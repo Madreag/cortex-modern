@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes
 from feel.records import compress_case_records, record_path
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable
 from run_selftests import SELFTESTS
 from compare_sim_traces import strict_compare
 
@@ -181,7 +181,20 @@ def peer_pre_match_history(peer, host_pre_match_history, client_pre_match_histor
     return client_pre_match_history if peer == 'client' else host_pre_match_history
 
 
+def case_peers(sp=False, silent_tick=None):
+    """The engines an arm launches: one single-player run, or host and client plus a survivor when the client goes silent."""
+    return ['sp'] if sp else (['host', 'client', 'survivor'] if silent_tick else ['host', 'client'])
+
+
+# Set by --dry-run: launch_case records each arm here instead of launching it.
+DRY_RUN_PLAN = None
+
+
 def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0):
+    if DRY_RUN_PLAN is not None:
+        DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, loss_percent=loss_percent, silent_tick=silent_tick,
+                                 autosave_seconds=autosave_seconds, peers=case_peers(sp, silent_tick)))
+        return None
     out = root / name
     out.mkdir(exist_ok=False)
     final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
@@ -193,10 +206,10 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     live_stalls=live_stalls, autosave_seconds=autosave_seconds, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
-                    exe=file_record(REPO / 'Cortex Command.exe'), lua_states=lua_states, pre_match_history=pre_match_history,
+                    exe=file_record(engine_executable(REPO)), lua_states=lua_states, pre_match_history=pre_match_history,
                     lua_states_note='retired: the engine fixes the count at build time')
     write_json(out / 'manifest.json', manifest)
-    peers = ['sp'] if sp else (['host', 'client', 'survivor'] if silent_tick else ['host', 'client'])
+    peers = case_peers(sp, silent_tick)
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
     placements = engine_placements(peers)
     manifest['engine_placement'] = {}
@@ -625,7 +638,27 @@ def parse_args(argv=None):
     parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
     parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES],
                         help='run only the selected autosave arms, without baselines or the full matrix')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='print every arm this command would launch with its port and peers; launch nothing, write nothing')
     return parser, parser.parse_args(argv)
+
+
+def launch_autosave_arm(root, index, case, port_base, script, exe_hash, timeout, counts):
+    """One autosave arm, launched the same way by the full matrix and by --cases."""
+    name, lag, seconds = case
+    return launch_case(root, name, lag, 60, True, port_base + 8 + index % 2, script, exe_hash, timeout,
+                       window_ticks=2 * TICKS, autosave_seconds=seconds, **counts)
+
+
+def dry_run_plan(launch_all):
+    """The arms the given launch sequence would start, read from launch_case itself."""
+    global DRY_RUN_PLAN
+    DRY_RUN_PLAN = []
+    try:
+        launch_all()
+        return DRY_RUN_PLAN
+    finally:
+        DRY_RUN_PLAN = None
 
 
 def main(argv=None):
@@ -644,21 +677,24 @@ def main(argv=None):
                   host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
     if args.cases:
         selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES) if case[0] in args.cases]
+        launch_selected = lambda script, exe_hash: [launch_autosave_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
+                                                    for index, case in selected]
+        if args.dry_run:
+            print(json.dumps(dict(path='--cases', arms=dry_run_plan(lambda: launch_selected(root / 'input.txt', None))), indent=2), flush=True)
+            return 0
         if not args.analyze_only:
             root.mkdir(parents=True, exist_ok=True)
             if (root / 'matrix-plan.json').exists():
                 parser.error('matrix-plan.json already exists; use a fresh output directory')
-            exe = file_record(REPO / 'Cortex Command.exe')
+            exe = file_record(engine_executable(REPO))
             write_json(root / 'matrix-plan.json', dict(started=stamp(), exe=exe, branch=branch,
                 commit=subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
                 source=file_record(Path(__file__)), reducer=file_record(HELPERS / 'report.py'),
-                ports=[args.port + 8 + index for index, _ in selected], ticks=2 * TICKS,
+                ports=[args.port + 8 + index % 2 for index, _ in selected], ticks=2 * TICKS,
                 arms=[case[0] for _, case in selected]))
             script = root / 'input.txt'
             input_pattern(script)
-            for index, (name, lag, seconds) in selected:
-                launch_case(root, name, lag, 60, True, args.port + 8 + index, script, exe['sha256'],
-                            args.timeout, window_ticks=2 * TICKS, autosave_seconds=seconds, **counts)
+            launch_selected(script, exe['sha256'])
         results = [reduce_timing_case(root / case[0]) for _, case in selected]
         for result in results:
             write_json(root / result['name'] / 'feel-report.json', result)
@@ -669,11 +705,32 @@ def main(argv=None):
             case_launches={result['name']: result['launches_complete'] for result in results},
             off_wire_pass=proof_pass, gates_unverified=True, scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT)))
         return 0 if complete and proof_pass else 1
+    def launch_matrix(script, exe_hash):
+        for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
+            launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe_hash, args.timeout, sp=True, **counts)
+            launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe_hash, args.timeout, sp=True, **counts)
+        launch_case(root, 'baseline-three-60hz', 0, 60, True, 0, script, exe_hash, args.timeout, sp=True,
+                    window_ticks=2 * TICKS, sp_humans=3, **counts)
+        port = args.port
+        for lag in (100, 200):
+            for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
+                for enabled in (True, False):
+                    name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
+                    launch_case(root, name, lag, cap, enabled, port, script, exe_hash, args.timeout, **counts)
+                    port += 1
+        for index, (name, lag, loss, silent) in enumerate(TIMING_CASES):
+            launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe_hash, args.timeout,
+                        loss_percent=loss, silent_tick=silent, **counts)
+        for index, case in enumerate(AUTOSAVE_CASES):
+            launch_autosave_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
+    if args.dry_run:
+        print(json.dumps(dict(path='full matrix', arms=dry_run_plan(lambda: launch_matrix(root / 'input.txt', None))), indent=2), flush=True)
+        return 0
     if not args.analyze_only:
         root.mkdir(parents=True, exist_ok=True)
         if (root / 'matrix-plan.json').exists():
             parser.error('matrix-plan.json already exists; retain it and use a fresh child output directory')
-        exe = file_record(REPO / 'Cortex Command.exe')
+        exe = file_record(engine_executable(REPO))
         plan = dict(started=stamp(), exe=exe, branch=branch,
                     commit=subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
                     source=file_record(Path(__file__)), reducer=file_record(HELPERS / 'report.py'),
@@ -689,24 +746,7 @@ def main(argv=None):
         write_json(root / 'matrix-plan.json', plan)
         script = root / 'input.txt'
         input_pattern(script)
-        for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
-            launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe['sha256'], args.timeout, sp=True, **counts)
-            launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe['sha256'], args.timeout, sp=True, **counts)
-        launch_case(root, 'baseline-three-60hz', 0, 60, True, 0, script, exe['sha256'], args.timeout, sp=True,
-                    window_ticks=2 * TICKS, sp_humans=3, **counts)
-        port = args.port
-        for lag in (100, 200):
-            for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
-                for enabled in (True, False):
-                    name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
-                    launch_case(root, name, lag, cap, enabled, port, script, exe['sha256'], args.timeout, **counts)
-                    port += 1
-        for index, (name, lag, loss, silent) in enumerate(TIMING_CASES):
-            launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe['sha256'], args.timeout,
-                        loss_percent=loss, silent_tick=silent, **counts)
-        for index, (name, lag, autosave_seconds) in enumerate(AUTOSAVE_CASES):
-            launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe['sha256'], args.timeout,
-                        window_ticks=2 * TICKS, autosave_seconds=autosave_seconds, **counts)
+        launch_matrix(script, exe['sha256'])
     try:
         stock = json.loads(args.stock_baseline.read_text(encoding='utf-8')) if args.stock_baseline else None
         results = analyze(root, stock)

@@ -7,9 +7,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from run_sim_test import engine_executable  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
-EXE = REPO / "Cortex Command.exe"
+EXE = engine_executable(REPO)
 TOOL = REPO / "tools" / "symbolize_abort.py"
 KNOWN = ("main", "WinMain", "SDL_main")
 

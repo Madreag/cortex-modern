@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from wait_engine_idle import wait_engine_idle
+from run_sim_test import engine_executable, file_sha256  # noqa: E402
 
 STAGE = Path("D:/Projects/stage2_p4")
 FIXTURE = STAGE / "fixtures/single_shot.txt"
@@ -18,7 +19,7 @@ FIXTURE = STAGE / "fixtures/single_shot.txt"
 
 def sha256(path: Path) -> str:
     with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        return file_sha256(handle)
 
 
 def load(path: Path, name: str):
@@ -36,7 +37,7 @@ def main() -> int:
     parser.add_argument("--fixture", type=Path, default=FIXTURE)
     parser.add_argument("--no-fixture", action="store_true")
     options = parser.parse_args()
-    exe = options.repo / "Cortex Command.exe"
+    exe = engine_executable(options.repo)
     print("exe sha256:", sha256(exe), flush=True)
     sys.path.insert(0, str(options.repo / "tools"))
     sys.path.insert(0, str(STAGE))

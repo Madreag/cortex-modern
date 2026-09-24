@@ -430,7 +430,6 @@ static State Observe(const std::string& gapPath) {
     audit.Field("clock.sim_accumulator", g_TimerMan.GetSimAccumulator());
     audit.Field("clock.dt", g_TimerMan.GetDeltaTimeSecs());
     audit.Field("allocator.uid", MovableObject::GetUniqueIDCounter());
-    audit.Field("allocator.lua_cursor", g_LuaMan.GetScriptStateCursor());
     audit.Field("checkpoint.restoring", g_MovableMan.IsRestoringSnapshot());
     audit.Field("checkpoint.pending_graph", g_ActivityMan.HasFullScriptGraphToRestore());
     audit.Field("world.actors", g_MovableMan.m_Actors);
@@ -478,7 +477,6 @@ static State ObservePendingCheckpoint(const std::string& gapPath) {
     audit.Field("pending.sim_count", pending.simUpdateCount);
     audit.Field("pending.sim_time", pending.simTimeTicks);
     audit.Field("pending.uid_counter", pending.uniqueIDCounter);
-    audit.Field("pending.lua_cursor", pending.luaStateCursor);
     audit.Field("pending.join_quarantine", pending.joinQuarantine);
     audit.Field("pending.runtime_globals", pending.runtimeGlobals);
     audit.Field("pending.world_structure", pending.worldStructure);

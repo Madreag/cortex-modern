@@ -13,7 +13,7 @@ import subprocess
 
 from compare_sim_traces import strict_compare
 import net_lobby_wire
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable
 
 # Magic, envelope version, header size, message type, payload length.
 ENVELOPE = "<IHHHHI"
@@ -647,14 +647,14 @@ def launch(options):
     config = root / "launch-config.bin"
     wire = net_lobby_wire.read(repo)
     config.write_bytes(encode_config(rules, wire, options.dedicated, default))
-    exe_hash = sha(repo / "Cortex Command.exe")
+    exe_hash = sha(engine_executable(repo))
     manifest = dict(stamp=stamp(), repo=str(repo), exe_sha256=exe_hash, rules=rules, variant=options.variant, wire=wire.as_json(),
                     dedicated=options.dedicated, port=options.port, detector_sha256=sha(__file__), config_sha256=sha(config),
                     codec_driver_sha256=sha(Path(__file__).with_name("test_net_activity_options.py")),
                     compare_sha256=sha(Path(__file__).with_name("compare_sim_traces.py")))
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     def ledger(event):
-        actual = sha(repo / "Cortex Command.exe")
+        actual = sha(engine_executable(repo))
         with (root / "exe-ledger.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(dict(stamp=stamp(), event=event, exe_sha256=actual)) + "\n")
         if actual != exe_hash:
@@ -963,7 +963,7 @@ def launch(options):
             offline_log = (root / "offline/stdout.log").read_text(errors="replace")
             checks["offline_process"] = result["offline_record"].get("exit_code") == 0 and not result["offline_record"].get("timed_out")
             result["census"] = census_compare(root / "offline/trace.json.simdump.txt", root / "host/trace.json.simdump.txt")
-            result["census"]["offline_exe_sha256"] = sha(offline_repo / "Cortex Command.exe")
+            result["census"]["offline_exe_sha256"] = sha(engine_executable(offline_repo))
             # Evidence, not a gate: a reference build has no rules print, and the command line scenario path
             # never runs the technology combo the menu does, so its team tech stays unset.
             result["census"]["rules_rows"] = {"offline": observations(offline_log), "match": observations(logs["host"])}
@@ -1018,7 +1018,7 @@ def funds_preview(options):
     config = root / "launch-config.bin"
     wire = net_lobby_wire.read(repo)
     config.write_bytes(encode_config(rules, wire, False, True))
-    exe_hash = sha(repo / "Cortex Command.exe")
+    exe_hash = sha(engine_executable(repo))
     common = [
         "-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
         "-net-match-mode", "pvp", "-net-match-ticks", "120", "-max-ticks", "120",

@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable
 from test_telemetry_bundle import set_visual_resolution
 from test_window_size_sim import parse_size, sha256_file
 
@@ -68,7 +68,7 @@ def main() -> int:
         FIXTURE = options.fixture.resolve()
 
     options.out.mkdir(parents=True, exist_ok=False)
-    result = {"exe_sha256": sha256_file(options.repo / "Cortex Command.exe"), "fixture": str(FIXTURE), "runs": {}}
+    result = {"exe_sha256": sha256_file(engine_executable(options.repo)), "fixture": str(FIXTURE), "runs": {}}
     for text in options.sizes:
         result["runs"][text] = run_one(options.repo, options.out / text, parse_size(text), options.ticks, options.timeout)
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -15,11 +16,33 @@ if sys.platform == "win32":
         from win32_test_runner import IsolatedRun
 else:
     if __package__:
-        from .posix_test_runner import IsolatedRun
+        from .posix_test_runner import IsolatedRun, resolve_binary
         from .posix_test_runner import make_run as posix_make_run
     else:
-        from posix_test_runner import IsolatedRun
+        from posix_test_runner import IsolatedRun, resolve_binary
         from posix_test_runner import make_run as posix_make_run
+
+
+def engine_executable(repo):
+    """The engine this platform's runner launches: the tree's executable on Windows, the POSIX runner's binary
+    (CCCP_TEST_BINARY, else build-gns/CortexCommand) elsewhere."""
+    if sys.platform == "win32":
+        return Path(repo).resolve() / "Cortex Command.exe"
+    return resolve_binary(Path(repo).resolve())
+
+
+def file_sha256(source):
+    """SHA-256 of a path or an open binary stream; hashlib.file_digest is 3.11 and the Mac's own Python is 3.9."""
+    if isinstance(source, (str, os.PathLike)):
+        with open(source, "rb") as stream:
+            return file_sha256(stream)
+    digest = getattr(hashlib, "file_digest", None)
+    if digest is not None:
+        return digest(source, "sha256").hexdigest()
+    hasher = hashlib.sha256()
+    for block in iter(lambda: source.read(1024 * 1024), b""):
+        hasher.update(block)
+    return hasher.hexdigest()
 
 
 def prepare_runtime(repo, out, fixtures=None):
@@ -51,7 +74,7 @@ def prepare_runtime(repo, out, fixtures=None):
         for name in staged:
             src = src_dir / name
             (dest / Path(name).name).write_bytes(src.read_bytes())
-    manifest = {"executable": str(repo / "Cortex Command.exe"), "cwd": str(runtime), "data": str(repo / "Data"), "settings_sha256": hashlib.sha256(settings.encode()).hexdigest(), "settings_overrides": values, "fixtures": staged}
+    manifest = {"executable": str(engine_executable(repo)), "cwd": str(runtime), "data": str(repo / "Data"), "settings_sha256": hashlib.sha256(settings.encode()).hexdigest(), "settings_overrides": values, "fixtures": staged}
     (out / "runtime.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return runtime
 
@@ -75,7 +98,7 @@ def make_run(repo, args, out, timeout=120, env=None, expected=None, *, runtime=N
             raise ValueError(f"retained runtime is incomplete: {runtime}")
         out.mkdir(parents=True, exist_ok=False)
         if sys.platform == "win32":
-            exe = Path(repo).resolve() / "Cortex Command.exe"
+            exe = engine_executable(repo)
             argv = [str(exe), "-headless", *map(str, args)]
             private_env = dict(env or {})
             private_env.update(TEMP=str(runtime / "Temp"), TMP=str(runtime / "Temp"))
@@ -95,7 +118,7 @@ def make_run(repo, args, out, timeout=120, env=None, expected=None, *, runtime=N
     out = Path(out).resolve()
     out.mkdir(parents=True, exist_ok=False)
     runtime = prepare_runtime(repo, out, fixtures=fixtures)
-    argv = [str(Path(repo).resolve() / "Cortex Command.exe"), "-headless", *map(str, args)]
+    argv = [str(engine_executable(repo)), "-headless", *map(str, args)]
     private_env = dict(env or {})
     private_env.update(TEMP=str(runtime / "Temp"), TMP=str(runtime / "Temp"))
     return IsolatedRun(argv, runtime, out, timeout, env=private_env, evidence_expected=expected)

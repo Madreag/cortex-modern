@@ -49,7 +49,7 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
-from run_sim_test import make_run  # noqa: E402  (the path is set above on purpose)
+from run_sim_test import make_run, engine_executable, file_sha256  # noqa: E402  (the path is set above on purpose)
 from h4_gate_evidence import reseat_evidence
 
 # The seat a 2-remote match gives the first joining client: slot 0 is the host's own.
@@ -86,7 +86,7 @@ TIMEOUT_S = 660.0
 
 def sha256(path: Path) -> str:
     with Path(path).open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        return file_sha256(handle)
 
 
 def out_root(base: Path, name: str) -> Path:
@@ -311,7 +311,7 @@ def run_gate(
         root.mkdir(parents=True, exist_ok=True)
     ticket = root / "leaver.ticket"
     argvs = build_argvs(gate, root, ticket)
-    exe = repo / "Cortex Command.exe"
+    exe = engine_executable(repo)
     if dry_run:
         print(f"DRY-RUN {gate}")
         for key, argv in argvs.items():
