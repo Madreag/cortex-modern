@@ -5321,16 +5321,22 @@ namespace RTE {
 					if (answerableMs > firstMissingMs && (nowMs < answerableMs || nowMs - answerableMs < declarationDeadline)) continue;
 				}
 				// A sender's first frames of the round are its pipeline filling: the round starts skewed by
-				// the start message's own trip and each peer's activity restart, and the sender's delay
-				// window is the budget that fill was agreed to take. The window is the few frames from its
-				// own start; after them it is judged like any other.
-				if (!m_PeerAdmissions.contains(peer) && (!m_PeersPlayedThisRound.contains(peer) || frame <= EffectiveStartOf(peer) + m_Config.slowPlayerBoundTicks)) {
+				// the start message's own trip and each machine's startup work, and the sender's delay
+				// window is the budget that fill was agreed to take. Its first second of play is judged by
+				// that ramp; after it the sender is judged like any other.
+				// A sender still feeding the round every tick is not stalled, it is behind: the round absorbs the
+				// skew by waiting, but only while its stream is within the bound of this frame, so it never paces
+				// the others past the bound. The bound catches a stream that STOPPED or strayed.
+				const bool feeding = peerStats.lastProgressMs >= firstMissingMs && nowMs - peerStats.lastProgressMs < declarationDeadline &&
+				    peerStats.highestTargetFrame + m_Config.slowPlayerBoundTicks >= frame && peerStats.highestTargetFrame <= frame + m_Config.slowPlayerBoundTicks;
+				if (!m_PeerAdmissions.contains(peer) && (!m_PeersPlayedThisRound.contains(peer) ||
+				    frame <= EffectiveStartOf(peer) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks))) {
 					// Our own longest park is the start work this machine did; a peer that has not produced
 					// yet is doing the same, so it is allowed as much before its silence means anything.
 					const uint64_t park = std::max(peerStats.startParkMs, m_Stats.longestOwnParkMs);
 					const uint64_t ramp = static_cast<uint64_t>(std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)) +
 					    peerStats.pingMs + peerStats.jitterMs + park;
-					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
+					if (nowMs - firstMissingMs < declarationDeadline + ramp || feeding) continue;
 					std::cout << "[net-lockstep] bound judged peer " << static_cast<int>(peer) << " at frame " << frame
 					          << " starting: since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
 					          << "ms ramp=" << ramp << "ms own_park=" << m_Stats.longestOwnParkMs
@@ -5368,11 +5374,7 @@ namespace RTE {
 					          << "ms ramp=" << ramp << "ms ping=" << peerStats.pingMs << "ms link=" << linkMs << "ms jitter=" << linkJitterMs
 					          << "ms own_park=" << m_Stats.longestOwnParkMs << "ms peer_park=" << restartMs
 					          << "ms heard_through=" << peerStats.highestTargetFrame << std::endl;
-				} else if (peerStats.lastProgressMs >= firstMissingMs && nowMs - peerStats.lastProgressMs < declarationDeadline &&
-				           peerStats.highestTargetFrame + m_Config.slowPlayerBoundTicks >= frame && peerStats.highestTargetFrame <= frame + m_Config.slowPlayerBoundTicks) {
-					// A sender still feeding the round every tick is not stalled, it is behind: the round absorbs the
-					// skew by waiting, but only while its stream is within the bound of this frame, so it never paces
-					// the others past the bound. The bound catches a stream that STOPPED or strayed.
+				} else if (feeding) {
 					continue;
 				}
 				std::string holdError;

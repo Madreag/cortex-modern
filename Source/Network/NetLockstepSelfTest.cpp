@@ -2234,14 +2234,77 @@ namespace RTE {
 			if (host.GetStats().peers.at(2).framePacketsReceived == 0 || host.GetStats().peers.at(2).holds != 0) {
 				return describe("the late peer's first frames did not reach the round, or it was held on arrival");
 			}
-			// Negative control: the same peer, now producing, goes silent and the round waits on it.
+			// Negative control: the same peer plays through its first second, then goes silent and the round waits on it.
+			pump(340, 1700, true);
 			const uint64_t silentFrame = host.GetStats().nextFrame;
-			host.NoteFrameWait(silentFrame, 700);
-			host.NoteFrameWait(silentFrame, 760);
-			host.Tick(760);
+			host.NoteFrameWait(silentFrame, 2000);
+			host.NoteFrameWait(silentFrame, 2060);
+			host.Tick(2060);
 			if (host.GetStats().peers.at(2).holds != 1 || !host.IsSeatUnderAI(2, silentFrame)) {
 				return describe("the bounded wait no longer holds a peer that went silent while the round waited");
 			}
+			return true;
+		}
+
+		// A sender that stumbles in its first second of play - its first-tick work, a loaded machine - is judged by its startup
+		// ramp, not held at the bare bound: the survivors wait out the start, never a seat that already plays.
+		bool TestAStartingPeerIsJudgedByItsRampForItsFirstSecond(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A0E, 1, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A0E, 3, NetTransportLane::ControlReliable);
+			a.startFrame = b.startFrame = 1;
+			a.roundId = b.roundId = 22;
+			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+			a.timeoutMs = b.timeoutMs = 30000;
+			a.relayToOtherPeers = true;
+			a.peerInputDelayFrames = b.peerInputDelayFrames = {{1, 1}, {2, 3}};
+			a.matchConfig = b.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A0E);
+			if (!StartCoordinatorPair(48899, hostWire, clientWire, host, client, a, b, error)) return false;
+			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
+			// The joiner's machine measured 300 ms of start work and publishes it with its start.
+			client.NoteLocalStartPark(300);
+			uint64_t hostProduced = 1, hostApplied = 0, clientProduced = 1, clientApplied = 0;
+			std::string queueError;
+			const auto pump = [&](uint64_t from, uint64_t to, bool clientPlays) {
+				for (uint64_t now = from; now < to; ++now) {
+					while (host.IsRunning() && hostProduced <= hostApplied + 2 &&
+					       host.QueueLocalInput(hostProduced, {MakeFrame(100, hostProduced)}, {}, &queueError)) ++hostProduced;
+					if (clientPlays) {
+						while (client.IsRunning() && clientProduced <= clientApplied + 3 &&
+						       client.QueueLocalInput(clientProduced, {MakeFrame(200, clientProduced)}, {}, &queueError)) ++clientProduced;
+					}
+					host.Tick(now); client.Tick(now);
+					// Both simulate one frame a tick, as live sims do, so the round's frame follows the clock.
+					NetLockstepReadyFrame ready;
+					if (now % 17 == 0 && host.PopReadyFrame(ready)) { hostApplied = ready.frame; (void)host.FinishSimulationTick(ready.frame); }
+					if (now % 17 == 0 && client.PopReadyFrame(ready)) { clientApplied = ready.frame; (void)client.FinishSimulationTick(ready.frame); }
+					hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				}
+			};
+			pump(0, 300, false);
+			pump(300, 500, true);
+			if (host.GetStats().peers.at(2).framePacketsReceived == 0 || hostApplied < 4) {
+				*error = "the starting peer's first frames never reached the round: applied=" + std::to_string(hostApplied);
+				return false;
+			}
+			// It stumbles for 150 ms, three times the bound, a few frames into its play.
+			pump(500, 650, false);
+			const uint64_t stumbledAt = host.GetStats().nextFrame;
+			if (stumbledAt <= 4 + a.slowPlayerBoundTicks || stumbledAt > 4 + NetLockstepCoordinator::c_StartupSettleTicks) {
+				*error = "the stumble fell inside the bare start window, so it proves nothing: stumbled_at=" + std::to_string(stumbledAt);
+				return false;
+			}
+			pump(650, 1200, true);
+			const auto holds = host.GetStats().peers.at(2).holds;
+			if (holds != 0 || host.IsSeatUnderAI(2, stumbledAt) || hostApplied <= stumbledAt) {
+				*error = "a seat that stumbled in its first second of play was held at the bare bound: holds=" + std::to_string(holds) +
+				         " stumbled_at=" + std::to_string(stumbledAt) + " applied=" + std::to_string(hostApplied) + " queue=" + queueError;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_starting_peer_is_judged_by_its_ramp_for_its_first_second stumbled_at=" << stumbledAt
+			          << " applied=" << hostApplied << std::endl;
 			return true;
 		}
 
@@ -2308,11 +2371,12 @@ namespace RTE {
 				if (host.GetStats().peers.at(2).framePacketsReceived == 0 || host.GetStats().peers.at(2).holds != 0) {
 					return describe("the started peer's frames did not reach the round, or it was held on arrival");
 				}
-				// Negative control: the same peer stops sending while the round waits, and is held at the bound.
+				// Negative control: past its first second of play the same peer stops sending while the round waits, and is held at the bound.
+				pump(clientStartsAtMs + 120, clientStartsAtMs + 1400, true);
 				const uint64_t silentFrame = host.GetStats().nextFrame;
-				host.NoteFrameWait(silentFrame, clientStartsAtMs + 400);
-				host.NoteFrameWait(silentFrame, clientStartsAtMs + 460);
-				host.Tick(clientStartsAtMs + 460);
+				host.NoteFrameWait(silentFrame, clientStartsAtMs + 1700);
+				host.NoteFrameWait(silentFrame, clientStartsAtMs + 1760);
+				host.Tick(clientStartsAtMs + 1760);
 				if (host.GetStats().peers.at(2).holds != 1 || !host.IsSeatUnderAI(2, silentFrame)) {
 					return describe("the bounded wait no longer holds a peer that went silent while the round waited");
 				}
@@ -19108,16 +19172,17 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_PeersPlayedThisRound = {2};
 		host.m_PeerEffectiveStart[2] = 15;
 		host.m_Stats.peers[2].pingMs = 200;
-		host.m_Stats.nextFrame = 48;
-		// This host's own park held back frame 34, the one the seat produces frame 48 from: it committed it only now.
-		for (uint64_t frame = 20; frame < 48; ++frame) host.m_CommittedAtMs[frame] = frame < 34 ? 700 : 1000;
-		if (host.DeclareOverdueInputs(48, 1100, 1000, {2}) || host.GetStats().peers.at(2).holds != 0) {
+		// Past the start's first second, where the bare bound judges a seat.
+		host.m_Stats.nextFrame = 148;
+		// This host's own park held back frame 134, the one the seat produces frame 148 from: it committed it only now.
+		for (uint64_t frame = 120; frame < 148; ++frame) host.m_CommittedAtMs[frame] = frame < 134 ? 700 : 1000;
+		if (host.DeclareOverdueInputs(148, 1100, 1000, {2}) || host.GetStats().peers.at(2).holds != 0) {
 			*error = "a seat waiting on this host's own frame was held as slow: since_missing=100ms link=200ms holds=" +
 			         std::to_string(host.GetStats().peers.at(2).holds);
 			return false;
 		}
 		// Negative control: answered a link ago and still silent past the bound, the seat is declared.
-		if (!host.DeclareOverdueInputs(48, 1260, 1000, {2})) {
+		if (!host.DeclareOverdueInputs(148, 1260, 1000, {2})) {
 			*error = "the bound no longer declares a seat the round answered a link ago";
 			return false;
 		}
@@ -19289,7 +19354,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_PeerEffectiveStart[3] = 15;
 		host.m_Stats.peers[2].pingMs = 0;
 		host.m_Stats.peers[3].pingMs = 200;
-		host.m_Stats.nextFrame = 6;
+		// Past the start's first second, where the bare bound judges a seat.
+		host.m_Stats.nextFrame = 206;
 		const auto describe = [&](const char* what, uint64_t elapsed) {
 			*error = std::string(what) + "; elapsed=" + std::to_string(elapsed) + "ms notice=" +
 			         std::to_string(host.GetStats().holdNoticeBudgetMs) + "ms bound_ticks=" +
@@ -19297,14 +19363,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			         " feasible=" + std::to_string(host.GetStats().holdDeadlineFeasible ? 1 : 0);
 			return false;
 		};
-		if (host.DeclareOverdueInputs(6, 500, 500, {2}) || host.GetStats().peers.at(2).holds != 0) {
+		if (host.DeclareOverdueInputs(206, 500, 500, {2}) || host.GetStats().peers.at(2).holds != 0) {
 			return describe("a survivor's long link held a peer the instant its frame was late", 0);
 		}
-		if (host.DeclareOverdueInputs(6, 530, 500, {2}) || host.GetStats().peers.at(2).holds != 0) {
+		if (host.DeclareOverdueInputs(206, 530, 500, {2}) || host.GetStats().peers.at(2).holds != 0) {
 			return describe("a peer was held before the slow-player bound elapsed", 30);
 		}
 		// Negative control: past the bound the seat is still declared.
-		if (!host.DeclareOverdueInputs(6, 560, 500, {2})) {
+		if (!host.DeclareOverdueInputs(206, 560, 500, {2})) {
 			return describe("the bound no longer declares a peer that stopped sending", 60);
 		}
 		return true;
@@ -19373,6 +19439,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestASlowLoaderIsHeldAtTheStartupBudget, "a_slow_loader_is_held_at_the_startup_budget");
 		row(&TestAReturningSeatsRampIsTheBound, "a_returning_seats_ramp_is_the_bound");
 		row(&TestALinkBlipIsBridgedByAResend, "a_link_blip_is_bridged_by_a_resend");
+		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
 		row(&TestAPeerIsDueADelayAfterAPark, "a_peer_is_due_a_delay_after_a_park");
