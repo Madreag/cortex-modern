@@ -1,0 +1,64 @@
+# The two seated humans of the UI walk. Each walks its brain away from the other team's sentry dummy, past
+# the 450 px sight distance (Grasslands wraps at 2496 px, so the far side stays out of sight too), then only
+# sweeps its aim and swaps weapons: the duel has no fight in it, so it cannot end while the menus are walked.
+# Format: [player=N] <from> <to> ACTION...  (InputScript::Load)
+
+# player 0 (team 1, spawns at x 880; the team 2 dummy stands at x 1165)
+player=0 1 2700 AIM=-0.8,0.6
+player=0 1 320 L_LEFT
+player=0 60 75 JUMP
+player=0 180 195 JUMP
+player=0 360 390 AIM_UP
+player=0 420 450 AIM_DOWN
+player=0 495 505 WEAPON_CHANGE_NEXT
+player=0 660 690 AIM_UP
+player=0 720 750 AIM_DOWN
+player=0 795 805 WEAPON_CHANGE_NEXT
+player=0 960 990 AIM_UP
+player=0 1020 1050 AIM_DOWN
+player=0 1095 1105 WEAPON_CHANGE_NEXT
+player=0 1260 1290 AIM_UP
+player=0 1320 1350 AIM_DOWN
+player=0 1395 1405 WEAPON_CHANGE_NEXT
+player=0 1560 1590 AIM_UP
+player=0 1620 1650 AIM_DOWN
+player=0 1695 1705 WEAPON_CHANGE_NEXT
+player=0 1860 1890 AIM_UP
+player=0 1920 1950 AIM_DOWN
+player=0 1995 2005 WEAPON_CHANGE_NEXT
+player=0 2160 2190 AIM_UP
+player=0 2220 2250 AIM_DOWN
+player=0 2295 2305 WEAPON_CHANGE_NEXT
+player=0 2460 2490 AIM_UP
+player=0 2520 2550 AIM_DOWN
+player=0 2595 2605 WEAPON_CHANGE_NEXT
+
+# player 1 (team 2, spawns at x 1120; the team 1 dummy stands at x 835)
+player=1 1 2700 AIM=0.8,0.6
+player=1 1 320 L_RIGHT
+player=1 80 95 JUMP
+player=1 200 215 JUMP
+player=1 380 410 AIM_UP
+player=1 440 470 AIM_DOWN
+player=1 515 525 WEAPON_CHANGE_NEXT
+player=1 680 710 AIM_UP
+player=1 740 770 AIM_DOWN
+player=1 815 825 WEAPON_CHANGE_NEXT
+player=1 980 1010 AIM_UP
+player=1 1040 1070 AIM_DOWN
+player=1 1115 1125 WEAPON_CHANGE_NEXT
+player=1 1280 1310 AIM_UP
+player=1 1340 1370 AIM_DOWN
+player=1 1415 1425 WEAPON_CHANGE_NEXT
+player=1 1580 1610 AIM_UP
+player=1 1640 1670 AIM_DOWN
+player=1 1715 1725 WEAPON_CHANGE_NEXT
+player=1 1880 1910 AIM_UP
+player=1 1940 1970 AIM_DOWN
+player=1 2015 2025 WEAPON_CHANGE_NEXT
+player=1 2180 2210 AIM_UP
+player=1 2240 2270 AIM_DOWN
+player=1 2315 2325 WEAPON_CHANGE_NEXT
+player=1 2480 2510 AIM_UP
+player=1 2540 2570 AIM_DOWN
+player=1 2615 2625 WEAPON_CHANGE_NEXT
