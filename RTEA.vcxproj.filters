@@ -739,6 +739,9 @@
     <ClInclude Include="Source\GUI\GUIWriter.h">
       <Filter>GUI</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Lua\LuaBindingExhaustiveSelfTest.h">
+      <Filter>Lua</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Lua\LuabindObjectWrapper.h">
       <Filter>Lua</Filter>
     </ClInclude>
@@ -1504,6 +1507,9 @@
     </ClCompile>
     <ClCompile Include="Source\GUI\GUIWriter.cpp">
       <Filter>GUI</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Lua\LuaBindingExhaustiveSelfTest.cpp">
+      <Filter>Lua</Filter>
     </ClCompile>
     <ClCompile Include="Source\Lua\LuabindObjectWrapper.cpp">
       <Filter>Lua</Filter>
