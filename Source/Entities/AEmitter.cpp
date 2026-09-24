@@ -479,6 +479,10 @@ float AEmitter::EstimateImpulse(bool burst) {
 			}
 		}
 
+		// A preview reads the world's emitters without filling the cache their checkpoint holds.
+		if (!MayFillCaches()) {
+			return impulse * GetThrottleFactor();
+		}
 		if (burst) {
 			m_AvgBurstImpulse = impulse;
 		} else {
