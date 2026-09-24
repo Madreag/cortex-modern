@@ -90,6 +90,8 @@ namespace RTE {
 		/// SharedText() with its timers bound at a capture's sim time, as BindSimTime(ticks).Text() binds the whole text.
 		std::string SharedText(int64_t simTimeTicks) const;
 		static CheckpointText Deferred(std::function<std::string()> produce, size_t ownedBytes = 0, std::string identity = {});
+		/// A deferred text whose producer brackets each run only this machine holds with `mark`: Text() drops the marks, SharedText() the runs as well.
+		static CheckpointText DeferredWithPeerRuns(std::function<std::string()> produce, std::string mark, size_t ownedBytes = 0);
 	private:
 		struct Data;
 		std::shared_ptr<Data> m_Data;

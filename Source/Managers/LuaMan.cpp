@@ -93,6 +93,7 @@ extern "C" {
 #include <typeinfo>
 #include <iostream>
 #include <unordered_map>
+#include <random>
 #include <unordered_set>
 
 #include "tracy/Tracy.hpp"
@@ -1138,11 +1139,17 @@ local function stringToken(s)
 	return "s" .. #s .. ":" .. s
 end
 
--- A fragment only this machine holds (a timer's wall clock); the text is the same either way.
+-- A fragment only this machine holds (a timer's wall clock); the text is the same either way. A frozen worker writes plain
+-- text, so it brackets the fragment with the mark its capture strips again.
 local function peerText(text)
 	if capturing then return captureNative.peer(text) end
+	local mark = captureNative and captureNative.peerMark
+	if mark then return mark .. text .. mark end
 	return text
 end
+
+-- A seat's controller, menus and banners are this machine's interface, as the activity keeps them.
+local SEAT_INTERFACE = { ["player-controller"] = true, ["buy-menu"] = true, ["editor-menu"] = true, ["yellow-banner"] = true, ["red-banner"] = true }
 
 -- Capture-owned nodes are numbered in walk order in a band of their own above every birth, so the
 -- bytes of an unchanged state do not follow where its birth counter stands.
@@ -1411,7 +1418,7 @@ local function visitUserdata(value, ctx)
 			payload = (typedOnly and "Z" or native[6] and "Y" or "x") .. visit(native[2], ctx) .. stringToken(native[3]) .. "n" .. outputNumber(native[4]) .. ";" .. (native[5] and "t;" or "f;")
 			if native[6] then
 				payload = payload .. stringToken(native[6])
-				if not typedOnly then payload = payload .. stringToken(native[7]) end
+				if not typedOnly then payload = payload .. (SEAT_INTERFACE[native[3]] and peerText(stringToken(native[7])) or stringToken(native[7])) end
 			end
 		end
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(_ScriptGraphInstance(value), ctx))
@@ -5216,16 +5223,7 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 			return {};
 		};
 		if (s_ScriptGraphCapture && hasCheckpoint) {
-			CheckpointText checkpoint = CheckpointWriter::CaptureNative(save);
-			// A seat's controller, menus and banners are this machine's interface, as the activity keeps them.
-			static const std::unordered_set<std::string_view> seatInterface = {"player-controller", "buy-menu", "editor-menu", "yellow-banner", "red-banner"};
-			if (seatInterface.contains(property)) {
-				CheckpointBuffer buffer;
-				buffer.PeerBegin();
-				buffer.Child(checkpoint);
-				buffer.PeerEnd();
-				checkpoint = buffer.Finish();
-			}
+			const CheckpointText checkpoint = CheckpointWriter::CaptureNative(save);
 			lua_pushlstring(L, type.data(), type.size());
 			PushScriptGraphCapturedText(L, checkpoint);
 			return 7;
@@ -6270,10 +6268,15 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		}
 		(void)frozenUs;
 		// A refusal is the archive's verdict and travels back whole; any other failure retires this state's frozen path.
-		text = CheckpointText::Deferred([image = std::move(image), unavailable = m_FrozenCaptureUnavailable, index = g_LuaMan.GetStateIndex(this)] {
+		// The worker writes plain text, so it brackets what only this machine holds with a mark no script value carries.
+		static const std::string peerMark = [] {
+			std::random_device device;
+			return std::format("\x01\x02peer-run-{:08x}{:08x}{:08x}{:08x}\x02\x01", device(), device(), device(), device());
+		}();
+		text = CheckpointText::DeferredWithPeerRuns([image = std::move(image), unavailable = m_FrozenCaptureUnavailable, index = g_LuaMan.GetStateIndex(this)] {
 			std::unordered_set<uint64_t> carried;
 			try {
-				return image->Serialize(c_ScriptGraphHelper, carried);
+				return image->Serialize(c_ScriptGraphHelper, carried, peerMark);
 			} catch (const ScriptGraphRefusal&) {
 				throw;
 			} catch (const std::exception& error) {
@@ -6281,7 +6284,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 				System::PrintDiagnosticLine(std::format("[frozen-graph] state={} retired: {}\n", index, error.what()));
 				throw;
 			}
-		}, bytes);
+		}, peerMark, bytes);
 		return true;
 	} catch (const std::exception& error) {
 		problems.emplace_back(std::string("frozen graph capture failed: ") + error.what());
