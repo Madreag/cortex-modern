@@ -878,6 +878,8 @@ namespace RTE {
 		bool RelaunchInFlightLocked() const;
 		/// Host: ends the rejoin of every returner that has replayed past the bound without showing the headroom its activation needs.
 		void RefuseReturnersWithoutHeadroomLocked(uint64_t nowMs);
+		/// Host: ends one returner's rejoin and tells its client why, so it tries again instead of waiting.
+		void RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text);
 		/// Client: points the ticket at a successor and rejoins it.
 		bool RejoinSuccessorRoute(const NetMatchServiceRequest& route, std::string* error);
 		/// Host: seals the successor capsule for a returning peer and sends it after the config, as a lobby round does.

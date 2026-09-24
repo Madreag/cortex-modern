@@ -3620,8 +3620,6 @@ static std::string ResyncSaveName() {
 			std::string error;
 			if (!m_WorldJoin.BeginRejoin(holder, seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
 			m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
-			m_Runner->GetLobbySession().SendMatchConfigTo(member);
-			SendSuccessorCapsuleToLocked(member);
 			{
 				std::ostringstream line;
 				line << "[net-match] private rejoin peer=" << static_cast<int>(member) << " incarnation=" << incarnation;
@@ -3633,6 +3631,13 @@ static std::string ResyncSaveName() {
 		std::erase_if(m_PrivateJoinBlobs, [&](const auto& task) { return m_WorldJoin.FindSession(task.first) == nullptr &&
 		    task.second.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; });
 		for (const auto& session: m_WorldJoin.Sessions()) {
+			// The returner's lobby answers only once it is up: its seat, config and successor capsule go then, and before the image,
+			// or it waits for a config that was sent while it could not hear it.
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.matchConfigSent && m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(session.assignedPeerId) &&
+			    m_Runner->GetLobbySession().SendMatchConfigTo(session.assignedPeerId)) {
+				SendSuccessorCapsuleToLocked(session.assignedPeerId);
+				m_WorldJoin.NoteMatchConfigSent(session.connection);
+			}
 			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
 			// A returning seat takes the base being captured for it, not the older one that capture replaces.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && m_WorldJoin.Image().IsValid() && !m_PrivateImageTask.valid() &&
@@ -3693,9 +3698,24 @@ static std::string ResyncSaveName() {
 			line << "[net-match] rejoin refused peer=" << static_cast<int>(session ? session->assignedPeerId : 0) << ": the returner replayed at "
 			     << (session ? session->headroom.Ratio() : 0.0) << " of the round's rate for " << c_NetWorldHeadroomWaitMs << "ms, below the 1.2 its activation needs";
 			System::PrintDiagnosticLine(line.str());
-			if (m_Session) m_Session->DisconnectReadyPeer(connection, NetRejectReason::HostNotAccepting, "Your machine could not catch up with the match; rejoining again");
-			m_WorldJoin.CancelJoin(connection, "the returner replayed slower than the round plays");
+			RefuseReturnerLocked(connection, "the returner replayed slower than the round plays", "Your machine could not catch up with the match; rejoining again");
 		}
+		// A returner whose base never comes (the round cannot capture one) is told so, never left waiting on it.
+		std::vector<NetPeerId> unserved;
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+			if (session.spectator || session.phase != NetWorldJoinPhase::SnapshotTransfer || session.transferStarted || m_PrivateImageTask.valid() || session.openedAtMs == 0) continue;
+			if (m_WorldJoin.IsPrivateMatch() && nowMs > session.openedAtMs && nowMs - session.openedAtMs > 2 * c_PrivateImageWaitMs) unserved.push_back(session.connection);
+		}
+		for (const NetPeerId connection: unserved) {
+			System::PrintDiagnosticLine("[net-match] rejoin refused connection=" + std::to_string(connection) + ": no image could be staged for it in " + std::to_string(2 * c_PrivateImageWaitMs) + "ms" +
+			                            (m_PrivateBaseHeldReason ? std::string(" (") + m_PrivateBaseHeldReason + ")" : std::string()));
+			RefuseReturnerLocked(connection, "no image could be staged for the returner", "The host could not stage your rejoin; rejoining again");
+		}
+	}
+
+	void NetMatchService::RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text) {
+		if (m_Session) m_Session->DisconnectReadyPeer(connection, NetRejectReason::HostNotAccepting, text);
+		m_WorldJoin.CancelJoin(connection, reason);
 	}
 
 	bool NetMatchService::MovePrivateActivationPastPark(const NetWorldJoinSession& session) {
