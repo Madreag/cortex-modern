@@ -267,8 +267,11 @@ struct Voice {
 		return voice;
 	}
 	void Apply(FMOD::System* system, FMOD::Channel* channel) const {
-		Require(channel->setFrequency(frequency)); Require(channel->setPriority(priority)); Require(channel->setLoopCount(loops));
-		Require(channel->setLoopPoints(loopStart, FMOD_TIMEUNIT_PCM, loopEnd, FMOD_TIMEUNIT_PCM)); Require(channel->setPosition(position, FMOD_TIMEUNIT_PCM));
+		// A voice captured with no channel (its sample still loading) carries no rate or loop range; it starts on its sample's own.
+		if (frequency != 0) Require(channel->setFrequency(frequency));
+		Require(channel->setPriority(priority)); Require(channel->setLoopCount(loops));
+		if (loopEnd > loopStart) Require(channel->setLoopPoints(loopStart, FMOD_TIMEUNIT_PCM, loopEnd, FMOD_TIMEUNIT_PCM));
+		Require(channel->setPosition(position, FMOD_TIMEUNIT_PCM));
 		control.Apply(system, channel, false);
 	}
 };

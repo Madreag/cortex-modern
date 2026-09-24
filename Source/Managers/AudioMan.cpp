@@ -2782,6 +2782,36 @@ bool AudioMan::RunCheckpointEffectsSelfTest() {
 			StopAll();
 		}
 	}
+	// A voice captured while its sample was still loading carries no rate or loop range of its own (Voice::Capture); a restore
+	// where the sample is ready starts it, and that start must not refuse the whole checkpoint.
+	{
+		std::string refusal;
+		try {
+			const auto* preset = dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", "Funds Changed", "Base.rte"));
+			if (!preset) throw std::runtime_error("missing sound preset");
+			std::unique_ptr<SoundContainer> source(static_cast<SoundContainer*>(preset->Clone()));
+			AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+			if (!source->Play() || source->GetPlayingChannels()->empty()) throw std::runtime_error("sound did not play");
+			const std::string path = m_PlayingVoices.at(*source->GetPlayingChannels()->begin()).soundPath;
+			StopAll();
+			const auto cached = ContentFile::s_LoadedSamples.find(path);
+			if (cached == ContentFile::s_LoadedSamples.end() || !cached->second) throw std::runtime_error("missing loaded sample " + path);
+			const AudioCheckpoint::Voice pending = AudioCheckpoint::Voice::Capture(1, 0, path, 0, nullptr, 0, true);
+			FMOD::Channel* channel = nullptr;
+			AudioCheckpoint::Require(m_AudioSystem->playSound(cached->second, m_SFXChannelGroup, true, &channel));
+			try {
+				pending.Apply(m_AudioSystem, channel);
+			} catch (const std::exception& error) {
+				refusal = error.what();
+			}
+			StopDetached(channel);
+		} catch (const std::exception& error) {
+			refusal = std::string("fixture: ") + error.what();
+		}
+		System::PrintDiagnosticLine(std::format("[checkpoint-audio-effects-selftest] {} a_voice_captured_before_its_sample_loaded_restores refusal={}\n",
+		    refusal.empty() ? "PASS" : "FAIL", refusal.empty() ? "none" : refusal));
+		passed = refusal.empty() && passed;
+	}
 	g_ConsoleMan.SaveAllText(System::GetWorkingDirectory() + "checkpoint-audio-console.log");
 	System::PrintDiagnosticLine(std::string("[checkpoint-audio-effects-selftest] ") + (passed ? "PASS\n" : "FAIL\n"));
 	return passed;
