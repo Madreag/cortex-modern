@@ -761,6 +761,19 @@ def check_cross_capture(results, scratch):
     ok &= row(results, 'cross/merged-media-and-contract', merge_halves(roots, scratch / 'cross-merged'))
     merged = json.loads((scratch / 'cross-merged/manifest.json').read_text())
     ok &= row(results, 'cross/shared-key-and-platforms', merged['match_identity_gate']['match_id'] == '0000000000000005-0000000000000007' and merged['match_identity_gate']['cross_platform'])
+    # Every real half carries the frameless assert-dialog row; it passes on its probe and fails the merge when it fails.
+    for root, name in zip(roots, ('host', 'client')):
+        driver.write_json(root / 'review.json', {'scenario': scenario['name'], 'checklist': [
+            {'id': name, 'peer': name, 'frames': [0, 0], 'probe': 'pass'},
+            {'id': 'no-assert-dialogs', 'peer': 'all', 'frames': None, 'state': 'checked', 'probe': 'pass'}]})
+    ok &= row(results, 'cross/assert-dialog-row-passes-on-its-probe', merge_halves(roots, scratch / 'cross-merged-dialogs'))
+    dialog = json.loads((roots[1] / 'review.json').read_text())
+    dialog['checklist'][1].update(probe='fail', finding={'class': 'engine', 'reason': 'assert dialog: synthetic'})
+    driver.write_json(roots[1] / 'review.json', dialog)
+    ok &= row(results, 'cross/assert-dialog-fails-the-merge', not merge_halves(roots, scratch / 'cross-merged-dialog-red'))
+    dialog['checklist'][1].update(probe='pass')
+    dialog['checklist'][1].pop('finding')
+    driver.write_json(roots[1] / 'review.json', dialog)
     (roots[1] / 'client.mp4').write_bytes(b'changed synthetic video')
     ok &= row(results, 'cross/transferred-media-tamper-fails', not merge_halves(roots, scratch / 'cross-tampered'))
     bad = {'name': 'run0', 'peers': [{'name': 'host', 'kill_when': {'peer': 'absent', 'event': 'ready'}}]}
