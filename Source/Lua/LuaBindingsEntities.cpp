@@ -1303,6 +1303,10 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, SceneObject) {
 	                          luabind::value("SCRIPTONLY", static_cast<int>(SceneObject::BuyableMode::ScriptOnly))];
 }
 
+LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, SLTerrain) {
+	return luabind::class_<SLTerrain, Entity>("SLTerrain");
+}
+
 LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, SLBackground) {
 	return luabind::class_<SLBackground, StaticSceneLayer>("SLBackground")
 
