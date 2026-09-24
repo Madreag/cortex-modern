@@ -1257,14 +1257,6 @@ namespace RTE {
 						if constexpr (requires { payload.peerId; }) return payload.peerId;
 						return std::nullopt;
 					}, decoded.message.payload);
-					// A client's report on a transfer the host has since closed (a repair started over a returner's catch-up) is stale,
-					// not hostile: it is dropped and the connection kept.
-					if (m_Config.host && std::holds_alternative<NetLobbyStateChunk>(decoded.message.payload) && event.lane == NetTransportLane::ControlReliable) {
-						++m_Stats.malformedMessages;
-						System::PrintDiagnosticLine("[net-lobby] dropped StateChunk connection=" + std::to_string(event.peerId) + " peer=" + std::to_string(sender->first) +
-						                            ": no transfer is bound to that peer");
-						return;
-					}
 					// A payload that names no peer claims nothing: it is refused by its own rule, and the line says which.
 					if (claimedPeer) {
 						System::PrintDiagnosticLine("[net-lobby] sender mismatch type=" + type + " connection=" + std::to_string(event.peerId) +
