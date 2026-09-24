@@ -291,6 +291,7 @@ namespace RTE {
 		std::map<uint8_t, std::string> m_RemotePlatformsByPeer;
 		std::set<uint8_t> m_RemoteLobbyUp; //!< Remotes that have sent a lobby message of their own.
 		std::set<NetPeerId> m_LobbyUpConnections;
+		std::set<NetPeerId> m_OutOfRosterPeers; //!< Connections already named as seated past the roster, so each is said once.
 		std::set<uint8_t> m_WorldTransferPeers; //!< World bootstraps the host bound; no lobby-up gate.
 		bool m_SeatAssigned = false;       //!< Client: the host has named the id it bound to this connection.
 		std::vector<uint8_t> m_StateBytesToSend;
