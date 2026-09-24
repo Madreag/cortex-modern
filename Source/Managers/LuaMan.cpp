@@ -2831,6 +2831,15 @@ end
 -- the horizon separately: scratch never moves it and only a live birth does.
 local function graphHorizon(graph) return tonumber(string.match(graph, "^SG6;S(%d+);")) end
 local function horizonless(graph) return (string.gsub(graph, "^SG6;S%d+;", "SG6;", 1)) end
+-- A compiled tonumber whose number nothing reads still hands lj_strscan_num a slot to fill; on Windows x64 the
+-- slot must lie past the callee's register home area, or a register the callee saved there comes back as the number.
+do
+	local box, hits = { "51" }, 0
+	for _ = 1, 4000 do
+		if tonumber(box[1]) then hits = hits + 1 end
+	end
+	check("a_compiled_tonumber_keeps_the_callers_registers", hits == 4000, "hits=" .. hits)
+end
 
 _SelfTestShared = { count = 7 }
 _SelfTestVector = Vector(11, 12)
