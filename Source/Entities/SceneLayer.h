@@ -15,6 +15,9 @@ namespace RTE {
 
 	struct BigTexture;
 
+	/// The back buffers the scene layers hold right now, for the leak check over a scene reload.
+	int SceneLayerBackBufferCount();
+
 	struct SceneLayerInfo {
 		std::string name;
 		std::unique_ptr<BITMAP> bitmap;
@@ -341,6 +344,9 @@ namespace RTE {
 		/// Clears any tracked and drawn-to areas.
 		/// @param clearTo Color to clear to.
 		void ClearDrawings(BITMAP* bitmap, const std::vector<IntRect>& drawings, ColorKeys clearTo) const;
+
+		/// Frees the back buffer once any asynchronous clear of it is done.
+		void ReleaseBackBuffer();
 
 		bool m_CheckpointInitialized = false;
 

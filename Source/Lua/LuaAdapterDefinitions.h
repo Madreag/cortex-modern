@@ -205,6 +205,7 @@ namespace RTE {
 		LuaEntityCastFunctionsDeclarationsForType(MOSprite);
 		LuaEntityCastFunctionsDeclarationsForType(Scene);
 		LuaEntityCastFunctionsDeclarationsForType(SLBackground);
+		LuaEntityCastFunctionsDeclarationsForType(SLTerrain);
 		LuaEntityCastFunctionsDeclarationsForType(StaticSceneLayer);
 		LuaEntityCastFunctionsDeclarationsForType(Material);
 		LuaEntityCastFunctionsDeclarationsForType(MetaPlayer);

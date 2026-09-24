@@ -5181,6 +5181,8 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 				const auto parsed = std::from_chars(path.data(), path.data() + path.size(), uid);
 				if (parsed.ec == std::errc{} && parsed.ptr == path.data() + path.size()) return push(object->FindPartByUniqueID(uid));
 			}
+		} else if (std::strcmp(owner->crep()->name(), "Scene") == 0 && std::strcmp(property, "terrain") == 0) {
+			if (index == 0) return push(static_cast<Scene*>(owner->ptr())->GetTerrain());
 		} else if (std::strcmp(owner->crep()->name(), "Scene") == 0 && std::strcmp(property, "background") == 0) {
 			const auto& layers = static_cast<Scene*>(owner->ptr())->GetBackLayers();
 			if (static_cast<size_t>(index) < layers.size()) return push(*std::next(layers.begin(), index));
@@ -5296,6 +5298,7 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		lua_pop(L, 1);
 	}
 	if (Scene* scene = g_SceneMan.GetScene()) {
+		if (rep->ptr() == scene->GetTerrain()) return found(scene, "terrain", 0);
 		int index = 0;
 		for (SLBackground* layer: scene->GetBackLayers()) {
 			if (rep->ptr() == layer) return found(scene, "background", index);
@@ -7117,6 +7120,7 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SceneArea),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, StaticSceneLayer),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SLBackground),
+	                         RegisterLuaBindingsOfType(EntityLuaBindings, SLTerrain),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, Deployment),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, DataModule),
 	                         RegisterLuaBindingsOfType(ActivityLuaBindings, Activity),
@@ -9893,6 +9897,185 @@ shared.parent = _AutosaveCaptureProbe
 	}
 	std::cout << "[script-graph-selftest] " << (ownedGraph ? "PASS" : "FAIL") << " captured_graph_survives_mutation_and_collection" << std::endl;
 	checkpointValues = ownedGraph && checkpointValues;
+	{
+		// A mod's handle to the terrain goes into a checkpoint as the scene's terrain and comes back as it.
+		SceneMan::SceneSetAside originalScene;
+		g_SceneMan.SetAsideScene(originalScene);
+		SceneMan::SceneSetAside terrainScene;
+		struct ProbeTerrain : SLTerrain {
+			ProbeTerrain() {
+				m_MainBitmap = create_bitmap_ex(8, 64, 64);
+				m_MainBitmapOwned = true;
+			}
+		};
+		auto* scene = new Scene();
+		scene->Create(new ProbeTerrain());
+		terrainScene.scene = scene;
+		g_SceneMan.ReinstateScene(terrainScene);
+		const bool held = RunScriptString("CheckpointTerrainProbe = SceneMan:GetTerrain(); assert(CheckpointTerrainProbe ~= nil and CheckpointTerrainProbe.ClassName == 'SLTerrain', 'no terrain handle')") == 0;
+		std::string saved;
+		std::vector<std::string> problems;
+		const bool captured = held && SerializeScriptGraph(saved, problems);
+		RunScriptString("CheckpointTerrainProbe = nil");
+		const bool restored = captured && RestoreScriptGraph(saved, problems);
+		lua_getglobal(m_State, "CheckpointTerrainProbe");
+		const auto* rep = luabind::detail::is_class_object(m_State, -1);
+		const bool same = restored && rep && rep->ptr() == scene->GetTerrain() && rep->crep() && std::strcmp(rep->crep()->name(), "SLTerrain") == 0;
+		lua_pop(m_State, 1);
+		RunScriptString("CheckpointTerrainProbe = nil");
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		g_SceneMan.SetAsideScene(terrainScene);
+		g_SceneMan.ReinstateScene(originalScene);
+		const bool passed = held && captured && same;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " terrain_reference_round_trips_a_checkpoint held=" << held << " captured=" << captured << " restored=" << restored << " same=" << same << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] terrain reference: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
+		// The boxes a script keeps from an Area it dropped keep that Area, before and after a checkpoint.
+		const bool held = RunScriptString(R"lua(
+local area = Area("CheckpointBoxOwnerProbe")
+area:AddBox(Box(Vector(1, 2), 30, 40))
+CheckpointHeldBoxes = {}
+for box in area.Boxes do CheckpointHeldBoxes.iterated = box end
+CheckpointHeldBoxes.first = area.FirstBox
+CheckpointHeldBoxes.inside = area:GetBoxInside(Vector(5, 5))
+CheckpointAreaWeak = setmetatable({ area = area }, { __mode = "v" })
+)lua") == 0;
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		const char* readBoxes = R"lua(
+local held = CheckpointHeldBoxes
+for _, name in ipairs({ "iterated", "first", "inside" }) do
+	local box = held[name]
+	assert(box ~= nil and box.Corner.X == 1 and box.Corner.Y == 2 and box.Width == 30 and box.Height == 40, "the " .. name .. " box does not read its Area's box")
+end
+)lua";
+		const bool keptBefore = held && RunScriptString("assert(CheckpointAreaWeak.area ~= nil, 'the Area was collected under its boxes')") == 0 && RunScriptString(readBoxes) == 0;
+		std::string saved;
+		std::vector<std::string> problems;
+		const bool captured = held && SerializeScriptGraph(saved, problems);
+		RunScriptString("CheckpointHeldBoxes = nil; CheckpointAreaWeak = nil");
+		const bool restored = captured && RestoreScriptGraph(saved, problems);
+		RunScriptString("CheckpointAreaWeak = nil");
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		const bool readAfter = restored && RunScriptString(readBoxes) == 0;
+		std::string again;
+		const bool recaptured = readAfter && SerializeScriptGraph(again, problems);
+		RunScriptString("CheckpointHeldBoxes = nil; CheckpointAreaWeak = nil");
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		const bool passed = keptBefore && captured && readAfter && recaptured && problems.empty();
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " boxes_keep_the_area_a_script_dropped kept_before=" << keptBefore << " captured=" << captured << " restored=" << restored
+		          << " read_after=" << readAfter << " recaptured=" << recaptured << " problems=" << problems.size() << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] kept boxes: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
+		// A sound's getters read a world sound from inside a preview window without writing it; outside, Pos stays a live alias.
+		const auto* preset = dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", "Funds Changed", "Base.rte"));
+		bool passed = false;
+		std::string detail = "no preset";
+		if (preset) {
+			SoundContainer sound(*preset);
+			SoundSet set(sound.GetTopLevelSoundSet());
+			sound.SetTopLevelSoundSet(set);
+			luabind::object(m_State, &sound).push(m_State);
+			lua_setglobal(m_State, "PreviewSoundProbe");
+			const std::string before = sound.SaveCheckpoint();
+			const Vector position = sound.GetPosition();
+			float previewLength = -1.0F;
+			bool previewRead = false;
+			LuaMan::CapturePreviewSelfCopies({}, false);
+			{
+				LuaMan::PreviewHookScope hookScope(true);
+				previewLength = sound.GetLength(SoundContainer::LengthOfSoundType::NextPlayed);
+				previewRead = RunScriptString("local x = PreviewSoundProbe.Pos.X; PreviewSoundProbe.Pos.X = x + 5") == 0;
+			}
+			LuaMan::EndPreviewScripts();
+			const bool checkpointSame = sound.SaveCheckpoint() == before;
+			const bool unwritten = checkpointSame && !sound.TestSharedAliasHeld() && sound.GetPosition() == position;
+			const float committedLength = sound.GetLength(SoundContainer::LengthOfSoundType::NextPlayed);
+			const bool alias = RunScriptString("local p = PreviewSoundProbe.Pos; p.X = 7; PreviewSoundProbe.Pos.Y = 9") == 0 && sound.GetPosition().m_X == 7.0F && sound.GetPosition().m_Y == 9.0F;
+			RunScriptString("PreviewSoundProbe = nil");
+			lua_gc(m_State, LUA_GCCOLLECT, 0);
+			passed = previewRead && unwritten && previewLength > 0.0F && previewLength == committedLength && alias;
+			detail = "read=" + std::to_string(previewRead) + " unwritten=" + std::to_string(unwritten) + " checkpoint_same=" + std::to_string(checkpointSame) +
+			         " preview_length=" + std::to_string(previewLength) + " committed_length=" + std::to_string(committedLength) + " alias_outside=" + std::to_string(alias);
+		}
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_sound_getters_leave_the_world_sound " << detail << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
+		// A preview's copy of an actor runs no mode-change callback; the world's actor runs it.
+		const auto* preset = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+		std::unique_ptr<AHuman> actor(preset ? dynamic_cast<AHuman*>(preset->Clone()) : nullptr);
+		const std::string scriptPath = g_PresetMan.GetFullModulePath("Tests.rte/PreviewModeCallback.lua");
+		int world = -1, copy = -1;
+		const auto count = [&actor]() {
+			LuaStateWrapper* state = actor ? actor->GetLuaState() : nullptr;
+			if (!state) return -1;
+			std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+			lua_State* L = state->GetLuaState();
+			int value = 0;
+			lua_getglobal(L, "_ScriptFieldsStash");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, "preview-mode-callback");
+				value = static_cast<int>(lua_tointeger(L, -1));
+				lua_pop(L, 1);
+			}
+			lua_pop(L, 1);
+			return value;
+		};
+		if (actor && actor->LoadScript(scriptPath) >= 0) {
+			actor->OnControllerInputModeChanged(Controller::CIM_AI, -1);
+			world = count();
+			LuaMan::CapturePreviewSelfCopies({actor.get()}, false);
+			MovableObject* clone = nullptr;
+			{
+				MovableObject::FaithfulCloneScope scope(false);
+				clone = dynamic_cast<MovableObject*>(actor->Clone());
+			}
+			if (auto* previewed = dynamic_cast<Actor*>(clone)) {
+				LuaMan::BeginPreviewScripts({previewed}, false, {actor.get()});
+				LuaMan::SetScriptsFrozen(true);
+				previewed->OnControllerInputModeChanged(Controller::CIM_AI, -1);
+				LuaMan::SetScriptsFrozen(false);
+			}
+			LuaMan::EndPreviewScripts();
+			delete clone;
+			copy = count() - world;
+		}
+		const bool passed = world == 1 && copy == 0;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " preview_copy_runs_no_mode_change_callback world=" << world << " copy=" << copy << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
+		// A scene reload leaves no scene layer's back buffer behind: a preset's clone loaded twice, and a clone of a loaded scene loaded again.
+		const int before = SceneLayerBackBufferCount();
+		const auto* preset = dynamic_cast<const Scene*>(g_PresetMan.GetEntityPreset("Scene", "Grasslands", "Base.rte"));
+		int afterReload = -1, afterCopy = -1, peak = -1;
+		if (preset) {
+			{
+				std::unique_ptr<Scene> scene(dynamic_cast<Scene*>(preset->Clone()));
+				scene->LoadData(false, false, false);
+				scene->ClearData();
+				scene->LoadData(false, false, false);
+				peak = SceneLayerBackBufferCount() - before;
+				{
+					std::unique_ptr<Scene> copy(dynamic_cast<Scene*>(scene->Clone()));
+					copy->LoadData(false, false, false);
+					copy->ClearData();
+				}
+				afterCopy = SceneLayerBackBufferCount() - before;
+				scene->ClearData();
+			}
+			afterReload = SceneLayerBackBufferCount() - before;
+		}
+		const bool passed = preset && peak > 0 && afterCopy == peak && afterReload == 0;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " scene_reload_leaves_no_back_buffer loaded=" << peak << " after_copy_reload=" << afterCopy << " after_release=" << afterReload << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
 	const bool pass = checkpointValues && settledSoundOwner && scopeForgetsDestroyed && nativeLifetime && registryLifetime && randomRoundtrip && soundSetCopies && textRoundtrip && !report.empty() && report.find("FAIL") == std::string::npos;
 	std::cout << "[script-graph-selftest] " << (pass ? "PASS" : "FAIL") << std::endl;
 	return pass;
@@ -12266,6 +12449,8 @@ namespace {
 		luabind::detail::preview_fence::argument = &PreviewFenceArgument;
 		s_PreviewLastDroppedCall.clear();
 		MOSprite::s_PreviewKeepsCachesOf = &PreviewFenceKeepsCaches;
+		SoundContainer::s_PreviewReadsWorld = [] { return luabind::detail::preview_fence_detaches(); };
+		SoundContainer::s_PreviewWindowOpen = true;
 		s_PreviewSavedMORNG = s_workerMORNG;
 		s_PreviewSavedLuaRNGOverride = s_luaRNGOverride;
 		luabind::detail::preview_fence::open();
@@ -12284,6 +12469,8 @@ namespace {
 			}
 		}
 		MOSprite::s_PreviewKeepsCachesOf = nullptr;
+		SoundContainer::s_PreviewReadsWorld = nullptr;
+		SoundContainer::s_PreviewWindowOpen = false;
 		s_workerMORNG = s_PreviewSavedMORNG;
 		s_luaRNGOverride = s_PreviewSavedLuaRNGOverride;
 		luabind::detail::preview_fence::close();
