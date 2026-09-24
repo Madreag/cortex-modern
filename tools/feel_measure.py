@@ -20,7 +20,7 @@ from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes
 from feel.records import compress_case_records, record_path
 from run_sim_test import make_run
 from run_selftests import SELFTESTS
-from compare_sim_traces import strict_compare
+from compare_sim_traces import compare_fullstate, strict_compare
 
 REPO = Path(__file__).resolve().parents[1]
 MST = timezone(timedelta(hours=-7))
@@ -29,6 +29,8 @@ SP_CONTROL = Path('D:/mx/opus-f24-20260913/sp-control')
 SP_COMPARATOR = Path('D:/Projects/reviews/takeover-20260909/grok-workers/opus-f24-first-update-20260913/scripts/compare_sp.py')
 BYTE_LIMIT = 5_000_000_000
 MATRIX_BYTE_LIMIT = 10_000_000_000
+# Every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
+FULLSTATE_EVERY = 0
 
 
 def stamp():
@@ -228,6 +230,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                           '-net-match-report', str(out / f'{peer}_report.json')]
                 if autosave_seconds is not None and peer == 'host':
                     flags += ['-net-autosave-seconds', str(autosave_seconds)]
+                if FULLSTATE_EVERY:
+                    flags += ['-net-fullstate-hash-every', str(FULLSTATE_EVERY)]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
             environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{final_tick}', PYTHONDONTWRITEBYTECODE='1')
             if peer == 'client' and loss_percent:
@@ -296,6 +300,11 @@ def held_client_rewinds(log):
         if int(image) < int(stop):
             images.append(int(image))
     return tuple(images)
+
+
+def fullstate_proof(run, pairs):
+    """The full-state oracle's verdict per pair of match peers: every sampled tick's shared sections must match."""
+    return {f'{left}/{right}': compare_fullstate(Path(run) / left / 'stdout.log', Path(run) / right / 'stdout.log') for left, right in pairs}
 
 
 def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False, client_away=(), window_only=False, client_rewinds=()):
@@ -444,6 +453,9 @@ def reduce_timing_case(run, reference=None):
                     for passes in live.values())
     proof.update(live_passes=live, live_pass=live_pass)
     proof['pass'] &= live_pass
+    if FULLSTATE_EVERY:
+        proof['fullstate'] = fullstate_proof(run, pairs)
+        proof['pass'] &= all(row['passed'] for row in proof['fullstate'].values())
     write_json(run / 'hash-proof.json', proof)
     return dict(name=run.name, peers=peers, measurement_complete=manifest['launches_complete'] and all(value['measurement_complete'] for value in peers.values()),
                 launches_complete=manifest['launches_complete'], engine_placement=manifest.get('engine_placement') or {},
@@ -510,6 +522,10 @@ def analyze(root, stock=None):
             proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json', cross_peer=True),
                      'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json', cross_peer=True),
                      **{peer + '_on_off': compare_pair(on / f'{peer}_trace.json', off / f'{peer}_trace.json') for peer in ('host', 'client')}}
+            if FULLSTATE_EVERY:
+                for state, state_run in (('on', on), ('off', off)):
+                    verdict = compare_fullstate(state_run / 'host' / 'stdout.log', state_run / 'client' / 'stdout.log')
+                    proof[f'fullstate_{state}'] = dict(verdict, **{'pass': verdict['passed']})
             write_json(on / 'hash-proof.json', proof)
             raw_paths = [on / 'manifest.json', on / 'run-result.json', on / 'match.ccreplay', on / 'replay-report.json',
                          on / 'replay-inspect/stdout.log', off / 'manifest.json', off / 'run-result.json',
@@ -625,6 +641,8 @@ def parse_args(argv=None):
     parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
     parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES],
                         help='run only the selected autosave arms, without baselines or the full matrix')
+    parser.add_argument('--fullstate-every', type=int, default=0,
+                        help='every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off')
     return parser, parser.parse_args(argv)
 
 
@@ -635,6 +653,10 @@ def main(argv=None):
         parser.error('the ten match ports must stay within 48231..48240')
     if args.host_lua_states < 1 or args.client_lua_states < 1:
         parser.error('--host-lua-states and --client-lua-states must be positive')
+    if args.fullstate_every < 0:
+        parser.error('--fullstate-every must be 0 or positive')
+    global FULLSTATE_EVERY
+    FULLSTATE_EVERY = args.fullstate_every
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
