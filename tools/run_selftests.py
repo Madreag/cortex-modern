@@ -64,6 +64,48 @@ LOAD_SENSITIVE = {
     # threaded_synced_update_pass_timing: 1,024 registered MOs, 150 us added per pass.
     "script-graph": ["-script-graph-selftest"],
 }
+# The wall-clock budget checks inside those rows. A sanitizer build instruments every access, so its timings measure
+# the instrumentation: there the budget lines are reported, not judged, and every other check still decides the row.
+WALL_CLOCK_CHECKS = {"script-graph": ("threaded_synced_update_pass_timing", "threaded_synced_update_pass_timing_under_load")}
+SANITIZER_MARKERS = {b"clang_rt.asan": "asan", b"__asan_init": "asan", b"clang_rt.tsan": "tsan", b"__tsan_init": "tsan"}
+
+
+def sanitizer_build(exe: Path):
+    """The sanitizer an executable links, read from its bytes (the runtime's import name or init symbol), or None."""
+    overlap = max(len(marker) for marker in SANITIZER_MARKERS)
+    tail = b""
+    with Path(exe).open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 22), b""):
+            window = tail + block
+            for marker, kind in SANITIZER_MARKERS.items():
+                if marker in window:
+                    return kind
+            tail = window[-overlap:]
+    return None
+
+
+def score_wall_clock_informational(stdout: str, record: dict, name: str, sanitizer: str) -> dict:
+    """A sanitizer build's row with its declared budget lines reported, not judged. It passes only when those lines
+    are its only FAIL lines, its closing verdict is a bare PASS (the checks that print one reached the end green),
+    no fatal line was printed and the engine exited 1 by itself - the exit the budget checks alone give the script-graph
+    row, whose closing PASS covers the master state and whose exit adds the threaded checks. Anything else keeps the plain score."""
+    tag = f"{name}-selftest"
+    checks = WALL_CLOCK_CHECKS.get(name, ())
+    lines = (stdout or "").splitlines()
+    budget = [line for line in lines if any(re.match(rf"^\[{re.escape(tag)}\] FAIL {re.escape(check)}(\s|$)", line) for check in checks)]
+    rest = "\n".join(line for line in lines if line not in budget)
+    closing = [match.group(0).split("] ", 1)[1].strip() for match in re.finditer(rf"^\[{re.escape(tag)}\] (PASS|FAIL)\s*$", rest, re.M)]
+    named_passes = [line for line in lines if re.match(rf"^\[{re.escape(tag)}\] PASS \S", line)]
+    excused = (bool(budget) and closing == ["PASS"] and not SUITE_FAIL.search(rest) and not FATAL.search(rest) and bool(named_passes)
+               and record.get("exit_code") == 1 and not record.get("timed_out"))
+    scored = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), tag)
+    if excused:
+        scored.update(**{"pass": True, "reason": f"{sanitizer} build: {len(budget)} wall-clock budget line(s) reported, not judged"})
+    scored["sanitizer"] = sanitizer
+    scored["informational_budget_lines"] = budget
+    return scored
+
+
 # Every binding walked in a preview window on the pickup_fire replay's world: fixtures join at tick 150, the walk runs at 154.
 BINDING_WALK_ARGS = ["-net-replay", "tools/fixtures/pickup_fire.ccreplay", "-input-script", "tools/fixtures/pickup_fire.txt",
                      "-max-ticks", "155", "-preview-binding-exhaustive-selftest"]
@@ -187,6 +229,7 @@ def main():
     if not exe.is_file():
         parser.error(f"no engine executable at {exe}; build it, or set CCCP_TEST_BINARY on POSIX")
     exe_hash = sha256_of(exe)
+    sanitizer = sanitizer_build(exe)
     results = {}
     rows = [] if options.quiet_rows == "only" else list(SELFTESTS)
     quiet = list(LOAD_SENSITIVE) if options.quiet_rows else []
@@ -200,6 +243,8 @@ def main():
                 run.close()
             stdout = (case / "stdout.log").read_text(errors="replace") if (case / "stdout.log").exists() else ""
             scored = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), f"{name}-selftest")
+            if sanitizer and not scored["pass"]:
+                scored = score_wall_clock_informational(stdout, record, name, sanitizer)
             scored["binary"] = record.get("exe_sha256")
             scored["load_sensitive"] = True
         elif name == "headless-assert-continues":
@@ -255,6 +300,7 @@ def main():
         "passed": sum(1 for r in results.values() if r["pass"]),
         "total": len(rows) + len(quiet),
         "quiet_rows": quiet,
+        "sanitizer": sanitizer,
         "results": results,
     }
     (out / "result.json").write_text(json.dumps(summary, indent=2))

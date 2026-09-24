@@ -761,6 +761,19 @@ def check_cross_capture(results, scratch):
     ok &= row(results, 'cross/merged-media-and-contract', merge_halves(roots, scratch / 'cross-merged'))
     merged = json.loads((scratch / 'cross-merged/manifest.json').read_text())
     ok &= row(results, 'cross/shared-key-and-platforms', merged['match_identity_gate']['match_id'] == '0000000000000005-0000000000000007' and merged['match_identity_gate']['cross_platform'])
+    # Every real half carries the frameless assert-dialog row; it passes on its probe and fails the merge when it fails.
+    for root, name in zip(roots, ('host', 'client')):
+        driver.write_json(root / 'review.json', {'scenario': scenario['name'], 'checklist': [
+            {'id': name, 'peer': name, 'frames': [0, 0], 'probe': 'pass'},
+            {'id': 'no-assert-dialogs', 'peer': 'all', 'frames': None, 'state': 'checked', 'probe': 'pass'}]})
+    ok &= row(results, 'cross/assert-dialog-row-passes-on-its-probe', merge_halves(roots, scratch / 'cross-merged-dialogs'))
+    dialog = json.loads((roots[1] / 'review.json').read_text())
+    dialog['checklist'][1].update(probe='fail', finding={'class': 'engine', 'reason': 'assert dialog: synthetic'})
+    driver.write_json(roots[1] / 'review.json', dialog)
+    ok &= row(results, 'cross/assert-dialog-fails-the-merge', not merge_halves(roots, scratch / 'cross-merged-dialog-red'))
+    dialog['checklist'][1].update(probe='pass')
+    dialog['checklist'][1].pop('finding')
+    driver.write_json(roots[1] / 'review.json', dialog)
     (roots[1] / 'client.mp4').write_bytes(b'changed synthetic video')
     ok &= row(results, 'cross/transferred-media-tamper-fails', not merge_halves(roots, scratch / 'cross-tampered'))
     bad = {'name': 'run0', 'peers': [{'name': 'host', 'kill_when': {'peer': 'absent', 'event': 'ready'}}]}
@@ -921,6 +934,84 @@ def check_recorder_flush(results, scratch):
     return ok
 
 
+def check_log_gates(results, scratch):
+    """A gate on a peer's own stdout line: a drop or a start waits for the product to print it."""
+    log = scratch / "log-gate" / "stdout.log"
+    log.parent.mkdir()
+    log.write_text("[net-match] held client: replaying the private committed tail\n")
+    pattern = r"\[net-match\] private catch-up complete frame=\d+"
+    ok = row(results, "log-gate/unprinted-line-is-unmet", not driver.log_line_seen(log, pattern))
+    ok &= row(results, "log-gate/missing-log-is-unmet", not driver.log_line_seen(log.parent / "absent.log", pattern))
+    log.write_text(log.read_text() + "[net-match] private catch-up complete frame=742\n")
+    ok &= row(results, "log-gate/printed-line-is-met", driver.log_line_seen(log, pattern))
+    peers = [{"name": "client", "kill_when": {"peer": "client", "log": pattern}}]
+    ok &= row(results, "log-gate/drop-on-a-log-line-passes-preflight", driver.run_preflight({"peers": peers}, {"name": "run0", "peers": peers}, [], {}) is None)
+    both = [{"name": "client", "kill_when": {"peer": "client", "log": pattern, "event": "video_mark x"}}]
+    ok &= row(results, "log-gate/drop-with-two-triggers-is-refused",
+              driver.run_preflight({"peers": both}, {"name": "run0", "peers": both}, [], {})["class"] == "harness")
+    scenario = driver.load_scenario("mp-rollback-lag")
+    peers = {peer["name"]: peer for peer in scenario["runs"][0]["peers"]}
+    drops = peers["client"].get("kill_when") or []
+    ok &= row(results, "log-gate/rollback-lag-drops-the-client-after-catch-up", any(gate.get("log") == pattern for gate in drops))
+    args = peers["host"]["args"]
+    round_ticks = int(args[args.index("-net-match-ticks") + 1])
+    window_end = scenario["runs"][0]["feel_gate"].get("ticks")
+    # The fallback reads the host's own scripted-input line (its sim clock, not its recorded frames, which trail the sim
+    # under load) and leaves the relaunch at least 600 ticks (10 s at 60 Hz) of the round.
+    host_gate = next((gate["log"] for gate in drops if gate.get("peer") == "host" and gate.get("log")), None)
+    fires = [tick for tick in range(1, round_ticks + 1) if host_gate and re.search(host_gate, f"[input-script] tick {tick} player 0 pressed FIRE")]
+    ok &= row(results, "log-gate/rollback-lag-drops-inside-the-round-without-a-catch-up",
+              bool(fires) and fires[0] > window_end - 60 and fires[0] <= round_ticks - 600, f"first host tick={fires[:1]} round={round_ticks}")
+    ok &= row(results, "feel-window/rollback-lag-gates-keep-the-1200-tick-window", window_end == 1200 and round_ticks > window_end,
+              f"window_end={window_end} round={round_ticks}")
+    fixture = next(entry for entry in peers["host"]["runtime_files"] if entry.get("copy") == "tools/feel/FeelBaseline.lua")
+    staged = driver.staged_copy(driver.Path(__file__).resolve().parents[1] / fixture["copy"], fixture.get("replace", [])).decode("utf-8")
+    ok &= row(results, "feel-window/rollback-lag-activity-runs-the-whole-round", f"local WINDOW_TICKS = {round_ticks};" in staged)
+    bad = scratch / "staged-copy.lua"
+    bad.write_text("local A = 1;\nlocal A = 1;\n", encoding="utf-8")
+    try:
+        driver.staged_copy(bad, [[r"^local A = \d+;$", "local A = 2;"]])
+        refused = False
+    except ValueError:
+        refused = True
+    ok &= row(results, "staged-copy/ambiguous-replacement-is-refused", refused)
+    rejoin = [item for item in scenario["checklist"] if item.get("peer") == "client-rejoined"]
+    ok &= row(results, "feel-window/rollback-lag-rejoin-is-judged-on-the-reclaim",
+              bool(rejoin) and all(any("seat-reclaimed" in pattern for pattern in item.get("log_regex", [])) for item in rejoin))
+    either = [{"name": "host"}, {"name": "client", "kill_when": [{"peer": "client", "log": pattern}, {"peer": "host", "sim_tick": 800}]}]
+    ok &= row(results, "log-gate/first-of-several-drop-gates-passes-preflight", driver.run_preflight({"peers": either}, {"name": "run0", "peers": either}, [], {}) is None)
+    stray = [{"name": "client", "kill_when": [{"peer": "client", "log": pattern}, {"peer": "absent", "sim_tick": 800}]}]
+    ok &= row(results, "log-gate/unknown-peer-in-a-gate-list-is-refused", driver.run_preflight({"peers": stray}, {"name": "run0", "peers": stray}, [], {})["class"] == "harness")
+    ok &= row(results, "log-gate/rollback-lag-survivor-waits-for-the-client-route", peers["survivor"].get("start_when", {}).get("peer") == "host"
+              and "RouteAllowed" in peers["survivor"]["start_when"].get("log", ""))
+    return ok
+
+
+def check_fullstate_applicability(results, scratch):
+    """A pair that never started a lockstep round has no full-state verdict; one that started and shares no sample is red."""
+    root = scratch / "fullstate-applicability"
+    root.mkdir()
+    host, client = root / "host.log", root / "client.log"
+    host.write_text("[menu-script] dump_lobby state=Completed members=2\n")
+    client.write_text("[menu-script] dump_lobby state=Failed members=1\n")
+    lobby = driver.fullstate_verdict(host, client)
+    ok = row(results, "fullstate/lobby-scenario-is-not-applicable", lobby["passed"] is None and bool(lobby["not_applicable"]), str(lobby))
+    capture = {"name": "run0", "peers": [], "fullstate": {"host/client": lobby}}
+    document = driver.review({"name": "lobby", "checklist": []}, capture, root)
+    ok &= row(results, "fullstate/not-applicable-is-no-finding", not any("full-state" in f["reason"] for f in document["run_findings"]))
+    client.write_text(driver.LOCKSTEP_ROUND_START + "1 frame=1 local_peer=2 peers=2 input_delay=3\n")
+    started = driver.fullstate_verdict(host, client)
+    ok &= row(results, "fullstate/started-round-without-samples-is-red", started["passed"] is False
+              and started["reasons"] == ["the peers share no full-state sample"], str(started))
+    capture["fullstate"] = {"host/client": started}
+    document = driver.review({"name": "lobby", "checklist": []}, capture, root)
+    ok &= row(results, "fullstate/red-verdict-is-a-finding", any("full-state oracle" in f["reason"] for f in document["run_findings"]))
+    capture["feel_window"] = {"end_tick": 1200, "measured": {"host": {"first_tick": 300, "last_tick": 1200}}}
+    document = driver.review({"name": "lobby", "checklist": []}, capture, root)
+    ok &= row(results, "feel-window/review-carries-the-window", document.get("feel_window") == capture["feel_window"])
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -958,6 +1049,8 @@ def main():
         ok &= check_cross_transfer(results, scratch)
         ok &= check_migration_timing(results, scratch)
         ok &= check_recorder_flush(results, scratch)
+        ok &= check_fullstate_applicability(results, scratch)
+        ok &= check_log_gates(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",

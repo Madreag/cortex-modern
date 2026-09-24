@@ -179,4 +179,6 @@ def merge_halves(roots, out):
                 'relocations': relocations, 'provenance': provenance, 'auxiliary_checksum_coverage': coverage}
     driver.write_json(out / 'manifest.json', manifest)
     driver.write_json(out / 'review.json', document)
-    return not findings and all(item.get('frames') is not None and not item.get('finding') and item.get('probe') not in ('fail', 'not-reached', 'not-run') for item in items)
+    # The assert-dialog row reads the peer's log, not frames: its own probe verdict decides it.
+    return not findings and all((item.get('frames') is not None or item.get('state') == 'checked') and not item.get('finding')
+                                and item.get('probe') not in ('fail', 'not-reached', 'not-run') for item in items)

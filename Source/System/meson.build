@@ -39,3 +39,7 @@ sources += files(
 'PieQuadrant.cpp',
 'SpatialPartitionGrid.cpp',
 )
+
+if host_machine.system() == 'darwin'
+  sources += files('AppleApplication.mm')
+endif

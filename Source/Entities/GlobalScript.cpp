@@ -19,6 +19,12 @@ GlobalScript::GlobalScript() {
 }
 
 GlobalScript::~GlobalScript() {
+	// The global named after the Lua class holds the running copy that bound it; when that copy goes, it goes to the preset.
+	if (!m_LuaClassName.empty()) {
+		const Entity* preset = GetModuleID() < g_PresetMan.GetTotalModuleCount() ? GetPresetForCopy() : nullptr;
+		const GlobalScript* kept = preset != this ? dynamic_cast<const GlobalScript*>(preset) : nullptr;
+		g_LuaMan.GetMasterScriptState().RetargetGlobalObject(m_LuaClassName, static_cast<const GlobalScript*>(this), const_cast<GlobalScript*>(kept));
+	}
 	Destroy(true);
 }
 

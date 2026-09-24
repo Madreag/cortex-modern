@@ -3957,7 +3957,8 @@ Actor* MovableMan::GetClosestTeamActor(int team, int player, const Vector& scene
 
 	Activity* pActivity = g_ActivityMan.GetActivity();
 
-	float sqrShortestDistance = static_cast<float>(maxRadius * maxRadius);
+	// Squared as float: a radius past 46340 overflows int (GetFirstTeamActor's 10000000 wrapped to a reach of about 16627).
+	float sqrShortestDistance = static_cast<float>(maxRadius) * static_cast<float>(maxRadius);
 	Actor* pClosestActor = 0;
 
 	// If we're looking for a noteam actor, then go through the entire actor list instead
@@ -4003,7 +4004,8 @@ Actor* MovableMan::GetClosestEnemyActor(int team, const Vector& scenePoint, int 
 
 	Activity* pActivity = g_ActivityMan.GetActivity();
 
-	float sqrShortestDistance = static_cast<float>(maxRadius * maxRadius);
+	// Squared as float: a radius past 46340 overflows int (GetFirstTeamActor's 10000000 wrapped to a reach of about 16627).
+	float sqrShortestDistance = static_cast<float>(maxRadius) * static_cast<float>(maxRadius);
 	Actor* pClosestActor = 0;
 
 	for (std::deque<Actor*>::iterator aIt = m_Actors.begin(); aIt != m_Actors.end(); ++aIt) {
@@ -4030,7 +4032,8 @@ Actor* MovableMan::GetClosestActor(const Vector& scenePoint, int maxRadius, Vect
 
 	Activity* pActivity = g_ActivityMan.GetActivity();
 
-	float sqrShortestDistance = static_cast<float>(maxRadius * maxRadius);
+	// Squared as float: a radius past 46340 overflows int (GetFirstTeamActor's 10000000 wrapped to a reach of about 16627).
+	float sqrShortestDistance = static_cast<float>(maxRadius) * static_cast<float>(maxRadius);
 	Actor* pClosestActor = 0;
 
 	for (std::deque<Actor*>::iterator aIt = m_Actors.begin(); aIt != m_Actors.end(); ++aIt) {

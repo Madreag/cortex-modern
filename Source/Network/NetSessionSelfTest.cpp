@@ -11,6 +11,7 @@
 #include "NetMatchRunner.h"
 #include "NetParticipantCrypto.h"
 #include "NetSession.h"
+#include "System/FaultInjection.h"
 #include "System/System.h"
 
 #include "nlohmann/json.hpp"
@@ -141,6 +142,60 @@ namespace RTE {
 				return false;
 			}
 			(void)port;
+			return true;
+		}
+
+		/// A hello the host's transport loses (handed over before the connection was announced) is repeated and the join completes;
+		/// a client that sends it once times out as before; a host that never answers still ends the join with the timeout's text.
+		bool TestAnUnansweredHelloIsRepeated(std::string* error) {
+			struct Arm {
+				const char* name;
+				uint32_t repeatMs;
+				bool hostAnswers;
+				bool joins;
+			};
+			for (const Arm& arm: {Arm{"once", 0, true, false}, Arm{"repeated", 250, true, true}, Arm{"no-answer", 250, false, false}}) {
+				TestArmFaultInject(arm.hostAnswers ? "drop_first_hello" : "");
+				LoopbackTransport hostTransport;
+				LoopbackTransport clientTransport;
+				NetSession host;
+				NetSession client;
+				NetSessionConfig hostConfig = MakeConfig(42331, 2301, "Host");
+				NetSessionConfig clientConfig = MakeConfig(42331, 2302, "Player");
+				hostConfig.timeoutMs = 2000;
+				clientConfig.timeoutMs = 2000;
+				clientConfig.helloRepeatMs = arm.repeatMs;
+				if (!StartPair(42331, host, client, hostTransport, clientTransport, hostConfig, clientConfig, error)) {
+					TestArmFaultInject("");
+					return false;
+				}
+				bool ready = false;
+				for (uint64_t now = 0; now <= 3000 && !ready; now += 10) {
+					if (arm.hostAnswers) host.Tick(now);
+					client.Tick(now);
+					ready = host.IsReady() && client.IsReady();
+					if (client.IsFailed() || client.IsRejected()) break;
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+				TestArmFaultInject("");
+				if (ready != arm.joins) {
+					*error = std::string("hello arm ") + arm.name + ": joined=" + (ready ? "1" : "0") + " client=" + NetSession::StateName(client.GetState()) +
+					         " repeats=" + std::to_string(client.GetStats().helloRepeats) + " host_repeats_seen=" + std::to_string(host.GetStats().repeatedHellos);
+					return false;
+				}
+				if (!arm.joins && ((!client.IsFailed() && !client.IsRejected()) || client.GetRejectReason() != NetRejectReason::Timeout ||
+				                   client.BuildPlayerRefusalText() != "The connection timed out. Please try again.")) {
+					*error = std::string("hello arm ") + arm.name + ": an unanswered join did not end on the timeout: " + NetSession::StateName(client.GetState()) +
+					         " '" + client.BuildPlayerRefusalText() + "'";
+					return false;
+				}
+				if (arm.joins && (client.GetStats().helloRepeats == 0 || host.GetReadyPeerCount() != 1)) {
+					*error = std::string("hello arm ") + arm.name + ": the join completed without a repeated hello or seated the client twice";
+					return false;
+				}
+			}
+			std::cout << "[net-session-selftest] PASS an_unanswered_hello_is_repeated" << std::endl;
 			return true;
 		}
 
@@ -2057,6 +2112,7 @@ namespace RTE {
 		std::string error;
 		if (!TestHappyPath(&error)) return fail(error);
 		if (!TestHandshakeNameAndReportDump(&error)) return fail(error);
+		if (!TestAnUnansweredHelloIsRepeated(&error)) return fail(error);
 		if (!TestAssignedPeerIdIgnoresTransportPeerId(&error)) return fail(error);
 		if (!TestReadyRequiresAcceptedConnection(&error)) return fail(error);
 		if (!TestHostWithNoRemoteSeatIsReady(&error)) return fail(error);

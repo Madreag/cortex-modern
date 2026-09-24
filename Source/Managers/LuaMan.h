@@ -437,6 +437,13 @@ namespace RTE {
 		/// @return Whether that global var has been defined yet in the Lua state.
 		bool GlobalIsDefined(const std::string& globalName);
 
+		/// When a global var holds the bound C++ object at object, points it at replacement instead, so the script table the
+		/// var carries stays; with no replacement the var is cleared. A var holding anything else is left alone.
+		/// @param globalName The name of the global var in the Lua state.
+		/// @param object The bound pointer, as the var's class sees it, of the object that is going away.
+		/// @param replacement The object of the same class to bind instead, or nullptr to clear the var.
+		void RetargetGlobalObject(const std::string& globalName, const void* object, void* replacement);
+
 		/// Checks if there is anything defined in a specific index of a table.
 		/// @param tableName The name of the table to look inside.
 		/// @param indexName The name of the index to check inside that table.
@@ -827,11 +834,22 @@ namespace RTE {
 		/// Updates the state of this LuaMan.
 		void Update();
 
-		/// Asynchronously enforces a GC run to occur.
+		/// Asynchronously enforces a GC run to occur, for the end of the current sim tick.
 		void StartAsyncGarbageCollection();
 
-		/// Sets whether every state's tick-end collection is a full cycle, as a run that must agree with another run needs, or the incremental step.
-		/// @param deterministic Whether every tick end runs a full collection on every state.
+		/// Starts the tick-end collection of a given sim tick. The incremental step runs on every state; a full collection
+		/// runs only on the states whose slot is the tick's, unless every state is asked for.
+		/// @param tick The sim tick whose end this pass is.
+		/// @param everyState Whether every state takes a full collection this pass, whatever its slot.
+		void StartAsyncGarbageCollection(uint64_t tick, bool everyState);
+
+		/// Ticks between two tick-end full collections of one state. State slot i (the master is 0, threaded state n is n + 1)
+		/// collects at the end of every tick t with t % c_CollectionPeriodTicks == i % c_CollectionPeriodTicks, so the tick a
+		/// dropped object dies on is a function of its state and the tick alone, never of the heap or the machine.
+		static constexpr uint64_t c_CollectionPeriodTicks = c_LuaStateCount + 1;
+
+		/// Sets whether the tick-end collection is a full cycle on the states whose slot is due, as a run that must agree with another run needs, or the incremental step.
+		/// @param deterministic Whether tick ends run full collections on the due states.
 		static void SetDeterministicCollection(bool deterministic);
 
 		/// Turns LuaJIT's allocation sinking on or off in every captured state. A sunk table is never
@@ -839,8 +857,8 @@ namespace RTE {
 		static void SetCheckpointAllocationSinking(bool sinking);
 		static bool IsCheckpointAllocationSinking();
 
-		/// Gets whether every state's tick-end collection is a full cycle.
-		/// @return Whether every tick end runs a full collection on every state.
+		/// Gets whether the tick-end collection is a full cycle on the due states.
+		/// @return Whether tick ends run full collections on the due states.
 		static bool IsDeterministicCollection();
 
 		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.

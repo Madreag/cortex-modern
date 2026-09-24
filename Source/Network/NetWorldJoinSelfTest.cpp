@@ -44,6 +44,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -3213,6 +3214,46 @@ namespace RTE {
 			return Fail("held-seat-returner-watches: the member whose seat the AI holds came back as a watcher, not on slot 2");
 		}
 		std::cout << "[net-world-join-selftest] PASS a_held_world_seat_waits_for_its_returner" << std::endl;
+		return 0;
+	}
+
+	/// A survivor that finds no other live member never ends the match because its host was lost: with a held seat in the
+	/// round it hosts the match so that seat rejoins it, with none it rejoins the host; only the host's announced leave ends it.
+	int TestALoneSurvivorWithAHeldSeatHostsTheMatch() {
+		using Outcome = NetMatchService::LoneElection;
+		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::HostForHeldSeats) {
+			return Fail("lone-survivor-ended-a-held-match: a lost host with a held seat in the round did not hand the match to the survivor");
+		}
+		if (NetMatchService::LoneElectionOutcome(false, false) != Outcome::RejoinHost) {
+			return Fail("lone-survivor-took-an-unheld-match: a lost host with no held seat was not rejoined");
+		}
+		if (NetMatchService::LoneElectionOutcome(true, true) != Outcome::EndMatch || NetMatchService::LoneElectionOutcome(true, false) != Outcome::EndMatch) {
+			return Fail("lone-survivor-overruled-the-host: the host's announced leave did not end the match");
+		}
+		std::cout << "[net-world-join-selftest] PASS a_lone_survivor_with_a_held_seat_hosts_the_match" << std::endl;
+		return 0;
+	}
+
+	/// A member whose seat the AI holds and who then leaves has gone for good: the world releases that seat for a new join,
+	/// while a seat still committed, dropped or mid-reclaim stays its member's.
+	int TestAHeldWorldMembersLeaveReleasesItsSeat() {
+		std::string error;
+		NetWorldJoinHost host;
+		if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) return Fail("held-leave fixture: " + error);
+		const uint8_t slot = host.FindSession(7) ? host.FindSession(7)->assignedPeerId : 0;
+		NetH4SeatStatus seat;
+		seat.stableSeat = 2; seat.lockstepPeerId = slot;
+		NetMatchService::WorldCleanLeave leave;
+		for (const auto& [name, committed, dropped, reclaiming]: std::vector<std::tuple<const char*, bool, bool, bool>>{{"committed", true, false, false}, {"dropped", true, true, false}, {"reclaiming", false, false, true}}) {
+			seat.committed = committed; seat.dropped = dropped; seat.reclaiming = reclaiming;
+			if (NetMatchService::FindHeldWorldCleanLeave({seat}, host, {slot}, leave)) return Fail(std::string("held-seat-released-while-") + name + ": a seat still its member's was released");
+		}
+		seat.committed = false; seat.dropped = false; seat.reclaiming = false;
+		if (NetMatchService::FindHeldWorldCleanLeave({seat}, host, {}, leave)) return Fail("a clean leave of a seat the AI does not hold was taken for a held one");
+		if (!NetMatchService::FindHeldWorldCleanLeave({seat}, host, {slot}, leave) || leave.peerId != slot || leave.stableSeat != 2 || leave.connection != 7) {
+			return Fail("held-leave-never-seen: a held member that left kept its seat for a reclaim that cannot come (peer " + std::to_string(leave.peerId) + ")");
+		}
+		std::cout << "[net-world-join-selftest] PASS a_held_world_members_leave_releases_its_seat" << std::endl;
 		return 0;
 	}
 
@@ -7439,6 +7480,8 @@ namespace RTE {
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
+		if (const int result = TestAHeldWorldMembersLeaveReleasesItsSeat(); result != 0) return result;
+		if (const int result = TestALoneSurvivorWithAHeldSeatHostsTheMatch(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;

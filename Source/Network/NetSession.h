@@ -59,6 +59,8 @@ namespace RTE {
 		bool readyWithoutPeers = false;
 		uint32_t heartbeatIntervalMs = 100;
 		uint32_t timeoutMs = 1000;
+		/// Client: an unanswered hello goes out again this often inside the timeout; 0 sends it once.
+		uint32_t helloRepeatMs = 250;
 		/// A rejoin phase with nobody to answer (the image, the load, the tail) ends the rejoin past this, the host's own join deadline.
 		uint32_t rejoinPhaseCeilingMs = 180000;
 		uint16_t minProtocolVersion = NetProtocol::c_Version;
@@ -73,6 +75,8 @@ namespace RTE {
 		uint32_t malformedMessages = 0;
 		uint32_t ignoredPhasePackets = 0;
 		uint32_t timeouts = 0;
+		uint32_t helloRepeats = 0;   //!< Client: hellos sent again while the host had not answered.
+		uint32_t repeatedHellos = 0; //!< Host: repeats of a hello it had already read.
 		uint32_t timeoutResumptions = 0; //!< Evaluations that restarted a silence window because the caller had stopped feeding the session for longer than the budget. One per transition; a second in a row without a word restarts nothing.
 		uint32_t unboundConnectionFaults = 0; //!< Host: per-connection transport faults ignored so a joiner cannot fail the session for everyone.
 		uint32_t unauthenticatedConnectionsRefused = 0; //!< Host: connections refused because the half-open bound was already full.
@@ -302,12 +306,14 @@ namespace RTE {
 			// digests that let it name the modules. Bounded by ExpireSilentHandshakes.
 			bool awaitingModuleDigests = false;
 			bool moduleDigestsSent = false;
+			bool helloSeen = false; //!< Its hello was read; a repeat of it is the client still waiting for the answer.
 			NetIdentityMismatch pendingModuleMismatch;
 		};
 
 		bool Send(NetPeerId peerId, NetPayload payload, std::string* error = nullptr);
 		void SendHeartbeat(NetPeerId peerId);
 		void MaybeSendHeartbeats();
+		void RepeatUnansweredHello();
 		void ProcessEvent(const NetTransportEvent& event);
 		void ProcessPacket(NetPeerId peerId, const std::vector<uint8_t>& bytes);
 		void HandleMalformed(NetPeerId peerId, const NetProtocolError& decodeError, const std::vector<uint8_t>& bytes);
@@ -382,6 +388,8 @@ namespace RTE {
 		uint64_t m_A7ClientConnectedMs = 0;
 		bool m_A7HeartbeatAttempted = false;
 		uint64_t m_StateStartedMs = 0;
+		uint64_t m_LastHelloSentMs = 0; //!< Client: when its hello last went out, so an unanswered one is repeated.
+		bool m_DroppedFirstHello = false; //!< Host test lever: the first hello was dropped as a transport that lost it would.
 		uint64_t m_LastReceiveMs = 0;
 		uint64_t m_LastTimeoutCheckMs = 0;
 		bool m_TimeoutsEvaluated = false;

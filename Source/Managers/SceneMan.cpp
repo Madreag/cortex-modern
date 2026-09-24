@@ -662,9 +662,8 @@ void SceneMan::HashTerrainBitmap(BITMAP* bitmap) {
 	}
 	const int dims[2] = {bitmap->w, bitmap->h};
 	g_SimChecksum.Update("terrain", dims, sizeof(dims));
-	for (int y = 0; y < bitmap->h; ++y) {
-		g_SimChecksum.Update("terrain", bitmap->line[y], static_cast<size_t>(bitmap->w));
-	}
+	// The same bytes row after row; what held still since the last hash costs next to nothing.
+	g_SimChecksum.UpdateRows("terrain", bitmap, bitmap->line, bitmap->w, bitmap->h);
 }
 
 namespace {
