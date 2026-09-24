@@ -250,9 +250,9 @@
       "mark": "ui-directory-listing",
       "screen": "MultiplayerScreen",
       "what": "A published session appears in discovery; selecting the row fills its join target.",
-      "assert": "directory/listed.json; activate GameRow0",
+      "assert": "directory/listed.json; activate GameRowPort{PORT} (this session's own row)",
       "events": [
-        "activate GameRow0 ok=1"
+        "activate GameRowPort\\d+ ok=1"
       ],
       "run": [
         "640x360",
