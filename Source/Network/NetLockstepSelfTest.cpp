@@ -77,6 +77,7 @@ namespace RTE {
 	bool TestAReturningSeatsRampIsTheBound(std::string* error);
 	bool TestASeatIsNotLateForOurOwnDecision(std::string* error);
 	bool TestAFirstDelayChangeIsNotAMutualWait(std::string* error);
+	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -19532,6 +19533,75 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// The live estimator lowers a seat's delay to what its link needs. A seat our sim is already waiting on has no frames to
+	// spare, so the lower delay leaves the frames between the two values unproduced and the seat is held a delay later
+	// (a returner reclaimed at delay 8 on a zero-ping link, lowered to 1: held 8 frames after the change). A seat that runs
+	// ahead still gets its lower delay.
+	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error) {
+		for (const uint64_t clientPeriodMs: {uint64_t(25), uint64_t(12)}) {
+			const bool clientIsSlow = clientPeriodMs > 17;
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A31, 0, NetTransportLane::InputUnreliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A31, 0, NetTransportLane::InputUnreliable);
+			for (auto* config: {&hostConfig, &clientConfig}) {
+				config->roundId = 0x9A31;
+				config->simTickMs = 1000.0 / 60.0;
+				config->timeoutMs = 20000;
+				config->substituteSlowPeers = true;
+				config->adaptiveInputDelay = true;
+				config->matchConfig = NetMatchConfigUtil::MakeDefault(0x9A31);
+				config->peerInputDelayFrames = {{1, 1}, {2, 8}};
+			}
+			hostConfig.relayToOtherPeers = true;
+			LoopbackTransportConfig link;
+			link.latencyMs = 1;
+			hostWire.SetFaultConfig(link); clientWire.SetFaultConfig(link);
+			if (!StartCoordinatorPair(48921, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			struct Sim { NetLockstepCoordinator* coordinator; int64_t uid; uint64_t periodMs; uint64_t tick = 0; bool produced = false; uint64_t startAtMs = 0; uint64_t longestWaitMs = 0; uint64_t waitingSinceMs = 0; };
+			Sim sims[2] = {{&host, 100, 17}, {&client, 200, clientPeriodMs}};
+			uint64_t now = 0;
+			std::string queueError;
+			const auto pump = [&] {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+				for (Sim& sim: sims) {
+					const uint8_t local = sim.coordinator->GetConfig().localPeerId;
+					const bool gateOpen = sim.coordinator->HasReadyFrame(sim.tick) || sim.tick < sim.coordinator->GetStats().effectiveStartFrame ||
+					    sim.coordinator->InputDelayAt(local, sim.tick) == 0;
+					if (!sim.produced && now >= sim.startAtMs && gateOpen && !sim.coordinator->TimingDecisionPendingAt(sim.tick)) {
+						if (!sim.coordinator->QueueLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}, {}, &queueError)) return;
+						sim.produced = true;
+						sim.waitingSinceMs = now;
+					}
+					NetLockstepReadyFrame ready;
+					if ((sim.produced || !gateOpen) && sim.coordinator->PopReadyFrame(ready)) {
+						(void)sim.coordinator->FinishSimulationTick(ready.frame);
+						if (now > 1000) sim.longestWaitMs = std::max(sim.longestWaitMs, now - sim.waitingSinceMs);
+						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
+					} else if (sim.coordinator == &host && sim.tick > 0) {
+						(void)host.NoteFrameWait(sim.tick, now);
+					}
+				}
+				++now;
+			};
+			// The estimator lowers a delay only after its window below it; run well past the change's frame.
+			while (now < 9000 && host.IsRunning() && client.IsRunning()) pump();
+			const auto holds = host.GetStats().peers.at(2).holds;
+			const uint16_t delay = host.InputDelayAt(2, sims[0].tick);
+			const bool lowered = delay < 8;
+			if (holds != 0 || !host.IsRunning() || sims[0].longestWaitMs > 50 || (!clientIsSlow && !lowered) || sims[0].tick < 300) {
+				*error = std::string(clientIsSlow ? "a seat our sim waits on" : "a seat that runs ahead") + ": holds=" + std::to_string(holds) +
+				         " delay=" + std::to_string(delay) + " host_tick=" + std::to_string(sims[0].tick) + " client_tick=" + std::to_string(sims[1].tick) +
+				         " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) + " queue=" + queueError;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_live_delay_decrease_keeps_a_waited_seats_slack client_period_ms=" << clientPeriodMs
+			          << " delay=" << delay << " holds=" << holds << " host_longest_wait_ms=" << sims[0].longestWaitMs << std::endl;
+		}
+		return true;
+	}
+
 	// A seat that rejoins a successor gets the successor's link from session seat 0, which is lockstep seat 1: the
 	// round's authority is seat 2. The returner answers the successor's timing proposal and both install it.
 	bool TestAReturnerAnswersItsSuccessor(std::string* error) {
@@ -19680,6 +19750,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");
 		row(&TestASeatIsNotLateForOurOwnDecision, "a_seat_is_not_late_for_our_own_decision");
 		row(&TestAFirstDelayChangeIsNotAMutualWait, "a_first_delay_change_is_not_a_mutual_wait");
+		row(&TestALiveDelayDecreaseKeepsAWaitedSeatsSlack, "a_live_delay_decrease_keeps_a_waited_seats_slack");
 		row(&TestAReturnerAnswersItsSuccessor, "a_returner_answers_its_successor");
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
