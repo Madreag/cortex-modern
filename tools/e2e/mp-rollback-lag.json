@@ -165,10 +165,16 @@
             "CC_TEST_GNS_LOSS_PERCENT": "5"
           },
           "observe_after_failure": true,
-          "kill_when": {
-            "peer": "client",
-            "log": "\\[net-match\\] private catch-up complete frame=\\d+"
-          }
+          "kill_when": [
+            {
+              "peer": "client",
+              "log": "\\[net-match\\] private catch-up complete frame=\\d+"
+            },
+            {
+              "peer": "host",
+              "sim_tick": 800
+            }
+          ]
         },
         {
           "name": "survivor",
@@ -509,10 +515,16 @@
             "CC_TEST_GNS_LOSS_PERCENT": "5"
           },
           "observe_after_failure": true,
-          "kill_when": {
-            "peer": "client",
-            "log": "\\[net-match\\] private catch-up complete frame=\\d+"
-          }
+          "kill_when": [
+            {
+              "peer": "client",
+              "log": "\\[net-match\\] private catch-up complete frame=\\d+"
+            },
+            {
+              "peer": "host",
+              "sim_tick": 800
+            }
+          ]
         },
         {
           "name": "survivor",

@@ -951,7 +951,14 @@ def check_log_gates(results, scratch):
               driver.run_preflight({"peers": both}, {"name": "run0", "peers": both}, [], {})["class"] == "harness")
     scenario = driver.load_scenario("mp-rollback-lag")
     peers = {peer["name"]: peer for peer in scenario["runs"][0]["peers"]}
-    ok &= row(results, "log-gate/rollback-lag-drops-the-client-after-catch-up", peers["client"].get("kill_when", {}).get("log") == pattern)
+    drops = peers["client"].get("kill_when") or []
+    ok &= row(results, "log-gate/rollback-lag-drops-the-client-after-catch-up", any(gate.get("log") == pattern for gate in drops))
+    ok &= row(results, "log-gate/rollback-lag-drops-inside-the-round-without-a-catch-up",
+              any(gate.get("peer") == "host" and 0 < gate.get("sim_tick", 0) < 1200 for gate in drops))
+    either = [{"name": "host"}, {"name": "client", "kill_when": [{"peer": "client", "log": pattern}, {"peer": "host", "sim_tick": 800}]}]
+    ok &= row(results, "log-gate/first-of-several-drop-gates-passes-preflight", driver.run_preflight({"peers": either}, {"name": "run0", "peers": either}, [], {}) is None)
+    stray = [{"name": "client", "kill_when": [{"peer": "client", "log": pattern}, {"peer": "absent", "sim_tick": 800}]}]
+    ok &= row(results, "log-gate/unknown-peer-in-a-gate-list-is-refused", driver.run_preflight({"peers": stray}, {"name": "run0", "peers": stray}, [], {})["class"] == "harness")
     ok &= row(results, "log-gate/rollback-lag-survivor-waits-for-the-client-route", peers["survivor"].get("start_when", {}).get("peer") == "host"
               and "RouteAllowed" in peers["survivor"]["start_when"].get("log", ""))
     return ok
