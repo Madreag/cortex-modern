@@ -8,6 +8,7 @@
 
 #include "BS_thread_pool.hpp"
 
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -24,6 +25,8 @@ namespace RTE {
 	class Scene;
 	class GAScripted;
 	struct AudioCheckpointCapture;
+	struct CheckpointSection;
+	enum class CheckpointScope : uint8_t;
 
 	/// The singleton manager of the Activities and rules of Cortex Command.
 	class ActivityMan : public Singleton<ActivityMan> {
@@ -177,6 +180,9 @@ namespace RTE {
 		/// The same capture, stamped with the identity a restore checks and the rewind point retention keeps.
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity);
 		bool RunCheckpointCaptureSelfTest(uint64_t tick);
+		/// Test lever: takes the autosave's capture at a completed tick and logs a hash of each shared section of it from the
+		/// writer thread. A dump directory also receives every section's bytes. Whether the capture was taken.
+		bool CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory = {});
 		/// Waits for every queued checkpoint and reports what the worker refused; whether they all completed.
 		bool WaitForAutosaveVerdict();
 		/// Reports on the simulation thread the refusals the checkpoint worker found off it.
@@ -376,15 +382,24 @@ namespace RTE {
 		bool QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
 		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr,
 		                       const AutosaveIdentity* identity = nullptr);
+		/// With fullStateOnly the capture is hashed by the oracle instead of written.
 		bool QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
 		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast,
-		                              const AutosaveIdentity* identity = nullptr);
+		                              const AutosaveIdentity* identity = nullptr, bool fullStateOnly = false);
+		/// Sections, when given with the manager parts, receives every part the globals carry under its name and scope.
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
 		    std::vector<std::pair<std::string, int64_t>>* timings = nullptr, const std::vector<CheckpointText>* managerParts = nullptr,
-		    AudioCheckpointCapture* audio = nullptr, const AudioCheckpointCapture* audioSamples = nullptr) const;
+		    AudioCheckpointCapture* audio = nullptr, const AudioCheckpointCapture* audioSamples = nullptr,
+		    std::vector<CheckpointSection>* sections = nullptr) const;
+		/// One manager's part of the runtime globals: its name, its saver and whether every peer of a match holds it alike.
+		struct RuntimeManagerSaver {
+			const char* name;
+			std::string (*save)();
+			CheckpointScope scope;
+		};
 		/// The managers' runtime globals, from the moving objects through the music, in the archive's order; each part is
 		/// captured on its own.
-		static const std::vector<std::pair<const char*, std::string (*)()>>& RuntimeManagerSavers();
+		static const std::vector<RuntimeManagerSaver>& RuntimeManagerSavers();
 		/// Serializes script graphs the way a save does and reports each refusal.
 		bool CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs);
 		/// Prints each refused script value to the console and tells the player once.
@@ -426,6 +441,9 @@ namespace RTE {
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
 		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< Captured checkpoints awaiting disk IO.
+		std::vector<std::shared_future<bool>> m_FullStateTasks; //!< The oracle's captures awaiting their hash.
+		std::string m_FullStateDumpDirectory; //!< Where the oracle's capture writes its sections; empty writes none.
+		uint64_t m_FullStateRound = 0; //!< The lockstep round the oracle's capture belongs to.
 		std::string m_LastAutosavePath;
 		uint64_t m_LastAutosaveTick = 0;
 		size_t m_LastAutosaveBytes = 0;
