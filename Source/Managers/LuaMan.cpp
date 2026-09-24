@@ -4485,6 +4485,25 @@ static int ScriptGraphEntityCast(lua_State* L) {
 	return 1;
 }
 
+// A script's reference can outlive the activity or editor it names, so a dependency is read only while it names the
+// running activity or a loaded preset, or an editor the running activity hands out.
+static bool ScriptGraphReadableDependency(const luabind::detail::object_rep* owner) {
+	if (!owner || !owner->crep()) return true;
+	const void* address = owner->ptr();
+	if (ClassDerivesFrom(owner->crep(), "Activity")) {
+		if (address == g_ActivityMan.GetActivity()) return true;
+		if (s_GraphNativeCapture) return s_GraphNativeCapture->ActivityPreset(address);
+		const auto presets = LoadedActivityPresets();
+		return std::binary_search(presets.begin(), presets.end(), address);
+	}
+	if (std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) {
+		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) if (address == game->GetEditorGUI(player)) return true;
+		return false;
+	}
+	return true;
+}
+
 static int ScriptGraphPropertyOwner(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep) return 0;
@@ -4495,8 +4514,10 @@ static int ScriptGraphPropertyOwner(lua_State* L) {
 		rep->get_dependencies().get(L);
 		lua_pushnil(L);
 		while (lua_next(L, -2) != 0) {
-			lua_pushvalue(L, -1);
-			lua_rawseti(L, candidates, ++candidateCount);
+			if (ScriptGraphReadableDependency(luabind::detail::is_class_object(L, -1))) {
+				lua_pushvalue(L, -1);
+				lua_rawseti(L, candidates, ++candidateCount);
+			}
 			lua_pop(L, 1);
 		}
 		lua_pop(L, 1);
@@ -5218,7 +5239,8 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		lua_pushnil(L);
 		while (lua_next(L, -2) != 0) {
 			const auto* owner = luabind::detail::is_class_object(L, -1);
-			if (owner && ClassDerivesFrom(owner->crep(), "Activity")) {
+			if (!ScriptGraphReadableDependency(owner)) {
+			} else if (owner && ClassDerivesFrom(owner->crep(), "Activity")) {
 				if (const int count = activityMember(static_cast<Activity*>(owner->ptr()))) return count;
 			} else if (owner && std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) {
 				if (const int count = editorMember(static_cast<SceneEditorGUI*>(owner->ptr()))) return count;
@@ -5450,6 +5472,40 @@ static int ScriptGraphNative(lua_State* L) {
 	lua_pushnil(L);
 	lua_pushstring(L, className.c_str());
 	return 2;
+}
+
+// After a relaunch a script can still hold a banner whose owner is the activity that is gone; asked about it, the
+// capture reads neither that activity nor one that is alive but not running.
+static bool RunStaleActivityReferenceSelfTest(LuaStateWrapper& lua) {
+	lua_State* L = lua.GetLuaState();
+	auto stale = std::make_unique<GameActivity>();
+	const void* const staleAddress = stale.get();
+	luabind::object(L, stale.get()).push(L);
+	lua_setglobal(L, "_F417Activity");
+	const bool bound = lua.RunScriptString("_F417Banner = _F417Activity:GetBanner(1, 1); _F417Activity = nil") == 0;
+	// What the capture names as the banner's owner: "owner-ref:stale" when it read the stale activity.
+	const auto described = [&] {
+		const int base = lua_gettop(L);
+		lua_pushcfunction(L, ScriptGraphNative);
+		lua_getglobal(L, "_F417Banner");
+		lua_pushboolean(L, 0);
+		if (lua_pcall(L, 2, LUA_MULTRET, 0) != 0) {
+			lua_settop(L, base);
+			return std::string("error");
+		}
+		std::string kind = lua_type(L, base + 1) == LUA_TSTRING ? lua_tostring(L, base + 1) : "nil";
+		const auto* owner = lua_gettop(L) > base + 1 ? luabind::detail::is_class_object(L, base + 2) : nullptr;
+		if (owner && owner->ptr() == staleAddress) kind += ":stale";
+		lua_settop(L, base);
+		return kind;
+	};
+	const std::string alive = bound ? described() : "unbound";
+	stale.reset();
+	const std::string relaunched = bound ? described() : "unbound";
+	lua.RunScriptString("_F417Banner = nil");
+	const bool passed = bound && alive.find(":stale") == std::string::npos && relaunched.find(":stale") == std::string::npos && relaunched != "error";
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " capture_reads_no_activity_but_the_running_one_or_a_preset alive=" << alive << " relaunched=" << relaunched << std::endl;
+	return passed;
 }
 
 static int ScriptGraphGlobalScript(lua_State* L) {
@@ -8084,6 +8140,7 @@ end
 		// A Lua class left in a global is what a mod checkpoint has to carry; the UI rows move the camera, which needs the scene too.
 		RunScriptString("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end");
 		checkpointValues = GameActivity::RunNetLocalUIRestoreSelfTest() && checkpointValues;
+		checkpointValues = RunStaleActivityReferenceSelfTest(*this) && checkpointValues;
 		g_SceneMan.SetAsideScene(deliveryScene);
 		g_SceneMan.ReinstateScene(originalScene);
 	}
