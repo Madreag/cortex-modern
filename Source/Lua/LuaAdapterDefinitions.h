@@ -68,6 +68,7 @@
 #include "SceneObject.h"
 #include "SLBackground.h"
 #include "SLTerrain.h"
+#include "SLTerrain.h"
 #include "SoundContainer.h"
 #include "TerrainObject.h"
 #include "TDExplosive.h"
@@ -205,6 +206,7 @@ namespace RTE {
 		LuaEntityCastFunctionsDeclarationsForType(MOSprite);
 		LuaEntityCastFunctionsDeclarationsForType(Scene);
 		LuaEntityCastFunctionsDeclarationsForType(SLBackground);
+		LuaEntityCastFunctionsDeclarationsForType(SLTerrain);
 		LuaEntityCastFunctionsDeclarationsForType(StaticSceneLayer);
 		LuaEntityCastFunctionsDeclarationsForType(Material);
 		LuaEntityCastFunctionsDeclarationsForType(MetaPlayer);

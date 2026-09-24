@@ -191,6 +191,7 @@ LuaEntityCastFunctionsDefinitionsForType(MOPixel);
 LuaEntityCastFunctionsDefinitionsForType(MOSprite);
 LuaEntityCastFunctionsDefinitionsForType(Scene);
 LuaEntityCastFunctionsDefinitionsForType(SLBackground);
+LuaEntityCastFunctionsDefinitionsForType(SLTerrain);
 LuaEntityCastFunctionsDefinitionsForType(StaticSceneLayer);
 LuaEntityCastFunctionsDefinitionsForType(Material);
 LuaEntityCastFunctionsDefinitionsForType(MetaPlayer);
