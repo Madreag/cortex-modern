@@ -267,6 +267,22 @@ namespace {
 		return writer;
 	}
 
+	/// The sim RNG's checkpoint text. Its draw count also counts this process's menu and loading draws before the match, so it is this machine's own; the stream is shared.
+	CheckpointText SimRNGCheckpoint() {
+		const std::string text = g_SimRNG.SerializeCheckpoint();
+		// "MT1 <seed> <draw count> <state words...>"
+		const size_t seedEnd = text.find(' ', text.find(' ') + 1);
+		const size_t countEnd = seedEnd == std::string::npos ? std::string::npos : text.find(' ', seedEnd + 1);
+		if (countEnd == std::string::npos) throw std::logic_error("the sim RNG checkpoint names no draw count");
+		CheckpointBuffer buffer;
+		buffer.Raw(std::string_view(text).substr(0, seedEnd + 1));
+		buffer.PeerBegin();
+		buffer.Raw(std::string_view(text).substr(seedEnd + 1, countEnd - seedEnd - 1));
+		buffer.PeerEnd();
+		buffer.Raw(std::string_view(text).substr(countEnd));
+		return buffer.Finish();
+	}
+
 	using CheckpointPalette = std::array<unsigned char, 256 * 3>;
 	CheckpointPalette CaptureCheckpointPalette() {
 		CheckpointPalette palette;
@@ -2243,7 +2259,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 		if (sections) sections->push_back({name, scope, text});
 	};
 	record("rng", [&] {
-		write("sim_rng", CheckpointScope::Shared, CheckpointWriter::Native([] { return g_SimRNG.SerializeCheckpoint(); }));
+		write("sim_rng", CheckpointScope::Shared, SimRNGCheckpoint());
 		// The render stream draws per drawn frame, and each machine paces its own frames.
 		write("render_rng", CheckpointScope::PerPeer, CheckpointWriter::Native([] { return g_RenderRNG.SerializeCheckpoint(); }));
 	});
