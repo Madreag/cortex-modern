@@ -1539,7 +1539,11 @@ static std::string ResyncSaveName() {
 			}
 			const uint64_t stagingBeganMs = SteadyNowMs();
 			SetRejoinPhaseLocked(NetSession::RejoinPhase::Loading);
+			// A private match's replay coordinator already names the roster; a world's round has none until it starts.
+			// The restore's Start consumes it.
+			Activity::SetRestoreRoster(m_WorldCatchUp.privateMatch ? nullptr : &m_WorldCatchUp.checkpointConfig, m_LocalPeerId);
 			if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
+				Activity::SetRestoreRoster(nullptr, 0);
 				if (error) *error = "world join snapshot load failed: " + pendingLoad;
 				return false;
 			}
@@ -4137,6 +4141,8 @@ static std::string ResyncSaveName() {
 		m_WorldCatchUp = {};
 		m_WorldCatchUp.active = true;
 		m_WorldCatchUp.privateMatch = image.privateSessionId != 0;
+		// A world image carries no roster of its own; the restore maps this machine's seats from the adopted one.
+		if (!m_WorldCatchUp.privateMatch) m_WorldCatchUp.checkpointConfig = adopted;
 		m_WorldCatchUp.roundId = image.round;
 		m_WorldCatchUp.authorityGeneration = image.authorityGeneration;
 		m_WorldCatchUp.authorityPeerId = image.authorityPeerId;
