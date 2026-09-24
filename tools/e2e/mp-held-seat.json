@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "name": "mp-held-seat",
+  "port_base": 49476,
+  "title": "Three peers; one seat drops at tick 300 and stays under the AI for a minute while the host and the other survivor play on",
+  "size": "960x540",
+  "timeout_s": 240,
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "4300",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/host_trace.json",
+        "-net-match-report",
+        "{OUT}/host-match.json"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "Host",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "menu_script": "mp-host-migration.host.menu.txt"
+    },
+    {
+      "name": "clienta",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "4300",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/clienta_trace.json",
+        "-net-match-report",
+        "{OUT}/clienta-match.json"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "ClientA",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark migration-listening",
+        "timeout_s": 90
+      }
+    },
+    {
+      "name": "clientb",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "4300",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/clientb_trace.json",
+        "-net-match-report",
+        "{OUT}/clientb-match.json"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "ClientB",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "clienta",
+        "event": "video_mark migration-client-admitted",
+        "timeout_s": 90
+      },
+      "kill_at_tick": 300
+    }
+  ],
+  "checklist": [
+    {
+      "id": "held-seat-host-plays-on",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        300,
+        4200
+      ],
+      "what": "The host plays on for a minute with ClientB's seat under the AI."
+    },
+    {
+      "id": "held-seat-survivor-plays-on",
+      "peer": "clienta",
+      "screen": "game",
+      "sim_ticks": [
+        300,
+        4200
+      ],
+      "what": "The other survivor plays on beside the held seat."
+    }
+  ]
+}
