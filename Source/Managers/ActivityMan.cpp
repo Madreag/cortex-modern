@@ -2223,6 +2223,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 
 const std::vector<ActivityMan::RuntimeManagerSaver>& ActivityMan::RuntimeManagerSavers() {
 	// The camera is each machine's own screens; the two inputs are what a network restore keeps from the local machine; the
+	// post effects are dropped at the first sim update after each drawn frame, so they follow this machine's drawing; the
 	// GUI sounds play this machine's own interface.
 	static const std::vector<RuntimeManagerSaver> savers = {
 		{"movable", [] { return g_MovableMan.SaveCheckpoint(); }, CheckpointScope::Shared},
@@ -2231,7 +2232,7 @@ const std::vector<ActivityMan::RuntimeManagerSaver>& ActivityMan::RuntimeManager
 		{"frame", [] { return g_FrameMan.SaveCheckpoint(); }, CheckpointScope::Shared},
 		{"gui_input", [] { return GUIInput::SaveSharedCheckpoint(); }, CheckpointScope::PerPeer},
 		{"input", [] { return g_UInputMan.SaveCheckpoint(); }, CheckpointScope::PerPeer},
-		{"post_process", [] { return g_PostProcessMan.SaveCheckpoint(); }, CheckpointScope::Shared},
+		{"post_process", [] { return g_PostProcessMan.SaveCheckpoint(); }, CheckpointScope::PerPeer},
 		{"primitives", [] { return g_PrimitiveMan.SaveCheckpoint(); }, CheckpointScope::Shared},
 		{"gui_sound", [] { return g_GUISound.SaveCheckpoint(); }, CheckpointScope::PerPeer},
 		{"music", [] { return g_MusicMan.SaveCheckpoint(); }, CheckpointScope::Shared},
