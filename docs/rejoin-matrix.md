@@ -7,6 +7,10 @@ host/client coordinator pair and a host/client session pair into the state, deli
 machine did with the expected tokens. This file is generated from that run's `table` lines; edit the rows in
 `Source/Network/NetRejoinMatrixSelfTest.cpp`, never here.
 
+The Migrating row runs on a three-peer star instead: host 1, successor 2 and the subject 3 (the survivor that is not next in line).
+The host stops without a close or a last packet, the survivors begin a migration, the event is delivered (host-side calls go to the
+successor, which is not the host yet), and the rig reads the subject once the migration settles.
+
 Tier 1 is the match path (hold, park, capture, relaunch, the rejoin phases, goodbye, link blip and restore, kick, ban, cap). Tier 2 is
 world images, migration, late join and resume from disk. A pair the rig cannot reach is marked `not walked` with the reason; the
 arms and scenarios of the inventory cover it.
@@ -21,6 +25,8 @@ arms and scenarios of the inventory cover it.
 | `sess=ready\|alive\|ended\|ended:Reason\|phase:X` | the subject's session: Ready; not ended; ended; ended with that reject reason; still in rejoin phase X. |
 | `holds=0 / holds>0` | holds the host counted on the seat after the state was entered. |
 | `api=ok\|refused` | the return of the call that delivers the event. |
+| `sub=run\|over\|ended` | Migrating row only: the subject survivor's coordinator once the migration settles (running; stopped on its own Complete; anything but running). |
+| `subhost=N` | Migrating row only: the peer the subject survivor takes for its host once the migration settles. |
 
 A walked expectation is a list of tokens that must all hold. A not-walked expectation is written out in words.
 
