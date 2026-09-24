@@ -176,6 +176,8 @@ namespace luabind { namespace detail
 		static void (*substitute)(object_rep* obj);
 		// 1 when the object behind a handle is the window's own, 0 when it is the world's, -1 when only the handle can tell.
 		static int (*owns)(const object_rep* obj);
+		// Whether a non-const method may run on an object the window does not own: a read-only call does, a write is dropped.
+		static bool (*runs)(const char* class_name, const char* method_name);
 	};
 
 	// Whether a write through this handle may land: always, outside a window.

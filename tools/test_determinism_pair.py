@@ -2,6 +2,8 @@
 
 fence: the host walks its brain so its preview runs the stride hook of
 tools/fixtures/preview_native_fence.lua, which writes a native property and an alias on the world's actor.
+method: the same walk runs tools/fixtures/preview_method_fence.lua, whose stride hook resets the Timer the real
+script keeps and adds a particle through MovableMan.
 craft: the host's seat flies a landing craft (tools/fixtures/craft_handoff_activity.lua) that hands out its passenger.
 
 Per-tick hashes are compared strictly on every tick both peers recorded, leaving out only the routing subsystem each
@@ -35,6 +37,9 @@ CASES = {
     "fence": {"ticks": 600, "files": ["preview_native_fence.lua"], "index": "",
               "both": ["-test-script", "UserScenes.rte/preview_native_fence.lua", "-net-local-prediction", "on"],
               "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
+    "method": {"ticks": 600, "files": ["preview_method_fence.lua"], "index": "",
+               "both": ["-test-script", "UserScenes.rte/preview_method_fence.lua", "-net-local-prediction", "on"],
+               "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
     "craft": {"ticks": 480, "files": ["craft_handoff_activity.lua"], "index": CRAFT_ACTIVITY,
               "both": ["-net-match-service-preset", "Determinism Craft Handoff", "-net-match-service-module", "UserScenes.rte"],
               "host": []},
@@ -44,6 +49,8 @@ PER_PEER_FIELDS = frozenset({"mode", "pie"})
 DESYNC = re.compile(r"^.*(?:\[lockstep\] desync at frame \d+|controller sync failed).*$", re.M)
 HOLD = re.compile(r"^\[net-match\] hold peer=.*$", re.M)
 FENCE = re.compile(r"\[preview-fence\] preview uid=(\d+) took=(\d+) kept_health=([-\d.]+)->([-\d.]+) kept_x=([-\d.]+)->([-\d.]+)")
+METHOD = re.compile(r"\[preview-method\] preview uid=(\d+) timer_before=([-\d.]+) timer_after=([-\d.]+)")
+MARK = " Spark Yellow 1 "
 CRAFT = re.compile(r"\[craft-fixture\] (hatch opening|passenger out|passenger played) tick=(\d+)")
 
 
@@ -141,6 +148,13 @@ def first_object_divergence(host_dump: Path, client_dump: Path) -> dict:
     return {"available": True, "tick": None, "identical": True, "common_ticks": len(common)}
 
 
+def count_rows(path: Path, needle: str) -> int:
+    if not Path(path).exists():
+        return 0
+    with Path(path).open("r", encoding="utf-8", errors="replace") as source:
+        return sum(1 for line in source if needle in line)
+
+
 def score(root: Path, case_name: str, exe_sha256: str, records: dict) -> dict:
     case = CASES[case_name]
     result = {"case": case_name, "ticks": case["ticks"], "exe_sha256": exe_sha256, "per_peer_excluded": sorted(PER_PEER_SUBSYSTEMS),
@@ -170,6 +184,13 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict) -> dict:
                               "kept_unchanged": sum(1 for row in rows if row["health_before"] == row["health_after"] and row["x_before"] == row["x_after"])}
         # A preview that never ran the hook proves nothing, and every run must leave the world's actor as it was.
         fixture_ok = bool(rows) and result["previews"]["clone_took_both"] == len(rows) and result["previews"]["kept_unchanged"] == len(rows)
+    elif case_name == "method":
+        rows = [dict(zip(("uid", "before", "after"), match)) for match in METHOD.findall(texts["host"])]
+        marks = {who: count_rows(root / who / "trace.json.simdump.txt", MARK) for who in PEERS}
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "timer_kept": sum(1 for row in rows if row["before"] == row["after"])}
+        result["commit_marks"] = marks
+        # The preview's reset and particle are dropped, and the committed hook's particles stand on both peers alike.
+        fixture_ok = bool(rows) and result["previews"]["timer_kept"] == len(rows) and marks["host"] > 0 and marks["host"] == marks["client"]
     else:
         events = {who: [(name, int(tick)) for name, tick in CRAFT.findall(texts[who])] for who in PEERS}
         result["craft"] = events
