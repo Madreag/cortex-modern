@@ -35,7 +35,23 @@
         "NetworkSlowPlayerBoundTicks": "3",
         "NetworkSlowPlayerPolicy": "Substitute"
       },
-      "menu_script": "mp-host-silent.host.menu.txt"
+      "menu_script": "mp-host-silent.host.menu.txt",
+      "runtime_files": [
+        {
+          "copy": "tools/feel/FeelBaseline.lua",
+          "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+          "replace": [
+            [
+              "^local WINDOW_TICKS = \\d+;$",
+              "local WINDOW_TICKS = 2400;"
+            ]
+          ]
+        },
+        {
+          "to": "Userdata/UserScenes.rte/Index.ini",
+          "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+        }
+      ]
     },
     {
       "name": "client",
@@ -69,7 +85,23 @@
         "peer": "host",
         "event": "video_mark silent-listening",
         "timeout_s": 90
-      }
+      },
+      "runtime_files": [
+        {
+          "copy": "tools/feel/FeelBaseline.lua",
+          "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+          "replace": [
+            [
+              "^local WINDOW_TICKS = \\d+;$",
+              "local WINDOW_TICKS = 2400;"
+            ]
+          ]
+        },
+        {
+          "to": "Userdata/UserScenes.rte/Index.ini",
+          "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+        }
+      ]
     }
   ],
   "checklist": [

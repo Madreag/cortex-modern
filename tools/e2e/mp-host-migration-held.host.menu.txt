@@ -3,7 +3,7 @@ activate ButtonMainToMultiplayer
 wait_ms 450
 activate ButtonMultiplayerHostGame
 wait_ms 450
-combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+combo_select ComboHostActivity Determinism FeelBaseline - UserScenes.rte
 settext TextHostPort {PORT}
 settext TextHostPlayers 4
 wait_ms 450
