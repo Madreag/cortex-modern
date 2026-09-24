@@ -1764,9 +1764,15 @@ namespace RTE {
 			session->wallCatchUpMs += elapsedMs;
 		}
 		m_Metrics.NoteCatchUp(ticksReplayed, elapsedMs);
-		// A returning seat is activated only once it has shown it replays faster than the round plays.
+		// A returning seat is activated only once it has shown it replays faster than the round plays, or that it has kept the
+		// round's pace at the head of the tail, where the tail's own arrival is what paces it.
 		const bool provesHeadroom = IsPrivateMatch() || session->returnsToHeldSeat;
-		if (provesHeadroom && (!session->linkFits || !session->headroom.Ready())) {
+		if (appliedThrough + c_NetWorldActivationLeadFrames >= nowFrame) {
+			if (session->atHeadSinceFrame == 0) session->atHeadSinceFrame = std::max<uint64_t>(appliedThrough, 1);
+		} else {
+			session->atHeadSinceFrame = 0;
+		}
+		if (provesHeadroom && (!session->linkFits || !ShowsReplayHeadroom(*session))) {
 			// A returner held back from its activation says why, once per reason.
 			const char* reason = !session->linkFits ? "its link does not fit the round's delay" : "its replay has not shown headroom over the round";
 			if (reason != session->activationHeldReason) {
@@ -1807,6 +1813,7 @@ namespace RTE {
 
 	void NetWorldJoinHost::NoteCatchUpClock(NetPeerId connection, uint64_t nowMs) {
 		if (NetWorldJoinSession* session = Find(connection)) {
+			if (session->catchUpSinceMs == 0) session->catchUpSinceMs = nowMs;
 			session->lastCatchUpReportMs = nowMs;
 		}
 	}
@@ -1934,6 +1941,21 @@ namespace RTE {
 		session->refusal = reason;
 		++m_JoinsCancelled;
 		std::erase_if(m_Sessions, [&](const NetWorldJoinSession& entry) { return entry.connection == connection; });
+	}
+
+	bool NetWorldJoinHost::ShowsReplayHeadroom(const NetWorldJoinSession& session) {
+		return session.headroom.Ready() || (session.atHeadSinceFrame != 0 && session.acknowledgedThrough >= session.atHeadSinceFrame + c_NetWorldPaceProofTicks);
+	}
+
+	std::vector<NetPeerId> NetWorldJoinHost::ReturnersWithoutHeadroom(uint64_t nowMs, uint64_t boundMs) const {
+		std::vector<NetPeerId> slow;
+		for (const NetWorldJoinSession& session: m_Sessions) {
+			const bool returning = IsPrivateMatch() || session.returnsToHeldSeat;
+			if (!returning || session.spectator || session.phase != NetWorldJoinPhase::CatchingUp || session.activationTick != 0 ||
+			    ShowsReplayHeadroom(session) || session.catchUpSinceMs == 0) continue;
+			if (nowMs > session.catchUpSinceMs && nowMs - session.catchUpSinceMs > boundMs) slow.push_back(session.connection);
+		}
+		return slow;
 	}
 
 	size_t NetWorldJoinHost::ExpireStaleJoins(uint64_t nowMs) {

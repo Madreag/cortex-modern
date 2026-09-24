@@ -179,6 +179,8 @@ namespace RTE {
 		uint64_t wallCatchUpTicks = 0;   //!< Ticks replayed between timed reports, for the wall-clock catch-up rate.
 		uint64_t wallCatchUpMs = 0;
 		uint64_t lastCatchUpReportMs = 0; //!< Host clock of the last catch-up report, for elapsed.
+		uint64_t catchUpSinceMs = 0; //!< Host clock of the first catch-up report; a returner's headroom is judged over the time since.
+		uint64_t atHeadSinceFrame = 0; //!< The applied frame from which it has replayed within the lead of the round's horizon; 0 while behind.
 		uint8_t spectatorLobbyPeer = 0;   //!< Non-member lobby id in [32, 47]; 0 if none remains.
 		std::string refusal;              //!< Why the bootstrap failed; empty while it is alive.
 	};
@@ -335,6 +337,11 @@ namespace RTE {
 	inline constexpr uint64_t c_NetWorldJoinDeadlineMs = 180000;
 	/// One later E if the joiner is still behind when the first E arrives; a second miss frees the slot.
 	inline constexpr uint32_t c_NetWorldActivationReannounceLimit = 1;
+	/// A returner that replays within the activation lead of the round for this many ticks keeps the round's pace: the tail it
+	/// replays arrives at that pace, so its measured rate cannot exceed the round's and is no evidence of a slow machine.
+	inline constexpr uint64_t c_NetWorldPaceProofTicks = 120;
+	/// How long a returning seat may replay without showing headroom before its rejoin is ended and retried.
+	inline constexpr uint64_t c_NetWorldHeadroomWaitMs = 30000;
 	/// World-join plane schema on the offer, the transition and the membership report.
 	inline constexpr uint16_t c_NetWorldJoinSchema = 1;
 	/// Overflow spectators bind lobby ids in [first, last], one per connection, above member seats.
@@ -533,6 +540,11 @@ namespace RTE {
 		/// @param outActivationTick The announced activation tick when this call scheduled one.
 		bool NoteCatchUpProgress(NetPeerId connection, uint64_t appliedThrough, uint64_t ticksReplayed, uint64_t elapsedMs, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
 		void NoteCatchUpClock(NetPeerId connection, uint64_t nowMs);
+		/// Returning seats that have replayed for longer than the bound without showing the headroom their activation needs.
+		/// A returner that replays slower than the round plays can never be activated without every peer waiting on it.
+		std::vector<NetPeerId> ReturnersWithoutHeadroom(uint64_t nowMs, uint64_t boundMs) const;
+		/// Whether a returner has replayed faster than the round plays, or kept the round's pace at the head of its tail.
+		static bool ShowsReplayHeadroom(const NetWorldJoinSession& session);
 		/// The bootstrap whose activation tick has arrived and whose joiner has applied through E-1.
 		const NetWorldJoinSession* DueActivation(uint64_t nowFrame) const;
 		/// Applied through E-1 after the E-1 pump, so Admit uses max(E, nextFrame + 1).
