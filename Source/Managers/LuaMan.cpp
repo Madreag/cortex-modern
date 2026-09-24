@@ -3941,6 +3941,8 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 		});
 		return std::binary_search(m_Known.begin(), m_Known.end(), object);
 	}
+	/// Makes the known-objects copy and lookup on this thread, before any worker asks.
+	void PreTouch() const { Known(nullptr); }
 	/// Whether an address is a loaded activity preset; only the pointer is read.
 	bool ActivityPreset(const void* address) const {
 		std::call_once(m_ActivityPresetsBuilt, [this] { m_ActivityPresets = LoadedActivityPresets(); });
@@ -6166,6 +6168,11 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 	}
 }
 
+void LuaScriptGraphNativeCaptureScope::PreTouch() {
+	if (const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity())) game->PrepareCheckpointCapture();
+	if (const LuaScriptGraphNativeCaptureData* shared = Current()) shared->PreTouch();
+}
+
 void LuaScriptGraphNativeCaptureScope::BuildWorld(const LuaScriptGraphNativeCaptureData* shared) {
 	if (!shared) return;
 	std::lock_guard worldLock(shared->frozenWorldMutex);
@@ -6181,6 +6188,9 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	std::vector<char> complete(order.size(), 0);
 	CheckpointLua::NativeEffects effects;
 	const LuaScriptGraphNativeCaptureData* shared = LuaScriptGraphNativeCaptureScope::Current();
+	// A world capture made these before its own workers started; a capture of the graphs alone makes them here.
+	ContentFile::LoadedBitmapIndexScope bitmapIndex;
+	if (!CaptureSentinel::InParallelPhase()) LuaScriptGraphNativeCaptureScope::PreTouch();
 	CaptureSentinel::ParallelPhase parallel;
 	LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
 	const auto capture = [&](size_t index) {
