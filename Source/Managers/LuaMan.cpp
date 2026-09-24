@@ -7584,6 +7584,77 @@ static void CollectEveryStateAtTickEnd() {
 	g_LuaMan.WaitForAsyncGarbageCollection();
 }
 
+static bool RunCollectorPhaseSelfTest() {
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL a_state_left_mid_cycle_is_fully_collected_in_its_slot no threaded Lua states" << std::endl;
+		return false;
+	}
+	// The first threaded state holds slot 1.
+	LuaStateWrapper& state = states.front();
+	constexpr uint64_t c_Slot = 1;
+	const uint64_t slotTick = 2000 * LuaMan::c_CollectionPeriodTicks + c_Slot;
+	const long counter = MovableObject::GetUniqueIDCounter();
+	const bool previousMode = LuaMan::IsDeterministicCollection();
+	LuaMan::SetDeterministicCollection(true);
+	const auto pass = [](uint64_t tick) {
+		g_LuaMan.StartAsyncGarbageCollection(tick, false);
+		g_LuaMan.WaitForAsyncGarbageCollection();
+	};
+	const auto globalUID = [&state](const char* name) {
+		std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+		lua_getglobal(state.GetLuaState(), name);
+		const long uid = static_cast<long>(lua_tonumber(state.GetLuaState(), -1));
+		lua_pop(state.GetLuaState(), 1);
+		return uid;
+	};
+
+	// A script steps the collector past its marking, drops an object the marking already reached, and stops the collector.
+	g_LuaMan.CollectGarbageForCheckpoint();
+	pass(slotTick);
+	state.RunScriptString("_MidCycleHeld = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _MidCycleUID = _MidCycleHeld.UniqueID");
+	const long midCycleUID = globalUID("_MidCycleUID");
+	int phase = -1;
+	{
+		std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+		lua_State* L = state.GetLuaState();
+		for (int step = 0; step < 100000 && (G(L)->gc.state == GCSpause || G(L)->gc.state == GCSpropagate); ++step) {
+			lua_gc(L, LUA_GCSTEP, 0);
+		}
+		phase = G(L)->gc.state;
+	}
+	state.RunScriptString("_MidCycleHeld = nil; collectgarbage('stop')");
+	pass(slotTick + LuaMan::c_CollectionPeriodTicks);
+	const bool midCycleGone = midCycleUID > 0 && g_MovableMan.FindObjectByUniqueID(midCycleUID) == nullptr;
+	const bool leftMidCycle = phase != GCSpause && phase != GCSpropagate;
+
+	// A script restarts the collector and drops an object, off the state's slot.
+	g_LuaMan.CollectGarbageForCheckpoint();
+	state.RunScriptString("collectgarbage('restart'); _RunningUID = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\").UniqueID");
+	const long runningUID = globalUID("_RunningUID");
+	pass(slotTick + 1);
+	int stillRunning = -1;
+	{
+		std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+		stillRunning = lua_gc(state.GetLuaState(), LUA_GCISRUNNING, 0);
+	}
+	const bool runningGone = runningUID > 0 && g_MovableMan.FindObjectByUniqueID(runningUID) == nullptr;
+
+	state.RunScriptString("_MidCycleHeld = nil; _MidCycleUID = nil; _RunningUID = nil");
+	g_LuaMan.CollectGarbageForCheckpoint();
+	LuaMan::SetDeterministicCollection(previousMode);
+	MovableObject::PinUniqueIDCounter(counter);
+
+	const bool midCyclePass = leftMidCycle && midCycleGone;
+	const bool runningPass = stillRunning == 0 && runningGone;
+	std::cout << "[script-graph-selftest] " << (midCyclePass ? "PASS" : "FAIL") << " a_state_left_mid_cycle_is_fully_collected_in_its_slot states=" << states.size()
+	          << " phase_after_steps=" << phase << " dropped_object_gone=" << (midCycleGone ? "yes" : "no")
+	          << (leftMidCycle ? "" : " (the steps never left the state mid-cycle, so the row proved nothing)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (runningPass ? "PASS" : "FAIL") << " a_running_collector_is_collected_and_stopped_at_the_next_tick_end states=" << states.size()
+	          << " running_after=" << stillRunning << " dropped_object_gone=" << (runningGone ? "yes" : "no") << std::endl;
+	return midCyclePass && runningPass;
+}
+
 static bool RunGarbageCollectionThreadSelfTest() {
 	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
 	if (states.empty()) {
@@ -7727,6 +7798,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	          << " naming_a_closed_state=" << namingAClosedState
 	          << (namingAClosedState > 0 ? " (a queued luabind object held a reference into a closed state)" : (drainedAtStateClose == 0 ? " (no state close drained anything, so the row proved nothing)" : "")) << std::endl;
 	const bool tickEndCollection = RunTickEndCollectionSelfTest();
+	const bool collectorPhase = RunCollectorPhaseSelfTest();
 	const bool collectionThread = RunGarbageCollectionThreadSelfTest();
 	LuaStatesArray setAside;
 	setAside.swap(m_ScriptStates);
@@ -7737,7 +7809,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
 	// No state is locked here, so a worker's save can ask every state about its aliases.
 	const bool retainedOwners = SceneEditorGUI::RunRetainedOwnerCaptureSelfTest();
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectionThread && emptySetPicksMaster && retainedOwners;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
@@ -11383,9 +11455,6 @@ void LuaMan::CollectGarbageForCheckpoint() {
 	LuabindObjectWrapper::ApplyQueuedDeletions();
 }
 
-// One per collection slot: whether the state's last tick-end collection finished a whole cycle.
-static std::array<std::atomic<bool>, c_LuaStateCount + 1> s_CollectedToPause{};
-
 void LuaMan::StartAsyncGarbageCollection() {
 	StartAsyncGarbageCollection(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), false);
 }
@@ -11394,46 +11463,46 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 	ZoneScoped;
 
 	const bool fullCollection = IsDeterministicCollection();
-	// A full collection costs the whole live heap, so each state takes one in its own slot of the period, not every tick.
-	const auto due = [fullCollection, everyState, tick](uint64_t slot) {
-		return !fullCollection || everyState || slot % c_CollectionPeriodTicks == tick % c_CollectionPeriodTicks;
+	// A full collection costs the whole live heap, so each state takes one in its own slot of the period, not every tick. A
+	// state whose collector runs (a fresh state, a script's collectgarbage) takes one now, so nothing collects mid-tick.
+	const auto due = [fullCollection, everyState, tick](LuaStateWrapper& luaState, uint64_t slot) {
+		if (!fullCollection || everyState || slot % c_CollectionPeriodTicks == tick % c_CollectionPeriodTicks) {
+			return true;
+		}
+		std::lock_guard<std::recursive_mutex> lock(luaState.GetMutex());
+		return lua_gc(luaState.GetLuaState(), LUA_GCISRUNNING, 0) != 0;
 	};
 	std::vector<LuaStateWrapper*> dueStates;
 	dueStates.reserve(m_ScriptStates.size() + 1);
-	if (due(0)) {
+	if (due(m_MasterScriptState, 0)) {
 		dueStates.push_back(&m_MasterScriptState);
 	}
 	for (size_t index = 0; index < m_ScriptStates.size(); ++index) {
-		if (due(index + 1)) {
+		if (due(m_ScriptStates[index], index + 1)) {
 			dueStates.push_back(&m_ScriptStates[index]);
 		}
 	}
 
 	m_GarbageCollectionTask = BS::multi_future<void>();
 	for (LuaStateWrapper* luaState: dueStates) {
-		const size_t slot = luaState == &m_MasterScriptState ? 0 : static_cast<size_t>(luaState - m_ScriptStates.data()) + 1;
 		m_GarbageCollectionTask.push_back(
-		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection, slot]() {
+		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection]() {
 			    ZoneScopedN("Lua Garbage Collection");
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
 			    lua_State* state = luaState->GetLuaState();
-			    // Whether this state still stands at the pause our last full cycle left it at; a script's collectgarbage or the
-			    // incremental step moves it, and a script that did so and did not stop the collector reads as running.
-			    std::atomic<bool>& atPause = s_CollectedToPause[slot % s_CollectedToPause.size()];
 			    if (fullCollection) {
 				    // A whole cycle, so the tick a dropped object dies on does not follow its state's heap size.
-				    if (atPause && lua_gc(state, LUA_GCISRUNNING, 0) == 0) {
+				    if (G(state)->gc.state == GCSpause) {
 					    // From the pause one unlimited step is that cycle; LUA_GCCOLLECT would first sweep every object once for nothing.
 					    const int stepMultiplier = lua_gc(state, LUA_GCSETSTEPMUL, 0);
 					    lua_gc(state, LUA_GCSTEP, 0);
 					    lua_gc(state, LUA_GCSETSTEPMUL, stepMultiplier);
 				    } else {
+					    // A state a script or a restore left mid-cycle finishes nothing it started: LUA_GCCOLLECT starts over.
 					    lua_gc(state, LUA_GCCOLLECT, 0);
 				    }
-				    atPause = true;
 			    } else {
 				    lua_gc(state, LUA_GCSTEP, 100);
-				    atPause = false;
 			    }
 			    lua_gc(state, LUA_GCSTOP, 0);
 		    }));

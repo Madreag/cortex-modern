@@ -371,10 +371,13 @@ namespace RTE {
 		/// @param simTick The sim tick the frame was applied at.
 		void NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, uint8_t deviceClass, uint16_t buttons, int64_t simTick);
 
-		/// The device class a script inside a lockstep round reads for a seat: the one the seat's committed frame carries.
+		/// Forgets every seat's committed mouse; a new round numbers its ticks afresh and has committed nothing yet.
+		void ResetCommittedSeats() { m_CommittedSeatMouse.fill({}); }
+
+		/// The device class a script inside a lockstep round reads for a seat: the one the seat's committed frame carries, else the agreed start's.
 		/// @param whichPlayer The seat's player.
 		/// @param deviceClass Set to the committed class (Controller::WireDeviceClass) when this returns true.
-		/// @return Whether the query is a script's inside a round; the class is None until the seat's first committed frame. Otherwise the caller reads this machine's.
+		/// @return Whether the query is a script's inside a round; before the seat's first committed frame the class is the one the agreed start names. Otherwise the caller reads this machine's.
 		bool ScriptSeatDeviceClass(int whichPlayer, uint8_t& deviceClass) const;
 
 		/// Set the mouse's analog emulation output to be of a specific normalized magnitude.

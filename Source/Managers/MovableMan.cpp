@@ -562,7 +562,10 @@ static void NeutralizeUnframedLockstepActors(const std::deque<Actor*>& actors, c
 	for (Actor* actor: actors) {
 		if (applied.find(static_cast<int64_t>(actor->GetUniqueID())) == applied.end()) {
 			actor->GetController()->ApplyWireNeutral();
-			if (canonicalStartup) actor->GetController()->ApplyWireMode(Controller::CIM_NETWORK, Players::NoPlayer);
+			if (canonicalStartup) {
+				actor->GetController()->ApplyWireMode(Controller::CIM_NETWORK, Players::NoPlayer);
+				actor->GetController()->ApplyWireEnabled();
+			}
 		}
 	}
 }
@@ -7292,8 +7295,10 @@ void MovableMan::UpdateControllers() {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep remote apply: " + error);
 			return;
 		}
-		NeutralizeUnframedLockstepActors(m_Actors, applied,
-		    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepEffectiveStartFrame());
+		const bool canonicalStartup = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepEffectiveStartFrame();
+		NeutralizeUnframedLockstepActors(m_Actors, applied, canonicalStartup);
+		// The round's opening actors join after this apply; before the first frame they take the same route on every peer.
+		if (canonicalStartup) NeutralizeUnframedLockstepActors(m_AddedActors, applied, true);
 		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);

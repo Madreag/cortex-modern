@@ -838,7 +838,7 @@ namespace RTE {
 		void StartAsyncGarbageCollection();
 
 		/// Starts the tick-end collection of a given sim tick. The incremental step runs on every state; a full collection
-		/// runs only on the states whose slot is the tick's, unless every state is asked for.
+		/// runs on the states whose slot is the tick's and on any state whose collector is running, unless every state is asked for.
 		/// @param tick The sim tick whose end this pass is.
 		/// @param everyState Whether every state takes a full collection this pass, whatever its slot.
 		void StartAsyncGarbageCollection(uint64_t tick, bool everyState);
