@@ -6152,7 +6152,7 @@ namespace RTE {
 		const uint8_t via = m_RemoteTransports.contains(senderPeerId) ? senderPeerId : !m_RelayHost && m_RemoteTransports.contains(GetHostPeerId()) ? GetHostPeerId() : 0;
 		if (via == 0) return;
 		// The same tick is asked for again only once the last answer has had its round trip.
-		const auto& link = m_Stats.peers[senderPeerId];
+		const auto& link = m_Stats.peers[via];
 		const uint64_t spacingMs = std::max<uint64_t>(static_cast<uint64_t>(std::max(1.0, std::ceil(m_Config.simTickMs))), static_cast<uint64_t>(link.pingMs) + link.jitterMs);
 		auto& [askedFrame, askedAtMs] = m_ResendRequests[senderPeerId];
 		if (askedFrame == frame && nowMs >= askedAtMs && nowMs - askedAtMs < spacingMs) return;
@@ -9738,9 +9738,11 @@ namespace RTE {
 			}
 			if (!allRequiredIn) {
 				if (m_MissingSinceFrame != m_Stats.nextFrame) { m_MissingSinceFrame = m_Stats.nextFrame; m_MissingSinceMs = nowMs; }
+				// Only a tick the sender has already sent past is lost: one still in flight on a long link arrives by itself.
 				if (nowMs >= m_MissingSinceMs && static_cast<double>(nowMs - m_MissingSinceMs) >= m_Config.simTickMs) {
 					for (uint8_t peer: m_RemotePeerIds) if (IsRemoteRequiredForFrame(peer, m_Stats.nextFrame) &&
-					    (remoteIt == m_RemoteFrames.end() || !remoteIt->second.contains(peer))) RequestMissingFrames(peer, m_Stats.nextFrame, nowMs);
+					    (remoteIt == m_RemoteFrames.end() || !remoteIt->second.contains(peer)) && m_Stats.peers[peer].highestTargetFrame > m_Stats.nextFrame)
+						RequestMissingFrames(peer, m_Stats.nextFrame, nowMs);
 				}
 				if (UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
 					if (m_FirstMissingFrame != m_Stats.nextFrame) { m_FirstMissingFrame = m_Stats.nextFrame; m_FirstMissingMs = nowMs; }
