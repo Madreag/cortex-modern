@@ -660,6 +660,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	std::shared_ptr<AudioCheckpointCapture> audio, audioSamples;
 	auto sceneCache = std::make_shared<CheckpointCache>();
 	sceneCache->Begin();
+	// What the workers would make on first use is made here; from the first worker to the join they only read.
+	LuaScriptGraphNativeCaptureScope::PreTouch();
 	std::optional<CaptureSentinel::ParallelPhase> parallel(std::in_place);
 	struct Aside {
 		std::vector<std::future<void>> tasks;

@@ -252,6 +252,10 @@ namespace RTE {
 		/// @param which Which player to get the GUI for. (default: 0)
 		/// @return A pointer to a SceneEditorGUI. Ownership is NOT transferred!
 		SceneEditorGUI* GetEditorGUI(unsigned int which = 0) const;
+
+		/// Makes every seat's stand-ins and drops the editors' retained owners nothing references, on the capturing
+		/// thread before a capture's workers read them.
+		void PrepareCheckpointCapture() const;
 		static bool RunNetLocalUIRestoreSelfTest();
 		static bool RunNetInventoryRelaunchProbe(std::string_view phase);
 

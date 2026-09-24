@@ -446,6 +446,18 @@ template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
 }
 } // namespace
 
+void GameActivity::PrepareCheckpointCapture() const {
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		GetBuyGUI(player);
+		GetEditorGUI(player);
+		GetBanner(YELLOW, player);
+		GetBanner(RED, player);
+		if (g_MovableMan.IsRestoringSnapshot()) continue;
+		if (m_pEditorGUI[player]) m_pEditorGUI[player]->ReclaimNetRetainedOwners();
+		if (m_SeatStubEditorGUI[player]) m_SeatStubEditorGUI[player]->ReclaimNetRetainedOwners();
+	}
+}
+
 BuyMenuGUI* GameActivity::GetBuyGUI(unsigned int which) const {
 	if (which >= Players::MaxPlayerCount) return nullptr;
 	const bool presented = LocalInputOfPlayer(which) != Players::NoPlayer;
