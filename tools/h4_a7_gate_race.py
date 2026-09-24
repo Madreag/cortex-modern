@@ -11,7 +11,7 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
-from run_sim_test import make_run  # noqa: E402
+from run_sim_test import make_run, engine_executable, file_sha256  # noqa: E402
 
 GAP = "connect gate invalid or its bounded wait expired"
 FAIL = "A7 connect gate invalid or timed out"
@@ -22,7 +22,7 @@ PORTS = {"torn": 48340, "wrong-id": 48341}
 
 def digest(path):
     with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        return file_sha256(stream)
 
 
 def events(path):
@@ -54,7 +54,7 @@ def write_plain(path, run_id, peer):
 
 
 def launch(repo, out, port, run_id, peer, gate, journal, report):
-    exe = Path(repo) / "Cortex Command.exe"
+    exe = engine_executable(Path(repo))
     env = {
         "CCCP_HEADLESS": "1",
         "CC_A7_EVENT_LOG": str(journal),
@@ -83,8 +83,8 @@ def run_arm(repo, root, arm):
         "port": PORTS[arm],
         "journal": str(journal),
         "stdout": str(out / "stdout.log"),
-        "exe": str(Path(repo) / "Cortex Command.exe"),
-        "exe_sha256": digest(Path(repo) / "Cortex Command.exe"),
+        "exe": str(engine_executable(Path(repo))),
+        "exe_sha256": digest(engine_executable(Path(repo))),
     }
     run = launch(repo, out, PORTS[arm], run_id, peer, gate, journal, report)
     try:

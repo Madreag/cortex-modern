@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 
 from compare_sim_traces import strict_compare
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable, file_sha256
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
 FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
@@ -156,8 +156,8 @@ def main() -> int:
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    with (repo / "Cortex Command.exe").open("rb") as exe:
-        exe_sha = hashlib.file_digest(exe, "sha256").hexdigest()
+    with engine_executable(repo).open("rb") as exe:
+        exe_sha = file_sha256(exe)
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"off": {"host": 0, "client": 0}, "on": {"host": 2, "client": 2},
             "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}

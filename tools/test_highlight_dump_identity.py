@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import sys
+from run_sim_test import file_sha256  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 SELFTEST = re.compile(r"\[piemenu-checkpoint-selftest\]")
@@ -22,7 +23,7 @@ ARGV = ["-script-graph-selftest"]
 
 def sha(path: Path) -> str:
     with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        return file_sha256(stream)
 
 
 def peer_log(run_dir: Path) -> str:

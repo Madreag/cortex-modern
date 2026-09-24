@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 
 from test_autosave_restore import CAPTURE, _run_world_round, peer_log, run_pair
+from run_sim_test import engine_executable, file_sha256  # noqa: E402
 
 
 BUDGET_MS = 5.0
@@ -72,8 +73,8 @@ def main() -> int:
     root = options.out.resolve()
     if not options.score_existing:
         root.mkdir(parents=True, exist_ok=False)
-    with (options.repo / "Cortex Command.exe").open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    with engine_executable(options.repo).open("rb") as stream:
+        digest = file_sha256(stream)
     result = {"exe_sha256": digest, "budget_ms": BUDGET_MS, "ticks": 600, "lua_states": options.lua_states, "arms": {}}
     extra = {who: ["-num-lua-states", str(options.lua_states)] for who in ("host", "client")} if options.lua_states else {}
     for index, arm in enumerate(("match", "world") if options.arm == "all" else (options.arm,)):

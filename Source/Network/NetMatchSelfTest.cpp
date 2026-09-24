@@ -2417,7 +2417,7 @@ namespace RTE {
 			manifest.savedTick = 480;
 			manifest.simTimeTicks = 480 * 1000;
 			manifest.intervalSeconds = 30;
-			manifest.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+			manifest.configHash = NetMatchConfigUtil::StoredConfigHash(config);
 			manifest.configPayload = ResumePayloadHex(config);
 			manifest.activityPreset = config.activityPreset;
 			manifest.scenePreset = config.sceneName;
@@ -2486,7 +2486,7 @@ namespace RTE {
 				return false;
 			}
 			decoded = std::get<NetLobbyMatchConfig>(message.message.payload).config;
-			if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(decoded)) != read.configHash) {
+			if (NetMatchConfigUtil::StoredConfigHash(decoded) != read.configHash) {
 				*error = "the manifest's configuration does not hash to the value stored beside it";
 				return false;
 			}
@@ -2652,7 +2652,7 @@ namespace RTE {
 				manifest.roundId = round;
 				manifest.worldBoot = boot;
 				manifest.savedTick = tick;
-				manifest.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+				manifest.configHash = NetMatchConfigUtil::StoredConfigHash(config);
 				manifest.configPayload = ResumePayloadHex(config);
 				return AutosaveStore::PublishManifest(scratch.path, manifest, error);
 			};
@@ -6298,7 +6298,7 @@ namespace RTE {
 		manifest.roundId = 11;
 		manifest.savedTick = 900;
 		manifest.intervalSeconds = 45;
-		manifest.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+		manifest.configHash = NetMatchConfigUtil::StoredConfigHash(config);
 		manifest.configPayload = ResumePayloadHex(config);
 		manifest.activityPreset = config.activityPreset;
 		manifest.scenePreset = config.sceneName;
@@ -6373,6 +6373,88 @@ namespace RTE {
 		if (service.m_ResumeSideState.playerBindings != manifest.sideState.playerBindings) {
 			*error = "the resumed round did not take the seats the checkpoint's manifest carried";
 			return false;
+		}
+		{
+			// A CPU world with no seated human, as a build before the roster order reached the hash saved it:
+			// its CPU slot ahead of its open seats, the hash taken without that order and no rule named.
+			NetMatchServiceRequest worldRequest;
+			worldRequest.host = worldRequest.dedicated = worldRequest.persistentWorld = true;
+			worldRequest.activityPreset = "Persistent World";
+			worldRequest.mode = NetMatchMode::PvPvE;
+			worldRequest.peerCount = 3;
+			worldRequest.worldId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+			worldRequest.worldBoot = 4;
+			worldRequest.autosaveSeconds = 60;
+			NetMatchConfig cpuWorld;
+			if (!NetMatchService::BuildMatchConfig(worldRequest, config.sessionId, cpuWorld, error)) return false;
+			// The older rule hashed the sorted fields alone, so the same roster in the builder's order is its value.
+			NetMatchConfig builderOrder = cpuWorld;
+			std::stable_sort(builderOrder.players.begin(), builderOrder.players.end(), [](const NetMatchPlayerSlot& lhs, const NetMatchPlayerSlot& rhs) {
+				if (lhs.cpu != rhs.cpu) return rhs.cpu;
+				return lhs.cpu ? lhs.team < rhs.team : lhs.peerId < rhs.peerId;
+			});
+			const std::string legacyHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(builderOrder));
+			if (legacyHash == NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(cpuWorld))) {
+				*error = "the CPU world's roster is in the builder's order, so it cannot tell the two hash rules apart";
+				return false;
+			}
+			AutosaveManifest legacy = manifest;
+			legacy.sessionId = cpuWorld.sessionId;
+			legacy.worldBoot = cpuWorld.worldBoot;
+			legacy.configHash = legacyHash;
+			legacy.configPayload = ResumePayloadHex(cpuWorld);
+			legacy.activityPreset = cpuWorld.activityPreset;
+			legacy.scenePreset = cpuWorld.sceneName;
+			if (!AutosaveStore::PublishManifest(scratch.path, legacy, error)) return false;
+			if (!service.PrepareResume(request, &refusal, scratch.path)) {
+				*error = "a CPU world checkpoint written before the roster order reached the hash was refused: " + refusal;
+				return false;
+			}
+			if (!request.resumeConfig || request.resumeConfig->players != cpuWorld.players) {
+				*error = "the older CPU world checkpoint did not resume on the roster it saved";
+				return false;
+			}
+			const std::optional<NetHash32> keptRule = NetMatchConfigUtil::HashConfigUnderRule(cpuWorld, NetMatchConfigUtil::c_SortedRosterHashRule);
+			if (!keptRule || NetIdentity::HashHex(*keptRule) != legacyHash) {
+				*error = "the kept sorted-roster rule no longer gives the value an older build stored";
+				return false;
+			}
+			// Each stored hash is checked by its own rule only: a real mismatch under that rule is still refused.
+			const auto refusedWith = [&](const std::string& stored, const std::string& expected, const char* what) {
+				AutosaveManifest probe = legacy;
+				probe.configHash = stored;
+				if (!AutosaveStore::PublishManifest(scratch.path, probe, error)) return false;
+				if (service.PrepareResume(request, &refusal, scratch.path)) {
+					*error = std::string(what) + " was accepted for a resume";
+					return false;
+				}
+				if (refusal.find(expected) == std::string::npos) {
+					*error = std::string(what) + " was refused without naming " + expected + ": " + refusal;
+					return false;
+				}
+				return true;
+			};
+			const std::string currentHex = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(cpuWorld));
+			const std::string ruleTag = std::to_string(NetMatchConfigUtil::c_ConfigHashRule) + ":";
+			if (!refusedWith(currentHex, "does not match the hash", "an untagged hash made by the wire-order rule") ||
+			    !refusedWith(ruleTag + legacyHash, "does not match the hash", "a wire-order tag on the sorted-roster value") ||
+			    !refusedWith(std::to_string(NetMatchConfigUtil::c_ConfigHashRule + 1) + ":" + currentHex, "newer than this build's rule", "a hash from a newer rule") ||
+			    !refusedWith("rule:" + currentHex, "names no hash rule", "an unreadable rule tag")) {
+				return false;
+			}
+			AutosaveManifest tagged = legacy;
+			tagged.configHash = NetMatchConfigUtil::StoredConfigHash(cpuWorld);
+			if (tagged.configHash != ruleTag + currentHex || !AutosaveStore::PublishManifest(scratch.path, tagged, error)) {
+				if (error->empty()) *error = "a checkpoint does not store its hash as the current rule's tag and hex: " + tagged.configHash;
+				return false;
+			}
+			if (!service.PrepareResume(request, &refusal, scratch.path)) {
+				*error = "a CPU world checkpoint stored under the current rule was refused: " + refusal;
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS pre_rule_cpu_world_checkpoint_resumes legacy=" << legacyHash.substr(0, 16)
+			          << " current=" << tagged.configHash.substr(0, 18) << " refused=untagged-current,tagged-legacy,newer-rule,unreadable-tag" << std::endl;
+			if (!AutosaveStore::PublishManifest(scratch.path, manifest, error)) return false;
 		}
 		// The sealed generation is the authority, so a file whose plaintext line disagrees with it is
 		// refused rather than half-believed.

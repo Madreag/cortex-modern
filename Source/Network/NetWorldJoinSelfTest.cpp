@@ -5085,7 +5085,7 @@ namespace RTE {
 		manifest.savedTick = tick;
 		manifest.simTimeTicks = static_cast<long long>(tick);
 		manifest.intervalSeconds = 45;
-		manifest.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+		manifest.configHash = NetMatchConfigUtil::StoredConfigHash(config);
 		manifest.configPayload = WorldConfigPayloadHex(config);
 		manifest.activityPreset = config.activityPreset;
 		manifest.scenePreset = config.sceneName;

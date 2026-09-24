@@ -28,6 +28,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from run_sim_test import engine_executable, file_sha256  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 FIXTURE = REPO / "tools/fixtures/spectate_skirmish_activity.lua"
@@ -72,7 +73,7 @@ KILL_MS = 5000
 
 def sha256(path: Path) -> str:
     with Path(path).open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        return file_sha256(handle)
 
 
 def stamp() -> str:
@@ -143,7 +144,7 @@ def load_harness(out: Path, port: int):
     spec = importlib.util.spec_from_file_location("brainless_spectate_harness", HARNESS)
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
-    harness.REPO, harness.EXE = REPO, REPO / "Cortex Command.exe"
+    harness.REPO, harness.EXE = REPO, engine_executable(REPO)
     harness.ROOT, harness.OUT = out, out / "e2e"
     return harness
 
@@ -278,7 +279,7 @@ def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: 
         input_path = out / "spectator_input.txt"
         input_path.write_text(CYCLE_INPUT, encoding="utf-8")
         flags += ["-input-script", str(input_path)]
-    exe = REPO / "Cortex Command.exe"
+    exe = engine_executable(REPO)
     argv = [str(exe), "-headless", *flags]
     env = {"TEMP": str(runtime / "Temp"), "TMP": str(runtime / "Temp"), "CCCP_HEADLESS": "1",
            "PATH": str(exe.parent) + os.pathsep + os.environ.get("PATH", "")}
@@ -355,7 +356,7 @@ def main() -> int:
     os.chdir(REPO)
 
     manifest = {"stamp": stamp(), "arm": args.arm, "port": args.port, "ticks": args.ticks,
-                "repo": str(REPO), "exe_sha256": sha256(REPO / "Cortex Command.exe"),
+                "repo": str(REPO), "exe_sha256": sha256(engine_executable(REPO)),
                 "driver_sha256": sha256(__file__), "fixture_sha256": sha256(FIXTURE),
                 "kill_ms": KILL_MS, "sim_dump": args.sim_dump, "dedicated": not args.two_humans,
                 "input_delay": args.delay}

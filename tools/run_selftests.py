@@ -55,6 +55,13 @@ SELFTESTS = [
     "headless-render-cap",
     "preview-invariance",
 ]
+# Rows whose verdict carries a wall-clock budget, so a loaded box can fail them without a defect: the inventory
+# runs them in its quiet stream. They stay out of the default rows; --quiet-rows runs them last, one at a time,
+# after every other row has finished, and --quiet-rows only runs them alone. Their budgets never move.
+LOAD_SENSITIVE = {
+    # threaded_synced_update_pass_timing: 1,024 registered MOs, 150 us added per pass.
+    "script-graph": ["-script-graph-selftest"],
+}
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",
     re.M,
@@ -148,6 +155,8 @@ def main():
     parser.add_argument("--exit-code", type=int, default=0)
     parser.add_argument("--timed-out", action="store_true")
     parser.add_argument("--name", default="controller-frame-selftest")
+    parser.add_argument("--quiet-rows", nargs="?", const="last", choices=("last", "only"),
+                        help="also run the load-sensitive rows, last and one at a time (only: those rows alone)")
     options = parser.parse_args()
 
     if options.score_stdout:
@@ -172,9 +181,21 @@ def main():
         parser.error(f"no engine executable at {exe}; build it, or set CCCP_TEST_BINARY on POSIX")
     exe_hash = sha256_of(exe)
     results = {}
-    for name in SELFTESTS:
+    rows = [] if options.quiet_rows == "only" else list(SELFTESTS)
+    quiet = list(LOAD_SENSITIVE) if options.quiet_rows else []
+    for name in rows + quiet:
         case = out / f"{name}-selftest"
-        if name == "headless-assert-continues":
+        if name in LOAD_SENSITIVE:
+            run = make_run(options.repo, LOAD_SENSITIVE[name], case, options.timeout)
+            try:
+                record = run.start().finish()
+            finally:
+                run.close()
+            stdout = (case / "stdout.log").read_text(errors="replace") if (case / "stdout.log").exists() else ""
+            scored = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), f"{name}-selftest")
+            scored["binary"] = record.get("exe_sha256")
+            scored["load_sensitive"] = True
+        elif name == "headless-assert-continues":
             from test_headless_assert import run_case as assert_case  # noqa: PLC0415
 
             scored = assert_case(options.repo, case, options.timeout)
@@ -222,7 +243,8 @@ def main():
         "exe_sha256": exe_hash,
         "repo": str(options.repo),
         "passed": sum(1 for r in results.values() if r["pass"]),
-        "total": len(SELFTESTS),
+        "total": len(rows) + len(quiet),
+        "quiet_rows": quiet,
         "results": results,
     }
     (out / "result.json").write_text(json.dumps(summary, indent=2))

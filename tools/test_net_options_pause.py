@@ -21,6 +21,7 @@ import re
 import sys
 import threading
 from pathlib import Path
+from run_sim_test import engine_executable, file_sha256  # noqa: E402
 
 SCRATCH = Path("D:/mx/opus-l03-pause-session-20260914")
 PORT_BASE = 48350
@@ -47,7 +48,7 @@ DESYNC_STOP = re.compile(r"Desync:sim state diverged at tick (\d+)")
 
 def sha(path):
     with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        return file_sha256(stream)
 
 
 def log_sources(out):
@@ -460,7 +461,7 @@ def main():
     from test_telemetry_bundle import set_visual_resolution
     os.environ["CCCP_HEADLESS"] = "1"
     root.mkdir(parents=True, exist_ok=False)
-    exe_sha = sha(repo / "Cortex Command.exe")
+    exe_sha = sha(engine_executable(repo))
     result = {"pass": False, "case": options.case, "checks": {}, "arms": {}, "ticks_per_run": TICKS,
               "arm_ticks": ARM_TICKS, "ports": list(ports), "driver_sha256": sha(__file__), "exe_sha256": exe_sha,
               "peer_hash_scope": "unchanged strict_compare: controller excluded; every other subsystem at every tick"}
@@ -489,7 +490,7 @@ def main():
     except Exception as error:
         result["error"] = str(error)
     finally:
-        after = sha(repo / "Cortex Command.exe")
+        after = sha(engine_executable(repo))
         if after != exe_sha:
             result["pass"] = False
             result["error"] = "the executable changed during the driver"

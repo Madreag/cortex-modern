@@ -27,6 +27,7 @@ import subprocess
 import sys
 import threading
 import time
+from run_sim_test import engine_executable, file_sha256  # noqa: E402
 
 SCRATCH = Path("D:/mx/swe-overlay-layout-20260914")
 PORT_BASE, PORT_COUNT = 48260, 10
@@ -192,7 +193,7 @@ def interior_ink(image, rect):
 
 def sha256(path):
     with Path(path).open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
+        return file_sha256(source)
 
 
 def git(repo, *args):
@@ -203,7 +204,7 @@ def git(repo, *args):
 def pin(repo):
     return {"head": git(repo, "rev-parse", "HEAD").decode().strip(),
             "diff_sha256": hashlib.sha256(git(repo, "diff", "HEAD", "--")).hexdigest(),
-            "exe_sha256": sha256(repo / "Cortex Command.exe")}
+            "exe_sha256": sha256(engine_executable(repo))}
 
 
 def require_pin(repo, expected):
