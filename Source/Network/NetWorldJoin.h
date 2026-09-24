@@ -147,6 +147,7 @@ namespace RTE {
 		uint64_t priorInputThrough = 0;
 		bool linkFits = false;
 		NetCatchUpHeadroom headroom;
+		bool returnsToHeldSeat = false; //!< A world member taking back the seat held for it: it proves headroom as a private return does.
 		bool declinesPromotion = false; //!< A watcher that asked to stay one; promotion skips it.
 		bool promoted = false;          //!< It reached its slot by promotion, not by a fresh join.
 		uint64_t joinOrder = 0;         //!< Monotonic open order, so promotion takes the oldest watcher.
