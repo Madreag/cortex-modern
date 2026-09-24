@@ -4096,6 +4096,17 @@ static bool IsControlClickable(GUIControl* control) {
 }
 
 bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
+	// The list shows every engine beaconing on the network, so a scripted join names its own session's row by port.
+	if (controlName.starts_with("GameRowPort")) {
+		const std::string number = controlName.substr(11);
+		if (number.empty() || number.size() > 5 || number.find_first_not_of("0123456789") != std::string::npos) return false;
+		const unsigned long port = std::stoul(number);
+		const auto row = std::find_if(m_GameRows.begin(), m_GameRows.end(), [port](const NetDirectoryClient::GameRow& candidate) { return candidate.port == port; });
+		if (row == m_GameRows.end() || !IsControlClickable(m_MultiplayerLanGamesList) || m_ActiveDialogBox) return false;
+		m_MultiplayerLanGamesList->SetSelectedIndex(static_cast<int>(row - m_GameRows.begin()));
+		HandleMultiplayerScreenInputEvents(m_MultiplayerLanGamesList);
+		return true;
+	}
 	if (controlName.starts_with("GameRow")) {
 		const std::string number = controlName.substr(7);
 		if (number.empty() || number.size() > 3 || number.find_first_not_of("0123456789") != std::string::npos) return false;
