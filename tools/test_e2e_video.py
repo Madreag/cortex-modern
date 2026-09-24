@@ -956,12 +956,25 @@ def check_log_gates(results, scratch):
     args = peers["host"]["args"]
     round_ticks = int(args[args.index("-net-match-ticks") + 1])
     window_end = scenario["runs"][0]["feel_gate"].get("ticks")
-    fallback = next((gate["sim_tick"] for gate in drops if gate.get("peer") == "host" and "sim_tick" in gate), None)
-    # The fallback leaves the relaunch at least 600 ticks (10 s at 60 Hz) of the round; the gates' window ends where it did at 1,200.
+    # The fallback reads the host's own scripted-input line (its sim clock, not its recorded frames, which trail the sim
+    # under load) and leaves the relaunch at least 600 ticks (10 s at 60 Hz) of the round.
+    host_gate = next((gate["log"] for gate in drops if gate.get("peer") == "host" and gate.get("log")), None)
+    fires = [tick for tick in range(1, round_ticks + 1) if host_gate and re.search(host_gate, f"[input-script] tick {tick} player 0 pressed FIRE")]
     ok &= row(results, "log-gate/rollback-lag-drops-inside-the-round-without-a-catch-up",
-              fallback is not None and 0 < fallback <= round_ticks - 600, f"fallback={fallback} round={round_ticks}")
+              bool(fires) and fires[0] > window_end - 60 and fires[0] <= round_ticks - 600, f"first host tick={fires[:1]} round={round_ticks}")
     ok &= row(results, "feel-window/rollback-lag-gates-keep-the-1200-tick-window", window_end == 1200 and round_ticks > window_end,
               f"window_end={window_end} round={round_ticks}")
+    fixture = next(entry for entry in peers["host"]["runtime_files"] if entry.get("copy") == "tools/feel/FeelBaseline.lua")
+    staged = driver.staged_copy(driver.Path(__file__).resolve().parents[1] / fixture["copy"], fixture.get("replace", [])).decode("utf-8")
+    ok &= row(results, "feel-window/rollback-lag-activity-runs-the-whole-round", f"local WINDOW_TICKS = {round_ticks};" in staged)
+    bad = scratch / "staged-copy.lua"
+    bad.write_text("local A = 1;\nlocal A = 1;\n", encoding="utf-8")
+    try:
+        driver.staged_copy(bad, [[r"^local A = \d+;$", "local A = 2;"]])
+        refused = False
+    except ValueError:
+        refused = True
+    ok &= row(results, "staged-copy/ambiguous-replacement-is-refused", refused)
     rejoin = [item for item in scenario["checklist"] if item.get("peer") == "client-rejoined"]
     ok &= row(results, "feel-window/rollback-lag-rejoin-is-judged-on-the-reclaim",
               bool(rejoin) and all(any("seat-reclaimed" in pattern for pattern in item.get("log_regex", [])) for item in rejoin))

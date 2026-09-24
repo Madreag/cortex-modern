@@ -309,6 +309,17 @@ def fullstate_verdict(host_log, client_log):
     return compare_fullstate(host_log, client_log)
 
 
+def staged_copy(source, replacements):
+    """A fixture's bytes with each [pattern, replacement] applied to exactly one line, as the feel driver rewrites its tick target."""
+    data = Path(source).read_bytes()
+    for pattern, replacement in replacements:
+        text, count = re.subn(pattern, replacement, data.decode("utf-8"), flags=re.M)
+        if count != 1:
+            raise ValueError(f"{source}: {pattern!r} matched {count} lines, expected exactly one")
+        data = text.encode("utf-8")
+    return data
+
+
 def log_line_seen(path, pattern):
     """Whether a peer's own stdout has printed a line matching pattern yet (a gate on the product's own log)."""
     path = Path(path)
@@ -892,7 +903,7 @@ def run_one(options, scenario, run, run_index, out):
             destination = Path(run_handle.cwd) / entry["to"]
             destination.parent.mkdir(parents=True, exist_ok=True)
             if "copy" in entry:
-                destination.write_bytes((Path(options.repo) / entry["copy"]).read_bytes())
+                destination.write_bytes(staged_copy(Path(options.repo) / entry["copy"], entry.get("replace", [])))
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
