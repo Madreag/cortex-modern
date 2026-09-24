@@ -6729,7 +6729,7 @@ namespace RTE {
 	/// Only the host's departure lands a seat that has committed nothing: an error on the peer's own side (a held client's private
 	/// catch-up that could not restore, say) keeps the seat's reconnect, so the seat the host still holds is rejoined, not abandoned.
 	bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error) {
-		const std::filesystem::path scratch = std::filesystem::temp_directory_path() / ("cccp-own-side-" + std::to_string(System::GetProcessID()));
+		const std::filesystem::path scratch = std::filesystem::temp_directory_path() / ("cccp-own-side-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
 		std::error_code ignored;
 		std::filesystem::create_directories(scratch, ignored);
 		const auto startPair = [](uint16_t port, LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetSession& host, NetSession& client, std::string& why) {
