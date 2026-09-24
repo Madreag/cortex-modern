@@ -383,6 +383,11 @@ namespace RTE {
 				SetError(error, NetLockstepErrorCode::InvalidValue, 0, "peer identity fields are out of range");
 				return false;
 			}
+			const auto knownDevice = [](uint8_t deviceClass) { return deviceClass < static_cast<uint8_t>(Controller::WireDeviceClass::Count); };
+			if (!knownDevice(payload.deviceClass) || !std::all_of(payload.peerDeviceClasses.begin(), payload.peerDeviceClasses.end(), knownDevice)) {
+				SetError(error, NetLockstepErrorCode::InvalidValue, 0, "device class is out of range");
+				return false;
+			}
 			if (payload.agreedStartRecord) {
 				const uint32_t validPeers = payload.peerCount == 32 ? UINT32_MAX : ((uint32_t{1} << payload.peerCount) - 1U);
 				if (payload.agreedFirstFrame < payload.startFrame || payload.agreedEffectiveStartFrame < payload.agreedFirstFrame ||
@@ -447,6 +452,7 @@ namespace RTE {
 			// The startup reading rides one past itself so that a publication is a fact on the wire and a
 			// machine that restarts in 0 ms still publishes: zero means nothing was measured yet.
 			AppendU32LE(out, payload.startupPublished && payload.activityRestartMs < UINT32_MAX ? payload.activityRestartMs + 1 : 0);
+			AppendU8(out, payload.deviceClass);
 			if (payload.agreedStartRecord) {
 				AppendU8(out, 1);
 				AppendU64LE(out, payload.agreedFirstFrame);
@@ -457,6 +463,7 @@ namespace RTE {
 				for (uint64_t frame: payload.peerEffectiveStartFrames) AppendU64LE(out, frame);
 				for (uint32_t park: payload.peerStartupParks) AppendU32LE(out, park);
 				for (uint16_t delay: payload.peerInputDelays) AppendU16LE(out, delay);
+				for (uint8_t deviceClass: payload.peerDeviceClasses) AppendU8(out, deviceClass);
 			}
 			return true;
 		}
@@ -1493,6 +1500,7 @@ namespace RTE {
 			    !reader.ReadString(payload.scenario, NetLockstepCodec::c_MaxScenarioBytes, "scenario", error) ||
 			    !reader.ReadString(payload.ownershipPolicy, NetLockstepCodec::c_MaxOwnershipPolicyBytes, "ownership_policy", error) ||
 			    (version >= NetLockstepCodec::c_StartParkVersion && !ReadOrTruncated(reader.ReadU32LE(startupReading), reader, error, "activity_restart_ms")) ||
+			    (version >= NetLockstepCodec::c_SeatDeviceVersion && !ReadOrTruncated(reader.ReadU8(payload.deviceClass), reader, error, "device_class")) ||
 			    !ValidateStart(payload, error)) {
 				return false;
 			}
@@ -1513,6 +1521,11 @@ namespace RTE {
 						if (!ReadOrTruncated(reader.ReadU32LE(park), reader, error, "agreed peer startup")) return false;
 					for (auto& delay: payload.peerInputDelays)
 						if (!ReadOrTruncated(reader.ReadU16LE(delay), reader, error, "agreed peer delay")) return false;
+					if (version >= NetLockstepCodec::c_SeatDeviceVersion) {
+						for (auto& deviceClass: payload.peerDeviceClasses)
+							if (!ReadOrTruncated(reader.ReadU8(deviceClass), reader, error, "agreed peer device")) return false;
+						if (!ValidateStart(payload, error)) return false;
+					}
 				}
 			}
 			out = payload;
@@ -4244,6 +4257,7 @@ namespace RTE {
 		start.resumeFromSnapshot = m_Config.resumeFromSnapshot;
 		start.activityRestartMs = m_LocalStartParkMs;
 		start.startupPublished = m_LocalStartupPublished;
+		start.deviceClass = m_LocalDeviceClass;
 		// A returning seat's reclaim delay is host-authored.  The sender must adopt its own
 		// admission fact even when this initial start is broadcast to the host rather than sent
 		// through the host's onlyPeerId filter.
@@ -4310,6 +4324,7 @@ namespace RTE {
 	// out: the local production a follower keeps, and the deferred-stop mode the launch path sets.
 	void NetLockstepCoordinator::ResetRoundState() {
 		m_PeerAdmissions.clear();
+		m_PeerDeviceClasses.fill(0);
 		m_HostAcceptedLocalFrames.clear();
 		m_ResumeAdmissionPending = m_Config.resumeFromSnapshot;
 		m_SynchronizedCaptureStartFrame = UINT64_MAX;
@@ -6851,6 +6866,17 @@ namespace RTE {
 		m_Stats.longestOwnParkMs = std::max(m_Stats.longestOwnParkMs, gap);
 	}
 
+	uint8_t NetLockstepCoordinator::AgreedSeatDeviceClass(int seat) const {
+		if (!m_AgreedStartRecord || seat < 0) return 0;
+		// Seats are the roster's human slots in order, the same numbering every peer maps its players by.
+		int humanSlot = 0;
+		for (const NetMatchPlayerSlot& slot: m_Config.matchConfig.players) {
+			if (slot.cpu) continue;
+			if (humanSlot++ == seat) return slot.peerId >= 1 && slot.peerId <= m_AgreedStartRecord->peerDeviceClasses.size() ? m_AgreedStartRecord->peerDeviceClasses[slot.peerId - 1] : 0;
+		}
+		return 0;
+	}
+
 	void NetLockstepCoordinator::NoteLocalStartPark(uint32_t restartMs) {
 		if (m_LocalStartupPublished && restartMs == m_LocalStartParkMs) {
 			return;
@@ -7316,6 +7342,7 @@ namespace RTE {
 		record.resumeFromSnapshot = m_Config.resumeFromSnapshot;
 		record.activityRestartMs = m_LocalStartParkMs;
 		record.startupPublished = m_LocalStartupPublished;
+		record.deviceClass = m_LocalDeviceClass;
 		record.agreedStartRecord = true;
 		record.agreedFirstFrame = m_Config.startFrame + startupFrames;
 		record.publishedPeerMask = publishedPeerMask;
@@ -7330,6 +7357,7 @@ namespace RTE {
 			record.peerEffectiveStartFrames[peer - 1] = record.agreedFirstFrame + (m_Config.resumeFromSnapshot ? 0 : delay);
 			record.peerStartupParks[peer - 1] = peer == m_Config.localPeerId ? m_LocalStartParkMs : m_Stats.peers[peer].startParkMs;
 			record.peerInputDelays[peer - 1] = delay;
+			record.peerDeviceClasses[peer - 1] = peer == m_Config.localPeerId ? m_LocalDeviceClass : m_PeerDeviceClasses[peer - 1];
 			firstCommitFrame = std::min(firstCommitFrame, record.peerEffectiveStartFrames[peer - 1]);
 			if ((expired || m_StartupLinksLost.contains(peer)) && m_Config.substituteSlowPeers && peer != m_Config.localPeerId &&
 			    std::find(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), peer) != m_RemotePeerIds.end() &&
@@ -8912,6 +8940,7 @@ namespace RTE {
 		if (publishedStartup) {
 			m_Stats.peers[start.localPeerId].startParkMs = start.activityRestartMs;
 		}
+		if (start.localPeerId >= 1 && start.localPeerId <= m_PeerDeviceClasses.size()) m_PeerDeviceClasses[start.localPeerId - 1] = start.deviceClass;
 		// A seat held at the agreed startup boundary is a late, valid return once its new startup
 		// publication arrives.  Route it through the same future admission window as a reconnect;
 		// leaving the AI marker in place until that frame gives every peer the same neutral ramp.
