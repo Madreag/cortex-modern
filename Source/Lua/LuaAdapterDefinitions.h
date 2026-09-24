@@ -68,7 +68,6 @@
 #include "SceneObject.h"
 #include "SLBackground.h"
 #include "SLTerrain.h"
-#include "SLTerrain.h"
 #include "SoundContainer.h"
 #include "TerrainObject.h"
 #include "TDExplosive.h"
