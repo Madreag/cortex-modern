@@ -245,7 +245,7 @@ namespace RTE {
 				case Event::Kick:
 				case Event::Ban: {
 					const std::string reason = e == Event::Kick ? "ParticipantRemoved" : "ParticipantBanned";
-					if (s == State::Relaunching) set("round=relaunch sess=ended:" + reason, "NP-KICK");
+					if (s == State::Relaunching) set("round=relaunch sess=ended:" + reason, "NP-KICK", "a kick or ban while the round relaunches: no line says what the ended round becomes; the conservative expectation leaves it relaunching and drops the seat from the next roster");
 					else if (s == State::RejoinConnecting) {
 						set("seat=Left round=run", "NP-KICK LS-STOP", c_LastHumanGap);
 						x.note = "coordinator half only: the handshaking returner is refused by the admission plane (NetReconnectHost), which the rig does not compose";
