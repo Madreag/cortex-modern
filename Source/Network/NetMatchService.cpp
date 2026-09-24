@@ -780,6 +780,7 @@ static std::string ResyncSaveName() {
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
 			m_HostRepairPending = false;
+			m_HostRepairDeferred = false;
 			m_MigrationAuthority = 0;
 			m_MigrationMembers.clear();
 			m_MigrationGeneration = 0;
@@ -1017,6 +1018,14 @@ static std::string ResyncSaveName() {
 		}
 		if (!m_ResyncOnDesync) return refuse("this session cannot reload a live snapshot");
 		if (!ResyncSnapshotAllowed(g_ActivityMan.GetActivity())) return refuse("match over");
+		// A repair restarts the round under every seat; a returner still catching up is let back in first.
+		if (PrivateReturnerInFlightLocked()) {
+			m_HostRepairDeferred = true;
+			m_HostRepairDeferredMs = SteadyNowMs();
+			m_HostRepairPending = true;
+			System::PrintDiagnosticLine("[net-match] repair waits for a returning seat's catch-up");
+			return true;
+		}
 		m_Coordinator->RequestResync("host requested repair");
 		m_ResyncHealStartMs = SteadyNowMs();
 		m_HostRepairPending = true;
@@ -1025,9 +1034,9 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		const bool queued = m_HostRepairPending && m_State == NetMatchServiceState::Running && m_Coordinator &&
+		const bool queued = m_HostRepairPending && m_State == NetMatchServiceState::Running && m_Coordinator && !m_HostRepairDeferred &&
 		                    m_Coordinator->IsRunning() && m_Coordinator->HasPendingRecoveryStop();
-		if (inFlight) *inFlight = m_ResyncHealOpen || queued;
+		if (inFlight) *inFlight = m_ResyncHealOpen || queued || m_HostRepairDeferred;
 		if (bytes) *bytes = queued ? 0 : (m_LastResync.envelopeBytes ? m_LastResync.envelopeBytes : m_LastResync.archiveBytes);
 		if (elapsedMs) *elapsedMs = m_ResyncHealOpen || queued ? SteadyNowMs() - m_ResyncHealStartMs : m_LastResync.healMs;
 	}
@@ -1121,6 +1130,7 @@ static std::string ResyncSaveName() {
 			// played. The silence windows start again here instead of measuring the match behind us.
 			NotePumpParkedLocked();
 			m_HostRepairPending = false;
+			m_HostRepairDeferred = false;
 		}
 		const uint64_t a7Resync = NetA7Journal::BeginResync();
 		const bool a7Save = NetA7Journal::Enabled() && isHost && FaultInjected("slow_resync_save");
@@ -1944,6 +1954,7 @@ static std::string ResyncSaveName() {
 			m_ResyncOnDesync = false;
 			m_ResyncHealOpen = false;
 			m_HostRepairPending = false;
+			m_HostRepairDeferred = false;
 			m_ResyncHealStartMs = 0;
 			m_LastResync = {};
 			m_PendingHeldReseats.clear();
@@ -3662,8 +3673,25 @@ static std::string ResyncSaveName() {
 		System::PrintDiagnosticLine(line.str());
 	}
 
+	bool NetMatchService::PrivateReturnerInFlightLocked() const {
+		return m_WorldJoin.IsPrivateMatch() && std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [](const NetWorldJoinSession& session) {
+			return !session.spectator && session.phase != NetWorldJoinPhase::Active && session.phase != NetWorldJoinPhase::Failed;
+		});
+	}
+
 	void NetMatchService::DrivePrivateMatchRejoins(uint64_t nowMs) {
 		if (!m_Runner || !m_Session || !m_Coordinator || !m_WorldJoin.IsPrivateMatch()) return;
+		// A deferred repair starts once the returner is back, or past the headroom bound if it never gets there.
+		if (m_HostRepairDeferred && (!PrivateReturnerInFlightLocked() || SteadyNowMs() - m_HostRepairDeferredMs > c_NetWorldHeadroomWaitMs)) {
+			m_HostRepairDeferred = false;
+			if (m_Coordinator->IsRunning() && !m_Coordinator->HasPendingRecoveryStop() && ResyncSnapshotAllowed(g_ActivityMan.GetActivity())) {
+				System::PrintDiagnosticLine(std::string("[net-match] repair starts: ") + (PrivateReturnerInFlightLocked() ? "the returner did not finish its catch-up in time" : "the returning seat is back"));
+				m_Coordinator->RequestResync("host requested repair");
+				m_ResyncHealStartMs = SteadyNowMs();
+			} else {
+				m_HostRepairPending = false;
+			}
+		}
 		m_WorldJoin.ExpireStaleJoins(nowMs);
 		RefuseReturnersWithoutHeadroomLocked(nowMs);
 		BoundPrivateImageWait(SteadyNowMs());

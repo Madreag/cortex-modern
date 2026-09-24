@@ -887,6 +887,7 @@ namespace RTE {
 		bool RelaunchInFlightLocked() const;
 		/// Host: ends the rejoin of every returner that has replayed past the bound without showing the headroom its activation needs.
 		void RefuseReturnersWithoutHeadroomLocked(uint64_t nowMs);
+		bool PrivateReturnerInFlightLocked() const;
 		std::set<NetPeerId> m_SlowReturnersNoted; //!< Returners already told they keep catching up below the round's rate.
 		/// Host: ends one returner's rejoin and tells its client why, so it tries again instead of waiting.
 		void RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text);
@@ -1445,6 +1446,8 @@ namespace RTE {
 		uint64_t m_ResyncHealStartMs = 0;
 		bool m_ResyncHealOpen = false;
 		bool m_HostRepairPending = false;
+		bool m_HostRepairDeferred = false; //!< Host: a repair asked for while a returner catches up, started once it is back.
+		uint64_t m_HostRepairDeferredMs = 0;
 		bool m_HostLobbyBeaconed = false;
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
