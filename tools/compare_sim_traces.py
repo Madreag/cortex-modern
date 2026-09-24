@@ -13,7 +13,7 @@ PAUSED_CORE = frozenset({"tick", "terrain", "sim_rng", "scene", "funds", "lua_st
 HASH = re.compile(r"[0-9a-f]{64}\Z")
 
 
-def load_trace(path):
+def load_trace(path, away=frozenset()):
     data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     runs = data.get("runs") if isinstance(data, dict) else None
     if not isinstance(runs, list) or len(runs) != 1 or not isinstance(runs[0], dict):
@@ -29,7 +29,7 @@ def load_trace(path):
         tick = entry.get("tick")
         if type(tick) is not int or tick < 1:
             raise ValueError(f"invalid tick {tick!r}")
-        if previous is not None and tick != previous + 1:
+        if previous is not None and tick != previous + 1 and not (tick > previous + 1 and set(range(previous + 1, tick)) <= away):
             raise ValueError(f"tick {tick} does not follow {previous} (gap, duplicate or reordering)")
         previous = tick
         paused = entry.get("paused", False)
@@ -53,9 +53,12 @@ def load_trace(path):
     return ticks, {k: v for k, v in runs[0].items() if k != "tick_hashes"}
 
 
-def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks=1, prefix=False, per_peer=frozenset()):
+def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks=1, prefix=False, per_peer=frozenset(), client_away=()):
     """per_peer names the subsystems that are per-machine by construction; only a cross-peer caller passes them
-    (tools/feel/retained_resume.py PER_PEER_SUBSYSTEMS), and the comparison of two runs of one peer keeps them."""
+    (tools/feel/retained_resume.py PER_PEER_SUBSYSTEMS), and the comparison of two runs of one peer keeps them.
+    client_away names inclusive tick ranges a held client never simulated: its coverage starts again at the image it
+    loaded, and every tick it did simulate is compared."""
+    away = {tick for low, high in client_away for tick in range(low, high + 1)}
     result = {"compared_ticks": 0, "first_divergence": None, "divergent_subsystems": [], "reasons": [], "paused_ticks": 0,
               "per_peer_excluded": sorted(per_peer)}
     if type(first_tick) is not int or first_tick < 1 or type(min_ticks) is not int or min_ticks < 1:
@@ -70,7 +73,7 @@ def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks
     traces = []
     for label, path in (("host", host), ("client", client)):
         try:
-            ticks, info = load_trace(path)
+            ticks, info = load_trace(path, away if label == "client" else frozenset())
         except (OSError, ValueError, TypeError) as exc:
             result["reasons"].append(f"{label}: {exc}")
             continue
@@ -78,12 +81,15 @@ def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks
         result[f"{label}_info"] = {"run": info}
         if next(iter(ticks)) != first_tick:
             result["reasons"].append(f"{label}: first tick is {next(iter(ticks))}, expected {first_tick}")
-        if expected_ticks is not None and (len(ticks) < expected_ticks if prefix else len(ticks) != expected_ticks):
+        expected_here = expected_ticks
+        if expected_ticks is not None and label == "client":
+            expected_here = expected_ticks - len(away & set(range(first_tick, first_tick + expected_ticks)))
+        if expected_ticks is not None and (len(ticks) < expected_here if prefix else len(ticks) != expected_here):
             kind = "at least" if prefix else "exactly"
-            if len(ticks) < expected_ticks:
-                result["reasons"].append(f"{label}: too few ticks ({len(ticks)}, expected {kind} {expected_ticks})")
+            if len(ticks) < expected_here:
+                result["reasons"].append(f"{label}: too few ticks ({len(ticks)}, expected {kind} {expected_here})")
             else:
-                result["reasons"].append(f"{label}: has {len(ticks)} ticks, expected {kind} {expected_ticks}")
+                result["reasons"].append(f"{label}: has {len(ticks)} ticks, expected {kind} {expected_here}")
         if len(ticks) < min_ticks:
             result["reasons"].append(f"{label}: too few ticks ({len(ticks)}, minimum is {min_ticks})")
     if result["reasons"]:
@@ -92,11 +98,12 @@ def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks
     if prefix:
         ht = {t: v for t, v in ht.items() if t < first_tick + expected_ticks}
         ct = {t: v for t, v in ct.items() if t < first_tick + expected_ticks}
-    if ht.keys() != ct.keys():
+    if ht.keys() - away != ct.keys():
         result["reasons"].append("host and client tick ranges differ")
         return False, result
+    result["client_away_ticks"] = len(away & ht.keys())
     schemas = set()
-    for tick in ht:
+    for tick in ct:
         hs, hp = ht[tick]
         cs, cp = ct[tick]
         schemas.update((tuple(sorted(hs)), tuple(sorted(cs))))
