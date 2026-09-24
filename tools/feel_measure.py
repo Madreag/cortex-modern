@@ -298,6 +298,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
         playback = make_run(REPO, ['-net-replay', str(out / 'match.ccreplay'), '-tick-hashes', '-out', str(out / 'replay_trace.json'),
                                    '-max-ticks', str(final_tick), '-seed', '42'], out / 'replay-off', timeout=timeout,
                             env={'CCCP_HEADLESS': '1'}, expected=[out / 'replay_trace.json'])
+        stage_baseline(playback, final_tick, 2)
         try:
             playback.start().finish()
         finally:
