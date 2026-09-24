@@ -557,6 +557,12 @@ _LOCAL_FIELDS = {
 # production_valid: the local seat's claim on that sample, cleared by the local SetDisabled (Controller.h:193).
 # committed_*: the sim-facing input BeginLocalProduction holds aside for the duration of the local pass (Controller.cpp:379-384).
 # producing_local_input: true only between this machine's BeginLocalProduction and EndLocalProduction (Controller.cpp:385, 407).
+# The move path is the owner machine's own pathfinder answer and these fields derive from it (Actor.cpp SaveActorRuntime
+# writes them in per-peer runs); the ordered waypoint beside them is the shared order.
+for _version in ("ActorRuntime1", "ActorRuntime2", "ActorRuntime3"):
+    _LOCAL_FIELDS[_version] = _LOCAL_FIELDS[_version] | set("waypoint_cursor draw_waypoints move_target previous_path_target move_vector update_path".split())
+# RenderUpdate moves a menu to its actor's interpolated position and eases the visual cursor on each drawn frame (PieMenu.cpp).
+_LOCAL_FIELDS["PieMenuRuntime1"] = {"center", "cursor_visual_angle"}
 _LOCAL_FIELDS["Controller3"] = _LOCAL_FIELDS["Controller2"] | set(
     "production_states production_analog_move production_analog_aim production_analog_cursor production_mouse_movement "
     "production_seat_mode production_seat_player production_valid committed_states committed_analog_move committed_analog_aim "
@@ -605,6 +611,14 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
             mask(key)
         if version in ("RuntimeGlobals1", "RuntimeGlobals2", "RuntimeGlobals3", "RuntimeGlobals4", "RuntimeGlobals5", "RuntimeGlobals6", "RuntimeGlobals7", "RuntimeGlobals8", "RuntimeGlobals9"):
             mask("render_rng")
+            # The sim RNG's draw count also counts each process's menu and loading draws; its seed and state are shared.
+            words = result.get("sim_rng").split(b" ") if isinstance(result.get("sim_rng"), bytes) else []
+            if len(words) == 627 and words[0] == b"MT1":
+                words[2] = b"LOCAL"
+                result["sim_rng"] = b" ".join(words)
+                masked.append((*path, "sim_rng", "draw_count"))
+            # The post effects are dropped at the first sim update after each drawn frame, so they follow this machine's drawing.
+            mask("postprocess")
             # A resync keeps this machine's own device and shared GUI input whole and drops the host's
             # (NetMatchService.cpp:822-823 captures them, 831 puts them back after RestoreRuntimeGlobals).
             mask("input")
@@ -627,6 +641,8 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
             if len(path) >= 2 and path[-2] == "player_controller" and path[-1] in asymmetric_seats:
                 mask("states")
         if version in ("Activity1", "Activity2", "Activity3", "Activity4"):
+            # The funds readout clears its changed flag as each machine draws it (Activity::TeamFundsChanged).
+            mask("funds_changed")
             if local_seat is None:
                 for key in ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links"):
                     result[key][0] = "LOCAL"
