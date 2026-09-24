@@ -48,6 +48,8 @@ def compare_fullstate(host_logs, client_logs):
                 differing += [name for name in order if dict(host_sections).get(name) != client_map.get(name) and name not in differing]
         if differing:
             result["divergent_ticks"] += 1
+            # Every divergent tick is kept, so a section that joins the difference later is visible beside the first.
+            result.setdefault("divergences", []).append({"round": key[0], "tick": key[1], "sections": differing})
             if result["first_divergence"] is None:
                 result["first_divergence"] = {"round": key[0], "tick": key[1], "section": differing[0], "sections": differing}
     if not common:
