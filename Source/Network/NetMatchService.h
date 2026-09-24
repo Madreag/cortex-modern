@@ -874,6 +874,8 @@ namespace RTE {
 		/// Moves a returning seat's activation to the first frame the agreed park cannot reach and tells the returner.
 		/// @return Whether the returner was told a new frame; false when it already used its re-announce.
 		bool MovePrivateActivationPastPark(const NetWorldJoinSession& session);
+		/// Opens the segment the round's last checkpoint names once its archive is written, so the ticks after it are recorded.
+		void SealPendingWorldSegmentAtEnd();
 		/// Host: the round has ended for a relaunch, or a relaunch is loading; moderation waits for the round it opens.
 		bool RelaunchInFlightLocked() const;
 		/// Host: ends the rejoin of every returner that has replayed past the bound without showing the headroom its activation needs.
