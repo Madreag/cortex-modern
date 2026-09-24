@@ -4,6 +4,7 @@
 #include "NetGameCommand.h"
 #include "NetMatchConfig.h"
 #include "NetTransport.h"
+#include <algorithm>
 
 #include <array>
 #include <cstdint>
@@ -654,6 +655,10 @@ namespace RTE {
 		uint32_t peerFramesWaived = 0; //!< Fenced incarnations the round stopped requiring frames from; not seat drops.
 		uint32_t connectionsClosedOnEviction = 0; //!< Connections the host closed because the round took the seat.
 		uint32_t timeouts = 0;
+		uint64_t parkFramesCommitted = 0; //!< Frames this round committed inside a capture park.
+		uint32_t frameResendRequests = 0; //!< Resend requests this peer sent for ticks the unreliable lane lost.
+		uint32_t framesResent = 0; //!< Own ticks this peer resent on the reliable lane on request.
+		uint64_t parkFramesWithInput = 0; //!< Of those, the ones carrying every seat's input they required.
 		uint64_t nextFrame = 0;
 		uint64_t longestStallMs = 0;
 		std::string lastMissingPeers; //!< Who the longest stall was waiting on.
@@ -684,6 +689,8 @@ namespace RTE {
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint32_t c_InputAcceptedMask = 0x40000000U;
+		/// Asks the named sender (the low byte) to resend its ticks from highestContiguousFrame on the reliable lane; an older peer ignores it.
+		static constexpr uint32_t c_FrameResendRequestMask = 0x20000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 32;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
@@ -905,8 +912,11 @@ namespace RTE {
 		bool HasSeatHoldGap(uint64_t frame) const { for (const auto& [peer, hold]: m_AiHeldSeats) if (IsSeatHoldGap(peer, frame)) return true; return false; }
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
-		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
-		bool AnyHeldAISeat() const { return !m_AiHeldSeats.empty(); }
+		/// A seat the AI holds for its returner. A released seat stays under the AI but no longer waits for anyone.
+		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId) && !m_ReleasedAiSeats.contains(peerId); }
+		bool AnyHeldAISeat() const { return std::any_of(m_AiHeldSeats.begin(), m_AiHeldSeats.end(), [&](const auto& seat) { return !m_ReleasedAiSeats.contains(seat.first); }); }
+		/// Whether the seat's hold was ended by a kick, a ban, a release or a clean leave: its units stay with the AI and a return is a new join.
+		bool IsSeatReleased(uint8_t peerId) const { return m_ReleasedAiSeats.contains(peerId); }
 		/// A seat's reclaim or admission is agreed and its activation frame is still ahead.
 		bool HasPendingSeatActivation() const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (reclaim.activationFrame >= m_Stats.nextFrame) return true; return false; }
 		/// Host: the current capture park covers the frame or may still grow to cover it.
@@ -981,6 +991,10 @@ namespace RTE {
 		// is the admission wall-clock; commits do not advance while a dropped seat is unresolved.
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
 		static constexpr uint64_t c_HoldPauseMs = 20000;
+		/// How long past the host's own startup a bounded-wait round waits for a slow loader before the AI takes its seat.
+		static constexpr uint64_t c_StartupAnswerBudgetMs = 5000;
+		/// A sender's first second of play is judged by its startup ramp, not the bare slow-player bound.
+		static constexpr uint64_t c_StartupSettleTicks = 60;
 		static constexpr uint64_t c_HoldHeartbeatMs = 50;
 		/// Marks a PeerDropped notice that waives a fenced incarnation's frames instead of dropping its seat.
 		static constexpr std::string_view c_FrameWaiverPrefix = "fenced:";
@@ -1070,6 +1084,9 @@ namespace RTE {
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
+		friend bool TestAReturningSeatsRampIsTheBound(std::string* error);
+		friend bool TestASeatIsNotLateForOurOwnDecision(std::string* error);
+		friend bool TestAFirstDelayChangeIsNotAMutualWait(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
@@ -1156,6 +1173,10 @@ namespace RTE {
 		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
 		void AttachFrameWindow(NetLockstepFrame& packet) const;
+		/// Asks for a sender's missing tick on the reliable lane, at most once a tick: a blip the window cannot bridge is not a hold.
+		void RequestMissingFrames(uint8_t senderPeerId, uint64_t frame, uint64_t nowMs);
+		/// Resends this peer's own ticks from a frame to one peer on the reliable lane, repeating each tick's first bytes.
+		size_t ResendOwnFramesFrom(uint8_t requesterPeerId, uint64_t fromFrame);
 		/// Sends one admitted member everything this peer still holds for targets from its first
 		/// required frame to the highest already sent, in target order, own frame before the members'.
 		size_t ReplaySentFramesTo(uint8_t peerId, uint64_t fromFrame);
@@ -1198,6 +1219,8 @@ namespace RTE {
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
+		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
+		void ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay);
 		void MaybeSendHoldHeartbeats(uint64_t nowMs);
 		static bool IsHoldResolutionReason(NetLockstepStopReason reason);
 		static NetLockstepStopReason StopReasonOf(NetLockstepHoldResolution resolution);
@@ -1276,6 +1299,8 @@ namespace RTE {
 		void PublishCapturePark(uint64_t startFrame);
 		void ApplyCapturePark(const NetLockstepTiming& timing);
 		uint64_t CaptureParkCapTicks() const;
+		/// What the next park's window is sized from: the middle of the last three parks' slowest captures.
+		double SteadyCaptureCostMs() const;
 		void SendCaptureParkReport(uint64_t nowMs = 0);
 		void RetryLateStartReclaims();
 		void FlushDeferredParkTimings();
@@ -1303,6 +1328,10 @@ namespace RTE {
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
+		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
+		std::set<uint8_t> m_ReleaseWhenHeld; //!< Host: clean leavers whose hold releases the seat as soon as it lands.
+		std::map<uint8_t, std::string> m_EvictAfterReclaim; //!< Host: removals that meet a return too close to withdraw; applied once it lands.
+		std::optional<NetLockstepStop> m_OwnEndDuringMigration; //!< This peer's own end while its host was being replaced; the new host hears it.
 		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
 		std::map<uint8_t, NetGameSeatReclaim> m_ReclaimTransactions;
 		std::optional<uint64_t> m_ConsumerWaitingFrame;
@@ -1386,6 +1415,11 @@ namespace RTE {
 		uint64_t m_CaptureReportSentMs = 0;
 		bool m_CaptureReportResent = false;
 		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
+		std::deque<uint32_t> m_ParkCaptureHistoryMs; //!< Host: the slowest capture of each recent park, newest last.
+		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_ResendRequests; //!< Sender -> (the tick last asked for, when).
+		uint64_t m_MissingSinceFrame = UINT64_MAX; //!< The committed frame this peer has waited on, for the resend request.
+		std::map<uint64_t, uint64_t> m_DecisionCommittedAtMs; //!< Host: a timing decision's frame -> when this host committed it.
+		uint64_t m_MissingSinceMs = 0;
 		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;
 		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
