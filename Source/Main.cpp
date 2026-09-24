@@ -81,6 +81,9 @@
 #include "RTEError.h"
 #include "DataModule.h"
 #include "MenuAutomation.h"
+#ifdef __APPLE__
+#include "AppleApplication.h"
+#endif
 
 #include "ControllerFrame.h"
 #include "GnsP2PSelfTest.h"
@@ -8614,6 +8617,11 @@ int main(int argc, char** argv) {
 #endif
 		}
 	}
+
+#ifdef __APPLE__
+	// Before SDL creates NSApp: its first event pump handles the launch event that decides window restoration.
+	AppleRegisterApplicationDefaults();
+#endif
 
 	install_allegro(SYSTEM_NONE, &errno, std::atexit);
 	loadpng_init();
