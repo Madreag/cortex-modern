@@ -3217,6 +3217,23 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A survivor that finds no other live member never ends the match because its host was lost: with a held seat in the
+	/// round it hosts the match so that seat rejoins it, with none it rejoins the host; only the host's announced leave ends it.
+	int TestALoneSurvivorWithAHeldSeatHostsTheMatch() {
+		using Outcome = NetMatchService::LoneElection;
+		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::HostForHeldSeats) {
+			return Fail("lone-survivor-ended-a-held-match: a lost host with a held seat in the round did not hand the match to the survivor");
+		}
+		if (NetMatchService::LoneElectionOutcome(false, false) != Outcome::RejoinHost) {
+			return Fail("lone-survivor-took-an-unheld-match: a lost host with no held seat was not rejoined");
+		}
+		if (NetMatchService::LoneElectionOutcome(true, true) != Outcome::EndMatch || NetMatchService::LoneElectionOutcome(true, false) != Outcome::EndMatch) {
+			return Fail("lone-survivor-overruled-the-host: the host's announced leave did not end the match");
+		}
+		std::cout << "[net-world-join-selftest] PASS a_lone_survivor_with_a_held_seat_hosts_the_match" << std::endl;
+		return 0;
+	}
+
 	/// A member whose seat the AI holds and who then leaves has gone for good: the world releases that seat for a new join,
 	/// while a seat still committed, dropped or mid-reclaim stays its member's.
 	int TestAHeldWorldMembersLeaveReleasesItsSeat() {
@@ -7438,6 +7455,7 @@ namespace RTE {
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAHeldWorldMembersLeaveReleasesItsSeat(); result != 0) return result;
+		if (const int result = TestALoneSurvivorWithAHeldSeatHostsTheMatch(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;

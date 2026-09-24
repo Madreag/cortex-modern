@@ -886,8 +886,17 @@ namespace RTE {
 		/// Host: the round has ended for a relaunch, or a relaunch is loading; moderation waits for the round it opens.
 		bool RelaunchInFlightLocked() const;
 		/// Host: ends the rejoin of every returner that has replayed past the bound without showing the headroom its activation needs.
-		void RefuseReturnersWithoutHeadroomLocked(uint64_t nowMs);
+		/// Answers the returners that cannot progress: one replaying below the round's rate is told once that it keeps catching
+		/// up (its activation waits for headroom); one whose base cannot come - a decided match, or no image within two capture
+		/// waits - is refused with the reason.
+		void AnswerStalledReturnersLocked(uint64_t nowMs);
 		bool PrivateReturnerInFlightLocked() const;
+	public:
+		enum class LoneElection { EndMatch, RejoinHost, HostForHeldSeats };
+		/// What a survivor that finds no other live member does: an announced leave ends its match, a lost host with a held
+		/// seat in the round is replaced by this peer so the held seats rejoin it, and a lost host with none is rejoined.
+		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool heldSeats);
+	private:
 		std::set<NetPeerId> m_SlowReturnersNoted; //!< Returners already told they keep catching up below the round's rate.
 		/// Host: ends one returner's rejoin and tells its client why, so it tries again instead of waiting.
 		void RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text);
@@ -1470,8 +1479,6 @@ namespace RTE {
 		uint64_t m_HeldRejoinPriorInput = 0;
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
 		uint32_t m_ReconnectRouteTurn = 0; //!< Alternates the reconnect prompt's attempts between the ticket's host and the successors.
-		std::atomic<uint64_t> m_LastHostSessionTrafficMs{0}; //!< Client: when the host's session last sent anything, steady ms.
-		static constexpr uint64_t c_HostTalkingWindowMs = 1000; //!< A host heard within this is alive, whatever its round did.
 		uint8_t m_ElectionHostPeer = 0; //!< Client: the round's host as last seen before an election.
 		uint64_t m_HostSilenceAtElectionMs = UINT64_MAX; //!< Client: how long that host was quiet when its election began.
 		/// A host heard this close to its election announced its leave; a lost one is silent for the host-silence bound (500 ms or more).
