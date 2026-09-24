@@ -2976,6 +2976,8 @@ static std::string ResyncSaveName() {
 		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured() &&
 		                         std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.joinCapture; });
 		if (!joinCapture && seconds == 0) return output;
+		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
+		if (input.activationPending) return output;
 		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
 		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
@@ -3017,6 +3019,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost) {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
+			input.activationPending = m_Coordinator->HasPendingSeatActivation();
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
 		if (output.capture) {
@@ -3775,16 +3778,31 @@ static std::string ResyncSaveName() {
 			if (!session.activationProposed && session.acknowledgedActivation == session.activationTick && session.acknowledgedThrough + 6 >= g_TimerMan.GetSimUpdateCount()) {
 				NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
 				if (!m_ReconnectHost.GetSeatHolder(session.stableSeat, holder, generation, incarnation) || holder != session.connection) continue;
-				const auto transition = BuildWorldActivateTransition(session, m_Runner->GetMatchConfig(), m_WorldJoin.Membership().Revision());
+				// A park commits empty frames, so no activation is agreed where a named or open park may reach it.
+				const uint64_t simulated = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+				if ((m_OpenCaptureTick != 0 && m_OpenCaptureTick >= simulated) || m_Coordinator->CaptureParkMayReach(session.activationTick)) continue;
 				std::string error;
-				if (m_Coordinator->ProposeWorldAdmission(session.connection, incarnation, transition, &error)) m_WorldJoin.MarkActivationProposed(session.connection);
+				// A seat the AI holds is still this member's: it comes back by reclaiming the seat, never as a new member.
+				if (m_Coordinator->HasHeldAISeat(session.assignedPeerId)) {
+					if (m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, incarnation, session.activationTick, &error)) {
+						m_WorldJoin.MarkActivationProposed(session.connection);
+						m_HeldWorldReclaims.insert(session.connection);
+					} else {
+						System::PrintDiagnosticLine("[net-world] held seat reclaim refused peer=" + std::to_string(session.assignedPeerId) + " at=" + std::to_string(session.activationTick) + ": " + error);
+					}
+				} else {
+					const auto transition = BuildWorldActivateTransition(session, m_Runner->GetMatchConfig(), m_WorldJoin.Membership().Revision());
+					if (m_Coordinator->ProposeWorldAdmission(session.connection, incarnation, transition, &error)) m_WorldJoin.MarkActivationProposed(session.connection);
+				}
 			}
-			if (session.activationProposed && !session.activationCommitted && m_Coordinator->HasWorldAdmission(session.assignedPeerId, session.activationTick)) {
+			if (session.activationProposed && !session.activationCommitted &&
+			    (m_HeldWorldReclaims.contains(session.connection) || m_Coordinator->HasWorldAdmission(session.assignedPeerId, session.activationTick))) {
 				m_WorldJoin.MarkActivationCommitted(session.connection);
 				m_Runner->GetLobbySession().SendPayloadTo(WorldJoinLobbyPeer(session), MakeWorldJoinReport(c_NetWorldReportActivationCommit, session.activationTick), nullptr);
 				{
 					std::ostringstream line;
-					line << "[net-world] activation agreed peer=" << static_cast<int>(session.assignedPeerId) << " at=" << session.activationTick;
+					line << "[net-world] activation agreed peer=" << static_cast<int>(session.assignedPeerId) << " at=" << session.activationTick
+					     << (m_HeldWorldReclaims.contains(session.connection) ? " reclaim" : " admission");
 					System::PrintDiagnosticLine(line.str());
 				}
 			}
