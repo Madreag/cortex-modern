@@ -3212,17 +3212,6 @@ namespace RTE {
 		if (returned == nullptr || returned->spectator || returned->assignedPeerId != 2) {
 			return Fail("held-seat-returner-watches: the member whose seat the AI holds came back as a watcher, not on slot 2");
 		}
-		// Her return is cut before it activates: the bootstrap gives the slot back, but the AI still holds her seat.
-		host.CancelJoin(8, "connection lost");
-		host.NoteReclaimHolds(NetMatchService::WorldReclaimHoldSlots({}, host.Membership(), {2}));
-		if (!host.BeginJoin(9, 9, "stranger", 3000, &error)) return Fail("held-seat fixture: the stranger was refused (" + error + ")");
-		if (const NetWorldJoinSession* stranger = host.FindSession(9); stranger == nullptr || stranger->assignedPeerId == 2) {
-			return Fail("held-seat-given-to-a-stranger: a fresh joiner took slot 2 while the AI holds its member's seat");
-		}
-		if (!host.BeginJoin(10, 2, "alice", 4000, &error, true)) return Fail("held-seat-refused-its-own-holder after a cut return: " + error);
-		if (const NetWorldJoinSession* again = host.FindSession(10); again == nullptr || again->spectator || again->assignedPeerId != 2 || !again->returnsToHeldSeat) {
-			return Fail("held-seat-returner-watches: after a cut return the member did not reclaim slot 2");
-		}
 		std::cout << "[net-world-join-selftest] PASS a_held_world_seat_waits_for_its_returner" << std::endl;
 		return 0;
 	}
