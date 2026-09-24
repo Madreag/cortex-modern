@@ -427,6 +427,7 @@ namespace RTE {
 			bool restartObjects = true, restartUnits = true;
 			long long simUpdateCount = -1, simTimeTicks = 0;
 			long uniqueIDCounter = -1;
+			long scriptRegistrationSerial = -1;
 			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
 			std::string runtimeGlobals, worldStructure, sceneRuntime;
 			std::vector<std::string> scriptGraphs;
