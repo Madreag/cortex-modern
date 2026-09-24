@@ -3912,14 +3912,17 @@ struct VectorField {
 };
 }
 
-// The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
-static std::vector<const void*> LoadedActivityPresets() {
+// The loaded presets of a type by address; a reference to anything else of that type names an instance.
+static std::vector<const void*> LoadedPresets(const char* type) {
 	std::list<Entity*> presets;
-	g_PresetMan.GetAllOfType(presets, "Activity");
+	g_PresetMan.GetAllOfType(presets, type);
 	std::vector<const void*> addresses(presets.begin(), presets.end());
 	std::sort(addresses.begin(), addresses.end());
 	return addresses;
 }
+
+// The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
+static std::vector<const void*> LoadedActivityPresets() { return LoadedPresets("Activity"); }
 
 struct RTE::LuaScriptGraphNativeCaptureData {
 	/// The objects that existed when the capture began, copied by the first question asked of them.
@@ -3947,6 +3950,11 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	bool ActivityPreset(const void* address) const {
 		std::call_once(m_ActivityPresetsBuilt, [this] { m_ActivityPresets = LoadedActivityPresets(); });
 		return std::binary_search(m_ActivityPresets.begin(), m_ActivityPresets.end(), address);
+	}
+	/// Whether an address is a loaded preset of any type; only the pointer is read.
+	bool Preset(const void* address) const {
+		std::call_once(m_PresetsBuilt, [this] { m_Presets = LoadedPresets("Entity"); });
+		return std::binary_search(m_Presets.begin(), m_Presets.end(), address);
 	}
 	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
 	const VectorField* VectorOwner(const void* address) const { return Find(Owners().vectors, address); }
@@ -4026,6 +4034,8 @@ private:
 	}
 	mutable std::once_flag m_ActivityPresetsBuilt;
 	mutable std::vector<const void*> m_ActivityPresets;
+	mutable std::once_flag m_PresetsBuilt;
+	mutable std::vector<const void*> m_Presets;
 	mutable std::once_flag m_KnownObjectsCopied;
 	mutable std::vector<MovableObject*> m_KnownObjects;
 	mutable std::once_flag m_OwnersBuilt;
@@ -4393,6 +4403,8 @@ static bool ScriptGraphNativeAlive(lua_State* L, const luabind::detail::object_r
 		const auto* object = static_cast<const MovableObject*>(rep->ptr());
 		return s_GraphNativeCapture ? s_GraphNativeCapture->Known(object) : g_MovableMan.IsKnownObject(object);
 	}
+	// An alarm lives for the frame that raised it and the next.
+	if (rep->crep() && std::strcmp(rep->crep()->name(), "AlarmEvent") == 0) return g_MovableMan.IsLiveAlarmEvent(static_cast<const AlarmEvent*>(rep->ptr()));
 	if (depth >= 8 || !rep->get_dependencies().is_valid()) return true;
 	bool member = false, alive = false;
 	rep->get_dependencies().get(L);
@@ -4490,6 +4502,15 @@ static int ScriptGraphEntityCast(lua_State* L) {
 static bool ScriptGraphReadableDependency(const luabind::detail::object_rep* owner) {
 	if (!owner || !owner->crep()) return true;
 	const void* address = owner->ptr();
+	if ((owner->flags() & luabind::detail::object_rep::owner) == 0) {
+		// A script keeps what it was handed past its object's end: a movable object gone from the world, or an alarm the
+		// last frame raised.
+		if (ClassDerivesFrom(owner->crep(), "MovableObject")) {
+			const auto* object = static_cast<const MovableObject*>(address);
+			return s_GraphNativeCapture ? s_GraphNativeCapture->Known(object) : g_MovableMan.IsKnownObject(object);
+		}
+		if (std::strcmp(owner->crep()->name(), "AlarmEvent") == 0) return g_MovableMan.IsLiveAlarmEvent(static_cast<const AlarmEvent*>(address));
+	}
 	if (ClassDerivesFrom(owner->crep(), "Activity")) {
 		if (address == g_ActivityMan.GetActivity()) return true;
 		if (s_GraphNativeCapture) return s_GraphNativeCapture->ActivityPreset(address);
@@ -5373,6 +5394,15 @@ static int ScriptGraphNative(lua_State* L) {
 			return 2;
 		}
 	}
+	// An Area a script keeps that the running scene does not own (Void Wanderers keeps CF.Activity.Zone) travels by
+	// value, as an owned one does.
+	if (className == "Area" && !owned && rep->ptr()) {
+		lua_pushstring(L, "copy");
+		lua_pushstring(L, className.c_str());
+		lua_pushliteral(L, "");
+		lua_pushliteral(L, "");
+		return 4;
+	}
 	if (className == "Controller" && s_GraphNativeCapture) {
 		if (const long* actor = s_GraphNativeCapture->ControllerOwner(rep->ptr())) {
 			lua_pushstring(L, "controller-ref");
@@ -5460,7 +5490,9 @@ static int ScriptGraphNative(lua_State* L) {
 				return 2;
 			}
 		}
-		if (owned || entity->IsOriginalPreset()) {
+		// A capture asks the preset registry, so an object the script outlived is never read to ask; a walk outside one
+		// reads only a reference whose owner still lives.
+		if (owned || (s_GraphNativeCapture ? s_GraphNativeCapture->Preset(entity) : ScriptGraphNativeAlive(L, rep) && entity->IsOriginalPreset())) {
 			const Entity* preset = entity->GetPresetForCopy();
 			lua_pushstring(L, owned ? "copy" : "preset");
 			lua_pushstring(L, entity->GetClassName().c_str());
@@ -7860,6 +7892,57 @@ end
 		RunScriptString("_ScriptGraphDeadFixture = nil");
 		std::cout << "[script-graph-selftest] " << (deadReference ? "PASS" : "FAIL") << " dead_actor_reference_same_tick_capture_restore" << std::endl;
 		checkpointValues = deadReference && checkpointValues;
+	}
+
+	{
+		// A mod keeps an Area the running scene does not own; a capture carries it by value and a restore hands it back.
+		// The script's reference outlives this block in the capture's caches, so the area it names lives as long as the process.
+		static Scene::Area kept("CheckpointKeptZone");
+		if (kept.HasNoArea()) kept.AddBox(Box(Vector(10, 20), 30, 40));
+		luabind::object(m_State, &kept).push(m_State);
+		lua_setglobal(m_State, "CheckpointKeptZone");
+		std::string saved, again;
+		std::vector<std::string> problems;
+		const bool captured = SerializeScriptGraph(saved, problems);
+		RunScriptString("CheckpointKeptZone = nil");
+		const bool restored = captured && RestoreScriptGraph(saved, problems);
+		const bool same = restored && RunScriptString(R"lua(
+local zone = CheckpointKeptZone
+assert(zone ~= nil and zone.Name == "CheckpointKeptZone", "the kept area did not come back by name")
+assert(not zone:HasNoArea() and zone:IsInside(Vector(15, 25)) and zone:IsInside(Vector(39, 59)) and not zone:IsInside(Vector(41, 61)), "the kept area's box changed")
+)lua") == 0;
+		RunScriptString("CheckpointKeptZone = nil");
+		const bool refused = std::any_of(problems.begin(), problems.end(), [](const std::string& problem) { return problem.find("(Area)") != std::string::npos; });
+		const bool passed = captured && same && !refused;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_kept_area_travels_by_value captured=" << captured << " restored=" << restored << " same=" << same << " refused=" << refused << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] kept area: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+
+	{
+		// The stock AI keeps an alarm's position (SharedBehaviors.lua: AI.AlarmPos = Event.ScenePos) past the alarm's frame;
+		// a capture names that alias without asking the alarm it no longer has.
+		const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
+		g_MovableMan.RegisterAlarmEvent(AlarmEvent(Vector(123, 45), Activity::TeamOne, 100.0F));
+		const bool held = RunScriptString("for event in MovableMan.AddedAlarmEvents do CheckpointAlarmAliasFixture = { pos = event.ScenePos } end") == 0 &&
+		                  RunScriptString("assert(CheckpointAlarmAliasFixture and CheckpointAlarmAliasFixture.pos.X == 123, 'the alias does not read the alarm')") == 0;
+		g_MovableMan.DiscardAddedSince(mark);
+		lua_getglobal(m_State, "CheckpointAlarmAliasFixture");
+		if (lua_istable(m_State, -1)) lua_getfield(m_State, -1, "pos"); else lua_pushnil(m_State);
+		const auto* alias = luabind::detail::is_class_object(m_State, -1);
+		const bool aliveAfter = !alias || ScriptGraphNativeAlive(m_State, alias);
+		lua_pop(m_State, 2);
+		CheckpointText image;
+		std::vector<std::string> problems;
+		const bool captured = held && CaptureScriptGraph(image, problems, true);
+		RunScriptString("CheckpointAlarmAliasFixture = nil");
+		const bool readAlarm = std::any_of(problems.begin(), problems.end(), [](const std::string& problem) { return problem.find("AlarmEvent") != std::string::npos; });
+		// The capture sees the alias as gone, so it never reads the alarm; a sanitizer build proves the read is gone too.
+		const bool passed = held && !aliveAfter && !readAlarm;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " capture_never_reads_an_alarm_the_script_outlived held=" << held << " alias_alive=" << aliveAfter << " captured=" << captured
+		          << " read_alarm=" << readAlarm << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] outlived alarm: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
 	}
 
 	{
