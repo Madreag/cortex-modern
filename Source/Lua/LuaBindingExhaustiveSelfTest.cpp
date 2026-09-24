@@ -506,6 +506,8 @@ namespace {
 		size_t m_LuaClasses = 0;
 		size_t m_OwnedChecks = 0;
 		std::map<std::string, int> m_OperatorRefs;
+		// The fixtures the call being made was handed as arguments, so a call that writes one is named.
+		std::vector<std::string> m_Touched;
 		// Free functions and static class functions, by the name a script calls them with.
 		std::vector<std::pair<std::string, const function_rep*>> m_FreeFunctionList;
 		std::vector<int> m_FreeFunctionRefs;
@@ -536,6 +538,8 @@ namespace {
 		void WalkFreeFunctions();
 		void WalkOperators(Instance& instance, int table);
 		void CountLuaClasses();
+		int HoldSpark();
+		void ProbeReusedUniqueID();
 		std::string ValueText(int index, bool nested);
 		std::vector<std::pair<std::string, std::string>> Fingerprint(const Instance& instance);
 		void Baseline(Instance& instance);
@@ -819,6 +823,7 @@ namespace {
 		} else if (const auto found = m_Instances.find(bare); found != m_Instances.end()) {
 			lua_rawgeti(L, LUA_REGISTRYINDEX, found->second.handle);
 			text += bare;
+			m_Touched.push_back(bare);
 		} else {
 			lua_pushnil(L);
 			text += "nil";
@@ -994,12 +999,23 @@ namespace {
 	void Walk::Probe(Instance& target, const std::string& call, const std::function<int()>& push) {
 		Call(call, push);
 		Check(target, call);
+		for (const std::string& name: std::set<std::string>(m_Touched.begin(), m_Touched.end())) {
+			Instance& argument = m_Instances.at(name);
+			std::string where;
+			std::string first;
+			if (&argument != &target && ObjectChanged(argument, where, first)) {
+				m_Leaks.push_back({call, where + " of the " + name + " argument", first});
+				std::cout << "[bindx] LEAK " << call << " " << where << " of the " << name << " argument first=" << first << std::endl;
+				Baseline(argument);
+			}
+		}
 	}
 
 	// One call inside a preview window, its faults and asserts listed; the checks are the caller's.
 	int Walk::Call(const std::string& call, const std::function<int()>& push) {
 		m_Journal << call << '\n' << std::flush;
 		const int base = lua_gettop(L);
+		m_Touched.clear();
 		const int count = push();
 		RTEError::s_LastIgnoredAssertDescription.clear();
 		unsigned long code = 0;
@@ -1443,6 +1459,60 @@ namespace {
 		}
 	}
 
+	// A spark made by a script, held in the registry; LUA_NOREF when the script could not make one.
+	int Walk::HoldSpark() {
+		unsigned long code = 0;
+		if (luaL_loadstring(L, "return CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\")") == 0 && GuardedCall(L, 0, 1, &code) == 0 && luabind::detail::is_class_object(L, -1)) {
+			return luaL_ref(L, LUA_REGISTRYINDEX);
+		}
+		lua_pop(L, 1);
+		return LUA_NOREF;
+	}
+
+	// A window-born object a script still holds after its window, while a canonical object takes its unique id and the
+	// script's copy is collected later: the world's index must never name the window's object, and must keep the canonical one.
+	void Walk::ProbeReusedUniqueID() {
+		const long floor = MovableObject::GetUniqueIDCounter();
+		const int top = lua_gettop(L);
+		m_Window.Open();
+		const int born = HoldSpark();
+		m_Window.Close();
+		lua_settop(L, top);
+		const auto movable = [this](int handle) -> MovableObject* {
+			lua_rawgeti(L, LUA_REGISTRYINDEX, handle);
+			const object_rep* rep = luabind::detail::is_class_object(L, -1);
+			lua_pop(L, 1);
+			int offset = 0;
+			return rep && luabind::detail::implicit_cast(rep->crep(), &typeid(MovableObject), offset) >= 0 ? reinterpret_cast<MovableObject*>(static_cast<char*>(rep->ptr()) + offset) : nullptr;
+		};
+		MovableObject* bornObject = born == LUA_NOREF ? nullptr : movable(born);
+		if (!bornObject) {
+			std::cout << "[bindx] uid reuse: the window made no spark to hold" << std::endl;
+			return;
+		}
+		const long bornID = bornObject->GetUniqueID();
+		if (g_MovableMan.FindObjectByUniqueID(bornID) == bornObject) {
+			m_Leaks.push_back({"a window-born spark held past its window", "the world's index", "uid " + std::to_string(bornID) + " names the window's object"});
+			std::cout << "[bindx] LEAK the world's index names the window-born spark uid=" << bornID << " after its window" << std::endl;
+		}
+		const int canonical = HoldSpark();
+		MovableObject* canonicalObject = canonical == LUA_NOREF ? nullptr : movable(canonical);
+		const long canonicalID = canonicalObject ? canonicalObject->GetUniqueID() : 0;
+		luaL_unref(L, LUA_REGISTRYINDEX, born);
+		CollectGarbage();
+		const MovableObject* indexed = canonicalObject ? g_MovableMan.FindObjectByUniqueID(canonicalID) : nullptr;
+		std::cout << "[bindx] uid reuse: window-born uid=" << bornID << " canonical uid=" << canonicalID << " index after the collection names "
+		          << (indexed == canonicalObject ? "the canonical spark" : indexed ? "another object" : "nothing") << std::endl;
+		if (canonicalObject && indexed != canonicalObject) {
+			m_Leaks.push_back({"a window-born spark collected after its id was reused", "the world's index", "uid " + std::to_string(canonicalID) + " lost the canonical object"});
+			std::cout << "[bindx] LEAK collecting the window-born spark took uid " << canonicalID << " from the canonical spark" << std::endl;
+		}
+		luaL_unref(L, LUA_REGISTRYINDEX, canonical);
+		CollectGarbage();
+		MovableObject::PinUniqueIDCounter(floor);
+		CheckWorld("the uid reuse probe");
+	}
+
 	bool Walk::Run() {
 		m_Journal.open("preview_binding_exhaustive.journal", std::ios::trunc);
 		g_MovableMan.WaitForActorsSeeTask();
@@ -1529,6 +1599,7 @@ namespace {
 			WalkClass(instance);
 		}
 		WalkFreeFunctions();
+		ProbeReusedUniqueID();
 
 		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
 		std::cout << c_Tag << " totals classes=" << m_Classes.size() << " with_instance=" << m_Instances.size() << " without_instance=" << without << " methods=" << m_Methods
