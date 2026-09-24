@@ -19542,8 +19542,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const bool clientIsSlow = clientPeriodMs > 17;
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
-			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A31, 0, NetTransportLane::InputUnreliable);
-			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A31, 0, NetTransportLane::InputUnreliable);
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A31, 1, NetTransportLane::InputUnreliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A31, 8, NetTransportLane::InputUnreliable);
 			for (auto* config: {&hostConfig, &clientConfig}) {
 				config->roundId = 0x9A31;
 				config->simTickMs = 1000.0 / 60.0;
@@ -19559,38 +19559,44 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			hostWire.SetFaultConfig(link); clientWire.SetFaultConfig(link);
 			if (!StartCoordinatorPair(48921, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
 			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
-			struct Sim { NetLockstepCoordinator* coordinator; int64_t uid; uint64_t periodMs; uint64_t tick = 0; bool produced = false; uint64_t startAtMs = 0; uint64_t longestWaitMs = 0; uint64_t waitingSinceMs = 0; };
+			struct Sim { NetLockstepCoordinator* coordinator; int64_t uid; uint64_t periodMs; uint64_t tick = 0; bool produced = false; uint64_t startAtMs = 0; uint64_t longestWaitMs = 0; };
 			Sim sims[2] = {{&host, 100, 17}, {&client, 200, clientPeriodMs}};
 			uint64_t now = 0;
 			std::string queueError;
+			bool queueFailed = false;
 			const auto pump = [&] {
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
 				for (Sim& sim: sims) {
-					const uint8_t local = sim.coordinator->GetConfig().localPeerId;
-					const bool gateOpen = sim.coordinator->HasReadyFrame(sim.tick) || sim.tick < sim.coordinator->GetStats().effectiveStartFrame ||
-					    sim.coordinator->InputDelayAt(local, sim.tick) == 0;
-					if (!sim.produced && now >= sim.startAtMs && gateOpen && !sim.coordinator->TimingDecisionPendingAt(sim.tick)) {
-						if (!sim.coordinator->QueueLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}, {}, &queueError)) return;
+					// Both delays are above zero: a tick before the commit stream runs without a frame, every later one
+					// waits for its committed frame before it produces the input its delay puts ahead of it.
+					const bool beforeStart = sim.tick < sim.coordinator->GetStats().effectiveStartFrame;
+					const bool frameReady = sim.coordinator->HasReadyFrame(sim.tick);
+					if (now < sim.startAtMs) continue;
+					if (!sim.produced && (beforeStart || frameReady) && !sim.coordinator->TimingDecisionPendingAt(sim.tick)) {
+						// While a delay shrinks the ticks whose targets are already queued fold into the next input, as the sim does.
+						if (!sim.coordinator->DeferLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}) &&
+						    !sim.coordinator->QueueLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}, {}, &queueError)) { queueFailed = true; break; }
 						sim.produced = true;
-						sim.waitingSinceMs = now;
 					}
 					NetLockstepReadyFrame ready;
-					if ((sim.produced || !gateOpen) && sim.coordinator->PopReadyFrame(ready)) {
-						(void)sim.coordinator->FinishSimulationTick(ready.frame);
-						if (now > 1000) sim.longestWaitMs = std::max(sim.longestWaitMs, now - sim.waitingSinceMs);
+					if (sim.produced && beforeStart) {
 						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
-					} else if (sim.coordinator == &host && sim.tick > 0) {
+					} else if (sim.produced && frameReady && sim.coordinator->PopReadyFrame(ready)) {
+						(void)sim.coordinator->FinishSimulationTick(ready.frame);
+						if (now > 1000) sim.longestWaitMs = std::max(sim.longestWaitMs, now - sim.startAtMs);
+						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
+					} else if (sim.coordinator == &host && !beforeStart) {
 						(void)host.NoteFrameWait(sim.tick, now);
 					}
 				}
 				++now;
 			};
 			// The estimator lowers a delay only after its window below it; run well past the change's frame.
-			while (now < 9000 && host.IsRunning() && client.IsRunning()) pump();
+			while (now < 9000 && !queueFailed && host.IsRunning() && client.IsRunning()) pump();
 			const auto holds = host.GetStats().peers.at(2).holds;
 			const uint16_t delay = host.InputDelayAt(2, sims[0].tick);
 			const bool lowered = delay < 8;
-			if (holds != 0 || !host.IsRunning() || sims[0].longestWaitMs > 50 || (!clientIsSlow && !lowered) || sims[0].tick < 300) {
+			if (queueFailed || holds != 0 || !host.IsRunning() || sims[0].longestWaitMs > 50 || (!clientIsSlow && !lowered) || sims[0].tick < 300) {
 				*error = std::string(clientIsSlow ? "a seat our sim waits on" : "a seat that runs ahead") + ": holds=" + std::to_string(holds) +
 				         " delay=" + std::to_string(delay) + " host_tick=" + std::to_string(sims[0].tick) + " client_tick=" + std::to_string(sims[1].tick) +
 				         " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) + " queue=" + queueError;
