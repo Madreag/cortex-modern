@@ -279,12 +279,21 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     return out
 
 
-def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False):
+def held_client_away(log):
+    """The ticks a held client never simulated: from the tick its seat was held at through the image it rejoined on."""
+    ranges = []
+    for stop, image in re.findall(r'\[net-match\] recovery requested tick=(\d+) [^\n]*PeerHeld:[^\n]*\n(?:[^\n]*\n)*?\[net-match\] bootstrap checkpoint=(\d+) ', log):
+        if int(image) >= int(stop):
+            ranges.append((int(stop), int(image)))
+    return tuple(ranges)
+
+
+def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False, client_away=(), window_only=False):
     """Two peers' traces skip only the per-machine routing subsystem (and the total that folds it in); two runs of one
     peer compare every field."""
     result = dict(first=str(first), second=str(second), cross_peer=cross_peer)
     per_peer = PER_PEER_SUBSYSTEMS if cross_peer else frozenset()
-    ok, existing = strict_compare(first, second, expected_ticks=expected_ticks, per_peer=per_peer)
+    ok, existing = strict_compare(first, second, expected_ticks=expected_ticks, per_peer=per_peer, client_away=client_away, prefix=window_only)
     result.update(sim_gated_pass=ok, existing_comparator=existing)
 
     def shared(row):
@@ -410,6 +419,12 @@ def reduce_timing_case(run, reference=None):
         for value in peers.values():
             apply_tps_call(value, reference)
     proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'), manifest.get('ticks', TICKS), cross_peer=True)
+    if silent:
+        # The held client's own ticks are compared too: before its hold and from the image it rejoined on.
+        client_log = (run / 'client/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / 'client/stdout.log').is_file() else ''
+        # A rejoined client runs its own cap from its image, so only the planned window is compared.
+        proof['held_client'] = compare_pair(run / 'host_trace.json', run / 'client_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
+                                            client_away=held_client_away(client_log), window_only=True)
     pairs = [('host', 'survivor'), ('host', 'client'), ('survivor', 'client')] if silent else [('host', 'client')]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
             for left, right in pairs}
