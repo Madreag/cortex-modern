@@ -655,6 +655,10 @@ namespace RTE {
 		uint32_t peerFramesWaived = 0; //!< Fenced incarnations the round stopped requiring frames from; not seat drops.
 		uint32_t connectionsClosedOnEviction = 0; //!< Connections the host closed because the round took the seat.
 		uint32_t timeouts = 0;
+		uint64_t parkFramesCommitted = 0; //!< Frames this round committed inside a capture park.
+		uint32_t frameResendRequests = 0; //!< Resend requests this peer sent for ticks the unreliable lane lost.
+		uint32_t framesResent = 0; //!< Own ticks this peer resent on the reliable lane on request.
+		uint64_t parkFramesWithInput = 0; //!< Of those, the ones carrying every seat's input they required.
 		uint64_t nextFrame = 0;
 		uint64_t longestStallMs = 0;
 		std::string lastMissingPeers; //!< Who the longest stall was waiting on.
@@ -685,6 +689,8 @@ namespace RTE {
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint32_t c_InputAcceptedMask = 0x40000000U;
+		/// Asks the named sender (the low byte) to resend its ticks from highestContiguousFrame on the reliable lane; an older peer ignores it.
+		static constexpr uint32_t c_FrameResendRequestMask = 0x20000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 32;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
@@ -1076,6 +1082,7 @@ namespace RTE {
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
+		friend bool TestAReturningSeatsRampIsTheBound(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
@@ -1162,6 +1169,10 @@ namespace RTE {
 		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
 		void AttachFrameWindow(NetLockstepFrame& packet) const;
+		/// Asks for a sender's missing tick on the reliable lane, at most once a tick: a blip the window cannot bridge is not a hold.
+		void RequestMissingFrames(uint8_t senderPeerId, uint64_t frame, uint64_t nowMs);
+		/// Resends this peer's own ticks from a frame to one peer on the reliable lane, repeating each tick's first bytes.
+		size_t ResendOwnFramesFrom(uint8_t requesterPeerId, uint64_t fromFrame);
 		/// Sends one admitted member everything this peer still holds for targets from its first
 		/// required frame to the highest already sent, in target order, own frame before the members'.
 		size_t ReplaySentFramesTo(uint8_t peerId, uint64_t fromFrame);
@@ -1284,6 +1295,8 @@ namespace RTE {
 		void PublishCapturePark(uint64_t startFrame);
 		void ApplyCapturePark(const NetLockstepTiming& timing);
 		uint64_t CaptureParkCapTicks() const;
+		/// What the next park's window is sized from: the middle of the last three parks' slowest captures.
+		double SteadyCaptureCostMs() const;
 		void SendCaptureParkReport(uint64_t nowMs = 0);
 		void RetryLateStartReclaims();
 		void FlushDeferredParkTimings();
@@ -1398,6 +1411,10 @@ namespace RTE {
 		uint64_t m_CaptureReportSentMs = 0;
 		bool m_CaptureReportResent = false;
 		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
+		std::deque<uint32_t> m_ParkCaptureHistoryMs; //!< Host: the slowest capture of each recent park, newest last.
+		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_ResendRequests; //!< Sender -> (the tick last asked for, when).
+		uint64_t m_MissingSinceFrame = UINT64_MAX; //!< The committed frame this peer has waited on, for the resend request.
+		uint64_t m_MissingSinceMs = 0;
 		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;
 		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
