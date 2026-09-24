@@ -34,6 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from compare_sim_traces import compare_fullstate, load_trace, strict_compare
+from feel_measure import held_client_away, held_client_rewinds
 from feel.retained_resume import PER_PEER_SUBSYSTEMS
 from run_sim_test import make_run, engine_executable
 
@@ -102,7 +103,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def peer_args(case: dict, who: str, port: int, root: Path, fullstate_every: int = 0) -> list:
+def peer_args(case: dict, who: str, port: int, root: Path, fullstate_every: int = 0, client_stall: str = "") -> list:
     ticks = str(case["ticks"])
     args = ["-free-run-sim", "-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
             "-net-match-ticks", ticks, "-max-ticks", ticks, "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
@@ -112,6 +113,9 @@ def peer_args(case: dict, who: str, port: int, root: Path, fullstate_every: int 
         args += case["host"]
     if fullstate_every:
         args += ["-net-fullstate-hash-every", str(fullstate_every)]
+    # The forced-hold lever: the client stalls once, so its seat is held and it rejoins.
+    if client_stall and who == "client":
+        args += ["-net-test-live-stall", client_stall]
     return args + (["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"])
 
 
@@ -131,13 +135,13 @@ def peer_text(root: Path, who: str) -> str:
     return text
 
 
-def run_pair(repo: Path, root: Path, case: dict, port: int, timeout: float, fullstate_every: int = 0) -> dict:
+def run_pair(repo: Path, root: Path, case: dict, port: int, timeout: float, fullstate_every: int = 0, client_stall: str = "") -> dict:
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     try:
         for who in PEERS:
             env = {"CCCP_HEADLESS": "1", "CC_SIM_DUMP": f"1:{case['ticks']}"}
-            runs[who] = make_run(repo, peer_args(case, who, port, root, fullstate_every), root / who, timeout, env=env)
+            runs[who] = make_run(repo, peer_args(case, who, port, root, fullstate_every, client_stall), root / who, timeout, env=env)
             stage_module(runs[who].cwd, case)
 
         def drive(who):
@@ -168,6 +172,22 @@ def load_dump(path: Path) -> dict:
     return ticks
 
 
+def load_dump_passes(path: Path) -> list:
+    """The dump split where its tick goes back: a held peer that rejoined on an older image dumps those ticks again."""
+    passes, previous = [{}], None
+    with Path(path).open("r", encoding="utf-8", errors="replace") as source:
+        for line in source:
+            head = line.split(" ", 1)[0]
+            if not head.isdigit():
+                continue
+            tick = int(head)
+            if previous is not None and tick < previous:
+                passes.append({})
+            passes[-1].setdefault(tick, []).append(line.rstrip("\n"))
+            previous = tick
+    return passes
+
+
 def shared_fields(line: str) -> list:
     return [token for token in line.split(" ") if token.split("=", 1)[0] not in PER_PEER_FIELDS]
 
@@ -176,18 +196,41 @@ def first_object_divergence(host_dump: Path, client_dump: Path) -> dict:
     """The first per-object row the two dumps disagree on outside the per-peer seat fields."""
     if not Path(host_dump).exists() or not Path(client_dump).exists():
         return {"available": False, "reason": "a simdump is missing"}
-    left, right = load_dump(host_dump), load_dump(client_dump)
-    common = sorted(set(left) & set(right))
-    for tick in common:
-        if len(left[tick]) != len(right[tick]):
-            return {"available": True, "tick": tick, "census_differs": True, "host_rows": len(left[tick]), "client_rows": len(right[tick])}
-        for host_line, client_line in zip(left[tick], right[tick]):
-            host_tokens, client_tokens = shared_fields(host_line), shared_fields(client_line)
-            if host_tokens != client_tokens:
-                fields = [{"host": a, "client": b} for a, b in zip(host_tokens, client_tokens) if a != b]
-                return {"available": True, "tick": tick, "census_differs": False,
-                        "object": " ".join(host_line.split(" ")[1:4]), "fields": fields[:12]}
-    return {"available": True, "tick": None, "identical": True, "common_ticks": len(common)}
+    left = load_dump(host_dump)
+    compared = 0
+    for right in load_dump_passes(client_dump):
+        common = sorted(set(left) & set(right))
+        compared += len(common)
+        for tick in common:
+            if len(left[tick]) != len(right[tick]):
+                return {"available": True, "tick": tick, "census_differs": True, "host_rows": len(left[tick]), "client_rows": len(right[tick])}
+            for host_line, client_line in zip(left[tick], right[tick]):
+                host_tokens, client_tokens = shared_fields(host_line), shared_fields(client_line)
+                if host_tokens != client_tokens:
+                    fields = [{"host": a, "client": b} for a, b in zip(host_tokens, client_tokens) if a != b]
+                    return {"available": True, "tick": tick, "census_differs": False,
+                            "object": " ".join(host_line.split(" ")[1:4]), "fields": fields[:12]}
+    return {"available": True, "tick": None, "identical": True, "common_ticks": compared}
+
+
+def shared_mark_rows(host_dump: Path, client_dump: Path, needle: str) -> dict:
+    """The rows naming needle on the ticks both dumps hold, so a held peer's missing ticks count on neither side."""
+    if not Path(host_dump).exists() or not Path(client_dump).exists():
+        return {"host": 0, "client": 0}
+    left = load_dump(host_dump)
+    counts = {"host": 0, "client": 0}
+    for right in load_dump_passes(client_dump):
+        for tick in set(left) & set(right):
+            counts["host"] += sum(1 for line in left[tick] if needle in line)
+            counts["client"] += sum(1 for line in right[tick] if needle in line)
+    return counts
+
+
+def commits_agree(commits: dict, held: bool) -> bool:
+    """Both peers log the same committed hook runs; a held client misses the ones it was away for, and each it logs matches the host's."""
+    if not held:
+        return commits["host"] == commits["client"]
+    return bool(commits["client"]) and set(commits["client"]) <= set(commits["host"])
 
 
 def count_rows(path: Path, needle: str) -> int:
@@ -205,18 +248,33 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
     traces = {who: root / who / "trace.json" for who in PEERS}
     texts = {who: peer_text(root, who) for who in PEERS}
     result["desync_lines"] = {who: DESYNC.findall(texts[who])[:4] for who in PEERS}
-    # A seat held for being slow replays through a rejoin, so its trace is no longer one live pass.
+    # A seat held for being slow skips the ticks it was away and may replay from an older image; those are read from
+    # its own log, and every tick both peers simulated is still compared.
     result["hold_lines"] = {who: HOLD.findall(texts[who])[:4] for who in PEERS}
+    held = any(result["hold_lines"].values())
+    away = held_client_away(texts["client"]) if held else ()
+    rewinds = held_client_rewinds(texts["client"]) if held else ()
+    away_ticks = {tick for low, high in away for tick in range(low, high + 1)}
     try:
-        lengths = {who: len(load_trace(traces[who])[0]) for who in PEERS}
+        ticks = {"host": load_trace(traces["host"])[0], "client": load_trace(traces["client"], away_ticks, frozenset(rewinds), [])[0]}
+        lengths = {who: len(ticks[who]) for who in PEERS}
     except (OSError, ValueError) as error:
         lengths = None
-        passed, comparison = False, {"reasons": [f"trace unreadable as one pass: {error}"]}
-    if lengths:
+        passed, comparison = False, {"reasons": [f"trace unreadable{' across the hold' if held else ' as one pass'}: {error}"]}
+    if lengths and not held:
         result["trace_ticks"] = lengths
         # Every tick both peers recorded is compared; a full run must also reach the case's length on both.
         passed, comparison = strict_compare(traces["host"], traces["client"], min(lengths.values()), prefix=True, per_peer=PER_PEER_SUBSYSTEMS)
         passed = passed and all(length == case["ticks"] for length in lengths.values())
+    elif lengths:
+        result["trace_ticks"] = lengths
+        # The host runs the whole case; the held client is compared on every tick it simulated up to where either trace ends.
+        window = min(max(ticks["host"]), max(ticks["client"]))
+        passed, comparison = strict_compare(traces["host"], traces["client"], window, prefix=True, per_peer=PER_PEER_SUBSYSTEMS,
+                                            client_away=away, client_rewinds=rewinds)
+        passed = passed and lengths["host"] == case["ticks"]
+    result["held"] = {"held": held, "client_away": [list(pair) for pair in away], "client_rewinds": list(rewinds),
+                      "shared_ticks": comparison.get("compared_ticks"), "client_last_tick": max(ticks["client"]) if lengths else None}
     result["simulation"] = comparison
     result["objects"] = first_object_divergence(root / "host" / "trace.json.simdump.txt", root / "client" / "trace.json.simdump.txt")
     if case_name == "fence":
@@ -228,7 +286,8 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
         fixture_ok = bool(rows) and result["previews"]["clone_took_both"] == len(rows) and result["previews"]["kept_unchanged"] == len(rows)
     elif case_name == "method":
         rows = [dict(zip(("uid", "before", "after"), match)) for match in METHOD.findall(texts["host"])]
-        marks = {who: count_rows(root / who / "trace.json.simdump.txt", MARK) for who in PEERS}
+        marks = (shared_mark_rows(root / "host" / "trace.json.simdump.txt", root / "client" / "trace.json.simdump.txt", MARK) if held else
+                 {who: count_rows(root / who / "trace.json.simdump.txt", MARK) for who in PEERS})
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "timer_kept": sum(1 for row in rows if row["before"] == row["after"])}
         result["commit_marks"] = marks
         # The preview's reset and particle are dropped, and the committed hook's particles stand on both peers alike.
@@ -256,7 +315,7 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
         commits = {who: CACHE_COMMIT.findall(texts[who]) for who in PEERS}
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "read": sum(1 for row in rows if row["impulse"] != "nil"), "commits": commits}
         # The preview reads the impulse at once without filling the thruster's cache, so both peers compute the committed one alike.
-        fixture_ok = bool(rows) and result["previews"]["read"] == len(rows) and bool(commits["host"]) and commits["host"] == commits["client"]
+        fixture_ok = bool(rows) and result["previews"]["read"] == len(rows) and bool(commits["host"]) and commits_agree(commits, held)
     elif case_name == "random":
         rows = [dict(zip(("uid", "jolt", "pick", "spin", "chance", "before", "after"), match)) for match in RANDOM.findall(texts["host"])]
         commits = {who: RANDOM_COMMIT.findall(texts[who]) for who in PEERS}
@@ -264,7 +323,7 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
         shown = sum(1 for row in rows if all(numeric.match(row[key]) for key in ("jolt", "pick", "spin", "chance")) and float(row["after"]) < float(row["before"]))
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "shown": shown, "commits": {who: len(commits[who]) for who in PEERS}}
         # Every preview run draws all four helpers and its jolt lands on the copy; the committed strides draw alike on both peers.
-        fixture_ok = bool(rows) and shown == len(rows) and bool(commits["host"]) and commits["host"] == commits["client"]
+        fixture_ok = bool(rows) and shown == len(rows) and bool(commits["host"]) and commits_agree(commits, held)
     elif case_name == "outparam":
         rows = [dict(zip(("uid", "before", "after"), match)) for match in OUTPARAM.findall(texts["host"])]
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "value_kept": sum(1 for row in rows if row["before"] == row["after"])}
@@ -280,8 +339,9 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
     result["fixture_ok"] = fixture_ok
     # The tick hash leaves out some per-object state (limb transforms, actor timers), so every dumped row must match too.
     objects_identical = result["objects"].get("identical") is True
+    # A held run passes on equal hashes over the ticks both peers simulated; result["held"] says the hold happened.
     result["passed"] = bool(passed and objects_identical and fixture_ok and all(result["processes"].values())
-                            and not any(result["desync_lines"].values()) and not any(result["hold_lines"].values()))
+                            and not any(result["desync_lines"].values()))
     if fullstate_every:
         # The whole capture of both peers, every N ticks: a section the tick hash and the dump leave out still has to match.
         result["fullstate"] = compare_fullstate(root / "host" / "stdout.log", root / "client" / "stdout.log")
@@ -299,11 +359,15 @@ def main() -> int:
     parser.add_argument("--score-only", action="store_true", help="score an existing run directory without launching")
     parser.add_argument("--fullstate-every", type=int, default=0,
                         help="every N committed ticks both peers hash their whole capture (-net-fullstate-hash-every); 0 is off")
+    parser.add_argument("--client-stall", default="", metavar="TICK:MS",
+                        help="the client stalls MS milliseconds at TICK (-net-test-live-stall), forcing a hold and a rejoin")
     options = parser.parse_args()
     if not PORTS[0] <= options.port <= PORTS[1]:
         parser.error(f"port outside this driver's block {PORTS[0]}-{PORTS[1]}")
     if options.fullstate_every < 0:
         parser.error("--fullstate-every must be 0 or positive")
+    if options.client_stall and not re.fullmatch(r"[1-9]\d*:[1-9]\d*", options.client_stall):
+        parser.error("--client-stall takes TICK:MS")
     case = CASES[options.case]
     exe = engine_executable(options.repo)
     if options.score_only:
@@ -311,7 +375,7 @@ def main() -> int:
         identity, records, unchanged = previous["exe_sha256"], previous["records"], previous.get("binary_unchanged")
     else:
         identity = sha256_file(exe)
-        records = run_pair(options.repo, options.out, case, options.port, options.timeout, options.fullstate_every)
+        records = run_pair(options.repo, options.out, case, options.port, options.timeout, options.fullstate_every, options.client_stall)
         unchanged = sha256_file(exe) == identity
     result = score(options.out, options.case, identity, records, options.fullstate_every)
     result["binary_unchanged"] = unchanged
@@ -321,7 +385,9 @@ def main() -> int:
     print(f"{'PASS' if result['passed'] else 'FAIL'} {options.case}: compared={comparison.get('compared_ticks')} "
           f"first_divergence={comparison.get('first_divergence')} subsystems={comparison.get('divergent_subsystems')} "
           f"trace_ticks={result.get('trace_ticks')} fixture_ok={result['fixture_ok']} processes={result['processes']} "
-          f"desync={result['desync_lines']} holds={result['hold_lines']}")
+          f"desync={result['desync_lines']} holds={result['hold_lines']}"
+          + (f" HELD: client away {result['held']['client_away']} rewinds {result['held']['client_rewinds']}, compared over the"
+             f" {result['held']['shared_ticks']} ticks both peers simulated through tick {result['held']['client_last_tick']}" if result["held"]["held"] else ""))
     objects = result["objects"]
     if result.get("fullstate"):
         fullstate = result["fullstate"]
