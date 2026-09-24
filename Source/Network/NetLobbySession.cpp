@@ -128,6 +128,7 @@ namespace RTE {
 		m_FailureReason.clear();
 		m_RemoteLobbyUp.clear();
 		m_LobbyUpConnections.clear();
+		m_OutOfRosterPeers.clear();
 		m_WorldTransferPeers.clear();
 		m_SeatAssigned = false;
 		m_StateBytesToSend.clear();
@@ -797,10 +798,19 @@ namespace RTE {
 			});
 		};
 		std::map<uint8_t, NetPeerId> transports;
+		const auto inRoster = [&](uint8_t peer) { return peer != 0 && peer <= m_Config.matchConfig.peerCount; };
 		for (const NetSessionPeerInfo& peer: readyPeers) {
 			if (worldConnection(peer.transportPeerId)) continue;
 			if (!active(static_cast<uint8_t>(peer.assignedPeerId + 1))) continue;
-			transports[static_cast<uint8_t>(peer.assignedPeerId + 1)] = peer.transportPeerId;
+			const uint8_t peerId = static_cast<uint8_t>(peer.assignedPeerId + 1);
+			// A connection the session seated past the roster is no lobby seat: a world admits it through its join plane.
+			if (!inRoster(peerId)) {
+				if (m_OutOfRosterPeers.insert(peer.transportPeerId).second)
+					System::PrintDiagnosticLine("[net-lobby] connection " + std::to_string(peer.transportPeerId) + " holds peer id " + std::to_string(peerId) +
+					                            " past the roster's " + std::to_string(m_Config.matchConfig.peerCount) + " seats; the lobby does not seat it");
+				continue;
+			}
+			transports[peerId] = peer.transportPeerId;
 		}
 		// A world bootstrap's id comes from the join plane, never from the session roster; without this
 		// the rebuild below would unbind it and the image in flight would stop.
@@ -820,6 +830,7 @@ namespace RTE {
 			if (worldConnection(peer.transportPeerId)) continue;
 			if (!active(peerId)) continue;
 			if (IsKnownRemote(peerId)) continue;
+			if (!inRoster(peerId)) continue;
 			addedPeer = true;
 			m_RemoteTransports[peerId] = peer.transportPeerId;
 			m_RemotePeerIds.push_back(peerId);
@@ -831,7 +842,8 @@ namespace RTE {
 			}
 			if (m_Config.autoInputDelay) {
 				auto& delays = m_Config.matchConfig.peerInputDelayFrames;
-				if (delays.empty()) delays.resize(m_Config.matchConfig.peerCount, std::max<uint16_t>(1, m_Config.matchConfig.inputDelayFrames));
+				// A restored config may carry fewer delays than seats; every seat it restores has one.
+				if (delays.size() < m_Config.matchConfig.peerCount) delays.resize(m_Config.matchConfig.peerCount, std::max<uint16_t>(1, m_Config.matchConfig.inputDelayFrames));
 				const uint32_t rttMs = m_Transport->GetPeerPingMs(peer.transportPeerId);
 				auto& sample = m_InputDelaySamples[peerId];
 				sample.Observe(m_TimingClockMs, rttMs);

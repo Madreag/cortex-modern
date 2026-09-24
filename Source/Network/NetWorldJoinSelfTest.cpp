@@ -1656,6 +1656,44 @@ namespace RTE {
 			return 0;
 		}
 
+		// A restored world's config carries its roster's seats and no delay list; a connection the session seated past that roster
+		// is the join plane's to admit. The host lobby must not seat it, and must never throw on it: that aborted the restarted host.
+		int TestALobbySeatsNoPeerPastItsRoster() {
+			std::string error;
+			LoopbackTransport hostWire, residentWire, lateWire;
+			NetSession hostSession, residentSession, lateSession;
+			if (!hostSession.StartHost(hostWire, MakeWorldSessionConfig(48918, 11, "World"), &error) ||
+			    !residentSession.StartClient(residentWire, "loopback", MakeWorldSessionConfig(48918, 22, "Resident"), &error)) return Fail(error);
+			uint64_t now = 0;
+			auto pumpSessions = [&] {
+				hostSession.Tick(now); residentSession.Tick(now); lateSession.Tick(now);
+				hostWire.AdvanceTimeMs(10); residentWire.AdvanceTimeMs(10); lateWire.AdvanceTimeMs(10); now += 10;
+			};
+			while (hostSession.GetReadyPeers().size() < 1 && now < 1000) pumpSessions();
+			if (hostSession.GetReadyPeers().size() != 1) return Fail("roster fixture: the resident session did not become ready");
+			const NetPeerId residentConnection = hostSession.GetReadyPeers().front().transportPeerId;
+			if (!lateSession.StartClient(lateWire, "loopback", MakeWorldSessionConfig(48918, 33, "Late"), &error)) return Fail(error);
+			while (hostSession.GetReadyPeers().size() < 2 && now < 2000) pumpSessions();
+			if (hostSession.GetReadyPeers().size() != 2 || hostSession.GetReadyPeers().back().assignedPeerId + 1 != 3) return Fail("roster fixture: the late session was not seated as peer 3");
+			NetLobbySession host;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.session = &hostSession;
+			hostConfig.matchConfig = MakeWorldConfig(); hostConfig.autoStart = false; hostConfig.autoInputDelay = true;
+			hostConfig.matchConfig.peerInputDelayFrames.clear();
+			// The resident arrives through the session like the late connection, so the lobby seats it and sizes the delay list.
+			(void)residentConnection;
+			if (!host.Start(hostWire, hostConfig, &error)) return Fail(error);
+			try {
+				for (int i = 0; i < 5; ++i) { host.Tick(now); hostWire.AdvanceTimeMs(10); now += 10; }
+			} catch (const std::exception& exception) {
+				return Fail(std::string("a peer seated past the roster threw in the host lobby: ") + exception.what());
+			}
+			if (host.IsRemoteLobbyUp(3) || host.IsFailed() || host.GetMatchConfig().peerInputDelayFrames.size() != host.GetMatchConfig().peerCount)
+				return Fail("the host lobby seated a peer past its roster or lost its delay list: delays=" + std::to_string(host.GetMatchConfig().peerInputDelayFrames.size()));
+			std::cout << "[net-world-join-selftest] PASS a_lobby_seats_no_peer_past_its_roster peer=3 roster=" << static_cast<int>(host.GetMatchConfig().peerCount) << std::endl;
+			return 0;
+		}
+
 		// A joiner activates inside a sim update: the start has to hand that update back and finish its
 		// handshake over the updates that follow, whatever the remote does.
 		int TestWorldJoinLockstepStartDoesNotHoldTheSimUpdate() {
@@ -6906,6 +6944,10 @@ namespace RTE {
 			std::string error;
 			return TestAnOwnSideErrorKeepsTheSeatsReconnect(&error) ? 0 : Fail(error);
 		}
+		if (std::strcmp(name, "-net-world-lobby-roster-selftest") == 0) {
+			s_FailTag = "net-world-lobby-roster-selftest";
+			return TestALobbySeatsNoPeerPastItsRoster();
+		}
 		if (std::strcmp(name, "-net-world-keeps-pace-selftest") == 0) {
 			s_FailTag = "net-world-keeps-pace-selftest";
 			return TestAReturnerKeepingPaceAtTheHeadIsActivated();
@@ -7373,6 +7415,7 @@ namespace RTE {
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
+		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;
 		if (const int result = TestAReturnerKeepingPaceAtTheHeadIsActivated(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
