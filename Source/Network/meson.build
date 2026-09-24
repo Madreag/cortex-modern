@@ -49,6 +49,7 @@ sources += files(
 'NetReconnectTxCache.cpp',
 'NetSeatAuth.cpp',
 'NetSession.cpp',
+'NetRejoinMatrixSelfTest.cpp',
 'NetSessionSelfTest.cpp',
 'NetWorldJoin.cpp',
 'NetWorldJoinSelfTest.cpp',
