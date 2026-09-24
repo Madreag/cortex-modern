@@ -985,14 +985,14 @@ namespace RTE {
 		// is the admission wall-clock; commits do not advance while a dropped seat is unresolved.
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
 		static constexpr uint64_t c_HoldPauseMs = 20000;
+		/// How long past the host's own startup a bounded-wait round waits for a slow loader before the AI takes its seat.
+		static constexpr uint64_t c_StartupAnswerBudgetMs = 5000;
 		static constexpr uint64_t c_HoldHeartbeatMs = 50;
 		/// Marks a PeerDropped notice that waives a fenced incarnation's frames instead of dropping its seat.
 		static constexpr std::string_view c_FrameWaiverPrefix = "fenced:";
 		/// Whether any dropped seat is still waiting on a host resolution. The frame argument is the
 		/// applied tick the activity gate names; the answer no longer moves with a frame deadline.
 		bool IsSeatHeldForReclaimAtFrame(uint64_t frame) const;
-		/// How long past the host's own startup a bounded-wait round waits for a slow loader before the AI takes its seat.
-		static constexpr uint64_t c_StartupAnswerBudgetMs = 5000;
 		bool AnyDroppedSeatHeld() const { return !m_DroppedSeats.empty(); }
 		NetLockstepHoldResolution HeldSeatResolution(uint8_t peerId) const;
 		/// Host: end one held seat and tell every peer at the held frame.
