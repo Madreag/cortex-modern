@@ -18,6 +18,7 @@ SUITES = (
     ("print-discipline", ["test_print_discipline.py"]),
     ("main-arg-loop", ["test_main_arg_loop.py"]),
     ("checkpoint-field-stamps", ["test_checkpoint_field_stamps.py"]),
+    ("selftest-sanitizer-rows", ["test_run_selftests.py"]),
 )
 
 

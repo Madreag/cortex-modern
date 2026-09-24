@@ -1,6 +1,6 @@
 """A client that loses its host never takes the match over alone: the split-brain arm of the service seam.
 
-Runs the e2e scenario mp-host-silent (a two-peer match; the host goes silent for 4 s at tick 450, so the client loses it
+Runs the e2e scenario mp-host-silent (a two-peer match; the host goes silent for 4 s at tick 300, so the client loses it
 while the host holds the client's seat) and judges from the run's files:
 
   1. the client never declares itself the host (`Host left - Client is now hosting` is the split brain);
@@ -25,6 +25,8 @@ import sys
 from pathlib import Path
 
 CAP = 2400
+# The host's silence starts here (tools/e2e/mp-host-silent.json -net-test-live-stall), before the duel is decided.
+STALL_TICK = 300
 SELF_HOSTED = re.compile(r"\[net-match\] Host left - (.+) is now hosting")
 CAUGHT_UP = re.compile(r"\[net-match\] private catch-up complete frame=(\d+)")
 
@@ -78,7 +80,7 @@ def judge(out: Path, repo: Path) -> dict:
         path = run / f"{name}_trace.json"
         traces[name] = {row["tick"] for row in json.loads(path.read_text(encoding="utf-8-sig"))["runs"][0]["tick_hashes"]} if path.is_file() else set()
     start = CAP
-    while start - 1 > 450 and start - 1 in traces["client"]:
+    while start - 1 > STALL_TICK and start - 1 in traces["client"]:
         start -= 1
     verdict["compared_from"] = start
     if start not in traces["client"] or any(tick not in traces["host"] for tick in range(start, CAP + 1)):

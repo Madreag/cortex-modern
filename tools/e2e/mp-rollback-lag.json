@@ -4,7 +4,7 @@
   "title": "V1 feel gate at 100 and 200 ms with five percent loss, a silent seat and a ticket rejoin",
   "port_base": 49464,
   "size": "960x540",
-  "timeout_s": 150,
+  "timeout_s": 240,
   "runs": [
     {
       "name": "lag-100",
@@ -22,7 +22,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -69,7 +69,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -98,7 +104,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -148,7 +154,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -164,7 +176,17 @@
             "CC_TRACE_PREVIEW_EVENT": "1",
             "CC_TEST_GNS_LOSS_PERCENT": "5"
           },
-          "observe_after_failure": true
+          "observe_after_failure": true,
+          "kill_when": [
+            {
+              "peer": "client",
+              "log": "\\[net-match\\] private catch-up complete frame=\\d+"
+            },
+            {
+              "peer": "host",
+              "log": "^\\[input-script\\] tick (119[5-9]|1[2-9]\\d\\d) player"
+            }
+          ]
         },
         {
           "name": "survivor",
@@ -179,7 +201,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -227,7 +249,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -241,7 +269,13 @@
           "env": {
             "CCCP_HEADLESS": "1",
             "CC_TRACE_PREVIEW_EVENT": "1"
-          }
+          },
+          "start_when": {
+            "peer": "host",
+            "log": "\\[net-route\\] RouteAllowed",
+            "timeout_s": 90
+          },
+          "after_gate_delay_s": 1
         },
         {
           "name": "client-rejoined",
@@ -256,7 +290,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -303,7 +337,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -337,7 +377,8 @@
           "client": 200,
           "survivor": 0,
           "client-rejoined": 200
-        }
+        },
+        "ticks": 1200
       }
     },
     {
@@ -356,7 +397,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -403,7 +444,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -432,7 +479,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -482,7 +529,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -498,7 +551,17 @@
             "CC_TRACE_PREVIEW_EVENT": "1",
             "CC_TEST_GNS_LOSS_PERCENT": "5"
           },
-          "observe_after_failure": true
+          "observe_after_failure": true,
+          "kill_when": [
+            {
+              "peer": "client",
+              "log": "\\[net-match\\] private catch-up complete frame=\\d+"
+            },
+            {
+              "peer": "host",
+              "log": "^\\[input-script\\] tick (119[5-9]|1[2-9]\\d\\d) player"
+            }
+          ]
         },
         {
           "name": "survivor",
@@ -513,7 +576,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -561,7 +624,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -575,7 +644,13 @@
           "env": {
             "CCCP_HEADLESS": "1",
             "CC_TRACE_PREVIEW_EVENT": "1"
-          }
+          },
+          "start_when": {
+            "peer": "host",
+            "log": "\\[net-route\\] RouteAllowed",
+            "timeout_s": 90
+          },
+          "after_gate_delay_s": 1
         },
         {
           "name": "client-rejoined",
@@ -590,7 +665,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -637,7 +712,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -671,7 +752,8 @@
           "client": 400,
           "survivor": 0,
           "client-rejoined": 400
-        }
+        },
+        "ticks": 1200
       }
     }
   ],
@@ -716,8 +798,8 @@
       "gate": "item9a_longest_wait"
     },
     {
-      "id": "lag-100-item9a_missing_frame_stalls",
-      "what": "The fast peer has zero steady missing-frame stalls.",
+      "id": "lag-100-item9a_confirmed_horizon_lag",
+      "what": "The fast peer's confirmed tick stays within 50 ms of the steady clock, recovery included.",
       "screen": "game",
       "assert": "unchanged tools/feel/report.py item9a_gates",
       "peer": "host",
@@ -726,7 +808,7 @@
         300,
         1200
       ],
-      "gate": "item9a_missing_frame_stalls"
+      "gate": "item9a_confirmed_horizon_lag"
     },
     {
       "id": "lag-100-item9a_loss_armed",
@@ -782,11 +864,17 @@
     },
     {
       "id": "lag-100-rejoin",
-      "what": "The relaunched peer returns to the same running world.",
+      "what": "The relaunched peer rejoins the running round from its ticket and reclaims its seat with live actors.",
       "screen": "game",
-      "assert": "rejoin report and gameplay frames",
+      "assert": "the relaunched client's own seat-reclaimed line with live actors",
       "peer": "client-rejoined",
-      "run": "lag-100"
+      "run": "lag-100",
+      "log_regex": [
+        "\\[net-match\\] seat-reclaimed peer=\\d+ frame=\\d+ live_actors=[1-9]\\d*"
+      ],
+      "forbidden_log_regex": [
+        "admission refused .*match over"
+      ]
     },
     {
       "id": "lag-200-item9a_wall_tps",
@@ -828,8 +916,8 @@
       "gate": "item9a_longest_wait"
     },
     {
-      "id": "lag-200-item9a_missing_frame_stalls",
-      "what": "The fast peer has zero steady missing-frame stalls.",
+      "id": "lag-200-item9a_confirmed_horizon_lag",
+      "what": "The fast peer's confirmed tick stays within 50 ms of the steady clock, recovery included.",
       "screen": "game",
       "assert": "unchanged tools/feel/report.py item9a_gates",
       "peer": "host",
@@ -838,7 +926,7 @@
         300,
         1200
       ],
-      "gate": "item9a_missing_frame_stalls"
+      "gate": "item9a_confirmed_horizon_lag"
     },
     {
       "id": "lag-200-item9a_loss_armed",
@@ -894,11 +982,17 @@
     },
     {
       "id": "lag-200-rejoin",
-      "what": "The relaunched peer returns to the same running world.",
+      "what": "The relaunched peer rejoins the running round from its ticket and reclaims its seat with live actors.",
       "screen": "game",
-      "assert": "rejoin report and gameplay frames",
+      "assert": "the relaunched client's own seat-reclaimed line with live actors",
       "peer": "client-rejoined",
-      "run": "lag-200"
+      "run": "lag-200",
+      "log_regex": [
+        "\\[net-match\\] seat-reclaimed peer=\\d+ frame=\\d+ live_actors=[1-9]\\d*"
+      ],
+      "forbidden_log_regex": [
+        "admission refused .*match over"
+      ]
     },
     {
       "id": "lag-100-role-order",

@@ -60,14 +60,27 @@ using namespace RTE;
 
 static std::string PlayerFacingStatus(const std::string& text) {
 	const bool wireReason = text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos;
+	const std::string refusalPrefix = "A player could not join: ";
 	const bool refusal = text.starts_with("A player could not join:");
+	// The host's notice names the refused player ahead of the sentence it quotes: "<name> is banned from this session".
+	const auto refusedName = [&](const std::string& sentence) {
+		const size_t at = text.find(sentence);
+		return at != std::string::npos && at > refusalPrefix.size() && text.starts_with(refusalPrefix) ? text.substr(refusalPrefix.size(), at - refusalPrefix.size()) : std::string();
+	};
 	if (text.find("removed from this session") != std::string::npos) {
 		// The host's notice never speaks to the player it removed, and the player reads a whole sentence.
-		return refusal ? "A removed player was refused." : "The host removed you from this session";
+		if (refusal) {
+			const std::string name = refusedName(" was removed from this session");
+			return name.empty() ? "A removed player was refused." : name + " was refused: removed from this session.";
+		}
+		return "The host removed you from this session";
 	}
 	if (wireReason || text.find("banned") != std::string::npos) {
 		// The host's notice wraps the refused player's own sentence, which is written to that player.
-		if (refusal) return "A banned player was refused.";
+		if (refusal) {
+			const std::string name = refusedName(" is banned from this session");
+			return name.empty() ? "A banned player was refused." : name + " was refused: banned from this session.";
+		}
 		return wireReason ? "You are banned from this session" : text;
 	}
 	if (text.find("transport stopped") != std::string::npos || text == "Connection dropped") return "The host's connection was lost.";

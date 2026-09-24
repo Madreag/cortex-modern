@@ -85,7 +85,7 @@ wait_ms 1200
 observe assert_label LabelLobbyPlayer1 Client 2
 observe assert_label LabelLobbyPlayer2 Client 3
 observe assert_label LabelMultiplayerStatus Waiting for 2 players to join
-observe assert_label LabelMultiplayerError A banned player was refused.
+observe assert_label LabelMultiplayerError ClientB was refused: banned from this session.
 dump_lobby
 wait_ms 1200
 exit
