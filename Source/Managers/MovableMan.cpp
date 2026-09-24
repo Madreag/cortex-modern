@@ -7629,14 +7629,20 @@ std::string MovableMan::SaveWorldStructure() const {
 	identities(m_AddedActors, state.cohorts[3]); identities(m_AddedItems, state.cohorts[4]); identities(m_AddedParticles, state.cohorts[5]);
 	identities(m_ValidActors, state.validObjects[0]); identities(m_ValidItems, state.validObjects[1]); identities(m_ValidParticles, state.validObjects[2]);
 	// A slot can outlive the object drawn into it (a script that took the object may have freed it), so only a
-	// registered object names its own slot; a freed one is never read.
-	state.moidIndex.assign(m_MOIDIndex.size(), 0);
-	{
+	// registered object names its slot; a freed one is never read.
+	std::vector<const MovableObject*> registered;
+	const std::vector<const MovableObject*>* known = &registered;
+	if (const KnownObjectsScope* scope = m_KnownObjectsScope.load(std::memory_order_acquire); scope && scope->m_Version == m_KnownObjectsVersion.load(std::memory_order_acquire)) {
+		scope->Copy();
+		known = &scope->m_ByAddress;
+	} else {
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
-		for (const auto& [uid, known]: m_KnownObjects) {
-			if (const MOID id = known->GetID(); id > 0 && id < static_cast<MOID>(m_MOIDIndex.size()) && m_MOIDIndex[id] == known) state.moidIndex[id] = uid;
-		}
+		registered.reserve(m_KnownObjects.size());
+		for (const auto& [uid, object]: m_KnownObjects) registered.push_back(object);
+		std::sort(registered.begin(), registered.end());
 	}
+	state.moidIndex.reserve(m_MOIDIndex.size());
+	for (const MovableObject* object: m_MOIDIndex) state.moidIndex.push_back(object && std::binary_search(known->begin(), known->end(), object) ? object->GetUniqueID() : 0);
 	for (int team = 0; team < Activity::MaxTeamCount; ++team) {
 		identities(m_ActorRoster[team], state.rosters[team]); state.sortRoster[team] = m_SortTeamRoster[team];
 		state.teamMOIDCount[team] = m_TeamMOIDCount[team];
