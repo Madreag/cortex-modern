@@ -131,37 +131,74 @@ Matrix& Matrix::operator=(const Matrix& rhs) {
 	return *this;
 }
 
+namespace {
+	// The elements an angle gives, negated to account for the upside-down coordinate system.
+	void ElementsForAngle(float angle, float (&elements)[2][2]) {
+		const float CosAngle = DeterministicCos(-angle);
+		const float SinAngle = DeterministicSin(-angle);
+		elements[0][0] = CosAngle;
+		elements[0][1] = -SinAngle;
+		elements[1][0] = SinAngle;
+		elements[1][1] = CosAngle;
+	}
+
+	// Both transforms, shared by the caching operators and the const readers so the two give the same bits.
+	Vector TransformBy(const float (&elements)[2][2], const bool (&flipped)[2], const Vector& rhs) {
+		Vector retVec = rhs;
+		// Apply flipping as set.
+		retVec.m_X = flipped[X] ? -retVec.m_X : retVec.m_X;
+		retVec.m_Y = flipped[Y] ? -retVec.m_Y : retVec.m_Y;
+
+		// Do the matrix multiplication.
+		retVec.SetXY(elements[0][0] * retVec.m_X + elements[0][1] * retVec.m_Y, elements[1][0] * retVec.m_X + elements[1][1] * retVec.m_Y);
+
+		return retVec;
+	}
+
+	Vector InverseTransformBy(const float (&elements)[2][2], const bool (&flipped)[2], const Vector& rhs) {
+		Vector retVec = rhs;
+
+		// Do the matrix multiplication.
+		retVec.SetXY(elements[0][0] * retVec.m_X + elements[1][0] * retVec.m_Y, elements[0][1] * retVec.m_X + elements[1][1] * retVec.m_Y);
+
+		// Apply flipping as set.
+		retVec.m_X = flipped[X] ? -retVec.m_X : retVec.m_X;
+		retVec.m_Y = flipped[Y] ? -retVec.m_Y : retVec.m_Y;
+
+		return retVec;
+	}
+} // namespace
+
 Vector Matrix::operator*(const Vector& rhs) {
 	if (!m_ElementsUpdated) {
 		UpdateElements();
 	}
-
-	Vector retVec = rhs;
-	// Apply flipping as set.
-	retVec.m_X = m_Flipped[X] ? -retVec.m_X : retVec.m_X;
-	retVec.m_Y = m_Flipped[Y] ? -retVec.m_Y : retVec.m_Y;
-
-	// Do the matrix multiplication.
-	retVec.SetXY(m_Elements[0][0] * retVec.m_X + m_Elements[0][1] * retVec.m_Y, m_Elements[1][0] * retVec.m_X + m_Elements[1][1] * retVec.m_Y);
-
-	return retVec;
+	return TransformBy(m_Elements, m_Flipped, rhs);
 }
 
 Vector Matrix::operator/(const Vector& rhs) {
 	if (!m_ElementsUpdated) {
 		UpdateElements();
 	}
+	return InverseTransformBy(m_Elements, m_Flipped, rhs);
+}
 
-	Vector retVec = rhs;
+Vector Matrix::TransformKeepingCache(const Vector& rhs) const {
+	if (m_ElementsUpdated) {
+		return TransformBy(m_Elements, m_Flipped, rhs);
+	}
+	float elements[2][2];
+	ElementsForAngle(m_Rotation, elements);
+	return TransformBy(elements, m_Flipped, rhs);
+}
 
-	// Do the matrix multiplication.
-	retVec.SetXY(m_Elements[0][0] * retVec.m_X + m_Elements[1][0] * retVec.m_Y, m_Elements[0][1] * retVec.m_X + m_Elements[1][1] * retVec.m_Y);
-
-	// Apply flipping as set.
-	retVec.m_X = m_Flipped[X] ? -retVec.m_X : retVec.m_X;
-	retVec.m_Y = m_Flipped[Y] ? -retVec.m_Y : retVec.m_Y;
-
-	return retVec;
+Vector Matrix::InverseTransformKeepingCache(const Vector& rhs) const {
+	if (m_ElementsUpdated) {
+		return InverseTransformBy(m_Elements, m_Flipped, rhs);
+	}
+	float elements[2][2];
+	ElementsForAngle(m_Rotation, elements);
+	return InverseTransformBy(elements, m_Flipped, rhs);
 }
 
 Matrix Matrix::operator-() {
@@ -177,13 +214,6 @@ Matrix Matrix::operator-() {
 }
 
 void Matrix::UpdateElements() {
-	// Negative angle to Account for upside-down coordinate system.
-	const float CosAngle = DeterministicCos(-m_Rotation);
-	const float SinAngle = DeterministicSin(-m_Rotation);
-	m_Elements[0][0] = CosAngle;
-	m_Elements[0][1] = -SinAngle;
-	m_Elements[1][0] = SinAngle;
-	m_Elements[1][1] = CosAngle;
-
+	ElementsForAngle(m_Rotation, m_Elements);
 	m_ElementsUpdated = true;
 }
