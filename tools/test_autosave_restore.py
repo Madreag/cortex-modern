@@ -784,6 +784,15 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             f"the lever did not rejoin the client from the first capture: capture {first_capture}, images {images}"
         desync = re.findall(r"^\[lockstep\] desync at frame \d+[^\n]*$", peer_log(first, "host"), re.MULTILINE)
         assert not desync, f"the rejoin from capture {first_capture} diverged: {desync[:2]}"
+        # Every tick from the image to the last one both peers simulated, the replayed catch-up included, agrees.
+        window = first / "lever-window"
+        window.mkdir()
+        rows = {who: read_live_hashes(first / f"{who}-live.jsonl") for who in ("host", "client")}
+        last_shared = min(max(row["tick"] for row in rows["host"]), max(row["tick"] for row in rows["client"]))
+        for who, peer_rows in rows.items():
+            (window / f"{who}-live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in peer_rows if row["tick"] <= last_shared),
+                                                      encoding="utf-8")
+        compare_live_window(window, first_capture + 1, last_shared, {"client": held_away(peer_log(first, "client"))})
     assert records["_killed"], f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}"
     identity = WORLD_IDENTITY.findall(peer_log(first, "host"))
     assert identity, "the world host never printed its identity"
