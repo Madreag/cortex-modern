@@ -5,6 +5,7 @@
 #include "MenuMan.h"
 #include "NetMuxTransport.h"
 #include "SettingsMan.h"
+#include "System.h"
 #ifdef CCCP_WITH_GNS
 #include "GnsSignaling.h"
 #endif
@@ -12783,7 +12784,9 @@ namespace RTE {
 		service.m_State = NetMatchServiceState::Starting;
 		service.m_BeaconGamePort = 49473;
 		service.m_BeaconMaxPlayers = 3;
-		service.m_LocalName = "OccupancyHost";
+		// Named per process: the same selftest running on another engine of this machine beacons on the same port.
+		const std::string occupancyHost = "OccupancyHost" + std::to_string(System::GetProcessID());
+		service.m_LocalName = occupancyHost;
 		NetLobbyMember host, second, third;
 		host.peerId = 1; host.connected = true; host.isLocal = true;
 		second.peerId = 2; third.peerId = 3;
@@ -12799,7 +12802,7 @@ namespace RTE {
 			for (int spin = 0; spin < 100; ++spin) {
 				browser.Tick(sampleNow);
 				for (const auto& entry : browser.GetHosts(sampleNow)) {
-					if (entry.port != 49473 || entry.hostName != "OccupancyHost" || entry.lastSeenMs != sampleNow) continue;
+					if (entry.port != 49473 || entry.hostName != occupancyHost || entry.lastSeenMs != sampleNow) continue;
 					const auto rows = NetDirectoryClient::MergeGameLists({entry}, {}, {});
 					if (rows.front().players != expected) {
 						*error = "discovery occupancy: expected " + expected + " received " + rows.front().players;
