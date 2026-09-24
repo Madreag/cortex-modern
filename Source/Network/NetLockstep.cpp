@@ -4072,6 +4072,15 @@ namespace RTE {
 			if (error) *error = "lockstep has no remote transport targets";
 			return false;
 		}
+		// A client's one link is its host's. A successor hosts the session from session seat 0, so a seat that joins it after a
+		// migration is handed that link under the first seat's id; the round's authority is the peer it talks to.
+		if (const uint8_t authority = config.authorityPeerId != 0 ? config.authorityPeerId : config.matchConfig.hostPeerId;
+		    !config.relayToOtherPeers && authority != 0 && authority != config.localPeerId && authority <= config.peerCount &&
+		    remoteTransports.size() == 1 && !remoteTransports.contains(authority)) {
+			const NetPeerId link = remoteTransports.begin()->second;
+			remoteTransports.clear();
+			remoteTransports[authority] = link;
+		}
 		// A relay host forwards between clients, so it must reach every remote directly.
 		if (config.relayToOtherPeers) {
 			for (uint8_t peerId : remotePeerIds) {
@@ -5048,7 +5057,8 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 				if ((timing.heldPeers & (1U << (peer - 1))) == 0 || m_AiHeldSeats.contains(peer)) continue;
 				m_AiHeldSeats[peer] = timing.applyFrame;
-				ApplyPeerLeave(peer, timing.applyFrame, "slow player: AI takeover", m_TimingNowMs, false, true, true);
+				// A clean leaver's leave exchange still owes its answer on this connection, so the leaver closes it.
+				ApplyPeerLeave(peer, timing.applyFrame, "slow player: AI takeover", m_TimingNowMs, false, !m_ReleaseWhenHeld.contains(peer), true);
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 				++m_Stats.peers[peer].holds;
 				std::cout << "[net-match] hold peer=" << static_cast<int>(peer) << " frame=" << timing.applyFrame << " AI in control" << std::endl;
@@ -5764,8 +5774,12 @@ namespace RTE {
 					const auto& stats = m_Stats.peers[peer];
 					const uint64_t budget = boundMs + stats.pingMs + stats.jitterMs;
 					// A peer still filling its pipeline owes its delay window before it counts as silent, and a
-					// peer still starting cannot acknowledge anything: its own start work is part of the ramp.
-					const uint64_t ramp = m_PeersPlayedThisRound.contains(peer) || m_PeerAdmissions.contains(peer) ? 0 :
+					// peer still starting cannot acknowledge anything: its own start work is part of the ramp. A
+					// reclaimed seat refills the same way until its activation and its delay window have passed.
+					const auto reclaim = m_ReclaimTransactions.find(peer);
+					const bool refilling = reclaim != m_ReclaimTransactions.end() &&
+					    *m_ConsumerWaitingFrame <= reclaim->second.activationFrame + InputDelayAt(peer, *m_ConsumerWaitingFrame);
+					const uint64_t ramp = !refilling && (m_PeersPlayedThisRound.contains(peer) || m_PeerAdmissions.contains(peer)) ? 0 :
 					    static_cast<uint64_t>(std::llround(InputDelayAt(peer, *m_ConsumerWaitingFrame) * m_Config.simTickMs)) +
 					        std::max(stats.startParkMs, m_Stats.longestOwnParkMs);
 					if ((decision.proposal.requiredPeers & bit) != 0 && (decision.acknowledgedPeers & bit) == 0 &&
@@ -9894,8 +9908,13 @@ namespace RTE {
 			hostLinkMs = std::max<uint64_t>(hostLinkMs, estimate->second.P95Ms());
 		const uint64_t silenceBoundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
 		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, std::max<uint64_t>(500, 3 * hostLinkMs + silenceBoundMs));
+		// A host still in its start work (no frame from it yet this round) or in a capture park it announced is busy, not gone:
+		// only its link's close or the round's timeout ends that wait.
+		const bool hostBusy = !m_PeersPlayedThisRound.contains(GetHostPeerId()) ||
+		    (m_SynchronizedCaptureStartFrame != UINT64_MAX && m_Stats.nextFrame >= m_SynchronizedCaptureStartFrame && m_Stats.nextFrame <= m_SynchronizedCaptureEndFrame + 1);
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
-		if (hostSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= hostSilenceMs && BeginHostMigration(nowMs)) return;
+		if (!hostBusy && hostSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= hostSilenceMs &&
+		    BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();
 			Fail(NetLockstepStopReason::MissingFrameTimeout, m_Stats.nextFrame, missing.empty() ? "missing lockstep frame" : "missing lockstep frame from " + missing);
