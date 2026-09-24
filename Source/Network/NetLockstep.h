@@ -144,6 +144,7 @@ namespace RTE {
 		bool resumeFromSnapshot = false;
 		uint32_t activityRestartMs = 0; //!< This peer's own measured activity restart; 0 until it has one.
 		bool startupPublished = false; //!< Whether that measurement is a reading and not an absence.
+		uint8_t deviceClass = 0; //!< The sender's seat device (Controller::WireDeviceClass); 0 until it has sampled one.
 		// A host-authored start boundary. Ordinary starts carry one peer's publication; this record is
 		// the single fact every peer applies, including the host that authored it.
 		bool agreedStartRecord = false;
@@ -155,6 +156,7 @@ namespace RTE {
 		std::array<uint64_t, 16> peerEffectiveStartFrames{};
 		std::array<uint32_t, 16> peerStartupParks{};
 		std::array<uint16_t, 16> peerInputDelays{};
+		std::array<uint8_t, 16> peerDeviceClasses{}; //!< Each seat's device as its peer published it; what a script reads before the seat's first frame.
 
 		bool operator==(const NetLockstepStart&) const = default;
 	};
@@ -670,9 +672,10 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		/// Version 38 hashes actor timers and attachable transforms each tick; admission refuses a peer below it.
-		static constexpr uint16_t c_Version = 38;
-		static constexpr uint16_t c_WorldVersion = 38;
+		/// Version 39 carries each seat's device class in the start and the agreed-start record; admission refuses a peer below it.
+		static constexpr uint16_t c_Version = 39;
+		static constexpr uint16_t c_WorldVersion = 39;
+		static constexpr uint16_t c_SeatDeviceVersion = 39;
 		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
 		/// arrives after this peer read past it is read past again rather than taken for a sender that started over.
 		static constexpr uint16_t c_UnreliableFrameVersion = 37;
@@ -682,7 +685,7 @@ namespace RTE {
 		/// Version 36 names the proposal a re-stamped timing decision withdraws, so no peer keeps the old one.
 		static constexpr uint16_t c_TimingWithdrawVersion = 36;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
-		static constexpr uint16_t c_CheckpointVersion = 39; //!< The newest wire: frames that carry the checkpoint schedule.
+		static constexpr uint16_t c_CheckpointVersion = 40; //!< The newest wire: frames that carry the checkpoint schedule.
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;
@@ -817,6 +820,10 @@ namespace RTE {
 
 		/// This machine's own measured start work, published so every peer judges us by it and not by theirs.
 		void NoteLocalStartPark(uint32_t restartMs);
+		/// This machine's seat device (Controller::WireDeviceClass), published with the start so the agreed record names every seat's.
+		void NoteLocalDeviceClass(uint8_t deviceClass) { m_LocalDeviceClass = deviceClass; }
+		/// The device class the agreed start names for a seat (a human slot in roster order); 0 before the record or for an unnamed seat.
+		uint8_t AgreedSeatDeviceClass(int seat) const;
 		/// Marks the agreed autosave tick as a local park while every peer captures the same state.
 		void BeginSynchronizedCapture(uint64_t completedFrame);
 		void CompleteSynchronizedCapture(uint64_t completedFrame, double captureMs);
@@ -1090,6 +1097,7 @@ namespace RTE {
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
+		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
 
 	private:
 		void TickHostMigration(uint64_t nowMs);
@@ -1330,6 +1338,12 @@ namespace RTE {
 		std::map<uint8_t, std::deque<ArrivalLead>> m_ArrivalLeads; //!< Per remote sender, the recent arrivals of its new input.
 		/// The decrease a live delay change may make without a wait at its frame: never more than the sender's inputs arrived early by, less the slow-player bound.
 		std::optional<uint16_t> SlackLimitedDecrease(uint8_t peerId, uint16_t proposed, uint16_t current, uint64_t nowMs);
+		/// The rise a live delay change makes so the sender's inputs keep the slow-player bound's worth of lead: what the least lead over the last
+		/// window lacked, never past the bound above the delay the link's round trip requires.
+		std::optional<uint16_t> MarginKeepingIncrease(uint8_t peerId, uint16_t current, uint32_t required, uint64_t nowMs) const;
+		/// Whether the blip test lever drops this unreliable frame send.
+		bool TestBlipDropsFrameSend(uint64_t targetFrame);
+		static constexpr uint64_t c_MarginWindowMs = 1000; //!< The arrivals a rise is judged over: short, so it lands before a spike finds the seat.
 		std::map<uint8_t, std::deque<NetLockstepTiming>> m_TimingOutgoing;
 		std::map<int64_t, ControllerFrame> m_DeferredControllerFrames;
 		uint64_t m_NextTimingRevision = 1;
@@ -1353,6 +1367,8 @@ namespace RTE {
 		uint64_t m_ConsumerWaitStartMs = 0;
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
 		uint32_t m_LocalStartParkMs = 0; //!< Our own activity restart, as it goes out in our start.
+		uint8_t m_LocalDeviceClass = 0; //!< Our own seat device, as it goes out in our start.
+		std::array<uint8_t, 16> m_PeerDeviceClasses{}; //!< Host: each seat's device from its latest start.
 		bool m_RequirePublishedStart = false;
 		bool m_StartWaitAnnounced = false;
 		uint64_t m_StartWaitSinceMs = 0;
@@ -1383,6 +1399,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerFrameWaivers; //!< Fenced peers -> the first frame the round stopped requiring.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
 		std::set<uint8_t> m_DroppedSeats;   //!< Classic holds pause; bounded holds commit empty input from their agreed frame.
+		std::set<uint8_t> m_LeavesHeardAhead; //!< Classic leavers whose leave frame was past the round's next frame when heard.
 		std::map<uint8_t, NetLockstepHoldResolution> m_DroppedSeatResolutions;
 		std::map<uint8_t, uint64_t> m_DroppedAtMs;
 		uint64_t m_LastHoldHeartbeatMs = 0;

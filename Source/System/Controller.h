@@ -423,6 +423,9 @@ namespace RTE {
 			m_Player = player;
 		}
 
+		/// Sets the wire-owned disabled flag a frame with no input carries; a synced order's disable stays.
+		void ApplyWireEnabled() { m_Disabled = m_SyncedOrderDisableTick >= 0; }
+
 		/// Replaces the scheme facts the sim reads (device class, digital aim speed) with the owner's, from a wire frame.
 		void ApplyWireScheme(WireDeviceClass deviceClass, float digitalAimSpeed);
 		bool HasWireScheme() const { return m_WireSchemeValid; }

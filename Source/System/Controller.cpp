@@ -331,8 +331,11 @@ bool Controller::IsMouseControlled() const {
 
 Controller::WireDeviceClass Controller::SchemeClassForQuery() const {
 	if (m_WireSchemeValid) return m_WireDeviceClass;
-	// A script inside a lockstep round reads the seat's committed device, the same on every peer.
-	if (uint8_t committed = 0; UInputMan::IsConstructed() && g_UInputMan.ScriptSeatDeviceClass(GetInputPlayer(), committed)) return static_cast<WireDeviceClass>(committed);
+	// A script inside a lockstep round reads the seat's committed device, the same on every peer. The seat is the
+	// activity's player slot or the player the wire gave an actor, never this machine's local input for it.
+	Activity* activity = ActivityMan::IsConstructed() ? g_ActivityMan.GetActivity() : nullptr;
+	const int seat = activity && m_SeatPlayer >= Players::PlayerOne && m_SeatPlayer < Players::MaxPlayerCount && activity->GetPlayerController(m_SeatPlayer) == this ? m_SeatPlayer : GetPlayer();
+	if (uint8_t committed = 0; UInputMan::IsConstructed() && g_UInputMan.ScriptSeatDeviceClass(seat, committed)) return static_cast<WireDeviceClass>(committed);
 	return GetLocalDeviceClass();
 }
 
