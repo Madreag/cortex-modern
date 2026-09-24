@@ -1860,6 +1860,8 @@ static std::string ResyncSaveName() {
 		}
 		m_IdentityPending = false;
 		SealPendingWorldSegmentAtEnd();
+		// A restart imports the seats as the round left them: a clean leave in its last seconds releases its seat there too.
+		PublishRestartAdmission();
 		// A clean stop of a world leaves the tick it stopped on, before anything is torn down.
 		WriteFinalWorldCheckpoint();
 		RunCleanLeave();
