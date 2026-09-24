@@ -4,6 +4,8 @@ fence: the host walks its brain so its preview runs the stride hook of
 tools/fixtures/preview_native_fence.lua, which writes a native property and an alias on the world's actor.
 method: the same walk runs tools/fixtures/preview_method_fence.lua, whose stride hook resets the Timer the real
 script keeps and adds a particle through MovableMan.
+outparam: the same walk runs tools/fixtures/preview_outparam_fence.lua, whose stride hook casts a ray into the
+file-scope Vector the real script keeps.
 craft: the host's seat flies a landing craft (tools/fixtures/craft_handoff_activity.lua) that hands out its passenger.
 
 Per-tick hashes are compared strictly on every tick both peers recorded, leaving out only the routing subsystem each
@@ -40,6 +42,9 @@ CASES = {
     "method": {"ticks": 600, "files": ["preview_method_fence.lua"], "index": "",
                "both": ["-test-script", "UserScenes.rte/preview_method_fence.lua", "-net-local-prediction", "on"],
                "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
+    "outparam": {"ticks": 600, "files": ["preview_outparam_fence.lua"], "index": "",
+                 "both": ["-test-script", "UserScenes.rte/preview_outparam_fence.lua", "-net-local-prediction", "on"],
+                 "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
     "craft": {"ticks": 480, "files": ["craft_handoff_activity.lua"], "index": CRAFT_ACTIVITY,
               "both": ["-net-match-service-preset", "Determinism Craft Handoff", "-net-match-service-module", "UserScenes.rte"],
               "host": []},
@@ -51,6 +56,7 @@ HOLD = re.compile(r"^\[net-match\] hold peer=.*$", re.M)
 FENCE = re.compile(r"\[preview-fence\] preview uid=(\d+) took=(\d+) kept_health=([-\d.]+)->([-\d.]+) kept_x=([-\d.]+)->([-\d.]+)")
 METHOD = re.compile(r"\[preview-method\] preview uid=(\d+) timer_before=([-\d.]+) timer_after=([-\d.]+)")
 MARK = " Spark Yellow 1 "
+OUTPARAM = re.compile(r"\[preview-outparam\] preview uid=(\d+) hit_before=([-\d.]+) hit_after=([-\d.]+)")
 CRAFT = re.compile(r"\[craft-fixture\] (hatch opening|passenger out|passenger played) tick=(\d+)")
 
 
@@ -191,6 +197,11 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict) -> dict:
         result["commit_marks"] = marks
         # The preview's reset and particle are dropped, and the committed hook's particles stand on both peers alike.
         fixture_ok = bool(rows) and result["previews"]["timer_kept"] == len(rows) and marks["host"] > 0 and marks["host"] == marks["client"]
+    elif case_name == "outparam":
+        rows = [dict(zip(("uid", "before", "after"), match)) for match in OUTPARAM.findall(texts["host"])]
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "value_kept": sum(1 for row in rows if row["before"] == row["after"])}
+        # The preview's cast writes a copy, so the Vector the real script keeps reads the same after it.
+        fixture_ok = bool(rows) and result["previews"]["value_kept"] == len(rows)
     else:
         events = {who: [(name, int(tick)) for name, tick in CRAFT.findall(texts[who])] for who in PEERS}
         result["craft"] = events

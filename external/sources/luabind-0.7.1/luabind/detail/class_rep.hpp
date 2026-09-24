@@ -145,6 +145,9 @@ namespace luabind { namespace detail
 		// Whether a preview window drops this write: one that would land on the world's own object.
 		bool preview_fence_drops(lua_State* L, const object_rep* obj) const;
 
+		// Whether Lua can construct this class, which makes it a value a preview window may copy.
+		bool has_lua_constructor() const { return !m_constructor.overloads.empty(); }
+
 		// this is called as __index metamethod on every instance of this class
 		static int gettable_dispatcher(lua_State* L);
 

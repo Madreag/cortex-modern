@@ -805,18 +805,21 @@ namespace luabind { namespace detail
 
 // ******* reference converter *******
 
-	// A plain value a preview window can copy instead of aliasing; an engine object is never copied by value.
+	// A type a preview window can copy instead of aliasing; which of them it does copy is decided by its class at run time.
 	template<class T>
 	struct preview_detachable
 	{
-		BOOST_STATIC_CONSTANT(bool, value = std::is_copy_constructible<T>::value && !std::is_polymorphic<T>::value && !std::is_abstract<T>::value);
+		BOOST_STATIC_CONSTANT(bool, value = std::is_copy_constructible<T>::value && !std::is_abstract<T>::value);
 	};
 
-	// Inside a preview window, an alias a getter or method would hand out of the world's object is a copy that dies with the window.
+	// Inside a preview window, an alias a getter or method would hand out of the world's object is a copy that dies with the
+	// window. Only a value Lua can construct is copied; any other alias stays one, and a write through it is dropped.
 	template<class T>
 	bool preview_fence_detach(lua_State* L, const T& ref, bool constant, boost::mpl::true_)
 	{
 		if (!preview_fence_detaches()) return false;
+		const class_rep* crep = get_class_rep<T>(L);
+		if (!crep || !crep->has_lua_constructor()) return false;
 		value_converter<cpp_to_lua>().apply(L, ref);
 		if (constant)
 		{
@@ -901,7 +904,9 @@ namespace luabind { namespace detail
 		{
 			assert(!lua_isnil(L, index));
 			typedef boost::mpl::bool_<preview_detachable<T>::value> detachable;
-			const bool copy = detachable::value && preview_fence_window && !preview_fence_writes(static_cast<object_rep*>(lua_touserdata(L, index)));
+			// Only a value Lua owns is copied: an engine object behind a reference is never duplicated.
+			const object_rep* rep = static_cast<object_rep*>(lua_touserdata(L, index));
+			const bool copy = detachable::value && preview_fence_window && rep && (rep->flags() & object_rep::owner) && !preview_fence_writes(rep);
 			T* ptr = pointer_converter<lua_to_cpp>().apply(L, by_pointer<T>(), index, !copy);
 			return copy ? *detach(ptr, detachable()) : *ptr;
 		}
