@@ -1,6 +1,7 @@
 #include "LuaMan.h"
 
 #include "LuabindObjectWrapper.h"
+#include "CaptureSentinel.h"
 #include "LuaBindingRegisterDefinitions.h"
 #include "ThreadMan.h"
 #include "System.h"
@@ -6176,6 +6177,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	std::vector<char> complete(order.size(), 0);
 	CheckpointLua::NativeEffects effects;
 	const LuaScriptGraphNativeCaptureData* shared = LuaScriptGraphNativeCaptureScope::Current();
+	CaptureSentinel::ParallelPhase parallel;
 	LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
 	const auto capture = [&](size_t index) {
 		LuaScriptGraphNativeCaptureScope lookups(shared);
@@ -6187,7 +6189,10 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	// Each state is its own VM behind its own lock, so the states are captured side by side.
 	std::vector<std::future<void>> tasks;
 	tasks.reserve(order.size());
-	for (size_t index = 1; index < order.size(); ++index) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, index] { capture(index); }));
+	for (size_t index = 1; index < order.size(); ++index) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, index] {
+		CaptureSentinel::WorkerScope worker("script-graph-state");
+		capture(index);
+	}));
 	std::exception_ptr failure;
 	try {
 		capture(0);
