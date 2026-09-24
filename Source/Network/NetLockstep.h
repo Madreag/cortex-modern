@@ -1322,7 +1322,12 @@ namespace RTE {
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
 		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
-		std::map<uint8_t, std::deque<std::pair<uint64_t, uint64_t>>> m_ArrivalLeads; //!< Per remote sender: (ms, frames its new input arrived ahead of our sim's next tick).
+		struct ArrivalLead {
+			uint64_t ms = 0; //!< When the input arrived.
+			uint64_t frame = 0; //!< The frame it was for.
+			uint64_t lead = 0; //!< Frames it arrived ahead of our sim's next tick.
+		};
+		std::map<uint8_t, std::deque<ArrivalLead>> m_ArrivalLeads; //!< Per remote sender, the recent arrivals of its new input.
 		/// The decrease a live delay change may make without a wait at its frame: never more than the sender's inputs arrived early by, less one.
 		std::optional<uint16_t> SlackLimitedDecrease(uint8_t peerId, uint16_t proposed, uint16_t current, uint64_t nowMs);
 		std::map<uint8_t, std::deque<NetLockstepTiming>> m_TimingOutgoing;
