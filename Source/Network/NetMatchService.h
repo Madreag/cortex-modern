@@ -907,6 +907,9 @@ namespace RTE {
 		/// Bounds a returning seat's wait on the private capture's writer: one fresh capture, then the seat stays with the AI.
 		void BoundPrivateImageWait(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
+		/// Held client: a round stopped by this peer's own seat hold, with its sim short of the hold frame, keeps its world and its
+		/// connection and replays the committed tail from its own tick. Returns whether it began; otherwise the stop reloads an image.
+		bool BeginInPlaceCatchUp();
 		/// Client: names the world's own UUID in the stored ticket, so the return watch browses for the
 		/// row the world re-registers under on its next boot.
 		void AdoptWorldTicketSession(const NetMatchConfig& config);
@@ -922,6 +925,8 @@ namespace RTE {
 		/// never start, so the caller ends it instead of retrying it every tick.
 		bool StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error, bool* outUnstartable = nullptr);
 		void PumpWorldJoinLobby(uint64_t nowMs);
+		/// Host: a held seat's player reporting the tick its own state stands at gets the committed tail from there on its live connection.
+		void OpenInPlaceRejoinLocked(const NetLobbySession::WorldJoinReport& report, const std::vector<NetSessionPeerInfo>& readyPeers, uint64_t nowMs);
 		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error);
 		/// Restarts the silence windows of a session handed to a worker thread.
 		void NoteSessionHandedToWorker(NetSession& session);
@@ -1494,6 +1499,11 @@ namespace RTE {
 		size_t m_CatchUpWireBytes = 0;
 		std::unique_ptr<LoopbackTransport> m_CatchUpTransport;
 		std::unique_ptr<NetLockstepCoordinator> m_CatchUpCoordinator;
+		bool m_InPlaceCatchUp = false;   //!< Held client: the catch-up replays on its own state over its live connection.
+		uint64_t m_InPlaceAskedMs = 0;   //!< When it last asked the host for its tail.
+		uint64_t m_InPlaceSinceMs = 0;   //!< When it began; a host that never serves it sends it to the image path.
+		static constexpr uint64_t c_InPlaceTailWaitMs = 10000;
+		std::map<uint8_t, uint32_t> m_InPlaceIncarnationBumps; //!< Host: in-place returns per seat since its holder last bound, over the admission plane's count.
 		std::function<bool(Activity&)> m_ActivateCatchUpLocalSeat;
 		struct PrivateJoinImage {
 			NetWorldCheckpointImage image;

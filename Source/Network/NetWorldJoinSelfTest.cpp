@@ -3302,14 +3302,14 @@ namespace RTE {
 		if (host.FindSession(42)->snapshotTick != 45) return Fail("a replaying return changed its checkpoint boundary");
 		host.NoteRejoinLinkFit(42, true);
 		uint64_t activation = 0;
-		if (!host.NoteRejoinCapacity(42, 120, 2000000, 900) || !host.NoteCatchUpProgress(42, 600, 120, 2000, 610, &activation, &error) || activation != 0)
-			return Fail("a peer without compute headroom scheduled a reclaim");
+		if (!host.NoteRejoinCapacity(42, 120, 2000000, 900) || !host.NoteCatchUpProgress(42, 500, 120, 2000, 610, &activation, &error) || activation != 0)
+			return Fail("a peer still outside the activation lead scheduled a reclaim");
 		host.NoteRejoinLinkFit(42, false);
 		if (!host.NoteRejoinCapacity(42, 240, 3000000, 900) || !host.NoteCatchUpProgress(42, 620, 20, 1000, 630, &activation, &error) || activation != 0)
 			return Fail("a peer whose delay does not fit scheduled a reclaim");
 		host.NoteRejoinLinkFit(42, true);
 		if (!host.NoteCatchUpProgress(42, 621, 1, 5, 631, &activation, &error) || activation <= 900)
-			return Fail("reclaim did not wait beyond every old input after proving capacity");
+			return Fail("reclaim did not wait beyond every old input once inside the lead");
 		if (!host.HasBootstrapInFlight()) return Fail("an unfinished private return did not protect its checkpoint");
 		if (!host.CompleteActivation(42, activation, &error)) return Fail(error);
 		if (host.HasBootstrapInFlight()) return Fail("an active returned member prevented every later private checkpoint refresh");
@@ -6909,7 +6909,7 @@ namespace RTE {
 	}
 
 	/// A returner that has reached the head of its tail replays at the pace the round commits the tail, so its measured rate can
-	/// never exceed the round's: keeping that pace for the proof window is what shows it keeps up, and it is activated.
+	/// never exceed the round's: standing inside the activation lead is what shows it keeps up, and it is activated there.
 	int TestAReturnerKeepingPaceAtTheHeadIsActivated() {
 		NetWorldJoinHost host;
 		auto config = NetMatchConfigUtil::MakeDefault(0x9A40);
@@ -6934,13 +6934,13 @@ namespace RTE {
 			if (activation != 0) reportedAt = applied;
 		}
 		if (activation == 0) return Fail("a returner that kept the round's pace at the head of its tail for 190 ticks was never activated");
-		if (reportedAt < 410 + c_NetWorldPaceProofTicks) return Fail("a returner was activated at " + std::to_string(reportedAt) + ", before it kept the round's pace for the proof window");
+		if (reportedAt != 410) return Fail("a returner inside the activation lead was activated at " + std::to_string(reportedAt) + " instead of its first report there");
 		std::cout << "[net-world-join-selftest] PASS a_returner_keeping_pace_at_the_head_is_activated applied=" << reportedAt << " activation=" << activation << std::endl;
 		return 0;
 	}
 
-	/// A world member taking back the seat the AI holds for it closes on the round only by the difference of the two rates, as a
-	/// private return does: it is activated once it has shown it replays faster than the round plays, never before.
+	/// A world member taking back the seat the AI holds for it is judged as a private return is: by how far its replay stands behind
+	/// the round's committed horizon. Outside the activation lead it keeps replaying; inside it, it is activated.
 	int TestAHeldWorldSeatProvesItsHeadroom() {
 		std::string error;
 		NetWorldJoinHost host;
@@ -6958,17 +6958,16 @@ namespace RTE {
 		image.path = "Worlds/image.bin";
 		host.PublishImage(image);
 		if (!host.NoteTransferComplete(8, 64, &error)) return Fail("held-world-headroom transfer: " + error);
-		// The returner replays at the round's own rate: it would never close on the round.
+		// The returner stands far behind the round: activated now, every peer would wait on it.
 		uint64_t activation = 0;
 		(void)host.NoteRejoinCapacity(8, 120, 2000000, 0);
-		if (!host.NoteCatchUpProgress(8, 70, 30, 500, 80, &activation, &error) || activation != 0) {
-			return Fail("a returning world seat with no replay headroom was activated at " + std::to_string(activation) + ": every peer would wait on it");
+		if (!host.NoteCatchUpProgress(8, 70, 30, 500, 200, &activation, &error) || activation != 0) {
+			return Fail("a returning world seat outside the activation lead was activated at " + std::to_string(activation) + ": every peer would wait on it");
 		}
-		// Sustained headroom lets it in, far enough ahead that it has caught up by then.
+		// Its replay closes on the round and comes inside the lead: it is let in there.
 		(void)host.NoteRejoinCapacity(8, 240, 2400000, 0);
-		(void)host.NoteRejoinCapacity(8, 360, 2800000, 0);
-		if (!host.NoteCatchUpProgress(8, 76, 6, 20, 82, &activation, &error) || activation == 0) {
-			return Fail("a returning world seat with replay headroom was never activated: " + error);
+		if (!host.NoteCatchUpProgress(8, 150, 80, 400, 205, &activation, &error) || activation == 0) {
+			return Fail("a returning world seat inside the activation lead was never activated: " + error);
 		}
 		std::cout << "[net-world-join-selftest] PASS a_held_world_seat_proves_its_headroom activation=" << activation << std::endl;
 		return 0;
