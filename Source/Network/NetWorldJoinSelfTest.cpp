@@ -6829,6 +6829,37 @@ namespace RTE {
 		return true;
 	}
 
+	/// A returner that has reached the head of its tail replays at the pace the round commits the tail, so its measured rate can
+	/// never exceed the round's: keeping that pace for the proof window is what shows it keeps up, and it is activated.
+	int TestAReturnerKeepingPaceAtTheHeadIsActivated() {
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A40);
+		std::string error;
+		constexpr double tickMs = 1000.0 / 60.0;
+		if (!host.ConfigureMatchRejoins(config, 9, tickMs, &error) || !host.BeginRejoin(42, 2, 2, 3, "returning", 1, &error)) return Fail("keeps-pace fixture: " + error);
+		NetWorldCheckpointImage image;
+		image.privateSessionId = config.sessionId; image.round = 9; image.bytes = 8;
+		image.checkpointConfig = "config"; image.sideState = "state";
+		image.authorityPeerId = 1;
+		image.tick = 400;
+		host.PublishImage(image);
+		if (!host.NoteTransferComplete(42, 8, &error)) return Fail("keeps-pace transfer: " + error);
+		host.NoteRejoinLinkFit(42, true);
+		// The round's horizon runs 20 frames ahead of what the returner has applied, and both advance 10 frames per report.
+		uint64_t activation = 0, reportedAt = 0, workTicks = 0, workUs = 0;
+		for (uint64_t applied = 410; applied <= 600 && activation == 0; applied += 10) {
+			workTicks += 10;
+			workUs += static_cast<uint64_t>(10 * tickMs * 1000.0 / 0.85);
+			(void)host.NoteRejoinCapacity(42, workTicks, workUs, 0);
+			if (!host.NoteCatchUpProgress(42, applied, 10, 167, applied + 20, &activation, &error)) return Fail("keeps-pace progress: " + error);
+			if (activation != 0) reportedAt = applied;
+		}
+		if (activation == 0) return Fail("a returner that kept the round's pace at the head of its tail for 190 ticks was never activated");
+		if (reportedAt < 410 + c_NetWorldPaceProofTicks) return Fail("a returner was activated at " + std::to_string(reportedAt) + ", before it kept the round's pace for the proof window");
+		std::cout << "[net-world-join-selftest] PASS a_returner_keeping_pace_at_the_head_is_activated applied=" << reportedAt << " activation=" << activation << std::endl;
+		return 0;
+	}
+
 	/// A world member taking back the seat the AI holds for it closes on the round only by the difference of the two rates, as a
 	/// private return does: it is activated once it has shown it replays faster than the round plays, never before.
 	int TestAHeldWorldSeatProvesItsHeadroom() {
@@ -6874,6 +6905,10 @@ namespace RTE {
 			s_FailTag = "net-world-own-side-error-selftest";
 			std::string error;
 			return TestAnOwnSideErrorKeepsTheSeatsReconnect(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "-net-world-keeps-pace-selftest") == 0) {
+			s_FailTag = "net-world-keeps-pace-selftest";
+			return TestAReturnerKeepingPaceAtTheHeadIsActivated();
 		}
 		if (std::strcmp(name, "-net-world-held-seat-headroom-selftest") == 0) {
 			s_FailTag = "net-world-held-seat-headroom-selftest";
@@ -7338,6 +7373,7 @@ namespace RTE {
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
+		if (const int result = TestAReturnerKeepingPaceAtTheHeadIsActivated(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
