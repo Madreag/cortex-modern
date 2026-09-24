@@ -1,0 +1,151 @@
+{
+  "schema": 1,
+  "name": "mp-host-migration-held",
+  "port_base": 49478,
+  "title": "Three peers; ClientB's seat is held when the host drops, ClientA takes over and ClientB rejoins it through the private rejoin",
+  "size": "960x540",
+  "timeout_s": 200,
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "900",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/host_trace.json",
+        "-net-match-report",
+        "{OUT}/host-match.json"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "Host",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "menu_script": "mp-host-migration.host.menu.txt",
+      "kill_at_tick": 601
+    },
+    {
+      "name": "clienta",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "900",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/clienta_trace.json",
+        "-net-match-report",
+        "{OUT}/clienta-match.json"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "ClientA",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark migration-listening",
+        "timeout_s": 90
+      }
+    },
+    {
+      "name": "clientb",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "900",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/clientb_trace.json",
+        "-net-match-report",
+        "{OUT}/clientb-match.json",
+        "-net-test-live-stall",
+        "450:6000"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "ClientB",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute",
+        "NetworkAutoReconnect": "1"
+      },
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "clienta",
+        "event": "video_mark migration-client-admitted",
+        "timeout_s": 90
+      }
+    }
+  ],
+  "checklist": [
+    {
+      "id": "migration-held-host-last-frame",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        650
+      ],
+      "drop_tick": 601,
+      "what": "The original host video ends at its recorded process drop after tick 600."
+    },
+    {
+      "id": "migration-held-named-clienta",
+      "peer": "clienta",
+      "screen": "game",
+      "sim_ticks": [
+        601,
+        900
+      ],
+      "what": "ClientA takes the match over.",
+      "log_regex": [
+        "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
+      ]
+    },
+    {
+      "id": "migration-held-rejoins-clientb",
+      "peer": "clientb",
+      "screen": "game",
+      "sim_ticks": [
+        601,
+        900
+      ],
+      "what": "ClientB, held when the host dropped, rejoins ClientA through the private rejoin and plays to the end.",
+      "log_regex": [
+        "\\[net-match\\] held rejoin: the host is gone; rejoining the successor at ",
+        "\\[net-match\\] private catch-up complete frame=\\d+"
+      ]
+    }
+  ]
+}
