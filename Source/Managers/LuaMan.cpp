@@ -3912,14 +3912,17 @@ struct VectorField {
 };
 }
 
-// The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
-static std::vector<const void*> LoadedActivityPresets() {
+// The loaded presets of a type by address; a reference to anything else of that type names an instance.
+static std::vector<const void*> LoadedPresets(const char* type) {
 	std::list<Entity*> presets;
-	g_PresetMan.GetAllOfType(presets, "Activity");
+	g_PresetMan.GetAllOfType(presets, type);
 	std::vector<const void*> addresses(presets.begin(), presets.end());
 	std::sort(addresses.begin(), addresses.end());
 	return addresses;
 }
+
+// The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
+static std::vector<const void*> LoadedActivityPresets() { return LoadedPresets("Activity"); }
 
 struct RTE::LuaScriptGraphNativeCaptureData {
 	/// The objects that existed when the capture began, copied by the first question asked of them.
@@ -3947,6 +3950,11 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	bool ActivityPreset(const void* address) const {
 		std::call_once(m_ActivityPresetsBuilt, [this] { m_ActivityPresets = LoadedActivityPresets(); });
 		return std::binary_search(m_ActivityPresets.begin(), m_ActivityPresets.end(), address);
+	}
+	/// Whether an address is a loaded movable object preset; only the pointer is read.
+	bool MovablePreset(const void* address) const {
+		std::call_once(m_MovablePresetsBuilt, [this] { m_MovablePresets = LoadedPresets("MovableObject"); });
+		return std::binary_search(m_MovablePresets.begin(), m_MovablePresets.end(), address);
 	}
 	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
 	const VectorField* VectorOwner(const void* address) const { return Find(Owners().vectors, address); }
@@ -4026,6 +4034,8 @@ private:
 	}
 	mutable std::once_flag m_ActivityPresetsBuilt;
 	mutable std::vector<const void*> m_ActivityPresets;
+	mutable std::once_flag m_MovablePresetsBuilt;
+	mutable std::vector<const void*> m_MovablePresets;
 	mutable std::once_flag m_KnownObjectsCopied;
 	mutable std::vector<MovableObject*> m_KnownObjects;
 	mutable std::once_flag m_OwnersBuilt;
@@ -5449,6 +5459,13 @@ static int ScriptGraphNative(lua_State* L) {
 	}
 	if (ClassDerivesFrom(crep, "Entity")) {
 		const Entity* entity = static_cast<const Entity*>(rep->ptr());
+		// A script can keep a movable object past its deletion; only a live one or a loaded preset is read, the rest is named.
+		if (!owned && ClassDerivesFrom(crep, "MovableObject") && !ScriptGraphNativeAlive(L, rep) &&
+		    !(s_GraphNativeCapture ? s_GraphNativeCapture->MovablePreset(entity) : [&] { const auto presets = LoadedPresets("MovableObject"); return std::binary_search(presets.begin(), presets.end(), static_cast<const void*>(entity)); }())) {
+			lua_pushnil(L);
+			lua_pushstring(L, className.c_str());
+			return 2;
+		}
 		// A scripted activity's class global stays bound to the instance its preset was read into, which is deleted once
 		// the preset is in its module: only a loaded preset is read through, never that instance.
 		if (!owned && ClassDerivesFrom(crep, "Activity")) {
