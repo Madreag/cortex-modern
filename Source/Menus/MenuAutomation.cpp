@@ -151,11 +151,11 @@ namespace RTE::MenuAutomation {
 		return true;
 	}
 	// What the renderer drew, read from its own record: a visible flag only says what a panel would
-	// draw if its parents did. A menu frame is 1/60 s, so a quarter second covers the last one.
+	// draw if its parents did. A manager that has not drawn for a quarter second is off the screen.
 	constexpr double c_DrawWindowSeconds = 0.25;
 	GUIControl* FirstDrawn(GUIControl* control) {
 		if (!control || !control->GetPanel()) return nullptr;
-		if (PanelDrewRecently(control->GetPanel(), c_DrawWindowSeconds)) return control;
+		if (PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds)) return control;
 		if (std::vector<GUIControl*>* children = control->GetChildren()) {
 			for (GUIControl* child: *children) {
 				if (GUIControl* drawn = FirstDrawn(child)) return drawn;
@@ -659,6 +659,7 @@ namespace RTE::MenuAutomation {
 				auto* control = manager->GetControl(name);
 				GUIControl* drawn = FirstDrawn(control);
 				observation = name + (control ? "" : " missing") + " drawn=" + (drawn ? drawn->GetName() : std::string("none"));
+				if (control) System::PrintDiagnosticLine("[draw-record] " + name + " last_drawn_ms=" + std::to_string(static_cast<long long>(PanelDrawAgeMs(control->GetPanel()))) + " in_latest_pass=" + (drawn == control ? "1" : "0"));
 				return control != nullptr && drawn == nullptr;
 			}
 			if (command == "assert_opaque_panel") {
@@ -1006,6 +1007,24 @@ namespace RTE::MenuAutomation {
 			if (runnerHad) {
 				SDL_setenv_unsafe("CCCP_HEADLESS", runnerValue.c_str(), 1);
 			}
+		}
+		{
+			// A panel its manager skipped on the latest pass is off the screen, however recent the pass before was.
+			int manager = 0, shown = 0, replaced = 0, loose = 0;
+			const void* previous = BeginPanelDrawPass(&manager);
+			RecordPanelDraw(&shown);
+			RecordPanelDraw(&replaced);
+			EndPanelDrawPass(previous);
+			previous = BeginPanelDrawPass(&manager);
+			RecordPanelDraw(&shown);
+			EndPanelDrawPass(previous);
+			RecordPanelDraw(&loose);
+			const std::string age = "replaced_age_ms=" + std::to_string(PanelDrawAgeMs(&replaced));
+			check("draw_record_latest_pass_drawn", PanelDrawnInLatestPass(&shown, c_DrawWindowSeconds), age);
+			check("draw_record_skipped_panel_not_drawn", !PanelDrawnInLatestPass(&replaced, c_DrawWindowSeconds), age);
+			check("draw_record_outside_pass_uses_window", PanelDrawnInLatestPass(&loose, c_DrawWindowSeconds), age);
+			ClearPanelDrawRecord();
+			check("draw_record_cleared", !PanelDrawnInLatestPass(&shown, c_DrawWindowSeconds) && PanelDrawAgeMs(&shown) < 0, age);
 		}
 		std::cout << "[menu-automation-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed;
