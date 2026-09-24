@@ -31,6 +31,7 @@ BYTE_LIMIT = 5_000_000_000
 MATRIX_BYTE_LIMIT = 10_000_000_000
 # Every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
 FULLSTATE_EVERY = 0
+LAG_ARMS = tuple(f'{lag}ms-{cap}' for lag in (100, 200) for cap in ('60hz', 'uncapped'))
 
 
 def stamp():
@@ -293,6 +294,14 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
             inspect.start().finish()
         finally:
             inspect.close()
+        # The recorder's off-wire proof on one committed timeline: the recording played back with no recorder.
+        playback = make_run(REPO, ['-net-replay', str(out / 'match.ccreplay'), '-tick-hashes', '-out', str(out / 'replay_trace.json'),
+                                   '-max-ticks', str(final_tick), '-seed', '42'], out / 'replay-off', timeout=timeout,
+                            env={'CCCP_HEADLESS': '1'}, expected=[out / 'replay_trace.json'])
+        try:
+            playback.start().finish()
+        finally:
+            playback.close()
     return out
 
 
@@ -318,6 +327,18 @@ def held_client_rewinds(log):
 def fullstate_proof(run, pairs):
     """The full-state oracle's verdict per pair of match peers: every sampled tick's shared sections must match."""
     return {f'{left}/{right}': compare_fullstate(Path(run) / left / 'stdout.log', Path(run) / right / 'stdout.log') for left, right in pairs}
+
+
+def committed_timeline(run, final_tick=TICKS):
+    """What a match committed before any tick ran: the lobby's seat delays, the agreed first frame and every live delay change."""
+    run = Path(run)
+    report = json.loads((run / 'host_report.json').read_text(encoding='utf-8-sig')) if (run / 'host_report.json').is_file() else {}
+    delays = report.get('service', {}).get('runner', {}).get('lobby', {}).get('match_config', {}).get('peer_input_delays')
+    log = (run / 'host/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / 'host/stdout.log').is_file() else ''
+    first = re.findall(r'\[net-match\] agreed first frame=(\d+)', log)
+    changes = re.findall(r'\[net-match\] delay change peer=(\d+) frame=(\d+) delay=(\d+)', log)
+    return dict(peer_input_delays=delays, agreed_first_frame=int(first[0]) if first else None,
+                delay_changes=[[int(peer), int(frame), int(delay)] for peer, frame, delay in changes if int(frame) <= final_tick])
 
 
 def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False, client_away=(), window_only=False, client_rewinds=()):
@@ -497,8 +518,11 @@ def analyze(root, stock=None):
         write_json(root / 'feel-report.json', result)
         return [result]
     baselines, plain_baselines = {}, {}
+    subset = json.loads((root / 'matrix-plan.json').read_text(encoding='utf-8')).get('lag_arms') if (root / 'matrix-plan.json').is_file() else None
     for cap_name in ('60hz', 'uncapped'):
         run = root / f'baseline-{cap_name}'
+        if subset and not run.is_dir():
+            continue
         result = reduce_or_fail(run, 'sp')
         baselines[cap_name] = dict(result['metrics'], raw_path=result['raw_path'])
         timing = item9a_gates(run, 'sp')
@@ -509,14 +533,18 @@ def analyze(root, stock=None):
         plain_baselines[cap_name] = dict(steady_wall_tps=plain['metrics']['steady_wall_tps'],
             evidence=plain['metrics']['clock_path'], method='same build, scene, input script, hashes and render cap; recorder off')
         write_json(root / f'baseline-{cap_name}-off' / 'feel-report.json', plain)
-    three = item9a_gates(root / 'baseline-three-60hz', 'sp')
-    write_json(root / 'baseline-three-60hz' / 'feel-report.json', three)
-    three_reference = dict(steady_wall_tps=three['metrics']['steady_wall_tps'], evidence=three['metrics']['clock_path'],
-        method='same build, six actors, three human seats, recorder and 60 Hz cap; single process with local seat views')
+    three_reference = None
+    if not subset:
+        three = item9a_gates(root / 'baseline-three-60hz', 'sp')
+        write_json(root / 'baseline-three-60hz' / 'feel-report.json', three)
+        three_reference = dict(steady_wall_tps=three['metrics']['steady_wall_tps'], evidence=three['metrics']['clock_path'],
+            method='same build, six actors, three human seats, recorder and 60 Hz cap; single process with local seat views')
     results = []
     for lag in (100, 200):
         for cap_name in ('60hz', 'uncapped'):
             name = f'{lag}ms-{cap_name}'
+            if subset and name not in subset:
+                continue
             on, off = root / (name + '-on'), root / (name + '-off')
             manifest = json.loads((on / 'manifest.json').read_text(encoding='utf-8'))
             peers = {peer: reduce_or_fail(on, peer, baselines[cap_name]) for peer in ('host', 'client')}
@@ -534,7 +562,13 @@ def analyze(root, stock=None):
                 peers[peer + '_off'] = timing
             proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json', cross_peer=True),
                      'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json', cross_peer=True),
+                     **{peer + '_on_replay': compare_pair(on / f'{peer}_trace.json', on / 'replay_trace.json', cross_peer=True) for peer in ('host', 'client')},
                      **{peer + '_on_off': compare_pair(on / f'{peer}_trace.json', off / f'{peer}_trace.json') for peer in ('host', 'client')}}
+            # Two separate matches are one sim only when they committed one timeline; otherwise the replay rows carry the proof.
+            timelines = {state: committed_timeline(run) for state, run in (('on', on), ('off', off))}
+            for peer in ('host', 'client'):
+                proof[peer + '_on_off']['committed_timelines'] = timelines
+                proof[peer + '_on_off']['required'] = timelines['on'] == timelines['off']
             if FULLSTATE_EVERY:
                 for state, state_run in (('on', on), ('off', off)):
                     verdict = compare_fullstate(state_run / 'host' / 'stdout.log', state_run / 'client' / 'stdout.log')
@@ -551,7 +585,7 @@ def analyze(root, stock=None):
                 raw_paths += sorted((on / peer / 'feel').glob('*.png'))
             report = dict(name=name, mode=manifest['mode'], measured=stamp(), executable=manifest['exe'],
                           reducer=file_record(HELPERS / 'report.py'), driver=file_record(Path(__file__)),
-                          peers=peers, proof=proof, off_wire_pass=all(row['pass'] for row in proof.values()),
+                          peers=peers, proof=proof, off_wire_pass=all(row['pass'] for row in proof.values() if row.get('required', True)),
                           measurement_complete=manifest['launches_complete'] and all(row['measurement_complete'] for row in peers.values()),
                           raw_files=[file_record(path) for path in raw_paths if record_path(path).is_file()],
                           missing_raw_files=[str(path) for path in raw_paths if not record_path(path).is_file()])
@@ -559,7 +593,7 @@ def analyze(root, stock=None):
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
             results.append(report)
-    for name, _, _, _ in TIMING_CASES:
+    for name, _, _, _ in () if subset else TIMING_CASES:
         run = root / name
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
@@ -569,7 +603,7 @@ def analyze(root, stock=None):
         report = reduce_timing_case(run, reference)
         write_json(run / 'feel-report.json', report)
         results.append(report)
-    for name, _, _ in AUTOSAVE_CASES:
+    for name, _, _ in () if subset else AUTOSAVE_CASES:
         run = root / name
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
@@ -654,6 +688,8 @@ def parse_args(argv=None):
     parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
     parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES],
                         help='run only the selected autosave arms, without baselines or the full matrix')
+    parser.add_argument('--lag-arms', nargs='+', choices=LAG_ARMS,
+                        help='run only these lag arms (each on and off) and the single-player baselines of their caps')
     parser.add_argument('--dry-run', action='store_true',
                         help='print every arm this command would launch with its port and peers; launch nothing, write nothing')
     parser.add_argument('--fullstate-every', type=int, default=0,
@@ -728,6 +764,19 @@ def main(argv=None):
             off_wire_pass=proof_pass, gates_unverified=True, scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT)))
         return 0 if complete and proof_pass else 1
     def launch_matrix(script, exe_hash):
+        if args.lag_arms:
+            for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
+                if not any(arm.endswith(cap_name) for arm in args.lag_arms): continue
+                launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe_hash, args.timeout, sp=True, **counts)
+                launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe_hash, args.timeout, sp=True, **counts)
+            # The full matrix's port for each arm, so a subset never reaches outside the ten.
+            for index, arm in enumerate(LAG_ARMS):
+                if arm not in args.lag_arms: continue
+                lag, cap_name = int(arm.split('ms-')[0]), arm.split('ms-')[1]
+                for offset, enabled in enumerate((True, False)):
+                    launch_case(root, f'{arm}-' + ('on' if enabled else 'off'), lag, 60 if cap_name == '60hz' else 0, enabled, args.port + 2 * index + offset,
+                                script, exe_hash, args.timeout, **counts)
+            return
         for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
             launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe_hash, args.timeout, sp=True, **counts)
             launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe_hash, args.timeout, sp=True, **counts)
@@ -760,6 +809,7 @@ def main(argv=None):
                     scratch_byte_limits=dict(case=BYTE_LIMIT, matrix=MATRIX_BYTE_LIMIT),
                     mode='service e2e without -free-run-sim; the normal loop presents every render iteration',
                     captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame',
+                    lag_arms=args.lag_arms,
                     arms=[f'baseline-{cap}-on' for cap in ('60hz', 'uncapped')] +
                          [f'{lag}ms-{cap}-{state}' for lag in (100, 200) for cap in ('60hz', 'uncapped') for state in ('on', 'off')] +
                          [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES],
