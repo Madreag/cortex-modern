@@ -621,7 +621,33 @@ namespace RTE {
 					return false;
 				}
 			}
-			std::cout << "[net-session-selftest] PASS lockstep_codec_admission current/current, current/15, 15/current" << std::endl;
+			// The build before this lockstep version advertised the wire below it; the two refuse each other either way round.
+			const uint16_t current = NetLockstepCodec::c_CheckpointVersion, currentWorld = NetLockstepCodec::c_WorldVersion;
+			for (size_t index = 0; index < 2; ++index) {
+				const uint16_t port = static_cast<uint16_t>(42156 + index);
+				const bool hostCurrent = index == 0;
+				LoopbackTransport hostTransport, clientTransport;
+				NetSession host, client;
+				auto hostConfig = MakeConfig(port, 1503, "Host");
+				auto clientConfig = MakeConfig(port, 1504, "Client");
+				for (auto* config: {&hostConfig, &clientConfig}) {
+					const bool isCurrent = (config == &hostConfig) == hostCurrent;
+					config->localIdentity.deterministicConfig.supportedLockstepCodecVersion = isCurrent ? current : static_cast<uint16_t>(current - 1);
+					config->localIdentity.deterministicConfig.supportedWorldLockstepCodecVersion = isCurrent ? currentWorld : static_cast<uint16_t>(currentWorld - 1);
+					config->localIdentity.deterministicConfigHash = NetIdentity::HashDeterministicConfig(config->localIdentity.deterministicConfig);
+				}
+				if (!StartPair(port, host, client, hostTransport, clientTransport, hostConfig, clientConfig, error) ||
+				    !DrivePair(hostTransport, clientTransport, host, client, [&] { return (host.IsReady() && client.IsReady()) || client.IsRejected(); }, error)) return false;
+				if (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::DeterministicConfigMismatch || client.GetMismatchKey() != "deterministic_config_hash" ||
+				    host.IsReady() || client.BuildPlayerRefusalText().empty()) {
+					*error = std::string("lockstep codec admission ") + (hostCurrent ? "current host, previous client" : "previous host, current client") +
+					         " expected DeterministicConfigMismatch got " + NetSession::StateName(client.GetState());
+					return false;
+				}
+				std::cout << "[net-session-selftest] lockstep_codec_refusal " << (hostCurrent ? "current_host previous_client" : "previous_host current_client") << " reason=DeterministicConfigMismatch key=" << client.GetMismatchKey()
+				          << " text=\"" << client.BuildPlayerRefusalText() << "\"" << std::endl;
+			}
+			std::cout << "[net-session-selftest] PASS lockstep_codec_admission current/current, current/15, 15/current, current/previous, previous/current" << std::endl;
 			return true;
 		}
 
