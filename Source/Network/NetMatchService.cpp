@@ -3316,6 +3316,11 @@ static std::string ResyncSaveName() {
 		if (!m_WorldJoin.IsConfigured()) {
 			return;
 		}
+		// Test lever: the world keeps serving its first capture, so a rejoin catches up across everything since it.
+		static const bool firstImageOnly = std::getenv("CC_TEST_WORLD_JOIN_FIRST_IMAGE") != nullptr;
+		if (firstImageOnly && m_WorldJoin.Image().IsValid()) {
+			return;
+		}
 		const std::optional<ActivityMan::CompletedAutosave> entry = g_ActivityMan.LastCompletedAutosave();
 		if (!entry || entry->tick <= m_WorldJoin.Image().tick) {
 			return;
