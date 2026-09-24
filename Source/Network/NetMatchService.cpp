@@ -3673,6 +3673,12 @@ static std::string ResyncSaveName() {
 		System::PrintDiagnosticLine(line.str());
 	}
 
+	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool heldSeats) {
+		// An announced leave is the host's decision; a lost host is absent, and a match with a held seat is never ended by that.
+		if (hostAnnounced) return LoneElection::EndMatch;
+		return heldSeats ? LoneElection::HostForHeldSeats : LoneElection::RejoinHost;
+	}
+
 	bool NetMatchService::PrivateReturnerInFlightLocked() const {
 		return m_WorldJoin.IsPrivateMatch() && std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [](const NetWorldJoinSession& session) {
 			return !session.spectator && session.phase != NetWorldJoinPhase::Active && session.phase != NetWorldJoinPhase::Failed;
@@ -3693,7 +3699,7 @@ static std::string ResyncSaveName() {
 			}
 		}
 		m_WorldJoin.ExpireStaleJoins(nowMs);
-		RefuseReturnersWithoutHeadroomLocked(nowMs);
+		AnswerStalledReturnersLocked(nowMs);
 		BoundPrivateImageWait(SteadyNowMs());
 		const auto ready = m_Session->GetReadyPeers();
 		std::vector<NetPeerId> live;
@@ -3790,7 +3796,7 @@ static std::string ResyncSaveName() {
 		(void)lobby.SendPayloadTo(member, capsule, nullptr);
 	}
 
-	void NetMatchService::RefuseReturnersWithoutHeadroomLocked(uint64_t nowMs) {
+	void NetMatchService::AnswerStalledReturnersLocked(uint64_t nowMs) {
 		// A returner that replays slower than the round plays keeps catching up: its activation waits until its replay shows
 		// headroom, so no peer ever waits on it, and a restart would only hand the same machine the same gap again.
 		for (const NetPeerId connection: m_WorldJoin.ReturnersWithoutHeadroom(nowMs, c_NetWorldHeadroomWaitMs)) {
@@ -3855,7 +3861,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_WorldJoin.ExpireStaleJoins(nowMs);
-		RefuseReturnersWithoutHeadroomLocked(nowMs);
+		AnswerStalledReturnersLocked(nowMs);
 		// The opening checkpoint is the round's state only at its anchor; past it a returning seat takes the newest image.
 		if (m_Runner && m_Coordinator->IsRunning()) {
 			NetLobbySession& lobby = m_Runner->GetLobbySession();
@@ -4665,8 +4671,6 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
-			// The session keeps talking while the round stops; a client's only remote is its host.
-			if (!m_IsHost && event.type == NetTransportEventType::PacketReceived) m_LastHostSessionTrafficMs = SteadyNowMs();
 			if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 				const auto message = NetLobbyProtocol::Decode(event.bytes);
 				if (const auto* config = std::get_if<NetLobbyMatchConfig>(&message.message.payload)) {
@@ -5251,17 +5255,21 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		const auto& result = m_Coordinator->GetMigrationResult();
-		// A handover is the survivors' election. A peer that finds nobody but itself cannot tell the host's loss from its own
-		// link's, so it rejoins the host it knew instead of hosting a match the host may still be playing.
+		// A handover is the survivors' election, and a held seat is a present player whose input the AI holds.
 		if (std::none_of(result.members.begin(), result.members.end(), [&](uint8_t peer) { return peer != m_LocalPeerId; })) {
-			// A host whose session still talks left the round on purpose: the match is over for this seat. A silent one may
-			// only be this peer's own link, so the seat goes back to it through its private rejoin.
-			const bool hostAnnounced = m_HostSilenceAtElectionMs < c_HostAnnouncedSilenceMs;
-			const bool hostStillTalks = hostAnnounced || (m_LastHostSessionTrafficMs != 0 && SteadyNowMs() - m_LastHostSessionTrafficMs < c_HostTalkingWindowMs);
-			System::PrintDiagnosticLine(hostStillTalks ? "[net-match] host left with no other survivor: the match is over for this seat"
-			                                           : "[net-match] host lost with no other survivor: rejoining the host instead of taking the match over");
-			ScenarioRunner::SetControllerReplayError(hostStillTalks ? "PeerLeft:The host left the match" : "PeerHeld:The host connection was lost - rejoining");
-			return;
+			switch (LoneElectionOutcome(m_HostSilenceAtElectionMs < c_HostAnnouncedSilenceMs, m_Coordinator->AnyHeldAISeat())) {
+				case LoneElection::EndMatch:
+					System::PrintDiagnosticLine("[net-match] host left with no other survivor: the match is over for this seat");
+					ScenarioRunner::SetControllerReplayError("PeerLeft:The host left the match");
+					return;
+				case LoneElection::RejoinHost:
+					System::PrintDiagnosticLine("[net-match] host lost with no other survivor: rejoining the host instead of taking the match over");
+					ScenarioRunner::SetControllerReplayError("PeerHeld:The host connection was lost - rejoining");
+					return;
+				case LoneElection::HostForHeldSeats:
+					System::PrintDiagnosticLine("[net-match] host lost with only held seats beside this one: hosting the match so they rejoin it");
+					break;
+			}
 		}
 		const auto& config = m_Coordinator->GetConfig().matchConfig;
 		auto wire = m_Coordinator->TakeMigrationTransport();
