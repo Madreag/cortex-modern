@@ -78,6 +78,8 @@ namespace RTE {
 	bool TestASeatIsNotLateForOurOwnDecision(std::string* error);
 	bool TestAFirstDelayChangeIsNotAMutualWait(std::string* error);
 	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error);
+	bool TestAThinLeadIsRaisedBeforeASpike(std::string* error);
+	bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -1061,7 +1063,18 @@ namespace RTE {
 			agreed.peerInputDelays[1] = 8;
 			agreed.startupPublished = true;
 			agreed.activityRestartMs = 216;
+			agreed.deviceClass = 1;
+			agreed.peerDeviceClasses[0] = 1;
+			agreed.peerDeviceClasses[1] = 3;
 			if (!RoundTrip({agreed}, error)) return false;
+			NetLockstepStart unknownDevice = agreed;
+			unknownDevice.peerDeviceClasses[1] = static_cast<uint8_t>(Controller::WireDeviceClass::Count);
+			std::vector<uint8_t> refused;
+			NetLockstepError deviceError;
+			if (NetLockstepCodec::Encode({unknownDevice}, refused, &deviceError) || deviceError.code != NetLockstepErrorCode::InvalidValue) {
+				*error = "a start naming an unknown seat device was encoded";
+				return false;
+			}
 
 			NetLockstepFrame frame;
 			frame.senderPeerId = 2;
@@ -1119,7 +1132,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x26, 0x00,
+				0x27, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -2433,6 +2446,43 @@ namespace RTE {
 			}
 			std::cout << "[net-lockstep-selftest] PASS first_start_waits_for_published_startup startup_ms=1000 peer_start_ms=200 agreed_frame_at_least="
 			          << expectedAgreedFrame << std::endl;
+			return true;
+		}
+
+		// Every seat's device reaches every peer in the agreed start, so a script asking before the seat's first frame reads it alike.
+		bool TestAgreedStartNamesEachSeatsDevice(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A1D, 3, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A1D, 3, NetTransportLane::ControlReliable);
+			hostConfig.startFrame = clientConfig.startFrame = 1;
+			hostConfig.roundId = clientConfig.roundId = 41;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 30000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1D);
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (!StartCoordinatorPair(49561, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			const uint8_t mouse = static_cast<uint8_t>(Controller::WireDeviceClass::MouseKeyboard), gamepad = static_cast<uint8_t>(Controller::WireDeviceClass::Gamepad);
+			host.NoteLocalDeviceClass(mouse);
+			host.NoteLocalStartPark(20);
+			client.NoteLocalDeviceClass(gamepad);
+			client.NoteLocalStartPark(30);
+			for (uint64_t now = 0; now < 500 && (!host.IsRunning() || !client.IsRunning()); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			const auto names = [&](const NetLockstepCoordinator& peer) {
+				return peer.AgreedSeatDeviceClass(0) == mouse && peer.AgreedSeatDeviceClass(1) == gamepad && peer.AgreedSeatDeviceClass(2) == 0 && peer.AgreedSeatDeviceClass(-1) == 0;
+			};
+			if (!host.IsRunning() || !client.IsRunning() || !names(host) || !names(client) || host.GetAgreedStartRecord() != client.GetAgreedStartRecord()) {
+				*error = "the agreed start did not name each seat's device alike: running=" + std::to_string(host.IsRunning()) + "/" + std::to_string(client.IsRunning()) +
+				         " host=" + std::to_string(host.AgreedSeatDeviceClass(0)) + "," + std::to_string(host.AgreedSeatDeviceClass(1)) +
+				         " client=" + std::to_string(client.AgreedSeatDeviceClass(0)) + "," + std::to_string(client.AgreedSeatDeviceClass(1));
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS the_agreed_start_names_each_seats_device seat0=" << static_cast<int>(host.AgreedSeatDeviceClass(0))
+			          << " seat1=" << static_cast<int>(host.AgreedSeatDeviceClass(1)) << std::endl;
 			return true;
 		}
 
@@ -8776,7 +8826,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x26, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x27, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -9483,6 +9533,96 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "an announced leave held a scripted outcome that should have applied at once";
 				return false;
 			}
+			return true;
+		}
+
+		// A classic round hears an announced leave before its frame: the leaver's own inputs drive its units until that frame on every
+		// peer, and only from it does a survivor take them over, or two peers would produce the same actor's frames.
+		bool TestAClassicLeaverDrivesItsUnitsUntilItsFrame(std::string* error) {
+			const uint16_t port = 43197;
+			const uint64_t sessionId = 0x7000000000000197ULL;
+			LoopbackTransport hostT, leaverT, stayerT;
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			NetMatchConfig roster = NetMatchConfigUtil::MakeDefault(sessionId);
+			roster.peerCount = 3;
+			roster.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Leaver"}, NetMatchPlayerSlot{3, 2, false, "Stayer"}};
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.inputDelayFrames = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig = roster;
+				return c;
+			};
+			NetLockstepCoordinator host, leaver, stayer;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) || !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
+			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now); leaver.Tick(now); stayer.Tick(now);
+					if (done()) return true;
+					hostT.AdvanceTimeMs(5); leaverT.AdvanceTimeMs(5); stayerT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); })) {
+				*error = "the classic leave round never started";
+				return false;
+			}
+			// The leaver has produced further ahead than the survivors when it announces its leave, so the round has not
+			// yet committed every frame its own inputs drive.
+			for (uint64_t f = 0; f < 6; ++f) {
+				if (!leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) return false;
+				if (f < 3 && (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) || !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error))) return false;
+			}
+			NetLockstepReadyFrame ready;
+			uint64_t hostCommitted = 0, stayerCommitted = 0;
+			const auto pop = [&](uint64_t through) {
+				while (hostCommitted <= through && host.PopReadyFrame(ready)) { (void)host.FinishSimulationTick(ready.frame); ++hostCommitted; }
+				while (stayerCommitted <= through && stayer.PopReadyFrame(ready)) { (void)stayer.FinishSimulationTick(ready.frame); ++stayerCommitted; }
+				return hostCommitted > through && stayerCommitted > through;
+			};
+			if (!drive(2000, [&] { return pop(2); })) {
+				*error = "the classic leave round never committed its first frames";
+				return false;
+			}
+			leaver.Leave("bye");
+			if (!drive(3000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && stayer.GetPeerLeaveFrames().count(2) != 0; })) {
+				*error = "the announced leave never reached both survivors";
+				return false;
+			}
+			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
+			const int64_t leaverUnit = 200;
+			const uint8_t beforeHost = host.ResolveActorOwner(leaverUnit, 1, false), beforeStayer = stayer.ResolveActorOwner(leaverUnit, 1, false);
+			if (leaveFrame <= 3 || beforeHost != 2 || beforeStayer != 2) {
+				*error = "a survivor took the leaver's units before its leave frame: leave_frame=" + std::to_string(leaveFrame) +
+				         " owner_host=" + std::to_string(beforeHost) + " owner_stayer=" + std::to_string(beforeStayer);
+				return false;
+			}
+			for (uint64_t f = 3; f <= leaveFrame + 1; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) || !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) return false;
+			}
+			if (!drive(3000, [&] { return pop(leaveFrame); })) {
+				*error = "the survivors never committed the leave frame " + std::to_string(leaveFrame);
+				return false;
+			}
+			const uint8_t afterHost = host.ResolveActorOwner(leaverUnit, 1, false), afterStayer = stayer.ResolveActorOwner(leaverUnit, 1, false);
+			if (afterHost != 1 || afterStayer != 1) {
+				*error = "the leaver's units did not pass to the host at the leave frame: owner_host=" + std::to_string(afterHost) + " owner_stayer=" + std::to_string(afterStayer);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_classic_leaver_drives_its_units_until_its_frame leave_frame=" << leaveFrame << std::endl;
 			return true;
 		}
 
@@ -10195,12 +10335,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 			}
 			NetLockstepReadyFrame ready;
-			size_t committed = 0;
+			size_t committed = 0, stayerCommitted = 0;
+			// Both peers still in the round stand on the same committed frame, where their answers are compared.
 			if (!drive(4000, [&] {
 					while (host.PopReadyFrame(ready)) {
 						++committed;
 					}
-					return committed >= 2;
+					while (clientB.PopReadyFrame(ready)) {
+						++stayerCommitted;
+					}
+					return committed >= 2 && stayerCommitted >= 2;
 				})) {
 				*error = "the held-seat ownership fixture never committed a frame";
 				return false;
@@ -19381,6 +19525,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "a seat was held for a frame past the round's last tick: frame=2403 last=2401 holds=" + std::to_string(host.m_Stats.peers[2].holds);
 			return false;
 		}
+		// A client whose capped run completes leaves past the last tick: that is its leave, never a hold.
+		host.SetFinalFrame(2401);
+		host.ApplyPeerLeave(2, 2402, "e2e complete", 5000, true, false, false, false);
+		if (!host.GetPeerLeaveFrames().contains(2) || host.m_AiHeldSeats.contains(2) || host.m_Stats.peers[2].holds != 0) {
+			*error = "a leave past the round's last tick became a hold: leave_recorded=" + std::to_string(host.GetPeerLeaveFrames().contains(2)) +
+			         " held=" + std::to_string(host.m_AiHeldSeats.contains(2)) + " holds=" + std::to_string(host.m_Stats.peers[2].holds);
+			return false;
+		}
 		std::cout << "[net-lockstep-selftest] PASS no_seat_is_judged_past_the_last_tick last=2401" << std::endl;
 		return true;
 	}
@@ -19538,6 +19690,121 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	// (a returner reclaimed at delay 8 on a zero-ping link, lowered to 1: held 8 frames after the change). A seat that runs
 	// ahead still gets its lower delay, and a seat with some frames to spare spends them once: the next decrease waits for a
 	// window of arrivals under the delay it got.
+	// A seat whose inputs arrive with a frame of lead is raised to the bound's worth before a spike finds it: a 70 ms stall that held
+	// it at that lead passes with no hold and no wait past the bound, and a machine that cannot keep pace gains no more than the bound.
+	// A world member admitted into a seat the AI kept after a release owns it: a later hold of it is reclaimable, not released.
+	bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error) {
+		LoopbackTransport hostT;
+		if (!hostT.StartHost(43198, error)) return false;
+		NetMatchConfig world = NetMatchConfigUtil::MakeDefault(0x574F524C45ULL);
+		world.version = NetMatchConfigUtil::c_PersistentWorldVersion;
+		world.persistentWorld = true;
+		world.dedicated = true;
+		world.worldId = "sweep-released-seat";
+		world.worldBoot = 1;
+		world.peerCount = 2;
+		world.hostPeerId = 1;
+		world.players = {NetMatchPlayerSlot{0, 0, true, "World"}, NetMatchPlayerSlot{2, 1, false, "Player"}};
+		NetLockstepConfig config;
+		config.sessionId = 3;
+		config.localPeerId = 1;
+		config.peerCount = 2;
+		config.timeoutMs = 1000000;
+		config.relayToOtherPeers = true;
+		config.matchConfig = world;
+		NetLockstepCoordinator host;
+		if (!host.Start(hostT, config, error)) return false;
+		host.m_AiHeldSeats[2] = host.GetStats().nextFrame;
+		host.ReleaseHeldSeat(2, 0, false);
+		if (!host.IsSeatReleased(2)) {
+			*error = "the fixture could not release a held seat";
+			return false;
+		}
+		const uint64_t firstRequired = host.GetStats().nextFrame + 60;
+		if (!host.AdmitWorldMember(2, 1, firstRequired, error)) return false;
+		host.m_AiHeldSeats[2] = firstRequired + 10;
+		if (host.IsSeatReleased(2) || !host.HasHeldAISeat(2)) {
+			*error = "a member admitted into a released seat still reads it released: released=" + std::to_string(host.IsSeatReleased(2)) +
+			         " held_reclaimable=" + std::to_string(host.HasHeldAISeat(2));
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_world_admission_clears_a_released_seat" << std::endl;
+		return true;
+	}
+
+	bool TestAThinLeadIsRaisedBeforeASpike(std::string* error) {
+		struct Case { const char* name; uint64_t clientPeriodMs; uint64_t stallAtTick; }; // 0: no stall
+		const Case cases[] = {{"a spike on a thin lead", 17, 330}, {"a machine that cannot keep pace", 25, 0}};
+		for (const Case& test: cases) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			const uint16_t start = 7;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A41, 1, NetTransportLane::InputUnreliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A41, start, NetTransportLane::InputUnreliable);
+			for (auto* config: {&hostConfig, &clientConfig}) {
+				config->roundId = 0x9A41;
+				config->simTickMs = 1000.0 / 60.0;
+				config->timeoutMs = 20000;
+				config->substituteSlowPeers = true;
+				config->adaptiveInputDelay = true;
+				config->slowPlayerBoundTicks = 3;
+				config->matchConfig = NetMatchConfigUtil::MakeDefault(0x9A41);
+				config->peerInputDelayFrames = {{1, 1}, {2, start}};
+			}
+			hostConfig.relayToOtherPeers = true;
+			LoopbackTransportConfig link;
+			link.latencyMs = 45;
+			hostWire.SetFaultConfig(link); clientWire.SetFaultConfig(link);
+			if (!StartCoordinatorPair(49563, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 3000, 5)) return false;
+			struct Sim { NetLockstepCoordinator* coordinator; int64_t uid; uint64_t periodMs; uint64_t tick = 0; bool produced = false; uint64_t startAtMs = 0; uint64_t longestWaitMs = 0; };
+			Sim sims[2] = {{&host, 100, 17}, {&client, 200, test.clientPeriodMs}};
+			uint64_t now = 0;
+			std::string queueError;
+			bool queueFailed = false, stalled = false;
+			const auto pump = [&] {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+				for (Sim& sim: sims) {
+					const bool beforeStart = sim.tick < sim.coordinator->GetStats().effectiveStartFrame;
+					const bool frameReady = sim.coordinator->HasReadyFrame(sim.tick);
+					if (now < sim.startAtMs) continue;
+					if (!sim.produced && (beforeStart || frameReady) && !sim.coordinator->TimingDecisionPendingAt(sim.tick)) {
+						if (!sim.coordinator->DeferLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}) &&
+						    !sim.coordinator->QueueLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}, {}, &queueError)) { queueFailed = true; break; }
+						sim.produced = true;
+					}
+					NetLockstepReadyFrame ready;
+					if (sim.produced && beforeStart) {
+						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
+					} else if (sim.produced && frameReady && sim.coordinator->PopReadyFrame(ready)) {
+						(void)sim.coordinator->FinishSimulationTick(ready.frame);
+						if (now > 1000) sim.longestWaitMs = std::max(sim.longestWaitMs, now - sim.startAtMs);
+						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
+						// The client's machine stops for 70 ms once: a load spike, not a slow link.
+						if (sim.coordinator == &client && test.stallAtTick != 0 && sim.tick == test.stallAtTick && !stalled) { stalled = true; sim.startAtMs = now + 70; }
+					} else if (sim.coordinator == &host && !beforeStart) {
+						(void)host.NoteFrameWait(sim.tick, now);
+					}
+				}
+				++now;
+			};
+			while (now < 9000 && !queueFailed && host.IsRunning() && client.IsRunning()) pump();
+			const auto holds = host.GetStats().peers.at(2).holds;
+			const uint16_t delay = host.InputDelayAt(2, sims[0].tick);
+			const uint16_t ceiling = start + 3 + 2;
+			const bool spikeCase = test.stallAtTick != 0;
+			if (queueFailed || holds != 0 || !host.IsRunning() || (spikeCase && (!stalled || delay <= start || sims[0].longestWaitMs > 50)) || delay > ceiling || sims[0].tick < 300) {
+				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " stalled=" + std::to_string(stalled) + " start_delay=" + std::to_string(start) +
+				         " delay=" + std::to_string(delay) + " ceiling=" + std::to_string(ceiling) + " host_tick=" + std::to_string(sims[0].tick) +
+				         " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) + " queue=" + queueError;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_thin_lead_is_raised_before_a_spike case=\"" << test.name << "\" delay=" << start << "->" << delay
+			          << " holds=" << holds << " host_longest_wait_ms=" << sims[0].longestWaitMs << std::endl;
+		}
+		return true;
+	}
+
 	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error) {
 		struct Case { const char* name; uint64_t clientPeriodMs; uint16_t clientDelay; uint64_t clientStartMs; uint16_t expectedDelay; }; // 0: any delay below the start
 		const Case cases[] = {{"a seat our sim waits on", 25, 8, 0, 8}, {"a seat that runs ahead", 12, 8, 0, 0}, {"a seat five ticks behind", 17, 12, 85, 0}};
@@ -19754,12 +20021,15 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestCaptureParkCommitsCanonicalEmptyFrames, "capture_park_commits_every_players_input");
 		row(&TestASlowLoaderIsHeldAtTheStartupBudget, "a_slow_loader_is_held_at_the_startup_budget");
 		row(&TestAReturningSeatsRampIsTheBound, "a_returning_seats_ramp_is_the_bound");
+		row(&TestAgreedStartNamesEachSeatsDevice, "the_agreed_start_names_each_seats_device");
 		row(&TestALinkBlipIsBridgedByAResend, "a_link_blip_is_bridged_by_a_resend");
 		row(&TestALinkBlipIsBridgedInAStar, "a_link_blip_is_bridged_in_a_star");
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");
 		row(&TestASeatIsNotLateForOurOwnDecision, "a_seat_is_not_late_for_our_own_decision");
 		row(&TestAFirstDelayChangeIsNotAMutualWait, "a_first_delay_change_is_not_a_mutual_wait");
 		row(&TestALiveDelayDecreaseKeepsAWaitedSeatsSlack, "a_live_delay_decrease_keeps_a_waited_seats_slack");
+		row(&TestAThinLeadIsRaisedBeforeASpike, "a_thin_lead_is_raised_before_a_spike");
+		row(&TestAWorldAdmissionClearsAReleasedSeat, "a_world_admission_clears_a_released_seat");
 		row(&TestAReturnerAnswersItsSuccessor, "a_returner_answers_its_successor");
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
@@ -19946,6 +20216,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestB2SeatSnapshotResyncSeedsNewPeer(&error) ||
 		    !TestB2SeatSnapshotDoesNotReviveDepartedTransport(&error) ||
 		    !TestAnnouncedLeaveHoldsNothing(&error) ||
+		    !TestAClassicLeaverDrivesItsUnitsUntilItsFrame(&error) ||
 		    !TestHoldPauseCommitsNothing(&error) ||
 		    !TestHoldExpiredResumesWithoutSeat(&error) ||
 		    !TestHoldReclaimedResyncsAtLeaveFrame(&error) ||
