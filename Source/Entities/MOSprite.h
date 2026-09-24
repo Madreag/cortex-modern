@@ -329,6 +329,13 @@ namespace RTE {
 		/// @return The resulting vector whihch has been flipped and rotated as appropriate.
 		Vector UnRotateOffset(const Vector& offset) const;
 
+		/// Whether a reader may fill a cache this object's checkpoint holds. A preview window leaves the objects it does not own as it found them.
+		/// @return False while this thread runs a preview window that does not own this object.
+		bool MayFillCaches() const { return !s_PreviewKeepsCachesOf || !s_PreviewKeepsCachesOf(this); }
+
+		/// Set on the thread that runs a preview window while the window is open: whether the window keeps an object's caches as they are.
+		static thread_local bool (*s_PreviewKeepsCachesOf)(const MOSprite* object);
+
 		/// Adjusts an absolute angle based on wether this MOSprite is flipped.
 		/// @param angle The input angle in radians.
 		/// @return The output angle in radians, which will be unaltered if this MOSprite is not flipped.

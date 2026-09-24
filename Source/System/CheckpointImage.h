@@ -63,6 +63,7 @@ namespace RTE {
 		CheckpointText globals;
 		std::vector<CheckpointSection> globalSections; //!< The runtime globals' parts in the archive's order; filled only when asked for.
 		std::vector<CheckpointText> graphs;
+		std::vector<CheckpointScope> graphScopes; //!< Each graph's scope, in the graphs' order; a graph with none is shared.
 		std::string activityName;
 		std::string originalScenePresetName;
 		int64_t simUpdateCount = 0;

@@ -537,18 +537,26 @@ namespace RTE {
 		bool m_CheckpointInitialized = false;
 		bool m_CheckpointValueTrap = false;
 		Entity* m_CheckpointOwner = nullptr;
+		// The seat and the sampling state RestoreLocalInputState keeps from this machine are its own.
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_ControlStates, self.m_AnalogMove, self.m_AnalogAim, self.m_AnalogCursor,
 				self.m_Disabled, self.m_WireApplyTick, self.m_WireSchemeValid, self.m_WireDeviceClass, self.m_WireDigitalAimSpeed,
-				self.m_InputMode, self.m_SeatMode, self.m_Player, self.m_SeatPlayer, self.m_Team, self.m_NextIgnore, self.m_PrevIgnore,
+				self.m_InputMode);
+			archive.PerPeer(self.m_SeatMode);
+			archive(self.m_Player);
+			// The team is refreshed only while this machine samples the seat, so it is this machine's too.
+			archive.PerPeer(self.m_SeatPlayer, self.m_Team);
+			archive.PerPeer(self.m_NextIgnore, self.m_PrevIgnore,
 				self.m_WeaponChangeNextIgnore, self.m_WeaponChangePrevIgnore, self.m_WeaponPickupIgnore, self.m_WeaponDropIgnore,
 				self.m_WeaponReloadIgnore, self.m_WeaponPrimaryHotkeyIgnore, self.m_ReleaseTimer, self.m_JoyAccelTimer,
-				self.m_KeyAccelTimer, self.m_MouseMovement, self.m_AnalogCursorAngleLimits);
+				self.m_KeyAccelTimer);
+			archive(self.m_MouseMovement);
+			archive.PerPeer(self.m_AnalogCursorAngleLimits);
 		}
 		/// The producer's own baseline, so a restored controller carries on from the input it was producing
-		/// instead of re-deriving a held button as a fresh press.
+		/// instead of re-deriving a held button as a fresh press. It is this machine's own.
 		template <class Archive, class Self> static void VisitLocalProduction(Archive& archive, Self& self) {
-			archive(self.m_LocalProduction.controlStates, self.m_LocalProduction.analogMove, self.m_LocalProduction.analogAim,
+			archive.PerPeer(self.m_LocalProduction.controlStates, self.m_LocalProduction.analogMove, self.m_LocalProduction.analogAim,
 				self.m_LocalProduction.analogCursor, self.m_LocalProduction.mouseMovement,
 				self.m_LocalProductionSeatMode, self.m_LocalProductionSeatPlayer, self.m_LocalProductionValid,
 				self.m_CommittedInput.controlStates, self.m_CommittedInput.analogMove, self.m_CommittedInput.analogAim,

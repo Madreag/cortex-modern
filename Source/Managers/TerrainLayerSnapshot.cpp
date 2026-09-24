@@ -163,7 +163,10 @@ namespace RTE {
 
 	std::string TerrainLayerSnapshot::Layer::SaveCheckpoint() const {
 		CheckpointWriter writer("TerrainLayer1");
-		writer(width, height, masked, wrapX, wrapY, origin, offset, scrollInfo, scrollRatio, scale, scaledDimensions, zOrder, entityState, contentState);
+		// Where this machine's camera scrolled the layer is its own.
+		writer(width, height, masked, wrapX, wrapY, origin);
+		writer.PerPeer(offset);
+		writer(scrollInfo, scrollRatio, scale, scaledDimensions, zOrder, entityState, contentState);
 		return writer.Text();
 	}
 
@@ -193,9 +196,9 @@ namespace RTE {
 					if (!source) return Layer{}.SaveCheckpoint();
 					const BITMAP* bitmap = source->m_MainBitmap;
 					CheckpointWriter writer("TerrainLayer1");
-					writer(bitmap ? bitmap->w : 0, bitmap ? bitmap->h : 0, source->m_DrawMasked, source->m_WrapX, source->m_WrapY,
-					       source->m_OriginOffset, source->m_Offset, source->m_ScrollInfo, source->m_ScrollRatio,
-					       source->m_ScaleFactor, source->m_ScaledDimensions, source->m_ZOrder,
+					writer(bitmap ? bitmap->w : 0, bitmap ? bitmap->h : 0, source->m_DrawMasked, source->m_WrapX, source->m_WrapY, source->m_OriginOffset);
+					writer.PerPeer(source->m_Offset);
+					writer(source->m_ScrollInfo, source->m_ScrollRatio, source->m_ScaleFactor, source->m_ScaledDimensions, source->m_ZOrder,
 					       CheckpointWriter::Native([source] { return source->Entity::SaveCheckpoint(); }),
 					       CheckpointWriter::Native([source] { return source->m_BitmapFile.SaveCheckpoint(); }));
 					return writer.Text();

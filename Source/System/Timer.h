@@ -161,7 +161,7 @@ namespace RTE {
 		/// This is useful for blink animations etc.
 		/// @param period An int with the alternating period in ms. The time specified here is how long it will take for the switch to alternate.
 		/// @return Whether the elapsed time is in the first state or not.
-		bool AlternateReal(int period) const { return (static_cast<int>(GetElapsedRealTimeMS()) % (period * 2)) > period; }
+		bool AlternateReal(int period) const { return (period == 0) ? true : (static_cast<int>(GetElapsedRealTimeMS()) % (period * 2)) > period; }
 
 		/// Returns an incrementing int, depending on whether the elapsed time falls in repeating intervals which divide it.
 		/// This is useful for blink animations etc, for example ".", "..", "...", etc.

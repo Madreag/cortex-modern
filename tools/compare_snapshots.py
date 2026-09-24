@@ -402,6 +402,25 @@ def masked_timer_tokens(value):
     return value
 
 
+def without_live_serial(graph):
+    """Take the live birth horizon a capture records in _ScriptGraphCallbacks out of the graph.
+
+    LuaStateWrapper::CaptureScriptCallbacks writes the state's birth counter there, and a restore adopts it as that
+    counter, so it is the state serial under another name."""
+    token = graph.get("globals", {}).get(b"_ScriptGraphCallbacks")
+    if not token or token[:1] != ("#",) or graph["nodes"][token[1]].get("kind") != "T":
+        return graph, None
+    node = graph["nodes"][token[1]]
+    found = [value for key, value in node["pairs"] if key == ("s", b"liveSerial")]
+    if not found:
+        return graph, None
+    if len(found) != 1 or found[0][:1] != ("n",):
+        raise GraphMismatch("the live birth horizon is not one number")
+    nodes = dict(graph["nodes"])
+    nodes[token[1]] = dict(node, pairs=[pair for pair in node["pairs"] if pair[0] != ("s", b"liveSerial")])
+    return dict(graph, nodes=nodes), int(found[0][1])
+
+
 def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep_master=True):
     """Require a bijection, including table keys, closures, upvalue cells and native aliases.
 
@@ -413,6 +432,11 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
     """
     if cross_process:
         first, second = masked_timer_tokens(first), masked_timer_tokens(second)
+    # A threaded state's live birth horizon is its local counter, checked with the serial below; the master's stays in the walk.
+    live = (None, None)
+    if not lockstep_master and first.get("version") == "SG6" and second.get("version") == "SG6":
+        (first, live_a), (second, live_b) = without_live_serial(first), without_live_serial(second)
+        live = (live_a, live_b)
     cuts = [local_ai_boundaries(graph, actor_uids) if actor_uids is not None else {} for graph in (first, second)]
 
     def mismatch(path, reason):
@@ -550,6 +574,17 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
                     f"node offset {offset}, state counter offset {serial_offset}")
             report["identity_offset"] = offset
             report["identity_offset_evidence"] = "single" if len(moved) == 1 else "uniform" if moved else "none"
+            if (live[0] is None) != (live[1] is None):
+                raise GraphMismatch("only one peer recorded the state's live birth horizon")
+            if live[0] is not None:
+                for horizon, serial in ((live[0], first["serial"]), (live[1], second["serial"])):
+                    if not 1 <= horizon <= serial:
+                        raise GraphMismatch(f"live birth horizon {horizon} lies outside the state counter {serial}")
+                if (live[1] - live[0]) * serial_offset < 0 or (live[1] != live[0] and serial_offset == 0):
+                    raise GraphMismatch(
+                        "live birth horizon offset opposes the state counters: "
+                        f"horizon offset {live[1] - live[0]}, state counter offset {serial_offset}")
+                report["live_serial"] = {"a": live[0], "b": live[1]}
     return report
 
 

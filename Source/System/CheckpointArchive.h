@@ -65,6 +65,16 @@ namespace RTE {
 			return result;
 		}
 		template <class... Values> void operator()(const Values&... values) { (Value(values), ...); }
+		/// Writes values only this machine holds (its clocks, pacing, seat or view): the archive carries them as before,
+		/// and the shared state a peer is compared on leaves them out.
+		template <class... Values> void PerPeer(const Values&... values) {
+			BeginPerPeer();
+			(Value(values), ...);
+			EndPerPeer();
+		}
+		/// Opens and closes such a run around values a visitor writes itself.
+		void BeginPerPeer() { if (m_Recording) m_Capture.PeerBegin(); }
+		void EndPerPeer() { if (m_Recording) m_Capture.PeerEnd(); }
 
 		template <class T> requires std::is_integral_v<T>
 		void Value(T value) {
@@ -102,7 +112,8 @@ namespace RTE {
 		}
 		void Value(const Vector& value) { (*this)(value.m_X, value.m_Y); }
 		void Value(const Box& value) { (*this)(value.m_Corner, value.m_Width, value.m_Height); }
-		void Value(const Timer& value) { (*this)(value.GetStartSimTimeMS(), value.GetSimTimeLimitTicks(), value.GetStartRealTimeMS(), value.GetRealTimeLimitTicks()); }
+		// The real-time half is this machine's wall clock.
+		void Value(const Timer& value) { (*this)(value.GetStartSimTimeMS(), value.GetSimTimeLimitTicks()); PerPeer(value.GetStartRealTimeMS(), value.GetRealTimeLimitTicks()); }
 		template <class T, size_t N> void Value(const std::array<T, N>& values) { for (const auto& value: values) Value(value); }
 		template <class T, size_t N> void Value(const T (&values)[N]) { for (const auto& value: values) Value(value); }
 		template <class T, class U> void Value(const std::pair<T, U>& value) { (*this)(value.first, value.second); }
@@ -162,6 +173,7 @@ namespace RTE {
 		}
 		void OnCommit(std::function<void()> apply) { if (!m_ValidateOnly) m_Apply.push_back(std::move(apply)); }
 		template <class... Values> void operator()(Values&... values) { (Stage(values), ...); }
+		template <class... Values> void PerPeer(Values&... values) { (Stage(values), ...); }
 		/// PieMenuRuntime1 only: four timer ticks, integer or an exact-integer dotted token.
 		void StageRuntime1Timer(Timer& value) {
 			int64_t start = 0;
