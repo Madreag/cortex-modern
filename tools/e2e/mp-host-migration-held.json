@@ -136,10 +136,11 @@
       },
       "menu_script": "mp-host-migration.client.menu.txt",
       "start_when": {
-        "peer": "clientb",
+        "peer": "clienta",
         "event": "video_mark migration-client-admitted",
         "timeout_s": 90
-      }
+      },
+      "after_gate_delay_s": 3
     }
   ],
   "checklist": [
