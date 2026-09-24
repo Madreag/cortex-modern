@@ -74,6 +74,7 @@ namespace RTE {
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
+	bool TestAReturningSeatsRampIsTheBound(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -1587,14 +1588,24 @@ namespace RTE {
 				         std::to_string(coordinator.IsSynchronizedCapturePark(101));
 				return false;
 			}
+			// Nothing measured yet: the first window is the slow-player bound, and the capture it covers never moves it.
+			const uint64_t firstTicks = static_cast<uint64_t>(std::ceil(std::floor(config.slowPlayerBoundTicks * config.simTickMs) / config.simTickMs));
 			coordinator.CompleteSynchronizedCapture(100, 97.0);
-			if (!coordinator.IsSynchronizedCapturePark(106) || coordinator.IsSynchronizedCapturePark(120)) {
-				*error = "the capture park was not bounded by the measured capture duration: park106=" +
-				         std::to_string(coordinator.IsSynchronizedCapturePark(106)) + " park120=" +
-				         std::to_string(coordinator.IsSynchronizedCapturePark(120)) + " capture_ms=97";
+			if (!coordinator.IsSynchronizedCapturePark(100 + firstTicks) || coordinator.IsSynchronizedCapturePark(101 + firstTicks)) {
+				*error = "the first park was not the bound's window, or its own capture moved it: ticks=" + std::to_string(firstTicks) +
+				         " park_last=" + std::to_string(coordinator.IsSynchronizedCapturePark(100 + firstTicks)) + " park_past=" +
+				         std::to_string(coordinator.IsSynchronizedCapturePark(101 + firstTicks)) + " capture_ms=97";
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS synchronized_capture_park" << std::endl;
+			// The next park is sized by what the last one cost: ceil(97 / 16.7) = 6 frames, not a round trip more.
+			coordinator.BeginSynchronizedCapture(200);
+			if (!coordinator.IsSynchronizedCapturePark(201) || !coordinator.IsSynchronizedCapturePark(206) || coordinator.IsSynchronizedCapturePark(207)) {
+				*error = "the capture park was not bounded by the measured capture duration: park206=" +
+				         std::to_string(coordinator.IsSynchronizedCapturePark(206)) + " park207=" +
+				         std::to_string(coordinator.IsSynchronizedCapturePark(207)) + " capture_ms=97";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS synchronized_capture_park first_ticks=" << firstTicks << " measured_ticks=6" << std::endl;
 			return true;
 		}
 
@@ -1615,7 +1626,7 @@ namespace RTE {
 			uint64_t queued = 0;
 			auto feed = [&](uint64_t through) {
 				for (; queued <= through; ++queued)
-					if (!host.QueueLocalInput(queued, {}, {}, error) || !client.QueueLocalInput(queued, {}, {}, error)) return false;
+					if (!host.QueueLocalInput(queued, {MakeFrame(100, queued)}, {}, error) || !client.QueueLocalInput(queued, {MakeFrame(200, queued)}, {}, error)) return false;
 				return true;
 			};
 			if (!feed(9)) return false;
@@ -1636,8 +1647,8 @@ namespace RTE {
 				if (!feed(std::max(host.GetStats().nextFrame, client.GetStats().nextFrame) + 8)) return false;
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
 				NetLockstepReadyFrame ready;
-				while (host.PopReadyFrame(ready)) { hostFrames.emplace_back(ready.frame, ready.hasLocalInput || !ready.remoteFrames.empty()); (void)host.FinishSimulationTick(ready.frame); }
-				while (client.PopReadyFrame(ready)) { clientFrames.emplace_back(ready.frame, ready.hasLocalInput || !ready.remoteFrames.empty()); (void)client.FinishSimulationTick(ready.frame); }
+				while (host.PopReadyFrame(ready)) { hostFrames.emplace_back(ready.frame, ready.hasLocalInput && ready.remoteFrameCounts.contains(2)); (void)host.FinishSimulationTick(ready.frame); }
+				while (client.PopReadyFrame(ready)) { clientFrames.emplace_back(ready.frame, ready.hasLocalInput && ready.remoteFrameCounts.contains(1)); (void)client.FinishSimulationTick(ready.frame); }
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
 			}
 			if (hostFrames != clientFrames || hostFrames.size() < 40) {
@@ -1646,20 +1657,22 @@ namespace RTE {
 				         " client_frames=" + std::to_string(clientFrames.size());
 				return false;
 			}
+			// A park never discards a player's input: every frame inside it carries what each peer sent for it, the same on
+			// both peers, and the window is the capture's cost, not a round trip on top of a 250 ms seed.
 			uint64_t parked = 0;
 			for (const auto& [frame, hadInput]: hostFrames) {
 				if (!host.IsSynchronizedCapturePark(frame)) continue;
 				++parked;
-				if (hadInput) { *error = "the capture park applied noncanonical input at frame " + std::to_string(frame); return false; }
+				if (!hadInput) { *error = "the capture park committed frame " + std::to_string(frame) + " with no player's input"; return false; }
 			}
-			if (parked < 10) { *error = "the capture park committed only " + std::to_string(parked) + " frames"; return false; }
-			std::cout << "[net-lockstep-selftest] PASS capture_park_commits_empty_frames parked=" << parked << " through=" << (host.GetStats().nextFrame - 1) << std::endl;
+			const uint64_t boundTicks = static_cast<uint64_t>(std::ceil(std::floor(hostConfig.slowPlayerBoundTicks * hostConfig.simTickMs) / hostConfig.simTickMs));
+			if (parked == 0 || parked > boundTicks) { *error = "the capture park committed " + std::to_string(parked) + " frames; its first window is " + std::to_string(boundTicks); return false; }
+			std::cout << "[net-lockstep-selftest] PASS capture_park_commits_every_players_input parked=" << parked << " through=" << (host.GetStats().nextFrame - 1) << std::endl;
 			return true;
 		}
 
-		// A park commits its frames empty on every peer, but a command is an event, not a sample: one aimed at a park
-		// frame - queued inside the window, or produced for a frame the park already committed while its peer captured -
-		// commits once past the park, at the same frame on every peer. Dropped, a writer's report never reached the host.
+		// A park frame is a frame like any other: a command aimed at one - a writer's report queued inside the window -
+		// commits at that frame, the same on every peer. Dropped or moved, a writer's report reached the host late.
 		bool TestACommandAParkEmptiedCommitsAfterIt(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
@@ -1694,21 +1707,17 @@ namespace RTE {
 				while (host.PopReadyFrame(ready)) { notes(ready, hostNotes); (void)host.FinishSimulationTick(ready.frame); }
 				while (client.PopReadyFrame(ready)) { notes(ready, clientNotes); (void)client.FinishSimulationTick(ready.frame); }
 			};
-			if (!feed(9)) return false;
+			if (!feed(3)) return false;
 			uint64_t now = 0;
 			for (; now < 200 && (host.GetStats().nextFrame <= 3 || client.GetStats().nextFrame <= 3); ++now) pump(now);
 			const uint64_t completed = std::min(host.GetStats().nextFrame, client.GetStats().nextFrame) - 1;
 			host.BeginSynchronizedCapture(completed); client.BeginSynchronizedCapture(completed);
 			host.CompleteSynchronizedCapture(completed, 700.0); client.CompleteSynchronizedCapture(completed, 250.0);
-			uint64_t behindAt = 0;
-			for (; now < 4000 && (behindAt == 0 || host.GetStats().nextFrame <= behindAt + 30 || client.GetStats().nextFrame <= behindAt + 30); ++now) {
+			// The client hears the window before it produces for it, as a live seat does: the start clears a round trip.
+			const auto clientKnowsThePark = [&] { for (uint64_t frame = completed + 1; frame <= completed + 64; ++frame) if (client.IsSynchronizedCapturePark(frame)) return true; return false; };
+			for (; now < 400 && !clientKnowsThePark(); ++now) pump(now);
+			for (; now < 4000 && (insideAt == 0 || host.GetStats().nextFrame <= insideAt + 30 || client.GetStats().nextFrame <= insideAt + 30); ++now) {
 				if (!feed(std::max(host.GetStats().nextFrame, client.GetStats().nextFrame) + 8)) return false;
-				// Once the park is behind both peers, a sample produced late for one of its frames carries a command.
-				if (behindAt == 0 && insideAt != 0 && !client.IsSynchronizedCapturePark(client.GetStats().nextFrame) && client.GetStats().nextFrame > insideAt + 1 &&
-				    host.GetStats().nextFrame > insideAt + 1) {
-					behindAt = std::min(host.GetStats().nextFrame, client.GetStats().nextFrame);
-					if (!client.QueueLocalInput(insideAt + 1, {}, {written(72)}, error)) return false;
-				}
 				pump(now);
 			}
 			const auto frameOf = [](const std::vector<std::pair<uint64_t, uint64_t>>& seen, uint64_t tick) {
@@ -1716,17 +1725,15 @@ namespace RTE {
 				for (const auto& [note, frame]: seen) if (note == tick) frames.push_back(frame);
 				return frames;
 			};
-			const auto host71 = frameOf(hostNotes, 71), client71 = frameOf(clientNotes, 71), host72 = frameOf(hostNotes, 72), client72 = frameOf(clientNotes, 72);
+			const auto host71 = frameOf(hostNotes, 71), client71 = frameOf(clientNotes, 71);
 			const auto describe = [](const std::vector<uint64_t>& frames) { std::string text; for (uint64_t frame: frames) text += (text.empty() ? "" : ",") + std::to_string(frame); return "[" + text + "]"; };
-			if (insideAt == 0 || behindAt == 0 || host71.size() != 1 || host71 != client71 || host72.size() != 1 || host72 != client72 ||
-			    host.IsSynchronizedCapturePark(host71.front()) || host.IsSynchronizedCapturePark(host72.front())) {
-				*error = "a command a park emptied did not commit once past it on both peers: inside_at=" + std::to_string(insideAt) + " behind_at=" + std::to_string(behindAt) +
-				         " note71 host=" + describe(host71) + " client=" + describe(client71) + " note72 host=" + describe(host72) + " client=" + describe(client72) +
+			if (insideAt == 0 || host71.size() != 1 || host71 != client71 || host71.front() != insideAt) {
+				*error = "a command aimed at a park frame did not commit at that frame on both peers: inside_at=" + std::to_string(insideAt) +
+				         " note71 host=" + describe(host71) + " client=" + describe(client71) +
 				         " host_next=" + std::to_string(host.GetStats().nextFrame) + " client_next=" + std::to_string(client.GetStats().nextFrame);
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS a_command_a_park_emptied_commits_after_it inside_at=" << insideAt << " note71_frame=" << host71.front()
-			          << " behind_at=" << behindAt << " note72_frame=" << host72.front() << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS a_command_in_a_park_commits_at_its_frame inside_at=" << insideAt << " note71_frame=" << host71.front() << std::endl;
 			return true;
 		}
 
@@ -1755,25 +1762,29 @@ namespace RTE {
 				while (client.PopReadyFrame(ready)) (void)client.FinishSimulationTick(ready.frame);
 			}
 			if (host.GetStats().nextFrame < 4) { *error = "the budget row never committed its pre-park frames"; return false; }
-			// The seat that owes a capture report never sends one: only the budget can close this park.
+			// The seat that owes a capture report never sends one: the window is final when published, so the round
+			// passes it on its input alone and never waits for the report.
 			const uint64_t completed = host.GetStats().nextFrame - 1;
 			host.BeginSynchronizedCapture(completed);
 			host.CompleteSynchronizedCapture(completed, 120.0);
 			uint64_t end = 0;
 			for (uint64_t frame = completed; frame <= completed + 300; ++frame) if (host.IsSynchronizedCapturePark(frame)) end = frame;
 			if (end == 0) { *error = "the capture park never opened on the host"; return false; }
+			if (host.CaptureParkMayReach(end + 1)) { *error = "the published park may still grow past " + std::to_string(end) + " while it waits for a report"; return false; }
+			const uint64_t closedByMs = now + 400;
 			for (uint64_t step = 0; step < 6000 && host.GetStats().nextFrame <= end; step += 2, now += 2) {
 				if (!feed(host.GetStats().nextFrame + 8)) return false;
-				hostWire.AdvanceTimeMs(2); host.Tick(now);
+				hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now);
 				NetLockstepReadyFrame ready;
 				while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
+				while (client.PopReadyFrame(ready)) (void)client.FinishSimulationTick(ready.frame);
 			}
-			if (host.GetStats().nextFrame <= end) {
-				*error = "the capture park never closed on its budget: next=" + std::to_string(host.GetStats().nextFrame) +
-				         " end=" + std::to_string(end) + " budget_ms=" + std::to_string(hostConfig.timeoutMs);
+			if (host.GetStats().nextFrame <= end || now > closedByMs) {
+				*error = "the capture park waited on a report it does not need: next=" + std::to_string(host.GetStats().nextFrame) +
+				         " end=" + std::to_string(end) + " closed_at_ms=" + std::to_string(now) + " by_ms=" + std::to_string(closedByMs);
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS a_park_closes_on_its_budget end=" << end
+			std::cout << "[net-lockstep-selftest] PASS a_park_awaits_no_report end=" << end
 			          << " next=" << host.GetStats().nextFrame << std::endl;
 			return true;
 		}
@@ -2981,6 +2992,111 @@ namespace RTE {
 			}
 			std::cout << "[net-lockstep-selftest] PASS unpublished_startup_cannot_park_the_round ran_at=" << ranAtMs
 			          << "ms budget=" << budgetMs << "ms effective=" << host.GetStats().effectiveStartFrame << std::endl;
+			return true;
+		}
+
+		// A slow loader never holds the others' start past the startup answer budget: the AI takes its seat at the agreed
+		// first frame on every peer, and the loader comes back through its rejoin. The product's grace is 20 s; the start must
+		// not borrow it.
+		bool TestASlowLoaderIsHeldAtTheStartupBudget(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A3D, 2, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A3D, 2, NetTransportLane::ControlReliable);
+			hostConfig.startFrame = clientConfig.startFrame = 1;
+			hostConfig.roundId = clientConfig.roundId = 0x9A3D;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 20000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A3D);
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (!StartCoordinatorPair(48909, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			// The host has loaded; the client is still loading and publishes nothing.
+			host.NoteLocalStartPark(120);
+			uint64_t now = 0, ranAtMs = 0;
+			for (; now < 25000 && ranAtMs == 0; ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+				if (host.IsRunning()) ranAtMs = now;
+			}
+			const uint64_t budgetMs = NetLockstepCoordinator::c_StartupAnswerBudgetMs;
+			if (ranAtMs == 0 || ranAtMs < budgetMs || ranAtMs > budgetMs + 50) {
+				*error = "a slow loader held the others' start for " + std::to_string(ranAtMs) + " ms; the startup answer budget is " +
+				         std::to_string(budgetMs) + " ms (ran=" + std::to_string(host.IsRunning()) + ")";
+				return false;
+			}
+			for (const uint64_t until = now + 500; now < until && !client.IsLocalSeatHeld(); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			if (!host.HasHeldAISeat(2) || !client.IsLocalSeatHeld()) {
+				*error = "the slow loader's seat did not go to the AI on both peers: host_held=" + std::to_string(host.HasHeldAISeat(2)) +
+				         " client_held=" + std::to_string(client.IsLocalSeatHeld());
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_slow_loader_is_held_at_the_startup_budget ran_at=" << ranAtMs << "ms budget=" << budgetMs << "ms" << std::endl;
+			return true;
+		}
+
+		// A blip the redundancy window cannot bridge is repaired by a resend on request over the reliable lane: 300 ms with every
+		// unreliable frame of the seat lost ends with the link running and no seat held.
+		bool TestALinkBlipIsBridgedByAResend(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A3E, 3, NetTransportLane::InputUnreliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A3E, 3, NetTransportLane::InputUnreliable);
+			hostConfig.roundId = clientConfig.roundId = 0x9A3E;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 20000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A3E);
+			if (!StartCoordinatorPair(48911, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			uint64_t now = 0, nextHostSimMs = 0, hostSimulated = 0, clientSimulated = 0, hostQueued = 0, clientQueued = 0;
+			bool waiting = false;
+			std::string queueError;
+			const auto holdsOfPeerTwo = [&] { const auto& peers = host.GetStats().peers; const auto found = peers.find(2); return found == peers.end() ? 0U : found->second.holds; };
+			// The host simulates one frame a tick and waits like a live sim, so its runway drains the way a real one does.
+			const auto pump = [&] {
+				for (; hostQueued <= hostSimulated + 6; ++hostQueued) if (!host.QueueLocalInput(hostQueued, {MakeFrame(100, hostQueued)}, {}, &queueError)) break;
+				for (; clientQueued <= clientSimulated + 6; ++clientQueued) if (!client.QueueLocalInput(clientQueued, {MakeFrame(200, clientQueued)}, {}, &queueError)) break;
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+				NetLockstepReadyFrame ready;
+				if (now >= nextHostSimMs) {
+					if (host.PopReadyFrame(ready)) {
+						if (waiting) { host.FinishFrameWait(now); waiting = false; }
+						(void)host.FinishSimulationTick(ready.frame);
+						hostSimulated = ready.frame;
+						nextHostSimMs = now + 17;
+					} else if (hostSimulated > 0) {
+						waiting = true;
+						(void)host.NoteFrameWait(hostSimulated + 1, now);
+					}
+				}
+				while (client.PopReadyFrame(ready)) { (void)client.FinishSimulationTick(ready.frame); clientSimulated = ready.frame; }
+				++now;
+			};
+			while (now < 3000 && hostSimulated < 60) pump();
+			if (hostSimulated < 60) { *error = "the pair never reached its steady state: host_frame=" + std::to_string(hostSimulated); return false; }
+			LoopbackTransportConfig blip;
+			blip.unreliableDropEveryN = 1;
+			clientWire.SetFaultConfig(blip);
+			const uint64_t blipFrom = hostSimulated;
+			for (const uint64_t until = now + 300; now < until;) pump();
+			clientWire.SetFaultConfig(LoopbackTransportConfig{});
+			const uint64_t target = hostSimulated + 60;
+			while (now < 20000 && hostSimulated < target && host.IsRunning()) pump();
+			if (holdsOfPeerTwo() != 0 || hostSimulated < target || !host.IsRunning() || !client.IsRunning()) {
+				*error = "a 300 ms blip of the seat's unreliable frames was not bridged: holds=" + std::to_string(holdsOfPeerTwo()) +
+				         " host_frame=" + std::to_string(hostSimulated) + " target=" + std::to_string(target) + " blip_from=" + std::to_string(blipFrom) +
+				         " requests=" + std::to_string(host.GetStats().frameResendRequests) + " resent=" + std::to_string(client.GetStats().framesResent) +
+				         " longest_stall_ms=" + std::to_string(host.GetStats().longestStallMs);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_link_blip_is_bridged_by_a_resend blip_ms=300 requests=" << host.GetStats().frameResendRequests
+			          << " resent=" << client.GetStats().framesResent << " longest_stall_ms=" << host.GetStats().longestStallMs << " holds=0" << std::endl;
 			return true;
 		}
 
@@ -6347,8 +6463,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
 				return false;
 			}
-			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) ||
-			    !client.QueueLocalInput(0, {MakeFrame(200, 2)}, {}, error)) {
+			// A lost unreliable frame is resent on request, so the missing frame here is one the client never produced.
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error)) {
 				return false;
 			}
 			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsFailed(); }, error, 500)) {
@@ -19106,6 +19222,48 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A returning seat's first-input allowance is its window, its link and the slow-player bound: never the slowest restart
+	// another machine paid this round. A seat that stumbles on return is held at that allowance, not seconds later.
+	bool TestAReturningSeatsRampIsTheBound(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A12, 3, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 0x9A12;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true; config.timeoutMs = 20000;
+		config.peerInputDelayFrames = {{1, 3}, {2, 3}};
+		config.remoteTransportPeerIds = {{2, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A12);
+		if (!wire.StartHost(48910, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_PeersPlayedThisRound = {2};
+		const uint64_t activation = 300;
+		host.m_ReclaimTransactions[2] = NetGameSeatReclaim{2, 0, 7, 2, activation, 3, activation + 3, std::nullopt};
+		host.m_PeerAdmissions[2] = {activation, 3};
+		host.m_PeerEffectiveStart[2] = activation + 3;
+		host.m_Stats.nextFrame = activation + 4;
+		auto& seat = host.m_Stats.peers[2];
+		seat.pingMs = 20; seat.jitterMs = 2; seat.startParkMs = 0; seat.reclaimAdmittedMs = 1000;
+		// Another machine paid a three-second restart this round; the returning seat has none of its own to publish.
+		host.m_Stats.peers[1].startParkMs = 3000;
+		const uint64_t frame = host.m_Stats.nextFrame;
+		uint64_t heldAtMs = 0;
+		for (uint64_t now = 1000; now < 8000 && heldAtMs == 0; now += 2)
+			if (host.DeclareOverdueInputs(frame, now, 1000, {2})) heldAtMs = now;
+		const uint64_t windowMs = static_cast<uint64_t>(std::llround(3 * config.simTickMs));
+		const uint64_t boundMs = static_cast<uint64_t>(std::floor(config.slowPlayerBoundTicks * config.simTickMs));
+		const uint64_t allowanceMs = std::max<uint64_t>(windowMs, 2 * seat.pingMs + seat.jitterMs) + 2 * boundMs + 4;
+		if (heldAtMs == 0 || heldAtMs - 1000 > allowanceMs) {
+			*error = "a returning seat that never answered was lent the round's slowest restart: held_after_ms=" +
+			         std::to_string(heldAtMs == 0 ? 0 : heldAtMs - 1000) + " allowance_ms=" + std::to_string(allowanceMs) + " other_restart_ms=3000";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_returning_seats_ramp_is_the_bound held_after_ms=" << (heldAtMs - 1000)
+		          << " allowance_ms=" << allowanceMs << std::endl;
+		return true;
+	}
+
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
 		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
 		// notice than the whole bound, and the seat must still be declared only after the bound of
@@ -19210,7 +19368,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			rowsPassed = false;
 		};
 		row(&TestAResumedRoundPrimesPastItsAgreedFirstFrame, "a_resumed_round_primes_past_its_agreed_first_frame");
-		row(&TestACommandAParkEmptiedCommitsAfterIt, "a_command_a_park_emptied_commits_after_it");
+		row(&TestACommandAParkEmptiedCommitsAfterIt, "a_command_in_a_park_commits_at_its_frame");
+		row(&TestCaptureParkCommitsCanonicalEmptyFrames, "capture_park_commits_every_players_input");
+		row(&TestASlowLoaderIsHeldAtTheStartupBudget, "a_slow_loader_is_held_at_the_startup_budget");
+		row(&TestAReturningSeatsRampIsTheBound, "a_returning_seats_ramp_is_the_bound");
+		row(&TestALinkBlipIsBridgedByAResend, "a_link_blip_is_bridged_by_a_resend");
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
 		row(&TestAPeerIsDueADelayAfterAPark, "a_peer_is_due_a_delay_after_a_park");
