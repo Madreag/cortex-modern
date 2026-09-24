@@ -761,7 +761,6 @@ void ACraft::DropAllInventory() {
 				g_MovableMan.AddActor(pPassenger);
 
 				// If this craft is being directly controlled by a player, and has landed, switch control to the first guy out
-				// The switch is this machine's own: SwitchToActor takes a seat this peer plays, and nothing else.
 				HandoffExitingPassenger(pPassenger);
 
 				// Remove from inventory
@@ -1091,19 +1090,31 @@ void ACraft::RemapExternalLinks(const std::function<MovableObject*(MovableObject
 	}
 }
 
-void ACraft::HandoffExitingPassenger(Actor* passenger) {
+bool ACraft::SwitchSeatToPassenger(Actor* passenger) {
 	if (!passenger || passenger->GetTeam() != m_Team || !m_Controller.IsSeatedByPlayer() || !m_LandingCraft) {
-		return;
+		return false;
 	}
 	Activity* activity = g_ActivityMan.GetActivity();
 	if (!activity || activity->GetLocallyControlledActor(m_Controller.GetSeatPlayer()) != this) {
-		return;
+		return false;
 	}
 	if (!ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
-		return;
+		return false;
 	}
 	activity->SwitchToActor(passenger, m_Controller.GetSeatPlayer(), m_Team);
-	passenger->Update();
+	return true;
+}
+
+void ACraft::HandoffExitingPassenger(Actor* passenger) {
+	const bool switched = SwitchSeatToPassenger(passenger);
+	Activity* activity = g_ActivityMan.GetActivity();
+	if (!activity || !passenger || passenger->GetTeam() != m_Team || !m_LandingCraft) {
+		return;
+	}
+	// The passenger updates once on the way out so the view starts next to it; under lockstep that update is every peer's.
+	if (ScenarioRunner::IsLockstepControllerSyncActive() ? activity->GetControlledActor(m_Controller.GetPlayer()) == this : switched) {
+		passenger->Update();
+	}
 }
 
 std::string ACraft::SaveACraftRuntime() const {
