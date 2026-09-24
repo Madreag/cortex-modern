@@ -236,7 +236,7 @@ def run_preflight(scenario, run, captures, tokens):
                 return {"class": "harness", "reason": "A same-run runtime may be reused only after its earlier owner ends"}
         elif reference and (not prior_peer(captures, reference) or not cross_run_ready(captures, {**reference, "ended": True})):
             return {"class": "harness", "reason": f"Retained runtime is unavailable: {reference}"}
-    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN", "DIRECTORY_ROOT"}
+    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN", "DIRECTORY_ROOT", "DIRECTORY_SESSION"}
     builtins.update(f"{prefix}_{peer['name']}" for peer in peers for prefix in ("STAGE", "PROBE_DIR", "VIDEO"))
     body = json.dumps(peers)
     for peer in peers:
@@ -248,6 +248,25 @@ def run_preflight(scenario, run, captures, tokens):
     if missing:
         return {"class": "harness", "reason": "Unresolved tokens: " + ", ".join(missing), "tokens": missing}
     return {"class": run.get("blocker_class", "engine"), "reason": run["blocked_by"]} if run.get("blocked_by") else None
+
+
+def directory_session(root, port):
+    """The session id this run's own directory lists for the run's port, once its host has registered."""
+    path = Path(root) / "listed.json" if root else None
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8")).get("sessions", []) if path and path.is_file() else []
+    except ValueError:
+        return None
+    return next((row["session_id"] for row in rows if row.get("listen_port") == port and row.get("session_id")), None)
+
+
+def bind_directory_session(staged_menu, session):
+    """A peer that joins by session id gets it written into its staged script just before it starts."""
+    path = Path(staged_menu)
+    if path.is_file() and "{DIRECTORY_SESSION}" in path.read_text(encoding="utf-8"):
+        path.write_text(path.read_text(encoding="utf-8").replace("{DIRECTORY_SESSION}", session), encoding="utf-8")
+        return True
+    return False
 
 
 def port_for(run_index, base):
@@ -430,6 +449,43 @@ def log_assertions(peer_root, required=(), forbidden=()):
             for denied, patterns in ((False, required), (True, forbidden)) for pattern in patterns]
 
 
+LISTED_ROW = re.compile(r' row=("(?:[^"\\]|\\.)*")')
+ROW_ENDPOINT = re.compile(r"\s(\S+):(\d+)( \[[^\]]+\])?$")
+
+
+def listed_rows(peer_root, control):
+    """The rows a menu list showed, in list order, from the script's last text-fit readback of that list."""
+    path = Path(peer_root) / "stdout.log"
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    lines = [line for line in text.splitlines() if line.startswith(f"[menu-script] assert_text_fits {control} ")]
+    return [json.loads(row) for row in LISTED_ROW.findall(lines[-1])] if lines else None
+
+
+def own_session_evidence(peer_root, spec, port):
+    """A LAN listing shows every engine beaconing on the network, so the count is of this run's own session only."""
+    rows = listed_rows(peer_root, spec["control"])
+    endpoints = [(row, ROW_ENDPOINT.search(row)) for row in rows or []]
+    own = [row for row, found in endpoints if found and int(found[2]) == port]
+    others = [row for row, found in endpoints if not (found and int(found[2]) == port)]
+    address = spec.get("address")
+    placed = all(ROW_ENDPOINT.search(row)[1] == address for row in own) if address else True
+    return {"control": spec["control"], "port": port, "rows": rows, "own_rows": own, "other_sessions": others,
+            "expected": spec.get("expected", 1), "address": address,
+            "pass": rows is not None and len(own) == spec.get("expected", 1) and placed}
+
+
+def join_port_evidence(peer_root, spec):
+    """The Port field follows the first joinable listed row, whichever session that is."""
+    rows = listed_rows(peer_root, spec["control"])
+    joinable = [found for found in (ROW_ENDPOINT.search(row) for row in rows or []) if found and not found[3]]
+    path = Path(peer_root) / "stdout.log"
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    shown = re.findall(rf'^\[menu-script\] assert_label {re.escape(spec["field"])} ".*?" text="([^"]*)" PASS$', text, re.M)
+    expected = joinable[0][2] if joinable else None
+    return {"control": spec["control"], "field": spec["field"], "rows": rows, "first_joinable_port": expected,
+            "shown": shown[-1] if shown else None, "pass": bool(expected) and bool(shown) and shown[-1] == expected}
+
+
 def frame_gap_evidence(record, spec):
     """The recorder's own wall clock between presented frames. A menu that holds one is a render stall."""
     rows = [row for row in record.get("index", []) if isinstance(row.get("wall_ms"), (int, float))]
@@ -471,7 +527,7 @@ def completed_probe(path):
         return False
 
 
-def item_evidence(record, item):
+def item_evidence(record, item, port=None):
     rows = record["index"]
     events_path = Path(record["video_dir"]) / "events.jsonl"
     events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()] if events_path.is_file() else []
@@ -528,6 +584,13 @@ def item_evidence(record, item):
         evidence["log_assertions"] = assertions
         if not passed or evidence.get("probe") == "none":
             evidence["probe"] = "pass" if passed else "fail"
+    for key, measure in (("own_session_rows", lambda spec: own_session_evidence(record["root"], spec, port)),
+                         ("join_port_follows_list", lambda spec: join_port_evidence(record["root"], spec))):
+        if item.get(key):
+            evidence[key] = measure(item[key])
+            passed = evidence[key]["pass"]
+            if not passed or evidence.get("probe") == "none":
+                evidence["probe"] = "pass" if passed else "fail"
     if item.get("frame_gap"):
         evidence["frame_gap"] = frame_gap_evidence(record, item["frame_gap"])
         passed = evidence["frame_gap"]["pass"]
@@ -586,7 +649,7 @@ def review(scenario, capture, out):
                 items.append({**item, "peer": name, "run": capture["name"], "frames": None, "probe": "not-run", "state": "skipped",
                               "finding": capture.get("skip_finding") or {"class": "harness", "reason": "No such peer in this capture"}})
                 continue
-            found, assertions = item_evidence(record, item)
+            found, assertions = item_evidence(record, item, capture.get("port"))
             if item.get("peer_drop"):
                 required = item["peer_drop"]
                 witness = next((row for row in capture["peers"] if row["peer"] == required["peer"]), None)
@@ -798,6 +861,8 @@ def run_one(options, scenario, run, run_index, out):
     def gate_met(gate):
         if gate.get("run"):
             return cross_run_ready(getattr(options, "completed_runs", []), gate)
+        if gate.get("directory_listed") and not directory_session(shared.get("DIRECTORY_ROOT"), port):
+            return False
         name = gate["peer"]
         if gate.get("ended"):
             return name in records and records[name].get("exit_code") is not None
@@ -855,6 +920,9 @@ def run_one(options, scenario, run, run_index, out):
                     break
                 if failed.wait(float(peer.get("after_gate_delay_s", 0))):
                     break
+            session = directory_session(shared.get("DIRECTORY_ROOT"), port)
+            if session and bind_directory_session(Path(staged[name]["stage"]) / "menu.txt", session):
+                staged[name]["directory_session"] = session
             thread = threading.Thread(target=drive, args=(name,))
             threads.append(thread)
             thread.start()

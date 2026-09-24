@@ -36,6 +36,8 @@
         {
           "name": "host",
           "args": [
+            "-module",
+            "VoidWanderers.rte",
             "-net-match-service-e2e",
             "-net-port",
             "{PORT}",
@@ -66,6 +68,8 @@
         {
           "name": "client",
           "args": [
+            "-module",
+            "VoidWanderers.rte",
             "-net-match-service-e2e",
             "-net-port",
             "{PORT}",

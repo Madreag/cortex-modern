@@ -26,6 +26,7 @@ from run_sim_test import make_run
 from test_directory_ice_join import start_service, list_sessions, patch_settings
 from feel_measure import stage_baseline
 from feel.retained_resume import compare_live_hashes
+from compare_sim_traces import compare_fullstate
 
 HTTP_429 = re.compile(r'(?i)(?:\bHTTP\s+429\b|\bstatus\s*=\s*429\b|"\s*429\s+-)')
 
@@ -89,7 +90,11 @@ def main():
     parser.add_argument('--turn', required=True)
     parser.add_argument('--keep-wsl-running', action='store_true')
     parser.add_argument('--rendezvous-log', type=int, default=0)
+    parser.add_argument('--fullstate-every', type=int, default=0,
+                        help='every N committed ticks each peer hashes its whole capture; a differing pair fails the run; 0 is off')
     args = parser.parse_args()
+    if args.fullstate_every < 0:
+        parser.error('--fullstate-every must be 0 or positive')
     if not all(49470 <= value <= 49499 for value in (args.port, args.game_port)):
         parser.error('ports must stay in 49470..49499')
     username, password = os.environ['CC_TEST_TURN_USER'], os.environ['CC_TEST_TURN_PASS']
@@ -135,6 +140,8 @@ def main():
             flags += ['-net-host'] if peer == 'host' else ['-net-join-session', session_id]
             if args.rendezvous_log:
                 flags += ['-net-rendezvous-log', str(args.rendezvous_log)]
+            if args.fullstate_every:
+                flags += ['-net-fullstate-hash-every', str(args.fullstate_every)]
             run = make_run(repo, flags, root / peer, 180, env={'CCCP_HEADLESS': '1'})
             runs[peer] = run
             patch_settings(Path(run.cwd), {**settings, 'SessionDirectoryInstallKey': f'feel-relay-{peer}-install'})
@@ -179,7 +186,9 @@ def main():
               and not has_http_429(directory) and bool(comparisons)
               and all(row['compared_ticks'] > 0 and row['mismatched_ticks'] == 0
                       and row['mismatched_applied_input_ticks'] == 0 for row in comparisons))
-    result = dict(passed=passed, checks=checks, comparisons=comparisons,
+    fullstate = compare_fullstate(root / 'host' / 'stdout.log', root / 'client' / 'stdout.log') if args.fullstate_every else None
+    passed = passed and (fullstate is None or fullstate['passed'])
+    result = dict(passed=passed, checks=checks, comparisons=comparisons, fullstate=fullstate,
                   directory_no_429=not has_http_429(directory), directory_port=args.port, game_port=args.game_port,
                   relay=dict(endpoint=f'{turn_host}:{turn_port}', warm_attempts=warm_attempts, reachable=reachable))
     (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

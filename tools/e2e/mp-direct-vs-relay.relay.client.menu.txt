@@ -30,8 +30,11 @@ assert_substate JoinSetup
 wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 4000
 assert_visible ListLanGames 1
-activate GameRow0
+# Relay only joins an Internet session, and other engines on the box list as rows too: join this host's by id.
+settext TextJoinAddress session:{DIRECTORY_SESSION}
+settext TextJoinPort {PORT}
 wait_ms 900
+assert_label TextJoinAddress session:{DIRECTORY_SESSION}
 assert_label TextJoinPort {PORT}
 wait_ms 495
 activate ButtonMultiplayerConnect

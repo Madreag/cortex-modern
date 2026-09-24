@@ -850,7 +850,7 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
     out = Path(out)
     world = out / "world"
     world.mkdir(parents=True, exist_ok=True)
-    (world / "host").mkdir(parents=True, exist_ok=True)
+    # The runner creates each peer's run directory itself; the recording lands in the host's once it exists.
     recording = world / "host" / "match.ccreplay"
     records = restore._run_world_round(repo, world, port, 1200, {"host": ["-net-replay-out", str(recording)]})
     for who in ("host", "client"):

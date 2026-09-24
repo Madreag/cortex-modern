@@ -21,6 +21,22 @@
     },
     {
       "op": "wait",
+      "control": "LabelNetMatchStatus",
+      "text_contains": "Host connection lost - choosing a new host",
+      "equals": {
+        "visible": true
+      }
+    },
+    {
+      "op": "menu",
+      "command": "video_mark migration-loss-overlay"
+    },
+    {
+      "op": "screenshot",
+      "name": "host-loss"
+    },
+    {
+      "op": "wait",
       "control": "LabelNetMatchHandoverToast",
       "text_contains": "Host left - ClientA is now hosting",
       "equals": {
