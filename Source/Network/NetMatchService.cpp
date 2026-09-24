@@ -2666,6 +2666,14 @@ static std::string ResyncSaveName() {
 			ResetCheckpointSchedule();
 		} else {
 			ForgetOpenCaptureOnHeal();
+			// A member streamed the world's checkpoint keeps the world's chain from here, as one that held it does.
+			if (m_AutosaveMatchId.empty() && m_Runner && m_Runner->GetMatchConfig().persistentWorld && !m_Runner->GetMatchConfig().worldId.empty()) {
+				m_AutosaveMatchId = m_Runner->GetMatchConfig().worldId;
+				m_AutosaveIdentity.sessionId = m_Runner->GetMatchConfig().sessionId;
+				m_AutosaveIdentity.roundId = launchRound;
+				m_AutosaveIdentity.intervalSeconds = MatchAutosaveSeconds(m_Runner->GetMatchConfig());
+				m_AutosaveIdentity.pinnedCheckpointSource = m_PinnedAutosave;
+			}
 		}
 		// Every round writes its checkpoints under the configuration it is actually played on, so a
 		// resumed match's own checkpoints can be resumed again.
