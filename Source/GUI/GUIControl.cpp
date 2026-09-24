@@ -1,4 +1,5 @@
 #include "GUI.h"
+#include "CaptureSentinel.h"
 
 #include <cassert>
 
@@ -13,6 +14,7 @@ GUIControl::GUIControl() {
 	m_IsContainer = false;
 	m_MinWidth = m_MinHeight = m_DefWidth = m_DefHeight = 0;
 	m_ControlManager = nullptr;
+	CaptureSentinel::NoteCreation("GUIControl", this);
 }
 
 void GUIControl::Create(const std::string& Name, int X, int Y, int Width, int Height) {

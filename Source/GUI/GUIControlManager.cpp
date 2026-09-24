@@ -1,4 +1,5 @@
 #include "GUI.h"
+#include "CaptureSentinel.h"
 #include "GUICheckpoint.h"
 #include "AllegroScreen.h"
 #include <iostream>
@@ -423,6 +424,7 @@ GUIControlManager::GUIControlManager() {
 	m_EventQueue.clear();
 
 	m_CursorType = Pointer;
+	CaptureSentinel::NoteCreation("GUIControlManager", this);
 }
 
 GUIControlManager::~GUIControlManager() {

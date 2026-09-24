@@ -24,6 +24,7 @@
 
 #include "GUI.h"
 #include "GUIInputWrapper.h"
+#include "CaptureSentinel.h"
 #include "MainMenuGUI.h"
 #include "NetModerationGUI.h"
 #include "NetModerationGUIProbe.h"
@@ -842,6 +843,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-cow-checkpoint-autosave") {
 			s_cowCheckpointAutosave = true;
+			++i;
+			continue;
+		}
+		// Reports every engine object a capture's worker threads make; Debug and ASan builds report from the start.
+		if (currentArg == "-checkpoint-sentinel") {
+			CaptureSentinel::Enable();
 			++i;
 			continue;
 		}
@@ -8593,6 +8600,7 @@ int main(int argc, char** argv) {
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	const bool mainArgsValid = HandleMainArgs(argc, argv);
+	if (CaptureSentinel::Enabled()) CaptureSentinel::Enable();
 	if (s_netDedicated && !s_netMatchServiceE2E) {
 		s_netWorldDaemon = true;
 		s_netMatchServiceE2E = true;

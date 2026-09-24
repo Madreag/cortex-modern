@@ -438,7 +438,10 @@ namespace {
 std::array<std::mutex, 64> g_SeatStubLocks;
 template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
 	std::lock_guard lock(g_SeatStubLocks[(reinterpret_cast<uintptr_t>(&stub) >> 3) % g_SeatStubLocks.size()]);
-	if (!stub) stub = std::make_unique<T>();
+	if (!stub) {
+		CaptureSentinel::NoteCreation("seat stand-in", &stub);
+		stub = std::make_unique<T>();
+	}
 	return stub.get();
 }
 } // namespace

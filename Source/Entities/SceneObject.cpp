@@ -1,4 +1,5 @@
 #include "SceneObject.h"
+#include "CaptureSentinel.h"
 #include "PresetMan.h"
 #include "Matrix.h"
 #include "ActivityMan.h"
@@ -11,6 +12,7 @@ const std::string SceneObject::SOPlacer::c_ClassName = "SOPlacer";
 
 SceneObject::SceneObject() {
 	Clear();
+	CaptureSentinel::NoteCreation("SceneObject", this);
 }
 
 SceneObject::~SceneObject() {
