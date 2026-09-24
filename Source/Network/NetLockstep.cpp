@@ -8951,6 +8951,13 @@ namespace RTE {
 			++m_Stats.stopsFromLeftPeers;
 			return;
 		}
+		// A world member reaching its own planned end leaves the world; only the host's end closes the round.
+		if (stop.reason == NetLockstepStopReason::Complete && IsPersistentWorldRound() && stop.senderPeerId != GetHostPeerId()) {
+			NetLockstepStop leave = stop;
+			leave.reason = NetLockstepStopReason::PeerLeft;
+			HandleStop(leave, nowMs, fromTransport);
+			return;
+		}
 		if (m_DeferStops && stop.reason == NetLockstepStopReason::Complete &&
 		    (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick + 1 < stop.frame)) {
 			if (!m_PendingCompleteStop || stop.frame < m_PendingCompleteStop->frame) m_PendingCompleteStop = stop;

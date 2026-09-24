@@ -484,10 +484,11 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
             "resumed_captures_to": reached, "peer_comparison": compared}
 
 
-def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list) -> list:
-    """One peer of a persistent world: the host is the dedicated world daemon, the client an ordinary join."""
+def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list, own_ticks: int = 0) -> list:
+    """One peer of a persistent world: the host is the dedicated world daemon, the client an ordinary join.
+    `own_ticks` is the cap a peer counts from its own first tick; it defaults to `ticks` for a round that starts at 0."""
     args = ["-net-port", str(port), "-net-match-peers", "2", "-net-match-input-delay", "3",
-            "-net-autosave-seconds", "1", "-net-match-ticks", str(ticks),
+            "-net-autosave-seconds", "1", "-net-match-ticks", str(own_ticks or ticks),
             "-net-live-tick-hashes", str(root / f"{who}-live.jsonl"),
                 "-tick-hashes", "-max-ticks", str(ticks), "-out", str(root / f"{who}_trace.json"),
             "-net-match-report", str(root / f"{who}_report.json")]
@@ -546,7 +547,7 @@ def _world_kill_ready(host_log: str, client_log: str, kill_past: int, published:
 
 
 def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict, kill_past: int = 0,
-                     carry=None) -> dict:
+                     carry=None, own_ticks: int = 0) -> dict:
     """One round of a persistent world. `carry` is the previous round's root: its world state is
     copied into each staged runtime after the runner prepares it and before the process starts."""
     if FAMILY_LOCK.exists():
@@ -562,7 +563,7 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
     killed = False
     try:
         for who in ("host", "client"):
-            runs[who] = make_run(repo, _world_peer_args(root, who, port, ticks, extra.get(who, [])),
+            runs[who] = make_run(repo, _world_peer_args(root, who, port, ticks, extra.get(who, []), own_ticks),
                                  root / who, 420, env={"CCCP_HEADLESS": "1"})
             if carry is not None:
                 _carry_world_state(carry, who, Path(runs[who].cwd))
@@ -686,7 +687,8 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "")
     # Boot two: the same install, no -net-resume-match. The world reopens on its own newest checkpoint.
     second.mkdir(parents=True, exist_ok=False)
     resume_end = resume_tick + round_ticks
-    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first)
+    # Each peer counts its cap from its own first tick, so the resumed round is given the ticks it runs past the checkpoint.
+    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first, own_ticks=round_ticks)
     host_log = peer_log(second, "host")
     restarted = WORLD_IDENTITY.findall(host_log)
     assert restarted, "the restarted world printed no identity"
