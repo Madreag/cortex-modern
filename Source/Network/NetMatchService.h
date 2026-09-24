@@ -874,6 +874,14 @@ namespace RTE {
 		/// Moves a returning seat's activation to the first frame the agreed park cannot reach and tells the returner.
 		/// @return Whether the returner was told a new frame; false when it already used its re-announce.
 		bool MovePrivateActivationPastPark(const NetWorldJoinSession& session);
+		/// Host: the round has ended for a relaunch, or a relaunch is loading; moderation waits for the round it opens.
+		bool RelaunchInFlightLocked() const;
+		/// Host: ends the rejoin of every returner that has replayed past the bound without showing the headroom its activation needs.
+		void RefuseReturnersWithoutHeadroomLocked(uint64_t nowMs);
+		/// Host: ends one returner's rejoin and tells its client why, so it tries again instead of waiting.
+		void RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text);
+		/// Client: points the ticket at a successor and rejoins it.
+		bool RejoinSuccessorRoute(const NetMatchServiceRequest& route, std::string* error);
 		/// Host: seals the successor capsule for a returning peer and sends it after the config, as a lobby round does.
 		void SendSuccessorCapsuleToLocked(uint8_t member);
 		/// Bounds a returning seat's wait on the private capture's writer: one fresh capture, then the seat stays with the AI.
@@ -1448,6 +1456,7 @@ namespace RTE {
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint64_t m_HeldRejoinPriorInput = 0;
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
+		uint32_t m_ReconnectRouteTurn = 0; //!< Alternates the reconnect prompt's attempts between the ticket's host and the successors.
 		std::atomic<uint64_t> m_LastHostSessionTrafficMs{0}; //!< Client: when the host's session last sent anything, steady ms.
 		static constexpr uint64_t c_HostTalkingWindowMs = 1000; //!< A host heard within this is alive, whatever its round did.
 		NetWorldCatchUpClient m_WorldCatchUp;
