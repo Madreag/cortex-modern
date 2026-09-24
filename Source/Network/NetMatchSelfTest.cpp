@@ -3910,6 +3910,8 @@ namespace RTE {
 			return true;
 		}
 		bool Pending() const { return service.m_HostOptionsRequest.pending.load(); }
+		// The run's cadence override is process-wide; a row that flips it puts it back.
+		static bool& AutosaveOverride() { return NetMatchService::s_AutosaveSecondsOverridden; }
 		bool Run(std::string* error) {
 			const bool started = runner.Start(tap, hostSession, hostCoordinator, config, error);
 			if (!failure.empty() || !peerError.empty()) {
@@ -4120,6 +4122,66 @@ namespace RTE {
 					}
 				}
 			}
+			return true;
+		}
+
+		// The service is the authority on the published cadence: a submitted interval clamps into
+		// the minute-to-hour range, 0 stays off, and a run's own cadence override keeps its seconds.
+		bool TestLobbyClampsSubmittedAutosave(std::string* error) {
+			struct OverrideScope {
+				bool saved = HostOptionsLobbyRow::AutosaveOverride();
+				~OverrideScope() { HostOptionsLobbyRow::AutosaveOverride() = saved; }
+			} overrideScope;
+			struct Arm {
+				bool enabled;
+				uint32_t submitted, published;
+				bool overridden;
+			};
+			const Arm arms[] = {
+				{true, 5, NetMatchService::c_MinAutosaveIntervalSeconds, false},
+				{true, 4000, NetMatchService::c_MaxAutosaveIntervalSeconds, false},
+				{false, 0, 0, false},
+				{true, 1, 1, true},
+			};
+			HostOptionsLobbyRow row(43154, 4);
+			size_t arm = 0;
+			bool submitted = false;
+			row.observe = [&] {
+				const auto& lobby = row.runner.GetLobbySession();
+				if (arm >= std::size(arms) || !lobby.IsConfigAcked(2) || !lobby.IsRemoteReady(2)) return;
+				const NetMatchConfig adopted = row.service.GetLobbyMatchConfig();
+				if (submitted) {
+					if (adopted.configRevision != 5 + arm || row.Pending()) return;
+					const Arm& landed = arms[arm];
+					if (adopted.autosaveEnabled != landed.enabled || adopted.autosaveIntervalSeconds != landed.published) {
+						row.Fail("a submitted " + std::to_string(landed.submitted) + " s autosave published " + (adopted.autosaveEnabled ? "on at " : "off at ") +
+						         std::to_string(adopted.autosaveIntervalSeconds) + " s, not " + std::to_string(landed.published) + " s");
+						return;
+					}
+					submitted = false;
+					if (++arm == std::size(arms)) {
+						row.start.store(true);
+						return;
+					}
+				}
+				const Arm& next = arms[arm];
+				HostOptionsLobbyRow::AutosaveOverride() = next.overridden;
+				NetMatchConfig draft = adopted;
+				draft.autosaveEnabled = next.enabled;
+				draft.autosaveIntervalSeconds = next.submitted;
+				std::string refusal;
+				if (!row.service.SubmitHostOptions(adopted.configRevision, draft, &refusal)) {
+					row.Fail("SubmitHostOptions refused a " + std::to_string(next.submitted) + " s autosave: " + refusal);
+					return;
+				}
+				submitted = true;
+			};
+			if (!row.Run(error)) return false;
+			if (arm != std::size(arms)) {
+				*error = "the autosave clamp row stopped before arm " + std::to_string(arm) + " landed";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS host options autosave: 5 s publishes 60 s, 4000 s publishes 3600 s, 0 stays off, a run override keeps 1 s" << std::endl;
 			return true;
 		}
 
@@ -9747,7 +9809,8 @@ namespace RTE {
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
-			const NetH4ModerationSeat* joiner = findRow(lobby.service.GetModerationSeats(), 2);
+			const std::vector<NetH4ModerationSeat> rows = lobby.service.GetModerationSeats();
+			const NetH4ModerationSeat* joiner = findRow(rows, 2);
 			if (joiner == nullptr) {
 				*error = "the open lobby published no row for peer 2";
 				SetNetAuthCryptoForTest(nullptr);
@@ -11866,8 +11929,8 @@ namespace RTE {
 		    persistent.completedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
 			    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
-			        {"supported_lockstep_codec_version", 38}, {"supported_world_lockstep_codec_version", 37},
-		        {"supported_match_config_version", 6}, {"supported_world_match_config_version", 7}} ||
+			        {"supported_lockstep_codec_version", NetLockstepCodec::c_CheckpointVersion}, {"supported_world_lockstep_codec_version", NetLockstepCodec::c_WorldVersion},
+		        {"supported_match_config_version", NetMatchConfigUtil::c_Version}, {"supported_world_match_config_version", NetMatchConfigUtil::c_PersistentWorldVersion}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
 			return false;
@@ -13033,6 +13096,8 @@ namespace RTE {
 		if (requestedTtl() != lifetime) failures.push_back("host minted its relay for " + std::to_string(requestedTtl()) + " s, not the service's longest " + std::to_string(lifetime) + " s");
 		service.m_Directory.Update(2); service.UpdateRelayOffer(2);
 		if (!service.ReadRelayOffer(offered) || offered != relay) { *error = "host did not publish its minted relay"; return false; }
+		// A healthy offer adds no line under the host's relay hint; the hint itself says the login renews.
+		if (!service.GetRelayError().empty()) failures.push_back("the healthy relay state printed \"" + service.GetRelayError() + "\"");
 		service.UpdateRelayOffer(15001);
 		if (service.m_Directory.IceRequestPending()) failures.push_back("host renewed a relay offer it had just minted");
 		// The same offer with half its lifetime spent.
@@ -13056,6 +13121,22 @@ namespace RTE {
 		service.m_FreshRelayRequested = true;
 		service.UpdateRelayOffer(45004);
 		if (!service.m_Directory.IceRequestPending() || nlohmann::json::parse(script->sent.back().body).value("match_id", "") != "11111111-2222-4333-8444-555555555555:2") failures.push_back("a fresh round reused the previous relay request");
+		// An offer that lapses while its renewal is still out says so, and the next offer clears the line.
+		relay.expiresAt = now - 1;
+		service.SetRelayOfferLocked(relay);
+		service.UpdateRelayOffer(45005);
+		if (service.GetRelayError().find("Relay login expired") == std::string::npos) failures.push_back("an offer that expired unrenewed printed \"" + service.GetRelayError() + "\"");
+		NetRelayConfig fresh = relay;
+		fresh.expiresAt = now + lifetime;
+		fresh.iceServers.front().credential = "fresh-password";
+		script->replies.push_back({200, fresh.ToJson(), ""});
+		service.m_Directory.Update(45006); service.UpdateRelayOffer(45006);
+		if (!service.ReadRelayOffer(offered) || offered != fresh || !service.GetRelayError().empty()) failures.push_back("the offer that landed after a lapse left \"" + service.GetRelayError() + "\"");
+		// A failed re-mint names the directory's reason instead.
+		service.m_FreshRelayRequested = true;
+		service.UpdateRelayOffer(60010);
+		service.m_Directory.Update(60011); service.UpdateRelayOffer(60011);
+		if (service.GetRelayError() != "Relay credentials unavailable or expired") failures.push_back("a failed re-mint printed \"" + service.GetRelayError() + "\"");
 		if (!failures.empty()) {
 			*error = "relay renewal: " + failures.front();
 			for (size_t index = 1; index < failures.size(); ++index) *error += " | " + failures[index];
@@ -13436,12 +13517,15 @@ namespace RTE {
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error, true)) return fail("resync after private return: " + error);
 		// The host options transaction: each arm reports its own verdict so one red cannot hide another.
-		std::string republishError, staleOptionsError, seatingWaitError, hostDefaultsError, stagedRematchError;
+		std::string republishError, staleOptionsError, autosaveClampError, seatingWaitError, hostDefaultsError, stagedRematchError;
 		if (!TestLobbyRepublishesHostOptionsRevision(&republishError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << republishError << std::endl;
 		}
 		if (!TestLobbyRefusesStaleOptionsRevision(&staleOptionsError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << staleOptionsError << std::endl;
+		}
+		if (!TestLobbyClampsSubmittedAutosave(&autosaveClampError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << autosaveClampError << std::endl;
 		}
 		if (!TestSeatingWaitIsNotTheMessageDeadline(&seatingWaitError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << seatingWaitError << std::endl;
@@ -13454,6 +13538,7 @@ namespace RTE {
 		}
 		if (!republishError.empty()) return fail(republishError);
 		if (!staleOptionsError.empty()) return fail(staleOptionsError);
+		if (!autosaveClampError.empty()) return fail(autosaveClampError);
 		if (!seatingWaitError.empty()) return fail(seatingWaitError);
 		if (!hostDefaultsError.empty()) return fail(hostDefaultsError);
 		if (!stagedRematchError.empty()) return fail(stagedRematchError);

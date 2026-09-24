@@ -55,7 +55,122 @@ void ContentFile::SwapCheckpoint(ContentFile& other) noexcept {
 
 const std::string ContentFile::c_ClassName = "ContentFile";
 
-std::array<std::unordered_map<std::string, BITMAP*>, ContentFile::BitDepths::BitDepthCount> ContentFile::s_LoadedBitmaps;
+std::array<ContentFile::LoadedBitmaps, ContentFile::BitDepths::BitDepthCount> ContentFile::s_LoadedBitmaps;
+
+namespace {
+	// Per bitmap, the least path each depth's cache holds it under; rebuilt when the cache's version moved.
+	struct LoadedBitmapIndex {
+		uint64_t version = ~uint64_t{0};
+		std::unordered_map<const BITMAP*, std::array<const std::string*, 2>> paths;
+		std::atomic<int> scopes{0};
+	};
+	LoadedBitmapIndex& Index() {
+		static LoadedBitmapIndex index;
+		return index;
+	}
+}
+
+ContentFile::LoadedBitmapIndexScope::LoadedBitmapIndexScope() {
+	LoadedBitmapIndex& index = Index();
+	const auto& registry = std::as_const(s_LoadedBitmaps);
+	static_assert(std::tuple_size_v<std::decay_t<decltype(registry)>> == 2);
+	if (index.scopes.fetch_add(1) == 0 && index.version != LoadedBitmaps::Version()) {
+		index.paths.clear();
+		size_t count = 0;
+		for (const auto& loaded: registry) count += loaded.size();
+		index.paths.reserve(count);
+		for (size_t depth = 0; depth < registry.size(); ++depth) {
+			for (const auto& [path, bitmap]: registry[depth]) {
+				const std::string*& least = index.paths[bitmap][depth];
+				if (!least || path < *least) least = &path;
+			}
+		}
+		index.version = LoadedBitmaps::Version();
+	}
+}
+
+ContentFile::LoadedBitmapIndexScope::~LoadedBitmapIndexScope() {
+	--Index().scopes;
+}
+
+std::string ContentFile::LoadedBitmapChangeMissedByIndex() {
+	// Only the scratch bitmaps' addresses are compared; nothing reads through them.
+	static const std::array<char, 2> scratch{};
+	BITMAP* first = reinterpret_cast<BITMAP*>(const_cast<char*>(&scratch[0]));
+	BITMAP* second = reinterpret_cast<BITMAP*>(const_cast<char*>(&scratch[1]));
+	const std::string key = "checkpoint-selftest/loaded-bitmap-index-row.png";
+	LoadedBitmaps& registry = s_LoadedBitmaps[BitDepths::Eight];
+	// The live entries step aside for the ways that clear or walk the whole registry, and come back after.
+	LoadedBitmaps::Base live;
+	registry.swap(live);
+	// A stale index answers with a path the registry no longer holds, so an absence is checked without reading it.
+	const auto present = [&key](const BITMAP* bitmap) {
+		LoadedBitmapIndexScope scope;
+		int depth = BitDepths::Eight;
+		const std::string* path = LoadedBitmapPath(bitmap, depth);
+		return path && *path == key;
+	};
+	const auto absent = [](const BITMAP* bitmap) {
+		LoadedBitmapIndexScope scope;
+		int depth = BitDepths::Eight;
+		return LoadedBitmapPath(bitmap, depth) == nullptr;
+	};
+	std::string missed;
+	const auto way = [&missed](const char* name, bool seen) {
+		if (!seen && missed.empty()) missed = name;
+	};
+	absent(first);
+	registry[key] = first;
+	way("operator[]", present(first));
+	registry.erase(key);
+	way("erase(key)", absent(first));
+	registry.try_emplace(key, first);
+	way("try_emplace", present(first));
+	registry.erase(std::as_const(registry).find(key));
+	way("erase(position)", absent(first));
+	registry.emplace(key, first);
+	way("emplace", present(first));
+	registry.find(key)->second = second;
+	way("find", present(second) && absent(first));
+	registry.at(key) = first;
+	way("at", present(first) && absent(second));
+	registry.begin()->second = second;
+	way("begin", present(second) && absent(first));
+	registry.clear();
+	way("clear", absent(second));
+	registry.insert(LoadedBitmaps::value_type(key, first));
+	way("insert", present(first));
+	LoadedBitmaps::Base emptied;
+	registry.swap(emptied);
+	way("swap", absent(first));
+	registry.merge(emptied);
+	way("merge", present(first));
+	registry.clear();
+	registry.swap(live);
+	return missed;
+}
+
+const std::string* ContentFile::LoadedBitmapPath(const BITMAP* bitmap, int& depth) {
+	const auto& registry = std::as_const(s_LoadedBitmaps);
+	const LoadedBitmapIndex& index = Index();
+	const auto least = [&](size_t at) -> const std::string* {
+		if (index.scopes.load() > 0) {
+			const auto found = index.paths.find(bitmap);
+			return found == index.paths.end() ? nullptr : found->second[at];
+		}
+		const std::string* result = nullptr;
+		for (const auto& [path, image]: registry[at]) if (image == bitmap && (!result || path < *result)) result = &path;
+		return result;
+	};
+	if (depth >= 0) return least(static_cast<size_t>(depth));
+	for (size_t at = 0; at < registry.size(); ++at) {
+		if (const std::string* path = least(at)) {
+			depth = static_cast<int>(at);
+			return path;
+		}
+	}
+	return nullptr;
+}
 std::unordered_map<std::string, SDL_Surface*> ContentFile::s_MemoryPNGs;
 std::unordered_map<std::string, FMOD::Sound*> ContentFile::s_LoadedSamples;
 std::unordered_map<size_t, std::string> ContentFile::s_PathHashes;
@@ -311,8 +426,8 @@ BITMAP* ContentFile::GetAsBitmap(int conversionMode, bool storeBitmap, const std
 	}
 
 	// Check if the file has already been read and loaded from the disk and, if so, use that data.
-	std::unordered_map<std::string, BITMAP*>::iterator foundBitmap = s_LoadedBitmaps[bitDepth].find(dataPathToLoad);
-	if (foundBitmap != s_LoadedBitmaps[bitDepth].end()) {
+	const auto foundBitmap = std::as_const(s_LoadedBitmaps[bitDepth]).find(dataPathToLoad);
+	if (foundBitmap != std::as_const(s_LoadedBitmaps[bitDepth]).end()) {
 		if (storeBitmap) {
 			returnBitmap = (*foundBitmap).second;
 		} else if (SDL_Surface* surface = s_MemoryPNGs[dataPathToLoad]) {

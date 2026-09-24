@@ -242,11 +242,8 @@ const MovableObject* GUICheckpoint::LiveObject(const MovableObject* object) {
 std::string GUICheckpoint::SaveSharedBitmap(const BITMAP* bitmap) {
 	std::string path;
 	int cacheSlot = -1;
-	if (bitmap) for (size_t slot = 0; slot < ContentFile::s_LoadedBitmaps.size(); ++slot) {
-		for (const auto& [candidate, image]: ContentFile::s_LoadedBitmaps[slot]) if (image == bitmap && (cacheSlot < 0 || std::make_pair(static_cast<int>(slot), candidate) < std::make_pair(cacheSlot, path))) {
-			cacheSlot = slot; path = candidate;
-		}
-	}
+	if (const std::string* found = bitmap ? ContentFile::LoadedBitmapPath(bitmap, cacheSlot) : nullptr) path = *found;
+	else cacheSlot = -1;
 	CheckpointWriter writer("SharedBitmap1");
 	writer(path, cacheSlot, CheckpointWriter::Native([&] { return SaveBitmap(bitmap); }));
 	return writer.Text();

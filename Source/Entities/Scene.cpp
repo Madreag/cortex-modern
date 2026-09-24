@@ -8,14 +8,21 @@
 #include "LuaMan.h"
 #include "MovableMan.h"
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <exception>
 #include <iterator>
+#include <map>
+#include <mutex>
 #include <optional>
+#include <set>
 #include "TimerMan.h"
 #include "FrameMan.h"
 #include "ConsoleMan.h"
 #include "SettingsMan.h"
 #include "ThreadMan.h"
+#include "AudioMan.h"
 #include "MetaMan.h"
 #include "ContentFile.h"
 #include "Base64/base64.h"
@@ -109,7 +116,27 @@ namespace {
 
 std::string Scene::SaveRuntimeCheckpoint() const {
 	std::vector<CheckpointText> pathfinders;
-	for (const auto& pathfinder: m_pPathFinders) pathfinders.push_back(CheckpointWriter::Native([&] { return pathfinder ? pathfinder->SaveCheckpoint() : ""; }));
+	// The grid tasks read this frame's locals, so they end before anything leaves it.
+	struct GridTasks {
+		std::vector<std::future<void>> tasks;
+		~GridTasks() { for (std::future<void>& task: tasks) if (task.valid()) task.wait(); }
+		void Join() {
+			for (std::future<void>& task: tasks) task.wait();
+			for (std::future<void>& task: tasks) task.get();
+			tasks.clear();
+		}
+	} grids;
+	if (CheckpointWriter::IsCapturing()) {
+		// Each team's grid is its own; a capture takes them side by side, in the same order, beside the rest of the runtime.
+		pathfinders.resize(m_pPathFinders.size());
+		for (size_t index = 0; index < m_pPathFinders.size(); ++index) {
+			grids.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, &pathfinders, index] {
+				pathfinders[index] = CheckpointWriter::CaptureNative([this, index] { return m_pPathFinders[index] ? m_pPathFinders[index]->SaveCheckpoint() : ""; });
+			}));
+		}
+	} else {
+		for (const auto& pathfinder: m_pPathFinders) pathfinders.push_back(CheckpointWriter::Native([&] { return pathfinder ? pathfinder->SaveCheckpoint() : ""; }));
+	}
 	std::vector<std::pair<CheckpointText, CheckpointText>> backgrounds;
 	for (const SLBackground* layer: m_BackLayerList) backgrounds.emplace_back(CheckpointWriter::Native([&] { return layer->Entity::SaveCheckpoint(); }), CheckpointWriter::Native([&] { return layer->SaveCheckpoint(); }));
 	std::array<CheckpointText, Players::MaxPlayerCount> brains;
@@ -128,6 +155,7 @@ std::string Scene::SaveRuntimeCheckpoint() const {
 		if (!terrain.Capture()) throw std::runtime_error("could not capture scene terrain metadata");
 		metadata = CheckpointText(terrain.SaveMetadata());
 	}
+	grids.Join();
 	CheckpointWriter writer("SceneRuntime1");
 	writer(CheckpointWriter::Native([&] { return Entity::SaveCheckpoint(); }), m_Location, m_LocationOffset, m_MetagamePlayable, m_Revealed, m_OwnedByTeam, m_RoundIncome,
 		m_BuildBudget, m_BuildBudgetRatio, m_AutoDesigned, m_TotalInvestment, m_PathfindingUpdated, m_PartialPathUpdateTimer,
@@ -1359,14 +1387,18 @@ int Scene::Save(Writer& writer) const {
 		g_MovableMan.GetAllItems(false, liveObjects);
 		g_MovableMan.GetAllParticles(false, liveObjects);
 	}
+	const auto placeable = [doFullGameSave](const SceneObject* placedObject) {
+		// Preset-less MOPixels (terrain debris) serialize in full form on full-game saves; anything else preset-less is unplaceable.
+		return !(placedObject->GetPresetName().empty() || placedObject->GetPresetName() == "None") || (doFullGameSave && dynamic_cast<const MOPixel*>(placedObject));
+	};
+	const std::vector<CheckpointText> liveTexts = writer.IsCapturing() && writer.IsSavedScene(this) ? CaptureSceneObjects(writer, liveObjects, placeable, doFullGameSave) : std::vector<CheckpointText>();
+	size_t liveIndex = 0;
 	for (int set = PlacedObjectSets::PLACEONLOAD; set < PlacedObjectSets::PLACEDSETSCOUNT; ++set) {
-		const auto& objects = writer.IsSavedScene(this) && set == PlacedObjectSets::PLACEONLOAD ? liveObjects : m_PlacedObjects[set];
+		const bool live = writer.IsSavedScene(this) && set == PlacedObjectSets::PLACEONLOAD;
+		const auto& objects = live ? liveObjects : m_PlacedObjects[set];
 		for (const SceneObject* placedObject: objects) {
-			if (placedObject->GetPresetName().empty() || placedObject->GetPresetName() == "None") {
-				// Preset-less MOPixels (terrain debris) serialize in full form on full-game saves; anything else preset-less is unplaceable.
-				if (!(doFullGameSave && dynamic_cast<const MOPixel*>(placedObject))) {
-					continue;
-				}
+			if (!placeable(placedObject)) {
+				continue;
 			}
 
 			if (set == PlacedObjectSets::PLACEONLOAD) {
@@ -1377,8 +1409,11 @@ int Scene::Save(Writer& writer) const {
 				writer.NewProperty("PlaceAIPlanObject");
 			}
 
-			// writer << placedObject;
-			SaveSceneObject(writer, placedObject, false, doFullGameSave);
+			if (live && !liveTexts.empty()) {
+				writer.Append(liveTexts[liveIndex++]);
+			} else {
+				SaveSceneObject(writer, placedObject, false, doFullGameSave);
+			}
 		}
 	}
 
@@ -1452,6 +1487,169 @@ int Scene::Save(Writer& writer) const {
 	return 0;
 }
 
+namespace {
+	thread_local int64_t s_LastObjectCaptureUs = 0;
+
+	// A tree's heavy node written on the pool ahead of its tree. Whoever reaches it first writes it; the tree takes its
+	// text and the sounds it carries, so a node no tree takes leaves no trace in the capture.
+	class AheadNode {
+	public:
+		AheadNode(const SceneObject* object, unsigned channel, const Writer::SaveOverrides* overrides) : m_Object(object), m_Channel(channel), m_Overrides(overrides) {}
+		/// Writes the node here unless another thread already started it.
+		void Run() {
+			if (Claim()) Write();
+		}
+		/// The node's text for its tree: written here if nobody started it, else once its writer is done.
+		CheckpointText Take() {
+			if (Claim()) {
+				Write();
+			} else {
+				std::unique_lock lock(m_Mutex);
+				m_Done.wait(lock, [this] { return m_Written; });
+			}
+			if (m_Failure) std::rethrow_exception(m_Failure);
+			for (const uint64_t identity: m_Carried) g_AudioMan.NoteCarriedSoundIdentity(identity);
+			return m_Text;
+		}
+		int64_t WriteUs() const { return m_WriteUs; }
+
+	private:
+		bool Claim() {
+			bool expected = false;
+			return m_Started.compare_exchange_strong(expected, true);
+		}
+		// The channel carries the indent and the flags the tree would write the node with.
+		void Write() {
+			const auto started = std::chrono::steady_clock::now();
+			try {
+				AudioMan::SoundCheckpointSaveScope carried(false);
+				CheckpointCache values;
+				values.Begin();
+				CheckpointWriter::CacheScope valuesScope(&values);
+				m_Text = Writer::Capture([this](Writer& owned) {
+					owned.SetSaveOverrides(m_Overrides);
+					owned.SetCaptureObject(m_Object);
+					Scene::SaveSceneObject(owned, m_Object, (m_Channel & 1) != 0, (m_Channel & 2) != 0);
+				}, static_cast<int>((m_Channel - 32) / 8));
+				m_Carried.assign(carried.Carried().begin(), carried.Carried().end());
+			} catch (...) {
+				m_Failure = std::current_exception();
+			}
+			m_WriteUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			{
+				std::lock_guard lock(m_Mutex);
+				m_Written = true;
+			}
+			m_Done.notify_all();
+		}
+
+		const SceneObject* m_Object;
+		unsigned m_Channel;
+		const Writer::SaveOverrides* m_Overrides;
+		std::atomic<bool> m_Started{false};
+		std::mutex m_Mutex;
+		std::condition_variable m_Done;
+		bool m_Written = false;
+		CheckpointText m_Text;
+		std::vector<uint64_t> m_Carried;
+		std::exception_ptr m_Failure;
+		int64_t m_WriteUs = 0;
+	};
+
+	// One capture's nodes to write ahead, and the heavy nodes it wrote, which the next capture writes ahead.
+	struct AheadCapture {
+		std::map<std::pair<const SceneObject*, unsigned>, std::unique_ptr<AheadNode>> nodes;
+		std::mutex heavyMutex;
+		std::set<std::pair<long, unsigned>> heavy;
+		void NoteHeavy(long uid, unsigned channel) {
+			std::lock_guard lock(heavyMutex);
+			heavy.emplace(uid, channel);
+		}
+	};
+	thread_local AheadCapture* s_AheadCapture = nullptr;
+	// Nodes that took this long to write are written ahead by the next capture.
+	constexpr int64_t c_AheadNodeUs = 200;
+	std::mutex s_AheadPlanMutex;
+	std::set<std::pair<long, unsigned>> s_AheadPlan;
+
+	class AheadCaptureScope {
+	public:
+		explicit AheadCaptureScope(AheadCapture* capture) : m_Previous(s_AheadCapture) { s_AheadCapture = capture; }
+		~AheadCaptureScope() { s_AheadCapture = m_Previous; }
+		AheadCaptureScope(const AheadCaptureScope&) = delete;
+		AheadCaptureScope& operator=(const AheadCaptureScope&) = delete;
+	private:
+		AheadCapture* m_Previous;
+	};
+}
+
+int64_t Scene::LastObjectCaptureUs() {
+	return s_LastObjectCaptureUs;
+}
+
+std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, const std::list<SceneObject*>& objects, const std::function<bool(const SceneObject*)>& placeable, bool saveFullData) {
+	const auto started = std::chrono::steady_clock::now();
+	std::vector<const SceneObject*> order;
+	order.reserve(objects.size());
+	for (const SceneObject* object: objects) if (placeable(object)) order.push_back(object);
+	std::vector<CheckpointText> texts(order.size());
+	const Writer::SaveOverrides* overrides = writer.GetSaveOverrides();
+	const int indent = writer.GetIndent();
+	AudioMan::SoundCheckpointSaveScope* sounds = AudioMan::SoundCheckpointSaveScope::Current();
+	// The last capture's heaviest nodes that still exist are written side by side, ahead of the trees that hold them.
+	AheadCapture ahead;
+	{
+		std::lock_guard lock(s_AheadPlanMutex);
+		for (const auto& [uid, channel]: s_AheadPlan) {
+			if (const SceneObject* node = g_MovableMan.FindObjectByUniqueID(uid)) ahead.nodes.try_emplace({node, channel}, std::make_unique<AheadNode>(node, channel, overrides));
+		}
+	}
+	// Each object is written by one thread, as its own capture, exactly as the loop would write it.
+	const auto capture = [&](size_t first, size_t last) {
+		AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
+		AheadCaptureScope aheadScope(&ahead);
+		CheckpointCache values;
+		values.Begin();
+		CheckpointWriter::CacheScope valuesScope(&values);
+		for (size_t index = first; index < last; ++index) {
+			const SceneObject* object = order[index];
+			texts[index] = Writer::Capture([&](Writer& owned) {
+				owned.SetSaveOverrides(overrides);
+				owned.SetCaptureObject(object);
+				SaveSceneObject(owned, object, false, saveFullData);
+			}, indent);
+		}
+	};
+	// Few objects carry most of the work (an actor's whole attachable tree), so each is a task of its own.
+	constexpr size_t c_ObjectsPerTask = 1;
+	std::vector<std::future<void>> tasks;
+	for (const auto& [key, node]: ahead.nodes) {
+		tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&ahead, node = node.get()] {
+			AheadCaptureScope aheadScope(&ahead);
+			node->Run();
+		}));
+	}
+	for (size_t first = c_ObjectsPerTask; first < order.size(); first += c_ObjectsPerTask) {
+		tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, first, last = std::min(first + c_ObjectsPerTask, order.size())] { capture(first, last); }));
+	}
+	std::exception_ptr failure;
+	try {
+		capture(0, std::min(c_ObjectsPerTask, order.size()));
+	} catch (...) {
+		failure = std::current_exception();
+	}
+	// Every task reads this frame's locals, so all of them end before anything leaves it.
+	for (std::future<void>& task: tasks) task.wait();
+	if (failure) std::rethrow_exception(failure);
+	for (std::future<void>& task: tasks) task.get();
+	{
+		std::lock_guard lock(s_AheadPlanMutex);
+		s_AheadPlan = std::move(ahead.heavy);
+	}
+	s_LastObjectCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+	return texts;
+}
+
 void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData) {
 	if (writer.IsCapturing() && writer.GetCaptureObject() != sceneObjectToSave) {
 		const unsigned channel = 32 + 8 * writer.GetIndent() + 2 * saveFullData + isChildAttachable;
@@ -1480,11 +1678,21 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 				return;
 			}
 		}
-		CheckpointText text = Writer::Capture([&](Writer& owned) {
+		// A node written ahead on the pool is taken as it was written; the heavy ones are written ahead next time.
+		const auto started = std::chrono::steady_clock::now();
+		AheadNode* ahead = nullptr;
+		if (s_AheadCapture) {
+			if (const auto found = s_AheadCapture->nodes.find({sceneObjectToSave, channel}); found != s_AheadCapture->nodes.end()) ahead = found->second.get();
+		}
+		CheckpointText text = ahead ? ahead->Take() : Writer::Capture([&](Writer& owned) {
 			owned.SetSaveOverrides(writer.GetSaveOverrides());
 			owned.SetCaptureObject(sceneObjectToSave);
 			SaveSceneObject(owned, sceneObjectToSave, isChildAttachable, saveFullData);
 		}, writer.GetIndent());
+		if (s_AheadCapture && identity != 0) {
+			const int64_t writeUs = ahead ? ahead->WriteUs() : std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			if (writeUs >= c_AheadNodeUs) s_AheadCapture->NoteHeavy(static_cast<long>(identity), channel);
+		}
 		if (auto* cache = CheckpointWriter::CurrentCache()) text = cache->Remember(sceneObjectToSave, channel, std::move(text), stamp, identity, movableToSave);
 		writer.Append(text);
 		return;

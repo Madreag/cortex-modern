@@ -3,6 +3,7 @@
 #include "CheckpointLuaView.h"
 
 #include <array>
+#include <exception>
 #include <map>
 #include <optional>
 #include <string_view>
@@ -14,6 +15,21 @@
 namespace RTE::CheckpointLua {
 
 	class CaptureScope;
+
+	// The counters a native capture must leave as it found them, put back when it ends.
+	struct NativeEffects {
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		long uid = MovableObject::GetUniqueIDCounter();
+		// The sound registry is restored once per world capture, as the live walk has it.
+		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
+		~NativeEffects() {
+			g_SimRNG = sim; g_RenderRNG = render;
+			MovableObject::PinUniqueIDCounter(uid);
+			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
+			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
+		}
+	};
 
 	class NativeImage {
 	public:
@@ -292,7 +308,10 @@ namespace RTE::CheckpointLua {
 	// The caller holds the VM lock and keeps carried sound observations enabled.
 	class CaptureScope {
 	public:
-		CaptureScope(lua_State* state, NativeCache& cache) : m_References(state), m_Capture(true), m_Thread(std::this_thread::get_id()), m_Cache(cache) {}
+		CaptureScope(lua_State* state, NativeCache& cache) : m_References(state), m_Capture(true), m_Thread(std::this_thread::get_id()), m_Cache(cache) {
+			// A world capture puts the counters back once, after every state; a state captured alone does it here.
+			if (!s_GraphNativeCapture) m_Effects.emplace();
+		}
 		CaptureScope(const CaptureScope&) = delete;
 		CaptureScope& operator=(const CaptureScope&) = delete;
 
@@ -341,17 +360,13 @@ namespace RTE::CheckpointLua {
 			lua_pop(State(), 1);
 			const auto worldStarted = std::chrono::steady_clock::now();
 			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(worldStarted - enumStarted).count();
-			auto& shared = s_GraphNativeCapture->frozenWorld;
-			if (!shared) {
-				auto world = std::make_shared<NativeImage::World>();
-				for (const MovableObject* object: s_GraphNativeCapture->knownObjects) {
-					if (!g_MovableMan.ValidMO(object)) continue;
-					world->objects.push_back(reinterpret_cast<uintptr_t>(object));
-					Describe(object, world->topology, nullptr);
-				}
-				shared = std::move(world);
+			{
+				// The states of one world capture may run side by side; the first to get here walks the world.
+				std::lock_guard worldLock(s_GraphNativeCapture->frozenWorldMutex);
+				auto& shared = s_GraphNativeCapture->frozenWorld;
+				if (!shared) shared = BuildWorld(s_GraphNativeCapture->KnownObjects());
+				m_Image->m_World = std::static_pointer_cast<const NativeImage::World>(shared);
 			}
-			m_Image->m_World = std::static_pointer_cast<const NativeImage::World>(shared);
 			const auto answerStarted = std::chrono::steady_clock::now();
 			m_Image->m_WorldUs = std::chrono::duration_cast<std::chrono::microseconds>(answerStarted - worldStarted).count();
 			for (size_t index = 0; index < m_Queue.size(); ++index) {
@@ -412,19 +427,7 @@ namespace RTE::CheckpointLua {
 			}
 		} m_References;
 
-		struct NativeEffects {
-			RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
-			long uid = MovableObject::GetUniqueIDCounter();
-			// The sound registry is restored once per world capture, as the live walk has it.
-			uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
-			std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
-			~NativeEffects() {
-				g_SimRNG = sim; g_RenderRNG = render;
-				MovableObject::PinUniqueIDCounter(uid);
-				g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
-				g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
-			}
-		} m_Effects;
+		std::optional<NativeEffects> m_Effects;
 
 		ScriptGraphCaptureScope m_Capture;
 		std::optional<LuaScriptGraphNativeCaptureScope> m_NativeScope;
@@ -613,7 +616,7 @@ namespace RTE::CheckpointLua {
 				movable = ClassDerivesFrom(object->crep(), "MovableObject");
 				owned = (object->flags() & luabind::detail::object_rep::owner) != 0;
 				detached = !object->ptr() && (!movable || owned);
-				if (movable && object->ptr()) {
+				if (movable && object->ptr() && ScriptGraphNativeAlive(State(), object)) {
 					const auto* mo = static_cast<const MovableObject*>(object->ptr());
 					entry.movable = reinterpret_cast<uintptr_t>(mo);
 					CaptureObject(mo);
@@ -686,6 +689,40 @@ namespace RTE::CheckpointLua {
 			m_Image->m_Iterators.emplace(gcval(&value), std::move(result));
 		}
 
+	public:
+		// The world's trees, walked in chunks side by side; an object two chunks reach is described the same by both.
+		static std::shared_ptr<const void> BuildWorld(const std::vector<MovableObject*>& known) {
+			auto world = std::make_shared<NativeImage::World>();
+			const size_t chunks = std::clamp<size_t>(known.size() / 512, 1, 16);
+			std::vector<NativeImage::Topology> topologies(chunks);
+			std::vector<std::vector<NativeImage::NativeId>> objects(chunks);
+			const auto walk = [&](size_t chunk) {
+				for (size_t index = chunk * known.size() / chunks; index < (chunk + 1) * known.size() / chunks; ++index) {
+					const MovableObject* object = known[index];
+					if (!g_MovableMan.ValidMO(object)) continue;
+					objects[chunk].push_back(reinterpret_cast<uintptr_t>(object));
+					Describe(object, topologies[chunk], nullptr);
+				}
+			};
+			std::vector<std::future<void>> tasks;
+			for (size_t chunk = 1; chunk < chunks; ++chunk) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&walk, chunk] { walk(chunk); }));
+			std::exception_ptr failure;
+			try {
+				walk(0);
+			} catch (...) {
+				failure = std::current_exception();
+			}
+			for (std::future<void>& task: tasks) task.wait();
+			if (failure) std::rethrow_exception(failure);
+			for (std::future<void>& task: tasks) task.get();
+			for (size_t chunk = 0; chunk < chunks; ++chunk) {
+				world->objects.insert(world->objects.end(), objects[chunk].begin(), objects[chunk].end());
+				for (auto& [identity, object]: topologies[chunk]) world->topology.try_emplace(identity, std::move(object));
+			}
+			return world;
+		}
+
+	private:
 		void CaptureObject(const MovableObject* source) {
 			Describe(source, m_Image->m_Owned, m_Image->m_World ? &m_Image->m_World->topology : nullptr);
 		}
