@@ -4949,9 +4949,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				ScenarioRunner::ClearNetUiToasts();
 				ScenarioRunner::PushNetUiToast(heldRejoin ? "seat_held" : "resync_finish", heldRejoin ? "Held - AI in control - rejoining" : "Match resynced (healed at frame " + std::to_string(ScenarioRunner::GetLockstepResumeFrame()) + ")");
 				if (s_netMatchServiceE2E) {
-					const uint64_t resumeFrame = ScenarioRunner::HasLockstepCoordinator()
-						                             ? ScenarioRunner::GetLockstepResumeFrame()
-						                             : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
+					// A world rejoin names no lockstep resume frame: its budget runs from the image it loaded, as a private return's does.
+					const uint64_t lockstepResume = ScenarioRunner::HasLockstepCoordinator() ? ScenarioRunner::GetLockstepResumeFrame() : 0;
+					const uint64_t resumeFrame = lockstepResume > 0 ? lockstepResume : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
 					s_netMatchE2ETicks.OnResyncRelaunch(resumeFrame);
 					// The relaunch restarts the editor phase, so its budget restarts.
 					s_netMatchE2EEditorTicks = 0;
