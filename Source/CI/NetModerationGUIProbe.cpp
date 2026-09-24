@@ -19,6 +19,7 @@
 #include "NetMatchService.h"
 #include "NetModerationGUI.h"
 #include "NetProtocol.h"
+#include "ScenarioRunner.h"
 #include "System.h"
 #include "TimerMan.h"
 #include "UInputMan.h"
@@ -167,7 +168,10 @@ namespace {
 
 	Json Observe() {
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		// sim_frame counts every sim update since launch, lobby ticks included; lockstep_frame is the round's own.
+		const uint64_t lockstepFrame = ScenarioRunner::HasLockstepCoordinator() ? ScenarioRunner::GetLockstepCompletedFrame() : 0;
 		Json observed = {{"at_ms", NowMs()}, {"render", probe.renders}, {"sim_frame", g_TimerMan.GetSimUpdateCount()},
+		    {"lockstep_frame", lockstepFrame},
 		    {"screen", MenuScreen()},
 		    {"service", snapshot.serviceState}, {"host", snapshot.isHost}, {"activity_preset", snapshot.activityPreset},
 		    {"panel_open", g_MenuMan.IsNetworkPanelOpen()},
@@ -340,7 +344,7 @@ namespace {
 	bool Step(const Json& step, Json& observed) {
 		const std::string op = step.at("op");
 		if (op == "wait") {
-			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("renders") ||
+			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
 			    step.contains("picker_open") || step.contains("chat_entry_open"), "wait has no predicate");
@@ -366,6 +370,7 @@ namespace {
 			}
 			if (step.contains("service") && observed["service"] != step["service"]) return false;
 			if (step.contains("sim_at_least") && observed["sim_frame"].get<long long>() < step["sim_at_least"].get<long long>()) return false;
+			if (step.contains("lockstep_frame_at_least") && observed["lockstep_frame"].get<uint64_t>() < step["lockstep_frame_at_least"].get<uint64_t>()) return false;
 			if (step.contains("renders") && probe.renders - probe.stepRender < step["renders"].get<uint64_t>()) return false;
 			if (step.contains("elapsed_ms") && NowMs() - probe.stepMs < step["elapsed_ms"].get<uint64_t>()) return false;
 			if (step.contains("panel_open") && observed["panel_open"] != step["panel_open"]) return false;
