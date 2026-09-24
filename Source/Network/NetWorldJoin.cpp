@@ -1807,6 +1807,7 @@ namespace RTE {
 
 	void NetWorldJoinHost::NoteCatchUpClock(NetPeerId connection, uint64_t nowMs) {
 		if (NetWorldJoinSession* session = Find(connection)) {
+			if (session->catchUpSinceMs == 0) session->catchUpSinceMs = nowMs;
 			session->lastCatchUpReportMs = nowMs;
 		}
 	}
@@ -1934,6 +1935,17 @@ namespace RTE {
 		session->refusal = reason;
 		++m_JoinsCancelled;
 		std::erase_if(m_Sessions, [&](const NetWorldJoinSession& entry) { return entry.connection == connection; });
+	}
+
+	std::vector<NetPeerId> NetWorldJoinHost::ReturnersWithoutHeadroom(uint64_t nowMs, uint64_t boundMs) const {
+		std::vector<NetPeerId> slow;
+		for (const NetWorldJoinSession& session: m_Sessions) {
+			const bool returning = IsPrivateMatch() || session.returnsToHeldSeat;
+			if (!returning || session.spectator || session.phase != NetWorldJoinPhase::CatchingUp || session.activationTick != 0 ||
+			    session.headroom.Ready() || session.catchUpSinceMs == 0) continue;
+			if (nowMs > session.catchUpSinceMs && nowMs - session.catchUpSinceMs > boundMs) slow.push_back(session.connection);
+		}
+		return slow;
 	}
 
 	size_t NetWorldJoinHost::ExpireStaleJoins(uint64_t nowMs) {
