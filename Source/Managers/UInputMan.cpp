@@ -488,18 +488,19 @@ bool UInputMan::ScriptReadsCommittedSeat(int whichPlayer) const {
 	return luaState && lua_getstack(luaState, 0, &frame) != 0;
 }
 
-void UInputMan::NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, uint8_t deviceClass, int64_t simTick) {
+void UInputMan::NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, uint8_t deviceClass, uint16_t buttons, int64_t simTick) {
 	if (whichPlayer < 0 || whichPlayer >= Players::MaxPlayerCount) {
 		return;
 	}
-	m_CommittedSeatMouse[whichPlayer] = {movement, deviceClass, simTick};
+	m_CommittedSeatMouse[whichPlayer] = {movement, deviceClass, buttons, simTick};
 }
 
 bool UInputMan::ScriptSeatDeviceClass(int whichPlayer, uint8_t& deviceClass) const {
-	if (!ScriptReadsCommittedSeat(whichPlayer) || m_CommittedSeatMouse[whichPlayer].tick < 0 || m_CommittedSeatMouse[whichPlayer].deviceClass == 0) {
+	if (!ScriptReadsCommittedSeat(whichPlayer)) {
 		return false;
 	}
-	deviceClass = m_CommittedSeatMouse[whichPlayer].deviceClass;
+	// Before the seat's first committed frame no peer knows its device, so every peer reads none.
+	deviceClass = m_CommittedSeatMouse[whichPlayer].tick >= 0 ? m_CommittedSeatMouse[whichPlayer].deviceClass : 0;
 	return true;
 }
 
@@ -954,6 +955,27 @@ bool UInputMan::GetKeyboardButtonState(SDL_Scancode scancodeToTest, InputState w
 bool UInputMan::GetMouseButtonState(int whichPlayer, int whichButton, InputState whichState, SDL_MouseID mouseID) const {
 	if (whichButton < MouseButtons::MOUSE_LEFT || whichButton >= MouseButtons::MAX_MOUSE_BUTTONS) {
 		return false;
+	}
+	// A script in a lockstep round reads the seat's buttons from its committed frame, the same on every peer.
+	if (ScriptReadsCommittedSeat(whichPlayer)) {
+		const CommittedSeatMouse& seat = m_CommittedSeatMouse[whichPlayer];
+		const int64_t now = static_cast<int64_t>(g_TimerMan.GetSimUpdateCount());
+		if (seat.tick < 0 || now - seat.tick > 1) {
+			return false;
+		}
+		const int bit = whichButton - MouseButtons::MOUSE_LEFT;
+		switch (whichState) {
+			case InputState::Held:
+				return (seat.buttons & (1U << bit)) != 0;
+			case InputState::Pressed:
+			case InputState::PressedSim:
+				return (seat.buttons & (1U << (bit + 3))) != 0;
+			case InputState::Released:
+			case InputState::ReleasedSim:
+				return (seat.buttons & (1U << (bit + 6))) != 0;
+			default:
+				return false;
+		}
 	}
 
 	// A scripted player's mouse buttons are its fire and pie-menu elements, so a mouse scheme reads the script too.
