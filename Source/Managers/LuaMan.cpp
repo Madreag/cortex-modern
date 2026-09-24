@@ -11818,15 +11818,16 @@ namespace {
 
 	// Every binding here was read and writes nothing, though its declaration does not say so: the non-const readers of any
 	// class, and the manager reads without a reading verb. Anything else that is not a const read is dropped on an object the
-	// window does not own, so a binding added later stays out of a preview until it is read and listed. Left out on purpose:
-	// EstimateImpulse and the firearm's AI aim getters fill caches, and TeamFundsChanged clears the flag it reports.
+	// window does not own, so a binding added later stays out of a preview until it is read and listed. EstimateImpulse fills
+	// its cache only where MOSprite::MayFillCaches lets it. Left out on purpose: the firearm's AI aim getters fill caches, and
+	// TeamFundsChanged clears the flag it reports.
 	bool PreviewFenceListedReader(std::string_view name) {
 		static constexpr std::string_view listed[] = {
 		    "ActivityPaused", "ActivityRunning", "AnalogAimValues", "AnalogAxisValue", "AnalogMoveValues", "AnyInput", "AnyJoyButtonPress", "AnyJoyInput", "AnyJoyPress",
 		    "AnyKeyPress", "AnyMouseButtonPress", "AnyPress", "AnyStartPress", "AnythingUnseen", "CalculateTextHeight", "CalculateTextWidth", "CanTriggerBurst",
 		    "CastAllMOsRay", "CastFindMORay", "CastMORay", "CastMaterialRay", "CastMaxStrengthRay", "CastNotMaterialRay", "CastObstacleRay", "CastStrengthRay",
 		    "CastStrengthSumRay", "CastTerrainPenetrationRay", "CastWeaknessRay", "DetectObstacle", "DirectoryExists", "DrawnSimUpdate", "ElementHeld", "ElementPressed",
-		    "ElementPressedSim", "ElementReleased", "ElementReleasedSim", "FileExists", "FindAltitude", "FindObjectByUniqueID", "ForceBounds", "GetAlarmPoint",
+		    "ElementPressedSim", "ElementReleased", "ElementReleasedSim", "EstimateImpulse", "FileExists", "FindAltitude", "FindObjectByUniqueID", "ForceBounds", "GetAlarmPoint",
 		    "GetAllEntities", "GetAllEntitiesOfGroup", "GetAllSpritePixelPositions", "GetAllVisibleSpritePixelPositions", "GetAltitude", "GetArea", "GetBoxInside",
 		    "GetCalculatedMaxThrowVelIncludingArmThrowStrength", "GetClosestActor", "GetClosestEnemyActor", "GetClosestTeamActor", "GetControlledActor", "GetController",
 		    "GetCrabToHumanSpawnRatio", "GetDataModule", "GetDeliveryCount", "GetDirectoryList", "GetEntityDataLocation", "GetFileList", "GetFirstTeamActor",
@@ -11904,9 +11905,32 @@ namespace {
 		}
 	}
 
+	// What a window draws from, so the committed stream never moves: a hook draws from its own per-object generator as the
+	// committed hook would, and a draw outside any hook takes a copy of the master state's generator that the window drops.
+	thread_local RandomGenerator s_PreviewWindowRNG;
+	thread_local RandomGenerator s_PreviewSavedMORNG;
+	thread_local RandomGenerator* s_PreviewSavedLuaRNGOverride = nullptr;
+
+	bool PreviewFenceRandomHelper(std::string_view className, std::string_view name) {
+		static constexpr std::string_view helpers[] = {"NormalRand", "PosRand", "RangeRand", "SelectRand"};
+		return className == "LuaManager" && std::find(std::begin(helpers), std::end(helpers), name) != std::end(helpers);
+	}
+
+	void PreviewFenceDrawFromWindow() {
+		if (!s_luaRNGOverride) {
+			s_PreviewWindowRNG = RandomGenerator();
+			s_PreviewWindowRNG.RestoreCheckpoint(g_LuaMan.GetMasterScriptState().GetRandomGeneratorCheckpoint());
+			s_luaRNGOverride = &s_PreviewWindowRNG;
+		}
+	}
+
 	bool PreviewFenceRuns(const char* className, const char* methodName, bool isConst) {
 		const std::string_view cls = className ? className : "";
 		const std::string_view name = methodName ? methodName : "";
+		if (PreviewFenceRandomHelper(cls, name)) {
+			PreviewFenceDrawFromWindow();
+			return true;
+		}
 		const bool reads = PreviewFenceManagerClass(cls) ? PreviewFenceManagerReads(name, isConst) : (isConst && !PreviewFenceMutatorName(name)) || PreviewFenceListedReader(name);
 		if (!reads) {
 			PreviewFenceNoteDropped(std::string(cls.empty() ? "?" : cls) + ":" + std::string(name.empty() ? "?" : name), "on an object the preview does not own");
@@ -11914,10 +11938,56 @@ namespace {
 		return reads;
 	}
 
+	// A free function named To and a registered class only casts the object it is handed.
+	bool PreviewFenceCast(lua_State* L, const char* name) {
+		if (!name || std::strncmp(name, "To", 2) != 0 || !std::isupper(static_cast<unsigned char>(name[2]))) {
+			return false;
+		}
+		const int top = lua_gettop(L);
+		lua_getglobal(L, name + 2);
+		const bool cast = luabind::detail::is_class_rep(L, -1);
+		lua_settop(L, top);
+		return cast;
+	}
+
+	// A Vector or a Box a script holds, its own or an alias into the world, goes into a call as a copy the window owns: a
+	// parameter the callee writes, declared const or not, never reaches the script's value.
+	bool PreviewFenceCopyValue(lua_State* L, int index, const luabind::detail::object_rep* rep) {
+		if (!rep || !rep->ptr() || !rep->crep() || rep->crep()->get_class_type() != luabind::detail::class_rep::cpp_class) {
+			return false;
+		}
+		const std::type_info& type = *rep->crep()->type();
+		if (type == typeid(Vector)) {
+			luabind::object(L, *static_cast<const Vector*>(rep->ptr())).push(L);
+		} else if (type == typeid(Box)) {
+			luabind::object(L, *static_cast<const Box*>(rep->ptr())).push(L);
+		} else {
+			return false;
+		}
+		lua_replace(L, index);
+		return true;
+	}
+
 	// A world object handed to a call takes the window's copy when there is one. Without a copy, a parameter the callee may
-	// write drops the call; a value Lua made, bound to a reference, is written as a copy instead (the converter's rule).
+	// write drops the call; a value a script holds goes in as a copy.
+	// A free function (no class) that may write its argument takes only what the window made: never the world's object, nor
+	// a preview copy whose life the window manages. A cast writes nothing.
 	bool PreviewFenceArgument(lua_State* L, int index, bool mutablePointer, bool mutableReference, const char* callClass, const char* callName) {
 		luabind::detail::object_rep* rep = luabind::detail::is_class_object(L, index);
+		if (rep && !luabind::detail::preview_fence_writes(rep) && PreviewFenceCopyValue(L, index, rep)) {
+			return true;
+		}
+		const bool freeFunction = !callClass;
+		const bool cast = freeFunction && PreviewFenceCast(L, callName);
+		if (freeFunction && !cast && rep && (mutablePointer || mutableReference)) {
+			int ownOffset = 0;
+			const MovableObject* own = FencedMovableObject(rep, ownOffset);
+			if (!luabind::detail::preview_fence_writes(rep) || (own && LuaMan::IsPreviewClone(own))) {
+				PreviewFenceNoteDropped(std::string(callName ? callName : "?") + "()", "with a writable argument the preview does not own");
+				return false;
+			}
+			return true;
+		}
 		if (!rep || luabind::detail::preview_fence_writes(rep)) {
 			return true;
 		}
@@ -11931,7 +12001,7 @@ namespace {
 			lua_replace(L, index);
 			return true;
 		}
-		if (!mutablePointer && !mutableReference) {
+		if (cast || (!mutablePointer && !mutableReference)) {
 			return true;
 		}
 		if (mutableReference && !mo && (rep->flags() & luabind::detail::object_rep::owner)) {
@@ -11939,6 +12009,11 @@ namespace {
 		}
 		PreviewFenceNoteDropped(std::string(callClass ? callClass : "?") + ":" + (callName ? callName : "?"), "with a writable argument the preview does not own");
 		return false;
+	}
+
+	// The window's own copies and what it made fill their caches; every other object keeps the ones its checkpoint holds.
+	bool PreviewFenceKeepsCaches(const MOSprite* object) {
+		return s_PreviewBindingFenceOpen && !(LuaMan::IsPreviewClone(object) || object->GetUniqueID() > s_PreviewBindingUIDFloor);
 	}
 
 	void OpenPreviewBindingFence() {
@@ -11953,6 +12028,9 @@ namespace {
 		luabind::detail::preview_fence::runs = &PreviewFenceRuns;
 		luabind::detail::preview_fence::argument = &PreviewFenceArgument;
 		s_PreviewLastDroppedCall.clear();
+		MOSprite::s_PreviewKeepsCachesOf = &PreviewFenceKeepsCaches;
+		s_PreviewSavedMORNG = s_workerMORNG;
+		s_PreviewSavedLuaRNGOverride = s_luaRNGOverride;
 		luabind::detail::preview_fence::open();
 	}
 
@@ -11962,6 +12040,15 @@ namespace {
 		}
 		s_PreviewBindingFenceOpen = false;
 		s_PreviewCloneOf.clear();
+		// What the window made and a script still holds leaves the world's index, so no canonical lookup finds it.
+		for (MovableObject* known: g_MovableMan.SnapshotKnownObjects()) {
+			if (known && known->GetUniqueID() > s_PreviewBindingUIDFloor) {
+				g_MovableMan.UnregisterObject(known);
+			}
+		}
+		MOSprite::s_PreviewKeepsCachesOf = nullptr;
+		s_workerMORNG = s_PreviewSavedMORNG;
+		s_luaRNGOverride = s_PreviewSavedLuaRNGOverride;
 		luabind::detail::preview_fence::close();
 	}
 }
