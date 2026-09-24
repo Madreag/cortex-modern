@@ -2839,9 +2839,10 @@ static std::string ResyncSaveName() {
 		                   !g_ActivityMan.ActivityRunning() ? "the activity is not running" : nullptr;
 		if (held || !m_IsHost) {
 			// A returner that waits on a base the host cannot take says why, once per reason.
-			if (held && held != m_PrivateBaseHeldReason && std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [](const NetWorldJoinSession& session) { return session.phase == NetWorldJoinPhase::SnapshotTransfer; }))
+			if (held && held != m_PrivateBaseHeldReason && std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [](const NetWorldJoinSession& session) { return session.phase == NetWorldJoinPhase::SnapshotTransfer; })) {
 				System::PrintDiagnosticLine(std::string("[net-match] private base waits: ") + held);
-			m_PrivateBaseHeldReason = held;
+				m_PrivateBaseHeldReason = held;
+			}
 			return;
 		}
 		m_PrivateBaseHeldReason = nullptr;
