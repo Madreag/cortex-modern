@@ -768,7 +768,8 @@ namespace RTE {
 				case Event::Ban: {
 					const bool kick = event == Event::Kick;
 					const NetPeerId peer = HostSessionPeer(r);
-					r.host.EvictRemovedPeer(2, kick ? "kicked" : "banned", r.now);
+					// As the service does: a round already ended for a relaunch is not evicted from.
+					if (r.host.IsRunning() && !r.host.HasPendingRecoveryStop()) r.host.EvictRemovedPeer(2, kick ? "kicked" : "banned", r.now);
 					if (peer != c_InvalidNetPeerId) r.hostSession.DisconnectReadyPeer(peer, kick ? NetRejectReason::ParticipantRemoved : NetRejectReason::ParticipantBanned, kick ? "kicked" : "banned");
 					return "ok";
 				}

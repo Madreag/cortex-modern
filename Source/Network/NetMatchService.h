@@ -618,6 +618,8 @@ namespace RTE {
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 		void PreparePrivateRejoinCheckpoint();
+		/// Host: a returning seat is waiting and the private base it would load is missing, abandoned or older than one capture interval.
+		bool PrivateBaseWantedLocked(uint64_t nowMs) const;
 		/// Whether a private base taken earlier is due again, for a seat held now or one returned after the base was taken.
 		/// steadyCaptureMs is the median of the last captures past the round's first, or negative before there is one.
 		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double steadyCaptureMs);
@@ -655,6 +657,9 @@ namespace RTE {
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
 		bool BeginHeldRejoin(std::string* error = nullptr);
+		/// Held client: its rejoin found the host gone, so it rejoins the next peer the match's successor order names.
+		/// @return Whether an attempt started; false when the failure was not the host's departure or no successor is left.
+		bool BeginHeldRejoinOnNextHost(std::string* error = nullptr);
 		/// How far every rejoin this host is serving has come: its admission, its phase, the image staged for
 		/// it, the transfer it has acknowledged and the tail it has consumed. The goodbye drain watches this
 		/// beside the round's own progress, because a rejoin commits no frame until it is back in the round.
@@ -866,6 +871,9 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
+		/// Moves a returning seat's activation to the first frame the agreed park cannot reach and tells the returner.
+		/// @return Whether the returner was told a new frame; false when it already used its re-announce.
+		bool MovePrivateActivationPastPark(const NetWorldJoinSession& session);
 		/// Bounds a returning seat's wait on the private capture's writer: one fresh capture, then the seat stays with the AI.
 		void BoundPrivateImageWait(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
@@ -1403,6 +1411,8 @@ namespace RTE {
 		bool m_HostGoodbyeSeen = false;
 		/// Host: a seat was held when the round ended, so a rejoin still arriving is owed the goodbye.
 		bool m_GoodbyeOwedToRejoiners = false;
+		/// A goodbye belongs to the round it ended; the next round and a torn-down service start without one.
+		void ResetRoundGoodbyeLocked() { m_CompletedRoundFinalFrame = 0; m_HostGoodbyeSeen = false; m_GoodbyeOwedToRejoiners = false; }
 		struct LastResyncMetrics {
 			uint64_t archiveBytes = 0;
 			uint64_t envelopeBytes = 0;
@@ -1432,6 +1442,9 @@ namespace RTE {
 		bool m_LastJoinTargetPersistentWorld = false;
 		std::optional<NetMatchServiceRequest> m_LastJoinRoute;
 		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
+		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
+		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
+		uint64_t m_HeldRejoinPriorInput = 0;
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::set<NetPeerId> m_PrivateActivations;
 		std::map<NetPeerId, std::future<std::vector<uint8_t>>> m_PrivateJoinBlobs;
