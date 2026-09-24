@@ -12165,6 +12165,32 @@ namespace {
 			}
 		}
 	}
+
+	// Every state's birth counter as the window found it: what the window creates dies with it, so the numbers go back.
+	std::vector<std::pair<LuaStateWrapper*, uint64_t>> s_PreviewStateSerials;
+
+	void OpenPreviewWindow() {
+		if (s_PreviewBindingFenceOpen) {
+			return;
+		}
+		OpenPreviewBindingFence();
+		s_PreviewStateSerials.clear();
+		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewStateSerials.emplace_back(&state, luaJIT_state_serial(state.GetLuaState())); });
+	}
+
+	void ClosePreviewWindow() {
+		if (!s_PreviewBindingFenceOpen) {
+			return;
+		}
+		// Without the globals fence a window's tables can outlive it, so their numbers stay taken.
+		if (LuaMan::PreviewGlobalFenceEnabled()) {
+			for (const auto& [state, serial]: s_PreviewStateSerials) {
+				luaJIT_set_state_serial(state->GetLuaState(), serial);
+			}
+		}
+		s_PreviewStateSerials.clear();
+		ClosePreviewBindingFence();
+	}
 }
 
 bool LuaMan::IsPreviewClone(const MovableObject* mo) {
@@ -12204,7 +12230,7 @@ std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
 
 void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
 	// Open first, so the copies the hold makes are the window's own to write.
-	OpenPreviewBindingFence();
+	OpenPreviewWindow();
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
 	if (!sharedSlot) {
@@ -12246,7 +12272,7 @@ bool LuaMan::PreviewGlobalFenceEnabled() {
 }
 
 void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot, const std::vector<const MovableObject*>& originals) {
-	OpenPreviewBindingFence();
+	OpenPreviewWindow();
 	s_PreviewClones.clear();
 	s_PreviewRootByUID.clear();
 	s_PreviewPartByUID.clear();
@@ -12349,7 +12375,7 @@ void LuaMan::EndPreviewScripts() {
 			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;
 		}
 	}
-	ClosePreviewBindingFence();
+	ClosePreviewWindow();
 }
 
 CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
