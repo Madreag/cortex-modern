@@ -276,7 +276,7 @@ namespace RTE {
 		if (frame.inputMode == static_cast<uint8_t>(Controller::CIM_PLAYER) && frame.playerRaw >= 0 && UInputMan::IsConstructed() &&
 		    (!MovableMan::IsConstructed() || !g_MovableMan.IsSpeculative())) {
 			g_UInputMan.NoteCommittedSeatMouse(frame.playerRaw, Vector(static_cast<float>(frame.mouseDeltaX), static_cast<float>(frame.mouseDeltaY)),
-			                                   static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
+			                                   frame.IsLegacy() ? uint8_t{0} : frame.deviceClass, static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 		}
 		return true;
 	}
