@@ -934,6 +934,28 @@ def check_recorder_flush(results, scratch):
     return ok
 
 
+def check_fullstate_applicability(results, scratch):
+    """A pair that never started a lockstep round has no full-state verdict; one that started and shares no sample is red."""
+    root = scratch / "fullstate-applicability"
+    root.mkdir()
+    host, client = root / "host.log", root / "client.log"
+    host.write_text("[menu-script] dump_lobby state=Completed members=2\n")
+    client.write_text("[menu-script] dump_lobby state=Failed members=1\n")
+    lobby = driver.fullstate_verdict(host, client)
+    ok = row(results, "fullstate/lobby-scenario-is-not-applicable", lobby["passed"] is None and bool(lobby["not_applicable"]), str(lobby))
+    capture = {"name": "run0", "peers": [], "fullstate": {"host/client": lobby}}
+    document = driver.review({"name": "lobby", "checklist": []}, capture, root)
+    ok &= row(results, "fullstate/not-applicable-is-no-finding", not any("full-state" in f["reason"] for f in document["run_findings"]))
+    client.write_text(driver.LOCKSTEP_ROUND_START + "1 frame=1 local_peer=2 peers=2 input_delay=3\n")
+    started = driver.fullstate_verdict(host, client)
+    ok &= row(results, "fullstate/started-round-without-samples-is-red", started["passed"] is False
+              and started["reasons"] == ["the peers share no full-state sample"], str(started))
+    capture["fullstate"] = {"host/client": started}
+    document = driver.review({"name": "lobby", "checklist": []}, capture, root)
+    ok &= row(results, "fullstate/red-verdict-is-a-finding", any("full-state oracle" in f["reason"] for f in document["run_findings"]))
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -971,6 +993,7 @@ def main():
         ok &= check_cross_transfer(results, scratch)
         ok &= check_migration_timing(results, scratch)
         ok &= check_recorder_flush(results, scratch)
+        ok &= check_fullstate_applicability(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",
