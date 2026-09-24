@@ -3583,6 +3583,8 @@ static std::string ResyncSaveName() {
 			const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
 			NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
 			if (seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != peer.transportPeerId) continue;
+			// The held seat's own connection lingers until its transport times out; a returner reclaims, which moves the incarnation on.
+			if (const auto hold = m_Coordinator->HeldTransactions().find(member); hold != m_Coordinator->HeldTransactions().end() && incarnation <= hold->second.seatIncarnation) continue;
 			std::string error;
 			if (!m_WorldJoin.BeginRejoin(holder, seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
 			m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
