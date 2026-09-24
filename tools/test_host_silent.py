@@ -62,7 +62,9 @@ def judge(out: Path, repo: Path) -> dict:
     client = (run / "client" / "stdout.log").read_text(encoding="utf-8", errors="replace")
     host = (run / "host" / "stdout.log").read_text(encoding="utf-8", errors="replace")
     failures = []
-    verdict = {"client_took_over": SELF_HOSTED.findall(client), "catch_up_complete": CAUGHT_UP.findall(client),
+    # The coordinator names the election's winner; the service refuses a lone one, and only an unrefused one is a split brain.
+    refused = "no other survivor" in client
+    verdict = {"client_took_over": [] if refused else SELF_HOSTED.findall(client), "lone_election_refused": refused, "catch_up_complete": CAUGHT_UP.findall(client),
                "host_stall": [line for line in host.splitlines() if "live stall" in line][:1],
                "client_landed": "The host left the match" in client}
     if verdict["client_took_over"]:
