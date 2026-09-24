@@ -3779,6 +3779,11 @@ static std::string ResyncSaveName() {
 				}
 				std::string error;
 				if (!m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error)) {
+					if (m_PrivateTransferHeldReasons[session.connection] != error) {
+						m_PrivateTransferHeldReasons[session.connection] = error;
+						System::PrintDiagnosticLine("[net-match] reclaim not scheduled peer=" + std::to_string(session.assignedPeerId) + " e=" + std::to_string(session.activationTick) +
+						                            " incarnation=" + std::to_string(session.incarnation) + ": " + error);
+					}
 					m_PrivateJoinError = error; continue;
 				}
 				m_PrivateActivations.insert(session.connection);
@@ -4486,7 +4491,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		// No tail reaches its state: it comes back through the image on a new connection.
-		System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(member) + " cannot catch up in place: " + error);
+		System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(member) + " cannot catch up in place: " + error + " (sessions=" + std::to_string(m_WorldJoin.Sessions().size()) + ")");
 		m_Session->DisconnectReadyPeer(connection, NetRejectReason::HostNotAccepting, "slow player: rejoin from the host's image");
 	}
 

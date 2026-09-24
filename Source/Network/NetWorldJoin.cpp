@@ -1769,6 +1769,16 @@ namespace RTE {
 			return false;
 		}
 		session->acknowledgedThrough = appliedThrough;
+		// The replay's own progress against the round's committed horizon, both in frames: a loaded machine slows the round too,
+		// so no wall clock enters it.
+		if (session->closingAnchorHorizon == 0 || nowFrame < session->closingAnchorHorizon) {
+			session->closingAnchorApplied = appliedThrough; session->closingAnchorHorizon = nowFrame;
+		} else if (nowFrame - session->closingAnchorHorizon >= c_NetWorldClosingWindowFrames) {
+			const double round = static_cast<double>(nowFrame - session->closingAnchorHorizon);
+			session->closingRate = (static_cast<double>(appliedThrough - session->closingAnchorApplied) - round) / round;
+			session->closingMeasured = true;
+			session->closingAnchorApplied = appliedThrough; session->closingAnchorHorizon = nowFrame;
+		}
 		session->catchUpTicks += ticksReplayed;
 		session->catchUpMs += elapsedMs;
 		// The first report carries the whole replay so far against no clock; only timed reports measure the rate.
@@ -1804,8 +1814,18 @@ namespace RTE {
 		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame) {
 			return true;
 		}
-		// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline.
-		session->activationTick = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
+		// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline. One still closing
+		// is given the frames its measured rate needs to reach the horizon too, so it is at its activation before the round is.
+		const uint64_t behind = nowFrame > appliedThrough ? nowFrame - appliedThrough : 0;
+		uint64_t activation = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
+		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4) {
+			// Not yet measured over a window, or losing ground on the round: it keeps replaying.
+			if (!session->closingMeasured || session->closingRate < -0.1) return true;
+			// One at the round's pace stands behind by its link, which its input delay already covers.
+			if (session->closingRate > 0.1)
+				activation = std::max(activation, nowFrame + static_cast<uint64_t>(std::ceil(behind / session->closingRate)) + c_NetWorldActivationLeadFrames);
+		}
+		session->activationTick = activation;
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
 	}
