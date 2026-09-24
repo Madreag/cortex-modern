@@ -4328,6 +4328,7 @@ namespace RTE {
 	// out: the local production a follower keeps, and the deferred-stop mode the launch path sets.
 	void NetLockstepCoordinator::ResetRoundState() {
 		m_PeerAdmissions.clear();
+		m_LeavesHeardAhead.clear();
 		m_PeerDeviceClasses.fill(0);
 		m_HostAcceptedLocalFrames.clear();
 		m_ResumeAdmissionPending = m_Config.resumeFromSnapshot;
@@ -7733,7 +7734,7 @@ namespace RTE {
 				}
 				m_ReclaimTransactions[reclaim->peerId] = *reclaim;
 				m_Config.peerIncarnations[reclaim->peerId] = reclaim->seatIncarnation;
-				m_AiHeldSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
+				m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
 				m_PeerLeaveFrames.erase(reclaim->peerId); m_PeerFrameWaivers.erase(reclaim->peerId);
 				m_DroppedSeats.erase(reclaim->peerId); m_LeftSeatsHeld.erase(reclaim->peerId); m_DroppedAtMs.erase(reclaim->peerId);
 				m_DroppedSeatResolutions[reclaim->peerId] = NetLockstepHoldResolution::Reclaimed;
@@ -7849,13 +7850,13 @@ namespace RTE {
 		const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
 		if (m_LastDeliveredFrame && IsSeatUnderAI(ownerPeerId, *m_LastDeliveredFrame)) return GetHostPeerId();
 		// A leaver's team falls to its next surviving human peer, so the units play on. The lockstep gate synchronizes leave
-		// knowledge, so every peer re-resolves identically - except for an announced leave heard before its frame: the
-		// leaver's own inputs drive its units until that frame is committed, so a running round re-resolves them there.
+		// knowledge, so every peer re-resolves identically - except for a leave heard before its frame: the leaver's own
+		// inputs drive its units until that frame is committed, so the round re-resolves them there.
 		const auto leave = m_PeerLeaveFrames.find(ownerPeerId);
-		const bool announcedAhead = leave != m_PeerLeaveFrames.end() && IsRunning() && !m_DroppedSeats.contains(ownerPeerId) &&
-		                            (!m_LastDeliveredFrame || *m_LastDeliveredFrame < leave->second);
+		const bool heardAhead = leave != m_PeerLeaveFrames.end() && m_LeavesHeardAhead.contains(ownerPeerId) &&
+		                        (!m_LastDeliveredFrame || *m_LastDeliveredFrame < leave->second);
 		if (UsesBoundedWait() || m_Playback ? m_LastDeliveredFrame && IsPeerGoneAtFrame(ownerPeerId, *m_LastDeliveredFrame)
-		                                 : leave != m_PeerLeaveFrames.end() && !announcedAhead) {
+		                                 : leave != m_PeerLeaveFrames.end() && !heardAhead) {
 			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
 			// The host produces AI controllers for a departed team while the round continues.
 			ownerPeerId = survivor != 0 ? survivor : (IsRunning() || IsHoldingSeatForReclaim() ? GetHostPeerId() : survivor);
@@ -8260,6 +8261,8 @@ namespace RTE {
 		m_PeerFrameWaivers.erase(peerId);
 		m_DroppedSeats.erase(peerId);
 		m_AiHeldSeats.erase(peerId);
+		// A released seat that admits a member is that member's: a later hold of it is reclaimable.
+		m_ReleasedAiSeats.erase(peerId);
 		m_DroppedSeatResolutions.erase(peerId);
 		// The member's round starts at E, so its own first produced target is E plus its input delay.
 		// The frames before that are the ones this admission replays; the round must not wait on the
@@ -9704,6 +9707,8 @@ namespace RTE {
 			m_DroppedSeats.insert(peerId);
 			m_DroppedAtMs[peerId] = nowMs;
 		}
+		// The leaver produced inputs for the frames up to this one: its own inputs drive its units there.
+		if (firstFrameWithout > m_Stats.nextFrame) m_LeavesHeardAhead.insert(peerId);
 		RefreshLeftSeatHolds();
 		std::cout << "[net-match] " << DescribePeer(peerId) << " left the match at frame " << firstFrameWithout << " (" << message << ")" << std::endl;
 		NetLockstepStop notice;

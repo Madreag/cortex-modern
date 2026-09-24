@@ -1097,6 +1097,7 @@ namespace RTE {
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
+		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
 
 	private:
 		void TickHostMigration(uint64_t nowMs);
@@ -1398,6 +1399,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerFrameWaivers; //!< Fenced peers -> the first frame the round stopped requiring.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
 		std::set<uint8_t> m_DroppedSeats;   //!< Classic holds pause; bounded holds commit empty input from their agreed frame.
+		std::set<uint8_t> m_LeavesHeardAhead; //!< Classic leavers whose leave frame was past the round's next frame when heard.
 		std::map<uint8_t, NetLockstepHoldResolution> m_DroppedSeatResolutions;
 		std::map<uint8_t, uint64_t> m_DroppedAtMs;
 		uint64_t m_LastHoldHeartbeatMs = 0;

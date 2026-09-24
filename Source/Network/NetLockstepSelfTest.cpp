@@ -79,6 +79,7 @@ namespace RTE {
 	bool TestAFirstDelayChangeIsNotAMutualWait(std::string* error);
 	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error);
 	bool TestAThinLeadIsRaisedBeforeASpike(std::string* error);
+	bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -9579,10 +9580,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "the classic leave round never started";
 				return false;
 			}
-			// Every peer produces its delayed inputs for frames 0..5; the survivors commit 0..2 before the leaver announces its leave.
+			// The leaver has produced further ahead than the survivors when it announces its leave, so the round has not
+			// yet committed every frame its own inputs drive.
 			for (uint64_t f = 0; f < 6; ++f) {
-				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) || !leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
-				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) return false;
+				if (!leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error)) return false;
+				if (f < 3 && (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) || !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error))) return false;
 			}
 			NetLockstepReadyFrame ready;
 			uint64_t hostCommitted = 0, stayerCommitted = 0;
@@ -9608,7 +9610,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				         " owner_host=" + std::to_string(beforeHost) + " owner_stayer=" + std::to_string(beforeStayer);
 				return false;
 			}
-			for (uint64_t f = 6; f <= leaveFrame + 1; ++f) {
+			for (uint64_t f = 3; f <= leaveFrame + 1; ++f) {
 				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) || !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) return false;
 			}
 			if (!drive(3000, [&] { return pop(leaveFrame); })) {
@@ -19682,6 +19684,46 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	// window of arrivals under the delay it got.
 	// A seat whose inputs arrive with a frame of lead is raised to the bound's worth before a spike finds it: a 70 ms stall that held
 	// it at that lead passes with no hold and no wait past the bound, and a machine that cannot keep pace gains no more than the bound.
+	// A world member admitted into a seat the AI kept after a release owns it: a later hold of it is reclaimable, not released.
+	bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error) {
+		LoopbackTransport hostT;
+		if (!hostT.StartHost(43198, error)) return false;
+		NetMatchConfig world = NetMatchConfigUtil::MakeDefault(0x574F524C45ULL);
+		world.version = NetMatchConfigUtil::c_PersistentWorldVersion;
+		world.persistentWorld = true;
+		world.dedicated = true;
+		world.worldId = "sweep-released-seat";
+		world.worldBoot = 1;
+		world.peerCount = 2;
+		world.hostPeerId = 1;
+		world.players = {NetMatchPlayerSlot{0, 0, true, "World"}, NetMatchPlayerSlot{2, 1, false, "Player"}};
+		NetLockstepConfig config;
+		config.sessionId = 3;
+		config.localPeerId = 1;
+		config.peerCount = 2;
+		config.timeoutMs = 1000000;
+		config.relayToOtherPeers = true;
+		config.matchConfig = world;
+		NetLockstepCoordinator host;
+		if (!host.Start(hostT, config, error)) return false;
+		host.m_AiHeldSeats[2] = host.GetStats().nextFrame;
+		host.ReleaseHeldSeat(2, 0, false);
+		if (!host.IsSeatReleased(2)) {
+			*error = "the fixture could not release a held seat";
+			return false;
+		}
+		const uint64_t firstRequired = host.GetStats().nextFrame + 60;
+		if (!host.AdmitWorldMember(2, 1, firstRequired, error)) return false;
+		host.m_AiHeldSeats[2] = firstRequired + 10;
+		if (host.IsSeatReleased(2) || !host.HasHeldAISeat(2)) {
+			*error = "a member admitted into a released seat still reads it released: released=" + std::to_string(host.IsSeatReleased(2)) +
+			         " held_reclaimable=" + std::to_string(host.HasHeldAISeat(2));
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_world_admission_clears_a_released_seat" << std::endl;
+		return true;
+	}
+
 	bool TestAThinLeadIsRaisedBeforeASpike(std::string* error) {
 		struct Case { const char* name; uint64_t clientPeriodMs; uint64_t stallAtTick; }; // 0: no stall
 		const Case cases[] = {{"a spike on a thin lead", 17, 330}, {"a machine that cannot keep pace", 25, 0}};
@@ -19979,6 +20021,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAFirstDelayChangeIsNotAMutualWait, "a_first_delay_change_is_not_a_mutual_wait");
 		row(&TestALiveDelayDecreaseKeepsAWaitedSeatsSlack, "a_live_delay_decrease_keeps_a_waited_seats_slack");
 		row(&TestAThinLeadIsRaisedBeforeASpike, "a_thin_lead_is_raised_before_a_spike");
+		row(&TestAWorldAdmissionClearsAReleasedSeat, "a_world_admission_clears_a_released_seat");
 		row(&TestAReturnerAnswersItsSuccessor, "a_returner_answers_its_successor");
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
