@@ -3945,6 +3945,7 @@ namespace RTE {
 		m_ObservationDecodeTables.Reset();
 		m_ObservationDecodeTables.roundId = m_RoundId;
 		m_LastQueuedTargetFrame = UINT64_MAX;
+		m_LastProducedFrame = UINT64_MAX;
 		m_Stats.nextFrame = m_Config.startFrame;
 		m_Stats.configuredStartFrame = m_Config.startFrame;
 		m_Stats.effectiveStartFrame = m_Config.startFrame;
@@ -4181,6 +4182,7 @@ namespace RTE {
 		m_LocalObservations.clear();
 		m_LocalValueObservations.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
+		m_LastProducedFrame = UINT64_MAX;
 		m_RoundId = config.roundId;
 		m_ObservationDecodeTables.roundId = m_RoundId;
 		m_Stats = {};
@@ -4392,6 +4394,7 @@ namespace RTE {
 		m_RelayBacklog.clear();
 		m_RelayBacklogSinceMs.clear();
 		m_RelayedTicks.clear();
+		m_RelayedTickFrames.clear();
 		m_ReliableFramesThrough.clear();
 		m_ResendRequests.clear();
 		m_DecisionCommittedAtMs.clear();
@@ -4638,6 +4641,7 @@ namespace RTE {
 		m_LocalObservations.clear();
 		m_LocalValueObservations.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
+		m_LastProducedFrame = UINT64_MAX;
 		m_PeerEffectiveStart.clear();
 		m_RoundId = config.roundId;
 		m_Stats = {};
@@ -4819,7 +4823,33 @@ namespace RTE {
 			return false;
 		}
 		m_DeferredControllerFrames.clear();
+		m_LastProducedFrame = producedFrame;
+		PadAheadOfDelayRise();
 		return true;
+	}
+
+	void NetLockstepCoordinator::PadAheadOfDelayRise() {
+		if (m_Playback || !IsRunning() || m_LastProducedFrame == UINT64_MAX || m_LastQueuedTargetFrame == UINT64_MAX) return;
+		// The sim waits for a tick's committed frame before it runs that tick once its delay is above zero, so a delay
+		// that rises from zero leaves the targets between the last one sent and the next production's owed now: the
+		// same padding the next production would send, sent before the tick that would have to wait for it.
+		const uint64_t next = m_LastProducedFrame + 1;
+		const uint64_t nextTarget = next + InputDelayAt(m_Config.localPeerId, next);
+		if (nextTarget <= m_LastQueuedTargetFrame + 1) return;
+		NetLockstepFrame previous;
+		if (!FindLocalInput(m_LastQueuedTargetFrame, previous)) return;
+		for (auto& controller: previous.frames) {
+			controller.stateMask &= ~DelayedControllerEdges();
+			controller.mouseDeltaX = controller.mouseDeltaY = 0;
+			controller.SetAimIntent(false);
+			controller.SetFlipIntent(false);
+			controller.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::None);
+		}
+		for (uint64_t pad = m_LastQueuedTargetFrame + 1; pad < nextTarget; ++pad) {
+			std::string ignored;
+			if (!QueueInputAtTarget(pad, previous.frames, {}, &ignored, {})) return;
+			++m_Stats.delayPaddingFrames;
+		}
 	}
 
 	void NetLockstepCoordinator::NoteSeatReclaimed(uint8_t peerId) {
@@ -4989,6 +5019,7 @@ namespace RTE {
 		} else if (timing.action == NetTimingAction::Delay) {
 			m_DelayChanges[timing.peerId][timing.applyFrame] = timing.delayFrames;
 			++m_Stats.delayChangesCommitted;
+			if (timing.peerId == m_Config.localPeerId) PadAheadOfDelayRise();
 			std::cout << "[net-match] delay change peer=" << static_cast<int>(timing.peerId) << " frame=" << timing.applyFrame
 			          << " delay=" << timing.delayFrames << " revision=" << timing.revision << std::endl;
 		} else if (timing.action == NetTimingAction::Reclaim || timing.action == NetTimingAction::WorldAdmission) {
@@ -5425,6 +5456,13 @@ namespace RTE {
 			stats.longestWaitMsSinceReclaim = std::max(stats.longestWaitMsSinceReclaim, elapsed);
 		}
 		if (!missing.empty()) m_Stats.lastMissingPeers = DescribeMissingPeers();
+		// A wait past the bound names what it waits on, once: a stall is a defect to be found, not a number.
+		if (elapsed >= 100 && m_DescribedWaitFrame != frame) {
+			m_DescribedWaitFrame = frame;
+			std::cout << "[net-frame-wait] frame=" << frame << " waiting_ms=" << elapsed << " next=" << m_Stats.nextFrame << " missing=" << DescribeMissingPeers()
+			          << " local_sent_through=" << (m_LastQueuedTargetFrame == UINT64_MAX ? -1 : static_cast<int64_t>(m_LastQueuedTargetFrame))
+			          << " decision=" << TimingDecisionPendingAt(frame) << " " << DescribePendingTimingDecisions(frame) << std::endl;
+		}
 		const uint64_t firstMissing = m_FirstMissingFrame == frame ? std::min(m_FirstMissingMs, m_ConsumerWaitStartMs) : m_ConsumerWaitStartMs;
 		if (DeclareOverdueInputs(frame, nowMs, firstMissing, missing)) AdvanceReadyFrames(nowMs);
 		return m_Stats.nextFrame > frame;
@@ -6101,18 +6139,23 @@ namespace RTE {
 				AdvertiseFrameWindow();
 			}
 		}
-		if ((ack.receivedMask & NetLockstepCodec::c_FrameResendRequestMask) != 0 && (ack.receivedMask & 0xFFU) == m_Config.localPeerId && IsRunning()) {
-			(void)ResendOwnFramesFrom(ack.senderPeerId, ack.highestContiguousFrame);
+		if ((ack.receivedMask & NetLockstepCodec::c_FrameResendRequestMask) != 0 && IsRunning()) {
+			const uint8_t named = static_cast<uint8_t>(ack.receivedMask & 0xFFU);
+			if (named == m_Config.localPeerId) (void)ResendOwnFramesFrom(ack.senderPeerId, ack.highestContiguousFrame);
+			else if (m_RelayHost && named != ack.senderPeerId && IsKnownRemotePeer(named)) (void)ResendRelayedFramesFrom(ack.senderPeerId, named, ack.highestContiguousFrame);
 		}
 	}
 
-	void NetLockstepCoordinator::RequestMissingFrames(uint8_t senderPeerId, uint64_t frame, uint64_t nowMs) {
+	void NetLockstepCoordinator::RequestMissingFrames(uint8_t senderPeerId, uint64_t frame, uint64_t nowMs, uint64_t waitedMs) {
 		if (m_Config.frameLane == NetTransportLane::ControlReliable || m_Playback || !m_Transport) return;
-		// Only a sender this peer hears directly can resend: a client hears everyone else through the host.
-		if (!m_RemoteTransports.contains(senderPeerId)) return;
-		// The same tick is asked for again only once the last answer has had its round trip.
-		const auto& link = m_Stats.peers[senderPeerId];
+		// A client hears every other client through the host, which re-serves what it relayed.
+		const uint8_t via = m_RemoteTransports.contains(senderPeerId) ? senderPeerId : !m_RelayHost && m_RemoteTransports.contains(GetHostPeerId()) ? GetHostPeerId() : 0;
+		if (via == 0) return;
+		// A tick is lost once the sender has sent past it, or once the link it comes over has had its round trip: one
+		// still in flight on a long link arrives by itself. The same tick is asked for again only a round trip later.
+		const auto& link = m_Stats.peers[via];
 		const uint64_t spacingMs = std::max<uint64_t>(static_cast<uint64_t>(std::max(1.0, std::ceil(m_Config.simTickMs))), static_cast<uint64_t>(link.pingMs) + link.jitterMs);
+		if (m_Stats.peers[senderPeerId].highestTargetFrame <= frame && waitedMs < spacingMs) return;
 		auto& [askedFrame, askedAtMs] = m_ResendRequests[senderPeerId];
 		if (askedFrame == frame && nowMs >= askedAtMs && nowMs - askedAtMs < spacingMs) return;
 		askedFrame = frame;
@@ -6122,7 +6165,29 @@ namespace RTE {
 		request.highestContiguousFrame = frame;
 		request.receivedMask = NetLockstepCodec::c_FrameResendRequestMask | senderPeerId;
 		std::string ignored;
-		if (SendPacket({request}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, senderPeerId)) ++m_Stats.frameResendRequests;
+		if (SendPacket({request}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, via)) ++m_Stats.frameResendRequests;
+	}
+
+	size_t NetLockstepCoordinator::ResendRelayedFramesFrom(uint8_t requesterPeerId, uint8_t senderPeerId, uint64_t fromFrame) {
+		if (!m_RelayHost || m_Config.frameLane == NetTransportLane::ControlReliable || !m_RemoteTransports.contains(requesterPeerId)) return 0;
+		const auto kept = m_RelayedTickFrames.find(senderPeerId);
+		if (kept == m_RelayedTickFrames.end()) return 0;
+		NetLockstepObservationBlocks& blocks = m_ObservationBlocks[senderPeerId];
+		size_t resent = 0;
+		uint64_t last = fromFrame;
+		for (auto it = kept->second.lower_bound(fromFrame); it != kept->second.end() && it->first < fromFrame + NetLockstepCodec::c_MaxWindowTicks; ++it) {
+			// Repeated only with the bytes it was first forwarded with, so the requester binds what the others bound.
+			if (!blocks.contains(it->first)) break;
+			std::string error;
+			if (!SendPacket({it->second}, NetTransportLane::ControlReliable, &error, &m_ObservationEncodeTables.Exactly(senderPeerId), nullptr, requesterPeerId, nullptr, &blocks)) break;
+			last = it->first;
+			++resent;
+		}
+		m_Stats.framesResent += static_cast<uint32_t>(resent);
+		if (resent > 0)
+			std::cout << "[lockstep] resent " << resent << " relayed ticks " << fromFrame << ".." << last << " of peer " << static_cast<int>(senderPeerId)
+			          << " to peer " << static_cast<int>(requesterPeerId) << " on the reliable lane" << std::endl;
+		return resent;
 	}
 
 	size_t NetLockstepCoordinator::ResendOwnFramesFrom(uint8_t requesterPeerId, uint64_t fromFrame) {
@@ -6136,7 +6201,7 @@ namespace RTE {
 			if (!FindLocalInput(target, own)) continue;
 			// A tick is repeated only with the bytes it first went out with; re-encoding it against a table that has
 			// moved on would bind keys the requester never saw.
-			if (!blocks.contains(target) && (!own.observations.empty() || !own.valueObservations.empty())) break;
+			if (!blocks.contains(target)) break;
 			own.priorWindow.clear();
 			std::string error;
 			if (!SendPacket({own}, NetTransportLane::ControlReliable, &error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), nullptr, requesterPeerId, nullptr, &blocks)) break;
@@ -9012,8 +9077,13 @@ namespace RTE {
 			}
 			RelayToOtherRemotes({packet}, frame.senderPeerId);
 			relayed.insert(tick.targetFrame);
+			NetLockstepFrame whole = std::move(packet);
+			whole.priorWindow.clear();
+			m_RelayedTickFrames[frame.senderPeerId][tick.targetFrame] = std::move(whole);
 		}
 		relayed.erase(relayed.begin(), relayed.lower_bound(keepFrom));
+		auto& keptTicks = m_RelayedTickFrames[frame.senderPeerId];
+		keptTicks.erase(keptTicks.begin(), keptTicks.lower_bound(keepFrom));
 	}
 
 	NetTransportLane NetLockstepCoordinator::LaneTo(uint8_t peerId, const NetLockstepPacket& packet, NetTransportLane lane) const {
@@ -9672,7 +9742,7 @@ namespace RTE {
 				if (m_MissingSinceFrame != m_Stats.nextFrame) { m_MissingSinceFrame = m_Stats.nextFrame; m_MissingSinceMs = nowMs; }
 				if (nowMs >= m_MissingSinceMs && static_cast<double>(nowMs - m_MissingSinceMs) >= m_Config.simTickMs) {
 					for (uint8_t peer: m_RemotePeerIds) if (IsRemoteRequiredForFrame(peer, m_Stats.nextFrame) &&
-					    (remoteIt == m_RemoteFrames.end() || !remoteIt->second.contains(peer))) RequestMissingFrames(peer, m_Stats.nextFrame, nowMs);
+					    (remoteIt == m_RemoteFrames.end() || !remoteIt->second.contains(peer))) RequestMissingFrames(peer, m_Stats.nextFrame, nowMs, nowMs - m_MissingSinceMs);
 				}
 				if (UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
 					if (m_FirstMissingFrame != m_Stats.nextFrame) { m_FirstMissingFrame = m_Stats.nextFrame; m_FirstMissingMs = nowMs; }
