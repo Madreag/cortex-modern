@@ -906,6 +906,10 @@ namespace RTE {
 		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
 		bool AnyHeldAISeat() const { return !m_AiHeldSeats.empty(); }
+		/// A seat's reclaim or admission is agreed and its activation frame is still ahead.
+		bool HasPendingSeatActivation() const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (reclaim.activationFrame >= m_Stats.nextFrame) return true; return false; }
+		/// Host: the current capture park covers the frame or may still grow to cover it.
+		bool CaptureParkMayReach(uint64_t frame) const;
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.

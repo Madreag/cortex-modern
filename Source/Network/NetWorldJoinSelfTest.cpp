@@ -3141,8 +3141,6 @@ namespace RTE {
 		return 0;
 	}
 
-	/// A seat readmitted for a frame past the round's last one is a member that never played again: the round's goodbye is owed
-	/// to it as to any returner the round does not use, or it times out on a host that has already left and exits as a failure.
 	int TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh() {
 		// The round's first capture pays its warm-up (146 ms before the merge, 51-55 ms after); only the captures after it count.
 		std::deque<double> costs;
@@ -3161,6 +3159,8 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A seat readmitted for a frame past the round's last one is a member that never played again: the round's goodbye is owed
+	/// to it as to any returner the round does not use, or it times out on a host that has already left and exits as a failure.
 	int TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye() {
 		if (!NetMatchService::EndedRoundOwesGoodbye(true, true)) {
 			return Fail("a seat readmitted for frame 2409 of a round that ended at 2401 was left without the goodbye");
@@ -6025,6 +6025,31 @@ namespace RTE {
 		return true;
 	}
 
+	// A park commits empty frames: a capture named while a seat's activation is still ahead would drop the activation it covers.
+	bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-0000000000000005";
+		service.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		uint64_t firstNamed = 0;
+		for (uint64_t tick = 1; tick <= 400 && firstNamed == 0; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick;
+			input.now = static_cast<int64_t>(tick) * tickLength;
+			input.writers = {1};
+			input.lead = 5;
+			input.activationPending = tick <= 300;
+			for (const NetMatchService::CheckpointNote& note: service.StepAutosaveSchedule(input).send) if (note.kind == NetGameCheckpoint::Capture) firstNamed = tick;
+		}
+		if (firstNamed == 0 || firstNamed <= 300) {
+			*error = "capture-named-over-a-pending-activation: first named at tick " + std::to_string(firstNamed) + " while an activation was ahead through 300";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS no_capture_is_named_over_a_pending_activation first_named=" << firstNamed << std::endl;
+		return true;
+	}
+
 	// The schedule rides the committed stream: both entries cross the lockstep wire on the checkpoint
 	// version, and the committed tail a joiner replays carries them unchanged.
 	bool TestCheckpointCommandCrossesTheWire(std::string* error) {
@@ -7046,6 +7071,7 @@ namespace RTE {
 			if (!TestWorldRecorderRollsAtCheckpoint(&error)) return Fail(error);
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
+			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
 			if (!TestACaptureNamedIntoAParkOpensTheNext(&error)) return Fail(error);
 			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);

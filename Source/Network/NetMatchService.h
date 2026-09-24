@@ -449,6 +449,7 @@ namespace RTE {
 			std::vector<uint64_t> finished; //!< Captures this peer's writer finished since the last boundary.
 			std::set<uint8_t> writers; //!< Host: every peer that captures on the schedule.
 			uint16_t lead = 0; //!< Host: ticks between naming a capture and taking it.
+			bool activationPending = false; //!< Host: a seat's agreed activation is still ahead.
 		};
 		struct AutosaveTickOutput {
 			bool capture = false; //!< This peer captures at this tick.
@@ -1055,6 +1056,7 @@ namespace RTE {
 		friend bool TestWorldBootstrapWaitsForLobby(std::string* error);
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
+		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
 		friend bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error);
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
@@ -1262,6 +1264,7 @@ namespace RTE {
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
 		bool m_LandedWithoutFrame = false; //!< The host dropped before this seat committed a frame: it landed with nothing to reclaim.
 		bool m_FailedWithoutFrame = false; //!< The failed round's coordinator had simulated no frame when it was torn down.
+		std::set<NetPeerId> m_HeldWorldReclaims; //!< Host: world joins returning to a seat the AI held, agreed by the reclaim itself.
 		uint64_t m_LastUpdateMs = 0;     //!< The millisecond Update() last ran, so two callers in one frame do one pump.
 		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
 		std::string m_InputDelayText; //!< The announced input-delay line, built beside each lobby publish.
