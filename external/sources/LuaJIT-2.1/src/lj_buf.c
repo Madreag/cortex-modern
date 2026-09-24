@@ -295,7 +295,7 @@ uint32_t LJ_FASTCALL lj_buf_ruleb128(const char **pp)
   if (LJ_UNLIKELY(v >= 0x80)) {
     int sh = 0;
     v &= 0x7f;
-    do { v |= ((*w & 0x7f) << (sh += 7)); } while (*w++ >= 0x80);
+    do { v |= ((uint32_t)(*w & 0x7f) << (sh += 7)); } while (*w++ >= 0x80);
   }
   *pp = (const char *)w;
   return v;
