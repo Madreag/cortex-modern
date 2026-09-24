@@ -1461,6 +1461,14 @@ namespace RTE {
 		uint32_t m_ReconnectRouteTurn = 0; //!< Alternates the reconnect prompt's attempts between the ticket's host and the successors.
 		std::atomic<uint64_t> m_LastHostSessionTrafficMs{0}; //!< Client: when the host's session last sent anything, steady ms.
 		static constexpr uint64_t c_HostTalkingWindowMs = 1000; //!< A host heard within this is alive, whatever its round did.
+		uint8_t m_ElectionHostPeer = 0; //!< Client: the round's host as last seen before an election.
+		uint64_t m_HostSilenceAtElectionMs = UINT64_MAX; //!< Client: how long that host was quiet when its election began.
+		/// A host heard this close to its election announced its leave; a lost one is silent for the host-silence bound (500 ms or more).
+		static constexpr uint64_t c_HostAnnouncedSilenceMs = 250;
+		bool m_RejoinOfRunningMatch = false; //!< Client: this service is rejoining the match it was playing, so its seat committed frames.
+		bool m_HostEndedTheMatch = false; //!< Client: the host left a match this seat finished; it lands and nothing reconnects.
+		/// Client: the host ended the match by leaving it; the ticket goes and no reconnect is offered or driven.
+		void NoteHostEndedTheMatchLocked();
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::set<NetPeerId> m_PrivateActivations;
 		std::map<NetPeerId, std::future<std::vector<uint8_t>>> m_PrivateJoinBlobs;
