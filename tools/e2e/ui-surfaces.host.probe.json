@@ -305,6 +305,34 @@
       "scope": "menu"
     },
     {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_client}/done.json",
+      "scope": "menu"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark ui-host-leave"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonLeaveMatch"
+    },
+    {
+      "op": "wait",
+      "screen": "PauseLeaveConfirm",
+      "elapsed_ms": 450,
+      "scope": "menu"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonLeaveConfirm"
+    },
+    {
+      "op": "wait",
+      "service": "Completed",
+      "scope": "menu"
+    },
+    {
       "op": "finish"
     }
   ]
