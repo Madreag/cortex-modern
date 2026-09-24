@@ -4226,7 +4226,8 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 			// wire takes over from the next tick's controller update.
 			if (!m_RestoringSnapshot && ScenarioRunner::IsLockstepControllerSyncActive()) {
 				actorToAdd->GetController()->SetDisabled(true);
-				m_LockstepJoinQuarantine.emplace_back(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), actorToAdd->GetUniqueID());
+				// A preview's spawn is discarded with the preview, so only the canonical add holds a seat in the quarantine.
+				if (!m_Speculation.active) m_LockstepJoinQuarantine.emplace_back(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), actorToAdd->GetUniqueID());
 			}
 
 			// This will call SetTeam and subsequently force the team as active.
