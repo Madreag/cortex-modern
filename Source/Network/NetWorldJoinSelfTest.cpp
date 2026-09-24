@@ -6621,6 +6621,8 @@ namespace RTE {
 	/// that debt must not refuse the next round's joiners, finish its failed rejoins as "match over" or turn its catch-up link drops
 	/// into a finished match; a torn-down service carries none of it either.
 	bool TestTheGoodbyeEndsWithItsRound(std::string* error) {
+		// A round's launch reads the network settings, as a menu-hosted one does.
+		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
 		const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay, uint64_t round) {
 			NetLockstepConfig lockstep;
 			lockstep.sessionId = 0x474F4F4442594531ULL;
