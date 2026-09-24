@@ -26,7 +26,7 @@ assert_substate JoinSetup
 wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 4000
 assert_visible ListLanGames 1
-activate GameRow0
+activate GameRowPort{PORT}
 wait_ms 900
 assert_label TextJoinPort {PORT}
 wait_ms 495
