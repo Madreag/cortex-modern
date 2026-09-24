@@ -86,6 +86,25 @@ class TraceContracts(unittest.TestCase):
         diverged["runs"][0]["tick_hashes"][-1]["subsystems"]["actors"] = "c" * 64
         self.assertFalse(self.compare(host, diverged, expected_ticks=6, client_away=((3, 4),))[0])
 
+    def test_a_held_client_that_replays_its_own_ticks_is_compared_twice(self):
+        host = copy.deepcopy(self.trace)
+        host["runs"][0]["tick_hashes"] = [{"tick": tick, "total": "a" * 64, "subsystems": dict.fromkeys(CORE | {"controller"}, "b" * 64)}
+                                          for tick in range(1, 7)]
+        client = copy.deepcopy(host)
+        rows = client["runs"][0]["tick_hashes"]
+        client["runs"][0]["tick_hashes"] = rows[:4] + copy.deepcopy(rows[2:])
+        self.assertFalse(self.compare(host, client, expected_ticks=6)[0])
+        passed, result = self.compare(host, client, expected_ticks=6, client_rewinds=(2,))
+        self.assertTrue(passed, result["reasons"])
+        self.assertEqual((result["compared_ticks"], result["client_replayed_ticks"]), (6, 2))
+        self.assertFalse(self.compare(host, client, expected_ticks=6, client_rewinds=(1,))[0])
+        diverged = copy.deepcopy(client)
+        diverged["runs"][0]["tick_hashes"][4]["total"] = "c" * 64
+        diverged["runs"][0]["tick_hashes"][4]["subsystems"]["actors"] = "c" * 64
+        passed, result = self.compare(host, diverged, expected_ticks=6, client_rewinds=(2,))
+        self.assertFalse(passed)
+        self.assertEqual(result["first_divergence"], 3)
+
     def test_tick_range_is_exact(self):
         for mode in ("empty", "duplicate", "gap", "reordered", "extra", "late_start", "bool_tick"):
             with self.subTest(mode=mode):
