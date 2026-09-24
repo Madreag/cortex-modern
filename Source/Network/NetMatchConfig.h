@@ -178,7 +178,18 @@ namespace RTE {
 		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
 		/// Whether the text is a canonical lowercase 8-4-4-4-12 UUID, the only shape a world id may take.
 		static bool IsWorldId(const std::string& text);
+		/// The rules the config hash has followed. A stored hash names the rule that made it, so a checkpoint an
+		/// older build saved is checked by that rule and never by a looser compare.
+		static constexpr uint16_t c_SortedRosterHashRule = 1; //!< The roster's sorted fields alone.
+		static constexpr uint16_t c_WireOrderHashRule = 2; //!< A roster outside the builder's order also binds that order.
+		static constexpr uint16_t c_ConfigHashRule = c_WireOrderHashRule;
 		static NetHash32 HashConfig(const NetMatchConfig& config);
+		/// The hash under a rule this build keeps; nothing for a rule it does not know.
+		static std::optional<NetHash32> HashConfigUnderRule(const NetMatchConfig& config, uint16_t rule);
+		/// The hash a checkpoint stores: "<rule>:<hex>" under the current rule.
+		static std::string StoredConfigHash(const NetMatchConfig& config);
+		/// Splits a stored hash into its rule and hex. A bare hex predates the rule tag, so it is the sorted-roster rule.
+		static bool ParseStoredConfigHash(const std::string& stored, uint16_t& rule, std::string& hex);
 		static std::string BuildReportJson(const NetMatchConfig& config);
 		/// The peer's input delay: its per-sender entry, or the uniform value when no set rides the config.
 		static uint16_t PeerInputDelay(const NetMatchConfig& config, uint8_t peerId);

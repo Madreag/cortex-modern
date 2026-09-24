@@ -65,7 +65,7 @@ namespace RTE {
 		uint64_t savedTick = 0;
 		long long simTimeTicks = 0;
 		uint32_t intervalSeconds = 0;
-		std::string configHash;    //!< Hex of the hash every peer acked for this configuration.
+		std::string configHash;    //!< The hash every peer acked for this configuration, as "<rule>:<hex>"; a bare hex is the first rule.
 		std::string configPayload; //!< Hex of the exact lobby payload bytes that carried it.
 		std::string activityPreset;
 		std::string scenePreset;
