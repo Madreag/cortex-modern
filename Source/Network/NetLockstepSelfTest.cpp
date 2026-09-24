@@ -19525,6 +19525,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "a seat was held for a frame past the round's last tick: frame=2403 last=2401 holds=" + std::to_string(host.m_Stats.peers[2].holds);
 			return false;
 		}
+		// A client whose capped run completes leaves past the last tick: that is its leave, never a hold.
+		host.SetFinalFrame(2401);
+		host.ApplyPeerLeave(2, 2402, "e2e complete", 5000, true, false, false, false);
+		if (!host.GetPeerLeaveFrames().contains(2) || host.m_AiHeldSeats.contains(2) || host.m_Stats.peers[2].holds != 0) {
+			*error = "a leave past the round's last tick became a hold: leave_recorded=" + std::to_string(host.GetPeerLeaveFrames().contains(2)) +
+			         " held=" + std::to_string(host.m_AiHeldSeats.contains(2)) + " holds=" + std::to_string(host.m_Stats.peers[2].holds);
+			return false;
+		}
 		std::cout << "[net-lockstep-selftest] PASS no_seat_is_judged_past_the_last_tick last=2401" << std::endl;
 		return true;
 	}

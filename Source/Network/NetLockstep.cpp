@@ -8956,6 +8956,19 @@ namespace RTE {
 				std::cout << "[lockstep] ignored a start of round " << start.roundId << " that disagrees with this round's setup" << std::endl;
 				return;
 			}
+			// A returning seat's start sent before it took the host's admission terms is its straggler, never the round's end:
+			// the host authored the admission, and the seat's next start carries it.
+			if (const auto admission = m_PeerAdmissions.find(start.localPeerId); admission != m_PeerAdmissions.end() && m_Config.localPeerId == GetHostPeerId() &&
+			    start.localPeerId != m_Config.localPeerId && start.inputDelayFrames != admission->second.delay) {
+				NetLockstepStart delayed = start;
+				delayed.inputDelayFrames = admission->second.delay;
+				if (StartMatchesConfig(delayed)) {
+					++m_Stats.staleRoundPackets;
+					std::cout << "[lockstep] ignored peer " << static_cast<int>(start.localPeerId) << "'s start sent before its admission's delay: " << start.inputDelayFrames
+					          << " for " << admission->second.delay << std::endl;
+					return;
+				}
+			}
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep start mismatch (" + DescribeStartMismatch(start) + ")");
 			return;
 		}
@@ -9691,7 +9704,7 @@ namespace RTE {
 	// frame without processing this, so every peer drops the requirement at the same tick.
 	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport, bool agreedBoundary, bool removed) {
 		// Past the round's last tick no seat is held: a leave there is only a leave.
-		if (UsesBoundedWait() && !agreedBoundary && !removed && m_Config.localPeerId == GetHostPeerId() && !m_GoodbyeDrain) {
+		if (UsesBoundedWait() && !agreedBoundary && !removed && m_Config.localPeerId == GetHostPeerId() && !m_GoodbyeDrain && firstFrameWithout <= m_FinalFrame) {
 			std::cout << "[net-lockstep] a leave becomes a hold for peer " << static_cast<int>(peerId)
 			          << " at frame " << firstFrameWithout << ": " << message << std::endl;
 			// A clean leaver's seat is released once the AI has it: a return is a new join, never a reclaim.
