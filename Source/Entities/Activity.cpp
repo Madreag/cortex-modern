@@ -1233,7 +1233,9 @@ Actor* Activity::GetControlledActor(int player) {
 		return m_RenderSubstituteActor[player];
 	}
 	if (m_SharedPlayerSeats) {
-		return ResolveNetActor(m_LockstepControlUID[player]);
+		// A seat nothing has named yet plays the brain a script gave it this tick, which the brain record names on the next update.
+		const bool unnamed = m_LockstepControlUID[player] == 0 && ScenarioRunner::HasLockstepCoordinator() && IsSeatActive(player) && IsHumanSeat(player);
+		return ResolveNetActor(unnamed ? NetActorUID(m_Brain[player]) : m_LockstepControlUID[player]);
 	}
 	return m_ControlledActor[player];
 }
