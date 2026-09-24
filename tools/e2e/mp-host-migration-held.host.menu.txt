@@ -1,0 +1,22 @@
+wait_ms 1500
+activate ButtonMainToMultiplayer
+wait_ms 450
+activate ButtonMultiplayerHostGame
+wait_ms 450
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+settext TextHostPort {PORT}
+settext TextHostPlayers 4
+wait_ms 450
+activate ButtonMultiplayerCreate
+wait_ms 450
+assert_substate Lobby
+video_mark migration-listening
+wait_connected 4 90
+wait_remote_ready 90
+assert_label LabelLobbyPlayer0 Host (you)
+assert_label LabelLobbyPlayer1 ClientA
+assert_label LabelLobbyPlayer2 ClientB
+assert_label LabelLobbyPlayer3 ClientC
+dump_lobby
+activate ButtonMultiplayerStart
+wait_ms 120000
