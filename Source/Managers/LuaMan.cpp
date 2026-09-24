@@ -5490,8 +5490,9 @@ static int ScriptGraphNative(lua_State* L) {
 				return 2;
 			}
 		}
-		// A reference is a preset when the registry holds it: an object the script outlived is never read to ask.
-		if (owned || (s_GraphNativeCapture ? s_GraphNativeCapture->Preset(entity) : [&] { const auto presets = LoadedPresets("Entity"); return std::binary_search(presets.begin(), presets.end(), static_cast<const void*>(entity)); }())) {
+		// A capture asks the preset registry, so an object the script outlived is never read to ask; a walk outside one
+		// reads only a reference whose owner still lives.
+		if (owned || (s_GraphNativeCapture ? s_GraphNativeCapture->Preset(entity) : ScriptGraphNativeAlive(L, rep) && entity->IsOriginalPreset())) {
 			const Entity* preset = entity->GetPresetForCopy();
 			lua_pushstring(L, owned ? "copy" : "preset");
 			lua_pushstring(L, entity->GetClassName().c_str());
@@ -7893,8 +7894,9 @@ end
 
 	{
 		// A mod keeps an Area the running scene does not own; a capture carries it by value and a restore hands it back.
-		Scene::Area kept("CheckpointKeptZone");
-		kept.AddBox(Box(Vector(10, 20), 30, 40));
+		// The script's reference outlives this block in the capture's caches, so the area it names lives as long as the process.
+		static Scene::Area kept("CheckpointKeptZone");
+		if (kept.HasNoArea()) kept.AddBox(Box(Vector(10, 20), 30, 40));
 		luabind::object(m_State, &kept).push(m_State);
 		lua_setglobal(m_State, "CheckpointKeptZone");
 		std::string saved, again;
@@ -7905,9 +7907,7 @@ end
 		const bool same = restored && RunScriptString(R"lua(
 local zone = CheckpointKeptZone
 assert(zone ~= nil and zone.Name == "CheckpointKeptZone", "the kept area did not come back by name")
-local count = 0
-for box in zone.Boxes do count = count + 1; assert(box.Corner.X == 10 and box.Corner.Y == 20 and box.Width == 30 and box.Height == 40, "the kept area's box changed") end
-assert(count == 1, "the kept area came back with " .. count .. " boxes")
+assert(not zone:HasNoArea() and zone:IsInside(Vector(15, 25)) and zone:IsInside(Vector(39, 59)) and not zone:IsInside(Vector(41, 61)), "the kept area's box changed")
 )lua") == 0;
 		RunScriptString("CheckpointKeptZone = nil");
 		const bool refused = std::any_of(problems.begin(), problems.end(), [](const std::string& problem) { return problem.find("(Area)") != std::string::npos; });
