@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <fstream>
 #include <limits>
+#include <string>
 
 namespace RTE {
 
@@ -13,7 +14,8 @@ namespace RTE {
 
 		constexpr char c_Magic[] = {'C', 'C', 'C', 'F', 'L', 'O', 'G', '1'};
 		// Version 2 logs carry the current ControllerFrame layout; version 1 logs carry the legacy one.
-		constexpr uint16_t c_LogVersion = 2;
+		/// Version 3 carries version 8 controller frames (the seat's mouse buttons); version 1 carries legacy frames.
+		constexpr uint16_t c_LogVersion = 3;
 
 		void SetError(std::string* error, const std::string& message) {
 			if (error) {
@@ -197,6 +199,11 @@ namespace RTE {
 		uint16_t version = 0;
 		if (!ReadU16LE(in, version) || version < 1 || version > c_LogVersion) {
 			SetError(error, "ControllerLog version mismatch.");
+			return false;
+		}
+		// A version 2 log holds frames of a layout it does not name (version 6 or 7), so it is refused rather than guessed.
+		if (version == 2) {
+			SetError(error, "ControllerLog version 2 predates controller frame version " + std::to_string(ControllerFrame::c_Version) + "; record it again.");
 			return false;
 		}
 		const uint16_t frameVersion = version == 1 ? ControllerFrame::c_LegacyVersion : ControllerFrame::c_Version;
