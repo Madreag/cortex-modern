@@ -123,6 +123,7 @@
 #include "OwnedMovableObjects.h"
 #include "PreviewEventLedger.h"
 #include "PreviewScriptSelfTest.h"
+#include "LuaBindingExhaustiveSelfTest.h"
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
@@ -1856,6 +1857,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				return false;
 			}
 			continue;
+		}
+		if (currentArg == "-preview-binding-exhaustive-selftest") {
+			// Fixtures join the world at 150 and the walk runs at 154, off the 30-tick desync sample; the row plays the pickup_fire replay.
+			LuaBindingExhaustiveSelfTest::Arm(150, 154);
 		}
 		if (!lastArg && currentArg == "-lpinv-overlay-links") {
 			// b spawn and shadow links, r a shadow item in reach, c spawn parts, wounds and a shadow part.
@@ -5792,6 +5797,9 @@ void RunGameLoop() {
 			NoteE2eSwitchOwnerLog(simTick);
 			TickProbeIfArmed(simTick);
 			LocalPredictionInvarianceOnTick(simTick);
+			if (LuaBindingExhaustiveSelfTest::OnTick(simTick) > 0) {
+				s_netReplayExitCode = 5;
+			}
 			PreviewEventLedgerFrameOnTick();
 			TrackUidsIfArmed(simTick);
 			DumpTerrainIfArmed(simTick);
