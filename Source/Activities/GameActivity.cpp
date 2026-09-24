@@ -1,4 +1,5 @@
 #include "CheckpointArchive.h"
+#include "CaptureSentinel.h"
 #include "GameActivity.h"
 
 #include "CameraMan.h"
@@ -3458,7 +3459,8 @@ std::string GameActivity::SaveValueCheckpoint() const {
 		AudioMan::SoundCheckpointSaveScope* const sounds = AudioMan::SoundCheckpointSaveScope::Current();
 		std::vector<std::future<void>> tasks;
 		for (size_t index = 0; index < menus.size(); ++index) {
-			tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&menus, &menu, sounds, index] {
+			tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&menus, &menu, sounds, index, task = CaptureSentinel::CurrentTask()] {
+				CaptureSentinel::WorkerScope worker(task);
 				AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
 				menus[index] = CheckpointWriter::CaptureNative(menu(static_cast<int>(index) / c_MenuParts, static_cast<int>(index) % c_MenuParts));
 			}));
