@@ -1766,7 +1766,17 @@ namespace RTE {
 		m_Metrics.NoteCatchUp(ticksReplayed, elapsedMs);
 		// A returning seat is activated only once it has shown it replays faster than the round plays.
 		const bool provesHeadroom = IsPrivateMatch() || session->returnsToHeldSeat;
-		if (provesHeadroom && (!session->linkFits || !session->headroom.Ready())) return true;
+		if (provesHeadroom && (!session->linkFits || !session->headroom.Ready())) {
+			// A returner held back from its activation says why, once per reason.
+			const char* reason = !session->linkFits ? "its link does not fit the round's delay" : "its replay has not shown headroom over the round";
+			if (reason != session->activationHeldReason) {
+				std::ostringstream line;
+				line << "[net-world] activation waits peer=" << static_cast<int>(session->assignedPeerId) << ": " << reason << " (replay ratio " << session->headroom.Ratio() << ")";
+				System::PrintDiagnosticLine(line.str());
+				session->activationHeldReason = reason;
+			}
+			return true;
+		}
 		if (session->activationTick != 0) {
 			return true;
 		}
