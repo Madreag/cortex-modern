@@ -133,6 +133,9 @@ namespace RTE {
 		const std::vector<std::unique_ptr<Entity>>& GetCheckpointRetainedOwners() const { return m_NetRetainedOwners; }
 		Entity* GetCheckpointRetainedOwner(size_t index) const { return index < m_NetRetainedOwners.size() ? m_NetRetainedOwners[index].get() : nullptr; }
 		void ReclaimNetRetainedOwners() const;
+		/// A capture's workers save an editor holding a retained owner nothing references while another reads it.
+		/// @return Whether the owner outlived the capture's parallel phase and was dropped at the next save after it.
+		static bool RunRetainedOwnerCaptureSelfTest();
 
 		/// Sets the current mode of this editor.
 		/// @param newMode The new mode to set to, see the EditorGUIMode enum.

@@ -232,6 +232,16 @@ namespace RTE {
 		/// @return The resulting transformed Vector.
 		Vector operator*(const Vector& rhs);
 
+		/// Transforms a Vector exactly as operator* does, reading the element cache when it is current and never filling it.
+		/// @param rhs A Vector reference as the right hand side operand.
+		/// @return The resulting transformed Vector.
+		Vector TransformKeepingCache(const Vector& rhs) const;
+
+		/// Transforms a Vector back exactly as operator/ does, reading the element cache when it is current and never filling it.
+		/// @param rhs A Vector reference as the right hand side operand.
+		/// @return The resulting transformed Vector.
+		Vector InverseTransformKeepingCache(const Vector& rhs) const;
+
 		/// Multiplication operator overload for Vectors with Matrices.
 		/// @param lhs A Vector reference as the left hand side operand.
 		/// @param rhs A Matrix reference as the right hand side operand.

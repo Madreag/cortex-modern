@@ -12,7 +12,10 @@ argument: the same walk runs tools/fixtures/preview_argument_fence.lua, whose pr
 script keeps.
 nilchain: the same walk runs tools/fixtures/preview_nil_chain.lua, whose hook chains on a call a preview drops.
 cache: the same walk runs tools/fixtures/preview_reader_cache.lua, whose preview copy asks a kept thruster for its burst
-impulse, a reader-named call that fills a cache the real script reads later.
+impulse, a reader-named call that fills a cache the real script reads later: the preview must read it at once and leave
+the cache as it was.
+random: the same walk runs tools/fixtures/preview_random_effect.lua, whose stride hook jolts the actor by amounts it
+draws from the random helpers; the preview's copy shows the jolt at once and the committed draws stay the same.
 craft: the host's seat flies a landing craft (tools/fixtures/craft_handoff_activity.lua) that hands out its passenger.
 
 Per-tick hashes are compared strictly on every tick both peers recorded, leaving out only the routing subsystem each
@@ -64,6 +67,9 @@ CASES = {
     "cache": {"ticks": 600, "files": ["preview_reader_cache.lua"], "index": "",
               "both": ["-test-script", "UserScenes.rte/preview_reader_cache.lua", "-net-local-prediction", "on"],
               "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
+    "random": {"ticks": 1200, "files": ["preview_random_effect.lua"], "index": "",
+               "both": ["-test-script", "UserScenes.rte/preview_random_effect.lua", "-net-local-prediction", "on"],
+               "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
     "craft": {"ticks": 480, "files": ["craft_handoff_activity.lua"], "index": CRAFT_ACTIVITY,
               "both": ["-net-match-service-preset", "Determinism Craft Handoff", "-net-match-service-module", "UserScenes.rte"],
               "host": []},
@@ -82,6 +88,8 @@ NIL_REPORT = re.compile(r"PREVIEW: \S*preview_nil_chain\.lua stopped a preview h
 NIL_ERROR = re.compile(r"ERROR: \S*preview_nil_chain\.lua")
 CACHE = re.compile(r"\[preview-cache\] preview uid=(\d+) impulse=(\S+)")
 CACHE_COMMIT = re.compile(r"\[preview-cache\] commit uid=(\d+) tick=(\d+) impulse=([-\d.]+) health=([-\d.]+)")
+RANDOM = re.compile(r"\[preview-random\] preview uid=(\d+) jolt=(\S+) pick=(\S+) spin=(\S+) chance=(\S+) health_before=([-\d.]+) health_after=([-\d.]+)")
+RANDOM_COMMIT = re.compile(r"\[preview-random\] commit uid=(\d+) stride=(\d+) jolt=([-\d.]+) pick=(\d+) spin=([-\d.]+) chance=([-\d.]+) health=([-\d.]+)")
 OUTPARAM = re.compile(r"\[preview-outparam\] preview uid=(\d+) hit_before=([-\d.]+) hit_after=([-\d.]+)")
 CRAFT = re.compile(r"\[craft-fixture\] (hatch opening|passenger out|passenger played) tick=(\d+)")
 
@@ -246,9 +254,17 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
     elif case_name == "cache":
         rows = [dict(zip(("uid", "impulse"), match)) for match in CACHE.findall(texts["host"])]
         commits = {who: CACHE_COMMIT.findall(texts[who]) for who in PEERS}
-        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "dropped": sum(1 for row in rows if row["impulse"] == "nil"), "commits": commits}
-        # The preview's read is dropped, so both peers compute the impulse at the committed tick alike.
-        fixture_ok = bool(rows) and result["previews"]["dropped"] == len(rows) and bool(commits["host"]) and commits["host"] == commits["client"]
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "read": sum(1 for row in rows if row["impulse"] != "nil"), "commits": commits}
+        # The preview reads the impulse at once without filling the thruster's cache, so both peers compute the committed one alike.
+        fixture_ok = bool(rows) and result["previews"]["read"] == len(rows) and bool(commits["host"]) and commits["host"] == commits["client"]
+    elif case_name == "random":
+        rows = [dict(zip(("uid", "jolt", "pick", "spin", "chance", "before", "after"), match)) for match in RANDOM.findall(texts["host"])]
+        commits = {who: RANDOM_COMMIT.findall(texts[who]) for who in PEERS}
+        numeric = re.compile(r"^-?\d+(?:\.\d+)?(?:e-?\d+)?$")
+        shown = sum(1 for row in rows if all(numeric.match(row[key]) for key in ("jolt", "pick", "spin", "chance")) and float(row["after"]) < float(row["before"]))
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "shown": shown, "commits": {who: len(commits[who]) for who in PEERS}}
+        # Every preview run draws all four helpers and its jolt lands on the copy; the committed strides draw alike on both peers.
+        fixture_ok = bool(rows) and shown == len(rows) and bool(commits["host"]) and commits["host"] == commits["client"]
     elif case_name == "outparam":
         rows = [dict(zip(("uid", "before", "after"), match)) for match in OUTPARAM.findall(texts["host"])]
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "value_kept": sum(1 for row in rows if row["before"] == row["after"])}

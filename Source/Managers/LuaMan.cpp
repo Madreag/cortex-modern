@@ -1,6 +1,7 @@
 #include "LuaMan.h"
 
 #include "LuabindObjectWrapper.h"
+#include "CaptureSentinel.h"
 #include "LuaBindingRegisterDefinitions.h"
 #include "ThreadMan.h"
 #include "System.h"
@@ -3911,19 +3912,25 @@ struct VectorField {
 };
 }
 
-// The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
-static std::vector<const void*> LoadedActivityPresets() {
+// The loaded presets of a type by address; a reference to anything else of that type names an instance.
+static std::vector<const void*> LoadedPresets(const char* type) {
 	std::list<Entity*> presets;
-	g_PresetMan.GetAllOfType(presets, "Activity");
+	g_PresetMan.GetAllOfType(presets, type);
 	std::vector<const void*> addresses(presets.begin(), presets.end());
 	std::sort(addresses.begin(), addresses.end());
 	return addresses;
 }
 
+// The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
+static std::vector<const void*> LoadedActivityPresets() { return LoadedPresets("Activity"); }
+
 struct RTE::LuaScriptGraphNativeCaptureData {
 	/// The objects that existed when the capture began, copied by the first question asked of them.
 	const std::vector<MovableObject*>& KnownObjects() const {
-		std::call_once(m_KnownObjectsCopied, [this] { m_KnownObjects = g_MovableMan.SnapshotKnownObjects(); });
+		std::call_once(m_KnownObjectsCopied, [this] {
+			CaptureSentinel::NoteCreation("capture known-objects copy", &m_KnownObjects);
+			m_KnownObjects = g_MovableMan.SnapshotKnownObjects();
+		});
 		return m_KnownObjects;
 	}
 	mutable std::shared_ptr<const void> frozenWorld; // The first frozen state's walk of the world's trees, shared by the rest.
@@ -3931,15 +3938,23 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	/// Whether an object existed when the capture began; only the pointer is read.
 	bool Known(const MovableObject* object) const {
 		std::call_once(m_KnownBuilt, [this] {
+			CaptureSentinel::NoteCreation("capture known-objects lookup", &m_Known);
 			m_Known.assign(KnownObjects().begin(), KnownObjects().end());
 			std::sort(m_Known.begin(), m_Known.end());
 		});
 		return std::binary_search(m_Known.begin(), m_Known.end(), object);
 	}
+	/// Makes the known-objects copy and lookup on this thread, before any worker asks.
+	void PreTouch() const { Known(nullptr); }
 	/// Whether an address is a loaded activity preset; only the pointer is read.
 	bool ActivityPreset(const void* address) const {
 		std::call_once(m_ActivityPresetsBuilt, [this] { m_ActivityPresets = LoadedActivityPresets(); });
 		return std::binary_search(m_ActivityPresets.begin(), m_ActivityPresets.end(), address);
+	}
+	/// Whether an address is a loaded preset of any type; only the pointer is read.
+	bool Preset(const void* address) const {
+		std::call_once(m_PresetsBuilt, [this] { m_Presets = LoadedPresets("Entity"); });
+		return std::binary_search(m_Presets.begin(), m_Presets.end(), address);
 	}
 	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
 	const VectorField* VectorOwner(const void* address) const { return Find(Owners().vectors, address); }
@@ -4019,6 +4034,8 @@ private:
 	}
 	mutable std::once_flag m_ActivityPresetsBuilt;
 	mutable std::vector<const void*> m_ActivityPresets;
+	mutable std::once_flag m_PresetsBuilt;
+	mutable std::vector<const void*> m_Presets;
 	mutable std::once_flag m_KnownObjectsCopied;
 	mutable std::vector<MovableObject*> m_KnownObjects;
 	mutable std::once_flag m_OwnersBuilt;
@@ -4386,6 +4403,8 @@ static bool ScriptGraphNativeAlive(lua_State* L, const luabind::detail::object_r
 		const auto* object = static_cast<const MovableObject*>(rep->ptr());
 		return s_GraphNativeCapture ? s_GraphNativeCapture->Known(object) : g_MovableMan.IsKnownObject(object);
 	}
+	// An alarm lives for the frame that raised it and the next.
+	if (rep->crep() && std::strcmp(rep->crep()->name(), "AlarmEvent") == 0) return g_MovableMan.IsLiveAlarmEvent(static_cast<const AlarmEvent*>(rep->ptr()));
 	if (depth >= 8 || !rep->get_dependencies().is_valid()) return true;
 	bool member = false, alive = false;
 	rep->get_dependencies().get(L);
@@ -4478,6 +4497,34 @@ static int ScriptGraphEntityCast(lua_State* L) {
 	return 1;
 }
 
+// A script's reference can outlive the activity or editor it names, so a dependency is read only while it names the
+// running activity or a loaded preset, or an editor the running activity hands out.
+static bool ScriptGraphReadableDependency(const luabind::detail::object_rep* owner) {
+	if (!owner || !owner->crep()) return true;
+	const void* address = owner->ptr();
+	if ((owner->flags() & luabind::detail::object_rep::owner) == 0) {
+		// A script keeps what it was handed past its object's end: a movable object gone from the world, or an alarm the
+		// last frame raised.
+		if (ClassDerivesFrom(owner->crep(), "MovableObject")) {
+			const auto* object = static_cast<const MovableObject*>(address);
+			return s_GraphNativeCapture ? s_GraphNativeCapture->Known(object) : g_MovableMan.IsKnownObject(object);
+		}
+		if (std::strcmp(owner->crep()->name(), "AlarmEvent") == 0) return g_MovableMan.IsLiveAlarmEvent(static_cast<const AlarmEvent*>(address));
+	}
+	if (ClassDerivesFrom(owner->crep(), "Activity")) {
+		if (address == g_ActivityMan.GetActivity()) return true;
+		if (s_GraphNativeCapture) return s_GraphNativeCapture->ActivityPreset(address);
+		const auto presets = LoadedActivityPresets();
+		return std::binary_search(presets.begin(), presets.end(), address);
+	}
+	if (std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) {
+		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) if (address == game->GetEditorGUI(player)) return true;
+		return false;
+	}
+	return true;
+}
+
 static int ScriptGraphPropertyOwner(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep) return 0;
@@ -4488,8 +4535,10 @@ static int ScriptGraphPropertyOwner(lua_State* L) {
 		rep->get_dependencies().get(L);
 		lua_pushnil(L);
 		while (lua_next(L, -2) != 0) {
-			lua_pushvalue(L, -1);
-			lua_rawseti(L, candidates, ++candidateCount);
+			if (ScriptGraphReadableDependency(luabind::detail::is_class_object(L, -1))) {
+				lua_pushvalue(L, -1);
+				lua_rawseti(L, candidates, ++candidateCount);
+			}
 			lua_pop(L, 1);
 		}
 		lua_pop(L, 1);
@@ -5211,7 +5260,8 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		lua_pushnil(L);
 		while (lua_next(L, -2) != 0) {
 			const auto* owner = luabind::detail::is_class_object(L, -1);
-			if (owner && ClassDerivesFrom(owner->crep(), "Activity")) {
+			if (!ScriptGraphReadableDependency(owner)) {
+			} else if (owner && ClassDerivesFrom(owner->crep(), "Activity")) {
 				if (const int count = activityMember(static_cast<Activity*>(owner->ptr()))) return count;
 			} else if (owner && std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) {
 				if (const int count = editorMember(static_cast<SceneEditorGUI*>(owner->ptr()))) return count;
@@ -5344,6 +5394,15 @@ static int ScriptGraphNative(lua_State* L) {
 			return 2;
 		}
 	}
+	// An Area a script keeps that the running scene does not own (Void Wanderers keeps CF.Activity.Zone) travels by
+	// value, as an owned one does.
+	if (className == "Area" && !owned && rep->ptr()) {
+		lua_pushstring(L, "copy");
+		lua_pushstring(L, className.c_str());
+		lua_pushliteral(L, "");
+		lua_pushliteral(L, "");
+		return 4;
+	}
 	if (className == "Controller" && s_GraphNativeCapture) {
 		if (const long* actor = s_GraphNativeCapture->ControllerOwner(rep->ptr())) {
 			lua_pushstring(L, "controller-ref");
@@ -5431,7 +5490,9 @@ static int ScriptGraphNative(lua_State* L) {
 				return 2;
 			}
 		}
-		if (owned || entity->IsOriginalPreset()) {
+		// A capture asks the preset registry, so an object the script outlived is never read to ask; a walk outside one
+		// reads only a reference whose owner still lives.
+		if (owned || (s_GraphNativeCapture ? s_GraphNativeCapture->Preset(entity) : ScriptGraphNativeAlive(L, rep) && entity->IsOriginalPreset())) {
 			const Entity* preset = entity->GetPresetForCopy();
 			lua_pushstring(L, owned ? "copy" : "preset");
 			lua_pushstring(L, entity->GetClassName().c_str());
@@ -5443,6 +5504,40 @@ static int ScriptGraphNative(lua_State* L) {
 	lua_pushnil(L);
 	lua_pushstring(L, className.c_str());
 	return 2;
+}
+
+// After a relaunch a script can still hold a banner whose owner is the activity that is gone; asked about it, the
+// capture reads neither that activity nor one that is alive but not running.
+static bool RunStaleActivityReferenceSelfTest(LuaStateWrapper& lua) {
+	lua_State* L = lua.GetLuaState();
+	auto stale = std::make_unique<GameActivity>();
+	const void* const staleAddress = stale.get();
+	luabind::object(L, stale.get()).push(L);
+	lua_setglobal(L, "_F417Activity");
+	const bool bound = lua.RunScriptString("_F417Banner = _F417Activity:GetBanner(1, 1); _F417Activity = nil") == 0;
+	// What the capture names as the banner's owner: "owner-ref:stale" when it read the stale activity.
+	const auto described = [&] {
+		const int base = lua_gettop(L);
+		lua_pushcfunction(L, ScriptGraphNative);
+		lua_getglobal(L, "_F417Banner");
+		lua_pushboolean(L, 0);
+		if (lua_pcall(L, 2, LUA_MULTRET, 0) != 0) {
+			lua_settop(L, base);
+			return std::string("error");
+		}
+		std::string kind = lua_type(L, base + 1) == LUA_TSTRING ? lua_tostring(L, base + 1) : "nil";
+		const auto* owner = lua_gettop(L) > base + 1 ? luabind::detail::is_class_object(L, base + 2) : nullptr;
+		if (owner && owner->ptr() == staleAddress) kind += ":stale";
+		lua_settop(L, base);
+		return kind;
+	};
+	const std::string alive = bound ? described() : "unbound";
+	stale.reset();
+	const std::string relaunched = bound ? described() : "unbound";
+	lua.RunScriptString("_F417Banner = nil");
+	const bool passed = bound && alive.find(":stale") == std::string::npos && relaunched.find(":stale") == std::string::npos && relaunched != "error";
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " capture_reads_no_activity_but_the_running_one_or_a_preset alive=" << alive << " relaunched=" << relaunched << std::endl;
+	return passed;
 }
 
 static int ScriptGraphGlobalScript(lua_State* L) {
@@ -6161,6 +6256,11 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 	}
 }
 
+void LuaScriptGraphNativeCaptureScope::PreTouch() {
+	if (const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity())) game->PrepareCheckpointCapture();
+	if (const LuaScriptGraphNativeCaptureData* shared = Current()) shared->PreTouch();
+}
+
 void LuaScriptGraphNativeCaptureScope::BuildWorld(const LuaScriptGraphNativeCaptureData* shared) {
 	if (!shared) return;
 	std::lock_guard worldLock(shared->frozenWorldMutex);
@@ -6176,6 +6276,10 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	std::vector<char> complete(order.size(), 0);
 	CheckpointLua::NativeEffects effects;
 	const LuaScriptGraphNativeCaptureData* shared = LuaScriptGraphNativeCaptureScope::Current();
+	// A world capture made these before its own workers started; a capture of the graphs alone makes them here.
+	ContentFile::LoadedBitmapIndexScope bitmapIndex;
+	if (!CaptureSentinel::InParallelPhase()) LuaScriptGraphNativeCaptureScope::PreTouch();
+	CaptureSentinel::ParallelPhase parallel;
 	LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
 	const auto capture = [&](size_t index) {
 		LuaScriptGraphNativeCaptureScope lookups(shared);
@@ -6187,7 +6291,10 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	// Each state is its own VM behind its own lock, so the states are captured side by side.
 	std::vector<std::future<void>> tasks;
 	tasks.reserve(order.size());
-	for (size_t index = 1; index < order.size(); ++index) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, index] { capture(index); }));
+	for (size_t index = 1; index < order.size(); ++index) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, index] {
+		CaptureSentinel::WorkerScope worker("script-graph-state");
+		capture(index);
+	}));
 	std::exception_ptr failure;
 	try {
 		capture(0);
@@ -6903,6 +7010,8 @@ void LuaStateWrapper::Initialize() {
 	                             .def("DirectoryRename", &LuaStateWrapper::DirectoryRename)
 	                             .def("FileReadLine", &LuaStateWrapper::FileReadLine)
 	                             .def("FileWriteLine", &LuaStateWrapper::FileWriteLine)
+	                             // Mods written against older docs call FileWriteLine by this name (Void Wanderers' Lib_Config.lua).
+	                             .def("WriteLine", &LuaStateWrapper::FileWriteLine)
 	                             .def("FileEOF", &LuaStateWrapper::FileEOF),
 
 	                         luabind::def("DeleteEntity", &LuaAdaptersUtility::DeleteEntity, luabind::adopt(_1)), // NOT a member function, so adopting _1 instead of the _2 for the first param, since there's no "this" pointer!!
@@ -7566,7 +7675,9 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectionThread && emptySetPicksMaster;
+	// No state is locked here, so a worker's save can ask every state about its aliases.
+	const bool retainedOwners = SceneEditorGUI::RunRetainedOwnerCaptureSelfTest();
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
@@ -7781,6 +7892,57 @@ end
 		RunScriptString("_ScriptGraphDeadFixture = nil");
 		std::cout << "[script-graph-selftest] " << (deadReference ? "PASS" : "FAIL") << " dead_actor_reference_same_tick_capture_restore" << std::endl;
 		checkpointValues = deadReference && checkpointValues;
+	}
+
+	{
+		// A mod keeps an Area the running scene does not own; a capture carries it by value and a restore hands it back.
+		// The script's reference outlives this block in the capture's caches, so the area it names lives as long as the process.
+		static Scene::Area kept("CheckpointKeptZone");
+		if (kept.HasNoArea()) kept.AddBox(Box(Vector(10, 20), 30, 40));
+		luabind::object(m_State, &kept).push(m_State);
+		lua_setglobal(m_State, "CheckpointKeptZone");
+		std::string saved, again;
+		std::vector<std::string> problems;
+		const bool captured = SerializeScriptGraph(saved, problems);
+		RunScriptString("CheckpointKeptZone = nil");
+		const bool restored = captured && RestoreScriptGraph(saved, problems);
+		const bool same = restored && RunScriptString(R"lua(
+local zone = CheckpointKeptZone
+assert(zone ~= nil and zone.Name == "CheckpointKeptZone", "the kept area did not come back by name")
+assert(not zone:HasNoArea() and zone:IsInside(Vector(15, 25)) and zone:IsInside(Vector(39, 59)) and not zone:IsInside(Vector(41, 61)), "the kept area's box changed")
+)lua") == 0;
+		RunScriptString("CheckpointKeptZone = nil");
+		const bool refused = std::any_of(problems.begin(), problems.end(), [](const std::string& problem) { return problem.find("(Area)") != std::string::npos; });
+		const bool passed = captured && same && !refused;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_kept_area_travels_by_value captured=" << captured << " restored=" << restored << " same=" << same << " refused=" << refused << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] kept area: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+
+	{
+		// The stock AI keeps an alarm's position (SharedBehaviors.lua: AI.AlarmPos = Event.ScenePos) past the alarm's frame;
+		// a capture names that alias without asking the alarm it no longer has.
+		const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
+		g_MovableMan.RegisterAlarmEvent(AlarmEvent(Vector(123, 45), Activity::TeamOne, 100.0F));
+		const bool held = RunScriptString("for event in MovableMan.AddedAlarmEvents do CheckpointAlarmAliasFixture = { pos = event.ScenePos } end") == 0 &&
+		                  RunScriptString("assert(CheckpointAlarmAliasFixture and CheckpointAlarmAliasFixture.pos.X == 123, 'the alias does not read the alarm')") == 0;
+		g_MovableMan.DiscardAddedSince(mark);
+		lua_getglobal(m_State, "CheckpointAlarmAliasFixture");
+		if (lua_istable(m_State, -1)) lua_getfield(m_State, -1, "pos"); else lua_pushnil(m_State);
+		const auto* alias = luabind::detail::is_class_object(m_State, -1);
+		const bool aliveAfter = !alias || ScriptGraphNativeAlive(m_State, alias);
+		lua_pop(m_State, 2);
+		CheckpointText image;
+		std::vector<std::string> problems;
+		const bool captured = held && CaptureScriptGraph(image, problems, true);
+		RunScriptString("CheckpointAlarmAliasFixture = nil");
+		const bool readAlarm = std::any_of(problems.begin(), problems.end(), [](const std::string& problem) { return problem.find("AlarmEvent") != std::string::npos; });
+		// The capture sees the alias as gone, so it never reads the alarm; a sanitizer build proves the read is gone too.
+		const bool passed = held && !aliveAfter && !readAlarm;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " capture_never_reads_an_alarm_the_script_outlived held=" << held << " alias_alive=" << aliveAfter << " captured=" << captured
+		          << " read_alarm=" << readAlarm << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] outlived alarm: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
 	}
 
 	{
@@ -8065,6 +8227,7 @@ end
 		// A Lua class left in a global is what a mod checkpoint has to carry; the UI rows move the camera, which needs the scene too.
 		RunScriptString("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end");
 		checkpointValues = GameActivity::RunNetLocalUIRestoreSelfTest() && checkpointValues;
+		checkpointValues = RunStaleActivityReferenceSelfTest(*this) && checkpointValues;
 		g_SceneMan.SetAsideScene(deliveryScene);
 		g_SceneMan.ReinstateScene(originalScene);
 	}
@@ -11818,16 +11981,18 @@ namespace {
 
 	// Every binding here was read and writes nothing, though its declaration does not say so: the non-const readers of any
 	// class, and the manager reads without a reading verb. Anything else that is not a const read is dropped on an object the
-	// window does not own, so a binding added later stays out of a preview until it is read and listed. Left out on purpose:
-	// EstimateImpulse and the firearm's AI aim getters fill caches, and TeamFundsChanged clears the flag it reports.
+	// window does not own, so a binding added later stays out of a preview until it is read and listed. EstimateImpulse and the
+	// firearm's AI aim getters fill their caches only where MOSprite::MayFillCaches lets them. The operators are bound as free
+	// functions, which luabind never calls const; every one registered reads its operands. Left out on purpose:
+	// TeamFundsChanged clears the flag it reports.
 	bool PreviewFenceListedReader(std::string_view name) {
 		static constexpr std::string_view listed[] = {
 		    "ActivityPaused", "ActivityRunning", "AnalogAimValues", "AnalogAxisValue", "AnalogMoveValues", "AnyInput", "AnyJoyButtonPress", "AnyJoyInput", "AnyJoyPress",
 		    "AnyKeyPress", "AnyMouseButtonPress", "AnyPress", "AnyStartPress", "AnythingUnseen", "CalculateTextHeight", "CalculateTextWidth", "CanTriggerBurst",
 		    "CastAllMOsRay", "CastFindMORay", "CastMORay", "CastMaterialRay", "CastMaxStrengthRay", "CastNotMaterialRay", "CastObstacleRay", "CastStrengthRay",
-		    "CastStrengthSumRay", "CastTerrainPenetrationRay", "CastWeaknessRay", "DetectObstacle", "DirectoryExists", "DrawnSimUpdate", "ElementHeld", "ElementPressed",
-		    "ElementPressedSim", "ElementReleased", "ElementReleasedSim", "FileExists", "FindAltitude", "FindObjectByUniqueID", "ForceBounds", "GetAlarmPoint",
-		    "GetAllEntities", "GetAllEntitiesOfGroup", "GetAllSpritePixelPositions", "GetAllVisibleSpritePixelPositions", "GetAltitude", "GetArea", "GetBoxInside",
+		    "CastStrengthSumRay", "CastTerrainPenetrationRay", "CastWeaknessRay", "CompareTrajectories", "DetectObstacle", "DirectoryExists", "DrawnSimUpdate", "ElementHeld", "ElementPressed",
+		    "ElementPressedSim", "ElementReleased", "ElementReleasedSim", "EstimateImpulse", "FileExists", "FindAltitude", "FindObjectByUniqueID", "ForceBounds", "GetAIBulletLifeTime", "GetAIFireVel",
+		    "GetAlarmPoint", "GetAllEntities", "GetAllEntitiesOfGroup", "GetAllSpritePixelPositions", "GetAllVisibleSpritePixelPositions", "GetAltitude", "GetArea", "GetBoxInside", "GetBulletAccScalar",
 		    "GetCalculatedMaxThrowVelIncludingArmThrowStrength", "GetClosestActor", "GetClosestEnemyActor", "GetClosestTeamActor", "GetControlledActor", "GetController",
 		    "GetCrabToHumanSpawnRatio", "GetDataModule", "GetDeliveryCount", "GetDirectoryList", "GetEntityDataLocation", "GetFileList", "GetFirstTeamActor",
 		    "GetFogOfWarEnabled", "GetForceOffset", "GetForceVector", "GetForcesCount", "GetImpulseOffset", "GetImpulseVector", "GetImpulsesCount", "GetLandingZone",
@@ -11843,7 +12008,7 @@ namespace {
 		    "MouseButtonPressedSim", "MouseButtonReleased", "MouseButtonReleasedSim", "MouseUsedByPlayer", "MouseWheelMoved", "MovePointToGround", "NoTeamLeft",
 		    "ObscuredPoint", "OneOrNoneTeamsLeft", "OnlyOneTeamLeft", "OtherTeam", "PathFindingUpdated", "ScancodeHeld", "ScancodePressed", "ScancodeReleased",
 		    "ShortestDistance", "SnapPosition", "SplitStringToFitWidth", "TargetDistanceScalar", "TimeForSimUpdate", "ValidMO", "WhichJoyButtonPressed", "WhichTeamLeft",
-		    "WrapBox", "WrapPosition"};
+		    "WrapBox", "WrapPosition", "__add", "__div", "__eq", "__mul", "__sub", "__tostring"};
 		return std::binary_search(std::begin(listed), std::end(listed), name);
 	}
 
@@ -11904,9 +12069,32 @@ namespace {
 		}
 	}
 
+	// What a window draws from, so the committed stream never moves: a hook draws from its own per-object generator as the
+	// committed hook would, and a draw outside any hook takes a copy of the master state's generator that the window drops.
+	thread_local RandomGenerator s_PreviewWindowRNG;
+	thread_local RandomGenerator s_PreviewSavedMORNG;
+	thread_local RandomGenerator* s_PreviewSavedLuaRNGOverride = nullptr;
+
+	bool PreviewFenceRandomHelper(std::string_view className, std::string_view name) {
+		static constexpr std::string_view helpers[] = {"NormalRand", "PosRand", "RangeRand", "SelectRand"};
+		return className == "LuaManager" && std::find(std::begin(helpers), std::end(helpers), name) != std::end(helpers);
+	}
+
+	void PreviewFenceDrawFromWindow() {
+		if (!s_luaRNGOverride) {
+			s_PreviewWindowRNG = RandomGenerator();
+			s_PreviewWindowRNG.RestoreCheckpoint(g_LuaMan.GetMasterScriptState().GetRandomGeneratorCheckpoint());
+			s_luaRNGOverride = &s_PreviewWindowRNG;
+		}
+	}
+
 	bool PreviewFenceRuns(const char* className, const char* methodName, bool isConst) {
 		const std::string_view cls = className ? className : "";
 		const std::string_view name = methodName ? methodName : "";
+		if (PreviewFenceRandomHelper(cls, name)) {
+			PreviewFenceDrawFromWindow();
+			return true;
+		}
 		const bool reads = PreviewFenceManagerClass(cls) ? PreviewFenceManagerReads(name, isConst) : (isConst && !PreviewFenceMutatorName(name)) || PreviewFenceListedReader(name);
 		if (!reads) {
 			PreviewFenceNoteDropped(std::string(cls.empty() ? "?" : cls) + ":" + std::string(name.empty() ? "?" : name), "on an object the preview does not own");
@@ -11914,10 +12102,56 @@ namespace {
 		return reads;
 	}
 
+	// A free function named To and a registered class only casts the object it is handed.
+	bool PreviewFenceCast(lua_State* L, const char* name) {
+		if (!name || std::strncmp(name, "To", 2) != 0 || !std::isupper(static_cast<unsigned char>(name[2]))) {
+			return false;
+		}
+		const int top = lua_gettop(L);
+		lua_getglobal(L, name + 2);
+		const bool cast = luabind::detail::is_class_rep(L, -1);
+		lua_settop(L, top);
+		return cast;
+	}
+
+	// A Vector or a Box a script holds, its own or an alias into the world, goes into a call as a copy the window owns: a
+	// parameter the callee writes, declared const or not, never reaches the script's value.
+	bool PreviewFenceCopyValue(lua_State* L, int index, const luabind::detail::object_rep* rep) {
+		if (!rep || !rep->ptr() || !rep->crep() || rep->crep()->get_class_type() != luabind::detail::class_rep::cpp_class) {
+			return false;
+		}
+		const std::type_info& type = *rep->crep()->type();
+		if (type == typeid(Vector)) {
+			luabind::object(L, *static_cast<const Vector*>(rep->ptr())).push(L);
+		} else if (type == typeid(Box)) {
+			luabind::object(L, *static_cast<const Box*>(rep->ptr())).push(L);
+		} else {
+			return false;
+		}
+		lua_replace(L, index);
+		return true;
+	}
+
 	// A world object handed to a call takes the window's copy when there is one. Without a copy, a parameter the callee may
-	// write drops the call; a value Lua made, bound to a reference, is written as a copy instead (the converter's rule).
+	// write drops the call; a value a script holds goes in as a copy.
+	// A free function (no class) that may write its argument takes only what the window made: never the world's object, nor
+	// a preview copy whose life the window manages. A cast writes nothing.
 	bool PreviewFenceArgument(lua_State* L, int index, bool mutablePointer, bool mutableReference, const char* callClass, const char* callName) {
 		luabind::detail::object_rep* rep = luabind::detail::is_class_object(L, index);
+		if (rep && !luabind::detail::preview_fence_writes(rep) && PreviewFenceCopyValue(L, index, rep)) {
+			return true;
+		}
+		const bool freeFunction = !callClass;
+		const bool cast = freeFunction && PreviewFenceCast(L, callName);
+		if (freeFunction && !cast && rep && (mutablePointer || mutableReference)) {
+			int ownOffset = 0;
+			const MovableObject* own = FencedMovableObject(rep, ownOffset);
+			if (!luabind::detail::preview_fence_writes(rep) || (own && LuaMan::IsPreviewClone(own))) {
+				PreviewFenceNoteDropped(std::string(callName ? callName : "?") + "()", "with a writable argument the preview does not own");
+				return false;
+			}
+			return true;
+		}
 		if (!rep || luabind::detail::preview_fence_writes(rep)) {
 			return true;
 		}
@@ -11931,7 +12165,7 @@ namespace {
 			lua_replace(L, index);
 			return true;
 		}
-		if (!mutablePointer && !mutableReference) {
+		if (cast || (!mutablePointer && !mutableReference)) {
 			return true;
 		}
 		if (mutableReference && !mo && (rep->flags() & luabind::detail::object_rep::owner)) {
@@ -11939,6 +12173,11 @@ namespace {
 		}
 		PreviewFenceNoteDropped(std::string(callClass ? callClass : "?") + ":" + (callName ? callName : "?"), "with a writable argument the preview does not own");
 		return false;
+	}
+
+	// The window's own copies and what it made fill their caches; every other object keeps the ones its checkpoint holds.
+	bool PreviewFenceKeepsCaches(const MOSprite* object) {
+		return s_PreviewBindingFenceOpen && !(LuaMan::IsPreviewClone(object) || object->GetUniqueID() > s_PreviewBindingUIDFloor);
 	}
 
 	void OpenPreviewBindingFence() {
@@ -11953,6 +12192,9 @@ namespace {
 		luabind::detail::preview_fence::runs = &PreviewFenceRuns;
 		luabind::detail::preview_fence::argument = &PreviewFenceArgument;
 		s_PreviewLastDroppedCall.clear();
+		MOSprite::s_PreviewKeepsCachesOf = &PreviewFenceKeepsCaches;
+		s_PreviewSavedMORNG = s_workerMORNG;
+		s_PreviewSavedLuaRNGOverride = s_luaRNGOverride;
 		luabind::detail::preview_fence::open();
 	}
 
@@ -11962,6 +12204,15 @@ namespace {
 		}
 		s_PreviewBindingFenceOpen = false;
 		s_PreviewCloneOf.clear();
+		// What the window made and a script still holds leaves the world's index, so no canonical lookup finds it.
+		for (MovableObject* known: g_MovableMan.SnapshotKnownObjects()) {
+			if (known && known->GetUniqueID() > s_PreviewBindingUIDFloor) {
+				g_MovableMan.UnregisterObject(known);
+			}
+		}
+		MOSprite::s_PreviewKeepsCachesOf = nullptr;
+		s_workerMORNG = s_PreviewSavedMORNG;
+		s_luaRNGOverride = s_PreviewSavedLuaRNGOverride;
 		luabind::detail::preview_fence::close();
 	}
 }

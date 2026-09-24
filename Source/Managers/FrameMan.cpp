@@ -1727,7 +1727,10 @@ std::string FrameMan::SavePaletteCheckpoint() const {
 	CheckpointWriter writer("FramePalette1");
 	auto bytes = [](const auto& value) { return std::string(reinterpret_cast<const char*>(&value), sizeof(value)); };
 	PALETTE current; get_palette(current);
-	writer(m_PaletteFile, bytes(m_Palette), bytes(m_DefaultPalette), bytes(current), bytes(m_RGBTable), m_BlackColor, m_AlmostBlackColor, m_CurrentAlpha, m_ColorTablePruneTimer);
+	writer(m_PaletteFile, bytes(m_Palette), bytes(m_DefaultPalette), bytes(current), bytes(m_RGBTable), m_BlackColor, m_AlmostBlackColor);
+	// The blend tables this machine drew with, the one selected and the blender state are its own draw's caches.
+	writer.BeginPerPeer();
+	writer(m_CurrentAlpha, m_ColorTablePruneTimer);
 	int selectedMode = color_map ? -2 : -1;
 	std::array<int, 4> selectedKey{};
 	for (size_t mode = 0; mode < m_ColorTables.size(); ++mode) {
@@ -1741,6 +1744,7 @@ std::string FrameMan::SavePaletteCheckpoint() const {
 	writer(selectedMode, selectedKey, selectedMode == -2 ? bytes(*color_map) : std::string{});
 	for (const auto function: {_blender_func15, _blender_func16, _blender_func24, _blender_func32, _blender_func15x, _blender_func16x, _blender_func24x}) writer(CheckpointBlenderName(function));
 	writer(_blender_col_15, _blender_col_16, _blender_col_24, _blender_col_32, _blender_alpha);
+	writer.EndPerPeer();
 	return writer.Text();
 }
 
@@ -1831,8 +1835,11 @@ bool FrameMan::RunPaletteCheckpointSelfTest() {
 
 std::string FrameMan::SaveCheckpoint() const {
 	CheckpointWriter writer("FrameMan3");
-	writer(m_HSplit, m_VSplit);
+	// The split and each screen's text and flash are this machine's own screens.
+	writer.PerPeer(m_HSplit, m_VSplit);
+	writer.BeginPerPeer();
 	VisitCheckpoint(writer, *this);
+	writer.EndPerPeer();
 	for (const auto* font: m_SmallFonts) writer(CheckpointWriter::Native([font] { return font ? GUICheckpoint::SaveFont(*font) : std::string{}; }));
 	for (const auto* font: m_LargeFonts) writer(CheckpointWriter::Native([font] { return font ? GUICheckpoint::SaveFont(*font) : std::string{}; }));
 	writer(CheckpointWriter::Native([&] { return SavePaletteCheckpoint(); }));

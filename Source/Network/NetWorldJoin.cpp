@@ -1374,6 +1374,8 @@ namespace RTE {
 		}
 		m_Identity = identity;
 		m_Config = config;
+		// A world plays at the fixed step; a returning seat's headroom is measured against it.
+		m_SimTickMs = c_DefaultDeltaTimeS * 1000.0;
 		m_Sessions.clear();
 		m_Image = NetWorldCheckpointImage{};
 		m_Tail.Clear();
@@ -1414,7 +1416,7 @@ namespace RTE {
 
 	bool NetWorldJoinHost::NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough) {
 		auto* session = Find(connection);
-		if (!session || !IsPrivateMatch()) return false;
+		if (!session || (!IsPrivateMatch() && !session->returnsToHeldSeat)) return false;
 		session->priorInputThrough = std::max(session->priorInputThrough, sentThrough);
 		return session->headroom.Observe(workTicks, workUs, m_SimTickMs);
 	}
@@ -1564,6 +1566,9 @@ namespace RTE {
 		session.assignedPeerId = peerId;
 		session.team = team;
 		session.holderGeneration = generation;
+		session.returnsToHeldSeat = reclaiming;
+		// Its link is judged by the round's own hold, as every member's is.
+		session.linkFits = reclaiming;
 		session.phase = NetWorldJoinPhase::SnapshotTransfer;
 		m_Sessions.push_back(std::move(session));
 		return true;
@@ -1759,7 +1764,19 @@ namespace RTE {
 			session->wallCatchUpMs += elapsedMs;
 		}
 		m_Metrics.NoteCatchUp(ticksReplayed, elapsedMs);
-		if (IsPrivateMatch() && (!session->linkFits || !session->headroom.Ready())) return true;
+		// A returning seat is activated only once it has shown it replays faster than the round plays.
+		const bool provesHeadroom = IsPrivateMatch() || session->returnsToHeldSeat;
+		if (provesHeadroom && (!session->linkFits || !session->headroom.Ready())) {
+			// A returner held back from its activation says why, once per reason.
+			const char* reason = !session->linkFits ? "its link does not fit the round's delay" : "its replay has not shown headroom over the round";
+			if (reason != session->activationHeldReason) {
+				std::ostringstream line;
+				line << "[net-world] activation waits peer=" << static_cast<int>(session->assignedPeerId) << ": " << reason << " (replay ratio " << session->headroom.Ratio() << ")";
+				System::PrintDiagnosticLine(line.str());
+				session->activationHeldReason = reason;
+			}
+			return true;
+		}
 		if (session->activationTick != 0) {
 			return true;
 		}
@@ -1773,7 +1790,7 @@ namespace RTE {
 		// up, it reaches its first frame after the round does and every peer waits on it.
 		const double roundRate = 1000.0 / m_SimTickMs;
 		const double replayRate = session->wallCatchUpMs > 0 ? session->wallCatchUpTicks * 1000.0 / session->wallCatchUpMs : 0.0;
-		if (IsPrivateMatch() && replayRate > roundRate && nowFrame > appliedThrough) {
+		if (provesHeadroom && replayRate > roundRate && nowFrame > appliedThrough) {
 			const double frames = std::ceil((nowFrame - appliedThrough) * roundRate / (replayRate - roundRate));
 			activation = std::max(activation, nowFrame + static_cast<uint64_t>(frames) + c_NetWorldActivationLeadFrames);
 		}

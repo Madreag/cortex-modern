@@ -3,6 +3,7 @@
 #include "LuaBindingExhaustiveSelfTest.h"
 
 #include "LuabindDefinitions.h"
+#include "luabind/function.hpp"
 #include "luabind/detail/class_registry.hpp"
 #include "luabind/detail/class_rep.hpp"
 #include "luabind/detail/construct_rep.hpp"
@@ -66,6 +67,7 @@ namespace {
 	using luabind::detail::object_rep;
 	using luabind::detail::overload_rep;
 	using luabind::detail::overload_rep_base;
+	using luabind::detail::free_functions::function_rep;
 
 	constexpr const char* c_Tag = "[preview-binding-exhaustive-selftest]";
 	constexpr int c_Crashed = -1000;
@@ -498,6 +500,19 @@ namespace {
 		size_t m_Dropped = 0;
 		size_t m_Errors = 0;
 		size_t m_DiscoveryCrashes = 0;
+		size_t m_FreeFunctions = 0;
+		size_t m_FreeOverloads = 0;
+		size_t m_Operators = 0;
+		size_t m_LuaClasses = 0;
+		size_t m_OwnedChecks = 0;
+		std::map<std::string, int> m_OperatorRefs;
+		// The fixtures the call being made was handed as arguments, so a call that writes one is named.
+		std::vector<std::string> m_Touched;
+		// Free functions and static class functions, by the name a script calls them with.
+		std::vector<std::pair<std::string, const function_rep*>> m_FreeFunctionList;
+		std::vector<int> m_FreeFunctionRefs;
+		// Objects a script made and holds before the window, handed to a free function that may write its argument.
+		std::vector<Instance> m_Owned;
 
 		void MakeHelpers();
 		// A full cycle, as the engine runs between ticks, and the collector stopped again as the engine leaves it.
@@ -513,8 +528,18 @@ namespace {
 		void AddPresetClones();
 		void FillBases();
 		void Construct();
-		void PushArgument(const std::string& type, double number, std::string& text);
-		int PushArguments(const overload_rep_base& overload, double number, std::string& text);
+		void PushArgument(const std::string& type, double number, std::string& text, int set = 1);
+		int PushArguments(const overload_rep_base& overload, double number, std::string& text, bool method = true, int set = 1);
+		int Call(const std::string& call, const std::function<int()>& push);
+		void CheckWorld(const std::string& call);
+		void CollectFreeFunctions();
+		bool MutableClassParameter(const std::string& parameter, class_rep** crep);
+		void MakeOwned();
+		void WalkFreeFunctions();
+		void WalkOperators(Instance& instance, int table);
+		void CountLuaClasses();
+		int HoldSpark();
+		void ProbeReusedUniqueID();
 		std::string ValueText(int index, bool nested);
 		std::vector<std::pair<std::string, std::string>> Fingerprint(const Instance& instance);
 		void Baseline(Instance& instance);
@@ -526,6 +551,18 @@ namespace {
 		void WalkClass(Instance& instance);
 	};
 
+	// Each operator a class can define, as a script writes it: the metatable's dispatch runs, not the method table's entry.
+	const std::pair<const char*, const char*> c_Operators[] = {
+	    {"__add", "return function(a, b) return a + b end"}, {"__sub", "return function(a, b) return a - b end"}, {"__mul", "return function(a, b) return a * b end"},
+	    {"__div", "return function(a, b) return a / b end"}, {"__mod", "return function(a, b) return a % b end"}, {"__pow", "return function(a, b) return a ^ b end"},
+	    {"__eq", "return function(a, b) return a == b end"}, {"__lt", "return function(a, b) return a < b end"}, {"__le", "return function(a, b) return a <= b end"},
+	    {"__concat", "return function(a, b) return a .. b end"}, {"__unm", "return function(a) return -a end"}, {"__len", "return function(a) return #a end"},
+	    {"__call", "return function(a) return a() end"}, {"__tostring", "return function(a) return tostring(a) end"}};
+
+	bool UnaryOperator(const std::string& name) {
+		return name == "__unm" || name == "__len" || name == "__call" || name == "__tostring";
+	}
+
 	void Walk::MakeHelpers() {
 		// Property reads and writes go through Lua, so an error in either comes back to the pcall.
 		if (luaL_loadstring(L, "return function(o, k) return o[k] end, function(o, k, v) o[k] = v end") == 0 && lua_pcall(L, 0, 2, 0) == 0) {
@@ -533,6 +570,13 @@ namespace {
 			m_GetRef = luaL_ref(L, LUA_REGISTRYINDEX);
 		} else {
 			lua_pop(L, 1);
+		}
+		for (const auto& [name, source]: c_Operators) {
+			if (luaL_loadstring(L, source) == 0 && lua_pcall(L, 0, 1, 0) == 0) {
+				m_OperatorRefs[name] = luaL_ref(L, LUA_REGISTRYINDEX);
+			} else {
+				lua_pop(L, 1);
+			}
 		}
 	}
 
@@ -762,7 +806,8 @@ namespace {
 		return false;
 	}
 
-	void Walk::PushArgument(const std::string& type, double number, std::string& text) {
+	// The first set passes 1, true and "a"; the second 0, false and "", which reach the branches the first skips.
+	void Walk::PushArgument(const std::string& type, double number, std::string& text, int set) {
 		const std::string bare = BareType(type);
 		if (bare == "number" || bare.rfind("custom", 0) == 0) {
 			lua_pushnumber(L, number);
@@ -770,25 +815,26 @@ namespace {
 			std::snprintf(buffer, sizeof(buffer), "%g", number);
 			text += buffer;
 		} else if (bare == "boolean") {
-			lua_pushboolean(L, 1);
-			text += "true";
+			lua_pushboolean(L, set == 1 ? 1 : 0);
+			text += set == 1 ? "true" : "false";
 		} else if (bare == "string") {
-			lua_pushstring(L, "a");
-			text += "\"a\"";
+			lua_pushstring(L, set == 1 ? "a" : "");
+			text += set == 1 ? "\"a\"" : "\"\"";
 		} else if (const auto found = m_Instances.find(bare); found != m_Instances.end()) {
 			lua_rawgeti(L, LUA_REGISTRYINDEX, found->second.handle);
 			text += bare;
+			m_Touched.push_back(bare);
 		} else {
 			lua_pushnil(L);
 			text += "nil";
 		}
 	}
 
-	int Walk::PushArguments(const overload_rep_base& overload, double number, std::string& text) {
+	int Walk::PushArguments(const overload_rep_base& overload, double number, std::string& text, bool method, int set) {
 		std::string signature;
 		overload.get_signature(L, signature);
 		std::vector<std::string> parameters = SignatureParameters(signature);
-		const int count = std::max(0, OverloadArity::Of(overload) - 1);
+		const int count = std::max(0, OverloadArity::Of(overload) - (method ? 1 : 0));
 		// A method bound from a free function names its self first; Lua passes self apart.
 		if (static_cast<int>(parameters.size()) > count) {
 			parameters.erase(parameters.begin(), parameters.begin() + (parameters.size() - count));
@@ -798,7 +844,7 @@ namespace {
 			if (i > 0) {
 				text += ", ";
 			}
-			PushArgument(i < static_cast<int>(parameters.size()) ? parameters[i] : std::string("nil"), number, text);
+			PushArgument(i < static_cast<int>(parameters.size()) ? parameters[i] : std::string("nil"), number, text, set);
 		}
 		text += ")";
 		return count;
@@ -951,8 +997,25 @@ namespace {
 	}
 
 	void Walk::Probe(Instance& target, const std::string& call, const std::function<int()>& push) {
+		Call(call, push);
+		Check(target, call);
+		for (const std::string& name: std::set<std::string>(m_Touched.begin(), m_Touched.end())) {
+			Instance& argument = m_Instances.at(name);
+			std::string where;
+			std::string first;
+			if (&argument != &target && ObjectChanged(argument, where, first)) {
+				m_Leaks.push_back({call, where + " of the " + name + " argument", first});
+				std::cout << "[bindx] LEAK " << call << " " << where << " of the " << name << " argument first=" << first << std::endl;
+				Baseline(argument);
+			}
+		}
+	}
+
+	// One call inside a preview window, its faults and asserts listed; the checks are the caller's.
+	int Walk::Call(const std::string& call, const std::function<int()>& push) {
 		m_Journal << call << '\n' << std::flush;
 		const int base = lua_gettop(L);
+		m_Touched.clear();
 		const int count = push();
 		RTEError::s_LastIgnoredAssertDescription.clear();
 		unsigned long code = 0;
@@ -976,7 +1039,7 @@ namespace {
 			std::cout << "[bindx] ASSERT " << call << ": " << RTEError::s_LastIgnoredAssertDescription << std::endl;
 		}
 		CollectGarbage();
-		Check(target, call);
+		return status;
 	}
 
 	void Walk::Check(Instance& target, const std::string& call) {
@@ -987,6 +1050,10 @@ namespace {
 			std::cout << "[bindx] LEAK " << call << " " << where << " first=" << first << std::endl;
 			Baseline(target);
 		}
+		CheckWorld(call);
+	}
+
+	void Walk::CheckWorld(const std::string& call) {
 		const WorldHash now = HashWorld();
 		if (now.total != m_World.total || now.parts != m_World.parts) {
 			std::string parts;
@@ -1075,15 +1142,34 @@ namespace {
 					return PushArguments(overload, 1, args) + 1;
 				};
 				std::string preview;
+				int count = 0;
 				{
 					const int top = lua_gettop(L);
-					PushArguments(overload, 1, preview);
+					count = PushArguments(overload, 1, preview);
 					lua_settop(L, top);
 				}
 				Probe(instance, className + ":" + method + preview, push);
+				if (count == 0) {
+					continue;
+				}
+				std::string second;
+				const std::function<int()> pushSecond = [&, method = method]() {
+					lua_pushstring(L, method.c_str());
+					lua_rawget(L, table);
+					lua_rawgeti(L, LUA_REGISTRYINDEX, instance.handle);
+					return PushArguments(overload, 0, second, true, 2) + 1;
+				};
+				preview.clear();
+				{
+					const int top = lua_gettop(L);
+					PushArguments(overload, 0, preview, true, 2);
+					lua_settop(L, top);
+				}
+				Probe(instance, className + ":" + method + preview + " second set", pushSecond);
 			}
 		}
 		m_Overloads += overloads;
+		WalkOperators(instance, table);
 		lua_settop(L, table - 1);
 
 		const auto& getters = instance.crep->properties();
@@ -1161,6 +1247,272 @@ namespace {
 		          << " calls=" << (m_Calls - callsBefore) << " leaks=" << (m_Leaks.size() - leaksBefore) << " seconds=" << seconds << " instance: " << instance.origin << std::endl;
 	}
 
+	// The class's operators as a script writes them, each with the fixture itself and a number as the other operand.
+	void Walk::WalkOperators(Instance& instance, int table) {
+		const std::string className = instance.crep->name();
+		for (const auto& [name, source]: c_Operators) {
+			lua_pushstring(L, name);
+			lua_rawget(L, table);
+			const bool defined = !lua_isnil(L, -1);
+			lua_pop(L, 1);
+			const auto found = m_OperatorRefs.find(name);
+			if (!defined || found == m_OperatorRefs.end()) {
+				continue;
+			}
+			const int function = found->second;
+			for (int operand = 0; operand < (UnaryOperator(name) ? 1 : 2); ++operand) {
+				++m_Operators;
+				const std::string call = className + " operator " + name + (UnaryOperator(name) ? std::string() : operand == 0 ? " (itself)" : " (1)");
+				Probe(instance, call, [&, operand]() {
+					lua_rawgeti(L, LUA_REGISTRYINDEX, function);
+					lua_rawgeti(L, LUA_REGISTRYINDEX, instance.handle);
+					if (UnaryOperator(name)) {
+						return 1;
+					}
+					if (operand == 0) {
+						lua_rawgeti(L, LUA_REGISTRYINDEX, instance.handle);
+					} else {
+						lua_pushnumber(L, 1);
+					}
+					return 2;
+				});
+			}
+		}
+	}
+
+	// Every free function a script can call: the globals, and the static functions in each class's table.
+	void Walk::CollectFreeFunctions() {
+		const auto collect = [this](int table, const std::string& prefix) {
+			lua_pushnil(L);
+			while (lua_next(L, table) != 0) {
+				if (lua_type(L, -2) == LUA_TSTRING && lua_tocfunction(L, -1) == &luabind::detail::free_functions::function_dispatcher) {
+					const std::string name = prefix + lua_tostring(L, -2);
+					if (lua_getupvalue(L, -1, 1)) {
+						const function_rep* rep = static_cast<const function_rep*>(lua_touserdata(L, -1));
+						lua_pop(L, 1);
+						lua_pushvalue(L, -1);
+						m_FreeFunctionList.emplace_back(name, rep);
+						m_FreeFunctionRefs.push_back(luaL_ref(L, LUA_REGISTRYINDEX));
+					}
+				}
+				lua_pop(L, 1);
+			}
+		};
+		collect(LUA_GLOBALSINDEX, "");
+		for (const auto& [name, crep]: m_Classes) {
+			crep->get_table(L);
+			const int table = lua_gettop(L);
+			collect(table, name + ".");
+			lua_settop(L, table - 1);
+		}
+	}
+
+	// A pointer or reference to a registered class the callee may write.
+	bool Walk::MutableClassParameter(const std::string& parameter, class_rep** crep) {
+		if (parameter.rfind("const ", 0) == 0 || parameter.empty() || (parameter.back() != '*' && parameter.back() != '&')) {
+			return false;
+		}
+		const auto found = m_Classes.find(BareType(parameter));
+		if (found == m_Classes.end()) {
+			return false;
+		}
+		*crep = found->second;
+		return true;
+	}
+
+	// One object a script made and holds, for each free-function overload that may write a class argument: a script's
+	// own entity is canonical state, so a call that takes it or writes it in a preview is a leak.
+	void Walk::MakeOwned() {
+		const auto particle = m_Classes.find("MOPixel");
+		for (const auto& [name, rep]: m_FreeFunctionList) {
+			for (const auto& overload: rep->overloads()) {
+				std::string signature;
+				overload.get_signature(L, signature);
+				bool wanted = false;
+				for (const std::string& parameter: SignatureParameters(signature)) {
+					class_rep* crep = nullptr;
+					int offset = 0;
+					wanted = wanted || (MutableClassParameter(parameter, &crep) && particle != m_Classes.end() && luabind::detail::implicit_cast(particle->second, crep->type(), offset) >= 0);
+				}
+				if (!wanted) {
+					continue;
+				}
+				const int top = lua_gettop(L);
+				unsigned long code = 0;
+				if (luaL_loadstring(L, "return CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\")") != 0 || GuardedCall(L, 0, 1, &code) != 0) {
+					lua_settop(L, top);
+					continue;
+				}
+				object_rep* made = luabind::detail::is_class_object(L, -1);
+				if (!made || !(made->flags() & object_rep::owner)) {
+					lua_settop(L, top);
+					continue;
+				}
+				Instance instance;
+				instance.crep = made->crep();
+				instance.object = made->ptr();
+				instance.origin = "a spark a script made for " + name;
+				instance.handle = luaL_ref(L, LUA_REGISTRYINDEX);
+				Describe(instance);
+				m_Owned.push_back(std::move(instance));
+				lua_settop(L, top);
+			}
+		}
+	}
+
+	// Each overload of each free function, with the first argument set and with the second; a class argument the callee may
+	// write gets, in the second set, an object a script owns.
+	void Walk::WalkFreeFunctions() {
+		size_t owned = 0;
+		for (size_t index = 0; index < m_FreeFunctionList.size(); ++index) {
+			const auto& [name, rep] = m_FreeFunctionList[index];
+			const int function = m_FreeFunctionRefs[index];
+			++m_FreeFunctions;
+			for (const auto& overload: rep->overloads()) {
+				++m_FreeOverloads;
+				std::string signature;
+				overload.get_signature(L, signature);
+				const std::vector<std::string> parameters = SignatureParameters(signature);
+				for (int set = 1; set <= 2; ++set) {
+					std::vector<std::string> touched;
+					Instance* script = nullptr;
+					std::string args = "(";
+					const auto push = [&]() {
+						lua_rawgeti(L, LUA_REGISTRYINDEX, function);
+						args = "(";
+						touched.clear();
+						for (size_t i = 0; i < parameters.size(); ++i) {
+							args += i > 0 ? ", " : "";
+							class_rep* crep = nullptr;
+							int offset = 0;
+							if (set == 2 && !script && owned < m_Owned.size() && MutableClassParameter(parameters[i], &crep) && luabind::detail::implicit_cast(m_Owned[owned].crep, crep->type(), offset) >= 0) {
+								script = &m_Owned[owned++];
+								lua_rawgeti(L, LUA_REGISTRYINDEX, script->handle);
+								args += "a script's " + std::string(script->crep->name());
+								continue;
+							}
+							if (m_Instances.count(BareType(parameters[i])) > 0) {
+								touched.push_back(BareType(parameters[i]));
+							}
+							PushArgument(parameters[i], set == 1 ? 1 : 0, args, set);
+						}
+						args += ")";
+						return static_cast<int>(parameters.size());
+					};
+					std::string preview;
+					{
+						const int top = lua_gettop(L);
+						for (size_t i = 0; i < parameters.size(); ++i) {
+							preview += i > 0 ? ", " : "";
+							PushArgument(parameters[i], set == 1 ? 1 : 0, preview, set);
+						}
+						lua_settop(L, top);
+					}
+					Call(name + "(" + preview + ")" + (set == 2 ? " second set" : ""), push);
+					const std::string call = name + args;
+					for (const std::string& fixture: touched) {
+						std::string where;
+						std::string first;
+						Instance& instance = m_Instances.at(fixture);
+						if (ObjectChanged(instance, where, first)) {
+							m_Leaks.push_back({call, where + " of the " + fixture + " argument", first});
+							std::cout << "[bindx] LEAK " << call << " " << where << " of the " << fixture << " argument first=" << first << std::endl;
+							Baseline(instance);
+						}
+					}
+					if (script) {
+						++m_OwnedChecks;
+						lua_rawgeti(L, LUA_REGISTRYINDEX, script->handle);
+						const object_rep* handle = luabind::detail::is_class_object(L, -1);
+						const bool stillOwned = handle && (handle->flags() & object_rep::owner) && handle->ptr() == script->object;
+						lua_pop(L, 1);
+						std::string where;
+						std::string first;
+						if (!stillOwned) {
+							m_Leaks.push_back({call, "a script's object", "the call took the object the script holds"});
+							std::cout << "[bindx] LEAK " << call << " took the " << script->crep->name() << " a script holds (" << script->origin << ")" << std::endl;
+						} else if (ObjectChanged(*script, where, first)) {
+							m_Leaks.push_back({call, where + " of a script's object", first});
+							std::cout << "[bindx] LEAK " << call << " " << where << " of a script's " << script->crep->name() << " first=" << first << std::endl;
+							Baseline(*script);
+						}
+					}
+					CheckWorld(call);
+				}
+			}
+		}
+		Sweep("free function");
+	}
+
+	// Classes a script defined with class 'Name': their methods are Lua, and whatever bindings they call are walked above.
+	void Walk::CountLuaClasses() {
+		lua_pushnil(L);
+		while (lua_next(L, LUA_GLOBALSINDEX) != 0) {
+			if (lua_type(L, -2) == LUA_TSTRING && luabind::detail::is_class_rep(L, -1)) {
+				const class_rep* crep = static_cast<const class_rep*>(lua_touserdata(L, -1));
+				if (crep && crep->get_class_type() == class_rep::lua_class) {
+					++m_LuaClasses;
+					std::cout << "[bindx] lua class " << lua_tostring(L, -2) << std::endl;
+				}
+			}
+			lua_pop(L, 1);
+		}
+	}
+
+	// A spark made by a script, held in the registry; LUA_NOREF when the script could not make one.
+	int Walk::HoldSpark() {
+		unsigned long code = 0;
+		if (luaL_loadstring(L, "return CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\")") == 0 && GuardedCall(L, 0, 1, &code) == 0 && luabind::detail::is_class_object(L, -1)) {
+			return luaL_ref(L, LUA_REGISTRYINDEX);
+		}
+		lua_pop(L, 1);
+		return LUA_NOREF;
+	}
+
+	// A window-born object a script still holds after its window, while a canonical object takes its unique id and the
+	// script's copy is collected later: the world's index must never name the window's object, and must keep the canonical one.
+	void Walk::ProbeReusedUniqueID() {
+		const long floor = MovableObject::GetUniqueIDCounter();
+		const int top = lua_gettop(L);
+		m_Window.Open();
+		const int born = HoldSpark();
+		m_Window.Close();
+		lua_settop(L, top);
+		const auto movable = [this](int handle) -> MovableObject* {
+			lua_rawgeti(L, LUA_REGISTRYINDEX, handle);
+			const object_rep* rep = luabind::detail::is_class_object(L, -1);
+			lua_pop(L, 1);
+			int offset = 0;
+			return rep && luabind::detail::implicit_cast(rep->crep(), &typeid(MovableObject), offset) >= 0 ? reinterpret_cast<MovableObject*>(static_cast<char*>(rep->ptr()) + offset) : nullptr;
+		};
+		MovableObject* bornObject = born == LUA_NOREF ? nullptr : movable(born);
+		if (!bornObject) {
+			std::cout << "[bindx] uid reuse: the window made no spark to hold" << std::endl;
+			return;
+		}
+		const long bornID = bornObject->GetUniqueID();
+		if (g_MovableMan.FindObjectByUniqueID(bornID) == bornObject) {
+			m_Leaks.push_back({"a window-born spark held past its window", "the world's index", "uid " + std::to_string(bornID) + " names the window's object"});
+			std::cout << "[bindx] LEAK the world's index names the window-born spark uid=" << bornID << " after its window" << std::endl;
+		}
+		const int canonical = HoldSpark();
+		MovableObject* canonicalObject = canonical == LUA_NOREF ? nullptr : movable(canonical);
+		const long canonicalID = canonicalObject ? canonicalObject->GetUniqueID() : 0;
+		luaL_unref(L, LUA_REGISTRYINDEX, born);
+		CollectGarbage();
+		const MovableObject* indexed = canonicalObject ? g_MovableMan.FindObjectByUniqueID(canonicalID) : nullptr;
+		std::cout << "[bindx] uid reuse: window-born uid=" << bornID << " canonical uid=" << canonicalID << " index after the collection names "
+		          << (indexed == canonicalObject ? "the canonical spark" : indexed ? "another object" : "nothing") << std::endl;
+		if (canonicalObject && indexed != canonicalObject) {
+			m_Leaks.push_back({"a window-born spark collected after its id was reused", "the world's index", "uid " + std::to_string(canonicalID) + " lost the canonical object"});
+			std::cout << "[bindx] LEAK collecting the window-born spark took uid " << canonicalID << " from the canonical spark" << std::endl;
+		}
+		luaL_unref(L, LUA_REGISTRYINDEX, canonical);
+		CollectGarbage();
+		MovableObject::PinUniqueIDCounter(floor);
+		CheckWorld("the uid reuse probe");
+	}
+
 	bool Walk::Run() {
 		m_Journal.open("preview_binding_exhaustive.journal", std::ios::trunc);
 		g_MovableMan.WaitForActorsSeeTask();
@@ -1197,6 +1549,9 @@ namespace {
 		Construct();
 		Discover();
 		FillBases();
+		CollectFreeFunctions();
+		MakeOwned();
+		CountLuaClasses();
 
 		size_t without = 0;
 		for (const auto& [name, crep]: m_Classes) {
@@ -1214,6 +1569,9 @@ namespace {
 		if (again.total != m_World.total || again.parts != m_World.parts) {
 			std::cout << c_Tag << " FAIL the world hash differs between two readings with nothing between them" << std::endl;
 			return false;
+		}
+		for (Instance& instance: m_Owned) {
+			Baseline(instance);
 		}
 		for (auto& [name, instance]: m_Instances) {
 			Baseline(instance);
@@ -1240,17 +1598,21 @@ namespace {
 		for (auto& [name, instance]: m_Instances) {
 			WalkClass(instance);
 		}
+		WalkFreeFunctions();
+		ProbeReusedUniqueID();
 
 		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
 		std::cout << c_Tag << " totals classes=" << m_Classes.size() << " with_instance=" << m_Instances.size() << " without_instance=" << without << " methods=" << m_Methods
-		          << " overloads=" << m_Overloads << " properties=" << m_Properties << " calls=" << m_Calls << " dropped=" << m_Dropped << " errors=" << m_Errors
-		          << " leaks=" << m_Leaks.size() << " crashes=" << m_Crashes.size() << " asserts=" << m_Asserts.size() << " discovery_crashes=" << m_DiscoveryCrashes
-		          << " seconds=" << seconds << std::endl;
-		if (m_Leaks.empty()) {
+		          << " overloads=" << m_Overloads << " properties=" << m_Properties << " operators=" << m_Operators << " free_functions=" << m_FreeFunctions
+		          << " free_overloads=" << m_FreeOverloads << " script_objects=" << m_Owned.size() << " script_object_checks=" << m_OwnedChecks << " lua_classes=" << m_LuaClasses
+		          << " calls=" << m_Calls << " dropped=" << m_Dropped << " errors=" << m_Errors << " leaks=" << m_Leaks.size() << " crashes=" << m_Crashes.size()
+		          << " asserts=" << m_Asserts.size() << " discovery_crashes=" << m_DiscoveryCrashes << " seconds=" << seconds << std::endl;
+		// A fault is a binding a mod can crash the game with, so it fails the row as a leak does.
+		if (m_Leaks.empty() && m_Crashes.empty() && m_DiscoveryCrashes == 0) {
 			std::cout << c_Tag << " PASS" << std::endl;
 			return true;
 		}
-		std::cout << c_Tag << " FAIL leaks=" << m_Leaks.size() << std::endl;
+		std::cout << c_Tag << " FAIL leaks=" << m_Leaks.size() << " crashes=" << m_Crashes.size() << " discovery_crashes=" << m_DiscoveryCrashes << std::endl;
 		return false;
 	}
 

@@ -276,12 +276,16 @@ namespace RTE {
 
 	private:
 
+		// The wall clock and everything paced by it are this machine's own.
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
-			archive(self.m_TicksPerSecond, self.m_RealTimeTicks, self.m_SimTimeTicks, self.m_SimUpdateCount,
-				self.m_SimAccumulator, self.m_DeltaTime, self.m_DeltaTimeS, self.m_DeltaBuffer,
-				self.m_SimUpdatesSinceDrawn, self.m_DrawnSimUpdate, self.m_SimSpeed, self.m_TimeScale,
-				self.m_SimPaused, self.m_SimTimeFrozen, self.m_FreeRunSim, self.m_PaceAccruedTicks,
-				self.m_PaceTrimmedTicks, self.m_PaceWallSeenTicks, self.m_PaceCapLostTicks, self.m_PacePausedLostTicks,
+			archive(self.m_TicksPerSecond);
+			archive.PerPeer(self.m_RealTimeTicks);
+			archive(self.m_SimTimeTicks, self.m_SimUpdateCount);
+			archive.PerPeer(self.m_SimAccumulator);
+			archive(self.m_DeltaTime, self.m_DeltaTimeS);
+			archive.PerPeer(self.m_DeltaBuffer, self.m_SimUpdatesSinceDrawn, self.m_DrawnSimUpdate, self.m_SimSpeed);
+			archive(self.m_TimeScale, self.m_SimPaused, self.m_SimTimeFrozen, self.m_FreeRunSim);
+			archive.PerPeer(self.m_PaceAccruedTicks, self.m_PaceTrimmedTicks, self.m_PaceWallSeenTicks, self.m_PaceCapLostTicks, self.m_PacePausedLostTicks,
 				self.m_PaceUpdateCalls, self.m_PaceResetCalls);
 		}
 		/// Clears all the member variables of this TimerMan, effectively resetting the members of this abstraction level only.

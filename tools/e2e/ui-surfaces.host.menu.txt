@@ -88,7 +88,7 @@ observe assert_enabled TextHostRecAutosaveInterval 1
 focus TextHostRecAutosaveInterval
 observe set_text TextHostRecAutosaveInterval 30
 wait_ms 500
-observe assert_label TextHostRecAutosaveInterval 30
+observe assert_label TextHostRecAutosaveInterval 60
 observe setcheck CheckHostRecAutosave 0
 wait_ms 500
 observe assert_enabled TextHostRecAutosaveInterval 0

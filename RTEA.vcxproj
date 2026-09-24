@@ -984,6 +984,7 @@
     <ClInclude Include="Source\System\InputScript.h" />
     <ClInclude Include="Source\System\AIWriteScript.h" />
     <ClInclude Include="Source\System\FaultInjection.h" />
+    <ClInclude Include="Source\System\CaptureSentinel.h" />
     <ClInclude Include="Source\System\ContentFile.h" />
     <ClInclude Include="Source\System\SaveGameArchive.h" />
     <ClInclude Include="Source\System\AutosaveStore.h" />
@@ -1622,6 +1623,7 @@
     <ClCompile Include="Source\System\InputScript.cpp" />
     <ClCompile Include="Source\System\AIWriteScript.cpp" />
     <ClCompile Include="Source\System\FaultInjection.cpp" />
+    <ClCompile Include="Source\System\CaptureSentinel.cpp" />
     <ClCompile Include="Source\System\ContentFile.cpp" />
     <ClCompile Include="Source\System\DataModule.cpp" />
     <ClCompile Include="Source\System\RTEError.cpp" />

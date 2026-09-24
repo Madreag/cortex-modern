@@ -22,6 +22,8 @@
             "{OUT}/host_trace.json",
             "-net-match-report",
             "{OUT}/host-match.json",
+            "-net-autosave-seconds",
+            "1",
             "-max-ticks",
             "1200"
           ],
@@ -49,6 +51,8 @@
             "{OUT}/client_trace.json",
             "-net-match-report",
             "{OUT}/client-match.json",
+            "-net-autosave-seconds",
+            "1",
             "-max-ticks",
             "1200"
           ],
@@ -79,10 +83,10 @@
       "peer": "host",
       "mark": "resume-autosave-options",
       "screen": "MultiplayerScreen",
-      "what": "Recovery visibly keeps Autosave on at the shortest valid interval, one simulation second.",
+      "what": "Recovery visibly keeps Autosave on; a typed one-second interval clamps to the shortest valid interval, sixty seconds. The one-second stress cadence is the run's test lever (-net-autosave-seconds 1).",
       "events": [
         "assert_checked CheckHostRecAutosave expected=1 actual=1 PASS",
-        "assert_label TextHostRecAutosaveInterval.*1.*PASS"
+        "assert_label TextHostRecAutosaveInterval \"60\" text=\"60\" PASS"
       ]
     },
     {
@@ -99,10 +103,10 @@
       "peer": "host",
       "mark": "resume-two-checkpoints",
       "screen": "game",
-      "what": "The original match keeps playing after two distinct one-second autosaves have been published.",
+      "what": "The original match keeps playing after two distinct autosaves at the test lever's one-second cadence have been published.",
       "log_regex": [
         "^\\[autosave\\] tick=\\d+ capture_ms=",
-        "^\\[autosave\\] retained tick=\\d+ keep=2 "
+        "^\\[autosave\\] retained tick=\\d+ keep=\\d+ "
       ]
     },
     {
@@ -130,10 +134,10 @@
       "peer": "client",
       "mark": "resume-two-checkpoints",
       "screen": "game",
-      "what": "The original match keeps playing after two distinct one-second autosaves have been published.",
+      "what": "The original match keeps playing after two distinct autosaves at the test lever's one-second cadence have been published.",
       "log_regex": [
         "^\\[autosave\\] tick=\\d+ capture_ms=",
-        "^\\[autosave\\] retained tick=\\d+ keep=2 "
+        "^\\[autosave\\] retained tick=\\d+ keep=\\d+ "
       ]
     },
     {

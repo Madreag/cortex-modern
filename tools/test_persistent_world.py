@@ -850,7 +850,7 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
     out = Path(out)
     world = out / "world"
     world.mkdir(parents=True, exist_ok=True)
-    (world / "host").mkdir(parents=True, exist_ok=True)
+    # The runner creates each peer's run directory itself; the recording lands in the host's once it exists.
     recording = world / "host" / "match.ccreplay"
     records = restore._run_world_round(repo, world, port, 1200, {"host": ["-net-replay-out", str(recording)]})
     for who in ("host", "client"):
@@ -886,13 +886,14 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
     assert report.get("first_frame") == first_tick + 1, (report.get("first_frame"), first_tick)
 
     # Playback stands on the checkpoint: the world's own Autosaves are what the replay run reads.
+    # The runner stages the replay's runtime; the world's Autosaves are copied into it before the process starts.
     replay = out / "replay"
-    (replay / "runtime").mkdir(parents=True, exist_ok=True)
-    shutil.copytree(autosaves, replay / "runtime/Autosaves", dirs_exist_ok=True)
     trace = replay / "replay_trace.json"
     play = run_sim_test.make_run(repo, ["-net-replay", str(replay / "runtime/Autosaves" / segments[0].name),
                                         "-tick-hashes", "-out", str(trace)],
                                  replay, timeout=600, env={"CCCP_HEADLESS": "1"})
+    assert Path(play.cwd).resolve() == (replay / "runtime").resolve(), (play.cwd, replay)
+    shutil.copytree(autosaves, Path(play.cwd) / "Autosaves", dirs_exist_ok=True)
     play.start().finish()
     play_log = (replay / "stdout.log").read_text(encoding="utf-8", errors="replace")
     assert f"[net-replay] segment stands on checkpoint tick={first_tick}" in play_log, \
@@ -910,11 +911,8 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
     # for the tick it resumed from - not an ordinary file that names no world.
     restarted = out / "restarted"
     restarted.mkdir(parents=True, exist_ok=True)
-    for who in ("host", "client"):
-        (restarted / who).mkdir(parents=True, exist_ok=True)
-        restore._carry_world_state(world, restarted, who)
     again = restore._run_world_round(repo, restarted, port + 2, 600,
-                                     {"host": ["-net-replay-out", str(restarted / "host" / "match.ccreplay")]})
+                                     {"host": ["-net-replay-out", str(restarted / "host" / "match.ccreplay")]}, carry=world)
     for who in ("host", "client"):
         assert again[who].get("exit_code") == 0, (who, again[who].get("exit_code"), again[who].get("error"))
     restarted_log = restore.peer_log(restarted, "host")

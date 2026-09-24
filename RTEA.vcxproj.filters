@@ -73,6 +73,9 @@
     <ClInclude Include="Source\System\Color.h">
       <Filter>System</Filter>
     </ClInclude>
+    <ClInclude Include="Source\System\CaptureSentinel.h">
+      <Filter>System</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\ContentFile.h">
       <Filter>System</Filter>
     </ClInclude>
@@ -851,6 +854,9 @@
       <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\Color.cpp">
+      <Filter>System</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\System\CaptureSentinel.cpp">
       <Filter>System</Filter>
     </ClCompile>
     <ClCompile Include="Source\System\ContentFile.cpp">

@@ -1,0 +1,15 @@
+# Clang UBSan ignorelist (-fsanitize-ignorelist), wired in meson.build for clang builds with b_sanitize=undefined.
+# Only third-party functions, each under the one check it trips, each entry citing its report. Our own code is fixed,
+# never listed here. Reports: grok-workers/mac-probe-v1-20260923/evidence/ubsan-report.<pid> (Apple clang 17, arm64).
+
+# LuaJIT lj_buf.c:298 lj_buf_ruleb128: "left shift of 15 by 28 places cannot be represented in type 'int'" while
+# decoding a ULEB128 during luaopen_table's bytecode load (upstream code, the int shift is LuaJIT's own).
+# ubsan-report.16774 16957 16971 17007 17114 17158 17194 17263 17275 17285 17304 (x11)
+[shift-base]
+fun:lj_buf_ruleb128
+
+# LuaJIT lj_parse.c:1063 var_new: "member access within misaligned address 0x000000000001 for type 'GCobj'";
+# LuaJIT stores its small VARNAME_* sentinels through obj2gco (upstream design, the pointer is never dereferenced).
+# ubsan-report.16969
+[alignment]
+fun:var_new

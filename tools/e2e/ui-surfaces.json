@@ -43,7 +43,7 @@
         "{INPUT_SCRIPT}"
       ],
       "menu_script": "ui-surfaces.host.menu.txt",
-      "input_script": "ui-surfaces.input.txt",
+      "input_script": "ui-surfaces.walk.input.txt",
       "probe": "ui-surfaces.host.probe.json",
       "settings": {
         "NetworkDisplayName": "Host",
@@ -61,7 +61,7 @@
         "{INPUT_SCRIPT}"
       ],
       "menu_script": "ui-surfaces.client.menu.txt",
-      "input_script": "ui-surfaces.input.txt",
+      "input_script": "ui-surfaces.walk.input.txt",
       "probe": "ui-surfaces.client.probe.json",
       "settings": {
         "NetworkDisplayName": "Joiner",
@@ -167,7 +167,7 @@
       "peer": "host",
       "mark": "ui-recovery",
       "screen": "MultiplayerScreen",
-      "what": "Autosave enables its interval field, accepts 30, then disables it when unchecked.",
+      "what": "Autosave enables its interval field, clamps a typed 30 to the sixty-second minimum, then disables it when unchecked.",
       "assert": "menu assertions in the marked interval",
       "events": [
         "assert_enabled TextHostRecAutosaveInterval expected=1 actual=1 PASS",

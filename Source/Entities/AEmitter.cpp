@@ -479,6 +479,10 @@ float AEmitter::EstimateImpulse(bool burst) {
 			}
 		}
 
+		// A preview reads the world's emitters without filling the cache their checkpoint holds.
+		if (!MayFillCaches()) {
+			return impulse * GetThrottleFactor();
+		}
 		if (burst) {
 			m_AvgBurstImpulse = impulse;
 		} else {
@@ -793,8 +797,10 @@ std::string AEmitter::SaveAEmitterRuntime() const {
 	CheckpointWriter archive("AEmitterRuntime1");
 	archive(m_EmitEnabled, m_WasEmitting, m_EmitCount, m_EmitCountLimit, m_NegativeThrottleMultiplier, m_PositiveThrottleMultiplier, m_Throttle);
 	archive(m_EmissionsIgnoreThis, m_BurstScale, m_BurstDamage, m_EmitterDamageMultiplier, m_BurstTriggered, m_BurstSpacing, m_BurstTimer);
-	archive(m_PlayBurstSound, m_EmitAngle, m_EmissionOffset, m_EmitDamage, m_LastEmitTmr, m_FlashScale, m_AvgBurstImpulse);
-	archive(m_AvgImpulse, m_LoudnessOnEmit, m_FlashOnlyOnBurst, m_SustainBurstSound, m_BurstSoundFollowsEmitter);
+	archive(m_PlayBurstSound, m_EmitAngle, m_EmissionOffset, m_EmitDamage, m_LastEmitTmr, m_FlashScale);
+	// The impulse averages are filled when this machine's own AI first asks.
+	archive.PerPeer(m_AvgBurstImpulse, m_AvgImpulse);
+	archive(m_LoudnessOnEmit, m_FlashOnlyOnBurst, m_SustainBurstSound, m_BurstSoundFollowsEmitter);
 	return archive.Text();
 }
 

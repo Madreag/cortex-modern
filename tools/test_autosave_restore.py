@@ -108,8 +108,19 @@ def _seat_rows(root: Path, who: str) -> dict:
     return {peer["seat"]: peer for peer in summary.get("peers", [])}
 
 
-def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict) -> dict:
-    """Two peers of one match, each with the arm's own extra flags."""
+def pin_settings(run, values: dict) -> None:
+    """Writes the named Settings.ini values into a staged peer's own runtime."""
+    path = Path(run.cwd) / "Userdata/Settings.ini"
+    text = path.read_text(encoding="utf-8-sig")
+    for name, value in values.items():
+        text, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*", lambda match: match[1] + value, text)
+        if count == 0:
+            text += f"\n\t{name} = {value}\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict, settings: dict | None = None) -> dict:
+    """Two peers of one match, each with the arm's own extra flags and Settings.ini values."""
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
     root.mkdir(parents=True, exist_ok=False)
@@ -126,6 +137,8 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
         args += extra.get(who, []) + fullstate_args()
         runs[who] = make_run(repo, args, root / who, 420, env={"CCCP_HEADLESS": "1"})
         stage_baseline(runs[who], ticks)
+        if settings and settings.get(who):
+            pin_settings(runs[who], settings[who])
 
     def drive(who: str) -> None:
         try:
@@ -316,7 +329,7 @@ def arm_retention(repo: Path, root: Path, port: int) -> dict:
     return details
 
 
-def arm_anchor(repo: Path, root: Path, port: int) -> dict:
+def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False) -> dict:
     """A heal names one rewind point for the whole match, and it survives later rotation.
 
     The perturbation is timed late on purpose: at the stock tick 50 the heal lands before the first
@@ -325,10 +338,13 @@ def arm_anchor(repo: Path, root: Path, port: int) -> dict:
     four checkpoints before the heal, and the 1400-tick cap leaves room for more than the retention limit
     afterwards, so the named one can only survive by being pinned."""
     ticks, perturb_at = 1400, 700
+    # The perturbation waits for both seats to be live; a peer the host holds (a sanitizer build's slow client) keeps it
+    # from landing, so such a build asks the host to pause for a slow peer instead.
     records = run_pair(repo, root, port, ticks, 2,
                        {"host": ["-net-test-perturb-when-live", "-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
                                  "-net-match-e2e-resync"],
-                        "client": ["-net-match-e2e-resync"]})
+                        "client": ["-net-match-e2e-resync"]},
+                       {"host": {"NetworkSlowPlayerPolicy": "Pause"}} if pause_slow_peers else None)
     injection = re.search(r"\[net-test\] live perturb frame=(\d+)", peer_log(root, "host"))
     assert injection and int(injection[1]) >= perturb_at, "the live-peer perturbation was never injected"
     anchors, captures = {}, {}
@@ -961,6 +977,8 @@ def main() -> int:
                         "round's start so the host holds its seat and the seat has to rejoin")
     parser.add_argument("--fullstate-every", type=int, default=0,
                         help="every N committed ticks both peers hash their whole capture (-net-fullstate-hash-every); 0 is off")
+    parser.add_argument("--pause-slow-peers", action="store_true",
+                        help="anchor only: the host pauses for a slow peer instead of holding it, so a sanitizer build's heal lands")
     args = parser.parse_args()
     if args.fullstate_every < 0:
         parser.error("--fullstate-every must be 0 or positive")
@@ -974,7 +992,7 @@ def main() -> int:
     with engine_executable(repo).open("rb") as exe:
         exe_sha = file_sha256(exe)
     result = {"exe_sha256": exe_sha, "arms": {}}
-    arms = {"restore": arm_restore, "retention": arm_retention, "anchor": arm_anchor, "resume": arm_resume,
+    arms = {"restore": arm_restore, "retention": arm_retention, "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers), "resume": arm_resume,
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks),
             "park": arm_park}
     if args.arm != "all":

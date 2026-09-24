@@ -1,3 +1,4 @@
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "SceneMan.h"
 #include "PostProcessMan.h"
@@ -3163,7 +3164,10 @@ std::string SceneMan::SaveMaterialCatalog() const {
             }
         };
         std::vector<std::future<void>> tasks;
-        for (size_t chunk = 1; chunk < chunks; ++chunk) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&write, chunk] { write(chunk); }));
+        for (size_t chunk = 1; chunk < chunks; ++chunk) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&write, chunk, task = CaptureSentinel::CurrentTask()] {
+            CaptureSentinel::WorkerScope worker(task);
+            write(chunk);
+        }));
         std::exception_ptr failure;
         try {
             write(0);

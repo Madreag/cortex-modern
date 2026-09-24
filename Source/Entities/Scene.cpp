@@ -1,4 +1,5 @@
 #include "Scene.h"
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
 #include "BitmapCheckpoint.h"
@@ -130,7 +131,8 @@ std::string Scene::SaveRuntimeCheckpoint() const {
 		// Each team's grid is its own; a capture takes them side by side, in the same order, beside the rest of the runtime.
 		pathfinders.resize(m_pPathFinders.size());
 		for (size_t index = 0; index < m_pPathFinders.size(); ++index) {
-			grids.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, &pathfinders, index] {
+			grids.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, &pathfinders, index, task = CaptureSentinel::CurrentTask()] {
+				CaptureSentinel::WorkerScope worker(task);
 				pathfinders[index] = CheckpointWriter::CaptureNative([this, index] { return m_pPathFinders[index] ? m_pPathFinders[index]->SaveCheckpoint() : ""; });
 			}));
 		}
@@ -1624,13 +1626,17 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 	constexpr size_t c_ObjectsPerTask = 1;
 	std::vector<std::future<void>> tasks;
 	for (const auto& [key, node]: ahead.nodes) {
-		tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&ahead, node = node.get()] {
+		tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&ahead, node = node.get(), task = CaptureSentinel::CurrentTask()] {
+			CaptureSentinel::WorkerScope worker(task);
 			AheadCaptureScope aheadScope(&ahead);
 			node->Run();
 		}));
 	}
 	for (size_t first = c_ObjectsPerTask; first < order.size(); first += c_ObjectsPerTask) {
-		tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, first, last = std::min(first + c_ObjectsPerTask, order.size())] { capture(first, last); }));
+		tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, first, last = std::min(first + c_ObjectsPerTask, order.size()), task = CaptureSentinel::CurrentTask()] {
+			CaptureSentinel::WorkerScope worker(task);
+			capture(first, last);
+		}));
 	}
 	std::exception_ptr failure;
 	try {
@@ -1827,8 +1833,10 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("BurstTimerStart", pEmitterToSave->GetBurstTimerStart());
 		writer.NewPropertyWithValue("LastEmitTimerStart", pEmitterToSave->GetLastEmitTimerStart());
 		writer.NewPropertyWithValue("SpecialBehaviour_WasEmitting", pEmitterToSave->WasEmitting());
+		writer.PerPeerBegin();
 		writer.NewPropertyWithValue("SpecialBehaviour_AvgBurstImpulse", pEmitterToSave->GetAvgBurstImpulse());
 		writer.NewPropertyWithValue("SpecialBehaviour_AvgImpulse", pEmitterToSave->GetAvgImpulse());
+		writer.PerPeerEnd();
 		for (double accumulator: pEmitterToSave->GetEmissionAccumulators()) {
 			writer.NewPropertyWithValue("EmissionAccumulator", accumulator);
 		}
@@ -1850,7 +1858,12 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("PrevRotation", moSpriteToSave->GetPrevRotMatrix());
 			writer.NewPropertyWithValue("AngularVel", moSpriteToSave->GetAngularVel());
 			writer.NewPropertyWithValue("SpecialBehaviour_AngOscillations", moSpriteToSave->GetAngOscillations());
+			// A firearm's flash shows the frame this machine's draw picked with the render stream.
+			const auto* firearm = dynamic_cast<const HDFirearm*>(moSpriteToSave->GetParent());
+			const bool drawnFrame = firearm && firearm->GetFlash() == moSpriteToSave;
+			if (drawnFrame) writer.PerPeerBegin();
 			writer.NewPropertyWithValue("Frame", static_cast<int>(moSpriteToSave->GetFrame()));
+			if (drawnFrame) writer.PerPeerEnd();
 			writer.NewPropertyWithValue("SpecialBehaviour_PrevAngVel", moSpriteToSave->GetPrevAngularVel());
 			writer.NewPropertyWithValue("SpriteAnimTimerStart", moSpriteToSave->GetSpriteAnimTimerStart());
 			writer.NewPropertyWithValue("SpecialBehaviour_SpriteAnimIsReversingFrames", moSpriteToSave->GetSpriteAnimIsReversingFrames());
@@ -1956,8 +1969,11 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (const AEmitter* aemitterToSave = dynamic_cast<const AEmitter*>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("BurstTimerStart", aemitterToSave->GetBurstTimerStart());
 			writer.NewPropertyWithValue("SpecialBehaviour_WasEmitting", aemitterToSave->WasEmitting());
+			// The impulse averages are filled when this machine's own AI first asks.
+			writer.PerPeerBegin();
 			writer.NewPropertyWithValue("SpecialBehaviour_AvgBurstImpulse", aemitterToSave->GetAvgBurstImpulse());
 			writer.NewPropertyWithValue("SpecialBehaviour_AvgImpulse", aemitterToSave->GetAvgImpulse());
+			writer.PerPeerEnd();
 			writer.NewPropertyWithValue("LastEmitTimerStart", aemitterToSave->GetLastEmitTimerStart());
 			for (double accumulator: aemitterToSave->GetEmissionAccumulators()) {
 				writer.NewPropertyWithValue("EmissionAccumulator", accumulator);
