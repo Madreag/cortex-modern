@@ -1843,7 +1843,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMatchRunner> runner;
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
-		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateJoinError.clear();
+		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateCaptureCosts.clear(); m_PrivateCaptureCold = false; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
 		m_LastJoinRoute.reset();
 		m_WorldCaptureRequestedTick = 0;
@@ -2764,11 +2764,18 @@ static std::string ResyncSaveName() {
 		}
 	}
 
-	bool NetMatchService::PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double lastCaptureMs) {
-		// Zero means no completed capture has been measured yet; only the round's initial base may run
-		// in that state. A capture stalls every peer, so no seat, held or returned, asks for another base after a slow one.
-		const bool captureWithinBudget = lastCaptureMs > 0.0 && lastCaptureMs <= 50.0;
+	bool NetMatchService::PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double steadyCaptureMs) {
+		// A capture stalls every peer, so no seat asks for another base while the steady capture cost is past the bound;
+		// the round's first capture pays a one-time warm-up and never decides alone.
+		const bool captureWithinBudget = steadyCaptureMs < 0.0 || steadyCaptureMs <= 50.0;
 		return captureWithinBudget && (seatHeld || staleFrom > baseTick);
+	}
+
+	double NetMatchService::SteadyCaptureMs(const std::deque<double>& costs) {
+		if (costs.empty()) return -1.0;
+		std::vector<double> sorted(costs.begin(), costs.end());
+		std::sort(sorted.begin(), sorted.end());
+		return sorted.size() % 2 ? sorted[sorted.size() / 2] : (sorted[sorted.size() / 2 - 1] + sorted[sorted.size() / 2]) / 2.0;
 	}
 
 	void NetMatchService::PreparePrivateRejoinCheckpoint() {
@@ -2782,7 +2789,7 @@ static std::string ResyncSaveName() {
 		m_PrivateImageSeatHeld = seatHeld;
 		const uint64_t nowMs = SteadyNowMs();
 		const bool cadenceOpen = m_PrivateImageTakenMs == 0 || nowMs - m_PrivateImageTakenMs >= c_PrivateImageMinIntervalMs;
-		const bool stale = (m_PrivateImageRecapture || PrivateBaseRefreshDue(seatHeld, m_PrivateImageStaleFrom, m_WorldJoin.Image().tick, m_PrivateImageLastCaptureMs)) &&
+		const bool stale = (m_PrivateImageRecapture || PrivateBaseRefreshDue(seatHeld, m_PrivateImageStaleFrom, m_WorldJoin.Image().tick, SteadyCaptureMs(m_PrivateCaptureCosts))) &&
 		                   !m_WorldJoin.HasImageTransferInFlight() &&
 		                   !m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) &&
 		                   !m_PrivateImageTask.valid() && (m_PrivateImageRecapture || cadenceOpen);
@@ -2801,6 +2808,7 @@ static std::string ResyncSaveName() {
 		m_PrivateImageRound = round;
 		m_PrivateImageTakenMs = nowMs;
 		m_PrivateImageRecapture = false;
+		m_PrivateCaptureCold = initial;
 		if (initial) { m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); }
 		m_PrivateJoinError.clear();
 		const auto& config = m_Coordinator->GetConfig();
@@ -3133,6 +3141,10 @@ static std::string ResyncSaveName() {
 			m_WorldJoinImageArchive = std::move(ready.archive);
 			m_WorldJoinImageDigest = ready.image.digest;
 			m_PrivateImageLastCaptureMs = ready.image.captureMs;
+			if (!m_PrivateCaptureCold) {
+				m_PrivateCaptureCosts.push_back(ready.image.captureMs);
+				if (m_PrivateCaptureCosts.size() > 3) m_PrivateCaptureCosts.pop_front();
+			}
 			m_WorldJoin.PublishImage(ready.image);
 			return;
 		}
@@ -3513,7 +3525,8 @@ static std::string ResyncSaveName() {
 		    task.second.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; });
 		for (const auto& session: m_WorldJoin.Sessions()) {
 			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
-			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && m_WorldJoin.Image().IsValid())
+			// A returning seat takes the base being captured for it, not the older one that capture replaces.
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && m_WorldJoin.Image().IsValid() && !m_PrivateImageTask.valid())
 				StartJoinerImageTransfer(session, nullptr, nullptr);
 			if (session.phase == NetWorldJoinPhase::CatchingUp) SendWorldJoinTailTo(m_Runner->GetLobbySession(), m_WorldJoin, session);
 		}
