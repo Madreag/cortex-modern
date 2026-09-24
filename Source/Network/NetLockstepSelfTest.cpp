@@ -78,6 +78,7 @@ namespace RTE {
 	bool TestASeatIsNotLateForOurOwnDecision(std::string* error);
 	bool TestAFirstDelayChangeIsNotAMutualWait(std::string* error);
 	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error);
+	bool TestAThinLeadIsRaisedBeforeASpike(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -1130,7 +1131,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x26, 0x00,
+				0x27, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -8824,7 +8825,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x26, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x27, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -19586,6 +19587,81 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	// (a returner reclaimed at delay 8 on a zero-ping link, lowered to 1: held 8 frames after the change). A seat that runs
 	// ahead still gets its lower delay, and a seat with some frames to spare spends them once: the next decrease waits for a
 	// window of arrivals under the delay it got.
+	// A seat whose inputs arrive with a frame of lead is raised to the bound's worth before a spike finds it: a 70 ms stall that held
+	// it at that lead passes with no hold and no wait past the bound, and a machine that cannot keep pace gains no more than the bound.
+	bool TestAThinLeadIsRaisedBeforeASpike(std::string* error) {
+		struct Case { const char* name; uint64_t clientPeriodMs; uint64_t stallAtTick; }; // 0: no stall
+		const Case cases[] = {{"a spike on a thin lead", 17, 330}, {"a machine that cannot keep pace", 25, 0}};
+		for (const Case& test: cases) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			const uint16_t start = 7;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A41, 1, NetTransportLane::InputUnreliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A41, start, NetTransportLane::InputUnreliable);
+			for (auto* config: {&hostConfig, &clientConfig}) {
+				config->roundId = 0x9A41;
+				config->simTickMs = 1000.0 / 60.0;
+				config->timeoutMs = 20000;
+				config->substituteSlowPeers = true;
+				config->adaptiveInputDelay = true;
+				config->slowPlayerBoundTicks = 3;
+				config->matchConfig = NetMatchConfigUtil::MakeDefault(0x9A41);
+				config->peerInputDelayFrames = {{1, 1}, {2, start}};
+			}
+			hostConfig.relayToOtherPeers = true;
+			LoopbackTransportConfig link;
+			link.latencyMs = 45;
+			hostWire.SetFaultConfig(link); clientWire.SetFaultConfig(link);
+			if (!StartCoordinatorPair(49563, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 3000, 5)) return false;
+			struct Sim { NetLockstepCoordinator* coordinator; int64_t uid; uint64_t periodMs; uint64_t tick = 0; bool produced = false; uint64_t startAtMs = 0; uint64_t longestWaitMs = 0; };
+			Sim sims[2] = {{&host, 100, 17}, {&client, 200, test.clientPeriodMs}};
+			uint64_t now = 0;
+			std::string queueError;
+			bool queueFailed = false, stalled = false;
+			const auto pump = [&] {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+				for (Sim& sim: sims) {
+					const bool beforeStart = sim.tick < sim.coordinator->GetStats().effectiveStartFrame;
+					const bool frameReady = sim.coordinator->HasReadyFrame(sim.tick);
+					if (now < sim.startAtMs) continue;
+					if (!sim.produced && (beforeStart || frameReady) && !sim.coordinator->TimingDecisionPendingAt(sim.tick)) {
+						if (!sim.coordinator->DeferLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}) &&
+						    !sim.coordinator->QueueLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}, {}, &queueError)) { queueFailed = true; break; }
+						sim.produced = true;
+					}
+					NetLockstepReadyFrame ready;
+					if (sim.produced && beforeStart) {
+						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
+					} else if (sim.produced && frameReady && sim.coordinator->PopReadyFrame(ready)) {
+						(void)sim.coordinator->FinishSimulationTick(ready.frame);
+						if (now > 1000) sim.longestWaitMs = std::max(sim.longestWaitMs, now - sim.startAtMs);
+						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
+						// The client's machine stops for 70 ms once: a load spike, not a slow link.
+						if (sim.coordinator == &client && test.stallAtTick != 0 && sim.tick == test.stallAtTick && !stalled) { stalled = true; sim.startAtMs = now + 70; }
+					} else if (sim.coordinator == &host && !beforeStart) {
+						(void)host.NoteFrameWait(sim.tick, now);
+					}
+				}
+				++now;
+			};
+			while (now < 9000 && !queueFailed && host.IsRunning() && client.IsRunning()) pump();
+			const auto holds = host.GetStats().peers.at(2).holds;
+			const uint16_t delay = host.InputDelayAt(2, sims[0].tick);
+			const uint16_t ceiling = start + 3 + 2;
+			const bool spikeCase = test.stallAtTick != 0;
+			if (queueFailed || holds != 0 || !host.IsRunning() || (spikeCase && (!stalled || delay <= start || sims[0].longestWaitMs > 50)) || delay > ceiling || sims[0].tick < 300) {
+				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " stalled=" + std::to_string(stalled) + " start_delay=" + std::to_string(start) +
+				         " delay=" + std::to_string(delay) + " ceiling=" + std::to_string(ceiling) + " host_tick=" + std::to_string(sims[0].tick) +
+				         " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) + " queue=" + queueError;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_thin_lead_is_raised_before_a_spike case=\"" << test.name << "\" delay=" << start << "->" << delay
+			          << " holds=" << holds << " host_longest_wait_ms=" << sims[0].longestWaitMs << std::endl;
+		}
+		return true;
+	}
+
 	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error) {
 		struct Case { const char* name; uint64_t clientPeriodMs; uint16_t clientDelay; uint64_t clientStartMs; uint16_t expectedDelay; }; // 0: any delay below the start
 		const Case cases[] = {{"a seat our sim waits on", 25, 8, 0, 8}, {"a seat that runs ahead", 12, 8, 0, 0}, {"a seat five ticks behind", 17, 12, 85, 0}};
@@ -19809,6 +19885,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestASeatIsNotLateForOurOwnDecision, "a_seat_is_not_late_for_our_own_decision");
 		row(&TestAFirstDelayChangeIsNotAMutualWait, "a_first_delay_change_is_not_a_mutual_wait");
 		row(&TestALiveDelayDecreaseKeepsAWaitedSeatsSlack, "a_live_delay_decrease_keeps_a_waited_seats_slack");
+		row(&TestAThinLeadIsRaisedBeforeASpike, "a_thin_lead_is_raised_before_a_spike");
 		row(&TestAReturnerAnswersItsSuccessor, "a_returner_answers_its_successor");
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");

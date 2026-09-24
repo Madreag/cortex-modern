@@ -2724,7 +2724,7 @@ namespace RTE {
 
 		uint16_t encodeVersion = c_Version;
 		if (const auto* start = std::get_if<NetLockstepStart>(&packet.payload); start && start->agreedStartRecord) {
-			encodeVersion = c_AgreedStartVersion;
+			encodeVersion = c_SeatDeviceVersion;
 		}
 		if (const auto* frame = std::get_if<NetLockstepFrame>(&packet.payload)) {
 			for (const NetGameCommand& command: frame->commands) {
@@ -4006,7 +4006,11 @@ namespace RTE {
 		m_PendingValueObservations.insert(m_PendingValueObservations.end(), carriedValues.begin(), carriedValues.end());
 		m_DroppedObservations.insert(m_DroppedObservations.end(), dropped.begin(), dropped.end());
 		m_DroppedValueObservations.insert(m_DroppedValueObservations.end(), droppedValues.begin(), droppedValues.end());
-		std::cout << "[net-match] Host left - " << DescribePeer(m_MigrationSuccessor) << " is now hosting; boundary=" << m_MigrationBoundary << " round=" << m_RoundId << std::endl;
+		// A handover that found nobody but this peer is no election: the service refuses it, so nobody is hosting.
+		if (std::any_of(m_MigrationResult.members.begin(), m_MigrationResult.members.end(), [&](uint8_t peer) { return peer != m_Config.localPeerId; }))
+			std::cout << "[net-match] Host left - " << DescribePeer(m_MigrationSuccessor) << " is now hosting; boundary=" << m_MigrationBoundary << " round=" << m_RoundId << std::endl;
+		else
+			std::cout << "[net-match] Host left - no other survivor; boundary=" << m_MigrationBoundary << " round=" << m_RoundId << std::endl;
 		// Our own end outlives the handover: the new host hears it as our leave, and this peer stays ended.
 		if (const auto ownEnd = std::exchange(m_OwnEndDuringMigration, std::nullopt); ownEnd && IsRunning()) {
 			if (ownEnd->reason == NetLockstepStopReason::Complete) Complete(ownEnd->message); else Leave(ownEnd->message);
@@ -5073,6 +5077,8 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 				if ((timing.heldPeers & (1U << (peer - 1))) == 0 || m_AiHeldSeats.contains(peer)) continue;
 				m_AiHeldSeats[peer] = timing.applyFrame;
+				// The seat's lead is measured afresh once it is back; what arrived before the hold says nothing of it.
+				m_ArrivalLeads.erase(peer);
 				// A clean leaver's leave exchange still owes its answer on this connection, so the leaver closes it.
 				ApplyPeerLeave(peer, timing.applyFrame, "slow player: AI takeover", m_TimingNowMs, false, !m_ReleaseWhenHeld.contains(peer), true);
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
@@ -5766,6 +5772,33 @@ namespace RTE {
 		return delay < current ? std::optional<uint16_t>{static_cast<uint16_t>(delay)} : std::nullopt;
 	}
 
+	std::optional<uint16_t> NetLockstepCoordinator::MarginKeepingIncrease(uint8_t peerId, uint16_t current, uint32_t required, uint64_t nowMs) const {
+		// A seat whose inputs arrive with less than the slow-player bound's worth of lead is one load spike away from a
+		// hold. Its delay rises by what the lead lacks, before any wait: only arrivals made under the delay now in force
+		// count, over a whole short window of them, so a change still pending or not yet measured leaves nothing to raise.
+		uint64_t firstFrameUnderCurrent = 0;
+		if (const auto changes = m_DelayChanges.find(peerId); changes != m_DelayChanges.end() && !changes->second.empty()) {
+			const auto& [applyFrame, delay] = *changes->second.rbegin();
+			if (delay != current) return std::nullopt;
+			firstFrameUnderCurrent = applyFrame + delay;
+		}
+		const auto found = m_ArrivalLeads.find(peerId);
+		if (found == m_ArrivalLeads.end()) return std::nullopt;
+		const auto& leads = found->second;
+		const auto first = std::find_if(leads.begin(), leads.end(), [&](const ArrivalLead& arrival) { return arrival.frame >= firstFrameUnderCurrent; });
+		if (first == leads.end() || first->ms > nowMs || nowMs - first->ms < c_MarginWindowMs) return std::nullopt;
+		uint64_t least = UINT64_MAX;
+		for (auto arrival = first; arrival != leads.end(); ++arrival)
+			if (nowMs - arrival->ms <= c_MarginWindowMs) least = std::min(least, arrival->lead);
+		const uint64_t keep = std::max<uint64_t>(1, m_Config.slowPlayerBoundTicks);
+		if (least == UINT64_MAX || least >= keep) return std::nullopt;
+		// The rise stays within the bound above what the link's round trip needs: a machine that cannot keep pace gains
+		// nothing from a longer delay, and the bound is what answers it.
+		const uint64_t ceiling = std::min<uint64_t>(static_cast<uint64_t>(required) + keep, NetLockstepCodec::c_MaxInputDelayFrames);
+		const uint64_t delay = std::min<uint64_t>(static_cast<uint64_t>(current) + keep - least, ceiling);
+		return delay > current ? std::optional<uint16_t>{static_cast<uint16_t>(delay)} : std::nullopt;
+	}
+
 	void NetLockstepCoordinator::TickTiming(uint64_t nowMs) {
 		if (!IsRunning() || m_Playback) return;
 		const bool host = m_Config.localPeerId == GetHostPeerId();
@@ -5784,6 +5817,8 @@ namespace RTE {
 				if (host && m_Config.adaptiveInputDelay) {
 					std::optional<uint16_t> delay = estimator.Change(nowMs, stats.delayFrames, m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
 					if (delay && *delay < stats.delayFrames) delay = SlackLimitedDecrease(peer, *delay, stats.delayFrames, nowMs);
+					const uint32_t required = estimator.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
+					if (const auto kept = MarginKeepingIncrease(peer, stats.delayFrames, required, nowMs); kept && (!delay || *kept > *delay)) delay = kept;
 					if (delay) ProposeInputDelay(peer, *delay, FutureTimingFrame());
 				}
 			}
@@ -8130,6 +8165,9 @@ namespace RTE {
 				const auto backlogIt = m_RelayBacklog.find(peerId);
 				return (backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty()) || m_TimingOutgoing.contains(peerId);
 			}();
+			if (frame && destinationLane == NetTransportLane::InputUnreliable && TestBlipDropsFrameSend(frame->targetFrame)) {
+				continue;
+			}
 			std::string sendError;
 			bool congested = false;
 			if (!backlogged && m_Transport->Send(transportId, destinationLane, bytes, &sendError, &congested)) {
@@ -8158,6 +8196,28 @@ namespace RTE {
 			}
 		}
 		return true;
+	}
+
+	// Test lever: CC_TEST_LOCKSTEP_BLIP_FRAME / _MS drop this peer's unreliable frame sends for a wall-clock window from that frame on, once.
+	bool NetLockstepCoordinator::TestBlipDropsFrameSend(uint64_t targetFrame) {
+		static const auto blipFrame = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_BLIP_FRAME");
+		static const auto blipMs = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_BLIP_MS");
+		static uint64_t untilMs = 0;
+		static uint64_t drops = 0;
+		if (!blipFrame || !blipMs || m_Playback) return false;
+		const uint64_t nowMs = NetLockstepNowMs();
+		if (untilMs == 0 && targetFrame >= *blipFrame) {
+			untilMs = nowMs + *blipMs;
+			std::cout << "[lockstep-test] blip from frame=" << targetFrame << " ms=" << *blipMs << std::endl;
+		}
+		if (untilMs == 0 || untilMs == UINT64_MAX) return false;
+		if (nowMs < untilMs) {
+			++drops;
+			return true;
+		}
+		std::cout << "[lockstep-test] blip ended at frame=" << targetFrame << " dropped_sends=" << drops << std::endl;
+		untilMs = UINT64_MAX;
+		return false;
 	}
 
 	bool NetLockstepCoordinator::IsKnownRemotePeer(uint8_t peerId) const {

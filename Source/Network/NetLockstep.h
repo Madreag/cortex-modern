@@ -1337,6 +1337,12 @@ namespace RTE {
 		std::map<uint8_t, std::deque<ArrivalLead>> m_ArrivalLeads; //!< Per remote sender, the recent arrivals of its new input.
 		/// The decrease a live delay change may make without a wait at its frame: never more than the sender's inputs arrived early by, less the slow-player bound.
 		std::optional<uint16_t> SlackLimitedDecrease(uint8_t peerId, uint16_t proposed, uint16_t current, uint64_t nowMs);
+		/// The rise a live delay change makes so the sender's inputs keep the slow-player bound's worth of lead: what the least lead over the last
+		/// window lacked, never past the bound above the delay the link's round trip requires.
+		std::optional<uint16_t> MarginKeepingIncrease(uint8_t peerId, uint16_t current, uint32_t required, uint64_t nowMs) const;
+		/// Whether the blip test lever drops this unreliable frame send.
+		bool TestBlipDropsFrameSend(uint64_t targetFrame);
+		static constexpr uint64_t c_MarginWindowMs = 1000; //!< The arrivals a rise is judged over: short, so it lands before a spike finds the seat.
 		std::map<uint8_t, std::deque<NetLockstepTiming>> m_TimingOutgoing;
 		std::map<int64_t, ControllerFrame> m_DeferredControllerFrames;
 		uint64_t m_NextTimingRevision = 1;
