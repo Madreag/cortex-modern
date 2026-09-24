@@ -326,6 +326,12 @@ namespace RTE {
 		/// @return The position of this SoundContainer.
 		const Vector& GetPosition() const { return CurrentPos(); }
 
+		/// Set by the preview fence while a window is open on this thread: whether the Lua call running now reads the world's
+		/// object, which a getter may then not write.
+		static thread_local bool (*s_PreviewReadsWorld)();
+		/// Set while a preview window is open on this thread: a lazy setup there fills a scratch copy, never this container.
+		static thread_local bool s_PreviewWindowOpen;
+
 		/// Whether a shared scope has handed this container's position to Lua as a live alias.
 		bool TestSharedAliasHeld() const { return m_SharedAliasHeld; }
 		/// The position Lua holds. In an AI hook it is this pass's private copy, so a write through it

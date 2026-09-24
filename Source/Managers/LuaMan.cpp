@@ -12376,6 +12376,8 @@ namespace {
 		luabind::detail::preview_fence::argument = &PreviewFenceArgument;
 		s_PreviewLastDroppedCall.clear();
 		MOSprite::s_PreviewKeepsCachesOf = &PreviewFenceKeepsCaches;
+		SoundContainer::s_PreviewReadsWorld = [] { return luabind::detail::preview_fence_detaches(); };
+		SoundContainer::s_PreviewWindowOpen = true;
 		s_PreviewSavedMORNG = s_workerMORNG;
 		s_PreviewSavedLuaRNGOverride = s_luaRNGOverride;
 		luabind::detail::preview_fence::open();
@@ -12394,6 +12396,8 @@ namespace {
 			}
 		}
 		MOSprite::s_PreviewKeepsCachesOf = nullptr;
+		SoundContainer::s_PreviewReadsWorld = nullptr;
+		SoundContainer::s_PreviewWindowOpen = false;
 		s_workerMORNG = s_PreviewSavedMORNG;
 		s_luaRNGOverride = s_PreviewSavedLuaRNGOverride;
 		luabind::detail::preview_fence::close();
