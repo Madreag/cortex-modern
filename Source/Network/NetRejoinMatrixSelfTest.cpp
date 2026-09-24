@@ -703,6 +703,8 @@ namespace RTE {
 			Pump(r, 300, [&r] { return r.host.HasHeldAISeat(2) || r.host.GetPeerLeaveFrames().contains(2); });
 			if (CoordinatorLabel(r.client) != "stopped:PeerLeft") return Fail(r, "the client did not leave");
 			if (!r.host.HasHeldAISeat(2) && !r.host.GetPeerLeaveFrames().contains(2)) return Fail(r, "the host never recorded the leave");
+			// The leaver's leave exchange answers on its connection; the host must not close it under the leaver.
+			if (r.host.GetStats().connectionsClosedOnEviction != 0) return Fail(r, "the host closed a clean leaver's connection");
 			return true;
 		}
 
