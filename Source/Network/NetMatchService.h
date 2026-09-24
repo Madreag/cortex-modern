@@ -437,6 +437,8 @@ namespace RTE {
 			return config.autosaveEnabled ? config.autosaveIntervalSeconds : 0;
 		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
+		/// A completed tick's committed frame joins the catch-up history a returner replays; a paused tick's too.
+		void AppendCommittedJoinFrame(uint64_t tick);
 		void AutosaveAtTickBoundary(uint64_t tick);
 		/// One entry of the checkpoint schedule on the committed stream.
 		struct CheckpointNote { uint8_t sender = 0; uint8_t kind = 0; uint64_t tick = 0; };
@@ -704,6 +706,11 @@ namespace RTE {
 		/// the seat's lockstep id - a promoted watcher plays on a slot its own seat does not name, so
 		/// a leftover row naming that id would release whoever holds it next.
 		static bool FindWorldCleanLeave(const std::vector<NetH4SeatStatus>& statuses, const NetWorldJoinHost& world, WorldCleanLeave& outLeave);
+		/// A slot whose seat the AI holds while its player closed that seat by leaving: the member chose to go, so the seat is
+		/// released (the AI keeps its units) and the slot opens for a new join. A seat still committed, dropped or mid-reclaim
+		/// is still its member's. The departed returner's bootstrap, if any is left, is named in the result.
+		static bool FindHeldWorldCleanLeave(const std::vector<NetH4SeatStatus>& statuses, const NetWorldJoinHost& world, const std::set<uint8_t>& aiHeldPeers,
+		                                    WorldCleanLeave& outLeave);
 		/// The world slots a dropped or reclaiming seat is waiting for, by the slot each seat holds.
 		/// A promoted watcher plays on a slot its seat's lockstep id does not name, so a hold keyed on
 		/// that id would leave its slot open and fence a slot nobody is coming back to.
@@ -880,6 +887,8 @@ namespace RTE {
 		bool RelaunchInFlightLocked() const;
 		/// Host: ends the rejoin of every returner that has replayed past the bound without showing the headroom its activation needs.
 		void RefuseReturnersWithoutHeadroomLocked(uint64_t nowMs);
+		bool PrivateReturnerInFlightLocked() const;
+		std::set<NetPeerId> m_SlowReturnersNoted; //!< Returners already told they keep catching up below the round's rate.
 		/// Host: ends one returner's rejoin and tells its client why, so it tries again instead of waiting.
 		void RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text);
 		/// Client: points the ticket at a successor and rejoins it.
@@ -1437,6 +1446,8 @@ namespace RTE {
 		uint64_t m_ResyncHealStartMs = 0;
 		bool m_ResyncHealOpen = false;
 		bool m_HostRepairPending = false;
+		bool m_HostRepairDeferred = false; //!< Host: a repair asked for while a returner catches up, started once it is back.
+		uint64_t m_HostRepairDeferredMs = 0;
 		bool m_HostLobbyBeaconed = false;
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
@@ -1494,6 +1505,7 @@ namespace RTE {
 		bool m_PrivateImageRecapture = false; //!< Host: the next pass takes a fresh base; the stuck writer was abandoned.
 		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.
 		bool m_PrivateImageSeatHeld = false;
+		std::map<NetPeerId, std::string> m_PrivateTransferHeldReasons; //!< Host: why a returner's image has not left, reported once per reason.
 		const char* m_PrivateBaseHeldReason = nullptr; //!< Host: why the last pass could not take a base, reported once per reason.
 		std::string m_PrivateJoinError;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.

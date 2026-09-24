@@ -221,6 +221,7 @@ namespace RTE {
 			}
 		}
 		PumpChatOutbox();
+		RepeatUnansweredHello();
 		CheckTimeouts();
 		MaybeSendHeartbeats();
 		if (m_ReconnectHost) {
@@ -634,6 +635,7 @@ namespace RTE {
 					}
 					m_State = NetSessionState::HelloSent;
 					m_StateStartedMs = m_NowMs;
+					m_LastHelloSentMs = m_NowMs;
 				}
 				break;
 			case NetTransportEventType::PeerDisconnected:
@@ -805,10 +807,22 @@ namespace RTE {
 			return;
 		}
 		if (const auto* hello = std::get_if<NetClientHello>(&message.payload)) {
+			// A client repeats its hello until it is answered; the repeat of one already read changes nothing.
+			if (peer->helloSeen && hello->clientNonce == peer->clientNonce) {
+				++m_Stats.repeatedHellos;
+				return;
+			}
+			if (FaultInjected("drop_first_hello") && !m_DroppedFirstHello) {
+				m_DroppedFirstHello = true;
+				System::PrintDiagnosticLine("[net-session] test: dropped the first hello from transport peer " + std::to_string(peerId));
+				return;
+			}
 			if (peer->state != NetSessionState::Handshake) {
 				RejectPeer(*peer, NetRejectReason::HostNotAccepting, "state", "handshake", StateName(peer->state), "host is not accepting another hello for this peer");
 				return;
 			}
+			peer->helloSeen = true;
+			peer->clientNonce = hello->clientNonce;
 			uint8_t assignedPeerId = AllocatePeerId();
 			if (assignedPeerId == 0) {
 				if (m_Config.maxPeers == 0) {
@@ -1521,6 +1535,17 @@ namespace RTE {
 				m_Transport->Disconnect(m_RemoteTransportPeerId, "session timeout");
 			}
 		}
+	}
+
+	void NetSession::RepeatUnansweredHello() {
+		// A hello the host's transport handed over before it announced the connection is lost there, so it goes out again.
+		if (m_Role != NetSessionRole::Client || m_State != NetSessionState::HelloSent || m_Config.helloRepeatMs == 0 ||
+		    m_RemoteTransportPeerId == c_InvalidNetPeerId || FaultInjected("client_never_says_hello") || NetA7Journal::ControlledSilentClient() ||
+		    m_NowMs < m_LastHelloSentMs + m_Config.helloRepeatMs) {
+			return;
+		}
+		m_LastHelloSentMs = m_NowMs;
+		if (Send(m_RemoteTransportPeerId, BuildClientHello())) ++m_Stats.helloRepeats;
 	}
 
 	void NetSession::ExpireSilentHandshakes() {
