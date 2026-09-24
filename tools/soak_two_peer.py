@@ -161,7 +161,9 @@ def main(argv: list[str] | None = None) -> int:
     # The host is never killed here, so a client that names a new host has split the match in two.
     split = count(root / "client" / "stdout.log", "[net-match] Host left - ")
     autosaves = count(root / "host" / "stdout.log", "[autosave] tick=", "capture_ms=")
-    owed = int(options.minutes * 60 // options.autosave_seconds) - 1
+    # The cadence is in simulation seconds, so what is owed follows the ticks the host reached, not the wall clock.
+    reached = max((row["last_tick"] for row in live), default=0)
+    owed = int(reached // (TICKS_PER_SECOND * options.autosave_seconds)) - 1
     minutes_sampled = sum(1 for row in samples if row.get("host") and row.get("client"))
     exits = {peer: {"exit_code": record.get("exit_code"), "timed_out": record.get("timed_out")} for peer, record in records.items()}
     checks = {"exits": all(row["exit_code"] == 0 and not row["timed_out"] for row in exits.values()),
@@ -174,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
                      "peak": max(row[peer]["working_set"] for row in samples if row.get(peer))}
               for peer in ("host", "client")} if first and last else None
     result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
-              "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
+              "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
               "autosaves_published": autosaves, "autosaves_owed": owed,
               "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
               "plan": plan}
