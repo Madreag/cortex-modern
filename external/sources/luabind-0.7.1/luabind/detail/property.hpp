@@ -270,7 +270,8 @@ namespace luabind { namespace detail
 			if (converter1_t::is_value_converter::value && nret == 1)
 			{
 				object_rep* child = is_class_object(L, -1);
-				if (child && child != obj)
+				// A preview window's detached copy owns itself, so a write to it is no write to the parent.
+				if (child && child != obj && !(child->flags() & object_rep::owner))
 				{
 					child->set_checkpoint_parent(obj);
 					checkpoint_member_owner(obj, ptr, 0);

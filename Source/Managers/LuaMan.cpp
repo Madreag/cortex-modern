@@ -10123,6 +10123,10 @@ int LuaStateWrapper::RunScriptString(const std::string& scriptString, bool conso
 	return error;
 }
 
+namespace {
+	void NotePreviewHookFailure(const std::string& script, const std::string& error);
+}
+
 int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functionObject, const std::string& selfGlobalTableName, const std::string& selfGlobalTableKey, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	int status = 0;
 
@@ -10177,6 +10181,8 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	if (&g_LuaMan.GetMasterScriptState() == this) {
 		timing = &m_ScriptTimings[path];
 	}
+	// Kept by value for the same reason: a preview hook's failure names its script after the call.
+	const std::string previewScript = LuaMan::IsRunningPreviewHook() ? path : std::string();
 
 	std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
 	{
@@ -10186,7 +10192,12 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 		if (lua_pcall(m_State, argumentCount, LUA_MULTRET, -argumentCount - 2) > 0) {
 			m_LastError = lua_tostring(m_State, -1);
 			lua_pop(m_State, 1);
-			g_ConsoleMan.PrintString("ERROR: " + m_LastError);
+			// A preview hook that fails, as one does after a dropped call's nil, stops there; it is reported once per script.
+			if (LuaMan::IsRunningPreviewHook()) {
+				NotePreviewHookFailure(previewScript, m_LastError);
+			} else {
+				g_ConsoleMan.PrintString("ERROR: " + m_LastError);
+			}
 			ClearErrors();
 			status = -1;
 		}
@@ -11734,6 +11745,193 @@ namespace {
 	void DropPreviewSoundCopies() {
 		s_PreviewSoundCopies.clear();
 	}
+
+	// The window's fence at the binding boundary: the objects it owns, and the world parts it holds copies of.
+	bool s_PreviewBindingFenceOpen = false;
+	long s_PreviewBindingUIDFloor = 0;
+	std::unordered_map<const MovableObject*, MovableObject*> s_PreviewCloneOf;
+
+	// The MovableObject a handle names, cast through the bases luabind registered; null for any other class.
+	MovableObject* FencedMovableObject(const luabind::detail::object_rep* rep, int& offset) {
+		const luabind::detail::class_rep* crep = rep ? rep->crep() : nullptr;
+		if (!crep || !rep->ptr() || crep->has_holder() || crep->get_class_type() != luabind::detail::class_rep::cpp_class) {
+			return nullptr;
+		}
+		const std::type_info* movableObject = &typeid(MovableObject);
+		offset = 0;
+		if (luabind::detail::implicit_cast(crep, movableObject, offset) < 0) {
+			return nullptr;
+		}
+		return reinterpret_cast<MovableObject*>(static_cast<char*>(rep->ptr()) + offset);
+	}
+
+	void PreviewFenceSubstitute(luabind::detail::object_rep* rep) {
+		int offset = 0;
+		const MovableObject* mo = FencedMovableObject(rep, offset);
+		if (const auto clone = mo ? s_PreviewCloneOf.find(mo) : s_PreviewCloneOf.end(); clone != s_PreviewCloneOf.end()) {
+			rep->set_object(reinterpret_cast<char*>(clone->second) - offset);
+		}
+	}
+
+	// A preview copy and anything the window created are its own; every other object is the world's.
+	int PreviewFenceOwns(const luabind::detail::object_rep* rep) {
+		int offset = 0;
+		if (const MovableObject* mo = FencedMovableObject(rep, offset)) {
+			return LuaMan::IsPreviewClone(mo) || mo->GetUniqueID() > s_PreviewBindingUIDFloor ? 1 : 0;
+		}
+		// The hold's sound copies are the window's own, as are the Vectors it made.
+		if (rep && rep->crep() && std::strcmp(rep->crep()->name(), "SoundContainer") == 0 && IsPreviewSoundCopy(static_cast<const SoundContainer*>(rep->ptr()))) {
+			return 1;
+		}
+		return -1;
+	}
+
+	// The bindings expose many readers as non-const methods, so a non-const call on the world's objects runs only when its
+	// name says it reads: the accessors and tests, and the ray casts that only look (the see and unsee casts change the map).
+	bool PreviewFenceReadOnlyName(std::string_view name) {
+		static constexpr std::string_view readers[] = {"Get", "Is", "Has", "Find", "Count", "Any", "Can", "Needs", "Was", "Within", "Compare", "Estimate", "Element", "Analog", "LeftTill"};
+		static constexpr std::string_view named[] = {"ValidMO", "WhichTeamLeft", "OtherTeam", "NoTeamLeft", "OneOrNoneTeamsLeft", "OnlyOneTeamLeft", "FacingAngle", "ScriptEnabled",
+		                                             "PathFindingUpdated", "TeamFundsChanged", "CalculateTextHeight", "CalculateTextWidth", "SplitStringToFitWidth", "JustStartedEmitting",
+		                                             "FirearmsAreReloading", "DetectObstacle", "CastStrengthRay", "CastStrengthSumRay", "CastWeaknessRay", "CastMORay", "CastAllMOsRay",
+		                                             "CastFindMORay", "CastObstacleRay", "CastTerrainPenetrationRay"};
+		if (name.ends_with("Exists")) {
+			return true;
+		}
+		for (std::string_view reader: readers) {
+			// A reader's verb is followed by the next word, so "Is" does not take "Island".
+			if (name.starts_with(reader) && (name.size() == reader.size() || !std::islower(static_cast<unsigned char>(name[reader.size()])))) {
+				return true;
+			}
+		}
+		return std::find(std::begin(named), std::end(named), name) != std::end(named);
+	}
+
+	// The engine's managers, as the bindings name them: constness is not trusted on these, a const EndActivity ends the match.
+	bool PreviewFenceManagerClass(std::string_view className) {
+		static constexpr std::string_view managers[] = {"ActivityManager", "AudioManager", "MusicManager", "ConsoleManager", "FrameManager", "MetaManager", "MovableManager",
+		                                                "PerformanceManager", "PostProcessManager", "PresetManager", "PrimitiveManager", "SceneManager", "CameraManager",
+		                                                "SettingsManager", "MetricsCollectorManager", "TimerManager", "UInputManager"};
+		return std::find(std::begin(managers), std::end(managers), className) != std::end(managers);
+	}
+
+	bool PreviewFenceNameStartsWith(std::string_view name, std::string_view verb) {
+		// A verb is followed by the next word, so "Is" does not take "Island".
+		return name.starts_with(verb) && (name.size() == verb.size() || !std::islower(static_cast<unsigned char>(name[verb.size()])));
+	}
+
+	// A manager call runs only when its name reads. The allow-list is every manager binding that reads without saying so:
+	// the scene's reading casts and positions (which write at most their own Vector argument), the text metrics, the input
+	// queries and the activity and timer tests.
+	bool PreviewFenceManagerReads(std::string_view name) {
+		static constexpr std::string_view verbs[] = {"Get", "Is", "Has", "Count", "Find", "Contains", "Can"};
+		static constexpr std::string_view reviewed[] = {
+		    "ActivityPaused", "ActivityRunning", "CalculateTextHeight", "CalculateTextWidth", "SplitStringToFitWidth", "ValidMO", "TargetDistanceScalar", "DrawnSimUpdate",
+		    "TimeForSimUpdate", "AnythingUnseen", "CastAllMOsRay", "CastFindMORay", "CastMORay", "CastMaterialRay", "CastMaxStrengthRay", "CastNotMaterialRay", "CastObstacleRay",
+		    "CastStrengthRay", "CastStrengthSumRay", "CastTerrainPenetrationRay", "CastWeaknessRay", "ForceBounds", "WrapPosition", "WrapBox", "SnapPosition", "ShortestDistance",
+		    "MovePointToGround", "ObscuredPoint", "AnalogAimValues", "AnalogAxisValue", "AnalogMoveValues", "AnyInput", "AnyJoyButtonPress", "AnyJoyInput", "AnyJoyPress",
+		    "AnyKeyPress", "AnyMouseButtonPress", "AnyPress", "AnyStartPress", "ElementHeld", "ElementPressed", "ElementPressedSim", "ElementReleased", "ElementReleasedSim",
+		    "JoyButtonHeld", "JoyButtonPressed", "JoyButtonReleased", "JoyDirectionHeld", "JoyDirectionPressed", "JoyDirectionReleased", "KeyHeld", "KeyPressed", "KeyReleased",
+		    "MouseButtonHeld", "MouseButtonPressed", "MouseButtonPressedSim", "MouseButtonReleased", "MouseButtonReleasedSim", "MouseUsedByPlayer", "MouseWheelMoved",
+		    "ScancodeHeld", "ScancodePressed", "ScancodeReleased", "WhichJoyButtonPressed"};
+		for (std::string_view verb: verbs) {
+			if (PreviewFenceNameStartsWith(name, verb)) {
+				return true;
+			}
+		}
+		return std::find(std::begin(reviewed), std::end(reviewed), name) != std::end(reviewed);
+	}
+
+	// A const method that says it changes something is not trusted on an object the window does not own.
+	bool PreviewFenceMutatorName(std::string_view name) {
+		static constexpr std::string_view verbs[] = {"End", "Pause", "Restart", "Reset", "Set", "Add", "Remove", "Clear", "Load", "Save", "Start", "Stop", "Kill", "Gib",
+		                                             "Destroy", "Fire", "Reload", "Attach", "Detach", "Apply", "Force"};
+		for (std::string_view verb: verbs) {
+			if (PreviewFenceNameStartsWith(name, verb)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// The last call the window dropped, for the line a hook that then fails leaves behind.
+	std::string s_PreviewLastDroppedCall;
+
+	void PreviewFenceNoteDropped(const std::string& call, const char* why) {
+		s_PreviewLastDroppedCall = call;
+		static std::unordered_set<std::string> reported;
+		if (reported.insert(call).second) {
+			std::cout << "[preview-fence] dropped " << call << " " << why << "; the committed tick runs it" << std::endl;
+		}
+	}
+
+	void NotePreviewHookFailure(const std::string& script, const std::string& error) {
+		static std::unordered_set<std::string> reported;
+		if (reported.insert(script).second) {
+			g_ConsoleMan.PrintString("PREVIEW: " + script + " stopped a preview hook after the dropped call " + (s_PreviewLastDroppedCall.empty() ? std::string("(none)") : s_PreviewLastDroppedCall) +
+			                         "; the committed tick runs it (" + error + "); reported once per script");
+		}
+	}
+
+	bool PreviewFenceRuns(const char* className, const char* methodName, bool isConst) {
+		const std::string_view cls = className ? className : "";
+		const std::string_view name = methodName ? methodName : "";
+		const bool reads = PreviewFenceManagerClass(cls) ? PreviewFenceManagerReads(name) : isConst ? !PreviewFenceMutatorName(name) : PreviewFenceReadOnlyName(name);
+		if (!reads) {
+			PreviewFenceNoteDropped(std::string(cls.empty() ? "?" : cls) + ":" + std::string(name.empty() ? "?" : name), "on an object the preview does not own");
+		}
+		return reads;
+	}
+
+	// A world object handed to a call takes the window's copy when there is one. Without a copy, a parameter the callee may
+	// write drops the call; a value Lua made, bound to a reference, is written as a copy instead (the converter's rule).
+	bool PreviewFenceArgument(lua_State* L, int index, bool mutablePointer, bool mutableReference, const char* callClass, const char* callName) {
+		luabind::detail::object_rep* rep = luabind::detail::is_class_object(L, index);
+		if (!rep || luabind::detail::preview_fence_writes(rep)) {
+			return true;
+		}
+		int offset = 0;
+		const MovableObject* mo = FencedMovableObject(rep, offset);
+		if (const auto clone = mo ? s_PreviewCloneOf.find(mo) : s_PreviewCloneOf.end(); clone != s_PreviewCloneOf.end()) {
+			void* storage = lua_newuserdata(L, sizeof(luabind::detail::object_rep));
+			new (storage) luabind::detail::object_rep(reinterpret_cast<char*>(clone->second) - offset, rep->crep(), 0, nullptr);
+			luabind::detail::getref(L, rep->crep()->metatable_ref());
+			lua_setmetatable(L, -2);
+			lua_replace(L, index);
+			return true;
+		}
+		if (!mutablePointer && !mutableReference) {
+			return true;
+		}
+		if (mutableReference && !mo && (rep->flags() & luabind::detail::object_rep::owner)) {
+			return true;
+		}
+		PreviewFenceNoteDropped(std::string(callClass ? callClass : "?") + ":" + (callName ? callName : "?"), "with a writable argument the preview does not own");
+		return false;
+	}
+
+	void OpenPreviewBindingFence() {
+		if (s_PreviewBindingFenceOpen) {
+			return;
+		}
+		s_PreviewBindingFenceOpen = true;
+		s_PreviewBindingUIDFloor = MovableObject::GetUniqueIDCounter();
+		s_PreviewCloneOf.clear();
+		luabind::detail::preview_fence::substitute = &PreviewFenceSubstitute;
+		luabind::detail::preview_fence::owns = &PreviewFenceOwns;
+		luabind::detail::preview_fence::runs = &PreviewFenceRuns;
+		luabind::detail::preview_fence::argument = &PreviewFenceArgument;
+		s_PreviewLastDroppedCall.clear();
+		luabind::detail::preview_fence::open();
+	}
+
+	void ClosePreviewBindingFence() {
+		if (!s_PreviewBindingFenceOpen) {
+			return;
+		}
+		s_PreviewBindingFenceOpen = false;
+		s_PreviewCloneOf.clear();
+		luabind::detail::preview_fence::close();
+	}
 }
 
 bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems) {
@@ -12104,6 +12302,32 @@ namespace {
 			}
 		}
 	}
+
+	// Every state's birth counter as the window found it: what the window creates dies with it, so the numbers go back.
+	std::vector<std::pair<LuaStateWrapper*, uint64_t>> s_PreviewStateSerials;
+
+	void OpenPreviewWindow() {
+		if (s_PreviewBindingFenceOpen) {
+			return;
+		}
+		OpenPreviewBindingFence();
+		s_PreviewStateSerials.clear();
+		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewStateSerials.emplace_back(&state, luaJIT_state_serial(state.GetLuaState())); });
+	}
+
+	void ClosePreviewWindow() {
+		if (!s_PreviewBindingFenceOpen) {
+			return;
+		}
+		// Without the globals fence a window's tables can outlive it, so their numbers stay taken.
+		if (LuaMan::PreviewGlobalFenceEnabled()) {
+			for (const auto& [state, serial]: s_PreviewStateSerials) {
+				luaJIT_set_state_serial(state->GetLuaState(), serial);
+			}
+		}
+		s_PreviewStateSerials.clear();
+		ClosePreviewBindingFence();
+	}
 }
 
 bool LuaMan::IsPreviewClone(const MovableObject* mo) {
@@ -12142,6 +12366,8 @@ std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
 }
 
 void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
+	// Open first, so the copies the hold makes are the window's own to write.
+	OpenPreviewWindow();
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
 	if (!sharedSlot) {
@@ -12182,7 +12408,8 @@ bool LuaMan::PreviewGlobalFenceEnabled() {
 	return enabled;
 }
 
-void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot) {
+void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot, const std::vector<const MovableObject*>& originals) {
+	OpenPreviewWindow();
 	s_PreviewClones.clear();
 	s_PreviewRootByUID.clear();
 	s_PreviewPartByUID.clear();
@@ -12196,6 +12423,17 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 			s_PreviewClones.insert(mo);
 			if (mo) {
 				s_PreviewPartByUID[mo->GetUniqueID()] = mo;
+			}
+		});
+	}
+	// A faithful copy keeps each part's unique id, so every part of an original names its copy's part.
+	for (size_t i = 0; i < originals.size() && i < clones.size(); ++i) {
+		if (!originals[i] || !clones[i]) {
+			continue;
+		}
+		WalkOwned(originals[i], [](MovableObject* part) {
+			if (const auto copy = s_PreviewPartByUID.find(part->GetUniqueID()); copy != s_PreviewPartByUID.end() && copy->second != part) {
+				s_PreviewCloneOf[part] = copy->second;
 			}
 		});
 	}
@@ -12274,6 +12512,7 @@ void LuaMan::EndPreviewScripts() {
 			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;
 		}
 	}
+	ClosePreviewWindow();
 }
 
 CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {

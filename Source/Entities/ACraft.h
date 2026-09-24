@@ -208,9 +208,13 @@ namespace RTE {
 		/// @return Whetehr the object in the group was found carried by this.
 		bool HasObjectInGroup(std::string groupName) const override;
 
-		/// Hands a landing passenger to the controlling seat the same way an exit does.
-		/// A presented-but-foreign seat is presentation only, so the extra Update does not run.
+		/// Hands a landing passenger to the controlling seat the same way an exit does. The switch is that seat's own
+		/// input; the passenger's first update is sim state, so under lockstep every peer runs it for the seat the wire names.
 		void HandoffExitingPassenger(Actor* passenger);
+
+		/// The seat's half of a handoff: switches the human who plays this craft on this machine to the passenger.
+		/// @return Whether this machine's seat took the passenger.
+		bool SwitchSeatToPassenger(Actor* passenger);
 
 		/// Gets the current state of the hatch.
 		/// @return An int encoding the hatch state. See the HatchState enum.
