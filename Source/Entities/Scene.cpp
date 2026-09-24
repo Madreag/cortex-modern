@@ -18,6 +18,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <unordered_set>
 #include "TimerMan.h"
 #include "FrameMan.h"
 #include "ConsoleMan.h"
@@ -256,6 +257,30 @@ Scene::Scene() {
 
 Scene::~Scene() {
 	Destroy(true);
+}
+
+namespace {
+	// Every constructed Area by address; allocated once and never freed, so an Area destroyed at exit can still leave it.
+	struct LiveAreas {
+		std::mutex mutex;
+		std::unordered_set<const Scene::Area*> areas;
+	};
+	LiveAreas& GetLiveAreas() {
+		static LiveAreas* live = new LiveAreas;
+		return *live;
+	}
+} // namespace
+
+void Scene::Area::Track(const Area* area, bool live) {
+	LiveAreas& registry = GetLiveAreas();
+	std::scoped_lock lock(registry.mutex);
+	if (live) registry.areas.insert(area); else registry.areas.erase(area);
+}
+
+bool Scene::Area::IsLive(const Area* area) {
+	LiveAreas& registry = GetLiveAreas();
+	std::scoped_lock lock(registry.mutex);
+	return registry.areas.contains(area);
 }
 
 void Scene::Area::Clear() {
