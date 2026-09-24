@@ -55,6 +55,7 @@ SELFTESTS = [
     "save-refusal-diagnosis",
     "headless-render-cap",
     "preview-invariance",
+    "preview-binding-exhaustive",
 ]
 # Rows whose verdict carries a wall-clock budget, so a loaded box can fail them without a defect: the inventory
 # runs them in its quiet stream. They stay out of the default rows; --quiet-rows runs them last, one at a time,
@@ -63,6 +64,11 @@ LOAD_SENSITIVE = {
     # threaded_synced_update_pass_timing: 1,024 registered MOs, 150 us added per pass.
     "script-graph": ["-script-graph-selftest"],
 }
+# Every binding walked in a preview window on the pickup_fire replay's world: fixtures join at tick 150, the walk runs at 154.
+BINDING_WALK_ARGS = ["-net-replay", "tools/fixtures/pickup_fire.ccreplay", "-input-script", "tools/fixtures/pickup_fire.txt",
+                     "-max-ticks", "155", "-preview-binding-exhaustive-selftest"]
+BINDING_WALK_FIXTURES = ["pickup_fire.ccreplay", "pickup_fire.txt"]
+BINDING_WALK_TIMEOUT = 1800
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",
     re.M,
@@ -224,7 +230,10 @@ def main():
             scored = invariance_case(options.repo, case, options.timeout)
             scored["binary"] = scored.get("exe_sha256")
         else:
-            run = make_run(options.repo, [f"-{name}-selftest"], case, options.timeout, fixtures=SELFTEST_FIXTURES.get(name))
+            walk = name == "preview-binding-exhaustive"
+            run = make_run(options.repo, BINDING_WALK_ARGS if walk else [f"-{name}-selftest"], case,
+                           max(options.timeout, BINDING_WALK_TIMEOUT) if walk else options.timeout,
+                           fixtures=BINDING_WALK_FIXTURES if walk else SELFTEST_FIXTURES.get(name))
             try:
                 record = run.start().finish()
             finally:
