@@ -5156,6 +5156,8 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 				const auto parsed = std::from_chars(path.data(), path.data() + path.size(), uid);
 				if (parsed.ec == std::errc{} && parsed.ptr == path.data() + path.size()) return push(object->FindPartByUniqueID(uid));
 			}
+		} else if (std::strcmp(owner->crep()->name(), "Scene") == 0 && std::strcmp(property, "terrain") == 0) {
+			if (index == 0) return push(static_cast<Scene*>(owner->ptr())->GetTerrain());
 		} else if (std::strcmp(owner->crep()->name(), "Scene") == 0 && std::strcmp(property, "background") == 0) {
 			const auto& layers = static_cast<Scene*>(owner->ptr())->GetBackLayers();
 			if (static_cast<size_t>(index) < layers.size()) return push(*std::next(layers.begin(), index));
@@ -5271,6 +5273,7 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		lua_pop(L, 1);
 	}
 	if (Scene* scene = g_SceneMan.GetScene()) {
+		if (rep->ptr() == scene->GetTerrain()) return found(scene, "terrain", 0);
 		int index = 0;
 		for (SLBackground* layer: scene->GetBackLayers()) {
 			if (rep->ptr() == layer) return found(scene, "background", index);
@@ -7081,6 +7084,7 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SceneArea),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, StaticSceneLayer),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SLBackground),
+	                         RegisterLuaBindingsOfType(EntityLuaBindings, SLTerrain),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, Deployment),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, DataModule),
 	                         RegisterLuaBindingsOfType(ActivityLuaBindings, Activity),
