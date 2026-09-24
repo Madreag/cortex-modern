@@ -69,6 +69,7 @@ extern "C" {
 
 #include <atomic>
 #include <algorithm>
+#include <list>
 #include <cmath>
 #include <charconv>
 #include <cstdlib>
@@ -3908,6 +3909,15 @@ struct VectorField {
 };
 }
 
+// The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
+static std::vector<const void*> LoadedActivityPresets() {
+	std::list<Entity*> presets;
+	g_PresetMan.GetAllOfType(presets, "Activity");
+	std::vector<const void*> addresses(presets.begin(), presets.end());
+	std::sort(addresses.begin(), addresses.end());
+	return addresses;
+}
+
 struct RTE::LuaScriptGraphNativeCaptureData {
 	/// The objects that existed when the capture began, copied by the first question asked of them.
 	const std::vector<MovableObject*>& KnownObjects() const {
@@ -3923,6 +3933,11 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 			std::sort(m_Known.begin(), m_Known.end());
 		});
 		return std::binary_search(m_Known.begin(), m_Known.end(), object);
+	}
+	/// Whether an address is a loaded activity preset; only the pointer is read.
+	bool ActivityPreset(const void* address) const {
+		std::call_once(m_ActivityPresetsBuilt, [this] { m_ActivityPresets = LoadedActivityPresets(); });
+		return std::binary_search(m_ActivityPresets.begin(), m_ActivityPresets.end(), address);
 	}
 	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
 	const VectorField* VectorOwner(const void* address) const { return Find(Owners().vectors, address); }
@@ -4000,6 +4015,8 @@ private:
 		});
 		return m_Owners;
 	}
+	mutable std::once_flag m_ActivityPresetsBuilt;
+	mutable std::vector<const void*> m_ActivityPresets;
 	mutable std::once_flag m_KnownObjectsCopied;
 	mutable std::vector<MovableObject*> m_KnownObjects;
 	mutable std::once_flag m_OwnersBuilt;
@@ -5401,6 +5418,17 @@ static int ScriptGraphNative(lua_State* L) {
 	}
 	if (ClassDerivesFrom(crep, "Entity")) {
 		const Entity* entity = static_cast<const Entity*>(rep->ptr());
+		// A scripted activity's class global stays bound to the instance its preset was read into, which is deleted once
+		// the preset is in its module: only a loaded preset is read through, never that instance.
+		if (!owned && ClassDerivesFrom(crep, "Activity")) {
+			const bool loaded = s_GraphNativeCapture ? s_GraphNativeCapture->ActivityPreset(entity)
+			                                         : [&] { const auto presets = LoadedActivityPresets(); return std::binary_search(presets.begin(), presets.end(), static_cast<const void*>(entity)); }();
+			if (!loaded) {
+				lua_pushnil(L);
+				lua_pushstring(L, className.c_str());
+				return 2;
+			}
+		}
 		if (owned || entity->IsOriginalPreset()) {
 			const Entity* preset = entity->GetPresetForCopy();
 			lua_pushstring(L, owned ? "copy" : "preset");
