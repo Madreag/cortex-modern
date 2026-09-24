@@ -7093,6 +7093,11 @@ static std::string ResyncSaveName() {
 			// A returning seat's fresh session talks to the host live until its handshake is done.
 			System::PrintDiagnosticLine("[net-match] rejoin phase Active -> Connecting");
 			session->SetRejoinPhase(NetSession::RejoinPhase::Connecting);
+			// It loads a checkpoint only if the host offers one on this connection: the round's opening offer may be retired.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_ResumeHeldMatchId.clear();
+			m_ResumeHeldTick = 0;
+			m_ResumeHeldRound = 0;
 		}
 		if (started || iceSetupFailed) {
 			if (request.host) ReadRelayOffer(runnerConfig.matchConfig.relay);
