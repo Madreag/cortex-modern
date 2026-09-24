@@ -3573,6 +3573,7 @@ static std::string ResyncSaveName() {
 			if (!m_WorldJoin.BeginRejoin(holder, seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
 			m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
 			m_Runner->GetLobbySession().SendMatchConfigTo(member);
+			SendSuccessorCapsuleToLocked(member);
 			{
 				std::ostringstream line;
 				line << "[net-match] private rejoin peer=" << static_cast<int>(member) << " incarnation=" << incarnation;
@@ -3617,6 +3618,22 @@ static std::string ResyncSaveName() {
 		}
 		// After the walk: CancelJoin erases from the vector the loop above is iterating.
 		for (const NetPeerId connection: missed) m_WorldJoin.CancelJoin(connection, "the returner could not be moved past the capture park");
+	}
+
+	void NetMatchService::SendSuccessorCapsuleToLocked(uint8_t member) {
+		// A match that names its successors withholds its config from a returner until it holds its successor capsule,
+		// so the capsule follows the config as a lobby round sends them.
+		NetLobbySession& lobby = m_Runner->GetLobbySession();
+		if (lobby.GetMatchConfig().successorOrder.empty()) return;
+		NetLobbyMigration capsule;
+		capsule.kind = 2;
+		capsule.peerId = member;
+		capsule.configHash = lobby.GetMatchConfigHash();
+		if (!SealMigrationCapsuleLocked(member, capsule.configHash, capsule.sealedState)) {
+			System::PrintDiagnosticLine("[net-match] no successor capsule could be sealed for returning peer " + std::to_string(member));
+			return;
+		}
+		(void)lobby.SendPayloadTo(member, capsule, nullptr);
 	}
 
 	bool NetMatchService::MovePrivateActivationPastPark(const NetWorldJoinSession& session) {
