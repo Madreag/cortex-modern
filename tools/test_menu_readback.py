@@ -951,16 +951,18 @@ def scripts(case, port, root, size="960x540"):
         if case == "net-host-left":
             # The host leaves only after the client's own round has committed frames, so the case
             # measures a mid-match departure on any machine load instead of racing the client's start.
-            host_steps = [{"op": "wait", "service": "Running", "screen": "Gameplay", "sim_at_least": 150},
+            # The round's own committed frame: the launch counter also counts the lobby's ticks.
+            host_steps = [{"op": "wait", "service": "Running", "screen": "Gameplay", "lockstep_frame_at_least": 150},
                           {"op": "wait_file", "path": str(client_frame)},
                           {"op": "wait", "elapsed_ms": 500},
                           {"op": "assert", "equals": {"paused": False, "service": "Running"}}] + leave
             # The survivor lands on the multiplayer landing once the dead rematch lobby reports Failed;
             # its panel rect sits beside the net_ui rects in that observation.
             client_probe = {"schema": 1, "timeout_ms": 90000, "steps": [
-                {"op": "wait", "service": "Running", "screen": "Gameplay", "sim_at_least": 30},
+                {"op": "wait", "service": "Running", "screen": "Gameplay", "lockstep_frame_at_least": 30},
                 {"op": "signal", "name": "client_frame"},
-                {"op": "wait", "scope": "menu", "service": "Failed"},
+                # A menu-scope wait also runs on game frames: the landing is read once the menu itself is back.
+                {"op": "wait", "scope": "menu", "service": "Failed", "screen": "MultiplayerScreen"},
                 {"op": "assert_control", "scope": "menu", "control": "MultiplayerLandingPanel", "equals": {}},
                 {"op": "assert_control", "scope": "menu", "control": "MultiplayerScreen", "equals": {}},
                 {"op": "finish"}]}
