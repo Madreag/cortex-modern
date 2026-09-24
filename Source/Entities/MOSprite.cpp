@@ -473,13 +473,22 @@ bool MOSprite::IsOnScenePoint(Vector& scenePoint) const {
 	return false;
 }
 
+thread_local bool (*MOSprite::s_PreviewKeepsCachesOf)(const MOSprite* object) = nullptr;
+
 Vector MOSprite::RotateOffset(const Vector& offset) const {
 	Vector rotOff(offset.GetXFlipped(m_HFlipped));
+	// A preview reads the world's objects without filling the rotation cache their checkpoint holds.
+	if (!MayFillCaches()) {
+		return m_Rotation.TransformKeepingCache(rotOff);
+	}
 	rotOff *= const_cast<Matrix&>(m_Rotation);
 	return rotOff;
 }
 
 Vector MOSprite::UnRotateOffset(const Vector& offset) const {
+	if (!MayFillCaches()) {
+		return m_Rotation.InverseTransformKeepingCache(offset).GetXFlipped(m_HFlipped);
+	}
 	Vector rotOff(offset);
 	rotOff /= const_cast<Matrix&>(m_Rotation);
 	return rotOff.GetXFlipped(m_HFlipped);

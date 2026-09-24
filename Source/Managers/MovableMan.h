@@ -1040,6 +1040,19 @@ namespace RTE {
 		/// @param getsHitByMOsOnly Whether to only include MOs that have GetsHitByMOs enabled, or all MOs.
 		/// @return Pointers to the MOs that are within the specified radius of the given centre position.
 		const std::vector<MovableObject*>* GetMOsAtPosition(int pixelX, int pixelY, int ignoreTeam, bool getsHitByMOsOnly) const;
+
+		/// Gets pointers to the MOs at the given pixel position, including the ones that do not get hit by MOs.
+		/// @param pixelX The x coordinate of the pixel.
+		/// @param pixelY The y coordinate of the pixel.
+		/// @param ignoreTeam The team to ignore.
+		/// @return Pointers to the MOs at the given pixel position.
+		const std::vector<MovableObject*>* GetMOsAtPosition(int pixelX, int pixelY, int ignoreTeam) const { return GetMOsAtPosition(pixelX, pixelY, ignoreTeam, false); }
+
+		/// Gets pointers to the MOs of every team at the given pixel position, including the ones that do not get hit by MOs.
+		/// @param pixelX The x coordinate of the pixel.
+		/// @param pixelY The y coordinate of the pixel.
+		/// @return Pointers to the MOs at the given pixel position.
+		const std::vector<MovableObject*>* GetMOsAtPosition(int pixelX, int pixelY) const { return GetMOsAtPosition(pixelX, pixelY, Activity::NoTeam); }
 		
 		/// Runs a lua function on all MOs in the simulation, including owned child MOs.
 		void RunLuaFunctionOnAllMOs(const std::string& functionName, bool includeAdded, const std::vector<const Entity*>& functionEntityArguments = std::vector<const Entity*>(), const std::vector<std::string_view>& functionLiteralArguments = std::vector<std::string_view>(), const std::vector<LuabindObjectWrapper*>& functionObjectArguments = std::vector<LuabindObjectWrapper*>());

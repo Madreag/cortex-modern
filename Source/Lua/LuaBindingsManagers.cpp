@@ -26,6 +26,11 @@ namespace {
 	bool MetricsCollectorWriteReport(MetricsCollector* self, const std::string& path) {
 		return self->WriteReport(path);
 	}
+
+	// The form without findChildMOIDs passes its default; the script's resultPos is written as the full form writes it.
+	bool SceneManCastFindMORay(SceneMan& self, const Vector& start, const Vector& ray, MOID targetMOID, Vector& resultPos, unsigned char ignoreMaterial, bool ignoreAllTerrain, int skip) {
+		return self.CastFindMORay(start, ray, targetMOID, resultPos, ignoreMaterial, ignoreAllTerrain, skip);
+	}
 }
 
 LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, ActivityMan) {
@@ -372,7 +377,7 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, SceneMan) {
 	    .def("CastMORay", &LuaAdaptersSceneMan::CastMORay1)
 	    .def("CastMORay", &LuaAdaptersSceneMan::CastMORay2)
 	    .def("CastAllMOsRay", &LuaAdaptersSceneMan::CastAllMOsRay, luabind::return_stl_iterator_owned)
-	    .def("CastFindMORay", (bool(SceneMan::*)(const Vector&, const Vector&, MOID, const Vector&, unsigned char, bool, int)) & SceneMan::CastFindMORay)
+	    .def("CastFindMORay", &SceneManCastFindMORay)
 	    .def("CastFindMORay", &SceneMan::CastFindMORay)
 	    .def("CastObstacleRay", &LuaAdaptersSceneMan::CastObstacleRay1)
 	    .def("CastObstacleRay", &LuaAdaptersSceneMan::CastObstacleRay2)
