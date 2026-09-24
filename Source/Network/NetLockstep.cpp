@@ -7848,10 +7848,10 @@ namespace RTE {
 		}
 		const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
 		if (m_LastDeliveredFrame && IsSeatUnderAI(ownerPeerId, *m_LastDeliveredFrame)) return GetHostPeerId();
-		// A leaver's team falls to its next surviving human peer, so the units play on. The
-		// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
+		// A leaver's team falls to its next surviving human peer, so the units play on. Every peer re-resolves at the
+		// same committed frame: a leave can be heard before its frame, and the leaver's own inputs drive its units until then.
 		if (UsesBoundedWait() || m_Playback ? m_LastDeliveredFrame && IsPeerGoneAtFrame(ownerPeerId, *m_LastDeliveredFrame)
-		                                 : m_PeerLeaveFrames.contains(ownerPeerId)) {
+		                                 : IsPeerGoneAtFrame(ownerPeerId, m_LastDeliveredFrame ? *m_LastDeliveredFrame + 1 : m_Config.startFrame)) {
 			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
 			// The host produces AI controllers for a departed team while the round continues.
 			ownerPeerId = survivor != 0 ? survivor : (IsRunning() || IsHoldingSeatForReclaim() ? GetHostPeerId() : survivor);
