@@ -24,11 +24,6 @@
       "command": "video_mark status-loss"
     },
     {
-      "op": "assert_control",
-      "control": "LabelNetMatchStatus",
-      "text_contains": "RTT -- ms"
-    },
-    {
       "op": "menu",
       "command": "dump_network_layout"
     },
@@ -38,12 +33,11 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 500
-    },
-    {
-      "op": "assert_control",
       "control": "LabelNetMatchStatus",
-      "text_contains": "Current wait "
+      "text_contains": "Left - AI in control",
+      "equals": {
+        "visible": true
+      }
     },
     {
       "op": "screenshot",

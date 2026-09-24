@@ -893,6 +893,34 @@ def check_migration_timing(results, scratch):
     return ok
 
 
+def check_recorder_flush(results, scratch):
+    """A probe-complete drop waits for the frames the recorder already took; it never waits past its bound."""
+    video = scratch / "recorder-flush" / "video"
+    video.mkdir(parents=True)
+    stop = threading.Event()
+    missing = driver.await_recorder(video, stop, timeout_s=.2)
+    ok = row(results, "recorder-flush/no-output-does-not-wait", missing["flushed"] is False and missing["reason"] == "no recorder output")
+    (video / "events.jsonl").write_text('{"wall_ms": 1000, "message": "video_mark toast-open"}\n{"wall_ms": 1200, "message": "net_status"}\n')
+    (video / "frames.jsonl").write_text('{"frame": 0, "wall_ms": 990, "saved": true}\n')
+    behind = driver.await_recorder(video, stop, timeout_s=.2)
+    ok &= row(results, "recorder-flush/behind-times-out", behind["flushed"] is False and behind["reason"] == "timed out"
+              and behind["target_wall_ms"] == 1200 and behind["last_frame_wall_ms"] == 990, str(behind))
+
+    def write_late_frame():
+        with (video / "frames.jsonl").open("a") as index:
+            index.write('{"frame": 1, "wall_ms": 1210, "saved": true}\n')
+    writer = threading.Timer(.1, write_late_frame)
+    writer.start()
+    caught_up = driver.await_recorder(video, stop, timeout_s=5)
+    writer.join()
+    ok &= row(results, "recorder-flush/waits-for-the-written-frame", caught_up["flushed"] is True and caught_up["last_frame_wall_ms"] == 1210, str(caught_up))
+    stop.set()
+    (video / "events.jsonl").write_text('{"wall_ms": 5000, "message": "late"}\n')
+    stopped = driver.await_recorder(video, stop, timeout_s=5)
+    ok &= row(results, "recorder-flush/stops-with-the-watchers", stopped["flushed"] is False and stopped["reason"] == "capture stopping", str(stopped))
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -929,6 +957,7 @@ def main():
         ok &= check_cross_capture(results, scratch)
         ok &= check_cross_transfer(results, scratch)
         ok &= check_migration_timing(results, scratch)
+        ok &= check_recorder_flush(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",

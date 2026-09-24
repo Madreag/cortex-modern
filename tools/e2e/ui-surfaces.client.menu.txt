@@ -12,7 +12,7 @@ video_mark ui-directory-listing
 wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 4000
 assert_visible ListLanGames 1
-activate GameRow0
+activate GameRowPort{PORT}
 wait_ms 800
 dump_player_options
 assert_label TextJoinPort {PORT}
