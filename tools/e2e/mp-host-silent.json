@@ -4,7 +4,7 @@
   "port_base": 49436,
   "size": "960x540",
   "timeout_s": 220,
-  "title": "Two peers; the host goes silent for 4 s at tick 450 while it holds the client: the client rejoins the host and never takes the match over",
+  "title": "Two peers; the host goes silent for 4 s at tick 300 while it holds the client: the client rejoins the host and never takes the match over",
   "peers": [
     {
       "name": "host",
@@ -23,7 +23,7 @@
         "-net-match-report",
         "{OUT}/host-match.json",
         "-net-test-live-stall",
-        "450:4000"
+        "300:4000"
       ],
       "input_script": "mp-host-migration.input.txt",
       "observe_after_failure": true,
@@ -78,7 +78,7 @@
       "peer": "host",
       "screen": "game",
       "sim_ticks": [
-        450,
+        300,
         2400
       ],
       "what": "The host wakes and keeps hosting."
@@ -88,7 +88,7 @@
       "peer": "client",
       "screen": "game",
       "sim_ticks": [
-        450,
+        300,
         2400
       ],
       "what": "The client rejoins the host through the private rejoin.",

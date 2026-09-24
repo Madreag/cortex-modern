@@ -1096,7 +1096,7 @@ def scripts(case, port, root, size="960x540"):
                 "assert_visible HostBannedDialog 1\nassert_label LabelHostBannedList Joiner\n"
                 "activate ButtonHostBannedClose\nwait 3\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                "wait_label LabelMultiplayerError banned player was refused\n"
+                "wait_label LabelMultiplayerError Joiner was refused: banned from this session\n"
                 # The last dump stays the post-Apply lobby readback: a second Lobby capture here
                 # would break the paired check that counts one lobby-mode capture per peer.
                 "dump_lobby\nwait 600\nexit\n")
