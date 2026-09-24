@@ -3166,6 +3166,76 @@ namespace RTE {
 			return true;
 		}
 
+		// In a star every client hears the other clients through the host. A 300 ms blip of everything the host sends on the
+		// unreliable lane is repaired by the host re-serving its own ticks and the ticks it relayed, on request: no seat is held.
+		bool TestALinkBlipIsBridgedInAStar(std::string* error) {
+			const uint16_t port = 48914;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) return false;
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = 0x9A3F; c.roundId = 0x9A3F; c.startFrame = 0; c.inputDelayFrames = 3; c.timeoutMs = 20000;
+				c.localPeerId = local; c.peerCount = 3; c.remoteTransportPeerIds = std::move(transports); c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::InputUnreliable; c.scenario = "LockstepSelfTest"; c.ownershipPolicy = "unique-id-split";
+				c.substituteSlowPeers = true; c.simTickMs = 1000.0 / 60.0;
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) || !clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error) ||
+			    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error)) return false;
+			struct Peer { NetLockstepCoordinator* coordinator; LoopbackTransport* wire; int64_t uid; uint64_t simulated = 0, queued = 0; };
+			Peer peers[3] = {{&host, &hostT, 100}, {&clientA, &clientAT, 200}, {&clientB, &clientBT, 300}};
+			uint64_t now = 0, nextHostSimMs = 0;
+			bool waiting = false;
+			std::string queueError;
+			const auto pump = [&] {
+				for (Peer& peer: peers) {
+					for (; peer.queued <= peer.simulated + 6; ++peer.queued)
+						if (!peer.coordinator->IsRunning() || !peer.coordinator->QueueLocalInput(peer.queued, {MakeFrame(peer.uid, peer.queued)}, {}, &queueError)) break;
+					peer.wire->AdvanceTimeMs(1);
+					peer.coordinator->Tick(now);
+				}
+				NetLockstepReadyFrame ready;
+				// The host simulates one frame a tick and waits like a live sim, so its bound judges a seat the way a real one does.
+				if (now >= nextHostSimMs) {
+					if (host.PopReadyFrame(ready)) {
+						if (waiting) { host.FinishFrameWait(now); waiting = false; }
+						(void)host.FinishSimulationTick(ready.frame);
+						peers[0].simulated = ready.frame;
+						nextHostSimMs = now + 17;
+					} else if (peers[0].simulated > 0) {
+						waiting = true;
+						(void)host.NoteFrameWait(peers[0].simulated + 1, now);
+					}
+				}
+				for (size_t index = 1; index < 3; ++index)
+					while (peers[index].coordinator->PopReadyFrame(ready)) { (void)peers[index].coordinator->FinishSimulationTick(ready.frame); peers[index].simulated = ready.frame; }
+				++now;
+			};
+			while (now < 4000 && (!host.IsRunning() || peers[0].simulated < 60 || peers[1].simulated < 50 || peers[2].simulated < 50)) pump();
+			if (peers[0].simulated < 60) { *error = "the star never reached its steady state: host_frame=" + std::to_string(peers[0].simulated); return false; }
+			LoopbackTransportConfig blip;
+			blip.unreliableDropEveryN = 1;
+			hostT.SetFaultConfig(blip);
+			for (const uint64_t until = now + 300; now < until;) pump();
+			hostT.SetFaultConfig(LoopbackTransportConfig{});
+			const uint64_t target = peers[0].simulated + 60;
+			while (now < 20000 && (peers[0].simulated < target || peers[1].simulated < target || peers[2].simulated < target) && host.IsRunning()) pump();
+			const auto holdsOf = [&](uint8_t peer) { const auto& all = host.GetStats().peers; const auto found = all.find(peer); return found == all.end() ? 0U : found->second.holds; };
+			const auto relayed = host.GetStats().framesResent;
+			if (holdsOf(2) != 0 || holdsOf(3) != 0 || peers[1].simulated < target || peers[2].simulated < target || !clientA.IsRunning() || !clientB.IsRunning()) {
+				*error = "a 300 ms blip of the host's unreliable sends was not bridged in the star: holds=" + std::to_string(holdsOf(2)) + "," + std::to_string(holdsOf(3)) +
+				         " frames host/A/B=" + std::to_string(peers[0].simulated) + "/" + std::to_string(peers[1].simulated) + "/" + std::to_string(peers[2].simulated) +
+				         " target=" + std::to_string(target) + " requests A/B=" + std::to_string(clientA.GetStats().frameResendRequests) + "/" +
+				         std::to_string(clientB.GetStats().frameResendRequests) + " host_resent=" + std::to_string(relayed) + " A=" + NetLockstepCoordinator::StateName(clientA.GetState()) +
+				         " B=" + NetLockstepCoordinator::StateName(clientB.GetState()) + " " + clientA.GetStats().timeoutReason;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_link_blip_is_bridged_in_a_star blip_ms=300 requests_A=" << clientA.GetStats().frameResendRequests
+			          << " requests_B=" << clientB.GetStats().frameResendRequests << " host_resent=" << relayed << " holds=0" << std::endl;
+			return true;
+		}
+
 		// The redundancy window is the unreliable lane's only repair. The round samples its link on its first tick, so the
 		// first frames of a 200 ms link already ride out a burst longer than the window's floor of eight.
 		bool TestTheFirstFramesRideOutABurstOnALongLink(std::string* error) {
@@ -15935,16 +16005,17 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			AddSwitchTestActor(localSeatBrain);
 			AddSwitchTestActor(bought);
 			const auto uidOf = [](const Actor* actor) { return actor ? static_cast<int64_t>(actor->GetUniqueID()) : 0; };
-			// The stock modes place their brains from the activity's own script (P4AlphaDuel.lua:42), and that
-			// call is a mod's too: it may only set this machine's record, never the answer the match agreed on.
+			// The stock modes place their brains from the activity's own script (P4AlphaDuel.lua:42), and a mod may do it after the
+			// first brain record (Void Wanderers does): while the wire has named nothing, the seat answers the brain the next record
+			// will name, which every peer computes from the same shared state.
 			const int seats[2] = {Players::PlayerOne, Players::PlayerTwo};
 			Actor* brains[2] = {hostSeatBrain, localSeatBrain};
 			match->SetPlayerBrain(hostSeatBrain, Players::PlayerOne);
 			match->SetPlayerBrain(localSeatBrain, Players::PlayerTwo);
 			for (int index = 0; index < 2; ++index) {
-				if (match->GetControlledActor(seats[index]) != nullptr) {
-					return finish(("a script's brain assignment moved a seat's shared answer: seat " + std::to_string(seats[index]) +
-					               " answers " + std::to_string(uidOf(match->GetControlledActor(seats[index]))) + " while the wire has named nothing for it")
+				if (match->GetControlledActor(seats[index]) != brains[index]) {
+					return finish(("a seat the wire has not named did not answer its placed brain: seat " + std::to_string(seats[index]) +
+					               " answers " + std::to_string(uidOf(match->GetControlledActor(seats[index]))) + " brain " + std::to_string(uidOf(brains[index])))
 					                  .c_str());
 				}
 			}
@@ -19542,6 +19613,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestASlowLoaderIsHeldAtTheStartupBudget, "a_slow_loader_is_held_at_the_startup_budget");
 		row(&TestAReturningSeatsRampIsTheBound, "a_returning_seats_ramp_is_the_bound");
 		row(&TestALinkBlipIsBridgedByAResend, "a_link_blip_is_bridged_by_a_resend");
+		row(&TestALinkBlipIsBridgedInAStar, "a_link_blip_is_bridged_in_a_star");
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");
 		row(&TestASeatIsNotLateForOurOwnDecision, "a_seat_is_not_late_for_our_own_decision");
 		row(&TestAFirstDelayChangeIsNotAMutualWait, "a_first_delay_change_is_not_a_mutual_wait");
