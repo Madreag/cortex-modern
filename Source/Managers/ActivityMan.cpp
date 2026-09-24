@@ -1,5 +1,6 @@
 #include "ActivityMan.h"
 #include "AutosaveStore.h"
+#include "CaptureSentinel.h"
 #include "GameVersion.h"
 #include "GUIInput.h"
 #include "GUISound.h"
@@ -665,6 +666,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	std::shared_ptr<AudioCheckpointCapture> audio, audioSamples;
 	auto sceneCache = std::make_shared<CheckpointCache>();
 	sceneCache->Begin();
+	// What the workers would make on first use is made here; from the first worker to the join they only read.
+	LuaScriptGraphNativeCaptureScope::PreTouch();
+	std::optional<CaptureSentinel::ParallelPhase> parallel(std::in_place);
 	struct Aside {
 		std::vector<std::future<void>> tasks;
 		~Aside() { for (std::future<void>& task: tasks) if (task.valid()) task.wait(); }
@@ -677,6 +681,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	AudioMan::SoundCheckpointSaveScope* const sounds = &carriedSounds;
 	const auto captureAside = [&aside, sounds](std::function<void()> work, CheckpointCache* cache = nullptr) {
 		aside.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([sounds, cache, work = std::move(work)] {
+			CaptureSentinel::WorkerScope worker("capture-aside");
 			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
 			CheckpointCache values;
 			values.Begin();
@@ -772,6 +777,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->graphRootsRewritten = image->luaReused || frozenGraphs ? 0 : image->graph.rootsRewritten;
 	readAudio();
 	aside.Join();
+	parallel.reset();
 	for (LayerCapture& captured: layers) {
 		image->layers.emplace_back(captured.name, std::move(captured.snapshot));
 		std::move(captured.retired.begin(), captured.retired.end(), std::back_inserter(retiredLayers));

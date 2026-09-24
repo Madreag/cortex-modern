@@ -97,6 +97,8 @@ namespace RTE {
 		static const LuaScriptGraphNativeCaptureData* Current();
 		/// Walks the world's trees for a capture's native answers here, unless one of its states already did.
 		static void BuildWorld(const LuaScriptGraphNativeCaptureData* shared);
+		/// Makes, on the capturing thread, everything a capture's workers would otherwise make on first use.
+		static void PreTouch();
 		LuaScriptGraphNativeCaptureScope(const LuaScriptGraphNativeCaptureScope&) = delete;
 		LuaScriptGraphNativeCaptureScope& operator=(const LuaScriptGraphNativeCaptureScope&) = delete;
 	private:

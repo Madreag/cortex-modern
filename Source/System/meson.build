@@ -7,6 +7,7 @@ sources += files(
 'StandardIncludes.cpp',
 'AllegroTools.cpp',
 'Atom.cpp',
+'CaptureSentinel.cpp',
 'ContentFile.cpp',
 'Controller.cpp',
 'GenericSavedData.cpp',

@@ -1,4 +1,5 @@
 #include "ContentFile.h"
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
 
@@ -75,6 +76,7 @@ ContentFile::LoadedBitmapIndexScope::LoadedBitmapIndexScope() {
 	const auto& registry = std::as_const(s_LoadedBitmaps);
 	static_assert(std::tuple_size_v<std::decay_t<decltype(registry)>> == 2);
 	if (index.scopes.fetch_add(1) == 0 && index.version != LoadedBitmaps::Version()) {
+		CaptureSentinel::NoteCreation("loaded-bitmap index", &index);
 		index.paths.clear();
 		size_t count = 0;
 		for (const auto& loaded: registry) count += loaded.size();
