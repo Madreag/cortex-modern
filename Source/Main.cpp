@@ -7453,7 +7453,9 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 		CloseNetReplayPlayback();
 		return false;
 	}
-	if (const auto& agreed = ScenarioRunner::GetLockstepReplayAgreedStart(); agreed) {
+	// A segment stands on its checkpoint: the round's opening start boundary lies before its first record and would hold the
+	// playback at a frame the segment never carries.
+	if (const auto& agreed = ScenarioRunner::GetLockstepReplayAgreedStart(); agreed && !(worldSegment && agreed->agreedFirstFrame < lockstepConfig.startFrame)) {
 		if (!s_replayCoordinator.ApplyReplayAgreedStart(*agreed, &setupError)) {
 			if (error) *error = setupError;
 			CloseNetReplayPlayback();
