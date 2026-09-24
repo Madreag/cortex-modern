@@ -19463,14 +19463,19 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		const auto pump = [&] {
 			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
 			for (Sim& sim: sims) {
-				// A live sim produces a tick's input first, once no decision holds that tick, then waits for the tick to commit.
-				if (!sim.produced && now >= sim.startAtMs && !sim.coordinator->TimingDecisionPendingAt(sim.tick)) {
+				// A live sim runs a tick only once its committed frame is in, unless the tick's own input is produced by
+				// running it (a delay of zero; ScenarioRunner::PollLockstepSimulationTick). Then it produces the tick's input,
+				// once no decision holds that tick, and waits for the tick to commit.
+				const uint8_t local = sim.coordinator->GetConfig().localPeerId;
+				const bool gateOpen = sim.coordinator->HasReadyFrame(sim.tick) || sim.tick < sim.coordinator->GetStats().effectiveStartFrame ||
+				    sim.coordinator->InputDelayAt(local, sim.tick) == 0;
+				if (!sim.produced && now >= sim.startAtMs && gateOpen && !sim.coordinator->TimingDecisionPendingAt(sim.tick)) {
 					if (!sim.coordinator->QueueLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}, {}, &queueError)) return;
 					sim.produced = true;
 					sim.waitingSinceMs = now;
 				}
 				NetLockstepReadyFrame ready;
-				if (sim.produced && sim.coordinator->PopReadyFrame(ready)) {
+				if ((sim.produced || !gateOpen) && sim.coordinator->PopReadyFrame(ready)) {
 					(void)sim.coordinator->FinishSimulationTick(ready.frame);
 					sim.longestWaitMs = std::max(sim.longestWaitMs, now - sim.waitingSinceMs);
 					++sim.tick; sim.produced = false; sim.startAtMs = now + 17;

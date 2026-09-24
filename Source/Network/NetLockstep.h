@@ -1173,6 +1173,8 @@ namespace RTE {
 		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
 		void AttachFrameWindow(NetLockstepFrame& packet) const;
+		/// Sends the padding a local delay rise owes before the tick that would wait for it.
+		void PadAheadOfDelayRise();
 		/// Asks for a sender's missing tick on the reliable lane, at most once a tick: a blip the window cannot bridge is not a hold.
 		void RequestMissingFrames(uint8_t senderPeerId, uint64_t frame, uint64_t nowMs);
 		/// Resends this peer's own ticks from a frame to one peer on the reliable lane, repeating each tick's first bytes.
@@ -1424,6 +1426,7 @@ namespace RTE {
 		std::map<uint64_t, uint64_t> m_DecisionCommittedAtMs; //!< Host: a timing decision's frame -> when this host committed it.
 		uint64_t m_MissingSinceMs = 0;
 		uint64_t m_DescribedWaitFrame = UINT64_MAX; //!< The waited frame whose long wait was already named.
+		uint64_t m_LastProducedFrame = UINT64_MAX; //!< The produced frame of this peer's last queued local input.
 		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;
 		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.

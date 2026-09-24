@@ -3945,6 +3945,7 @@ namespace RTE {
 		m_ObservationDecodeTables.Reset();
 		m_ObservationDecodeTables.roundId = m_RoundId;
 		m_LastQueuedTargetFrame = UINT64_MAX;
+		m_LastProducedFrame = UINT64_MAX;
 		m_Stats.nextFrame = m_Config.startFrame;
 		m_Stats.configuredStartFrame = m_Config.startFrame;
 		m_Stats.effectiveStartFrame = m_Config.startFrame;
@@ -4181,6 +4182,7 @@ namespace RTE {
 		m_LocalObservations.clear();
 		m_LocalValueObservations.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
+		m_LastProducedFrame = UINT64_MAX;
 		m_RoundId = config.roundId;
 		m_ObservationDecodeTables.roundId = m_RoundId;
 		m_Stats = {};
@@ -4639,6 +4641,7 @@ namespace RTE {
 		m_LocalObservations.clear();
 		m_LocalValueObservations.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
+		m_LastProducedFrame = UINT64_MAX;
 		m_PeerEffectiveStart.clear();
 		m_RoundId = config.roundId;
 		m_Stats = {};
@@ -4820,7 +4823,33 @@ namespace RTE {
 			return false;
 		}
 		m_DeferredControllerFrames.clear();
+		m_LastProducedFrame = producedFrame;
+		PadAheadOfDelayRise();
 		return true;
+	}
+
+	void NetLockstepCoordinator::PadAheadOfDelayRise() {
+		if (m_Playback || !IsRunning() || m_LastProducedFrame == UINT64_MAX || m_LastQueuedTargetFrame == UINT64_MAX) return;
+		// The sim waits for a tick's committed frame before it runs that tick once its delay is above zero, so a delay
+		// that rises from zero leaves the targets between the last one sent and the next production's owed now: the
+		// same padding the next production would send, sent before the tick that would have to wait for it.
+		const uint64_t next = m_LastProducedFrame + 1;
+		const uint64_t nextTarget = next + InputDelayAt(m_Config.localPeerId, next);
+		if (nextTarget <= m_LastQueuedTargetFrame + 1) return;
+		NetLockstepFrame previous;
+		if (!FindLocalInput(m_LastQueuedTargetFrame, previous)) return;
+		for (auto& controller: previous.frames) {
+			controller.stateMask &= ~DelayedControllerEdges();
+			controller.mouseDeltaX = controller.mouseDeltaY = 0;
+			controller.SetAimIntent(false);
+			controller.SetFlipIntent(false);
+			controller.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::None);
+		}
+		for (uint64_t pad = m_LastQueuedTargetFrame + 1; pad < nextTarget; ++pad) {
+			std::string ignored;
+			if (!QueueInputAtTarget(pad, previous.frames, {}, &ignored, {})) return;
+			++m_Stats.delayPaddingFrames;
+		}
 	}
 
 	void NetLockstepCoordinator::NoteSeatReclaimed(uint8_t peerId) {
@@ -4990,6 +5019,7 @@ namespace RTE {
 		} else if (timing.action == NetTimingAction::Delay) {
 			m_DelayChanges[timing.peerId][timing.applyFrame] = timing.delayFrames;
 			++m_Stats.delayChangesCommitted;
+			if (timing.peerId == m_Config.localPeerId) PadAheadOfDelayRise();
 			std::cout << "[net-match] delay change peer=" << static_cast<int>(timing.peerId) << " frame=" << timing.applyFrame
 			          << " delay=" << timing.delayFrames << " revision=" << timing.revision << std::endl;
 		} else if (timing.action == NetTimingAction::Reclaim || timing.action == NetTimingAction::WorldAdmission) {
