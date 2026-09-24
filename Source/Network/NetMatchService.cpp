@@ -2707,8 +2707,15 @@ static std::string ResyncSaveName() {
 			m_AutosaveIdentity.roundId = launchRound;
 			m_AutosaveIdentity.intervalSeconds = m_MatchAutosaveSeconds;
 			m_AutosaveIdentity.pinnedCheckpointSource = m_PinnedAutosave;
-			// A new match pins nothing: the previous round's rewind point must not hold an archive here.
-			m_PinnedAutosave->Store(0, 0);
+			// A new match pins nothing: the previous round's rewind point must not hold an archive here. A seat rejoining its
+			// own round is not a new match: it keeps the checkpoint that round agreed to rewind to.
+			const bool privateReturn = m_WorldCatchUp.active && m_WorldCatchUp.privateMatch;
+			if (privateReturn && m_RewindAnchorTick != 0 && m_RewindAnchorMatchId == m_AutosaveMatchId) {
+				const std::optional<AutosaveDescriptor> anchor = AutosaveStore::Find(m_RewindAnchorMatchId, m_RewindAnchorTick, nullptr);
+				m_PinnedAutosave->Store(anchor ? anchor->roundId : launchRound, m_RewindAnchorTick);
+			} else {
+				m_PinnedAutosave->Store(0, 0);
+			}
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 			ResetCheckpointSchedule();
