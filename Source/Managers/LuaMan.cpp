@@ -7957,13 +7957,12 @@ assert(not zone:HasNoArea() and zone:IsInside(Vector(15, 25)) and zone:IsInside(
 
 	{
 		// Void Wanderers keeps its launcher scene's Area past LoadScene. The capture names such an Area gone without reading
-		// it, a restore hands back a gone Area, and that one captures again. The storage stays mapped, so a read is not a crash here.
-		alignas(Scene::Area) static unsigned char storage[sizeof(Scene::Area)];
-		auto* ended = new (storage) Scene::Area("CheckpointEndedZone");
+		// it, a restore hands back a gone Area, and that one captures again. The Area is freed, so a read is one a sanitizer names.
+		auto* ended = new Scene::Area("CheckpointEndedZone");
 		ended->AddBox(Box(Vector(10, 20), 30, 40));
 		luabind::object(m_State, ended).push(m_State);
 		lua_setglobal(m_State, "CheckpointEndedZone");
-		ended->~Area();
+		delete ended;
 		RunScriptString("CheckpointEndedKind = ({_ScriptGraphNative(CheckpointEndedZone)})[1]");
 		lua_getglobal(m_State, "CheckpointEndedKind");
 		const std::string kind = lua_isstring(m_State, -1) ? lua_tostring(m_State, -1) : "";
