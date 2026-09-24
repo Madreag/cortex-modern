@@ -294,6 +294,39 @@ def read_index(video_dir):
     return rows
 
 
+RECORDER_FLUSH_S = 5.0
+
+
+def last_event_ms(video_dir):
+    """The recorder's clock at its latest event line; events are written at once, frames behind a queue."""
+    path = Path(video_dir) / "events.jsonl"
+    if not path.is_file():
+        return None
+    for line in reversed(path.read_text(encoding="utf-8", errors="replace").splitlines()):
+        try:
+            return json.loads(line)["wall_ms"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+    return None
+
+
+def await_recorder(video_dir, stop, timeout_s=RECORDER_FLUSH_S):
+    """Waits until the recorder has written a frame taken at or after its latest event, bounded by timeout_s."""
+    target = last_event_ms(video_dir)
+    if target is None or not (Path(video_dir) / "frames.jsonl").is_file():
+        return {"target_wall_ms": target, "flushed": False, "reason": "no recorder output"}
+    deadline = time.monotonic() + timeout_s
+    while True:
+        rows = read_index(video_dir)
+        latest = rows[-1]["wall_ms"] if rows else None
+        if latest is not None and latest >= target:
+            return {"target_wall_ms": target, "flushed": True, "last_frame_wall_ms": latest}
+        if time.monotonic() >= deadline:
+            return {"target_wall_ms": target, "flushed": False, "last_frame_wall_ms": latest, "reason": "timed out"}
+        if stop.wait(.05):
+            return {"target_wall_ms": target, "flushed": False, "last_frame_wall_ms": latest, "reason": "capture stopping"}
+
+
 def read_manifest(video_dir):
     path = Path(video_dir) / "manifest.json"
     if not path.is_file():
@@ -894,8 +927,12 @@ def run_one(options, scenario, run, run_index, out):
             if name in records:
                 return
             if gate_met(gate):
+                # A peer dropped because a probe finished ends a scenario, not a fault: its recorder writes the
+                # frames it already took first, so the probe's last marked window keeps its video.
+                flushed = await_recorder(shared[f"VIDEO_{gate['peer']}"], stop_watchers) if gate.get("probe_complete") else None
                 rows = read_index(shared[f"VIDEO_{name}"])
-                write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None})
+                write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None,
+                                                                                  "recorder_flush": flushed})
                 description = "completed peer probe" if gate.get("probe_complete") else "peer event " + gate["event"]
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
