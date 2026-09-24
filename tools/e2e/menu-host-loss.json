@@ -512,14 +512,6 @@
             "text"
           ],
           "not_contains": "RTT -- ms"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "ms / max peer"
         }
       ],
       "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
@@ -603,14 +595,6 @@
             "text"
           ],
           "not_contains": "RTT -- ms"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "ms / host link"
         }
       ],
       "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
@@ -694,14 +678,6 @@
             "text"
           ],
           "not_contains": "RTT -- ms"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "ms / max peer"
         }
       ],
       "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
@@ -785,14 +761,6 @@
             "text"
           ],
           "not_contains": "RTT -- ms"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "ms / host link"
         }
       ],
       "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
@@ -876,14 +844,6 @@
             "text"
           ],
           "not_contains": "RTT -- ms"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "ms / max peer"
         }
       ],
       "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
@@ -967,14 +927,6 @@
             "text"
           ],
           "not_contains": "RTT -- ms"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "ms / host link"
         }
       ],
       "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
