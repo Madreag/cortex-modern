@@ -61,9 +61,10 @@ def process_memory(run) -> dict | None:
     return {"working_set": int(fields[0]) * 1024, "virtual": int(fields[1]) * 1024} if len(fields) == 2 else None
 
 
-def count(path: Path, needle: str) -> int:
+def count(path: Path, needle: str, also: str = "") -> int:
+    """Lines that start with `needle` (and carry `also`): one per event, never the event's detail lines."""
     text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
-    return sum(needle in line for line in text.splitlines())
+    return sum(line.startswith(needle) and also in line for line in text.splitlines())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     fullstate = compare_fullstate(root / "host" / "stdout.log", root / "client" / "stdout.log") if options.fullstate_every else None
     holds = count(root / "host" / "stdout.log", "[net-match] hold peer=")
     rejoins = count(root / "client" / "stdout.log", "[net-match] private catch-up complete")
-    autosaves = count(root / "host" / "stdout.log", "[autosave] tick=")
+    autosaves = count(root / "host" / "stdout.log", "[autosave] tick=", "capture_ms=")
     owed = int(options.minutes * 60 // options.autosave_seconds) - 1
     minutes_sampled = sum(1 for row in samples if row.get("host") and row.get("client"))
     exits = {peer: {"exit_code": record.get("exit_code"), "timed_out": record.get("timed_out")} for peer, record in records.items()}
