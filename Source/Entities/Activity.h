@@ -858,8 +858,10 @@ namespace RTE {
 			archive.PerPeer(self.m_PlayerScreen, self.m_ViewState, self.m_DeathTimer);
 			archive(self.m_TeamNames, self.m_TeamCount, self.m_TeamActive,
 				self.m_Team, self.m_TeamDeaths, self.m_TeamAISkillLevels, self.m_TeamFunds,
-				self.m_TeamFundsShare, self.m_FundsChanged, self.m_FundsContribution, self.m_HadBrain,
-				self.m_BrainEvacuated);
+				self.m_TeamFundsShare);
+			// The funds readout clears its changed flag as each machine draws it.
+			archive.PerPeer(self.m_FundsChanged);
+			archive(self.m_FundsContribution, self.m_HadBrain, self.m_BrainEvacuated);
 			archive.PerPeer(self.m_PlayerController, self.m_MessageTimer);
 			archive(self.m_SavedValues.m_SavedEncodedStrings.m_Data,
 				self.m_SavedValues.m_SavedStrings.m_Data, self.m_SavedValues.m_SavedNumbers.m_Data);
