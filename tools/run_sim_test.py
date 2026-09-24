@@ -38,6 +38,11 @@ def prepare_runtime(repo, out, fixtures=None):
         if count == 0:
             settings += f"\n\t{name} = {value}\n"
     (runtime / "Userdata/Settings.ini").write_text(settings, encoding="utf-8")
+    # The script-graph self-test reads its mod-compatibility fixture from the runtime, as the POSIX runner stages it.
+    modcompat = repo / "tools/fixtures/preview_window_modcompat.lua"
+    if modcompat.is_file():
+        (runtime / "tools/fixtures").mkdir(parents=True, exist_ok=True)
+        (runtime / "tools/fixtures" / modcompat.name).write_bytes(modcompat.read_bytes())
     staged = [str(name) for name in (fixtures or [])]
     if staged:
         dest = runtime / "tools/fixtures"

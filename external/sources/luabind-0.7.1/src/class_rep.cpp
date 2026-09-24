@@ -265,6 +265,7 @@ int luabind::detail::class_rep::gettable(lua_State* L)
 	if (j != m_getters.end())
 	{
 		// the name is a data member
+		preview_fence_call call(obj);
 		return j->second.func(L, j->second.pointer_offset);
 	}
 
@@ -348,6 +349,26 @@ bool luabind::detail::class_rep::settable(lua_State* L)
 	return true;
 }
 
+// Only a write that would land counts: a wrong type or a read-only attribute still reports as it does outside the window.
+bool luabind::detail::class_rep::preview_fence_drops(lua_State* L, const object_rep* obj) const
+{
+	if (!preview_fence_window || preview_fence_writes(obj) || lua_isnil(L, 2)) return false;
+	const char* key = lua_tostring(L, 2);
+	if (key && std::strlen(key) == lua_strlen(L, 2))
+	{
+		std::map<const char*, callback, ltstr>::const_iterator j = m_setters.find(key);
+		if (j != m_setters.end())
+		{
+#ifndef LUABIND_NO_ERROR_CHECKING
+			if (j->second.match(L, 3) < 0) return false;
+#endif
+			return true;
+		}
+		if (m_getters.find(key) != m_getters.end()) return false;
+	}
+	return true;
+}
+
 int class_rep::gettable_dispatcher(lua_State* L)
 {
 	object_rep* obj = static_cast<object_rep*>(lua_touserdata(L, 1));
@@ -358,6 +379,9 @@ int class_rep::gettable_dispatcher(lua_State* L)
 int luabind::detail::class_rep::settable_dispatcher(lua_State* L)
 {
 	object_rep* obj = static_cast<object_rep*>(lua_touserdata(L, 1));
+
+	// Inside a preview window a write to the world's own object is dropped: the committed tick runs the same hook for real.
+	if (obj->crep()->preview_fence_drops(L, obj)) return 0;
 
 	// A property write is always a mutation, so the checkpoint hears about it before it happens.
 	checkpoint_object_mutated(obj);
@@ -681,6 +705,8 @@ int luabind::detail::class_rep::function_dispatcher(lua_State* L)
         }
 		else
 		{
+			// What the method hands back takes the standing of the object it runs on.
+			preview_fence_call call(L, 1);
 	        return o.call(L, force_static_call != 0);
 		}
 

@@ -142,6 +142,9 @@ namespace luabind { namespace detail
 		// the object pointer is passed on the lua stack
 		bool settable(lua_State* L);
 
+		// Whether a preview window drops this write: one that would land on the world's own object.
+		bool preview_fence_drops(lua_State* L, const object_rep* obj) const;
+
 		// this is called as __index metamethod on every instance of this class
 		static int gettable_dispatcher(lua_State* L);
 

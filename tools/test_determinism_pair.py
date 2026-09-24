@@ -42,6 +42,7 @@ CASES = {
 # The simdump fields each machine holds for its own seats: the controller mode a local switch writes first, and the pie menu.
 PER_PEER_FIELDS = frozenset({"mode", "pie"})
 DESYNC = re.compile(r"^.*(?:\[lockstep\] desync at frame \d+|controller sync failed).*$", re.M)
+HOLD = re.compile(r"^\[net-match\] hold peer=.*$", re.M)
 FENCE = re.compile(r"\[preview-fence\] preview uid=(\d+) took=(\d+) kept_health=([-\d.]+)->([-\d.]+) kept_x=([-\d.]+)->([-\d.]+)")
 CRAFT = re.compile(r"\[craft-fixture\] (hatch opening|passenger out|passenger played) tick=(\d+)")
 
@@ -148,14 +149,18 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict) -> dict:
     traces = {who: root / who / "trace.json" for who in PEERS}
     texts = {who: peer_text(root, who) for who in PEERS}
     result["desync_lines"] = {who: DESYNC.findall(texts[who])[:4] for who in PEERS}
-    if all(path.exists() for path in traces.values()):
+    # A seat held for being slow replays through a rejoin, so its trace is no longer one live pass.
+    result["hold_lines"] = {who: HOLD.findall(texts[who])[:4] for who in PEERS}
+    try:
         lengths = {who: len(load_trace(traces[who])[0]) for who in PEERS}
+    except (OSError, ValueError) as error:
+        lengths = None
+        passed, comparison = False, {"reasons": [f"trace unreadable as one pass: {error}"]}
+    if lengths:
         result["trace_ticks"] = lengths
         # Every tick both peers recorded is compared; a full run must also reach the case's length on both.
         passed, comparison = strict_compare(traces["host"], traces["client"], min(lengths.values()), prefix=True, per_peer=PER_PEER_SUBSYSTEMS)
         passed = passed and all(length == case["ticks"] for length in lengths.values())
-    else:
-        passed, comparison = False, {"reasons": ["a peer wrote no trace"]}
     result["simulation"] = comparison
     result["objects"] = first_object_divergence(root / "host" / "trace.json.simdump.txt", root / "client" / "trace.json.simdump.txt")
     if case_name == "fence":
@@ -175,7 +180,8 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict) -> dict:
     result["fixture_ok"] = fixture_ok
     # The tick hash leaves out some per-object state (limb transforms, actor timers), so every dumped row must match too.
     objects_identical = result["objects"].get("identical") is True
-    result["passed"] = bool(passed and objects_identical and fixture_ok and all(result["processes"].values()) and not any(result["desync_lines"].values()))
+    result["passed"] = bool(passed and objects_identical and fixture_ok and all(result["processes"].values())
+                            and not any(result["desync_lines"].values()) and not any(result["hold_lines"].values()))
     return result
 
 
@@ -207,7 +213,7 @@ def main() -> int:
     print(f"{'PASS' if result['passed'] else 'FAIL'} {options.case}: compared={comparison.get('compared_ticks')} "
           f"first_divergence={comparison.get('first_divergence')} subsystems={comparison.get('divergent_subsystems')} "
           f"trace_ticks={result.get('trace_ticks')} fixture_ok={result['fixture_ok']} processes={result['processes']} "
-          f"desync={result['desync_lines']}")
+          f"desync={result['desync_lines']} holds={result['hold_lines']}")
     objects = result["objects"]
     if objects.get("available") and objects.get("tick"):
         print(f"first differing object: tick {objects['tick']} {objects.get('object', 'census')} {json.dumps(objects.get('fields', []))}")

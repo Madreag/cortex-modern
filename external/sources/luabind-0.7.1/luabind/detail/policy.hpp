@@ -28,6 +28,7 @@
 
 #include <typeinfo>
 #include <string>
+#include <type_traits>
 
 #include <boost/type_traits/is_enum.hpp>
 #include <boost/type_traits/is_array.hpp>
@@ -494,6 +495,7 @@ namespace luabind { namespace detail
 			void* obj = lua_newuserdata(L, sizeof(object_rep));
 			//new(obj) object_rep(ptr, crep, object_rep::owner, destructor_s<T>::apply);
 			new(obj) object_rep(ptr, crep, 0, 0);
+			preview_fence_converted(static_cast<object_rep*>(obj));
 
 			// set the meta table
 			detail::getref(L, crep->metatable_ref());
@@ -753,6 +755,7 @@ namespace luabind { namespace detail
 			assert(obj && "internal error, please report");
 			// we send 0 as destructor since we know it will never be called
 			new(obj) object_rep(const_cast<T*>(ptr), crep, object_rep::constant, 0);
+			preview_fence_converted(static_cast<object_rep*>(obj));
 
 			// set the meta table
 			detail::getref(L, crep->metatable_ref());
@@ -802,6 +805,33 @@ namespace luabind { namespace detail
 
 // ******* reference converter *******
 
+	// A plain value a preview window can copy instead of aliasing; an engine object is never copied by value.
+	template<class T>
+	struct preview_detachable
+	{
+		BOOST_STATIC_CONSTANT(bool, value = std::is_copy_constructible<T>::value && !std::is_polymorphic<T>::value && !std::is_abstract<T>::value);
+	};
+
+	// Inside a preview window, an alias a getter or method would hand out of the world's object is a copy that dies with the window.
+	template<class T>
+	bool preview_fence_detach(lua_State* L, const T& ref, bool constant, boost::mpl::true_)
+	{
+		if (!preview_fence_detaches()) return false;
+		value_converter<cpp_to_lua>().apply(L, ref);
+		if (constant)
+		{
+			object_rep* copy = static_cast<object_rep*>(lua_touserdata(L, -1));
+			copy->set_flags(copy->flags() | object_rep::constant);
+		}
+		return true;
+	}
+
+	template<class T>
+	bool preview_fence_detach(lua_State*, const T&, bool, boost::mpl::false_)
+	{
+		return false;
+	}
+
 	template<class Direction> struct ref_converter;
 
 	template<>
@@ -809,11 +839,14 @@ namespace luabind { namespace detail
 	{
 		typedef boost::mpl::bool_<false> is_value_converter;
 		typedef ref_converter type;
-		
+
 		template<class T>
 		void apply(lua_State* L, T& ref)
 		{
 			if (luabind::get_back_reference(L, ref))
+				return;
+
+			if (preview_fence_detach(L, ref, false, boost::mpl::bool_<preview_detachable<T>::value>()))
 				return;
 
 			class_rep* crep = get_class_rep<T>(L);
@@ -828,6 +861,7 @@ namespace luabind { namespace detail
 			void* obj = lua_newuserdata(L, sizeof(object_rep));
 			assert(obj && "internal error, please report");
 			new(obj) object_rep(ptr, crep, 0, 0);
+			preview_fence_converted(static_cast<object_rep*>(obj));
 
 			// set the meta table
 			detail::getref(L, crep->metatable_ref());
@@ -876,6 +910,9 @@ namespace luabind { namespace detail
 			if (luabind::get_back_reference(L, ref))
 				return;
 
+			if (preview_fence_detach(L, ref, true, boost::mpl::bool_<preview_detachable<T>::value>()))
+				return;
+
 			class_rep* crep = get_class_rep<T>(L);
 
 			// if you get caught in this assert you are
@@ -888,6 +925,7 @@ namespace luabind { namespace detail
 			void* obj = lua_newuserdata(L, sizeof(object_rep));
 			assert(obj && "internal error, please report");
 			new(obj) object_rep(const_cast<T*>(ptr), crep, object_rep::constant, 0);
+			preview_fence_converted(static_cast<object_rep*>(obj));
 
 			// set the meta table
 			detail::getref(L, crep->metatable_ref());

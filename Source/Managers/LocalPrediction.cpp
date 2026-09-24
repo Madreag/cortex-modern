@@ -189,13 +189,16 @@ namespace RTE {
 		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
 		std::vector<MovableObject*> clones;
+		std::vector<const MovableObject*> cloned;
 		clones.reserve(targets.size());
+		cloned.reserve(targets.size());
 		for (const Preview& preview: targets) {
 			if (preview.clone) {
 				clones.push_back(preview.clone);
+				cloned.push_back(preview.original);
 			}
 		}
-		LuaMan::BeginPreviewScripts(clones, PreviewScriptSelfTest::SharedSlot());
+		LuaMan::BeginPreviewScripts(clones, PreviewScriptSelfTest::SharedSlot(), cloned);
 		if (PreviewScriptSelfTest::StrideCounterRequested()) {
 			for (MovableObject* clone: clones) {
 				PreviewScriptSelfTest::InstallStrideCounter(clone);
