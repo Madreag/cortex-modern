@@ -839,7 +839,7 @@ namespace RTE {
 		/// Ticks between two tick-end full collections of one state. State slot i (the master is 0, threaded state n is n + 1)
 		/// collects at the end of every tick t with t % c_CollectionPeriodTicks == i % c_CollectionPeriodTicks, so the tick a
 		/// dropped object dies on is a function of its state and the tick alone, never of the heap or the machine.
-		static constexpr uint64_t c_CollectionPeriodTicks = 11;
+		static constexpr uint64_t c_CollectionPeriodTicks = c_LuaStateCount + 1;
 
 		/// Sets whether the tick-end collection is a full cycle on the states whose slot is due, as a run that must agree with another run needs, or the incremental step.
 		/// @param deterministic Whether tick ends run full collections on the due states.

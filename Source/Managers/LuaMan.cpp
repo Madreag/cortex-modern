@@ -11183,6 +11183,9 @@ void LuaMan::CollectGarbageForCheckpoint() {
 	LuabindObjectWrapper::ApplyQueuedDeletions();
 }
 
+// One per collection slot: whether the state's last tick-end collection finished a whole cycle.
+static std::array<std::atomic<bool>, c_LuaStateCount + 1> s_CollectedToPause{};
+
 void LuaMan::StartAsyncGarbageCollection() {
 	StartAsyncGarbageCollection(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), false);
 }
@@ -11208,17 +11211,31 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 
 	m_GarbageCollectionTask = BS::multi_future<void>();
 	for (LuaStateWrapper* luaState: dueStates) {
+		const size_t slot = luaState == &m_MasterScriptState ? 0 : static_cast<size_t>(luaState - m_ScriptStates.data()) + 1;
 		m_GarbageCollectionTask.push_back(
-		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection]() {
+		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection, slot]() {
 			    ZoneScopedN("Lua Garbage Collection");
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
+			    lua_State* state = luaState->GetLuaState();
+			    // Whether this state still stands at the pause our last full cycle left it at; a script's collectgarbage or the
+			    // incremental step moves it, and a script that did so and did not stop the collector reads as running.
+			    std::atomic<bool>& atPause = s_CollectedToPause[slot % s_CollectedToPause.size()];
 			    if (fullCollection) {
 				    // A whole cycle, so the tick a dropped object dies on does not follow its state's heap size.
-				    lua_gc(luaState->GetLuaState(), LUA_GCCOLLECT, 0);
+				    if (atPause && lua_gc(state, LUA_GCISRUNNING, 0) == 0) {
+					    // From the pause one unlimited step is that cycle; LUA_GCCOLLECT would first sweep every object once for nothing.
+					    const int stepMultiplier = lua_gc(state, LUA_GCSETSTEPMUL, 0);
+					    lua_gc(state, LUA_GCSTEP, 0);
+					    lua_gc(state, LUA_GCSETSTEPMUL, stepMultiplier);
+				    } else {
+					    lua_gc(state, LUA_GCCOLLECT, 0);
+				    }
+				    atPause = true;
 			    } else {
-				    lua_gc(luaState->GetLuaState(), LUA_GCSTEP, 100);
+				    lua_gc(state, LUA_GCSTEP, 100);
+				    atPause = false;
 			    }
-			    lua_gc(luaState->GetLuaState(), LUA_GCSTOP, 0);
+			    lua_gc(state, LUA_GCSTOP, 0);
 		    }));
 	}
 }
