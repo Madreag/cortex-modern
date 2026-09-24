@@ -6972,7 +6972,6 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SceneArea),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, StaticSceneLayer),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SLBackground),
-	                         luabind::class_<SLTerrain, Entity>("SLTerrain"),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, Deployment),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, DataModule),
 	                         RegisterLuaBindingsOfType(ActivityLuaBindings, Activity),
