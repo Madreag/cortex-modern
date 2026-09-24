@@ -3568,6 +3568,14 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_WorldJoin.ExpireStaleJoins(nowMs);
+		// The opening checkpoint is the round's state only at its anchor; past it a returning seat takes the newest image.
+		if (m_Runner && m_Coordinator->IsRunning()) {
+			NetLobbySession& lobby = m_Runner->GetLobbySession();
+			if (const uint64_t anchor = lobby.ResumeOfferTick(); anchor != 0 && m_Coordinator->GetStats().nextFrame > anchor + 1) {
+				lobby.RetireResumeOffer();
+				System::PrintDiagnosticLine("[net-world] opening resume offer retired at frame " + std::to_string(m_Coordinator->GetStats().nextFrame) + " past anchor " + std::to_string(anchor));
+			}
+		}
 		// Every activation this pump announces is chosen ahead of what the round has already sent.
 		m_WorldJoin.NoteSentInputThrough(m_Coordinator->SentInputThrough());
 		PumpWorldJoinLobby(nowMs);
