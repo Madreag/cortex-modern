@@ -321,8 +321,8 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | late-join | 2 | api=refused round=relaunch | H4-7 R2D3 |  | walked |
 | ticket-rejoin | 1 | round=relaunch sess=ready | H4-0 |  | walked |
 | held-rejoin | 1 | api=refused round=relaunch sess=ready | GAP | GAP: a returner arriving during a relaunch (conservative: the running round refuses; the relaunch's own admission carries it) | walked |
-| kick | 1 | round=relaunch sess=ended:ParticipantRemoved | NP-KICK |  | walked |
-| ban | 1 | round=relaunch sess=ended:ParticipantBanned | NP-KICK |  | walked |
+| kick | 1 | round=relaunch sess=ended:ParticipantRemoved | NP-KICK | GAP: a kick or ban while the round relaunches: no line says what the ended round becomes; the conservative expectation leaves it relaunching and drops the seat from the next roster | walked |
+| ban | 1 | round=relaunch sess=ended:ParticipantBanned | NP-KICK | GAP: a kick or ban while the round relaunches: no line says what the ended round becomes; the conservative expectation leaves it relaunching and drops the seat from the next roster | walked |
 | seat-release | 1 | round=relaunch sess=ready | LS-STOP |  | walked |
 | own-cap | 1 | round=relaunch sess=ended | R1F7 |  | walked |
 | resume-from-disk | 2 | legal: the relaunch loads the match's newest checkpoint from disk on every peer | READY-4 |  | not walked: a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none |
@@ -423,7 +423,7 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | link-blip | 1 | seat=Held peer=left round=run sess=ready | RB3 |  | walked |
 | link-restore | 1 | seat=Held peer=left round=run sess=ready | RB3 |  | walked |
 
-## Gap list (98 pairs)
+## Gap list (100 pairs)
 
 | state | event | the question no line answers |
 |---|---|---|
@@ -489,6 +489,8 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | Relaunching | private-capture-complete | a private image completing for a seat that is not waiting on one |
 | Relaunching | world-image-offered | a world image offered to a seat that is not waiting on one |
 | Relaunching | held-rejoin | a returner arriving during a relaunch (conservative: the running round refuses; the relaunch's own admission carries it) |
+| Relaunching | kick | a kick or ban while the round relaunches: no line says what the ended round becomes; the conservative expectation leaves it relaunching and drops the seat from the next roster |
+| Relaunching | ban | a kick or ban while the round relaunches: no line says what the ended round becomes; the conservative expectation leaves it relaunching and drops the seat from the next roster |
 | Migrating | hold-proposed | an event other than the migration's own steps arriving while the host is being replaced |
 | Migrating | hold-resolved | an event other than the migration's own steps arriving while the host is being replaced |
 | Migrating | park-begin | an event other than the migration's own steps arriving while the host is being replaced |
