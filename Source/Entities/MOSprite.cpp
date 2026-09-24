@@ -1,4 +1,5 @@
 #include "MOSprite.h"
+#include "HDFirearm.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "GUICheckpoint.h"
@@ -714,7 +715,10 @@ void MOSprite::Draw(BITMAP* pTargetBitmap,
 
 std::string MOSprite::SaveMOSpriteRuntime() const {
 	CheckpointWriter archive("MOSpriteRuntime2");
-	archive(m_Rotation, m_PrevRotation, m_AngularVel, m_PrevAngVel, m_FrameCount, m_SpriteOffset, m_Frame);
+	archive(m_Rotation, m_PrevRotation, m_AngularVel, m_PrevAngVel, m_FrameCount, m_SpriteOffset);
+	// A firearm's flash shows the frame this machine's draw picked with the render stream.
+	const auto* firearm = dynamic_cast<const HDFirearm*>(GetParent());
+	if (firearm && firearm->GetFlash() == this) archive.PerPeer(m_Frame); else archive(m_Frame);
 	archive(m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimTimer, m_SpriteAnimIsReversingFrames, m_HFlipped, m_ForcedHFlip, m_SpriteRadius);
 	archive(m_SpriteDiameter, m_AngOscillations, m_SettleMaterialDisabled, m_SpriteModified);
 	archive(m_SpriteFile, m_IconFile);
