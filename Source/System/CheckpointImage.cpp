@@ -37,7 +37,9 @@
 #include <iomanip>
 #include <iterator>
 #include <map>
+#include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -573,6 +575,67 @@ CheckpointText RTE::AssembleCheckpointIndex(const CheckpointImage& image) {
 		writer.NewPropertyWithValue("ActivityName", image.activityName);
 		writer.NewPropertyWithValue("OriginalScenePresetName", image.originalScenePresetName);
 	});
+}
+
+void RTE::VisitCheckpointSections(const CheckpointImage& image, const std::function<void(const std::string& name, CheckpointScope scope, std::string_view bytes)>& visit) {
+	// Timer fields are written relative to the capture's sim time, as the archive binds them.
+	const auto part = [&](const std::string& name, CheckpointScope scope, const CheckpointText& value) {
+		const CheckpointText bound = value.BindSimTime(image.simTimeTicks);
+		visit(name, scope, bound.Text());
+	};
+	std::ostringstream header;
+	header << "ActivityName " << image.activityName << "\nOriginalScenePresetName " << image.originalScenePresetName
+	       << "\nSimUpdateCount " << image.simUpdateCount << "\nSimTimeTicks " << image.simTimeTicks << "\nUniqueIDCounter " << image.uniqueIDCounter
+	       << "\nScriptRegistrationSerial " << image.scriptRegistrationSerial << "\nPlaceObjects " << image.placeObjects << "\nPlaceUnits " << image.placeUnits;
+	for (const auto& [savedTick, uid]: image.quarantine) header << "\nLockstepJoinQuarantine " << savedTick << "|" << uid;
+	visit("header", CheckpointScope::Shared, header.str());
+	part("activity", CheckpointScope::Shared, image.activity);
+	for (const CheckpointSection& section: image.globalSections) part("globals." + section.name, section.scope, section.text);
+	part("structure", CheckpointScope::Shared, image.structure);
+	part("scene_runtime", CheckpointScope::Shared, image.sceneRuntime);
+	for (size_t i = 0; i < image.graphs.size(); ++i) part("graph." + std::to_string(i), CheckpointScope::Shared, image.graphs[i]);
+	part("scene", CheckpointScope::Shared, image.scene);
+	for (const auto& [name, layer]: image.layers) {
+		if (layer) visit("layer." + name, CheckpointScope::Shared, layer->PixelBytes());
+	}
+}
+
+namespace {
+	// Word-wise multiply-xor, then a splitmix64 finish: every step is a bijection of the state, so a single changed word always shows.
+	uint64_t FullStateHash(std::string_view bytes) {
+		uint64_t state = 0xcbf29ce484222325ull ^ bytes.size();
+		size_t at = 0;
+		for (; at + 8 <= bytes.size(); at += 8) {
+			uint64_t word;
+			std::memcpy(&word, bytes.data() + at, 8);
+			state = (state ^ word) * 0x9e3779b97f4a7c15ull;
+			state ^= state >> 32;
+		}
+		for (; at < bytes.size(); ++at) state = (state ^ static_cast<unsigned char>(bytes[at])) * 0x100000001b3ull;
+		uint64_t z = state + 0x9e3779b97f4a7c15ull;
+		z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+		z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+		return z ^ (z >> 31);
+	}
+} // namespace
+
+std::string RTE::FullStateHashLine(const CheckpointImage& image, const std::string& dumpDirectory) {
+	std::string sections, combined;
+	std::filesystem::path dump;
+	if (!dumpDirectory.empty()) {
+		dump = std::filesystem::path(dumpDirectory) / std::to_string(image.tick);
+		std::filesystem::create_directories(dump);
+	}
+	VisitCheckpointSections(image, [&](const std::string& name, CheckpointScope scope, std::string_view bytes) {
+		const std::string hash = std::format("{:016x}", FullStateHash(bytes));
+		// Pixels are hashed only; the text sections are what a reader diffs line by line.
+		if (!dump.empty() && !name.starts_with("layer.")) std::ofstream(dump / (name + (scope == CheckpointScope::PerPeer ? ".peer" : "") + ".txt"), std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+		// A per-peer section is this machine's own by construction; it is named in the dump, never in the compared line.
+		if (scope != CheckpointScope::Shared) return;
+		sections += (sections.empty() ? "" : ",") + name + ":" + hash;
+		combined += name + "=" + hash + ";";
+	});
+	return std::format("[fullstate] tick={} hash={:016x} sections={}", image.tick, FullStateHash(combined), sections);
 }
 
 namespace {

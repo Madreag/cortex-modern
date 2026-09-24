@@ -27,6 +27,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from run_sim_test import make_run
+from compare_sim_traces import compare_fullstate
 
 # The private port range: a lane takes its own block inside it so two lanes never share a listener.
 PRIVATE_PORTS = (49152, 65535)
@@ -101,9 +102,13 @@ def main() -> int:
     parser.add_argument("--ticks", type=int, default=1200)
     parser.add_argument("--port", type=int, required=True, help=f"host listen port, inside {PRIVATE_PORTS[0]}-{PRIVATE_PORTS[1]}")
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--fullstate-every", type=int, default=0,
+                        help="every N committed ticks both peers hash their whole capture (-net-fullstate-hash-every); 0 is off")
     options = parser.parse_args()
     if options.tick < 1 or options.ticks < 30:
         parser.error("tick must be positive and ticks at least 30")
+    if options.fullstate_every < 0:
+        parser.error("--fullstate-every must be 0 or positive")
     if not PRIVATE_PORTS[0] <= options.port <= PRIVATE_PORTS[1]:
         parser.error(f"--port must be in the private range {PRIVATE_PORTS[0]}-{PRIVATE_PORTS[1]}")
     os.environ["CCCP_HEADLESS"] = "1"
@@ -130,6 +135,8 @@ def main() -> int:
             args += ["-net-reconnect-ticket", str(ticket.resolve())]
         if script:
             args += ["-input-script", str(script.resolve())]
+        if options.fullstate_every:
+            args += ["-net-fullstate-hash-every", str(options.fullstate_every)]
         args += (["-net-host", "-net-resume-match", options.match, "-net-resume-tick", str(options.tick)]
                  if who == "host" else ["-net-join", "127.0.0.1"])
         runs[who] = make_run(options.repo, args, root / who, options.timeout,
@@ -185,11 +192,15 @@ def main() -> int:
         if run["mismatched_ticks"]:
             failures.append(f"pass {run['pass']} ({run['first_tick']}-{run['last_tick']}) differs from the host on "
                             f"{run['mismatched_ticks']} of {run['compared_ticks']} ticks: {run['first_mismatches']} {run['subsystems']}")
+    fullstate = None
+    if options.fullstate_every:
+        fullstate = compare_fullstate(root / "host" / "stdout.log", root / "client" / "stdout.log")
+        failures += [f"full-state oracle: {reason}" for reason in fullstate["reasons"]]
     passed = not failures
     compared_ticks = sum(run["compared_ticks"] for run in comparison)
     line = f"[retained-resume] {'PASS' if passed else 'FAIL'} tick={options.tick} passes={len(comparison)} compared_ticks={compared_ticks}"
     result = {"passed": passed, "final_line": line, "failures": failures, "comparison": comparison,
-              "checkpoint_sha256": archive_hash, "deterministic_config_hash": expected_hash,
+              "fullstate": fullstate, "checkpoint_sha256": archive_hash, "deterministic_config_hash": expected_hash,
               "peer_config_hashes": identities, "port": options.port,
               "desync_checks": {who: reports[who].get("desync_check", {}) for who in ("host", "client")},
               "retained_runtimes": {who: str(getattr(options, f"runtime_{who}").resolve()) for who in ("host", "client")}}
