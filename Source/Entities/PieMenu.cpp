@@ -414,13 +414,16 @@ int PieMenu::Save(Writer& writer) const {
 
 std::string PieMenu::SaveRuntimeCheckpoint() const {
 	CheckpointWriter writer("PieMenuRuntime1");
-	writer(static_cast<const Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode, m_CenterPos, m_Rotation,
-		m_EnabledState, m_EnableDisableAnimationTimer, m_HoverTimer, m_SubPieMenuHoverOpenTimer);
+	writer(static_cast<const Entity&>(*this), m_DirectionIfSubPieMenu, m_MenuMode);
+	// Each drawn frame moves the menu to its actor's interpolated position and eases its visual cursor, so both are this machine's own.
+	writer.PerPeer(m_CenterPos);
+	writer(m_Rotation, m_EnabledState, m_EnableDisableAnimationTimer, m_HoverTimer, m_SubPieMenuHoverOpenTimer);
 	writer(m_IconSeparatorMode, m_FullInnerRadius, m_BackgroundThickness, m_BackgroundSeparatorSize,
 		m_DrawBackgroundTransparent, m_BackgroundColor, m_BackgroundBorderColor, m_SelectedItemBackgroundColor);
 	for (const auto& quadrant: m_PieQuadrants) writer(quadrant.m_Enabled, quadrant.m_Direction);
-	writer(m_CurrentInnerRadius, m_CursorInVisiblePosition, m_CursorAngle, m_CursorVisualAngle,
-		m_BGBitmapNeedsRedrawing, m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing);
+	writer(m_CurrentInnerRadius, m_CursorInVisiblePosition, m_CursorAngle);
+	writer.PerPeer(m_CursorVisualAngle);
+	writer(m_BGBitmapNeedsRedrawing, m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing);
 	BitmapCheckpoint background, rotation, slices;
 	background.Capture(m_BGBitmap); rotation.Capture(m_BGRotationBitmap); slices.Capture(m_BGPieSlicesWithSubPieMenuBitmap);
 	writer(background, rotation, slices);
