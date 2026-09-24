@@ -5394,6 +5394,15 @@ static int ScriptGraphNative(lua_State* L) {
 			return 2;
 		}
 	}
+	// An Area a script keeps that the running scene does not own (Void Wanderers keeps CF.Activity.Zone) travels by
+	// value, as an owned one does.
+	if (className == "Area" && !owned && rep->ptr()) {
+		lua_pushstring(L, "copy");
+		lua_pushstring(L, className.c_str());
+		lua_pushliteral(L, "");
+		lua_pushliteral(L, "");
+		return 4;
+	}
 	if (className == "Controller" && s_GraphNativeCapture) {
 		if (const long* actor = s_GraphNativeCapture->ControllerOwner(rep->ptr())) {
 			lua_pushstring(L, "controller-ref");
@@ -7880,6 +7889,32 @@ end
 		RunScriptString("_ScriptGraphDeadFixture = nil");
 		std::cout << "[script-graph-selftest] " << (deadReference ? "PASS" : "FAIL") << " dead_actor_reference_same_tick_capture_restore" << std::endl;
 		checkpointValues = deadReference && checkpointValues;
+	}
+
+	{
+		// A mod keeps an Area the running scene does not own; a capture carries it by value and a restore hands it back.
+		Scene::Area kept("CheckpointKeptZone");
+		kept.AddBox(Box(Vector(10, 20), 30, 40));
+		luabind::object(m_State, &kept).push(m_State);
+		lua_setglobal(m_State, "CheckpointKeptZone");
+		std::string saved, again;
+		std::vector<std::string> problems;
+		const bool captured = SerializeScriptGraph(saved, problems);
+		RunScriptString("CheckpointKeptZone = nil");
+		const bool restored = captured && RestoreScriptGraph(saved, problems);
+		const bool same = restored && RunScriptString(R"lua(
+local zone = CheckpointKeptZone
+assert(zone ~= nil and zone.Name == "CheckpointKeptZone", "the kept area did not come back by name")
+local count = 0
+for box in zone.Boxes do count = count + 1; assert(box.Corner.X == 10 and box.Corner.Y == 20 and box.Width == 30 and box.Height == 40, "the kept area's box changed") end
+assert(count == 1, "the kept area came back with " .. count .. " boxes")
+)lua") == 0;
+		RunScriptString("CheckpointKeptZone = nil");
+		const bool refused = std::any_of(problems.begin(), problems.end(), [](const std::string& problem) { return problem.find("(Area)") != std::string::npos; });
+		const bool passed = captured && same && !refused;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_kept_area_travels_by_value captured=" << captured << " restored=" << restored << " same=" << same << " refused=" << refused << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] kept area: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
 	}
 
 	{
