@@ -3418,7 +3418,8 @@ static std::string ResyncSaveName() {
 		}
 	} // namespace
 
-	std::vector<uint8_t> NetMatchService::WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership) {
+	std::vector<uint8_t> NetMatchService::WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership,
+	                                                             const std::set<uint8_t>& aiHeldPeers) {
 		std::vector<uint8_t> holds;
 		for (const NetH4SeatStatus& status: statuses) {
 			if (status.stableSeat == 0 || !(status.dropped || status.reclaiming)) {
@@ -3428,6 +3429,10 @@ static std::string ResyncSaveName() {
 			if (const NetWorldSlot* bound = BoundWorldSlot(membership, status.stableSeat)) {
 				holds.push_back(bound->peerId);
 			}
+		}
+		// A seat the AI holds is still its member's: its returner reclaims the slot, never watches.
+		for (const NetWorldSlot& slot: membership.Slots()) {
+			if (slot.held && aiHeldPeers.contains(slot.peerId) && std::find(holds.begin(), holds.end(), slot.peerId) == holds.end()) holds.push_back(slot.peerId);
 		}
 		return holds;
 	}
@@ -3591,7 +3596,9 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.ReleaseLostConnections(liveConnections);
 		// A dropped or reclaiming seat keeps its slot: only that holder may take it back, and a
 		// fresh join that arrives meanwhile watches instead of allocating it.
-		m_WorldJoin.NoteReclaimHolds(WorldReclaimHoldSlots(m_ReconnectHost.GetSeatStatuses(), m_WorldJoin.Membership()));
+		std::set<uint8_t> aiHeld;
+		for (const NetWorldSlot& slot: m_WorldJoin.Membership().Slots()) if (m_Coordinator->HasHeldAISeat(slot.peerId)) aiHeld.insert(slot.peerId);
+		m_WorldJoin.NoteReclaimHolds(WorldReclaimHoldSlots(m_ReconnectHost.GetSeatStatuses(), m_WorldJoin.Membership(), aiHeld));
 		m_WorldSpectatorsFree = static_cast<int64_t>(m_WorldJoin.SpectatorsFree());
 		bool answeredRefusal = false;
 		for (const NetSessionPeerInfo& peer: readyPeers) {

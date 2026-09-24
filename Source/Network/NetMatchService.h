@@ -702,7 +702,9 @@ namespace RTE {
 		/// The world slots a dropped or reclaiming seat is waiting for, by the slot each seat holds.
 		/// A promoted watcher plays on a slot its seat's lockstep id does not name, so a hold keyed on
 		/// that id would leave its slot open and fence a slot nobody is coming back to.
-		static std::vector<uint8_t> WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership);
+		/// A held slot whose seat the AI plays waits for its own player the same way.
+		static std::vector<uint8_t> WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership,
+		                                                  const std::set<uint8_t>& aiHeldPeers = {});
 		/// The sim id and team the holder of an admission seat plays on. The world plane owns that
 		/// answer: a member plays the slot its seat is bound to, whatever id its seat table names.
 		/// An unbound seat is not the world's, so the caller keeps the seat's own pair.

@@ -3159,6 +3159,25 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A member whose seat the AI holds comes back to that seat: the slot waits for its returner, who never lands as a watcher.
+	int TestAHeldWorldSeatWaitsForItsReturner() {
+		std::string error;
+		NetWorldJoinHost host;
+		if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) return Fail("held-seat fixture: " + error);
+		const NetWorldJoinSession* seated = host.FindSession(7);
+		if (seated == nullptr || seated->spectator || seated->assignedPeerId != 2) return Fail("held-seat fixture: alice did not take slot 2");
+		// Her seat is held by the AI while her connection lives on, so no drop names her slot.
+		if (!NetMatchService::WorldReclaimHoldSlots({}, host.Membership()).empty()) return Fail("a live seat nobody holds for the AI was fenced for a reclaim");
+		host.NoteReclaimHolds(NetMatchService::WorldReclaimHoldSlots({}, host.Membership(), {2}));
+		if (!host.BeginJoin(8, 2, "alice", 2000, &error, true)) return Fail("held-seat-refused-its-own-holder: " + error);
+		const NetWorldJoinSession* returned = host.FindSession(8);
+		if (returned == nullptr || returned->spectator || returned->assignedPeerId != 2) {
+			return Fail("held-seat-returner-watches: the member whose seat the AI holds came back as a watcher, not on slot 2");
+		}
+		std::cout << "[net-world-join-selftest] PASS a_held_world_seat_waits_for_its_returner" << std::endl;
+		return 0;
+	}
+
 	/// A seat readmitted for a frame past the round's last one is a member that never played again: the round's goodbye is owed
 	/// to it as to any returner the round does not use, or it times out on a host that has already left and exits as a failure.
 	int TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye() {
@@ -7055,6 +7074,7 @@ namespace RTE {
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
+		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
