@@ -3128,14 +3128,13 @@ namespace RTE {
 	}
 
 	/// Capturing a private base stalls every peer's simulation for the capture, so a seat's return buys no refresh whose
-	/// measured capture cannot fit the bound: the next rejoin replays a longer tail in private instead.
+	/// steady capture cost cannot fit the bound: the next rejoin replays a longer tail in private instead.
 	int TestAReturnedSeatTakesNoBaseThatStallsTheRound() {
 		if (NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 173.5)) {
 			return Fail("a returned seat refreshed the private base with a 173.5 ms capture, a stall of every peer past the 50 ms bound");
 		}
 		if (!NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(false, 1, 1, 12.0) ||
-		    !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 173.5) ||
-		    NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 0.0)) {
+		    !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 173.5)) {
 			return Fail("a private base refresh that fits the bound was refused, or one that does not was taken for a held seat");
 		}
 		std::cout << "[net-world-join-selftest] PASS a_returned_seat_takes_no_base_that_stalls_the_round capture_ms=173.5" << std::endl;
@@ -3144,6 +3143,24 @@ namespace RTE {
 
 	/// A seat readmitted for a frame past the round's last one is a member that never played again: the round's goodbye is owed
 	/// to it as to any returner the round does not use, or it times out on a host that has already left and exits as a failure.
+	int TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh() {
+		// The round's first capture pays its warm-up (146 ms before the merge, 51-55 ms after); only the captures after it count.
+		std::deque<double> costs;
+		if (NetMatchService::SteadyCaptureMs(costs) >= 0.0 || !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, NetMatchService::SteadyCaptureMs(costs))) {
+			return Fail("a held seat was refused a fresh base before any steady capture was measured: the cold first capture decided alone");
+		}
+		costs = {38.0, 41.0, 175.0};
+		if (NetMatchService::SteadyCaptureMs(costs) != 41.0 || !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, NetMatchService::SteadyCaptureMs(costs))) {
+			return Fail("one slow capture among three steady ones refused the refresh: median " + std::to_string(NetMatchService::SteadyCaptureMs(costs)));
+		}
+		costs = {38.0, 120.0, 175.0};
+		if (NetMatchService::PrivateBaseRefreshDue(true, 0, 1, NetMatchService::SteadyCaptureMs(costs))) {
+			return Fail("a steady capture cost of 120 ms past the 50 ms bound still took a refresh");
+		}
+		std::cout << "[net-world-join-selftest] PASS the_cold_first_capture_never_decides_a_held_seats_refresh" << std::endl;
+		return 0;
+	}
+
 	int TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye() {
 		if (!NetMatchService::EndedRoundOwesGoodbye(true, true)) {
 			return Fail("a seat readmitted for frame 2409 of a round that ended at 2401 was left without the goodbye");
@@ -7012,6 +7029,7 @@ namespace RTE {
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
+		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
