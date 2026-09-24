@@ -11,6 +11,54 @@ CORE = frozenset({"actors", "terrain", "sim_rng", "scene", "funds", "lua_state",
 # whenever the world holds objects, and the comparison covers every subsystem both peers reported.
 PAUSED_CORE = frozenset({"tick", "terrain", "sim_rng", "scene", "funds", "lua_state"})
 HASH = re.compile(r"[0-9a-f]{64}\Z")
+# The full-state oracle (-net-fullstate-hash-every): a hash per shared section of the capture, in the capture's order.
+# The engine leaves the per-peer sections out of the line by the capture's own section table, so every listed one is compared.
+FULLSTATE = re.compile(r"^\[fullstate\] tick=(\d+) hash=([0-9a-f]{16}) sections=(\S+) round=(\d+)\s*$", re.M)
+
+
+def load_fullstate(paths):
+    """Every oracle sample in one peer's logs, keyed by (round, tick). A tick sampled twice (a rewind) keeps both."""
+    samples = {}
+    for path in [paths] if isinstance(paths, (str, Path)) else paths:
+        path = Path(path)
+        text = path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else ""
+        for tick, total, sections, round_id in FULLSTATE.findall(text):
+            parsed = [tuple(item.rsplit(":", 1)) for item in sections.split(",")]
+            samples.setdefault((int(round_id), int(tick)), []).append((total, parsed))
+    return samples
+
+
+def compare_fullstate(host_logs, client_logs):
+    """The oracle's verdict over every (round, tick) both peers sampled: each client sample must equal each host sample
+    of that tick section for section. The first differing tick and the first differing section in the capture's order
+    are named; a pair with no sample in common is not a pass."""
+    host, client = load_fullstate(host_logs), load_fullstate(client_logs)
+    common = sorted(host.keys() & client.keys())
+    result = {"host_samples": sum(map(len, host.values())), "client_samples": sum(map(len, client.values())),
+              "compared_samples": 0, "first_divergence": None, "divergent_ticks": 0, "reasons": []}
+    for key in common:
+        differing = []
+        for client_total, client_sections in client[key]:
+            for host_total, host_sections in host[key]:
+                result["compared_samples"] += 1
+                if client_total == host_total and client_sections == host_sections:
+                    continue
+                client_map = dict(client_sections)
+                order = [name for name, _ in host_sections] + [name for name, _ in client_sections if name not in dict(host_sections)]
+                differing += [name for name in order if dict(host_sections).get(name) != client_map.get(name) and name not in differing]
+        if differing:
+            result["divergent_ticks"] += 1
+            if result["first_divergence"] is None:
+                result["first_divergence"] = {"round": key[0], "tick": key[1], "section": differing[0], "sections": differing}
+    if not common:
+        result["reasons"].append("the peers share no full-state sample")
+    elif result["first_divergence"]:
+        first = result["first_divergence"]
+        result["reasons"].append(f"full state differs at round {first['round']} tick {first['tick']}: first section {first['section']} "
+                                 f"of {len(first['sections'])} {first['sections']}")
+    result["sampled_ticks"] = [tick for _, tick in common]
+    result["passed"] = not result["reasons"]
+    return result
 
 
 def load_trace(path, away=frozenset(), rewinds=frozenset(), repeats=None):
@@ -158,14 +206,21 @@ def main():
     parser.add_argument("--first-tick", type=int, default=1)
     parser.add_argument("--min-ticks", type=int, default=1)
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--fullstate", nargs=2, type=Path, metavar=("HOST_LOG", "CLIENT_LOG"),
+                        help="also compare the [fullstate] samples of the two peers' stdout logs")
     args = parser.parse_args()
     passed, result = strict_compare(args.host, args.client, args.prefix_ticks or args.expected_ticks, first_tick=args.first_tick, min_ticks=args.min_ticks, prefix=args.prefix_ticks is not None)
+    if args.fullstate:
+        result["fullstate"] = compare_fullstate(*args.fullstate)
+        passed = passed and result["fullstate"]["passed"]
     if args.json:
         args.json.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if passed:
         print(f"PASS sim-gated: {result['compared_ticks']} overlapping ticks identical (controller excluded); paused_ticks={result['paused_ticks']}")
+        if args.fullstate:
+            print(f"PASS full state: {result['fullstate']['compared_samples']} samples identical at ticks {result['fullstate']['sampled_ticks']}")
     else:
-        print("FAIL: " + "; ".join(result["reasons"]), file=sys.stderr)
+        print("FAIL: " + "; ".join(result["reasons"] + result.get("fullstate", {}).get("reasons", [])), file=sys.stderr)
     return 0 if passed else 1
 
 
