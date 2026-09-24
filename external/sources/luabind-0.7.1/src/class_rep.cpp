@@ -691,11 +691,22 @@ int luabind::detail::class_rep::function_dispatcher(lua_State* L)
 		const overload_rep& o = rep->overloads()[match_index];
 
 		// Inside a preview window a call that may write an object the window does not own is dropped, as a property
-		// write is: the committed tick runs the same hook on every peer. Const and read-only calls run.
-		if (preview_fence_window && !o.is_const() && !preview_fence_writes(is_class_object(L, 1))
-			&& !(preview_fence::runs && preview_fence::runs(rep->crep->name(), rep->name)))
+		// write is: the committed tick runs the same hook on every peer. What reads runs.
+		if (preview_fence_window)
 		{
-			return 0;
+			if (!preview_fence_writes(is_class_object(L, 1))
+				&& !(preview_fence::runs && preview_fence::runs(rep->crep->name(), rep->name, o.is_const())))
+			{
+				return 0;
+			}
+			if (preview_fence::argument)
+			{
+				const int top = lua_gettop(L);
+				for (int index = 2; index <= top; ++index)
+				{
+					if (!preview_fence::argument(L, index, o.mutable_pointer_arg(index), o.mutable_reference_arg(index), rep->crep->name(), rep->name)) return 0;
+				}
+			}
 		}
 
 		// The match has accepted the object at index 1 as this overload's self, so it is one of ours.
