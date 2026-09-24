@@ -875,12 +875,35 @@ namespace luabind { namespace detail
 	{
 		typedef boost::mpl::bool_<false> is_value_converter;
 		typedef ref_converter type;
-		
+
+		// Inside a preview window a callee that writes through a reference to a value the window does not own writes a
+		// copy that dies with the call, as an alias getter hands out one.
+		void* detached;
+		void (*destroy)(void*);
+
+		ref_converter(): detached(0), destroy(0) {}
+		~ref_converter() { if (destroy) destroy(detached); }
+
+		template<class T>
+		T* detach(T* original, boost::mpl::true_)
+		{
+			T* copy = new T(*original);
+			detached = copy;
+			destroy = &delete_s<T>::apply;
+			return copy;
+		}
+
+		template<class T>
+		T* detach(T* original, boost::mpl::false_) { return original; }
+
 		template<class T>
 		typename make_reference<T>::type apply(lua_State* L, by_reference<T>, int index)
 		{
 			assert(!lua_isnil(L, index));
-			return *pointer_converter<lua_to_cpp>().apply(L, by_pointer<T>(), index, true);
+			typedef boost::mpl::bool_<preview_detachable<T>::value> detachable;
+			const bool copy = detachable::value && preview_fence_window && !preview_fence_writes(static_cast<object_rep*>(lua_touserdata(L, index)));
+			T* ptr = pointer_converter<lua_to_cpp>().apply(L, by_pointer<T>(), index, !copy);
+			return copy ? *detach(ptr, detachable()) : *ptr;
 		}
 
 		template<class T>

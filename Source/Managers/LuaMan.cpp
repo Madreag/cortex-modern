@@ -11775,6 +11775,37 @@ namespace {
 		return -1;
 	}
 
+	// The bindings expose many readers as non-const methods, so a non-const call on the world's objects runs only when its
+	// name says it reads: the accessors and tests, and the ray casts that only look (the see and unsee casts change the map).
+	bool PreviewFenceReadOnlyName(std::string_view name) {
+		static constexpr std::string_view readers[] = {"Get", "Is", "Has", "Find", "Count", "Any", "Can", "Needs", "Was", "Within", "Compare", "Estimate", "Element", "Analog", "LeftTill"};
+		static constexpr std::string_view named[] = {"ValidMO", "WhichTeamLeft", "OtherTeam", "NoTeamLeft", "OneOrNoneTeamsLeft", "OnlyOneTeamLeft", "FacingAngle", "ScriptEnabled",
+		                                             "PathFindingUpdated", "TeamFundsChanged", "CalculateTextHeight", "CalculateTextWidth", "SplitStringToFitWidth", "JustStartedEmitting",
+		                                             "FirearmsAreReloading", "DetectObstacle", "CastStrengthRay", "CastStrengthSumRay", "CastWeaknessRay", "CastMORay", "CastAllMOsRay",
+		                                             "CastFindMORay", "CastObstacleRay", "CastTerrainPenetrationRay"};
+		if (name.ends_with("Exists")) {
+			return true;
+		}
+		for (std::string_view reader: readers) {
+			// A reader's verb is followed by the next word, so "Is" does not take "Island".
+			if (name.starts_with(reader) && (name.size() == reader.size() || !std::islower(static_cast<unsigned char>(name[reader.size()])))) {
+				return true;
+			}
+		}
+		return std::find(std::begin(named), std::end(named), name) != std::end(named);
+	}
+
+	bool PreviewFenceRuns(const char* className, const char* methodName) {
+		if (PreviewFenceReadOnlyName(methodName ? methodName : "")) {
+			return true;
+		}
+		static std::unordered_set<std::string> reported;
+		if (const std::string call = std::string(className ? className : "?") + ":" + (methodName ? methodName : "?"); reported.insert(call).second) {
+			std::cout << "[preview-fence] dropped " << call << " on an object the preview does not own; the committed tick runs it" << std::endl;
+		}
+		return false;
+	}
+
 	void OpenPreviewBindingFence() {
 		if (s_PreviewBindingFenceOpen) {
 			return;
@@ -11784,6 +11815,7 @@ namespace {
 		s_PreviewCloneOf.clear();
 		luabind::detail::preview_fence::substitute = &PreviewFenceSubstitute;
 		luabind::detail::preview_fence::owns = &PreviewFenceOwns;
+		luabind::detail::preview_fence::runs = &PreviewFenceRuns;
 		luabind::detail::preview_fence::open();
 	}
 

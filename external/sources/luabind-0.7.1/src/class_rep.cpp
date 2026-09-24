@@ -690,6 +690,14 @@ int luabind::detail::class_rep::function_dispatcher(lua_State* L)
 
 		const overload_rep& o = rep->overloads()[match_index];
 
+		// Inside a preview window a call that may write an object the window does not own is dropped, as a property
+		// write is: the committed tick runs the same hook on every peer. Const and read-only calls run.
+		if (preview_fence_window && !o.is_const() && !preview_fence_writes(is_class_object(L, 1))
+			&& !(preview_fence::runs && preview_fence::runs(rep->crep->name(), rep->name)))
+		{
+			return 0;
+		}
+
 		// The match has accepted the object at index 1 as this overload's self, so it is one of ours.
 		// A non-const overload may write it, which is what the checkpoint's trap wants to hear.
 		if (!o.is_const())

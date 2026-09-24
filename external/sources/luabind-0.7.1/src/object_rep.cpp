@@ -34,6 +34,7 @@ namespace luabind { namespace detail
 	thread_local int preview_fence_parent = -1;
 	void (*preview_fence::substitute)(object_rep*) = 0;
 	int (*preview_fence::owns)(const object_rep*) = 0;
+	bool (*preview_fence::runs)(const char*, const char*) = 0;
 
 	namespace
 	{
