@@ -19536,14 +19536,17 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	// The live estimator lowers a seat's delay to what its link needs. A seat our sim is already waiting on has no frames to
 	// spare, so the lower delay leaves the frames between the two values unproduced and the seat is held a delay later
 	// (a returner reclaimed at delay 8 on a zero-ping link, lowered to 1: held 8 frames after the change). A seat that runs
-	// ahead still gets its lower delay.
+	// ahead still gets its lower delay, and a seat with some frames to spare spends them once: the next decrease waits for a
+	// window of arrivals under the delay it got.
 	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error) {
-		for (const uint64_t clientPeriodMs: {uint64_t(25), uint64_t(12)}) {
-			const bool clientIsSlow = clientPeriodMs > 17;
+		struct Case { const char* name; uint64_t clientPeriodMs; uint16_t clientDelay; uint64_t clientStartMs; uint16_t expectedDelay; }; // 0: any delay below the start
+		const Case cases[] = {{"a seat our sim waits on", 25, 8, 0, 8}, {"a seat that runs ahead", 12, 8, 0, 2}, {"a seat five ticks behind", 17, 12, 85, 0}};
+		for (const Case& test: cases) {
+			const uint64_t clientPeriodMs = test.clientPeriodMs;
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
 			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A31, 1, NetTransportLane::InputUnreliable);
-			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A31, 8, NetTransportLane::InputUnreliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A31, test.clientDelay, NetTransportLane::InputUnreliable);
 			for (auto* config: {&hostConfig, &clientConfig}) {
 				config->roundId = 0x9A31;
 				config->simTickMs = 1000.0 / 60.0;
@@ -19551,7 +19554,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				config->substituteSlowPeers = true;
 				config->adaptiveInputDelay = true;
 				config->matchConfig = NetMatchConfigUtil::MakeDefault(0x9A31);
-				config->peerInputDelayFrames = {{1, 1}, {2, 8}};
+				config->peerInputDelayFrames = {{1, 1}, {2, test.clientDelay}};
 			}
 			hostConfig.relayToOtherPeers = true;
 			LoopbackTransportConfig link;
@@ -19561,6 +19564,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
 			struct Sim { NetLockstepCoordinator* coordinator; int64_t uid; uint64_t periodMs; uint64_t tick = 0; bool produced = false; uint64_t startAtMs = 0; uint64_t longestWaitMs = 0; };
 			Sim sims[2] = {{&host, 100, 17}, {&client, 200, clientPeriodMs}};
+			sims[1].startAtMs = test.clientStartMs;
 			uint64_t now = 0;
 			std::string queueError;
 			bool queueFailed = false;
@@ -19595,14 +19599,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			while (now < 9000 && !queueFailed && host.IsRunning() && client.IsRunning()) pump();
 			const auto holds = host.GetStats().peers.at(2).holds;
 			const uint16_t delay = host.InputDelayAt(2, sims[0].tick);
-			const bool lowered = delay < 8;
-			if (queueFailed || holds != 0 || !host.IsRunning() || sims[0].longestWaitMs > 50 || (!clientIsSlow && !lowered) || sims[0].tick < 300) {
-				*error = std::string(clientIsSlow ? "a seat our sim waits on" : "a seat that runs ahead") + ": holds=" + std::to_string(holds) +
+			if (queueFailed || holds != 0 || !host.IsRunning() || sims[0].longestWaitMs > 50 || (test.expectedDelay ? delay != test.expectedDelay : delay >= test.clientDelay) || sims[0].tick < 300) {
+				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " expected_delay=" + std::to_string(test.expectedDelay) +
 				         " delay=" + std::to_string(delay) + " host_tick=" + std::to_string(sims[0].tick) + " client_tick=" + std::to_string(sims[1].tick) +
 				         " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) + " queue=" + queueError;
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS a_live_delay_decrease_keeps_a_waited_seats_slack client_period_ms=" << clientPeriodMs
+			std::cout << "[net-lockstep-selftest] PASS a_live_delay_decrease_keeps_a_waited_seats_slack case=\"" << test.name << "\" client_period_ms=" << clientPeriodMs
 			          << " delay=" << delay << " holds=" << holds << " host_longest_wait_ms=" << sims[0].longestWaitMs << std::endl;
 		}
 		return true;
