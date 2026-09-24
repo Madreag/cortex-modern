@@ -317,6 +317,9 @@ namespace RTE {
 		/// including the leave the waited-for peer is waiting to have acknowledged.
 		static void SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail = {}, std::function<uint64_t()> sessionProgress = {},
 		                           std::function<void()> goodbyeToPendingReturners = {});
+		/// What a round stopped by this peer's own seat hold tries first: the catch-up in place on the committed tail.
+		/// Returns whether it began, which takes the round off the stop path.
+		static void SetHeldCatchUp(std::function<bool()> begin);
 		static void SetLockstepSeatPresence(const NetSeatPresence* presence);
 
 		/// One shown match-event banner: the lockstep tick it was recorded at, its class and text.

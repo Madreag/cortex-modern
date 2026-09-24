@@ -63,6 +63,7 @@ namespace RTE {
 		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
+		std::function<bool()> s_HeldCatchUp;
 		std::function<bool()> s_PendingSessionTail;
 		std::function<uint64_t()> s_SessionProgress;
 		std::function<void()> s_GoodbyeToPendingReturners;
@@ -809,6 +810,10 @@ namespace RTE {
 		s_PendingSessionTail = std::move(pendingTail);
 		s_SessionProgress = std::move(sessionProgress);
 		s_GoodbyeToPendingReturners = std::move(goodbyeToPendingReturners);
+	}
+
+	void ScenarioRunner::SetHeldCatchUp(std::function<bool()> begin) {
+		s_HeldCatchUp = std::move(begin);
 	}
 
 	void ScenarioRunner::SetLockstepSeatPresence(const NetSeatPresence* presence) {
@@ -2820,6 +2825,7 @@ namespace RTE {
 		if (s_SessionPump) s_SessionPump();
 		if (!s_LockstepCoordinator) return false;
 		if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
+			if (s_LockstepCoordinator->IsStopped() && s_LockstepCoordinator->IsLocalSeatHeld() && s_HeldCatchUp && s_HeldCatchUp()) return false;
 			SetControllerReplayError("tick " + std::to_string(tick) + " lockstep stopped: " + s_LockstepCoordinator->GetStats().timeoutReason);
 			return false;
 		}

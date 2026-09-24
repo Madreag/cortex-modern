@@ -922,6 +922,8 @@ namespace RTE {
 		/// Host: the current capture park covers the frame or may still grow to cover it.
 		bool CaptureParkMayReach(uint64_t frame) const;
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
+		/// The frame the host held this peer's seat from; 0 when the hold was not taken on the wire (a closed link).
+		uint64_t GetLocalHoldFrame() const { return m_LocalHoldFrame; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
@@ -1365,6 +1367,7 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> m_LateStartReclaims; //!< Boundary-held seats whose late start still owes a reclaim.
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
+		uint64_t m_LocalHoldFrame = 0;
 		bool m_Playback = false;
 		uint32_t m_LocalSeatReclaims = 0;
 
