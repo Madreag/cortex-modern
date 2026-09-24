@@ -5067,6 +5067,21 @@ static std::string ResyncSaveName() {
 			}
 		}
 		m_Runner->AdoptHostMigration(result, m_LocalPeerId);
+		if (m_IsHost) {
+			// A returning seat's config, image and tail travel on the lobby, which is the new host's from here.
+			NetLobbySessionConfig lobby;
+			lobby.host = true;
+			lobby.localPeerId = m_LocalPeerId;
+			lobby.matchConfig = config;
+			lobby.startFrame = result.boundary + 1;
+			lobby.session = m_Session.get();
+			lobby.sessionNowMs = [this] { return AdmissionNowMs(); };
+			lobby.displayName = m_LocalName.empty() ? "Host" : m_LocalName;
+			lobby.autoStart = false;
+			std::string lobbyError;
+			if (!m_Runner->GetLobbySession().Start(*m_MigratedTransport, lobby, &lobbyError))
+				System::PrintDiagnosticLine("[net-match] the new host's rejoin lobby did not open: " + lobbyError);
+		}
 		m_ResyncOnDesync = true;
 		m_MigrationRepairPending = true;
 		const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == result.hostPeerId; });
