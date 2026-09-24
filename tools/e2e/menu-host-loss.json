@@ -1,11 +1,153 @@
 {
   "schema": 1,
   "name": "menu-host-loss",
-  "title": "Host-loss label and Funds separation readbacks at the two larger sizes",
+  "title": "Host-loss label and Funds separation readbacks at 640x360, 960x540 and 1280x720",
   "port_base": 49450,
   "size": "960x540",
   "timeout_s": 95,
   "runs": [
+    {
+      "name": "640x360",
+      "size": "640x360",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0,
+          "kill_at_tick": 601
+        },
+        {
+          "name": "leaver",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/leaver-match.json",
+            "-out",
+            "{OUT}/leaver_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "leaver",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "probe": "menu-host-loss.probe.json",
+          "kill_when": {
+            "peer": "leaver",
+            "probe_complete": true
+          }
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5,
+          "probe": "menu-host-loss.probe.json",
+          "kill_when": {
+            "peer": "survivor",
+            "probe_complete": true
+          }
+        }
+      ]
+    },
     {
       "name": "960x540",
       "size": "960x540",
@@ -293,24 +435,22 @@
   ],
   "checklist": [
     {
-      "id": "loss-960x540-leaver",
-      "run": "960x540",
+      "id": "loss-640x360-leaver",
+      "run": "640x360",
       "peer": "leaver",
       "mark": "status-loss",
-      "screen": "LockstepWaitOverlay",
       "probe_steps": [
+        2,
         3,
         4,
         5,
         6,
         7,
-        8,
-        9,
-        10
+        8
       ],
       "readback": [
         {
-          "step": 4,
+          "step": 2,
           "path": [
             "control",
             "text"
@@ -318,15 +458,23 @@
           "contains": "Host connection lost - choosing a new host"
         },
         {
-          "step": 4,
+          "step": 2,
           "path": [
             "control",
             "text"
           ],
-          "contains": "RTT -- ms"
+          "contains": "RTT -- ms / host lost"
         },
         {
-          "step": 4,
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Current wait "
+        },
+        {
+          "step": 2,
           "path": [
             "control",
             "text"
@@ -334,36 +482,248 @@
           "not_contains": "LIVE"
         },
         {
-          "step": 8,
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Left - AI in control"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "LIVE"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "Host connection lost"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "RTT -- ms"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ms / max peer"
+        }
+      ],
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
+      "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
+    },
+    {
+      "id": "loss-640x360-survivor",
+      "run": "640x360",
+      "peer": "survivor",
+      "mark": "status-loss",
+      "probe_steps": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "readback": [
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms / host lost"
+        },
+        {
+          "step": 2,
           "path": [
             "control",
             "text"
           ],
           "contains": "Current wait "
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Left - AI in control"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "LIVE"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "Host connection lost"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "RTT -- ms"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ms / host link"
         }
       ],
-      "what": "During host loss the status box names the loss, blanks RTT and updates its wait; the old top-left roster does not cover Funds.",
-      "assert": "Native status text twice, completed probe, first and later screenshots, and dump_network_layout."
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
+      "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
+    },
+    {
+      "id": "loss-960x540-leaver",
+      "run": "960x540",
+      "peer": "leaver",
+      "mark": "status-loss",
+      "probe_steps": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "readback": [
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms / host lost"
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Current wait "
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Left - AI in control"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "LIVE"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "Host connection lost"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "RTT -- ms"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ms / max peer"
+        }
+      ],
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
+      "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     },
     {
       "id": "loss-960x540-survivor",
       "run": "960x540",
       "peer": "survivor",
       "mark": "status-loss",
-      "screen": "LockstepWaitOverlay",
       "probe_steps": [
+        2,
         3,
         4,
         5,
         6,
         7,
-        8,
-        9,
-        10
+        8
       ],
       "readback": [
         {
-          "step": 4,
+          "step": 2,
           "path": [
             "control",
             "text"
@@ -371,15 +731,23 @@
           "contains": "Host connection lost - choosing a new host"
         },
         {
-          "step": 4,
+          "step": 2,
           "path": [
             "control",
             "text"
           ],
-          "contains": "RTT -- ms"
+          "contains": "RTT -- ms / host lost"
         },
         {
-          "step": 4,
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Current wait "
+        },
+        {
+          "step": 2,
           "path": [
             "control",
             "text"
@@ -387,36 +755,66 @@
           "not_contains": "LIVE"
         },
         {
-          "step": 8,
+          "step": 6,
           "path": [
             "control",
             "text"
           ],
-          "contains": "Current wait "
+          "contains": "Left - AI in control"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "LIVE"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "Host connection lost"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "RTT -- ms"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ms / host link"
         }
       ],
-      "what": "During host loss the status box names the loss, blanks RTT and updates its wait; the old top-left roster does not cover Funds.",
-      "assert": "Native status text twice, completed probe, first and later screenshots, and dump_network_layout."
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
+      "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     },
     {
       "id": "loss-1280x720-leaver",
       "run": "1280x720",
       "peer": "leaver",
       "mark": "status-loss",
-      "screen": "LockstepWaitOverlay",
       "probe_steps": [
+        2,
         3,
         4,
         5,
         6,
         7,
-        8,
-        9,
-        10
+        8
       ],
       "readback": [
         {
-          "step": 4,
+          "step": 2,
           "path": [
             "control",
             "text"
@@ -424,15 +822,23 @@
           "contains": "Host connection lost - choosing a new host"
         },
         {
-          "step": 4,
+          "step": 2,
           "path": [
             "control",
             "text"
           ],
-          "contains": "RTT -- ms"
+          "contains": "RTT -- ms / host lost"
         },
         {
-          "step": 4,
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Current wait "
+        },
+        {
+          "step": 2,
           "path": [
             "control",
             "text"
@@ -440,36 +846,66 @@
           "not_contains": "LIVE"
         },
         {
-          "step": 8,
+          "step": 6,
           "path": [
             "control",
             "text"
           ],
-          "contains": "Current wait "
+          "contains": "Left - AI in control"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "LIVE"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "Host connection lost"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "RTT -- ms"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ms / max peer"
         }
       ],
-      "what": "During host loss the status box names the loss, blanks RTT and updates its wait; the old top-left roster does not cover Funds.",
-      "assert": "Native status text twice, completed probe, first and later screenshots, and dump_network_layout."
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
+      "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     },
     {
       "id": "loss-1280x720-survivor",
       "run": "1280x720",
       "peer": "survivor",
       "mark": "status-loss",
-      "screen": "LockstepWaitOverlay",
       "probe_steps": [
+        2,
         3,
         4,
         5,
         6,
         7,
-        8,
-        9,
-        10
+        8
       ],
       "readback": [
         {
-          "step": 4,
+          "step": 2,
           "path": [
             "control",
             "text"
@@ -477,15 +913,23 @@
           "contains": "Host connection lost - choosing a new host"
         },
         {
-          "step": 4,
+          "step": 2,
           "path": [
             "control",
             "text"
           ],
-          "contains": "RTT -- ms"
+          "contains": "RTT -- ms / host lost"
         },
         {
-          "step": 4,
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Current wait "
+        },
+        {
+          "step": 2,
           "path": [
             "control",
             "text"
@@ -493,16 +937,48 @@
           "not_contains": "LIVE"
         },
         {
-          "step": 8,
+          "step": 6,
           "path": [
             "control",
             "text"
           ],
-          "contains": "Current wait "
+          "contains": "Left - AI in control"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "LIVE"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "Host connection lost"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "RTT -- ms"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ms / host link"
         }
       ],
-      "what": "During host loss the status box names the loss, blanks RTT and updates its wait; the old top-left roster does not cover Funds.",
-      "assert": "Native status text twice, completed probe, first and later screenshots, and dump_network_layout."
+      "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
+      "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
     }
   ]
 }
