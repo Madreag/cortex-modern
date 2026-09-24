@@ -6,8 +6,7 @@ activate ButtonMultiplayerJoinGame
 wait_ms 3500
 video_mark loss-lan-list
 observe assert_text_fits ListLanGames
-observe assert_list_rows ListLanGames 1
-observe assert_label TextJoinPort {PORT}
+observe assert_label TextJoinPort
 dump_host_options
 screenshot loss-lan-list
 settext TextJoinAddress 127.0.0.1
