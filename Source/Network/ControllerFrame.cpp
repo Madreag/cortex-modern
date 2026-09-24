@@ -272,6 +272,12 @@ namespace RTE {
 		if (!frame.IsLegacy()) {
 			controller.ApplyWireScheme(static_cast<Controller::WireDeviceClass>(frame.deviceClass), frame.digitalAimSpeed);
 		}
+		// The seat's committed mouse is what a script asking about that seat reads, on every peer; a preview is this machine's alone.
+		if (frame.inputMode == static_cast<uint8_t>(Controller::CIM_PLAYER) && frame.playerRaw >= 0 && UInputMan::IsConstructed() &&
+		    (!MovableMan::IsConstructed() || !g_MovableMan.IsSpeculative())) {
+			g_UInputMan.NoteCommittedSeatMouse(frame.playerRaw, Vector(static_cast<float>(frame.mouseDeltaX), static_cast<float>(frame.mouseDeltaY)),
+			                                   static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
+		}
 		return true;
 	}
 
