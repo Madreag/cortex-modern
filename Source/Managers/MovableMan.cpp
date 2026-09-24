@@ -1277,6 +1277,17 @@ namespace {
 	//
 	// The added deques go in beside the live ones: the checkpoint archive writes both (Scene writes
 	// GetAllParticles, which concatenates them), so an object only one peer holds has to move the hash.
+	// Every attachable in the tree, depth first in attachment order: its identity and where the sim put it.
+	void FeedAttachableTransforms(const MOSRotating* parent) {
+		for (const Attachable* attachable: parent->GetAttachableList()) {
+			const int64_t uniqueID = static_cast<int64_t>(attachable->GetUniqueID());
+			const float transform[3] = {attachable->GetPos().m_X, attachable->GetPos().m_Y, attachable->GetRotAngle()};
+			g_SimChecksum.Update("attachables", &uniqueID, sizeof(uniqueID));
+			g_SimChecksum.Update("attachables", transform, sizeof(transform));
+			FeedAttachableTransforms(attachable);
+		}
+	}
+
 	void FeedSimChecksum(const std::deque<Actor*>& actors, const std::deque<Actor*>& addedActors,
 	                     const std::deque<MovableObject*>& items, const std::deque<MovableObject*>& addedItems,
 	                     const std::deque<MovableObject*>& particles, const std::deque<MovableObject*>& addedParticles,
@@ -1313,6 +1324,12 @@ namespace {
 			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
 			const float actorAngVel = a->GetAngularVel();
 			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
+			// The actor's sim-time timers and its limbs' transforms; the alarm timer is the owner's AI perception, so it stays out.
+			const double timers[5] = {a->GetLastSecondTimerElapsedSimMS(), a->GetStableRecoverTimerElapsedSimMS(), a->GetHeartBeatTimerElapsedSimMS(),
+			                          a->GetNewControlTimerElapsedSimMS(), a->GetDeathTimerElapsedSimMS()};
+			g_SimChecksum.Update("actor_timers", &uniqueID, sizeof(uniqueID));
+			g_SimChecksum.Update("actor_timers", timers, sizeof(timers));
+			FeedAttachableTransforms(a);
 		});
 
 		// Controller input state per actor — catches control drift the actors fingerprint misses.
