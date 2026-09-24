@@ -1008,6 +1008,24 @@ namespace RTE::MenuAutomation {
 				SDL_setenv_unsafe("CCCP_HEADLESS", runnerValue.c_str(), 1);
 			}
 		}
+		{
+			// A panel its manager skipped on the latest pass is off the screen, however recent the pass before was.
+			int manager = 0, shown = 0, replaced = 0, loose = 0;
+			const void* previous = BeginPanelDrawPass(&manager);
+			RecordPanelDraw(&shown);
+			RecordPanelDraw(&replaced);
+			EndPanelDrawPass(previous);
+			previous = BeginPanelDrawPass(&manager);
+			RecordPanelDraw(&shown);
+			EndPanelDrawPass(previous);
+			RecordPanelDraw(&loose);
+			const std::string age = "replaced_age_ms=" + std::to_string(PanelDrawAgeMs(&replaced));
+			check("draw_record_latest_pass_drawn", PanelDrawnInLatestPass(&shown, c_DrawWindowSeconds), age);
+			check("draw_record_skipped_panel_not_drawn", !PanelDrawnInLatestPass(&replaced, c_DrawWindowSeconds), age);
+			check("draw_record_outside_pass_uses_window", PanelDrawnInLatestPass(&loose, c_DrawWindowSeconds), age);
+			ClearPanelDrawRecord();
+			check("draw_record_cleared", !PanelDrawnInLatestPass(&shown, c_DrawWindowSeconds) && PanelDrawAgeMs(&shown) < 0, age);
+		}
 		std::cout << "[menu-automation-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed;
 	}
