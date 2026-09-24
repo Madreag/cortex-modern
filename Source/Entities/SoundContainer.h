@@ -325,6 +325,9 @@ namespace RTE {
 		/// Gets the position at which this SoundContainer's sound will be played. Note that its individual sounds can be offset from this.
 		/// @return The position of this SoundContainer.
 		const Vector& GetPosition() const { return CurrentPos(); }
+
+		/// Whether a shared scope has handed this container's position to Lua as a live alias.
+		bool TestSharedAliasHeld() const { return m_SharedAliasHeld; }
 		/// The position Lua holds. In an AI hook it is this pass's private copy, so a write through it
 		/// is reconciled into a deferred position write instead of landing on shared state early.
 		const Vector& GetScriptPosition() const;

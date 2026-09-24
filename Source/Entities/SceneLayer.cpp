@@ -14,6 +14,7 @@
 #include "tracy/TracyOpenGL.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <charconv>
 #include <cmath>
@@ -32,6 +33,18 @@ ConcreteClassInfo(SceneLayer, Entity, 0);
 ConcreteClassInfo(StaticSceneLayer, Entity, 0);
 
 namespace {
+	std::atomic<int> s_BackBuffers{0};
+
+	BITMAP* NewBackBuffer(BITMAP* mainBitmap) {
+		s_BackBuffers.fetch_add(1, std::memory_order_relaxed);
+		return create_bitmap_ex(bitmap_color_depth(mainBitmap), mainBitmap->w, mainBitmap->h);
+	}
+
+	void FreeBackBuffer(BITMAP* backBitmap) {
+		s_BackBuffers.fetch_sub(1, std::memory_order_relaxed);
+		destroy_bitmap(backBitmap);
+	}
+
 	unsigned int BitmapFullCopyPercent() {
 		static const unsigned int threshold = [] {
 			unsigned int percent = 50;
@@ -45,6 +58,10 @@ namespace {
 		}();
 		return threshold;
 	}
+}
+
+int RTE::SceneLayerBackBufferCount() {
+	return s_BackBuffers.load(std::memory_order_relaxed);
 }
 
 void BitmapSnapshot::BitmapDeleter::operator()(BITMAP* bitmap) const {
@@ -269,7 +286,7 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Create(BITMAP* bitmap, bool 
 
 	m_MainBitmapOwned = true;
 
-	m_BackBitmap = create_bitmap_ex(bitmap_color_depth(m_MainBitmap), m_MainBitmap->w, m_MainBitmap->h);
+	m_BackBitmap = NewBackBuffer(m_MainBitmap);
 	m_LastClearColor = ColorKeys::g_InvalidColor;
 	if constexpr (!STATIC_TEXTURE) {
 		m_MainTexture = std::make_unique<BigTexture>(m_MainBitmap);
@@ -310,7 +327,7 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Create(const SceneLayerImpl&
 		RTEAssert(m_MainBitmap, "Failed to allocate BITMAP in SceneLayerImpl::Create");
 		blit(bitmapToCopy, m_MainBitmap, 0, 0, 0, 0, bitmapToCopy->w, bitmapToCopy->h);
 
-		m_BackBitmap = create_bitmap_ex(bitmap_color_depth(m_MainBitmap), m_MainBitmap->w, m_MainBitmap->h);
+		m_BackBitmap = NewBackBuffer(m_MainBitmap);
 		m_LastClearColor = ColorKeys::g_InvalidColor;
 
 		if constexpr (!STATIC_TEXTURE) {
@@ -355,7 +372,7 @@ void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Destroy(bool notInherited) 
 		destroy_bitmap(m_MainBitmap);
 	}
 	if (m_BackBitmap) {
-		destroy_bitmap(m_BackBitmap);
+		FreeBackBuffer(m_BackBitmap);
 	}
 	if (!notInherited) {
 		Entity::Destroy();
@@ -411,7 +428,7 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::LoadData() {
 	m_MainBitmap = m_BitmapFile.GetAsBitmap(COLORCONV_NONE, false);
 	m_MainBitmapOwned = true;
 
-	m_BackBitmap = create_bitmap_ex(bitmap_color_depth(m_MainBitmap), m_MainBitmap->w, m_MainBitmap->h);
+	m_BackBitmap = NewBackBuffer(m_MainBitmap);
 	if constexpr (!STATIC_TEXTURE) {
 		m_MainTexture = std::make_unique<BigTexture>(m_MainBitmap);
 	}
@@ -574,7 +591,7 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::ClearData() {
 	m_MainBitmapOwned = false;
 
 	if (m_BackBitmap) {
-		destroy_bitmap(m_BackBitmap);
+		FreeBackBuffer(m_BackBitmap);
 	}
 	m_BackBitmap = nullptr;
 	m_LastClearColor = ColorKeys::g_InvalidColor;
