@@ -6,6 +6,11 @@ method: the same walk runs tools/fixtures/preview_method_fence.lua, whose stride
 script keeps and adds a particle through MovableMan.
 outparam: the same walk runs tools/fixtures/preview_outparam_fence.lua, whose stride hook casts a ray into the
 file-scope Vector the real script keeps.
+const: the same walk runs tools/fixtures/preview_const_mutator.lua, whose preview copy kills the enemies and ends the
+activity, both const calls on managers.
+argument: the same walk runs tools/fixtures/preview_argument_fence.lua, whose preview copy attaches a spare the real
+script keeps.
+nilchain: the same walk runs tools/fixtures/preview_nil_chain.lua, whose hook chains on a call a preview drops.
 craft: the host's seat flies a landing craft (tools/fixtures/craft_handoff_activity.lua) that hands out its passenger.
 
 Per-tick hashes are compared strictly on every tick both peers recorded, leaving out only the routing subsystem each
@@ -45,6 +50,15 @@ CASES = {
     "outparam": {"ticks": 600, "files": ["preview_outparam_fence.lua"], "index": "",
                  "both": ["-test-script", "UserScenes.rte/preview_outparam_fence.lua", "-net-local-prediction", "on"],
                  "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
+    "const": {"ticks": 600, "files": ["preview_const_mutator.lua"], "index": "",
+              "both": ["-test-script", "UserScenes.rte/preview_const_mutator.lua", "-net-local-prediction", "on"],
+              "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
+    "argument": {"ticks": 600, "files": ["preview_argument_fence.lua"], "index": "",
+                 "both": ["-test-script", "UserScenes.rte/preview_argument_fence.lua", "-net-local-prediction", "on"],
+                 "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
+    "nilchain": {"ticks": 600, "files": ["preview_nil_chain.lua"], "index": "",
+                 "both": ["-test-script", "UserScenes.rte/preview_nil_chain.lua", "-net-local-prediction", "on"],
+                 "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
     "craft": {"ticks": 480, "files": ["craft_handoff_activity.lua"], "index": CRAFT_ACTIVITY,
               "both": ["-net-match-service-preset", "Determinism Craft Handoff", "-net-match-service-module", "UserScenes.rte"],
               "host": []},
@@ -56,6 +70,11 @@ HOLD = re.compile(r"^\[net-match\] hold peer=.*$", re.M)
 FENCE = re.compile(r"\[preview-fence\] preview uid=(\d+) took=(\d+) kept_health=([-\d.]+)->([-\d.]+) kept_x=([-\d.]+)->([-\d.]+)")
 METHOD = re.compile(r"\[preview-method\] preview uid=(\d+) timer_before=([-\d.]+) timer_after=([-\d.]+)")
 MARK = " Spark Yellow 1 "
+CONST = re.compile(r"\[preview-const\] preview uid=(\d+) running=(\w+) killed=(\w+)")
+ARGUMENT = re.compile(r"\[preview-argument\] preview uid=(\d+) attached=(\w+)")
+NILCHAIN = re.compile(r"\[preview-nil\] preview uid=(\d+)")
+NIL_REPORT = re.compile(r"PREVIEW: \S*preview_nil_chain\.lua stopped a preview hook after the dropped call Vector:SetMagnitude")
+NIL_ERROR = re.compile(r"ERROR: \S*preview_nil_chain\.lua")
 OUTPARAM = re.compile(r"\[preview-outparam\] preview uid=(\d+) hit_before=([-\d.]+) hit_after=([-\d.]+)")
 CRAFT = re.compile(r"\[craft-fixture\] (hatch opening|passenger out|passenger played) tick=(\d+)")
 
@@ -197,6 +216,24 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict) -> dict:
         result["commit_marks"] = marks
         # The preview's reset and particle are dropped, and the committed hook's particles stand on both peers alike.
         fixture_ok = bool(rows) and result["previews"]["timer_kept"] == len(rows) and marks["host"] > 0 and marks["host"] == marks["client"]
+    elif case_name == "const":
+        rows = [dict(zip(("uid", "running", "killed"), match)) for match in CONST.findall(texts["host"])]
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12],
+                              "dropped": sum(1 for row in rows if row["running"] == "true" and row["killed"] == "nil")}
+        # The preview's kill and end are dropped, so nobody dies and the activity runs on after every preview.
+        fixture_ok = bool(rows) and result["previews"]["dropped"] == len(rows)
+    elif case_name == "argument":
+        rows = [dict(zip(("uid", "attached"), match)) for match in ARGUMENT.findall(texts["host"])]
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "never_attached": sum(1 for row in rows if row["attached"] == "false")}
+        # The preview's attach of the kept spare is dropped, so the spare is never taken by a preview's copy.
+        fixture_ok = bool(rows) and result["previews"]["never_attached"] == len(rows)
+    elif case_name == "nilchain":
+        rows = NILCHAIN.findall(texts["host"])
+        reports = {who: len(NIL_REPORT.findall(texts[who])) for who in PEERS}
+        errors = {who: len(NIL_ERROR.findall(texts[who])) for who in PEERS}
+        result["previews"] = {"hook_runs": len(rows), "reports": reports, "errors": errors}
+        # Every preview run of the hook fails on the dropped call's nil; it is reported once, and the real hook never fails.
+        fixture_ok = len(rows) > 1 and reports["host"] == 1 and reports["client"] == 0 and errors["host"] == 0 and errors["client"] == 0
     elif case_name == "outparam":
         rows = [dict(zip(("uid", "before", "after"), match)) for match in OUTPARAM.findall(texts["host"])]
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "value_kept": sum(1 for row in rows if row["before"] == row["after"])}
