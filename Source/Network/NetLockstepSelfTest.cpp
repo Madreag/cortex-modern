@@ -1061,7 +1061,18 @@ namespace RTE {
 			agreed.peerInputDelays[1] = 8;
 			agreed.startupPublished = true;
 			agreed.activityRestartMs = 216;
+			agreed.deviceClass = 1;
+			agreed.peerDeviceClasses[0] = 1;
+			agreed.peerDeviceClasses[1] = 3;
 			if (!RoundTrip({agreed}, error)) return false;
+			NetLockstepStart unknownDevice = agreed;
+			unknownDevice.peerDeviceClasses[1] = static_cast<uint8_t>(Controller::WireDeviceClass::Count);
+			std::vector<uint8_t> refused;
+			NetLockstepError deviceError;
+			if (NetLockstepCodec::Encode({unknownDevice}, refused, &deviceError) || deviceError.code != NetLockstepErrorCode::InvalidValue) {
+				*error = "a start naming an unknown seat device was encoded";
+				return false;
+			}
 
 			NetLockstepFrame frame;
 			frame.senderPeerId = 2;
@@ -2433,6 +2444,43 @@ namespace RTE {
 			}
 			std::cout << "[net-lockstep-selftest] PASS first_start_waits_for_published_startup startup_ms=1000 peer_start_ms=200 agreed_frame_at_least="
 			          << expectedAgreedFrame << std::endl;
+			return true;
+		}
+
+		// Every seat's device reaches every peer in the agreed start, so a script asking before the seat's first frame reads it alike.
+		bool TestAgreedStartNamesEachSeatsDevice(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A1D, 3, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A1D, 3, NetTransportLane::ControlReliable);
+			hostConfig.startFrame = clientConfig.startFrame = 1;
+			hostConfig.roundId = clientConfig.roundId = 41;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 30000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1D);
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (!StartCoordinatorPair(49561, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			const uint8_t mouse = static_cast<uint8_t>(Controller::WireDeviceClass::MouseKeyboard), gamepad = static_cast<uint8_t>(Controller::WireDeviceClass::Gamepad);
+			host.NoteLocalDeviceClass(mouse);
+			host.NoteLocalStartPark(20);
+			client.NoteLocalDeviceClass(gamepad);
+			client.NoteLocalStartPark(30);
+			for (uint64_t now = 0; now < 500 && (!host.IsRunning() || !client.IsRunning()); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			const auto names = [&](const NetLockstepCoordinator& peer) {
+				return peer.AgreedSeatDeviceClass(0) == mouse && peer.AgreedSeatDeviceClass(1) == gamepad && peer.AgreedSeatDeviceClass(2) == 0 && peer.AgreedSeatDeviceClass(-1) == 0;
+			};
+			if (!host.IsRunning() || !client.IsRunning() || !names(host) || !names(client) || host.GetAgreedStartRecord() != client.GetAgreedStartRecord()) {
+				*error = "the agreed start did not name each seat's device alike: running=" + std::to_string(host.IsRunning()) + "/" + std::to_string(client.IsRunning()) +
+				         " host=" + std::to_string(host.AgreedSeatDeviceClass(0)) + "," + std::to_string(host.AgreedSeatDeviceClass(1)) +
+				         " client=" + std::to_string(client.AgreedSeatDeviceClass(0)) + "," + std::to_string(client.AgreedSeatDeviceClass(1));
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS the_agreed_start_names_each_seats_device seat0=" << static_cast<int>(host.AgreedSeatDeviceClass(0))
+			          << " seat1=" << static_cast<int>(host.AgreedSeatDeviceClass(1)) << std::endl;
 			return true;
 		}
 
@@ -19754,6 +19802,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestCaptureParkCommitsCanonicalEmptyFrames, "capture_park_commits_every_players_input");
 		row(&TestASlowLoaderIsHeldAtTheStartupBudget, "a_slow_loader_is_held_at_the_startup_budget");
 		row(&TestAReturningSeatsRampIsTheBound, "a_returning_seats_ramp_is_the_bound");
+		row(&TestAgreedStartNamesEachSeatsDevice, "the_agreed_start_names_each_seats_device");
 		row(&TestALinkBlipIsBridgedByAResend, "a_link_blip_is_bridged_by_a_resend");
 		row(&TestALinkBlipIsBridgedInAStar, "a_link_blip_is_bridged_in_a_star");
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");

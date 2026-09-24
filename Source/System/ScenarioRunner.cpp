@@ -964,6 +964,8 @@ namespace RTE {
 			s_RetiredChecksumCounters.compares += retiring.checksumCompares;
 			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
 		}
+		// Every seat's committed mouse comes from the new coordinator's own frames, never an earlier round's.
+		if (coordinator && coordinator != s_LockstepCoordinator && UInputMan::IsConstructed()) g_UInputMan.ResetCommittedSeats();
 		s_LockstepCoordinator = coordinator;
 		s_PreSimWait.reset();
 		s_LocalStartParkPublished = false;
@@ -2807,6 +2809,18 @@ namespace RTE {
 		return drained;
 	}
 
+	void ScenarioRunner::PublishLocalStartup() {
+		// The seat's device goes out with the startup reading, so the agreed record names it before any frame does.
+		if (UInputMan::IsConstructed()) {
+			s_LockstepCoordinator->NoteLocalDeviceClass(static_cast<uint8_t>(Controller::ClassifyDevice(g_UInputMan.GetControlScheme(Players::PlayerOne)->GetDevice())));
+		}
+		s_LockstepCoordinator->NoteLocalStartPark(g_ActivityMan.GetLastRestartMs());
+	}
+
+	uint8_t ScenarioRunner::GetLockstepAgreedSeatDeviceClass(int seat) {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->AgreedSeatDeviceClass(seat) : 0;
+	}
+
 	bool ScenarioRunner::PollLockstepSimulationTick(uint64_t tick) {
 		if (!s_LockstepCoordinator || s_LockstepCoordinator->IsReplayPlayback() || WorldCatchUpActive()) return true;
 		const auto now = std::chrono::steady_clock::now();
@@ -2814,7 +2828,7 @@ namespace RTE {
 		s_PreSimWait.reset();
 		if (!s_LocalStartParkPublished) {
 			s_LocalStartParkPublished = true;
-			s_LockstepCoordinator->NoteLocalStartPark(g_ActivityMan.GetLastRestartMs());
+			PublishLocalStartup();
 		}
 		s_LockstepCoordinator->Tick(NetLockstepNowMs());
 		if (s_SessionPump) s_SessionPump();
@@ -2917,7 +2931,7 @@ namespace RTE {
 		// The round's activity restart runs before the first frame wait, so publish what it cost us here.
 		if (!s_LocalStartParkPublished) {
 			s_LocalStartParkPublished = true;
-			s_LockstepCoordinator->NoteLocalStartPark(g_ActivityMan.GetLastRestartMs());
+			PublishLocalStartup();
 		}
 		while (true) {
 			if (!s_LockstepCoordinator->HasReadyFrame(tick)) s_LockstepCoordinator->Tick(NetLockstepNowMs());

@@ -496,11 +496,16 @@ void UInputMan::NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, 
 }
 
 bool UInputMan::ScriptSeatDeviceClass(int whichPlayer, uint8_t& deviceClass) const {
+	// A controller no seat drives has no device on any peer; a script in the round must not read this machine's for it.
+	if (whichPlayer < Players::PlayerOne && ScriptReadsCommittedSeat(Players::PlayerOne)) {
+		deviceClass = 0;
+		return true;
+	}
 	if (!ScriptReadsCommittedSeat(whichPlayer)) {
 		return false;
 	}
-	// Before the seat's first committed frame no peer knows its device, so every peer reads none.
-	deviceClass = m_CommittedSeatMouse[whichPlayer].tick >= 0 ? m_CommittedSeatMouse[whichPlayer].deviceClass : 0;
+	// Before the seat's first committed frame every peer reads the device the round's agreed start names for it.
+	deviceClass = m_CommittedSeatMouse[whichPlayer].tick >= 0 ? m_CommittedSeatMouse[whichPlayer].deviceClass : ScenarioRunner::GetLockstepAgreedSeatDeviceClass(whichPlayer);
 	return true;
 }
 
