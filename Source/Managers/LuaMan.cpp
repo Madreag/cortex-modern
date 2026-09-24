@@ -7332,7 +7332,11 @@ static std::atomic<bool> s_AllocationSinking{true};
 static std::atomic<bool> s_CollectorModeAnnounced{false};
 
 static void PrintCollectorMode(bool deterministic) {
-	std::cout << "[lua] collector: " << (deterministic ? "full collection" : "incremental step") << " at every tick end" << std::endl;
+	if (deterministic) {
+		std::cout << "[lua] collector: full collection of each state at the end of every " << LuaMan::c_CollectionPeriodTicks << "th tick, in its slot" << std::endl;
+	} else {
+		std::cout << "[lua] collector: incremental step at every tick end" << std::endl;
+	}
 }
 
 void LuaMan::SetCheckpointAllocationSinking(bool sinking) {
@@ -7514,13 +7518,15 @@ bool LuaMan::RunThreadedScriptWriteHashSelfTest() {
 static bool RunTickEndCollectionSelfTest() {
 	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
 	if (states.empty()) {
-		std::cout << "[script-graph-selftest] FAIL dropped_lua_owned_object_dies_at_the_next_tick_end no threaded Lua states" << std::endl;
+		std::cout << "[script-graph-selftest] FAIL dropped_lua_owned_object_dies_in_its_states_slot_whatever_the_heap no threaded Lua states" << std::endl;
 		return false;
 	}
+	// The first threaded state holds slot 1.
 	LuaStateWrapper& state = states.front();
+	constexpr uint64_t c_Slot = 1;
 	const long counter = MovableObject::GetUniqueIDCounter();
-	// Tick-end passes until a dropped Lua-owned object is gone, with `ballast` extra live tables on its state.
-	const auto passesToDestroy = [&state](int ballast) {
+	// The tick at whose end a Lua-owned object dropped before tick `from` is gone, with `ballast` extra live tables on its state.
+	const auto deathTick = [&state](int ballast, uint64_t from) {
 		g_LuaMan.CollectGarbageForCheckpoint();
 		state.RunScriptString("_TickEndBallast = {}; for i = 1, " + std::to_string(ballast) + " do _TickEndBallast[i] = {i} end");
 		state.RunScriptString("_TickEndUID = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\").UniqueID");
@@ -7531,29 +7537,47 @@ static bool RunTickEndCollectionSelfTest() {
 			uid = static_cast<long>(lua_tonumber(state.GetLuaState(), -1));
 			lua_pop(state.GetLuaState(), 1);
 		}
-		int passes = 0;
-		while (uid > 0 && passes < 1000 && g_MovableMan.FindObjectByUniqueID(uid) != nullptr) {
-			g_LuaMan.StartAsyncGarbageCollection();
+		// Still alive after a thousand tick ends reads as the thousandth; no object at all as -1.
+		long long died = uid > 0 ? static_cast<long long>(from + 1000) : -1;
+		for (uint64_t tick = from; uid > 0 && tick < from + 1000; ++tick) {
+			g_LuaMan.StartAsyncGarbageCollection(tick, false);
 			g_LuaMan.WaitForAsyncGarbageCollection();
-			++passes;
+			if (!g_MovableMan.FindObjectByUniqueID(uid)) {
+				died = static_cast<long long>(tick);
+				break;
+			}
 		}
 		state.RunScriptString("_TickEndBallast = nil; _TickEndUID = nil");
 		g_LuaMan.CollectGarbageForCheckpoint();
-		return uid > 0 ? passes : -1;
+		return died;
 	};
 	const bool previousMode = LuaMan::IsDeterministicCollection();
 	LuaMan::SetDeterministicCollection(true);
-	const int smallHeap = passesToDestroy(0);
-	const int largeHeap = passesToDestroy(200000);
+	// One drop lands on its slot's tick, one just after it: the second waits out the whole period.
+	const uint64_t onSlot = 1000 * LuaMan::c_CollectionPeriodTicks + c_Slot;
+	const uint64_t pastSlot = onSlot + 1;
+	const long long smallOnSlot = deathTick(0, onSlot);
+	const long long largeOnSlot = deathTick(200000, onSlot);
+	const long long smallPastSlot = deathTick(0, pastSlot);
+	const long long largePastSlot = deathTick(200000, pastSlot);
 	LuaMan::SetDeterministicCollection(false);
-	const int largeHeapIncremental = passesToDestroy(200000);
+	const long long largeIncremental = deathTick(200000, onSlot);
 	LuaMan::SetDeterministicCollection(previousMode);
 	MovableObject::PinUniqueIDCounter(counter);
-	const bool fullPass = smallHeap == 1 && largeHeap == 1;
-	const bool incrementalPass = largeHeapIncremental > 1;
-	std::cout << "[script-graph-selftest] " << (fullPass ? "PASS" : "FAIL") << " dropped_lua_owned_object_dies_at_the_next_tick_end states=" << states.size() << " passes_small_heap=" << smallHeap << " passes_large_heap=" << largeHeap << std::endl;
-	std::cout << "[script-graph-selftest] " << (incrementalPass ? "PASS" : "FAIL") << " incremental_step_needs_more_than_one_tick_end_on_a_large_heap states=" << states.size() << " passes_large_heap=" << largeHeapIncremental << std::endl;
-	return fullPass && incrementalPass;
+	const long long expectedOnSlot = static_cast<long long>(onSlot);
+	const long long expectedPastSlot = static_cast<long long>(onSlot + LuaMan::c_CollectionPeriodTicks);
+	const bool slotPass = smallOnSlot == expectedOnSlot && largeOnSlot == expectedOnSlot && smallPastSlot == expectedPastSlot && largePastSlot == expectedPastSlot;
+	const bool incrementalPass = largeIncremental > expectedOnSlot;
+	std::cout << "[script-graph-selftest] " << (slotPass ? "PASS" : "FAIL") << " dropped_lua_owned_object_dies_in_its_states_slot_whatever_the_heap states=" << states.size() << " period=" << LuaMan::c_CollectionPeriodTicks
+	          << " on_slot=" << smallOnSlot << "," << largeOnSlot << " expected=" << expectedOnSlot << " past_slot=" << smallPastSlot << "," << largePastSlot << " expected=" << expectedPastSlot << std::endl;
+	std::cout << "[script-graph-selftest] " << (incrementalPass ? "PASS" : "FAIL") << " incremental_step_needs_more_than_one_tick_end_on_a_large_heap states=" << states.size() << " tick_ends_large_heap=" << (largeIncremental < 0 ? largeIncremental : largeIncremental - expectedOnSlot + 1) << std::endl;
+	return slotPass && incrementalPass;
+}
+
+// The fixture's passes take every state at once, whatever the tick's slot.
+static void CollectEveryStateAtTickEnd() {
+	g_LuaMan.StartAsyncGarbageCollection(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), true);
+	g_LuaMan.WaitForAsyncGarbageCollection();
 }
 
 static bool RunGarbageCollectionThreadSelfTest() {
@@ -7586,8 +7610,7 @@ static bool RunGarbageCollectionThreadSelfTest() {
 	for (size_t index = 0; index < droppingStates; ++index) {
 		states[index].RunScriptString("_GCThreadDrop = nil; _GCThreadUID = nil");
 	}
-	g_LuaMan.StartAsyncGarbageCollection();
-	g_LuaMan.WaitForAsyncGarbageCollection();
+	CollectEveryStateAtTickEnd();
 
 	const uint64_t offSimThread = LuabindObjectWrapper::OffSimThreadDeletionCount() - offSimThreadBefore;
 	const uint64_t simThread = LuabindObjectWrapper::SimThreadDeletionCount() - simThreadBefore;
@@ -7606,8 +7629,7 @@ static bool RunGarbageCollectionThreadSelfTest() {
 		for (int pass = 0; pass < 4; ++pass) {
 			const uint64_t offBefore = LuabindObjectWrapper::OffSimThreadDeletionCount();
 			const uint64_t simBefore = LuabindObjectWrapper::SimThreadDeletionCount();
-			g_LuaMan.StartAsyncGarbageCollection();
-			g_LuaMan.WaitForAsyncGarbageCollection();
+			CollectEveryStateAtTickEnd();
 			off += LuabindObjectWrapper::OffSimThreadDeletionCount() - offBefore;
 			sim += LuabindObjectWrapper::SimThreadDeletionCount() - simBefore;
 		}
@@ -7621,8 +7643,7 @@ static bool RunGarbageCollectionThreadSelfTest() {
 
 	// Drop the class global and collect; ClassDerivesFrom still reads the instance's class_rep name.
 	states[0].RunScriptString("class 'F90NameUAF' (Box); function F90NameUAF:__init() super() end; _F90NameHeld = F90NameUAF(); F90NameUAF = nil; collectgarbage(); collectgarbage()");
-	g_LuaMan.StartAsyncGarbageCollection();
-	g_LuaMan.WaitForAsyncGarbageCollection();
+	CollectEveryStateAtTickEnd();
 	std::string nameGraph;
 	std::vector<std::string> nameProblems;
 	states[0].SerializeScriptGraph(nameGraph, nameProblems);
@@ -7636,8 +7657,7 @@ static bool RunGarbageCollectionThreadSelfTest() {
 			states[index].RunScriptString("_GCThreadDrop = {}; for i = 1, " + std::to_string(c_DropsPerState) + " do _GCThreadDrop[#_GCThreadDrop + 1] = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\"); _GCThreadDrop[#_GCThreadDrop + 1] = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); end; _GCThreadDrop = nil");
 		}
 		const auto started = std::chrono::steady_clock::now();
-		g_LuaMan.StartAsyncGarbageCollection();
-		g_LuaMan.WaitForAsyncGarbageCollection();
+		CollectEveryStateAtTickEnd();
 		passMicroseconds += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 	}
 	passMicroseconds /= c_TimedRounds;
@@ -11164,25 +11184,36 @@ void LuaMan::CollectGarbageForCheckpoint() {
 }
 
 void LuaMan::StartAsyncGarbageCollection() {
+	StartAsyncGarbageCollection(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), false);
+}
+
+void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 	ZoneScoped;
 
-	std::vector<LuaStateWrapper*> allStates;
-	allStates.reserve(m_ScriptStates.size() + 1);
-
-	allStates.push_back(&m_MasterScriptState);
-	for (LuaStateWrapper& wrapper: m_ScriptStates) {
-		allStates.push_back(&wrapper);
+	const bool fullCollection = IsDeterministicCollection();
+	// A full collection costs the whole live heap, so each state takes one in its own slot of the period, not every tick.
+	const auto due = [fullCollection, everyState, tick](uint64_t slot) {
+		return !fullCollection || everyState || slot % c_CollectionPeriodTicks == tick % c_CollectionPeriodTicks;
+	};
+	std::vector<LuaStateWrapper*> dueStates;
+	dueStates.reserve(m_ScriptStates.size() + 1);
+	if (due(0)) {
+		dueStates.push_back(&m_MasterScriptState);
+	}
+	for (size_t index = 0; index < m_ScriptStates.size(); ++index) {
+		if (due(index + 1)) {
+			dueStates.push_back(&m_ScriptStates[index]);
+		}
 	}
 
-	const bool fullCollection = IsDeterministicCollection();
 	m_GarbageCollectionTask = BS::multi_future<void>();
-	for (LuaStateWrapper* luaState: allStates) {
+	for (LuaStateWrapper* luaState: dueStates) {
 		m_GarbageCollectionTask.push_back(
 		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection]() {
 			    ZoneScopedN("Lua Garbage Collection");
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
 			    if (fullCollection) {
-				    // A whole cycle every tick, so the tick a dropped object dies on does not follow its state's heap size.
+				    // A whole cycle, so the tick a dropped object dies on does not follow its state's heap size.
 				    lua_gc(luaState->GetLuaState(), LUA_GCCOLLECT, 0);
 			    } else {
 				    lua_gc(luaState->GetLuaState(), LUA_GCSTEP, 100);
