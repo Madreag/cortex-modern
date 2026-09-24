@@ -768,6 +768,8 @@ def review(scenario, capture, out):
                 "run_findings": run_findings,
                 "failures": {row["peer"]: row["menu_script_failures"] for row in capture["peers"]},
                 "verdict": "agent-review-required"}
+    if capture.get("feel_window"):
+        document["feel_window"] = capture["feel_window"]
     (Path(out) / "review.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     return document
 
@@ -1272,6 +1274,11 @@ def feel_probes(run, capture, source):
         except Exception as error:
             result[peer["peer"]] = {"pass_check": False, "error": repr(error), "pins": {}}
             peer["gates"] = {}
+    # The gates average over a fixed tick window (feel_gate "ticks" ends it), so a round made longer to fit a
+    # relaunch never dilutes them; the window each peer was measured over goes into review.json.
+    capture["feel_window"] = {"end_tick": run["feel_gate"].get("ticks"),
+                              "measured": {name: {key: (value.get("metrics") or {}).get(key) for key in ("first_tick", "last_tick")}
+                                           for name, value in result.items()}}
     write_json(root / "feel-gates.json", result)
 
 
