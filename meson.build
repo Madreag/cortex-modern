@@ -28,6 +28,17 @@ if get_option('debug') and get_option('b_lto')
   warning('Link time optimization enabled in debug mode, debug symbols may not be fully available. Disable b_lto with "meson configure -Db_lto=false".')
 endif
 
+# Clang UBSan builds skip only the third-party functions tools/sanitizers/ubsan_ignorelist.txt lists, each with its report.
+# Global, so the LuaJIT and Allegro subprojects get it too; it must come before the first subproject().
+if compiler.get_id() == 'clang' and '@0@'.format(get_option('b_sanitize')).contains('undefined')
+  ubsan_ignorelist = meson.current_source_dir() / 'tools' / 'sanitizers' / 'ubsan_ignorelist.txt'
+  ubsan_ignorelist_arg = '-fsanitize-ignorelist=' + ubsan_ignorelist
+  if not compiler.has_multi_arguments(['-fsanitize=undefined', ubsan_ignorelist_arg])
+    ubsan_ignorelist_arg = '-fsanitize-blacklist=' + ubsan_ignorelist
+  endif
+  add_global_arguments(ubsan_ignorelist_arg, language: ['c', 'cpp'])
+endif
+
 if compiler.get_argument_syntax()== 'gcc' # used for gcc compatible compilers
   # Build against system libraries on linux
   message('gcc detected')
