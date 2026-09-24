@@ -332,6 +332,18 @@ def check_review(results, scratch):
         for index, at in enumerate((0, 10, 20, 30))]}
     frames, observed = driver.item_evidence(record, {"mark": "first", "screen": "SettingsScreen", "events": ["assert_label Value shown PASS"]})
     ok &= row(results, "review/marker-bounds", frames == [1, 2] and observed["probe"] == "pass", str(frames))
+    tied = scratch / "markers-tied"
+    tied.mkdir()
+    (tied / "events.jsonl").write_text(''.join(json.dumps(value) + '\n' for value in [
+        {"wall_ms": 10, "message": "video_mark first"}, {"wall_ms": 25, "message": "assert_label Value shown PASS"},
+        {"wall_ms": 25, "message": "video_mark next"}, {"wall_ms": 25, "message": "assert_label Next shown PASS"}]), encoding="utf-8")
+    tied_record = {**record, "video_dir": str(tied)}
+    _, observed = driver.item_evidence(tied_record, {"mark": "first", "screen": "SettingsScreen", "events": ["assert_label Value shown PASS"]})
+    ok &= row(results, "review/assert-in-the-next-marks-millisecond-kept", observed["probe"] == "pass")
+    _, observed = driver.item_evidence(tied_record, {"mark": "next", "screen": "SettingsScreen", "events": ["assert_label Value shown PASS"]})
+    ok &= row(results, "review/earlier-marks-assert-not-borrowed", observed["probe"] == "fail")
+    _, observed = driver.item_evidence(tied_record, {"mark": "next", "screen": "SettingsScreen", "events": ["assert_label Next shown PASS"]})
+    ok &= row(results, "review/next-marks-own-assert-kept", observed["probe"] == "pass")
     frames, observed = driver.item_evidence(record, {"mark": "missing", "screen": "SettingsScreen"})
     ok &= row(results, "review/missing-marker-is-not-a-screen-pass", frames is None and observed["probe"] == "not-reached")
     return ok
