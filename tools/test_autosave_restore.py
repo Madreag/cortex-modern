@@ -617,9 +617,10 @@ def _world_kill_ready(host_log: str, client_log: str, kill_past: int, published:
 
 
 def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict, kill_past: int = 0,
-                     carry=None, own_ticks: int = 0) -> dict:
+                     carry=None, own_ticks: int = 0, after_carry=None) -> dict:
     """One round of a persistent world. `carry` is the previous round's root: its world state is
-    copied into each staged runtime after the runner prepares it and before the process starts."""
+    copied into each staged runtime after the runner prepares it and before the process starts;
+    `after_carry(who, runtime)` then edits what that peer finds on its disk."""
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
     runs, records = {}, {}
@@ -637,6 +638,8 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
                                  root / who, 420, env={"CCCP_HEADLESS": "1"})
             if carry is not None:
                 _carry_world_state(carry, who, Path(runs[who].cwd))
+            if after_carry is not None:
+                after_carry(who, Path(runs[who].cwd))
         threads[0].start()
         threading.Event().wait(1)
         threads[1].start()
@@ -718,7 +721,8 @@ def _world_checkpoint_state(manifest: str, host_log: str, world_id: str, tick: i
             "binding_peers": sorted(peers)}
 
 
-def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "", round_ticks: int = 600) -> dict:
+def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "", round_ticks: int = 600,
+                      client_lacks_checkpoint: bool = False) -> dict:
     """A persistent world host is KILLED and restarted on the same install with the same UUID,
     the seats the checkpoint held, and the client's stored ticket.
 
@@ -768,8 +772,20 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     second.mkdir(parents=True, exist_ok=False)
     resume_end = resume_tick + round_ticks
     # Each peer counts its cap from its own first tick, so the resumed round is given the ticks it runs past the checkpoint.
-    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first, own_ticks=round_ticks)
+    def drop_client_copy(who: str, runtime: Path) -> None:
+        # The client lost its copy of the checkpoint the world resumes on, so it is streamed the host's archive.
+        if who == "client":
+            for leftover in (runtime / "Autosaves").glob(f"{world_id}-{resume_tick}.*"):
+                leftover.unlink()
+
+    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first, own_ticks=round_ticks,
+                               after_carry=drop_client_copy if client_lacks_checkpoint else None)
     host_log = peer_log(second, "host")
+    if client_lacks_checkpoint:
+        client_log = peer_log(second, "client")
+        offer = OFFER.search(client_log)
+        assert offer and offer[3] != "held locally", f"the client held the checkpoint this arm removed: {offer and offer[0]}"
+        assert RECEIVED_LAUNCH.search(client_log), "the client was not streamed the host's checkpoint"
     restarted = WORLD_IDENTITY.findall(host_log)
     assert restarted, "the restarted world printed no identity"
     assert restarted[0][0] == world_id, (restarted[0][0], world_id)
@@ -977,6 +993,8 @@ def main() -> int:
                         "round's start so the host holds its seat and the seat has to rejoin")
     parser.add_argument("--fullstate-every", type=int, default=0,
                         help="every N committed ticks both peers hash their whole capture (-net-fullstate-hash-every); 0 is off")
+    parser.add_argument("--client-lacks-checkpoint", action="store_true",
+                        help="world-restart only: the client loses its copy of the resume checkpoint and is streamed the host's")
     parser.add_argument("--pause-slow-peers", action="store_true",
                         help="anchor only: the host pauses for a slow peer instead of holding it, so a sanitizer build's heal lands")
     args = parser.parse_args()
@@ -993,7 +1011,8 @@ def main() -> int:
         exe_sha = file_sha256(exe)
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"restore": arm_restore, "retention": arm_retention, "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers), "resume": arm_resume,
-            "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks),
+            "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks,
+                                                                        args.client_lacks_checkpoint),
             "park": arm_park}
     if args.arm != "all":
         arms = {args.arm: arms[args.arm]}
