@@ -21,7 +21,7 @@ dump_lobby
 wait_state Failed 45
 video_mark loss-client-landing
 wait_ms 300
-observe assert_label LabelMultiplayerLandingStatus The host's connection was lost
+observe assert_label LabelMultiplayerLandingStatus The host left the match
 dump_host_options
 screenshot loss-client-landing
 wait_ms 1000

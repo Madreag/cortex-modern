@@ -120,7 +120,7 @@
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
       "assert": "Native label/geometry readback.",
       "log_regex": [
-        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host left the match.* PASS"
       ]
     },
     {
@@ -142,7 +142,7 @@
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
       "assert": "Native label/geometry readback.",
       "log_regex": [
-        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host left the match.* PASS"
       ]
     },
     {
@@ -164,7 +164,7 @@
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
       "assert": "Native label/geometry readback.",
       "log_regex": [
-        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host left the match.* PASS"
       ]
     },
     {
