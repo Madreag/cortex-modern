@@ -4356,6 +4356,7 @@ namespace RTE {
 		m_PreStartTiming.clear();
 		m_DelayChanges = m_Config.initialDelayChanges;
 		m_DelayEstimators.clear();
+		m_ArrivalLeads.clear();
 		m_TimingOutgoing.clear();
 		m_DeferredControllerFrames.clear();
 		m_NextTimingRevision = 1;
@@ -5723,6 +5724,21 @@ namespace RTE {
 		return decision.committed && applied && decision.proposal.applyFrame < GetResumeFrame();
 	}
 
+	std::optional<uint16_t> NetLockstepCoordinator::SlackLimitedDecrease(uint8_t peerId, uint16_t proposed, uint16_t current, uint64_t nowMs) {
+		// A lower delay makes the sender's next inputs due that many ticks sooner. When our sim is already waiting on
+		// them the frames between the two delays are never produced in time, so the change would hold the seat.
+		auto found = m_ArrivalLeads.find(peerId);
+		if (found == m_ArrivalLeads.end()) return std::nullopt;
+		auto& leads = found->second;
+		while (!leads.empty() && nowMs - leads.front().first > NetInputDelayEstimator::c_WindowMs) leads.pop_front();
+		if (leads.empty()) return std::nullopt;
+		uint64_t spare = UINT64_MAX;
+		for (const auto& [when, lead]: leads) spare = std::min(spare, lead);
+		const uint64_t needed = spare > current ? 0 : static_cast<uint64_t>(current) + 1 - spare;
+		const uint64_t delay = std::max<uint64_t>(proposed, needed);
+		return delay < current ? std::optional<uint16_t>{static_cast<uint16_t>(delay)} : std::nullopt;
+	}
+
 	void NetLockstepCoordinator::TickTiming(uint64_t nowMs) {
 		if (!IsRunning() || m_Playback) return;
 		const bool host = m_Config.localPeerId == GetHostPeerId();
@@ -5739,8 +5755,9 @@ namespace RTE {
 				if (const uint32_t jitter = estimator.JitterMs(); jitter > 0 || stats.jitterMs == 0) stats.jitterMs = jitter;
 				stats.delayFrames = InputDelayAt(peer, m_Stats.nextFrame);
 				if (host && m_Config.adaptiveInputDelay) {
-					if (const auto delay = estimator.Change(nowMs, stats.delayFrames, m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames))
-						ProposeInputDelay(peer, *delay, FutureTimingFrame());
+					std::optional<uint16_t> delay = estimator.Change(nowMs, stats.delayFrames, m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
+					if (delay && *delay < stats.delayFrames) delay = SlackLimitedDecrease(peer, *delay, stats.delayFrames, nowMs);
+					if (delay) ProposeInputDelay(peer, *delay, FutureTimingFrame());
 				}
 			}
 		}
@@ -6380,6 +6397,12 @@ namespace RTE {
 		}
 		peerFrames[frame.senderPeerId] = frame.frames;
 		peerStats.acceptedThroughFrame = std::max(peerStats.acceptedThroughFrame, frame.targetFrame);
+		if (!windowCopy && m_Config.adaptiveInputDelay && m_Config.localPeerId == GetHostPeerId()) {
+			const uint64_t simNext = m_LastDeliveredFrame ? *m_LastDeliveredFrame + 1 : m_Config.startFrame;
+			auto& leads = m_ArrivalLeads[frame.senderPeerId];
+			leads.emplace_back(nowMs, frame.targetFrame > simNext ? frame.targetFrame - simNext : 0);
+			while (!leads.empty() && nowMs - leads.front().first > NetInputDelayEstimator::c_WindowMs) leads.pop_front();
+		}
 		static const auto observeTarget = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
 		if (observeTarget && frame.targetFrame == *observeTarget) {
 			std::cout << "[lockstep-test] received peer=" << static_cast<int>(frame.senderPeerId)
