@@ -1680,7 +1680,8 @@ namespace RTE {
 			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.session = &hostSession;
 			hostConfig.matchConfig = MakeWorldConfig(); hostConfig.autoStart = false; hostConfig.autoInputDelay = true;
 			hostConfig.matchConfig.peerInputDelayFrames.clear();
-			hostConfig.remoteTransportPeerIds = {{2, residentConnection}};
+			// The resident arrives through the session like the late connection, so the lobby seats it and sizes the delay list.
+			(void)residentConnection;
 			if (!host.Start(hostWire, hostConfig, &error)) return Fail(error);
 			try {
 				for (int i = 0; i < 5; ++i) { host.Tick(now); hostWire.AdvanceTimeMs(10); now += 10; }
