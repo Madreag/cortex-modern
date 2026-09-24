@@ -9535,6 +9535,95 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		// A classic round hears an announced leave before its frame: the leaver's own inputs drive its units until that frame on every
+		// peer, and only from it does a survivor take them over, or two peers would produce the same actor's frames.
+		bool TestAClassicLeaverDrivesItsUnitsUntilItsFrame(std::string* error) {
+			const uint16_t port = 43197;
+			const uint64_t sessionId = 0x7000000000000197ULL;
+			LoopbackTransport hostT, leaverT, stayerT;
+			if (!hostT.StartHost(port, error) || !leaverT.Connect("loopback", port, error) || !stayerT.Connect("loopback", port, error)) {
+				return false;
+			}
+			NetMatchConfig roster = NetMatchConfigUtil::MakeDefault(sessionId);
+			roster.peerCount = 3;
+			roster.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Leaver"}, NetMatchPlayerSlot{3, 2, false, "Stayer"}};
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.inputDelayFrames = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.matchConfig = roster;
+				return c;
+			};
+			NetLockstepCoordinator host, leaver, stayer;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) || !leaver.Start(leaverT, cfg(2, {{1, 1}}, false), error) ||
+			    !stayer.Start(stayerT, cfg(3, {{1, 1}}, false), error)) {
+				return false;
+			}
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now); leaver.Tick(now); stayer.Tick(now);
+					if (done()) return true;
+					hostT.AdvanceTimeMs(5); leaverT.AdvanceTimeMs(5); stayerT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && leaver.IsRunning() && stayer.IsRunning(); })) {
+				*error = "the classic leave round never started";
+				return false;
+			}
+			// Every peer produces its delayed inputs for frames 0..5; the survivors commit 0..2 before the leaver announces its leave.
+			for (uint64_t f = 0; f < 6; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) || !leaver.QueueLocalInput(f, {MakeFrame(200, f + 1)}, {}, error) ||
+				    !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) return false;
+			}
+			NetLockstepReadyFrame ready;
+			uint64_t hostCommitted = 0, stayerCommitted = 0;
+			const auto pop = [&](uint64_t through) {
+				while (hostCommitted <= through && host.PopReadyFrame(ready)) { (void)host.FinishSimulationTick(ready.frame); ++hostCommitted; }
+				while (stayerCommitted <= through && stayer.PopReadyFrame(ready)) { (void)stayer.FinishSimulationTick(ready.frame); ++stayerCommitted; }
+				return hostCommitted > through && stayerCommitted > through;
+			};
+			if (!drive(2000, [&] { return pop(2); })) {
+				*error = "the classic leave round never committed its first frames";
+				return false;
+			}
+			leaver.Leave("bye");
+			if (!drive(3000, [&] { return host.GetPeerLeaveFrames().count(2) != 0 && stayer.GetPeerLeaveFrames().count(2) != 0; })) {
+				*error = "the announced leave never reached both survivors";
+				return false;
+			}
+			const uint64_t leaveFrame = host.GetPeerLeaveFrames().at(2);
+			const int64_t leaverUnit = 200;
+			const uint8_t beforeHost = host.ResolveActorOwner(leaverUnit, 1, false), beforeStayer = stayer.ResolveActorOwner(leaverUnit, 1, false);
+			if (leaveFrame <= 3 || beforeHost != 2 || beforeStayer != 2) {
+				*error = "a survivor took the leaver's units before its leave frame: leave_frame=" + std::to_string(leaveFrame) +
+				         " owner_host=" + std::to_string(beforeHost) + " owner_stayer=" + std::to_string(beforeStayer);
+				return false;
+			}
+			for (uint64_t f = 6; f <= leaveFrame + 1; ++f) {
+				if (!host.QueueLocalInput(f, {MakeFrame(100, f + 1)}, {}, error) || !stayer.QueueLocalInput(f, {MakeFrame(300, f + 1)}, {}, error)) return false;
+			}
+			if (!drive(3000, [&] { return pop(leaveFrame); })) {
+				*error = "the survivors never committed the leave frame " + std::to_string(leaveFrame);
+				return false;
+			}
+			const uint8_t afterHost = host.ResolveActorOwner(leaverUnit, 1, false), afterStayer = stayer.ResolveActorOwner(leaverUnit, 1, false);
+			if (afterHost != 1 || afterStayer != 1) {
+				*error = "the leaver's units did not pass to the host at the leave frame: owner_host=" + std::to_string(afterHost) + " owner_stayer=" + std::to_string(afterStayer);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_classic_leaver_drives_its_units_until_its_frame leave_frame=" << leaveFrame << std::endl;
+			return true;
+		}
+
 		// B1: the substitution scenario at the resync save. One of two remotes drops, its seat is held
 		// for its reclaim window, and the OTHER remote plays on - which is exactly what the four
 		// substitution gates set up. A scripted outcome the absent player produced must wait for that
@@ -10244,12 +10333,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 			}
 			NetLockstepReadyFrame ready;
-			size_t committed = 0;
+			size_t committed = 0, stayerCommitted = 0;
+			// Both peers still in the round stand on the same committed frame, where their answers are compared.
 			if (!drive(4000, [&] {
 					while (host.PopReadyFrame(ready)) {
 						++committed;
 					}
-					return committed >= 2;
+					while (clientB.PopReadyFrame(ready)) {
+						++stayerCommitted;
+					}
+					return committed >= 2 && stayerCommitted >= 2;
 				})) {
 				*error = "the held-seat ownership fixture never committed a frame";
 				return false;
@@ -20072,6 +20165,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestB2SeatSnapshotResyncSeedsNewPeer(&error) ||
 		    !TestB2SeatSnapshotDoesNotReviveDepartedTransport(&error) ||
 		    !TestAnnouncedLeaveHoldsNothing(&error) ||
+		    !TestAClassicLeaverDrivesItsUnitsUntilItsFrame(&error) ||
 		    !TestHoldPauseCommitsNothing(&error) ||
 		    !TestHoldExpiredResumesWithoutSeat(&error) ||
 		    !TestHoldReclaimedResyncsAtLeaveFrame(&error) ||
