@@ -7780,6 +7780,16 @@ static std::string ResyncSaveName() {
 			const NetMatchServiceRequest route = m_HeldRejoinRoutes.front();
 			m_HeldRejoinRoutes.pop_front();
 			System::PrintDiagnosticLine("[net-match] held rejoin: the host is gone; rejoining the successor at " + route.address + ":" + std::to_string(route.port));
+			{
+				// The ticket names the host its match is on; the successor hosts that match now, as a survivor's ticket says.
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				NetH4TicketRecord record;
+				m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+				if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded && record.hostAddress != route.address) {
+					record.hostAddress = route.address;
+					(void)m_TicketStore.Store(record, nullptr);
+				}
+			}
 			m_LeaveExchangeRun = true;
 			if (BeginTicketRejoinOnRoute(error, &route)) {
 				ScenarioRunner::SetWorldCatchUpPriorInputThrough(m_HeldRejoinPriorInput);
