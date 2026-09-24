@@ -993,6 +993,8 @@ namespace RTE {
 		static constexpr uint64_t c_HoldPauseMs = 20000;
 		/// How long past the host's own startup a bounded-wait round waits for a slow loader before the AI takes its seat.
 		static constexpr uint64_t c_StartupAnswerBudgetMs = 5000;
+		/// A sender's first second of play is judged by its startup ramp, not the bare slow-player bound.
+		static constexpr uint64_t c_StartupSettleTicks = 60;
 		static constexpr uint64_t c_HoldHeartbeatMs = 50;
 		/// Marks a PeerDropped notice that waives a fenced incarnation's frames instead of dropping its seat.
 		static constexpr std::string_view c_FrameWaiverPrefix = "fenced:";
