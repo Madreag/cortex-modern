@@ -33,6 +33,7 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 from run_sim_test import make_run, seed_settings  # noqa: E402
+from compare_sim_traces import compare_fullstate  # noqa: E402
 
 SCENARIO_DIR = TOOLS / "e2e"
 PORT_LO, PORT_HI = 49400, 49479
@@ -635,6 +636,10 @@ def review(scenario, capture, out):
             run_findings.append({"class": (capture.get("stop_finding") or {}).get("class", "unclassified"), "run": capture["name"], "peer": peer["peer"],
                                  "reason": (capture.get("stop_finding") or {}).get("reason") or peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
                                  "launch": peer.get("launch")})
+    for pair, verdict in (capture.get("fullstate") or {}).items():
+        if not verdict["passed"]:
+            run_findings.append({"class": "engine", "run": capture["name"], "peer": pair,
+                                 "reason": "full-state oracle: " + "; ".join(verdict["reasons"]), "launch": None})
     document = {"schema": 1, "scenario": scenario["name"], "title": scenario.get("title", ""),
                 "requires": scenario.get("requires", []),
                 "reviewer_reads": ["review.json", "<peer>-sheet.png", "<peer>.mp4"],
@@ -740,6 +745,9 @@ def run_one(options, scenario, run, run_index, out):
                   "VIDEO": peer_root / "video"}
         environment = stage_peer(scenario, peer, stage, tokens)
         args = peer_arguments(peer, tokens, options.fps)
+        # Every peer of a multi-peer run hashes its whole capture every N committed ticks; the pairs are compared after.
+        if getattr(options, "fullstate_every", 0) and len(peers) > 1:
+            args += ["-net-fullstate-hash-every", str(options.fullstate_every)]
         reference = peer.get("retain_runtime_from")
         retained = None
         if reference:
@@ -923,7 +931,13 @@ def run_one(options, scenario, run, run_index, out):
                           "error": records.get(name, {}).get("error"),
                           "manifest": read_manifest(video_dir), "index": read_index(video_dir),
                           "menu_script_failures": menu_script_failures(peer_root), **staged[name]})
-    return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted, "stop_finding": stop_finding}
+    fullstate = None
+    if getattr(options, "fullstate_every", 0) and len(peers) > 1:
+        first = peers[0]["name"]
+        fullstate = {f"{first}/{peer['name']}": compare_fullstate(root / first / "stdout.log", root / peer["name"] / "stdout.log")
+                     for peer in peers[1:]}
+    return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted, "stop_finding": stop_finding,
+            "fullstate": fullstate}
 
 
 def render(capture_run, fps, every, scratch_root=None, scratch_limit_bytes=SCRATCH_LIMIT):
@@ -1235,6 +1249,9 @@ def main():
     parser.add_argument("--scratch-limit-bytes", type=positive_bytes,
                         help=f"positive byte allowance; default {SCRATCH_LIMIT}, or the retained allowance when finalizing")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument("--fullstate-every", type=int, default=0,
+                        help="multi-peer runs: every N committed ticks each peer hashes its whole capture (-net-fullstate-hash-every); "
+                             "a pair that differs is an engine finding; 0 is off")
     options = parser.parse_args()
 
     if options.merge_peer_captures:
@@ -1261,6 +1278,8 @@ def main():
         parser.error("the engine records at 1-60 fps")
     if options.sheet_every < 1:
         parser.error("--sheet-every must be positive")
+    if options.fullstate_every < 0:
+        parser.error("--fullstate-every must be 0 or positive")
     if options.port is not None and not PORT_LO <= options.port <= PORT_HI:
         parser.error(f"this driver owns ports {PORT_LO}-{PORT_HI}")
     if os.environ.get("CCCP_HEADLESS", "1") != "1":

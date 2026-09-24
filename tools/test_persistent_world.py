@@ -827,7 +827,7 @@ def directory_resume_same_world_id() -> None:
         raise AssertionError("directory resume took a row without its token, the row now reads %r" % (listed,))
 
 
-def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT) -> None:
+def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullstate_every: int = 0) -> None:
     """A recording world cuts a segment at every checkpoint; each segment replays from that checkpoint.
 
     Written, NOT run (the 2026-09-16 order). The arm runs one short world round with the recorder
@@ -845,6 +845,8 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT) -> Non
     import run_sim_test
     import test_autosave_restore as restore
 
+    # Every N committed ticks both peers of each round hash their whole capture; each round's pair must match.
+    restore.FULLSTATE_EVERY = fullstate_every
     out = Path(out)
     world = out / "world"
     world.mkdir(parents=True, exist_ok=True)
@@ -932,6 +934,11 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT) -> Non
     assert resumed_report.get("segment") is True and resumed_report.get("segment_tick") == resume_tick, resumed_report
     assert resumed_report.get("world_id") == world_id, (resumed_report.get("world_id"), world_id)
     assert resumed_report.get("first_frame") == resume_tick + 1, (resumed_report.get("first_frame"), resume_tick)
+    if fullstate_every:
+        verdicts = restore.fullstate_pairs(out)
+        (out / "fullstate.json").write_text(json.dumps(verdicts, indent=2) + "\n", encoding="utf-8")
+        tripped = {name: verdict["reasons"] for name, verdict in verdicts.items() if not verdict["passed"]}
+        assert verdicts and not tripped, f"full-state oracle: {tripped or 'no two-peer round was sampled'}"
 
 def _printed_world_id(text: str) -> str:
     for line in (text or "").splitlines():
@@ -961,12 +968,26 @@ def host_restart_same_world_id(repo: Path, out: Path) -> None:
         raise AssertionError("world-id-did-not-survive-restart: " + repr(printed))
 
 
+USAGE = """usage: test_persistent_world.py [directory-resume | world-segment REPO [OUT] | host-restart REPO [OUT]] [--fullstate-every N]
+
+  --fullstate-every N  world-segment only: every N committed ticks both peers of each world round hash their whole
+                       capture (-net-fullstate-hash-every) and every round's pair must match; 0 is off"""
+
+
 if __name__ == "__main__":
+    if "-h" in sys.argv or "--help" in sys.argv:
+        print(USAGE)
+        sys.exit(0)
+    FULLSTATE_EVERY = 0
+    if "--fullstate-every" in sys.argv:
+        at = sys.argv.index("--fullstate-every")
+        FULLSTATE_EVERY = int(sys.argv[at + 1])
+        del sys.argv[at:at + 2]
     if len(sys.argv) > 1 and sys.argv[1] == "directory-resume":
         directory_resume_same_world_id()
         print("[directory-resume] PASS")
     elif len(sys.argv) > 1 and sys.argv[1] == "world-segment":
-        world_segment_replay(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()))
+        world_segment_replay(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()), fullstate_every=FULLSTATE_EVERY)
         print("[world-segment-replay] PASS")
         # Every launch went through run_sim_test.make_run: nothing here starts the executable itself.
     elif len(sys.argv) > 1 and sys.argv[1] == "host-restart":
