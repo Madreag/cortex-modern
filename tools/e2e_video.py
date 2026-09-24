@@ -236,7 +236,7 @@ def run_preflight(scenario, run, captures, tokens):
                 return {"class": "harness", "reason": "A same-run runtime may be reused only after its earlier owner ends"}
         elif reference and (not prior_peer(captures, reference) or not cross_run_ready(captures, {**reference, "ended": True})):
             return {"class": "harness", "reason": f"Retained runtime is unavailable: {reference}"}
-    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN", "DIRECTORY_ROOT"}
+    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN", "DIRECTORY_ROOT", "DIRECTORY_SESSION"}
     builtins.update(f"{prefix}_{peer['name']}" for peer in peers for prefix in ("STAGE", "PROBE_DIR", "VIDEO"))
     body = json.dumps(peers)
     for peer in peers:
@@ -248,6 +248,25 @@ def run_preflight(scenario, run, captures, tokens):
     if missing:
         return {"class": "harness", "reason": "Unresolved tokens: " + ", ".join(missing), "tokens": missing}
     return {"class": run.get("blocker_class", "engine"), "reason": run["blocked_by"]} if run.get("blocked_by") else None
+
+
+def directory_session(root, port):
+    """The session id this run's own directory lists for the run's port, once its host has registered."""
+    path = Path(root) / "listed.json" if root else None
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8")).get("sessions", []) if path and path.is_file() else []
+    except ValueError:
+        return None
+    return next((row["session_id"] for row in rows if row.get("listen_port") == port and row.get("session_id")), None)
+
+
+def bind_directory_session(staged_menu, session):
+    """A peer that joins by session id gets it written into its staged script just before it starts."""
+    path = Path(staged_menu)
+    if path.is_file() and "{DIRECTORY_SESSION}" in path.read_text(encoding="utf-8"):
+        path.write_text(path.read_text(encoding="utf-8").replace("{DIRECTORY_SESSION}", session), encoding="utf-8")
+        return True
+    return False
 
 
 def port_for(run_index, base):
@@ -842,6 +861,8 @@ def run_one(options, scenario, run, run_index, out):
     def gate_met(gate):
         if gate.get("run"):
             return cross_run_ready(getattr(options, "completed_runs", []), gate)
+        if gate.get("directory_listed") and not directory_session(shared.get("DIRECTORY_ROOT"), port):
+            return False
         name = gate["peer"]
         if gate.get("ended"):
             return name in records and records[name].get("exit_code") is not None
@@ -899,6 +920,9 @@ def run_one(options, scenario, run, run_index, out):
                     break
                 if failed.wait(float(peer.get("after_gate_delay_s", 0))):
                     break
+            session = directory_session(shared.get("DIRECTORY_ROOT"), port)
+            if session and bind_directory_session(Path(staged[name]["stage"]) / "menu.txt", session):
+                staged[name]["directory_session"] = session
             thread = threading.Thread(target=drive, args=(name,))
             threads.append(thread)
             thread.start()

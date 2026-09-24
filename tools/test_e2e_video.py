@@ -423,6 +423,16 @@ def check_listed_rows(results, scratch):
     (root / "stdout.log").write_text("[menu-script] assert_label TextJoinPort \"\" text=\"49402\" PASS\n", encoding="utf-8")
     _, evidence = driver.item_evidence(record, rows_item, 49402)
     ok &= row(results, "listed-rows/missing-readback-fails", evidence["probe"] == "fail" and evidence["own_session_rows"]["rows"] is None)
+    directory = root / "directory"
+    directory.mkdir()
+    ok &= row(results, "directory-session/unlisted-is-none", driver.directory_session(directory, 49475) is None)
+    (directory / "listed.json").write_text(json.dumps({"sessions": [{"listen_port": 49443, "session_id": "other"},
+                                                                     {"listen_port": 49475, "session_id": "ours"}]}), encoding="utf-8")
+    ok &= row(results, "directory-session/own-port-row", driver.directory_session(directory, 49475) == "ours")
+    menu = root / "menu.txt"
+    menu.write_text("settext TextJoinAddress session:{DIRECTORY_SESSION}\n", encoding="utf-8")
+    bound = driver.bind_directory_session(menu, "ours")
+    ok &= row(results, "directory-session/bound-into-script", bound and menu.read_text(encoding="utf-8") == "settext TextJoinAddress session:ours\n")
     return ok
 
 
