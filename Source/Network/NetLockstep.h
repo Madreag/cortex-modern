@@ -1176,7 +1176,7 @@ namespace RTE {
 		/// Sends the padding a local delay rise owes before the tick that would wait for it.
 		void PadAheadOfDelayRise();
 		/// Asks for a sender's missing tick on the reliable lane, at most once a tick: a blip the window cannot bridge is not a hold.
-		void RequestMissingFrames(uint8_t senderPeerId, uint64_t frame, uint64_t nowMs);
+		void RequestMissingFrames(uint8_t senderPeerId, uint64_t frame, uint64_t nowMs, uint64_t waitedMs);
 		/// Resends this peer's own ticks from a frame to one peer on the reliable lane, repeating each tick's first bytes.
 		size_t ResendOwnFramesFrom(uint8_t requesterPeerId, uint64_t fromFrame);
 		/// Relay host: resends the ticks it forwarded for another sender, from a frame, to the peer that asked.
