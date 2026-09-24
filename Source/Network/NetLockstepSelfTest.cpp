@@ -4483,6 +4483,30 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		// A world joiner replays its tail with no playback coordinator. A seat the round held inside that tail is handed
+		// to the AI at the hold's frame there too, or the joiner keeps a seat the survivors gave the AI.
+		bool TestAWorldTailHandsAHeldSeatToTheAI(std::string* error) {
+			EnsureSwitchTestManagers();
+			const auto timer = g_TimerMan.SaveCheckpoint();
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			const auto finish = [&](bool result) { ScenarioRunner::ReleaseWorldCatchUp(); g_TimerMan.LoadCheckpoint(timer); return result; };
+			NetLockstepFrame held, after;
+			held.targetFrame = 41; held.commands = {{1, NetGameSeatHold{3, 0, 1, 2, 41}}};
+			after.targetFrame = 42;
+			if (!ScenarioRunner::InstallWorldCatchUp(40, {held, after}, error)) return finish(false);
+			NetLockstepReadyFrame ready;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(41, ready, error) || ready.aiHeldPeerIds != std::vector<uint8_t>{3}) {
+				*error = "a world tail crossed a hold without handing the seat to the AI (held=" + std::to_string(ready.aiHeldPeerIds.size()) + ")";
+				return finish(false);
+			}
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(42, ready, error) || !ready.aiHeldPeerIds.empty()) {
+				*error = "a world tail named a held seat on a frame with no hold record";
+				return finish(false);
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_world_tail_hands_a_held_seat_to_the_ai frame=41 seat=3" << std::endl;
+			return finish(true);
+		}
+
 		bool TestCommittedCatchUpKeepsSharedState(std::string* error) {
 			EnsureSwitchTestManagers();
 			const auto timer = g_TimerMan.SaveCheckpoint();
@@ -19743,6 +19767,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
+		    !TestAWorldTailHandsAHeldSeatToTheAI(&error) ||
 		    !TestCatchUpFencesTheReclaimGap(&error) ||
 		    !TestCatchUpFencesTheHoldGap(&error) ||
 		    !TestWorldTailKeepsItsLiveCoordinatorSeparate(&error) ||

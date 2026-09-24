@@ -326,15 +326,22 @@ float Controller::GetDigitalAimSpeed() const {
 }
 
 bool Controller::IsMouseControlled() const {
-	return (m_WireSchemeValid ? m_WireDeviceClass : GetLocalDeviceClass()) == WireDeviceClass::MouseKeyboard;
+	return SchemeClassForQuery() == WireDeviceClass::MouseKeyboard;
+}
+
+Controller::WireDeviceClass Controller::SchemeClassForQuery() const {
+	if (m_WireSchemeValid) return m_WireDeviceClass;
+	// A script inside a lockstep round reads the seat's committed device, the same on every peer.
+	if (uint8_t committed = 0; UInputMan::IsConstructed() && g_UInputMan.ScriptSeatDeviceClass(GetInputPlayer(), committed)) return static_cast<WireDeviceClass>(committed);
+	return GetLocalDeviceClass();
 }
 
 bool Controller::IsKeyboardOnlyControlled() const {
-	return (m_WireSchemeValid ? m_WireDeviceClass : GetLocalDeviceClass()) == WireDeviceClass::KeyboardOnly;
+	return SchemeClassForQuery() == WireDeviceClass::KeyboardOnly;
 }
 
 bool Controller::IsGamepadControlled() const {
-	return (m_WireSchemeValid ? m_WireDeviceClass : GetLocalDeviceClass()) == WireDeviceClass::Gamepad;
+	return SchemeClassForQuery() == WireDeviceClass::Gamepad;
 }
 
 int Controller::GetTeam() const {

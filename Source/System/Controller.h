@@ -331,6 +331,9 @@ namespace RTE {
 		/// @return Whether this is using mouse input at all.
 		bool IsMouseControlled() const;
 
+		/// The device class a query reads: the wire's, a round's committed seat class for a script, else this machine's.
+		WireDeviceClass SchemeClassForQuery() const;
+
 		/// Indicates whether this is only listening to keyboard input.
 		/// @return Whether this is only using keyboard input.
 		bool IsKeyboardOnlyControlled() const;

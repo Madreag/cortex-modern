@@ -367,13 +367,14 @@ namespace RTE {
 		/// @param whichPlayer The seat's player.
 		/// @param movement The mouse movement the committed frame carries.
 		/// @param deviceClass The seat's device class the committed frame carries (Controller::WireDeviceClass), 0 when it carries none.
+		/// @param buttons The seat's mouse buttons the committed frame carries (ControllerFrame::mouseButtons).
 		/// @param simTick The sim tick the frame was applied at.
-		void NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, uint8_t deviceClass, int64_t simTick);
+		void NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, uint8_t deviceClass, uint16_t buttons, int64_t simTick);
 
 		/// The device class a script inside a lockstep round reads for a seat: the one the seat's committed frame carries.
 		/// @param whichPlayer The seat's player.
 		/// @param deviceClass Set to the committed class (Controller::WireDeviceClass) when this returns true.
-		/// @return Whether the query is a script's inside a round and the seat has a committed class; otherwise the caller reads this machine's.
+		/// @return Whether the query is a script's inside a round; the class is None until the seat's first committed frame. Otherwise the caller reads this machine's.
 		bool ScriptSeatDeviceClass(int whichPlayer, uint8_t& deviceClass) const;
 
 		/// Set the mouse's analog emulation output to be of a specific normalized magnitude.
@@ -554,6 +555,7 @@ namespace RTE {
 		struct CommittedSeatMouse {
 			Vector movement;
 			uint8_t deviceClass = 0;
+			uint16_t buttons = 0;
 			int64_t tick = -1;
 		};
 		std::array<CommittedSeatMouse, Players::MaxPlayerCount> m_CommittedSeatMouse{};

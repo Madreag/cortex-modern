@@ -12,14 +12,16 @@ namespace RTE {
 	class Actor;
 
 	struct ControllerFrame {
-		/// Version 7 adds the one-shot hatch command; version 6 carries the other one-shot actor intents
-		/// and the owner's control scheme; version 5 frames (older recordings) apply the actor state
-		/// absolutely every tick.
-		static constexpr uint16_t c_Version = 7;
+		/// Version 8 adds the seat's mouse buttons; version 7 the one-shot hatch command; version 6 carries the
+		/// other one-shot actor intents and the owner's control scheme; version 5 frames (older recordings) apply
+		/// the actor state absolutely every tick.
+		static constexpr uint16_t c_Version = 8;
+		static constexpr uint16_t c_MouseButtonVersion = 8;
 		static constexpr uint16_t c_HatchVersion = 7;
 		static constexpr uint16_t c_PreHatchVersion = 6;
 		static constexpr uint16_t c_LegacyVersion = 5;
-		static constexpr size_t c_EncodedSize = 85;
+		static constexpr size_t c_EncodedSize = 87;
+		static constexpr size_t c_HatchEncodedSize = 85;
 		static constexpr size_t c_PreHatchEncodedSize = 84;
 		static constexpr size_t c_LegacyEncodedSize = 80;
 		static constexpr int c_AnalogScale = 32767;
@@ -55,6 +57,8 @@ namespace RTE {
 		float bgHandPosY = 0.0F;
 		float digitalAimSpeed = 1.0F;
 		uint8_t hatchCommand = static_cast<uint8_t>(HatchCommand::None);
+		/// The seat's mouse buttons this tick: bits 0-2 held, 3-5 pressed, 6-8 released (left, middle, right).
+		uint16_t mouseButtons = 0;
 		/// The semantics this frame was decoded with; the apply path dispatches on it.
 		uint16_t version = c_Version;
 
@@ -72,6 +76,8 @@ namespace RTE {
 		/// on the version that introduced it, so a later build still reads a version 7 recording's hatch.
 		bool HasHatchChannel() const { return version >= c_HatchVersion; }
 		bool IsLegacy() const { return version <= c_LegacyVersion; }
+		bool HasMouseButtonChannel() const { return version >= c_MouseButtonVersion; }
+		static constexpr uint16_t c_KnownMouseButtonBits = 0x01FFU;
 		static constexpr uint8_t c_KnownFlags = 0x0FU;
 		static constexpr uint8_t c_LegacyKnownFlags = 0x03U;
 	};
@@ -84,17 +90,20 @@ namespace RTE {
 		/// Applies only the frame's off-wire intents; the sim derives everything else from the controller.
 		static bool ApplyActorStateIntents(const ControllerFrame& frame, Actor& actor, std::string* error = nullptr);
 
-		static bool IsSupportedVersion(uint16_t version) { return version == ControllerFrame::c_Version || version == ControllerFrame::c_PreHatchVersion || version == ControllerFrame::c_LegacyVersion; }
+		static bool IsSupportedVersion(uint16_t version) {
+			return version == ControllerFrame::c_Version || version == ControllerFrame::c_HatchVersion || version == ControllerFrame::c_PreHatchVersion || version == ControllerFrame::c_LegacyVersion;
+		}
 		static size_t EncodedSizeFor(uint16_t version) {
 			if (version <= ControllerFrame::c_LegacyVersion) return ControllerFrame::c_LegacyEncodedSize;
-			return version <= ControllerFrame::c_PreHatchVersion ? ControllerFrame::c_PreHatchEncodedSize : ControllerFrame::c_EncodedSize;
+			if (version <= ControllerFrame::c_PreHatchVersion) return ControllerFrame::c_PreHatchEncodedSize;
+			return version < ControllerFrame::c_MouseButtonVersion ? ControllerFrame::c_HatchEncodedSize : ControllerFrame::c_EncodedSize;
 		}
 
 		static std::vector<uint8_t> Encode(const ControllerFrame& frame);
 		static bool Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error = nullptr, uint16_t version = ControllerFrame::c_Version);
 
 		/// Bits for a negotiated window tick after the first; the actor id always rides the wire.
-		static constexpr uint32_t c_DeltaAll = 0x1FFFU;
+		static constexpr uint32_t c_DeltaAll = 0x3FFFU;
 		static uint32_t ChangeMask(const ControllerFrame& from, const ControllerFrame& to);
 		static void EncodeDelta(std::vector<uint8_t>& out, const ControllerFrame& frame, const ControllerFrame* previous);
 		static bool DecodeDelta(const uint8_t* data, size_t size, ControllerFrame& outFrame, const ControllerFrame* previous, size_t* consumed, std::string* error = nullptr, uint16_t version = ControllerFrame::c_Version);

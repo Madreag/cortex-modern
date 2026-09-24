@@ -205,6 +205,16 @@ namespace RTE {
 		frame.SetQuickDisabled(controller.IsQuickDisabled());
 		frame.deviceClass = static_cast<uint8_t>(controller.GetLocalDeviceClass());
 		frame.digitalAimSpeed = controller.GetLocalDigitalAimSpeed();
+		// The seat's mouse buttons, read on the machine that owns the seat, answer every peer's scripts for it.
+		if (controller.GetSeatMode() == Controller::CIM_PLAYER && UInputMan::IsConstructed()) {
+			const int player = controller.GetSeatPlayerRaw();
+			for (int button = MouseButtons::MOUSE_LEFT; button < MouseButtons::MAX_MOUSE_BUTTONS; ++button) {
+				const int bit = button - MouseButtons::MOUSE_LEFT;
+				if (g_UInputMan.MouseButtonHeld(button, player)) frame.mouseButtons |= static_cast<uint16_t>(1U << bit);
+				if (g_UInputMan.MouseButtonPressedSim(button, player)) frame.mouseButtons |= static_cast<uint16_t>(1U << (bit + 3));
+				if (g_UInputMan.MouseButtonReleasedSim(button, player)) frame.mouseButtons |= static_cast<uint16_t>(1U << (bit + 6));
+			}
+		}
 		if (actor) {
 			// A direct AI write this tick rides as the intent value; the live state stays what the wire last applied.
 			const long long simTick = static_cast<long long>(g_TimerMan.GetSimUpdateCount());
@@ -276,7 +286,7 @@ namespace RTE {
 		if (frame.inputMode == static_cast<uint8_t>(Controller::CIM_PLAYER) && frame.playerRaw >= 0 && UInputMan::IsConstructed() &&
 		    (!MovableMan::IsConstructed() || !g_MovableMan.IsSpeculative())) {
 			g_UInputMan.NoteCommittedSeatMouse(frame.playerRaw, Vector(static_cast<float>(frame.mouseDeltaX), static_cast<float>(frame.mouseDeltaY)),
-			                                   frame.IsLegacy() ? uint8_t{0} : frame.deviceClass, static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
+			                                   frame.IsLegacy() ? uint8_t{0} : frame.deviceClass, frame.mouseButtons, static_cast<int64_t>(g_TimerMan.GetSimUpdateCount()));
 		}
 		return true;
 	}
@@ -363,6 +373,7 @@ namespace RTE {
 		AppendF32LE(out, frame.bgHandPosY);
 		AppendF32LE(out, frame.digitalAimSpeed);
 		AppendU8(out, frame.hatchCommand);
+		AppendU16LE(out, frame.mouseButtons);
 		return out;
 	}
 
@@ -387,6 +398,7 @@ namespace RTE {
 		if (!SameFloatBits(from.bgHandPosX, to.bgHandPosX) || !SameFloatBits(from.bgHandPosY, to.bgHandPosY)) mask |= 0x0400U;
 		if (!SameFloatBits(from.digitalAimSpeed, to.digitalAimSpeed)) mask |= 0x0800U;
 		if (from.hatchCommand != to.hatchCommand) mask |= 0x1000U;
+		if (from.mouseButtons != to.mouseButtons) mask |= 0x2000U;
 		return mask;
 	}
 
@@ -436,6 +448,7 @@ namespace RTE {
 		}
 		if (mask & 0x0800U) AppendF32LE(out, frame.digitalAimSpeed);
 		if (mask & 0x1000U) AppendU8(out, frame.hatchCommand);
+		if (mask & 0x2000U) AppendU16LE(out, frame.mouseButtons);
 	}
 
 	// The field rules a decoded frame must meet, whichever wire form carried it: a delta tick reaches the
@@ -460,6 +473,10 @@ namespace RTE {
 				SetError(error, "ControllerFrame hatch command is out of range.");
 				return false;
 			}
+		}
+		if ((frame.mouseButtons & ~(frame.HasMouseButtonChannel() ? ControllerFrame::c_KnownMouseButtonBits : 0U)) != 0) {
+			SetError(error, "ControllerFrame mouse button bits are reserved.");
+			return false;
 		}
 		if (frame.inputMode >= static_cast<uint8_t>(Controller::CIM_INPUTMODECOUNT)) {
 			SetError(error, "ControllerFrame input_mode is out of range.");
@@ -608,6 +625,13 @@ namespace RTE {
 			}
 			frame.hatchCommand = ReadU8(p);
 		}
+		if (mask & 0x2000U) {
+			if (!need(2)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.mouseButtons = ReadU16LE(p);
+		}
 		if (!ValidateDecodedFrame(frame, error)) {
 			return false;
 		}
@@ -657,6 +681,9 @@ namespace RTE {
 			frame.digitalAimSpeed = ReadF32LE(p);
 			if (frame.HasHatchChannel()) {
 				frame.hatchCommand = ReadU8(p);
+			}
+			if (frame.HasMouseButtonChannel()) {
+				frame.mouseButtons = ReadU16LE(p);
 			}
 		}
 		if (!ValidateDecodedFrame(frame, error)) {
@@ -733,6 +760,7 @@ namespace RTE {
 		frame.deviceClass = static_cast<uint8_t>(Controller::WireDeviceClass::Gamepad);
 		frame.digitalAimSpeed = 1.75F;
 		frame.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::Open);
+		frame.mouseButtons = 0x0109U;
 
 		const std::vector<uint8_t> encoded = ControllerFrameCodec::Encode(frame);
 		if (encoded.size() != ControllerFrame::c_EncodedSize) {
@@ -760,6 +788,7 @@ namespace RTE {
 		    decoded.deviceClass != frame.deviceClass ||
 		    decoded.digitalAimSpeed != frame.digitalAimSpeed ||
 		    decoded.hatchCommand != frame.hatchCommand ||
+		    decoded.mouseButtons != frame.mouseButtons ||
 		    decoded.version != ControllerFrame::c_Version) {
 			return fail("decoded scalar fields differ");
 		}
@@ -775,6 +804,39 @@ namespace RTE {
 			if (probe.HasHatchChannel() != (ControllerFrameCodec::EncodedSizeFor(supported) > ControllerFrame::c_PreHatchEncodedSize)) {
 				return fail("version " + std::to_string(supported) + " reads its hatch channel against the wrong version");
 			}
+		}
+
+		// A version 7 frame is the first 85 bytes: it carries the hatch and no mouse buttons.
+		std::vector<uint8_t> hatchBytes(encoded.begin(), encoded.begin() + static_cast<std::ptrdiff_t>(ControllerFrame::c_HatchEncodedSize));
+		ControllerFrame hatchOnly;
+		if (ControllerFrameCodec::Decode(hatchBytes.data(), hatchBytes.size(), hatchOnly, nullptr)) {
+			return fail("a version 7 sized frame decoded as the current version");
+		}
+		if (!ControllerFrameCodec::Decode(hatchBytes.data(), hatchBytes.size(), hatchOnly, &error, ControllerFrame::c_HatchVersion)) {
+			return fail("version 7 frame decode failed: " + error);
+		}
+		if (hatchOnly.HasMouseButtonChannel() || hatchOnly.mouseButtons != 0 || hatchOnly.hatchCommand != frame.hatchCommand || !hatchOnly.HasHatchChannel()) {
+			return fail("version 7 frame fields differ");
+		}
+		ControllerFrame badButtons = frame;
+		badButtons.mouseButtons = 0x0200U;
+		const std::vector<uint8_t> badButtonBytes = ControllerFrameCodec::Encode(badButtons);
+		if (ControllerFrameCodec::Decode(badButtonBytes.data(), badButtonBytes.size(), decoded, nullptr)) {
+			return fail("reserved mouse button bits were accepted");
+		}
+		// A button change alone rides the delta form under its own bit.
+		ControllerFrame released = frame;
+		released.mouseButtons = 0x0040U;
+		if (ControllerFrameCodec::ChangeMask(frame, released) != 0x2000U) {
+			return fail("a mouse button change did not set its own delta bit");
+		}
+		std::vector<uint8_t> delta;
+		ControllerFrameCodec::EncodeDelta(delta, released, &frame);
+		ControllerFrame fromDelta;
+		size_t consumed = 0;
+		if (!ControllerFrameCodec::DecodeDelta(delta.data(), delta.size(), fromDelta, &frame, &consumed, &error) || consumed != delta.size() ||
+		    fromDelta.mouseButtons != released.mouseButtons || fromDelta.hatchCommand != frame.hatchCommand) {
+			return fail("a mouse button delta did not round-trip: " + error);
 		}
 
 		// A version 6 frame is the first 84 bytes: it keeps the intent semantics and simply has no hatch channel.
