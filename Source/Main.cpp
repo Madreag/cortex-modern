@@ -6081,9 +6081,14 @@ void RunGameLoop() {
 				}
 			}
 			// Test lever: the full-state oracle samples the same boundary the autosave captures at, on every live peer alike.
-			if (s_netFullStateEvery > 0 && !lockstepPausedTick && simTick % s_netFullStateEvery == 0 && ScenarioRunner::IsLockstepControllerSyncActive() &&
+			// A round's first committed tick is sampled too, so a round shorter than the interval still has a sample its peers share.
+			if (s_netFullStateEvery > 0 && !lockstepPausedTick && ScenarioRunner::IsLockstepControllerSyncActive() &&
 			    !ScenarioRunner::WorldCatchUpActive() && ScenarioRunner::GetLockstepAppliedFrame() == simTick && g_ActivityMan.ActivityRunning()) {
-				g_ActivityMan.CaptureFullStateHash(simTick, ScenarioRunner::GetLockstepRoundId(), s_netFullStateDump);
+				static uint64_t s_fullStateSampledRound = 0;
+				const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+				const bool roundStart = round != s_fullStateSampledRound;
+				s_fullStateSampledRound = round;
+				if (roundStart || simTick % s_netFullStateEvery == 0) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			TelemetryBundle::CaptureAtTickBoundary();
