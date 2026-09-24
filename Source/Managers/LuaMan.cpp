@@ -93,6 +93,7 @@ extern "C" {
 #include <typeinfo>
 #include <iostream>
 #include <unordered_map>
+#include <random>
 #include <unordered_set>
 
 #include "tracy/Tracy.hpp"
@@ -848,6 +849,15 @@ end
 		return PushScriptGraphCapturedText(state, ScriptGraphNumber(luaL_checknumber(state, 1), lua_toboolean(state, 2) != 0));
 	}
 
+	// A fragment only this machine holds: the text is unchanged, the shared text leaves it out.
+	static int ScriptGraphCapturePeer(lua_State* state) {
+		CheckpointBuffer buffer;
+		buffer.PeerBegin();
+		buffer.Child(ScriptGraphTextValue(state, 1));
+		buffer.PeerEnd();
+		return PushScriptGraphCapturedText(state, buffer.Finish());
+	}
+
 	static int ScriptGraphCaptureString(lua_State* state) {
 		CheckpointBuffer buffer;
 		if (lua_type(state, 1) == LUA_TSTRING) {
@@ -917,6 +927,7 @@ end
 		lua_pushcfunction(state, [](lua_State* value) -> int { lua_pushboolean(value, s_ScriptGraphCapture != nullptr); return 1; });
 		lua_setfield(state, -2, "active");
 		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureNumber>); lua_setfield(state, -2, "number");
+		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCapturePeer>); lua_setfield(state, -2, "peer");
 		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureString>); lua_setfield(state, -2, "string");
 		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureJoin>); lua_setfield(state, -2, "join");
 		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureBytecode>); lua_setfield(state, -2, "bytecode");
@@ -1127,6 +1138,18 @@ local function stringToken(s)
 	if capturing then return captureNative.string(s) end
 	return "s" .. #s .. ":" .. s
 end
+
+-- A fragment only this machine holds (a timer's wall clock); the text is the same either way. A frozen worker writes plain
+-- text, so it brackets the fragment with the mark its capture strips again.
+local function peerText(text)
+	if capturing then return captureNative.peer(text) end
+	local mark = captureNative and captureNative.peerMark
+	if mark then return mark .. text .. mark end
+	return text
+end
+
+-- A seat's controller, menus and banners are this machine's interface, as the activity keeps them.
+local SEAT_INTERFACE = { ["player-controller"] = true, ["buy-menu"] = true, ["editor-menu"] = true, ["yellow-banner"] = true, ["red-banner"] = true }
 
 -- Capture-owned nodes are numbered in walk order in a band of their own above every birth, so the
 -- bytes of an unchanged state do not follow where its birth counter stands.
@@ -1379,7 +1402,7 @@ local function visitUserdata(value, ctx)
 		for _, number in ipairs(native[2]) do fields[#fields + 1] = "n" .. numberText(number) .. ";" end
 		return userdataNode(value, ctx, "P" .. outputNumber(#fields) .. ";" .. concatenate(fields))
 	elseif kind == "timer" then
-		return userdataNode(value, ctx, "m" .. numberText(value.StartSimTimeTicks) .. "," .. numberText(value.SimTimeLimitTicks) .. "," .. numberText(value.StartRealTimeTicks) .. "," .. numberText(value.RealTimeLimitTicks) .. ";")
+		return userdataNode(value, ctx, "m" .. numberText(value.StartSimTimeTicks) .. "," .. numberText(value.SimTimeLimitTicks) .. peerText("," .. numberText(value.StartRealTimeTicks) .. "," .. numberText(value.RealTimeLimitTicks)) .. ";")
 	elseif kind == "vector-ref" then
 		return userdataNode(value, ctx, "w" .. numberText(native[2]) .. ":" .. stringToken(native[3]))
 	elseif kind == "controller-ref" then
@@ -1395,7 +1418,7 @@ local function visitUserdata(value, ctx)
 			payload = (typedOnly and "Z" or native[6] and "Y" or "x") .. visit(native[2], ctx) .. stringToken(native[3]) .. "n" .. outputNumber(native[4]) .. ";" .. (native[5] and "t;" or "f;")
 			if native[6] then
 				payload = payload .. stringToken(native[6])
-				if not typedOnly then payload = payload .. stringToken(native[7]) end
+				if not typedOnly then payload = payload .. (SEAT_INTERFACE[native[3]] and peerText(stringToken(native[7])) or stringToken(native[7])) end
 			end
 		end
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(_ScriptGraphInstance(value), ctx))
@@ -4405,6 +4428,8 @@ static bool ScriptGraphNativeAlive(lua_State* L, const luabind::detail::object_r
 	}
 	// An alarm lives for the frame that raised it and the next.
 	if (rep->crep() && std::strcmp(rep->crep()->name(), "AlarmEvent") == 0) return g_MovableMan.IsLiveAlarmEvent(static_cast<const AlarmEvent*>(rep->ptr()));
+	// A scene's Area ends with its scene; Void Wanderers keeps its launcher scene's zone past LoadScene.
+	if (rep->crep() && std::strcmp(rep->crep()->name(), "Area") == 0) return Scene::Area::IsLive(static_cast<const Scene::Area*>(rep->ptr()));
 	if (depth >= 8 || !rep->get_dependencies().is_valid()) return true;
 	bool member = false, alive = false;
 	rep->get_dependencies().get(L);
@@ -4897,7 +4922,7 @@ static int ScriptGraphSetInstance(lua_State* L) {
 static int ScriptGraphAreaBoxes(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	lua_newtable(L);
-	if (rep && rep->crep() && std::strcmp(rep->crep()->name(), "Area") == 0) {
+	if (rep && rep->crep() && std::strcmp(rep->crep()->name(), "Area") == 0 && ScriptGraphNativeAlive(L, rep)) {
 		int index = 0;
 		for (Box* box: static_cast<Scene::Area*>(rep->ptr())->GetBoxes()) {
 			lua_pushlightuserdata(L, box);
@@ -4910,7 +4935,7 @@ static int ScriptGraphAreaBoxes(lua_State* L) {
 static int ScriptGraphAreaBox(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	const int index = lua_tointeger(L, 2);
-	if (rep && rep->crep() && std::strcmp(rep->crep()->name(), "Area") == 0) {
+	if (rep && rep->crep() && std::strcmp(rep->crep()->name(), "Area") == 0 && ScriptGraphNativeAlive(L, rep)) {
 		const auto& boxes = static_cast<Scene::Area*>(rep->ptr())->GetBoxes();
 		if (index > 0 && static_cast<size_t>(index) <= boxes.size()) {
 			if (lua_toboolean(L, 3)) {
@@ -4941,7 +4966,7 @@ static int ScriptGraphSceneBoxOwner(lua_State* L) {
 		lua_pushnil(L);
 		while (lua_next(L, -2) != 0) {
 			auto* owner = luabind::detail::is_class_object(L, -1);
-			if (owner && owner->crep() && std::strcmp(owner->crep()->name(), "Area") == 0) {
+			if (owner && owner->crep() && std::strcmp(owner->crep()->name(), "Area") == 0 && ScriptGraphNativeAlive(L, owner)) {
 				if (const int index = find(static_cast<Scene::Area*>(owner->ptr()))) {
 					lua_pushinteger(L, index);
 					return 2;
@@ -5308,6 +5333,12 @@ static int ScriptGraphNative(lua_State* L) {
 	const luabind::detail::class_rep* crep = rep->crep();
 	const bool owned = (rep->flags() & luabind::detail::object_rep::owner) != 0;
 	const std::string className = crep->name();
+	// An Area a script kept past its scene's end is named, never read.
+	if (!owned && className == "Area" && !ScriptGraphNativeAlive(L, rep)) {
+		lua_pushstring(L, "invalid");
+		lua_pushstring(L, className.c_str());
+		return 2;
+	}
 	if (!owned && className == "Material") {
 		const auto& palette = g_SceneMan.GetMaterialPalette();
 		for (size_t index = 0; index < palette.size(); ++index) {
@@ -5888,7 +5919,7 @@ static int ScriptGraphDeadReference(lua_State* L) {
 	lua_getglobal(L, name);
 	if (!luabind::detail::is_class_rep(L, -1)) return luaL_error(L, "unknown dead reference class %s", name);
 	auto* type = static_cast<luabind::detail::class_rep*>(lua_touserdata(L, -1));
-	if (!ClassDerivesFrom(type, "MovableObject")) return luaL_error(L, "dead reference class is not a MovableObject");
+	if (!ClassDerivesFrom(type, "MovableObject") && std::strcmp(type->name(), "Area") != 0) return luaL_error(L, "dead reference class is not a MovableObject or an Area");
 	lua_pop(L, 1);
 	void* storage = lua_newuserdata(L, sizeof(luabind::detail::object_rep));
 	new (storage) luabind::detail::object_rep(nullptr, type, 0, nullptr);
@@ -6237,10 +6268,15 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		}
 		(void)frozenUs;
 		// A refusal is the archive's verdict and travels back whole; any other failure retires this state's frozen path.
-		text = CheckpointText::Deferred([image = std::move(image), unavailable = m_FrozenCaptureUnavailable, index = g_LuaMan.GetStateIndex(this)] {
+		// The worker writes plain text, so it brackets what only this machine holds with a mark no script value carries.
+		static const std::string peerMark = [] {
+			std::random_device device;
+			return std::format("\x01\x02peer-run-{:08x}{:08x}{:08x}{:08x}\x02\x01", device(), device(), device(), device());
+		}();
+		text = CheckpointText::DeferredWithPeerRuns([image = std::move(image), unavailable = m_FrozenCaptureUnavailable, index = g_LuaMan.GetStateIndex(this)] {
 			std::unordered_set<uint64_t> carried;
 			try {
-				return image->Serialize(c_ScriptGraphHelper, carried);
+				return image->Serialize(c_ScriptGraphHelper, carried, peerMark);
 			} catch (const ScriptGraphRefusal&) {
 				throw;
 			} catch (const std::exception& error) {
@@ -6248,7 +6284,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 				System::PrintDiagnosticLine(std::format("[frozen-graph] state={} retired: {}\n", index, error.what()));
 				throw;
 			}
-		}, bytes);
+		}, peerMark, bytes);
 		return true;
 	} catch (const std::exception& error) {
 		problems.emplace_back(std::string("frozen graph capture failed: ") + error.what());
@@ -7916,6 +7952,38 @@ assert(not zone:HasNoArea() and zone:IsInside(Vector(15, 25)) and zone:IsInside(
 		const bool passed = captured && same && !refused;
 		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_kept_area_travels_by_value captured=" << captured << " restored=" << restored << " same=" << same << " refused=" << refused << std::endl;
 		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] kept area: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+
+	{
+		// Void Wanderers keeps its launcher scene's Area past LoadScene. The capture names such an Area gone without reading
+		// it, a restore hands back a gone Area, and that one captures again. The storage stays mapped, so a read is not a crash here.
+		alignas(Scene::Area) static unsigned char storage[sizeof(Scene::Area)];
+		auto* ended = new (storage) Scene::Area("CheckpointEndedZone");
+		ended->AddBox(Box(Vector(10, 20), 30, 40));
+		luabind::object(m_State, ended).push(m_State);
+		lua_setglobal(m_State, "CheckpointEndedZone");
+		ended->~Area();
+		RunScriptString("CheckpointEndedKind = ({_ScriptGraphNative(CheckpointEndedZone)})[1]");
+		lua_getglobal(m_State, "CheckpointEndedKind");
+		const std::string kind = lua_isstring(m_State, -1) ? lua_tostring(m_State, -1) : "";
+		lua_pop(m_State, 1);
+		std::string saved;
+		CheckpointText frozen, again;
+		std::vector<std::string> problems;
+		const bool captured = SerializeScriptGraph(saved, problems) && CaptureScriptGraph(frozen, problems, true);
+		RunScriptString("CheckpointEndedZone = nil");
+		const bool restored = captured && RestoreScriptGraph(saved, problems);
+		const bool gone = restored && RunScriptString(R"lua(
+assert(CheckpointEndedZone ~= nil, "the ended area did not come back")
+assert(({_ScriptGraphNative(CheckpointEndedZone)})[1] == "invalid", "the restored area is not named gone")
+)lua") == 0;
+		const bool capturedAgain = gone && CaptureScriptGraph(again, problems, true);
+		RunScriptString("CheckpointEndedZone = nil; CheckpointEndedKind = nil");
+		const bool passed = kind == "invalid" && captured && gone && capturedAgain;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " an_area_its_scene_outlived_is_never_read kind=" << kind << " captured=" << captured
+		          << " restored=" << restored << " gone=" << gone << " captured_again=" << capturedAgain << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] ended area: " << problem << std::endl;
 		checkpointValues = passed && checkpointValues;
 	}
 
@@ -9984,8 +10052,14 @@ void LuaMan::PushPathCallbacks(lua_State* state) {
 		std::scoped_lock lock(context->mutex);
 		const auto found = context->nextId.find(state);
 		nextId = found == context->nextId.end() ? 0 : found->second;
-		nextOrder = context->nextOrder;
-		for (const auto& callback: context->callbacks) if (callback.state == state) callbacks.push_back(callback);
+		// The counter is machine-wide and each machine's own AI states draw from it, so a state carries only the bound its
+		// own callbacks need: a restore still orders every later callback after them.
+		nextOrder = 0;
+		for (const auto& callback: context->callbacks) {
+			if (callback.state != state) continue;
+			callbacks.push_back(callback);
+			nextOrder = std::max(nextOrder, callback.order + 1);
+		}
 		for (const auto& request: context->pending) if (request.state == state) pending.push_back(request);
 	}
 	PushScriptGraphScratchTable(state);

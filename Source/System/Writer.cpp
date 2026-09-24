@@ -70,6 +70,8 @@ struct CheckpointText::Data {
 	std::string values;
 	std::vector<CheckpointText> children;
 	std::function<std::string()> produce;
+	std::string peerMark;
+	mutable std::vector<std::pair<size_t, size_t>> peerRuns;
 	std::string identity;
 	size_t ownedBytes = 0;
 	bool hasPeer = false;
@@ -116,6 +118,35 @@ CheckpointText CheckpointText::Deferred(std::function<std::string()> produce, si
 	data->identity = std::move(identity);
 	return CheckpointText(std::move(data));
 }
+
+CheckpointText CheckpointText::DeferredWithPeerRuns(std::function<std::string()> produce, std::string mark, size_t ownedBytes) {
+	if (mark.empty()) throw std::logic_error("a per-peer run mark cannot be empty");
+	auto data = std::make_shared<Data>();
+	data->produce = std::move(produce);
+	data->peerMark = std::move(mark);
+	data->ownedBytes = ownedBytes;
+	data->hasPeer = true;
+	return CheckpointText(std::move(data));
+}
+
+namespace {
+	// Drops the marks a producer put around its per-peer runs and remembers where the runs lie in the text that is left.
+	void StripPeerMarks(std::string& text, const std::string& mark, std::vector<std::pair<size_t, size_t>>& runs) {
+		std::string kept;
+		kept.reserve(text.size());
+		size_t at = 0, runStart = 0;
+		bool inside = false;
+		for (size_t found = text.find(mark); found != std::string::npos; found = text.find(mark, at)) {
+			kept.append(text, at, found - at);
+			if (inside) runs.emplace_back(runStart, kept.size()); else runStart = kept.size();
+			inside = !inside;
+			at = found + mark.size();
+		}
+		if (inside) throw std::logic_error("a deferred checkpoint text left a per-peer run open");
+		kept.append(text, at, std::string::npos);
+		text = std::move(kept);
+	}
+} // namespace
 
 CheckpointText CheckpointText::Base64(bool url) const {
 	CheckpointBuffer buffer;
@@ -277,6 +308,7 @@ const std::string& CheckpointText::Text() const {
 		std::call_once(node->ready, [node] {
 			if (node->produce) {
 				node->text = node->produce();
+				if (!node->peerMark.empty()) StripPeerMarks(node->text, node->peerMark, node->peerRuns);
 				node->formatted.store(true, std::memory_order_release);
 				return;
 			}
@@ -357,6 +389,17 @@ std::string CheckpointText::SharedText(int64_t simTimeTicks) const {
 std::string CheckpointText::SharedText() const {
 	if (!m_Data || !m_Data->hasPeer) return Text();
 	if (m_Data->usesSimTime) return AtSimTime(m_Data->simTimeTicks).SharedText();
+	if (m_Data->produce) {
+		const std::string& text = Text();
+		std::string shared;
+		size_t at = 0;
+		for (const auto& [begin, end]: m_Data->peerRuns) {
+			shared.append(text, at, begin - at);
+			at = end;
+		}
+		shared.append(text, at, std::string::npos);
+		return shared;
+	}
 	const Data& node = *m_Data;
 	const std::string_view values = node.values;
 	std::string text;
