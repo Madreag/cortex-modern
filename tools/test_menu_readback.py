@@ -961,7 +961,8 @@ def scripts(case, port, root, size="960x540"):
             client_probe = {"schema": 1, "timeout_ms": 90000, "steps": [
                 {"op": "wait", "service": "Running", "screen": "Gameplay", "lockstep_frame_at_least": 30},
                 {"op": "signal", "name": "client_frame"},
-                {"op": "wait", "scope": "menu", "service": "Failed"},
+                # A menu-scope wait also runs on game frames: the landing is read once the menu itself is back.
+                {"op": "wait", "scope": "menu", "service": "Failed", "screen": "MultiplayerScreen"},
                 {"op": "assert_control", "scope": "menu", "control": "MultiplayerLandingPanel", "equals": {}},
                 {"op": "assert_control", "scope": "menu", "control": "MultiplayerScreen", "equals": {}},
                 {"op": "finish"}]}
