@@ -687,8 +687,8 @@ def parse_args(argv=None):
     parser.add_argument('--client-lua-states', type=int, default=4, help='retired: the build fixes the Lua state count')
     parser.add_argument('--host-pre-match-history', type=int, default=0, help='objects the host runtime spends before the match')
     parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
-    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES],
-                        help='run only the selected autosave arms, without baselines or the full matrix')
+    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES] + [name for name, *_ in TIMING_CASES],
+                        help='run only the selected autosave or timing arms, without baselines or the full matrix')
     parser.add_argument('--lag-arms', nargs='+', choices=LAG_ARMS,
                         help='run only these lag arms (each on and off) and the single-player baselines of their caps')
     parser.add_argument('--dry-run', action='store_true',
@@ -696,6 +696,13 @@ def parse_args(argv=None):
     parser.add_argument('--fullstate-every', type=int, default=0,
                         help='every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off')
     return parser, parser.parse_args(argv)
+
+
+def launch_timing_arm(root, index, case, port_base, script, exe_hash, timeout, counts):
+    """One loss or silent-seat arm, launched the same way by the full matrix and by --cases."""
+    name, lag, loss, silent = case
+    return launch_case(root, name, lag, 60, True, port_base + 8 + index % 2, script, exe_hash, timeout,
+                       loss_percent=loss, silent_tick=silent, **counts)
 
 
 def launch_autosave_arm(root, index, case, port_base, script, exe_hash, timeout, counts):
@@ -735,8 +742,9 @@ def main(argv=None):
     counts = dict(host_lua_states=args.host_lua_states, client_lua_states=args.client_lua_states,
                   host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
     if args.cases:
-        selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES) if case[0] in args.cases]
-        launch_selected = lambda script, exe_hash: [launch_autosave_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
+        selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES) if case[0] in args.cases] + \
+                   [(index, case) for index, case in enumerate(TIMING_CASES) if case[0] in args.cases]
+        launch_selected = lambda script, exe_hash: [(launch_timing_arm if len(case) == 4 else launch_autosave_arm)(root, index, case, args.port, script, exe_hash, args.timeout, counts)
                                                     for index, case in selected]
         if args.dry_run:
             print(json.dumps(dict(path='--cases', arms=dry_run_plan(lambda: launch_selected(root / 'input.txt', None))), indent=2), flush=True)
@@ -790,9 +798,8 @@ def main(argv=None):
                     name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
                     launch_case(root, name, lag, cap, enabled, port, script, exe_hash, args.timeout, **counts)
                     port += 1
-        for index, (name, lag, loss, silent) in enumerate(TIMING_CASES):
-            launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe_hash, args.timeout,
-                        loss_percent=loss, silent_tick=silent, **counts)
+        for index, case in enumerate(TIMING_CASES):
+            launch_timing_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
         for index, case in enumerate(AUTOSAVE_CASES):
             launch_autosave_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
     if args.dry_run:
