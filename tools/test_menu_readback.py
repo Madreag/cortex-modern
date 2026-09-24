@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable, file_sha256
 from test_lobby_lifecycle import wait_for_log
 from test_telemetry_bundle import set_visual_resolution
 
@@ -239,7 +239,7 @@ INPUT_SCRIPT = "# the probe opens the match pause menu with a real key edge\n"
 
 def sha(path):
     with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        return file_sha256(stream)
 
 
 def checks(control, parent):
@@ -1816,7 +1816,7 @@ def run_case(options, case, root, failing=None):
                 assert "unknown command" not in logs[who], logs[who][-3000:]
             else:
                 images += captures(run.cwd, {"source_revision": options.revision,
-                    "executable": str(options.repo / "Cortex Command.exe"), "exe_sha256": options.exe_sha,
+                    "executable": str(engine_executable(options.repo)), "exe_sha256": options.exe_sha,
                     "os": os.name, "configuration": "Final", "argv": record.get("argv", argv[who]),
                     "peer": who, "case": case, "logical_size": options.size})
                 if case == "net-activity" and who == "host":
@@ -2521,7 +2521,7 @@ def main():
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()
-    options.exe_sha = sha(options.repo / "Cortex Command.exe")
+    options.exe_sha = sha(engine_executable(options.repo))
     requested = options.size
 
     def sizes_for(case):

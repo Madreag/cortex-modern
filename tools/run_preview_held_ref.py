@@ -10,7 +10,7 @@ from pathlib import Path
 
 TREE = Path(r"D:\Projects\value-observations")
 sys.path.insert(0, str(TREE / "tools"))
-from run_sim_test import prepare_runtime  # noqa: E402
+from run_sim_test import prepare_runtime, engine_executable, file_sha256  # noqa: E402
 from win32_test_runner import IsolatedRun  # noqa: E402
 
 LOCK_EXCLUSIVE = Path(r"D:\mx\LEAD_EXCLUSIVE.lock")
@@ -28,7 +28,7 @@ LONG_SAMPLE = TREE / "Data/Base.rte/Sounds/Actors/JetpackLoop1.flac"
 
 def sha256(path: Path) -> str:
     with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        return file_sha256(handle)
 
 
 def cortex_running() -> bool:
@@ -77,7 +77,7 @@ def launch(out: Path, flags: list[str], files: dict[str, Path] | None, timeout: 
         if "sound_ai_deferral.lua" in files:
             (runtime / "Userdata/UserScenes.rte/ProbeShort.flac").write_bytes(SHORT_SAMPLE.read_bytes())
             (runtime / "Userdata/UserScenes.rte/ProbeLong.flac").write_bytes(LONG_SAMPLE.read_bytes())
-    exe = TREE / "Cortex Command.exe"
+    exe = engine_executable(TREE)
     argv = [str(exe), "-headless", *flags]
     env = {
         "TEMP": str(runtime / "Temp"),

@@ -52,6 +52,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from run_sim_test import engine_executable  # noqa: E402
 
 
 LABEL = "LabelMultiplayerLandingStatus"
@@ -90,7 +91,7 @@ def git(repo, *args, binary=False):
 def pin_state(repo):
     return {"head": git(repo, "rev-parse", "HEAD"),
             "diff_sha256": hashlib.sha256(git(repo, "diff", "HEAD", "--", binary=True)).hexdigest(),
-            "exe_sha256": sha256_file(Path(repo) / "Cortex Command.exe")}
+            "exe_sha256": sha256_file(engine_executable(Path(repo)))}
 
 
 class PinDrift(RuntimeError):

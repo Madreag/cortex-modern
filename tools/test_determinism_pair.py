@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from compare_sim_traces import load_trace, strict_compare
 from feel.retained_resume import PER_PEER_SUBSYSTEMS
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable
 
 PEERS = ("host", "client")
 PORTS = (49720, 49739)
@@ -266,7 +266,7 @@ def main() -> int:
     if not PORTS[0] <= options.port <= PORTS[1]:
         parser.error(f"port outside this driver's block {PORTS[0]}-{PORTS[1]}")
     case = CASES[options.case]
-    exe = options.repo / "Cortex Command.exe"
+    exe = engine_executable(options.repo)
     if options.score_only:
         previous = json.loads((options.out / "result.json").read_text(encoding="utf-8"))
         identity, records, unchanged = previous["exe_sha256"], previous["records"], previous.get("binary_unchanged")

@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable
 from test_window_size_sim import sha256_file
 
 REPO = Path(__file__).resolve().parents[1]
@@ -64,7 +64,7 @@ def main() -> int:
             text += path.read_text(errors="replace")
     phases = {phase: {"tick": int(tick), "len": int(length)} for tick, phase, length in PHASE.findall(text)}
     dug = [{"tick": int(tick), "pixels": int(pixels)} for tick, pixels in DUG.findall(text)]
-    result = {"exe_sha256": sha256_file(options.repo / "Cortex Command.exe"), "fixture": str(fixture),
+    result = {"exe_sha256": sha256_file(engine_executable(options.repo)), "fixture": str(fixture),
               "exit_code": record.get("exit_code"), "timed_out": record.get("timed_out"),
               "dug": dug, "phases": phases,
               # True where the tick that dug the hole already pathed through it; a horizon answers False.

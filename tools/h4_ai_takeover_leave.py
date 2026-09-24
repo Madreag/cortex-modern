@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import re
 
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable, file_sha256
 
 
 def main() -> int:
@@ -24,9 +24,9 @@ def main() -> int:
         parser.error("the verification family owns the machine")
     repo, out = options.repo.resolve(), options.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    executable = repo / "Cortex Command.exe"
+    executable = engine_executable(repo)
     with executable.open("rb") as handle:
-        executable_sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
+        executable_sha256 = file_sha256(handle)
     os.environ["CCCP_HEADLESS"] = "1"
     run = make_run(repo, ["-net-lockstep-selftest"], out / "run", options.timeout,
                    env={"CCCP_HEADLESS": "1"})

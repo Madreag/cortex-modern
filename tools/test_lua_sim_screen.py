@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from compare_sim_traces import strict_compare
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable
 from test_telemetry_bundle import set_visual_resolution
 from test_window_size_sim import first_object_divergence, parse_size, sha256_file
 
@@ -100,7 +100,7 @@ def main() -> int:
     options.out.mkdir(parents=True, exist_ok=False)
     sizes = {"a": parse_size(options.a_size), "b": parse_size(options.b_size)}
     result = {"ticks": options.ticks, "seed": options.seed, "preset": PRESET,
-              "exe_sha256": sha256_file(options.repo / "Cortex Command.exe"), "runs": {}}
+              "exe_sha256": sha256_file(engine_executable(options.repo)), "runs": {}}
     for label, size in sizes.items():
         result["runs"][label] = run_one(options.repo, options.out / label, size, options.ticks,
                                         options.seed, options.timeout, options.sim_dump)

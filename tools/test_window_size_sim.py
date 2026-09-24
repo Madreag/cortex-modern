@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from compare_sim_traces import strict_compare
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable
 from test_telemetry_bundle import set_visual_resolution
 
 PEERS = ("host", "client")
@@ -165,7 +165,7 @@ def main() -> int:
                        mode=options.mode, module=options.user_module)
     result = {"sizes": {who: list(size) for who, size in sizes.items()}, "ticks": options.ticks,
               "preset": options.preset, "mode": options.mode,
-              "seed": options.seed, "exe_sha256": sha256_file(options.repo / "Cortex Command.exe"),
+              "seed": options.seed, "exe_sha256": sha256_file(engine_executable(options.repo)),
               "records": records}
     result["processes"] = {who: bool(records.get(who, {}).get("exit_code") == 0 and not records.get(who, {}).get("timed_out"))
                            for who in PEERS}
