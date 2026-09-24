@@ -819,6 +819,15 @@ void MainMenuGUI::OfferStoredRejoinOnEntry() {
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 }
 
+void MainMenuGUI::OfferHostLeftLandingOnEntry() {
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen || g_NetMatchService.GetState() != NetMatchServiceState::Failed ||
+	    g_NetMatchService.GetLobbySnapshot().errorText != "The host left the match") {
+		return;
+	}
+	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
+	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+}
+
 void MainMenuGUI::OfferRematchLobbyOnEntry() {
 	if (!g_NetMatchService.NeedsCompletedLobbyPump()) {
 		return;

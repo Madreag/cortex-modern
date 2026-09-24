@@ -826,6 +826,8 @@ namespace RTE {
 		bool HasPendingRecoveryStop() const { return m_PendingRecoveryStop.has_value(); }
 		/// The first frame the sim has not applied: a heal resumes the round here.
 		uint64_t GetResumeFrame() const { return m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick + 1 : m_Config.startFrame; }
+		/// Whether this peer has simulated any frame of the round.
+		bool HasCompletedSimulationTick() const { return m_LastCompletedSimulationTick.has_value(); }
 		bool FinishSimulationTick(uint64_t completedTick);
 		/// Waives the parked tick's frames for every peer it still needs whose transport the admission
 		/// plane has fenced or forgotten, so the tick commits and the pending stop fires at its boundary.

@@ -1929,6 +1929,8 @@ static std::string ResyncSaveName() {
 			m_InputDelayText.clear();
 			m_LeaveExchangeRun = false;
 			m_MatchWasRunning = false;
+			m_LandedWithoutFrame = false;
+			m_FailedWithoutFrame = false;
 			m_LeftMatch = false;
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
@@ -1988,6 +1990,7 @@ static std::string ResyncSaveName() {
 			if (m_CapturedRunnerReport.empty() && m_Runner && m_Session && m_Coordinator) {
 				m_CapturedRunnerReport = m_Runner->BuildReportJson(*m_Session, *m_Coordinator);
 			}
+			m_FailedWithoutFrame = m_Coordinator && !m_Coordinator->HasCompletedSimulationTick();
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
 			session = std::move(m_Session);
@@ -2497,6 +2500,18 @@ static std::string ResyncSaveName() {
 		}
 		if (!NetReconnectUx::RecoveryApplies(state == NetMatchServiceState::Failed, isHost, hasRecord, matchWasRunning)) {
 			return;
+		}
+		// A seat that committed no frame of the round has nothing to reclaim: losing the host lands it at once.
+		if (!m_ReconnectUx.IsActive()) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_LandedWithoutFrame) return;
+			if (m_FailedWithoutFrame) {
+				m_LandedWithoutFrame = true;
+				m_ErrorText = "The host left the match";
+				m_StatusText = m_ErrorText;
+				System::PrintDiagnosticLine("[net-match] resync failed: The host left the match before this seat committed a frame; nothing to reclaim, landing");
+				return;
+			}
 		}
 		if (m_ReconnectUx.GetState() == NetReconnectUxState::Retrying) {
 			m_ReconnectUx.NoteAttemptFailed(nowMs, reason);
@@ -5409,6 +5424,8 @@ static std::string ResyncSaveName() {
 				snapshot.members.push_back(member);
 			}
 		}
+		// A seat that landed when its host dropped names the members as of the failure: itself.
+		if (m_LandedWithoutFrame) std::erase_if(snapshot.members, [](const NetLobbyMember& member) { return !member.isLocal; });
 		if (snapshot.members.empty() && snapshot.active) {
 			NetLobbyMember local;
 			local.peerId = m_LocalPeerId;
