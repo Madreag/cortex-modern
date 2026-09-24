@@ -991,6 +991,8 @@ namespace RTE {
 		/// Whether any dropped seat is still waiting on a host resolution. The frame argument is the
 		/// applied tick the activity gate names; the answer no longer moves with a frame deadline.
 		bool IsSeatHeldForReclaimAtFrame(uint64_t frame) const;
+		/// How long past the host's own startup a bounded-wait round waits for a slow loader before the AI takes its seat.
+		static constexpr uint64_t c_StartupAnswerBudgetMs = 5000;
 		bool AnyDroppedSeatHeld() const { return !m_DroppedSeats.empty(); }
 		NetLockstepHoldResolution HeldSeatResolution(uint8_t peerId) const;
 		/// Host: end one held seat and tell every peer at the held frame.

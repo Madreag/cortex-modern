@@ -7155,7 +7155,8 @@ namespace RTE {
 		// A publication that never arrives cannot park the round: the wait gets the same answer budget
 		// the round gives any peer to answer a frame, and the bound judges a seat still silent after it.
 		if (!m_StartWaitAnnounced || m_Config.timeoutMs == 0) return false;
-		return nowMs >= m_StartWaitSinceMs && nowMs - m_StartWaitSinceMs >= m_Config.timeoutMs;
+		const uint64_t budgetMs = m_Config.substituteSlowPeers ? std::min<uint64_t>(m_Config.timeoutMs, c_StartupAnswerBudgetMs) : m_Config.timeoutMs;
+		return nowMs >= m_StartWaitSinceMs && nowMs - m_StartWaitSinceMs >= budgetMs;
 	}
 
 	void NetLockstepCoordinator::TickStartupWait(uint64_t nowMs) {
