@@ -142,6 +142,10 @@ namespace RTE {
 		NetLobbyStateTransfer BeginStateTransferToPeer(uint8_t peerId, std::vector<uint8_t> fileBytes);
 		/// Host: whether that peer answered that it already holds the resume checkpoint.
 		bool IsResumeHeldBy(uint8_t peerId) const { return m_ResumeHeldPeers.contains(peerId); }
+		/// The tick the round's opening resume offer names, or 0 when there is none.
+		uint64_t ResumeOfferTick() const { return m_Config.resumeMatchId.empty() ? 0 : m_Config.resumeTick; }
+		/// Stops offering the opening checkpoint: a peer that arrives once the round has moved past it joins on the newest image.
+		void RetireResumeOffer() { m_Config.resumeMatchId.clear(); m_Config.resumeTick = 0; m_Config.resumeDigest.clear(); m_Config.resumeSideStateHash.clear(); }
 		/// Client: whether this peer answered the host's resume offer with its own copy of the checkpoint.
 		bool AnsweredResumeHeld() const { return m_ResumeAnsweredHeld; }
 		/// Whether a joiner's image is waiting for the pump.

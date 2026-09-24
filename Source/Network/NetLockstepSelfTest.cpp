@@ -6921,6 +6921,148 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		/// One lane of the relay-rejection row: forged client ticks under each rule the relay drops by, then the round
+		/// played on. `summary` names what the survivor saw of them.
+		bool RelayRejectsForgedTicks(NetTransportLane lane, uint16_t port, std::string& summary, std::string* error) {
+			LoopbackTransport hostTransport, clientTransport, survivorTransport;
+			if (!hostTransport.StartHost(port, error) || !clientTransport.Connect("loopback", port, error) || !survivorTransport.Connect("loopback", port, error)) return false;
+			const auto config = [lane](uint8_t local, std::map<uint8_t, NetPeerId> remotes) {
+				NetLockstepConfig value;
+				value.sessionId = 0x9A44; value.roundId = 44; value.localPeerId = local; value.peerCount = 3;
+				value.timeoutMs = 20000; value.simTickMs = 1000.0 / 60.0;
+				value.remoteTransportPeerIds = std::move(remotes); value.relayToOtherPeers = local == 1;
+				value.frameLane = lane; value.frameRedundancyTicks = lane == NetTransportLane::InputUnreliable ? 4 : 0;
+				value.matchConfig = NetMatchConfigUtil::MakeDefault(value.sessionId);
+				value.matchConfig.peerCount = 3; value.matchConfig.players.push_back({3, 2, false, "Survivor"});
+				value.ownershipPolicy = "team-owner";
+				return value;
+			};
+			NetLockstepCoordinator host, client, survivor;
+			if (!host.Start(hostTransport, config(1, {{2, 1}, {3, 2}}), error) || !client.Start(clientTransport, config(2, {{1, 1}}), error) ||
+			    !survivor.Start(survivorTransport, config(3, {{1, 1}}), error)) return false;
+			uint64_t now = 0;
+			std::map<uint64_t, uint64_t> hostSaw, survivorSaw;
+			const auto collect = [](NetLockstepCoordinator& peer, std::map<uint64_t, uint64_t>& saw) {
+				NetLockstepReadyFrame ready;
+				while (peer.PopReadyFrame(ready)) {
+					for (const ControllerFrame& frame : ready.remoteFrames) if (frame.actorUniqueID == 200 + static_cast<int64_t>(ready.frame)) saw[ready.frame] = frame.stateMask;
+				}
+			};
+			NetLockstepReadyFrame spare;
+			const auto step = [&] {
+				hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now); survivor.Tick(now);
+				collect(host, hostSaw); collect(survivor, survivorSaw);
+				while (client.PopReadyFrame(spare)) {}
+				++now;
+			};
+			for (int turn = 0; turn < 20; ++turn) step();
+			if (!host.IsRunning() || !client.IsRunning() || !survivor.IsRunning()) {
+				*error = "the three-peer relay fixture did not start";
+				return false;
+			}
+			// A tick the client never sent, handed to the relay as if the client had sent it.
+			const auto inject = [&](uint64_t target, uint64_t mask) {
+				NetLockstepFrame forged;
+				forged.senderPeerId = 2; forged.targetFrame = target; forged.roundId = host.GetRoundId();
+				forged.frames = {MakeFrame(200 + static_cast<int64_t>(target), mask)};
+				std::vector<uint8_t> bytes;
+				if (!NetLockstepCodec::Encode({forged}, bytes)) return false;
+				host.InjectEvent({NetTransportEventType::PacketReceived, 1, lane, bytes, {}}, now);
+				return true;
+			};
+			constexpr uint64_t c_Ticks = 12;
+			for (uint64_t produced = 0; produced < c_Ticks; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100 + static_cast<int64_t>(produced), produced + 1)}, {}, error) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200 + static_cast<int64_t>(produced), produced + 11)}, {}, error) ||
+				    !survivor.QueueLocalInput(produced, {MakeFrame(300 + static_cast<int64_t>(produced), produced + 21)}, {}, error)) return false;
+				step();
+			}
+			for (int turn = 0; turn < 3000 && (hostSaw.size() < c_Ticks || survivorSaw.size() < c_Ticks); ++turn) step();
+			const auto dropsOf = [](const NetLockstepCoordinator& peer) {
+				const auto found = peer.GetStats().peers.find(2);
+				return found == peer.GetStats().peers.end() ? std::pair<uint64_t, uint64_t>{0, 0}
+				                                            : std::pair<uint64_t, uint64_t>{found->second.duplicateFrames, found->second.futureFrameDrops};
+			};
+			const auto hostBefore = dropsOf(host), survivorBefore = dropsOf(survivor);
+			const uint64_t newest = host.GetStats().peers.at(2).highestTargetFrame;
+			const uint64_t next = host.GetStats().nextFrame;
+			// Old: a tick every peer has committed. Duplicate: the client's newest tick again, with other contents.
+			// Future skew: a tick past the window any peer accepts. Before start: a tick below the round's first frame.
+			if (!inject(2, 9001) || !inject(newest, 9002) || !inject(next + NetLockstepCodec::c_MaxFutureFrameSkew + 5, 9003) || !inject(0, 9004)) {
+				*error = "a forged tick did not encode";
+				return false;
+			}
+			for (int turn = 0; turn < 200; ++turn) step();
+			const auto hostAfter = dropsOf(host), survivorAfter = dropsOf(survivor);
+			const uint64_t hostDuplicates = hostAfter.first - hostBefore.first, survivorDuplicates = survivorAfter.first - survivorBefore.first;
+			const uint64_t hostFuture = hostAfter.second - hostBefore.second, survivorFuture = survivorAfter.second - survivorBefore.second;
+			if (hostDuplicates < 3 || hostFuture != 1) {
+				*error = "the relay did not drop the forged ticks itself: duplicates " + std::to_string(hostDuplicates) + " future " + std::to_string(hostFuture);
+				return false;
+			}
+			// The future tick is new to the relay on either lane, so it is sent on and dropped behind it too.
+			if (survivorFuture != hostFuture) {
+				*error = "the survivor behind the relay kept a future tick the relay dropped: " + std::to_string(survivorFuture) + "/" + std::to_string(hostFuture);
+				return false;
+			}
+			// The reliable lane sends every tick on before its rules drop it; the unreliable lane sends a tick on once.
+			const bool reliable = lane == NetTransportLane::ControlReliable;
+			if (reliable ? survivorDuplicates != hostDuplicates : survivorDuplicates != 0) {
+				*error = "the survivor dropped " + std::to_string(survivorDuplicates) + " of the relay's " + std::to_string(hostDuplicates) + " old and repeated ticks on the " +
+				         (reliable ? "reliable lane, which sends every tick on" : "unreliable lane, which sends a tick on once");
+				return false;
+			}
+			// Gone: the client leaves, and a tick it never sent past its leave reaches the relay.
+			client.Leave("m3 row");
+			for (int turn = 0; turn < 200; ++turn) step();
+			if (!inject(host.GetStats().nextFrame + 2, 9005)) {
+				*error = "the forged tick past the leave did not encode";
+				return false;
+			}
+			for (uint64_t produced = c_Ticks; produced < c_Ticks + 40; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100 + static_cast<int64_t>(produced), produced + 1)}, {}, error) ||
+				    !survivor.QueueLocalInput(produced, {MakeFrame(300 + static_cast<int64_t>(produced), produced + 21)}, {}, error)) return false;
+				step();
+			}
+			for (int turn = 0; turn < 400; ++turn) step();
+			if (!host.IsRunning() || !survivor.IsRunning()) {
+				*error = "a forged tick stopped the round: host " + std::string(host.IsRunning() ? "running" : host.GetStats().timeoutReason) +
+				         ", survivor " + std::string(survivor.IsRunning() ? "running" : survivor.GetStats().timeoutReason);
+				return false;
+			}
+			if (hostSaw != survivorSaw) {
+				*error = "the host and the survivor committed different client ticks after the forged ones";
+				return false;
+			}
+			for (const auto& [tick, mask] : hostSaw) {
+				if (mask >= 9001) {
+					*error = "tick " + std::to_string(tick) + " committed the forged mask " + std::to_string(mask);
+					return false;
+				}
+			}
+			summary = std::string(reliable ? "reliable" : "unreliable") + ":duplicates=" + std::to_string(hostDuplicates) + "/" + std::to_string(survivorDuplicates) +
+			          ",future=" + std::to_string(hostFuture) + "/" + std::to_string(survivorFuture) + ",committed=" + std::to_string(hostSaw.size());
+			return true;
+		}
+
+		/// Every tick the relay rejects is rejected the same way behind it: the old, duplicate, too-far-ahead, before-start and
+		/// gone ticks of a sender never reach a commit on any peer, and the host and the survivor commit the same ticks.
+		bool TestTheRelayDropsEveryRejectedTickTheWayItsReceiversDo(std::string* error) {
+			std::string reliable, unreliable;
+			if (!RelayRejectsForgedTicks(NetTransportLane::ControlReliable, 49544, reliable, error)) {
+				*error = "reliable lane: " + *error;
+				return false;
+			}
+			if (!RelayRejectsForgedTicks(NetTransportLane::InputUnreliable, 49546, unreliable, error)) {
+				*error = "unreliable lane: " + *error;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS the_relay_drops_every_rejected_tick_the_way_its_receivers_do rules=old,duplicate,future_skew,before_start,gone "
+			          << reliable << " " << unreliable << std::endl;
+			return true;
+		}
+
 		bool TestFrameWindowSurvivesUnreliableLoss(std::string* error) {
 			const uint16_t port = 43082;
 			LoopbackTransportConfig faults;
@@ -19237,6 +19379,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAWindowReachesBackARoundTrip(&error) ||
 		    !TestALateTickIsReadPast(&error) ||
 		    !TestTheRelayForwardsATickItFirstReadInAWindow(&error) ||
+		    !TestTheRelayDropsEveryRejectedTickTheWayItsReceiversDo(&error) ||
 		    !TestFrameWindowStripsRelayWithoutCapability(&error) ||
 		    !TestFrameWindowHoldHeartbeatKeepsTicksOne(&error) ||
 		    !TestActivityGateAgreesAcrossPeers(&error) ||
