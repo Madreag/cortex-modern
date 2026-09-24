@@ -11816,31 +11816,42 @@ namespace {
 		return -1;
 	}
 
-	// The bindings expose many readers as non-const methods, so a non-const call on the world's objects runs only when its
-	// name says it reads: the accessors and tests, and the ray casts that only look (the see and unsee casts change the map).
-	bool PreviewFenceReadOnlyName(std::string_view name) {
-		static constexpr std::string_view readers[] = {"Get", "Is", "Has", "Find", "Count", "Any", "Can", "Needs", "Was", "Within", "Compare", "Estimate", "Element", "Analog", "LeftTill"};
-		static constexpr std::string_view named[] = {"ValidMO", "WhichTeamLeft", "OtherTeam", "NoTeamLeft", "OneOrNoneTeamsLeft", "OnlyOneTeamLeft", "FacingAngle", "ScriptEnabled",
-		                                             "PathFindingUpdated", "TeamFundsChanged", "CalculateTextHeight", "CalculateTextWidth", "SplitStringToFitWidth", "JustStartedEmitting",
-		                                             "FirearmsAreReloading", "DetectObstacle", "CastStrengthRay", "CastStrengthSumRay", "CastWeaknessRay", "CastMORay", "CastAllMOsRay",
-		                                             "CastFindMORay", "CastObstacleRay", "CastTerrainPenetrationRay"};
-		if (name.ends_with("Exists")) {
-			return true;
-		}
-		for (std::string_view reader: readers) {
-			// A reader's verb is followed by the next word, so "Is" does not take "Island".
-			if (name.starts_with(reader) && (name.size() == reader.size() || !std::islower(static_cast<unsigned char>(name[reader.size()])))) {
-				return true;
-			}
-		}
-		return std::find(std::begin(named), std::end(named), name) != std::end(named);
+	// Every binding here was read and writes nothing, though its declaration does not say so: the non-const readers of any
+	// class, and the manager reads without a reading verb. Anything else that is not a const read is dropped on an object the
+	// window does not own, so a binding added later stays out of a preview until it is read and listed. Left out on purpose:
+	// EstimateImpulse and the firearm's AI aim getters fill caches, and TeamFundsChanged clears the flag it reports.
+	bool PreviewFenceListedReader(std::string_view name) {
+		static constexpr std::string_view listed[] = {
+		    "ActivityPaused", "ActivityRunning", "AnalogAimValues", "AnalogAxisValue", "AnalogMoveValues", "AnyInput", "AnyJoyButtonPress", "AnyJoyInput", "AnyJoyPress",
+		    "AnyKeyPress", "AnyMouseButtonPress", "AnyPress", "AnyStartPress", "AnythingUnseen", "CalculateTextHeight", "CalculateTextWidth", "CanTriggerBurst",
+		    "CastAllMOsRay", "CastFindMORay", "CastMORay", "CastMaterialRay", "CastMaxStrengthRay", "CastNotMaterialRay", "CastObstacleRay", "CastStrengthRay",
+		    "CastStrengthSumRay", "CastTerrainPenetrationRay", "CastWeaknessRay", "DetectObstacle", "DirectoryExists", "DrawnSimUpdate", "ElementHeld", "ElementPressed",
+		    "ElementPressedSim", "ElementReleased", "ElementReleasedSim", "FileExists", "FindAltitude", "FindObjectByUniqueID", "ForceBounds", "GetAlarmPoint",
+		    "GetAllEntities", "GetAllEntitiesOfGroup", "GetAllSpritePixelPositions", "GetAllVisibleSpritePixelPositions", "GetAltitude", "GetArea", "GetBoxInside",
+		    "GetCalculatedMaxThrowVelIncludingArmThrowStrength", "GetClosestActor", "GetClosestEnemyActor", "GetClosestTeamActor", "GetControlledActor", "GetController",
+		    "GetCrabToHumanSpawnRatio", "GetDataModule", "GetDeliveryCount", "GetDirectoryList", "GetEntityDataLocation", "GetFileList", "GetFirstTeamActor",
+		    "GetFogOfWarEnabled", "GetForceOffset", "GetForceVector", "GetForcesCount", "GetImpulseOffset", "GetImpulseVector", "GetImpulsesCount", "GetLandingZone",
+		    "GetLastRayHitPos", "GetLimbPath", "GetLimbPathPushForce", "GetLimbPathSpeed", "GetLimbPathTravelSpeed", "GetLoadout", "GetLoadoutName", "GetMOFromID",
+		    "GetMOIDCount", "GetMOIDPixel", "GetMaterial", "GetMaterialFromID", "GetMetaPlayerOfInGamePlayer", "GetModuleID", "GetModuleIDFromPath", "GetNextActorInGroup",
+		    "GetNextTeamActor", "GetOfficialModuleCount", "GetOptionalArea", "GetOrderList", "GetOwnedItemsAmount", "GetParent", "GetPieCommand", "GetPlayer",
+		    "GetPlayerController", "GetPreset", "GetPrevActorInGroup", "GetPrevTeamActor", "GetRandomOfGroup", "GetRandomOfGroupInModuleSpace", "GetReloadTimer",
+		    "GetRootMOID", "GetRootParent", "GetRotAngleTarget", "GetScenePath", "GetScreenOcclusion", "GetSegment", "GetStartingGold", "GetTerrMatter", "GetTerrain",
+		    "GetTopLevelSoundSet", "GetTotalModuleCount", "GetTotalValue", "GetWaypointListSize", "GetWounds", "HasArea", "HasScript", "IsActor", "IsAtRest", "IsDevice",
+		    "IsInventoryEmpty", "IsMOSubtractionEnabled", "IsOfActor", "IsParticle", "IsParticleSettlingEnabled", "IsPastRealMS", "IsRecoiled", "IsShield", "IsTool",
+		    "IsUnseen", "IsWeapon", "JoyButtonHeld", "JoyButtonPressed", "JoyButtonReleased", "JoyDirectionHeld", "JoyDirectionPressed", "JoyDirectionReleased", "KeyHeld",
+		    "KeyPressed", "KeyReleased", "LeftTillRealMS", "LeftTillRealTimeLimitMS", "LeftTillRealTimeLimitS", "MouseButtonHeld", "MouseButtonPressed",
+		    "MouseButtonPressedSim", "MouseButtonReleased", "MouseButtonReleasedSim", "MouseUsedByPlayer", "MouseWheelMoved", "MovePointToGround", "NoTeamLeft",
+		    "ObscuredPoint", "OneOrNoneTeamsLeft", "OnlyOneTeamLeft", "OtherTeam", "PathFindingUpdated", "ScancodeHeld", "ScancodePressed", "ScancodeReleased",
+		    "ShortestDistance", "SnapPosition", "SplitStringToFitWidth", "TargetDistanceScalar", "TimeForSimUpdate", "ValidMO", "WhichJoyButtonPressed", "WhichTeamLeft",
+		    "WrapBox", "WrapPosition"};
+		return std::binary_search(std::begin(listed), std::end(listed), name);
 	}
 
 	// The engine's managers, as the bindings name them: constness is not trusted on these, a const EndActivity ends the match.
 	bool PreviewFenceManagerClass(std::string_view className) {
 		static constexpr std::string_view managers[] = {"ActivityManager", "AudioManager", "MusicManager", "ConsoleManager", "FrameManager", "MetaManager", "MovableManager",
 		                                                "PerformanceManager", "PostProcessManager", "PresetManager", "PrimitiveManager", "SceneManager", "CameraManager",
-		                                                "SettingsManager", "MetricsCollectorManager", "TimerManager", "UInputManager"};
+		                                                "SettingsManager", "MetricsCollectorManager", "TimerManager", "UInputManager", "LuaManager"};
 		return std::find(std::begin(managers), std::end(managers), className) != std::end(managers);
 	}
 
@@ -11849,26 +11860,17 @@ namespace {
 		return name.starts_with(verb) && (name.size() == verb.size() || !std::islower(static_cast<unsigned char>(name[verb.size()])));
 	}
 
-	// A manager call runs only when its name reads. The allow-list is every manager binding that reads without saying so:
-	// the scene's reading casts and positions (which write at most their own Vector argument), the text metrics, the input
-	// queries and the activity and timer tests.
-	bool PreviewFenceManagerReads(std::string_view name) {
+	// A manager call runs only when it is a const read or a listed one: constness alone is not trusted here.
+	bool PreviewFenceManagerReads(std::string_view name, bool isConst) {
 		static constexpr std::string_view verbs[] = {"Get", "Is", "Has", "Count", "Find", "Contains", "Can"};
-		static constexpr std::string_view reviewed[] = {
-		    "ActivityPaused", "ActivityRunning", "CalculateTextHeight", "CalculateTextWidth", "SplitStringToFitWidth", "ValidMO", "TargetDistanceScalar", "DrawnSimUpdate",
-		    "TimeForSimUpdate", "AnythingUnseen", "CastAllMOsRay", "CastFindMORay", "CastMORay", "CastMaterialRay", "CastMaxStrengthRay", "CastNotMaterialRay", "CastObstacleRay",
-		    "CastStrengthRay", "CastStrengthSumRay", "CastTerrainPenetrationRay", "CastWeaknessRay", "ForceBounds", "WrapPosition", "WrapBox", "SnapPosition", "ShortestDistance",
-		    "MovePointToGround", "ObscuredPoint", "AnalogAimValues", "AnalogAxisValue", "AnalogMoveValues", "AnyInput", "AnyJoyButtonPress", "AnyJoyInput", "AnyJoyPress",
-		    "AnyKeyPress", "AnyMouseButtonPress", "AnyPress", "AnyStartPress", "ElementHeld", "ElementPressed", "ElementPressedSim", "ElementReleased", "ElementReleasedSim",
-		    "JoyButtonHeld", "JoyButtonPressed", "JoyButtonReleased", "JoyDirectionHeld", "JoyDirectionPressed", "JoyDirectionReleased", "KeyHeld", "KeyPressed", "KeyReleased",
-		    "MouseButtonHeld", "MouseButtonPressed", "MouseButtonPressedSim", "MouseButtonReleased", "MouseButtonReleasedSim", "MouseUsedByPlayer", "MouseWheelMoved",
-		    "ScancodeHeld", "ScancodePressed", "ScancodeReleased", "WhichJoyButtonPressed"};
-		for (std::string_view verb: verbs) {
-			if (PreviewFenceNameStartsWith(name, verb)) {
-				return true;
+		if (isConst) {
+			for (std::string_view verb: verbs) {
+				if (PreviewFenceNameStartsWith(name, verb)) {
+					return true;
+				}
 			}
 		}
-		return std::find(std::begin(reviewed), std::end(reviewed), name) != std::end(reviewed);
+		return PreviewFenceListedReader(name);
 	}
 
 	// A const method that says it changes something is not trusted on an object the window does not own.
@@ -11905,7 +11907,7 @@ namespace {
 	bool PreviewFenceRuns(const char* className, const char* methodName, bool isConst) {
 		const std::string_view cls = className ? className : "";
 		const std::string_view name = methodName ? methodName : "";
-		const bool reads = PreviewFenceManagerClass(cls) ? PreviewFenceManagerReads(name) : isConst ? !PreviewFenceMutatorName(name) : PreviewFenceReadOnlyName(name);
+		const bool reads = PreviewFenceManagerClass(cls) ? PreviewFenceManagerReads(name, isConst) : (isConst && !PreviewFenceMutatorName(name)) || PreviewFenceListedReader(name);
 		if (!reads) {
 			PreviewFenceNoteDropped(std::string(cls.empty() ? "?" : cls) + ":" + std::string(name.empty() ? "?" : name), "on an object the preview does not own");
 		}
