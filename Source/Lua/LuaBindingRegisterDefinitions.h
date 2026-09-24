@@ -84,6 +84,7 @@ namespace RTE {
 	PER_LUA_BINDING(SceneObject) \
 	/* SceneLayer-Derived */ \
 	PER_LUA_BINDING(SLBackground) \
+	PER_LUA_BINDING(SLTerrain) \
 	/* Base Classes */ \
 	PER_LUA_BINDING(SoundSet) \
 	PER_LUA_BINDING(Gib) \
@@ -244,6 +245,7 @@ namespace RTE {
 		LuaBindingRegisterFunctionDeclarationForType(StaticSceneLayer);
 		LuaBindingRegisterFunctionDeclarationForType(SceneObject);
 		LuaBindingRegisterFunctionDeclarationForType(SLBackground);
+		LuaBindingRegisterFunctionDeclarationForType(SLTerrain);
 		LuaBindingRegisterFunctionDeclarationForType(SoundContainer);
 		LuaBindingRegisterFunctionDeclarationForType(SoundSet);
 		LuaBindingRegisterFunctionDeclarationForType(TDExplosive);
