@@ -1351,6 +1351,7 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 		out.simUpdateCount = simUpdateCount;
 		out.simTimeTicks = simTimeTicks;
 		out.uniqueIDCounter = uniqueIDCounter;
+		out.scriptRegistrationSerial = scriptRegistrationSerial;
 		out.joinQuarantine = std::move(joinQuarantine);
 		out.scriptGraphs = std::move(scriptGraphs);
 		out.runtimeGlobals = std::move(runtimeGlobals);
@@ -2458,6 +2459,13 @@ bool ActivityMan::RestartActivity() {
 		}
 		if (restored && !m_PendingCheckpoint.runtimeGlobals.empty()) restored = RestoreRuntimeGlobals(m_PendingCheckpoint.runtimeGlobals);
 		if (restored && m_PendingCheckpoint.uniqueIDCounter >= 0) MovableObject::PinUniqueIDCounter(m_PendingCheckpoint.uniqueIDCounter);
+		// Registrations continue where the image's writer stood, not where this process's earlier worlds left the count; only an
+		// object the restored world still holds may keep it higher.
+		if (restored && m_PendingCheckpoint.scriptRegistrationSerial >= 0) {
+			long serial = m_PendingCheckpoint.scriptRegistrationSerial;
+			for (const MovableObject* object: g_MovableMan.SnapshotKnownObjects()) serial = std::max(serial, object->GetScriptRegistrationSerial());
+			MovableObject::PinScriptRegistrationSerial(serial);
+		}
 		if (restored && m_PendingCheckpoint.afterRestore) {
 			g_MovableMan.SetRestoringSnapshot(true);
 			restored = m_Activity && m_PendingCheckpoint.afterRestore(*m_Activity);
