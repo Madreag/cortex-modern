@@ -2420,7 +2420,8 @@ namespace RTE {
 		if (!history.empty() && history.rbegin()->first > NetLockstepCodec::c_MaxFutureFrameSkew) {
 			history.erase(history.begin(), history.lower_bound(history.rbegin()->first - NetLockstepCodec::c_MaxFutureFrameSkew));
 		}
-		if (!s_LockstepCoordinator->InstallResyncInputs(authoritative, error)) return false;
+		// A playback's recording carries every committed frame from the checkpoint on, so nothing in flight is installed.
+		if (!s_LockstepCoordinator->IsReplayPlayback() && !s_LockstepCoordinator->InstallResyncInputs(authoritative, error)) return false;
 		s_LockstepControlOverrides = std::move(owners);
 		s_LockstepDroppedControlOverrides = std::move(dropped);
 		// A resync does not undo the first transfer; a new process restores it from the snapshot.
