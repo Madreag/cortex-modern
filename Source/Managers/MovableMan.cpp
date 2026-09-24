@@ -1925,7 +1925,7 @@ MovableObject* MovableMan::LookupMOID(MOID whichID) const {
 		// Anyways, until we can fix the god-awful abomination that is this game's memory ownership semantics, we're stuck with this
 		// Which is also technically undefined behaviour
 		MovableObject* candidate = m_MOIDIndex[whichID];
-		if (candidate->GetID() != whichID) {
+		if (!candidate || candidate->GetID() != whichID) {
 			return nullptr;
 		}
 
@@ -7628,7 +7628,15 @@ std::string MovableMan::SaveWorldStructure() const {
 	identities(m_Actors, state.cohorts[0]); identities(m_Items, state.cohorts[1]); identities(m_Particles, state.cohorts[2]);
 	identities(m_AddedActors, state.cohorts[3]); identities(m_AddedItems, state.cohorts[4]); identities(m_AddedParticles, state.cohorts[5]);
 	identities(m_ValidActors, state.validObjects[0]); identities(m_ValidItems, state.validObjects[1]); identities(m_ValidParticles, state.validObjects[2]);
-	identities(m_MOIDIndex, state.moidIndex);
+	// A slot can outlive the object drawn into it (a script that took the object may have freed it), so only a
+	// registered object names its own slot; a freed one is never read.
+	state.moidIndex.assign(m_MOIDIndex.size(), 0);
+	{
+		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+		for (const auto& [uid, known]: m_KnownObjects) {
+			if (const MOID id = known->GetID(); id > 0 && id < static_cast<MOID>(m_MOIDIndex.size()) && m_MOIDIndex[id] == known) state.moidIndex[id] = uid;
+		}
+	}
 	for (int team = 0; team < Activity::MaxTeamCount; ++team) {
 		identities(m_ActorRoster[team], state.rosters[team]); state.sortRoster[team] = m_SortTeamRoster[team];
 		state.teamMOIDCount[team] = m_TeamMOIDCount[team];
