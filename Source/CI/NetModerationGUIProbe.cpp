@@ -49,7 +49,7 @@ namespace {
 	struct Probe {
 		bool loaded = false, enabled = false, done = false, resultStarted = false;
 		size_t index = 0, gestureIndex = SIZE_MAX;
-		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0;
+		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, resultWrittenMs = 0;
 		Clock::time_point started;
 		std::filesystem::path directory;
 		Json script, result;
@@ -767,7 +767,12 @@ namespace {
 			++probe.index;
 			probe.stepRender = probe.renders;
 			probe.stepMs = NowMs();
-			WriteResult();
+			// The result grows by a full observation per step; rewriting all of it every frame made a long script its own
+			// peer's slowest work, so it is written at most once a second and always at the end.
+			if (probe.done || probe.stepMs >= probe.resultWrittenMs + 1000) {
+				WriteResult();
+				probe.resultWrittenMs = probe.stepMs;
+			}
 			if (probe.done) System::PrintDiagnosticLine("[net-ui-probe] PASS: completed " + std::to_string(probe.index) + " steps");
 		} catch (const std::exception& error) {
 			GUIInputWrapper::SetAutomationDriving(false);
