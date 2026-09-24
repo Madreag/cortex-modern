@@ -539,10 +539,13 @@ def item_evidence(record, item, port=None):
             return None, {"probe": "not-reached", "reason": f"No recorded marker {item['mark']}", "events": str(events_path)}
         index = starts[0]
         start = events[index]["wall_ms"]
-        end = next((event["wall_ms"] for event in events[index + 1:]
-                    if event["message"].startswith("video_mark ") and not event["message"].endswith(" PASS")), float("inf"))
+        following = next((position for position in range(index + 1, len(events))
+                          if events[position]["message"].startswith("video_mark ") and not events[position]["message"].endswith(" PASS")),
+                         len(events))
+        end = events[following]["wall_ms"] if following < len(events) else float("inf")
         rows = [row for row in rows if start <= row["wall_ms"] < end]
-        events = [event for event in events if start <= event["wall_ms"] < end]
+        # The marked events go by log order: an assert logged in the same millisecond as the next mark is still this one's.
+        events = events[index:following]
         evidence.update(events=str(events_path), marker=item["mark"])
     required = item.get("events", [])
     probe_path = Path(record.get("probe_dir", "")) / "net-ui-result.json"
