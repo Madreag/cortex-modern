@@ -50,6 +50,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
+from compare_sim_traces import compare_fullstate
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, read_live_hashes, split_passes
 from run_sim_test import make_run, engine_executable, file_sha256
 from feel_measure import stage_baseline
@@ -66,6 +67,8 @@ OFFER = re.compile(r"^\[autosave\] resume offer match=(\S+) tick=(\d+) (held loc
 HELD_LAUNCH = re.compile(r"^\[net-match\] launching from the held checkpoint: (\S+)$", re.MULTILINE)
 RECEIVED_LAUNCH = re.compile(r"^\[net-match\] launching from the received snapshot: (\S+)$", re.MULTILINE)
 FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
+# Every N committed ticks each peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
+FULLSTATE_EVERY = 0
 RETAINED_AUTOSAVES = 3  # The default of the NetworkAutosavesKept option (AutosaveStore::c_RetainedAutosaves), which
                         # these runs never set; the engine's own keep= value is held to it below.
 
@@ -74,6 +77,20 @@ WORLD_IDENTITY = re.compile(r"^\[net-world\] identity (\S+) boot=(\d+) round=(\d
 WORLD_START = re.compile(r"^\[net-lockstep\] start round=(\d+) frame=(\d+) local_peer=(\d+) peers=(\d+) input_delay=(\d+)$", re.MULTILINE)
 WORLD_LOBBY = re.compile(r"^\[net-match-service-e2e\] lobby_snapshot: [^\n]*\bactivity=Persistent World\b[^\n]*$", re.MULTILINE)
 WORLD_AGREED = re.compile(r'^\[autosave\] agreed match=(\S+) tick=(\d+) state=(".*")$', re.MULTILINE)
+
+
+def fullstate_args() -> list:
+    return ["-net-fullstate-hash-every", str(FULLSTATE_EVERY)] if FULLSTATE_EVERY else []
+
+
+def fullstate_pairs(root: Path) -> dict:
+    """The full-state oracle's verdict for every two-peer round under an arm's directory, keyed by the round's directory."""
+    results = {}
+    for host_log in sorted(Path(root).rglob("host/stdout.log")):
+        client_log = host_log.parent.parent / "client" / "stdout.log"
+        if client_log.is_file():
+            results[host_log.parent.parent.relative_to(root).as_posix()] = compare_fullstate(host_log, client_log)
+    return results
 
 
 def _seat_rows(root: Path, who: str) -> dict:
@@ -103,7 +120,7 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
                 "-tick-hashes", "-max-ticks", str(ticks), "-out", str(root / f"{who}_trace.json"),
                 "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
-        args += extra.get(who, [])
+        args += extra.get(who, []) + fullstate_args()
         runs[who] = make_run(repo, args, root / who, 420, env={"CCCP_HEADLESS": "1"})
         stage_baseline(runs[who], ticks)
 
@@ -373,6 +390,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
                 "-net-live-tick-hashes", str(first / f"{who}-live.jsonl"),
                 "-tick-hashes", "-max-ticks", "1200", "-out", str(first / f"{who}_trace.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
+        args += fullstate_args()
         runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1"})
         stage_baseline(runs[who], 1200)
 
@@ -426,6 +444,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
                 "-net-live-tick-hashes", str(second / f"{who}-live.jsonl"),
                 "-tick-hashes", "-max-ticks", str(resume_ticks), "-out", str(second / f"{who}_trace.json")]
         args += ["-net-host", "-net-resume-match", match_id, "-net-resume-tick", str(resume_tick)] if who == "host" else ["-net-join", "127.0.0.1"]
+        args += fullstate_args()
         resumed[who] = make_run(repo, args, second / who, 420, env={"CCCP_HEADLESS": "1"})
         stage_baseline(resumed[who], 1200)
         # What a restarted process finds on its own disk: its checkpoints, its manifests, its admission
@@ -498,7 +517,7 @@ def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list, o
         args = ["-net-dedicated", "-net-persistent-world", *args]
     else:
         args = ["-net-match-service-e2e", "-net-join", "127.0.0.1", *args]
-    return args + extra
+    return args + extra + fullstate_args()
 
 
 def _carry_world_state(source: Path, who: str, runtime: Path) -> None:
@@ -906,7 +925,13 @@ def main() -> int:
     parser.add_argument("--round-ticks", type=int, default=600, help="world-restart only: the resumed and fresh rounds' length")
     parser.add_argument("--client-stall", default="", help="world-restart only: TICK:MS, the client stalls once past each "
                         "round's start so the host holds its seat and the seat has to rejoin")
+    parser.add_argument("--fullstate-every", type=int, default=0,
+                        help="every N committed ticks both peers hash their whole capture (-net-fullstate-hash-every); 0 is off")
     args = parser.parse_args()
+    if args.fullstate_every < 0:
+        parser.error("--fullstate-every must be 0 or positive")
+    global FULLSTATE_EVERY
+    FULLSTATE_EVERY = args.fullstate_every
     if not 1024 <= args.port <= 65516:
         parser.error("the base port must leave room for twenty unprivileged ports")
     os.environ["CCCP_HEADLESS"] = "1"
@@ -930,6 +955,13 @@ def main() -> int:
         except Exception as error:
             details.update(passed=False, error=str(error))
             print(f"FAIL {arm}: {error}", flush=True)
+        if FULLSTATE_EVERY:
+            details["fullstate"] = fullstate_pairs(root / arm)
+            tripped = [name for name, verdict in details["fullstate"].items() if not verdict["passed"]]
+            if tripped or not details["fullstate"]:
+                details["passed"] = False
+                print(f"FAIL {arm} full state: " + "; ".join(f"{name}: {'; '.join(details['fullstate'][name]['reasons'])}" for name in tripped)
+                      if tripped else f"FAIL {arm} full state: no two-peer round was sampled", flush=True)
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     return 0 if all(arm["passed"] for arm in result["arms"].values()) else 1
 

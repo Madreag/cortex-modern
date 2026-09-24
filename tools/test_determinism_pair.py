@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from compare_sim_traces import load_trace, strict_compare
+from compare_sim_traces import compare_fullstate, load_trace, strict_compare
 from feel.retained_resume import PER_PEER_SUBSYSTEMS
 from run_sim_test import make_run, engine_executable
 
@@ -94,7 +94,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def peer_args(case: dict, who: str, port: int, root: Path) -> list:
+def peer_args(case: dict, who: str, port: int, root: Path, fullstate_every: int = 0) -> list:
     ticks = str(case["ticks"])
     args = ["-free-run-sim", "-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
             "-net-match-ticks", ticks, "-max-ticks", ticks, "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
@@ -102,6 +102,8 @@ def peer_args(case: dict, who: str, port: int, root: Path) -> list:
             "-net-match-report", str(root / who / "report.json"), *case["both"]]
     if who == "host":
         args += case["host"]
+    if fullstate_every:
+        args += ["-net-fullstate-hash-every", str(fullstate_every)]
     return args + (["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"])
 
 
@@ -121,13 +123,13 @@ def peer_text(root: Path, who: str) -> str:
     return text
 
 
-def run_pair(repo: Path, root: Path, case: dict, port: int, timeout: float) -> dict:
+def run_pair(repo: Path, root: Path, case: dict, port: int, timeout: float, fullstate_every: int = 0) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     runs, records = {}, {}
     try:
         for who in PEERS:
             env = {"CCCP_HEADLESS": "1", "CC_SIM_DUMP": f"1:{case['ticks']}"}
-            runs[who] = make_run(repo, peer_args(case, who, port, root), root / who, timeout, env=env)
+            runs[who] = make_run(repo, peer_args(case, who, port, root, fullstate_every), root / who, timeout, env=env)
             stage_module(runs[who].cwd, case)
 
         def drive(who):
@@ -187,7 +189,7 @@ def count_rows(path: Path, needle: str) -> int:
         return sum(1 for line in source if needle in line)
 
 
-def score(root: Path, case_name: str, exe_sha256: str, records: dict) -> dict:
+def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_every: int = 0) -> dict:
     case = CASES[case_name]
     result = {"case": case_name, "ticks": case["ticks"], "exe_sha256": exe_sha256, "per_peer_excluded": sorted(PER_PEER_SUBSYSTEMS),
               "records": {who: {key: record.get(key) for key in ("pid", "exit_code", "timed_out", "error")} for who, record in records.items()}}
@@ -264,6 +266,10 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict) -> dict:
     objects_identical = result["objects"].get("identical") is True
     result["passed"] = bool(passed and objects_identical and fixture_ok and all(result["processes"].values())
                             and not any(result["desync_lines"].values()) and not any(result["hold_lines"].values()))
+    if fullstate_every:
+        # The whole capture of both peers, every N ticks: a section the tick hash and the dump leave out still has to match.
+        result["fullstate"] = compare_fullstate(root / "host" / "stdout.log", root / "client" / "stdout.log")
+        result["passed"] = bool(result["passed"] and result["fullstate"]["passed"])
     return result
 
 
@@ -275,9 +281,13 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=PORTS[0])
     parser.add_argument("--timeout", type=float, default=600)
     parser.add_argument("--score-only", action="store_true", help="score an existing run directory without launching")
+    parser.add_argument("--fullstate-every", type=int, default=0,
+                        help="every N committed ticks both peers hash their whole capture (-net-fullstate-hash-every); 0 is off")
     options = parser.parse_args()
     if not PORTS[0] <= options.port <= PORTS[1]:
         parser.error(f"port outside this driver's block {PORTS[0]}-{PORTS[1]}")
+    if options.fullstate_every < 0:
+        parser.error("--fullstate-every must be 0 or positive")
     case = CASES[options.case]
     exe = engine_executable(options.repo)
     if options.score_only:
@@ -285,9 +295,9 @@ def main() -> int:
         identity, records, unchanged = previous["exe_sha256"], previous["records"], previous.get("binary_unchanged")
     else:
         identity = sha256_file(exe)
-        records = run_pair(options.repo, options.out, case, options.port, options.timeout)
+        records = run_pair(options.repo, options.out, case, options.port, options.timeout, options.fullstate_every)
         unchanged = sha256_file(exe) == identity
-    result = score(options.out, options.case, identity, records)
+    result = score(options.out, options.case, identity, records, options.fullstate_every)
     result["binary_unchanged"] = unchanged
     result["passed"] = bool(result["passed"] and unchanged)
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
@@ -297,6 +307,9 @@ def main() -> int:
           f"trace_ticks={result.get('trace_ticks')} fixture_ok={result['fixture_ok']} processes={result['processes']} "
           f"desync={result['desync_lines']} holds={result['hold_lines']}")
     objects = result["objects"]
+    if result.get("fullstate"):
+        fullstate = result["fullstate"]
+        print(f"full state: {'PASS' if fullstate['passed'] else 'FAIL'} compared={fullstate['compared_samples']} first_divergence={fullstate['first_divergence']}")
     if objects.get("available") and objects.get("tick"):
         print(f"first differing object: tick {objects['tick']} {objects.get('object', 'census')} {json.dumps(objects.get('fields', []))}")
     return 0 if result["passed"] else 1
