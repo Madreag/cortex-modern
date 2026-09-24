@@ -48,6 +48,48 @@ namespace RTE {
 			return {};
 		}
 
+		// A host names its build's versions beside its config hash, so a refused joiner can say which of the two is newer.
+		constexpr const char* c_HostVersionsTag = "; host versions ";
+
+		std::string VersionTuple(const NetIdentityDeterministicConfig& config) {
+			return std::to_string(config.supportedLockstepCodecVersion) + "." + std::to_string(config.supportedWorldLockstepCodecVersion) + "." +
+			       std::to_string(config.supportedMatchConfigVersion) + "." + std::to_string(config.supportedWorldMatchConfigVersion) + "." +
+			       std::to_string(config.lobbyProtocolVersion);
+		}
+
+		/// Compares two dotted version texts field by field; a range compares by its highest version.
+		/// @return Positive when the first is newer, negative when older, zero when equal or unreadable.
+		int CompareVersionTexts(const std::string& first, const std::string& second) {
+			const auto fields = [](const std::string& text) {
+				std::vector<uint64_t> values;
+				uint64_t value = 0;
+				bool digits = false;
+				for (const char ch: text.substr(text.find_last_of('-') == std::string::npos ? 0 : text.find_last_of('-') + 1)) {
+					if (ch >= '0' && ch <= '9') {
+						value = value * 10 + static_cast<uint64_t>(ch - '0');
+						digits = true;
+					} else if (digits) {
+						values.push_back(value);
+						value = 0;
+						digits = false;
+					}
+				}
+				if (digits) values.push_back(value);
+				return values;
+			};
+			const std::vector<uint64_t> a = fields(first), b = fields(second);
+			if (a.empty() || b.empty()) return 0;
+			for (size_t index = 0; index < std::max(a.size(), b.size()); ++index) {
+				const uint64_t left = index < a.size() ? a[index] : 0, right = index < b.size() ? b[index] : 0;
+				if (left != right) return left > right ? 1 : -1;
+			}
+			return 0;
+		}
+
+		std::string NewerOrOlderHost(int order) {
+			return order > 0 ? "This host runs a newer game version." : "This host runs an older game version.";
+		}
+
 		bool HasMismatch(const NetIdentityMismatch& mismatch) {
 			return !mismatch.key.empty();
 		}
@@ -1563,6 +1605,30 @@ namespace RTE {
 
 	std::string NetSession::BuildPlayerRefusalText() const {
 		if (!m_HasReject) return {};
+		if (m_Role == NetSessionRole::Client) {
+			// A version refusal says which side is newer: the host's value is whichever of the two is not this build's.
+			const auto hostValue = [&](const std::string& mine) { return m_ExpectedValue == mine ? m_ActualValue : m_ExpectedValue; };
+			switch (m_RejectReason) {
+				case NetRejectReason::GameVersionMismatch:
+					if (const int order = CompareVersionTexts(hostValue(m_Config.localIdentity.gameVersion), m_Config.localIdentity.gameVersion)) return NewerOrOlderHost(order);
+					return "This host runs a different game version.";
+				case NetRejectReason::ProtocolMismatch:
+					if (const int order = CompareVersionTexts(hostValue(std::to_string(NetProtocol::c_Version)), std::to_string(NetProtocol::c_Version))) return NewerOrOlderHost(order);
+					return "This host runs a different game version.";
+				case NetRejectReason::ControllerFrameVersionMismatch:
+					if (const int order = CompareVersionTexts(hostValue(std::to_string(m_Config.localIdentity.controllerFrameVersion)), std::to_string(m_Config.localIdentity.controllerFrameVersion))) return NewerOrOlderHost(order);
+					return "This host runs a different game version.";
+				case NetRejectReason::DeterministicConfigMismatch: {
+					const size_t named = m_RejectSummary.find(c_HostVersionsTag);
+					// A host that names no versions cannot be placed: the refusal says only that the builds differ.
+					if (named == std::string::npos) return "This host runs a different game version.";
+					if (const int order = CompareVersionTexts(m_RejectSummary.substr(named + std::string(c_HostVersionsTag).size()), VersionTuple(m_Config.localIdentity.deterministicConfig))) return NewerOrOlderHost(order);
+					// The same build: the difference is a simulation setting, not a version.
+					return "This match's simulation settings do not match yours.";
+				}
+				default: break;
+			}
+		}
 		switch (m_RejectReason) {
 			case NetRejectReason::ModuleManifestMismatch: return m_RejectSummary.empty() ? "This host's mods do not match yours." : m_RejectSummary;
 			case NetRejectReason::ProtocolMismatch:
@@ -1759,7 +1825,7 @@ namespace RTE {
 			return MakeMismatch("controller_frame_encoded_size", NetRejectReason::ControllerFrameSizeMismatch, std::to_string(m_Config.localIdentity.controllerFrameEncodedSize), std::to_string(hello.controllerFrameEncodedSize), "ControllerFrame encoded size does not match");
 		}
 		if (hello.deterministicConfigHash != m_Config.localIdentity.deterministicConfigHash) {
-			return MakeMismatch("deterministic_config_hash", NetRejectReason::DeterministicConfigMismatch, HashText(m_Config.localIdentity.deterministicConfigHash), HashText(hello.deterministicConfigHash), "deterministic config hash does not match");
+			return MakeMismatch("deterministic_config_hash", NetRejectReason::DeterministicConfigMismatch, HashText(m_Config.localIdentity.deterministicConfigHash), HashText(hello.deterministicConfigHash), "deterministic config hash does not match" + std::string(c_HostVersionsTag) + VersionTuple(m_Config.localIdentity.deterministicConfig));
 		}
 		if (m_Config.rejectUserdataModules && hello.hasUserdataModules) {
 			return MakeMismatch("userdata_modules", NetRejectReason::UserdataModulesNotAllowed, "false", "true", "userdata modules are not allowed in network sessions");

@@ -1,0 +1,100 @@
+{
+  "schema": 1,
+  "name": "mp-host-silent",
+  "port_base": 49436,
+  "size": "960x540",
+  "timeout_s": 220,
+  "title": "Two peers; the host goes silent for 4 s at tick 450 while it holds the client: the client rejoins the host and never takes the match over",
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "2400",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/host_trace.json",
+        "-net-match-report",
+        "{OUT}/host-match.json",
+        "-net-test-live-stall",
+        "450:4000"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "Host",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "menu_script": "mp-host-silent.host.menu.txt"
+    },
+    {
+      "name": "client",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "2400",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/client_trace.json",
+        "-net-match-report",
+        "{OUT}/client-match.json"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "Client",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark silent-listening",
+        "timeout_s": 90
+      }
+    }
+  ],
+  "checklist": [
+    {
+      "id": "silent-host-plays-on",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        450,
+        2400
+      ],
+      "what": "The host wakes and keeps hosting."
+    },
+    {
+      "id": "silent-client-rejoins",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        450,
+        2400
+      ],
+      "what": "The client rejoins the host through the private rejoin.",
+      "log_regex": [
+        "\\[net-match\\] private catch-up complete frame=\\d+"
+      ]
+    }
+  ]
+}

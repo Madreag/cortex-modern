@@ -4811,7 +4811,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		const bool e2ePeerStoppedAfterCap = s_netMatchServiceE2E &&
 			NetMatchE2ERoundReachedPlannedEnd(error, s_netMatchE2ETicks.Total(), matchTick, e2eTickCap);
-		const bool observeTraceRecovery = !s_netMatchServiceE2E && s_recordTickHashes && error.find("ResyncRequested") != std::string::npos;
+		// A held seat's rejoin is the product's own recovery too: the observed trace follows it instead of stopping.
+		const bool observeTraceRecovery = !s_netMatchServiceE2E && s_recordTickHashes &&
+		    (error.find("ResyncRequested") != std::string::npos || (error.find("PeerHeld:") != std::string::npos && g_SettingsMan.GetNetworkAutoReconnect()));
 		if (!s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted() && !observeTraceRecovery) {
 			const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
 			if (g_MetricsCollector.GetTickHashCount() < cap || error.find("Complete:") == std::string::npos) {
@@ -4933,7 +4935,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			if (heldRejoin) {
 				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
-			if (resyncOk) {
+			for (bool attempt = resyncOk; attempt;) {
+				attempt = false;
 				std::string launchPreset;
 				const auto resyncWaitStart = std::chrono::steady_clock::now();
 				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
@@ -4954,6 +4957,14 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 						break;
 					}
 					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+				}
+				// A held seat whose host is gone rejoins the peer that hosts the match now, through its private rejoin.
+				if (!resyncOk && heldRejoin && !System::IsSetToQuit()) {
+					std::string nextError;
+					if (g_NetMatchService.BeginHeldRejoinOnNextHost(&nextError)) {
+						resyncOk = true;
+						attempt = true;
+					}
 				}
 			}
 			if (resyncOk) {
@@ -7449,7 +7460,9 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 		CloseNetReplayPlayback();
 		return false;
 	}
-	if (const auto& agreed = ScenarioRunner::GetLockstepReplayAgreedStart(); agreed) {
+	// A segment stands on its checkpoint: the round's opening start boundary lies before its first record and would hold the
+	// playback at a frame the segment never carries.
+	if (const auto& agreed = ScenarioRunner::GetLockstepReplayAgreedStart(); agreed && !(worldSegment && agreed->agreedFirstFrame < lockstepConfig.startFrame)) {
 		if (!s_replayCoordinator.ApplyReplayAgreedStart(*agreed, &setupError)) {
 			if (error) *error = setupError;
 			CloseNetReplayPlayback();
