@@ -294,6 +294,19 @@ def read_index(video_dir):
     return rows
 
 
+LOCKSTEP_ROUND_START = "[net-lockstep] start round="
+
+
+def fullstate_verdict(host_log, client_log):
+    """The full-state oracle for a pair, or not applicable when neither peer started a lockstep round (a scenario that
+    ends in the lobby samples nothing to compare, and that is not a divergence)."""
+    started = [Path(log).is_file() and LOCKSTEP_ROUND_START in Path(log).read_text(encoding="utf-8", errors="replace")
+               for log in (host_log, client_log)]
+    if not any(started):
+        return {"passed": None, "not_applicable": "neither peer started a lockstep round", "reasons": [], "compared_samples": 0}
+    return compare_fullstate(host_log, client_log)
+
+
 RECORDER_FLUSH_S = 5.0
 
 
@@ -736,7 +749,7 @@ def review(scenario, capture, out):
                                  "reason": (capture.get("stop_finding") or {}).get("reason") or peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
                                  "launch": peer.get("launch")})
     for pair, verdict in (capture.get("fullstate") or {}).items():
-        if not verdict["passed"]:
+        if not verdict.get("not_applicable") and not verdict["passed"]:
             run_findings.append({"class": "engine", "run": capture["name"], "peer": pair,
                                  "reason": "full-state oracle: " + "; ".join(verdict["reasons"]), "launch": None})
     document = {"schema": 1, "scenario": scenario["name"], "title": scenario.get("title", ""),
@@ -1042,7 +1055,7 @@ def run_one(options, scenario, run, run_index, out):
     fullstate = None
     if getattr(options, "fullstate_every", 0) and len(peers) > 1:
         first = peers[0]["name"]
-        fullstate = {f"{first}/{peer['name']}": compare_fullstate(root / first / "stdout.log", root / peer["name"] / "stdout.log")
+        fullstate = {f"{first}/{peer['name']}": fullstate_verdict(root / first / "stdout.log", root / peer["name"] / "stdout.log")
                      for peer in peers[1:]}
     return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted, "stop_finding": stop_finding,
             "fullstate": fullstate}
