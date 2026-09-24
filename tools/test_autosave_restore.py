@@ -105,8 +105,19 @@ def _seat_rows(root: Path, who: str) -> dict:
     return {peer["seat"]: peer for peer in summary.get("peers", [])}
 
 
-def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict) -> dict:
-    """Two peers of one match, each with the arm's own extra flags."""
+def pin_settings(run, values: dict) -> None:
+    """Writes the named Settings.ini values into a staged peer's own runtime."""
+    path = Path(run.cwd) / "Userdata/Settings.ini"
+    text = path.read_text(encoding="utf-8-sig")
+    for name, value in values.items():
+        text, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*", lambda match: match[1] + value, text)
+        if count == 0:
+            text += f"\n\t{name} = {value}\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict, settings: dict | None = None) -> dict:
+    """Two peers of one match, each with the arm's own extra flags and Settings.ini values."""
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
     root.mkdir(parents=True, exist_ok=False)
@@ -123,6 +134,8 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
         args += extra.get(who, []) + fullstate_args()
         runs[who] = make_run(repo, args, root / who, 420, env={"CCCP_HEADLESS": "1"})
         stage_baseline(runs[who], ticks)
+        if settings and settings.get(who):
+            pin_settings(runs[who], settings[who])
 
     def drive(who: str) -> None:
         try:
@@ -322,10 +335,13 @@ def arm_anchor(repo: Path, root: Path, port: int) -> dict:
     four checkpoints before the heal, and the 1400-tick cap leaves room for more than the retention limit
     afterwards, so the named one can only survive by being pinned."""
     ticks, perturb_at = 1400, 700
+    # The perturbation waits for both seats to be live; a slow peer (a sanitizer build) the host held would keep it
+    # from ever landing, so the host pauses for a slow peer instead and the heal lands at its tick on every build.
     records = run_pair(repo, root, port, ticks, 2,
                        {"host": ["-net-test-perturb-when-live", "-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
                                  "-net-match-e2e-resync"],
-                        "client": ["-net-match-e2e-resync"]})
+                        "client": ["-net-match-e2e-resync"]},
+                       {"host": {"NetworkSlowPlayerPolicy": "Pause"}})
     injection = re.search(r"\[net-test\] live perturb frame=(\d+)", peer_log(root, "host"))
     assert injection and int(injection[1]) >= perturb_at, "the live-peer perturbation was never injected"
     anchors, captures = {}, {}
