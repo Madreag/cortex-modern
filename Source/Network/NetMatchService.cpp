@@ -3743,6 +3743,17 @@ static std::string ResyncSaveName() {
 			System::PrintDiagnosticLine(line.str());
 			RefuseReturnerLocked(connection, "the returner replayed slower than the round plays", "Your machine could not catch up with the match; rejoining again");
 		}
+		// A match its own rules decided has no base left to take: a returner still waiting for one is told the match is over, at once.
+		if (m_WorldJoin.IsPrivateMatch() && m_Session && ClassifyRejoin(g_ActivityMan.GetActivity()) == NetRejoinAnswer::MatchOver) {
+			std::vector<NetPeerId> ended;
+			for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
+				if (!session.spectator && session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) ended.push_back(session.connection);
+			for (const NetPeerId connection: ended) {
+				System::PrintDiagnosticLine("[net-match] rejoin refused connection=" + std::to_string(connection) + ": the match is over");
+				m_Session->DisconnectReadyPeer(connection, NetRejectReason::SessionEnded, MatchOverGoodbyeText(0));
+				m_WorldJoin.CancelJoin(connection, "the match is over");
+			}
+		}
 		// A returner whose base never comes (the round cannot capture one) is told so, never left waiting on it.
 		std::vector<NetPeerId> unserved;
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
