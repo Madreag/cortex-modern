@@ -4772,7 +4772,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		}
 	} else {
 		const uint64_t e2eTickBudget = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-		const uint64_t e2eTickCap = !ScenarioRunner::IsPersistentWorld() && s_netMatchE2ETicks.matchFirstFrame != UINT64_MAX
+		const uint64_t e2eTickCap = s_netMatchE2ETicks.matchFirstFrame != UINT64_MAX
 		    ? e2eTickBudget + s_netMatchE2ETicks.matchFirstFrame - 1 : e2eTickBudget;
 		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		const bool e2ePeerStoppedAfterCap = s_netMatchServiceE2E &&
@@ -6554,7 +6554,8 @@ void RunGameLoop() {
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const bool unlimitedWorld = (s_netWorldDaemon || s_netPersistentWorld) && !s_netMatchTicksExplicit;
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-					const uint64_t completedTicks = ScenarioRunner::IsPersistentWorld() ? simTick : s_netMatchE2ETicks.Total();
+					// A peer counts its cap from its own first tick, a world joiner too.
+					const uint64_t completedTicks = s_netMatchE2ETicks.Total();
 					// Every peer stops at the cap, so the round knows the last frame anyone will feed.
 					if (!unlimitedWorld && completedTicks <= tickCap && ScenarioRunner::HasLockstepCoordinator())
 						ScenarioRunner::SetLockstepFinalFrame(ScenarioRunner::GetLockstepAppliedFrame() + (tickCap + 1 - completedTicks));
