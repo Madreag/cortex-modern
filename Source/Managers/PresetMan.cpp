@@ -65,11 +65,12 @@ int PresetMan::Save(Writer &writer) const
 */
 
 void PresetMan::Destroy() {
-	for (std::vector<DataModule*>::iterator dmItr = m_pDataModules.begin(); dmItr != m_pDataModules.end(); ++dmItr) {
-		delete (*dmItr);
-	}
-
+	// Emptied before the modules go: a preset's destructor that looks presets up finds none, never a module already deleted.
+	std::vector<DataModule*> dataModules = std::move(m_pDataModules);
 	Clear();
+	for (DataModule* dataModule: dataModules) {
+		delete dataModule;
+	}
 }
 
 bool PresetMan::LoadDataModule(const std::string& moduleName, bool official, bool userdata, const ProgressCallback& progressCallback) {
