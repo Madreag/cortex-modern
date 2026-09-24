@@ -75,6 +75,7 @@ namespace RTE {
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
 	bool TestAReturningSeatsRampIsTheBound(std::string* error);
+	bool TestASeatIsNotLateForOurOwnDecision(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -19329,6 +19330,42 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A seat produces nothing at or past a timing decision's frame until this host's commit of it has crossed its link. When the
+	// commit comes late - a delay change on a loaded machine - the wait at that frame is the host's own, not the seat's lateness.
+	bool TestASeatIsNotLateForOurOwnDecision(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A13, 1, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 0x9A13;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true; config.timeoutMs = 20000;
+		config.peerInputDelayFrames = {{1, 1}, {2, 1}};
+		config.remoteTransportPeerIds = {{2, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A13);
+		if (!wire.StartHost(48912, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_PeersPlayedThisRound = {2};
+		host.m_PeerEffectiveStart[2] = 2;
+		host.m_Stats.nextFrame = 400;
+		host.m_Stats.peers[2].pingMs = 20; host.m_Stats.peers[2].jitterMs = 2;
+		// The round reached frame 400 at 1000 ms; the delay change at 400 committed only at 1100, once its acknowledgement came back.
+		host.m_DecisionCommittedAtMs[400] = 1100;
+		const uint64_t answerableMs = 1100 + 20 + 2 + 17;
+		if (host.DeclareOverdueInputs(400, answerableMs + 30, 1000, {2}) || host.GetStats().peers.at(2).holds != 0) {
+			*error = "a seat waiting on this host's own late decision commit was held as slow: since_missing=" + std::to_string(answerableMs + 30 - 1000) +
+			         "ms since_commit_answerable=30ms holds=" + std::to_string(host.GetStats().peers.at(2).holds);
+			return false;
+		}
+		// Negative control: past the bound from when it could have answered, the seat is declared.
+		if (!host.DeclareOverdueInputs(400, answerableMs + 60, 1000, {2})) {
+			*error = "the bound no longer declares a seat that stayed silent after our decision reached it";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_seat_is_not_late_for_our_own_decision held_after_answerable_ms=60" << std::endl;
+		return true;
+	}
+
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
 		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
 		// notice than the whole bound, and the seat must still be declared only after the bound of
@@ -19440,6 +19477,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAReturningSeatsRampIsTheBound, "a_returning_seats_ramp_is_the_bound");
 		row(&TestALinkBlipIsBridgedByAResend, "a_link_blip_is_bridged_by_a_resend");
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");
+		row(&TestASeatIsNotLateForOurOwnDecision, "a_seat_is_not_late_for_our_own_decision");
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
 		row(&TestAPeerIsDueADelayAfterAPark, "a_peer_is_due_a_delay_after_a_park");
