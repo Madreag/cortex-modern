@@ -650,6 +650,31 @@ namespace RTE {
 	}
 
 	NetHash32 NetMatchConfigUtil::HashConfig(const NetMatchConfig& config) {
+		return *HashConfigUnderRule(config, c_ConfigHashRule);
+	}
+
+	std::string NetMatchConfigUtil::StoredConfigHash(const NetMatchConfig& config) {
+		return std::to_string(c_ConfigHashRule) + ":" + NetIdentity::HashHex(HashConfig(config));
+	}
+
+	bool NetMatchConfigUtil::ParseStoredConfigHash(const std::string& stored, uint16_t& rule, std::string& hex) {
+		const size_t colon = stored.find(':');
+		if (colon == std::string::npos) {
+			rule = c_SortedRosterHashRule;
+			hex = stored;
+			return true;
+		}
+		const std::string digits = stored.substr(0, colon);
+		if (digits.empty() || digits.size() > 5 || digits.find_first_not_of("0123456789") != std::string::npos) return false;
+		const unsigned long value = std::stoul(digits);
+		if (value < c_SortedRosterHashRule || value > std::numeric_limits<uint16_t>::max()) return false;
+		rule = static_cast<uint16_t>(value);
+		hex = stored.substr(colon + 1);
+		return true;
+	}
+
+	std::optional<NetHash32> NetMatchConfigUtil::HashConfigUnderRule(const NetMatchConfig& config, uint16_t rule) {
+		if (rule < c_SortedRosterHashRule || rule > c_ConfigHashRule) return std::nullopt;
 		std::vector<std::pair<std::string, std::string>> fields = {
 			{"version", std::to_string(config.version)},
 			{"session_id", std::to_string(config.sessionId)},
@@ -681,7 +706,7 @@ namespace RTE {
 			fields.emplace_back(prefix + "display_name", player.displayName);
 		}
 		// The wire order seats the players: a live roster outside the builder's order hashes that order too.
-		if (config.version >= c_RelayLayoutVersion && !InBuilderOrder(config.players)) {
+		if (rule >= c_WireOrderHashRule && config.version >= c_RelayLayoutVersion && !InBuilderOrder(config.players)) {
 			std::string order;
 			for (const NetMatchPlayerSlot& player : config.players) {
 				order += (order.empty() ? "" : ",") + (player.cpu ? "cpu" + std::to_string(player.team) : std::to_string(player.peerId));

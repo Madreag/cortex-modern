@@ -2780,7 +2780,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_AutosaveIdentity.configPayload = std::move(payload);
-		m_AutosaveIdentity.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+		m_AutosaveIdentity.configHash = NetMatchConfigUtil::StoredConfigHash(config);
 		m_AutosaveIdentity.peerNames.clear();
 		for (const NetMatchPlayerSlot& slot: config.players) {
 			if (!slot.cpu && !slot.displayName.empty()) m_AutosaveIdentity.peerNames.push_back(slot.displayName);
@@ -4734,7 +4734,18 @@ static std::string ResyncSaveName() {
 		if (!AutosaveStore::ReadManifest(directory, matchId, checkpoint->savedTick, manifest, &reason)) return refuse("restart manifest refused: " + reason);
 		NetMatchConfig config;
 		if (!DecodeConfigPayload(manifest.configPayload, config)) return refuse("the restart manifest's configuration does not decode");
-		if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config)) != manifest.configHash) {
+		// The hash is checked by the rule that made it, so an older build's checkpoint stays loadable.
+		uint16_t hashRule = 0;
+		std::string storedHash;
+		if (!NetMatchConfigUtil::ParseStoredConfigHash(manifest.configHash, hashRule, storedHash)) {
+			return refuse("the restart manifest's configuration hash names no hash rule");
+		}
+		const std::optional<NetHash32> agreedHash = NetMatchConfigUtil::HashConfigUnderRule(config, hashRule);
+		if (!agreedHash) {
+			return refuse("the restart manifest's configuration hash follows rule " + std::to_string(hashRule) + ", newer than this build's rule " +
+			              std::to_string(NetMatchConfigUtil::c_ConfigHashRule) + ": resume it on the build that saved it");
+		}
+		if (NetIdentity::HashHex(*agreedHash) != storedHash) {
 			return refuse("the restart manifest's configuration does not match the hash the peers agreed");
 		}
 		if (manifest.worldBoot != (config.persistentWorld ? config.worldBoot : 0)) {
