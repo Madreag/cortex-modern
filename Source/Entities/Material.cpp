@@ -172,10 +172,10 @@ std::string Material::SaveCheckpoint() const {
     VisitCheckpoint(archive, *this);
     const auto textureKey = [](const BITMAP* bitmap) {
         if (!bitmap) return std::string{};
-        std::string result;
-        for (const auto& [path, cached]: ContentFile::s_LoadedBitmaps[ContentFile::BitDepths::Eight]) if (cached == bitmap && (result.empty() || path < result)) result = path;
-        if (result.empty()) throw std::runtime_error("material texture is not owned by the content cache");
-        return result;
+        int depth = ContentFile::BitDepths::Eight;
+        const std::string* found = ContentFile::LoadedBitmapPath(bitmap, depth);
+        if (!found || found->empty()) throw std::runtime_error("material texture is not owned by the content cache");
+        return *found;
     };
     archive(textureKey(m_TerrainFGTexture), textureKey(m_TerrainBGTexture));
     return archive.Text();

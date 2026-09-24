@@ -295,7 +295,7 @@ namespace RTE {
 
 		/// Every Lua state's script graph, by state index; false with the reasons when a state could not be carried faithfully.
 		bool SerializeScriptGraphs(std::vector<std::string>& graphs, std::vector<std::string>& problems) const;
-		bool CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage = nullptr) const;
+		bool CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage = nullptr, const std::function<void()>& whileWaiting = {}) const;
 
 		/// The last script graph failure a set-aside recorded, empty when none.
 		const std::string& GetScriptGraphFailure() const { return m_ScriptGraphFailure; }
@@ -309,6 +309,29 @@ namespace RTE {
 
 		/// Whether the pointer is an object this manager knows by unique id, so it can be read safely.
 		bool IsKnownObject(const MovableObject* object);
+
+		/// While one lives, IsKnownObject and SnapshotKnownObjects answer from copies of the known objects taken as it
+		/// opens, without the registry lock, until the known objects change. A capture opens one at its fence.
+		class KnownObjectsScope {
+			friend class MovableMan;
+		public:
+			KnownObjectsScope();
+			~KnownObjectsScope();
+			KnownObjectsScope(const KnownObjectsScope&) = delete;
+			KnownObjectsScope& operator=(const KnownObjectsScope&) = delete;
+		private:
+			/// Copies the known objects the first time anything asks; a change since the scope opened stops it being asked.
+			void Copy() const;
+			mutable std::once_flag m_Copied;
+			mutable std::vector<MovableObject*> m_ByIdentity; //!< In unique id order, as the registry holds them.
+			mutable std::vector<const MovableObject*> m_ByAddress; //!< Sorted by address, for IsKnownObject.
+			uint64_t m_Version = 0; //!< The known objects' version when the scope opened.
+			KnownObjectsScope* m_Previous = nullptr;
+		};
+
+		/// Changes the known objects by each way in while a known-objects scope lives, and checks IsKnownObject answers
+		/// as the registry does after each. @return The first way it did not, or empty.
+		std::string KnownObjectsScopeMissedChange();
 
 		struct AddQueueMark {
 			size_t actors = 0;
@@ -1177,6 +1200,8 @@ namespace RTE {
 
 		// Global map which stores all objects so they could be foud by their unique ID
 		std::map<long int, MovableObject*> m_KnownObjects;
+		std::atomic<uint64_t> m_KnownObjectsVersion{0}; //!< Moves with every change to m_KnownObjects, under its lock.
+		std::atomic<KnownObjectsScope*> m_KnownObjectsScope{nullptr}; //!< The innermost live known-objects scope.
 		std::vector<std::map<long int, MovableObject*>*> m_HeldRegistries; //!< Registry copies a scope will put back.
 		std::string m_ScriptGraphFailure; //!< Why the last set-aside could not carry the script graphs, empty when it could.
 

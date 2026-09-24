@@ -165,6 +165,8 @@ namespace RTE {
 		static constexpr size_t c_MaxAdmissionBytes = 64U * 1024U;
 
 		static std::filesystem::path Directory();
+		/// Removes the `.ccsave.tmp.<pid>` files a writer left behind when it died mid-archive; a live writer's are kept.
+		static size_t SweepOrphanedTemporaries(const std::filesystem::path& directory);
 		static std::string ArchiveName(const std::string& matchId, uint64_t tick);
 		static std::filesystem::path ArchivePath(const std::string& matchId, uint64_t tick);
 		static std::filesystem::path ArchivePath(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick);

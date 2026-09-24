@@ -121,6 +121,10 @@ namespace RTE {
 		/// @param maxValue The maximum numeric value. 0 means no maximum value.
 		void SetMaxNumericValue(int maxValue) { m_MaxNumericValue = maxValue; }
 
+		/// Sets this text panel's minimum numeric value when in numeric only mode.
+		/// @param minValue The minimum numeric value. 0 means no minimum value.
+		void SetMinNumericValue(int minValue) { m_MinNumericValue = minValue; }
+
 		/// Sets the maximum length of the text this text panel can contain.
 		/// @param maxLength The maximum length of the text this text panel can contain.
 		void SetMaxTextLength(int maxLength) { m_MaxTextLength = maxLength; }
@@ -159,6 +163,7 @@ namespace RTE {
 		int m_MaxTextLength; //!< The maximum length of the text this text panel can contain.
 		bool m_NumericOnly; //!< Whether this text panel only accepts numeric symbols.
 		int m_MaxNumericValue; //!< The maximum numeric value when in numeric only mode. 0 means no maximum value.
+		int m_MinNumericValue; //!< The minimum nonzero numeric value when in numeric only mode. 0 means no minimum value.
 
 		/// Updates the cursor and start positions.
 		/// @param Typing Typing, Increment. (default: false)

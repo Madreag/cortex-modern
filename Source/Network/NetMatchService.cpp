@@ -593,7 +593,6 @@ static std::string ResyncSaveName() {
 			m_RelayReady = false;
 			m_RelayPublishPending = false;
 			m_RelayAttempted = false;
-			m_ActiveRelayExpiresAt = 0;
 			m_RelayReplies = m_Directory.IceReplies();
 			m_NextRelayRequestMs = 0;
 			m_FreshRelayRequested = true;
@@ -5376,6 +5375,27 @@ static std::string ResyncSaveName() {
 		if (snapshot.sceneModule.empty()) {
 			snapshot.sceneModule = m_SceneModule;
 		}
+		if (snapshot.modeName.empty() && m_MatchConfig.sessionId != 0) {
+			snapshot.modeName = NetMatchConfigUtil::ModeName(m_MatchConfig.mode);
+		}
+		if (snapshot.modeLabel.empty() && m_MatchConfig.sessionId != 0) {
+			snapshot.modeLabel = NetMatchConfigUtil::ModeLabel(m_MatchConfig.mode);
+		}
+		if (snapshot.members.empty() && snapshot.active) {
+			// Until the runner's first publish this renders the committed roster on the host and, on a
+			// client, the local placeholder config the runner publishes from WaitForSessionReady.
+			for (const NetMatchPlayerSlot& slot : m_MatchConfig.players) {
+				NetLobbyMember member;
+				member.peerId = slot.peerId;
+				member.team = slot.team;
+				member.cpu = slot.cpu;
+				member.isLocal = slot.peerId == m_LocalPeerId;
+				member.displayName = member.isLocal && !m_LocalName.empty() ? m_LocalName : slot.displayName;
+				member.connected = member.isLocal || slot.cpu;
+				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, slot.peerId);
+				snapshot.members.push_back(member);
+			}
+		}
 		if (snapshot.members.empty() && snapshot.active) {
 			NetLobbyMember local;
 			local.peerId = m_LocalPeerId;
@@ -5471,6 +5491,10 @@ static std::string ResyncSaveName() {
 		}
 		m_PendingHostOptions = draft;
 		m_PendingHostOptions->configRevision = adopted.configRevision + 1;
+		// Every minute through every hour, or off; a run's own cadence override keeps its seconds.
+		if (m_PendingHostOptions->autosaveIntervalSeconds != 0 && !s_AutosaveSecondsOverridden) {
+			m_PendingHostOptions->autosaveIntervalSeconds = std::clamp(m_PendingHostOptions->autosaveIntervalSeconds, c_MinAutosaveIntervalSeconds, c_MaxAutosaveIntervalSeconds);
+		}
 		// The runner owns the lobby; this posts the accepted revision to its thread, where an open
 		// round republishes it to every peer at once and a closed one starts its rematch on it. The
 		// draft stays staged here too: it is what the options panel re-seeds from either way.
@@ -6398,13 +6422,11 @@ static std::string ResyncSaveName() {
 		return g_SettingsMan.GetNetworkStunServers().empty() ? "Port forwarding required" : "NAT: STUN";
 	}
 
+	// The host row's line for an offer that expired before a renewal landed; the next offer clears it.
+	static constexpr const char* c_RelayLapsedText = "Relay login expired and has not renewed yet; new joins connect direct until it does.";
+
 	std::string NetMatchService::GetRelayError() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (m_RelayError.empty() && m_ActiveRelayExpiresAt != 0) {
-			const uint64_t now = UnixNowMs(nullptr) / 1000;
-			if (now >= m_ActiveRelayExpiresAt) return "The active relay login expired; rejoin to use the refreshed offer.";
-			return "Rejoin before the active relay login expires in " + std::to_string((m_ActiveRelayExpiresAt - now + 59) / 60) + " min.";
-		}
 		return m_RelayError;
 	}
 
@@ -6424,7 +6446,11 @@ static std::string ResyncSaveName() {
 				m_RelayReady = true;
 				m_RelayPublishPending = true;
 			}
-			if (!m_RelayOffer.Empty() && !m_RelayOffer.Usable(wall)) { SetRelayOfferLocked({}); m_RelayPublishPending = true; }
+			if (!m_RelayOffer.Empty() && !m_RelayOffer.Usable(wall)) {
+				SetRelayOfferLocked({});
+				m_RelayPublishPending = true;
+				if (m_RelayError.empty()) m_RelayError = c_RelayLapsedText;
+			}
 			if (m_Directory.GetState() != NetDirectoryClient::State::Registered || m_Directory.IceRequestPending()) return;
 			const bool fresh = m_FreshRelayRequested.load();
 			// Renew at half the offer's lifetime, so a connection opened on it still has the other half.
@@ -6442,6 +6468,7 @@ static std::string ResyncSaveName() {
 				fixed.expiresAt = wall + NetDirectoryClient::c_MaxRelayTtlSeconds;
 				SetRelayOfferLocked(fixed);
 				m_RelayPublishPending = true;
+				if (m_RelayError == c_RelayLapsedText) m_RelayError.clear();
 			}
 		}
 		if (request) m_Directory.RequestIceServers(matchId, NetDirectoryClient::c_MaxRelayTtlSeconds, fixed.Empty() ? nullptr : &fixed);
@@ -6508,7 +6535,6 @@ static std::string ResyncSaveName() {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_RelayAttempted = !ice.turnServerList.empty();
-				m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && !g_SettingsMan.HasNetworkTurnServersOverride() && m_HostRelayMode == 1 ? relay.expiresAt : 0;
 				m_IceBoundSessionId = sessionId;
 				m_IceIdentity = identity;
 				m_IceRoute = "ice";
@@ -6618,7 +6644,6 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			SetRelayOfferLocked(relay);
 			m_RelayAttempted = !spec.p2p.turnServerList.empty();
-			m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && !g_SettingsMan.HasNetworkTurnServersOverride() ? relay.expiresAt : 0;
 		}
 		GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
 		spec.makeSignaling = [dispatcher] { return dispatcher->CreateJoinSignaling(); };
@@ -7671,7 +7696,13 @@ static std::string ResyncSaveName() {
 		config.dedicated = request.dedicated;
 		// The host publishes the checkpoint cadence the whole match follows; a client's own setting never steers one.
 		if (request.host) {
-			const uint32_t seconds = std::min(request.autosaveSeconds.value_or(GetAutosaveSeconds()), c_MaxAutosaveIntervalSeconds);
+			// Every minute through every hour, or off; a run's own cadence override keeps its seconds.
+			uint32_t seconds = request.autosaveSeconds.value_or(GetAutosaveSeconds());
+			if (seconds != 0 && (request.autosaveSeconds.has_value() || !s_AutosaveSecondsOverridden)) {
+				seconds = std::clamp(seconds, c_MinAutosaveIntervalSeconds, c_MaxAutosaveIntervalSeconds);
+			} else {
+				seconds = std::min(seconds, c_MaxAutosaveIntervalSeconds);
+			}
 			config.autosaveEnabled = seconds > 0;
 			config.autosaveIntervalSeconds = seconds;
 			// The rest of the host's saved session options ride the same config to every peer.
