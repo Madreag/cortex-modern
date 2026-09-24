@@ -288,12 +288,23 @@ def held_client_away(log):
     return tuple(ranges)
 
 
-def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False, client_away=(), window_only=False):
+def held_client_rewinds(log):
+    """The images a held client replayed from that were older than the tick it stopped at: it simulates the ticks
+    between them twice, and both readings are compared."""
+    images = []
+    for stop, image in re.findall(r'\[net-match\] recovery requested tick=(\d+) [^\n]*PeerHeld:[^\n]*\n(?:[^\n]*\n)*?\[net-match\] bootstrap checkpoint=(\d+) ', log):
+        if int(image) < int(stop):
+            images.append(int(image))
+    return tuple(images)
+
+
+def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False, client_away=(), window_only=False, client_rewinds=()):
     """Two peers' traces skip only the per-machine routing subsystem (and the total that folds it in); two runs of one
     peer compare every field."""
     result = dict(first=str(first), second=str(second), cross_peer=cross_peer)
     per_peer = PER_PEER_SUBSYSTEMS if cross_peer else frozenset()
-    ok, existing = strict_compare(first, second, expected_ticks=expected_ticks, per_peer=per_peer, client_away=client_away, prefix=window_only)
+    ok, existing = strict_compare(first, second, expected_ticks=expected_ticks, per_peer=per_peer, client_away=client_away, prefix=window_only,
+                                  client_rewinds=client_rewinds)
     result.update(sim_gated_pass=ok, existing_comparator=existing)
 
     def shared(row):
@@ -424,7 +435,8 @@ def reduce_timing_case(run, reference=None):
         client_log = (run / 'client/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / 'client/stdout.log').is_file() else ''
         # A rejoined client runs its own cap from its image, so only the planned window is compared.
         proof['held_client'] = compare_pair(run / 'host_trace.json', run / 'client_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
-                                            client_away=held_client_away(client_log), window_only=True)
+                                            client_away=held_client_away(client_log), window_only=True,
+                                            client_rewinds=held_client_rewinds(client_log))
     pairs = [('host', 'survivor'), ('host', 'client'), ('survivor', 'client')] if silent else [('host', 'client')]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
             for left, right in pairs}
