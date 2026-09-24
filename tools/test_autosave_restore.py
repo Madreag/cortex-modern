@@ -55,6 +55,7 @@ from run_sim_test import make_run
 from feel_measure import stage_baseline
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
+HOLD = re.compile(r"^\[net-match\] hold peer=\d+ frame=\d+ AI in control$", re.MULTILINE)
 RETAINED = re.compile(r"^\[autosave\] retained tick=(\d+) keep=(\d+) pinned=(\d+) removed=(\d+)$", re.MULTILINE)
 RESTORE = re.compile(r"^\[autosave\] restore_check (PASS|FAIL) match=(\S+) tick=(\d+) sim_update_count=(\d+) "
                      r"world_hash=(\S+) expected=(\S+) policy=(\d)$", re.MULTILINE)
@@ -636,7 +637,7 @@ def _world_checkpoint_state(manifest: str, host_log: str, world_id: str, tick: i
             "binding_peers": sorted(peers)}
 
 
-def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
+def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "") -> dict:
     """A persistent world host is KILLED and restarted on the same install with the same UUID,
     the seats the checkpoint held, and the client's stored ticket.
 
@@ -652,7 +653,14 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
     first.mkdir(parents=True, exist_ok=False)
     kill_tick, round_ticks = 400, 600
 
-    records = _run_world_round(repo, first, port, 1200, {}, kill_past=kill_tick)
+    def stall(start: int, extra: dict) -> dict:
+        """The stress lever: the client stalls once past `start`, so its seat is held and has to rejoin."""
+        if not client_stall:
+            return extra
+        tick, milliseconds = (int(part) for part in client_stall.split(":"))
+        return {**extra, "client": [*extra.get("client", []), "-net-test-live-stall", f"{start + tick}:{milliseconds}"]}
+
+    records = _run_world_round(repo, first, port, 1200, stall(0, {}), kill_past=kill_tick)
     assert records["_killed"], f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}"
     identity = WORLD_IDENTITY.findall(peer_log(first, "host"))
     assert identity, "the world host never printed its identity"
@@ -678,7 +686,7 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
     # Boot two: the same install, no -net-resume-match. The world reopens on its own newest checkpoint.
     second.mkdir(parents=True, exist_ok=False)
     resume_end = resume_tick + round_ticks
-    resumed = _run_world_round(repo, second, port + 2, resume_end, {}, carry=first)
+    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first)
     host_log = peer_log(second, "host")
     restarted = WORLD_IDENTITY.findall(host_log)
     assert restarted, "the restarted world printed no identity"
@@ -711,7 +719,7 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
 
     # The fresh flag: the same install and the same checkpoints, a NEW round from the scene.
     fresh.mkdir(parents=True, exist_ok=False)
-    fresh_records = _run_world_round(repo, fresh, port + 4, round_ticks, {"host": ["-net-world-fresh"]}, carry=second)
+    fresh_records = _run_world_round(repo, fresh, port + 4, round_ticks, stall(0, {"host": ["-net-world-fresh"]}), carry=second)
     fresh_log = peer_log(fresh, "host")
     assert not RESUMING.search(fresh_log), "a fresh world boot resumed a checkpoint anyway"
     fresh_identity = WORLD_IDENTITY.findall(fresh_log)
@@ -739,7 +747,8 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
             "manifest_control_owners": side_state["control_owners"], "manifest_applied_sequences": side_state["applied_sequences"],
             "manifest_binding_peers": side_state["binding_peers"],
             "seats": sorted(seats_two), "fresh_first_capture": min(fresh_captures),
-            "peer_comparison": compared, "fresh_peer_comparison": fresh_compared}
+            "peer_comparison": compared, "fresh_peer_comparison": fresh_compared,
+            "holds": {half.name: len(HOLD.findall(peer_log(half, "host"))) for half in (first, second, fresh)}}
 
 
 class WorldRestartOracleTests(unittest.TestCase):
@@ -861,6 +870,8 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48720)
     parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor", "resume", "world-restart"), default="all")
+    parser.add_argument("--client-stall", default="", help="world-restart only: TICK:MS, the client stalls once past each "
+                        "round's start so the host holds its seat and the seat has to rejoin")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65516:
         parser.error("the base port must leave room for twenty unprivileged ports")
@@ -871,7 +882,7 @@ def main() -> int:
         exe_sha = hashlib.file_digest(exe, "sha256").hexdigest()
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"restore": arm_restore, "retention": arm_retention, "anchor": arm_anchor, "resume": arm_resume,
-            "world-restart": arm_world_restart}
+            "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall)}
     if args.arm != "all":
         arms = {args.arm: arms[args.arm]}
     for index, (arm, run) in enumerate(arms.items()):
