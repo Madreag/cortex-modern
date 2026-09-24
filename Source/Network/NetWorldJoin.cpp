@@ -1936,8 +1936,8 @@ namespace RTE {
 			return;
 		}
 		// A bootstrap that never activated holds no seat the round waits on: releasing it is not a
-		// departure and must not reach the dropped-seat hold. A returner's slot stays its member's.
-		if (session->phase != NetWorldJoinPhase::Active && session->assignedPeerId != 0 && !session->returnsToHeldSeat) {
+		// departure and must not reach the dropped-seat hold.
+		if (session->phase != NetWorldJoinPhase::Active && session->assignedPeerId != 0) {
 			(void)m_Membership.Release(session->assignedPeerId, nullptr);
 		}
 		session->phase = NetWorldJoinPhase::Failed;

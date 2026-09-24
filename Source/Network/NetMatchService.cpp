@@ -3555,10 +3555,9 @@ static std::string ResyncSaveName() {
 				holds.push_back(bound->peerId);
 			}
 		}
-		// A seat the AI holds is still its member's, even after a returner's bootstrap gave the slot back: its returner reclaims
-		// the slot and a fresh joiner never takes it.
+		// A seat the AI holds is still its member's: its returner reclaims the slot, never watches.
 		for (const NetWorldSlot& slot: membership.Slots()) {
-			if (aiHeldPeers.contains(slot.peerId) && std::find(holds.begin(), holds.end(), slot.peerId) == holds.end()) holds.push_back(slot.peerId);
+			if (slot.held && aiHeldPeers.contains(slot.peerId) && std::find(holds.begin(), holds.end(), slot.peerId) == holds.end()) holds.push_back(slot.peerId);
 		}
 		return holds;
 	}
