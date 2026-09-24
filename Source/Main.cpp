@@ -81,6 +81,9 @@
 #include "RTEError.h"
 #include "DataModule.h"
 #include "MenuAutomation.h"
+#ifdef __APPLE__
+#include "AppleApplication.h"
+#endif
 
 #include "ControllerFrame.h"
 #include "GnsP2PSelfTest.h"
@@ -204,6 +207,7 @@ struct MenuTraceCoverage {
 	uint64_t heldResume = 0;
 	unsigned heldGaps = 0;
 	bool unexplained = false;
+	bool heldReplay = false;
 
 	void NoteRecorded(uint64_t tick, bool firstOfRun) {
 		if (firstOfRun) {
@@ -213,8 +217,12 @@ struct MenuTraceCoverage {
 			if (heldResume != 0 && tick == heldResume) ++heldGaps; else unexplained = true;
 		}
 		heldResume = 0;
+		heldReplay = false;
 		lastTick = tick;
 	}
+	// A held rejoin that resumes at an image behind its last recorded tick replays ticks the trace already holds; they are
+	// not recorded twice, so the trace's record budget reaches the cap tick.
+	bool SkipsReplayedTick(uint64_t tick) const { return heldReplay && tick <= lastTick; }
 	// Past a held rejoin the count also holds the ticks it skipped or replayed twice, so only the cap tick itself counts.
 	bool ReachedCap(size_t count, uint64_t cap) const { return heldGaps > 0 ? lastTick >= cap : count >= cap; }
 	bool CoversCap(size_t count, uint64_t cap) const { return heldGaps > 0 ? !unexplained && lastTick == cap : count == cap; }
@@ -278,6 +286,8 @@ static long long s_frameStallTick = 0;
 static int s_frameStallMs = 0;
 struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; };
 static std::vector<NetLiveStall> s_netLiveStalls;
+// Test lever: how many ticks the e2e synced pause lasts before its unpause.
+static uint64_t s_netTestPauseTicks = 180;
 static std::optional<uint64_t> s_netLiveStallActivation;
 static bool s_netPerturbWhenLive = false;
 
@@ -1011,6 +1021,14 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 		if (currentArg == "-net-test-perturb-when-live") { s_netPerturbWhenLive = true; ++i; continue; }
+		if (currentArg == "-net-test-pause-ticks" && i + 1 < argCount) {
+			const std::string value = argValue[++i];
+			uint64_t ticks = 0;
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), ticks);
+			if (parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && ticks > 0) s_netTestPauseTicks = ticks;
+			++i;
+			continue;
+		}
 		if (currentArg == "-net-test-live-stall" && i + 1 < argCount) {
 			const std::string spec = argValue[++i];
 			const size_t separator = spec.find(':');
@@ -5010,7 +5028,10 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					const uint64_t resumedAt = ScenarioRunner::GetLockstepResumeFrame();
 					g_MetricsCollector.RecordString(traceGapKey, nlohmann::json{{"stopped_at", matchTick}, {"reason", error}, {"resumed_at", resumedAt}}.dump());
 					System::PrintDiagnosticLine("[menu-mp] trace observation resumed frame=" + std::to_string(resumedAt));
-					if (heldRejoin) s_menuTraceCoverage.heldResume = resumedAt;
+					if (heldRejoin) {
+						s_menuTraceCoverage.heldResume = resumedAt;
+						s_menuTraceCoverage.heldReplay = true;
+					}
 				}
 				// The relaunch drops the queue; the healed round has not applied a frame yet, so the
 				// toast names the frame it resumes on.
@@ -5425,7 +5446,7 @@ void RunGameLoop() {
 				const uint64_t pauseTick = ScenarioRunner::GetArgs().selftestPauseTick;
 				if (simTick == pauseTick) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, true}});
-				} else if (simTick == pauseTick + 180) {
+				} else if (simTick == pauseTick + s_netTestPauseTicks) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, false}});
 				}
 			}
@@ -5489,6 +5510,11 @@ void RunGameLoop() {
 				g_MovableMan.RunLockstepPausedTick();
 				if (lockstepPaused) {
 					ScenarioRunner::AdvanceLockstepPausedTick();
+				}
+				// The session plane keeps running through a pause: a seat held during it is served its image and its tail.
+				g_NetMatchService.PumpSessionEvents();
+				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState(); g_NetMatchService.IsHost() && netServiceState == NetMatchServiceState::Running) {
+					g_NetMatchService.Update();
 				}
 			}
 			if (!lockstepPausedTick) {
@@ -5896,7 +5922,7 @@ void RunGameLoop() {
 					NetA7Journal::AppliedTick(round, simTick, ScenarioRunner::GetLockstepLocalPeerId(), SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult)));
 					g_MovableMan.RecordA7UnitOwnership(round, simTick);
 				}
-				if (s_recordTickHashes && s_rbProbePhase != 3) {
+				if (s_recordTickHashes && s_rbProbePhase != 3 && !s_menuTraceCoverage.SkipsReplayedTick(simTick)) {
 					const size_t recordedBefore = g_MetricsCollector.GetTickHashCount();
 					g_MetricsCollector.RecordTickHash(tickResult, lockstepPausedTick);
 					if (const size_t recorded = g_MetricsCollector.GetTickHashCount(); recorded != recordedBefore) {
@@ -6120,6 +6146,7 @@ void RunGameLoop() {
 				if (roundStart || simTick % s_netFullStateEvery == 0) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
+			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
 			TelemetryBundle::CaptureAtTickBoundary();
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
@@ -8457,6 +8484,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-sim-checksum-selftest") {
+			return SimChecksum::RunRowBlockSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-cow-checkpoint-selftest") {
 			return RTE::RunCheckpointImageSelfTest() ? 0 : 1;
 		}
@@ -8648,6 +8678,11 @@ int main(int argc, char** argv) {
 #endif
 		}
 	}
+
+#ifdef __APPLE__
+	// Before SDL creates NSApp: its first event pump handles the launch event that decides window restoration.
+	AppleRegisterApplicationDefaults();
+#endif
 
 	install_allegro(SYSTEM_NONE, &errno, std::atexit);
 	loadpng_init();

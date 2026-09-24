@@ -448,6 +448,10 @@ void Atom::DrawTrail(BITMAP* targetBitmap, const Vector& targetPos) const {
 		bottomRightExtent.m_Y = std::max(bottomRightExtent.m_Y, trailPointPos.m_Y);
 	}
 
+	// No trail point drawn leaves the extents at +-FLT_MAX, which no int holds: there is nothing to register.
+	if (topLeftExtent.m_X > bottomRightExtent.m_X) {
+		return;
+	}
 	g_SceneMan.RegisterDrawing(targetBitmap, g_NoMOID, topLeftExtent.m_X, topLeftExtent.m_Y, bottomRightExtent.m_X + 1.0F, bottomRightExtent.m_Y + 1.0F);
 }
 

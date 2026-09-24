@@ -126,9 +126,9 @@ namespace RTE {
 		void SetElapsedRealTimeS(const double newElapsedRealTime) { m_StartRealTime = g_TimerMan.GetRealTickCount() - (newElapsedRealTime * static_cast<double>(g_TimerMan.GetTicksPerSecond())); }
 
 		/// Returns how much time in ms that there is left till this Timer reaches a certain time limit.
-		/// @param when A unsigned long specifying till when there is time.
-		/// @return A unsigned long with the time left till the passed in value, or negative if this Timer is already past that point in time.
-		unsigned long LeftTillRealMS(int64_t when) { return when - GetElapsedRealTimeMS(); }
+		/// @param when An int64 specifying till when there is time.
+		/// @return A double with the time left till the passed in value, or negative if this Timer is already past that point in time.
+		double LeftTillRealMS(int64_t when) { return static_cast<double>(when) - GetElapsedRealTimeMS(); }
 
 		/// Returns true if the elapsed real time is past a certain amount of time relative to this' start.
 		/// @param limit A long specifying the threshold amount of real time in ms.

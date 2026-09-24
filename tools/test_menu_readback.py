@@ -421,9 +421,12 @@ def pause_probe(who, root):
         # ENGINE 200: End Match is the host's row only while the round runs. The enabled state is re-derived
         # from the live service on every pause-menu Update and the button is drawn by that same pass, so the
         # host reads it live here and the capture's recorded pause rows carry the state after completion.
+        # The host keeps its probe running until the client has left: a host that stops probing plays at full rate while the
+        # probing client cannot, and the round then holds that client as a slow player before it reaches Leave.
         steps += [menu_step("assert_enabled ButtonEndMatch 1"),
                   {"op": "assert", "equals": {"service": "Running"}},
-                  {"op": "signal", "name": "done"}]
+                  {"op": "signal", "name": "done"},
+                  {"op": "wait_file", "path": str(probe_root(root, "client") / "left.json")}]
     steps += [{"op": "finish"}]
     return {"schema": 1, "timeout_ms": 90000, "steps": steps}
 
@@ -1096,7 +1099,7 @@ def scripts(case, port, root, size="960x540"):
                 "assert_visible HostBannedDialog 1\nassert_label LabelHostBannedList Joiner\n"
                 "activate ButtonHostBannedClose\nwait 3\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                "wait_label LabelMultiplayerError banned player was refused\n"
+                "wait_label LabelMultiplayerError Joiner was refused: banned from this session\n"
                 # The last dump stays the post-Apply lobby readback: a second Lobby capture here
                 # would break the paired check that counts one lobby-mode capture per peer.
                 "dump_lobby\nwait 600\nexit\n")
@@ -1740,8 +1743,10 @@ def run_case(options, case, root, failing=None):
                 # The flag takes the same over-cap name the box gets below: one console refusal.
                 args += ["-net-player-name", "F" * (DISPLAY_NAME_MAX_BYTES + 1)]
             if paired and not menu_driven:
+                # A repair round is long enough for a seat held at its start to finish its rejoin before the repair runs.
+                round_ticks = "2400" if case == "repair" else "400"
                 args += ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
-                         "-net-match-ticks", "400", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
+                         "-net-match-ticks", round_ticks, "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
                          "-input-script", str(inputs), "-net-match-report", str(root / f"{who}-match.json")]
                 args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
                 if case == "repair":

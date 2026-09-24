@@ -293,6 +293,15 @@ if gns_mode != 'disabled'
   if gns_root != '' and fs.is_file(join_paths(gns_root + '-turnfix', 'include', 'GameNetworkingSockets', 'steam', 'steamnetworkingtypes.h'))
     gns_root = gns_root + '-turnfix'
   endif
+  # UBSan's vptr check needs RTTI in each class it sees a virtual call on, and GNS release builds use -fno-rtti: a UBSan build
+  # links GNS built in its own sanitizer configuration (-DSANITIZE_UNDEFINED=ON keeps RTTI), installed beside as <prefix>-ubsan.
+  if gns_root != '' and '@0@'.format(get_option('b_sanitize')).contains('undefined') and not gns_root.endswith('-ubsan')
+    if fs.is_file(join_paths(gns_root + '-ubsan', 'include', 'GameNetworkingSockets', 'steam', 'steamnetworkingtypes.h'))
+      gns_root = gns_root + '-ubsan'
+    else
+      warning('UBSan build against ' + gns_root + ', built without RTTI: every call into GameNetworkingSockets reports as a vptr error. Install GNS built with -DSANITIZE_UNDEFINED=ON as ' + gns_root + '-ubsan (docs/turn-relay.md).')
+    endif
+  endif
   gns_dep_root = get_option('gns_dep_root')
   gns_required = gns_mode == 'enabled'
   if gns_root == ''

@@ -222,9 +222,11 @@ def run_preflight(scenario, run, captures, tokens):
     peers = run.get("peers") or scenario.get("peers", [])
     for node in [run, *peers]:
         kill_gate = node.get("kill_when")
-        if kill_gate and (kill_gate.get("peer") not in {peer["name"] for peer in peers} or
-                          bool(kill_gate.get("event")) == (kill_gate.get("probe_complete") is True)):
-            return {"class": "harness", "reason": "A process-drop gate must name a peer and either an event or a completed probe"}
+        # A list of gates drops the peer at the first one met.
+        for gate in (kill_gate if isinstance(kill_gate, list) else [kill_gate] if kill_gate else []):
+            if gate.get("peer") not in {peer["name"] for peer in peers} or \
+                    [bool(gate.get("event")), gate.get("probe_complete") is True, bool(gate.get("log")), "sim_tick" in gate].count(True) != 1:
+                return {"class": "harness", "reason": "A process-drop gate must name a peer and one of an event, a completed probe, a log line or a sim tick"}
         condition = node.get("start_when", {})
         if condition.get("run") and not cross_run_ready(captures, condition):
             return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
@@ -292,6 +294,36 @@ def read_index(video_dir):
         except json.JSONDecodeError:
             continue
     return rows
+
+
+LOCKSTEP_ROUND_START = "[net-lockstep] start round="
+
+
+def fullstate_verdict(host_log, client_log):
+    """The full-state oracle for a pair, or not applicable when neither peer started a lockstep round (a scenario that
+    ends in the lobby samples nothing to compare, and that is not a divergence)."""
+    started = [Path(log).is_file() and LOCKSTEP_ROUND_START in Path(log).read_text(encoding="utf-8", errors="replace")
+               for log in (host_log, client_log)]
+    if not any(started):
+        return {"passed": None, "not_applicable": "neither peer started a lockstep round", "reasons": [], "compared_samples": 0}
+    return compare_fullstate(host_log, client_log)
+
+
+def staged_copy(source, replacements):
+    """A fixture's bytes with each [pattern, replacement] applied to exactly one line, as the feel driver rewrites its tick target."""
+    data = Path(source).read_bytes()
+    for pattern, replacement in replacements:
+        text, count = re.subn(pattern, replacement, data.decode("utf-8"), flags=re.M)
+        if count != 1:
+            raise ValueError(f"{source}: {pattern!r} matched {count} lines, expected exactly one")
+        data = text.encode("utf-8")
+    return data
+
+
+def log_line_seen(path, pattern):
+    """Whether a peer's own stdout has printed a line matching pattern yet (a gate on the product's own log)."""
+    path = Path(path)
+    return path.is_file() and re.search(pattern, path.read_text(encoding="utf-8", errors="replace"), re.M) is not None
 
 
 RECORDER_FLUSH_S = 5.0
@@ -736,7 +768,7 @@ def review(scenario, capture, out):
                                  "reason": (capture.get("stop_finding") or {}).get("reason") or peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
                                  "launch": peer.get("launch")})
     for pair, verdict in (capture.get("fullstate") or {}).items():
-        if not verdict["passed"]:
+        if not verdict.get("not_applicable") and not verdict["passed"]:
             run_findings.append({"class": "engine", "run": capture["name"], "peer": pair,
                                  "reason": "full-state oracle: " + "; ".join(verdict["reasons"]), "launch": None})
     document = {"schema": 1, "scenario": scenario["name"], "title": scenario.get("title", ""),
@@ -747,6 +779,8 @@ def review(scenario, capture, out):
                 "run_findings": run_findings,
                 "failures": {row["peer"]: row["menu_script_failures"] for row in capture["peers"]},
                 "verdict": "agent-review-required"}
+    if capture.get("feel_window"):
+        document["feel_window"] = capture["feel_window"]
     (Path(out) / "review.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     return document
 
@@ -869,7 +903,7 @@ def run_one(options, scenario, run, run_index, out):
             destination = Path(run_handle.cwd) / entry["to"]
             destination.parent.mkdir(parents=True, exist_ok=True)
             if "copy" in entry:
-                destination.write_bytes((Path(options.repo) / entry["copy"]).read_bytes())
+                destination.write_bytes(staged_copy(Path(options.repo) / entry["copy"], entry.get("replace", [])))
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
@@ -904,6 +938,8 @@ def run_one(options, scenario, run, run_index, out):
             return name in records and records[name].get("exit_code") is not None
         if gate.get("probe_complete"):
             return completed_probe(Path(shared[f"PROBE_DIR_{name}"]) / "net-ui-result.json")
+        if gate.get("log"):
+            return log_line_seen(root / name / "stdout.log", gate["log"])
         video = Path(shared[f"VIDEO_{name}"])
         if "sim_tick" in gate:
             return any(row.get("screen") == "game" and row.get("sim_tick", 0) >= gate["sim_tick"] for row in read_index(video))
@@ -922,18 +958,21 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], f"scenario drop after recorded tick {tick}")
                 return
 
-    def kill_when(name, gate):
+    def kill_when(name, gates):
+        gates = gates if isinstance(gates, list) else [gates]
         while not stop_watchers.wait(.05):
             if name in records:
                 return
-            if gate_met(gate):
+            gate = next((candidate for candidate in gates if gate_met(candidate)), None)
+            if gate:
                 # A peer dropped because a probe finished ends a scenario, not a fault: its recorder writes the
                 # frames it already took first, so the probe's last marked window keeps its video.
                 flushed = await_recorder(shared[f"VIDEO_{gate['peer']}"], stop_watchers) if gate.get("probe_complete") else None
                 rows = read_index(shared[f"VIDEO_{name}"])
                 write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None,
                                                                                   "recorder_flush": flushed})
-                description = "completed peer probe" if gate.get("probe_complete") else "peer event " + gate["event"]
+                description = ("completed peer probe" if gate.get("probe_complete") else "peer log line " + gate["log"] if gate.get("log")
+                               else f"{gate['peer']} sim tick {gate['sim_tick']}" if "sim_tick" in gate else "peer event " + gate["event"])
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
 
@@ -1042,7 +1081,7 @@ def run_one(options, scenario, run, run_index, out):
     fullstate = None
     if getattr(options, "fullstate_every", 0) and len(peers) > 1:
         first = peers[0]["name"]
-        fullstate = {f"{first}/{peer['name']}": compare_fullstate(root / first / "stdout.log", root / peer["name"] / "stdout.log")
+        fullstate = {f"{first}/{peer['name']}": fullstate_verdict(root / first / "stdout.log", root / peer["name"] / "stdout.log")
                      for peer in peers[1:]}
     return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted, "stop_finding": stop_finding,
             "fullstate": fullstate}
@@ -1246,6 +1285,11 @@ def feel_probes(run, capture, source):
         except Exception as error:
             result[peer["peer"]] = {"pass_check": False, "error": repr(error), "pins": {}}
             peer["gates"] = {}
+    # The gates average over a fixed tick window (feel_gate "ticks" ends it), so a round made longer to fit a
+    # relaunch never dilutes them; the window each peer was measured over goes into review.json.
+    capture["feel_window"] = {"end_tick": run["feel_gate"].get("ticks"),
+                              "measured": {name: {key: (value.get("metrics") or {}).get(key) for key in ("first_tick", "last_tick")}
+                                           for name, value in result.items()}}
     write_json(root / "feel-gates.json", result)
 
 

@@ -630,8 +630,9 @@ static atomic32_t _memory_heap_id;
 //! Huge page support
 static int _memory_huge_pages;
 #if ENABLE_GLOBAL_CACHE
-//! Global span cache
-static global_cache_t _memory_span_cache[LARGE_CLASS_COUNT];
+//! Global span cache. Constant-initialized: as C++20 its atomic lock would otherwise get a dynamic initializer that
+//! runs after the profiler (constructed earlier in TracyClient.cpp) has started threads that take and hold that lock.
+static global_cache_t _memory_span_cache[LARGE_CLASS_COUNT] = {};
 #endif
 //! Global reserved spans
 static span_t* _memory_global_reserve;

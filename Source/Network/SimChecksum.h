@@ -45,6 +45,20 @@ namespace RTE {
 		/// Feed bytes into a named subsystem accumulator. Thread-safe.
 		void Update(std::string_view subsystem, const void* data, size_t bytes);
 
+		/// Feeds rows into a subsystem exactly as one Update per row, in order, would. A block of a row that holds the same
+		/// bytes as at this key's last call folds in through a table built from them beside the game, so an unchanged block
+		/// costs one multiply instead of its length. Thread-safe against Update; one caller per key.
+		/// @param subsystem The subsystem the rows feed.
+		/// @param key What the rows belong to (a bitmap); its blocks are remembered between calls.
+		/// @param rows The rows, each width bytes long.
+		/// @param width Bytes per row.
+		/// @param height Number of rows.
+		void UpdateRows(std::string_view subsystem, const void* key, const uint8_t* const* rows, int width, int height);
+
+		/// Checks UpdateRows against one Update per row on changing rows, the table path included, and prints the result.
+		/// @return Whether every tick's hash matched.
+		static bool RunRowBlockSelfTest();
+
 		/// Finalize the current tick. Computes per-subsystem hashes + the total.
 		Result EndTick();
 

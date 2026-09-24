@@ -1880,9 +1880,12 @@ void rlLoadExtensions(void* loader) {
 	TRACELOG(RL_LOG_INFO, "    GL_MAX_TEXTURE_IMAGE_UNITS: %i", capability);
 	glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &capability);
 	TRACELOG(RL_LOG_INFO, "    GL_MAX_VERTEX_ATTRIBS: %i", capability);
-	glGetIntegerv(GL_MAX_UNIFORM_LOCATIONS, &capability);
-	TRACELOG(RL_LOG_INFO, "    GL_MAX_UNIFORM_LOCATIONS: %i", capability);
 #if !defined(GRAPHICS_API_OPENGL_ES2)
+	// GL 4.3 or ARB_explicit_uniform_location: a macOS 4.1 core context rejects the enum with GL_INVALID_ENUM.
+	if (GLAD_GL_VERSION_4_3 || GLAD_GL_ARB_explicit_uniform_location) {
+		glGetIntegerv(GL_MAX_UNIFORM_LOCATIONS, &capability);
+		TRACELOG(RL_LOG_INFO, "    GL_MAX_UNIFORM_LOCATIONS: %i", capability);
+	}
 	glGetIntegerv(GL_MAX_UNIFORM_BLOCK_SIZE, &capability);
 	TRACELOG(RL_LOG_INFO, "    GL_MAX_UNIFORM_BLOCK_SIZE: %i", capability);
 	glGetIntegerv(GL_MAX_DRAW_BUFFERS, &capability);
