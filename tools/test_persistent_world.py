@@ -21,7 +21,7 @@ def _wire_version(header: str, owner: str, name: str) -> int:
     """One class-scoped constexpr from the sources under test, so an expectation cannot pin a stale literal."""
     path = Path(__file__).resolve().parent.parent / header
     text = path.read_text(encoding="utf-8")
-    opener = re.search(rf"(?m)^[ \t]*class\s+{owner}\b[^;{{]*\{{", text)
+    opener = re.search(rf"(?m)^[ \t]*(?:class|struct)\s+{owner}\b[^;{{]*\{{", text)
     if not opener:
         raise RuntimeError(f"{path}: {owner} not found")
     start, depth = text.rindex("{", opener.start(), opener.end()), 0
@@ -783,9 +783,9 @@ def _world_row(world_id: str, boot: int, resume_token: str = "") -> dict:
         "seats_free": 1,
         "game_version": "7.0.0",
         "build_id": "stage2-world",
-        "network_protocol_version": 1,
+        "network_protocol_version": _wire_version("Source/Network/NetProtocol.h", "NetProtocol", "c_Version"),
         "lockstep_codec_version": _wire_version("Source/Network/NetLockstep.h", "NetLockstepCodec", "c_Version"),
-        "controller_frame_version": 7,
+        "controller_frame_version": _wire_version("Source/Network/ControllerFrame.h", "ControllerFrame", "c_Version"),
         "match_config_hash": "a" * 64,
         "session_identity_hash": "b" * 64,
         "module_manifest_hash": "c" * 64,

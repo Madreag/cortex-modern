@@ -9,6 +9,7 @@ import hmac
 import http.client
 import json
 import logging
+import re
 import shutil
 import socket
 import ssl
@@ -27,6 +28,32 @@ from session_directory import IP_REQ_PER_MIN, DualRateLimiter, LOGGER, RunningSe
 from unittest import mock
 
 INSTALL_KEY = "0123456789abcdef"
+
+
+def wire_version(header: str, owner: str, name: str = "c_Version") -> int:
+    """One class-scoped constexpr from the engine sources, so a row carries the live layout and never a stale literal."""
+    path = Path(__file__).resolve().parents[2] / header
+    text = path.read_text(encoding="utf-8")
+    opener = re.search(rf"(?m)^[ \t]*(?:class|struct)\s+{owner}\b[^;{{]*\{{", text)
+    if not opener:
+        raise RuntimeError(f"{path}: {owner} not found")
+    start, depth = text.rindex("{", opener.start(), opener.end()), 0
+    for index in range(start, len(text)):
+        depth += (text[index] == "{") - (text[index] == "}")
+        if depth == 0:
+            body = text[start:index]
+            break
+    else:
+        raise RuntimeError(f"{path}: {owner} is never closed")
+    found = re.findall(rf"(?m)^[ \t]*static\s+constexpr\s+\w+\s+{name}\s*=\s*(\d+)\s*;", body)
+    if len(found) != 1:
+        raise RuntimeError(f"{path}: expected exactly one definition of {owner}::{name}, found {len(found)}")
+    return int(found[0])
+
+
+NETWORK_PROTOCOL_VERSION = wire_version("Source/Network/NetProtocol.h", "NetProtocol")
+LOCKSTEP_CODEC_VERSION = wire_version("Source/Network/NetLockstep.h", "NetLockstepCodec")
+CONTROLLER_FRAME_VERSION = wire_version("Source/Network/ControllerFrame.h", "ControllerFrame")
 HEX64_A = "a" * 64
 HEX64_B = "b" * 64
 HEX64_C = "c" * 64
@@ -83,9 +110,9 @@ def sample_register(**overrides: object) -> dict[str, Any]:
         "seats_free": 1,
         "game_version": "7.0.0",
         "build_id": "stage2-p2d-local",
-        "network_protocol_version": 1,
-        "lockstep_codec_version": 20,
-        "controller_frame_version": 6,
+        "network_protocol_version": NETWORK_PROTOCOL_VERSION,
+        "lockstep_codec_version": LOCKSTEP_CODEC_VERSION,
+        "controller_frame_version": CONTROLLER_FRAME_VERSION,
         "match_config_hash": HEX64_A,
         "session_identity_hash": HEX64_B,
         "module_manifest_hash": HEX64_C,
@@ -412,9 +439,9 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(row["seats_free"], 1)
         self.assertEqual(row["game_version"], "7.0.0")
         self.assertEqual(row["build_id"], "stage2-p2d-local")
-        self.assertEqual(row["network_protocol_version"], 1)
-        self.assertEqual(row["lockstep_codec_version"], 20)
-        self.assertEqual(row["controller_frame_version"], 6)
+        self.assertEqual(row["network_protocol_version"], NETWORK_PROTOCOL_VERSION)
+        self.assertEqual(row["lockstep_codec_version"], LOCKSTEP_CODEC_VERSION)
+        self.assertEqual(row["controller_frame_version"], CONTROLLER_FRAME_VERSION)
         self.assertEqual(row["match_config_hash"], HEX64_A)
         self.assertEqual(row["session_identity_hash"], HEX64_B)
         self.assertEqual(row["module_manifest_hash"], HEX64_C)

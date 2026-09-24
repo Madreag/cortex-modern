@@ -257,7 +257,9 @@ namespace RTE {
 			const NetModuleDiff diff = NetIdentity::DiffModules(
 				NetIdentity::BuildModuleDigests(host, NetProtocol::c_MaxModuleDigestEntries),
 				NetIdentity::BuildModuleDigests(joiner, NetProtocol::c_MaxModuleDigestEntries));
-			if (diff.differing.size() != 1 || diff.differing[0].localVersion != 5 || diff.differing[0].remoteVersion != 3 || !diff.differing[0].contentDiffers) {
+			if (diff.differing.size() != 1 || diff.differing[0].localVersion != static_cast<uint32_t>(host[2].version) ||
+			    diff.differing[0].remoteVersion != static_cast<uint32_t>(joiner[1].version) ||
+			    !diff.differing[0].contentDiffers) {
 				*error = "the differing entry did not carry both versions and the content flag";
 				return false;
 			}
@@ -442,9 +444,11 @@ namespace RTE {
 			NetIdentityManifest worldInputs, defaultInputs;
 			if (!NetIdentity::CaptureManifestInputs(worldInputs, error, worldOptions) ||
 			    !NetIdentity::CaptureManifestInputs(defaultInputs, error, defaultOptions)) return false;
-			if (worldInputs.schema != 2 || defaultInputs.schema != 2 ||
-			    worldInputs.deterministicConfig.lockstepCodecVersion != 37 || defaultInputs.deterministicConfig.lockstepCodecVersion != 37 ||
-			    worldInputs.deterministicConfig.matchConfigVersion != 7 || defaultInputs.deterministicConfig.matchConfigVersion != 6) {
+			if (worldInputs.schema != NetIdentityManifest::c_Schema || defaultInputs.schema != NetIdentityManifest::c_Schema ||
+			    worldInputs.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_WorldVersion ||
+			    defaultInputs.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
+			    worldInputs.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_PersistentWorldVersion ||
+			    defaultInputs.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_Version) {
 				*error = "world and default targets lost their diagnostic layout versions";
 				return false;
 			}
@@ -452,8 +456,10 @@ namespace RTE {
 			world.deterministicConfig = worldInputs.deterministicConfig;
 			joiner.deterministicConfig = defaultInputs.deterministicConfig;
 			const auto& supported = world.deterministicConfig;
-			if (supported.supportedLockstepCodecVersion != 38 || supported.supportedWorldLockstepCodecVersion != 37 ||
-			    supported.supportedMatchConfigVersion != 6 || supported.supportedWorldMatchConfigVersion != 7) {
+			if (supported.supportedLockstepCodecVersion != NetLockstepCodec::c_CheckpointVersion ||
+			    supported.supportedWorldLockstepCodecVersion != NetLockstepCodec::c_WorldVersion ||
+			    supported.supportedMatchConfigVersion != NetMatchConfigUtil::c_Version ||
+			    supported.supportedWorldMatchConfigVersion != NetMatchConfigUtil::c_PersistentWorldVersion) {
 				*error = "the admission identity lost a supported layout";
 				return false;
 			}
