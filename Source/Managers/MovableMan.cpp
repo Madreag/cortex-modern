@@ -562,7 +562,10 @@ static void NeutralizeUnframedLockstepActors(const std::deque<Actor*>& actors, c
 	for (Actor* actor: actors) {
 		if (applied.find(static_cast<int64_t>(actor->GetUniqueID())) == applied.end()) {
 			actor->GetController()->ApplyWireNeutral();
-			if (canonicalStartup) actor->GetController()->ApplyWireMode(Controller::CIM_NETWORK, Players::NoPlayer);
+			if (canonicalStartup) {
+				actor->GetController()->ApplyWireMode(Controller::CIM_NETWORK, Players::NoPlayer);
+				actor->GetController()->ApplyWireEnabled();
+			}
 		}
 	}
 }
