@@ -953,8 +953,18 @@ def check_log_gates(results, scratch):
     peers = {peer["name"]: peer for peer in scenario["runs"][0]["peers"]}
     drops = peers["client"].get("kill_when") or []
     ok &= row(results, "log-gate/rollback-lag-drops-the-client-after-catch-up", any(gate.get("log") == pattern for gate in drops))
+    args = peers["host"]["args"]
+    round_ticks = int(args[args.index("-net-match-ticks") + 1])
+    window_end = scenario["runs"][0]["feel_gate"].get("ticks")
+    fallback = next((gate["sim_tick"] for gate in drops if gate.get("peer") == "host" and "sim_tick" in gate), None)
+    # The fallback leaves the relaunch at least 600 ticks (10 s at 60 Hz) of the round; the gates' window ends where it did at 1,200.
     ok &= row(results, "log-gate/rollback-lag-drops-inside-the-round-without-a-catch-up",
-              any(gate.get("peer") == "host" and 0 < gate.get("sim_tick", 0) < 1200 for gate in drops))
+              fallback is not None and 0 < fallback <= round_ticks - 600, f"fallback={fallback} round={round_ticks}")
+    ok &= row(results, "feel-window/rollback-lag-gates-keep-the-1200-tick-window", window_end == 1200 and round_ticks > window_end,
+              f"window_end={window_end} round={round_ticks}")
+    rejoin = [item for item in scenario["checklist"] if item.get("peer") == "client-rejoined"]
+    ok &= row(results, "feel-window/rollback-lag-rejoin-is-judged-on-the-reclaim",
+              bool(rejoin) and all(any("seat-reclaimed" in pattern for pattern in item.get("log_regex", [])) for item in rejoin))
     either = [{"name": "host"}, {"name": "client", "kill_when": [{"peer": "client", "log": pattern}, {"peer": "host", "sim_tick": 800}]}]
     ok &= row(results, "log-gate/first-of-several-drop-gates-passes-preflight", driver.run_preflight({"peers": either}, {"name": "run0", "peers": either}, [], {}) is None)
     stray = [{"name": "client", "kill_when": [{"peer": "client", "log": pattern}, {"peer": "absent", "sim_tick": 800}]}]
@@ -983,6 +993,9 @@ def check_fullstate_applicability(results, scratch):
     capture["fullstate"] = {"host/client": started}
     document = driver.review({"name": "lobby", "checklist": []}, capture, root)
     ok &= row(results, "fullstate/red-verdict-is-a-finding", any("full-state oracle" in f["reason"] for f in document["run_findings"]))
+    capture["feel_window"] = {"end_tick": 1200, "measured": {"host": {"first_tick": 300, "last_tick": 1200}}}
+    document = driver.review({"name": "lobby", "checklist": []}, capture, root)
+    ok &= row(results, "feel-window/review-carries-the-window", document.get("feel_window") == capture["feel_window"])
     return ok
 
 

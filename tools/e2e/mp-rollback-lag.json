@@ -4,7 +4,7 @@
   "title": "V1 feel gate at 100 and 200 ms with five percent loss, a silent seat and a ticket rejoin",
   "port_base": 49464,
   "size": "960x540",
-  "timeout_s": 150,
+  "timeout_s": 240,
   "runs": [
     {
       "name": "lag-100",
@@ -22,7 +22,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -98,7 +98,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -172,7 +172,7 @@
             },
             {
               "peer": "host",
-              "sim_tick": 800
+              "sim_tick": 1200
             }
           ]
         },
@@ -189,7 +189,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -272,7 +272,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -353,7 +353,8 @@
           "client": 200,
           "survivor": 0,
           "client-rejoined": 200
-        }
+        },
+        "ticks": 1200
       }
     },
     {
@@ -372,7 +373,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -448,7 +449,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -522,7 +523,7 @@
             },
             {
               "peer": "host",
-              "sim_tick": 800
+              "sim_tick": 1200
             }
           ]
         },
@@ -539,7 +540,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -622,7 +623,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "1800",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -703,7 +704,8 @@
           "client": 400,
           "survivor": 0,
           "client-rejoined": 400
-        }
+        },
+        "ticks": 1200
       }
     }
   ],
@@ -814,11 +816,17 @@
     },
     {
       "id": "lag-100-rejoin",
-      "what": "The relaunched peer returns to the same running world while the round still runs.",
+      "what": "The relaunched peer rejoins the running round from its ticket and reclaims its seat with live actors.",
       "screen": "game",
-      "assert": "rejoin report and gameplay frames",
+      "assert": "the relaunched client's own seat-reclaimed line with live actors",
       "peer": "client-rejoined",
-      "run": "lag-100"
+      "run": "lag-100",
+      "log_regex": [
+        "\\[net-match\\] seat-reclaimed peer=\\d+ frame=\\d+ live_actors=[1-9]\\d*"
+      ],
+      "forbidden_log_regex": [
+        "admission refused .*match over"
+      ]
     },
     {
       "id": "lag-200-item9a_wall_tps",
@@ -926,11 +934,17 @@
     },
     {
       "id": "lag-200-rejoin",
-      "what": "The relaunched peer returns to the same running world while the round still runs.",
+      "what": "The relaunched peer rejoins the running round from its ticket and reclaims its seat with live actors.",
       "screen": "game",
-      "assert": "rejoin report and gameplay frames",
+      "assert": "the relaunched client's own seat-reclaimed line with live actors",
       "peer": "client-rejoined",
-      "run": "lag-200"
+      "run": "lag-200",
+      "log_regex": [
+        "\\[net-match\\] seat-reclaimed peer=\\d+ frame=\\d+ live_actors=[1-9]\\d*"
+      ],
+      "forbidden_log_regex": [
+        "admission refused .*match over"
+      ]
     },
     {
       "id": "lag-100-role-order",
