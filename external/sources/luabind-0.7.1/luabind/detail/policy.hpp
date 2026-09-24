@@ -28,6 +28,7 @@
 
 #include <typeinfo>
 #include <string>
+#include <type_traits>
 
 #include <boost/type_traits/is_enum.hpp>
 #include <boost/type_traits/is_array.hpp>
@@ -494,6 +495,7 @@ namespace luabind { namespace detail
 			void* obj = lua_newuserdata(L, sizeof(object_rep));
 			//new(obj) object_rep(ptr, crep, object_rep::owner, destructor_s<T>::apply);
 			new(obj) object_rep(ptr, crep, 0, 0);
+			preview_fence_converted(static_cast<object_rep*>(obj));
 
 			// set the meta table
 			detail::getref(L, crep->metatable_ref());
@@ -753,6 +755,7 @@ namespace luabind { namespace detail
 			assert(obj && "internal error, please report");
 			// we send 0 as destructor since we know it will never be called
 			new(obj) object_rep(const_cast<T*>(ptr), crep, object_rep::constant, 0);
+			preview_fence_converted(static_cast<object_rep*>(obj));
 
 			// set the meta table
 			detail::getref(L, crep->metatable_ref());
@@ -802,6 +805,36 @@ namespace luabind { namespace detail
 
 // ******* reference converter *******
 
+	// A type a preview window can copy instead of aliasing; which of them it does copy is decided by its class at run time.
+	template<class T>
+	struct preview_detachable
+	{
+		BOOST_STATIC_CONSTANT(bool, value = std::is_copy_constructible<T>::value && !std::is_abstract<T>::value);
+	};
+
+	// Inside a preview window, an alias a getter or method would hand out of the world's object is a copy that dies with the
+	// window. Only a value Lua can construct is copied; any other alias stays one, and a write through it is dropped.
+	template<class T>
+	bool preview_fence_detach(lua_State* L, const T& ref, bool constant, boost::mpl::true_)
+	{
+		if (!preview_fence_detaches()) return false;
+		const class_rep* crep = get_class_rep<T>(L);
+		if (!crep || !crep->has_lua_constructor()) return false;
+		value_converter<cpp_to_lua>().apply(L, ref);
+		if (constant)
+		{
+			object_rep* copy = static_cast<object_rep*>(lua_touserdata(L, -1));
+			copy->set_flags(copy->flags() | object_rep::constant);
+		}
+		return true;
+	}
+
+	template<class T>
+	bool preview_fence_detach(lua_State*, const T&, bool, boost::mpl::false_)
+	{
+		return false;
+	}
+
 	template<class Direction> struct ref_converter;
 
 	template<>
@@ -809,11 +842,14 @@ namespace luabind { namespace detail
 	{
 		typedef boost::mpl::bool_<false> is_value_converter;
 		typedef ref_converter type;
-		
+
 		template<class T>
 		void apply(lua_State* L, T& ref)
 		{
 			if (luabind::get_back_reference(L, ref))
+				return;
+
+			if (preview_fence_detach(L, ref, false, boost::mpl::bool_<preview_detachable<T>::value>()))
 				return;
 
 			class_rep* crep = get_class_rep<T>(L);
@@ -828,6 +864,7 @@ namespace luabind { namespace detail
 			void* obj = lua_newuserdata(L, sizeof(object_rep));
 			assert(obj && "internal error, please report");
 			new(obj) object_rep(ptr, crep, 0, 0);
+			preview_fence_converted(static_cast<object_rep*>(obj));
 
 			// set the meta table
 			detail::getref(L, crep->metatable_ref());
@@ -841,12 +878,37 @@ namespace luabind { namespace detail
 	{
 		typedef boost::mpl::bool_<false> is_value_converter;
 		typedef ref_converter type;
-		
+
+		// Inside a preview window a callee that writes through a reference to a value the window does not own writes a
+		// copy that dies with the call, as an alias getter hands out one.
+		void* detached;
+		void (*destroy)(void*);
+
+		ref_converter(): detached(0), destroy(0) {}
+		~ref_converter() { if (destroy) destroy(detached); }
+
+		template<class T>
+		T* detach(T* original, boost::mpl::true_)
+		{
+			T* copy = new T(*original);
+			detached = copy;
+			destroy = &delete_s<T>::apply;
+			return copy;
+		}
+
+		template<class T>
+		T* detach(T* original, boost::mpl::false_) { return original; }
+
 		template<class T>
 		typename make_reference<T>::type apply(lua_State* L, by_reference<T>, int index)
 		{
 			assert(!lua_isnil(L, index));
-			return *pointer_converter<lua_to_cpp>().apply(L, by_pointer<T>(), index, true);
+			typedef boost::mpl::bool_<preview_detachable<T>::value> detachable;
+			// Only a value Lua owns is copied: an engine object behind a reference is never duplicated.
+			const object_rep* rep = static_cast<object_rep*>(lua_touserdata(L, index));
+			const bool copy = detachable::value && preview_fence_window && rep && (rep->flags() & object_rep::owner) && !preview_fence_writes(rep);
+			T* ptr = pointer_converter<lua_to_cpp>().apply(L, by_pointer<T>(), index, !copy);
+			return copy ? *detach(ptr, detachable()) : *ptr;
 		}
 
 		template<class T>
@@ -876,6 +938,9 @@ namespace luabind { namespace detail
 			if (luabind::get_back_reference(L, ref))
 				return;
 
+			if (preview_fence_detach(L, ref, true, boost::mpl::bool_<preview_detachable<T>::value>()))
+				return;
+
 			class_rep* crep = get_class_rep<T>(L);
 
 			// if you get caught in this assert you are
@@ -888,6 +953,7 @@ namespace luabind { namespace detail
 			void* obj = lua_newuserdata(L, sizeof(object_rep));
 			assert(obj && "internal error, please report");
 			new(obj) object_rep(const_cast<T*>(ptr), crep, object_rep::constant, 0);
+			preview_fence_converted(static_cast<object_rep*>(obj));
 
 			// set the meta table
 			detail::getref(L, crep->metatable_ref());

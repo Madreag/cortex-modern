@@ -1,0 +1,11 @@
+# pickup+fire fixture (host, player 0): switch from the brain to the dummy, drop its rifle, walk back
+# onto it, pick it up and fire it. Ticks are the sim ticks at which the input is sampled; the wire
+# applies them D ticks later. The predicted pickup and the dependent shot are the G3 gate.
+# A picked-up firearm's fire timer restarts on the pickup (250 ms for the Battle Rifle), so the
+# shot is pressed 14 ticks after the pickup lands.
+30 31 NEXT
+60 61 WEAPON_DROP
+100 118 L_LEFT
+120 138 L_RIGHT
+140 175 WEAPON_PICKUP
+157 163 FIRE

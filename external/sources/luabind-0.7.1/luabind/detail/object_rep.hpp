@@ -74,6 +74,9 @@ namespace luabind { namespace detail
 		object_rep* checkpoint_parent() const { return m_checkpoint_parent; }
 		void set_checkpoint_owner(void* owner, void (*write)(void*)) { m_checkpoint_owner = owner; m_checkpoint_owner_write = write; }
 		void checkpoint_owner_written() { if (m_checkpoint_owner_write) m_checkpoint_owner_write(m_checkpoint_owner); }
+		// The preview window this handle may write in, or 0.
+		unsigned preview_window() const { return m_preview_window; }
+		void set_preview_window(unsigned window) { m_preview_window = window; }
 
 		static int garbage_collector(lua_State* L);
 
@@ -90,6 +93,7 @@ namespace luabind { namespace detail
 		object_rep* m_checkpoint_parent = 0;
 		void* m_checkpoint_owner = 0;
 		void (*m_checkpoint_owner_write)(void*) = 0;
+		unsigned m_preview_window = 0;
 
 		// ======== the new way, separate object_rep from the holder
 //		instance_holder* m_instance;
@@ -157,6 +161,69 @@ namespace luabind { namespace detail
 		return obj;
 
 	}
+
+	// A preview window's fence at the binding boundary. It is open only on the thread that runs the window, only while
+	// the window lasts; outside it every handle reads and writes exactly as before.
+	extern LUABIND_API thread_local unsigned preview_fence_window; // The open window's serial on this thread, or 0.
+	extern LUABIND_API thread_local int preview_fence_parent; // What the call being converted runs on: -1 nothing, 0 the world's, 1 the window's.
+
+	struct LUABIND_API preview_fence
+	{
+		// Opens a window on this thread; a nested window shares the outermost one's serial.
+		static void open();
+		static void close();
+		// Points a converted handle at the window's own copy of the world object it names, when the window holds one.
+		static void (*substitute)(object_rep* obj);
+		// 1 when the object behind a handle is the window's own, 0 when it is the world's, -1 when only the handle can tell.
+		static int (*owns)(const object_rep* obj);
+		// Whether a method may run on an object the window does not own: a read-only call does, a write is dropped.
+		static bool (*runs)(const char* class_name, const char* method_name, bool is_const);
+		// Whether a call may take the argument at this stack index: the window's copy of a world object takes its place, and
+		// a world object bound to a parameter the callee may write drops the call.
+		static bool (*argument)(lua_State* L, int index, bool mutable_pointer, bool mutable_reference, const char* class_name, const char* method_name);
+	};
+
+	// Whether a write through this handle may land: always, outside a window.
+	inline bool preview_fence_writes(const object_rep* obj)
+	{
+		if (!preview_fence_window || !obj) return true;
+		const int owned = preview_fence::owns ? preview_fence::owns(obj) : -1;
+		return owned >= 0 ? owned != 0 : obj->preview_window() == preview_fence_window;
+	}
+
+	// A handle the window makes for an object it did not create takes the standing of the call that produced it.
+	inline void preview_fence_converted(object_rep* obj)
+	{
+		if (!preview_fence_window) return;
+		if (preview_fence_parent == 1) obj->set_preview_window(preview_fence_window);
+		if (preview_fence::substitute) preview_fence::substitute(obj);
+	}
+
+	// Inside a window, a getter or method run on the world's object hands back a copy of what it reads, never an alias.
+	inline bool preview_fence_detaches()
+	{
+		return preview_fence_window && preview_fence_parent == 0;
+	}
+
+	// The results a getter or method converts take the standing of the object it runs on, for as long as it runs.
+	struct preview_fence_call
+	{
+		int previous;
+
+		explicit preview_fence_call(const object_rep* self) : previous(preview_fence_parent)
+		{
+			if (preview_fence_window) preview_fence_parent = self && preview_fence_writes(self) ? 1 : 0;
+		}
+
+		preview_fence_call(lua_State* L, int index) : previous(preview_fence_parent)
+		{
+			if (!preview_fence_window) return;
+			const object_rep* self = is_class_object(L, index);
+			preview_fence_parent = self && preview_fence_writes(self) ? 1 : 0;
+		}
+
+		~preview_fence_call() { preview_fence_parent = previous; }
+	};
 
 }}
 

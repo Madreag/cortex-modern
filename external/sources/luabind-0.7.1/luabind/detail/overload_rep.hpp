@@ -37,6 +37,7 @@
 #include <luabind/detail/overload_rep_base.hpp>
 
 #include <luabind/detail/is_indirect_const.hpp>
+#include <luabind/detail/typetraits.hpp>
 
 #ifndef BOOST_MSVC
 #include <luabind/detail/policy.hpp>
@@ -79,6 +80,10 @@ namespace luabind { namespace detail
 		// A const overload cannot write the object it is called on; everything else may.
 		bool is_const() const { return m_const; }
 
+		// Whether the Lua argument at this stack index binds a non-const pointer or a non-const reference, which the callee may write.
+		bool mutable_pointer_arg(int index) const { return index >= 0 && index < 32 && ((m_mutable_pointers >> index) & 1U) != 0; }
+		bool mutable_reference_arg(int index) const { return index >= 0 && index < 32 && ((m_mutable_references >> index) & 1U) != 0; }
+
 	private:
 
 		// this is the normal function pointer that may be a virtual
@@ -93,6 +98,9 @@ namespace luabind { namespace detail
 		std::vector<LUABIND_TYPE_INFO> m_params_;
 		// is true if the overload is const (this is a part of the signature)
 		bool m_const;
+		// Bit n: the argument at Lua stack index n binds a non-const pointer / a non-const reference.
+		unsigned m_mutable_pointers = 0;
+		unsigned m_mutable_references = 0;
 	};
 
 }} // namespace luabind::detail
@@ -102,6 +110,7 @@ namespace luabind { namespace detail
 #elif BOOST_PP_ITERATION_FLAGS() == 1
 
 #define LUABIND_PARAM(z, n, _) m_params_.push_back(LUABIND_TYPEID(A##n));
+#define LUABIND_MUTABLE_ARG(z, n, offset) 		if (n + offset < 32 && is_nonconst_pointer<A##n>::value) m_mutable_pointers |= 1U << (n + offset); 		if (n + offset < 32 && is_nonconst_reference<A##n>::value) m_mutable_references |= 1U << (n + offset);
 #define LUABIND_POLICY_DECL(z,n,offset) typedef typename detail::find_conversion_policy<n + offset, Policies>::type BOOST_PP_CAT(p,n);
 #define LUABIND_ARITY(z,n,text) + BOOST_PP_CAT(p,n)::has_arg
 
@@ -114,6 +123,7 @@ namespace luabind { namespace detail
 			m_params_.reserve(BOOST_PP_ITERATION());
 			BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_PARAM, _)
 			BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_POLICY_DECL, 2)
+			BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_MUTABLE_ARG, 2)
 			m_arity = 1 BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_ARITY, 0);
 		}
 
@@ -124,6 +134,7 @@ namespace luabind { namespace detail
 			m_params_.reserve(BOOST_PP_ITERATION());
 			BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_PARAM, _)
 			BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_POLICY_DECL, 2)
+			BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_MUTABLE_ARG, 2)
 			m_arity = 1 BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_ARITY, 0);
 		}
 
@@ -134,11 +145,13 @@ namespace luabind { namespace detail
 			m_params_.reserve(BOOST_PP_ITERATION());
 			BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_PARAM, _)
 			BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_POLICY_DECL, 1)
+			BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_MUTABLE_ARG, 1)
 			m_arity = 0 BOOST_PP_REPEAT(BOOST_PP_ITERATION(), LUABIND_ARITY, 0);
 		}
 
 #undef LUABIND_ARITY
 #undef LUABIND_POLICY_DECL
+#undef LUABIND_MUTABLE_ARG
 #undef LUABIND_PARAM
 
 #endif

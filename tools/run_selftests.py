@@ -53,6 +53,7 @@ SELFTESTS = [
     "text-wrap",
     "save-refusal-diagnosis",
     "headless-render-cap",
+    "preview-invariance",
 ]
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",
@@ -195,6 +196,11 @@ def main():
             case_data = run_case(options.repo, case, options.timeout)
             scored = score_detect(case_data)
             scored["binary"] = case_data.get("exe_sha256")
+        elif name == "preview-invariance":
+            from test_preview_invariance import run_case as invariance_case  # noqa: PLC0415
+
+            scored = invariance_case(options.repo, case, options.timeout)
+            scored["binary"] = scored.get("exe_sha256")
         else:
             run = make_run(options.repo, [f"-{name}-selftest"], case, options.timeout, fixtures=SELFTEST_FIXTURES.get(name))
             try:

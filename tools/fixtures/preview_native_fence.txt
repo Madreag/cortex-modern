@@ -1,0 +1,2 @@
+# Preview fence (host, player 0): walk the brain left so its strides run inside the host's preview window.
+60 420 L_LEFT

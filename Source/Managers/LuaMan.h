@@ -576,9 +576,11 @@ namespace RTE {
 		static inline bool s_ScriptsFrozen = false;
 
 		/// Copies each original's self into a hold table. A refused self stays frozen.
+		/// Opens the window's fence at the binding boundary on this thread, which EndPreviewScripts closes.
 		static void CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot);
 		/// Binds each clone to `_ScriptedObjects["<uid>#preview"]`, or the shared slot when sharedSlot is set.
-		static void BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot);
+		/// originals[i], when given, is the world object clones[i] copies: a handle the window makes for it names the clone.
+		static void BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot, const std::vector<const MovableObject*>& originals = {});
 		/// Drops the preview slots.
 		static void EndPreviewScripts();
 		static bool IsPreviewClone(const MovableObject* mo);

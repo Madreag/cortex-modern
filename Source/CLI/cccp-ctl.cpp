@@ -93,6 +93,8 @@ namespace {
 	    {"sim_rng",     "core",    "g_SimRNG state (the sim side of the sim/render RNG split)."},
 	    {"lua_state",   "lua",     "The master Lua state's RNG, plus every scripted object's script graph in a hashed single-process run; the RNG alone under a lockstep coordinator or a replay."},
 	    {"actors",      "sim",     "All MovableMan actors' state (stable MOID iteration)."},
+	    {"actor_timers", "sim",    "Each actor's sim-time timers (last second, stable recovery, heartbeat, new control, death)."},
+	    {"attachables", "sim",     "Every actor's attachable tree: each part's position and rotation."},
 	    {"particles",   "sim",     "MovableMan particles' state."},
 	    {"controller",  "sim",     "The input applied to each actor (53 control states + analog vectors + AI mode)."},
 	    {"controller_route", "sim", "Which seat drives each actor on THIS machine (input mode + player); per-peer by construction."},
