@@ -7,7 +7,7 @@ holds its seat, the host's process is dropped at tick 601, ClientA takes the mat
   2. ClientB's rejoin found its host gone and went to the successor, then completed its private catch-up
      (`held rejoin: the host is gone; rejoining the successor at ...`, `private catch-up complete frame=E`),
      never the round-stopping resync and never the landing;
-  3. both survivors played to tick 900 and their tick hashes are equal on every tick ClientB simulated after the
+  3. both survivors played to tick 3000 and their tick hashes are equal on every tick ClientB simulated after the
      boundary, through the end: ClientB's coverage starts at the image it loaded (ruling D2) and every tick from there is
      compared.
 
@@ -27,7 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-CAP = 900
+CAP = 3000
 HOSTED = re.compile(r"(?m)^\[net-match\] Host left - (.+) is now hosting; boundary=(\d+) round=(\d+)")
 SUCCESSOR = re.compile(r"\[net-match\] held rejoin: the host is gone; rejoining the successor at (\S+)")
 CAUGHT_UP = re.compile(r"\[net-match\] private catch-up complete frame=(\d+)")
