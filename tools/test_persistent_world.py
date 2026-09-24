@@ -903,8 +903,18 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
     # The chain: the next segment is taken at the tick its checkpoint was captured on, no reload.
     assert f"[net-replay] segment chained into" in play_log and f"at tick {second_tick}" in play_log, \
         f"{RED_SEGMENT_CHAIN_BROKE}: {play_log[-2000:]}"
-    # Every canonical tick hash of the replayed world equals the recording host's, from checkpoint+1.
-    passed, compared = restore.strict_compare(world / "host_trace.json", trace, first_tick=first_tick + 1)
+    # Every canonical tick hash of the replayed world equals the recording host's, from checkpoint+1 to the host's last tick.
+    from compare_sim_traces import strict_compare
+    windowed = {}
+    for name, source in (("host", world / "host_trace.json"), ("replay", trace)):
+        data = json.loads(source.read_text(encoding="utf-8-sig"))
+        windowed[name] = data
+    host_last = max(entry["tick"] for entry in windowed["host"]["runs"][0]["tick_hashes"])
+    for name, data in windowed.items():
+        data["runs"][0]["tick_hashes"] = [entry for entry in data["runs"][0]["tick_hashes"] if first_tick < entry["tick"] <= host_last]
+        (out / f"{name}_from_checkpoint.json").write_text(json.dumps(data), encoding="utf-8")
+    passed, compared = strict_compare(str(out / "host_from_checkpoint.json"), str(out / "replay_from_checkpoint.json"),
+                                      expected_ticks=host_last - first_tick, first_tick=first_tick + 1)
     assert passed, f"{RED_SEGMENT_HASHES_DIVERGED}: {compared}"
 
     # The restarted world: its round opens ON a checkpoint, so its FIRST recording is a segment named
