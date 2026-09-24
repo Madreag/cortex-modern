@@ -29,9 +29,34 @@ SELF_HOSTED = re.compile(r"\[net-match\] Host left - (.+) is now hosting")
 CAUGHT_UP = re.compile(r"\[net-match\] private catch-up complete frame=(\d+)")
 
 
+def compare_window(first: Path, second: Path, start: int, cap: int, out: Path) -> dict:
+    """Both traces over [start, cap] only: a held peer's coverage starts at the image it loaded (ruling D2), so the window is
+    validated and compared tick by tick and the held gap before it is not part of the comparison."""
+    from compare_sim_traces import load_trace, strict_compare  # noqa: PLC0415
+
+    out.mkdir(parents=True, exist_ok=True)
+    rows, paths, errors = [], [], []
+    for index, source in enumerate((first, second)):
+        data = json.loads(Path(source).read_text(encoding="utf-8-sig"))
+        data["runs"][0]["tick_hashes"] = [row for row in data["runs"][0]["tick_hashes"] if start <= row["tick"] <= cap]
+        path = out / f"window-{index}.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        try:
+            load_trace(path)
+        except ValueError as error:
+            errors.append(f"{source}: {error}")
+        rows.append(data["runs"][0]["tick_hashes"])
+        paths.append(path)
+    passed, _ = strict_compare(*paths, expected_ticks=cap - start + 1, first_tick=start)
+    coverage = all([row["tick"] for row in trace] == list(range(start, cap + 1)) for trace in rows)
+    first_difference = next((a["tick"] for a, b in zip(*rows) if a != b), None)
+    exact = coverage and rows[0] == rows[1]
+    return {"status": "PASS" if passed and exact and not errors else "FAIL", "first_tick": start, "last_tick": cap,
+            "first_difference": first_difference, "coverage": coverage, "compared_ticks": len(rows[0]), "validation_errors": errors}
+
+
 def judge(out: Path, repo: Path) -> dict:
     sys.path.insert(0, str(repo / "tools"))
-    from e2e_video import compare_hash_range  # noqa: PLC0415
 
     run = out / "run0"
     client = (run / "client" / "stdout.log").read_text(encoding="utf-8", errors="replace")
@@ -57,8 +82,8 @@ def judge(out: Path, repo: Path) -> dict:
     if start not in traces["client"] or any(tick not in traces["host"] for tick in range(start, CAP + 1)):
         failures.append(f"the peers do not both cover the ticks {start}-{CAP}")
     else:
-        compared = compare_hash_range(run / "host_trace.json", run / "client_trace.json", start, CAP, out / "silent-hashes")
-        verdict["hashes"] = {key: compared[key] for key in ("status", "first_tick", "last_tick", "first_difference", "first_missing_tick", "full_rows_equal")}
+        compared = compare_window(run / "host_trace.json", run / "client_trace.json", start, CAP, out / "silent-hashes")
+        verdict["hashes"] = {key: compared[key] for key in ("status", "first_tick", "last_tick", "first_difference", "coverage", "compared_ticks", "validation_errors")}
         if compared["status"] != "PASS":
             failures.append(f"the peers' hashes differ: first difference at {compared['first_difference']}")
     verdict["failures"] = failures
