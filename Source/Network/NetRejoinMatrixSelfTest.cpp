@@ -136,7 +136,7 @@ namespace RTE {
 					case Event::HostGoodbye:
 					case Event::HostLost: set("ignore: the host is already gone", "R1-392ii"); break;
 					case Event::MatchOver: set("refuse: no host remains to end the match until the successor hosts", "GAP", "an end of match requested while the host is being replaced"); break;
-					default: set("ignore until the migration completes or fails (conservative)", "GAP", std::string("event '") + EventName(e) + "' during a host migration"); break;
+					default: set("ignore until the migration completes or fails (conservative)", "GAP", "an event other than the migration's own steps arriving while the host is being replaced"); break;
 				}
 				return x;
 			}
