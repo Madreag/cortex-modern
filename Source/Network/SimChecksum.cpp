@@ -48,8 +48,11 @@ namespace RTE {
 		constexpr uint64_t c_FnvPrime = 0x100000001b3ull;
 		// A block is wide enough that folding it is rare work and narrow enough that a small change rebuilds little.
 		constexpr int c_RowBlockBytes = 4096;
-		// Table builds outstanding at once per key; a block past the budget folds byte by byte until its turn.
-		constexpr size_t c_RowBlockBuildsInFlight = 64;
+		// Table builds outstanding at once per key; a block past the budget folds byte by byte until its turn. Each build is
+		// 256 passes over its block, so the budget keeps the background pool from crowding the sim thread's own cores.
+		constexpr size_t c_RowBlockBuildsInFlight = 16;
+		// Calls a block must hold still through before its table is worth building.
+		constexpr uint8_t c_RowBlockStillCalls = 2;
 
 		using RowBlockTable = std::array<uint64_t, 256>;
 
@@ -114,6 +117,7 @@ namespace RTE {
 			std::vector<uint64_t> tableVersion;
 			std::vector<uint8_t> building;
 			std::vector<uint8_t> same;
+			std::vector<uint8_t> stillCalls;
 			std::vector<std::unique_ptr<RowBlockTable>> table;
 			std::shared_ptr<RowBlockSink> sink = std::make_shared<RowBlockSink>();
 		};
@@ -217,6 +221,7 @@ namespace RTE {
 			fresh.version.assign(blocks, 0);
 			fresh.tableVersion.assign(blocks, 0);
 			fresh.building.assign(blocks, 0);
+			fresh.stillCalls.assign(blocks, 0);
 			fresh.table.resize(blocks);
 		}
 		RowBlockCache& cache = **found;
@@ -279,6 +284,9 @@ namespace RTE {
 				const bool same = cache.same[block] != 0;
 				if (!same) {
 					cache.version[block] = ++cache.nextVersion;
+					cache.stillCalls[block] = 0;
+				} else if (cache.stillCalls[block] < c_RowBlockStillCalls) {
+					++cache.stillCalls[block];
 				}
 				if (same && cache.table[block] && cache.tableVersion[block] == cache.version[block]) {
 					const uint64_t power = column + 1 == cache.blocksPerRow ? cache.tailPower : cache.fullPower;
@@ -289,8 +297,8 @@ namespace RTE {
 				for (size_t index = 0; index < length; ++index) {
 					state = (state ^ live[index]) * c_FnvPrime;
 				}
-				// A block that held still since the last call is likely to hold still again: build its table.
-				if (same && !cache.building[block] && cache.inFlight + worthATable.size() < c_RowBlockBuildsInFlight) {
+				// A block that has held still is likely to hold still again: build its table.
+				if (same && cache.stillCalls[block] >= c_RowBlockStillCalls && !cache.building[block] && cache.inFlight + worthATable.size() < c_RowBlockBuildsInFlight) {
 					worthATable.push_back(block);
 				}
 			}
