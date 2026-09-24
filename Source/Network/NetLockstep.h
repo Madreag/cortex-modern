@@ -1204,6 +1204,8 @@ namespace RTE {
 		void AdvanceReadyFrames(uint64_t nowMs);
 		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
+		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
+		void ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay);
 		void MaybeSendHoldHeartbeats(uint64_t nowMs);
 		static bool IsHoldResolutionReason(NetLockstepStopReason reason);
 		static NetLockstepStopReason StopReasonOf(NetLockstepHoldResolution resolution);
@@ -1217,8 +1219,6 @@ namespace RTE {
 		/// grace: past the silence bound, so a transient episode still costs nobody a seat, and a clear
 		/// quarter short of the missing-frame timeout, so a hold can never be what ends the round.
 		uint64_t CongestionHoldLeaveMs() const { return m_Config.timeoutMs * 3 / 4; }
-		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
-		void ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay);
 		/// Relay host: a required remote that has blocked the round this long has left, whatever its
 		/// socket still says. Waiting for the transport means waiting on the dead peer's own process.
 		void AdjudicateSilentPeers(uint64_t nowMs);
@@ -1311,6 +1311,10 @@ namespace RTE {
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
+		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
+		std::set<uint8_t> m_ReleaseWhenHeld; //!< Host: clean leavers whose hold releases the seat as soon as it lands.
+		std::map<uint8_t, std::string> m_EvictAfterReclaim; //!< Host: removals that meet a return too close to withdraw; applied once it lands.
+		std::optional<NetLockstepStop> m_OwnEndDuringMigration; //!< This peer's own end while its host was being replaced; the new host hears it.
 		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
 		std::map<uint8_t, NetGameSeatReclaim> m_ReclaimTransactions;
 		std::optional<uint64_t> m_ConsumerWaitingFrame;
@@ -1326,10 +1330,6 @@ namespace RTE {
 		bool m_LocalStartupPublished = false;
 		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
 		std::set<uint8_t> m_StartupLinksLost; //!< Host: seats whose link died before the agreed start; the start holds them.
-		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
-		std::set<uint8_t> m_ReleaseWhenHeld; //!< Host: clean leavers whose hold releases the seat as soon as it lands.
-		std::map<uint8_t, std::string> m_EvictAfterReclaim; //!< Host: removals that meet a return too close to withdraw; applied once it lands.
-		std::optional<NetLockstepStop> m_OwnEndDuringMigration; //!< This peer's own end while its host was being replaced; the new host hears it.
 		bool m_AgreedStartApplied = false;
 		std::optional<NetLockstepStart> m_AgreedStartRecord;
 		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.

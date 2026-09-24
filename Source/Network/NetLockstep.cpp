@@ -5017,11 +5017,11 @@ namespace RTE {
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 				++m_Stats.peers[peer].holds;
 				std::cout << "[net-match] hold peer=" << static_cast<int>(peer) << " frame=" << timing.applyFrame << " AI in control" << std::endl;
+				// A clean leaver's seat goes to the AI like any other and is released at once: a return is a new join.
+				if (m_ReleaseWhenHeld.erase(peer) != 0) ReleaseHeldSeat(peer, m_TimingNowMs, true);
 			}
 			for (auto& [revision, pending]: m_TimingDecisions) pending.acknowledgedPeers |= timing.heldPeers;
 		}
-				// A clean leaver's seat goes to the AI like any other and is released at once: a return is a new join.
-				if (m_ReleaseWhenHeld.erase(peer) != 0) ReleaseHeldSeat(peer, m_TimingNowMs, true);
 	}
 
 	bool NetLockstepCoordinator::ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error) {
@@ -5031,14 +5031,14 @@ namespace RTE {
 			if (error) *error = "invalid held peer or authority";
 			return false;
 		}
-		for (const auto& [revision, pending]: m_TimingDecisions)
-			if (!pending.committed && pending.proposal.action == NetTimingAction::Hold && (pending.proposal.heldPeers & (1U << (peerId - 1))) != 0) return true;
-		std::cout << "[net-lockstep] propose hold peer=" << static_cast<int>(peerId) << " next_frame=" << m_Stats.nextFrame
 		// The round has run its last tick: nothing simulates past it, so no seat is judged.
 		if (m_GoodbyeDrain) {
 			if (error) *error = "the goodbye drain takes no hold";
 			return false;
 		}
+		for (const auto& [revision, pending]: m_TimingDecisions)
+			if (!pending.committed && pending.proposal.action == NetTimingAction::Hold && (pending.proposal.heldPeers & (1U << (peerId - 1))) != 0) return true;
+		std::cout << "[net-lockstep] propose hold peer=" << static_cast<int>(peerId) << " next_frame=" << m_Stats.nextFrame
 		          << " played=" << m_PeersPlayedThisRound.contains(peerId) << " first_missing_ms=" << m_FirstMissingMs
 		          << " now=" << nowMs << " own_park=" << m_Stats.longestOwnParkMs
 		          << " peer_park=" << m_Stats.peers[peerId].startParkMs << " ready=" << m_ReadyFrames.size() << std::endl;
@@ -5231,13 +5231,13 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error) {
 		if (!UsesBoundedWait() || !m_AiHeldSeats.contains(peerId)) return true;
-		if (!m_LastDeliveredFrame || *m_LastDeliveredFrame < m_AiHeldSeats.at(peerId)) {
-			if (error) *error = "Rejoining: waiting for the agreed AI handoff frame";
-			return false;
 		if (m_ReleasedAiSeats.contains(peerId)) {
 			if (error) *error = "Your seat was released; you can join the match again as a new player.";
 			return false;
 		}
+		if (!m_LastDeliveredFrame || *m_LastDeliveredFrame < m_AiHeldSeats.at(peerId)) {
+			if (error) *error = "Rejoining: waiting for the agreed AI handoff frame";
+			return false;
 		}
 		auto& estimate = m_DelayEstimators[peerId];
 		estimate.Observe(nowMs, rttMs);
@@ -7234,6 +7234,13 @@ namespace RTE {
 		TickTiming(nowMs);
 		FlushDeferredParkTimings();
 		AdvanceReadyFrames(nowMs);
+		for (auto it = m_EvictAfterReclaim.begin(); it != m_EvictAfterReclaim.end();) {
+			const auto reclaim = m_ReclaimTransactions.find(it->first);
+			if (reclaim != m_ReclaimTransactions.end() && m_LastDeliveredFrame.value_or(0) < reclaim->second.activationFrame) { ++it; continue; }
+			const auto [peer, message] = *it;
+			it = m_EvictAfterReclaim.erase(it);
+			EvictRemovedPeer(peer, message, nowMs);
+		}
 		EndRoundIfNobodyIsComingBack();
 	}
 
@@ -7241,6 +7248,7 @@ namespace RTE {
 		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Idle) {
 			return;
 		}
+		if (IsMigrating()) m_OwnEndDuringMigration = NetLockstepStop{m_Config.localPeerId, NetLockstepStopReason::Complete, 0, message};
 		if (m_Transport) {
 			NetLockstepStop stop;
 			stop.senderPeerId = m_Config.localPeerId;
@@ -7263,6 +7271,7 @@ namespace RTE {
 			Complete(message);
 			return;
 		}
+		if (IsMigrating()) m_OwnEndDuringMigration = NetLockstepStop{m_Config.localPeerId, NetLockstepStopReason::PeerLeft, 0, message};
 		if (m_Transport) {
 			NetLockstepStop stop;
 			stop.senderPeerId = m_Config.localPeerId;
@@ -7298,13 +7307,6 @@ namespace RTE {
 			(void)SendPacket({stop}, NetTransportLane::ControlReliable, &ignored);
 		}
 		m_State = NetLockstepState::Failed;
-		for (auto it = m_EvictAfterReclaim.begin(); it != m_EvictAfterReclaim.end();) {
-			const auto reclaim = m_ReclaimTransactions.find(it->first);
-			if (reclaim != m_ReclaimTransactions.end() && m_LastDeliveredFrame.value_or(0) < reclaim->second.activationFrame) { ++it; continue; }
-			const auto [peer, message] = *it;
-			it = m_EvictAfterReclaim.erase(it);
-			EvictRemovedPeer(peer, message, nowMs);
-		}
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::ResyncRequested)) + ":" + message;
 	}
 
@@ -7312,7 +7314,6 @@ namespace RTE {
 		if (!m_DeferStops) {
 			Fail(reason, frame, message);
 			return;
-		if (IsMigrating()) m_OwnEndDuringMigration = NetLockstepStop{m_Config.localPeerId, NetLockstepStopReason::Complete, 0, message};
 		}
 		if (m_PendingRecoveryStop || !IsRunning()) return;
 		m_PendingRecoveryStop = NetLockstepStop{m_Config.localPeerId, reason, frame, message};
@@ -7335,7 +7336,6 @@ namespace RTE {
 			}
 		}
 		FlushTimingOutgoing();
-		if (IsMigrating()) m_OwnEndDuringMigration = NetLockstepStop{m_Config.localPeerId, NetLockstepStopReason::PeerLeft, 0, message};
 		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
 		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
 		if (IsRunning() && !m_Playback && IsSynchronizedCapturePark(completedTick)) {
@@ -9204,6 +9204,20 @@ namespace RTE {
 		if (!m_RelayHost || peerId == 0 || peerId == m_Config.localPeerId) {
 			return;
 		}
+		// A round that has ended or is relaunching is not rewritten: the next round forms without the removed seat.
+		if (!IsRunning()) {
+			return;
+		}
+		if (m_AiHeldSeats.contains(peerId)) {
+			if (m_ReleasedAiSeats.contains(peerId)) return;
+			// A return some peer may already have committed stands; the removal meets the seat once it is back.
+			if (const auto reclaim = m_ReclaimTransactions.find(peerId); reclaim != m_ReclaimTransactions.end() && reclaim->second.activationFrame <= FutureTimingFrame()) {
+				m_EvictAfterReclaim[peerId] = message;
+				return;
+			}
+			ReleaseHeldSeat(peerId, nowMs, true);
+			return;
+		}
 		if (m_DroppedSeats.find(peerId) != m_DroppedSeats.end()) {
 			ApplyHoldResolution(peerId, NetLockstepHoldResolution::Expired, nowMs, true);
 			return;
@@ -9258,6 +9272,49 @@ namespace RTE {
 		(void)nowMs;
 	}
 
+	void NetLockstepCoordinator::ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay) {
+		if (!m_AiHeldSeats.contains(peerId) || !m_ReleasedAiSeats.insert(peerId).second) return;
+		const bool host = relay && m_RelayHost && m_Config.localPeerId == GetHostPeerId();
+		// An agreed return is withdrawn by holding the seat again at its current incarnation. The caller made sure its
+		// activation is still past every peer's horizon, so no peer can have committed it.
+		if (const auto reclaim = m_ReclaimTransactions.find(peerId); host && reclaim != m_ReclaimTransactions.end() && m_NextTimingRevision != UINT64_MAX) {
+			NetLockstepTiming timing;
+			timing.senderPeerId = GetHostPeerId(); timing.peerId = peerId;
+			timing.action = NetTimingAction::Hold; timing.phase = NetTimingPhase::HoldAtFrame;
+			timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId; timing.authorityGeneration = m_Config.migrationGeneration;
+			timing.revision = m_NextTimingRevision++;
+			timing.applyFrame = timing.cutoffFrame = FutureTimingFrame();
+			timing.heldPeers = static_cast<uint8_t>(1U << (peerId - 1));
+			const auto incarnation = m_Config.peerIncarnations.find(peerId);
+			timing.seatIncarnations[peerId - 1] = incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second;
+			timing.nextFrame = m_Stats.nextFrame;
+			timing.requiredPeers = static_cast<uint8_t>(1U << (m_Config.localPeerId - 1));
+			for (uint8_t peer: m_RemotePeerIds)
+				if (peer != peerId && !IsPeerGoneAtFrame(peer, timing.applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
+			m_TimingDecisions[timing.revision] = {timing, 0, true, nowMs};
+			QueueTiming(timing);
+			FlushTimingOutgoing();
+			ApplyTiming(timing);
+			std::cout << "[net-match] reclaim withdrawn peer=" << static_cast<int>(peerId) << " frame=" << timing.applyFrame << std::endl;
+		}
+		m_DroppedSeats.erase(peerId);
+		m_DroppedSeatResolutions[peerId] = NetLockstepHoldResolution::Expired;
+		m_LateStartReclaims.erase(peerId);
+		m_EvictAfterReclaim.erase(peerId);
+		RefreshLeftSeatHolds();
+		std::cout << "[net-match] seat released peer=" << static_cast<int>(peerId) << " - the AI keeps its units" << std::endl;
+		if (host && m_Transport) {
+			NetLockstepStop notice;
+			notice.senderPeerId = peerId;
+			notice.reason = StopReasonOf(NetLockstepHoldResolution::Expired);
+			const auto leaveIt = m_PeerLeaveFrames.find(peerId);
+			notice.frame = leaveIt != m_PeerLeaveFrames.end() ? leaveIt->second : m_Stats.nextFrame;
+			notice.message = std::string(NetLockstepCodec::StopReasonName(notice.reason));
+			std::string ignored;
+			(void)SendPacket({notice}, NetTransportLane::ControlReliable, &ignored);
+		}
+	}
+
 	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {
 		return !m_LeftSeatsHeld.empty();
 	}
@@ -9274,20 +9331,6 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::SeatIsRefilling(uint8_t peerId) const {
 		const NetLockstepHoldResolution resolution = HeldSeatResolution(peerId);
-		// A round that has ended or is relaunching is not rewritten: the next round forms without the removed seat.
-		if (!IsRunning()) {
-			return;
-		}
-		if (m_AiHeldSeats.contains(peerId)) {
-			if (m_ReleasedAiSeats.contains(peerId)) return;
-			// A return some peer may already have committed stands; the removal meets the seat once it is back.
-			if (const auto reclaim = m_ReclaimTransactions.find(peerId); reclaim != m_ReclaimTransactions.end() && reclaim->second.activationFrame <= FutureTimingFrame()) {
-				m_EvictAfterReclaim[peerId] = message;
-				return;
-			}
-			ReleaseHeldSeat(peerId, nowMs, true);
-			return;
-		}
 		if (m_AiHeldSeats.contains(peerId)) return resolution == NetLockstepHoldResolution::Reclaimed;
 		return resolution == NetLockstepHoldResolution::Reclaimed || resolution == NetLockstepHoldResolution::Substituted;
 	}
