@@ -237,7 +237,7 @@ void set_palette_range(AL_CONST PALETTE p, int from, int to, int vsync)
 		   palette_color[c] = makecol(p[c].r, p[c].g, p[c].b);
    }
 
-   _current_palette_changed = 0xFFFFFFFF & ~(1<<(_color_depth-1));
+   _current_palette_changed = 0xFFFFFFFF & ~(1u<<(_color_depth-1));
 
    if (gfx_driver) {
       if ((screen->vtable->color_depth == 8) && (!_dispsw_status))
@@ -280,7 +280,7 @@ void select_palette(AL_CONST PALETTE p)
 
    _got_prev_current_palette = TRUE;
 
-   _current_palette_changed = 0xFFFFFFFF & ~(1<<(_color_depth-1));
+   _current_palette_changed = 0xFFFFFFFF & ~(1u<<(_color_depth-1));
 }
 
 
@@ -303,7 +303,7 @@ void unselect_palette(void)
    ASSERT(_got_prev_current_palette == TRUE);
    _got_prev_current_palette = FALSE;
 
-   _current_palette_changed = 0xFFFFFFFF & ~(1<<(_color_depth-1));
+   _current_palette_changed = 0xFFFFFFFF & ~(1u<<(_color_depth-1));
 }
 
 
@@ -324,7 +324,7 @@ static int *palette_expansion_table(int bpp)
       default: ASSERT(FALSE); return NULL;
    }
 
-   if (_current_palette_changed & (1<<(bpp-1))) {
+   if (_current_palette_changed & (1u<<(bpp-1))) {
       for (c=0; c<PAL_SIZE; c++) {
 	 table[c] = makecol_depth(bpp,
 				  _current_palette[c].r, 
@@ -332,7 +332,7 @@ static int *palette_expansion_table(int bpp)
 				  _current_palette[c].b);
       }
 
-      _current_palette_changed &= ~(1<<(bpp-1));
+      _current_palette_changed &= ~(1u<<(bpp-1));
    } 
 
    return table;
