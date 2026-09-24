@@ -7628,7 +7628,10 @@ namespace {
 		std::set<long> playerBrains; // The actors human players depend on as their brains.
 		// A WorldStructure1 payload predates the owner map, a WorldStructure2 payload the brain record.
 		template <class Archive> void Fields(Archive& archive, int version = 3) {
-			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs);
+			archive(cohorts);
+			// A roster is re-sorted when a seat's own interface asks for the next actor, so its order is this machine's own.
+			archive.PerPeer(rosters, sortRoster);
+			archive(alarms, quarantine, moidIndex, contiguousActorIDs);
 			if (version >= 2) archive(actorOwners);
 			archive(teamMOIDCount, validObjects);
 			if (version >= 3) archive(playerBrains);
