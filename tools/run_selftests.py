@@ -86,17 +86,17 @@ def sanitizer_build(exe: Path):
 
 def score_wall_clock_informational(stdout: str, record: dict, name: str, sanitizer: str) -> dict:
     """A sanitizer build's row with its declared budget lines reported, not judged. It passes only when those lines
-    are its only named FAILs, the row reached its closing verdict (a bare FAIL that they alone explain), no fatal
-    line was printed and the engine exited 1 by itself; any other failure keeps the plain score."""
+    are its only FAIL lines, its closing verdict is a bare PASS (the checks that print one reached the end green),
+    no fatal line was printed and the engine exited 1 by itself - the exit the budget checks alone give the script-graph
+    row, whose closing PASS covers the master state and whose exit adds the threaded checks. Anything else keeps the plain score."""
     tag = f"{name}-selftest"
     checks = WALL_CLOCK_CHECKS.get(name, ())
     lines = (stdout or "").splitlines()
     budget = [line for line in lines if any(re.match(rf"^\[{re.escape(tag)}\] FAIL {re.escape(check)}(\s|$)", line) for check in checks)]
-    closing = [line for line in lines if re.fullmatch(rf"\[{re.escape(tag)}\] FAIL\s*", line)]
-    rest = "\n".join(line for line in lines if line not in budget and line not in closing)
+    rest = "\n".join(line for line in lines if line not in budget)
+    closing = [match.group(0).split("] ", 1)[1].strip() for match in re.finditer(rf"^\[{re.escape(tag)}\] (PASS|FAIL)\s*$", rest, re.M)]
     named_passes = [line for line in lines if re.match(rf"^\[{re.escape(tag)}\] PASS \S", line)]
-    excused = (bool(budget) and len(closing) == 1 and lines.index(closing[0]) == max(i for i, line in enumerate(lines) if line.strip())
-               and not SUITE_FAIL.search(rest) and not FATAL.search(rest) and bool(named_passes)
+    excused = (bool(budget) and closing == ["PASS"] and not SUITE_FAIL.search(rest) and not FATAL.search(rest) and bool(named_passes)
                and record.get("exit_code") == 1 and not record.get("timed_out"))
     scored = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), tag)
     if excused:

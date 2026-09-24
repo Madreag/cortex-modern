@@ -21,28 +21,31 @@ class SanitizerBudgetRows(unittest.TestCase):
         return runner.score_wall_clock_informational(stdout, {"exit_code": exit_code, "timed_out": timed_out}, "script-graph", "asan")
 
     def test_budget_lines_alone_are_reported_not_judged(self):
-        scored = self.score(log(TIMING, LOADED, f"{TAG} FAIL"))
+        scored = self.score(log(TIMING, LOADED, f"{TAG} PASS"))
         self.assertTrue(scored["pass"], scored)
         self.assertEqual(scored["informational_budget_lines"], [TIMING, LOADED])
         self.assertIn("asan build", scored["reason"])
 
     def test_any_other_named_fail_keeps_the_row_red(self):
-        scored = self.score(log(TIMING, f"{TAG} FAIL threaded_synced_update_permitted_writes global_writes=0", f"{TAG} FAIL"))
+        scored = self.score(log(TIMING, f"{TAG} FAIL threaded_synced_update_permitted_writes global_writes=0", f"{TAG} PASS"))
         self.assertFalse(scored["pass"], scored)
 
-    def test_a_crash_before_the_closing_verdict_keeps_the_row_red(self):
+    def test_a_crash_or_a_missing_or_failed_closing_verdict_keeps_the_row_red(self):
         self.assertFalse(self.score(log(TIMING, LOADED), exit_code=3221225477)["pass"])
+        self.assertFalse(self.score(log(TIMING, LOADED, f"{TAG} PASS"), exit_code=3221225477)["pass"])
         self.assertFalse(self.score(log(TIMING, LOADED), exit_code=1)["pass"])
+        self.assertFalse(self.score(log(TIMING, LOADED, f"{TAG} FAIL"))["pass"])
+        self.assertFalse(self.score(log(TIMING, LOADED, f"{TAG} PASS", f"{TAG} FAIL"))["pass"])
 
     def test_a_fatal_line_or_a_timeout_keeps_the_row_red(self):
-        self.assertFalse(self.score(log(TIMING, "RTE Assert (headless) something", f"{TAG} FAIL"))["pass"])
-        self.assertFalse(self.score(log(TIMING, f"{TAG} FAIL"), timed_out=True)["pass"])
+        self.assertFalse(self.score(log(TIMING, "RTE Assert (headless) something", f"{TAG} PASS"))["pass"])
+        self.assertFalse(self.score(log(TIMING, f"{TAG} PASS"), timed_out=True)["pass"])
 
     def test_a_row_without_budget_lines_is_scored_plainly(self):
-        self.assertFalse(self.score(log(f"{TAG} FAIL"))["pass"])
+        self.assertFalse(self.score(log(f"{TAG} PASS"))["pass"])
 
     def test_an_ordinary_build_judges_the_budget(self):
-        self.assertFalse(runner.score_selftest(log(TIMING, f"{TAG} FAIL"), 1, False, "script-graph-selftest")["pass"])
+        self.assertFalse(runner.score_selftest(log(TIMING, f"{TAG} PASS"), 1, False, "script-graph-selftest")["pass"])
 
     def test_the_sanitizer_is_read_from_the_executable(self):
         with tempfile.TemporaryDirectory() as scratch:
