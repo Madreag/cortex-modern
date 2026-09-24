@@ -665,8 +665,9 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 37;
-		static constexpr uint16_t c_WorldVersion = 37;
+		/// Version 38 hashes actor timers and attachable transforms each tick; admission refuses a peer below it.
+		static constexpr uint16_t c_Version = 38;
+		static constexpr uint16_t c_WorldVersion = 38;
 		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
 		/// arrives after this peer read past it is read past again rather than taken for a sender that started over.
 		static constexpr uint16_t c_UnreliableFrameVersion = 37;
@@ -676,7 +677,7 @@ namespace RTE {
 		/// Version 36 names the proposal a re-stamped timing decision withdraws, so no peer keeps the old one.
 		static constexpr uint16_t c_TimingWithdrawVersion = 36;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
-		static constexpr uint16_t c_CheckpointVersion = 38; //!< The newest wire: frames that carry the checkpoint schedule.
+		static constexpr uint16_t c_CheckpointVersion = 39; //!< The newest wire: frames that carry the checkpoint schedule.
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;

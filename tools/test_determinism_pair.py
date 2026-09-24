@@ -11,6 +11,8 @@ activity, both const calls on managers.
 argument: the same walk runs tools/fixtures/preview_argument_fence.lua, whose preview copy attaches a spare the real
 script keeps.
 nilchain: the same walk runs tools/fixtures/preview_nil_chain.lua, whose hook chains on a call a preview drops.
+cache: the same walk runs tools/fixtures/preview_reader_cache.lua, whose preview copy asks a kept thruster for its burst
+impulse, a reader-named call that fills a cache the real script reads later.
 craft: the host's seat flies a landing craft (tools/fixtures/craft_handoff_activity.lua) that hands out its passenger.
 
 Per-tick hashes are compared strictly on every tick both peers recorded, leaving out only the routing subsystem each
@@ -59,6 +61,9 @@ CASES = {
     "nilchain": {"ticks": 600, "files": ["preview_nil_chain.lua"], "index": "",
                  "both": ["-test-script", "UserScenes.rte/preview_nil_chain.lua", "-net-local-prediction", "on"],
                  "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
+    "cache": {"ticks": 600, "files": ["preview_reader_cache.lua"], "index": "",
+              "both": ["-test-script", "UserScenes.rte/preview_reader_cache.lua", "-net-local-prediction", "on"],
+              "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
     "craft": {"ticks": 480, "files": ["craft_handoff_activity.lua"], "index": CRAFT_ACTIVITY,
               "both": ["-net-match-service-preset", "Determinism Craft Handoff", "-net-match-service-module", "UserScenes.rte"],
               "host": []},
@@ -75,6 +80,8 @@ ARGUMENT = re.compile(r"\[preview-argument\] preview uid=(\d+) attached=(\w+)")
 NILCHAIN = re.compile(r"\[preview-nil\] preview uid=(\d+)")
 NIL_REPORT = re.compile(r"PREVIEW: \S*preview_nil_chain\.lua stopped a preview hook after the dropped call Vector:SetMagnitude")
 NIL_ERROR = re.compile(r"ERROR: \S*preview_nil_chain\.lua")
+CACHE = re.compile(r"\[preview-cache\] preview uid=(\d+) impulse=(\S+)")
+CACHE_COMMIT = re.compile(r"\[preview-cache\] commit uid=(\d+) tick=(\d+) impulse=([-\d.]+) health=([-\d.]+)")
 OUTPARAM = re.compile(r"\[preview-outparam\] preview uid=(\d+) hit_before=([-\d.]+) hit_after=([-\d.]+)")
 CRAFT = re.compile(r"\[craft-fixture\] (hatch opening|passenger out|passenger played) tick=(\d+)")
 
@@ -234,6 +241,12 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict) -> dict:
         result["previews"] = {"hook_runs": len(rows), "reports": reports, "errors": errors}
         # Every preview run of the hook fails on the dropped call's nil; it is reported once, and the real hook never fails.
         fixture_ok = len(rows) > 1 and reports["host"] == 1 and reports["client"] == 0 and errors["host"] == 0 and errors["client"] == 0
+    elif case_name == "cache":
+        rows = [dict(zip(("uid", "impulse"), match)) for match in CACHE.findall(texts["host"])]
+        commits = {who: CACHE_COMMIT.findall(texts[who]) for who in PEERS}
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "dropped": sum(1 for row in rows if row["impulse"] == "nil"), "commits": commits}
+        # The preview's read is dropped, so both peers compute the impulse at the committed tick alike.
+        fixture_ok = bool(rows) and result["previews"]["dropped"] == len(rows) and bool(commits["host"]) and commits["host"] == commits["client"]
     elif case_name == "outparam":
         rows = [dict(zip(("uid", "before", "after"), match)) for match in OUTPARAM.findall(texts["host"])]
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "value_kept": sum(1 for row in rows if row["before"] == row["after"])}
