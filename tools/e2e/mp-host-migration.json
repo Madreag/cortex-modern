@@ -134,7 +134,7 @@
       "id": "migration-drop-clienta",
       "peer": "clienta",
       "mark": "migration-host-drop",
-      "what": "The survivor video spans the recorded host drop until the new host is named."
+      "what": "The survivor video spans the recorded host drop until the on-screen host-loss status appears."
     },
     {
       "id": "migration-named-clienta",
@@ -147,7 +147,7 @@
       ],
       "readback": [
         {
-          "step": 6,
+          "step": 9,
           "path": [
             "control",
             "text"
@@ -155,7 +155,7 @@
           "contains": "is now hosting"
         },
         {
-          "step": 6,
+          "step": 9,
           "path": [
             "control",
             "text"
@@ -163,7 +163,7 @@
           "contains": "ClientA"
         },
         {
-          "step": 6,
+          "step": 9,
           "path": [
             "control",
             "visible"
@@ -225,7 +225,7 @@
       "id": "migration-drop-clientb",
       "peer": "clientb",
       "mark": "migration-host-drop",
-      "what": "The survivor video spans the recorded host drop until the new host is named."
+      "what": "The survivor video spans the recorded host drop until the on-screen host-loss status appears."
     },
     {
       "id": "migration-named-clientb",
@@ -238,7 +238,7 @@
       ],
       "readback": [
         {
-          "step": 6,
+          "step": 9,
           "path": [
             "control",
             "text"
@@ -246,7 +246,7 @@
           "contains": "is now hosting"
         },
         {
-          "step": 6,
+          "step": 9,
           "path": [
             "control",
             "text"
@@ -254,7 +254,7 @@
           "contains": "ClientA"
         },
         {
-          "step": 6,
+          "step": 9,
           "path": [
             "control",
             "visible"
@@ -306,10 +306,44 @@
       "peer": "clienta",
       "mark": "migration-host-drop",
       "screen": "LockstepWaitOverlay",
-      "what": "During host loss the survivor's status names the loss: the recorder observes the host-lost status state at least once between the drop and the new host.",
-      "assert": "Recorded status observation with host_lost=1.",
+      "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no LIVE band, and the recorder observes the host-lost status state.",
+      "assert": "Native readback of LabelNetMatchStatus at the probe's wait for the loss text, plus the recorded host_lost=1 status.",
       "events": [
         "net_status peer=\\d+ host_lost=1"
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
       ]
     },
     {
@@ -317,10 +351,44 @@
       "peer": "clientb",
       "mark": "migration-host-drop",
       "screen": "LockstepWaitOverlay",
-      "what": "During host loss the survivor's status names the loss: the recorder observes the host-lost status state at least once between the drop and the new host.",
-      "assert": "Recorded status observation with host_lost=1.",
+      "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no LIVE band, and the recorder observes the host-lost status state.",
+      "assert": "Native readback of LabelNetMatchStatus at the probe's wait for the loss text, plus the recorded host_lost=1 status.",
       "events": [
         "net_status peer=\\d+ host_lost=1"
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
       ]
     }
   ],
