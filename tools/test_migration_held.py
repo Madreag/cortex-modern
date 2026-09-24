@@ -1,9 +1,10 @@
 """A seat held when its host drops rejoins the new host through the private rejoin: the migration arm of the service seam.
 
-Runs the e2e scenario mp-host-migration-held (host, ClientA and ClientB; ClientB stalls at tick 450 for 6 s so the host
-holds its seat, the host's process is dropped at tick 601, ClientA takes the match over) and judges from the run's files:
+Runs the e2e scenario mp-host-migration-held (host, ClientA, ClientB and ClientC; ClientB stalls at tick 450 for 6 s so the
+host holds its seat, the host's process is dropped at tick 601, ClientA and ClientC elect ClientA) and judges from the run's files:
 
-  1. ClientA declares itself the new host (`Host left - ClientA is now hosting; boundary=B round=R`);
+  1. ClientA and ClientC declare the same new host, boundary and round (`Host left - ClientA is now hosting; boundary=B round=R`),
+     and ClientA and ClientC hash equal from the boundary through the end;
   2. ClientB's rejoin found its host gone and went to the successor, then completed its private catch-up
      (`held rejoin: the host is gone; rejoining the successor at ...`, `private catch-up complete frame=E`),
      never the round-stopping resync and never the landing;
@@ -38,9 +39,11 @@ def judge(out: Path, repo: Path) -> dict:
     from e2e_video import compare_hash_range  # noqa: PLC0415
 
     run = out / "run0"
-    logs = {name: (run / name / "stdout.log").read_text(encoding="utf-8", errors="replace") for name in ("clienta", "clientb")}
+    logs = {name: (run / name / "stdout.log").read_text(encoding="utf-8", errors="replace") for name in ("clienta", "clientb", "clientc")}
     failures = []
     hosted = HOSTED.findall(logs["clienta"])
+    if HOSTED.findall(logs["clientc"]) != hosted:
+        failures.append(f"ClientC declared {HOSTED.findall(logs['clientc'])} where ClientA declared {hosted}")
     successor = SUCCESSOR.findall(logs["clientb"])
     caught_up = CAUGHT_UP.findall(logs["clientb"])
     landed = "The host left the match" in logs["clientb"]
@@ -55,6 +58,10 @@ def judge(out: Path, repo: Path) -> dict:
         failures.append("ClientB was sent to the landing")
     if hosted:
         boundary = int(hosted[0][1])
+        survivors = compare_hash_range(run / "clienta_trace.json", run / "clientc_trace.json", boundary + 1, CAP, out / "survivor-hashes")
+        verdict["survivor_hashes"] = {key: survivors[key] for key in ("status", "first_tick", "last_tick", "first_difference", "first_missing_tick")}
+        if survivors["status"] != "PASS":
+            failures.append(f"ClientA and ClientC differ after the boundary: {verdict['survivor_hashes']}")
         traces = {}
         for name in ("clienta", "clientb"):
             data = json.loads((run / f"{name}_trace.json").read_text(encoding="utf-8-sig"))

@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "mp-host-migration-held",
   "port_base": 49478,
-  "title": "Three peers; ClientB's seat is held when the host drops, ClientA takes over and ClientB rejoins it through the private rejoin",
+  "title": "Four peers; ClientB's seat is held when the host drops, ClientA and ClientC elect ClientA, and ClientB rejoins it through the private rejoin",
   "size": "960x540",
   "timeout_s": 260,
   "peers": [
@@ -33,7 +33,7 @@
         "NetworkSlowPlayerBoundTicks": "3",
         "NetworkSlowPlayerPolicy": "Substitute"
       },
-      "menu_script": "mp-host-migration.host.menu.txt",
+      "menu_script": "mp-host-migration-held.host.menu.txt",
       "kill_at_tick": 601
     },
     {
@@ -106,6 +106,40 @@
         "event": "video_mark migration-client-admitted",
         "timeout_s": 90
       }
+    },
+    {
+      "name": "clientc",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "3000",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/clientc_trace.json",
+        "-net-match-report",
+        "{OUT}/clientc-match.json"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "ClientC",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "clientb",
+        "event": "video_mark migration-client-admitted",
+        "timeout_s": 90
+      }
     }
   ],
   "checklist": [
@@ -145,6 +179,19 @@
       "log_regex": [
         "\\[net-match\\] held rejoin: the host is gone; rejoining the successor at ",
         "\\[net-match\\] private catch-up complete frame=\\d+"
+      ]
+    },
+    {
+      "id": "migration-held-survivor-clientc",
+      "peer": "clientc",
+      "screen": "game",
+      "sim_ticks": [
+        601,
+        3000
+      ],
+      "what": "ClientC survives the host's drop under ClientA.",
+      "log_regex": [
+        "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
       ]
     }
   ]
