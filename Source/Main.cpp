@@ -198,6 +198,26 @@ static std::string s_netFullStateDump;
 static bool s_netDesyncCheck = true;
 static bool s_telemetryBundleOnExit = false;
 static std::string s_menuMpTraceError;
+// The menu trace's tick coverage: a held seat's trace skips the ticks it was away and resumes at the image it loaded.
+struct MenuTraceCoverage {
+	uint64_t lastTick = 0;
+	uint64_t heldResume = 0;
+	unsigned heldGaps = 0;
+	bool unexplained = false;
+
+	void NoteRecorded(uint64_t tick, bool firstOfRun) {
+		if (firstOfRun) {
+			*this = MenuTraceCoverage{};
+		} else if (tick != lastTick + 1) {
+			if (heldResume != 0 && tick == heldResume && tick > lastTick) ++heldGaps; else unexplained = true;
+		}
+		heldResume = 0;
+		lastTick = tick;
+	}
+	bool ReachedCap(size_t count, uint64_t cap) const { return count >= cap || (heldGaps > 0 && lastTick >= cap); }
+	bool CoversCap(size_t count, uint64_t cap) const { return count == cap || (heldGaps > 0 && !unexplained && lastTick == cap); }
+};
+static MenuTraceCoverage s_menuTraceCoverage;
 static bool s_cowCheckpointAutosave = false;
 static bool s_checkpointAudioEffects = false;
 static bool s_checkpointAudioEffectsPassed = false;
@@ -4816,7 +4836,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		    (error.find("ResyncRequested") != std::string::npos || (error.find("PeerHeld:") != std::string::npos && g_SettingsMan.GetNetworkAutoReconnect()));
 		if (!s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted() && !observeTraceRecovery) {
 			const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
-			if (g_MetricsCollector.GetTickHashCount() < cap || error.find("Complete:") == std::string::npos) {
+			if (!s_menuTraceCoverage.ReachedCap(g_MetricsCollector.GetTickHashCount(), cap) || error.find("Complete:") == std::string::npos) {
 				s_menuMpTraceError = error;
 				{
 					std::ostringstream line;
@@ -4988,6 +5008,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					const uint64_t resumedAt = ScenarioRunner::GetLockstepResumeFrame();
 					g_MetricsCollector.RecordString(traceGapKey, nlohmann::json{{"stopped_at", matchTick}, {"reason", error}, {"resumed_at", resumedAt}}.dump());
 					System::PrintDiagnosticLine("[menu-mp] trace observation resumed frame=" + std::to_string(resumedAt));
+					if (heldRejoin) s_menuTraceCoverage.heldResume = resumedAt;
 				}
 				// The relaunch drops the queue; the healed round has not applied a frame yet, so the
 				// toast names the frame it resumes on.
@@ -5874,7 +5895,11 @@ void RunGameLoop() {
 					g_MovableMan.RecordA7UnitOwnership(round, simTick);
 				}
 				if (s_recordTickHashes && s_rbProbePhase != 3) {
+					const size_t recordedBefore = g_MetricsCollector.GetTickHashCount();
 					g_MetricsCollector.RecordTickHash(tickResult, lockstepPausedTick);
+					if (const size_t recorded = g_MetricsCollector.GetTickHashCount(); recorded != recordedBefore) {
+						s_menuTraceCoverage.NoteRecorded(simTick, recorded == 1);
+					}
 				}
 				// Key the exchange on the frame the sim applied, not on the local tick: after a resync
 				// relaunch a peer can tick past the round's stop, and a hash labelled with that tick
@@ -6436,7 +6461,7 @@ void RunGameLoop() {
 			// Stop after the last requested trace tick has completed.
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
 				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
-				if (g_MetricsCollector.GetTickHashCount() >= cap) {
+				if (s_menuTraceCoverage.ReachedCap(g_MetricsCollector.GetTickHashCount(), cap)) {
 					{
 						std::ostringstream line;
 						line << "[menu-mp] trace complete at tick " << g_TimerMan.GetSimUpdateCount();
@@ -9042,7 +9067,7 @@ int main(int argc, char** argv) {
 			if (traceMenuMp) {
 				g_MetricsCollector.EndRun();
 				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
-				if (!s_menuMpTraceError.empty() || g_MetricsCollector.GetTickHashCount() != cap) {
+				if (!s_menuMpTraceError.empty() || !s_menuTraceCoverage.CoversCap(g_MetricsCollector.GetTickHashCount(), cap)) {
 					{
 						std::ostringstream line;
 						line << "[menu-mp] FAIL: collected " << g_MetricsCollector.GetTickHashCount() << " of " << cap << " requested ticks";
