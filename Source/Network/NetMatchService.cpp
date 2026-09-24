@@ -2833,8 +2833,18 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::PreparePrivateRejoinCheckpoint() {
-		if (!m_IsHost || m_State != NetMatchServiceState::Running || !m_Coordinator || !m_Coordinator->IsRunning() ||
-		    !m_Coordinator->UsesBoundedWait() || m_Coordinator->IsPersistentWorldRound() || m_Coordinator->IsMigrating() || !g_ActivityMan.ActivityRunning()) return;
+		const char* held = !m_IsHost ? nullptr : m_State != NetMatchServiceState::Running ? "the service is not running" : !m_Coordinator ? "there is no round" :
+		                   !m_Coordinator->IsRunning() ? "the round is not running" : !m_Coordinator->UsesBoundedWait() ? "the round has no bounded wait" :
+		                   m_Coordinator->IsPersistentWorldRound() ? "the round is a world" : m_Coordinator->IsMigrating() ? "the round is migrating" :
+		                   !g_ActivityMan.ActivityRunning() ? "the activity is not running" : nullptr;
+		if (held || !m_IsHost) {
+			// A returner that waits on a base the host cannot take says why, once per reason.
+			if (held && held != m_PrivateBaseHeldReason && std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [](const NetWorldJoinSession& session) { return session.phase == NetWorldJoinPhase::SnapshotTransfer; }))
+				System::PrintDiagnosticLine(std::string("[net-match] private base waits: ") + held);
+			m_PrivateBaseHeldReason = held;
+			return;
+		}
+		m_PrivateBaseHeldReason = nullptr;
 		const uint64_t round = m_Coordinator->GetRoundId();
 		if (round == 0) return;
 		const auto& config = m_Coordinator->GetConfig();
