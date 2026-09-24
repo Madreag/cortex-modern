@@ -9908,9 +9908,9 @@ namespace RTE {
 			hostLinkMs = std::max<uint64_t>(hostLinkMs, estimate->second.P95Ms());
 		const uint64_t silenceBoundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
 		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, std::max<uint64_t>(500, 3 * hostLinkMs + silenceBoundMs));
-		// A host in its start work or in a capture park it announced is busy, not gone: only its link's close or the round's
-		// timeout ends that wait.
-		const bool hostBusy = m_Stats.nextFrame < m_Config.startFrame + c_StartupSettleTicks ||
+		// A host still in its start work (no frame from it yet this round) or in a capture park it announced is busy, not gone:
+		// only its link's close or the round's timeout ends that wait.
+		const bool hostBusy = !m_PeersPlayedThisRound.contains(GetHostPeerId()) ||
 		    (m_SynchronizedCaptureStartFrame != UINT64_MAX && m_Stats.nextFrame >= m_SynchronizedCaptureStartFrame && m_Stats.nextFrame <= m_SynchronizedCaptureEndFrame + 1);
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
 		if (!hostBusy && hostSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= hostSilenceMs &&
