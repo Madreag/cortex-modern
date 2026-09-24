@@ -12,7 +12,8 @@ argument: the same walk runs tools/fixtures/preview_argument_fence.lua, whose pr
 script keeps.
 nilchain: the same walk runs tools/fixtures/preview_nil_chain.lua, whose hook chains on a call a preview drops.
 cache: the same walk runs tools/fixtures/preview_reader_cache.lua, whose preview copy asks a kept thruster for its burst
-impulse, a reader-named call that fills a cache the real script reads later.
+impulse, a reader-named call that fills a cache the real script reads later: the preview must read it at once and leave
+the cache as it was.
 random: the same walk runs tools/fixtures/preview_random_effect.lua, whose stride hook jolts the actor by amounts it
 draws from the random helpers; the preview's copy shows the jolt at once and the committed draws stay the same.
 craft: the host's seat flies a landing craft (tools/fixtures/craft_handoff_activity.lua) that hands out its passenger.
@@ -253,9 +254,9 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
     elif case_name == "cache":
         rows = [dict(zip(("uid", "impulse"), match)) for match in CACHE.findall(texts["host"])]
         commits = {who: CACHE_COMMIT.findall(texts[who]) for who in PEERS}
-        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "dropped": sum(1 for row in rows if row["impulse"] == "nil"), "commits": commits}
-        # The preview's read is dropped, so both peers compute the impulse at the committed tick alike.
-        fixture_ok = bool(rows) and result["previews"]["dropped"] == len(rows) and bool(commits["host"]) and commits["host"] == commits["client"]
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "read": sum(1 for row in rows if row["impulse"] != "nil"), "commits": commits}
+        # The preview reads the impulse at once without filling the thruster's cache, so both peers compute the committed one alike.
+        fixture_ok = bool(rows) and result["previews"]["read"] == len(rows) and bool(commits["host"]) and commits["host"] == commits["client"]
     elif case_name == "random":
         rows = [dict(zip(("uid", "jolt", "pick", "spin", "chance", "before", "after"), match)) for match in RANDOM.findall(texts["host"])]
         commits = {who: RANDOM_COMMIT.findall(texts[who]) for who in PEERS}
