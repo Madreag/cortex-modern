@@ -286,6 +286,7 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Create(BITMAP* bitmap, bool 
 
 	m_MainBitmapOwned = true;
 
+	ReleaseBackBuffer();
 	m_BackBitmap = NewBackBuffer(m_MainBitmap);
 	m_LastClearColor = ColorKeys::g_InvalidColor;
 	if constexpr (!STATIC_TEXTURE) {
@@ -327,6 +328,7 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Create(const SceneLayerImpl&
 		RTEAssert(m_MainBitmap, "Failed to allocate BITMAP in SceneLayerImpl::Create");
 		blit(bitmapToCopy, m_MainBitmap, 0, 0, 0, 0, bitmapToCopy->w, bitmapToCopy->h);
 
+		ReleaseBackBuffer();
 		m_BackBitmap = NewBackBuffer(m_MainBitmap);
 		m_LastClearColor = ColorKeys::g_InvalidColor;
 
@@ -368,11 +370,9 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Save(Writer& writer) const {
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Destroy(bool notInherited) {
+	ReleaseBackBuffer();
 	if (m_MainBitmapOwned) {
 		destroy_bitmap(m_MainBitmap);
-	}
-	if (m_BackBitmap) {
-		FreeBackBuffer(m_BackBitmap);
 	}
 	if (!notInherited) {
 		Entity::Destroy();
@@ -428,6 +428,7 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::LoadData() {
 	m_MainBitmap = m_BitmapFile.GetAsBitmap(COLORCONV_NONE, false);
 	m_MainBitmapOwned = true;
 
+	ReleaseBackBuffer();
 	m_BackBitmap = NewBackBuffer(m_MainBitmap);
 	if constexpr (!STATIC_TEXTURE) {
 		m_MainTexture = std::make_unique<BigTexture>(m_MainBitmap);
@@ -580,6 +581,18 @@ void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::MarkBitmapSnapshotDirty(int
 }
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
+void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::ReleaseBackBuffer() {
+	// The asynchronous clear writes the back buffer, so it finishes first.
+	if (m_BitmapClearTask.valid()) {
+		m_BitmapClearTask.wait();
+	}
+	if (m_BackBitmap) {
+		FreeBackBuffer(m_BackBitmap);
+	}
+	m_BackBitmap = nullptr;
+}
+
+template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::ClearData() {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_BackBitmap, m_MainBitmap, m_LastClearColor); });
 	ResetBitmapSnapshot();
@@ -590,10 +603,7 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::ClearData() {
 	m_MainTexture.reset();
 	m_MainBitmapOwned = false;
 
-	if (m_BackBitmap) {
-		FreeBackBuffer(m_BackBitmap);
-	}
-	m_BackBitmap = nullptr;
+	ReleaseBackBuffer();
 	m_LastClearColor = ColorKeys::g_InvalidColor;
 
 	return 0;

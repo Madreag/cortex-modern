@@ -345,6 +345,9 @@ namespace RTE {
 		/// @param clearTo Color to clear to.
 		void ClearDrawings(BITMAP* bitmap, const std::vector<IntRect>& drawings, ColorKeys clearTo) const;
 
+		/// Frees the back buffer once any asynchronous clear of it is done.
+		void ReleaseBackBuffer();
+
 		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this SceneLayer, effectively resetting the members of this abstraction level only.
