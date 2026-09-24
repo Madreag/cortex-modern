@@ -3095,7 +3095,9 @@ static std::string ResyncSaveName() {
 		                         std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.joinCapture; });
 		if (!joinCapture && seconds == 0) return output;
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
-		if (input.activationPending) return output;
+		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
+		// reaches a writer and the schedule would wait on it for the rest of the round.
+		if (input.activationPending || input.startupPending) return output;
 		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
 		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
@@ -3138,6 +3140,8 @@ static std::string ResyncSaveName() {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
 			input.activationPending = m_Coordinator->HasPendingSeatActivation();
+			const auto& start = m_Coordinator->GetAgreedStartRecord();
+			input.startupPending = start && tick < start->agreedFirstFrame;
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
 		if (output.capture) {
