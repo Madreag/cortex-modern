@@ -1260,6 +1260,8 @@ namespace RTE {
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
+		bool m_LandedWithoutFrame = false; //!< The host dropped before this seat committed a frame: it landed with nothing to reclaim.
+		bool m_FailedWithoutFrame = false; //!< The failed round's coordinator had simulated no frame when it was torn down.
 		uint64_t m_LastUpdateMs = 0;     //!< The millisecond Update() last ran, so two callers in one frame do one pump.
 		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
 		std::string m_InputDelayText; //!< The announced input-delay line, built beside each lobby publish.
