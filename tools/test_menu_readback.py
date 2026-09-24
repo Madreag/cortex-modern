@@ -1743,8 +1743,10 @@ def run_case(options, case, root, failing=None):
                 # The flag takes the same over-cap name the box gets below: one console refusal.
                 args += ["-net-player-name", "F" * (DISPLAY_NAME_MAX_BYTES + 1)]
             if paired and not menu_driven:
+                # A repair round is long enough for a seat held at its start to finish its rejoin before the repair runs.
+                round_ticks = "2400" if case == "repair" else "400"
                 args += ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
-                         "-net-match-ticks", "400", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
+                         "-net-match-ticks", round_ticks, "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
                          "-input-script", str(inputs), "-net-match-report", str(root / f"{who}-match.json")]
                 args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
                 if case == "repair":
