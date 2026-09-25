@@ -106,9 +106,13 @@
       "run": "run0",
       "peer": "survivor",
       "screen": "game",
-      "what": "The held survivor, alone, hosts the match and plays on.",
+      "what": "The held survivor, alone, hosts the match from its own state and plays the round to its end.",
       "log_regex": [
         "^\\[net-match\\] Host left - survivor is now hosting"
+      ],
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed",
+        "\\[net-match\\] recovery requested"
       ]
     }
   ]
