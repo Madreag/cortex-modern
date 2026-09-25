@@ -4451,12 +4451,83 @@ static std::string ResyncSaveName() {
 		m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 		m_ActivateCatchUpLocalSeat = {};
 		m_InPlaceCatchUp = true;
-		m_InPlaceAskedMs = m_InPlaceSinceMs = SteadyNowMs();
+		m_InPlaceAskedMs = m_InPlaceSinceMs = m_InPlaceHeardMs = SteadyNowMs();
+		m_InPlaceProgressApplied = tick;
 		NoteTailReplayBeganLocked();
 		(void)m_Runner->GetLobbySession().SendPayload(MakeJoinerCatchUpReport(), nullptr);
 		ScenarioRunner::PushNetUiToast("seat_held", "Held - AI in control - rejoining");
 		System::PrintDiagnosticLine("[net-match] held client: catching up in place from frame " + std::to_string(tick) + " (held from " + std::to_string(holdFrame) +
 		                            ", input sent through " + std::to_string(priorInput) + ")");
+		return true;
+	}
+
+	bool NetMatchService::HeldSeatHasSuccessorLocked() const {
+		if (!m_Coordinator) return false;
+		const NetMatchConfig& config = m_Coordinator->GetConfig().matchConfig;
+		const uint8_t host = m_Coordinator->GetHostPeerId();
+		return std::any_of(config.successorOrder.begin(), config.successorOrder.end(), [&](uint8_t peer) {
+			if (peer == host || peer == m_LocalPeerId) return false;
+			const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& candidate) { return candidate.peerId == peer; });
+			return endpoint != config.migrationPeers.end() && endpoint->listenPort != 0;
+		});
+	}
+
+	bool NetMatchService::HostAloneFromOwnStateLocked() {
+		if (!m_Coordinator || !m_CatchUpCoordinator || !m_CatchUpTransport || !g_ActivityMan.ActivityRunning()) return false;
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		NetResyncState committed;
+		std::string error;
+		if (!ScenarioRunner::CaptureNetResyncState(tick, committed, &error, false)) {
+			System::PrintDiagnosticLine("[net-match] held client cannot host alone: " + error);
+			return false;
+		}
+		committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+		const NetLockstepPauseState pause = ScenarioRunner::CaptureLockstepPauseState();
+		// The round goes on from the tick this peer stands on, with every other seat the AI's: its own hold ends, as nobody is left to wait for.
+		NetLockstepConfig config = m_Coordinator->GetConfig();
+		const uint8_t local = config.localPeerId;
+		config.roundId = m_Coordinator->GetRoundId();
+		config.originalRoundConfigHash = m_Coordinator->GetRoundConfigHash();
+		config.startFrame = tick + 1;
+		config.authorityPeerId = local;
+		config.activePeerIds = {local};
+		config.remoteTransportPeerIds.clear();
+		config.remotePeerId = 0;
+		config.remoteTransportPeerId = c_InvalidNetPeerId;
+		config.relayToOtherPeers = true;
+		config.requirePublishedStart = false;
+		config.resumeFromSnapshot = false;
+		config.joinsRunningRound = false;
+		config.initialPeerLeaves.clear();
+		config.initialSeatHolds.clear();
+		config.initialSeatReclaims.clear();
+		for (const auto& [peer, frame]: m_CatchUpCoordinator->GetPeerLeaveFrames()) if (peer != local && frame <= tick) config.initialPeerLeaves[peer] = frame;
+		for (const auto& [peer, hold]: m_CatchUpCoordinator->HeldTransactions()) if (peer != local && hold.cutoffFrame <= tick) config.initialSeatHolds[peer] = hold;
+		config.initialDelayChanges = m_CatchUpCoordinator->GetDelayChanges();
+		const uint8_t lostHost = m_Coordinator->GetHostPeerId();
+		if (!m_Coordinator->Start(*m_CatchUpTransport, config, &error) || !m_Coordinator->IsRunning()) {
+			System::PrintDiagnosticLine("[net-match] held client cannot host alone: " + (error.empty() ? std::string("its round did not start") : error));
+			return false;
+		}
+		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
+		if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, tick)) {
+			ScenarioRunner::SetControllerReplayError("PeerLeft:the held seat could not host the match alone: " + error);
+			return true;
+		}
+		m_CatchUpCoordinator.reset();
+		m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
+		m_ActivateCatchUpLocalSeat = {};
+		m_InPlaceCatchUp = false;
+		m_WorldCatchUp = {};
+		ScenarioRunner::ReleaseWorldCatchUp();
+		ScenarioRunner::NoteLocalSeatReclaimed();
+		m_Coordinator->DeferStopsToTickBoundary();
+		m_StatusText = "Hosting alone - AI in control of the other seats";
+		std::ostringstream line;
+		line << "[net-match] Host left - " << (m_LocalName.empty() ? std::string("this peer") : m_LocalName) << " is now hosting; boundary=" << tick
+		     << " round=" << config.roundId << " alone=1 lost_host=" << static_cast<int>(lostHost);
+		System::PrintDiagnosticLine(line.str());
+		ScenarioRunner::PushNetUiToast("host_handover_live", "Host left - hosting the match alone");
 		return true;
 	}
 
@@ -4478,7 +4549,10 @@ static std::string ResyncSaveName() {
 		const uint64_t heldThrough = report.value;
 		std::string error;
 		if (heldThrough >= hold->second.cutoffFrame) error = "its state ran past the hold at " + std::to_string(hold->second.cutoffFrame);
+		// The connection's last return is done: its reclaim and its reasons belong to that return, not to this one.
 		if (m_WorldJoin.FindSession(connection)) m_WorldJoin.CancelJoin(connection, "the seat was held again");
+		m_PrivateActivations.erase(connection);
+		m_PrivateTransferHeldReasons.erase(connection);
 		const uint32_t returning = hold->second.seatIncarnation + 1;
 		if (error.empty() && m_WorldJoin.BeginInPlaceRejoin(connection, seat, member, returning, link->displayName, nowMs, heldThrough, &error)) {
 			m_InPlaceIncarnationBumps[member] = returning > incarnation ? returning - incarnation : 0;
@@ -4533,6 +4607,8 @@ static std::string ResyncSaveName() {
 				ScenarioRunner::SetControllerReplayError("MatchOver:the match ended while this seat was rejoining");
 				return;
 			}
+			// A held seat with nobody left to rejoin is the match now: it hosts it from its own committed state.
+			if (m_InPlaceCatchUp && !HeldSeatHasSuccessorLocked() && HostAloneFromOwnStateLocked()) return;
 			ScenarioRunner::SetControllerReplayError(m_WorldCatchUp.privateMatch
 			    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
 			    : "PeerLeft:The host connection was lost while joining the world");
@@ -4543,14 +4619,26 @@ static std::string ResyncSaveName() {
 		if (refusal != 0) {
 			m_State = NetMatchServiceState::Failed; m_ErrorText = NetWorldJoinRefusalText(refusal); return;
 		}
-		// The held seat asks for its tail until the first frame of it lands; a host that never serves it sends the seat to the image.
-		if (m_InPlaceCatchUp && m_WorldCatchUp.appliedThrough == m_WorldCatchUp.snapshotTick && !ScenarioRunner::WorldCatchUpHasFrame(m_WorldCatchUp.snapshotTick + 1)) {
+		// The held seat's tail is its host's liveness: a host that stops feeding a seat still behind its activation is gone,
+		// and the seat rejoins the next host, or hosts the match itself when nobody is left.
+		if (m_InPlaceCatchUp) {
 			const uint64_t steadyMs = SteadyNowMs();
-			if (steadyMs - m_InPlaceSinceMs > c_InPlaceTailWaitMs) {
+			if (m_WorldCatchUp.appliedThrough != m_InPlaceProgressApplied || ScenarioRunner::WorldCatchUpHasFrame(m_WorldCatchUp.appliedThrough + 1) ||
+			    ScenarioRunner::WorldCatchUpHolding()) {
+				m_InPlaceProgressApplied = m_WorldCatchUp.appliedThrough;
+				m_InPlaceHeardMs = steadyMs;
+			} else if (steadyMs - m_InPlaceHeardMs > c_InPlaceHostSilenceMs) {
+				System::PrintDiagnosticLine("[net-match] held client: the host sent nothing for " + std::to_string(steadyMs - m_InPlaceHeardMs) + "ms at frame " +
+				                            std::to_string(m_WorldCatchUp.appliedThrough));
+				if (!HeldSeatHasSuccessorLocked() && HostAloneFromOwnStateLocked()) return;
 				m_InPlaceCatchUp = false;
 				ScenarioRunner::SetControllerReplayError("PeerHeld:Held - AI in control - the host sent no catch-up; rejoining");
 				return;
 			}
+		}
+		// The held seat asks for its tail until the first frame of it lands.
+		if (m_InPlaceCatchUp && m_WorldCatchUp.appliedThrough == m_WorldCatchUp.snapshotTick && !ScenarioRunner::WorldCatchUpHasFrame(m_WorldCatchUp.snapshotTick + 1)) {
+			const uint64_t steadyMs = SteadyNowMs();
 			if (steadyMs - m_InPlaceAskedMs >= 500) {
 				(void)lobby.SendPayload(MakeJoinerCatchUpReport(), nullptr);
 				m_InPlaceAskedMs = steadyMs;
