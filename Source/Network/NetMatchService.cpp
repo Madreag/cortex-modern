@@ -3792,6 +3792,9 @@ static std::string ResyncSaveName() {
 			}
 			if (session.acknowledgedThrough + 1 >= session.activationTick)
 				m_WorldJoin.CompleteActivation(session.connection, session.activationTick, nullptr);
+			// A returner still replaying toward its reclaim frame is judged from its catch-up's end, not from the reclaim.
+			else if (session.lastCatchUpReportMs != 0 && nowMs >= session.lastCatchUpReportMs && nowMs - session.lastCatchUpReportMs < c_ReturnerReportGapMs)
+				m_Coordinator->NoteReturnerCatchingUp(session.assignedPeerId, NetLockstepNowMs());
 		}
 		// After the walk: CancelJoin erases from the vector the loop above is iterating.
 		for (const NetPeerId connection: missed) m_WorldJoin.CancelJoin(connection, "the returner could not be moved past the capture park");
@@ -4646,6 +4649,29 @@ static std::string ResyncSaveName() {
 				line << "[net-match] held client asks for its tail again from=" << m_WorldCatchUp.snapshotTick << " activation=" << m_WorldCatchUp.activationTick
 				     << " wire_packets=" << m_CatchUpWirePackets.size() << " starting=" << m_Runner->IsWorldJoinLockstepStarting() << " waited_ms=" << (steadyMs - m_InPlaceSinceMs);
 				System::PrintDiagnosticLine(line.str());
+			}
+		}
+		// A host that holds this seat again has taken back the return it agreed: the catch-up carries on toward the next one,
+		// on the round's own record of both, and the start that return began is dropped.
+		if (m_WorldCatchUp.privateMatch && m_WorldCatchUp.activationTick != 0 && m_CatchUpCoordinator && m_Coordinator && !m_Coordinator->IsRunning()) {
+			const uint8_t localBit = static_cast<uint8_t>(1U << (m_LocalPeerId - 1));
+			const bool heldAgain = std::any_of(m_CatchUpWirePackets.begin(), m_CatchUpWirePackets.end(), [&](const NetTransportEvent& event) {
+				if (event.bytes.size() < NetLockstepCodec::c_HeaderBytes || event.bytes[8] != static_cast<uint8_t>(NetLockstepPacketType::Timing)) return false;
+				const auto decoded = NetLockstepCodec::Decode(event.bytes);
+				const auto* decision = decoded.ok ? std::get_if<NetLockstepTiming>(&decoded.packet.payload) : nullptr;
+				return decision && decision->phase == NetTimingPhase::HoldAtFrame && (decision->heldPeers & localBit) != 0 &&
+				       decision->senderPeerId == m_CatchUpCoordinator->GetHostPeerId() && decision->roundId == m_WorldCatchUp.roundId;
+			});
+			if (heldAgain) {
+				System::PrintDiagnosticLine("[net-match] held client: the host held this seat again before its return at " + std::to_string(m_WorldCatchUp.activationTick) +
+				                            "; catching up on from " + std::to_string(m_WorldCatchUp.appliedThrough));
+				m_Runner->CancelWorldJoinLockstepStart();
+				m_WorldCatchUp.activationTick = 0;
+				m_WorldCatchUp.activationCommitted = false;
+				ScenarioRunner::SetWorldCatchUpActivation(0);
+				m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
+				// The next report asks for the tail from here, and the host answers it as a fresh in-place return.
+				(void)lobby.SendPayload(MakeJoinerCatchUpReport(), nullptr);
 			}
 		}
 		if ((m_WorldCatchUp.privateMatch || m_WorldCatchUp.activationCommitted) && m_WorldCatchUp.activationTick != 0 && m_Coordinator &&
@@ -5513,6 +5539,8 @@ static std::string ResyncSaveName() {
 					return;
 				case LoneElection::HostForHeldSeats:
 					System::PrintDiagnosticLine("[net-match] host lost with only held seats beside this one: hosting the match so they rejoin it");
+					System::PrintDiagnosticLine("[net-match] Host left - " + m_Coordinator->DescribePeer(result.hostPeerId) + " is now hosting; boundary=" +
+					                            std::to_string(result.boundary) + " round=" + std::to_string(m_Coordinator->GetRoundId()));
 					break;
 			}
 		}
