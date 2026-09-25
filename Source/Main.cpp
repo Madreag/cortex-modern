@@ -5939,7 +5939,8 @@ void RunGameLoop() {
 			// Start async GC after all main-thread Lua work for this tick is done. Earlier (inside MovableMan::Update)
 			// it overlapped with LateUpdateGlobalScripts on main, opening a window for ABBA between main holding one
 			// state for the global script and a worker GC __gc finalizer wanting it from another state.
-			g_LuaMan.StartAsyncGarbageCollection();
+			// A tick the round named for a capture collects every state, on every peer, before the capture reads the world.
+			g_LuaMan.StartAsyncGarbageCollection(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), g_NetMatchService.IsNamedCaptureTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())));
 			// Join before leaving the tick: an unfinished GC races the next tick's Lua for the state
 			// mutexes, so collection timing (and per-peer sim state) would follow wall-clock scheduling.
 			g_LuaMan.WaitForAsyncGarbageCollection();
