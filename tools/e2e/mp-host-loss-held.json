@@ -1,0 +1,168 @@
+{
+  "schema": 1,
+  "name": "mp-host-loss-held",
+  "port_base": 49408,
+  "size": "960x540",
+  "timeout_s": 240,
+  "title": "Diagnostic: three peers; the survivor is held at tick 450, the host is killed at tick 601 while it catches up; the leaver hosts and the survivor rejoins it",
+  "runs": [
+    {
+      "name": "run0",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1800",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutoReconnect": "1"
+          },
+          "start_delay_s": 0,
+          "kill_at_tick": 601
+        },
+        {
+          "name": "leaver",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1800",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/leaver-match.json",
+            "-out",
+            "{OUT}/leaver_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "leaver",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutoReconnect": "1"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1800",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1",
+            "-net-test-live-stall",
+            "450:3000"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutoReconnect": "1"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "held-loss-leaver-hosts",
+      "run": "run0",
+      "peer": "leaver",
+      "screen": "game",
+      "what": "The live survivor hosts the match for the held seat.",
+      "log_regex": [
+        "^\\[net-match\\] Host left - leaver is now hosting; boundary=\\d+ round=\\d+"
+      ]
+    },
+    {
+      "id": "held-loss-survivor-rejoins",
+      "run": "run0",
+      "peer": "survivor",
+      "screen": "game",
+      "what": "The held survivor rejoins the new host and plays on.",
+      "log_regex": [
+        "\\[net-match\\] private catch-up complete frame=\\d+"
+      ]
+    }
+  ]
+}
