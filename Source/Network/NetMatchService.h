@@ -463,6 +463,9 @@ namespace RTE {
 		AutosaveTickOutput StepAutosaveSchedule(const AutosaveTickInput& input);
 		/// Whether this host's capture at the tick is the one a joining member waits for.
 		bool IsJoinCaptureTick(uint64_t tick) const { return m_IsHost && m_OpenCaptureForJoin && tick == m_OpenCaptureTick; }
+		/// Whether the round named a capture for this tick: every peer collects every Lua state at its end, so the garbage each
+		/// capture sees is the same on every peer and an image restored from it carries none the others still hold.
+		bool IsNamedCaptureTick(uint64_t tick) const { return m_ScheduledCaptures.contains(tick); }
 		/// Host: the peers that capture on the schedule at the tick, itself included.
 		std::set<uint8_t> CheckpointWriters(uint64_t tick) const;
 		/// Forgets the schedule a previous round named.
