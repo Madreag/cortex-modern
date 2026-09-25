@@ -18649,7 +18649,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "a held seat's send on its open link was reported as controller failure: " + *error; return false;
 			}
 			for (uint64_t now = 20; now < 40 && !client.IsLocalSeatHeld(); ++now) client.Tick(now);
-			if (!client.IsLocalSeatHeld() || client.GetLocalHoldFrame() == 0 || client.IsFailed() || host.GetStats().connectionsClosedOnEviction != 0) {
+			const auto heldAt = host.GetPeerLeaveFrames().find(2);
+			if (!client.IsLocalSeatHeld() || heldAt == host.GetPeerLeaveFrames().end() || client.GetLocalHoldFrame() != heldAt->second || client.IsFailed() ||
+			    host.GetStats().connectionsClosedOnEviction != 0) {
 				*error = "a held seat did not learn its hold over the link the host kept open: held=" + std::to_string(client.IsLocalSeatHeld()) +
 				         " frame=" + std::to_string(client.GetLocalHoldFrame()) + " closed=" + std::to_string(host.GetStats().connectionsClosedOnEviction);
 				return false;
