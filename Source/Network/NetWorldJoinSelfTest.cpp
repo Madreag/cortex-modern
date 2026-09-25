@@ -3134,6 +3134,36 @@ namespace RTE {
 		return exact ? 0 : Fail("a controller roster larger than one lobby chunk was truncated: " + error);
 	}
 
+	/// A held seat whose player kept its state catches up on the committed tail from its own tick: no image is staged or sent,
+	/// the tail starts at the next frame, and a state the kept tail no longer reaches is refused so the seat takes the image.
+	int TestAHeldSeatCatchesUpInPlaceWithoutAnImage() {
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A22);
+		std::string error;
+		if (!host.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &error)) return Fail("in-place fixture: " + error);
+		for (uint64_t tick = 30; tick <= 80; ++tick) {
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1; frame.targetFrame = tick; frame.roundId = 9;
+			if (!host.Tail().Append(frame, &error)) return Fail("in-place tail: " + error);
+		}
+		if (host.BeginInPlaceRejoin(41, 2, 2, 3, "returning", 1, 20, &error) || host.FindSession(41))
+			return Fail("a held seat whose state the kept tail no longer reaches caught up in place");
+		error.clear();
+		if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 50, &error)) return Fail("a held seat with its own state was refused its in-place catch-up: " + error);
+		const NetWorldJoinSession* session = host.FindSession(42);
+		if (!session || session->phase != NetWorldJoinPhase::CatchingUp || !session->transferStarted || session->snapshotTick != 50 ||
+		    session->acknowledgedThrough != 50 || host.HasImageTransferInFlight())
+			return Fail("an in-place catch-up waited on an image instead of streaming its tail from its own tick");
+		std::vector<uint8_t> chunk;
+		if (!host.NextTailChunk(42, chunk) || chunk.size() < 4) return Fail("an in-place catch-up got no tail");
+		const uint32_t size = static_cast<uint32_t>(chunk[0]) | (static_cast<uint32_t>(chunk[1]) << 8) | (static_cast<uint32_t>(chunk[2]) << 16) | (static_cast<uint32_t>(chunk[3]) << 24);
+		NetLockstepFrame first;
+		if (chunk.size() < 4 + size || !DecodeCommittedJoinFrame(std::vector<uint8_t>(chunk.begin() + 4, chunk.begin() + 4 + size), first, &error) || first.targetFrame != 51)
+			return Fail("an in-place tail did not start at the frame after the seat's own state: " + error);
+		std::cout << "[net-world-join-selftest] PASS a_held_seat_catches_up_in_place_without_an_image from=50 first=" << first.targetFrame << std::endl;
+		return 0;
+	}
+
 	/// A returning seat is activated where it will have caught up: at its measured replay rate it closes on the round
 	/// only by the difference of the two rates, and an activation the round reaches first leaves every peer waiting.
 	int TestPrivateActivationWaitsForTheCatchUp() {
@@ -7454,6 +7484,7 @@ namespace RTE {
 		}
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
+		if (const int result = TestAHeldSeatCatchesUpInPlaceWithoutAnImage(); result != 0) return result;
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
