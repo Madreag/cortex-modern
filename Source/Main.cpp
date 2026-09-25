@@ -282,6 +282,7 @@ static bool s_globalCallbacksSelfTestPassed = false;
 // -selftest-frame-stall <tick>:<ms>: hold one frame, so a sim tick reading the wall clock is observable.
 static bool s_frameStallArmed = false;
 static bool s_frameStallFired = false;
+static bool s_scriptedLeaveDue = false; //!< The -net-match-e2e-leave tick has run; the leave follows at its end.
 static long long s_frameStallTick = 0;
 static int s_frameStallMs = 0;
 struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; };
@@ -5700,16 +5701,10 @@ void RunGameLoop() {
 					}
 					std::this_thread::sleep_for(std::chrono::seconds(8));
 				}
-				// Test control: leave the match at the flag's tick (default 300) like a pause-menu quit;
-				// the peer must get a clean end.
+				// Test control: leave the match at the flag's tick (default 300) like a pause-menu quit, which happens between
+				// ticks: the leave waits for this tick's end, so the tick's hash and checksum are the ones every peer computes.
 				if (ScenarioRunner::GetArgs().selftestLeave && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == ScenarioRunner::GetArgs().selftestLeaveTick) {
-					{
-						std::ostringstream line;
-						line << "[net-match] leave: quitting to menu at tick " << simTick;
-						System::PrintDiagnosticLine(line.str());
-					}
-					g_ActivityMan.EndActivity();
-					g_ActivityMan.SetInActivity(false);
+					s_scriptedLeaveDue = true;
 				}
 				// E2E control: this peer spawns a SECOND brain for its own team; the win condition must ride
 				// through the original brain's death because the team still has the spawned one.
@@ -5948,6 +5943,16 @@ void RunGameLoop() {
 			// Join before leaving the tick: an unfinished GC races the next tick's Lua for the state
 			// mutexes, so collection timing (and per-peer sim state) would follow wall-clock scheduling.
 			g_LuaMan.WaitForAsyncGarbageCollection();
+			if (s_scriptedLeaveDue) {
+				s_scriptedLeaveDue = false;
+				{
+					std::ostringstream line;
+					line << "[net-match] leave: quitting to menu at tick " << simTick;
+					System::PrintDiagnosticLine(line.str());
+				}
+				g_ActivityMan.EndActivity();
+				g_ActivityMan.SetInActivity(false);
+			}
 
 			// This is to support hot reloading entities in SceneEditorGUI. It's a bit hacky to put it in Main like this, but PresetMan has no update in which to clear the value, and I didn't want to set up a listener for the job.
 			// It's in this spot to allow it to be set by UInputMan update and ConsoleMan update, and read from ActivityMan update.
