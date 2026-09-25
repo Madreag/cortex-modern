@@ -1546,6 +1546,25 @@ static std::string ResyncSaveName() {
 				m_CatchUpCoordinator = std::make_unique<NetLockstepCoordinator>();
 				if (!m_CatchUpCoordinator->StartReplay(*m_CatchUpTransport, config, error)) return false;
 				ScenarioRunner::SetLockstepCoordinator(m_CatchUpCoordinator.get());
+			} else if (m_Runner && m_Session) {
+				// A world's tail replays on the same kind of coordinator, so a seat held in it goes to the AI at its frame.
+				NetLockstepConfig config;
+				config.sessionId = m_Session->GetSessionId();
+				config.roundId = m_WorldCatchUp.roundId;
+				config.matchConfig = m_Runner->GetMatchConfig();
+				config.peerCount = config.matchConfig.peerCount; config.localPeerId = m_LocalPeerId;
+				config.authorityPeerId = m_WorldCatchUp.authorityPeerId;
+				config.initialPeerLeaves = m_WorldCatchUp.initialPeerLeaves;
+				config.startFrame = m_WorldCatchUp.snapshotTick + 1;
+				config.migrationGeneration = m_WorldCatchUp.authorityGeneration;
+				config.simTickMs = g_TimerMan.GetDeltaTimeMS();
+				auto transport = std::make_unique<LoopbackTransport>();
+				auto replay = std::make_unique<NetLockstepCoordinator>();
+				if (config.peerCount != 0 && m_LocalPeerId != 0 && m_LocalPeerId <= config.peerCount && replay->StartReplay(*transport, config, error)) {
+					m_CatchUpTransport = std::move(transport);
+					m_CatchUpCoordinator = std::move(replay);
+					ScenarioRunner::SetLockstepCoordinator(m_CatchUpCoordinator.get());
+				}
 			}
 			const uint64_t stagingBeganMs = SteadyNowMs();
 			SetRejoinPhaseLocked(NetSession::RejoinPhase::Loading);
@@ -4810,6 +4829,22 @@ static std::string ResyncSaveName() {
 			m_InPlaceCatchUp = false;
 		}
 		if (m_Coordinator && m_Coordinator->IsRunning() && !m_WorldCatchUp.privateMatch) {
+			// The world's own coordinator takes the round from its replay at the activation, with the committed state it replayed to.
+			if (m_CatchUpCoordinator) {
+				NetResyncState committed;
+				std::string error;
+				if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error, false)) {
+					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: " + error); return;
+				}
+				committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+				committed.sessionId = m_Coordinator->GetConfig().sessionId;
+				const auto pause = ScenarioRunner::CaptureLockstepPauseState();
+				ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
+				if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) {
+					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: " + error); return;
+				}
+				m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
+			}
 			for (const auto& event: m_CatchUpWirePackets) {
 				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
 					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
