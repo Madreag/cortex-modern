@@ -565,6 +565,10 @@ static void NeutralizeUnframedLockstepActors(const std::deque<Actor*>& actors, c
 			if (canonicalStartup) {
 				actor->GetController()->ApplyWireMode(Controller::CIM_NETWORK, Players::NoPlayer);
 				actor->GetController()->ApplyWireEnabled();
+				// A menu this machine's own input opened before the round is closed on every peer alike, not animated shut here only.
+				if (PieMenu* pieMenu = actor->GetPieMenu()) {
+					pieMenu->CloseForCanonicalStart();
+				}
 			}
 		}
 	}
