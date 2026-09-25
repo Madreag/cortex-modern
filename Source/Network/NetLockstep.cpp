@@ -4378,6 +4378,7 @@ namespace RTE {
 		m_DelayChanges = m_Config.initialDelayChanges;
 		m_DelayEstimators.clear();
 		m_ArrivalLeads.clear();
+		m_ArrivalLateness.clear();
 		m_TimingOutgoing.clear();
 		m_DeferredControllerFrames.clear();
 		m_NextTimingRevision = 1;
@@ -4881,6 +4882,12 @@ namespace RTE {
 			if (!QueueInputAtTarget(pad, previous.frames, {}, &ignored, {})) return;
 			++m_Stats.delayPaddingFrames;
 		}
+	}
+
+	void NetLockstepCoordinator::NoteReturnerCatchingUp(uint8_t peerId, uint64_t nowMs) {
+		if (!IsReturningSeatBeforeItsFirstInput(peerId)) return;
+		auto& stats = m_Stats.peers[peerId];
+		stats.reclaimAdmittedMs = std::max(stats.reclaimAdmittedMs, nowMs);
 	}
 
 	void NetLockstepCoordinator::NoteSeatReclaimed(uint8_t peerId) {
@@ -6258,8 +6265,18 @@ namespace RTE {
 		// A tick is lost once the sender has sent past it, or once the link it comes over has had its round trip: one
 		// still in flight on a long link arrives by itself. The same tick is asked for again only a round trip later.
 		const auto& link = m_Stats.peers[via];
-		const uint64_t spacingMs = std::max<uint64_t>(static_cast<uint64_t>(std::max(1.0, std::ceil(m_Config.simTickMs))), static_cast<uint64_t>(link.pingMs) + link.jitterMs);
-		if (m_Stats.peers[senderPeerId].highestTargetFrame <= frame && waitedMs < spacingMs) return;
+		const uint64_t tickMs = static_cast<uint64_t>(std::max(1.0, std::ceil(m_Config.simTickMs)));
+		uint64_t spacingMs = std::max<uint64_t>(tickMs, static_cast<uint64_t>(link.pingMs) + link.jitterMs);
+		// A tick still inside the lateness this sender's ticks usually land with is in flight, not lost: a relayed one
+		// crosses two links and waits a relay pass, so neither the sender having sent past it nor one tick of waiting says more.
+		uint64_t arrivalMs = 0;
+		if (const auto lateness = m_ArrivalLateness.find(senderPeerId); lateness != m_ArrivalLateness.end() && !lateness->second.empty()) {
+			std::vector<uint32_t> sorted(lateness->second.begin(), lateness->second.end());
+			std::sort(sorted.begin(), sorted.end());
+			arrivalMs = sorted[std::min(sorted.size() - 1, sorted.size() * 95 / 100)] + tickMs;
+		}
+		spacingMs = std::max(spacingMs, arrivalMs);
+		if (waitedMs < arrivalMs || (m_Stats.peers[senderPeerId].highestTargetFrame <= frame && waitedMs < spacingMs)) return;
 		auto& [askedFrame, askedAtMs] = m_ResendRequests[senderPeerId];
 		if (askedFrame == frame && nowMs >= askedAtMs && nowMs - askedAtMs < spacingMs) return;
 		askedFrame = frame;
@@ -9164,6 +9181,15 @@ namespace RTE {
 			return;
 		}
 		if (frame.targetFrame > peerStats.highestTargetFrame) { peerStats.highestTargetFrame = frame.targetFrame; peerStats.lastProgressMs = nowMs; }
+		// How late this sender's tick lands after we first missed it is the window a resend request waits out.
+		if (frame.targetFrame == m_MissingSinceFrame && m_MissingSinceMs != 0 && nowMs >= m_MissingSinceMs) {
+			const auto held = m_RemoteFrames.find(frame.targetFrame);
+			if (held == m_RemoteFrames.end() || !held->second.contains(frame.senderPeerId)) {
+				auto& lateness = m_ArrivalLateness[frame.senderPeerId];
+				lateness.push_back(static_cast<uint32_t>(std::min<uint64_t>(nowMs - m_MissingSinceMs, UINT32_MAX)));
+				while (lateness.size() > c_ArrivalLatenessSamples) lateness.pop_front();
+			}
+		}
 		// Forward every frame this peer's slot table has taken in, before any rule of ours drops it: what
 		// the peers behind the relay decode has to be the same sequence, or their tables fall behind and a
 		// later slot reference means nothing to them. They apply the same rules to it that we do.

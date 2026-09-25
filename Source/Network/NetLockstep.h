@@ -913,6 +913,8 @@ namespace RTE {
 		uint32_t LocalSeatReclaims() const { return m_LocalSeatReclaims; }
 		/// Restarts a returning seat's presentation readings at the frame its reclaim commits.
 		void NoteSeatReclaimed(uint8_t peerId);
+		/// Host: a returning seat whose catch-up is still replaying toward its reclaim frame; its first-input allowance starts at the catch-up's end.
+		void NoteReturnerCatchingUp(uint8_t peerId, uint64_t nowMs);
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
@@ -1338,6 +1340,8 @@ namespace RTE {
 			uint64_t lead = 0; //!< Frames it arrived ahead of our sim's next tick.
 		};
 		std::map<uint8_t, std::deque<ArrivalLead>> m_ArrivalLeads; //!< Per remote sender, the recent arrivals of its new input.
+		std::map<uint8_t, std::deque<uint32_t>> m_ArrivalLateness; //!< Per remote sender, how long its recent ticks landed after we first missed them.
+		static constexpr size_t c_ArrivalLatenessSamples = 64;
 		/// The decrease a live delay change may make without a wait at its frame: never more than the sender's inputs arrived early by, less the slow-player bound.
 		std::optional<uint16_t> SlackLimitedDecrease(uint8_t peerId, uint16_t proposed, uint16_t current, uint64_t nowMs);
 		/// The rise a live delay change makes so the sender's inputs keep the slow-player bound's worth of lead: what the least lead over the last
