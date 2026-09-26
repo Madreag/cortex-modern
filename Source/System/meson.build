@@ -13,6 +13,7 @@ sources += files(
 'GenericSavedData.cpp',
 'Writer.cpp',
 'CheckpointImage.cpp',
+'PageWriteFence.cpp',
 'Box.cpp',
 'Entity.cpp',
 'Vector.cpp',
