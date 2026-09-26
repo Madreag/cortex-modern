@@ -3965,6 +3965,8 @@ namespace RTE {
 		m_RelayHost = m_Config.relayToOtherPeers;
 		m_Transport = m_MigrationTransport.get();
 		m_Config.initialDelayChanges.clear(); m_Config.initialPeerLeaves.clear(); m_Config.initialSeatHolds.clear(); m_Config.initialSeatReclaims.clear();
+		// Every member starts the successor's round at the boundary: none joins it from a replayed tail, so none waits for that tail's seat state.
+		m_Config.joinsRunningRound = false; m_Config.seatStateThroughFrame = 0;
 		ResetRoundState();
 		for (const auto& decision: m_MigrationFutureDelays) m_DelayChanges[decision.peerId][decision.applyFrame] = decision.delayFrames;
 		m_ReclaimTransactions = reclaimTransactions;
