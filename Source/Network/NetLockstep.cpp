@@ -4464,6 +4464,8 @@ namespace RTE {
 			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 		}
 		m_ReclaimTransactions = m_Config.initialSeatReclaims;
+		// A round joined from a replayed tail commits nothing until the seats that tail changed after its seat state was read are taken.
+		m_AwaitingReplayedSeatState = m_Config.joinsRunningRound && m_Config.seatStateThroughFrame != 0;
 		// A seat taken back before our first frame is a member from it: the start the host hands out for it names that frame.
 		for (const auto& [peer, reclaim]: m_ReclaimTransactions)
 			m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
@@ -4924,6 +4926,37 @@ namespace RTE {
 		if (m_AnnouncedCaptureEvery > 0 && frame > 1 && covers((frame - 1) / m_AnnouncedCaptureEvery * m_AnnouncedCaptureEvery)) return true;
 		const auto after = m_AnnouncedCaptureTicks.lower_bound(frame > delay + 2 ? frame - delay - 2 : 0);
 		return after != m_AnnouncedCaptureTicks.end() && covers(*after);
+	}
+
+	void NetLockstepCoordinator::AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == m_Config.localPeerId) continue;
+			const auto back = replay.m_ReclaimTransactions.find(peer);
+			const auto ours = m_ReclaimTransactions.find(peer);
+			if (back != replay.m_ReclaimTransactions.end() && back->second.activationFrame > m_Config.seatStateThroughFrame && back->second.activationFrame <= throughFrame &&
+			    (ours == m_ReclaimTransactions.end() || ours->second.eventSequence < back->second.eventSequence) &&
+			    (m_AiHeldSeats.contains(peer) || m_PeerLeaveFrames.contains(peer))) {
+				NetLockstepTiming reclaim;
+				reclaim.peerId = peer; reclaim.authorityGeneration = back->second.authorityGeneration; reclaim.revision = back->second.eventSequence;
+				reclaim.seatIncarnations[peer - 1] = back->second.seatIncarnation; reclaim.applyFrame = back->second.activationFrame;
+				reclaim.delayFrames = back->second.delayFrames; reclaim.neutralThroughFrame = back->second.neutralThroughFrame; reclaim.worldTransition = back->second.worldTransition;
+				TakeReturnBeforeFirstFrame(reclaim);
+				std::cout << "[net-lockstep] took peer " << static_cast<int>(peer) << "'s return at " << back->second.activationFrame << " from the replayed tail" << std::endl;
+				continue;
+			}
+			const auto held = replay.m_HoldTransactions.find(peer);
+			if (held != replay.m_HoldTransactions.end() && replay.m_AiHeldSeats.contains(peer) && held->second.cutoffFrame > m_Config.seatStateThroughFrame &&
+			    held->second.cutoffFrame <= throughFrame && !m_AiHeldSeats.contains(peer)) {
+				m_ReclaimTransactions.erase(peer);
+				m_HoldTransactions[peer] = held->second;
+				m_AiHeldSeats[peer] = held->second.cutoffFrame;
+				m_PeerLeaveFrames[peer] = held->second.cutoffFrame;
+				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+				m_Config.peerIncarnations[peer] = std::max(m_Config.peerIncarnations[peer], held->second.seatIncarnation);
+				std::cout << "[net-lockstep] took peer " << static_cast<int>(peer) << "'s hold at " << held->second.cutoffFrame << " from the replayed tail" << std::endl;
+			}
+		}
+		m_AwaitingReplayedSeatState = false;
 	}
 
 	void NetLockstepCoordinator::NoteInPlaceReturn(uint8_t peerId) {
@@ -10003,7 +10036,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::AdvanceReadyFrames(uint64_t nowMs) {
-		if (IsMigrating() || m_State != NetLockstepState::Running || (m_Config.resumeFromSnapshot && (m_ResumeAdmissionPending || !m_ResyncPrimed))) {
+		if (IsMigrating() || m_State != NetLockstepState::Running || (m_Config.resumeFromSnapshot && (m_ResumeAdmissionPending || !m_ResyncPrimed)) || m_AwaitingReplayedSeatState) {
 			return;
 		}
 		if (AnyDroppedSeatHeld() && !UsesBoundedWait()) {
