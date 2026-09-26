@@ -10454,6 +10454,12 @@ namespace RTE {
 		return !m_LeftSeatsHeld.empty();
 	}
 
+	bool NetLockstepCoordinator::HeldSeatReturnsBy(uint8_t peerId, uint64_t frame) const {
+		NET_PLANE_CHECK();
+		const auto back = m_ReclaimTransactions.find(peerId);
+		return m_AiHeldSeats.contains(peerId) && back != m_ReclaimTransactions.end() && back->second.activationFrame <= frame;
+	}
+
 	bool NetLockstepCoordinator::IsSeatHeldForReclaim(uint8_t peerId) const {
 		NET_PLANE_CHECK();
 		return m_LeftSeatsHeld.find(peerId) != m_LeftSeatsHeld.end();
