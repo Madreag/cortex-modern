@@ -3970,6 +3970,18 @@ namespace RTE {
 		ResetRoundState();
 		for (const auto& decision: m_MigrationFutureDelays) m_DelayChanges[decision.peerId][decision.applyFrame] = decision.delayFrames;
 		m_ReclaimTransactions = reclaimTransactions;
+		// A return the lost host agreed for a seat that did not come over with the round passes without it: the seat stays held, and
+		// this round agrees its own return when the seat reaches it.
+		std::set<uint8_t> passedReturns;
+		for (auto back = m_ReclaimTransactions.begin(); back != m_ReclaimTransactions.end();) {
+			const uint8_t peer = back->first;
+			if (back->second.activationFrame <= m_MigrationBoundary || !heldSeats.contains(peer) ||
+			    std::find(m_Config.activePeerIds.begin(), m_Config.activePeerIds.end(), peer) != m_Config.activePeerIds.end()) { ++back; continue; }
+			std::cout << "[net-lockstep] return of peer " << static_cast<int>(peer) << " at " << back->second.activationFrame
+			          << " was agreed with the lost host; the seat stays held from " << heldSeats.at(peer) << std::endl;
+			passedReturns.insert(peer);
+			back = m_ReclaimTransactions.erase(back);
+		}
 		m_LastCompletedSimulationTick = completed;
 		m_LastDeliveredFrame = m_MigrationBoundary;
 		for (const auto& [peer, frame]: heldSeats) {
@@ -3983,6 +3995,8 @@ namespace RTE {
 		}
 		m_PeerLeaveFrames = leaves;
 		m_SeatTransitions = seatTransitions;
+		for (const uint8_t peer: passedReturns)
+			if (const auto seat = m_SeatTransitions.find(peer); seat != m_SeatTransitions.end()) seat->second.erase(seat->second.upper_bound(m_MigrationBoundary), seat->second.end());
 		for (uint8_t peer: m_Config.activePeerIds) {
 			m_PeerLeaveFrames.erase(peer);
 			// A member of the successor's round is in it from its first frame, whatever the old round last recorded of its seat.
