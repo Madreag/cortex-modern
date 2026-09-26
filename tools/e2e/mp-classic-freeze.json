@@ -1,0 +1,197 @@
+{
+  "schema": 1,
+  "name": "mp-classic-freeze",
+  "port_base": 49407,
+  "title": "A classic Pause-for-them round rides out one peer's 1.5 s freeze without dropping its link",
+  "size": "960x540",
+  "timeout_s": 100,
+  "runs": [
+    {
+      "name": "freeze",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Pause",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0
+        },
+        {
+          "name": "frozen",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/frozen-match.json",
+            "-out",
+            "{OUT}/frozen_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "frozen",
+            "-net-join",
+            "127.0.0.1",
+            "-selftest-frame-stall",
+            "600:1500"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Pause",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "observe_after_failure": true
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Pause",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "freeze-no-drop",
+      "run": "freeze",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The host keeps the frozen peer's link and seat through the freeze.",
+      "forbidden_log_regex": [
+        "left the match at frame",
+        "hold peer=",
+        "disconnected"
+      ]
+    },
+    {
+      "id": "freeze-frozen-plays-on",
+      "run": "freeze",
+      "peer": "frozen",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The frozen peer resumes the round after its freeze, never reading it as the host lost.",
+      "log_regex": [
+        "\\[selftest\\] frame stall tick=600"
+      ],
+      "forbidden_log_regex": [
+        "host lost",
+        "resync failed",
+        "recovery requested",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "freeze-survivor-plays-on",
+      "run": "freeze",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The other client waits the freeze out and plays on.",
+      "forbidden_log_regex": [
+        "host lost",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    }
+  ]
+}

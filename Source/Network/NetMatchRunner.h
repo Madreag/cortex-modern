@@ -185,6 +185,8 @@ namespace RTE {
 		/// One tick of a starting joiner's handshake. Returns whether the coordinator is running; a
 		/// false with an error set is the start giving up.
 		bool PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, std::string* error = nullptr);
+		/// Drops a joiner's lockstep start whose activation the host has taken back; the round it follows goes on.
+		void CancelWorldJoinLockstepStart() { if (m_WorldJoinStarting) { m_WorldJoinStarting = false; m_State = NetMatchRuntimeState::Running; } }
 		/// Whether a joiner's lockstep start is mid-handshake and wants its tick this pump.
 		bool IsWorldJoinLockstepStarting() const { return m_WorldJoinStarting && m_State == NetMatchRuntimeState::LockstepStarting; }
 		/// How many of the joiner's own updates the start has cost so far.
