@@ -1793,6 +1793,21 @@ bool UInputMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
     } catch (const std::exception&) { return false; }
 }
 
+std::string UInputMan::SaveCommittedSeats() const {
+    CheckpointWriter archive("UInputSeats1");
+    for (const CommittedSeatMouse& seat: m_CommittedSeatMouse) archive(seat.movement, seat.deviceClass, seat.buttons, seat.tick);
+    return archive.Text();
+}
+
+bool UInputMan::LoadCommittedSeats(std::string_view text, bool validateOnly) {
+    try {
+        CheckpointReader archive(text, "UInputSeats1", validateOnly);
+        for (CommittedSeatMouse& seat: m_CommittedSeatMouse) archive(seat.movement, seat.deviceClass, seat.buttons, seat.tick);
+        archive.Finish();
+        return true;
+    } catch (const std::exception&) { return false; }
+}
+
 bool UInputMan::RunCheckpointSelfTest() {
     const std::string original = SaveCheckpoint();
     bool passed = true;
@@ -1856,6 +1871,15 @@ bool UInputMan::RunCheckpointSelfTest() {
         check("text_and_sensitivity", GetTextInput() == "checkpoint input text" && GetMouseSensitivity() == 1.375F);
         check("mapping_values_and_identity", &m_ControlScheme[0] == scheme && &(*scheme->GetInputMappings())[0] == mapping && scheme->GetKeyMapping(0) == SDL_SCANCODE_Q && scheme->GetDigitalAimSpeed() == 0.375F);
         check("joystick_edges", s_PrevJoystickStates.size() == 1 && s_PrevJoystickStates[0].m_Axis[1] == 12345 && s_PrevJoystickStates[0].m_ButtonsPressedSinceSim[2] && s_ChangedJoystickStates[0].m_ButtonsReleasedSinceSim[3]);
+        const auto seats = m_CommittedSeatMouse;
+        NoteCommittedSeatMouse(Players::PlayerTwo, Vector(3.5F, -2.0F), 2, 0x49, 77);
+        const std::string committed = SaveCommittedSeats();
+        ResetCommittedSeats();
+        check("committed_seats_truncated_atomic", !LoadCommittedSeats(committed.substr(0, committed.size() - 2)) && m_CommittedSeatMouse[Players::PlayerTwo].tick == -1);
+        check("committed_seats_validate_only", LoadCommittedSeats(committed, true) && m_CommittedSeatMouse[Players::PlayerTwo].tick == -1);
+        const CommittedSeatMouse& seat = m_CommittedSeatMouse[Players::PlayerTwo];
+        check("committed_seats_restore", LoadCommittedSeats(committed) && SaveCommittedSeats() == committed && seat.movement == Vector(3.5F, -2.0F) && seat.deviceClass == 2 && seat.buttons == 0x49 && seat.tick == 77);
+        m_CommittedSeatMouse = seats;
     } catch (const std::exception& error) {
         std::cout << "[input-checkpoint-selftest] exception=" << error.what() << std::endl;
         passed = false;
