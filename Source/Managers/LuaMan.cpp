@@ -12668,21 +12668,14 @@ namespace {
 		lua_pushboolean(L, 1);
 		lua_rawset(L, seen);
 
-		lua_newtable(L);
-		const int keys = lua_gettop(L);
-		int count = 0;
+		// The walk may change and clear existing fields; a key the remap changes is set once the walk is done.
+		int moved = 0;
+		int later = 0;
 		lua_pushnil(L);
 		while (lua_next(L, index) != 0) {
-			lua_pop(L, 1);
-			lua_pushvalue(L, -1);
-			lua_rawseti(L, keys, ++count);
-		}
-		for (int i = 1; i <= count; ++i) {
-			lua_rawgeti(L, keys, i);
-			const int oldKey = lua_gettop(L);
-			lua_pushvalue(L, oldKey);
-			lua_rawget(L, index);
-			const int value = lua_gettop(L);
+			int oldKey = lua_gettop(L) - 1;
+			int value = oldKey + 1;
+			lua_pushvalue(L, value);
 			if (!RemapPreviewValue(L, value, seen, freezeClass)) {
 				return false;
 			}
@@ -12690,18 +12683,34 @@ namespace {
 			if (!RemapPreviewValue(L, -1, seen, freezeClass)) {
 				return false;
 			}
-			const int newKey = lua_gettop(L);
-			if (!lua_rawequal(L, oldKey, newKey)) {
+			if (!lua_rawequal(L, oldKey, -1)) {
+				if (!later) {
+					lua_newtable(L);
+					lua_insert(L, oldKey);
+					later = oldKey++;
+					++value;
+				}
 				lua_pushvalue(L, oldKey);
 				lua_pushnil(L);
 				lua_rawset(L, index);
+				lua_rawseti(L, later, ++moved);
+				lua_pushvalue(L, value);
+				lua_rawseti(L, later, ++moved);
+			} else if (!lua_rawequal(L, value, value + 1)) {
+				lua_pushvalue(L, oldKey);
+				lua_pushvalue(L, value);
+				lua_rawset(L, index);
 			}
-			lua_pushvalue(L, newKey);
-			lua_pushvalue(L, value);
-			lua_rawset(L, index);
-			lua_pop(L, 3);
+			lua_settop(L, oldKey);
 		}
-		lua_pop(L, 1);
+		for (int i = 1; i < moved; i += 2) {
+			lua_rawgeti(L, later, i);
+			lua_rawgeti(L, later, i + 1);
+			lua_rawset(L, index);
+		}
+		if (later) {
+			lua_remove(L, later);
+		}
 		// The hold's metatables are its own clones, so the references they carry get the same remap as its fields.
 		if (lua_getmetatable(L, index) != 0) {
 			const bool remapped = RemapPreviewValue(L, -1, seen, freezeClass);
@@ -13277,10 +13286,9 @@ bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedS
 		return clone->InitializeObjectScripts(false) >= 0;
 	}
 	const std::string dest = uid + "#preview";
-	if (RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + dest + "\"] = To" + clone->GetClassName() + "(LuaMan.TempEntity);") < 0) {
-		return false;
-	}
-	if (RunScriptString("local hold = _ScriptFieldsStash and _ScriptFieldsStash[\"preview:" + uid + "\"]; local dest = _ScriptedObjects[\"" + dest + "\"]; if dest and hold and _ScriptGraphSetInstance then _ScriptGraphSetInstance(dest, hold) end") < 0) {
+	// One chunk: an error in the binding stops the hold's copy exactly as the two separate strings did.
+	if (RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + dest + "\"] = To" + clone->GetClassName() + "(LuaMan.TempEntity); "
+	                    "local hold = _ScriptFieldsStash and _ScriptFieldsStash[\"preview:" + uid + "\"]; local dest = _ScriptedObjects[\"" + dest + "\"]; if dest and hold and _ScriptGraphSetInstance then _ScriptGraphSetInstance(dest, hold) end") < 0) {
 		return false;
 	}
 	clone->m_ScriptObjectName = "_ScriptedObjects[\"" + dest + "\"]";
