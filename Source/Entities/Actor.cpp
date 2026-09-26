@@ -434,7 +434,7 @@ int Actor::Create(const Actor& reference) {
 	}
 	m_PersistedActorRuntime = reference.m_PersistedActorRuntime;
 	m_PersistedActorIconReferences = reference.m_PersistedActorIconReferences;
-	if (IsFaithfulClone() && m_PersistedActorRuntime.empty()) m_PersistedActorRuntime = reference.SaveActorRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedActorRuntime.empty()) m_PersistedActorRuntime = reference.SaveActorRuntime();
 	return 0;
 }
 

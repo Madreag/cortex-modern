@@ -116,7 +116,7 @@ int ACDropShip::Create(const ACDropShip& reference) {
 	m_HoverHeightModifier = reference.m_HoverHeightModifier;
 
 	m_PersistedACDropShipRuntime = reference.m_PersistedACDropShipRuntime;
-	if (IsFaithfulClone() && m_PersistedACDropShipRuntime.empty()) m_PersistedACDropShipRuntime = reference.SaveACDropShipRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedACDropShipRuntime.empty()) m_PersistedACDropShipRuntime = reference.SaveACDropShipRuntime();
 	return 0;
 }
 

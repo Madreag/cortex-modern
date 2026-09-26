@@ -170,7 +170,7 @@ int ACRocket::Create(const ACRocket& reference) {
 	m_MaxGimbalAngle = reference.m_MaxGimbalAngle;
 
 	m_PersistedACRocketRuntime = reference.m_PersistedACRocketRuntime;
-	if (IsFaithfulClone() && m_PersistedACRocketRuntime.empty()) m_PersistedACRocketRuntime = reference.SaveACRocketRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedACRocketRuntime.empty()) m_PersistedACRocketRuntime = reference.SaveACRocketRuntime();
 	return 0;
 }
 

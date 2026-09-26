@@ -80,7 +80,7 @@ int Magazine::Create(const Magazine& reference) {
 	m_AIAimVel = reference.m_AIAimVel;
 
 	m_PersistedMagazineRuntime = reference.m_PersistedMagazineRuntime;
-	if (IsFaithfulClone() && m_PersistedMagazineRuntime.empty()) m_PersistedMagazineRuntime = reference.SaveMagazineRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedMagazineRuntime.empty()) m_PersistedMagazineRuntime = reference.SaveMagazineRuntime();
 	return 0;
 }
 

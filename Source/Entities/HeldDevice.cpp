@@ -163,7 +163,7 @@ int HeldDevice::Create(const HeldDevice& reference) {
 	m_VisualRecoilMultiplier = reference.m_VisualRecoilMultiplier;
 
 	m_PersistedHeldDeviceRuntime = reference.m_PersistedHeldDeviceRuntime;
-	if (IsFaithfulClone() && m_PersistedHeldDeviceRuntime.empty()) m_PersistedHeldDeviceRuntime = reference.SaveHeldDeviceRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedHeldDeviceRuntime.empty()) m_PersistedHeldDeviceRuntime = reference.SaveHeldDeviceRuntime();
 	return 0;
 }
 
