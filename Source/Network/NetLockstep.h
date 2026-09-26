@@ -433,7 +433,6 @@ namespace RTE {
 		std::function<void(const NetMatchConfig&)> publishLiveConfig;
 		bool substituteSlowPeers = false;
 		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
-		uint32_t authorityKeepaliveMs = 0; //!< How often the host's session talks while its simulation is busy with its own work.
 		// Service matches wait for every peer's measured activity startup before the agreed first frame.
 		bool requirePublishedStart = false;
 	};

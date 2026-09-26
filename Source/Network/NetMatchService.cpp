@@ -1076,6 +1076,7 @@ static std::string ResyncSaveName() {
 	}
 
 	NetMatchService::TransportLink NetMatchService::TakeTransportLinkLocked() {
+		DisarmHostLiveness();
 		TransportLink link;
 		link.migrated = std::move(m_MigratedTransport);
 		link.ip = std::move(m_Transport);
@@ -1094,6 +1095,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::RestoreTransportLinkLocked(TransportLink link) {
+		DisarmHostLiveness();
 		m_MigratedTransport = std::move(link.migrated);
 		m_Transport = std::move(link.ip);
 		m_Mux = std::move(link.mux);
@@ -1497,6 +1499,71 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::ArmHostLivenessLocked() {
+		INetTransport* wire = ActiveWireLocked();
+		const bool hosting = m_IsHost && wire && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->IsMigrating() &&
+		    !m_Coordinator->GetConfig().matchConfig.successorOrder.empty();
+		std::vector<uint8_t> bytes;
+		std::vector<NetPeerId> targets;
+		if (hosting) {
+			NetLockstepAck alive;
+			alive.senderPeerId = m_Coordinator->GetConfig().localPeerId;
+			alive.highestContiguousFrame = m_Coordinator->GetStats().nextFrame;
+			if (!NetLockstepCodec::Encode({alive}, bytes)) bytes.clear();
+			for (const auto& [peer, transport]: m_Coordinator->RemoteTransports()) targets.push_back(transport);
+		}
+		const uint64_t nowMs = SteadyNowMs();
+		uint64_t sentWhileBusy = 0, busyMs = 0;
+		{
+			std::lock_guard<std::mutex> lock(m_LivenessMutex);
+			sentWhileBusy = m_Liveness.sentWhileBusy;
+			busyMs = nowMs >= m_Liveness.pumpMs ? nowMs - m_Liveness.pumpMs : 0;
+			m_Liveness.sentWhileBusy = 0;
+			m_Liveness.wire = hosting && !bytes.empty() && !targets.empty() ? wire : nullptr;
+			m_Liveness.targets = std::move(targets);
+			m_Liveness.bytes = std::move(bytes);
+			if (hosting) {
+				m_Liveness.lane = m_Coordinator->GetConfig().frameLane;
+				m_Liveness.tickMs = static_cast<uint64_t>(std::max(1.0, std::ceil(m_Coordinator->GetConfig().simTickMs)));
+				m_Liveness.busyLimitMs = m_Coordinator->GetConfig().timeoutMs;
+			}
+			m_Liveness.pumpMs = nowMs;
+		}
+		if (sentWhileBusy > 0) {
+			std::ostringstream line;
+			line << "[net-match] host liveness: " << sentWhileBusy << " acks from the session thread while the simulation was busy for " << busyMs << "ms";
+			System::PrintDiagnosticLine(line.str());
+		}
+		if (!hosting || m_LivenessThread.joinable()) return;
+		m_LivenessThread = std::jthread([this](std::stop_token stop) {
+			while (!stop.stop_requested()) {
+				{
+					std::lock_guard<std::mutex> lock(m_LivenessMutex);
+					HostLiveness& live = m_Liveness;
+					const uint64_t nowMs = SteadyNowMs();
+					// Only while the simulation is busy: a running host's own frames and acks already say it is alive. A host stuck past
+					// the round's timeout is not busy but hung, and goes quiet.
+					if (live.wire && nowMs >= live.pumpMs && nowMs - live.pumpMs >= live.tickMs && (live.busyLimitMs == 0 || nowMs - live.pumpMs < live.busyLimitMs) &&
+					    (nowMs < live.sentMs || nowMs - live.sentMs >= live.tickMs)) {
+						for (const NetPeerId target: live.targets) {
+							std::string ignored;
+							(void)live.wire->Send(target, live.lane, live.bytes, &ignored);
+						}
+						live.sentMs = nowMs;
+						++live.sentWhileBusy;
+					}
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(4));
+			}
+		});
+	}
+
+	void NetMatchService::DisarmHostLiveness() {
+		std::lock_guard<std::mutex> lock(m_LivenessMutex);
+		m_Liveness.wire = nullptr;
+		m_Liveness.targets.clear();
+	}
+
 	// The load runs on the sim thread without the service lock, so the keepalive must tick right through it.
 	bool NetMatchService::RunSnapshotLoadKeepaliveSelfTest(std::string* error) {
 		StopSnapshotLoadKeepalive();
@@ -1891,6 +1958,8 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::Destroy() {
 		m_CancelRequested.store(true);
+		DisarmHostLiveness();
+		if (m_LivenessThread.joinable()) { m_LivenessThread.request_stop(); m_LivenessThread.join(); }
 		StopSnapshotLoadKeepalive();
 		if (m_Worker.joinable()) {
 			m_Worker.join();
@@ -1929,6 +1998,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<INetTransport> migrated;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			DisarmHostLiveness();
 			if (m_Mux) m_Mux->SetPump({});
 #ifdef CCCP_WITH_GNS
 			if (m_Dispatcher) {
@@ -2047,6 +2117,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<INetTransport> migrated;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			DisarmHostLiveness();
 			if (m_Mux) m_Mux->SetPump({});
 #ifdef CCCP_WITH_GNS
 			if (m_Dispatcher) {
@@ -5834,6 +5905,8 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::PumpSessionEvents() {
+		// Nothing sends on the wire from off this thread while this pump may change it; the end of the pump arms it again.
+		DisarmHostLiveness();
 		PushPendingToasts();
 		PumpHostMigration();
 		if (m_Coordinator && m_Coordinator->IsMigrating())
@@ -5858,6 +5931,7 @@ static std::string ResyncSaveName() {
 				// driver that ever drains the session's chat outbox here.
 				m_Session->PumpChatOutbox();
 				if (ActiveWireLocked()) PublishRelayOfferLocked(*m_Session, *ActiveWireLocked());
+				ArmHostLivenessLocked();
 			}
 		}
 		const bool hostAdmission = m_AdmissionAttached && m_IsHost;
