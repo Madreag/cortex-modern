@@ -246,10 +246,10 @@
         601,
         5400
       ],
-      "what": "ClientB, held when the host dropped, rejoins ClientA through the private rejoin and plays to the end.",
+      "what": "ClientB, held when the host dropped, keeps its world: its catch-up moves to ClientA, which serves the tail from its own ring, and ClientB returns in place and plays to the end.",
       "log_regex": [
-        "\\[net-match\\] held rejoin: the host is gone; rejoining the successor at ",
-        "\\[net-match\\] private catch-up complete frame=\\d+"
+        "\\[net-match\\] held client: the host is gone; the catch-up moves to the successor at ",
+        "\\[net-match\\] private catch-up complete frame=\\d+ in_place=1"
       ]
     },
     {
