@@ -77,7 +77,7 @@ struct CheckpointText::Data {
 	bool hasPeer = false;
 	bool usesSimTime = false;
 	int64_t simTimeTicks = 0;
-	mutable std::once_flag ready;
+	mutable std::mutex ready; // Held while this node formats; a producer that throws leaves the node for the next read.
 	mutable std::atomic<bool> formatted{false};
 	mutable std::string text;
 	std::shared_ptr<Data> drainNext;
@@ -288,10 +288,11 @@ const std::string& CheckpointText::Text() const {
 	const auto root = m_Data;
 	if (root->formatted.load(std::memory_order_acquire)) return root->text;
 	if (root->usesSimTime) {
-		std::call_once(root->ready, [this, root] {
+		std::lock_guard lock(root->ready);
+		if (!root->formatted.load(std::memory_order_acquire)) {
 			root->text = AtSimTime(root->simTimeTicks).Text();
 			root->formatted.store(true, std::memory_order_release);
-		});
+		}
 		return root->text;
 	}
 	struct Frame { const Data* node; size_t next = 0; };
@@ -305,7 +306,7 @@ const std::string& CheckpointText::Text() const {
 			if (child && !child->formatted.load(std::memory_order_acquire)) pending.push_back({child});
 			continue;
 		}
-		std::call_once(node->ready, [node] {
+		const auto format = [node] {
 			if (node->produce) {
 				node->text = node->produce();
 				if (!node->peerMark.empty()) StripPeerMarks(node->text, node->peerMark, node->peerRuns);
@@ -375,7 +376,11 @@ const std::string& CheckpointText::Text() const {
 			}
 			node->text = std::move(text);
 			node->formatted.store(true, std::memory_order_release);
-		});
+		};
+		{
+			std::lock_guard lock(node->ready);
+			if (!node->formatted.load(std::memory_order_acquire)) format();
+		}
 		pending.pop_back();
 	}
 	return root->text;
