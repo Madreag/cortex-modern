@@ -5521,6 +5521,9 @@ namespace RTE {
 		// peer must see the hold at or after its accepted horizon.
 		// The host's own first frame without input is the one after the last it put on the wire.
 		timing.applyFrame = std::max(ownSeat ? SentInputThrough() + 1 : FirstFrameWithout(peerId), m_Stats.nextFrame);
+		// A returning seat's reclaim gap carries none of its input, so the survivors commit through it without the seat: a hold starts after it.
+		if (const auto back = m_ReclaimTransactions.find(peerId); back != m_ReclaimTransactions.end() && timing.applyFrame >= back->second.activationFrame)
+			timing.applyFrame = std::max(timing.applyFrame, std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames) + 1);
 		for (uint8_t peer: m_RemotePeerIds) {
 			if (peer == peerId || IsPeerGoneAtFrame(peer, timing.applyFrame)) continue;
 			timing.applyFrame = std::max(timing.applyFrame, m_Stats.peers[peer].reportedNextFrame);
