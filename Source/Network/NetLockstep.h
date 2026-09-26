@@ -1573,6 +1573,10 @@ namespace RTE {
 		const char* m_AdvanceBlock = ""; //!< Why the last commit pass stopped, for a long wait's description.
 		uint32_t m_WaitDuplicates = 0; //!< Duplicate ticks received while the consumer waits on its frame.
 		NetTransportLane m_PacketLane = NetTransportLane::ControlReliable; //!< The lane of the packet being handled.
+		std::set<std::pair<NetPeerId, std::string>> m_DropReasonsNamed; //!< Each connection's drop reasons already named once.
+		void NameDroppedPacket(const NetTransportEvent& event, const char* reason, const std::string& detail = {});
+		uint32_t m_StartsSentNamed = 0; //!< A returning seat's starts named so far.
+		uint8_t m_NamedAiAuthority = 0; //!< The AI authority last named at a delivered frame.
 		uint64_t m_LastProducedFrame = UINT64_MAX; //!< The produced frame of this peer's last queued local input.
 		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;

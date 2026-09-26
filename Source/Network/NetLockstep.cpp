@@ -4415,6 +4415,13 @@ namespace RTE {
 			start.inputDelayFrames = admission->second.delay;
 			start.resumeFromSnapshot = false;
 		}
+		// A returning seat's start names the terms it goes out on, so a host that reads it as a straggler is explained.
+		if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId); own != m_ReclaimTransactions.end() && m_Config.localPeerId != GetHostPeerId() && m_StartsSentNamed < 4) {
+			++m_StartsSentNamed;
+			std::cout << "[lockstep] returning seat sends its start: frame=" << start.startFrame << " delay=" << start.inputDelayFrames << " reclaim=" << own->second.activationFrame
+			          << "/" << own->second.delayFrames << " admitted=" << m_PeerAdmissions.contains(m_Config.localPeerId) << " config_start=" << m_Config.startFrame
+			          << " config_delay=" << m_Config.inputDelayFrames << " state=" << StateName(m_State) << std::endl;
+		}
 		if (!SendPacket({start}, NetTransportLane::ControlReliable, error, nullptr, nullptr, onlyPeerId)) {
 			return false;
 		}
@@ -8092,6 +8099,11 @@ namespace RTE {
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
 		m_LastDeliveredFrame = outFrame.frame;
+		// Who drives the seats the AI holds must read the same on every peer at every frame; a change is named with its frame.
+		if (const uint8_t authority = AiAuthorityAt(outFrame.frame); authority != m_NamedAiAuthority) {
+			std::cout << "[net-lockstep] AI authority frame=" << outFrame.frame << " peer=" << static_cast<int>(authority) << " was=" << static_cast<int>(m_NamedAiAuthority) << std::endl;
+			m_NamedAiAuthority = authority;
+		}
 		if (m_Playback || IsMigrationCatchUp() || m_Config.resumeFromSnapshot) {
 			for (const auto* commands: {&outFrame.localCommands, &outFrame.remoteCommands}) for (const auto& command: *commands) {
 				if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload)) {
@@ -9298,6 +9310,7 @@ namespace RTE {
 			case NetTransportEventType::PacketReceived: {
 				if (!m_RelayHost && !UsesTransportPeer(event.peerId)) {
 					++m_Stats.ignoredAdmissionFaults;
+					NameDroppedPacket(event, "a connection this client's round does not use");
 					return;
 				}
 				// Whatever the host sent proves it alive, a packet this peer cannot read included.
@@ -9322,11 +9335,13 @@ namespace RTE {
 						// again, so the packet is dropped rather than read as the wrong sound.
 						if (tables == nullptr) {
 							++m_Stats.ignoredAdmissionFaults;
+							NameDroppedPacket(event, "observation slots on a connection bound to no seat", decoded.error.message);
 							return;
 						}
 						if (m_Stats.unresolvedObservationPackets == 0) {
 							std::cout << "[lockstep] dropped a frame over its sound observations: " << decoded.error.message << std::endl;
 						}
+						NameDroppedPacket(event, "sound observations this peer cannot resolve", decoded.error.message);
 						++m_Stats.unresolvedObservationPackets;
 						return;
 					}
@@ -9360,6 +9375,7 @@ namespace RTE {
 					// A frame on the unreliable lane whose bindings ran past every window is one packet lost, not a broken peer.
 					if (event.lane == NetTransportLane::InputUnreliable && decoded.error.code == NetLockstepErrorCode::ObservationBindingGap) {
 						if (m_Stats.frameBindingGapDrops++ == 0) std::cout << "[lockstep] dropped an unreliable frame packet: " << decoded.error.message << std::endl;
+						NameDroppedPacket(event, "an unreliable frame past its bindings", decoded.error.message);
 						return;
 					}
 					// Malformed admission traffic cannot stop a round it never joined.
@@ -9386,6 +9402,13 @@ namespace RTE {
 				break;
 			}
 		}
+	}
+
+	void NetLockstepCoordinator::NameDroppedPacket(const NetTransportEvent& event, const char* reason, const std::string& detail) {
+		if (!m_DropReasonsNamed.insert({event.peerId, reason}).second) return;
+		std::cout << "[lockstep] dropped a packet from connection " << event.peerId << " (peer " << static_cast<int>(LockstepPeerOfTransport(event.peerId)) << ", "
+		          << (event.lane == NetTransportLane::ControlReliable ? "reliable" : "unreliable") << "): " << reason << (detail.empty() ? "" : ": " + detail)
+		          << " next=" << m_Stats.nextFrame << std::endl;
 	}
 
 	void NetLockstepCoordinator::HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport) {
@@ -9453,9 +9476,15 @@ namespace RTE {
 		    fromTransport == hostTransport->second && start.localPeerId != GetHostPeerId() && start.localPeerId != m_Config.localPeerId &&
 		    start.localPeerId > 0 && start.localPeerId <= m_Config.peerCount;
 		if (!SenderOwnsTransport(start.localPeerId, fromTransport)) {
-			std::cout << "[lockstep] dropped a start claiming peer " << static_cast<int>(start.localPeerId) << " from the wrong transport" << std::endl;
+			const auto bound = m_RemoteTransports.find(start.localPeerId);
+			std::cout << "[lockstep] dropped a start claiming peer " << static_cast<int>(start.localPeerId) << " from the wrong transport: from=" << fromTransport
+			          << " bound=" << (bound == m_RemoteTransports.end() ? std::string("none") : std::to_string(bound->second)) << " frame=" << start.startFrame << std::endl;
 			return;
 		}
+		// A returning seat's start is the first thing its round sends; when it lands says whether its frames can be in time.
+		if (m_RelayHost && m_ReclaimTransactions.contains(start.localPeerId) && !m_RemoteStartsReceived.contains(start.localPeerId))
+			std::cout << "[lockstep] start of returning peer " << static_cast<int>(start.localPeerId) << " landed: frame=" << start.startFrame << " next=" << m_Stats.nextFrame
+			          << " reclaim=" << m_ReclaimTransactions.at(start.localPeerId).activationFrame << std::endl;
 		// The peer we take our round from has started another one and ours has committed nothing, so that
 		// is the round we are in. Bounded to our own start frame, so a straggler from before a resync still
 		// takes the rule below, and to the peer that owns the transport it came in on: starts ride the
@@ -9700,7 +9729,9 @@ namespace RTE {
 			};
 		}
 		if (!SenderOwnsTransport(frame.senderPeerId, fromTransport)) {
-			std::cout << "[lockstep] dropped a frame claiming peer " << static_cast<int>(frame.senderPeerId) << " from the wrong transport" << std::endl;
+			const auto bound = m_RemoteTransports.find(frame.senderPeerId);
+			std::cout << "[lockstep] dropped a frame claiming peer " << static_cast<int>(frame.senderPeerId) << " from the wrong transport: target=" << frame.targetFrame
+			          << " from=" << fromTransport << " bound=" << (bound == m_RemoteTransports.end() ? std::string("none") : std::to_string(bound->second)) << std::endl;
 			return;
 		}
 		if (std::any_of(frame.commands.begin(), frame.commands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload); }) &&
@@ -9750,6 +9781,9 @@ namespace RTE {
 		}
 		// After a round restart a peer's first frames can outrun its start; hold them until it lands.
 		if (m_RemoteStartsReceived.find(frame.senderPeerId) == m_RemoteStartsReceived.end()) {
+			if (m_PreStartFrames[frame.senderPeerId].empty())
+				std::cout << "[lockstep] holds frames of peer " << static_cast<int>(frame.senderPeerId) << " until its start lands: first target=" << frame.targetFrame
+				          << " next=" << m_Stats.nextFrame << std::endl;
 			std::deque<NetLockstepFrame>& held = m_PreStartFrames[frame.senderPeerId];
 			if (held.size() >= NetLockstepCodec::c_MaxFutureFrameSkew) {
 				held.pop_front();
