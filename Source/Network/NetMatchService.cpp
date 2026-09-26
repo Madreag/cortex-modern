@@ -1893,7 +1893,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMatchRunner> runner;
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
-		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear();
+		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear(); m_RejoinFitReasons.clear();
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateCaptureCosts.clear(); m_PrivateCaptureCold = false; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
 		m_LastJoinRoute.reset();
@@ -4725,6 +4725,17 @@ static std::string ResyncSaveName() {
 					if (peer > 0 && peer <= live.peerCount && at != changes.begin()) live.initialDelayChanges[peer].emplace(std::prev(at)->first, std::prev(at)->second);
 				}
 				if (!live.initialSeatReclaims.contains(m_LocalPeerId)) return;
+				{
+					std::ostringstream line;
+					line << "[net-match] live round from the catch-up at " << m_WorldCatchUp.activationTick << ": held";
+					for (const auto& [peer, hold]: live.initialSeatHolds) line << ' ' << static_cast<int>(peer) << '@' << hold.cutoffFrame;
+					line << " left";
+					for (const auto& [peer, frame]: live.initialPeerLeaves) line << ' ' << static_cast<int>(peer) << '@' << frame;
+					line << " returns";
+					for (const auto& [peer, reclaim]: live.initialSeatReclaims) line << ' ' << static_cast<int>(peer) << '@' << reclaim.activationFrame;
+					line << " through=" << live.seatStateThroughFrame;
+					System::PrintDiagnosticLine(line.str());
+				}
 				m_Runner->ConfigurePrivateJoin(live);
 			}
 			if (!m_Runner->IsWorldJoinLockstepStarting())
@@ -5971,7 +5982,15 @@ static std::string ResyncSaveName() {
 		for (const auto& peer: m_Session->GetReadyPeers()) {
 			if (peer.assignedPeerId + 1 != peerId) continue;
 			std::string reason;
-			if (m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)) return true;
+			if (m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)) {
+				m_RejoinFitReasons.erase(peerId);
+				return true;
+			}
+			// A returner held back from its seat says why, once per reason.
+			if (auto& said = m_RejoinFitReasons[peerId]; said != reason) {
+				said = reason;
+				System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(peerId) + " waits to rejoin: " + reason);
+			}
 			if (reason.starts_with("Your connection needs")) {
 				m_RejoinOutcome = "waiting_for_delay";
 				if (!m_WorldJoin.IsPrivateMatch()) m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::HostNotAccepting, reason);
