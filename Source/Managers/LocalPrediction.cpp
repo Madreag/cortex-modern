@@ -48,6 +48,8 @@ namespace RTE {
 	uint64_t LocalPrediction::s_PreviewCount = 0;
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
 	double LocalPrediction::s_PreviewMs = 0.0;
+	uint64_t LocalPrediction::s_ReusedFrames = 0;
+	double LocalPrediction::s_ReusedMs = 0.0;
 	std::array<double, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseMs{};
 	const std::array<const char*, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseNames{"drop", "wait", "fence", "terrain_capture", "self_copies", "clone", "scripts_in", "links", "step", "discard", "terrain_restore", "restore", "scripts_out"};
 
@@ -94,6 +96,7 @@ namespace RTE {
 	}
 
 	void LocalPrediction::RunPreview() {
+		const auto entered = std::chrono::steady_clock::now();
 		if (!IsEnabled() || !ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::IsLockstepPaused() || !g_ActivityMan.ActivityRunning()) {
 			if (TraceEnabled()) {
 				std::cout << "[localpred] skip: enabled=" << IsEnabled() << " lockstep=" << ScenarioRunner::IsLockstepControllerSyncActive() << " paused=" << ScenarioRunner::IsLockstepPaused() << " running=" << g_ActivityMan.ActivityRunning() << std::endl;
@@ -103,6 +106,8 @@ namespace RTE {
 		}
 		// Nothing new arrives between sim ticks, so a frame drawn from the same tick reuses the previews.
 		if (!s_Previews.empty() && s_PreviewedTick == g_TimerMan.GetSimUpdateCount()) {
+			++s_ReusedFrames;
+			s_ReusedMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - entered).count();
 			return;
 		}
 		const auto dropStart = std::chrono::steady_clock::now();
@@ -512,6 +517,7 @@ namespace RTE {
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
 		       " preview_ghosts_peak=" + std::to_string(g_MovableMan.GetPreviewGhostPeak()) +
-		       (events.empty() ? std::string() : " " + events) + " terrain_pages_written=" + std::to_string(PageWriteFence::GetFaultCount()) + " phase_avg_ms=" + phases + " window_avg_ms=" + LuaMan::DescribePreviewWindowCost();
+		       (events.empty() ? std::string() : " " + events) + " terrain_pages_written=" + std::to_string(PageWriteFence::GetFaultCount()) +
+		       " reused_frames=" + std::to_string(s_ReusedFrames) + " reuse_avg_us=" + std::to_string(s_ReusedFrames ? 1000.0 * s_ReusedMs / static_cast<double>(s_ReusedFrames) : 0.0) + " phase_avg_ms=" + phases + " window_avg_ms=" + LuaMan::DescribePreviewWindowCost();
 	}
 } // namespace RTE
