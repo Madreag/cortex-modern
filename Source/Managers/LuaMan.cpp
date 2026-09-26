@@ -8116,6 +8116,28 @@ assert(({_ScriptGraphNative(CheckpointEndedZone)})[1] == "invalid", "the restore
 		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] outlived alarm: " << problem << std::endl;
 		checkpointValues = passed && checkpointValues;
 	}
+	{
+		// A script keeps an object's reference past its deletion; a preview's hold freezes on it without reading the object.
+		const auto* preset = dynamic_cast<const MovableObject*>(g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte"));
+		MovableObject* gone = preset ? dynamic_cast<MovableObject*>(preset->Clone()) : nullptr;
+		bool held = false;
+		std::string scriptClass;
+		if (gone) {
+			luabind::object(m_State, gone).push(m_State);
+			const auto* rep = luabind::detail::is_class_object(m_State, -1);
+			scriptClass = rep && rep->crep() ? rep->crep()->name() : "";
+			lua_setglobal(m_State, "PreviewOutlivedTarget");
+			held = RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; _ScriptFieldsStash['preview:-7654402'] = { target = PreviewOutlivedTarget }; PreviewOutlivedTarget = nil") == 0;
+			delete gone;
+		}
+		std::string freezeClass;
+		const bool remapped = held && RemapPreviewHoldReferences(-7654402, freezeClass);
+		RunScriptString("if _ScriptFieldsStash then _ScriptFieldsStash['preview:-7654402'] = nil end");
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		const bool passed = held && !scriptClass.empty() && !remapped && freezeClass == scriptClass;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_preview_never_reads_an_object_its_script_outlived held=" << held << " remapped=" << remapped << " frozen_as=" << freezeClass << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
 
 	{
 		// What a capture's cached answers name must die with the object they describe: a script table an
@@ -12138,7 +12160,8 @@ namespace {
 					}
 					return;
 				}
-				if (object->crep() && std::strcmp(object->crep()->name(), "SoundContainer") == 0) {
+				// A sound its owner took along when it was deleted stays as the script holds it; the remap freezes it.
+				if (object->crep() && std::strcmp(object->crep()->name(), "SoundContainer") == 0 && ScriptGraphNativeAlive(L, object)) {
 					auto* source = static_cast<SoundContainer*>(object->ptr());
 					lua_pushlightuserdata(L, source);
 					lua_rawget(L, seen);
@@ -12243,6 +12266,11 @@ namespace {
 		}
 		if (LuaMan::IsPreviewClone(mo)) {
 			return true;
+		}
+		// A script keeps its reference past the object's deletion, so only an object still alive is read.
+		if (!g_MovableMan.ValidMO(mo) && !ScriptGraphNativeAlive(L, object)) {
+			freezeClass = className;
+			return false;
 		}
 		MovableObject* mapped = nullptr;
 		if (const auto found = s_PreviewRootByUID.find(mo->GetUniqueID()); found != s_PreviewRootByUID.end() && found->second != mo) {
