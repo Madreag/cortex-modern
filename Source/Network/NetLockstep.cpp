@@ -10555,7 +10555,8 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::IsSeatHeldForReclaim(uint8_t peerId) const {
 		NET_PLANE_CHECK();
-		return m_LeftSeatsHeld.find(peerId) != m_LeftSeatsHeld.end();
+		// A replay drops no seat (an unbounded one would pause on it): a seat its record holds is held for reclaim as it was live.
+		return m_LeftSeatsHeld.find(peerId) != m_LeftSeatsHeld.end() || (m_Playback && peerId != GetHostPeerId() && m_AiHeldSeats.contains(peerId));
 	}
 
 	bool NetLockstepCoordinator::IgnoreStaleRefillLeave(uint8_t peerId, uint64_t) const {

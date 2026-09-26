@@ -2552,8 +2552,13 @@ namespace RTE {
 				if (!replay.PopReadyFrame(ready)) { *error = "a-recorded-hold-after-a-return-holds-the-seat: frame " + std::to_string(10 + index) + " was not delivered"; return false; }
 				seen += std::to_string(replay.IsSeatUnderAI(1, ready.frame)) + std::to_string(replay.AiAuthorityAt(ready.frame));
 			}
-			if (seen != "13010113") {
-				*error = "a-recorded-hold-after-a-return-holds-the-seat: held at 10, back at 11, held again at 13 read (under_ai, authority) per frame " + seen + "; expected 13010113";
+			if (seen != "13010112") {
+				*error = "a-recorded-hold-after-a-return-holds-the-seat: held at 10, back at 11, held again at 13 (seat 3 held at 12) read (under_ai, authority) per frame " + seen + "; expected 13010112";
+				return false;
+			}
+			// The replay drops no seat, yet the claims on a held seat's units last as they do live.
+			if (!replay.IsSeatHeldForReclaim(3)) {
+				*error = "a-recorded-hold-after-a-return-holds-the-seat: seat 3, held by its record at 12, reads as not held for reclaim in the replay";
 				return false;
 			}
 			return true;
