@@ -13248,6 +13248,17 @@ namespace {
 	// Every state's birth counter as the window found it: what the window creates dies with it, so the numbers go back.
 	std::vector<std::pair<LuaStateWrapper*, uint64_t>> s_PreviewStateSerials;
 
+	// Times a window's stages into LuaMan's counters; each Lap charges the time since the last one to a stage.
+	struct PreviewWindowLaps {
+		std::array<double, 11>& totals;
+		std::chrono::steady_clock::time_point last = std::chrono::steady_clock::now();
+		void Lap(size_t stage) {
+			const auto now = std::chrono::steady_clock::now();
+			totals[stage] += std::chrono::duration<double, std::milli>(now - last).count();
+			last = now;
+		}
+	};
+
 	void OpenPreviewWindow() {
 		if (s_PreviewBindingFenceOpen) {
 			return;
@@ -13308,10 +13319,13 @@ std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
 }
 
 void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
+	PreviewWindowLaps laps{s_PreviewWindowMs};
+	++s_PreviewWindows;
 	// Open first, so the copies the hold makes are the window's own to write.
 	OpenPreviewWindow();
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
+	laps.Lap(0);
 	if (!sharedSlot) {
 		for (const MovableObject* root: roots) {
 			WalkOwned(root, [](MovableObject* mo) {
@@ -13327,6 +13341,7 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 			});
 		}
 	}
+	laps.Lap(1);
 	if (PreviewGlobalFenceEnabled()) {
 		s_PreviewFenceWindow = true;
 		// Only the states a preview runs code in: the clones script in their originals' states, and the master runs the global scripts.
@@ -13340,6 +13355,7 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 			});
 		}
 	}
+	laps.Lap(2);
 }
 
 bool LuaMan::PreviewGlobalFenceEnabled() {
@@ -13351,6 +13367,7 @@ bool LuaMan::PreviewGlobalFenceEnabled() {
 }
 
 void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot, const std::vector<const MovableObject*>& originals) {
+	PreviewWindowLaps laps{s_PreviewWindowMs};
 	OpenPreviewWindow();
 	s_PreviewClones.clear();
 	s_PreviewRootByUID.clear();
@@ -13368,6 +13385,7 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 			}
 		});
 	}
+	laps.Lap(3);
 	// A faithful copy keeps each part's unique id, so every part of an original names its copy's part.
 	for (size_t i = 0; i < originals.size() && i < clones.size(); ++i) {
 		if (!originals[i] || !clones[i]) {
@@ -13379,6 +13397,7 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 			}
 		});
 	}
+	laps.Lap(4);
 	for (MovableObject* clone: clones) {
 		WalkOwned(clone, [sharedSlot](MovableObject* mo) {
 			LuaStateWrapper* state = mo->GetLuaState();
@@ -13417,9 +13436,11 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 			}
 		});
 	}
+	laps.Lap(5);
 }
 
 void LuaMan::EndPreviewScripts() {
+	PreviewWindowLaps laps{s_PreviewWindowMs};
 	std::unordered_set<long> dropped;
 	for (const auto& [uid, clone, state]: s_PreviewCloneBindings) {
 		if (!state) {
@@ -13441,20 +13462,35 @@ void LuaMan::EndPreviewScripts() {
 	s_PreviewSharedSlot = false;
 	s_RunningPreviewHook = false;
 	DropPreviewSoundCopies();
+	laps.Lap(6);
 	// Last, so a global the drops themselves make is undone too: a preview leaves every state's globals as it found them.
 	if (PreviewGlobalFenceEnabled()) {
 		s_PreviewFenceWindow = false;
 		// Every state gives up its window's references first and the queue is drained once, so no state's rollback
 		// undoes an unref that belongs to another state's window.
 		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewGlobalsUndone += state.DropPreviewWindowReferences(); });
+		laps.Lap(7);
 		LuabindObjectWrapper::ApplyQueuedDeletions();
+		laps.Lap(8);
 		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewGlobalsUndone += state.ReleasePreviewGlobalFence(); });
+		laps.Lap(9);
 		if (s_PreviewGlobalsUndone > 0 && !s_PreviewGlobalsReported) {
 			s_PreviewGlobalsReported = true;
 			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;
 		}
 	}
+	laps.last = std::chrono::steady_clock::now();
 	ClosePreviewWindow();
+	laps.Lap(10);
+}
+
+std::string LuaMan::DescribePreviewWindowCost() {
+	static constexpr const char* names[] = {"open", "hold_copies", "global_fences", "clone_maps", "original_maps", "bind", "unbind", "drop_refs", "queued_deletions", "release", "close"};
+	std::string out;
+	for (size_t stage = 0; stage < s_PreviewWindowMs.size() && s_PreviewWindows > 0; ++stage) {
+		out += (stage ? "," : "") + std::string(names[stage]) + ":" + std::to_string(s_PreviewWindowMs[stage] / static_cast<double>(s_PreviewWindows));
+	}
+	return out;
 }
 
 CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {

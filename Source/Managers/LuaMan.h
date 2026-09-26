@@ -614,6 +614,8 @@ namespace RTE {
 		};
 		static std::string PreviewScriptKey(const MovableObject* mo);
 		static uint64_t PreviewCodecFallbackCount() { return s_PreviewCodecFallbacks; }
+		/// Wall time per stage of the preview windows' script work, averaged per window, for the preview counters.
+		static std::string DescribePreviewWindowCost();
 		/// Whether previews fence the Lua states' globals; CC_PREVIEW_GLOBALS_FENCE=0 turns the fence off.
 		static bool PreviewGlobalFenceEnabled();
 		/// Stops tracking a function object a preview window handed out; LuabindObjectWrapper's deletion hook.
@@ -915,6 +917,8 @@ namespace RTE {
 		static inline bool s_RunningPreviewHook = false;
 		static inline bool s_PreviewSharedSlot = false;
 		static inline uint64_t s_PreviewCodecFallbacks = 0;
+		static inline std::array<double, 11> s_PreviewWindowMs{};
+		static inline uint64_t s_PreviewWindows = 0;
 		static std::unordered_set<const MovableObject*> s_PreviewClones;
 		static std::unordered_set<long> s_PreviewFrozenUIDs;
 		static inline uint64_t s_PreviewGlobalsUndone = 0;
