@@ -39,6 +39,7 @@ SESSION1_SCRIPT = 'D:/mx/session1/run.ps1'
 TASK = 'cortex-session1'
 REPO = Path('D:/Projects/takeover-build')
 GAME_PORT, DIRECTORY_PORT = 49860, 49875  # the lane's block is 49860-49879 on both boxes
+BRIDGE_UDP, BRIDGE_TCP = 49876, 49877
 ADDRESS = {'here': '68.3.162.151', 'edith': '24.251.145.96'}
 MACHINE = {'here': 'EROL-PC', 'edith': 'EDITH'}
 # The TURN URL each side can reach; EDITH reaches this site only through its public address.
@@ -349,13 +350,16 @@ def make_cert(root):
 
 
 class Tunnel:
-    """ssh -R: EDITH's 127.0.0.1:<directory port> reaches the directory on this box's loopback (signalling only)."""
+    """ssh -R: EDITH's 127.0.0.1:<directory port> reaches the directory on this box's loopback (signalling only); with the
+    bridge, EDITH's 127.0.0.1:<bridge TCP port> reaches this box's end of the relay bridge too."""
 
-    def __init__(self, log_path):
-        self.log_path, self.process = Path(log_path), None
+    def __init__(self, log_path, bridge=False):
+        self.log_path, self.process, self.bridge = Path(log_path), None, bridge
 
     def open(self):
-        argv = ['ssh', '-N', '-o', 'ExitOnForwardFailure=yes', '-R', f'127.0.0.1:{DIRECTORY_PORT}:127.0.0.1:{DIRECTORY_PORT}', 'edith']
+        forwards = [DIRECTORY_PORT] + ([BRIDGE_TCP] if self.bridge else [])
+        argv = ['ssh', '-N', '-o', 'ExitOnForwardFailure=yes',
+                *[part for port in forwards for part in ('-R', f'127.0.0.1:{port}:127.0.0.1:{port}')], 'edith']
         if DRY_RUN:
             say('dry-run: ' + ' '.join(argv))
             return
@@ -371,6 +375,121 @@ class Tunnel:
         if self.process and self.process.poll() is None:
             self.process.terminate()
             self.process.wait(timeout=10)
+
+
+def read_exact(connection, size):
+    data = b''
+    while len(data) < size:
+        chunk = connection.recv(size - len(data))
+        if not chunk:
+            return None
+        data += chunk
+    return data
+
+
+def pump_frames(connection, deliver, counts, key):
+    """TCP frames (2-byte length + datagram) from the tunnel, each handed on as one datagram."""
+    import struct
+    try:
+        while (header := read_exact(connection, 2)) is not None:
+            datagram = read_exact(connection, struct.unpack('>H', header)[0])
+            if datagram is None:
+                return
+            deliver(datagram)
+            counts[key] += 1
+    except OSError:
+        return
+
+
+def bridge_edith(udp_port=None, tcp_port=None):
+    """Runs on EDITH in the ssh session: the engine's TURN socket talks UDP to 127.0.0.1:<udp_port>; each source address
+    gets its own TCP stream through the ssh -R forward to this box's end, which speaks UDP to the TURN server."""
+    import socket
+    import struct
+    import threading
+    udp_port, tcp_port = udp_port or BRIDGE_UDP, tcp_port or BRIDGE_TCP
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(('127.0.0.1', udp_port))
+    flows, counts = {}, dict(up=0, down=0, flows=0)
+    print(f'{stamp()} bridge listening udp 127.0.0.1:{udp_port} -> tcp 127.0.0.1:{tcp_port}', flush=True)
+    last = time.monotonic()
+    while True:
+        try:
+            datagram, source = sock.recvfrom(65535)
+        except ConnectionResetError:
+            continue
+        stream = flows.get(source)
+        if stream is None:
+            stream = socket.create_connection(('127.0.0.1', tcp_port))
+            stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            flows[source] = stream
+            counts['flows'] += 1
+            threading.Thread(target=pump_frames, args=(stream, lambda data, to=source: sock.sendto(data, to), counts, 'down'), daemon=True).start()
+        stream.sendall(struct.pack('>H', len(datagram)) + datagram)
+        counts['up'] += 1
+        if time.monotonic() - last > 10:
+            print(f'{stamp()} bridge {json.dumps(counts)}', flush=True)
+            last = time.monotonic()
+
+
+class BridgeHere:
+    """This box's end of the relay bridge: each tunnel stream becomes one UDP flow to the TURN server."""
+
+    def __init__(self, turn_url, log_path):
+        import socket
+        host, port = re.match(r'turn:([^:?]+):(\d+)', turn_url).groups()
+        self.target, self.log_path = (host, int(port)), Path(log_path)
+        self.counts = dict(up=0, down=0, flows=0)
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.listener.bind(('127.0.0.1', BRIDGE_TCP))
+        self.listener.listen(8)
+        self.remote = None
+
+    def serve(self):
+        import socket
+        import struct
+        import threading
+        while True:
+            try:
+                stream, _ = self.listener.accept()
+            except OSError:
+                return
+            stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp.connect(self.target)
+            self.counts['flows'] += 1
+
+            def back(udp=udp, stream=stream):
+                try:
+                    while True:
+                        datagram = udp.recv(65535)
+                        stream.sendall(struct.pack('>H', len(datagram)) + datagram)
+                        self.counts['down'] += 1
+                except OSError:
+                    return
+            threading.Thread(target=pump_frames, args=(stream, udp.send, self.counts, 'up'), daemon=True).start()
+            threading.Thread(target=back, daemon=True).start()
+
+    def open(self):
+        import threading
+        threading.Thread(target=self.serve, daemon=True).start()
+        argv = ['ssh', 'edith', f"python '{(PAYLOAD / 'edith_cross.py').as_posix()}' --bridge-edith"]
+        self.remote = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'), stderr=subprocess.STDOUT,
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+        time.sleep(4)
+        if self.remote.poll() is not None:
+            raise RuntimeError(f'the EDITH end of the relay bridge exited; see {self.log_path}')
+
+    def close(self):
+        if self.remote and self.remote.poll() is None:
+            self.remote.terminate()
+            self.remote.wait(timeout=10)
+        ssh("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -like '*edith_cross.py*--bridge-edith*' } "
+            "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }", check=False)
+        self.listener.close()
+        with self.log_path.open('a') as stream:
+            stream.write(f'{stamp()} bridge here {json.dumps(self.counts)} target={self.target[0]}:{self.target[1]}\n')
 
 
 def wait_session(directory, budget_s, alive):
@@ -433,7 +552,7 @@ def wait_box(budget_s):
 # --- one match ---------------------------------------------------------------------------------------------------
 
 def run_match(h, options, index, login):
-    name = f'{options.direction}-{options.path}-{index}'
+    name = f'{options.direction}-{path_label(options)}-{index}'
     root = (options.out / name).resolve()
     port = GAME_PORT + (index - 1) % 10
     host_side = 'here' if options.direction == 'host-here' else 'edith'
@@ -516,6 +635,10 @@ def run_match(h, options, index, login):
     return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path,
                                        port=port, machines={peer: MACHINE[side] for peer, side in sides.items()},
                                        local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note))
+
+
+def path_label(options):
+    return options.path + ('-bridge' if options.relay_bridge else '')
 
 
 def launch_local(h, spec):
@@ -659,6 +782,9 @@ def parse_args(argv=None):
     parser.add_argument('--direction', choices=['host-here', 'host-edith'], default='host-here')
     parser.add_argument('--path', choices=['direct', 'relay', 'ip'], default='direct')
     parser.add_argument('--runs', type=int, default=1)
+    parser.add_argument('--relay-bridge', action='store_true',
+                        help='relay only: EDITH reaches the TURN server through a UDP-over-ssh bridge (its loopback UDP, an ssh -R '
+                             'TCP stream, UDP from this box), for a TURN server with no public forward')
     parser.add_argument('--out', type=Path, help=f'a fresh directory under {SCRATCH} (the same path is used on EDITH)')
     parser.add_argument('--minutes', type=float, default=10, help='sp-soak length')
     parser.add_argument('--timeout', type=int, default=420, help='each match engine (seconds)')
@@ -666,8 +792,11 @@ def parse_args(argv=None):
     parser.add_argument('--box-wait', type=int, default=2700, help='seconds to wait while the inventory feel matrix holds this box')
     parser.add_argument('--dry-run', action='store_true', help='print the launches, copies and ssh commands instead of running them')
     parser.add_argument('--remote-peer', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--bridge-edith', action='store_true', help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
-    if options.remote_peer is None:
+    if options.remote_peer is None and not options.bridge_edith:
+        if options.relay_bridge and options.path != 'relay':
+            parser.error('--relay-bridge needs --path relay')
         if not options.scenario or not options.out:
             parser.error('--scenario and --out are required')
         out = options.out.resolve()
@@ -683,6 +812,8 @@ def main(argv=None):
     parser, options = parse_args(argv)
     if options.remote_peer is not None:
         return remote_peer(options.remote_peer)
+    if options.bridge_edith:
+        return bridge_edith()
     DRY_RUN = options.dry_run
     os.environ.update(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
     h = harness(HERE)
@@ -702,13 +833,22 @@ def main(argv=None):
         say('REFUSED: the inventory feel matrix still holds this box')
         return 3
     login = turn_login() if options.path == 'relay' else None
-    tunnel = Tunnel(options.out.resolve() / f'tunnel-{options.direction}-{options.path}.log') if options.path != 'ip' else None
+    label = f'{options.direction}-{path_label(options)}'
+    tunnel = Tunnel(options.out.resolve() / f'tunnel-{label}.log', options.relay_bridge) if options.path != 'ip' else None
+    bridge = None
     verdicts = []
     try:
         if not DRY_RUN:
             options.out.mkdir(parents=True, exist_ok=True)
         if tunnel:
             tunnel.open()
+        if options.relay_bridge:
+            TURN['edith'] = f'turn:127.0.0.1:{BRIDGE_UDP}?transport=udp'
+            if DRY_RUN:
+                say(f'dry-run: relay bridge EDITH udp 127.0.0.1:{BRIDGE_UDP} -> ssh -R tcp {BRIDGE_TCP} -> {TURN["here"]}')
+            else:
+                bridge = BridgeHere(TURN['here'], options.out.resolve() / f'bridge-{label}.log')
+                bridge.open()
         for index in range(1, options.runs + 1):
             if not DRY_RUN and not wait_box(options.box_wait):
                 say('REFUSED: the inventory feel matrix holds this box')
@@ -717,13 +857,15 @@ def main(argv=None):
             if not DRY_RUN:
                 h.feel.scratch_bytes(SCRATCH, SCRATCH_LIMIT)
     finally:
+        if bridge:
+            bridge.close()
         if tunnel:
             tunnel.close()
     if DRY_RUN:
         return 0
     passed = sum(bool(row.get('passed')) for row in verdicts)
-    say(f'SUMMARY {options.scenario} {options.direction} {options.path}: {passed}/{options.runs} PASS {stamp()}')
-    write_json(options.out / f'summary-{options.direction}-{options.path}.json', verdicts)
+    say(f'SUMMARY {options.scenario} {label}: {passed}/{options.runs} PASS {stamp()}')
+    write_json(options.out / f'summary-{label}.json', verdicts)
     return 0 if passed == options.runs else 1
 
 
