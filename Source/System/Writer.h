@@ -55,19 +55,31 @@ namespace RTE {
 		return std::tuple(CheckpointField(values)...);
 	}
 
+	/// While one is held on a thread, every change on it touches its owner without comparing the values: for trees being torn down.
+	struct CheckpointChangeUncompared {
+		CheckpointChangeUncompared() { ++s_Depth; }
+		~CheckpointChangeUncompared() { --s_Depth; }
+		CheckpointChangeUncompared(const CheckpointChangeUncompared&) = delete;
+		CheckpointChangeUncompared& operator=(const CheckpointChangeUncompared&) = delete;
+		static inline thread_local int s_Depth = 0;
+	};
+
 	/// Stamps the final values, including branches that return early.
 	template <typename Owner, typename Observe> class CheckpointChange {
 	public:
 		CheckpointChange(Owner& owner, Observe observe, bool enabled = true) : m_Owner(owner), m_Observe(std::move(observe)) {
-			if (enabled) m_Before.emplace(m_Observe());
+			if (!enabled) return;
+			if (CheckpointChangeUncompared::s_Depth > 0) m_Uncompared = true;
+			else m_Before.emplace(m_Observe());
 		}
-		~CheckpointChange() { if (m_Before && *m_Before != m_Observe()) m_Owner.TouchCheckpoint(); }
+		~CheckpointChange() { if (m_Uncompared || (m_Before && *m_Before != m_Observe())) m_Owner.TouchCheckpoint(); }
 		CheckpointChange(const CheckpointChange&) = delete;
 		CheckpointChange& operator=(const CheckpointChange&) = delete;
 	private:
 		Owner& m_Owner;
 		Observe m_Observe;
 		std::optional<std::invoke_result_t<Observe>> m_Before;
+		bool m_Uncompared = false;
 	};
 
 	struct BitmapSnapshot;
