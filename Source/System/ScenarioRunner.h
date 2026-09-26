@@ -260,7 +260,7 @@ namespace RTE {
 		static void BeginWorldCatchUpFrame();
 		/// Takes one catch-up sim tick out of this real frame's budget.
 		static bool TakeWorldCatchUpGrant(uint64_t nextSimTick);
-		/// A host whose own seat the AI holds replays the committed frames faster than real time, like a world joiner, until it is back.
+		/// A host whose own seat the AI holds, or a seat inside its own reclaim gap, runs its ready frames faster than real time, like a world joiner, until it is back.
 		static bool TakeOwnSeatCatchUpGrant(uint64_t nextSimTick);
 		/// Whether a stopped coordinator holds the controller update this tick. A world joiner applying
 		/// its committed tail is driven by that tail, not by the coordinator, so it is not held.

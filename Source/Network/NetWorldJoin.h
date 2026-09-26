@@ -213,6 +213,8 @@ namespace RTE {
 		size_t CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* lastCopied = nullptr) const;
 		/// Forgets everything at or before the frame every live bootstrap has applied.
 		void DropThrough(uint64_t frame);
+		/// Takes another log's records as this empty log's own, bounded as this log is. False when this log already holds a record.
+		bool AdoptRecords(const NetWorldFrameLog& other);
 		void Clear();
 
 	private:

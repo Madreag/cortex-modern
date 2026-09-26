@@ -1990,7 +1990,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMatchRunner> runner;
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
-		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear(); m_RejoinFitReasons.clear();
+		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear(); m_RejoinFitReasons.clear(); m_CommittedRing.Clear();
 		m_PrivateBaseRequested = false; m_PrivateBaseTick = 0; m_PrivateBasePending.reset();
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateCaptureCosts.clear(); m_PrivateCaptureCold = false; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
@@ -3099,6 +3099,12 @@ static std::string ResyncSaveName() {
 			m_InPlaceIncarnationBumps.clear();
 			auto admissionConfig = config.matchConfig; admissionConfig.hostPeerId = m_Coordinator->GetHostPeerId();
 			if (!m_WorldJoin.ConfigureMatchRejoins(admissionConfig, round, config.simTickMs, &error)) { m_PrivateJoinError = error; return; }
+			// A successor serves the seats its predecessor held from its own record of the round, so a held seat keeps its world.
+			if (m_CommittedRing.Count() > 0 && m_CommittedRing.LastFrame() + 1 >= static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) && m_WorldJoin.Tail().AdoptRecords(m_CommittedRing)) {
+				System::PrintDiagnosticLine("[net-match] the rejoin plane opens on this peer's own record of the round: frames " + std::to_string(m_CommittedRing.FirstFrame()) +
+				                            ".." + std::to_string(m_CommittedRing.LastFrame()) + " round=" + std::to_string(round));
+			}
+			m_CommittedRing.Clear();
 			// A returning seat's base is this host's own archive of an announced capture; the writer thread hashes what it wrote.
 			g_ActivityMan.SetAutosaveDigest([](const std::vector<uint8_t>& bytes) { return DigestWorldJoinBytes(bytes); });
 			m_WorldJoin.Tail().EnableJournal(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + name + ".ccsave.inputs");
@@ -3315,12 +3321,20 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::AppendCommittedJoinFrame(uint64_t tick) {
-		if (!m_WorldJoin.IsConfigured() || !m_Coordinator) return;
+		if (!m_Coordinator) return;
+		// A peer with no tail of its own keeps the round's committed frames: as a successor it serves a held seat's catch-up from them.
+		const bool ring = !m_WorldJoin.IsPrivateMatch() && !m_Coordinator->IsPersistentWorldRound() && m_Coordinator->UsesBoundedWait();
+		if (!m_WorldJoin.IsConfigured() && !ring) return;
 		NetLockstepReadyFrame ready;
 		if (ReadCommittedJoinFrame(*m_Coordinator, tick, ready)) {
 			auto frame = PackWorldJoinReadyFrame(ready); frame.roundId = m_Coordinator->GetRoundId();
 			std::string error;
-			if (!m_WorldJoin.Tail().Append(frame, &error) && m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "committed catch-up history: " + error;
+			// A new round, or a tick this peer did not commit, starts the record again: a successor never serves across a gap.
+			if (ring && !m_CommittedRing.Append(frame, nullptr)) {
+				m_CommittedRing.Clear();
+				(void)m_CommittedRing.Append(frame, nullptr);
+			}
+			if (m_WorldJoin.IsConfigured() && !m_WorldJoin.Tail().Append(frame, &error) && m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "committed catch-up history: " + error;
 		} else if (m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "the completed tick has no committed catch-up input";
 	}
 
@@ -5029,7 +5043,7 @@ static std::string ResyncSaveName() {
 			{
 				std::ostringstream line;
 				line << "[net-match] private catch-up complete frame=" << m_WorldCatchUp.activationTick << " in_place=" << m_InPlaceCatchUp
-				     << " from=" << m_WorldCatchUp.snapshotTick;
+				     << " from=" << m_WorldCatchUp.snapshotTick << " clock=" << NetLockstepSharedClockMs();
 				System::PrintDiagnosticLine(line.str());
 			}
 			m_InPlaceCatchUp = false;

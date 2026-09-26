@@ -8723,6 +8723,8 @@ int main(int argc, char** argv) {
 			setenv("SDL_VIDEODRIVER", "offscreen", 1);
 #endif
 		}
+		// Every harness and self-test run proves the session plane's lock discipline as it plays.
+		if (headless || std::getenv("CCCP_HEADLESS") != nullptr) NetLockstepPlane::ArmChecks(true);
 	}
 
 #ifdef __APPLE__

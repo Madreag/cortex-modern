@@ -15,7 +15,7 @@ namespace RTE {
 
 	/// The slow-player policy's words, shared by the Network page's combo and the read-only summary.
 	inline const char* NetSlowPlayerPolicyText(NetSlowPlayerPolicy policy) {
-		return policy == NetSlowPlayerPolicy::Pause ? "Pause for them (up to 20 s)" : "Hand the seat to the AI and let them rejoin";
+		return policy == NetSlowPlayerPolicy::Pause ? "Pause for them (up to 20 s)" : "Give the seat to the AI (host too) until they catch up";
 	}
 
 	/// What happens to a player whose input is late, under the policy and bound the host picked.
