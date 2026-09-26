@@ -2,6 +2,7 @@
 
 #include "NetIdentity.h"
 #include "NetWorldJoin.h"
+#include "NetRoundStartScripts.h"
 #include "TimerMan.h"
 
 #include "nlohmann/json.hpp"
@@ -48,7 +49,8 @@ namespace RTE {
 		m_HostOptionsRefused = false;
 		m_UseLobbyProtocol = config.useLobbyProtocol;
 		// A round opened on a checkpoint resumes from a snapshot exactly as a healed round does.
-		m_ResyncRound = !m_StateToStream.empty();
+		// A round's start scripts ride the same stream as a match image, but the round starts fresh.
+		m_ResyncRound = !m_StateToStream.empty() && !IsRoundStartScriptBlob(m_StateToStream);
 		m_MatchConfig = config.matchConfig;
 		m_ActivePeerIds = m_MatchConfig.activePeerIds;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
@@ -682,7 +684,7 @@ namespace RTE {
 	bool NetMatchRunner::StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
 		NetLockstepConfig lockstepConfig;
 		lockstepConfig.sessionId = session.GetSessionId();
-		lockstepConfig.resumeFromSnapshot = RoundResumesASnapshot(m_ResyncRound, !m_ReceivedStateBytes.empty(),
+		lockstepConfig.resumeFromSnapshot = RoundResumesASnapshot(m_ResyncRound, !m_ReceivedStateBytes.empty() && !IsRoundStartScriptBlob(m_ReceivedStateBytes),
 		                                                         m_UseLobbyProtocol && m_Lobby.AnsweredResumeHeld());
 		if (const auto* admission = session.GetReconnectHost()) {
 			lockstepConfig.seatPresenceEpoch = admission->GetEpoch();
