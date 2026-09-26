@@ -3048,6 +3048,20 @@ namespace RTE {
 		if (states(host) != "123" || states(client) != "123" || states(survivor) != "123")
 			return Fail("tail-pack-order: the packed inputs of one actor read " + states(host) + "/" + states(client) + "/" + states(survivor) +
 			            " from the three peers' commits; every peer applies them 123, by sender");
+		// The committed record carries them to a returner in that order, and its replay takes them.
+		std::vector<uint8_t> record;
+		NetLockstepFrame decoded;
+		std::string codecError;
+		const bool encoded = EncodeCommittedJoinFrame(host, record, &codecError);
+		const bool read = encoded && DecodeCommittedJoinFrame(record, decoded, &codecError);
+		LoopbackTransport transport;
+		NetLockstepCoordinator replay;
+		NetLockstepConfig replayConfig;
+		replayConfig.localPeerId = 1; replayConfig.startFrame = 11; replayConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x54504F52ULL);
+		const bool replayed = read && replay.StartReplay(transport, replayConfig, &codecError) && replay.QueueReplayFrame(11, decoded.frames, {}, &codecError);
+		if (!replayed || states(decoded) != "123")
+			return Fail("tail-pack-order: one actor's inputs from three senders encoded " + std::to_string(encoded) + ", read back " + std::to_string(read) + " as " +
+			            states(decoded) + " and replayed " + std::to_string(replayed) + ": " + codecError + "; expected 1, 1 as 123 and 1");
 		return 0;
 	}
 

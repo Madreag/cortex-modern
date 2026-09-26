@@ -436,7 +436,8 @@ namespace RTE {
 			return true;
 		}
 
-		bool ValidateSortedFrames(const std::vector<ControllerFrame>& frames, NetLockstepError* error) {
+		/// One sender's frames name each actor once; a committed tick merges every sender's, so two for one actor stand in sender order there.
+		bool ValidateSortedFrames(const std::vector<ControllerFrame>& frames, NetLockstepError* error, bool mergedSenders = false) {
 			if (frames.size() > NetLockstepCodec::c_MaxFramesPerPacket) {
 				SetError(error, NetLockstepErrorCode::PayloadTooLarge, 0, "frame packet has too many ControllerFrames");
 				return false;
@@ -444,8 +445,8 @@ namespace RTE {
 			int64_t previousActorId = std::numeric_limits<int64_t>::min();
 			bool havePrevious = false;
 			for (const ControllerFrame& frame : frames) {
-				if (havePrevious && frame.actorUniqueID <= previousActorId) {
-					SetError(error, NetLockstepErrorCode::InvalidValue, 0, "ControllerFrames must be sorted by unique id without duplicates");
+				if (havePrevious && (frame.actorUniqueID < previousActorId || (!mergedSenders && frame.actorUniqueID == previousActorId))) {
+					SetError(error, NetLockstepErrorCode::InvalidValue, 0, mergedSenders ? "ControllerFrames must be sorted by unique id" : "ControllerFrames must be sorted by unique id without duplicates");
 					return false;
 				}
 				const std::vector<uint8_t> encodedFrame = ControllerFrameCodec::Encode(frame);
@@ -5036,7 +5037,8 @@ namespace RTE {
 			return false;
 		}
 		NetLockstepError frameError;
-		if (!ValidateSortedFrames(frames, &frameError)) {
+		// A recorded tick is every sender's frames merged.
+		if (!ValidateSortedFrames(frames, &frameError, true)) {
 			if (error) *error = frameError.message;
 			return false;
 		}

@@ -3007,9 +3007,10 @@ namespace RTE {
 		// The recorder captures every committed tick: all peers' frames and commands. The codec wants one
 		// UID-sorted set; command order re-sorts by sender at apply.
 		const auto record = [tick](const NetLockstepReadyFrame& ready) {
-			std::vector<ControllerFrame> allFrames = ready.localFrames;
-			allFrames.insert(allFrames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
-			std::sort(allFrames.begin(), allFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
+			// Two inputs for one actor keep the order every peer applies them in, so the recording replays to the same one.
+			std::vector<ControllerFrame> allFrames;
+			for (const ControllerFrame* input: CommittedControllerFramesInSenderOrder(ready, GetLockstepLocalPeerId())) allFrames.push_back(*input);
+			std::stable_sort(allFrames.begin(), allFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
 				return lhs.actorUniqueID < rhs.actorUniqueID;
 			});
 			std::vector<NetGameCommand> allCommands = ready.localCommands;
