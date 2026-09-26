@@ -8329,6 +8329,24 @@ end
 	                         birthsHere.back() >= birthsHere[birthsHere.size() - 2];
 	std::cout << "[script-graph-selftest] " << (birthsAgree ? "PASS" : "FAIL") << " table_birth_numbers_match_across_states" << std::endl;
 	checkpointValues = birthsAgree && checkpointValues;
+	// A state makes a container type's iterator metatable on its first iteration, which a peer restored from an image
+	// does later than the peer that saved it; so the first iteration takes the births every later one takes.
+	{
+		std::array<uint64_t, 2> births{};
+		std::vector<int> container{1, 2, 3};
+		if (lua_State* fresh = luaL_newstate()) {
+			for (uint64_t& born: births) {
+				const uint64_t before = luaJIT_state_serial(fresh);
+				luabind::detail::make_range<false>(fresh, container);
+				born = luaJIT_state_serial(fresh) - before;
+				lua_settop(fresh, 0);
+			}
+			lua_close(fresh);
+		}
+		const bool same = births[0] > 0 && births[0] == births[1];
+		std::cout << "[script-graph-selftest] " << (same ? "PASS" : "FAIL") << " first_iteration_of_a_type_takes_no_extra_birth first=" << births[0] << " next=" << births[1] << std::endl;
+		checkpointValues = same && checkpointValues;
+	}
 	// A table that never leaves a hot loop is sunk under -O3 and never born; a captured state must
 	// allocate it, or two peers whose traces differ would number their objects differently.
 	RunScriptString("_F76SinkProbe = function() local n = 0 for i = 1, 400 do local t = { i } n = n + t[1] end return n end");
