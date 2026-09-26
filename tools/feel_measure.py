@@ -78,14 +78,19 @@ def private_settings(run, cap):
     write_json(Path(run.out) / 'runtime.json', manifest)
 
 
-def stage_baseline(run, window_ticks=TICKS, humans=2):
+def stage_baseline(run, window_ticks=TICKS, humans=2, load_objects=0):
     module = Path(run.cwd) / 'Userdata/UserScenes.rte'
     module.mkdir(exist_ok=True)
     script, rewritten = re.subn(r'(?m)^local WINDOW_TICKS = \d+;$', f'local WINDOW_TICKS = {window_ticks};',
                                 (HELPERS / 'FeelBaseline.lua').read_text(encoding='utf-8'))
     if rewritten != 1:
         raise RuntimeError('the feel fixture does not carry exactly one WINDOW_TICKS line')
+    script, rewritten = re.subn(r'(?m)^local LOAD_OBJECTS = \d+;$', f'local LOAD_OBJECTS = {load_objects};', script)
+    if rewritten != 1:
+        raise RuntimeError('the feel fixture does not carry exactly one LOAD_OBJECTS line')
     (module / 'FeelBaseline.lua').write_text(script, encoding='utf-8')
+    if load_objects:
+        (module / 'FeelLoad.lua').write_text((HELPERS / 'FeelLoad.lua').read_text(encoding='utf-8'), encoding='utf-8')
     (module / 'Index.ini').write_text(
         'DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n'
         '\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n'
