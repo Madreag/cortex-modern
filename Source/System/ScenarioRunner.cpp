@@ -1138,8 +1138,8 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsPersistentWorld() {
-		const NetMatchConfig* config = GetLockstepMatchConfig();
-		return config != nullptr && config->persistentWorld;
+		const auto config = GetLockstepMatchConfig();
+		return config && config->persistentWorld;
 	}
 
 	bool ScenarioRunner::IsWorldAuthor() {
@@ -1152,12 +1152,12 @@ namespace RTE {
 	}
 
 	std::string ScenarioRunner::GetWorldId() {
-		const NetMatchConfig* config = GetLockstepMatchConfig();
-		return config != nullptr ? config->worldId : std::string();
+		const auto config = GetLockstepMatchConfig();
+		return config ? config->worldId : std::string();
 	}
 
 	int ScenarioRunner::GetWorldRespawnDelayFrames() {
-		if (const NetMatchConfig* config = GetLockstepMatchConfig(); config != nullptr) {
+		if (const auto config = GetLockstepMatchConfig()) {
 			return static_cast<int>(WorldRespawnDelayFrames(*config));
 		}
 		// With no round attached the preset runs alone on the world's own default. Built once: a
