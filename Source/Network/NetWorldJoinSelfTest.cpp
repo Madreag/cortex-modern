@@ -327,6 +327,19 @@ namespace RTE {
 			if (!log.Covers(10) || !log.Covers(11) || log.Count() != 2) {
 				return Fail("committed tail lost an in-order frame");
 			}
+			// A successor's tail opens on its own record of the round: the held frame is covered with the bytes every peer committed.
+			NetWorldFrameLog successor;
+			if (successor.Covers(10)) return Fail("an empty successor tail claims the held frame");
+			if (!successor.AdoptRecords(log) || !successor.Covers(10) || !successor.Covers(11) || successor.Count() != 2 || successor.Bytes() != log.Bytes()) {
+				return Fail("a successor did not adopt the round's committed record");
+			}
+			std::vector<std::vector<uint8_t>> adopted, recorded;
+			if (successor.CopyFrom(10, 8, 1 << 20, adopted) != 2 || log.CopyFrom(10, 8, 1 << 20, recorded) != 2 || adopted != recorded) {
+				return Fail("the adopted record serves other bytes than the round committed");
+			}
+			if (!successor.Append(MakeCommittedFrame(12), &error) || successor.AdoptRecords(log)) {
+				return Fail("an adopted tail did not continue in order, or adopted over its own record: " + error);
+			}
 			NetWorldCheckpointImage image;
 			image.worldId = c_WorldId;
 			image.boot = 1;
