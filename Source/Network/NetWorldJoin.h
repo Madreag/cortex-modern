@@ -10,6 +10,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -195,12 +196,16 @@ namespace RTE {
 		static constexpr size_t c_DefaultMaxFrames = 3600;              //!< A minute of 60 Hz ticks.
 		static constexpr uint64_t c_DefaultMaxBytes = 32ULL * 1024 * 1024;
 
+		/// The frames a peer's record of its round keeps: the slow-player bound, the delay margin and one capture interval of frames.
+		static size_t RingFrames(uint32_t boundTicks, uint32_t delayMarginFrames, uint64_t captureIntervalMs, double tickMs);
 		void Configure(size_t maxFrames, uint64_t maxBytes);
 		void EnableJournal(const std::string& path);
 		bool HasJournal() const { return static_cast<bool>(m_Journal); }
 		bool JournalFailed() const;
 		/// Encodes and retains one committed frame. Frames must arrive in order and without gaps.
 		bool Append(const NetLockstepFrame& frame, std::string* error = nullptr);
+		/// The oldest frame the log can still serve, from its journal or its memory; 0 when it holds none.
+		uint64_t FirstServableFrame() const;
 		/// Whether the log still covers the frame, so a join opened at B-1 can still converge.
 		bool Covers(uint64_t frame) const;
 		uint64_t FirstFrame() const { return m_Records.empty() ? 0 : m_Records.front().frame; }
@@ -382,6 +387,16 @@ namespace RTE {
 		return session.spectatorLobbyPeer;
 	}
 
+	/// Where the round changed hands: the first frame the new authority committed, its generation and id, and the peers that
+	/// left at that frame (bit n-1 for peer n). A returner replaying across it replays each side under its own authority.
+	struct NetWorldHandover {
+		uint64_t frame = 0;
+		uint64_t generation = 0;
+		uint8_t authorityPeerId = 0;
+		uint8_t departedMask = 0;
+		bool operator==(const NetWorldHandover&) const = default;
+	};
+
 	/// The joiner's own bootstrap state: the image it restored, the tail it holds and the E it was given.
 	struct NetWorldCatchUpClient {
 		bool active = false;
@@ -401,6 +416,8 @@ namespace RTE {
 		std::string digest;
 		std::vector<NetLockstepFrame> tail;
 		std::vector<uint8_t> partialTail;
+		std::optional<NetWorldHandover> handover; //!< Where the round it replays changed hands, once its successor said so.
+		bool handoverCrossed = false;             //!< The replay runs under the successor's authority from the handover on.
 	};
 
 	/// The catch-up report a joiner sends: what its sim has applied, never the host's frame.
@@ -418,6 +435,9 @@ namespace RTE {
 	inline constexpr uint8_t c_NetWorldReportDecline = 5; //!< A watcher's own choice: 1 declines a seat.
 	inline constexpr uint8_t c_NetWorldReportActivationAck = 6;
 	inline constexpr uint8_t c_NetWorldReportActivationCommit = 7;
+	/// A successor to a returner whose held state predates its handover: the first frame under the new authority.
+	inline constexpr uint8_t c_NetWorldReportHandover = 8;
+
 
 	/// Why a world turned a connection away, as a code the joiner turns into the line it shows.
 	enum class NetWorldJoinRefusal : uint64_t {
@@ -446,6 +466,10 @@ namespace RTE {
 
 	/// A valid one-chunk StateChunk carrying a typed 8-byte value. Empty payloads stay illegal.
 	NetLobbyStateChunk MakeWorldJoinReport(uint8_t kind, uint64_t value);
+	/// The handover report: the frame as its value, then the generation, the authority and the departed mask.
+	NetLobbyStateChunk MakeWorldJoinHandoverReport(const NetWorldHandover& handover);
+	/// Reads a handover report's fields as ParseWorldJoinReport returns them.
+	NetWorldHandover WorldJoinHandoverFromReport(uint64_t value, uint64_t generation, uint64_t authority, uint64_t departedMask);
 	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks = nullptr, uint64_t* workUs = nullptr, uint64_t* sentThrough = nullptr);
 
 	/// Host-authored Activate binding: seat, team, brain preset and spawn (Persistent World respawn API).

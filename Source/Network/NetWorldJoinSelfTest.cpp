@@ -3068,6 +3068,95 @@ namespace RTE {
 		return 0;
 	}
 
+	/// Every bounded-wait peer's record of a three-peer round: bounded to the ruling's frames, in commit order, byte-equal to the host's
+	/// own record over 600 frames, and refusing a frame older than it with the first frame it can serve.
+	int TestEveryPeersRecordServesTheHostsTail() {
+		const auto fail = [&](const std::string& message) { return Fail(message); };
+		const uint16_t port = 48976;
+		LoopbackTransport hostWire, clientAWire, clientBWire;
+		std::string wireError;
+		if (!hostWire.StartHost(port, &wireError) || !clientAWire.Connect("loopback", port, &wireError) || !clientBWire.Connect("loopback", port, &wireError)) return Fail(wireError);
+		const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+			NetLockstepConfig c;
+			c.sessionId = 0x9A76; c.roundId = 0x9A76; c.startFrame = 0; c.inputDelayFrames = 4; c.timeoutMs = 1000000;
+			c.localPeerId = local; c.peerCount = 3; c.remoteTransportPeerIds = std::move(transports); c.relayToOtherPeers = relay;
+			c.scenario = "LockstepSelfTest"; c.ownershipPolicy = "unique-id-split"; c.simTickMs = 1000.0 / 60.0;
+			return c;
+		};
+		NetLockstepCoordinator host, clientA, clientB;
+		if (!host.Start(hostWire, config(1, {{2, 1}, {3, 2}}, true), &wireError) || !clientA.Start(clientAWire, config(2, {{1, 1}}, false), &wireError) ||
+		    !clientB.Start(clientBWire, config(3, {{1, 1}}, false), &wireError)) return Fail(wireError);
+		const size_t capacity = NetWorldFrameLog::RingFrames(3, 4, 10000, 1000.0 / 60.0);
+		if (capacity != 607) return fail("a 60 Hz ring with a 3-tick bound and a 4-frame margin keeps " + std::to_string(capacity) + " frames, not 607");
+		// The host's record is the join plane's own tail; each client keeps a ring from its own coordinator's commits.
+		NetWorldFrameLog hostRecord;
+		NetWorldFrameLog rings[2];
+		for (NetWorldFrameLog& ring: rings) ring.Configure(capacity, 0);
+		struct Peer { NetLockstepCoordinator* coordinator; LoopbackTransport* wire; uint8_t id; uint64_t simulated = 0, queued = 0; };
+		Peer peers[3] = {{&host, &hostWire, 1}, {&clientA, &clientAWire, 2}, {&clientB, &clientBWire, 3}};
+		constexpr uint64_t c_Frames = 720;
+		std::string recordError;
+		bool recorded = true;
+		for (uint64_t now = 0; now < 60000 && std::any_of(std::begin(peers), std::end(peers), [&](const Peer& peer) { return peer.simulated < c_Frames; }); ++now) {
+			for (Peer& peer: peers) {
+				for (; peer.queued <= peer.simulated + 6; ++peer.queued) {
+					ControllerFrame input;
+					input.actorUniqueID = 100 * peer.id; input.stateMask = peer.queued; input.inputMode = static_cast<uint8_t>(Controller::CIM_PLAYER);
+					// Every seat sends a command every frame, so a frame's commands come from three senders in each peer's own local-first order.
+					const NetGameCommand command{peer.id, NetGameSetTeamFunds{static_cast<uint8_t>(peer.id - 1), static_cast<int32_t>(peer.queued)}, peer.queued};
+					if (!peer.coordinator->IsRunning() || !peer.coordinator->QueueLocalInput(peer.queued, {input}, {command}, &recordError)) break;
+				}
+				peer.wire->AdvanceTimeMs(1);
+				peer.coordinator->Tick(now);
+			}
+			for (size_t index = 0; index < 3; ++index) {
+				for (NetLockstepReadyFrame ready; peers[index].coordinator->PopReadyFrame(ready);) {
+					(void)peers[index].coordinator->FinishSimulationTick(ready.frame);
+					peers[index].simulated = ready.frame;
+					auto frame = PackWorldJoinReadyFrame(ready); frame.roundId = peers[index].coordinator->GetRoundId();
+					recorded = recorded && (index == 0 ? hostRecord.Append(frame, &recordError) : rings[index - 1].Append(frame, &recordError));
+				}
+			}
+		}
+		if (!recorded) return fail("a committed frame did not enter a record: " + recordError);
+		if (std::any_of(std::begin(peers), std::end(peers), [&](const Peer& peer) { return peer.simulated < c_Frames; }))
+			return fail("the three-peer round stopped short: frames " + std::to_string(peers[0].simulated) + "/" + std::to_string(peers[1].simulated) + "/" + std::to_string(peers[2].simulated));
+		for (const NetWorldFrameLog& ring: rings) {
+			// Bounded: the ring holds its capacity and no more, the newest frames, in commit order.
+			if (ring.Count() != capacity || ring.LastFrame() < c_Frames || ring.FirstFrame() != ring.LastFrame() - capacity + 1)
+				return fail("the ring is not the newest " + std::to_string(capacity) + " frames: count=" + std::to_string(ring.Count()) + " first=" + std::to_string(ring.FirstFrame()) +
+				            " last=" + std::to_string(ring.LastFrame()) + " evicted=" + std::to_string(ring.Evicted()));
+			const uint64_t from = ring.LastFrame() - 599;
+			std::vector<std::vector<uint8_t>> served, record;
+			uint64_t recordLast = 0;
+			if (ring.CopyFrom(from, 600, UINT64_MAX, served) != 600) return fail("the ring did not serve the 600 frames from " + std::to_string(from));
+			(void)hostRecord.CopyFrom(from, 600, UINT64_MAX, record, &recordLast);
+			if (record.size() != 600 || recordLast != from + 599) return fail("the host's record does not cover the 600 frames from " + std::to_string(from));
+			for (size_t index = 0; index < served.size(); ++index) {
+				NetLockstepFrame decoded;
+				if (!DecodeCommittedJoinFrame(served[index], decoded, &recordError) || decoded.targetFrame != from + index)
+					return fail("the served tail is out of commit order at " + std::to_string(from + index) + ": " + recordError);
+				if (served[index] != record[index]) {
+					NetLockstepFrame hosted;
+					(void)DecodeCommittedJoinFrame(record[index], hosted, nullptr);
+					return fail("the served tail differs from the host's record at frame " + std::to_string(from + index) + ": commands " + std::to_string(decoded.commands.size()) +
+					            "/" + std::to_string(hosted.commands.size()) + ", first sender " + std::to_string(decoded.commands.empty() ? 0 : decoded.commands.front().senderPeerId) +
+					            "/" + std::to_string(hosted.commands.empty() ? 0 : hosted.commands.front().senderPeerId));
+				}
+			}
+			// Past the ring: not covered, and the first frame it can serve is its oldest.
+			if (ring.Covers(ring.FirstFrame() - 1) || ring.FirstServableFrame() != ring.FirstFrame())
+				return fail("a frame older than the ring is covered or its first servable frame is " + std::to_string(ring.FirstServableFrame()) + " instead of " + std::to_string(ring.FirstFrame()));
+		}
+		// A frame that skips one is refused, so a record never serves across a gap.
+		NetLockstepFrame skipped;
+		skipped.targetFrame = rings[0].LastFrame() + 2; skipped.roundId = 0x9A76;
+		if (rings[0].Append(skipped, nullptr)) return fail("a record took a frame across a gap");
+		std::cout << "[net-world-join-selftest] PASS every_peers_record_serves_the_hosts_tail capacity=" << capacity << " served=600 from=" << rings[0].LastFrame() - 599
+		          << " refused_before=" << rings[0].FirstFrame() << std::endl;
+		return 0;
+	}
+
 	int TestCommittedTailJournal() {
 		ResumeScratchDirectory scratch;
 		const auto path = scratch.path / "committed.inputs";
@@ -7536,6 +7625,7 @@ namespace RTE {
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
+		if (const int result = TestEveryPeersRecordServesTheHostsTail(); result != 0) return result;
 		{
 			std::string error;
 			if (!TestWorldRestartOpensOnCheckpoint(&error)) return Fail(error);
