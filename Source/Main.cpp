@@ -300,6 +300,7 @@ static bool s_retiredLuaStateCountFlag = false;
 // two-peer rows that prove the assignment needs no agreement start one runtime with a history and
 // the other without.
 static int s_preMatchHistoryObjects = 0;
+static std::string s_preMatchActivity;
 
 // Post-module-load diagnostic. Empty means disabled.
 static std::string s_netIdentityDumpPath;
@@ -1041,6 +1042,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				    duration.ptr == spec.data() + spec.size() && stall.tick > 0 && stall.milliseconds > 0 && stall.milliseconds <= 20000)
 					s_netLiveStalls.push_back(stall);
 			}
+			++i;
+			continue;
+		}
+		if (currentArg == "-selftest-prematch-activity" && i + 1 < argCount) {
+			s_preMatchActivity = argValue[i + 1];
 			++i;
 			continue;
 		}
@@ -3063,6 +3069,29 @@ static void SpendPreMatchHistory(int objects) {
 	std::ostringstream line;
 	line << "[selftest] pre-match history: objects=" << objects << " scripted=" << loaded
 	     << " uid_counter=" << MovableObject::GetUniqueIDCounter();
+	System::PrintDiagnosticLine(line.str());
+}
+
+// A single-player game played before a match: the activity starts, runs a few updates and ends, leaving its scripts'
+// history in the Lua states as a player's earlier game would.
+static void PlayPreMatchActivity(const std::string& preset) {
+	if (preset.empty()) {
+		return;
+	}
+	const Activity* activity = dynamic_cast<const Activity*>(g_PresetMan.GetEntityPreset("GAScripted", preset));
+	if (activity && !activity->GetSceneName().empty()) {
+		g_SceneMan.SetSceneToLoad(activity->GetSceneName(), true, false);
+	}
+	const int started = activity ? g_ActivityMan.StartActivity("GAScripted", preset) : -1;
+	int updates = 0;
+	for (; started >= 0 && updates < 30; ++updates) {
+		g_ActivityMan.Update();
+		g_MovableMan.Update();
+	}
+	g_ActivityMan.EndActivity();
+	std::ostringstream line;
+	line << "[selftest] pre-match activity: preset=" << preset << " started=" << started << " updates=" << updates
+	     << " lua_births=" << g_LuaMan.GetTableBirthCount();
 	System::PrintDiagnosticLine(line.str());
 }
 
@@ -8812,6 +8841,7 @@ int main(int argc, char** argv) {
 
 	g_PresetMan.LoadAllDataModules();
 	SpendPreMatchHistory(s_preMatchHistoryObjects);
+	PlayPreMatchActivity(s_preMatchActivity);
 	// The modules are loaded and will not change under this process: read them once here, off the game
 	// thread, so the multiplayer landing and Create Lobby do not each walk every module on their frame.
 	NetIdentity::PrimeManifest();
