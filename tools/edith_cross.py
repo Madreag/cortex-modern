@@ -84,23 +84,29 @@ def harness(tools):
 
 # --- one peer, on either box ---------------------------------------------------------------------------------------
 
-def match_spec(peer, root, port, role_flags, settings, repo=REPO, ticks=MATCH_TICKS, timeout=420):
-    """The feel driver's two-peer arm (feel_measure.launch_case) with the real link in place of the fake lag."""
+def match_spec(peer, root, port, role_flags, settings, repo=REPO, ticks=MATCH_TICKS, timeout=420, record=False, lean=True):
+    """The feel driver's two-peer arm (feel_measure.launch_case) with the real link in place of the fake lag. Its '-off'
+    form by default: at 24dcda80ad the feel recorder stops a match with the [net-plane] ASSERT (FeelAfterPresent reads
+    the coordinator inside an open plane window), and item9a_gates reads its clock from the live-hash wall_ms rows.
+    lean keeps the relay compare's records (tick hashes, live hashes, the match report); the matrix form adds the
+    per-tick sim dump and the controller dump, which cost the tick budget on both boxes."""
     root, run_out = Path(root), Path(root) / peer
     trace = root / f'{peer}_trace.json'
     flags = ['-seed', '42', '-max-ticks', str(ticks), '-tick-hashes', '-net-live-tick-hashes', str(root / f'{peer}-live.jsonl'),
              '-out', str(trace), '-input-script', str(root / 'input.txt'),
-             '-controller-debug-dump', str(root / f'{peer}_controller.jsonl'), '-controller-debug-ticks', f'1-{ticks}',
-             '-feel-render-settings', str(run_out / 'runtime/Userdata/FeelRender.ini'), '-feel-measure', str(run_out / 'feel'),
-             '-net-match-service-e2e', '-net-port', str(port), '-net-match-ticks', str(ticks), '-net-match-humans', '2',
+             *([] if lean else ['-controller-debug-dump', str(root / f'{peer}_controller.jsonl'), '-controller-debug-ticks', f'1-{ticks}']),
+             '-feel-render-settings', str(run_out / 'runtime/Userdata/FeelRender.ini'),
+             *(['-feel-measure', str(run_out / 'feel')] if record else []), '-net-match-service-e2e', '-net-port', str(port), '-net-match-ticks', str(ticks), '-net-match-humans', '2',
              '-net-match-peers', '2', '-net-match-cpu-slots', '0', '-net-match-service-preset', 'Determinism FeelBaseline',
              '-net-match-service-module', 'UserScenes.rte', '-net-match-auto-delay', '-net-local-prediction', 'on',
              '-net-reconnect-ticket', str(root / f'{peer}.ticket'), '-net-match-report', str(root / f'{peer}_report.json'),
              *role_flags]
-    env = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{ticks}', PYTHONDONTWRITEBYTECODE='1')
-    expected = [str(trace), str(trace) + '.simdump.txt', str(root / f'{peer}_controller.jsonl')]
+    env = dict(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
+    if not lean:
+        env.update(CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{ticks}')
+    expected = [str(trace)] + ([] if lean else [str(trace) + '.simdump.txt', str(root / f'{peer}_controller.jsonl')])
     return dict(peer=peer, root=str(root), repo=str(repo), flags=flags, env=env, settings=settings, ticks=ticks, cap=60,
-                timeout=timeout, expected=expected, reduce=None)
+                timeout=timeout, expected=expected, reduce=None, record=record)
 
 
 def soak_spec(root, ticks, repo=REPO):
@@ -111,7 +117,7 @@ def soak_spec(root, ticks, repo=REPO):
              '-feel-render-settings', str(run_out / 'runtime/Userdata/FeelRender.ini'), '-feel-measure', str(run_out / 'feel'),
              '-scenario', 'FeelBaseline']
     return dict(peer='sp', root=str(root), repo=str(repo), flags=flags, env=dict(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1'),
-                settings={}, ticks=ticks, cap=60, timeout=int(ticks / 60) + 900, expected=[], reduce='tick-budget')
+                settings={}, ticks=ticks, cap=60, timeout=int(ticks / 60) + 900, expected=[], reduce='tick-budget', record=True)
 
 
 def prepare_peer(h, spec):
@@ -119,7 +125,8 @@ def prepare_peer(h, spec):
     run = h.run.make_run(Path(spec['repo']), spec['flags'], run_out, timeout=spec['timeout'], env=spec['env'],
                          expected=[Path(path) for path in spec['expected']])
     h.feel.private_settings(run, spec['cap'])
-    (run_out / 'feel').mkdir()
+    if spec.get('record'):
+        (run_out / 'feel').mkdir()
     h.feel.stage_baseline(run, spec['ticks'], 2)
     if spec['settings']:
         h.run.seed_settings(run, spec['settings'])
@@ -541,6 +548,23 @@ def box_free():
     return not (marks and marks[-1].rstrip().endswith('S3 start'))
 
 
+def box_load():
+    """Compilers, linkers and engines running on this box right now (other lanes' builds skew the local peer's tick)."""
+    names = subprocess.run(['pwsh', '-NoProfile', '-Command', "(Get-Process cl, link, 'Cortex Command*' -ErrorAction SilentlyContinue).ProcessName"],
+                           capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW).stdout.splitlines()
+    names = [name.strip() for name in names if name.strip()]
+    return {name: names.count(name) for name in sorted(set(names))}
+
+
+def wait_quiet(budget_s):
+    """Waits (bounded) until no compiler or linker runs here; returns what was running when the run starts."""
+    deadline = time.monotonic() + budget_s
+    while (load := box_load()) and any(name in load for name in ('cl', 'link')) and time.monotonic() < deadline:
+        say(f'a build runs on this box {load}; waiting')
+        time.sleep(30)
+    return load
+
+
 def wait_box(budget_s):
     deadline = time.monotonic() + budget_s
     while not box_free():
@@ -591,8 +615,10 @@ def run_match(h, options, index, login):
 
     def spec(peer, session_id=None):
         return match_spec(peer, root, port, role(peer, session_id), network_settings(options.path, sides[peer], pin, login),
-                          repo=options.repo, timeout=options.timeout)
+                          repo=options.repo, timeout=options.timeout, record=options.feel_records,
+                          lean=options.instrumentation == 'lean')
 
+    load = {} if DRY_RUN else wait_quiet(options.quiet_wait)
     started, local, local_record, session_id, note = stamp(), None, {}, None, None
     try:
         if local_peer == 'host':
@@ -636,7 +662,8 @@ def run_match(h, options, index, login):
         fetch(root, [f'{remote_peer_name}*', 'session1*'], [f'{remote_peer_name}/runtime'])
     return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path,
                                        port=port, machines={peer: MACHINE[side] for peer, side in sides.items()},
-                                       local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note))
+                                       local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note,
+                                       feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load))
 
 
 def path_label(options):
@@ -689,10 +716,10 @@ ROUTE = re.compile(r'\[net-ice\][^\n]*(?:selected|candidate|fail|timeout)[^\n]*|
 def analyze_match(h, root, meta):
     records = {peer: read_json(root / f'{peer}-record.json') for peer in ('host', 'client')}
     complete = all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values())
-    manifest = dict(started=meta['started'], finished=meta['finished'], mode='two-machine service e2e, EROL-PC <-> EDITH over the internet',
-                    ticks=MATCH_TICKS, lag_ms=0, cap_hz=60, instrumentation=True, port=meta['port'], loss_percent=0, silent_tick=None,
-                    live_stalls=None, autosave_seconds=None, per_peer_lag_ms={'host': 0, 'client': 0}, launches_complete=complete,
-                    exe={peer: row.get('exe_sha256') for peer, row in records.items()}, **meta)
+    manifest = dict(meta, mode='two-machine service e2e, EROL-PC <-> EDITH over the internet', ticks=MATCH_TICKS, lag_ms=0, cap_hz=60,
+                    instrumentation=meta['feel_records'], loss_percent=0, silent_tick=None, live_stalls=None, autosave_seconds=None,
+                    per_peer_lag_ms={'host': 0, 'client': 0}, launches_complete=complete,
+                    exe={peer: row.get('exe_sha256') for peer, row in records.items()})
     write_json(root / 'manifest.json', manifest)
     h.records.compress_case_records(root)
     try:
@@ -790,7 +817,12 @@ def parse_args(argv=None):
     parser.add_argument('--out', type=Path, help=f'a fresh directory under {SCRATCH} (the same path is used on EDITH)')
     parser.add_argument('--minutes', type=float, default=10, help='sp-soak length')
     parser.add_argument('--timeout', type=int, default=420, help='each match engine (seconds)')
+    parser.add_argument('--instrumentation', choices=['lean', 'matrix'], default='lean',
+                        help='lean: tick hashes, live hashes and the match report (the relay compare); matrix: plus the '
+                             'per-tick sim dump and the controller dump (the feel matrix arms)')
+    parser.add_argument('--feel-records', action='store_true', help='add -feel-measure to both match peers (the matrix -on arms)')
     parser.add_argument('--repo', type=Path, default=REPO, help='the engine tree on both boxes (its executable must match)')
+    parser.add_argument('--quiet-wait', type=int, default=1200, help='seconds to wait for other builds on this box to end')
     parser.add_argument('--box-wait', type=int, default=2700, help='seconds to wait while the inventory feel matrix holds this box')
     parser.add_argument('--dry-run', action='store_true', help='print the launches, copies and ssh commands instead of running them')
     parser.add_argument('--remote-peer', type=Path, help=argparse.SUPPRESS)
