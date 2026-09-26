@@ -35,7 +35,7 @@ namespace RTE {
 	}
 
 	std::string RandomGenerator::SerializeCheckpoint() const {
-		auto engine = m_RNG;
+		auto engine = EngineCopy();
 		std::ostringstream out;
 		out.imbue(std::locale::classic());
 		out << "MT1 " << m_Seed << ' ' << m_DrawCount;
@@ -99,6 +99,7 @@ namespace RTE {
 		m_RNG = candidate;
 		m_Seed = seed;
 		m_DrawCount = drawCount;
+		m_SeedPending = false;
 		return true;
 	}
 

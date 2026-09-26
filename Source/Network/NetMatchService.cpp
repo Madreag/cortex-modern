@@ -30,6 +30,7 @@
 #include "UInputMan.h"
 
 #include "MovableMan.h"
+#include "NetRoundStartScripts.h"
 
 #include "nlohmann/json.hpp"
 
@@ -727,6 +728,14 @@ static std::string ResyncSaveName() {
 			s_PortMap.Release();
 		}
 		s_PortMapApplied = false;
+		{
+			// A fresh lockstep round starts every peer on the host's script state, never on each machine's own history.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_RoundStartScriptsWanted = request.host && !request.resumeConfig && !targetingWorld;
+			m_RoundStartScripts.clear();
+			m_RoundStartScriptsToStream.clear();
+			m_PendingRoundStartScripts.clear();
+		}
 		m_EverStarted.store(true);
 		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest), std::move(identityOptions));
 		return true;
@@ -2735,6 +2744,23 @@ static std::string ResyncSaveName() {
 				m_ErrorText.clear();
 			}
 		}
+		// The host's script state is taken on this thread, the one that runs the scripts, when the round is asked to start.
+		bool capture = false;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			capture = m_RoundStartScriptsWanted && m_RoundStartScripts.empty() && m_State == NetMatchServiceState::Starting;
+		}
+		if (capture) {
+			std::vector<uint8_t> scripts;
+			std::string captureError;
+			if (!LuaMan::CaptureRoundStartScripts(scripts, &captureError)) {
+				SetState(NetMatchServiceState::Failed, "Match start failed", "the round's start scripts could not be captured: " + captureError);
+				return;
+			}
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_RoundStartScripts = scripts;
+			m_RoundStartScriptsToStream = std::move(scripts);
+		}
 		m_StartRequested.store(true);
 	}
 
@@ -2743,6 +2769,20 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State != NetMatchServiceState::ReadyToLaunch || !m_Coordinator) {
 			return false;
+		}
+		// Every peer, the host included, starts the round on the host's script state; a peer that cannot take it does not start.
+		if (!m_PendingRoundStartScripts.empty()) {
+			const std::vector<uint8_t> scripts = std::move(m_PendingRoundStartScripts);
+			m_PendingRoundStartScripts.clear();
+			std::string restoreError;
+			if (!LuaMan::RestoreRoundStartScripts(scripts, &restoreError)) {
+				m_State = NetMatchServiceState::Failed;
+				m_StatusText = "Match start failed";
+				m_ErrorText = "This game could not take the host's script state: " + restoreError;
+				System::PrintDiagnosticLine("[net-match] round start scripts refused: " + restoreError);
+				return false;
+			}
+			System::PrintDiagnosticLine(std::format("[net-match] round start scripts restored bytes={}", scripts.size()));
 		}
 		const uint64_t launchRound = m_WorldCatchUp.active && m_WorldCatchUp.privateMatch ? m_WorldCatchUp.roundId : m_Coordinator->GetRoundId();
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), m_PendingResyncState.has_value());
@@ -7688,6 +7728,10 @@ static std::string ResyncSaveName() {
 		config.autoStart = config.host && config.matchConfig.persistentWorld;
 		config.readyRequested = &m_ReadyRequested;
 		config.startRequested = &m_StartRequested;
+		config.roundStartScripts = [this] {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return std::exchange(m_RoundStartScriptsToStream, {});
+		};
 		config.cancelRequested = &m_CancelRequested;
 		config.hostOptions = &m_HostOptionsRequest;
 	}
@@ -7969,6 +8013,7 @@ static std::string ResyncSaveName() {
 		std::string pendingLoad;
 		std::optional<NetResyncState> pendingState;
 		std::optional<PendingAutosaveLoad> pendingAutosave;
+		std::vector<uint8_t> pendingRoundStartScripts;
 		if (started && request.resumeConfig && request.resumeTick != 0) {
 			// The host's world comes out of its own store, never off the wire it just streamed.
 			pendingAutosave = PendingAutosaveLoad{runnerConfig.resumeMatchId, runnerConfig.resumeTick};
@@ -7983,7 +8028,9 @@ static std::string ResyncSaveName() {
 		}
 		if (started && !pendingAutosave) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
-			if (!receivedState.empty()) {
+			if (IsRoundStartScriptBlob(receivedState)) {
+				pendingRoundStartScripts = std::move(receivedState);
+			} else if (!receivedState.empty()) {
 				if (IsWorldJoinImageBlob(receivedState)) {
 					started = PrepareReceivedWorldJoin(receivedState, runner->GetMatchConfig(), pendingLoad, &error);
 					if (started) NoteWorldCatchUpArmed(*session);
@@ -8019,6 +8066,7 @@ static std::string ResyncSaveName() {
 				m_PendingResyncLoad = pendingLoad;
 				m_PendingAutosaveLoad = pendingAutosave;
 				m_PendingResyncState = std::move(pendingState);
+				m_PendingRoundStartScripts = request.host ? m_RoundStartScripts : std::move(pendingRoundStartScripts);
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();
