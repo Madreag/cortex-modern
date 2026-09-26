@@ -401,10 +401,6 @@ namespace RTE {
 		/// The compiled scripts this state keeps, each by the global that holds its functions, with the function names it keeps; only those whose global still exists.
 		std::vector<std::pair<std::string, std::vector<std::string>>> DescribeScriptCache();
 
-		/// Makes the compiled-script cache exactly the one described, from this state's own globals, running no script.
-		/// @return Whether every described script's global held its functions.
-		bool RebuildScriptCache(const std::vector<std::pair<std::string, std::vector<std::string>>>& cache, std::vector<std::string>& problems);
-
 		/// Opens and loads a file containing a script and runs it on the state, then retrieves all of the specified functions that exist into the output map.
 		/// @param filePath The path to the file to load and run.
 		/// @param functionNamesToLookFor The vector of strings defining the function names to be retrieved.
@@ -864,7 +860,7 @@ namespace RTE {
 		static void SetCheckpointAllocationSinking(bool sinking);
 		static bool IsCheckpointAllocationSinking();
 
-		/// The script state a lockstep round starts from on every peer: every state's script graph with its compiled scripts, and the registration serial.
+		/// The script state a lockstep round starts from on every peer: every state's script graph with its compiled scripts, and the registration serial; no activity's callbacks.
 		/// @return Whether every state was captured faithfully.
 		static bool CaptureRoundStartScripts(std::vector<uint8_t>& blob, std::string* error);
 
