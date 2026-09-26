@@ -918,6 +918,14 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
         (out / f"{name}_from_checkpoint.json").write_text(json.dumps(data), encoding="utf-8")
     passed, compared = strict_compare(str(out / "host_from_checkpoint.json"), str(out / "replay_from_checkpoint.json"),
                                       expected_ticks=last - first_tick, first_tick=first_tick + 1)
+    # A window's verdict is the comparison's; the live world's own run flag says only that no scenario check ran in it.
+    for name, data in windowed.items():
+        run = data["runs"][0]
+        run["run_passed"] = run.get("passed")
+        run["passed"] = passed
+        run["reason"] = (f"ticks {first_tick + 1}..{last} compared against the {'replay' if name == 'host' else 'recording host'}: "
+                         + ("every canonical tick hash equal" if passed else "; ".join(compared.get("reasons", [])) or "the hashes differ"))
+        (out / f"{name}_from_checkpoint.json").write_text(json.dumps(data), encoding="utf-8")
     assert passed, f"{RED_SEGMENT_HASHES_DIVERGED}: {compared}"
     # The chain plays every tick the host ran: a tail the segments never recorded is its own failure.
     assert replay_last >= host_last, f"{RED_SEGMENT_TAIL_UNRECORDED}: the host ran to {host_last}, the segments end at {replay_last}"
