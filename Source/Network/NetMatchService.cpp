@@ -30,6 +30,7 @@
 #include "UInputMan.h"
 
 #include "MovableMan.h"
+#include "NetRoundStartScripts.h"
 
 #include "nlohmann/json.hpp"
 
@@ -727,6 +728,17 @@ static std::string ResyncSaveName() {
 			s_PortMap.Release();
 		}
 		s_PortMapApplied = false;
+		// A fresh lockstep round starts every peer on the host's script state, never on each machine's own history.
+		m_RoundStartScripts.clear();
+		m_PendingRoundStartScripts.clear();
+		if (request.host && !request.resumeConfig && !targetingWorld) {
+			std::string captureError;
+			if (!LuaMan::CaptureRoundStartScripts(m_RoundStartScripts, &captureError)) {
+				if (error) *error = "the round's start scripts could not be captured: " + captureError;
+				SetState(NetMatchServiceState::Failed, "Hosting failed", *error);
+				return false;
+			}
+		}
 		m_EverStarted.store(true);
 		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest), std::move(identityOptions));
 		return true;
@@ -2652,6 +2664,20 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State != NetMatchServiceState::ReadyToLaunch || !m_Coordinator) {
 			return false;
+		}
+		// Every peer, the host included, starts the round on the host's script state; a peer that cannot take it does not start.
+		if (!m_PendingRoundStartScripts.empty()) {
+			const std::vector<uint8_t> scripts = std::move(m_PendingRoundStartScripts);
+			m_PendingRoundStartScripts.clear();
+			std::string restoreError;
+			if (!LuaMan::RestoreRoundStartScripts(scripts, &restoreError)) {
+				m_State = NetMatchServiceState::Failed;
+				m_StatusText = "Match start failed";
+				m_ErrorText = "This game could not take the host's script state: " + restoreError;
+				System::PrintDiagnosticLine("[net-match] round start scripts refused: " + restoreError);
+				return false;
+			}
+			System::PrintDiagnosticLine(std::format("[net-match] round start scripts restored bytes={}", scripts.size()));
 		}
 		const uint64_t launchRound = m_WorldCatchUp.active && m_WorldCatchUp.privateMatch ? m_WorldCatchUp.roundId : m_Coordinator->GetRoundId();
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), m_PendingResyncState.has_value());
@@ -7672,6 +7698,8 @@ static std::string ResyncSaveName() {
 			} else {
 				runner->SetStateToStream(std::move(envelope));
 			}
+		} else if (started && request.host && !m_RoundStartScripts.empty()) {
+			runner->SetStateToStream(std::vector<uint8_t>(m_RoundStartScripts));
 		}
 		runnerConfig.enableMigration = s_AdmissionEnabled && !request.dedicated && !runnerConfig.matchConfig.persistentWorld && GetNetAuthCrypto().IsRealCrypto();
 		runnerConfig.migrationListenAddrs = {NetLanDiscovery::GetPrimaryLocalAddress()};
@@ -7746,6 +7774,7 @@ static std::string ResyncSaveName() {
 		std::string pendingLoad;
 		std::optional<NetResyncState> pendingState;
 		std::optional<PendingAutosaveLoad> pendingAutosave;
+		std::vector<uint8_t> pendingRoundStartScripts;
 		if (started && request.resumeConfig && request.resumeTick != 0) {
 			// The host's world comes out of its own store, never off the wire it just streamed.
 			pendingAutosave = PendingAutosaveLoad{runnerConfig.resumeMatchId, runnerConfig.resumeTick};
@@ -7760,7 +7789,9 @@ static std::string ResyncSaveName() {
 		}
 		if (started && !pendingAutosave) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
-			if (!receivedState.empty()) {
+			if (IsRoundStartScriptBlob(receivedState)) {
+				pendingRoundStartScripts = std::move(receivedState);
+			} else if (!receivedState.empty()) {
 				if (IsWorldJoinImageBlob(receivedState)) {
 					started = PrepareReceivedWorldJoin(receivedState, runner->GetMatchConfig(), pendingLoad, &error);
 					if (started) NoteWorldCatchUpArmed(*session);
@@ -7796,6 +7827,7 @@ static std::string ResyncSaveName() {
 				m_PendingResyncLoad = pendingLoad;
 				m_PendingAutosaveLoad = pendingAutosave;
 				m_PendingResyncState = std::move(pendingState);
+				m_PendingRoundStartScripts = request.host ? m_RoundStartScripts : std::move(pendingRoundStartScripts);
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();

@@ -1231,6 +1231,8 @@ namespace RTE {
 		NetHostOptionsSlot m_HostOptionsRequest;
 		bool m_ResyncOnDesync = false;
 		std::string m_PendingResyncLoad;
+		std::vector<uint8_t> m_RoundStartScripts; //!< The host's own start scripts for the round it sets up, streamed to every peer.
+		std::vector<uint8_t> m_PendingRoundStartScripts; //!< The start scripts this peer lays onto its states when the round launches.
 		std::optional<NetResyncState> m_PendingResyncState;
 		/// The checkpoint the next launch loads out of this peer's own store instead of a received file.
 		struct PendingAutosaveLoad {
