@@ -28,6 +28,26 @@ namespace RTE {
 		uint64_t m_Seed = 0; //!< The seed the generator was last seeded with.
 		uint64_t m_DrawCount = 0; //!< Raw 32-bit draws consumed since construction; observational only.
 		bool m_TraceDraws = false; //!< Routes each draw through g_RNGDrawHook when set.
+		bool m_SeedPending = false; //!< Whether m_Seed still has to be applied to m_RNG; until then m_RNG holds nothing a draw reads.
+
+		// The engine as a draw finds it: a pending seed is applied first.
+		std::mt19937& Engine() {
+			if (m_SeedPending) {
+				m_RNG.seed(m_Seed);
+				m_SeedPending = false;
+			}
+			return m_RNG;
+		}
+
+		// A copy of the engine as the next draw would find it, without applying a pending seed.
+		std::mt19937 EngineCopy() const {
+			if (!m_SeedPending) {
+				return m_RNG;
+			}
+			std::mt19937 engine;
+			engine.seed(m_Seed);
+			return engine;
+		}
 
 		// One raw 32-bit draw. The mt19937 stream is portable; the std:: distributions are not,
 		// so the mappings below are explicit.
@@ -36,7 +56,7 @@ namespace RTE {
 			if (m_TraceDraws && g_RNGDrawHook) {
 				g_RNGDrawHook(m_DrawCount);
 			}
-			return static_cast<uint32_t>(m_RNG());
+			return static_cast<uint32_t>(Engine()());
 		}
 
 		// Canonical [0, 1) from the top mantissa-width bits.
@@ -56,7 +76,16 @@ namespace RTE {
 		void Seed(uint64_t seed) {
 			m_Seed = seed;
 			m_RNG.seed(seed);
+			m_SeedPending = false;
 		};
+
+		/// Seeds the generator at its first draw: every draw is the one Seed would have given, and a user that never
+		/// draws never pays for the 624-word seeding.
+		/// @param seed The seed.
+		void SeedOnFirstDraw(uint64_t seed) {
+			m_Seed = seed;
+			m_SeedPending = true;
+		}
 
 		/// Gets the seed this generator was last seeded with.
 		/// @return The last seed.
@@ -64,11 +93,14 @@ namespace RTE {
 
 		/// Gets a copy of the engine state, for rollback snapshots.
 		/// @return The engine by value.
-		std::mt19937 GetEngineState() const { return m_RNG; }
+		std::mt19937 GetEngineState() const { return EngineCopy(); }
 
 		/// Restores a previously captured engine state.
 		/// @param state The engine state to restore.
-		void SetEngineState(const std::mt19937& state) { m_RNG = state; }
+		void SetEngineState(const std::mt19937& state) {
+			m_RNG = state;
+			m_SeedPending = false;
+		}
 
 		/// Captures the portable engine state, seed and draw count.
 		std::string SerializeCheckpoint() const;
@@ -89,7 +121,7 @@ namespace RTE {
 		/// across same-seed runs at the same tick once the determinism work has settled.
 		std::string SerializeStateForHashing() const {
 			// mt19937's operator<< text is implementation-defined; hash the next outputs of a copy instead (the stream is standard).
-			std::mt19937 copy = m_RNG;
+			std::mt19937 copy = EngineCopy();
 			std::ostringstream oss;
 			for (int i = 0; i < std::mt19937::state_size; ++i) {
 				oss << static_cast<uint32_t>(copy()) << ' ';

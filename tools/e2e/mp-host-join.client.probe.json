@@ -13,7 +13,7 @@
     {
       "op": "wait",
       "service": "Running",
-      "sim_at_least": 650
+      "lockstep_frame_at_least": 650
     },
     {
       "op": "key_down",

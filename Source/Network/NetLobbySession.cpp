@@ -141,6 +141,8 @@ namespace RTE {
 		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = 0;
 		m_ChunkSendStall = 0;
+		m_StartSentTo.clear();
+		m_StartSendStall = 0;
 		m_StateTransferProgressSerial = 0;
 		m_IncomingStateId = 0;
 		m_LastIncomingStateId = 0;
@@ -645,6 +647,9 @@ namespace RTE {
 		if (m_State == NetLobbyState::Idle || IsTerminal(m_State)) {
 			return refuse("the lobby round is no longer open");
 		}
+		if (!m_StartSentTo.empty()) {
+			return refuse("the round's Start has already reached a peer");
+		}
 		// The draft named the revision it was accepted against; anything at or behind the published
 		// one is a transaction the round has already moved past.
 		if (config.configRevision <= m_Config.matchConfig.configRevision) {
@@ -788,7 +793,8 @@ namespace RTE {
 	}
 
 	void NetLobbySession::SyncSessionPeers() {
-		if (!m_Config.host || !m_Config.session) return;
+		// The round a Start has partly reached keeps its roster until every remote has it.
+		if (!m_Config.host || !m_Config.session || !m_StartSentTo.empty()) return;
 		const std::vector<NetSessionPeerInfo> readyPeers = m_Config.session->GetReadyPeers();
 		const auto active = [&](uint8_t peer) {
 			return m_Config.matchConfig.activePeerIds.empty() || std::binary_search(m_Config.matchConfig.activePeerIds.begin(), m_Config.matchConfig.activePeerIds.end(), peer);
@@ -912,7 +918,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLobbySession::SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error) {
+	bool NetLobbySession::SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error, bool* congested) {
 		if (!m_Transport) {
 			if (error) *error = "lobby has no transport";
 			return false;
@@ -923,7 +929,7 @@ namespace RTE {
 			if (error) *error = encodeError.message;
 			return false;
 		}
-		if (!m_Transport->Send(transport, NetTransportLane::ControlReliable, bytes, error)) {
+		if (!m_Transport->Send(transport, NetTransportLane::ControlReliable, bytes, error, congested)) {
 			return false;
 		}
 		++m_Stats.messagesSent;
@@ -1144,11 +1150,20 @@ namespace RTE {
 		start.startFrame = m_StartFrame;
 		start.inputDelayFrames = m_Config.matchConfig.inputDelayFrames;
 		start.matchConfigHash = m_MatchConfigHash;
-		std::string error;
-		if (!Send(start, &error)) {
-			Fail(error);
-			return;
+		// The last chunk can leave the queue too full for the Start behind it: a congested refusal waits for a
+		// later tick, as a chunk does, and a remote that already has the Start is not sent it twice.
+		for (uint8_t peerId: m_RemotePeerIds) {
+			if (m_StartSentTo.contains(peerId)) continue;
+			std::string error;
+			bool congested = false;
+			if (!SendTo(m_RemoteTransports[peerId], start, &error, &congested)) {
+				if (!congested || ++m_StartSendStall > 4000) Fail(congested ? "start stalled: " + error : error);
+				return;
+			}
+			m_StartSentTo.insert(peerId);
 		}
+		m_StartSentTo.clear();
+		m_StartSendStall = 0;
 		++m_Stats.startPacketsSent;
 		m_State = NetLobbyState::Started;
 	}

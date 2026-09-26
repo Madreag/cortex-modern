@@ -275,7 +275,8 @@ DeterministicMORNGScope::DeterministicMORNGScope(long uniqueID, uint64_t phase, 
 	if (!enabled) {
 		return;
 	}
-	s_workerMORNG.Seed(DeriveMORNGSeed(uniqueID, g_TimerMan.GetSimUpdateCount(), phase));
+	// Most hooks draw nothing, so the generator seeds at its first draw.
+	s_workerMORNG.SeedOnFirstDraw(DeriveMORNGSeed(uniqueID, g_TimerMan.GetSimUpdateCount(), phase));
 	m_PrevSimOverride = t_simRNGOverride;
 	m_PrevLuaOverride = s_luaRNGOverride;
 	t_simRNGOverride = &s_workerMORNG;
@@ -287,6 +288,75 @@ DeterministicMORNGScope::~DeterministicMORNGScope() {
 		t_simRNGOverride = m_PrevSimOverride;
 		s_luaRNGOverride = m_PrevLuaOverride;
 	}
+}
+
+// A generator seeded at its first draw must be the generator Seed makes, to every reader: its draws, its checkpoint text,
+// its hash text, its engine state, a copy of it and a restore of its checkpoint, before and after it draws.
+static bool RunLazySeedSelfTest() {
+	const auto draws = [](RandomGenerator& rng, int count) {
+		std::vector<uint64_t> values;
+		values.reserve(count);
+		for (int draw = 0; draw < count; ++draw) values.push_back(rng.RandomNum<uint64_t>(0, ~0ULL));
+		return values;
+	};
+	std::vector<std::string> failed;
+	const auto check = [&failed](bool ok, const char* clause) {
+		if (!ok) failed.emplace_back(clause);
+	};
+	constexpr uint64_t c_Seed = 0x9E3779B97F4A7C15ULL;
+	constexpr uint64_t c_Reseed = 0xBF58476D1CE4E5B9ULL;
+	constexpr int c_Draws = 400; // 800 raw draws, past the engine's first twist of 624 words.
+
+	// Both have drawn before the seed, so the lazy one's engine holds a state its seed must replace.
+	RandomGenerator eager, lazy;
+	eager.RandomNum<uint64_t>(0, ~0ULL);
+	eager.Seed(c_Seed);
+	lazy.RandomNum<uint64_t>(0, ~0ULL);
+	lazy.SeedOnFirstDraw(c_Seed);
+	check(lazy.GetSeed() == eager.GetSeed() && lazy.GetDrawCount() == eager.GetDrawCount(), "seed");
+	check(lazy.SerializeCheckpoint() == eager.SerializeCheckpoint(), "checkpoint_before_a_draw");
+	check(lazy.SerializeStateForHashing() == eager.SerializeStateForHashing(), "hash_before_a_draw");
+	check(lazy.GetEngineState() == eager.GetEngineState(), "engine_state_before_a_draw");
+	RandomGenerator copy = lazy;
+	RandomGenerator restored;
+	check(restored.RestoreCheckpoint(lazy.SerializeCheckpoint()), "checkpoint_restores");
+	RandomGenerator eagerCopy = eager;
+	const std::vector<uint64_t> expected = draws(eagerCopy, c_Draws);
+	check(draws(lazy, c_Draws) == expected, "draws");
+	check(draws(copy, c_Draws) == expected, "copy_draws");
+	check(draws(restored, c_Draws) == expected, "restored_draws");
+	check(lazy.SerializeStateForHashing() == eagerCopy.SerializeStateForHashing(), "hash_after_draws");
+
+	// A second lazy seed over a generator that has drawn, as the next hook's scope gives the same thread's generator.
+	RandomGenerator reseeded;
+	reseeded.Seed(c_Reseed);
+	lazy.SeedOnFirstDraw(c_Reseed);
+	check(draws(lazy, c_Draws) == draws(reseeded, c_Draws), "reseed_draws");
+	lazy.SeedOnFirstDraw(c_Seed);
+	RandomGenerator set;
+	set.SeedOnFirstDraw(c_Reseed);
+	set.SetEngineState(eager.GetEngineState());
+	RandomGenerator eagerAgain;
+	eagerAgain.Seed(c_Seed);
+	check(draws(set, c_Draws) == draws(eagerAgain, c_Draws), "set_engine_state_over_a_pending_seed");
+
+	// The hook scope itself: nothing drawn leaves the thread's generator as Seed would have, the first draw is Seed's.
+	const long uniqueID = 4242;
+	const uint64_t phase = Hash(std::string("LazySeedSelfTest"));
+	RandomGenerator scopeEager;
+	scopeEager.Seed(DeriveMORNGSeed(uniqueID, g_TimerMan.GetSimUpdateCount(), phase));
+	{
+		DeterministicMORNGScope scope(uniqueID, phase, true);
+		check(GetSimRNG().GetEngineState() == scopeEager.GetEngineState(), "scope_state_before_a_draw");
+		check(&GetSimRNG() == &s_workerMORNG, "scope_routes_the_sim_draws");
+		check(RandomNum<float>() == scopeEager.RandomNum<float>(), "scope_first_draw");
+	}
+	const bool passed = failed.empty();
+	std::string clauses;
+	for (const std::string& clause: failed) clauses += (clauses.empty() ? "" : ",") + clause;
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_lazily_seeded_generator_is_the_seeded_one draws=" << c_Draws * 2
+	          << (passed ? "" : " failed=" + clauses) << std::endl;
+	return passed;
 }
 
 std::string LuaStateWrapper::DescribeScriptObjectIdentity(long uniqueID) {
@@ -7785,6 +7855,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool luaStateRestoreBoundary = g_MovableMan.RunLuaStateRestoreBoundarySelfTest();
 	const bool luaStateIdentity = g_MovableMan.RunLuaStateIdentitySelfTest();
 	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
+	const bool lazySeed = RunLazySeedSelfTest();
 	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
 	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
 	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
@@ -7878,7 +7949,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {

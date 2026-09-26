@@ -221,7 +221,7 @@ namespace RTE {
 		bool m_MigrationRequested = false;
 		bool m_HostLost = false;
 		uint64_t m_LastMigrationRequestMs = UINT64_MAX;
-		bool SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error = nullptr);
+		bool SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error = nullptr, bool* congested = nullptr);
 		bool Send(const NetLobbyPayload& payload, std::string* error = nullptr); // Broadcast to every remote transport.
 		void SendConfigIfDue(uint64_t nowMs);
 		void SendPeerState();
@@ -301,6 +301,8 @@ namespace RTE {
 		std::vector<std::pair<uint8_t, std::vector<uint8_t>>> m_QueuedStateTransfers; //!< Joiner images waiting for the pump.
 		uint16_t m_OutgoingChunkCount = 0;
 		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
+		std::set<uint8_t> m_StartSentTo; //!< Remotes this round's Start reached while a congested one still waits for it.
+		uint32_t m_StartSendStall = 0; //!< Consecutive ticks the transport refused the Start as congested.
 		uint64_t m_StateTransferProgressSerial = 0;
 		uint64_t m_IncomingStateId = 0; //!< The active incoming transfer, 0 = none.
 		uint64_t m_LastIncomingStateId = 0;
