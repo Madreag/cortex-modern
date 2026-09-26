@@ -8937,6 +8937,8 @@ namespace RTE {
 					++m_Stats.ignoredAdmissionFaults;
 					return;
 				}
+				// Whatever the host sent proves it alive, a packet this peer cannot read included.
+				if (!m_RelayHost && LockstepPeerOfTransport(event.peerId) == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 				// A frame's observation slots only mean anything against its sender's table. The relay host
 				// picks that table by the transport the bytes actually came in on, so a peer claiming to be
 				// another can only ever disturb its own; an unbound transport gets no table at all.
