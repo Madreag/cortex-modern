@@ -12992,8 +12992,8 @@ namespace {
 		s_PreviewBindingFenceOpen = false;
 		s_PreviewCloneOf.clear();
 		// What the window made and a script still holds leaves the world's index, so no canonical lookup finds it.
-		for (MovableObject* known: g_MovableMan.SnapshotKnownObjects()) {
-			if (known && known->GetUniqueID() > s_PreviewBindingUIDFloor) {
+		for (MovableObject* known: g_MovableMan.KnownObjectsAbove(s_PreviewBindingUIDFloor)) {
+			if (known) {
 				g_MovableMan.UnregisterObject(known);
 			}
 		}
