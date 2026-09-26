@@ -1091,8 +1091,14 @@ static void asm_strto(ASMState *as, IRIns *ir)
   args[1] = ASMREF_TMP1;  /* TValue *n  */
   asm_gencall(as, ci, args);
   /* Store the result to the spill slot or temp slots. */
+#if LJ_64 && LJ_ABI_WIN
+  /* The temp slots are the callee's register home area on WIN64. */
+  emit_rmro(as, XO_LEA, ra_releasetmp(as, ASMREF_TMP1)|REX_64,
+	    RID_ESP, ra_spill(as, ir));
+#else
   emit_rmro(as, XO_LEA, ra_releasetmp(as, ASMREF_TMP1)|REX_64,
 	    RID_ESP, sps_scale(ir->s));
+#endif
 }
 
 /* -- Memory references --------------------------------------------------- */

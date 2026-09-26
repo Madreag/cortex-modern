@@ -172,6 +172,10 @@ namespace RTE {
 		/// @param playSounds Whether or not to play appropriate sounds when the menu is enabled or disabled.
 		void SetEnabled(bool enable, bool playSounds = true);
 
+		/// Closes the PieMenu at once, with no animation, sound or flash, and restarts its timers: a lockstep round's opening
+		/// frames carry no input, so every peer starts every menu there the same whatever this machine's input did before.
+		void CloseForCanonicalStart();
+
 		/// Gets whether this PieMenu has an open sub-PieMenu.
 		/// @return Whether or not this PieMenu has an open sub-PieMenu.
 		bool HasSubPieMenuOpen() const { return m_ActiveSubPieMenu != nullptr; }

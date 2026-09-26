@@ -3043,6 +3043,9 @@ namespace RTE {
 		// every deterministic match must hand out the same IDs on every peer — including a rematch, where
 		// each process has created a different number of MOs by launch time. The base clears load-time IDs.
 		MovableObject::PinUniqueIDCounter(1 << 20);
+		// Script registrations order objects that share an identity, and a restore carries the count: they count from the
+		// match, not from whatever this process loaded before it.
+		MovableObject::PinScriptRegistrationSerial(0);
 		// Same reason: sound identities ride NetGameSoundOp.
 		constexpr uint64_t c_MatchSoundIdentityBase = 1ULL << 40;
 		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
