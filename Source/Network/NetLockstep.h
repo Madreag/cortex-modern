@@ -1121,6 +1121,8 @@ namespace RTE {
 		bool IsHoldingSeatForReclaim() const;
 		/// Whether this peer's left seat is still held, from the same set AnyLeftSeatHeld reads.
 		bool IsSeatHeldForReclaim(uint8_t peerId) const;
+		/// Whether a seat the AI holds comes back to its player by a frame: its agreed return lands at or before it.
+		bool HeldSeatReturnsBy(uint8_t peerId, uint64_t frame) const;
 		// Kept for UI estimates that still speak in frames (HoldSeconds(1200) == 20). The hold itself
 		// is the admission wall-clock; commits do not advance while a dropped seat is unresolved.
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;

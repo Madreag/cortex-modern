@@ -2014,6 +2014,24 @@ namespace RTE {
 		}
 		std::vector<NetGameCommand> commands;
 		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
+		// The AI of a held seat writes nothing that lands once the seat is its player's again: every peer would refuse it there.
+		const auto ownerAtTarget = [&](int64_t uid, int team) {
+			if (const auto claim = s_LockstepDroppedControlOverrides.find(uid); claim != s_LockstepDroppedControlOverrides.end() && producing->HeldSeatReturnsBy(claim->second, targetFrame))
+				return claim->second;
+			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(uid)));
+			return GetLockstepActorOwner(uid, team, !actor || !actor->IsPlayerControlled());
+		};
+		const auto writesAtTarget = [&](int32_t team, int64_t actorUID, int64_t writerUID) {
+			if (IsLockstepTeamCommandSender(team, config.localPeerId) || ownerAtTarget(actorUID, team) == config.localPeerId) return true;
+			const Actor* writer = writerUID != 0 ? dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(writerUID))) : nullptr;
+			return writerUID != 0 && (writer ? writer->GetTeam() : team) == team && ownerAtTarget(writerUID, writer ? writer->GetTeam() : team) == config.localPeerId;
+		};
+		std::erase_if(s_PendingLocalGameCommands, [&](const NetGameCommand& command) {
+			if (const auto* order = std::get_if<NetGameAIOrder>(&command.payload)) return !writesAtTarget(order->team, order->actorUID, order->writerUID);
+			if (const auto* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) return !writesAtTarget(message->team, message->writerUID, message->writerUID);
+			if (const auto* gib = std::get_if<NetGameAIGib>(&command.payload)) return !writesAtTarget(gib->team, gib->writerUID, gib->writerUID);
+			return false;
+		});
 		if ((!s_RequeuedCommands.empty() && s_RequeuedCommands.begin()->first < targetFrame) ||
 			(!s_RequeuedPlayerBindings.empty() && s_RequeuedPlayerBindings.begin()->first < targetFrame) ||
 			(!s_RequeuedInputs.empty() && s_RequeuedInputs.begin()->first < targetFrame)) {
