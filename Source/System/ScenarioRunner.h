@@ -235,6 +235,10 @@ namespace RTE {
 		/// Later catch-up bytes land here after the image is already installed.
 		static void AppendWorldCatchUp(std::vector<NetLockstepFrame> frames);
 		static void SetWorldCatchUpActivation(uint64_t activationTick);
+		/// Holds the replay before this tail frame until the fence is lifted with 0: the authority that committed it takes over there.
+		static void SetWorldCatchUpFence(uint64_t frame);
+		/// The tail frame the replay applied at this tick, as the round committed it; each is taken once.
+		static bool TakeWorldCatchUpAppliedFrame(uint64_t simTick, NetLockstepFrame& outFrame);
 		static bool WorldCatchUpActive();
 		/// Whether the tail is exhausted at the announced frame and the sim waits for the coordinator.
 		static bool WorldCatchUpHolding();

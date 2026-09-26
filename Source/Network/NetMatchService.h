@@ -16,6 +16,7 @@
 #include "NetResyncState.h"
 #include "ActivityMan.h"
 #include "NetWorldJoin.h"
+#include "NetCommittedTailRing.h"
 #include "Singleton.h"
 
 #include <algorithm>
@@ -935,6 +936,20 @@ namespace RTE {
 		void OpenInPlaceRejoinLocked(const NetLobbySession::WorldJoinReport& report, const std::vector<NetSessionPeerInfo>& readyPeers, uint64_t nowMs);
 		/// Held client: whether the match names a successor this seat could rejoin when its host is gone.
 		bool HeldSeatHasSuccessorLocked() const;
+		/// Held client: its host is gone, so its catch-up moves to the next successor on a new connection with the world it holds.
+		/// Returns whether a successor is being tried; otherwise the seat takes the image path.
+		bool BeginInPlaceMoveLocked(uint64_t nowMs);
+		/// Held client: dials the next successor route. Returns whether one is being dialed.
+		bool DialNextInPlaceRouteLocked(uint64_t nowMs);
+		/// Held client: drives the move's connection until the successor admits the seat, then asks it for the tail.
+		/// Returns whether the catch-up goes on; false means the move gave up and the seat takes the image path.
+		bool DriveInPlaceMoveLocked(uint64_t nowMs);
+		/// Held client: at the frame the round changed hands, the replay goes on under the authority that committed it.
+		bool CrossReplayHandoverLocked(std::string* error);
+		/// Every peer: records the committed frame of this tick in its own tail ring.
+		void RecordCommittedTail(uint64_t tick);
+		/// Client: its lobby speaks to this host on this connection, silent until asked: it carries a held return's reports and tail.
+		bool BindClientLobbyToHostLocked(INetTransport& wire, uint8_t hostPeerId, NetPeerId hostLink, uint64_t startFrame);
 		/// Held client: its host is gone and nobody else is left, so it plays the round on from its own committed state with the
 		/// AI in every other seat and its own hold ended. Returns whether the round runs on it.
 		bool HostAloneFromOwnStateLocked();
@@ -1536,6 +1551,18 @@ namespace RTE {
 		uint64_t m_InPlaceHeardMs = 0;   //!< When its tail last moved.
 		uint64_t m_InPlaceProgressApplied = 0;
 		static constexpr uint64_t c_InPlaceHostSilenceMs = 3000; //!< A host that feeds a held seat nothing this long is gone.
+		NetCommittedTailRing m_TailRing; //!< Every peer: the round's latest committed frames, which it serves held seats from if it takes the round over.
+		uint64_t m_HandoverFrame = 0; //!< The first frame the round committed under the authority that took it over here; 0 before a handover.
+		struct InPlaceRoute {
+			uint8_t peerId = 0;
+			NetMatchMigrationPeer endpoint;
+		};
+		std::deque<InPlaceRoute> m_InPlaceRoutes; //!< Held client: the successors its catch-up has yet to try.
+		std::unique_ptr<INetTransport> m_InPlaceMoveTransport; //!< Held client: the new connection while the successor admits it.
+		uint8_t m_InPlaceMoveHost = 0; //!< Held client: the successor being dialed; 0 when no move is under way.
+		std::string m_InPlaceMoveAddress;
+		uint64_t m_InPlaceMoveSinceMs = 0;
+		static constexpr uint64_t c_InPlaceMoveBudgetMs = 10000; //!< How long one successor has to admit a moving seat.
 		static constexpr uint64_t c_ReturnerReportGapMs = 500; //!< Host: a returner that has reported within this is still catching up.
 		std::map<uint8_t, uint32_t> m_InPlaceIncarnationBumps; //!< Host: in-place returns per seat since its holder last bound, over the admission plane's count.
 		std::map<uint8_t, std::string> m_RejoinFitReasons; //!< Host: the last reason each held seat's return was held back for.
