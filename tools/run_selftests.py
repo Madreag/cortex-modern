@@ -334,6 +334,62 @@ def run_tail_row(options, make_run, name, out, sanitizer):
     return {**second, "quiet_rerun": True, "attempts": [attempt_summary(first, case), attempt_summary(second, quiet_case)]}
 
 
+def plan_rows(quiet_rows=None, only=()):
+    """The ordinary rows in suite order, then the quiet tail: every load-sensitive row of SELFTESTS, the others with --quiet-rows."""
+    rows = [] if quiet_rows == "only" else [name for name in SELFTESTS if name not in LOAD_SENSITIVE]
+    tail = [name for name in LOAD_SENSITIVE if name in SELFTESTS or quiet_rows]
+    if only:
+        rows = [name for name in SELFTESTS if name in only and name not in LOAD_SENSITIVE]
+        tail = [name for name in LOAD_SENSITIVE if name in only]
+    return rows, tail
+
+
+def self_test():
+    """The suite runner's own rows on stubbed engine runs: the tail's order and its quiet rerun."""
+    import tempfile
+
+    global run_row, wait_for_quiet_box
+    failures = []
+
+    def expect(ok, what):
+        print(f"[run-selftests-selftest] {'PASS' if ok else 'FAIL'} {what}", flush=True)
+        if not ok:
+            failures.append(what)
+
+    rows, tail = plan_rows()
+    expect(tail == ["net-match"] and "net-match" not in rows and len(rows) + len(tail) == len(SELFTESTS), "default: net-match runs last, the count is the suite's")
+    rows, tail = plan_rows("last")
+    expect(tail == ["net-match", "script-graph"] and len(rows) + len(tail) == len(SELFTESTS) + 1, "--quiet-rows last: the tail adds script-graph")
+    expect(plan_rows("only") == ([], ["net-match", "script-graph"]), "--quiet-rows only: the tail alone")
+    expect(plan_rows(None, ["net-match", "rteerror"]) == (["rteerror"], ["net-match"]), "--only keeps a named row's place")
+    real_row, real_wait = run_row, wait_for_quiet_box
+    try:
+        wait_for_quiet_box = lambda *args, **kwargs: {"engines": [], "quiet": True, "waited_s": 0.0}
+        for outcomes, verdict in (([False, True], True), ([False, False], False), ([True], True)):
+            calls = []
+
+            def stub(options, make_run, name, case, sanitizer, outcomes=outcomes, calls=calls):
+                passed = outcomes[len(calls)]
+                calls.append(case)
+                return {"pass": passed, "reason": "" if passed else f"FAIL token: [{name}-selftest] FAIL under load",
+                        "exit_code": 0 if passed else 1, "timed_out": False, "fail_lines": [], "fatal": []}
+
+            run_row = stub
+            with tempfile.TemporaryDirectory() as scratch:
+                scored = run_tail_row(None, None, "net-match", Path(scratch), None)
+            attempts = scored.get("attempts", [])
+            if len(outcomes) == 1:
+                ok = scored["pass"] and len(calls) == 1 and not attempts
+            else:
+                ok = (scored["pass"] is verdict and len(calls) == 2 and calls[1].name == "net-match-selftest-quiet" and
+                      [row["pass"] for row in attempts] == outcomes and "under load" in attempts[0]["reason"] and attempts[1]["box"]["quiet"])
+            expect(ok, f"first {outcomes[0]}, rerun {outcomes[1:] or 'none'}: row {verdict}, both attempts recorded")
+    finally:
+        run_row, wait_for_quiet_box = real_row, real_wait
+    print(f"[run-selftests-selftest] {'PASS' if not failures else 'FAIL'}", flush=True)
+    return 0 if not failures else 1
+
+
 def write_result(out, summary):
     (out / "result.json").write_text(json.dumps(summary, indent=2))
 
@@ -351,8 +407,11 @@ def main():
                         help="also run every load-sensitive row in the quiet tail (only: the tail alone)")
     parser.add_argument("--only", action="append", default=[], metavar="ROW",
                         help="run just this row (repeatable); a load-sensitive row keeps its quiet rerun")
+    parser.add_argument("--self-test", action="store_true", help="the runner's own rows; no engine")
     options = parser.parse_args()
 
+    if options.self_test:
+        return self_test()
     if options.score_stdout:
         stdout = options.score_stdout.read_text(encoding="utf-8", errors="replace")
         scored = score_selftest(stdout, options.exit_code, options.timed_out, options.name)
@@ -379,11 +438,7 @@ def main():
     exe_hash = sha256_of(exe)
     sanitizer = sanitizer_build(exe)
     results = {}
-    rows = [] if options.quiet_rows == "only" else [name for name in SELFTESTS if name not in LOAD_SENSITIVE]
-    tail = [name for name in LOAD_SENSITIVE if name in SELFTESTS or options.quiet_rows]
-    if options.only:
-        rows = [name for name in SELFTESTS if name in options.only and name not in LOAD_SENSITIVE]
-        tail = [name for name in LOAD_SENSITIVE if name in options.only]
+    rows, tail = plan_rows(options.quiet_rows, options.only)
     summary = {"exe_sha256": exe_hash, "repo": str(options.repo), "passed": 0, "total": len(rows) + len(tail),
                "quiet_rows": tail, "sanitizer": sanitizer, "complete": False, "running": None, "results": results}
     for sig in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", None)):
