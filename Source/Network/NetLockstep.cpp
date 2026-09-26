@@ -5608,6 +5608,9 @@ namespace RTE {
 		timing.neutralThroughFrame = frame + InputDelayAt(peerId, frame);
 		for (uint64_t produced = frame > NetLockstepCodec::c_MaxInputDelayFrames ? frame - NetLockstepCodec::c_MaxInputDelayFrames : 0; produced <= frame; ++produced)
 			timing.neutralThroughFrame = std::max(timing.neutralThroughFrame, produced + InputDelayAt(GetHostPeerId(), produced));
+		// A seat that catches up in place activates from the committed tail, a trip behind the round's inputs: its first required frame is a link later.
+		if (const NetLockstepPeerStats& link = m_Stats.peers[peerId]; link.returnsInPlace && std::isfinite(m_Config.simTickMs) && m_Config.simTickMs > 0)
+			timing.neutralThroughFrame += static_cast<uint64_t>(std::ceil((static_cast<double>(link.pingMs) + link.jitterMs) / m_Config.simTickMs)) + 1;
 		timing.delayFrames = InputDelayAt(peerId, frame); timing.heldPeers = static_cast<uint8_t>(1U << (peerId - 1));
 		timing.requiredPeers = static_cast<uint8_t>(1U << (GetHostPeerId() - 1)); timing.seatIncarnations[peerId - 1] = incarnation;
 		m_RemoteTransports[peerId] = transport;

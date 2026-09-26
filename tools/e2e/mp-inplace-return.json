@@ -1,0 +1,392 @@
+{
+  "schema": 1,
+  "name": "mp-inplace-return",
+  "title": "A client held for its own 600 ms stall returns in place to a live host at 200 and 100 ms RTT with 3 peers, and is not held again after its reclaim",
+  "runs": [
+    {
+      "name": "rtt200",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1",
+            "-net-fake-lag",
+            "200",
+            "-net-test-live-stall",
+            "500:600"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1",
+            "-net-fake-lag",
+            "200"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    },
+    {
+      "name": "rtt100",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1",
+            "-net-fake-lag",
+            "100",
+            "-net-test-live-stall",
+            "500:600"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1",
+            "-net-fake-lag",
+            "100"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "rtt200-host-plays-on",
+      "run": "rtt200",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        500,
+        1200
+      ],
+      "what": "At 200 ms RTT the client stalls 600 ms at 500, is held and returns in place; the host plays on.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "resync failed",
+        "lockstep stopped",
+        "desync at frame"
+      ]
+    },
+    {
+      "id": "rtt200-client-plays-on",
+      "run": "rtt200",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        500,
+        1200
+      ],
+      "what": "At 200 ms RTT the client stalls 600 ms at 500, is held and returns in place; the client plays on.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "resync failed",
+        "lockstep stopped",
+        "desync at frame"
+      ]
+    },
+    {
+      "id": "rtt200-survivor-plays-on",
+      "run": "rtt200",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        500,
+        1200
+      ],
+      "what": "At 200 ms RTT the client stalls 600 ms at 500, is held and returns in place; the survivor plays on.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "resync failed",
+        "lockstep stopped",
+        "desync at frame"
+      ]
+    },
+    {
+      "id": "rtt100-host-plays-on",
+      "run": "rtt100",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        500,
+        1200
+      ],
+      "what": "At 100 ms RTT the client stalls 600 ms at 500, is held and returns in place; the host plays on.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "resync failed",
+        "lockstep stopped",
+        "desync at frame"
+      ]
+    },
+    {
+      "id": "rtt100-client-plays-on",
+      "run": "rtt100",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        500,
+        1200
+      ],
+      "what": "At 100 ms RTT the client stalls 600 ms at 500, is held and returns in place; the client plays on.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "resync failed",
+        "lockstep stopped",
+        "desync at frame"
+      ]
+    },
+    {
+      "id": "rtt100-survivor-plays-on",
+      "run": "rtt100",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        500,
+        1200
+      ],
+      "what": "At 100 ms RTT the client stalls 600 ms at 500, is held and returns in place; the survivor plays on.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "resync failed",
+        "lockstep stopped",
+        "desync at frame"
+      ]
+    }
+  ],
+  "port_base": 49431,
+  "size": "960x540",
+  "timeout_s": 150
+}
