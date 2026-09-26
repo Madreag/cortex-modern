@@ -196,7 +196,7 @@ namespace RTE {
 		g_MovableMan.BeginSpeculation();
 		lap(4);
 		{
-			MovableObject::FaithfulCloneScope scope(false);
+			MovableObject::FaithfulCloneScope scope(false, true);
 			for (Preview& preview: targets) {
 				preview.clone = dynamic_cast<Actor*>(preview.original->Clone());
 			}

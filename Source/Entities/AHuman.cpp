@@ -306,7 +306,7 @@ int AHuman::Create(const AHuman& reference) {
 		}
 	}
 	m_PersistedAHumanRuntime = reference.m_PersistedAHumanRuntime;
-	if (IsFaithfulClone() && m_PersistedAHumanRuntime.empty()) m_PersistedAHumanRuntime = reference.SaveAHumanRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedAHumanRuntime.empty()) m_PersistedAHumanRuntime = reference.SaveAHumanRuntime();
 	return 0;
 }
 

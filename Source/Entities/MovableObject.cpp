@@ -50,6 +50,7 @@ std::atomic<long> MovableObject::s_ScriptRegistrationSerial = 0;
 std::atomic<uint64_t> MovableObject::s_HookLoopsEndedOnADestroyedObject = 0;
 int MovableObject::s_FaithfulCloneDepth = 0;
 bool MovableObject::s_FaithfulCloneRegisters = false;
+bool MovableObject::s_FaithfulClonePreview = false;
 std::string MovableObject::ms_EmptyString = "";
 
 
@@ -501,7 +502,7 @@ int MovableObject::Create(const MovableObject& reference) {
 	m_PersistedAgeTimerAnchor = reference.m_PersistedAgeTimerAnchor;
 	m_PersistedMOIgnoreTimerAnchor = reference.m_PersistedMOIgnoreTimerAnchor;
 	m_PersistedMovableObjectRuntime = reference.m_PersistedMovableObjectRuntime;
-	if (IsFaithfulClone() && m_PersistedMovableObjectRuntime.empty()) m_PersistedMovableObjectRuntime = reference.SaveMovableObjectRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedMovableObjectRuntime.empty()) m_PersistedMovableObjectRuntime = reference.SaveMovableObjectRuntime();
 	g_MovableMan.UnregisterObject(this);
 	if (IsFaithfulClone()) {
 		// A snapshot clone carries the live sim state a spawn copy deliberately resets.

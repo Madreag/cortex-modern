@@ -126,7 +126,7 @@ int Arm::Create(const Arm& reference) {
 		m_FaithfulSupportedDeviceUID = reference.m_FaithfulSupportedDeviceUID;
 	}
 	m_PersistedArmRuntime = reference.m_PersistedArmRuntime;
-	if (IsFaithfulClone() && m_PersistedArmRuntime.empty()) m_PersistedArmRuntime = reference.SaveArmRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedArmRuntime.empty()) m_PersistedArmRuntime = reference.SaveArmRuntime();
 	return 0;
 }
 

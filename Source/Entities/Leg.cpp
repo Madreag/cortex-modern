@@ -88,7 +88,7 @@ int Leg::Create(const Leg& reference) {
 	m_MoveSpeed = reference.m_MoveSpeed;
 
 	m_PersistedLegRuntime = reference.m_PersistedLegRuntime;
-	if (IsFaithfulClone() && m_PersistedLegRuntime.empty()) m_PersistedLegRuntime = reference.SaveLegRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedLegRuntime.empty()) m_PersistedLegRuntime = reference.SaveLegRuntime();
 	return 0;
 }
 
