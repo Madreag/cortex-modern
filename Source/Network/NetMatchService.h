@@ -1510,6 +1510,7 @@ namespace RTE {
 		NetWorldJoinHost m_WorldJoin;
 		NetWorldFrameLog m_CommittedRing; //!< A peer with no tail of its own keeps the round's committed frames, so as a successor it serves a held seat in place.
 		uint64_t m_CommittedRingRound = 0; //!< The round the record is of; it is kept from that round's first bounded tick to its end.
+		uint64_t m_CommittedRingGeneration = 0; //!< The authority generation the record was last kept under; a handover renames the round, not its record.
 		int64_t m_WorldSpectatorsFree = 0; //!< The world's free watcher count, published for the directory row.
 		// A capture the simulation queued and whose verdict the writer thread has not given yet.
 		struct AwaitedAutosave { uint64_t tick = 0; bool joinCapture = false; };
