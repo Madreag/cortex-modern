@@ -5882,6 +5882,8 @@ namespace RTE {
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
+				// A seat whose packets this machine set aside for its simulation thread may have sent the input it is missing.
+				if (const auto link = m_RemoteTransports.find(peer); link != m_RemoteTransports.end() && m_PlaneHeldTransports.contains(link->second)) continue;
 				// A park commits its frames with no input from anyone, so a seat owes nothing until the frames after it fall
 				// due: its first post-park inputs are due a delay after the park's last frame ran here, never at the release.
 				if (const uint16_t owed = InputDelayAt(peer, frame); m_ParkFrameSimulated != UINT64_MAX && m_ParkFrameSimulated == m_SynchronizedCaptureEndFrame &&
@@ -9637,10 +9639,14 @@ namespace RTE {
 					if (UsesTransportPeer(event.peerId)) Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "recovery input requires the reliable control lane");
 					return;
 				}
-				// A start or a stop may end or reshape the round; the simulation thread takes it.
+				// A start or a stop may end or reshape the round; the simulation thread takes it. A repeat of a start this round already
+				// took reshapes nothing, so the seat's frames behind it go on without it.
 				if (m_PlaneTicking && (std::holds_alternative<NetLockstepStart>(decoded.packet.payload) || std::holds_alternative<NetLockstepStop>(decoded.packet.payload))) {
 					m_PlaneDeferredEvents.push_back(event);
-					m_PlaneHeldTransports.insert(event.peerId);
+					const auto* start = std::get_if<NetLockstepStart>(&decoded.packet.payload);
+					const bool repeat = start && m_RoundId != 0 && start->roundId == m_RoundId && m_RemoteStartsReceived.contains(start->localPeerId) &&
+					                    LockstepPeerOfTransport(event.peerId) == start->localPeerId;
+					if (!repeat) m_PlaneHeldTransports.insert(event.peerId);
 					return;
 				}
 				m_PacketLane = event.lane;
