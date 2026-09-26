@@ -91,12 +91,13 @@ namespace RTE {
 			const uint16_t floorDelay = m_MatchConfig.inputDelayFrames;
 			std::vector<uint16_t> delays(m_MatchConfig.peerCount, std::max<uint16_t>(floorDelay, 1));
 			uint16_t slowestRemoteDelay = delays.front();
+			const uint32_t margin = NetMatchConfigUtil::HoldMarginFrames(m_MatchConfig);
 			for (const auto& [peerId, transportId]: BuildRemoteTransportMap(session)) {
 				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
 				NetInputDelayEstimator estimate;
 				estimate.Observe(0, rttMs);
 				const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(
-				    estimate.RequiredFrames(tickMs, floorDelay), NetMatchConfigUtil::c_MaxInputDelayFrames));
+				    estimate.RequiredFrames(tickMs, floorDelay) + margin, NetMatchConfigUtil::c_MaxInputDelayFrames));
 				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);
 				slowestRemoteDelay = std::max(slowestRemoteDelay, neededDelay);
 				std::cout << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs
