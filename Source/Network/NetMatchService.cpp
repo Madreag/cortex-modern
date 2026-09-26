@@ -5149,20 +5149,23 @@ static std::string ResyncSaveName() {
 			}
 		}
 		// A host that holds this seat again has taken back the return it agreed: the catch-up carries on toward the next one,
-		// on the round's own record of both, and the start that return began is dropped.
-		if (m_WorldCatchUp.privateMatch && m_WorldCatchUp.activationTick != 0 && m_CatchUpCoordinator && m_Coordinator && !m_Coordinator->IsRunning()) {
+		// on the round's own record of both, and the start that return began is dropped. The hold may reach this wire or the
+		// round already started for the return, and that round may be running while the replay has not yet reached its frame.
+		if (m_WorldCatchUp.privateMatch && m_WorldCatchUp.activationTick != 0 && m_CatchUpCoordinator && m_Coordinator) {
 			const uint8_t localBit = static_cast<uint8_t>(1U << (m_LocalPeerId - 1));
-			const bool heldAgain = std::any_of(m_CatchUpWirePackets.begin(), m_CatchUpWirePackets.end(), [&](const NetTransportEvent& event) {
+			const bool heldAgain = m_Coordinator->HeldLocalSeatSince(m_WorldCatchUp.activationTick) ||
+			                       std::any_of(m_CatchUpWirePackets.begin(), m_CatchUpWirePackets.end(), [&](const NetTransportEvent& event) {
 				if (event.bytes.size() < NetLockstepCodec::c_HeaderBytes || event.bytes[8] != static_cast<uint8_t>(NetLockstepPacketType::Timing)) return false;
 				const auto decoded = NetLockstepCodec::Decode(event.bytes);
 				const auto* decision = decoded.ok ? std::get_if<NetLockstepTiming>(&decoded.packet.payload) : nullptr;
-				return decision && decision->phase == NetTimingPhase::HoldAtFrame && (decision->heldPeers & localBit) != 0 &&
+				return decision && decision->phase == NetTimingPhase::HoldAtFrame && (decision->heldPeers & localBit) != 0 && decision->applyFrame >= m_WorldCatchUp.activationTick &&
 				       decision->senderPeerId == m_CatchUpCoordinator->GetHostPeerId() && decision->roundId == m_WorldCatchUp.roundId;
 			});
 			if (heldAgain) {
 				System::PrintDiagnosticLine("[net-match] held client: the host held this seat again before its return at " + std::to_string(m_WorldCatchUp.activationTick) +
 				                            "; catching up on from " + std::to_string(m_WorldCatchUp.appliedThrough));
 				m_Runner->CancelWorldJoinLockstepStart();
+				if (m_Coordinator->IsRunning()) m_Coordinator->Complete("the host held this seat again before its return");
 				m_WorldCatchUp.activationTick = 0;
 				m_WorldCatchUp.activationCommitted = false;
 				ScenarioRunner::SetWorldCatchUpActivation(0);
