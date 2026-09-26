@@ -424,6 +424,24 @@ def check_committed_window(results, scratch, scenario_texts=None):
         # The mark lands within the round's first 100 frames, so a window closing at frame >= 100 + the requirement holds it.
         ok &= row(results, f"window/{item['id']}-closes-on-committed-frames",
                   closing.get("op") == "wait" and closing.get("lockstep_frame_at_least", 0) >= item["sim_progress"] + 100, json.dumps(closing))
+    # The other play windows close on the round's frame too: past the frame their window opens on by the requirement.
+    for name in ("mp-host-join", "mp-host-join-cross", "mp-resume-from-disk"):
+        scenario = driver.load_scenario(name)
+        for item in [item for item in scenario["checklist"] if item.get("sim_progress")]:
+            peers = scenario.get("peers") or next(run["peers"] for run in scenario["runs"] if run["name"] == item.get("run"))
+            probe = next(peer["probe"] for peer in peers if peer["name"] == item["peer"])
+            steps = json.loads((scenario_texts or {}).get(probe) or driver.scenario_text(scenario, probe))["steps"]
+            if item.get("probe_steps"):
+                opening = steps[item["probe_steps"][0]]
+                closing = next((steps[index] for index in reversed(item["probe_steps"][1:]) if steps[index].get("op") == "wait"), {})
+            else:
+                mark = next(index for index, step in enumerate(steps) if step.get("command") == "video_mark " + item["mark"])
+                opening, closing = steps[mark], steps[mark + 1]
+            opens_at = opening.get("lockstep_frame_at_least", 0)
+            counted = opening.get("op") == "menu" or "lockstep_frame_at_least" in opening
+            ok &= row(results, f"window/{name}/{item['id']}-closes-on-committed-frames",
+                      counted and closing.get("op") == "wait" and closing.get("lockstep_frame_at_least", 0) >= opens_at + item["sim_progress"]
+                      and "sim_at_least" not in closing, json.dumps([opening, closing]))
     return ok
 
 
