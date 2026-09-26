@@ -20532,15 +20532,15 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	// A gap keeps the plane from ticking until it ends, whatever opens and closes inside it, and a scope
 	// opened off the simulation thread is refused rather than moving the simulation thread's counts.
 	bool TestPlaneScopesKeepTheirOwnCounts(std::string* error) {
-		const auto fail = [error](const std::string& message) {
-			if (error) *error = message;
-			return false;
+		std::vector<std::string> failures;
+		const auto require = [&failures](bool held, const char* what) {
+			if (!held) failures.emplace_back(what);
 		};
-		if (NetLockstepPlane::TicksPermitted()) return fail("the plane may tick before any window opened");
+		require(!NetLockstepPlane::TicksPermitted(), "the plane may tick before any window opened");
 		const uint64_t refusedBefore = NetLockstepPlane::ScopeRefusals();
 		{
 			NetLockstepPlane::Window frame;
-			if (!NetLockstepPlane::TicksPermitted()) return fail("an open window does not let the plane tick");
+			require(NetLockstepPlane::TicksPermitted(), "an open window does not let the plane tick");
 			bool reopened = false;
 			{
 				NetLockstepPlane::Gap outer;
@@ -20551,8 +20551,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 				reopened = reopened || NetLockstepPlane::TicksPermitted();
 			}
-			if (reopened) return fail("a gap that ended inside another gap let the plane tick while the outer gap still allowed unguarded access");
-			if (!NetLockstepPlane::TicksPermitted()) return fail("the window did not reopen when every gap inside it ended");
+			require(!reopened, "a gap that ended inside another gap let the plane tick while the outer gap still allowed unguarded access");
+			require(NetLockstepPlane::TicksPermitted(), "the window did not reopen when every gap inside it ended");
 		}
 		bool closedByOtherGap = false;
 		bool openAfterClose = false;
@@ -20564,15 +20564,19 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				openAfterClose = NetLockstepPlane::TicksPermitted();
 			});
 		}
-		if (openAfterClose) return fail("a gap on another thread left the plane open after the simulation thread's only window closed");
-		if (closedByOtherGap) return fail("a gap on another thread closed the simulation thread's window");
+		require(!openAfterClose, "a gap on another thread left the plane open after the simulation thread's only window closed");
+		require(!closedByOtherGap, "a gap on another thread closed the simulation thread's window");
 		bool openedByOtherWindow = false;
 		WithScopeOnAnotherThread<NetLockstepPlane::Window>([&] { openedByOtherWindow = NetLockstepPlane::TicksPermitted(); });
-		if (openedByOtherWindow) return fail("a window opened off the simulation thread let the plane tick");
-		if (NetLockstepPlane::ScopeRefusals() != refusedBefore + 2)
-			return fail("refused " + std::to_string(NetLockstepPlane::ScopeRefusals() - refusedBefore) + " scopes opened off the simulation thread, expected 2");
-		if (NetLockstepPlane::TicksPermitted()) return fail("the plane may tick after every scope closed");
-		return true;
+		require(!openedByOtherWindow, "a window opened off the simulation thread let the plane tick");
+		require(NetLockstepPlane::ScopeRefusals() == refusedBefore + 2, "the plane did not refuse both scopes opened off the simulation thread");
+		require(!NetLockstepPlane::TicksPermitted(), "the plane may tick after every scope closed");
+		if (failures.empty()) return true;
+		if (error) {
+			*error = failures.front();
+			for (size_t index = 1; index < failures.size(); ++index) *error += "; " + failures[index];
+		}
+		return false;
 	}
 
 	// The check behind the plane: inside an open window an unguarded coordinator access trips it, a guarded access or one
