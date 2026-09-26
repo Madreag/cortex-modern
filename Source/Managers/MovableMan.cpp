@@ -78,6 +78,9 @@ extern "C" {
 #include <memory>
 #include <queue>
 #include <set>
+#include <atomic>
+#include <thread>
+#include <cstdlib>
 #include <string>
 #include <sstream>
 #include <tuple>
@@ -88,6 +91,18 @@ using namespace RTE;
 
 namespace {
 	using json = nlohmann::json;
+
+	// Test lever: CC_TEST_SEE_RAY_HOLD=1 holds the see-ray workers until the sim thread reaches the pass's join, the latest they may run.
+	bool SeeRayHoldLever() {
+		static const bool hold = [] { const char* value = std::getenv("CC_TEST_SEE_RAY_HOLD"); return value && value[0] == '1'; }();
+		return hold;
+	}
+	std::atomic<bool> s_SeeRaysReleased{true};
+
+	void HoldSeeRayWorker() {
+		if (!SeeRayHoldLever()) return;
+		for (int waited = 0; !s_SeeRaysReleased.load(std::memory_order_acquire) && waited < 20000; ++waited) std::this_thread::sleep_for(std::chrono::microseconds(100));
+	}
 
 	json MovableObjectDebugJson(const MovableObject* object) {
 		json j;
@@ -3280,6 +3295,7 @@ bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
 }
 
 void MovableMan::WaitForActorsSeeTask() {
+	s_SeeRaysReleased.store(true, std::memory_order_release);
 	m_ActorsSeeFuture.wait();
 }
 
@@ -6533,7 +6549,7 @@ void MovableMan::Update() {
 	}
 
 	// Finish our Seeing rays from last frame
-	m_ActorsSeeFuture.wait();
+	WaitForActorsSeeTask();
 
 	// Prior to controller/AI update, execute lua callbacks
 	g_LuaMan.ExecuteLuaScriptCallbacks();
@@ -6853,9 +6869,11 @@ void MovableMan::Update() {
 
 	// Run seeing rays for all actors; they finish while the next tick moves the clock, so they carry this one
 	const uint64_t seeTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+	if (SeeRayHoldLever()) s_SeeRaysReleased.store(false, std::memory_order_release);
 	m_ActorsSeeFuture = g_ThreadMan.GetPriorityThreadPool().parallelize_loop(m_Actors.size(),
 	                                                                         [&, seeTick](int start, int end) {
 		                                                                         ZoneScopedN("Actors See");
+		                                                                         HoldSeeRayWorker();
 		                                                                         for (int i = start; i < end; ++i) {
 			                                                                         m_Actors[i]->CastSeeRays(seeTick);
 		                                                                         }
