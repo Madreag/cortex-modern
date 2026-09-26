@@ -5624,7 +5624,19 @@ namespace RTE {
 		if (m_State == NetLockstepState::WaitingForStart && timing.senderPeerId == GetHostPeerId() &&
 		    timing.sessionId == m_Config.sessionId && (m_RoundId == 0 || timing.roundId == m_RoundId) && SenderOwnsTransport(timing.senderPeerId, fromTransport)) {
 			if (m_PreStartTiming.size() >= 256) { Fail(NetLockstepStopReason::ProtocolError, m_Config.startFrame, "pre-start timing backlog overflow"); return; }
-			m_PreStartTiming.emplace_back(timing, fromTransport); return;
+			m_PreStartTiming.emplace_back(timing, fromTransport);
+			// A joiner's own admission names the frame and delay its start must carry, or the host reads that start as a straggler.
+			if (m_Config.joinsRunningRound && timing.action == NetTimingAction::WorldAdmission && timing.peerId == m_Config.localPeerId &&
+			    (timing.phase == NetTimingPhase::Propose || timing.phase == NetTimingPhase::Commit)) {
+				const PeerAdmission terms{timing.applyFrame, timing.delayFrames};
+				const auto adopted = m_PeerAdmissions.find(m_Config.localPeerId);
+				if (adopted == m_PeerAdmissions.end() || adopted->second.frame != terms.frame || adopted->second.delay != terms.delay) {
+					m_PeerAdmissions[m_Config.localPeerId] = terms;
+					std::cout << "[lockstep] took this seat's admission before the start: frame=" << terms.frame << " delay=" << terms.delay << std::endl;
+					(void)SendStart(nullptr);
+				}
+			}
+			return;
 		}
 		if (!IsRunning() || timing.sessionId != m_Config.sessionId || timing.roundId != m_RoundId || timing.authorityGeneration != m_Config.migrationGeneration ||
 		    timing.peerId > m_Config.peerCount || !SenderOwnsTransport(timing.senderPeerId, fromTransport)) return;
