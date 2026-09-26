@@ -913,6 +913,8 @@ namespace RTE {
 		uint32_t LocalSeatReclaims() const { return m_LocalSeatReclaims; }
 		/// Restarts a returning seat's presentation readings at the frame its reclaim commits.
 		void NoteSeatReclaimed(uint8_t peerId);
+		/// Host: a returning seat whose catch-up is still replaying toward its reclaim frame; its first-input allowance starts at the catch-up's end.
+		void NoteReturnerCatchingUp(uint8_t peerId, uint64_t nowMs);
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
@@ -929,6 +931,8 @@ namespace RTE {
 		/// Host: the current capture park covers the frame or may still grow to cover it.
 		bool CaptureParkMayReach(uint64_t frame) const;
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
+		/// The frame the host held this peer's seat from; 0 when the hold was not taken on the wire (a closed link).
+		uint64_t GetLocalHoldFrame() const { return m_LocalHoldFrame; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
@@ -1336,6 +1340,8 @@ namespace RTE {
 			uint64_t lead = 0; //!< Frames it arrived ahead of our sim's next tick.
 		};
 		std::map<uint8_t, std::deque<ArrivalLead>> m_ArrivalLeads; //!< Per remote sender, the recent arrivals of its new input.
+		std::map<uint8_t, std::deque<uint32_t>> m_ArrivalLateness; //!< Per remote sender, how long its recent ticks landed after we first missed them.
+		static constexpr size_t c_ArrivalLatenessSamples = 64;
 		/// The decrease a live delay change may make without a wait at its frame: never more than the sender's inputs arrived early by, less the slow-player bound.
 		std::optional<uint16_t> SlackLimitedDecrease(uint8_t peerId, uint16_t proposed, uint16_t current, uint64_t nowMs);
 		/// The rise a live delay change makes so the sender's inputs keep the slow-player bound's worth of lead: what the least lead over the last
@@ -1381,6 +1387,7 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> m_LateStartReclaims; //!< Boundary-held seats whose late start still owes a reclaim.
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
+		uint64_t m_LocalHoldFrame = 0;
 		bool m_Playback = false;
 		uint32_t m_LocalSeatReclaims = 0;
 
