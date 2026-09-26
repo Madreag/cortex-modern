@@ -7895,8 +7895,8 @@ static bool RunScriptSelfFetchSelfTest() {
 	wrapper.Initialize();
 	lua_State* L = wrapper.GetLuaState();
 	std::lock_guard<std::recursive_mutex> lock(wrapper.GetMutex());
-	// The plain call leaves a hook's return values to the caller, so its probe returns nothing; the conditional one's returns its test.
-	wrapper.RunScriptString("function _SelfFetchProbe(...) _SelfFetchCount = select('#', ...); _SelfFetchArgs = {...} end");
+	// Both probes return values: a hook's results never stay on the state's stack.
+	wrapper.RunScriptString("function _SelfFetchProbe(...) _SelfFetchCount = select('#', ...); _SelfFetchArgs = {...}; return true, 'extra' end");
 	wrapper.RunScriptString("function _SelfFetchTest(...) _SelfFetchProbe(...); return true end");
 	lua_getglobal(L, "_SelfFetchProbe");
 	LuabindObjectWrapper probe(new luabind::adl::object(luabind::from_stack(L, -1)), "self-fetch-probe.lua");
@@ -7944,6 +7944,52 @@ static bool RunScriptSelfFetchSelfTest() {
 	return passed;
 }
 
+// A hook that returns values, called a thousand times through the plain and the conditional path, leaves the state's
+// stack where it found it; a hook that returns nothing is the control.
+static bool RunHookStackBalanceSelfTest() {
+	LuaStateWrapper wrapper;
+	wrapper.Initialize();
+	lua_State* L = wrapper.GetLuaState();
+	std::lock_guard<std::recursive_mutex> lock(wrapper.GetMutex());
+	wrapper.RunScriptString("function _StackTwoValues(a) return true, a end; function _StackNoValue(a) end");
+	lua_getglobal(L, "_StackTwoValues");
+	LuabindObjectWrapper twoValues(new luabind::adl::object(luabind::from_stack(L, -1)), "stack-two-values.lua");
+	lua_pop(L, 1);
+	lua_getglobal(L, "_StackNoValue");
+	LuabindObjectWrapper noValue(new luabind::adl::object(luabind::from_stack(L, -1)), "stack-no-value.lua");
+	lua_pop(L, 1);
+	constexpr int calls = 1000;
+	const auto growth = [&](const LuabindObjectWrapper& hook, bool conditional, int& returnedTrue) {
+		const int top = lua_gettop(L);
+		returnedTrue = 0;
+		for (int call = 0; call < calls; ++call) {
+			bool returned = false;
+			if (conditional) {
+				wrapper.RunScriptConditionalTestFunctionObject(&hook, "", "", returned, {}, {"7"});
+			} else {
+				wrapper.RunScriptFunctionObject(&hook, "", "", {}, {"7"});
+			}
+			returnedTrue += returned ? 1 : 0;
+		}
+		const int grown = lua_gettop(L) - top;
+		lua_settop(L, top);
+		return grown;
+	};
+	int plainTrue = 0;
+	int conditionalTrue = 0;
+	int controlTrue = 0;
+	const int plainGrowth = growth(twoValues, false, plainTrue);
+	const int conditionalGrowth = growth(twoValues, true, conditionalTrue);
+	const int controlGrowth = growth(noValue, false, controlTrue);
+	wrapper.RunScriptString("_StackTwoValues = nil; _StackNoValue = nil");
+	const bool passed = plainGrowth == 0 && conditionalGrowth == 0 && controlGrowth == 0 && conditionalTrue == calls;
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_hook_returning_values_leaves_the_stack_balanced calls=" << calls
+	          << " plain_two_values_growth=" << plainGrowth << " conditional_two_values_growth=" << conditionalGrowth
+	          << " plain_no_value_growth=" << controlGrowth << " conditional_results_true=" << conditionalTrue
+	          << (passed ? "" : conditionalTrue != calls ? " (the conditional call lost its hook's first result)" : " (a hook call left slots on the state's stack)") << std::endl;
+	return passed;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
@@ -7967,6 +8013,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool lazySeed = RunLazySeedSelfTest();
 	const bool getterCache = RunGetterCacheSelfTest();
 	const bool selfFetch = RunScriptSelfFetchSelfTest();
+	const bool hookStack = RunHookStackBalanceSelfTest();
 	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
 	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
 	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
@@ -8060,7 +8107,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && getterCache && selfFetch && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && getterCache && selfFetch && hookStack && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
@@ -10999,6 +11046,7 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
+	const int stackStart = lua_gettop(m_State);
 	lua_pushcfunction(m_State, &AddFileAndLineToError);
 	functionObject->GetLuabindObject()->push(m_State);
 
@@ -11069,7 +11117,8 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 		timing->m_CallCount++;
 	}
 
-	lua_pop(m_State, 1);
+	// A hook's return values go with the error handler.
+	lua_settop(m_State, stackStart);
 
 	m_CurrentlyRunningScriptPath = "";
 	return status;
@@ -11082,6 +11131,7 @@ int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectW
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
+	const int stackStart = lua_gettop(m_State);
 	lua_pushcfunction(m_State, &AddFileAndLineToError);
 	functionObject->GetLuabindObject()->push(m_State);
 
@@ -11140,7 +11190,7 @@ int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectW
 		m_ScriptTimings[path].m_CallCount++;
 	}
 
-	lua_pop(m_State, 1);
+	lua_settop(m_State, stackStart);
 
 	m_CurrentlyRunningScriptPath = "";
 	return status;
