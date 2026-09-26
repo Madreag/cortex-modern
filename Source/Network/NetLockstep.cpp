@@ -4951,7 +4951,9 @@ namespace RTE {
 			const auto held = replay.m_HoldTransactions.find(peer);
 			if (held != replay.m_HoldTransactions.end() && replay.m_AiHeldSeats.contains(peer) && held->second.cutoffFrame > m_Config.seatStateThroughFrame &&
 			    held->second.cutoffFrame <= throughFrame && !m_AiHeldSeats.contains(peer)) {
-				m_ReclaimTransactions.erase(peer);
+				// A return this round already knows of that lands after the hold ends the hold there; only an older one is gone.
+				if (const auto later = m_ReclaimTransactions.find(peer); later != m_ReclaimTransactions.end() && later->second.activationFrame <= held->second.cutoffFrame)
+					m_ReclaimTransactions.erase(later);
 				m_HoldTransactions[peer] = held->second;
 				m_AiHeldSeats[peer] = held->second.cutoffFrame;
 				m_PeerLeaveFrames[peer] = held->second.cutoffFrame;
@@ -5805,7 +5807,11 @@ namespace RTE {
 			}
 			if (repeated) return;
 			if ((!ownHold && timing.applyFrame < m_Stats.nextFrame) || timing.applyFrame > m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew) {
-				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "hold contradicts the survivor's accepted horizon");
+				std::ostringstream clause;
+				clause << "hold contradicts the survivor's accepted horizon: " << (timing.applyFrame < m_Stats.nextFrame ? "hold behind the accepted horizon" : "hold past the future skew")
+				       << " held=" << static_cast<int>(timing.heldPeers) << " hold_frame=" << timing.applyFrame << " accepted_through=" << (m_Stats.nextFrame > 0 ? m_Stats.nextFrame - 1 : 0)
+				       << " announcer=" << static_cast<int>(timing.senderPeerId) << " revision=" << timing.revision << " start=" << m_Config.startFrame;
+				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, clause.str());
 				return;
 			}
 			auto [found, inserted] = m_TimingDecisions.try_emplace(timing.revision, TimingDecision{timing, 0, true, nowMs});
