@@ -7825,6 +7825,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
 	// No state is locked here, so a worker's save can ask every state about its aliases.
 	const bool retainedOwners = SceneEditorGUI::RunRetainedOwnerCaptureSelfTest();
+	const bool graphRows = m_MasterScriptState.RunScriptGraphSelfTest();
 	bool roundStart = false;
 	{
 		// A peer's own history before a round - a global, a package path entry, a compiled script, births - is replaced by the round's start scripts.
@@ -7877,7 +7878,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return m_MasterScriptState.RunScriptGraphSelfTest() && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
@@ -11086,6 +11087,9 @@ std::vector<std::pair<std::string, std::vector<std::string>>> LuaStateWrapper::D
 }
 
 bool LuaMan::CaptureRoundStartScripts(std::vector<uint8_t>& blob, std::string* error) {
+	// An earlier game's world goes first: its objects' Destroy scripts and the sound identities their teardown draws
+	// are that game's, never the round's.
+	g_MovableMan.PurgeAllMOs();
 	s_RoundStartScripts = true;
 	struct Scope { ~Scope() { s_RoundStartScripts = false; } } scope;
 	std::vector<std::string> graphs, problems;
@@ -11121,6 +11125,7 @@ bool LuaMan::RestoreRoundStartScripts(const std::vector<uint8_t>& blob, std::str
 	if (graphs.size() != states) {
 		return fail("the host runs " + std::to_string(graphs.size()) + " script states, this peer " + std::to_string(states));
 	}
+	g_MovableMan.PurgeAllMOs();
 	// The graph carries each state's compiled scripts too, so a script the host already compiled never runs again here.
 	s_RoundStartScripts = true;
 	struct Scope { ~Scope() { s_RoundStartScripts = false; } } scope;
