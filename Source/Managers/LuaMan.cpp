@@ -6679,6 +6679,9 @@ bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::
 	return restored;
 }
 
+// Set while a round's start scripts are captured or laid down.
+static bool s_RoundStartScripts = false;
+
 void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	const int top = lua_gettop(m_State);
 	FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats;
@@ -6711,7 +6714,7 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	lua_pop(m_State, 1);
 	lua_setfield(m_State, callbacks, "roots");
 	if (stats) part(stats->receiversUs);
-	if (this == &g_LuaMan.GetMasterScriptState()) {
+	if (this == &g_LuaMan.GetMasterScriptState() && !s_RoundStartScripts) {
 		if (const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity())) {
 			PushScriptGraphScratchTable(m_State);
 			lua_pushstring(m_State, activity->GetLuaClassName().c_str());
@@ -6741,7 +6744,8 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 		}
 	}
 	if (stats) part(stats->activityUs);
-	g_LuaMan.PushPathCallbacks(m_State);
+	if (s_RoundStartScripts) PushScriptGraphScratchTable(m_State);
+	else g_LuaMan.PushPathCallbacks(m_State);
 	lua_setfield(m_State, callbacks, "async");
 	if (stats) part(stats->asyncUs);
 	PushScriptGraphScratchTable(m_State);
@@ -6790,6 +6794,8 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 }
 
 void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems, bool restoreAsync) {
+	// A round's start scripts carry no activity: the one in play is about to be replaced, and its pending paths go with it.
+	restoreAsync = restoreAsync && !s_RoundStartScripts;
 	const int top = lua_gettop(m_State);
 	lua_pushliteral(m_State, "_ScriptGraphCallbacks");
 	lua_rawget(m_State, LUA_GLOBALSINDEX);
@@ -6798,7 +6804,7 @@ void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems,
 		return;
 	}
 	const int callbacks = lua_gettop(m_State);
-	if (this == &g_LuaMan.GetMasterScriptState()) {
+	if (this == &g_LuaMan.GetMasterScriptState() && !s_RoundStartScripts) {
 		if (auto* activity = dynamic_cast<GAScripted*>(g_ActivityMan.GetActivity())) {
 			lua_getfield(m_State, callbacks, "activity");
 			if (lua_istable(m_State, -1)) {
@@ -11079,36 +11085,16 @@ std::vector<std::pair<std::string, std::vector<std::string>>> LuaStateWrapper::D
 	return described;
 }
 
-bool LuaStateWrapper::RebuildScriptCache(const std::vector<std::pair<std::string, std::vector<std::string>>>& cache, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(GetMutex());
-	const size_t before = problems.size();
-	for (auto& [owner, cached]: m_ScriptCache) {
-		for (auto& [name, function]: cached.functionNamesAndObjects) delete function;
-	}
-	m_ScriptCache.clear();
-	for (const auto& [owner, names]: cache) {
-		std::unordered_map<std::string, LuabindObjectWrapper*> copies;
-		if (!RetrieveFunctions(owner, names, copies)) {
-			problems.push_back("the compiled script " + owner + " has no global here");
-		} else if (m_ScriptCache[owner].functionNamesAndObjects.size() != names.size()) {
-			problems.push_back("the compiled script " + owner + " lacks one of its functions here");
-		}
-		for (auto& [name, copy]: copies) delete copy;
-	}
-	return problems.size() == before;
-}
-
 bool LuaMan::CaptureRoundStartScripts(std::vector<uint8_t>& blob, std::string* error) {
+	s_RoundStartScripts = true;
+	struct Scope { ~Scope() { s_RoundStartScripts = false; } } scope;
 	std::vector<std::string> graphs, problems;
 	if (!g_MovableMan.SerializeScriptGraphs(graphs, problems)) {
 		if (error) *error = problems.empty() ? "the script state could not be captured" : problems.front();
 		return false;
 	}
-	std::vector<std::vector<std::pair<std::string, std::vector<std::string>>>> caches;
-	caches.push_back(g_LuaMan.GetMasterScriptState().DescribeScriptCache());
-	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) caches.push_back(state.DescribeScriptCache());
 	CheckpointWriter writer("RoundStartScripts1");
-	writer(static_cast<int64_t>(MovableObject::GetScriptRegistrationSerialCounter()), graphs, caches);
+	writer(static_cast<int64_t>(MovableObject::GetScriptRegistrationSerialCounter()), graphs);
 	const std::string text = writer.Text();
 	blob.assign(std::begin(c_RoundStartScriptsMagic), std::end(c_RoundStartScriptsMagic));
 	blob.insert(blob.end(), text.begin(), text.end());
@@ -11123,26 +11109,23 @@ bool LuaMan::RestoreRoundStartScripts(const std::vector<uint8_t>& blob, std::str
 	if (!IsRoundStartScriptBlob(blob)) return fail("the round's start scripts are not a start-scripts blob");
 	int64_t registrationSerial = 0;
 	std::vector<std::string> graphs;
-	std::vector<std::vector<std::pair<std::string, std::vector<std::string>>>> caches;
 	try {
 		CheckpointReader reader(std::string_view(reinterpret_cast<const char*>(blob.data()) + 4, blob.size() - 4), "RoundStartScripts1");
 		reader.Value(registrationSerial);
 		reader.Value(graphs);
-		reader.Value(caches);
 		reader.Finish();
 	} catch (const std::exception& exception) {
 		return fail(std::string("the round's start scripts do not read: ") + exception.what());
 	}
 	const size_t states = 1 + g_LuaMan.GetThreadedScriptStates().size();
-	if (graphs.size() != states || caches.size() != states) {
+	if (graphs.size() != states) {
 		return fail("the host runs " + std::to_string(graphs.size()) + " script states, this peer " + std::to_string(states));
 	}
+	// The graph carries each state's compiled scripts too, so a script the host already compiled never runs again here.
+	s_RoundStartScripts = true;
+	struct Scope { ~Scope() { s_RoundStartScripts = false; } } scope;
 	std::string restoreError;
 	if (!g_MovableMan.RestoreScriptGraphs(graphs, &restoreError)) return fail("the host's script state did not restore: " + restoreError);
-	// A script the host already compiled is never run again here: the cache follows the restored globals.
-	std::vector<std::string> problems;
-	for (size_t index = 0; index < states; ++index) g_LuaMan.GetStateByIndex(static_cast<int>(index)).RebuildScriptCache(caches[index], problems);
-	if (!problems.empty()) return fail("the host's compiled scripts did not restore: " + problems.front());
 	MovableObject::PinScriptRegistrationSerial(static_cast<long>(registrationSerial));
 	return true;
 }
