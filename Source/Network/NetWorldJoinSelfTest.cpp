@@ -6148,6 +6148,32 @@ namespace RTE {
 		return true;
 	}
 
+	// A relaunched round runs empty startup frames until its agreed first frame; a capture named in them never reaches a
+	// writer, and the host would wait on it for the rest of the round.
+	bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-0000000000000006";
+		service.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		uint64_t firstNamed = 0;
+		for (uint64_t tick = 721; tick <= 1000 && firstNamed == 0; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick;
+			input.now = static_cast<int64_t>(tick) * tickLength;
+			input.writers = {1, 2};
+			input.lead = 5;
+			input.startupPending = tick < 758;
+			for (const NetMatchService::CheckpointNote& note: service.StepAutosaveSchedule(input).send) if (note.kind == NetGameCheckpoint::Capture) firstNamed = tick;
+		}
+		if (firstNamed < 758) {
+			*error = "capture-named-before-the-agreed-first-frame: first named at tick " + std::to_string(firstNamed) + " while the round started at 758";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS no_capture_is_named_before_the_agreed_first_frame first_named=" << firstNamed << std::endl;
+		return true;
+	}
+
 	// The schedule rides the committed stream: both entries cross the lockstep wire on the checkpoint
 	// version, and the committed tail a joiner replays carries them unchanged.
 	bool TestCheckpointCommandCrossesTheWire(std::string* error) {
@@ -7476,6 +7502,7 @@ namespace RTE {
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
+			if (!TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
 			if (!TestACaptureNamedIntoAParkOpensTheNext(&error)) return Fail(error);
 			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);

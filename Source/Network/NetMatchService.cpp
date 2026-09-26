@@ -1549,7 +1549,11 @@ static std::string ResyncSaveName() {
 			}
 			const uint64_t stagingBeganMs = SteadyNowMs();
 			SetRejoinPhaseLocked(NetSession::RejoinPhase::Loading);
+			// A private match's replay coordinator already names the roster; a world's round has none until it starts.
+			// The restore's Start consumes it.
+			Activity::SetRestoreRoster(m_WorldCatchUp.privateMatch ? nullptr : &m_WorldCatchUp.checkpointConfig, m_LocalPeerId);
 			if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
+				Activity::SetRestoreRoster(nullptr, 0);
 				if (error) *error = "world join snapshot load failed: " + pendingLoad;
 				return false;
 			}
@@ -3102,7 +3106,9 @@ static std::string ResyncSaveName() {
 		                         std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.joinCapture; });
 		if (!joinCapture && seconds == 0) return output;
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
-		if (input.activationPending) return output;
+		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
+		// reaches a writer and the schedule would wait on it for the rest of the round.
+		if (input.activationPending || input.startupPending) return output;
 		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
 		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
@@ -3148,6 +3154,8 @@ static std::string ResyncSaveName() {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
 			input.activationPending = m_Coordinator->HasPendingSeatActivation();
+			const auto& start = m_Coordinator->GetAgreedStartRecord();
+			input.startupPending = start && tick < start->agreedFirstFrame;
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
 		if (output.capture) {
@@ -3306,6 +3314,11 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		if (!m_WorldJoin.IsConfigured()) {
+			return;
+		}
+		// Test lever: the world keeps serving its first capture, so a rejoin catches up across everything since it.
+		static const bool firstImageOnly = std::getenv("CC_TEST_WORLD_JOIN_FIRST_IMAGE") != nullptr;
+		if (firstImageOnly && m_WorldJoin.Image().IsValid()) {
 			return;
 		}
 		const std::optional<ActivityMan::CompletedAutosave> entry = g_ActivityMan.LastCompletedAutosave();
@@ -4219,6 +4232,8 @@ static std::string ResyncSaveName() {
 		m_WorldCatchUp = {};
 		m_WorldCatchUp.active = true;
 		m_WorldCatchUp.privateMatch = image.privateSessionId != 0;
+		// A world image carries no roster of its own; the restore maps this machine's seats from the adopted one.
+		if (!m_WorldCatchUp.privateMatch) m_WorldCatchUp.checkpointConfig = adopted;
 		m_WorldCatchUp.roundId = image.round;
 		m_WorldCatchUp.authorityGeneration = image.authorityGeneration;
 		m_WorldCatchUp.authorityPeerId = image.authorityPeerId;

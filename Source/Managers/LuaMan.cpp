@@ -2831,6 +2831,15 @@ end
 -- the horizon separately: scratch never moves it and only a live birth does.
 local function graphHorizon(graph) return tonumber(string.match(graph, "^SG6;S(%d+);")) end
 local function horizonless(graph) return (string.gsub(graph, "^SG6;S%d+;", "SG6;", 1)) end
+-- A compiled tonumber whose number nothing reads still hands lj_strscan_num a slot to fill; on Windows x64 the
+-- slot must lie past the callee's register home area, or a register the callee saved there comes back as the number.
+do
+	local box, hits = { "51" }, 0
+	for _ = 1, 4000 do
+		if tonumber(box[1]) then hits = hits + 1 end
+	end
+	check("a_compiled_tonumber_keeps_the_callers_registers", hits == 4000, "hits=" .. hits)
+end
 
 _SelfTestShared = { count = 7 }
 _SelfTestVector = Vector(11, 12)
@@ -8053,13 +8062,12 @@ assert(not zone:HasNoArea() and zone:IsInside(Vector(15, 25)) and zone:IsInside(
 
 	{
 		// Void Wanderers keeps its launcher scene's Area past LoadScene. The capture names such an Area gone without reading
-		// it, a restore hands back a gone Area, and that one captures again. The storage stays mapped, so a read is not a crash here.
-		alignas(Scene::Area) static unsigned char storage[sizeof(Scene::Area)];
-		auto* ended = new (storage) Scene::Area("CheckpointEndedZone");
+		// it, a restore hands back a gone Area, and that one captures again. The Area is freed, so a read is one a sanitizer names.
+		auto* ended = new Scene::Area("CheckpointEndedZone");
 		ended->AddBox(Box(Vector(10, 20), 30, 40));
 		luabind::object(m_State, ended).push(m_State);
 		lua_setglobal(m_State, "CheckpointEndedZone");
-		ended->~Area();
+		delete ended;
 		RunScriptString("CheckpointEndedKind = ({_ScriptGraphNative(CheckpointEndedZone)})[1]");
 		lua_getglobal(m_State, "CheckpointEndedKind");
 		const std::string kind = lua_isstring(m_State, -1) ? lua_tostring(m_State, -1) : "";

@@ -452,6 +452,7 @@ namespace RTE {
 			std::set<uint8_t> writers; //!< Host: every peer that captures on the schedule.
 			uint16_t lead = 0; //!< Host: ticks between naming a capture and taking it.
 			bool activationPending = false; //!< Host: a seat's agreed activation is still ahead.
+			bool startupPending = false; //!< Host: the round's agreed first frame is still ahead.
 		};
 		struct AutosaveTickOutput {
 			bool capture = false; //!< This peer captures at this tick.
@@ -1097,6 +1098,7 @@ namespace RTE {
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
+		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
 		friend bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error);
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);

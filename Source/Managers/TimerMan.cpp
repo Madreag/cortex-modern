@@ -106,7 +106,8 @@ void TimerMan::Update() {
 	// Cap timeIncrease if too long (as when the app went out of focus), to c_RealToSimCap.
 	long long timeIncrease = std::min(m_RealTimeTicks - prevTime, static_cast<long long>(c_RealToSimCap * m_TicksPerSecond));
 
-	RTEAssert(timeIncrease > 0, "It seems your CPU is giving bad timing data to the game, this is known to happen on some multi-core processors. This may be fixed by downloading the latest CPU drivers from AMD or Intel.");
+	// A steady clock can read the same microsecond on two quick updates; only time running backwards is bad data.
+	RTEAssert(timeIncrease >= 0, "It seems your CPU is giving bad timing data to the game, this is known to happen on some multi-core processors. This may be fixed by downloading the latest CPU drivers from AMD or Intel.");
 
 	m_PaceWallSeenTicks += m_RealTimeTicks - prevTime;
 	m_PaceCapLostTicks += (m_RealTimeTicks - prevTime) - timeIncrease;

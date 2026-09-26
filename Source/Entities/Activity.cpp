@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <limits>
 #include <map>
+#include <optional>
 #include <iostream>
 #include <sstream>
 
@@ -414,9 +415,23 @@ void Activity::End() {
 	m_ActivityState = ActivityState::Over;
 }
 
+namespace {
+	// The roster a world rejoin's restore maps its own seats from before the round's coordinator has one.
+	std::optional<std::pair<NetMatchConfig, uint8_t>> s_RestoreRoster;
+}
+
+void Activity::SetRestoreRoster(const NetMatchConfig* config, uint8_t localPeer) {
+	if (config) s_RestoreRoster.emplace(*config, localPeer); else s_RestoreRoster.reset();
+}
+
 void Activity::SetupPlayers() {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_PlayerCount, m_PlayerScreen, m_TeamActive, m_TeamCount); });
-	if (!m_SharedPlayerSeats) ConfigureLockstepPlayers();
+	// A restored lockstep world keeps its seat facts; only which seats are this machine's comes from the roster, so a
+	// seat another peer plays is never switched here.
+	if (!m_SharedPlayerSeats && !ConfigureLockstepPlayers() && s_RestoreRoster && g_MovableMan.IsRestoringSnapshot() && ScenarioRunner::HasLockstepCoordinator()) {
+		MapLocalPlayers(s_RestoreRoster->first, s_RestoreRoster->second);
+		s_RestoreRoster.reset();
+	}
 	RefreshLockstepLocalPlayers();
 	m_TeamCount = 0;
 	m_PlayerCount = 0;
@@ -546,7 +561,7 @@ uint8_t Activity::GetLocalHumanCount() const {
 	return humans;
 }
 
-bool Activity::RunSharedSeatSelfTest() {
+bool Activity::RunSharedSeatSelfTest(Actor* switchable) {
 	GameActivity host, client, dedicated, offline;
 	NetMatchConfig config;
 	config.peerCount = 4;
@@ -596,7 +611,22 @@ bool Activity::RunSharedSeatSelfTest() {
 	std::cout << "[shared-seat-selftest] " << (ownView ? "PASS" : "FAIL") << " restored_seat_view_is_its_own remote=" << static_cast<int>(copied.m_ViewState[0])
 	          << " local=" << static_cast<int>(copied.m_ViewState[1]) << std::endl;
 	std::cout << "[shared-seat-selftest] " << (cpuRoster && cpuOrder && cpuReset ? "PASS" : "FAIL") << " cpu_roster=" << cpuRoster << " cpu_order=" << cpuOrder << " cpu_reset=" << cpuReset << std::endl;
-	return passed && rebound && ownView && cpuRoster && cpuOrder && cpuReset;
+	// A script switches the client's seat on the host too (the host does not present it): the host writes the same team the
+	// client does, and presents nothing.
+	bool remoteSwitch = false;
+	if (!switchable) std::cout << "[shared-seat-selftest] FAIL remote_seat_switch_writes_the_team no actor to switch" << std::endl;
+	if (switchable) {
+		const int before = switchable->GetTeam();
+		const int other = before == Teams::TeamTwo ? Teams::TeamThree : Teams::TeamTwo;
+		const Controller::InputMode mode = switchable->GetController()->GetInputMode();
+		const bool presented = host.SwitchToActor(switchable, 1, other);
+		const int hostTeam = switchable->GetTeam();
+		switchable->SetTeam(before);
+		remoteSwitch = !presented && hostTeam == other && switchable->GetController()->GetInputMode() == mode && !host.m_ControlledActor[1];
+		std::cout << "[shared-seat-selftest] " << (remoteSwitch ? "PASS" : "FAIL") << " remote_seat_switch_writes_the_team team=" << hostTeam << " expected=" << other
+		          << " presented=" << presented << std::endl;
+	}
+	return passed && rebound && ownView && cpuRoster && cpuOrder && cpuReset && remoteSwitch;
 }
 
 bool Activity::DeactivatePlayer(int playerToDeactivate) {
@@ -1255,7 +1285,19 @@ void Activity::NoteLockstepControlBinding(int64_t uid, int player) {
 }
 
 bool Activity::SwitchToActor(Actor* actor, int player, int team) {
-	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || !IsLocalHumanSeat(player)) {
+	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount) {
+		return false;
+	}
+	// Every peer of a shared roster runs the script that switches a seat, whichever machine presents it, so the team the
+	// switch hands the actor is written on every peer from what they all hold (Void Wanderers hands each seat's brain to
+	// its team this way).
+	const bool sharedTeamWrite = m_SharedPlayerSeats && IsHumanSeat(player);
+	if (sharedTeamWrite && actor && g_MovableMan.IsActor(actor) && actor->IsPlayerControllable() && actor->GetTeam() != team &&
+	    !(actor != m_Brain[player] && actor->GetController()->IsPlayerControlled()) &&
+	    !((!m_SharedPlayerSeats || actor != m_Brain[player]) && IsOtherPlayerBrain(actor, player))) {
+		actor->SetTeam(team);
+	}
+	if (!IsLocalHumanSeat(player)) {
 		return false;
 	}
 	if (!actor || !g_MovableMan.IsActor(actor) || !actor->IsPlayerControllable()) {
@@ -1273,7 +1315,7 @@ bool Activity::SwitchToActor(Actor* actor, int player, int team) {
 	}
 
 	m_ControlledActor[player] = actor;
-	if (m_ControlledActor[player]->GetTeam() != team) {
+	if (!sharedTeamWrite && m_ControlledActor[player]->GetTeam() != team) {
 		m_ControlledActor[player]->SetTeam(team);
 	}
 	m_ControlledActor[player]->SetControllerMode(Controller::CIM_PLAYER, player);
