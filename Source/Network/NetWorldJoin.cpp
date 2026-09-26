@@ -963,6 +963,11 @@ namespace RTE {
 
 	bool NetWorldFrameLog::JournalFailed() const { return m_Journal && m_Journal->failed; }
 
+	size_t NetWorldFrameLog::RingFrames(uint32_t boundTicks, uint32_t delayMarginFrames, uint64_t captureIntervalMs, double tickMs) {
+		const double tick = std::isfinite(tickMs) && tickMs > 0 ? tickMs : 1000.0 / 60.0;
+		return static_cast<size_t>(boundTicks) + delayMarginFrames + static_cast<size_t>(std::ceil(static_cast<double>(captureIntervalMs) / tick));
+	}
+
 	void NetWorldFrameLog::Configure(size_t maxFrames, uint64_t maxBytes) {
 		m_MaxFrames = maxFrames == 0 ? c_DefaultMaxFrames : maxFrames;
 		m_MaxBytes = maxBytes == 0 ? c_DefaultMaxBytes : maxBytes;
@@ -995,21 +1000,6 @@ namespace RTE {
 			m_Records.pop_front();
 			++m_Evicted;
 		}
-	}
-
-	bool NetWorldFrameLog::AppendEncoded(uint64_t frame, const std::vector<uint8_t>& bytes, std::string* error) {
-		if (!m_Records.empty() && frame != m_Records.back().frame + 1) {
-			if (error) *error = "the committed tail cannot skip from frame " + std::to_string(m_Records.back().frame) + " to " + std::to_string(frame);
-			return false;
-		}
-		if (m_Journal && m_Journal->Append(frame, bytes)) {
-			if (m_JournalFirst == 0) m_JournalFirst = frame;
-			m_JournalLast = frame;
-		}
-		m_Bytes += bytes.size();
-		m_Records.push_back({frame, bytes});
-		Trim();
-		return true;
 	}
 
 	uint64_t NetWorldFrameLog::FirstServableFrame() const {
@@ -1050,6 +1040,14 @@ namespace RTE {
 			m_Bytes -= m_Records.front().bytes.size();
 			m_Records.pop_front();
 		}
+	}
+
+	bool NetWorldFrameLog::AdoptRecords(const NetWorldFrameLog& other) {
+		if (!m_Records.empty()) return false;
+		m_Records = other.m_Records;
+		m_Bytes = other.m_Bytes;
+		Trim();
+		return true;
 	}
 
 	void NetWorldFrameLog::Clear() {

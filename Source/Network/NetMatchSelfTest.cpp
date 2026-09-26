@@ -13730,7 +13730,6 @@ namespace RTE {
 		};
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
 		row(&TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay, "a_rejoin_walks_its_phases_and_the_goodbye_ends_its_tail_replay");
-		row(&NetCommittedTailRing::SelfTest, "the_committed_tail_ring_serves_the_hosts_record");
 		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);

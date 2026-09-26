@@ -56,12 +56,12 @@ observe assert_label TextHostNetSlowBound 4
 observe combo_select ComboHostNetSlowPolicy Pause for them (up to 20 s)
 wait_ms 500
 observe assert_label ComboHostNetSlowPolicy Pause for them
-observe combo_select ComboHostNetSlowPolicy Hand the seat to the AI and let them rejoin
+observe combo_select ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up
 focus TextHostNetSlowBound
 observe set_text TextHostNetSlowBound 3
 wait_ms 500
 observe assert_label TextHostNetSlowBound 3
-observe assert_label ComboHostNetSlowPolicy Hand the seat to the AI
+observe assert_label ComboHostNetSlowPolicy Give the seat to the AI
 video_mark ui-visibility
 wait_ms 825
 observe assert_visible CollectionBoxHostPageNetwork 1

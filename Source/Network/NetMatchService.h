@@ -16,7 +16,6 @@
 #include "NetResyncState.h"
 #include "ActivityMan.h"
 #include "NetWorldJoin.h"
-#include "NetCommittedTailRing.h"
 #include "Singleton.h"
 
 #include <algorithm>
@@ -946,8 +945,6 @@ namespace RTE {
 		bool DriveInPlaceMoveLocked(uint64_t nowMs);
 		/// Held client: at the frame the round changed hands, the replay goes on under the authority that committed it.
 		bool CrossReplayHandoverLocked(std::string* error);
-		/// Every peer: records the committed frame of this tick in its own tail ring.
-		void RecordCommittedTail(uint64_t tick);
 		/// Client: its lobby speaks to this host on this connection, silent until asked: it carries a held return's reports and tail.
 		bool BindClientLobbyToHostLocked(INetTransport& wire, uint8_t hostPeerId, NetPeerId hostLink, uint64_t startFrame);
 		/// Held client: its host is gone and nobody else is left, so it plays the round on from its own committed state with the
@@ -1511,6 +1508,8 @@ namespace RTE {
 		bool m_HostLobbyBeaconed = false;
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
+		NetWorldFrameLog m_CommittedRing; //!< A peer with no tail of its own keeps the round's committed frames, so as a successor it serves a held seat in place.
+		uint64_t m_CommittedRingRound = 0; //!< The round the record is of; it is kept from that round's first bounded tick to its end.
 		int64_t m_WorldSpectatorsFree = 0; //!< The world's free watcher count, published for the directory row.
 		// A capture the simulation queued and whose verdict the writer thread has not given yet.
 		struct AwaitedAutosave { uint64_t tick = 0; bool joinCapture = false; };
@@ -1551,7 +1550,6 @@ namespace RTE {
 		uint64_t m_InPlaceHeardMs = 0;   //!< When its tail last moved.
 		uint64_t m_InPlaceProgressApplied = 0;
 		static constexpr uint64_t c_InPlaceHostSilenceMs = 3000; //!< A host that feeds a held seat nothing this long is gone.
-		NetCommittedTailRing m_TailRing; //!< Every peer: the round's latest committed frames, which it serves held seats from if it takes the round over.
 		uint64_t m_HandoverFrame = 0; //!< The first frame the round committed under the authority that took it over here; 0 before a handover.
 		struct InPlaceRoute {
 			uint8_t peerId = 0;
