@@ -624,6 +624,8 @@ namespace RTE {
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 		void PreparePrivateRejoinCheckpoint();
+		/// Host: the lockstep state a returning seat's base carries beside its archive, read at the base's own tick.
+		bool ReadPrivateBaseLocked(uint64_t tick, NetWorldCheckpointImage& image, std::string* error);
 		/// Host: a returning seat is waiting and the private base it would load is missing, abandoned or older than one capture interval.
 		bool PrivateBaseWantedLocked(uint64_t nowMs) const;
 		/// Whether a private base taken earlier is due again, for a seat held now or one returned after the base was taken.
@@ -1214,6 +1216,21 @@ namespace RTE {
 		std::string m_SceneModule;
 		std::thread m_Worker;
 		std::jthread m_SnapshotLoadKeepalive;
+		/// Host: the round's liveness ack, sent from off the simulation thread while that thread is busy, so a park of any length reads
+		/// as a busy host, never a gone one. The session pump arms it every tick and it is disarmed around every transport change.
+		struct HostLiveness {
+			INetTransport* wire = nullptr;
+			std::vector<NetPeerId> targets;
+			std::vector<uint8_t> bytes;
+			NetTransportLane lane = NetTransportLane::InputUnreliable;
+			uint64_t pumpMs = 0, tickMs = 17, sentMs = 0, busyLimitMs = 0;
+			uint64_t sentWhileBusy = 0;
+		};
+		std::mutex m_LivenessMutex;
+		HostLiveness m_Liveness;
+		std::jthread m_LivenessThread;
+		void ArmHostLivenessLocked();
+		void DisarmHostLiveness();
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveTicks{0};
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveWindowTicks{0};
 		bool m_WorkerDone = false;
@@ -1529,6 +1546,9 @@ namespace RTE {
 			std::string error;
 		};
 		std::future<PrivateJoinImage> m_PrivateImageTask;
+		bool m_PrivateBaseRequested = false; //!< Host: a returning seat's base is asked of the checkpoint schedule, which names its tick.
+		uint64_t m_PrivateBaseTick = 0; //!< Host: the announced tick the base was taken at; its metadata is read at that tick's end.
+		std::optional<NetWorldCheckpointImage> m_PrivateBasePending; //!< Host: the base read at its tick, waiting for its archive's writer.
 		uint64_t m_PrivateImageRound = 0;
 		uint64_t m_PrivateImageStaleFrom = 0; //!< Host: the frame a rejoin finished on; the base is older than play from here.
 		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last captured; the cadence is measured from it.

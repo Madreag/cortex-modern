@@ -433,7 +433,6 @@ namespace RTE {
 		std::function<void(const NetMatchConfig&)> publishLiveConfig;
 		bool substituteSlowPeers = false;
 		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
-		uint32_t authorityKeepaliveMs = 0; //!< How often the host's session talks while its simulation is busy with its own work.
 		// Service matches wait for every peer's measured activity startup before the agreed first frame.
 		bool requirePublishedStart = false;
 	};
@@ -941,7 +940,11 @@ namespace RTE {
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatHoldGap(uint64_t frame) const { for (const auto& [peer, hold]: m_AiHeldSeats) if (IsSeatHoldGap(peer, frame)) return true; return false; }
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
-		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
+		bool HasSeatReclaimGap(uint64_t frame) const {
+			for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true;
+			for (const auto& [peer, gap]: m_RetiredReclaimGaps) if (frame >= gap.first && frame <= gap.second) return true;
+			return false;
+		}
 		/// A seat the AI holds for its returner. A released seat stays under the AI but no longer waits for anyone.
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId) && !m_ReleasedAiSeats.contains(peerId); }
 		bool AnyHeldAISeat() const { return std::any_of(m_AiHeldSeats.begin(), m_AiHeldSeats.end(), [&](const auto& seat) { return !m_ReleasedAiSeats.contains(seat.first); }); }
@@ -1507,6 +1510,7 @@ namespace RTE {
 		uint64_t m_LivenessQuietSinceMs = 0; //!< Host: since when it has sent no frame of its own.
 		uint32_t m_AnnouncedCaptureEvery = 0; //!< Period of the captures every peer takes; 0 when there are none.
 		bool m_AwaitingReplayedSeatState = false; //!< A round joined from a replayed tail: no commit until that tail's seat changes are taken.
+		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_RetiredReclaimGaps; //!< A return's neutral gap that still covers frames before the hold that ended it.
 		std::set<uint64_t> m_AnnouncedCaptureTicks; //!< Named captures every peer takes at the end of these ticks.
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
