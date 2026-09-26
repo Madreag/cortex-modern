@@ -4890,6 +4890,20 @@ namespace RTE {
 		stats.reclaimAdmittedMs = std::max(stats.reclaimAdmittedMs, nowMs);
 	}
 
+	void NetLockstepCoordinator::NoteAnnouncedCapture(uint64_t tick) {
+		m_AnnouncedCaptureTicks.insert(tick);
+		while (m_AnnouncedCaptureTicks.size() > 64) m_AnnouncedCaptureTicks.erase(m_AnnouncedCaptureTicks.begin());
+	}
+
+	bool NetLockstepCoordinator::HostBusyWithAnnouncedCapture(uint64_t frame) const {
+		// The host's first input after a capture at the end of tick T is the one it produces simulating T + 1, which targets a delay later.
+		const uint64_t delay = InputDelayAt(GetHostPeerId(), frame);
+		const auto covers = [&](uint64_t tick) { return tick < frame && frame <= tick + delay + 2; };
+		if (m_AnnouncedCaptureEvery > 0 && frame > 1 && covers((frame - 1) / m_AnnouncedCaptureEvery * m_AnnouncedCaptureEvery)) return true;
+		const auto after = m_AnnouncedCaptureTicks.lower_bound(frame > delay + 2 ? frame - delay - 2 : 0);
+		return after != m_AnnouncedCaptureTicks.end() && covers(*after);
+	}
+
 	void NetLockstepCoordinator::NoteInPlaceReturn(uint8_t peerId) {
 		if (!m_AiHeldSeats.contains(peerId)) return;
 		m_Stats.peers[peerId].startParkMs = 0;
@@ -6116,6 +6130,7 @@ namespace RTE {
 				return false;
 			}
 		}
+		if (!recovery) ++m_OwnFramesSent;
 		m_PendingObservations = std::move(nextPendingObservations);
 		m_PendingValueObservations = std::move(nextPendingValueObservations);
 		// Every peer commits what the packet carried, so the leftovers ride the next frame with their own
@@ -10109,17 +10124,13 @@ namespace RTE {
 		const bool hasRemote = m_RemoteFrames.find(m_Stats.nextFrame) != m_RemoteFrames.end();
 		const bool hasFutureLocal = m_LocalFrames.upper_bound(m_Stats.nextFrame) != m_LocalFrames.end();
 		const bool hasFutureRemote = m_RemoteFrames.upper_bound(m_Stats.nextFrame) != m_RemoteFrames.end();
-		const bool pending = hasLocal || hasRemote || hasFutureLocal || hasFutureRemote || !m_RecoveryOutgoing.empty();
-		if (!pending) {
-			return;
-		}
-		if (m_WaitingFrame != m_Stats.nextFrame) {
-			m_WaitingFrame = m_Stats.nextFrame;
-			m_WaitStartMs = nowMs;
-		}
-		// A waiting host keeps talking every tick: its clients read a silent host as a gone one, so its wait must never look like that.
-		if (m_Config.localPeerId == GetHostPeerId() && m_RelayHost && m_Transport && !m_RemoteTransports.empty() && nowMs >= m_WaitStartMs &&
-		    static_cast<double>(nowMs - m_WaitStartMs) >= m_Config.simTickMs && (nowMs < m_LastLivenessMs || static_cast<double>(nowMs - m_LastLivenessMs) >= m_Config.simTickMs)) {
+		// A waiting host keeps talking every tick: the clients of a round that elects a successor read a silent host as a gone one, so a
+		// host that has sent no frame of its own for a tick says it is alive instead.
+		const bool saysAlive = m_Config.localPeerId == GetHostPeerId() && m_RelayHost && m_Transport && !m_RemoteTransports.empty() &&
+		    !m_Config.matchConfig.successorOrder.empty() && m_Config.migrationTransportFactory;
+		if (saysAlive && (m_OwnFramesSent != m_LivenessFramesSeen || nowMs < m_LivenessQuietSinceMs)) { m_LivenessFramesSeen = m_OwnFramesSent; m_LivenessQuietSinceMs = nowMs; }
+		if (saysAlive && static_cast<double>(nowMs - m_LivenessQuietSinceMs) >= m_Config.simTickMs &&
+		    (nowMs < m_LastLivenessMs || static_cast<double>(nowMs - m_LastLivenessMs) >= m_Config.simTickMs)) {
 			m_LastLivenessMs = nowMs;
 			NetLockstepAck alive;
 			alive.senderPeerId = m_Config.localPeerId;
@@ -10127,6 +10138,14 @@ namespace RTE {
 			if (ConfiguredWindowTicks() > 1 && FrameWindowAllRemotesAdvertised()) alive.receivedMask = NetLockstepCodec::c_FrameWindowCapabilityMask;
 			std::string ignored;
 			(void)SendPacket({alive}, m_Config.frameLane, &ignored);
+		}
+		const bool pending = hasLocal || hasRemote || hasFutureLocal || hasFutureRemote || !m_RecoveryOutgoing.empty();
+		if (!pending) {
+			return;
+		}
+		if (m_WaitingFrame != m_Stats.nextFrame) {
+			m_WaitingFrame = m_Stats.nextFrame;
+			m_WaitStartMs = nowMs;
 		}
 		if (m_LastStallFrame != m_Stats.nextFrame) {
 			++m_Stats.missingFrameStalls;
@@ -10138,20 +10157,15 @@ namespace RTE {
 		}
 		const uint64_t lastAuthorityTraffic = std::max(m_WaitStartMs, m_AuthorityLastHeardMs);
 		const uint64_t silenceBoundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		// One reading and one threshold: the slow-player bound plus the jitter the host's traffic lands with. A live host talks every
-		// tick even while it waits, and its announced captures are its busy spans below.
+		// One reading and one threshold: the slow-player bound plus the jitter of the host's link. A live host talks every tick even
+		// while it waits, so a late tick of its own is not its link's jitter; its announced captures are its busy spans below.
 		uint64_t jitterMs = 0;
 		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = host->second.jitterMs;
 		if (const auto estimate = m_DelayEstimators.find(GetHostPeerId()); estimate != m_DelayEstimators.end()) jitterMs = std::max<uint64_t>(jitterMs, estimate->second.JitterMs());
-		if (const auto lateness = m_ArrivalLateness.find(GetHostPeerId()); lateness != m_ArrivalLateness.end() && !lateness->second.empty()) {
-			std::vector<uint32_t> sorted(lateness->second.begin(), lateness->second.end());
-			std::sort(sorted.begin(), sorted.end());
-			jitterMs = std::max<uint64_t>(jitterMs, sorted[std::min(sorted.size() - 1, sorted.size() * 95 / 100)]);
-		}
 		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, silenceBoundMs + jitterMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs)));
 		// A host still in its start work (no frame from it yet this round) or in a capture park it announced is busy, not gone:
 		// only its link's close or the round's timeout ends that wait.
-		const bool hostBusy = !m_PeersPlayedThisRound.contains(GetHostPeerId()) ||
+		const bool hostBusy = !m_PeersPlayedThisRound.contains(GetHostPeerId()) || HostBusyWithAnnouncedCapture(m_Stats.nextFrame) ||
 		    (m_SynchronizedCaptureStartFrame != UINT64_MAX && m_Stats.nextFrame >= m_SynchronizedCaptureStartFrame && m_Stats.nextFrame <= m_SynchronizedCaptureEndFrame + 1);
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
 		if (!hostBusy && hostSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= hostSilenceMs &&

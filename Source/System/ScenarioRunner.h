@@ -131,6 +131,8 @@ namespace RTE {
 		static const std::string& GetControllerReplayError();
 
 		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands = false);
+		/// The period of the captures every peer takes at a tick's end, handed to the round so its host is busy there, not gone.
+		static void SetLockstepAnnouncedCaptureEvery(uint32_t every);
 		static void ObserveLockstepPlayerBindings(uint8_t peer, uint64_t frame, const NetGamePlayerBindings& bindings);
 		static bool ConsumeLockstepGameCommand(const NetGameCommand& command);
 		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();
