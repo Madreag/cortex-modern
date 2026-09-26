@@ -4890,6 +4890,17 @@ namespace RTE {
 		stats.reclaimAdmittedMs = std::max(stats.reclaimAdmittedMs, nowMs);
 	}
 
+	void NetLockstepCoordinator::NoteInPlaceReturn(uint8_t peerId) {
+		if (!m_AiHeldSeats.contains(peerId)) return;
+		m_Stats.peers[peerId].startParkMs = 0;
+	}
+
+	void NetLockstepCoordinator::NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs) {
+		if (!IsReturningSeatBeforeItsFirstInput(peerId)) return;
+		auto& stats = m_Stats.peers[peerId];
+		if (stats.returnerCaughtUpMs == 0) stats.returnerCaughtUpMs = nowMs;
+	}
+
 	void NetLockstepCoordinator::NoteSeatReclaimed(uint8_t peerId) {
 		// The seat is back. What it waited while it was away is the round's record, not the reading the
 		// surfaces owe the player from here on.
@@ -5089,6 +5100,7 @@ namespace RTE {
 				m_AiHeldSeats[peer] = timing.applyFrame;
 				// The seat's lead is measured afresh once it is back; what arrived before the hold says nothing of it.
 				m_ArrivalLeads.erase(peer);
+				m_Stats.peers[peer].returnerCaughtUpMs = 0;
 				// The held seat keeps its connection: its player catches up in place on the committed tail and reclaims over it.
 				// The hold goes to it here too, since a queue flushed after its link left the round would drop it.
 				if (m_Config.localPeerId == GetHostPeerId() && m_Transport && !m_ReleaseWhenHeld.contains(peer))
@@ -5454,10 +5466,14 @@ namespace RTE {
 					// The window the seat was admitted on was sized for its restart; what its machine costs past that
 					// window is its own, so the survivors lend it the slow-player bound and no more.
 					const uint64_t restartMs = std::min<uint64_t>(peerStats.startParkMs, boundMs);
-					const uint64_t ramp = std::max<uint64_t>(windowMs, 2 * static_cast<uint64_t>(linkMs) + linkJitterMs + restartMs);
+					// A seat whose catch-up reached its reclaim frame knew that frame before the round did and has no restart left to
+					// pay: its window covers its link like any seat's, so the survivors lend it nothing more.
+					const uint64_t ramp = peerStats.returnerCaughtUpMs != 0 ? 0 : std::max<uint64_t>(windowMs, 2 * static_cast<uint64_t>(linkMs) + linkJitterMs + restartMs);
 					// The clock starts at the admission, never at a dryness that began while the seat was away.
-					const uint64_t since = nowMs - std::max(firstMissingMs, peerStats.reclaimAdmittedMs);
-					if (nowMs < peerStats.reclaimAdmittedMs || since < declarationDeadline + ramp) continue;
+					const uint64_t clockFrom = std::max({firstMissingMs, peerStats.reclaimAdmittedMs, peerStats.returnerCaughtUpMs});
+					if (nowMs < clockFrom) continue;
+					const uint64_t since = nowMs - clockFrom;
+					if (since < declarationDeadline + ramp) continue;
 					std::cout << "[net-lockstep] bound judged returning peer " << static_cast<int>(peer) << " at frame " << frame
 					          << ": since_missing=" << since << "ms deadline=" << declarationDeadline
 					          << "ms ramp=" << ramp << "ms ping=" << peerStats.pingMs << "ms link=" << linkMs << "ms jitter=" << linkJitterMs

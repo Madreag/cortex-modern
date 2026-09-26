@@ -3822,8 +3822,10 @@ static std::string ResyncSaveName() {
 				std::erase_if(m_PendingHeldReseats, [&](const auto& pending) { return pending.newOwnerPeerId == session.assignedPeerId; });
 				std::erase_if(m_PendingHeldResolutions, [&](const auto& pending) { return pending.lockstepPeerId == session.assignedPeerId; });
 			}
-			if (session.acknowledgedThrough + 1 >= session.activationTick)
+			if (session.acknowledgedThrough + 1 >= session.activationTick) {
+				m_Coordinator->NoteReturnerCaughtUp(session.assignedPeerId, NetLockstepNowMs());
 				m_WorldJoin.CompleteActivation(session.connection, session.activationTick, nullptr);
+			}
 			// A returner still replaying toward its reclaim frame is judged from its catch-up's end, not from the reclaim.
 			else if (session.lastCatchUpReportMs != 0 && nowMs >= session.lastCatchUpReportMs && nowMs - session.lastCatchUpReportMs < c_ReturnerReportGapMs)
 				m_Coordinator->NoteReturnerCatchingUp(session.assignedPeerId, NetLockstepNowMs());
@@ -4593,6 +4595,7 @@ static std::string ResyncSaveName() {
 		const uint32_t returning = hold->second.seatIncarnation + 1;
 		if (error.empty() && m_WorldJoin.BeginInPlaceRejoin(connection, seat, member, returning, link->displayName, nowMs, heldThrough, &error)) {
 			m_InPlaceIncarnationBumps[member] = returning > incarnation ? returning - incarnation : 0;
+			m_Coordinator->NoteInPlaceReturn(member);
 			(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, connection, nullptr);
 			if (const NetWorldJoinSession* opened = m_WorldJoin.FindSession(connection)) SendWorldJoinTailTo(m_Runner->GetLobbySession(), m_WorldJoin, *opened);
 			std::ostringstream line;
