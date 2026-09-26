@@ -1386,6 +1386,7 @@ Field(path + ".RandomGenerator.m_RNG", object.m_RNG);
 Field(path + ".RandomGenerator.m_Seed", object.m_Seed);
 Field(path + ".RandomGenerator.m_DrawCount", object.m_DrawCount);
 Field(path + ".RandomGenerator.m_TraceDraws", object.m_TraceDraws);
+Field(path + ".RandomGenerator.m_SeedPending", object.m_SeedPending);
 }
 void Visit(const Round& object, const std::string& path) {
 Visit(static_cast<const Entity&>(object), path);
