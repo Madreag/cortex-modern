@@ -12,6 +12,11 @@
 # include <iterator>
 # include <utility>
 
+extern "C"
+{
+    #include "luajit.h"
+}
+
 namespace luabind { namespace detail {
 
 template <class Container, bool Owned>
@@ -108,6 +113,9 @@ int make_range(lua_State* L, Container& container)
     if (lua_isnil(L, -1))
     {
         lua_pop(L, 1);
+        // A state makes this the first time it iterates the type, which a peer restored from an image does later
+        // than the peer that saved it, so it takes no birth number from the state's sequence.
+        const uint64_t births = luaJIT_state_serial(L);
         lua_newtable(L);
         lua_pushcfunction(L, range_type::destroy);
         lua_setfield(L, -2, "__gc");
@@ -118,6 +126,7 @@ int make_range(lua_State* L, Container& container)
         lua_pushlightuserdata(L, &metatable_key);
         lua_pushvalue(L, -2);
         lua_rawset(L, LUA_REGISTRYINDEX);
+        luaJIT_set_state_serial(L, births);
     }
     lua_setmetatable(L, -2);
     if (is_class_object(L, 1)) lua_pushvalue(L, 1);
