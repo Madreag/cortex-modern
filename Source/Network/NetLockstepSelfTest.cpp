@@ -2543,7 +2543,7 @@ namespace RTE {
 			config.matchConfig.successorOrder = {3, 2};
 			if (!replay.StartReplay(transport, config, error)) return false;
 			const std::vector<std::vector<NetGameCommand>> frames = {
-				{{1, NetGameSeatHold{1, 0, 1, 1, 10}}}, {{1, NetGameSeatReclaim{1, 0, 2, 1, 11, 4, 12}}}, {}, {{1, NetGameSeatHold{1, 0, 3, 1, 13}}}};
+				{{1, NetGameSeatHold{1, 0, 1, 1, 10}}}, {{1, NetGameSeatReclaim{1, 0, 2, 1, 11, 4, 12}}}, {{1, NetGameSeatHold{3, 0, 4, 1, 12}}}, {{1, NetGameSeatHold{1, 0, 3, 1, 13}}}};
 			std::string seen;
 			for (uint64_t index = 0; index < frames.size(); ++index) {
 				NetLockstepReadyFrame ready;
