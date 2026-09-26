@@ -377,7 +377,7 @@ static bool RunPoolScopeTickSelfTest() {
 	std::shared_future<void> moved = clockMoved.get_future().share();
 	std::future<float> drawn = g_ThreadMan.GetPriorityThreadPool().submit([moved, uniqueID, phase, launchTick] {
 		moved.wait();
-		DeterministicMORNGScope scope(uniqueID, phase, true);
+		DeterministicMORNGScope scope(uniqueID, phase, launchTick, true);
 		return RandomNum<float>();
 	});
 	g_TimerMan.GrantSimUpdates(1);

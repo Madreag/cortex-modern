@@ -903,8 +903,9 @@ namespace RTE {
 		/// Applies the saved wire-applied controller mode; runs after the activity's AI setup so it can't be overwritten.
 		void ApplyPersistedControllerMode();
 
-		/// Cast see rays for this actor.
-		void CastSeeRays();
+		/// Cast see rays for this actor. They run on the thread pool past the tick that launched them, so they seed from that tick.
+		/// @param launchTick The sim tick that launched the pass.
+		void CastSeeRays(uint64_t launchTick);
 
 		/// Updates the full state of this object in one call. (PreControllerUpdate(), Controller::Update(), and Update())
 		virtual void FullUpdate() override;
