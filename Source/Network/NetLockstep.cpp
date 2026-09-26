@@ -9874,7 +9874,12 @@ namespace RTE {
 				continue;
 			}
 			const auto heardIt = m_PeerLastHeardMs.find(peerId);
-			if (heardIt == m_PeerLastHeardMs.end() || nowMs < heardIt->second || nowMs - heardIt->second < budget) {
+			if (heardIt == m_PeerLastHeardMs.end()) {
+				continue;
+			}
+			// A returning seat sent nothing while it was away: its silence runs from its admission, and its ramp judges it before that.
+			const uint64_t heardMs = std::max(heardIt->second, m_Stats.peers[peerId].reclaimAdmittedMs);
+			if (nowMs < heardMs || nowMs - heardMs < budget) {
 				continue;
 			}
 			silent.push_back(peerId);
