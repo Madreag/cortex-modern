@@ -3,6 +3,7 @@
 #include "MenuMan.h"
 #include "MainMenuGUI.h"
 #include "NetModerationGUI.h"
+#include "NetHostOptionsText.h"
 #include "NetPlayerPresentation.h"
 
 #include "GUI.h"
@@ -1025,6 +1026,36 @@ namespace RTE::MenuAutomation {
 			check("draw_record_outside_pass_uses_window", PanelDrawnInLatestPass(&loose, c_DrawWindowSeconds), age);
 			ClearPanelDrawRecord();
 			check("draw_record_cleared", !PanelDrawnInLatestPass(&shown, c_DrawWindowSeconds) && PanelDrawAgeMs(&shown) < 0, age);
+		}
+		{
+			// The option pages' hints say what a late player, a checkpoint and a route choice do, the host included.
+			const double tickMs = 1000.0 / 60.0;
+			const auto same = [&check](const char* label, const std::string& actual, const std::string& expected) {
+				check(label, actual == expected, "\"" + actual + "\"");
+			};
+			same("hint_policy_substitute", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute), "Give the seat to the AI (host too) until they catch up");
+			same("hint_policy_pause", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Pause), "Pause for them (up to 20 s)");
+			same("hint_bound_substitute", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 3, tickMs),
+			     "A player late past 3 ticks (50 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.");
+			same("hint_bound_one_tick", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 1, tickMs),
+			     "A player late past 1 tick (17 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.");
+			same("hint_bound_pause", NetSlowPlayerHint(NetSlowPlayerPolicy::Pause, 3, tickMs), "Everyone waits for a late player, host included, for up to 20 s.");
+			same("hint_auto_delay", NetAutoDelayText(3), "ping plus a 3-tick margin, raised live if inputs arrive late");
+			same("hint_autosave_range", NetAutosaveRangeHint(), "Every 60 s to 60 min, or off (default)");
+			same("hint_autosave_note", NetAutosaveNote(), "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.");
+			same("hint_connection_automatic", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::Automatic), "Direct first: lowest latency; relay adds a round trip if direct fails.");
+			same("hint_connection_direct", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::DirectOnly), "Direct only: lowest latency; fails when routers block a direct route.");
+			same("hint_connection_relay", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::RelayOnly), "Relay only: every packet uses the relay and adds its round trip.");
+			NetMatchConfig config;
+			config.delayPolicy = NetMatchDelayPolicy::Auto;
+			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+			config.slowPlayerBoundTicks = 3;
+			NetLobbySnapshot snapshot;
+			snapshot.inputDelayText = "Input delay: 4 (auto, 50ms ping)";
+			const std::string summary = NetHostOptionsSummary(config, snapshot);
+			check("hint_summary_policy", summary.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, summary);
+			check("hint_summary_delay", summary.find("\nInput delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n") != std::string::npos, summary);
+			check("hint_summary_no_rejoin", summary.find("rejoin") == std::string::npos, summary);
 		}
 		std::cout << "[menu-automation-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed;

@@ -1504,6 +1504,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostNetPolicyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetPolicy"));
 	m_HostNetSlowPolicyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetSlowPolicy"));
 	m_HostNetSlowBoundBox = dynamic_cast<GUITextBox*>(get("TextHostNetSlowBound"));
+	m_HostNetSlowPolicyHintLabel = dynamic_cast<GUILabel*>(get("LabelHostNetSlowPolicyHint"));
 	m_HostNetRedundancyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetRedundancy"));
 	m_HostNetMinDelayBox = dynamic_cast<GUITextBox*>(get("TextHostNetMinDelay"));
 	m_HostNetEffectiveLabel = dynamic_cast<GUILabel*>(get("LabelHostNetEffective"));
@@ -1528,6 +1529,13 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	if (m_HostRelayBoxes[2]) m_HostRelayBoxes[2]->SetPasswordMask(true);
 	if (m_HostRelayHint) m_HostRelayHint->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	if (m_HostNetModeLabel) m_HostNetModeLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	if (m_HostNetEffectiveLabel) m_HostNetEffectiveLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	if (m_HostNetSlowPolicyHintLabel) m_HostNetSlowPolicyHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	if (auto* rangeHint = dynamic_cast<GUILabel*>(get("LabelHostRecAutosaveHint"))) rangeHint->SetText(NetAutosaveRangeHint());
+	if (auto* autosaveNote = dynamic_cast<GUILabel*>(get("LabelHostRecAutosaveNote"))) {
+		autosaveNote->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+		autosaveNote->SetText(NetAutosaveNote());
+	}
 	if (m_HostNetIceHintLabel) {
 		m_HostNetIceHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	}
@@ -1625,8 +1633,8 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	}
 	if (m_HostNetSlowPolicyCombo) {
 		m_HostNetSlowPolicyCombo->ClearList();
-		m_HostNetSlowPolicyCombo->AddItem("Give the seat to the AI (host too) until they catch up");
-		m_HostNetSlowPolicyCombo->AddItem("Pause for them (up to 20 s)");
+		m_HostNetSlowPolicyCombo->AddItem(NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute));
+		m_HostNetSlowPolicyCombo->AddItem(NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Pause));
 	}
 	if (m_HostNetSlowBoundBox) {
 		m_HostNetSlowBoundBox->SetNumericOnly(true);
@@ -2005,15 +2013,20 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSelectComboIndex(m_HostNetPolicyCombo, m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed ? 1 : 0);
 	HostOptSelectComboIndex(m_HostNetSlowPolicyCombo, m_HostOptionsDraft.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? 1 : 0);
 	if (m_HostNetSlowBoundBox && !HostOptBoxFocused(m_HostNetSlowBoundBox)) m_HostNetSlowBoundBox->SetText(std::to_string(m_HostOptionsDraft.slowPlayerBoundTicks));
+	if (m_HostNetSlowPolicyHintLabel) {
+		m_HostNetSlowPolicyHintLabel->SetText(NetSlowPlayerHint(m_HostOptionsDraft.slowPlayerPolicy, m_HostOptionsDraft.slowPlayerBoundTicks, g_TimerMan.GetDeltaTimeMS()));
+	}
 	HostOptSelectComboIndex(m_HostNetRedundancyCombo, m_HostOptionsDraft.frameRedundancyTicks - 1);
 	if (m_HostNetMinDelayBox && !HostOptBoxFocused(m_HostNetMinDelayBox)) {
 		m_HostNetMinDelayBox->SetText(std::to_string(m_HostOptionsDraft.inputDelayFrames));
 	}
 	if (m_HostNetEffectiveLabel) {
-		// H22: the floor in ticks and in milliseconds, then the announced per-sender figure.
-		std::string effective = "Effective delay: " + std::to_string(m_HostOptionsDraft.inputDelayFrames) + " ticks (" +
-		                        std::to_string(static_cast<int>(m_HostOptionsDraft.inputDelayFrames * g_TimerMan.GetDeltaTimeMS())) + " ms)";
-		if (m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto) effective += " (auto, re-sized live from ping)";
+		// H22: what an automatic delay adds, then the floor in ticks and milliseconds and the announced per-sender figure.
+		const std::string floor = std::to_string(m_HostOptionsDraft.inputDelayFrames) + " ticks (" +
+		                          std::to_string(static_cast<int>(m_HostOptionsDraft.inputDelayFrames * g_TimerMan.GetDeltaTimeMS())) + " ms)";
+		std::string effective = m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto
+		                            ? "Effective delay: " + NetAutoDelayText(m_HostOptionsDraft.slowPlayerBoundTicks) + ", at least " + floor
+		                            : "Effective delay: " + floor;
 		if (!snapshot.inputDelayText.empty()) effective += " - " + snapshot.inputDelayText;
 		m_HostNetEffectiveLabel->SetText(effective);
 	}

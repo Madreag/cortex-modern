@@ -2,6 +2,7 @@
 #include "SettingsMan.h"
 #include "NetMatchConfig.h"
 #include "NetMatchService.h"
+#include "NetHostOptionsText.h"
 #include "NetReconnectUx.h"
 #include "NetLockstep.h"
 #include "TelemetryBundle.h"
@@ -287,8 +288,7 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_DirUrlTextbox->SetText(g_SettingsMan.GetSessionDirectoryUrl());
 	m_DirPinTextbox->SetText(g_SettingsMan.GetSessionDirectoryCertSha256());
 	m_ConnectionCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkConnectionMode()));
-	static const char* hints[] = {"Direct first: lowest latency; relay adds a round trip if direct fails.", "Direct only: lowest latency; fails when routers block a direct route.", "Relay only: every packet uses the relay and adds its round trip."};
-	m_ConnectionHint->SetText(hints[static_cast<int>(g_SettingsMan.GetNetworkConnectionMode())]);
+	m_ConnectionHint->SetText(NetConnectionModeHint(g_SettingsMan.GetNetworkConnectionMode()));
 	m_StunServersTextbox->SetText(g_SettingsMan.GetNetworkStunServersSetting());
 	m_StunServersTextbox->SetCursorPos(static_cast<int>(m_StunServersTextbox->GetText().size()));
 	m_RelayAddressTextbox->SetText(g_SettingsMan.GetNetworkPlayerTurnServers());
