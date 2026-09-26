@@ -5604,6 +5604,12 @@ namespace RTE {
 		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
 		m_PeerAdmissions[peer] = reclaim.applyFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
 		    PeerAdmission{reclaim.applyFrame, reclaim.delayFrames};
+		// The seat state this round started from may still hold the seat; the return ends that hold here, as the frame that
+		// carried it did on every peer that simulated it, or our first frame would hand the returned seat to the AI again.
+		m_AiHeldSeats.erase(peer); m_HoldTransactions.erase(peer); m_ReleasedAiSeats.erase(peer);
+		m_PeerLeaveFrames.erase(peer); m_PeerFrameWaivers.erase(peer);
+		m_DroppedSeats.erase(peer); m_LeftSeatsHeld.erase(peer); m_DroppedAtMs.erase(peer);
+		m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Reclaimed;
 		// The host may have answered our start before this return: the decision stands in for the start it will not repeat.
 		m_RemoteStartsReceived.insert(peer);
 	}
