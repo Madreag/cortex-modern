@@ -1977,8 +1977,22 @@ void MovableMan::RegisterObject(MovableObject* mo) {
 	}
 
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
-	m_KnownObjects[mo->GetUniqueID()] = mo;
+	// Register and unregister keep the address index current; every other change leaves it to be rebuilt.
+	const bool indexed = m_KnownAddressesVersion == m_KnownObjectsVersion.load();
+	auto [entry, inserted] = m_KnownObjects.try_emplace(mo->GetUniqueID(), mo);
+	if (!inserted) {
+		if (indexed) ForgetKnownAddress(entry->second);
+		entry->second = mo;
+	}
+	if (indexed) ++m_KnownAddresses[mo];
 	++m_KnownObjectsVersion;
+	if (indexed) m_KnownAddressesVersion = m_KnownObjectsVersion.load();
+}
+
+void MovableMan::ForgetKnownAddress(const MovableObject* mo) {
+	if (auto address = m_KnownAddresses.find(mo); address != m_KnownAddresses.end() && --address->second == 0) {
+		m_KnownAddresses.erase(address);
+	}
 }
 
 void MovableMan::UnregisterObject(MovableObject* mo) {
@@ -1990,8 +2004,11 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 	// Only drop the entry this object owns; an off-world snapshot clone shares its UniqueID with the live resident.
 	auto entry = m_KnownObjects.find(mo->GetUniqueID());
 	if (entry != m_KnownObjects.end() && entry->second == mo) {
+		const bool indexed = m_KnownAddressesVersion == m_KnownObjectsVersion.load();
 		m_KnownObjects.erase(entry);
+		if (indexed) ForgetKnownAddress(mo);
 		++m_KnownObjectsVersion;
+		if (indexed) m_KnownAddressesVersion = m_KnownObjectsVersion.load();
 	}
 }
 
@@ -2807,12 +2824,14 @@ bool MovableMan::IsKnownObject(const MovableObject* object) {
 		return std::binary_search(scope->m_ByAddress.begin(), scope->m_ByAddress.end(), object);
 	}
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
-	for (const auto& [uid, known]: m_KnownObjects) {
-		if (known == object) {
-			return true;
+	if (m_KnownAddressesVersion != m_KnownObjectsVersion.load()) {
+		m_KnownAddresses.clear();
+		for (const auto& [uid, known]: m_KnownObjects) {
+			++m_KnownAddresses[known];
 		}
+		m_KnownAddressesVersion = m_KnownObjectsVersion.load();
 	}
-	return false;
+	return m_KnownAddresses.contains(object);
 }
 
 std::string MovableMan::DescribeLuaIdentity() const {
