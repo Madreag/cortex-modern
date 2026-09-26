@@ -1,4 +1,8 @@
 #include "Serializable.h"
+#include "CaptureSentinel.h"
+#include "Entity.h"
+
+#include <optional>
 
 namespace RTE {
 
@@ -42,7 +46,28 @@ namespace RTE {
 		return reader;
 	}
 
+	namespace {
+		thread_local int t_TracedDepth = 0;
+		// A nested object's write, timed while a capture trace runs and the nesting is shallow enough.
+		struct TracedWrite {
+			std::optional<CaptureTrace::Span> span;
+			bool counted = false;
+			explicit TracedWrite(const Serializable& operand) {
+				if (!CaptureTrace::Active()) return;
+				counted = true;
+				if (++t_TracedDepth > CaptureTrace::ObjectDepth()) return;
+				const auto* entity = dynamic_cast<const Entity*>(&operand);
+				span.emplace("obj", std::to_string(t_TracedDepth) + ":" + operand.GetClassName() + ":" + (entity ? entity->GetPresetName() : std::string()));
+			}
+			~TracedWrite() {
+				span.reset();
+				if (counted) --t_TracedDepth;
+			}
+		};
+	} // namespace
+
 	Writer& operator<<(Writer& writer, const Serializable& operand) {
+		TracedWrite traced(operand);
 		operand.Save(writer);
 		writer.ObjectEnd();
 		return writer;
@@ -50,6 +75,7 @@ namespace RTE {
 
 	Writer& operator<<(Writer& writer, const Serializable* operand) {
 		if (operand) {
+			TracedWrite traced(*operand);
 			operand->Save(writer);
 			writer.ObjectEnd();
 		} else {

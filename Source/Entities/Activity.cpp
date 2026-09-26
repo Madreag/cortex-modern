@@ -1,6 +1,7 @@
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
 #include "Activity.h"
+#include "CaptureSentinel.h"
 #include "GameActivity.h"
 
 #include "CameraMan.h"
@@ -284,7 +285,10 @@ int Activity::ReadProperty(const std::string_view& propName, Reader& reader) {
 
 int Activity::Save(Writer& writer) const {
 	Entity::Save(writer);
-	if (writer.IsSnapshot()) writer.NewPropertyWithValue("SpecialBehaviour_RuntimeCheckpoint", CheckpointWriter::Native([&] { return m_PendingRuntimeCheckpoint.empty() ? SaveCheckpoint() : m_PendingRuntimeCheckpoint; }).Base64(true));
+	if (writer.IsSnapshot()) {
+		CaptureTrace::Span span("activity_runtime");
+		writer.NewPropertyWithValue("SpecialBehaviour_RuntimeCheckpoint", CheckpointWriter::Native([&] { return m_PendingRuntimeCheckpoint.empty() ? SaveCheckpoint() : m_PendingRuntimeCheckpoint; }).Base64(true));
+	}
 
 	writer.NewProperty("Description");
 	writer << m_Description;

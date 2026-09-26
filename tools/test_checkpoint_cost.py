@@ -67,15 +67,19 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=49520)
     parser.add_argument("--score-existing", action="store_true")
     parser.add_argument("--lua-states", type=int, help="override the engine's default Lua state count on both peers")
+    parser.add_argument("--objects", type=int, default=0, help="pinned scripted objects the match arm's scene starts with")
+    parser.add_argument("--trace", type=int, default=0, help="CCCP_CHECKPOINT_TRACE for both peers: each capture's spans, nested writes to this depth")
     options = parser.parse_args()
     os.environ["CCCP_HEADLESS"] = "1"
     os.environ["CCCP_CHECKPOINT_SPLIT"] = "1"
+    if options.trace:
+        os.environ["CCCP_CHECKPOINT_TRACE"] = str(options.trace)
     root = options.out.resolve()
     if not options.score_existing:
         root.mkdir(parents=True, exist_ok=False)
     with engine_executable(options.repo).open("rb") as stream:
         digest = file_sha256(stream)
-    result = {"exe_sha256": digest, "budget_ms": BUDGET_MS, "ticks": 600, "lua_states": options.lua_states, "arms": {}}
+    result = {"exe_sha256": digest, "budget_ms": BUDGET_MS, "ticks": 600, "lua_states": options.lua_states, "objects": options.objects, "arms": {}}
     extra = {who: ["-num-lua-states", str(options.lua_states)] for who in ("host", "client")} if options.lua_states else {}
     for index, arm in enumerate(("match", "world") if options.arm == "all" else (options.arm,)):
         directory = root / arm
@@ -85,7 +89,7 @@ def main() -> int:
                            for who in ("host", "client")}
                 result["exe_sha256"] = records["host"].get("exe_sha256")
             elif arm == "match":
-                records = run_pair(options.repo, directory, options.port + 2 * index, 600, 1, extra)
+                records = run_pair(options.repo, directory, options.port + 2 * index, 600, 1, extra, load_objects=options.objects)
             else:
                 directory.mkdir()
                 records = _run_world_round(options.repo, directory, options.port + 2 * index, 600, extra)
