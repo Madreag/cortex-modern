@@ -3059,6 +3059,8 @@ static std::string ResyncSaveName() {
 			m_InPlaceIncarnationBumps.clear();
 			auto admissionConfig = config.matchConfig; admissionConfig.hostPeerId = m_Coordinator->GetHostPeerId();
 			if (!m_WorldJoin.ConfigureMatchRejoins(admissionConfig, round, config.simTickMs, &error)) { m_PrivateJoinError = error; return; }
+			// A returning seat's base is this host's own archive of an announced capture; the writer thread hashes what it wrote.
+			g_ActivityMan.SetAutosaveDigest([](const std::vector<uint8_t>& bytes) { return DigestWorldJoinBytes(bytes); });
 			m_WorldJoin.Tail().EnableJournal(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + name + ".ccsave.inputs");
 			return;
 		}
