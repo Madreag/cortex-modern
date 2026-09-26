@@ -436,7 +436,8 @@ namespace RTE {
 			return true;
 		}
 
-		bool ValidateSortedFrames(const std::vector<ControllerFrame>& frames, NetLockstepError* error) {
+		/// One sender's frames name each actor once; a committed tick merges every sender's, so two for one actor stand in sender order there.
+		bool ValidateSortedFrames(const std::vector<ControllerFrame>& frames, NetLockstepError* error, bool mergedSenders = false) {
 			if (frames.size() > NetLockstepCodec::c_MaxFramesPerPacket) {
 				SetError(error, NetLockstepErrorCode::PayloadTooLarge, 0, "frame packet has too many ControllerFrames");
 				return false;
@@ -444,8 +445,8 @@ namespace RTE {
 			int64_t previousActorId = std::numeric_limits<int64_t>::min();
 			bool havePrevious = false;
 			for (const ControllerFrame& frame : frames) {
-				if (havePrevious && frame.actorUniqueID <= previousActorId) {
-					SetError(error, NetLockstepErrorCode::InvalidValue, 0, "ControllerFrames must be sorted by unique id without duplicates");
+				if (havePrevious && (frame.actorUniqueID < previousActorId || (!mergedSenders && frame.actorUniqueID == previousActorId))) {
+					SetError(error, NetLockstepErrorCode::InvalidValue, 0, mergedSenders ? "ControllerFrames must be sorted by unique id" : "ControllerFrames must be sorted by unique id without duplicates");
 					return false;
 				}
 				const std::vector<uint8_t> encodedFrame = ControllerFrameCodec::Encode(frame);
@@ -3150,7 +3151,9 @@ namespace RTE {
 			NetLockstepFrame input;
 			if (!NetLockstepCodec::DecodeRecoveryInput(std::vector<uint8_t>(data, data + size), input) || input.senderPeerId != peer || input.targetFrame != frame || input.roundId != m_Config.matchConfig.roundId)
 				return false;
-			if (!present && (!input.frames.empty() || !input.commands.empty() || !input.observations.empty() || !input.valueObservations.empty()))
+			// A seat absent from a frame sends nothing of its own, but the authority's commands for it ride its record: a held host's hold
+			// is carried in the host's own record at the frame its input is absent.
+			if (!present && (!input.frames.empty() || !input.observations.empty() || !input.valueObservations.empty()))
 				return false;
 			if (peer == m_Config.localPeerId) {
 				decoded.hasLocalInput = present != 0;
@@ -3930,6 +3933,7 @@ namespace RTE {
 		auto droppedValues = std::move(m_DroppedValueObservations);
 		const auto commandAcks = m_AuthoritativeCommandAcks;
 		const auto leaves = m_PeerLeaveFrames;
+		const auto seatTransitions = m_SeatTransitions;
 		const auto heldSeats = m_AiHeldSeats;
 		const auto releasedSeats = m_ReleasedAiSeats;
 		const auto holdTransactions = m_HoldTransactions;
@@ -3964,9 +3968,23 @@ namespace RTE {
 		m_RelayHost = m_Config.relayToOtherPeers;
 		m_Transport = m_MigrationTransport.get();
 		m_Config.initialDelayChanges.clear(); m_Config.initialPeerLeaves.clear(); m_Config.initialSeatHolds.clear(); m_Config.initialSeatReclaims.clear();
+		// Every member starts the successor's round at the boundary: none joins it from a replayed tail, so none waits for that tail's seat state.
+		m_Config.joinsRunningRound = false; m_Config.seatStateThroughFrame = 0;
 		ResetRoundState();
 		for (const auto& decision: m_MigrationFutureDelays) m_DelayChanges[decision.peerId][decision.applyFrame] = decision.delayFrames;
 		m_ReclaimTransactions = reclaimTransactions;
+		// A return the lost host agreed for a seat that did not come over with the round passes without it: the seat stays held, and
+		// this round agrees its own return when the seat reaches it.
+		std::set<uint8_t> passedReturns;
+		for (auto back = m_ReclaimTransactions.begin(); back != m_ReclaimTransactions.end();) {
+			const uint8_t peer = back->first;
+			if (back->second.activationFrame <= m_MigrationBoundary || !heldSeats.contains(peer) ||
+			    std::find(m_Config.activePeerIds.begin(), m_Config.activePeerIds.end(), peer) != m_Config.activePeerIds.end()) { ++back; continue; }
+			std::cout << "[net-lockstep] return of peer " << static_cast<int>(peer) << " at " << back->second.activationFrame
+			          << " was agreed with the lost host; the seat stays held from " << heldSeats.at(peer) << std::endl;
+			passedReturns.insert(peer);
+			back = m_ReclaimTransactions.erase(back);
+		}
 		m_LastCompletedSimulationTick = completed;
 		m_LastDeliveredFrame = m_MigrationBoundary;
 		for (const auto& [peer, frame]: heldSeats) {
@@ -3979,8 +3997,15 @@ namespace RTE {
 			if (const auto dropped = droppedAt.find(peer); dropped != droppedAt.end()) m_DroppedAtMs[peer] = dropped->second;
 		}
 		m_PeerLeaveFrames = leaves;
-		for (uint8_t peer: m_Config.activePeerIds)
+		m_SeatTransitions = seatTransitions;
+		for (const uint8_t peer: passedReturns)
+			if (const auto seat = m_SeatTransitions.find(peer); seat != m_SeatTransitions.end()) seat->second.erase(seat->second.upper_bound(m_MigrationBoundary), seat->second.end());
+		for (uint8_t peer: m_Config.activePeerIds) {
 			m_PeerLeaveFrames.erase(peer);
+			// A member of the successor's round is in it from its first frame, whatever the old round last recorded of its seat.
+			if (const auto seat = m_SeatTransitions.find(peer); seat != m_SeatTransitions.end() && !seat->second.empty() && seat->second.rbegin()->second != SeatTransition::Back)
+				NoteSeatTransition(peer, m_Config.startFrame, SeatTransition::Back);
+		}
 		m_AuthoritativeCommandAcks = commandAcks;
 		ApplyMigrationMembership(nowMs);
 		m_LocalFrames.clear();
@@ -4088,11 +4113,14 @@ namespace RTE {
 			std::recursive_mutex lock;
 			std::atomic<NetLockstepCoordinator*> target{nullptr};
 			std::atomic<int> windows{0};
+			std::atomic<int> gaps{0};
 			std::atomic<uint64_t> ticks{0};
 			std::atomic<bool> checksArmed{false};
 			std::atomic<uint64_t> checkTrips{0};
+			std::atomic<uint64_t> scopeRefusals{0};
 			std::mutex checkSitesLock;
 			std::set<std::string> checkSites;
+			std::set<std::string> refusedSites;
 			std::once_flag started;
 			std::jthread thread;
 		};
@@ -4102,14 +4130,39 @@ namespace RTE {
 			return state;
 		}
 
+		// The thread that runs main() runs the simulation; only it opens the plane's windows and gaps.
+		const std::thread::id s_SimulationThread = std::this_thread::get_id();
+
+		// The plane ticks only while a window is open and every gap is closed.
+		bool PlaneOpen(const PlaneState& plane) { return plane.windows.load(std::memory_order_acquire) > 0 && plane.gaps.load(std::memory_order_acquire) == 0; }
+
+		// A scope opened off the simulation thread moves no count: it could close the simulation's window under it or open one it never opened.
+		bool RefuseForeignScope(const char* kind, const char* name) {
+			if (std::this_thread::get_id() == s_SimulationThread) return false;
+			PlaneState& plane = Plane();
+			plane.scopeRefusals.fetch_add(1, std::memory_order_acq_rel);
+			const std::string site = std::string(kind) + (name ? std::string(" '") + name + "'" : std::string()) + " off the simulation thread";
+			std::lock_guard<std::mutex> sites(plane.checkSitesLock);
+			if (plane.checksArmed.load(std::memory_order_relaxed)) {
+				plane.checkTrips.fetch_add(1, std::memory_order_acq_rel);
+				plane.checkSites.insert(site);
+			}
+			if (plane.refusedSites.insert(site).second) {
+				std::ostringstream thread;
+				thread << "thread=" << std::this_thread::get_id() << " simulation_thread=" << s_SimulationThread;
+				std::cout << "[net-plane] refused a " << site << ": " << thread.str() << " from " << CallerNames() << std::endl;
+			}
+			return true;
+		}
+
 		void RunPlane(std::stop_token stop) {
 			PlaneState& plane = Plane();
 			while (!stop.stop_requested()) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-				if (plane.windows.load(std::memory_order_acquire) == 0) continue;
+				if (!PlaneOpen(plane)) continue;
 				std::unique_lock<std::recursive_mutex> lock(plane.lock, std::try_to_lock);
 				NetLockstepCoordinator* target = plane.target.load(std::memory_order_acquire);
-				if (!lock.owns_lock() || !target || plane.windows.load(std::memory_order_acquire) == 0) continue;
+				if (!lock.owns_lock() || !target || !PlaneOpen(plane)) continue;
 				++NetLockstepPlane::LockDepth();
 				const uint64_t nowMs = NetLockstepNowMs();
 				if (target->PlaneShouldTick(nowMs)) {
@@ -4147,6 +4200,10 @@ namespace RTE {
 
 	uint64_t NetLockstepPlane::CheckTrips() { return Plane().checkTrips.load(std::memory_order_acquire); }
 
+	bool NetLockstepPlane::TicksPermitted() { return PlaneOpen(Plane()); }
+
+	uint64_t NetLockstepPlane::ScopeRefusals() { return Plane().scopeRefusals.load(std::memory_order_acquire); }
+
 	int& NetLockstepPlane::LockDepth() {
 		thread_local int depth = 0;
 		return depth;
@@ -4154,7 +4211,7 @@ namespace RTE {
 
 	void NetLockstepPlane::Check(const void* coordinator, const char* where) {
 		PlaneState& plane = Plane();
-		if (!plane.checksArmed.load(std::memory_order_relaxed) || plane.windows.load(std::memory_order_acquire) == 0 || LockDepth() > 0 ||
+		if (!plane.checksArmed.load(std::memory_order_relaxed) || !PlaneOpen(plane) || LockDepth() > 0 ||
 		    coordinator != plane.target.load(std::memory_order_acquire)) return;
 		const uint64_t trips = plane.checkTrips.fetch_add(1, std::memory_order_acq_rel) + 1;
 		std::lock_guard<std::mutex> sites(plane.checkSitesLock);
@@ -4167,25 +4224,33 @@ namespace RTE {
 	}
 
 	NetLockstepPlane::Gap::Gap(const char* name) : m_Name(name) {
+		if (RefuseForeignScope("gap", name)) return;
 		if (m_Name) m_OpenedMs = NetLockstepNowMs();
 		PlaneState& plane = Plane();
+		// A tick in flight holds the lock; the plane reads the gaps again under it before its next tick.
 		std::lock_guard<std::recursive_mutex> lock(plane.lock);
-		m_Closed = plane.windows.exchange(0, std::memory_order_acq_rel);
+		m_ClosedWindow = PlaneOpen(plane);
+		plane.gaps.fetch_add(1, std::memory_order_acq_rel);
+		m_Counted = true;
 	}
 
 	NetLockstepPlane::Gap::~Gap() {
-		Plane().windows.fetch_add(m_Closed, std::memory_order_acq_rel);
-		if (m_Name && m_Closed > 0) {
+		if (!m_Counted) return;
+		Plane().gaps.fetch_sub(1, std::memory_order_acq_rel);
+		if (m_Name && m_ClosedWindow) {
 			const uint64_t lastedMs = NetLockstepNowMs() - m_OpenedMs;
 			if (lastedMs >= 250) std::cout << "[net-plane] the " << m_Name << " gap lasted " << lastedMs << " ms clock=" << NetLockstepSharedClockMs() << std::endl;
 		}
 	}
 
 	NetLockstepPlane::Window::Window(const char* name) : m_Name(name) {
+		if (RefuseForeignScope("window", name)) return;
 		if (m_Name) { m_OpenedMs = NetLockstepNowMs(); m_TicksAtOpen = Ticks(); }
 		Plane().windows.fetch_add(1, std::memory_order_acq_rel);
+		m_Counted = true;
 	}
 	NetLockstepPlane::Window::~Window() {
+		if (!m_Counted) return;
 		// A tick in flight finishes before the simulation thread goes on to code that reads the coordinator unguarded.
 		PlaneState& plane = Plane();
 		std::lock_guard<std::recursive_mutex> lock(plane.lock);
@@ -4197,7 +4262,7 @@ namespace RTE {
 		}
 		if (plane.checksArmed.load(std::memory_order_relaxed) && plane.checkTrips.load(std::memory_order_acquire) > 0) {
 			std::lock_guard<std::mutex> sites(plane.checkSitesLock);
-			std::cout << "[net-plane] ASSERT: " << plane.checkTrips.load() << " coordinator accesses without the plane's lock inside open windows at " << plane.checkSites.size() << " sites; stopping" << std::endl;
+			std::cout << "[net-plane] ASSERT: " << plane.checkTrips.load() << " coordinator accesses without the plane's lock inside open windows or scopes off the simulation thread at " << plane.checkSites.size() << " sites; stopping" << std::endl;
 			std::fflush(stdout);
 			std::abort();
 		}
@@ -4521,7 +4586,7 @@ namespace RTE {
 		};
 		if (start.sessionId != m_Config.sessionId) note("session", start.sessionId, m_Config.sessionId);
 		if (start.startFrame != (admitted ? admission->second.frame : m_Config.startFrame)) note("start_frame", start.startFrame, admitted ? admission->second.frame : m_Config.startFrame);
-		if (start.inputDelayFrames != (admitted ? admission->second.delay : PeerInputDelay(start.localPeerId))) note("delay", start.inputDelayFrames, admitted ? admission->second.delay : PeerInputDelay(start.localPeerId));
+		if (start.inputDelayFrames != (admitted ? admission->second.delay : MemberStartDelay(start))) note("delay", start.inputDelayFrames, admitted ? admission->second.delay : MemberStartDelay(start));
 		if (start.controllerFrameVersion != ControllerFrame::c_Version) note("controller_version", start.controllerFrameVersion, ControllerFrame::c_Version);
 		if (start.controllerFrameEncodedSize != ControllerFrame::c_EncodedSize) note("controller_size", start.controllerFrameEncodedSize, ControllerFrame::c_EncodedSize);
 		if (!IsKnownRemotePeer(start.localPeerId)) note("unknown_peer", start.localPeerId, start.localPeerId);
@@ -4532,12 +4597,17 @@ namespace RTE {
 		return named;
 	}
 
+	uint16_t NetLockstepCoordinator::MemberStartDelay(const NetLockstepStart& start) const {
+		// The host hands a seat joining a running round each member's start at the delay in force at that start, changes the tail committed included.
+		return m_Config.joinsRunningRound ? InputDelayAt(start.localPeerId, start.startFrame) : PeerInputDelay(start.localPeerId);
+	}
+
 	bool NetLockstepCoordinator::StartMatchesConfig(const NetLockstepStart& start) const {
 		const auto admission = m_PeerAdmissions.find(start.localPeerId);
 		const bool admitted = admission != m_PeerAdmissions.end();
 		return start.sessionId == m_Config.sessionId &&
 		       start.startFrame == (admitted ? admission->second.frame : m_Config.startFrame) &&
-		       start.inputDelayFrames == (admitted ? admission->second.delay : PeerInputDelay(start.localPeerId)) &&
+		       start.inputDelayFrames == (admitted ? admission->second.delay : MemberStartDelay(start)) &&
 		       start.controllerFrameVersion == ControllerFrame::c_Version &&
 		       start.controllerFrameEncodedSize == ControllerFrame::c_EncodedSize &&
 		       IsKnownRemotePeer(start.localPeerId) &&
@@ -4692,13 +4762,18 @@ namespace RTE {
 		m_LastStartSentMs = UINT64_MAX;
 		m_RemoteFrameWindow.clear();
 		m_PeerLeaveFrames = m_Config.initialPeerLeaves;
+		m_SeatTransitions.clear();
+		for (const auto& [peer, frame]: m_Config.initialPeerLeaves) NoteSeatTransition(peer, frame, SeatTransition::Left);
 		for (const auto& [peer, hold]: m_Config.initialSeatHolds) {
+			NoteSeatTransition(peer, hold.cutoffFrame, SeatTransition::Held);
 			// A held host is still the round's hub: its seat is under the AI, never gone.
 			m_HoldTransactions[peer] = hold; m_AiHeldSeats[peer] = hold.cutoffFrame;
 			if (peer != GetHostPeerId()) m_PeerLeaveFrames[peer] = hold.cutoffFrame;
 			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+			DropRecordedHeldSeat(peer);
 		}
 		m_ReclaimTransactions = m_Config.initialSeatReclaims;
+		for (const auto& [peer, reclaim]: m_ReclaimTransactions) NoteSeatTransition(peer, reclaim.activationFrame, SeatTransition::Back);
 		// A round joined from a replayed tail commits nothing until the seats that tail changed after its seat state was read are taken.
 		m_AwaitingReplayedSeatState = m_Config.joinsRunningRound && m_Config.seatStateThroughFrame != 0;
 		// A seat taken back before our first frame is a member from it: the start the host hands out for it names that frame.
@@ -4911,6 +4986,8 @@ namespace RTE {
 		m_State = NetLockstepState::Running;
 		ResetRoundState();
 		m_Playback = true;
+		// A replay reads our own held seat as the round recorded it.
+		for (const auto& [peer, hold]: m_Config.initialSeatHolds) DropRecordedHeldSeat(peer);
 		m_LocalFrames.clear();
 		m_LocalInputHistory.clear();
 		m_ResyncPrimed = true;
@@ -4960,7 +5037,8 @@ namespace RTE {
 			return false;
 		}
 		NetLockstepError frameError;
-		if (!ValidateSortedFrames(frames, &frameError)) {
+		// A recorded tick is every sender's frames merged.
+		if (!ValidateSortedFrames(frames, &frameError, true)) {
 			if (error) *error = frameError.message;
 			return false;
 		}
@@ -4996,6 +5074,7 @@ namespace RTE {
 				m_PeerLeaveFrames.erase(seat->first);
 				m_HoldTransactions.erase(seat->first);
 				m_DroppedSeatResolutions.erase(seat->first);
+				m_DroppedSeats.erase(seat->first); m_LeftSeatsHeld.erase(seat->first);
 				seat = m_AiHeldSeats.erase(seat);
 			} else ++seat;
 		}
@@ -5178,12 +5257,20 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::HostBusyWithAnnouncedCapture(uint64_t frame) const {
 		NET_PLANE_CHECK();
+		return AnnouncedCaptureCovering(frame).has_value();
+	}
+
+	std::optional<uint64_t> NetLockstepCoordinator::AnnouncedCaptureCovering(uint64_t frame) const {
 		// The host's first input after a capture at the end of tick T is the one it produces simulating T + 1, which targets a delay later.
 		const uint64_t delay = InputDelayAt(GetHostPeerId(), frame);
 		const auto covers = [&](uint64_t tick) { return tick < frame && frame <= tick + delay + 2; };
-		if (m_AnnouncedCaptureEvery > 0 && frame > 1 && covers((frame - 1) / m_AnnouncedCaptureEvery * m_AnnouncedCaptureEvery)) return true;
+		if (m_AnnouncedCaptureEvery > 0 && frame > 1) {
+			const uint64_t tick = (frame - 1) / m_AnnouncedCaptureEvery * m_AnnouncedCaptureEvery;
+			if (covers(tick)) return tick;
+		}
 		const auto after = m_AnnouncedCaptureTicks.lower_bound(frame > delay + 2 ? frame - delay - 2 : 0);
-		return after != m_AnnouncedCaptureTicks.end() && covers(*after);
+		if (after != m_AnnouncedCaptureTicks.end() && covers(*after)) return *after;
+		return std::nullopt;
 	}
 
 	void NetLockstepCoordinator::AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
@@ -5213,6 +5300,7 @@ namespace RTE {
 				m_AiHeldSeats[peer] = held->second.cutoffFrame;
 				if (peer != GetHostPeerId()) m_PeerLeaveFrames[peer] = held->second.cutoffFrame;
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+				DropRecordedHeldSeat(peer);
 				m_Config.peerIncarnations[peer] = std::max(m_Config.peerIncarnations[peer], held->second.seatIncarnation);
 				std::cout << "[net-lockstep] took peer " << static_cast<int>(peer) << "'s hold at " << held->second.cutoffFrame << " from the replayed tail" << std::endl;
 			}
@@ -5416,6 +5504,7 @@ namespace RTE {
 			if (timing.peerId != m_Config.localPeerId && !IsKnownRemotePeer(timing.peerId)) { m_RemotePeerIds.push_back(timing.peerId); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
 			m_ReclaimTransactions[timing.peerId] = {timing.peerId, timing.authorityGeneration, timing.revision,
 			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame, timing.worldTransition};
+			NoteSeatTransition(timing.peerId, timing.applyFrame, SeatTransition::Back);
 			std::cout << "[net-lockstep] return of peer " << static_cast<int>(timing.peerId) << " at " << timing.applyFrame << " delay=" << timing.delayFrames
 			          << " neutral_through=" << timing.neutralThroughFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[timing.peerId - 1]
 			          << " next=" << m_Stats.nextFrame << " clock=" << NetLockstepSharedClockMs() << std::endl;
@@ -5439,7 +5528,11 @@ namespace RTE {
 					if (timing.applyFrame > back->second.activationFrame)
 						m_RetiredReclaimGaps[peer] = {back->second.activationFrame, std::min(gapEnd, timing.applyFrame - 1)};
 					m_ReclaimTransactions.erase(back);
+					// The return ended the older hold whether or not this peer has simulated to it yet: this hold is the seat's own.
+					m_AiHeldSeats.erase(peer);
+					if (peer != m_Config.localPeerId) m_PeerLeaveFrames.erase(peer);
 				}
+				NoteSeatTransition(peer, timing.applyFrame, SeatTransition::Held);
 				m_HoldTransactions[peer] = {peer, timing.authorityGeneration, timing.revision, timing.seatIncarnations[peer - 1], timing.cutoffFrame};
 				m_Config.peerIncarnations[peer] = timing.seatIncarnations[peer - 1];
 			}
@@ -5493,8 +5586,12 @@ namespace RTE {
 		m_TimingNowMs = nowMs;
 		// The host holds its own seat like any other: its session plane authors the hold while its simulation is away.
 		const bool ownSeat = peerId == m_Config.localPeerId && peerId == GetHostPeerId();
+		// The leaves the simulation last took can still name a seat whose agreed return the round has already committed to, when that
+		// simulation is behind its commits (a host held for its own): that seat is back, and holdable like any.
+		const auto back = m_ReclaimTransactions.find(peerId);
+		const bool returned = back != m_ReclaimTransactions.end() && m_Stats.nextFrame >= back->second.activationFrame;
 		if (!IsRunning() || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || (peerId == GetHostPeerId() && !ownSeat) ||
-		    (!ownSeat && !IsKnownRemotePeer(peerId)) || m_PeerLeaveFrames.contains(peerId) || m_NextTimingRevision == UINT64_MAX) {
+		    (!ownSeat && !IsKnownRemotePeer(peerId)) || (m_PeerLeaveFrames.contains(peerId) && !returned) || m_NextTimingRevision == UINT64_MAX) {
 			if (error) *error = "invalid held peer or authority";
 			return false;
 		}
@@ -5626,6 +5723,13 @@ namespace RTE {
 		timing.requiredPeers = static_cast<uint8_t>(1U << (GetHostPeerId() - 1)); timing.seatIncarnations[peerId - 1] = incarnation;
 		m_RemoteTransports[peerId] = transport;
 		m_TimingDecisions[timing.revision] = {timing, timing.requiredPeers, true, m_TimingNowMs};
+		{
+			// Every seat this return reaches, so a seat that plays on without it says whether it was sent.
+			std::ostringstream line;
+			line << "[net-lockstep] return of peer " << static_cast<int>(peerId) << " at " << timing.applyFrame << " goes to";
+			for (const auto& [seat, connection]: m_RemoteTransports) line << ' ' << static_cast<int>(seat);
+			std::cout << line.str() << std::endl;
+		}
 		QueueTiming(timing); FlushTimingOutgoing(); ApplyTiming(timing);
 		for (const auto& [revision, decision]: m_TimingDecisions) {
 			if (decision.proposal.action != NetTimingAction::Delay || decision.proposal.applyFrame < frame) continue;
@@ -5683,6 +5787,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::IsSeatUnderAI(uint8_t peerId, uint64_t frame) const {
 		NET_PLANE_CHECK();
+		if (const auto past = SeatStateBeforeNewest(peerId, frame)) return *past == SeatTransition::Held;
 		const auto seat = m_AiHeldSeats.find(peerId);
 		return seat != m_AiHeldSeats.end() && frame >= seat->second &&
 		    (!m_ReclaimTransactions.contains(peerId) || frame < m_ReclaimTransactions.at(peerId).activationFrame);
@@ -5788,6 +5893,8 @@ namespace RTE {
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
+				// A seat whose packets this machine set aside for its simulation thread may have sent the input it is missing.
+				if (const auto link = m_RemoteTransports.find(peer); link != m_RemoteTransports.end() && m_PlaneHeldTransports.contains(link->second)) continue;
 				// A park commits its frames with no input from anyone, so a seat owes nothing until the frames after it fall
 				// due: its first post-park inputs are due a delay after the park's last frame ran here, never at the release.
 				if (const uint16_t owed = InputDelayAt(peer, frame); m_ParkFrameSimulated != UINT64_MAX && m_ParkFrameSimulated == m_SynchronizedCaptureEndFrame &&
@@ -5997,6 +6104,7 @@ namespace RTE {
 		if (!IsKnownRemotePeer(peer)) { m_RemotePeerIds.push_back(peer); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
 		m_ReclaimTransactions[peer] = {peer, reclaim.authorityGeneration, reclaim.revision, reclaim.seatIncarnations[peer - 1], reclaim.applyFrame,
 		    reclaim.delayFrames, reclaim.neutralThroughFrame, reclaim.worldTransition};
+		NoteSeatTransition(peer, reclaim.applyFrame, SeatTransition::Back);
 		m_Config.peerIncarnations[peer] = reclaim.seatIncarnations[peer - 1];
 		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
 		m_PeerAdmissions[peer] = reclaim.applyFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
@@ -6011,7 +6119,27 @@ namespace RTE {
 		m_RemoteStartsReceived.insert(peer);
 	}
 
+	bool NetLockstepCoordinator::HeldLocalSeatSince(uint64_t frame) const {
+		NET_PLANE_CHECK();
+		if (m_Config.localPeerId == GetHostPeerId()) return false;
+		if (m_LocalSeatHeld && m_LocalHoldFrame >= frame) return true;
+		const uint32_t local = 1U << (m_Config.localPeerId - 1);
+		return std::any_of(m_PreStartTiming.begin(), m_PreStartTiming.end(), [&](const auto& pending) {
+			const NetLockstepTiming& timing = pending.first;
+			return timing.phase == NetTimingPhase::HoldAtFrame && (timing.heldPeers & local) != 0 && timing.senderPeerId == GetHostPeerId() && timing.applyFrame >= frame;
+		});
+	}
+
 	void NetLockstepCoordinator::HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport) {
+		// A seat that joined while the round ran names each other seat's return it hears, so a return it never takes says where it went.
+		if (timing.phase == NetTimingPhase::ReclaimAtFrame && m_Config.joinsRunningRound && timing.peerId != m_Config.localPeerId)
+			std::cout << "[net-lockstep] heard peer " << static_cast<int>(timing.peerId) << "'s return at " << timing.applyFrame << " revision=" << timing.revision
+			          << " incarnation=" << timing.seatIncarnations[timing.peerId - 1] << " known=" << m_Config.peerIncarnations[timing.peerId] << " state=" << StateName(m_State)
+			          << " start=" << m_Config.startFrame << " next=" << m_Stats.nextFrame << " awaiting_tail=" << m_AwaitingReplayedSeatState << std::endl;
+		if (timing.phase == NetTimingPhase::HoldAtFrame && m_Config.localPeerId != GetHostPeerId() && (timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0)
+			std::cout << "[net-lockstep] hold of this seat at " << timing.applyFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[m_Config.localPeerId - 1]
+			          << " state=" << StateName(m_State) << " known_incarnation=" << m_Config.peerIncarnations[m_Config.localPeerId] << " next=" << m_Stats.nextFrame
+			          << " round_ok=" << (timing.roundId == m_RoundId) << " clock=" << NetLockstepSharedClockMs() << std::endl;
 		// A hold or a return that lands by a joining round's first frame is taken at once, even before the round runs: the starts
 		// the handshake waits for depend on it, and nothing later in the round revisits a frame behind its first.
 		if (m_Config.joinsRunningRound && timing.applyFrame <= m_Config.startFrame &&
@@ -8243,8 +8371,10 @@ namespace RTE {
 						}
 						m_AiHeldSeats[hold->peerId] = outFrame.frame;
 						m_HoldTransactions[hold->peerId] = *hold;
+						NoteSeatTransition(hold->peerId, outFrame.frame, SeatTransition::Held);
 						if (hold->peerId != GetHostPeerId()) m_PeerLeaveFrames[hold->peerId] = outFrame.frame;
 						m_DroppedSeatResolutions[hold->peerId] = NetLockstepHoldResolution::Substituted;
+						DropRecordedHeldSeat(hold->peerId);
 					}
 				}
 			}
@@ -8254,17 +8384,26 @@ namespace RTE {
 				if (command.senderPeerId != GetHostPeerId() || reclaim->peerId == 0 || reclaim->peerId > m_Config.peerCount || reclaim->activationFrame != outFrame.frame) {
 					Fail(NetLockstepStopReason::ProtocolError, outFrame.frame, "recorded reclaim has invalid authority or frame"); return false;
 				}
-				if (const auto held = m_ReclaimTransactions.find(reclaim->peerId); held == m_ReclaimTransactions.end() || !(held->second == *reclaim))
-					std::cout << "[net-lockstep] return of peer " << static_cast<int>(reclaim->peerId) << " committed at " << outFrame.frame << " delay=" << reclaim->delayFrames
-					          << " neutral_through=" << reclaim->neutralThroughFrame << " revision=" << reclaim->eventSequence << " differs from the one this peer held" << std::endl;
-				m_ReclaimTransactions[reclaim->peerId] = *reclaim;
-				m_Config.peerIncarnations[reclaim->peerId] = reclaim->seatIncarnation;
-				m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
-				m_PeerLeaveFrames.erase(reclaim->peerId); m_PeerFrameWaivers.erase(reclaim->peerId);
-				m_DroppedSeats.erase(reclaim->peerId); m_LeftSeatsHeld.erase(reclaim->peerId); m_DroppedAtMs.erase(reclaim->peerId);
-				m_DroppedSeatResolutions[reclaim->peerId] = NetLockstepHoldResolution::Reclaimed;
-				m_PeerEffectiveStart[reclaim->peerId] = outFrame.frame + reclaim->delayFrames;
-				m_PeerAdmissions[reclaim->peerId] = {outFrame.frame, reclaim->delayFrames};
+				// A hold the round agreed for a later frame is the seat's newer state: a simulation behind its commits (a host held for
+				// its own) delivers the return after that hold was taken, and the return's delivery must leave it standing.
+				const auto laterHold = m_HoldTransactions.find(reclaim->peerId);
+				if (laterHold != m_HoldTransactions.end() && laterHold->second.cutoffFrame > outFrame.frame) {
+					std::cout << "[net-lockstep] return of peer " << static_cast<int>(reclaim->peerId) << " delivered at " << outFrame.frame
+					          << " after its hold at " << laterHold->second.cutoffFrame << " was agreed: the hold stands" << std::endl;
+				} else {
+					if (const auto held = m_ReclaimTransactions.find(reclaim->peerId); held == m_ReclaimTransactions.end() || !(held->second == *reclaim))
+						std::cout << "[net-lockstep] return of peer " << static_cast<int>(reclaim->peerId) << " committed at " << outFrame.frame << " delay=" << reclaim->delayFrames
+						          << " neutral_through=" << reclaim->neutralThroughFrame << " revision=" << reclaim->eventSequence << " differs from the one this peer held" << std::endl;
+					m_ReclaimTransactions[reclaim->peerId] = *reclaim;
+					NoteSeatTransition(reclaim->peerId, outFrame.frame, SeatTransition::Back);
+					m_Config.peerIncarnations[reclaim->peerId] = reclaim->seatIncarnation;
+					m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
+					m_PeerLeaveFrames.erase(reclaim->peerId); m_PeerFrameWaivers.erase(reclaim->peerId);
+					m_DroppedSeats.erase(reclaim->peerId); m_LeftSeatsHeld.erase(reclaim->peerId); m_DroppedAtMs.erase(reclaim->peerId);
+					m_DroppedSeatResolutions[reclaim->peerId] = NetLockstepHoldResolution::Reclaimed;
+					m_PeerEffectiveStart[reclaim->peerId] = outFrame.frame + reclaim->delayFrames;
+					m_PeerAdmissions[reclaim->peerId] = {outFrame.frame, reclaim->delayFrames};
+				}
 				outFrame.reclaimedPeerIds.push_back(reclaim->peerId);
 				++m_Stats.peers[reclaim->peerId].rejoins;
 				NoteSeatReclaimed(reclaim->peerId);
@@ -8311,6 +8450,15 @@ namespace RTE {
 		}
 		outFrames = found->second;
 		return true;
+	}
+
+	void NetLockstepCoordinator::RememberCommittedFrame(const NetLockstepReadyFrame& ready) {
+		m_ReadyHistory[ready.frame] = ready;
+		// The history keeps its last frames, and never one the simulation has not yet finished: a simulation behind its commits
+		// still reads the frame it last took at that tick's end, however far the round has committed meanwhile.
+		while (m_ReadyHistory.size() > 180 && m_LastDeliveredFrame && m_ReadyHistory.begin()->first < *m_LastDeliveredFrame) {
+			m_ReadyHistory.erase(m_ReadyHistory.begin());
+		}
 	}
 
 	void NetLockstepCoordinator::RememberAppliedFrameInputs(const NetLockstepReadyFrame& ready) {
@@ -8418,10 +8566,19 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::JudgeOwnSeat(uint64_t frame, uint64_t nowMs) {
 		const uint8_t local = m_Config.localPeerId;
-		if (!UsesBoundedWait() || local != GetHostPeerId() || m_GoodbyeDrain || frame > m_FinalFrame || IsOwnHostSeatHeld() || m_RemotePeerIds.empty()) return false;
-		// The host's start work, a park every peer is in, and a capture it announced excuse its ticks exactly as they excuse a client's.
-		if (frame <= EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks) || IsSynchronizedCapturePark(frame) ||
-		    m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || HostBusyWithAnnouncedCapture(frame)) {
+		// A return the round agreed ends the hold from its own frame, whether or not this simulation has delivered it yet.
+		const auto back = m_ReclaimTransactions.find(local);
+		const bool backBy = back != m_ReclaimTransactions.end() && back->second.activationFrame <= frame;
+		if (!UsesBoundedWait() || local != GetHostPeerId() || m_GoodbyeDrain || frame > m_FinalFrame || (IsOwnHostSeatHeld() && !backBy) || m_RemotePeerIds.empty()) return false;
+		// The host's start work excuses its first ticks once; after a return only the return's own gap carries none of its input.
+		const uint64_t excusedThrough = back != m_ReclaimTransactions.end()
+			? std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames)
+			: EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks);
+		// An announced capture excuses the ticks after it only while its tick is still the last this simulation completed.
+		const auto capture = AnnouncedCaptureCovering(frame);
+		const bool capturing = capture && (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick <= *capture);
+		// A park every peer is in and a pending timing decision excuse its ticks exactly as they excuse a client's.
+		if (frame <= excusedThrough || IsSynchronizedCapturePark(frame) || m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || capturing) {
 			m_OwnMissingFrame.reset();
 			return false;
 		}
@@ -8514,11 +8671,21 @@ namespace RTE {
 		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsRunning() && !IsHoldingSeatForReclaim();
 	}
 
+	std::optional<NetLockstepCoordinator::SeatTransition> NetLockstepCoordinator::SeatStateBeforeNewest(uint8_t peer, uint64_t frame) const {
+		const auto seat = m_SeatTransitions.find(peer);
+		if (seat == m_SeatTransitions.end() || seat->second.empty() || seat->second.rbegin()->first <= frame) return std::nullopt;
+		const auto after = seat->second.upper_bound(frame);
+		// Before its first transition the seat was in the round.
+		return after == seat->second.begin() ? SeatTransition::Back : std::prev(after)->second;
+	}
+
 	bool NetLockstepCoordinator::IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const {
 		NET_PLANE_CHECK();
 		if (peerId == m_Config.localPeerId && !m_Playback && !m_LocalSeatHeld && !m_AiHeldSeats.contains(peerId)) {
 			return false;
 		}
+		// A held host is still the round's hub: its seat is under the AI, never gone.
+		if (const auto past = SeatStateBeforeNewest(peerId, frame)) return *past == SeatTransition::Left || (*past == SeatTransition::Held && peerId != GetHostPeerId());
 		if (const auto reclaim = m_ReclaimTransactions.find(peerId); reclaim != m_ReclaimTransactions.end() && frame >= reclaim->second.activationFrame) return false;
 		const auto leaveIt = m_PeerLeaveFrames.find(peerId);
 		return leaveIt != m_PeerLeaveFrames.end() && frame >= leaveIt->second;
@@ -9492,10 +9659,14 @@ namespace RTE {
 					if (UsesTransportPeer(event.peerId)) Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "recovery input requires the reliable control lane");
 					return;
 				}
-				// A start or a stop may end or reshape the round; the simulation thread takes it.
+				// A start or a stop may end or reshape the round; the simulation thread takes it. A repeat of a start this round already
+				// took reshapes nothing, so the seat's frames behind it go on without it.
 				if (m_PlaneTicking && (std::holds_alternative<NetLockstepStart>(decoded.packet.payload) || std::holds_alternative<NetLockstepStop>(decoded.packet.payload))) {
 					m_PlaneDeferredEvents.push_back(event);
-					m_PlaneHeldTransports.insert(event.peerId);
+					const auto* start = std::get_if<NetLockstepStart>(&decoded.packet.payload);
+					const bool repeat = start && m_RoundId != 0 && start->roundId == m_RoundId && m_RemoteStartsReceived.contains(start->localPeerId) &&
+					                    LockstepPeerOfTransport(event.peerId) == start->localPeerId;
+					if (!repeat) m_PlaneHeldTransports.insert(event.peerId);
 					return;
 				}
 				m_PacketLane = event.lane;
@@ -10146,6 +10317,13 @@ namespace RTE {
 	// who owns a left seat's units - so asking the service back from there re-locks it on its own
 	// thread. The answer is resolved here instead, from the tick, which also fixes it for the whole
 	// tick: ownership cannot change under a subsystem halfway through one.
+	void NetLockstepCoordinator::DropRecordedHeldSeat(uint8_t peerId) {
+		// Only a bounded wait holds a seat; a held host stays the round's hub, and our own seat is ours again once this round plays it.
+		if (!UsesBoundedWait() || peerId == GetHostPeerId() || (peerId == m_Config.localPeerId && !m_Playback)) return;
+		m_DroppedSeats.insert(peerId);
+		m_LeftSeatsHeld.insert(peerId);
+	}
+
 	void NetLockstepCoordinator::RefreshLeftSeatHolds() {
 		m_LeftSeatsHeld.clear();
 		for (uint8_t peerId: m_DroppedSeats) {
@@ -10364,6 +10542,12 @@ namespace RTE {
 		return !m_LeftSeatsHeld.empty();
 	}
 
+	bool NetLockstepCoordinator::HeldSeatReturnsBy(uint8_t peerId, uint64_t frame) const {
+		NET_PLANE_CHECK();
+		const auto back = m_ReclaimTransactions.find(peerId);
+		return m_AiHeldSeats.contains(peerId) && back != m_ReclaimTransactions.end() && back->second.activationFrame <= frame;
+	}
+
 	bool NetLockstepCoordinator::IsSeatHeldForReclaim(uint8_t peerId) const {
 		NET_PLANE_CHECK();
 		return m_LeftSeatsHeld.find(peerId) != m_LeftSeatsHeld.end();
@@ -10441,6 +10625,7 @@ namespace RTE {
 		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
 			return;
 		}
+		NoteSeatTransition(peerId, firstFrameWithout, SeatTransition::Left);
 		if (!announced) {
 			m_DroppedSeats.insert(peerId);
 			m_DroppedAtMs[peerId] = nowMs;
@@ -10775,10 +10960,7 @@ namespace RTE {
 				commands.push_back(NetGameCommand{GetHostPeerId(), reclaim});
 				if (reclaim.worldTransition) commands.push_back(NetGameCommand{GetHostPeerId(), *reclaim.worldTransition});
 			}
-			m_ReadyHistory[ready.frame] = ready;
-			while (m_ReadyHistory.size() > 180) {
-				m_ReadyHistory.erase(m_ReadyHistory.begin());
-			}
+			RememberCommittedFrame(ready);
 			m_ReadyFrames.push_back(std::move(ready));
 			m_HostAcceptedLocalFrames.erase(m_Stats.nextFrame);
 			if (UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {

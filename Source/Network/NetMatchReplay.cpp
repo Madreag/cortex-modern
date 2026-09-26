@@ -243,7 +243,13 @@ namespace RTE {
 		const size_t bindingCount = static_cast<size_t>(std::count_if(commands.begin(), commands.end(), [](const NetGameCommand& command) {
 			return std::holds_alternative<NetGamePlayerBindings>(command.payload);
 		}));
-		if (bindingCount <= 1) {
+		// A packet names each actor once: a second input for one actor, from another sender, rides a later packet in the order it applies.
+		std::vector<std::vector<ControllerFrame>> frameRuns(1);
+		for (const ControllerFrame& input: frames) {
+			if (!frameRuns.back().empty() && frameRuns.back().back().actorUniqueID == input.actorUniqueID) frameRuns.emplace_back();
+			frameRuns.back().push_back(input);
+		}
+		if (bindingCount <= 1 && frameRuns.size() == 1) {
 			if (!EncodeSenderPacket(record, wireBytes, error)) {
 				return false;
 			}
@@ -271,7 +277,7 @@ namespace RTE {
 				part.senderPeerId = sender;
 				part.targetFrame = frame;
 				if (sender == senders.front()) {
-					part.frames = frames;
+					part.frames = frameRuns.front();
 				}
 				for (const NetGameCommand& command : commands) {
 					if (command.senderPeerId == sender) {
@@ -288,6 +294,17 @@ namespace RTE {
 						part.valueObservations.push_back(observation);
 					}
 				}
+				std::vector<uint8_t> packet;
+				if (!EncodeSenderPacket(part, packet, error)) {
+					return false;
+				}
+				wireBytes.insert(wireBytes.end(), packet.begin(), packet.end());
+			}
+			for (size_t run = 1; run < frameRuns.size(); ++run) {
+				NetLockstepFrame part;
+				part.senderPeerId = senders.front();
+				part.targetFrame = frame;
+				part.frames = frameRuns[run];
 				std::vector<uint8_t> packet;
 				if (!EncodeSenderPacket(part, packet, error)) {
 					return false;

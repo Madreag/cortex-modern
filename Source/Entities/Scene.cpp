@@ -3351,7 +3351,7 @@ void Scene::UpdatePathFinding() {
 
 namespace {
 	uint16_t SharedPathHorizonTicks() {
-		const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+		const auto config = ScenarioRunner::GetLockstepMatchConfig();
 		return config ? config->pathHorizonTicks : 0;
 	}
 

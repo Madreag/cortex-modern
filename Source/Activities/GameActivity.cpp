@@ -413,7 +413,7 @@ void GameActivity::ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTe
 }
 
 void GameActivity::ApplyNetworkSeatAI(uint8_t peerId, bool held, uint64_t frame) {
-	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
 	if (!config) return;
 	if (held) for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player)
 		if (LockstepSeatPeerId(player) == peerId) ReleaseLockstepControlOfActor(player);
@@ -1138,7 +1138,7 @@ bool GameActivity::IsLockstepPlacement() {
 }
 
 uint8_t GameActivity::LockstepSeatPeerId(int player) {
-	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
 	if (!config || player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
 		return 0;
 	}
@@ -1615,7 +1615,7 @@ bool GameActivity::ApplyNetBrainPlacement(const NetGamePlaceBrain& placement, ui
 
 std::string GameActivity::LockstepSeatName(int player) {
 	// The roster's non-CPU slots fill the seats in order, the way ConfigureHumanRoster seats them.
-	if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
+	if (const auto config = ScenarioRunner::GetLockstepMatchConfig()) {
 		int seat = Players::PlayerOne;
 		for (const NetMatchPlayerSlot& slot: config->players) {
 			if (slot.cpu) {
