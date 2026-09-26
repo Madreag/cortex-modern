@@ -1,4 +1,13 @@
-"""POSIX IsolatedRun. No firewall check on POSIX."""
+"""POSIX IsolatedRun. No firewall check on POSIX.
+
+On the Mac an engine whose responsible process lives in the GUI login session (a launchd gui/<uid> job) raises
+macOS's Local Network consent dialog once per new binary path, and a pending dialog blocks that binary's LAN
+traffic. A runner that finds itself in that session therefore starts the engine through
+`ssh -o BatchMode=yes localhost` (same argv, cwd and environment; never prompted), keeps the engine's streams and
+exit code through the hop and kills the far process group itself on a timeout. CCCP_POSIX_HOP=ssh|off forces it.
+Launches of desktop tools (osascript, screencapture, System Events) are refused, and so is a launch from a lane
+script that calls them. `--self-test` proves the exit, stream, timeout and kill paths with and without the hop.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -18,6 +28,17 @@ from typing import Any, Mapping, Sequence
 VERDICT_LINE = re.compile(
     r"^\[[^\]]+\].*\b(PASS|FAIL|FAILED|complete|completed|finished|failed|refused)\b"
 )
+
+# Tools that act on the user's desktop session: a lane never runs them.
+DESKTOP_TOOL = re.compile(r"\b(?:osascript|screencapture)\b|System Events")
+DESKTOP_TOOL_NAMES = {"osascript", "screencapture"}
+LANE_SCRIPT_SUFFIXES = {".sh", ".zsh", ".bash", ".command", ".py", ".pl", ".rb", ".js"}
+# The variables that name the session a process runs in; the far side of the hop keeps its own.
+SESSION_ENV = {"SSH_AUTH_SOCK", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "XPC_SERVICE_NAME", "XPC_FLAGS",
+               "__CFBundleIdentifier", "LaunchInstanceID", "SECURITYSESSIONID", "TERM_SESSION_ID"}
+HOP_SSH = ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", "localhost"]
+_HOP_REACHABLE: bool | None = None
+_LANE_SCRIPT_HITS: list[str] | None = None
 
 SETTINGS_OVERRIDES = {
     "MuteMaster": "1",
@@ -255,8 +276,111 @@ def validate_argv(argv: Sequence[str | os.PathLike[str]] | None) -> list[str]:
             raise ArgumentPolicyError(
                 f'argv[{index}] contains the literal "$args": a PowerShell automatic variable leaked instead of the test arguments.'
             )
+        if Path(text).name in DESKTOP_TOOL_NAMES or "System Events" in text:
+            raise ArgumentPolicyError(f"argv[{index}] names a desktop tool ({text!r}); lanes never drive the user's session.")
         out.append(text)
     return out
+
+
+def _output(command: Sequence[str], timeout: float = 20) -> str | None:
+    try:
+        done = subprocess.run(list(command), capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def gui_session() -> bool:
+    """True when this process belongs to the Mac's GUI login session rather than an ssh or background one."""
+    if sys.platform != "darwin":
+        return False
+    manager = (_output(["/bin/launchctl", "managername"]) or "").strip()
+    if manager and manager != "Background":
+        return True
+    return not os.environ.get("SSH_CONNECTION") and _output(["/bin/launchctl", "print", f"gui/{os.getuid()}"]) is not None
+
+
+def hop_mode() -> str | None:
+    """'ssh' when the engine must start through ssh localhost, None for a direct child."""
+    forced = os.environ.get("CCCP_POSIX_HOP", "").strip().lower()
+    if forced in ("ssh", "off"):
+        return "ssh" if forced == "ssh" else None
+    return "ssh" if gui_session() else None
+
+
+def hop_reachable() -> bool:
+    global _HOP_REACHABLE
+    if _HOP_REACHABLE is None:
+        try:
+            done = subprocess.run([*HOP_SSH, "true"], stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+            _HOP_REACHABLE = done.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            _HOP_REACHABLE = False
+    return _HOP_REACHABLE
+
+
+def ancestor_commands(limit: int = 32) -> list[str]:
+    commands: list[str] = []
+    pid = os.getpid()
+    for _ in range(limit):
+        text = _output(["ps", "-o", "ppid=,args=", "-p", str(pid)])
+        if not text or not text.strip():
+            break
+        parent, _, args = text.strip().partition(" ")
+        commands.append(args.strip())
+        if not parent.strip().isdigit() or int(parent) <= 1:
+            break
+        pid = int(parent)
+    return commands
+
+
+def lane_script_desktop_uses(commands: Sequence[str] | None = None) -> list[str]:
+    """Lines of the calling lane's scripts (the ancestors' script arguments) that run a desktop tool."""
+    hits: list[str] = []
+    seen = {Path(__file__).resolve()}
+    for command in ancestor_commands() if commands is None else commands:
+        for token in command.split():
+            path = Path(token)
+            try:
+                if not path.is_file() or path.resolve() in seen or path.stat().st_size > (4 << 20):
+                    continue
+                seen.add(path.resolve())
+                data = path.read_bytes()
+            except OSError:
+                continue
+            if b"\0" in data[:4096] or not (path.suffix in LANE_SCRIPT_SUFFIXES or data.startswith(b"#!")):
+                continue
+            for number, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
+                if not line.lstrip().startswith("#") and DESKTOP_TOOL.search(line):
+                    hits.append(f"{path}:{number}: {line.strip()[:160]}")
+    return hits
+
+
+def hop_far_side(state_path: str) -> int:
+    """The ssh side of the hop: start the engine from the spec on stdin, record its pid and exit code."""
+    spec = json.loads(sys.stdin.read())
+    state = Path(state_path)
+    proc = subprocess.Popen(spec["argv"], cwd=spec["cwd"], env=spec["env"], stdin=subprocess.DEVNULL, start_new_session=True)
+    record: dict[str, Any] = {"engine_pid": proc.pid, "far_side_pid": os.getpid(), "started_utc": utc_now()}
+    state.write_text(json.dumps(record), encoding="utf-8")
+
+    def stop(signum: int, _frame: Any) -> None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        raise SystemExit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, stop)
+    while proc.poll() is None:
+        # A runner that went away (its ssh gone, this side re-parented) takes its engine with it.
+        if os.getppid() == 1:
+            os.killpg(proc.pid, signal.SIGKILL)
+        time.sleep(0.2)
+    record.update(exit_code=proc.returncode, ended_utc=utc_now())
+    state.write_text(json.dumps(record), encoding="utf-8")
+    return proc.returncode if proc.returncode >= 0 else 128 - proc.returncode
 
 
 def _probe_writable(directory: Path) -> bool:
@@ -449,6 +573,8 @@ class IsolatedRun:
         self._stdout: Any = None
         self._stderr: Any = None
         self.start_time: float | None = None
+        self.hop = hop_mode()
+        self.hop_state = self.out / "hop.json"
         self.record: dict[str, Any] = {
             "runner": "posix_test_runner.py",
             "runner_pid": os.getpid(),
@@ -466,6 +592,7 @@ class IsolatedRun:
             "started": False,
             "startup_checks": [],
             "evidence_expected": self.evidence_expected,
+            "hop": {"via": " ".join(HOP_SSH), "state": str(self.hop_state)} if self.hop else None,
         }
         self._save()
 
@@ -527,6 +654,10 @@ class IsolatedRun:
             )
         except OSError as exc:
             self._check("out_dir_private_writable", False, f"{self.out}: {exc}")
+        global _LANE_SCRIPT_HITS
+        if _LANE_SCRIPT_HITS is None:
+            _LANE_SCRIPT_HITS = lane_script_desktop_uses()
+        self._check("lane_scripts_desktop_free", not _LANE_SCRIPT_HITS, "; ".join(_LANE_SCRIPT_HITS[:5]) or "no desktop tool")
         failed = [c for c in self.record["startup_checks"] if not c["ok"]]
         self._save()
         if failed:
@@ -543,17 +674,35 @@ class IsolatedRun:
                 self.record["settings_sha256_before"] = before
             stdout_path = self.out / "stdout.log"
             stderr_path = self.out / "stderr.log"
+            if self.hop and not hop_reachable():
+                raise StartupCheckError(f"hop: `{' '.join(HOP_SSH)} true` failed; no engine is started in the GUI session")
             self._stdout = stdout_path.open("wb", buffering=0)
             self._stderr = stderr_path.open("wb", buffering=0)
-            self._proc = subprocess.Popen(
-                self.argv,
-                cwd=str(self.cwd),
-                env=self.env,
-                stdin=subprocess.DEVNULL,
-                stdout=self._stdout,
-                stderr=self._stderr,
-                start_new_session=True,
-            )
+            if self.hop:
+                far = shlex.join([sys.executable, str(Path(__file__).resolve()), "--hop-exec", str(self.hop_state)])
+                self._proc = subprocess.Popen(
+                    [*HOP_SSH, far],
+                    stdin=subprocess.PIPE,
+                    stdout=self._stdout,
+                    stderr=self._stderr,
+                    start_new_session=True,
+                )
+                spec = {"argv": self.argv, "cwd": str(self.cwd), "env": {k: v for k, v in self.env.items() if k not in SESSION_ENV}}
+                try:
+                    self._proc.stdin.write(json.dumps(spec).encode("utf-8"))
+                    self._proc.stdin.close()
+                except BrokenPipeError:
+                    pass
+            else:
+                self._proc = subprocess.Popen(
+                    self.argv,
+                    cwd=str(self.cwd),
+                    env=self.env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=self._stdout,
+                    stderr=self._stderr,
+                    start_new_session=True,
+                )
             self.start_time = time.monotonic()
             self.record["pid"] = self._proc.pid
             self.record["started"] = True
@@ -569,9 +718,35 @@ class IsolatedRun:
             json.dumps(self.record, indent=2), encoding="utf-8"
         )
 
+    def _hop_record(self, wait_s: float = 0.0) -> dict[str, Any]:
+        deadline = time.monotonic() + wait_s
+        while True:
+            try:
+                return json.loads(self.hop_state.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                if time.monotonic() >= deadline:
+                    return {}
+                time.sleep(0.05)
+
     def _signal_group(self, sig: int) -> None:
         if self._proc is None or self._proc.pid is None:
             return
+        if self.hop:
+            # The engine leads its own group on the far side of the hop; the same uid on the same box signals it.
+            engine = self._hop_record(wait_s=2.0).get("engine_pid")
+            if engine:
+                try:
+                    os.killpg(engine, sig)
+                except ProcessLookupError:
+                    pass
+                if sig != signal.SIGKILL:
+                    return
+                # The far side records the exit and closes the hop; only a hop that outlives that is killed too.
+                try:
+                    self._proc.wait(timeout=2)
+                    return
+                except subprocess.TimeoutExpired:
+                    pass
         try:
             os.killpg(self._proc.pid, sig)
         except ProcessLookupError:
@@ -584,6 +759,13 @@ class IsolatedRun:
         if self._proc is None:
             return self.record.get("exit_code")
         code = self._proc.poll()
+        if code is not None and self.hop:
+            far = self._hop_record(wait_s=1.0)
+            self.record["hop"].update(ssh_exit=code, engine_pid=far.get("engine_pid"))
+            if "exit_code" in far:
+                return far["exit_code"]
+            self.record["hop"]["failure"] = "the far side recorded no engine exit"
+            return code
         if code is not None:
             return code
         if self.start_time is not None and time.monotonic() - self.start_time >= self.timeout:
@@ -696,9 +878,90 @@ def run(
         obj.close()
 
 
+def _pid_alive(path: Path) -> bool:
+    try:
+        os.kill(int(path.read_text().strip()), 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def self_test(modes: Sequence[str]) -> int:
+    """The runner's own rows: refusals, then exit code, streams, signal, timeout and kill with and without the hop."""
+    import tempfile
+
+    failures: list[str] = []
+
+    def expect(ok: bool, what: str) -> None:
+        print(f"[posix-runner-selftest] {'PASS' if ok else 'FAIL'} {what}", flush=True)
+        if not ok:
+            failures.append(what)
+
+    for argv in (["/usr/bin/osascript", "-e", "beep"], ["screencapture", "-x", "shot.png"], ["/bin/sh", "-c", 'tell application "System Events"']):
+        try:
+            validate_argv(argv)
+            refused = False
+        except ArgumentPolicyError:
+            refused = True
+        expect(refused, f"refuses a launch of {argv[0]}")
+    with tempfile.TemporaryDirectory() as scratch:
+        calling = Path(scratch) / "lane.zsh"
+        calling.write_text("#!/bin/zsh\n# a lane step\n" + "screen" + "capture -x shot.png\n")
+        commented = Path(scratch) / "notes.zsh"
+        commented.write_text("#!/bin/zsh\n# never call osa" + "script here\necho ok\n")
+        expect(bool(lane_script_desktop_uses([f"/bin/zsh {calling}"])), "refuses a lane script that runs a desktop tool")
+        expect(not lane_script_desktop_uses([f"/bin/zsh {commented}"]), "passes a lane script that only mentions one in a comment")
+    saved = os.environ.get("CCCP_POSIX_HOP")
+    try:
+        for mode in modes:
+            os.environ["CCCP_POSIX_HOP"] = mode
+            with tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                record = run(["/bin/sh", "-c", "echo out; echo err >&2; exit 7"], root, root / "exit", 30, startup_checks=False)
+                streams = ((root / "exit/stdout.log").read_text(), (root / "exit/stderr.log").read_text())
+                expect(record["exit_code"] == 7 and streams == ("out\n", "err\n") and bool(record.get("hop")) == (mode == "ssh"),
+                       f"{mode}: exit code 7 and both streams kept (got {record['exit_code']}, {streams!r})")
+                record = run(["/bin/sh", "-c", "kill -TERM $$"], root, root / "signal", 30, startup_checks=False)
+                expect(record["exit_code"] == -signal.SIGTERM, f"{mode}: a signal death reads as -15 (got {record['exit_code']})")
+                group = ["/bin/sh", "-c", "sleep 300 & echo $! > child.pid; echo $$ > parent.pid; wait"]
+                started = time.monotonic()
+                record = run(group, root, root / "timeout", 3, startup_checks=False)
+                time.sleep(0.5)
+                alive = [name for name in ("parent.pid", "child.pid") if _pid_alive(root / name)]
+                expect(record.get("timed_out") is True and record["exit_code"] == 124 and not alive and time.monotonic() - started < 20,
+                       f"{mode}: a timeout ends the whole group (exit {record['exit_code']}, alive {alive})")
+                for name in ("parent.pid", "child.pid"):
+                    (root / name).unlink(missing_ok=True)
+                drop = IsolatedRun(group, root, root / "drop", 60, startup_checks=False)
+                try:
+                    drop.start()
+                    deadline = time.monotonic() + 15
+                    while not (root / "child.pid").is_file() and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    drop.terminate()
+                    record = drop.finish()
+                finally:
+                    drop.close()
+                time.sleep(0.5)
+                alive = [name for name in ("parent.pid", "child.pid") if _pid_alive(root / name)]
+                expect(record["exit_code"] == -signal.SIGKILL and not alive,
+                       f"{mode}: an injected drop kills the group and reads as -9 (exit {record['exit_code']}, alive {alive})")
+    finally:
+        if saved is None:
+            os.environ.pop("CCCP_POSIX_HOP", None)
+        else:
+            os.environ["CCCP_POSIX_HOP"] = saved
+    print(f"[posix-runner-selftest] {'PASS' if not failures else 'FAIL'} modes={','.join(modes)} gui_session={gui_session()}", flush=True)
+    return 0 if not failures else 1
+
+
 if __name__ == "__main__":
     import argparse
 
+    if sys.argv[1:2] == ["--hop-exec"]:
+        sys.exit(hop_far_side(sys.argv[2]))
+    if sys.argv[1:2] == ["--self-test"]:
+        sys.exit(self_test(sys.argv[2:] or ["off", "ssh"]))
     ap = argparse.ArgumentParser()
     ap.add_argument("--cwd", required=True)
     ap.add_argument("--out", required=True)
