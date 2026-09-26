@@ -7888,6 +7888,62 @@ static bool RunGetterCacheSelfTest() {
 	return passed;
 }
 
+// A script's self is fetched once and passed exactly when TableEntryIsDefined says the entry is set: the same argument
+// count and the same self for a present entry, a nil entry, an absent global, a global that is no table and a false entry.
+static bool RunScriptSelfFetchSelfTest() {
+	LuaStateWrapper wrapper;
+	wrapper.Initialize();
+	lua_State* L = wrapper.GetLuaState();
+	std::lock_guard<std::recursive_mutex> lock(wrapper.GetMutex());
+	// The plain call leaves a hook's return values to the caller, so its probe returns nothing; the conditional one's returns its test.
+	wrapper.RunScriptString("function _SelfFetchProbe(...) _SelfFetchCount = select('#', ...); _SelfFetchArgs = {...} end");
+	wrapper.RunScriptString("function _SelfFetchTest(...) _SelfFetchProbe(...); return true end");
+	lua_getglobal(L, "_SelfFetchProbe");
+	LuabindObjectWrapper probe(new luabind::adl::object(luabind::from_stack(L, -1)), "self-fetch-probe.lua");
+	lua_pop(L, 1);
+	lua_getglobal(L, "_SelfFetchTest");
+	LuabindObjectWrapper test(new luabind::adl::object(luabind::from_stack(L, -1)), "self-fetch-test.lua");
+	lua_pop(L, 1);
+	const std::vector<std::pair<const char*, std::string>> cases = {
+	    {"present", "_SelfFetchTable = { ['7'] = { tag = 'self' } }"},
+	    {"nil_entry", "_SelfFetchTable = {}"},
+	    {"absent_global", "_SelfFetchTable = nil"},
+	    {"not_a_table", "_SelfFetchTable = 5"},
+	    {"false_entry", "_SelfFetchTable = { ['7'] = false }"},
+	};
+	std::string failed;
+	for (const auto& [name, setup]: cases) {
+		for (const bool conditional: {false, true}) {
+			wrapper.RunScriptString(setup + "; _SelfFetchCount = -1; _SelfFetchArgs = nil");
+			const bool selfDefined = wrapper.TableEntryIsDefined("_SelfFetchTable", "7");
+			const int top = lua_gettop(L);
+			bool returned = false;
+			if (conditional) {
+				wrapper.RunScriptConditionalTestFunctionObject(&test, "_SelfFetchTable", "7", returned, {}, {"11"});
+			} else {
+				wrapper.RunScriptFunctionObject(&probe, "_SelfFetchTable", "7", {}, {"11"});
+			}
+			const bool balanced = lua_gettop(L) == top;
+			// The old path passed the entry itself first, then the literal.
+			const std::string check = selfDefined ? "_SelfFetchOk = _SelfFetchCount == 2 and rawequal(_SelfFetchArgs[1], _SelfFetchTable['7']) and _SelfFetchArgs[2] == 11"
+			                                      : "_SelfFetchOk = _SelfFetchCount == 1 and _SelfFetchArgs[1] == 11";
+			wrapper.RunScriptString(check);
+			lua_getglobal(L, "_SelfFetchOk");
+			const bool same = lua_toboolean(L, -1) != 0;
+			lua_pop(L, 1);
+			if (!same || !balanced || (conditional && !returned)) {
+				failed += std::string(failed.empty() ? "" : ",") + name + (conditional ? "/conditional" : "/plain") + (same ? "" : ":arguments") +
+				          (balanced ? "" : ":stack") + (conditional && !returned ? ":result" : "");
+			}
+		}
+	}
+	wrapper.RunScriptString("_SelfFetchProbe = nil; _SelfFetchTest = nil; _SelfFetchTable = nil; _SelfFetchArgs = nil; _SelfFetchOk = nil");
+	const bool passed = failed.empty();
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_script_self_is_fetched_as_table_entry_is_defined_says cases=" << cases.size() * 2
+	          << (passed ? "" : " failed=" + failed) << std::endl;
+	return passed;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
@@ -7910,6 +7966,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
 	const bool lazySeed = RunLazySeedSelfTest();
 	const bool getterCache = RunGetterCacheSelfTest();
+	const bool selfFetch = RunScriptSelfFetchSelfTest();
 	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
 	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
 	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
@@ -8003,7 +8060,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && getterCache && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && getterCache && selfFetch && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
@@ -10915,6 +10972,26 @@ namespace {
 	void NotePreviewHookFailure(const std::string& script, const std::string& error);
 }
 
+// Pushes a script's self from the named global table in one lookup, as TableEntryIsDefined and a second fetch did:
+// no self when the table or its entry is nil, any other value (false included) when it is set. Returns what it pushed.
+static int PushScriptSelf(lua_State* state, const std::string& tableName, const std::string& key) {
+	if (tableName.empty()) {
+		return 0;
+	}
+	lua_getglobal(state, tableName.c_str());
+	if (!lua_istable(state, -1)) {
+		lua_pop(state, 1);
+		return 0;
+	}
+	lua_getfield(state, -1, key.c_str());
+	lua_remove(state, -2);
+	if (lua_isnil(state, -1)) {
+		lua_pop(state, 1);
+		return 0;
+	}
+	return 1;
+}
+
 int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functionObject, const std::string& selfGlobalTableName, const std::string& selfGlobalTableKey, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	int status = 0;
 
@@ -10926,12 +11003,7 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	functionObject->GetLuabindObject()->push(m_State);
 
 	int argumentCount = functionEntityArguments.size() + functionLiteralArguments.size() + functionObjectArguments.size();
-	if (!selfGlobalTableName.empty() && TableEntryIsDefined(selfGlobalTableName, selfGlobalTableKey)) {
-		lua_getglobal(m_State, selfGlobalTableName.c_str());
-		lua_getfield(m_State, -1, selfGlobalTableKey.c_str());
-		lua_remove(m_State, -2);
-		argumentCount++;
-	}
+	argumentCount += PushScriptSelf(m_State, selfGlobalTableName, selfGlobalTableKey);
 
 	for (const Entity* functionEntityArgument: functionEntityArguments) {
 		std::unique_ptr<LuabindObjectWrapper> downCastEntityAsLuabindObjectWrapper(LuaAdaptersEntityCast::s_EntityToLuabindObjectCastFunctions.at(functionEntityArgument->GetClassName())(const_cast<Entity*>(functionEntityArgument), m_State));
@@ -11014,12 +11086,7 @@ int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectW
 	functionObject->GetLuabindObject()->push(m_State);
 
 	int argumentCount = functionEntityArguments.size() + functionLiteralArguments.size() + functionObjectArguments.size();
-	if (!selfGlobalTableName.empty() && TableEntryIsDefined(selfGlobalTableName, selfGlobalTableKey)) {
-		lua_getglobal(m_State, selfGlobalTableName.c_str());
-		lua_getfield(m_State, -1, selfGlobalTableKey.c_str());
-		lua_remove(m_State, -2);
-		argumentCount++;
-	}
+	argumentCount += PushScriptSelf(m_State, selfGlobalTableName, selfGlobalTableKey);
 
 	for (const Entity* functionEntityArgument: functionEntityArguments) {
 		std::unique_ptr<LuabindObjectWrapper> downCastEntityAsLuabindObjectWrapper(LuaAdaptersEntityCast::s_EntityToLuabindObjectCastFunctions.at(functionEntityArgument->GetClassName())(const_cast<Entity*>(functionEntityArgument), m_State));
