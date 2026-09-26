@@ -569,6 +569,7 @@ namespace RTE {
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
+		bool returnsInPlace = false; //!< This seat's return replays on its own state and connection: it starts its round before its reclaim frame.
 		uint64_t startParkMs = 0; //!< The start work THIS peer's machine measured, as it published it.
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
@@ -924,6 +925,8 @@ namespace RTE {
 		void SetAnnouncedCaptureEvery(uint32_t every) { m_AnnouncedCaptureEvery = every; }
 		/// A capture every peer takes at the end of the tick: the host's silence behind it is its capture, not its death.
 		void NoteAnnouncedCapture(uint64_t tick);
+		/// Client: the host was heard now; the gap since it was last heard is its talk jitter.
+		void NoteAuthorityHeard(uint64_t nowMs);
 		/// Whether the frame waited on is one the host produces only after a capture every peer announced.
 		bool HostBusyWithAnnouncedCapture(uint64_t frame) const;
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
@@ -1488,6 +1491,8 @@ namespace RTE {
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;
 		uint64_t m_AuthorityLastHeardMs = 0;
+		std::deque<uint32_t> m_AuthorityGaps; //!< Client: the recent gaps between the host's packets while it played.
+		static constexpr size_t c_AuthorityGapSamples = 256;
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
 		uint64_t m_OwnFramesSent = 0; //!< Frames of its own this peer has sent.
 		uint64_t m_LivenessFramesSeen = 0; //!< Host: the count its liveness last saw move.
