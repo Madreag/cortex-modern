@@ -4091,6 +4091,7 @@ namespace RTE {
 			std::atomic<uint64_t> ticks{0};
 			std::atomic<bool> checksArmed{false};
 			std::atomic<uint64_t> checkTrips{0};
+			std::atomic<uint64_t> scopeRefusals{0};
 			std::mutex checkSitesLock;
 			std::set<std::string> checkSites;
 			std::once_flag started;
@@ -4146,6 +4147,10 @@ namespace RTE {
 	bool NetLockstepPlane::ChecksArmed() { return Plane().checksArmed.load(std::memory_order_acquire); }
 
 	uint64_t NetLockstepPlane::CheckTrips() { return Plane().checkTrips.load(std::memory_order_acquire); }
+
+	bool NetLockstepPlane::TicksPermitted() { return Plane().windows.load(std::memory_order_acquire) != 0; }
+
+	uint64_t NetLockstepPlane::ScopeRefusals() { return Plane().scopeRefusals.load(std::memory_order_acquire); }
 
 	int& NetLockstepPlane::LockDepth() {
 		thread_local int depth = 0;
