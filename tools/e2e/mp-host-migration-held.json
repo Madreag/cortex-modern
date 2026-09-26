@@ -119,7 +119,9 @@
         "-net-match-report",
         "{OUT}/clientb-match.json",
         "-net-test-live-stall",
-        "450:4000"
+        "450:4000",
+        "-net-test-live-stall",
+        "1500:1500"
       ],
       "input_script": "mp-host-migration.input.txt",
       "observe_after_failure": true,
@@ -170,7 +172,11 @@
         "-out",
         "{OUT}/clientc_trace.json",
         "-net-match-report",
-        "{OUT}/clientc-match.json"
+        "{OUT}/clientc-match.json",
+        "-net-test-live-stall",
+        "900:1500",
+        "-net-test-live-stall",
+        "2400:1500"
       ],
       "input_script": "mp-host-migration.input.txt",
       "observe_after_failure": true,
