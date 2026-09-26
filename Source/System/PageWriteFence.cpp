@@ -10,6 +10,10 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <signal.h>
+#include <sys/mman.h>
+#include <unistd.h>
 #endif
 
 namespace RTE {
@@ -76,14 +80,64 @@ namespace RTE {
 			return installed;
 		}
 #else
-		// No fence on this platform yet: the caller copies the buffers.
-		size_t PageBytes() { return 0; }
-		bool Protect(uintptr_t, size_t bytes, bool) { return bytes == 0; }
-		bool InstallHandler() { return false; }
+		size_t PageBytes() {
+			const long bytes = sysconf(_SC_PAGESIZE);
+			return bytes > 0 ? static_cast<size_t>(bytes) : 0;
+		}
+
+		bool Protect(uintptr_t address, size_t bytes, bool readOnly) {
+			return bytes == 0 || mprotect(reinterpret_cast<void*>(address), bytes, readOnly ? PROT_READ : PROT_READ | PROT_WRITE) == 0;
+		}
+
+		bool Take(uintptr_t address);
+
+		// Darwin reports a write to a read-only page as SIGBUS, Linux as SIGSEGV; each keeps the handler it had before ours.
+		struct sigaction s_PreviousSegv{};
+		struct sigaction s_PreviousBus{};
+
+		void OnFault(int signal, siginfo_t* info, void* context) {
+			if (info && Take(reinterpret_cast<uintptr_t>(info->si_addr))) {
+				return;
+			}
+			const struct sigaction& previous = signal == SIGBUS ? s_PreviousBus : s_PreviousSegv;
+			if ((previous.sa_flags & SA_SIGINFO) && previous.sa_sigaction) {
+				previous.sa_sigaction(signal, info, context);
+				return;
+			}
+			if (!(previous.sa_flags & SA_SIGINFO) && previous.sa_handler != SIG_DFL && previous.sa_handler != SIG_IGN) {
+				previous.sa_handler(signal);
+				return;
+			}
+			// The default action: the faulting write runs again and ends the process as it would have without the fence.
+			struct sigaction fallback{};
+			fallback.sa_handler = SIG_DFL;
+			sigemptyset(&fallback.sa_mask);
+			sigaction(signal, &fallback, nullptr);
+		}
+
+		bool InstallOn(int signal, struct sigaction& previous) {
+			struct sigaction current{};
+			if (sigaction(signal, nullptr, &current) != 0) {
+				return false;
+			}
+			if ((current.sa_flags & SA_SIGINFO) && current.sa_sigaction == OnFault) {
+				return true;
+			}
+			struct sigaction action{};
+			action.sa_sigaction = OnFault;
+			action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+			sigemptyset(&action.sa_mask);
+			return sigaction(signal, &action, &previous) == 0;
+		}
+
+		// Checked at every arm, so a handler installed after ours is chained to rather than left to meet the fence.
+		bool InstallHandler() {
+			return InstallOn(SIGSEGV, s_PreviousSegv) && InstallOn(SIGBUS, s_PreviousBus);
+		}
 #endif
 
 		// Runs on the faulting thread, before its write lands: the page is copied aside and opened for writing.
-		[[maybe_unused]] bool Take(uintptr_t address) {
+		bool Take(uintptr_t address) {
 			State& fence = Fence();
 			if (!fence.armed.load(std::memory_order_acquire)) {
 				return false;
