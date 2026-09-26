@@ -88,6 +88,7 @@ namespace RTE {
 		bool s_WorldCatchUpActive = false;
 		bool s_WorldCatchUpHeld = false;
 		int s_WorldCatchUpBudget = 0;
+		int s_OwnSeatCatchUpBudget = 0;
 		uint64_t s_WorldCatchUpAppliedThrough = 0;
 		uint64_t s_WorldCatchUpActivationTick = 0;
 		std::deque<NetLockstepFrame> s_WorldCatchUpTail;
@@ -1068,7 +1069,7 @@ namespace RTE {
 		// A synced control handoff overrides the per-team policy for that actor.
 		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
 		if (overrideIt != s_LockstepControlOverrides.end()) {
-			return overrideIt->second == s_LockstepCoordinator->GetConfig().localPeerId;
+			return s_LockstepCoordinator->AiProducerOf(overrideIt->second) == s_LockstepCoordinator->GetConfig().localPeerId;
 		}
 		return s_LockstepCoordinator->IsLocalActor(actorUniqueID, actorTeam, cpuControlled);
 	}
@@ -1080,7 +1081,7 @@ namespace RTE {
 		}
 		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
 		if (overrideIt != s_LockstepControlOverrides.end()) {
-			return overrideIt->second == peerId;
+			return s_LockstepCoordinator->AiProducerOf(overrideIt->second) == peerId;
 		}
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled) == peerId;
 	}
@@ -1092,7 +1093,7 @@ namespace RTE {
 		}
 		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
 		if (overrideIt != s_LockstepControlOverrides.end()) {
-			return overrideIt->second;
+			return s_LockstepCoordinator->AiProducerOf(overrideIt->second);
 		}
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
 	}
@@ -1317,6 +1318,14 @@ namespace RTE {
 
 	void ScenarioRunner::BeginWorldCatchUpFrame() {
 		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
+		s_OwnSeatCatchUpBudget = c_WorldCatchUpTicksPerRealFrame;
+	}
+
+	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick) {
+		NetLockstepPlaneGuard plane;
+		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->IsOwnHostSeatHeld() || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
+		--s_OwnSeatCatchUpBudget;
+		return true;
 	}
 
 	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick) {
