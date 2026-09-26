@@ -1457,7 +1457,9 @@ namespace RTE {
 	}
 
 	bool NetWorldJoinHost::BeginInPlaceRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, uint64_t heldThrough, std::string* error) {
-		if (!IsPrivateMatch() || !m_Tail.Covers(heldThrough + 1)) {
+		// A returner whose state stands at or past the tail's end, ahead of a host that is behind, is served each frame as it is committed.
+		const bool reaches = m_Tail.Covers(heldThrough + 1) || (m_Tail.Count() != 0 && heldThrough >= m_Tail.LastFrame());
+		if (!IsPrivateMatch() || !reaches) {
 			if (error) *error = "the committed tail no longer reaches the held state at " + std::to_string(heldThrough + 1) + ": the first frame it can serve is " + std::to_string(m_Tail.FirstServableFrame());
 			return false;
 		}

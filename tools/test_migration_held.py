@@ -11,8 +11,9 @@ seat, the host's process is dropped at tick 601, ClientA and ClientC elect Clien
   3. every survivor plays to tick 5400 and ClientB's tick hashes equal ClientA's on every tick it simulated after the boundary.
 
 Variants (ClientB's first stall): `held` 4 s, the scenario as written (the stall outlasts the old host); `inside` 2 s (ClientB is
-back and catching up on the old host when it drops); `ringshort` 14 s (longer than the successor's ring: the successor refuses the
-in-place return naming the first frame it can serve, and ClientB comes back through the image).
+back and catching up on the old host when it drops); `ringshort` 14 s with the host dropped at tick 1150, so the held state is older
+than the successor's ring at its handover: the successor refuses the in-place return naming the first frame it can serve, and ClientB
+comes back through the image.
 
     python tools/test_migration_held.py --repo <tree> --out <dir> [--variant held|inside|ringshort] [--port 49760] [--size 640x360]
     python tools/test_migration_held.py --judge <dir>
@@ -40,6 +41,7 @@ REFUSED = re.compile(r"\[net-match\] held seat peer=(\d+) cannot catch up in pla
 RELAUNCH = re.compile(r"\[net-match\] recovery requested tick=(\d+) .*reason=\S*PeerHeld:")
 IMAGE = re.compile(r"\[net-match\] private rejoin peer=(\d+) incarnation=")
 STALLS = {"held": "450:4000", "inside": "450:2000", "ringshort": "450:14000"}
+KILLS = {"ringshort": 1150}
 PORT_BLOCK = (49760, 49799)
 
 
@@ -176,6 +178,8 @@ def drive(variant: str, port: int, arguments: list) -> int:
             if peer["name"] == "clientb":
                 args = peer["args"]
                 args[args.index("-net-test-live-stall") + 1] = STALLS[variant]
+            if peer["name"] == "host" and variant in KILLS:
+                peer["kill_at_tick"] = KILLS[variant]
         return scenario
 
     e2e_video.load_scenario = load_variant
@@ -212,7 +216,8 @@ def main() -> int:
                    "--scenario", "mp-host-migration-held"]
         subprocess.run(command, env=env, check=False)
         (out / "variant.json").write_text(json.dumps({"variant": options.variant, "clientb_stall": STALLS[options.variant],
-                                                      "port": options.port}) + "\n", encoding="utf-8")
+                                                      "host_kill_tick": KILLS.get(options.variant, 601), "port": options.port}) + "\n",
+                                          encoding="utf-8")
     verdict = judge(out, options.repo)
     (out / "migration-held-verdict.json").write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(verdict, indent=2))

@@ -3987,7 +3987,8 @@ static std::string ResyncSaveName() {
 			if (open) continue;
 			// A returner that kept its world reports its state before anything else; one that says nothing else first takes the image.
 			m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
-			if (!m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(member)) continue;
+			// A return already agreed is on its way; if it passes, the seat is held again and its player answered then.
+			if (!m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(member) || m_Coordinator->HasAgreedSeatReclaim(member)) continue;
 			std::string error;
 			if (!m_WorldJoin.BeginRejoin(holder, seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
 			{
@@ -4836,10 +4837,14 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::BeginInPlaceMoveLocked(uint64_t nowMs) {
 		if (!m_InPlaceCatchUp || !m_Coordinator || !m_Session || !m_Runner || !m_CatchUpCoordinator || m_InPlaceRoutes.empty()) return false;
-		// TODO: a return the lost host agreed is the survivors' too; the successor does not yet resume it on a new connection.
+		// A return the lost host agreed passes without this seat: the successor holds it again there and agrees its own.
 		if (m_WorldCatchUp.activationTick != 0) {
-			System::PrintDiagnosticLine("[net-match] held client: its return at " + std::to_string(m_WorldCatchUp.activationTick) + " was agreed with the lost host; it rejoins through the image");
-			return false;
+			System::PrintDiagnosticLine("[net-match] held client: its return at " + std::to_string(m_WorldCatchUp.activationTick) + " was agreed with the lost host; the successor agrees the next");
+			if (m_Runner->IsWorldJoinLockstepStarting()) m_Runner->CancelWorldJoinLockstepStart();
+			if (m_Coordinator->IsRunning()) m_Coordinator->Complete("the host that agreed this seat's return is gone");
+			m_WorldCatchUp.activationTick = 0;
+			m_WorldCatchUp.activationCommitted = false;
+			ScenarioRunner::SetWorldCatchUpActivation(0);
 		}
 		m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 		return DialNextInPlaceRouteLocked(nowMs);
@@ -5015,7 +5020,7 @@ static std::string ResyncSaveName() {
 			m_InPlaceIncarnationBumps[member] = returning > incarnation ? returning - incarnation : 0;
 			m_Coordinator->NoteInPlaceReturn(member);
 			(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, connection, nullptr);
-			if (heldBeforeHandover) {
+			if (m_HandoverFrame != 0 && heldThrough < m_HandoverFrame) {
 				// Ahead of the tail: where it changed hands, so the returner replays each side under the authority that committed it.
 				NetWorldHandover handover;
 				handover.frame = m_HandoverFrame;
@@ -5029,7 +5034,7 @@ static std::string ResyncSaveName() {
 			std::ostringstream line;
 			line << "[net-match] held seat catches up in place peer=" << static_cast<int>(member) << " from=" << heldThrough << " hold=" << hold->second.cutoffFrame
 			     << " incarnation=" << returning << " horizon=" << m_Coordinator->GetStats().nextFrame;
-			if (heldBeforeHandover) line << " handover=" << m_HandoverFrame << " tail_first=" << m_WorldJoin.Tail().FirstServableFrame();
+			if (m_HandoverFrame != 0 && heldThrough < m_HandoverFrame) line << " handover=" << m_HandoverFrame << " tail_first=" << m_WorldJoin.Tail().FirstServableFrame();
 			System::PrintDiagnosticLine(line.str());
 			return;
 		}
