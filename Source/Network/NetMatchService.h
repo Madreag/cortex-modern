@@ -1496,6 +1496,7 @@ namespace RTE {
 		bool m_HostLobbyBeaconed = false;
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
+		NetWorldFrameLog m_CommittedRing; //!< A peer with no tail of its own keeps the round's committed frames, so as a successor it serves a held seat in place.
 		int64_t m_WorldSpectatorsFree = 0; //!< The world's free watcher count, published for the directory row.
 		// A capture the simulation queued and whose verdict the writer thread has not given yet.
 		struct AwaitedAutosave { uint64_t tick = 0; bool joinCapture = false; };
