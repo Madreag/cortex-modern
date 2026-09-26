@@ -4437,6 +4437,7 @@ namespace RTE {
 		m_WaitStartMs = 0;
 		m_AuthorityLastHeardMs = 0;
 		m_AuthorityGaps.clear();
+		m_AuthorityLongestGapMs = 0;
 		m_LastStallFrame = UINT64_MAX;
 		m_RemoteFrames.clear();
 		m_RemoteCommands.clear();
@@ -4908,8 +4909,10 @@ namespace RTE {
 		// spans the silence check excuses anyway, so they are not its jitter.
 		if (m_AuthorityLastHeardMs != 0 && nowMs > m_AuthorityLastHeardMs && IsRunning() && m_PeersPlayedThisRound.contains(GetHostPeerId()) &&
 		    !HostBusyWithAnnouncedCapture(m_Stats.nextFrame)) {
-			m_AuthorityGaps.push_back(static_cast<uint32_t>(std::min<uint64_t>(nowMs - m_AuthorityLastHeardMs, UINT32_MAX)));
+			const uint32_t gap = static_cast<uint32_t>(std::min<uint64_t>(nowMs - m_AuthorityLastHeardMs, UINT32_MAX));
+			m_AuthorityGaps.push_back(gap);
 			while (m_AuthorityGaps.size() > c_AuthorityGapSamples) m_AuthorityGaps.pop_front();
+			m_AuthorityLongestGapMs = std::max(m_AuthorityLongestGapMs, gap);
 		}
 		m_AuthorityLastHeardMs = std::max(m_AuthorityLastHeardMs, nowMs);
 	}
@@ -10242,6 +10245,8 @@ namespace RTE {
 		uint64_t jitterMs = 0;
 		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = host->second.jitterMs;
 		if (const auto estimate = m_DelayEstimators.find(GetHostPeerId()); estimate != m_DelayEstimators.end()) jitterMs = std::max<uint64_t>(jitterMs, estimate->second.JitterMs());
+		// A host that has stalled this long for its own work once this round will again: the longest gap it left is its jitter too.
+		jitterMs = std::max<uint64_t>(jitterMs, m_AuthorityLongestGapMs);
 		for (const uint32_t gap: m_AuthorityGaps) jitterMs = std::max<uint64_t>(jitterMs, gap);
 		// The start work the host published is how long its machine stalls for its own work, and while it does its session still talks
 		// at its keepalive cadence: a silence no longer than those is not a death.

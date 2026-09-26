@@ -1500,6 +1500,7 @@ namespace RTE {
 		uint64_t m_AuthorityLastHeardMs = 0;
 		std::deque<uint32_t> m_AuthorityGaps; //!< Client: the recent gaps between the host's packets while it played.
 		static constexpr size_t c_AuthorityGapSamples = 256;
+		uint32_t m_AuthorityLongestGapMs = 0; //!< Client: the longest gap the host left while it played this round.
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
 		uint64_t m_OwnFramesSent = 0; //!< Frames of its own this peer has sent.
 		uint64_t m_LivenessFramesSeen = 0; //!< Host: the count its liveness last saw move.
