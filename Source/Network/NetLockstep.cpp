@@ -4556,7 +4556,9 @@ namespace RTE {
 		m_RemoteFrameWindow.clear();
 		m_PeerLeaveFrames = m_Config.initialPeerLeaves;
 		for (const auto& [peer, hold]: m_Config.initialSeatHolds) {
-			m_HoldTransactions[peer] = hold; m_AiHeldSeats[peer] = hold.cutoffFrame; m_PeerLeaveFrames[peer] = hold.cutoffFrame;
+			// A held host is still the round's hub: its seat is under the AI, never gone.
+			m_HoldTransactions[peer] = hold; m_AiHeldSeats[peer] = hold.cutoffFrame;
+			if (peer != GetHostPeerId()) m_PeerLeaveFrames[peer] = hold.cutoffFrame;
 			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 		}
 		m_ReclaimTransactions = m_Config.initialSeatReclaims;
@@ -5052,7 +5054,7 @@ namespace RTE {
 					m_ReclaimTransactions.erase(later);
 				m_HoldTransactions[peer] = held->second;
 				m_AiHeldSeats[peer] = held->second.cutoffFrame;
-				m_PeerLeaveFrames[peer] = held->second.cutoffFrame;
+				if (peer != GetHostPeerId()) m_PeerLeaveFrames[peer] = held->second.cutoffFrame;
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 				m_Config.peerIncarnations[peer] = std::max(m_Config.peerIncarnations[peer], held->second.seatIncarnation);
 				std::cout << "[net-lockstep] took peer " << static_cast<int>(peer) << "'s hold at " << held->second.cutoffFrame << " from the replayed tail" << std::endl;
@@ -6957,8 +6959,10 @@ namespace RTE {
 				if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload)) {
 					m_AiHeldSeats[hold->peerId] = input.targetFrame;
 					m_HoldTransactions[hold->peerId] = *hold;
-					m_PeerLeaveFrames[hold->peerId] = input.targetFrame;
-					m_DroppedSeats.insert(hold->peerId);
+					if (hold->peerId != GetHostPeerId()) {
+						m_PeerLeaveFrames[hold->peerId] = input.targetFrame;
+						m_DroppedSeats.insert(hold->peerId);
+					}
 					m_DroppedSeatResolutions[hold->peerId] = NetLockstepHoldResolution::Substituted;
 				}
 			}

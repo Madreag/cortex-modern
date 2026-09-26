@@ -19654,6 +19654,21 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			         " sent_through=" + std::to_string(host.SentInputThrough());
 			return false;
 		}
+		// A seat returning in place takes the host's hold from the tail it replayed: the host is under the AI there, never gone.
+		NetLockstepCoordinator replayed;
+		NetLockstepCoordinator returner;
+		auto returnerConfig = clientConfig;
+		returnerConfig.localPeerId = 3;
+		replayed.m_Config = returnerConfig;
+		returner.m_Config = returnerConfig;
+		replayed.m_HoldTransactions[1] = NetGameSeatHold{1, hold.authorityGeneration, hold.revision, hold.seatIncarnations[0], 200};
+		replayed.m_AiHeldSeats[1] = 200;
+		returner.m_RemotePeerIds = {1, 2};
+		returner.AdoptReplayedSeatTransitions(replayed, 203);
+		if (!returner.IsSeatUnderAI(1, 204) || returner.IsPeerGoneAtFrame(1, 204) || !returner.IsRemoteRequiredForFrame(1, 204)) {
+			*error = "a returner that took the host's hold from its replayed tail reads the host as gone: gone_204=" + std::to_string(returner.IsPeerGoneAtFrame(1, 204));
+			return false;
+		}
 		// Caught up to within its delay of the committed frames, the host takes its seat back past everything already committed.
 		host.m_LastCompletedSimulationTick = 199;
 		host.m_Stats.nextFrame = 205;
