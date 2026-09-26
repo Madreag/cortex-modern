@@ -13,7 +13,8 @@
     {
       "op": "wait",
       "service": "Running",
-      "elapsed_ms": 10500
+      "elapsed_ms": 10500,
+      "lockstep_frame_at_least": 700
     },
     {
       "op": "key_down",
@@ -58,6 +59,10 @@
     {
       "op": "menu",
       "command": "assert_text_fits ButtonEndMatch"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 660
     },
     {
       "op": "menu",
