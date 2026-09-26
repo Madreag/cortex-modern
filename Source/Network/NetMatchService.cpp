@@ -1529,7 +1529,7 @@ static std::string ResyncSaveName() {
 			}
 			m_Liveness.pumpMs = nowMs;
 		}
-		if (sentWhileBusy > 0) {
+		if (sentWhileBusy > 0 && busyMs >= 100) {
 			std::ostringstream line;
 			line << "[net-match] host liveness: " << sentWhileBusy << " acks from the session thread while the simulation was busy for " << busyMs << "ms";
 			System::PrintDiagnosticLine(line.str());
@@ -1541,9 +1541,9 @@ static std::string ResyncSaveName() {
 					std::lock_guard<std::mutex> lock(m_LivenessMutex);
 					HostLiveness& live = m_Liveness;
 					const uint64_t nowMs = SteadyNowMs();
-					// Only while the simulation is busy: a running host's own frames and acks already say it is alive. A host stuck past
-					// the round's timeout is not busy but hung, and goes quiet.
-					if (live.wire && nowMs >= live.pumpMs && nowMs - live.pumpMs >= live.tickMs && (live.busyLimitMs == 0 || nowMs - live.pumpMs < live.busyLimitMs) &&
+					// Only while the simulation is busy, from its second missed tick: a running host's own frames and acks already say it is
+					// alive. A host stuck past the round's timeout is not busy but hung, and goes quiet.
+					if (live.wire && nowMs >= live.pumpMs && nowMs - live.pumpMs >= 2 * live.tickMs && (live.busyLimitMs == 0 || nowMs - live.pumpMs < live.busyLimitMs) &&
 					    (nowMs < live.sentMs || nowMs - live.sentMs >= live.tickMs)) {
 						for (const NetPeerId target: live.targets) {
 							std::string ignored;
