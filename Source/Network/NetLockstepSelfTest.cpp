@@ -4129,6 +4129,65 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat that came back after this joiner's seat state was taken is still held in that state; the host's return for it,
+		// which lands by the joiner's first frame, must end the hold there, or the joiner's first frame hands the seat to the AI
+		// while every peer that simulated the return keeps it with its player.
+		bool TestAJoinerEndsAHoldItsStateStillCarries(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(49549, error) || !clientWire.Connect("loopback", 49549, error)) return false;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A58; config.roundId = 58; config.localPeerId = 2; config.peerCount = 3; config.authorityPeerId = 1;
+			config.startFrame = 40; config.joinsRunningRound = true; config.inputDelayFrames = 2; config.substituteSlowPeers = true;
+			config.timeoutMs = 60000; config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.remoteTransportPeerIds = {{1, 1}};
+			config.scenario = "LockstepSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 3; config.matchConfig.players.push_back({3, 2, false, "Other"});
+			config.activePeerIds = {1, 2, 3};
+			// This seat's state was read at 30, with peer 3 held since 20.
+			config.seatStateThroughFrame = 30;
+			NetGameSeatHold held; held.peerId = 3; held.eventSequence = 4; held.seatIncarnation = 1; held.cutoffFrame = 20;
+			config.initialSeatHolds[3] = held; config.initialPeerLeaves[3] = 20; config.peerIncarnations[3] = 1;
+			NetLockstepCoordinator client;
+			if (!client.Start(clientWire, config, error)) return false;
+			const auto wire = [](const NetLockstepPacket& packet) {
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+				if (!NetLockstepCodec::Encode(packet, event.bytes)) event.bytes.clear();
+				return event;
+			};
+			const auto startOf = [](uint8_t peer) {
+				NetLockstepStart start;
+				start.sessionId = 0x9A58; start.roundId = 58; start.localPeerId = peer; start.peerCount = 3; start.startFrame = 40; start.inputDelayFrames = 2;
+				start.controllerFrameVersion = ControllerFrame::c_Version;
+				start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+				start.scenario = "LockstepSelfTest"; start.ownershipPolicy = "unique-id-split";
+				return start;
+			};
+			// Peer 3 came back at 35: after this seat's state was read, before its first frame.
+			NetLockstepTiming back;
+			back.senderPeerId = 1; back.peerId = 3; back.action = NetTimingAction::Reclaim; back.phase = NetTimingPhase::ReclaimAtFrame;
+			back.sessionId = 0x9A58; back.roundId = 58; back.revision = 5; back.applyFrame = back.cutoffFrame = 35; back.delayFrames = 2;
+			back.neutralThroughFrame = 37; back.heldPeers = 0x4; back.requiredPeers = 0x1; back.seatIncarnations[2] = 2;
+			uint64_t now = 0;
+			for (const NetTransportEvent& event: {wire({startOf(1)}), wire({back}), wire({startOf(3)})}) {
+				if (event.bytes.empty()) { *error = "a packet of the joining round's handshake would not encode"; return false; }
+				client.InjectEvent(event, now);
+				for (uint64_t until = now + 20; now < until; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			}
+			// Every frame from the first one names its departed seats from the leaves the round holds; a returned seat is not one.
+			const bool stillLeft = client.GetPeerLeaveFrames().contains(3);
+			if (!client.IsRunning() || client.HasHeldAISeat(3) || stillLeft || client.IsSeatUnderAI(3, 40) || client.IsPeerGoneAtFrame(3, 40)) {
+				*error = std::string("a return that landed before the joiner's first frame left its seat held: state=") +
+				         NetLockstepCoordinator::StateName(client.GetState()) + " reason=" + client.GetStats().timeoutReason +
+				         " held=" + std::to_string(client.HasHeldAISeat(3)) + " left=" + std::to_string(stillLeft) +
+				         " under_ai=" + std::to_string(client.IsSeatUnderAI(3, 40)) + " gone=" + std::to_string(client.IsPeerGoneAtFrame(3, 40));
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_joiner_ends_a_hold_its_state_still_carries" << std::endl;
+			return true;
+		}
+
 		// A link the round has measured must survive the connection that measured it: a peer that comes
 		// back on a new transport reports no samples yet, and reading that as an instant link left the
 		// returning seat's allowance with nothing to size itself from.
@@ -20167,6 +20226,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame(&error) ||
 		    !TestAReturnerHearsAHoldTheHostAlreadyApplied(&error) ||
 		    !TestAJoinerIgnoresTransitionsItsStateAlreadyHolds(&error) ||
+		    !TestAJoinerEndsAHoldItsStateStillCarries(&error) ||
 		    !TestReclaimedSeatRestartsItsWaitReadings(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
