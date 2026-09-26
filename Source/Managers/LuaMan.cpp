@@ -8116,6 +8116,28 @@ assert(({_ScriptGraphNative(CheckpointEndedZone)})[1] == "invalid", "the restore
 		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] outlived alarm: " << problem << std::endl;
 		checkpointValues = passed && checkpointValues;
 	}
+	{
+		// A script keeps an object's reference past its deletion; a preview's hold freezes on it without reading the object.
+		const auto* preset = dynamic_cast<const MovableObject*>(g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte"));
+		MovableObject* gone = preset ? dynamic_cast<MovableObject*>(preset->Clone()) : nullptr;
+		bool held = false;
+		std::string scriptClass;
+		if (gone) {
+			luabind::object(m_State, gone).push(m_State);
+			const auto* rep = luabind::detail::is_class_object(m_State, -1);
+			scriptClass = rep && rep->crep() ? rep->crep()->name() : "";
+			lua_setglobal(m_State, "PreviewOutlivedTarget");
+			held = RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; _ScriptFieldsStash['preview:-7654402'] = { target = PreviewOutlivedTarget }; PreviewOutlivedTarget = nil") == 0;
+			delete gone;
+		}
+		std::string freezeClass;
+		const bool remapped = held && RemapPreviewHoldReferences(-7654402, freezeClass);
+		RunScriptString("if _ScriptFieldsStash then _ScriptFieldsStash['preview:-7654402'] = nil end");
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		const bool passed = held && !scriptClass.empty() && !remapped && freezeClass == scriptClass;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_preview_never_reads_an_object_its_script_outlived held=" << held << " remapped=" << remapped << " frozen_as=" << freezeClass << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
 
 	{
 		// What a capture's cached answers name must die with the object they describe: a script table an
@@ -8307,6 +8329,24 @@ end
 	                         birthsHere.back() >= birthsHere[birthsHere.size() - 2];
 	std::cout << "[script-graph-selftest] " << (birthsAgree ? "PASS" : "FAIL") << " table_birth_numbers_match_across_states" << std::endl;
 	checkpointValues = birthsAgree && checkpointValues;
+	// A state makes a container type's iterator metatable on its first iteration, which a peer restored from an image
+	// does later than the peer that saved it; so the first iteration takes the births every later one takes.
+	{
+		std::array<uint64_t, 2> births{};
+		std::vector<int> container{1, 2, 3};
+		if (lua_State* fresh = luaL_newstate()) {
+			for (uint64_t& born: births) {
+				const uint64_t before = luaJIT_state_serial(fresh);
+				luabind::detail::make_range<false>(fresh, container);
+				born = luaJIT_state_serial(fresh) - before;
+				lua_settop(fresh, 0);
+			}
+			lua_close(fresh);
+		}
+		const bool same = births[0] > 0 && births[0] == births[1];
+		std::cout << "[script-graph-selftest] " << (same ? "PASS" : "FAIL") << " first_iteration_of_a_type_takes_no_extra_birth first=" << births[0] << " next=" << births[1] << std::endl;
+		checkpointValues = same && checkpointValues;
+	}
 	// A table that never leaves a hot loop is sunk under -O3 and never born; a captured state must
 	// allocate it, or two peers whose traces differ would number their objects differently.
 	RunScriptString("_F76SinkProbe = function() local n = 0 for i = 1, 400 do local t = { i } n = n + t[1] end return n end");
@@ -8588,6 +8628,19 @@ end
 	checkpointValues = g_MusicMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_GUISound.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_UInputMan.RunCheckpointSelfTest() && checkpointValues;
+	{
+		// A seat's committed input travels in the runtime globals, so a peer restored from an image reads what the round committed.
+		const std::string before = g_UInputMan.SaveCommittedSeats();
+		g_UInputMan.NoteCommittedSeatMouse(Players::PlayerThree, Vector(-4.0F, 6.0F), 3, 0x12, 91);
+		const std::string noted = g_UInputMan.SaveCommittedSeats();
+		const std::string globals = g_ActivityMan.CaptureRuntimeGlobals();
+		g_UInputMan.ResetCommittedSeats();
+		const bool restored = g_ActivityMan.RestoreRuntimeGlobals(globals);
+		const bool carried = restored && g_UInputMan.SaveCommittedSeats() == noted;
+		g_UInputMan.LoadCommittedSeats(before);
+		std::cout << "[script-graph-selftest] " << (carried ? "PASS" : "FAIL") << " committed_seats_travel_in_the_runtime_globals restored=" << restored << " carried=" << carried << std::endl;
+		checkpointValues = carried && checkpointValues;
+	}
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
 	checkpointValues = System::RunPrintDisciplineSelfTest() && checkpointValues;
 	checkpointValues = ContentFile::RunImageLoadSelfTest() && checkpointValues;
@@ -12138,7 +12191,8 @@ namespace {
 					}
 					return;
 				}
-				if (object->crep() && std::strcmp(object->crep()->name(), "SoundContainer") == 0) {
+				// A sound its owner took along when it was deleted stays as the script holds it; the remap freezes it.
+				if (object->crep() && std::strcmp(object->crep()->name(), "SoundContainer") == 0 && ScriptGraphNativeAlive(L, object)) {
 					auto* source = static_cast<SoundContainer*>(object->ptr());
 					lua_pushlightuserdata(L, source);
 					lua_rawget(L, seen);
@@ -12243,6 +12297,11 @@ namespace {
 		}
 		if (LuaMan::IsPreviewClone(mo)) {
 			return true;
+		}
+		// A script keeps its reference past the object's deletion, so only an object still alive is read.
+		if (!g_MovableMan.ValidMO(mo) && !ScriptGraphNativeAlive(L, object)) {
+			freezeClass = className;
+			return false;
 		}
 		MovableObject* mapped = nullptr;
 		if (const auto found = s_PreviewRootByUID.find(mo->GetUniqueID()); found != s_PreviewRootByUID.end() && found->second != mo) {
