@@ -285,6 +285,9 @@ static bool s_frameStallFired = false;
 static bool s_scriptedLeaveDue = false; //!< The -net-match-e2e-leave tick has run; the leave follows at its end.
 static long long s_frameStallTick = 0;
 static int s_frameStallMs = 0;
+static long long s_drawStallTick = 0; //!< A present that blocks the main thread at this tick, for the plane's draw window.
+static int s_drawStallMs = 0;
+static bool s_drawStallFired = false;
 struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; };
 static std::vector<NetLiveStall> s_netLiveStalls;
 // Test lever: how many ticks the e2e synced pause lasts before its unpause.
@@ -1053,6 +1056,17 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-selftest-prematch-history" && i + 1 < argCount) {
 			s_preMatchHistoryObjects = static_cast<int>(std::strtol(argValue[i + 1], nullptr, 10));
 			++i;
+			continue;
+		}
+		if (currentArg == "-selftest-draw-stall" && i + 1 < argCount) {
+			const std::string spec = argValue[i + 1];
+			const size_t separator = spec.find(':');
+			if (separator != std::string::npos) {
+				s_drawStallTick = std::strtoll(spec.substr(0, separator).c_str(), nullptr, 10);
+				s_drawStallMs = static_cast<int>(std::strtol(spec.substr(separator + 1).c_str(), nullptr, 10));
+			}
+			if (s_drawStallMs <= 0) System::PrintDiagnosticErrorLine("[selftest] draw stall expected <tick>:<ms>, got " + spec);
+			i += 2;
 			continue;
 		}
 		if (currentArg == "-selftest-frame-stall" && i + 1 < argCount) {
@@ -3208,18 +3222,38 @@ static void DrawFrameWithPreviews() {
 		hudDisabled[screen] = g_FrameMan.IsHudDisabled(screen);
 		if (localPause) g_FrameMan.SetHudDisabled(true, screen);
 	}
-	g_FrameMan.Draw();
+	{
+		NetLockstepPlane::Window sceneDraw("scene draw");
+		g_FrameMan.Draw();
+	}
 	for (int screen = 0; screen < c_MaxScreenCount; ++screen) g_FrameMan.SetHudDisabled(hudDisabled[screen], screen);
 	LocalPredictionHudSelfTest::SampleAfterDraw();
-	g_MenuMan.DrawNetworkUI();
-	ScenarioRunner::DrawNetUiToasts();
-	g_WindowMan.DrawPostProcessBuffer();
-	g_MenuMan.DrawLocalPauseMenu();
+	{
+		// The overlays read the match service, which reaches the round without the plane's lock.
+		NetLockstepPlane::Gap plane("overlay draw");
+		g_MenuMan.DrawNetworkUI();
+		ScenarioRunner::DrawNetUiToasts();
+		g_WindowMan.DrawPostProcessBuffer();
+		g_MenuMan.DrawLocalPauseMenu();
+	}
 	FrameMan::FeelBeforePresent();
-	g_WindowMan.UploadFrame();
+	if (s_drawStallMs > 0 && !s_drawStallFired && g_TimerMan.GetSimUpdateCount() >= s_drawStallTick) {
+		// A present the driver holds: the main thread is away inside the frame's draw, not its simulation.
+		s_drawStallFired = true;
+		System::PrintDiagnosticLine("[selftest] draw stall tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(s_drawStallMs));
+		const uint64_t planeTicksBefore = NetLockstepPlane::Ticks();
+		std::this_thread::sleep_for(std::chrono::milliseconds(s_drawStallMs));
+		System::PrintDiagnosticLine("[selftest] draw stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
+	}
+	{
+		NetLockstepPlane::Window present("present");
+		g_WindowMan.UploadFrame();
+	}
 	g_FrameMan.FeelAfterPresent();
 	if (FrameRecorder::Instance().Enabled()) {
-		g_FrameMan.RecordVideoFrame(RecordedScreenName(), g_NetMatchService.GetLobbySnapshot().serviceState);
+		const std::string serviceState = [] { NetLockstepPlane::Gap plane("recorder's service state"); return g_NetMatchService.GetLobbySnapshot().serviceState; }();
+		NetLockstepPlane::Window recorder("recorder");
+		g_FrameMan.RecordVideoFrame(RecordedScreenName(), serviceState);
 	}
 	if (NetMatchScreenshotDue()) {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
@@ -5303,6 +5337,9 @@ void RunGameLoop() {
 		FrameMan::FeelBeginIteration();
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
+		// The host's session plane receives, relays and commits for every stretch of the frame the simulation spends away from its round.
+		std::optional<NetLockstepPlane::Window> frameHeadWindow;
+		frameHeadWindow.emplace("frame head");
 		PollSDLEvents();
 		g_WindowMan.Update();
 		g_WindowMan.ClearBackbuffer();
@@ -5336,6 +5373,7 @@ void RunGameLoop() {
 				break;
 			}
 		}
+		frameHeadWindow.reset();
 
 		g_TimerMan.Update();
 
@@ -5982,7 +6020,10 @@ void RunGameLoop() {
 			g_LuaMan.StartAsyncGarbageCollection(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), g_NetMatchService.IsNamedCaptureTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())));
 			// Join before leaving the tick: an unfinished GC races the next tick's Lua for the state
 			// mutexes, so collection timing (and per-peer sim state) would follow wall-clock scheduling.
-			g_LuaMan.WaitForAsyncGarbageCollection();
+			{
+				NetLockstepPlane::Window collectionWindow("tick-end collection wait");
+				g_LuaMan.WaitForAsyncGarbageCollection();
+			}
 			if (s_scriptedLeaveDue) {
 				s_scriptedLeaveDue = false;
 				{
@@ -6918,6 +6959,9 @@ void RunGameLoop() {
 		// Frame rendering must not advance the sim RNG stream or feed the MOID grid — its cadence is
 		// host frame-rate dependent, so redirect cosmetic draws to the render RNG and suspend
 		// MOID-grid registration for the frame.
+		// Presentation, input and the menus are this machine's own; the round goes on through them.
+		std::optional<NetLockstepPlane::Window> drawWindow;
+		drawWindow.emplace("frame draw");
 		FrameMan::FeelBeforePreview();
 		LocalPrediction::RunPreview();
 
@@ -6926,7 +6970,10 @@ void RunGameLoop() {
 			t_simRNGOverride = &g_RenderRNG;
 			g_SceneMan.SetRenderDrawContext(true);
 			g_UInputMan.Update();
-			g_MenuMan.UpdateNetworkUI();
+			{
+				NetLockstepPlane::Gap plane("network UI update");
+				g_MenuMan.UpdateNetworkUI();
+			}
 			g_MenuMan.UpdateLocalPauseMenu();
 			g_ActivityMan.RenderUpdate();
 			g_UInputMan.EndFrame();
@@ -6936,9 +6983,13 @@ void RunGameLoop() {
 		if (!freeRunLockstep || NetMatchScreenshotDue()) {
 			DrawFrameWithPreviews();
 		}
+		drawWindow.reset();
 
 		drawTotalTime = g_TimerMan.GetAbsoluteTime() - drawStartTime;
 		g_PerformanceMan.UpdateMSPF(updateTotalTime, drawTotalTime);
+		// A frame that kept the simulation away half a second names where the time went.
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && updateTotalTime + drawTotalTime >= 500000)
+			System::PrintDiagnosticLine("[main-loop] slow frame update_ms=" + std::to_string(updateTotalTime / 1000) + " draw_ms=" + std::to_string(drawTotalTime / 1000) + " tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()));
 
 		// Both ends of the iteration must be in a RUNNING match, or the teardown drain and
 		// menu-transition iterations poison the averages.

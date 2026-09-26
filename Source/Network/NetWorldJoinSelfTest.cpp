@@ -3029,6 +3029,28 @@ namespace RTE {
 		return 0;
 	}
 
+	// Two inputs for one actor in a frame reach the join tail in the order every live peer applies them, whichever peer packed it.
+	int TestTailPackKeepsSenderOrder() {
+		const auto input = [](uint64_t state) { ControllerFrame frame; frame.actorUniqueID = 7; frame.stateMask = state; return frame; };
+		const auto view = [&](uint8_t local) {
+			NetLockstepReadyFrame ready;
+			ready.frame = 11;
+			ready.localPeerId = local;
+			for (uint8_t peer = 1; peer <= 3; ++peer) {
+				if (peer == local) { ready.localFrames.push_back(input(peer)); continue; }
+				ready.remoteFrameCounts[peer] = 1;
+				ready.remoteFrames.push_back(input(peer));
+			}
+			return PackWorldJoinReadyFrame(ready);
+		};
+		const NetLockstepFrame host = view(1), client = view(2), survivor = view(3);
+		const auto states = [](const NetLockstepFrame& packed) { std::string text; for (const auto& frame: packed.frames) text += std::to_string(frame.stateMask); return text; };
+		if (states(host) != "123" || states(client) != "123" || states(survivor) != "123")
+			return Fail("tail-pack-order: the packed inputs of one actor read " + states(host) + "/" + states(client) + "/" + states(survivor) +
+			            " from the three peers' commits; every peer applies them 123, by sender");
+		return 0;
+	}
+
 	int TestReadyFramePackIncludesRemotes() {
 		NetLockstepReadyFrame ready;
 		ready.frame = 11;
@@ -7605,6 +7627,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestWorldCapacityRidesTheV5Config(); result != 0) {
+			return result;
+		}
+		if (const int result = TestTailPackKeepsSenderOrder(); result != 0) {
 			return result;
 		}
 		if (const int result = TestReadyFramePackIncludesRemotes(); result != 0) {
