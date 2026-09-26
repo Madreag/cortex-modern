@@ -91,6 +91,73 @@ namespace RTE {
 			return false;
 		}
 
+		// The host's liveness goes out from the session thread while the simulation thread pumps the same transport: two threads
+		// sending 10,000 messages each on one connection while a third pumps both ends lose none, reorder none and corrupt none.
+		bool TestTwoThreadsSendOnOneTransport(std::string* error) {
+			if (!GnsTransport::IsCompiledIn()) return true;
+			GnsTransport host, client;
+			if (!host.StartHost(49592, error) || !client.Connect("127.0.0.1", 49592, error)) return false;
+			NetPeerId toClient = c_InvalidNetPeerId;
+			bool clientUp = false;
+			const auto started = std::chrono::steady_clock::now();
+			while ((toClient == c_InvalidNetPeerId || !clientUp) && std::chrono::steady_clock::now() - started < std::chrono::seconds(5)) {
+				for (const auto& event: host.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) toClient = event.peerId;
+				for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) clientUp = true;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			if (toClient == c_InvalidNetPeerId || !clientUp) { *error = "the two-thread send fixture never connected"; return false; }
+			constexpr uint32_t c_Sends = 10000;
+			std::atomic<uint32_t> refused{0};
+			const auto message = [](uint8_t sender, uint32_t sequence) {
+				std::vector<uint8_t> bytes(24);
+				bytes[0] = sender;
+				for (int i = 0; i < 4; ++i) bytes[1 + i] = static_cast<uint8_t>(sequence >> (8 * i));
+				uint8_t sum = 0;
+				for (size_t i = 5; i + 1 < bytes.size(); ++i) { bytes[i] = static_cast<uint8_t>(sender * 31U + sequence * 7U + i); sum ^= bytes[i]; }
+				bytes.back() = sum;
+				return bytes;
+			};
+			const auto send = [&](uint8_t sender) {
+				for (uint32_t sequence = 0; sequence < c_Sends; ++sequence) {
+					const std::vector<uint8_t> bytes = message(sender, sequence);
+					for (;;) {
+						std::string sendError;
+						bool congested = false;
+						if (host.Send(toClient, NetTransportLane::ControlReliable, bytes, &sendError, &congested)) break;
+						if (!congested) { ++refused; break; }
+						std::this_thread::sleep_for(std::chrono::milliseconds(1));
+					}
+				}
+			};
+			std::array<uint32_t, 3> next{};
+			uint32_t received = 0, corrupt = 0, reordered = 0;
+			std::thread first(send, 1), second(send, 2);
+			// This thread pumps both ends the whole time, as the simulation thread pumps the wire the session thread sends on.
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+			while (received + corrupt < 2 * c_Sends && std::chrono::steady_clock::now() < deadline) {
+				(void)host.PollEvents();
+				for (const auto& event: client.PollEvents()) {
+					if (event.type != NetTransportEventType::PacketReceived) continue;
+					const auto& bytes = event.bytes;
+					if (bytes.size() != 24 || (bytes[0] != 1 && bytes[0] != 2)) { ++corrupt; continue; }
+					uint32_t sequence = 0;
+					for (int i = 0; i < 4; ++i) sequence |= static_cast<uint32_t>(bytes[1 + i]) << (8 * i);
+					if (bytes != message(bytes[0], sequence)) { ++corrupt; continue; }
+					if (sequence != next[bytes[0]]) ++reordered;
+					next[bytes[0]] = sequence + 1;
+					++received;
+				}
+			}
+			first.join(); second.join();
+			if (received != 2 * c_Sends || corrupt != 0 || reordered != 0 || refused != 0) {
+				*error = "two threads sending on one transport: received=" + std::to_string(received) + " of " + std::to_string(2 * c_Sends) +
+				         " corrupt=" + std::to_string(corrupt) + " reordered=" + std::to_string(reordered) + " refused=" + std::to_string(refused.load());
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS two_threads_send_on_one_transport sends=" << 2 * c_Sends << " corrupt=0 drops=0" << std::endl;
+			return true;
+		}
+
 		bool TestInputDelayUsesTheSimTick(std::string* error) {
 			NetInputDelayEstimator estimate;
 			estimate.Observe(0, 401);
@@ -13713,6 +13780,7 @@ namespace RTE {
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
+		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
 		if (!TestServiceWorldJoinAdoptsConfig(&error)) return fail(error);
 		if (!TestRemovedWoundReleasesItsRadiusCache(&error)) return fail(error);
 		if (!TestLobbyStartReturnsBeforeHashingModules(&error)) return fail(error);
