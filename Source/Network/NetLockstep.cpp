@@ -3980,6 +3980,11 @@ namespace RTE {
 		m_WaitingFrame = m_Config.startFrame;
 		m_WaitStartMs = nowMs;
 		m_AuthorityLastHeardMs = nowMs;
+		// The new host is in its start work until its first frame of the handed-over round, as a host is at a round's own start:
+		// only its link's close or the round's timeout ends that wait. Its predecessor's talk gaps say nothing of it.
+		if (m_MigrationSuccessor != m_Config.localPeerId) m_PeersPlayedThisRound.erase(m_MigrationSuccessor);
+		m_AuthorityGaps.clear();
+		m_AuthorityLongestGapMs = 0;
 		if (NeedsMigrationSnapshot()) {
 			std::string error;
 			if (!QueueInputAtTarget(m_Config.startFrame, {}, {}, &error, {}))
