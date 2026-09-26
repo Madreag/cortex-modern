@@ -639,6 +639,11 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// Every layer of the image comes off the terrain, and a scene mid-load has none yet.
 	if (!scene->GetTerrain()) throw std::runtime_error("scene has no terrain");
 	const auto freezeStart = std::chrono::steady_clock::now();
+	CaptureTrace::Begin(tick);
+	struct TraceEnd {
+		~TraceEnd() { CaptureTrace::End(); }
+	} traceEnd;
+	std::optional<CaptureTrace::Span> simSpan(std::in_place, "sim_prepare");
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	g_MovableMan.WaitForActorsSeeTask();
 	// Every part of the capture asks which objects exist; the fence answers from one copy instead of the registry's lock.
@@ -685,36 +690,36 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// What the workers would make on first use is made here; from the first worker to the join they only read.
 	LuaScriptGraphNativeCaptureScope::PreTouch();
 	std::optional<CaptureSentinel::ParallelPhase> parallel(std::in_place);
-	struct Aside {
-		std::vector<std::future<void>> tasks;
-		~Aside() { for (std::future<void>& task: tasks) if (task.valid()) task.wait(); }
-		void Join() {
-			for (std::future<void>& task: tasks) task.wait();
-			for (std::future<void>& task: tasks) task.get();
-			tasks.clear();
-		}
-	} aside;
+	// The parts run in the order they are named, the longest first; this thread takes whatever part is left once the
+	// graphs are done, so it never waits behind other pool work for a part nobody started.
+	std::vector<std::function<void()>> aside;
 	AudioMan::SoundCheckpointSaveScope* const sounds = &carriedSounds;
-	const auto captureAside = [&aside, sounds](std::function<void()> work, CheckpointCache* cache = nullptr) {
-		aside.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([sounds, cache, work = std::move(work)] {
+	const auto captureAside = [&aside, sounds](const char* label, std::string detail, std::function<void()> work, CheckpointCache* cache = nullptr) {
+		const auto task = [sounds, cache, label, detail = std::move(detail), queued = std::chrono::steady_clock::now(), work = std::move(work)] {
 			CaptureSentinel::WorkerScope worker("capture-aside");
+			CaptureTrace::Span span(label, detail, queued);
 			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
 			CheckpointCache values;
 			values.Begin();
 			CheckpointWriter::CacheScope valuesScope(cache ? cache : &values);
 			work();
-		}));
+		};
+		if (CaptureTrace::Serial()) {
+			task();
+			return;
+		}
+		aside.emplace_back(std::move(task));
 	};
 	// The script graphs' native answers need the world's trees walked; that starts first, off this thread.
-	captureAside([shared = LuaScriptGraphNativeCaptureScope::Current()] { LuaScriptGraphNativeCaptureScope::BuildWorld(shared); });
+	captureAside("build_world", {}, [shared = LuaScriptGraphNativeCaptureScope::Current()] { LuaScriptGraphNativeCaptureScope::BuildWorld(shared); });
 	// Elapsed timer fields change even when their object's write stamp holds, so the scene keeps a cache of its own.
-	captureAside([&] {
+	captureAside("scene", {}, [&] {
 		const auto sceneStart = std::chrono::steady_clock::now();
 		image->scene = scene->CaptureSavedScene(fileName);
 		image->movableUs = Scene::LastObjectCaptureUs();
 		image->sceneUs = since(sceneStart);
 	}, sceneCache.get());
-	captureAside([&] {
+	captureAside("activity", {}, [&] {
 		const auto activityStart = std::chrono::steady_clock::now();
 		image->activity = Writer::Capture([&](Writer& writer) {
 			writer.NewPropertyWithValue("Activity", activity);
@@ -726,28 +731,29 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		});
 		image->activityUs = since(activityStart);
 	});
+	captureAside("scene_runtime", {}, [&] {
+		const auto sceneRuntimeStart = std::chrono::steady_clock::now();
+		image->sceneRuntime = CheckpointWriter::CaptureNative([scene] { return scene->SaveRuntimeCheckpoint(); });
+		image->sceneRuntimeUs = since(sceneRuntimeStart);
+	});
+	captureAside("audio_samples", {}, [&audioSamples] { audioSamples = g_AudioMan.CaptureCheckpointSamples(); });
 	for (size_t part = 0; part < managerSavers.size(); ++part) {
-		captureAside([&managerParts, &managerTimings, &managerSavers, &since, part] {
+		captureAside("manager", managerSavers[part].name, [&managerParts, &managerTimings, &managerSavers, &since, part] {
 			const auto start = std::chrono::steady_clock::now();
 			managerParts[part] = CheckpointWriter::CaptureNative(managerSavers[part].save);
 			managerTimings[part] = {managerSavers[part].name, since(start)};
 		});
 	}
-	captureAside([&] {
-		const auto sceneRuntimeStart = std::chrono::steady_clock::now();
-		image->sceneRuntime = CheckpointWriter::CaptureNative([scene] { return scene->SaveRuntimeCheckpoint(); });
-		image->sceneRuntimeUs = since(sceneRuntimeStart);
-	});
-	captureAside([&audioSamples] { audioSamples = g_AudioMan.CaptureCheckpointSamples(); });
 	// Each terrain layer copies its own dirty rows; the image keeps the layers' order.
 	const auto layersStart = std::chrono::steady_clock::now();
 	for (LayerCapture& captured: layers) {
-		captureAside([&captured, &layersUs, &since, layersStart] {
+		captureAside("layer", captured.name, [&captured, &layersUs, &since, layersStart] {
 			captured.snapshot = captured.layer->CaptureBitmapSnapshot(&captured.retired);
 			const int64_t done = since(layersStart);
 			for (int64_t seen = layersUs.load(); done > seen && !layersUs.compare_exchange_weak(seen, done);) {}
 		});
 	}
+	ParallelWork asideWork(g_ThreadMan.GetPriorityThreadPool(), aside.size(), [&aside](size_t part) { aside[part](); });
 	std::vector<std::string> problems;
 	const size_t luaStateCount = 1 + g_LuaMan.GetThreadedScriptStates().size();
 	auto& graphIndex = CheckpointGraphIndex::Get();
@@ -763,6 +769,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		audio = g_AudioMan.CaptureCheckpointState(false);
 		audioReadUs = since(audioStart);
 	};
+	simSpan.emplace("sim_graphs");
 	const auto graphStart = std::chrono::steady_clock::now();
 	bool frozenGraphs = false;
 	const SaveKind kind = matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave;
@@ -801,9 +808,12 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// feeds no index and reuses no root, so it reports neither rather than the last live walk's sample.
 	image->graphRootsReused = image->luaReused ? image->graph.roots : (frozenGraphs ? 0 : image->graph.rootsReused);
 	image->graphRootsRewritten = image->luaReused || frozenGraphs ? 0 : image->graph.rootsRewritten;
+	simSpan.emplace("sim_audio");
 	readAudio();
-	aside.Join();
+	simSpan.emplace("sim_join");
+	asideWork.Finish();
 	parallel.reset();
+	simSpan.emplace("sim_after_join");
 	for (LayerCapture& captured: layers) {
 		image->layers.emplace_back(captured.name, std::move(captured.snapshot));
 		std::move(captured.retired.begin(), captured.retired.end(), std::back_inserter(retiredLayers));
@@ -820,9 +830,11 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	effectsSoFar();
 	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
 	allocation.RestoreCounters();
+	simSpan.emplace("sim_structure");
 	const auto structureStart = std::chrono::steady_clock::now();
 	image->structure = CheckpointWriter::CaptureNative([] { return g_MovableMan.SaveWorldStructure(); });
 	image->structureUs = since(structureStart);
+	simSpan.emplace("sim_globals");
 	const auto globalsStart = std::chrono::steady_clock::now();
 	image->globals = CheckpointWriter::CaptureNative([&] {
 		return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts, &managerParts, audio.get(), audioSamples.get(), fullStateOnly ? &image->globalSections : nullptr);
@@ -830,6 +842,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->globalParts.insert(image->globalParts.end(), managerTimings.begin(), managerTimings.end());
 	image->globalParts.emplace_back("audio_read", audioReadUs);
 	image->globalsUs = since(globalsStart);
+	simSpan.emplace("sim_finish");
 	effectsSoFar();
 	m_LastCaptureEffects = effects;
 	image->activityName = activity->GetPresetName();
@@ -858,6 +871,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->dirtyBytes = dirtyBytes;
 	image->dirtyRatio = image->imageBytes ? static_cast<double>(dirtyBytes) / static_cast<double>(image->imageBytes) : 0;
 	image->freezeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - freezeStart).count();
+	simSpan.reset();
+	CaptureTrace::End();
 	bytes = image->imageBytes;
 	auto previousImage = cow.FinishImage(image);
 	if (fullStateOnly) {

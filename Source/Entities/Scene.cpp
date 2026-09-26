@@ -118,30 +118,26 @@ namespace {
 
 std::string Scene::SaveRuntimeCheckpoint() const {
 	std::vector<CheckpointText> pathfinders;
-	// The grid tasks read this frame's locals, so they end before anything leaves it.
-	struct GridTasks {
-		std::vector<std::future<void>> tasks;
-		~GridTasks() { for (std::future<void>& task: tasks) if (task.valid()) task.wait(); }
-		void Join() {
-			for (std::future<void>& task: tasks) task.wait();
-			for (std::future<void>& task: tasks) task.get();
-			tasks.clear();
-		}
-	} grids;
-	if (CheckpointWriter::IsCapturing()) {
-		// Each team's grid is its own; a capture takes them side by side, in the same order, beside the rest of the runtime.
+	// Each team's grid is its own; a capture takes them side by side, in the same order, beside the rest of the runtime,
+	// and takes the grids no pool thread started once the rest is written.
+	std::optional<ParallelWork> grids;
+	if (CheckpointWriter::IsCapturing() && !CaptureTrace::Serial()) {
 		pathfinders.resize(m_pPathFinders.size());
-		for (size_t index = 0; index < m_pPathFinders.size(); ++index) {
-			grids.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, &pathfinders, index, task = CaptureSentinel::CurrentTask()] {
-				CaptureSentinel::WorkerScope worker(task);
-				pathfinders[index] = CheckpointWriter::CaptureNative([this, index] { return m_pPathFinders[index] ? m_pPathFinders[index]->SaveCheckpoint() : ""; });
-			}));
-		}
+		grids.emplace(g_ThreadMan.GetPriorityThreadPool(), m_pPathFinders.size(), [this, &pathfinders, task = CaptureSentinel::CurrentTask()](size_t index) {
+			CaptureSentinel::WorkerScope worker(task);
+			CaptureTrace::Span span("pathfinder", std::to_string(index));
+			pathfinders[index] = CheckpointWriter::CaptureNative([this, index] { return m_pPathFinders[index] ? m_pPathFinders[index]->SaveCheckpoint() : ""; });
+		});
 	} else {
-		for (const auto& pathfinder: m_pPathFinders) pathfinders.push_back(CheckpointWriter::Native([&] { return pathfinder ? pathfinder->SaveCheckpoint() : ""; }));
+		for (const auto& pathfinder: m_pPathFinders) {
+			CaptureTrace::Span span("pathfinder", std::to_string(pathfinders.size()));
+			pathfinders.push_back(CheckpointWriter::Native([&] { return pathfinder ? pathfinder->SaveCheckpoint() : ""; }));
+		}
 	}
+	std::optional<CaptureTrace::Span> span(std::in_place, "scene_runtime_backgrounds");
 	std::vector<std::pair<CheckpointText, CheckpointText>> backgrounds;
 	for (const SLBackground* layer: m_BackLayerList) backgrounds.emplace_back(CheckpointWriter::Native([&] { return layer->Entity::SaveCheckpoint(); }), CheckpointWriter::Native([&] { return layer->SaveCheckpoint(); }));
+	span.emplace("scene_runtime_owned");
 	std::array<CheckpointText, Players::MaxPlayerCount> brains;
 	for (size_t player = 0; player < brains.size(); ++player) brains[player] = SaveSceneOwnedObject(m_ResidentBrains[player]);
 	std::array<std::vector<CheckpointText>, PLACEDSETSCOUNT> placed;
@@ -150,6 +146,7 @@ std::string Scene::SaveRuntimeCheckpoint() const {
 	for (const Deployment* object: m_Deployments) deployments.push_back(SaveSceneOwnedObject(object));
 	std::map<std::string, std::string> assemblies;
 	for (const auto& [name, assembly]: m_SelectedAssemblies) assemblies[name] = assembly ? assembly->GetModuleAndPresetName() : "";
+	span.emplace("scene_runtime_preview_terrain");
 	BitmapCheckpoint preview; preview.Capture(m_pPreviewBitmap);
 	TerrainLayerSnapshot terrain;
 	CheckpointText metadata;
@@ -158,7 +155,9 @@ std::string Scene::SaveRuntimeCheckpoint() const {
 		if (!terrain.Capture()) throw std::runtime_error("could not capture scene terrain metadata");
 		metadata = CheckpointText(terrain.SaveMetadata());
 	}
-	grids.Join();
+	span.emplace("scene_runtime_join_grids");
+	if (grids) grids->Finish();
+	span.emplace("scene_runtime_write");
 	CheckpointWriter writer("SceneRuntime1");
 	writer(CheckpointWriter::Native([&] { return Entity::SaveCheckpoint(); }), m_Location, m_LocationOffset, m_MetagamePlayable, m_Revealed, m_OwnedByTeam, m_RoundIncome,
 		m_BuildBudget, m_BuildBudgetRatio, m_AutoDesigned, m_TotalInvestment, m_PathfindingUpdated, m_PartialPathUpdateTimer,
@@ -1517,6 +1516,12 @@ int Scene::Save(Writer& writer) const {
 namespace {
 	thread_local int64_t s_LastObjectCaptureUs = 0;
 
+	// An object as a capture trace names it.
+	std::string TraceName(const SceneObject* object) {
+		const auto* movable = dynamic_cast<const MovableObject*>(object);
+		return object->GetClassName() + ":" + object->GetPresetName() + ":" + std::to_string(movable ? movable->GetUniqueID() : 0);
+	}
+
 	// A tree's heavy node written on the pool ahead of its tree. Whoever reaches it first writes it; the tree takes its
 	// text and the sounds it carries, so a node no tree takes leaves no trace in the capture.
 	class AheadNode {
@@ -1548,6 +1553,7 @@ namespace {
 		// The channel carries the indent and the flags the tree would write the node with.
 		void Write() {
 			const auto started = std::chrono::steady_clock::now();
+			CaptureTrace::Span span("ahead", CaptureTrace::Active() ? TraceName(m_Object) : std::string());
 			try {
 				AudioMan::SoundCheckpointSaveScope carried(false);
 				CheckpointCache values;
@@ -1640,6 +1646,7 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 		CheckpointWriter::CacheScope valuesScope(&values);
 		for (size_t index = first; index < last; ++index) {
 			const SceneObject* object = order[index];
+			CaptureTrace::Span span("mo", CaptureTrace::Active() ? TraceName(object) : std::string());
 			texts[index] = Writer::Capture([&](Writer& owned) {
 				owned.SetSaveOverrides(overrides);
 				owned.SetCaptureObject(object);
@@ -1647,32 +1654,24 @@ std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, con
 			}, indent);
 		}
 	};
-	// Few objects carry most of the work (an actor's whole attachable tree), so each is a task of its own.
-	constexpr size_t c_ObjectsPerTask = 1;
-	std::vector<std::future<void>> tasks;
-	for (const auto& [key, node]: ahead.nodes) {
-		tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&ahead, node = node.get(), task = CaptureSentinel::CurrentTask()] {
+	// Few objects carry most of the work (an actor's whole attachable tree), so each is an item of its own, the last
+	// capture's heavy nodes first; the thread that asked takes items too rather than wait behind the pool's queue.
+	std::vector<AheadNode*> heavyNodes;
+	for (const auto& [key, node]: ahead.nodes) heavyNodes.push_back(node.get());
+	if (CaptureTrace::Serial()) {
+		capture(0, order.size());
+	} else {
+		ParallelWork items(g_ThreadMan.GetPriorityThreadPool(), heavyNodes.size() + order.size(), [&, task = CaptureSentinel::CurrentTask()](size_t item) {
 			CaptureSentinel::WorkerScope worker(task);
-			AheadCaptureScope aheadScope(&ahead);
-			node->Run();
-		}));
+			if (item < heavyNodes.size()) {
+				AheadCaptureScope aheadScope(&ahead);
+				heavyNodes[item]->Run();
+			} else {
+				capture(item - heavyNodes.size(), item - heavyNodes.size() + 1);
+			}
+		});
+		items.Finish();
 	}
-	for (size_t first = c_ObjectsPerTask; first < order.size(); first += c_ObjectsPerTask) {
-		tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, first, last = std::min(first + c_ObjectsPerTask, order.size()), task = CaptureSentinel::CurrentTask()] {
-			CaptureSentinel::WorkerScope worker(task);
-			capture(first, last);
-		}));
-	}
-	std::exception_ptr failure;
-	try {
-		capture(0, std::min(c_ObjectsPerTask, order.size()));
-	} catch (...) {
-		failure = std::current_exception();
-	}
-	// Every task reads this frame's locals, so all of them end before anything leaves it.
-	for (std::future<void>& task: tasks) task.wait();
-	if (failure) std::rethrow_exception(failure);
-	for (std::future<void>& task: tasks) task.get();
 	{
 		std::lock_guard lock(s_AheadPlanMutex);
 		s_AheadPlan = std::move(ahead.heavy);

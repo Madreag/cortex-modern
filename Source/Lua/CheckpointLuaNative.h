@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CheckpointLuaView.h"
+#include "CaptureSentinel.h"
 
 #include <array>
 #include <exception>
@@ -698,7 +699,7 @@ namespace RTE::CheckpointLua {
 		// The world's trees, walked in chunks side by side; an object two chunks reach is described the same by both.
 		static std::shared_ptr<const void> BuildWorld(const std::vector<MovableObject*>& known) {
 			auto world = std::make_shared<NativeImage::World>();
-			const size_t chunks = std::clamp<size_t>(known.size() / 512, 1, 16);
+			const size_t chunks = CaptureTrace::Serial() ? 1 : std::clamp<size_t>(known.size() / 512, 1, 16);
 			std::vector<NativeImage::Topology> topologies(chunks);
 			std::vector<std::vector<NativeImage::NativeId>> objects(chunks);
 			const auto walk = [&](size_t chunk) {
@@ -709,17 +710,7 @@ namespace RTE::CheckpointLua {
 					Describe(object, topologies[chunk], nullptr);
 				}
 			};
-			std::vector<std::future<void>> tasks;
-			for (size_t chunk = 1; chunk < chunks; ++chunk) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&walk, chunk] { walk(chunk); }));
-			std::exception_ptr failure;
-			try {
-				walk(0);
-			} catch (...) {
-				failure = std::current_exception();
-			}
-			for (std::future<void>& task: tasks) task.wait();
-			if (failure) std::rethrow_exception(failure);
-			for (std::future<void>& task: tasks) task.get();
+			ParallelWork(g_ThreadMan.GetPriorityThreadPool(), chunks, walk).Finish();
 			for (size_t chunk = 0; chunk < chunks; ++chunk) {
 				world->objects.insert(world->objects.end(), objects[chunk].begin(), objects[chunk].end());
 				for (auto& [identity, object]: topologies[chunk]) world->topology.try_emplace(identity, std::move(object));

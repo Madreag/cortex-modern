@@ -58,6 +58,7 @@
 #include <fstream>
 #include <iostream>
 #include <list>
+#include <optional>
 #include <mutex>
 #include <sstream>
 #include <thread>
@@ -3467,25 +3468,23 @@ std::string GameActivity::SaveValueCheckpoint() const {
 		}
 	};
 	constexpr int c_MenuParts = 5;
-	// A capture takes each player's menus and banners side by side; the archive holds them in the same order.
+	// A capture takes each player's menus and banners side by side while this thread writes the rest; the archive holds
+	// them in the same order.
 	std::vector<CheckpointText> menus;
-	if (CheckpointWriter::IsCapturing()) {
+	std::optional<ParallelWork> menuWork;
+	if (CheckpointWriter::IsCapturing() && !CaptureTrace::Serial()) {
 		menus.resize(Players::MaxPlayerCount * c_MenuParts);
 		AudioMan::SoundCheckpointSaveScope* const sounds = AudioMan::SoundCheckpointSaveScope::Current();
-		std::vector<std::future<void>> tasks;
-		for (size_t index = 0; index < menus.size(); ++index) {
-			tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&menus, &menu, sounds, index, task = CaptureSentinel::CurrentTask()] {
-				CaptureSentinel::WorkerScope worker(task);
-				AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
-				menus[index] = CheckpointWriter::CaptureNative(menu(static_cast<int>(index) / c_MenuParts, static_cast<int>(index) % c_MenuParts));
-			}));
-		}
-		for (std::future<void>& task: tasks) task.wait();
-		for (std::future<void>& task: tasks) task.get();
+		menuWork.emplace(g_ThreadMan.GetPriorityThreadPool(), menus.size(), [&menus, &menu, sounds, task = CaptureSentinel::CurrentTask()](size_t index) {
+			CaptureSentinel::WorkerScope worker(task);
+			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
+			menus[index] = CheckpointWriter::CaptureNative(menu(static_cast<int>(index) / c_MenuParts, static_cast<int>(index) % c_MenuParts));
+		});
 	}
 	CheckpointWriter writer("GameActivity3");
 	writer(CheckpointWriter::Native([&] { return Activity::SaveCheckpoint(); }));
 	VisitCheckpoint(writer, *this);
+	if (menuWork) menuWork->Finish();
 	// Each player's menus and banners are the interface this machine draws for its own seats.
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 		if (!menus.empty()) {
@@ -3600,13 +3599,16 @@ std::unique_ptr<Entity> LoadActivityOwnedEntity(const std::string& text) {
 
 std::string GameActivity::SaveCheckpoint() const {
     CheckpointWriter writer("GameActivity2");
+    std::optional<CaptureTrace::Span> span(std::in_place, "activity_values");
     writer(CheckpointWriter::Native([&] { return SaveValueCheckpoint(); }));
+    span.emplace("activity_players");
     for (int player = 0; player < Players::MaxPlayerCount; ++player) {
         writer(m_pLastMarkedActor[player] ? m_pLastMarkedActor[player]->GetUniqueID() : 0);
         writer(m_PurchaseOverride[player].size());
         for (const SceneObject* preset: m_PurchaseOverride[player]) writer(preset->GetClassName(), preset->GetPresetName(), preset->GetModuleName());
         writer(SaveActivityOwnedEntity(m_StrategicModePieMenu[player].get()));
     }
+    span.emplace("activity_deliveries");
     for (int team = 0; team < Teams::MaxTeamCount; ++team) {
         writer(m_Deliveries[team].size());
         for (const Delivery& delivery: m_Deliveries[team]) {

@@ -6317,15 +6317,19 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		image->labels = m_State->top[-1];
 		const auto nativeStarted = std::chrono::steady_clock::now();
 		if (!m_NativeCache) m_NativeCache = std::make_shared<CheckpointLua::NativeCache>(m_State);
+		std::optional<CaptureTrace::Span> span(std::in_place, "graph_natives", std::to_string(g_LuaMan.GetStateIndex(this)));
 		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
 		natives.Capture();
+		span.reset();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
 		image->native = natives.Finish(m_State);
 		image->scratch = scratch.values;
 		// The stack and the birth counter go back before the protect; the objects the image names stay as they are until written.
 		restore.Run();
 		// The copy runs off this thread; the gate holds every way into this VM until it lands.
+		span.emplace("graph_heap_freeze", std::to_string(g_LuaMan.GetStateIndex(this)));
 		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
+		span.reset();
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
@@ -6383,6 +6387,7 @@ void LuaScriptGraphNativeCaptureScope::PreTouch() {
 void LuaScriptGraphNativeCaptureScope::BuildWorld(const LuaScriptGraphNativeCaptureData* shared) {
 	if (!shared) return;
 	std::lock_guard worldLock(shared->frozenWorldMutex);
+	CaptureTrace::Span span("build_world_body");
 	if (!shared->frozenWorld) shared->frozenWorld = CheckpointLua::CaptureScope::BuildWorld(shared->KnownObjects());
 }
 
@@ -6399,32 +6404,42 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
 	if (!CaptureSentinel::InParallelPhase()) LuaScriptGraphNativeCaptureScope::PreTouch();
 	CaptureSentinel::ParallelPhase parallel;
-	LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
+	{
+		CaptureTrace::Span span("graph_build_world_wait");
+		LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
+	}
 	const auto capture = [&](size_t index) {
+		CaptureTrace::Span span("graph_state", std::to_string(index));
 		LuaScriptGraphNativeCaptureScope lookups(shared);
 		FrozenCaptureStats* const previous = LuaMan::s_FrozenCaptureStats;
 		LuaMan::s_FrozenCaptureStats = &parts[index];
 		complete[index] = order[index]->CaptureScriptGraph(texts[index], refusals[index], true);
 		LuaMan::s_FrozenCaptureStats = previous;
 	};
-	// Each state is its own VM behind its own lock, so the states are captured side by side.
-	std::vector<std::future<void>> tasks;
-	tasks.reserve(order.size());
-	for (size_t index = 1; index < order.size(); ++index) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, index] {
-		CaptureSentinel::WorkerScope worker("script-graph-state");
-		capture(index);
-	}));
+	// Each state is its own VM behind its own lock, so the states are captured side by side; this thread takes the states
+	// no pool thread has started once its own work is done.
+	std::optional<ParallelWork> states;
+	if (!CaptureTrace::Serial()) {
+		states.emplace(g_ThreadMan.GetPriorityThreadPool(), order.size() - 1, [&capture](size_t index) {
+			CaptureSentinel::WorkerScope worker("script-graph-state");
+			capture(index + 1);
+		});
+	}
 	std::exception_ptr failure;
 	try {
 		capture(0);
+		if (CaptureTrace::Serial()) for (size_t index = 1; index < order.size(); ++index) capture(index);
+		CaptureTrace::Span span("graph_while_waiting");
 		if (whileWaiting) whileWaiting();
 	} catch (...) {
 		failure = std::current_exception();
 	}
-	// Every task reads this frame's locals, so all of them end before anything leaves it.
-	for (std::future<void>& task: tasks) task.wait();
+	// Every state reads this frame's locals, so all of them end before anything leaves it.
+	if (states) {
+		CaptureTrace::Span span("graph_states_wait");
+		states->Finish(!failure);
+	}
 	if (failure) std::rethrow_exception(failure);
-	for (std::future<void>& task: tasks) task.get();
 	bool all = true;
 	for (size_t index = 0; index < order.size(); ++index) {
 		const FrozenCaptureStats& part = parts[index];
