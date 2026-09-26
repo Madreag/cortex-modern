@@ -4579,10 +4579,21 @@ static std::string ResyncSaveName() {
 		const auto link = std::find_if(readyPeers.begin(), readyPeers.end(), [&](const NetSessionPeerInfo& peer) { return peer.assignedPeerId + 1 == member; });
 		if (link == readyPeers.end() || m_Coordinator->UsesTransportPeer(link->transportPeerId)) return;
 		const NetPeerId connection = link->transportPeerId;
-		// A return already on its way, on this connection or a relaunched one, owns the seat's catch-up.
-		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
-			if (session.phase != NetWorldJoinPhase::Active && (session.connection == connection || session.assignedPeerId == member)) return;
 		const auto hold = m_Coordinator->HeldTransactions().find(member);
+		// A return already on its way, on this connection or a relaunched one, owns the seat's catch-up; one whose reclaim frame the
+		// seat was held again at or after is over, and this report opens the next.
+		std::vector<NetPeerId> overtaken;
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+			if (session.phase == NetWorldJoinPhase::Active || (session.connection != connection && session.assignedPeerId != member)) continue;
+			if (session.connection != connection || session.activationTick == 0 || hold == m_Coordinator->HeldTransactions().end() ||
+			    hold->second.cutoffFrame < session.activationTick) return;
+			overtaken.push_back(session.connection);
+		}
+		for (const NetPeerId stale: overtaken) {
+			m_PrivateActivations.erase(stale);
+			m_WorldJoin.CancelJoin(stale, "the seat was held again after its return");
+			System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(member) + " was held again after its return; its next catch-up replaces the last");
+		}
 		const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(connection);
 		NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
 		if (hold == m_Coordinator->HeldTransactions().end() || seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != connection) return;
