@@ -4165,13 +4165,20 @@ namespace RTE {
 		}
 	}
 
-	NetLockstepPlane::Gap::Gap() {
+	NetLockstepPlane::Gap::Gap(const char* name) : m_Name(name) {
+		if (m_Name) m_OpenedMs = NetLockstepNowMs();
 		PlaneState& plane = Plane();
 		std::lock_guard<std::recursive_mutex> lock(plane.lock);
 		m_Closed = plane.windows.exchange(0, std::memory_order_acq_rel);
 	}
 
-	NetLockstepPlane::Gap::~Gap() { Plane().windows.fetch_add(m_Closed, std::memory_order_acq_rel); }
+	NetLockstepPlane::Gap::~Gap() {
+		Plane().windows.fetch_add(m_Closed, std::memory_order_acq_rel);
+		if (m_Name && m_Closed > 0) {
+			const uint64_t lastedMs = NetLockstepNowMs() - m_OpenedMs;
+			if (lastedMs >= 250) std::cout << "[net-plane] the " << m_Name << " gap lasted " << lastedMs << " ms clock=" << NetLockstepSharedClockMs() << std::endl;
+		}
+	}
 
 	NetLockstepPlane::Window::Window(const char* name) : m_Name(name) {
 		if (m_Name) { m_OpenedMs = NetLockstepNowMs(); m_TicksAtOpen = Ticks(); }

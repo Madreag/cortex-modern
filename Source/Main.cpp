@@ -3222,12 +3222,15 @@ static void DrawFrameWithPreviews() {
 		hudDisabled[screen] = g_FrameMan.IsHudDisabled(screen);
 		if (localPause) g_FrameMan.SetHudDisabled(true, screen);
 	}
-	g_FrameMan.Draw();
+	{
+		NetLockstepPlane::Window sceneDraw("scene draw");
+		g_FrameMan.Draw();
+	}
 	for (int screen = 0; screen < c_MaxScreenCount; ++screen) g_FrameMan.SetHudDisabled(hudDisabled[screen], screen);
 	LocalPredictionHudSelfTest::SampleAfterDraw();
 	{
 		// The overlays read the match service, which reaches the round without the plane's lock.
-		NetLockstepPlane::Gap plane;
+		NetLockstepPlane::Gap plane("overlay draw");
 		g_MenuMan.DrawNetworkUI();
 		ScenarioRunner::DrawNetUiToasts();
 		g_WindowMan.DrawPostProcessBuffer();
@@ -3242,10 +3245,14 @@ static void DrawFrameWithPreviews() {
 		std::this_thread::sleep_for(std::chrono::milliseconds(s_drawStallMs));
 		System::PrintDiagnosticLine("[selftest] draw stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
 	}
-	g_WindowMan.UploadFrame();
+	{
+		NetLockstepPlane::Window present("present");
+		g_WindowMan.UploadFrame();
+	}
 	g_FrameMan.FeelAfterPresent();
 	if (FrameRecorder::Instance().Enabled()) {
-		const std::string serviceState = [] { NetLockstepPlane::Gap plane; return g_NetMatchService.GetLobbySnapshot().serviceState; }();
+		const std::string serviceState = [] { NetLockstepPlane::Gap plane("recorder's service state"); return g_NetMatchService.GetLobbySnapshot().serviceState; }();
+		NetLockstepPlane::Window recorder("recorder");
 		g_FrameMan.RecordVideoFrame(RecordedScreenName(), serviceState);
 	}
 	if (NetMatchScreenshotDue()) {
@@ -6964,7 +6971,7 @@ void RunGameLoop() {
 			g_SceneMan.SetRenderDrawContext(true);
 			g_UInputMan.Update();
 			{
-				NetLockstepPlane::Gap plane;
+				NetLockstepPlane::Gap plane("network UI update");
 				g_MenuMan.UpdateNetworkUI();
 			}
 			g_MenuMan.UpdateLocalPauseMenu();
