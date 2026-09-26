@@ -594,7 +594,8 @@ class RuntimeProjectionTests(unittest.TestCase):
     def test_the_resyncs_own_input_records_are_local_and_the_rest_of_the_block_is_not(self):
         # NetMatchService.cpp:822-823, 831 keeps this machine's UInputMan and shared GUI input over the host's.
         local, shared = ("input", "gui_input"), ("sim_rng", "timer", "movable", "scene", "camera", "primitive", "music", "audio")
-        for version in ("RuntimeGlobals4", "RuntimeGlobals9"):
+        for version, extra in (("RuntimeGlobals4", ()), ("RuntimeGlobals9", ()), ("RuntimeGlobals10", ("committed_seats",))):
+            shared = shared + extra
             value = dict(version=version, **dict.fromkeys(local + shared, b"peer"))
             for key in local + shared:
                 with self.subTest(version=version, key=key):
