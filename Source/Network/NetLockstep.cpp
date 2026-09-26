@@ -8369,6 +8369,9 @@ namespace RTE {
 							Fail(NetLockstepStopReason::ProtocolError, outFrame.frame, "recorded seat hold has invalid authority");
 							return false;
 						}
+						// A recorded hold ends the seat's recorded return before it, as the live hold ended it on every peer that took it.
+						if (const auto back = m_ReclaimTransactions.find(hold->peerId); back != m_ReclaimTransactions.end() && back->second.activationFrame <= outFrame.frame)
+							m_ReclaimTransactions.erase(back);
 						m_AiHeldSeats[hold->peerId] = outFrame.frame;
 						m_HoldTransactions[hold->peerId] = *hold;
 						NoteSeatTransition(hold->peerId, outFrame.frame, SeatTransition::Held);

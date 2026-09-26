@@ -2533,6 +2533,32 @@ namespace RTE {
 			return true;
 		}
 
+		// A replay takes the host's recorded return and then its recorded hold: the hold hands the host's seat to its successor's AI, as live.
+		bool TestARecordedHoldAfterAReturnHoldsTheSeat(std::string* error) {
+			LoopbackTransport transport;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.localPeerId = 2; config.authorityPeerId = 1; config.peerCount = 3; config.startFrame = 10;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1B);
+			config.matchConfig.successorOrder = {3, 2};
+			if (!replay.StartReplay(transport, config, error)) return false;
+			const std::vector<std::vector<NetGameCommand>> frames = {
+				{{1, NetGameSeatHold{1, 0, 1, 1, 10}}}, {{1, NetGameSeatReclaim{1, 0, 2, 1, 11, 4, 12}}}, {}, {{1, NetGameSeatHold{1, 0, 3, 1, 13}}}};
+			std::string seen;
+			for (uint64_t index = 0; index < frames.size(); ++index) {
+				NetLockstepReadyFrame ready;
+				if (!replay.QueueReplayFrame(10 + index, {}, frames[index], error)) return false;
+				replay.Tick(index);
+				if (!replay.PopReadyFrame(ready)) { *error = "a-recorded-hold-after-a-return-holds-the-seat: frame " + std::to_string(10 + index) + " was not delivered"; return false; }
+				seen += std::to_string(replay.IsSeatUnderAI(1, ready.frame)) + std::to_string(replay.AiAuthorityAt(ready.frame));
+			}
+			if (seen != "13010113") {
+				*error = "a-recorded-hold-after-a-return-holds-the-seat: held at 10, back at 11, held again at 13 read (under_ai, authority) per frame " + seen + "; expected 13010113";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestRecordedHoldReplaysAtItsFrame(std::string* error) {
 			NetLockstepFrame record;
 			record.senderPeerId = 1; record.targetFrame = 40;
@@ -20780,6 +20806,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
+		    !TestARecordedHoldAfterAReturnHoldsTheSeat(&error) ||
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
 		    !TestAWorldTailHandsAHeldSeatToTheAI(&error) ||
 		    !TestCatchUpFencesTheReclaimGap(&error) ||
