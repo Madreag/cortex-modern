@@ -18644,10 +18644,19 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!StartCoordinatorPair(49463, hostWire, clientWire, host, client, hc, cc, error)) return false;
 			for (uint64_t now = 0; now < 10; ++now) { host.Tick(now); client.Tick(now); }
 			if (!host.ProposePeerHold(2, 20, error)) return false;
-			if (!client.QueueLocalInput(1, {MakeFrame(20, 1)}, {}, error) || !client.IsLocalSeatHeld() || client.IsFailed()) {
-				*error = "hold queued before a closed-link send was reported as controller failure: " + *error; return false;
+			// The held seat keeps its link: its sends are not failures and it learns its hold, with the frame, from the host.
+			if (!client.QueueLocalInput(1, {MakeFrame(20, 1)}, {}, error) || client.IsFailed()) {
+				*error = "a held seat's send on its open link was reported as controller failure: " + *error; return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS held_sender_drains_authority_before_reporting_send_failure" << std::endl; return true;
+			for (uint64_t now = 20; now < 40 && !client.IsLocalSeatHeld(); ++now) client.Tick(now);
+			const auto heldAt = host.GetPeerLeaveFrames().find(2);
+			if (!client.IsLocalSeatHeld() || heldAt == host.GetPeerLeaveFrames().end() || client.GetLocalHoldFrame() != heldAt->second || client.IsFailed() ||
+			    host.GetStats().connectionsClosedOnEviction != 0) {
+				*error = "a held seat did not learn its hold over the link the host kept open: held=" + std::to_string(client.IsLocalSeatHeld()) +
+				         " frame=" + std::to_string(client.GetLocalHoldFrame()) + " closed=" + std::to_string(host.GetStats().connectionsClosedOnEviction);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS held_seat_keeps_its_link_and_learns_its_hold frame=" << client.GetLocalHoldFrame() << std::endl; return true;
 		}
 
 		template <typename LobbyConfig>
