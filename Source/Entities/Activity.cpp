@@ -475,7 +475,7 @@ void Activity::SetupPlayers() {
 }
 
 bool Activity::ConfigureLockstepPlayers() {
-	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
 	if (!config) return false;
 	ConfigureHumanRoster(*config, ScenarioRunner::GetLockstepLocalPeerId());
 	return true;
@@ -510,7 +510,7 @@ void Activity::ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localP
 void Activity::RefreshLockstepLocalPlayers() {
 	// An activity whose seats are its own keeps them; only a shared roster is remapped from the live match.
 	if (!m_SharedPlayerSeats) return;
-	if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
+	if (const auto config = ScenarioRunner::GetLockstepMatchConfig()) {
 		MapLocalPlayers(*config, ScenarioRunner::GetLockstepLocalPeerId());
 	}
 }
@@ -1445,7 +1445,7 @@ void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
 bool Activity::BrainlessHumansSpectate() const {
 	// A running match follows the host's agreed rule; everything else follows this machine's setting.
 	if (ScenarioRunner::IsLockstepControllerSyncActive()) {
-		if (const NetMatchConfig* matchConfig = ScenarioRunner::GetLockstepMatchConfig()) {
+		if (const auto matchConfig = ScenarioRunner::GetLockstepMatchConfig()) {
 			return matchConfig->brainlessHumansSpectate;
 		}
 	}

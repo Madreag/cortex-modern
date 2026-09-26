@@ -81,6 +81,7 @@ namespace RTE {
 	bool TestARepeatedStartHoldsNoFramesBehindIt(std::string* error);
 	bool TestALaggingSimulationReadsTheFrameItTook(std::string* error);
 	bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
+	bool TestAHeldMapReadKeepsNoLiveReference(std::string* error);
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -19838,6 +19839,21 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAHeldMapReadKeepsNoLiveReference(std::string* error) {
+		// A reader keeps what it read of the holds while a plane tick changes them: it holds a copy, never a reference into the round.
+		NetLockstepCoordinator host;
+		host.m_Config = MakeCoordinatorConfig(1, 2, 0x9A1A, 4, NetTransportLane::ControlReliable);
+		host.m_HoldTransactions[2] = {2, 0, 7, 1, 150};
+		const auto& read = host.HeldTransactions();
+		host.m_HoldTransactions[2].cutoffFrame = 190;
+		host.m_HoldTransactions[3] = {3, 0, 8, 1, 160};
+		if (!read.contains(2) || read.at(2).cutoffFrame != 150 || read.contains(3)) {
+			*error = "a-held-map-read-keeps-no-live-reference: a read of the holds changed under the reader when the round's own changed";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -20755,6 +20771,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestARepeatedStartHoldsNoFramesBehindIt(&error) ||
 		    !TestALaggingSimulationReadsTheFrameItTook(&error) ||
 		    !TestAHeldHostsFrameCrossesAMigration(&error) ||
+		    !TestAHeldMapReadKeepsNoLiveReference(&error) ||
 		    !TestASurvivorsRunwayIsTheRounds(&error) ||
 		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
 		    !TestNoSeatIsJudgedPastTheLastTick(&error) ||

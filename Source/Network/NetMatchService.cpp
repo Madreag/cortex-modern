@@ -3994,7 +3994,7 @@ static std::string ResyncSaveName() {
 			if (const auto bumps = m_InPlaceIncarnationBumps.find(member); bumps != m_InPlaceIncarnationBumps.end()) incarnation += bumps->second;
 			// The held seat's own connection stays up: its player catches up in place on it, so its reports must reach the round.
 			// A relaunched returner is a new incarnation and rejoins through the image.
-			if (const auto hold = m_Coordinator->HeldTransactions().find(member); hold != m_Coordinator->HeldTransactions().end() && incarnation <= hold->second.seatIncarnation) {
+			if (const auto holds = m_Coordinator->HeldTransactions(); holds.contains(member) && incarnation <= holds.at(member).seatIncarnation) {
 				(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
 				continue;
 			}
@@ -4999,7 +4999,8 @@ static std::string ResyncSaveName() {
 		const auto link = std::find_if(readyPeers.begin(), readyPeers.end(), [&](const NetSessionPeerInfo& peer) { return peer.assignedPeerId + 1 == member; });
 		if (link == readyPeers.end() || m_Coordinator->UsesTransportPeer(link->transportPeerId)) return;
 		const NetPeerId connection = link->transportPeerId;
-		const auto hold = m_Coordinator->HeldTransactions().find(member);
+		const auto heldSeats = m_Coordinator->HeldTransactions();
+		const auto hold = heldSeats.find(member);
 		// A return already on its way, on this connection or a relaunched one, owns the seat's catch-up; one whose reclaim frame the
 		// seat was held again at or after is over, and this report opens the next.
 		std::vector<NetPeerId> overtaken;
@@ -5007,7 +5008,7 @@ static std::string ResyncSaveName() {
 			if (session.phase == NetWorldJoinPhase::Active || (session.connection != connection && session.assignedPeerId != member)) continue;
 			// A returner that reports the state it holds needs no image, so one not yet sent to it is dropped.
 			const bool unsentImage = session.connection == connection && session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted;
-			if (!unsentImage && (session.connection != connection || session.activationTick == 0 || hold == m_Coordinator->HeldTransactions().end() ||
+			if (!unsentImage && (session.connection != connection || session.activationTick == 0 || hold == heldSeats.end() ||
 			                     hold->second.cutoffFrame < session.activationTick)) return;
 			overtaken.push_back(session.connection);
 		}
@@ -5018,11 +5019,11 @@ static std::string ResyncSaveName() {
 		}
 		const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(connection);
 		NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
-		if (hold == m_Coordinator->HeldTransactions().end() || seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != connection) return;
+		if (hold == heldSeats.end() || seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != connection) return;
 		const uint64_t heldThrough = report.value;
 		std::string error;
 		// A seat held before this host took the round over replayed the lost host's frames, which are the round's own up to the handover.
-		const bool heldBeforeHandover = m_HandoverFrame != 0 && hold != m_Coordinator->HeldTransactions().end() && hold->second.cutoffFrame < m_HandoverFrame;
+		const bool heldBeforeHandover = m_HandoverFrame != 0 && hold != heldSeats.end() && hold->second.cutoffFrame < m_HandoverFrame;
 		if (heldBeforeHandover && heldThrough >= m_HandoverFrame) error = "its state ran past the handover at " + std::to_string(m_HandoverFrame);
 		else if (!heldBeforeHandover && heldThrough >= hold->second.cutoffFrame) error = "its state ran past the hold at " + std::to_string(hold->second.cutoffFrame);
 		// The connection's last return is done: its reclaim and its reasons belong to that return, not to this one.
