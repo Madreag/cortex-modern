@@ -4713,6 +4713,7 @@ namespace RTE {
 			m_HoldTransactions[peer] = hold; m_AiHeldSeats[peer] = hold.cutoffFrame;
 			if (peer != GetHostPeerId()) m_PeerLeaveFrames[peer] = hold.cutoffFrame;
 			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+			DropRecordedHeldSeat(peer);
 		}
 		m_ReclaimTransactions = m_Config.initialSeatReclaims;
 		for (const auto& [peer, reclaim]: m_ReclaimTransactions) NoteSeatTransition(peer, reclaim.activationFrame, SeatTransition::Back);
@@ -4928,6 +4929,8 @@ namespace RTE {
 		m_State = NetLockstepState::Running;
 		ResetRoundState();
 		m_Playback = true;
+		// A replay reads our own held seat as the round recorded it.
+		for (const auto& [peer, hold]: m_Config.initialSeatHolds) DropRecordedHeldSeat(peer);
 		m_LocalFrames.clear();
 		m_LocalInputHistory.clear();
 		m_ResyncPrimed = true;
@@ -5013,6 +5016,7 @@ namespace RTE {
 				m_PeerLeaveFrames.erase(seat->first);
 				m_HoldTransactions.erase(seat->first);
 				m_DroppedSeatResolutions.erase(seat->first);
+				m_DroppedSeats.erase(seat->first); m_LeftSeatsHeld.erase(seat->first);
 				seat = m_AiHeldSeats.erase(seat);
 			} else ++seat;
 		}
@@ -5230,6 +5234,7 @@ namespace RTE {
 				m_AiHeldSeats[peer] = held->second.cutoffFrame;
 				if (peer != GetHostPeerId()) m_PeerLeaveFrames[peer] = held->second.cutoffFrame;
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+				DropRecordedHeldSeat(peer);
 				m_Config.peerIncarnations[peer] = std::max(m_Config.peerIncarnations[peer], held->second.seatIncarnation);
 				std::cout << "[net-lockstep] took peer " << static_cast<int>(peer) << "'s hold at " << held->second.cutoffFrame << " from the replayed tail" << std::endl;
 			}
@@ -8289,6 +8294,7 @@ namespace RTE {
 						NoteSeatTransition(hold->peerId, outFrame.frame, SeatTransition::Held);
 						if (hold->peerId != GetHostPeerId()) m_PeerLeaveFrames[hold->peerId] = outFrame.frame;
 						m_DroppedSeatResolutions[hold->peerId] = NetLockstepHoldResolution::Substituted;
+						DropRecordedHeldSeat(hold->peerId);
 					}
 				}
 			}
@@ -10209,6 +10215,13 @@ namespace RTE {
 	// who owns a left seat's units - so asking the service back from there re-locks it on its own
 	// thread. The answer is resolved here instead, from the tick, which also fixes it for the whole
 	// tick: ownership cannot change under a subsystem halfway through one.
+	void NetLockstepCoordinator::DropRecordedHeldSeat(uint8_t peerId) {
+		// Only a bounded wait holds a seat; a held host stays the round's hub, and our own seat is ours again once this round plays it.
+		if (!UsesBoundedWait() || peerId == GetHostPeerId() || (peerId == m_Config.localPeerId && !m_Playback)) return;
+		m_DroppedSeats.insert(peerId);
+		m_LeftSeatsHeld.insert(peerId);
+	}
+
 	void NetLockstepCoordinator::RefreshLeftSeatHolds() {
 		m_LeftSeatsHeld.clear();
 		for (uint8_t peerId: m_DroppedSeats) {
