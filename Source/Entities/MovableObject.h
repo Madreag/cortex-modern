@@ -1240,6 +1240,8 @@ namespace RTE {
 		static bool FaithfulCloneRegisters() { return s_FaithfulCloneRegisters; }
 		/// A faithful clone that may be adopted or saved keeps each class's runtime text; a preview's throwaway clone is never either.
 		static bool FaithfulCloneKeepsRuntime() { return s_FaithfulCloneDepth > 0 && !s_FaithfulClonePreview; }
+		/// A preview's clone lives while its pointers do, so it holds them as they are rather than by checkpoint name.
+		static bool FaithfulCloneForPreview() { return s_FaithfulCloneDepth > 0 && s_FaithfulClonePreview; }
 		struct ScriptLoadDeferralScope {
 			ScriptLoadDeferralScope() { ++s_ScriptLoadDeferralDepth; }
 			~ScriptLoadDeferralScope() { --s_ScriptLoadDeferralDepth; }

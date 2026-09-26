@@ -174,8 +174,11 @@ int Atom::Create(const Atom& reference) {
 
 	if (MovableObject::IsFaithfulClone()) {
 		m_LastHit = reference.m_LastHit;
-        m_CheckpointMaterialReferences = reference.CaptureCheckpointMaterialReferences();
-        m_HasCheckpointMaterials = true;
+		// The copied material pointers are what the names would resolve to, unless the reference itself still holds names.
+		if (!MovableObject::FaithfulCloneForPreview() || reference.m_HasCheckpointMaterials) {
+			m_CheckpointMaterialReferences = reference.CaptureCheckpointMaterialReferences();
+			m_HasCheckpointMaterials = true;
+		}
 		m_CheckpointLinkIDs = reference.CaptureCheckpointLinkIDs();
 		m_HasCheckpointLinks = true;
 		m_StepWasTaken = reference.m_StepWasTaken;
