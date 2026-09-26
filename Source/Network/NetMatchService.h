@@ -1214,6 +1214,21 @@ namespace RTE {
 		std::string m_SceneModule;
 		std::thread m_Worker;
 		std::jthread m_SnapshotLoadKeepalive;
+		/// Host: the round's liveness ack, sent from off the simulation thread while that thread is busy, so a park of any length reads
+		/// as a busy host, never a gone one. The session pump arms it every tick and it is disarmed around every transport change.
+		struct HostLiveness {
+			INetTransport* wire = nullptr;
+			std::vector<NetPeerId> targets;
+			std::vector<uint8_t> bytes;
+			NetTransportLane lane = NetTransportLane::InputUnreliable;
+			uint64_t pumpMs = 0, tickMs = 17, sentMs = 0, busyLimitMs = 0;
+			uint64_t sentWhileBusy = 0;
+		};
+		std::mutex m_LivenessMutex;
+		HostLiveness m_Liveness;
+		std::jthread m_LivenessThread;
+		void ArmHostLivenessLocked();
+		void DisarmHostLiveness();
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveTicks{0};
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveWindowTicks{0};
 		bool m_WorkerDone = false;

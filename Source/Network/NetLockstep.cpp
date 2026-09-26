@@ -10251,18 +10251,14 @@ namespace RTE {
 		}
 		const uint64_t lastAuthorityTraffic = std::max(m_WaitStartMs, m_AuthorityLastHeardMs);
 		const uint64_t silenceBoundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		// One reading and one threshold: the slow-player bound plus the host's jitter - its link's, its recent talk gaps and the start
-		// work its machine published. A live host talks every tick even while it waits; its announced captures are busy spans below.
+		// One reading and one threshold: the slow-player bound plus the jitter of the host's link, as its link reports it and as the gaps
+		// between its packets show it. A live host talks every tick whatever its simulation is doing, so only its link can go quiet.
 		uint64_t jitterMs = 0;
 		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = host->second.jitterMs;
 		if (const auto estimate = m_DelayEstimators.find(GetHostPeerId()); estimate != m_DelayEstimators.end()) jitterMs = std::max<uint64_t>(jitterMs, estimate->second.JitterMs());
 		// A host that has stalled this long for its own work once this round will again: the longest gap it left is its jitter too.
 		jitterMs = std::max<uint64_t>(jitterMs, m_AuthorityLongestGapMs);
 		for (const uint32_t gap: m_AuthorityGaps) jitterMs = std::max<uint64_t>(jitterMs, gap);
-		// The start work the host published is how long its machine stalls for its own work, and while it does its session still talks
-		// at its keepalive cadence: a silence no longer than those is not a death.
-		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = std::max<uint64_t>(jitterMs, host->second.startParkMs);
-		jitterMs = std::max<uint64_t>(jitterMs, m_Config.authorityKeepaliveMs);
 		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, silenceBoundMs + jitterMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs)));
 		// A host still in its start work (no frame from it yet this round) or in a capture park it announced is busy, not gone:
 		// only its link's close or the round's timeout ends that wait.

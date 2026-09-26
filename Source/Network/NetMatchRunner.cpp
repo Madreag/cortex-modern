@@ -717,7 +717,6 @@ namespace RTE {
 			}
 		}
 		lockstepConfig.timeoutMs = config.missingFrameGraceMs;
-		lockstepConfig.authorityKeepaliveMs = config.sessionConfig.heartbeatIntervalMs;
 		lockstepConfig.peerCount = m_MatchConfig.peerCount;
 		lockstepConfig.remoteTransportPeerIds = BuildRemoteTransportMap(session);
 		// Host-star: the host relays each client's frames/checksums to the other clients.
