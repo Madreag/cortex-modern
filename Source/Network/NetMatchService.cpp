@@ -4816,6 +4816,8 @@ static std::string ResyncSaveName() {
 			NotePumpParkedLocked();
 			SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
 			if (NetSession* live = LiveSessionLocked()) live->TickKeepalive(AdmissionNowMs());
+			// The host judges this seat's first input from the moment it knows the replay reached the frame before its return.
+			(void)m_Runner->GetLobbySession().SendPayload(MakeJoinerCatchUpReport(), nullptr);
 			const auto milliseconds = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
 			{
 				std::ostringstream line;
