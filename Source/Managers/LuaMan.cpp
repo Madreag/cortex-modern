@@ -271,12 +271,15 @@ static uint64_t DeriveMORNGSeed(long uniqueID, uint64_t tick, uint64_t phase) {
 }
 
 DeterministicMORNGScope::DeterministicMORNGScope(long uniqueID, uint64_t phase, bool enabled) :
+    DeterministicMORNGScope(uniqueID, phase, enabled ? static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) : 0, enabled) {}
+
+DeterministicMORNGScope::DeterministicMORNGScope(long uniqueID, uint64_t phase, uint64_t simTick, bool enabled) :
     m_Installed(enabled), m_PrevSimOverride(nullptr), m_PrevLuaOverride(nullptr) {
 	if (!enabled) {
 		return;
 	}
 	// Most hooks draw nothing, so the generator seeds at its first draw.
-	s_workerMORNG.SeedOnFirstDraw(DeriveMORNGSeed(uniqueID, g_TimerMan.GetSimUpdateCount(), phase));
+	s_workerMORNG.SeedOnFirstDraw(DeriveMORNGSeed(uniqueID, simTick, phase));
 	m_PrevSimOverride = t_simRNGOverride;
 	m_PrevLuaOverride = s_luaRNGOverride;
 	t_simRNGOverride = &s_workerMORNG;
@@ -356,6 +359,36 @@ static bool RunLazySeedSelfTest() {
 	for (const std::string& clause: failed) clauses += (clauses.empty() ? "" : ",") + clause;
 	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_lazily_seeded_generator_is_the_seeded_one draws=" << c_Draws * 2
 	          << (passed ? "" : " failed=" + clauses) << std::endl;
+	return passed;
+}
+
+// The see-ray pass runs on the thread pool from the end of its tick into the next, while the sim thread's UpdateSim moves the
+// clock: a worker that seeds after the clock moved must still draw the stream of the tick that launched it.
+static bool RunPoolScopeTickSelfTest() {
+	const long uniqueID = 4243;
+	const uint64_t phase = Hash(std::string("CastSeeRays"));
+	const long long count = g_TimerMan.GetSimUpdateCount();
+	const long long ticks = g_TimerMan.GetSimTimeTicks();
+	const uint64_t launchTick = static_cast<uint64_t>(count);
+	RandomGenerator launched;
+	launched.Seed(DeriveMORNGSeed(uniqueID, launchTick, phase));
+	const float expected = launched.RandomNum<float>();
+	std::promise<void> clockMoved;
+	std::shared_future<void> moved = clockMoved.get_future().share();
+	std::future<float> drawn = g_ThreadMan.GetPriorityThreadPool().submit([moved, uniqueID, phase, launchTick] {
+		moved.wait();
+		DeterministicMORNGScope scope(uniqueID, phase, true);
+		return RandomNum<float>();
+	});
+	g_TimerMan.GrantSimUpdates(1);
+	g_TimerMan.UpdateSim();
+	const long long movedTo = g_TimerMan.GetSimUpdateCount();
+	clockMoved.set_value();
+	const float actual = drawn.get();
+	g_TimerMan.RestoreSimTickAfterPreview(count, ticks);
+	const bool passed = movedTo == count + 1 && actual == expected;
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_pool_scope_seeds_from_its_launch_tick launch=" << launchTick
+	          << " clock=" << movedTo << " first_draw_matches=" << (actual == expected) << std::endl;
 	return passed;
 }
 
@@ -8026,6 +8059,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool luaStateIdentity = g_MovableMan.RunLuaStateIdentitySelfTest();
 	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
 	const bool lazySeed = RunLazySeedSelfTest();
+	const bool poolScopeTick = RunPoolScopeTickSelfTest();
 	const bool getterCache = RunGetterCacheSelfTest();
 	const bool selfFetch = RunScriptSelfFetchSelfTest();
 	const bool hookStack = RunHookStackBalanceSelfTest();
@@ -8122,7 +8156,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && getterCache && selfFetch && hookStack && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
