@@ -4795,6 +4795,7 @@ static std::string ResyncSaveName() {
 			committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
 			const auto activationCaptured = std::chrono::steady_clock::now();
 			const auto pause = ScenarioRunner::CaptureLockstepPauseState();
+			if (m_CatchUpCoordinator) m_Coordinator->AdoptReplayedSeatTransitions(*m_CatchUpCoordinator, m_WorldCatchUp.activationTick - 1);
 			ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
 			if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) {
 				ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return;

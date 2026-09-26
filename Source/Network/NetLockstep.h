@@ -922,6 +922,9 @@ namespace RTE {
 		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
 		void NoteInPlaceReturn(uint8_t peerId);
+		/// A joining round whose seat state was read before its first frame takes every hold and return of another seat that the replay
+		/// of its committed tail applied after that read, through the frame before its first; the host's own notice of them may never reach it.
+		void AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame);
 		/// Host: a returning seat bound to the round again is sent every frame from its reclaim frame the round sent while it was away,
 		/// so its live round starts with the inputs every other peer already holds. Returns how many went.
 		size_t SendReturnerTheRoundFrom(uint8_t peerId, uint64_t fromFrame);
@@ -1502,6 +1505,7 @@ namespace RTE {
 		uint64_t m_LivenessFramesSeen = 0; //!< Host: the count its liveness last saw move.
 		uint64_t m_LivenessQuietSinceMs = 0; //!< Host: since when it has sent no frame of its own.
 		uint32_t m_AnnouncedCaptureEvery = 0; //!< Period of the captures every peer takes; 0 when there are none.
+		bool m_AwaitingReplayedSeatState = false; //!< A round joined from a replayed tail: no commit until that tail's seat changes are taken.
 		std::set<uint64_t> m_AnnouncedCaptureTicks; //!< Named captures every peer takes at the end of these ticks.
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
