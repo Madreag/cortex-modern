@@ -1299,6 +1299,8 @@ namespace RTE {
 		/// Whether a scheduled resync owns the end of this round; a last-player leave must not take it.
 		bool ReclaimResyncPending() const;
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
+		/// Whether a committed frame carries this remote's input: exactly the senders the round requires at it.
+		bool CommitsRemoteInput(uint8_t peerId, uint64_t frame) const;
 		/// Records, and on the relay host announces, that the round stops requiring a fenced peer's frames.
 		bool WaiveRemoteFrames(uint8_t peerId, uint64_t fromFrame, uint64_t nowMs, bool announce);
 		static bool IsFrameWaiver(const NetLockstepStop& stop);

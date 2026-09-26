@@ -4467,6 +4467,12 @@ namespace RTE {
 		for (const auto& [peer, reclaim]: m_ReclaimTransactions)
 			m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
 			    PeerAdmission{reclaim.activationFrame, reclaim.delayFrames};
+		// Our own return produces on the delay the host admitted it on, whatever the config this round started from last heard.
+		if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId); own != m_ReclaimTransactions.end() && own->second.activationFrame >= m_Config.startFrame &&
+		    own->second.delayFrames != 0 && InputDelayAt(m_Config.localPeerId, own->second.activationFrame) != own->second.delayFrames) {
+			m_DelayChanges[m_Config.localPeerId][own->second.activationFrame] = own->second.delayFrames;
+			std::cout << "[net-lockstep] our return produces on its admitted delay " << own->second.delayFrames << " from frame " << own->second.activationFrame << std::endl;
+		}
 	}
 
 	void NetLockstepCoordinator::ReadoptRound(uint64_t roundId, uint64_t nowMs) {
@@ -8019,6 +8025,14 @@ namespace RTE {
 		return missing;
 	}
 
+	bool NetLockstepCoordinator::CommitsRemoteInput(uint8_t peerId, uint64_t frame) const {
+		if (IsSeatReclaimGap(peerId, frame)) return false;
+		// A returning seat contributes from the start it was admitted on, never whatever it sent earlier and happened to land in time:
+		// every peer commits the same set of senders at the frame.
+		const auto reclaim = m_ReclaimTransactions.find(peerId);
+		return reclaim == m_ReclaimTransactions.end() || frame < reclaim->second.activationFrame || frame >= EffectiveStartOf(peerId);
+	}
+
 	bool NetLockstepCoordinator::IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const {
 		// Ramp-in: a sender contributes nothing before its own first delayed frame.
 		if (frame < EffectiveStartOf(peerId) || IsSeatReclaimGap(peerId, frame)) {
@@ -10031,7 +10045,7 @@ namespace RTE {
 			// peer builds the byte-identical apply set. This is the one N-peer determinism-sensitive spot.
 			if (remoteIt != m_RemoteFrames.end()) {
 				for (auto& [peerId, frames]: remoteIt->second) {
-					if (!m_Playback && IsSeatReclaimGap(peerId, ready.frame)) continue;
+					if (!m_Playback && !CommitsRemoteInput(peerId, ready.frame)) continue;
 					ready.remoteFrameCounts.emplace(peerId, frames.size());
 					++m_Stats.peers[peerId].framesContributed;
 					ready.remoteFrames.insert(ready.remoteFrames.end(), std::make_move_iterator(frames.begin()), std::make_move_iterator(frames.end()));
@@ -10043,7 +10057,7 @@ namespace RTE {
 			}
 			if (auto remoteCmdIt = m_RemoteCommands.find(ready.frame); remoteCmdIt != m_RemoteCommands.end()) {
 				for (auto& [peerId, cmds]: remoteCmdIt->second) {
-					if (!m_Playback && IsSeatReclaimGap(peerId, ready.frame)) continue;
+					if (!m_Playback && !CommitsRemoteInput(peerId, ready.frame)) continue;
 					ready.remoteCommands.insert(ready.remoteCommands.end(), std::make_move_iterator(cmds.begin()), std::make_move_iterator(cmds.end()));
 				}
 				m_RemoteCommands.erase(remoteCmdIt);
@@ -10054,7 +10068,7 @@ namespace RTE {
 			}
 			if (auto remoteObsIt = m_RemoteObservations.find(ready.frame); remoteObsIt != m_RemoteObservations.end()) {
 				for (auto& [peerId, observations]: remoteObsIt->second) {
-					if (!m_Playback && IsSeatReclaimGap(peerId, ready.frame)) continue;
+					if (!m_Playback && !CommitsRemoteInput(peerId, ready.frame)) continue;
 					ready.remoteObservations.insert(ready.remoteObservations.end(), std::make_move_iterator(observations.begin()), std::make_move_iterator(observations.end()));
 				}
 				m_RemoteObservations.erase(remoteObsIt);
@@ -10065,7 +10079,7 @@ namespace RTE {
 			}
 			if (auto remoteValueIt = m_RemoteValueObservations.find(ready.frame); remoteValueIt != m_RemoteValueObservations.end()) {
 				for (auto& [peerId, observations]: remoteValueIt->second) {
-					if (!m_Playback && IsSeatReclaimGap(peerId, ready.frame)) continue;
+					if (!m_Playback && !CommitsRemoteInput(peerId, ready.frame)) continue;
 					ready.remoteValueObservations.insert(ready.remoteValueObservations.end(), std::make_move_iterator(observations.begin()), std::make_move_iterator(observations.end()));
 				}
 				m_RemoteValueObservations.erase(remoteValueIt);
