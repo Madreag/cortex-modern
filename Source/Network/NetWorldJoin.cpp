@@ -449,6 +449,11 @@ namespace RTE {
 		frame.observations.insert(frame.observations.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
 		frame.valueObservations = ready.localValueObservations;
 		frame.valueObservations.insert(frame.valueObservations.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
+		// Sender order, as every peer applies them, so each peer's record of a committed frame is the same bytes.
+		const auto bySender = [](const auto& lhs, const auto& rhs) { return lhs.senderPeerId < rhs.senderPeerId; };
+		std::stable_sort(frame.commands.begin(), frame.commands.end(), bySender);
+		std::stable_sort(frame.observations.begin(), frame.observations.end(), bySender);
+		std::stable_sort(frame.valueObservations.begin(), frame.valueObservations.end(), bySender);
 		return frame;
 	}
 
@@ -677,6 +682,24 @@ namespace RTE {
 		return chunk;
 	}
 
+	NetLobbyStateChunk MakeWorldJoinHandoverReport(const NetWorldHandover& handover) {
+		auto report = MakeWorldJoinReport(c_NetWorldReportHandover, handover.frame);
+		AppendU64LE(report.bytes, handover.generation);
+		AppendU64LE(report.bytes, handover.authorityPeerId);
+		AppendU64LE(report.bytes, handover.departedMask);
+		report.totalBytes = report.bytes.size();
+		return report;
+	}
+
+	NetWorldHandover WorldJoinHandoverFromReport(uint64_t value, uint64_t generation, uint64_t authority, uint64_t departedMask) {
+		NetWorldHandover handover;
+		handover.frame = value;
+		handover.generation = generation;
+		handover.authorityPeerId = authority <= NetMatchConfigUtil::c_MaxPeerCount ? static_cast<uint8_t>(authority) : 0;
+		handover.departedMask = static_cast<uint8_t>(departedMask);
+		return handover;
+	}
+
 	const char* NetWorldJoinRefusalText(uint64_t code) {
 		switch (static_cast<NetWorldJoinRefusal>(code)) {
 			case NetWorldJoinRefusal::WorldFull: return "the world is full";
@@ -696,15 +719,16 @@ namespace RTE {
 		}
 		kind = chunk.bytes[0];
 		if (kind != c_NetWorldReportProgress && kind != c_NetWorldReportCatchUp && kind != c_NetWorldReportActivate &&
-		    kind != c_NetWorldReportRefused && kind != c_NetWorldReportDecline && kind != c_NetWorldReportActivationAck && kind != c_NetWorldReportActivationCommit) {
+		    kind != c_NetWorldReportRefused && kind != c_NetWorldReportDecline && kind != c_NetWorldReportActivationAck && kind != c_NetWorldReportActivationCommit &&
+		    kind != c_NetWorldReportHandover) {
 			return false;
 		}
 		value = 0;
 		for (int i = 0; i < 8; ++i) {
 			value |= static_cast<uint64_t>(chunk.bytes[static_cast<size_t>(i + 1)]) << (8 * i);
 		}
+		if ((chunk.bytes.size() == 33) != (kind == c_NetWorldReportHandover) && kind != c_NetWorldReportCatchUp) return false;
 		if (chunk.bytes.size() == 33) {
-			if (kind != c_NetWorldReportCatchUp) return false;
 			const uint8_t* cursor = chunk.bytes.data() + 9;
 			const uint8_t* end = chunk.bytes.data() + chunk.bytes.size();
 			bool ok = true;
@@ -971,6 +995,26 @@ namespace RTE {
 			m_Records.pop_front();
 			++m_Evicted;
 		}
+	}
+
+	bool NetWorldFrameLog::AppendEncoded(uint64_t frame, const std::vector<uint8_t>& bytes, std::string* error) {
+		if (!m_Records.empty() && frame != m_Records.back().frame + 1) {
+			if (error) *error = "the committed tail cannot skip from frame " + std::to_string(m_Records.back().frame) + " to " + std::to_string(frame);
+			return false;
+		}
+		if (m_Journal && m_Journal->Append(frame, bytes)) {
+			if (m_JournalFirst == 0) m_JournalFirst = frame;
+			m_JournalLast = frame;
+		}
+		m_Bytes += bytes.size();
+		m_Records.push_back({frame, bytes});
+		Trim();
+		return true;
+	}
+
+	uint64_t NetWorldFrameLog::FirstServableFrame() const {
+		if (m_Journal && !m_Journal->failed && m_JournalFirst != 0) return m_JournalFirst;
+		return FirstFrame();
 	}
 
 	bool NetWorldFrameLog::Covers(uint64_t frame) const {
@@ -1416,7 +1460,7 @@ namespace RTE {
 
 	bool NetWorldJoinHost::BeginInPlaceRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, uint64_t heldThrough, std::string* error) {
 		if (!IsPrivateMatch() || !m_Tail.Covers(heldThrough + 1)) {
-			if (error) *error = "the committed tail no longer reaches the held state";
+			if (error) *error = "the committed tail no longer reaches the held state at " + std::to_string(heldThrough + 1) + ": the first frame it can serve is " + std::to_string(m_Tail.FirstServableFrame());
 			return false;
 		}
 		if (!BeginRejoin(connection, stableSeat, peerId, incarnation, name, nowMs, error)) return false;
