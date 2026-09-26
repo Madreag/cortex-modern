@@ -728,16 +728,13 @@ static std::string ResyncSaveName() {
 			s_PortMap.Release();
 		}
 		s_PortMapApplied = false;
-		// A fresh lockstep round starts every peer on the host's script state, never on each machine's own history.
-		m_RoundStartScripts.clear();
-		m_PendingRoundStartScripts.clear();
-		if (request.host && !request.resumeConfig && !targetingWorld) {
-			std::string captureError;
-			if (!LuaMan::CaptureRoundStartScripts(m_RoundStartScripts, &captureError)) {
-				if (error) *error = "the round's start scripts could not be captured: " + captureError;
-				SetState(NetMatchServiceState::Failed, "Hosting failed", *error);
-				return false;
-			}
+		{
+			// A fresh lockstep round starts every peer on the host's script state, never on each machine's own history.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_RoundStartScriptsWanted = request.host && !request.resumeConfig && !targetingWorld;
+			m_RoundStartScripts.clear();
+			m_RoundStartScriptsToStream.clear();
+			m_PendingRoundStartScripts.clear();
 		}
 		m_EverStarted.store(true);
 		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest), std::move(identityOptions));
@@ -2655,6 +2652,23 @@ static std::string ResyncSaveName() {
 				m_StatusText = "Start requested; waiting for peer";
 				m_ErrorText.clear();
 			}
+		}
+		// The host's script state is taken on this thread, the one that runs the scripts, when the round is asked to start.
+		bool capture = false;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			capture = m_RoundStartScriptsWanted && m_RoundStartScripts.empty() && m_State == NetMatchServiceState::Starting;
+		}
+		if (capture) {
+			std::vector<uint8_t> scripts;
+			std::string captureError;
+			if (!LuaMan::CaptureRoundStartScripts(scripts, &captureError)) {
+				SetState(NetMatchServiceState::Failed, "Match start failed", "the round's start scripts could not be captured: " + captureError);
+				return;
+			}
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_RoundStartScripts = scripts;
+			m_RoundStartScriptsToStream = std::move(scripts);
 		}
 		m_StartRequested.store(true);
 	}
@@ -7491,6 +7505,10 @@ static std::string ResyncSaveName() {
 		config.autoStart = config.host && config.matchConfig.persistentWorld;
 		config.readyRequested = &m_ReadyRequested;
 		config.startRequested = &m_StartRequested;
+		config.roundStartScripts = [this] {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return std::exchange(m_RoundStartScriptsToStream, {});
+		};
 		config.cancelRequested = &m_CancelRequested;
 		config.hostOptions = &m_HostOptionsRequest;
 	}
@@ -7698,8 +7716,6 @@ static std::string ResyncSaveName() {
 			} else {
 				runner->SetStateToStream(std::move(envelope));
 			}
-		} else if (started && request.host && !m_RoundStartScripts.empty()) {
-			runner->SetStateToStream(std::vector<uint8_t>(m_RoundStartScripts));
 		}
 		runnerConfig.enableMigration = s_AdmissionEnabled && !request.dedicated && !runnerConfig.matchConfig.persistentWorld && GetNetAuthCrypto().IsRealCrypto();
 		runnerConfig.migrationListenAddrs = {NetLanDiscovery::GetPrimaryLocalAddress()};

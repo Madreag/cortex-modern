@@ -99,6 +99,8 @@ namespace RTE {
 		bool autoStart = true;
 		const std::atomic<bool>* readyRequested = nullptr;
 		std::atomic<bool>* startRequested = nullptr;
+		// Host: the round's start scripts, streamed ahead of the lobby start the first time a start is asked for.
+		std::function<std::vector<uint8_t>()> roundStartScripts;
 		const std::atomic<bool>* cancelRequested = nullptr;
 		// Host: accepted host-options drafts on their way to this thread. The lobby loop republishes
 		// one as the round's next configuration revision; a rematch starts its round on it.
