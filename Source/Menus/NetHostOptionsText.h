@@ -13,6 +13,40 @@ namespace RTE {
 		return enabled ? "Automatic" : "Off (LAN or port-forwarded only)";
 	}
 
+	/// The slow-player policy's words, shared by the Network page's combo and the read-only summary.
+	inline const char* NetSlowPlayerPolicyText(NetSlowPlayerPolicy policy) {
+		return policy == NetSlowPlayerPolicy::Pause ? "Pause for them (up to 20 s)" : "Hand the seat to the AI and let them rejoin";
+	}
+
+	/// What happens to a player whose input is late, under the policy and bound the host picked.
+	inline std::string NetSlowPlayerHint(NetSlowPlayerPolicy policy, uint16_t boundTicks, double tickMs) {
+		return "";
+	}
+
+	/// How the automatic input delay is sized, in the words every delay readout uses.
+	inline std::string NetAutoDelayText(uint16_t marginTicks) {
+		return "auto, re-sized live from ping";
+	}
+
+	/// The autosave interval row's range.
+	inline const char* NetAutosaveRangeHint() {
+		return "Autosaves every 60 s to 60 min, or off";
+	}
+
+	/// What a match checkpoint is to the players.
+	inline const char* NetAutosaveNote() {
+		return "";
+	}
+
+	/// Settings > Network > Connection's hint for each route choice.
+	inline const char* NetConnectionModeHint(SettingsMan::NetworkConnectionMode mode) {
+		switch (mode) {
+			case SettingsMan::NetworkConnectionMode::DirectOnly: return "Direct only: lowest latency; fails when routers block a direct route.";
+			case SettingsMan::NetworkConnectionMode::RelayOnly: return "Relay only: every packet uses the relay and adds its round trip.";
+			default: return "Direct first: lowest latency; relay adds a round trip if direct fails.";
+		}
+	}
+
 	inline std::string NetHostNatModeText(const SettingsMan& settings) {
 		if (!settings.GetNetworkIceEnableSetting()) return "Port forwarding required";
 		if (settings.GetNetworkHostRelayMode() != SettingsMan::NetworkHostRelayMode::Off) return "NAT: STUN + relay";
@@ -136,8 +170,7 @@ namespace RTE {
 		          : "Automatic (" + snapshot.inputDelayText + ")"));
 		line("Frame redundancy: " + std::to_string(config.frameRedundancyTicks) + " ticks");
 		line("Slow player bound: " + std::to_string(config.slowPlayerBoundTicks) + " ticks");
-		line(std::string("When a player falls behind: ") + (config.slowPlayerPolicy == NetSlowPlayerPolicy::Pause
-		    ? "Pause for them (up to 20 s)" : "Hand the seat to the AI and let them rejoin"));
+		line(std::string("When a player falls behind: ") + NetSlowPlayerPolicyText(config.slowPlayerPolicy));
 		line(config.autosaveEnabled
 		         ? "Autosaves: every " + std::to_string(config.autosaveIntervalSeconds) + " sim seconds"
 		         : "Autosaves: off");
