@@ -11,11 +11,16 @@ on the Python the Mac ships, which has no `hashlib.file_digest`.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import signal
+import subprocess
 import sys
+import time
 
 SELFTEST_FIXTURES = {
     "mod-api-shims": ["mod-api-shims.lua"],
@@ -58,13 +63,18 @@ SELFTESTS = [
     "preview-invariance",
     "preview-binding-exhaustive",
 ]
-# Rows whose verdict carries a wall-clock budget, so a loaded box can fail them without a defect: the inventory
-# runs them in its quiet stream. They stay out of the default rows; --quiet-rows runs them last, one at a time,
-# after every other row has finished, and --quiet-rows only runs them alone. Their budgets never move.
+# Rows whose verdict carries a wall-clock window, so a loaded box can fail them without a defect. They run last, one at
+# a time, after every other row has finished (the quiet tail); a red one runs once more alone once the box has no other
+# engine, and that quiet result decides the row with the loaded one recorded beside it. A row of SELFTESTS always runs
+# in the tail; the others join it with --quiet-rows, and --quiet-rows only runs the tail alone. Their budgets never move.
 LOAD_SENSITIVE = {
+    # runner stalled state transfer amid session keepalives; the snapshot-load keepalive's 300 ms window.
+    "net-match": ["-net-match-selftest"],
     # threaded_synced_update_pass_timing: 1,024 registered MOs, 150 us added per pass.
     "script-graph": ["-script-graph-selftest"],
 }
+# How long a red tail row waits for other engines to leave the box before its quiet run starts anyway.
+QUIET_WAIT_S = 300
 # The wall-clock budget checks inside those rows. A sanitizer build instruments every access, so its timings measure
 # the instrumentation: there the budget lines are reported, not judged, and every other check still decides the row.
 WALL_CLOCK_CHECKS = {"script-graph": ("threaded_synced_update_pass_timing", "threaded_synced_update_pass_timing_under_load")}
@@ -112,6 +122,9 @@ BINDING_WALK_ARGS = ["-net-replay", "tools/fixtures/pickup_fire.ccreplay", "-inp
                      "-max-ticks", "155", "-preview-binding-exhaustive-selftest"]
 BINDING_WALK_FIXTURES = ["pickup_fire.ccreplay", "pickup_fire.txt"]
 BINDING_WALK_TIMEOUT = 1800
+# A sanitizer build instruments every access, so the walk gets its own budget, measured alone with headroom.
+BINDING_WALK_SANITIZER_TIMEOUT = {"tsan": 7200}
+BINDING_WALK_CLASS = re.compile(r"^\[bindx\] class \S+ ", re.M)
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",
     re.M,
@@ -196,6 +209,135 @@ def score_selftest(stdout: str, exit_code, timed_out=False, name=None) -> dict:
     }
 
 
+class Interrupted(Exception):
+    """A signal ended the suite; the result already written names the row it cut."""
+
+
+def _interrupt(signum, _frame):
+    raise Interrupted(signal.Signals(signum).name)
+
+
+def engines_running():
+    """Every engine process on the box as name:pid, or None when the process list cannot be read."""
+    try:
+        if sys.platform == "win32":
+            listing = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=60).stdout
+            rows = [(row[0], row[1]) for row in csv.reader(listing.splitlines()) if len(row) > 1]
+        else:
+            listing = subprocess.run(["ps", "-axo", "pid=,comm="], capture_output=True, text=True, timeout=60).stdout
+            rows = [(Path(comm.strip()).name, pid) for pid, _, comm in (line.strip().partition(" ") for line in listing.splitlines())]
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [f"{name}:{pid}" for name, pid in rows if name.lower().startswith("cortex command") or name == "CortexCommand"]
+
+
+def box_state():
+    state = {"engines": engines_running()}
+    if hasattr(os, "getloadavg"):
+        state["load"] = [round(value, 2) for value in os.getloadavg()]
+    return state
+
+
+def wait_for_quiet_box(limit_s=QUIET_WAIT_S, poll_s=5.0):
+    """Waits until no engine runs on the box (other lanes' included), up to limit_s; the rerun starts either way."""
+    start = time.monotonic()
+    while True:
+        state = box_state()
+        state["waited_s"] = round(time.monotonic() - start, 1)
+        if state["engines"] is None:
+            return {**state, "quiet": None}
+        if not state["engines"] or state["waited_s"] >= limit_s:
+            return {**state, "quiet": not state["engines"]}
+        time.sleep(poll_s)
+
+
+def attempt_summary(scored, case):
+    keys = ("pass", "reason", "exit_code", "timed_out", "fail_lines", "fatal", "box")
+    return {"dir": str(case), **{key: scored.get(key) for key in keys}}
+
+
+def run_row(options, make_run, name, case, sanitizer):
+    if name in LOAD_SENSITIVE:
+        run = make_run(options.repo, LOAD_SENSITIVE[name], case, options.timeout, fixtures=SELFTEST_FIXTURES.get(name))
+        try:
+            record = run.start().finish()
+        finally:
+            run.close()
+        stdout = (case / "stdout.log").read_text(errors="replace") if (case / "stdout.log").exists() else ""
+        scored = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), f"{name}-selftest")
+        if sanitizer and not scored["pass"] and name in WALL_CLOCK_CHECKS:
+            scored = score_wall_clock_informational(stdout, record, name, sanitizer)
+        scored["binary"] = record.get("exe_sha256")
+        scored["load_sensitive"] = True
+    elif name == "headless-assert-continues":
+        from test_headless_assert import run_case as assert_case  # noqa: PLC0415
+
+        scored = assert_case(options.repo, case, options.timeout)
+        scored["binary"] = scored.get("exe_sha256")
+    elif name == "ext-validate-version":
+        from test_ext_validate_version import run_case as ext_case  # noqa: PLC0415
+
+        scored = ext_case(options.repo, case, options.timeout)
+        scored["binary"] = scored.get("exe_sha256")
+    elif name == "single-module-harness":
+        from test_single_module_harness import run_case, score_detect  # noqa: PLC0415
+
+        case_data = run_case(options.repo, case, options.timeout, ["-module", "Tests.rte"])
+        scored = score_detect(case_data)
+        scored["binary"] = case_data.get("exe_sha256")
+    elif name == "headless-render-cap":
+        from test_headless_render_cap import run_case, score_detect  # noqa: PLC0415
+
+        case_data = run_case(options.repo, case, options.timeout)
+        scored = score_detect(case_data)
+        scored["binary"] = case_data.get("exe_sha256")
+    elif name == "preview-invariance":
+        from test_preview_invariance import run_case as invariance_case  # noqa: PLC0415
+
+        scored = invariance_case(options.repo, case, options.timeout)
+        scored["binary"] = scored.get("exe_sha256")
+    else:
+        walk = name == "preview-binding-exhaustive"
+        budget = max(options.timeout, BINDING_WALK_SANITIZER_TIMEOUT.get(sanitizer, BINDING_WALK_TIMEOUT)) if walk else options.timeout
+        run = make_run(options.repo, BINDING_WALK_ARGS if walk else [f"-{name}-selftest"], case, budget,
+                       fixtures=BINDING_WALK_FIXTURES if walk else SELFTEST_FIXTURES.get(name))
+        try:
+            record = run.start().finish()
+        finally:
+            run.close()
+        stdout = (
+            (case / "stdout.log").read_text(errors="replace")
+            if (case / "stdout.log").exists()
+            else ""
+        )
+        scored = score_selftest(
+            stdout, record.get("exit_code"), record.get("timed_out"), f"{name}-selftest"
+        )
+        scored["binary"] = record.get("exe_sha256")
+        if walk:
+            scored.update(budget_s=budget, elapsed_s=record.get("elapsed_seconds"), walked_classes=len(BINDING_WALK_CLASS.findall(stdout)))
+    return scored
+
+
+def run_tail_row(options, make_run, name, out, sanitizer):
+    """A load-sensitive row: a red first run is run once more alone, and the quiet run decides it."""
+    case = out / f"{name}-selftest"
+    box = box_state()
+    first = run_row(options, make_run, name, case, sanitizer)
+    first["box"] = box
+    if first["pass"]:
+        return first
+    quiet_case = out / f"{name}-selftest-quiet"
+    box = wait_for_quiet_box()
+    second = run_row(options, make_run, name, quiet_case, sanitizer)
+    second["box"] = box
+    return {**second, "quiet_rerun": True, "attempts": [attempt_summary(first, case), attempt_summary(second, quiet_case)]}
+
+
+def write_result(out, summary):
+    (out / "result.json").write_text(json.dumps(summary, indent=2))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path)
@@ -206,7 +348,9 @@ def main():
     parser.add_argument("--timed-out", action="store_true")
     parser.add_argument("--name", default="controller-frame-selftest")
     parser.add_argument("--quiet-rows", nargs="?", const="last", choices=("last", "only"),
-                        help="also run the load-sensitive rows, last and one at a time (only: those rows alone)")
+                        help="also run every load-sensitive row in the quiet tail (only: the tail alone)")
+    parser.add_argument("--only", action="append", default=[], metavar="ROW",
+                        help="run just this row (repeatable); a load-sensitive row keeps its quiet rerun")
     options = parser.parse_args()
 
     if options.score_stdout:
@@ -221,6 +365,9 @@ def main():
 
     if options.repo is None or options.out is None:
         parser.error("--repo and --out are required unless --score-stdout is set")
+    unknown = [name for name in options.only if name not in SELFTESTS and name not in LOAD_SENSITIVE]
+    if unknown:
+        parser.error(f"no such row: {', '.join(unknown)}")
     sys.path.insert(0, str(options.repo / "tools"))
     from run_sim_test import make_run  # noqa: PLC0415
 
@@ -232,79 +379,39 @@ def main():
     exe_hash = sha256_of(exe)
     sanitizer = sanitizer_build(exe)
     results = {}
-    rows = [] if options.quiet_rows == "only" else list(SELFTESTS)
-    quiet = list(LOAD_SENSITIVE) if options.quiet_rows else []
-    for name in rows + quiet:
-        case = out / f"{name}-selftest"
-        if name in LOAD_SENSITIVE:
-            run = make_run(options.repo, LOAD_SENSITIVE[name], case, options.timeout)
+    rows = [] if options.quiet_rows == "only" else [name for name in SELFTESTS if name not in LOAD_SENSITIVE]
+    tail = [name for name in LOAD_SENSITIVE if name in SELFTESTS or options.quiet_rows]
+    if options.only:
+        rows = [name for name in SELFTESTS if name in options.only and name not in LOAD_SENSITIVE]
+        tail = [name for name in LOAD_SENSITIVE if name in options.only]
+    summary = {"exe_sha256": exe_hash, "repo": str(options.repo), "passed": 0, "total": len(rows) + len(tail),
+               "quiet_rows": tail, "sanitizer": sanitizer, "complete": False, "running": None, "results": results}
+    for sig in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", None)):
+        if sig is not None:
+            signal.signal(sig, _interrupt)
+    try:
+        for name in rows + tail:
+            summary["running"] = name
+            write_result(out, summary)
             try:
-                record = run.start().finish()
-            finally:
-                run.close()
-            stdout = (case / "stdout.log").read_text(errors="replace") if (case / "stdout.log").exists() else ""
-            scored = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), f"{name}-selftest")
-            if sanitizer and not scored["pass"]:
-                scored = score_wall_clock_informational(stdout, record, name, sanitizer)
-            scored["binary"] = record.get("exe_sha256")
-            scored["load_sensitive"] = True
-        elif name == "headless-assert-continues":
-            from test_headless_assert import run_case as assert_case  # noqa: PLC0415
-
-            scored = assert_case(options.repo, case, options.timeout)
-            scored["binary"] = scored.get("exe_sha256")
-        elif name == "ext-validate-version":
-            from test_ext_validate_version import run_case as ext_case  # noqa: PLC0415
-
-            scored = ext_case(options.repo, case, options.timeout)
-            scored["binary"] = scored.get("exe_sha256")
-        elif name == "single-module-harness":
-            from test_single_module_harness import run_case, score_detect  # noqa: PLC0415
-
-            case_data = run_case(options.repo, case, options.timeout, ["-module", "Tests.rte"])
-            scored = score_detect(case_data)
-            scored["binary"] = case_data.get("exe_sha256")
-        elif name == "headless-render-cap":
-            from test_headless_render_cap import run_case, score_detect  # noqa: PLC0415
-
-            case_data = run_case(options.repo, case, options.timeout)
-            scored = score_detect(case_data)
-            scored["binary"] = case_data.get("exe_sha256")
-        elif name == "preview-invariance":
-            from test_preview_invariance import run_case as invariance_case  # noqa: PLC0415
-
-            scored = invariance_case(options.repo, case, options.timeout)
-            scored["binary"] = scored.get("exe_sha256")
-        else:
-            walk = name == "preview-binding-exhaustive"
-            run = make_run(options.repo, BINDING_WALK_ARGS if walk else [f"-{name}-selftest"], case,
-                           max(options.timeout, BINDING_WALK_TIMEOUT) if walk else options.timeout,
-                           fixtures=BINDING_WALK_FIXTURES if walk else SELFTEST_FIXTURES.get(name))
-            try:
-                record = run.start().finish()
-            finally:
-                run.close()
-            stdout = (
-                (case / "stdout.log").read_text(errors="replace")
-                if (case / "stdout.log").exists()
-                else ""
-            )
-            scored = score_selftest(
-                stdout, record.get("exit_code"), record.get("timed_out"), f"{name}-selftest"
-            )
-            scored["binary"] = record.get("exe_sha256")
-        results[name] = scored
-        print(json.dumps({"selftest": name, **{k: v for k, v in scored.items() if k != "binary"}}), flush=True)
-    summary = {
-        "exe_sha256": exe_hash,
-        "repo": str(options.repo),
-        "passed": sum(1 for r in results.values() if r["pass"]),
-        "total": len(rows) + len(quiet),
-        "quiet_rows": quiet,
-        "sanitizer": sanitizer,
-        "results": results,
-    }
-    (out / "result.json").write_text(json.dumps(summary, indent=2))
+                if name in tail:
+                    scored = run_tail_row(options, make_run, name, out, sanitizer)
+                else:
+                    scored = run_row(options, make_run, name, out / f"{name}-selftest", sanitizer)
+            except Interrupted:
+                raise
+            except Exception as exc:  # noqa: BLE001 - a runner failure is this row's red, never an empty result
+                scored = {"pass": False, "reason": f"runner error: {exc!r}"}
+            results[name] = scored
+            summary["passed"] = sum(1 for row in results.values() if row["pass"])
+            print(json.dumps({"selftest": name, **{k: v for k, v in scored.items() if k != "binary"}}), flush=True)
+    except Interrupted as stop:
+        summary["interrupted"] = f"{stop} during {summary['running']}"
+        write_result(out, summary)
+        print(json.dumps({"interrupted": summary["interrupted"], "passed": summary["passed"], "total": summary["total"]}), flush=True)
+        return 3
+    summary.update(complete=True, running=None)
+    write_result(out, summary)
     print(json.dumps({k: summary[k] for k in ("exe_sha256", "passed", "total")}, indent=2))
     return 0 if summary["passed"] == summary["total"] else 1
 
