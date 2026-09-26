@@ -196,14 +196,14 @@ namespace RTE {
 		static constexpr size_t c_DefaultMaxFrames = 3600;              //!< A minute of 60 Hz ticks.
 		static constexpr uint64_t c_DefaultMaxBytes = 32ULL * 1024 * 1024;
 
+		/// The frames a peer's record of its round keeps: the slow-player bound, the delay margin and one capture interval of frames.
+		static size_t RingFrames(uint32_t boundTicks, uint32_t delayMarginFrames, uint64_t captureIntervalMs, double tickMs);
 		void Configure(size_t maxFrames, uint64_t maxBytes);
 		void EnableJournal(const std::string& path);
 		bool HasJournal() const { return static_cast<bool>(m_Journal); }
 		bool JournalFailed() const;
 		/// Encodes and retains one committed frame. Frames must arrive in order and without gaps.
 		bool Append(const NetLockstepFrame& frame, std::string* error = nullptr);
-		/// Retains one frame already encoded as Append encodes it, in the same order.
-		bool AppendEncoded(uint64_t frame, const std::vector<uint8_t>& bytes, std::string* error = nullptr);
 		/// The oldest frame the log can still serve, from its journal or its memory; 0 when it holds none.
 		uint64_t FirstServableFrame() const;
 		/// Whether the log still covers the frame, so a join opened at B-1 can still converge.
@@ -218,6 +218,8 @@ namespace RTE {
 		size_t CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* lastCopied = nullptr) const;
 		/// Forgets everything at or before the frame every live bootstrap has applied.
 		void DropThrough(uint64_t frame);
+		/// Takes another log's records as this empty log's own, bounded as this log is. False when this log already holds a record.
+		bool AdoptRecords(const NetWorldFrameLog& other);
 		void Clear();
 
 	private:

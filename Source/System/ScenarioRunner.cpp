@@ -89,6 +89,7 @@ namespace RTE {
 		bool s_WorldCatchUpHeld = false;
 		int s_WorldCatchUpBudget = 0;
 		int s_OwnSeatCatchUpBudget = 0;
+		int s_FenceTraceFrames = 0; //!< Reclaim-gap frames whose inputs are still traced, fence by fence.
 		uint64_t s_WorldCatchUpAppliedThrough = 0;
 		uint64_t s_WorldCatchUpActivationTick = 0;
 		std::deque<NetLockstepFrame> s_WorldCatchUpTail;
@@ -1341,7 +1342,10 @@ namespace RTE {
 
 	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick) {
 		NetLockstepPlaneGuard plane;
-		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->IsOwnHostSeatHeld() || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
+		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
+		// A seat that came back from the committed tail stands a trip behind the round's inputs: it closes that trip through its reclaim gap.
+		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+		if (!s_LockstepCoordinator->IsOwnHostSeatHeld() && !s_LockstepCoordinator->IsSeatReclaimGap(local, nextSimTick)) return false;
 		--s_OwnSeatCatchUpBudget;
 		return true;
 	}
@@ -1525,7 +1529,11 @@ namespace RTE {
 
 	void ScenarioRunner::FilterReclaimControllerInputs(NetLockstepReadyFrame& ready) {
 		NetLockstepPlaneGuard plane;
+		static int fenceTraceLeft = 8;
+		if (!s_LockstepCoordinator || !s_LockstepCoordinator->HasSeatReclaimGap(ready.frame)) fenceTraceLeft = 8;
 		if (!s_LockstepCoordinator || (!s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) && !s_LockstepCoordinator->HasSeatHoldGap(ready.frame)) || !MovableMan::IsConstructed()) return;
+		// The first frames of each reclaim gap trace every input's seat reading.
+		s_FenceTraceFrames = s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) && fenceTraceLeft > 0 ? fenceTraceLeft-- : 0;
 		size_t seen = 0, fenced = 0;
 		const auto suppressed = [&](const ControllerFrame& input) {
 			if (input.actorUniqueID < 0 || input.actorUniqueID > std::numeric_limits<long>::max()) return false;
@@ -1536,6 +1544,15 @@ namespace RTE {
 			const uint8_t heldSeat = GetLockstepHeldSeat(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled(), ready.frame);
 			const bool gap = s_LockstepCoordinator->IsSeatReclaimGap(seat, ready.frame) || s_LockstepCoordinator->IsSeatHoldGap(heldSeat, ready.frame);
 			if (gap) ++fenced;
+			// Every input's seat reading at a gap frame, so a fence two peers disagree on names its actor and the reading that split.
+			if (s_FenceTraceFrames > 0) {
+				const auto overrideIt = s_LockstepControlOverrides.find(input.actorUniqueID);
+				const auto droppedIt = s_LockstepDroppedControlOverrides.find(input.actorUniqueID);
+				std::cout << "[net-lockstep] fence frame=" << ready.frame << " uid=" << input.actorUniqueID << " team=" << actor->GetTeam() << " cpu=" << !actor->IsPlayerControlled()
+				          << " seat=" << static_cast<int>(seat) << " held_seat=" << static_cast<int>(heldSeat) << " seeded=" << static_cast<int>(NetActorOwnership::GetSeededOwner(input.actorUniqueID))
+				          << " override=" << (overrideIt == s_LockstepControlOverrides.end() ? -1 : static_cast<int>(overrideIt->second))
+				          << " dropped=" << (droppedIt == s_LockstepDroppedControlOverrides.end() ? -1 : static_cast<int>(droppedIt->second)) << " fenced=" << gap << std::endl;
+			}
 			return gap;
 		};
 		const size_t before = ready.localFrames.size() + ready.remoteFrames.size();

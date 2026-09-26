@@ -598,9 +598,6 @@
     <ClInclude Include="Source\Network\NetMatchService.h">
       <Filter>Network</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Network\NetCommittedTailRing.h">
-      <Filter>Network</Filter>
-    </ClInclude>
     <ClInclude Include="Source\Network\NetMatchSelfTest.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -1001,9 +998,6 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetMatchService.cpp">
-      <Filter>Network</Filter>
-    </ClCompile>
-    <ClCompile Include="Source\Network\NetCommittedTailRing.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetMatchSelfTest.cpp">
