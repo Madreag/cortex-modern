@@ -973,6 +973,9 @@ static std::string ResyncSaveName() {
 
 	// A client's session has exactly one remote - the host. Its loss is the host's departure unless the
 	// host's own record says it removed or refused this seat, which keeps its own text.
+	// A live host's answer to a held return its tail cannot reach: the seat comes back through the image.
+	static constexpr const char* c_ImageRejoinDetail = "slow player: rejoin from the host's image";
+
 	static bool ClientSessionLossIsHostDeparture(const NetSession& session) {
 		if (session.IsReady()) return false;
 		if (!session.HasReject()) return true;
@@ -1991,7 +1994,7 @@ static std::string ResyncSaveName() {
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
 		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear(); m_RejoinFitReasons.clear(); m_CommittedRing.Clear(); m_CommittedRingRound = 0;
-		m_HandoverFrame = 0; m_InPlaceRoutes.clear(); m_InPlaceMoveHost = 0; m_InPlaceMoveAddress.clear();
+		m_HandoverFrame = 0; m_InPlaceRoutes.clear(); m_InPlaceMoveHost = 0; m_InPlaceMoveAddress.clear(); m_InPlaceTicketHost.clear();
 		m_PrivateBaseRequested = false; m_PrivateBaseTick = 0; m_PrivateBasePending.reset();
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateCaptureCosts.clear(); m_PrivateCaptureCold = false; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
@@ -4833,24 +4836,28 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::BeginInPlaceMoveLocked(uint64_t nowMs) {
 		if (!m_InPlaceCatchUp || !m_Coordinator || !m_Session || !m_Runner || !m_CatchUpCoordinator || m_InPlaceRoutes.empty()) return false;
-		// A return the lost host agreed is void: the successor agrees its own.
-		if (m_Runner->IsWorldJoinLockstepStarting()) m_Runner->CancelWorldJoinLockstepStart();
-		m_WorldCatchUp.activationTick = 0;
-		m_WorldCatchUp.activationCommitted = false;
-		ScenarioRunner::SetWorldCatchUpActivation(0);
+		// TODO: a return the lost host agreed is the survivors' too; the successor does not yet resume it on a new connection.
+		if (m_WorldCatchUp.activationTick != 0) {
+			System::PrintDiagnosticLine("[net-match] held client: its return at " + std::to_string(m_WorldCatchUp.activationTick) + " was agreed with the lost host; it rejoins through the image");
+			return false;
+		}
 		m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 		return DialNextInPlaceRouteLocked(nowMs);
 	}
 
 	bool NetMatchService::DialNextInPlaceRouteLocked(uint64_t nowMs) {
 		m_InPlaceMoveHost = 0;
+		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		if (m_InPlaceTicketHost.empty()) {
+			NetH4TicketRecord record;
+			if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded) m_InPlaceTicketHost = record.hostAddress;
+		}
 		while (!m_InPlaceRoutes.empty()) {
 			const InPlaceRoute route = m_InPlaceRoutes.front();
 			m_InPlaceRoutes.pop_front();
 			const std::string& address = route.endpoint.listenAddrs.front();
 			// The seat's ticket names the match's host; the successor holds the match's admission state and answers it.
 			NetH4TicketRecord record;
-			m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 			if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded && record.hostAddress != address) {
 				record.hostAddress = address;
 				(void)m_TicketStore.Store(record, nullptr);
@@ -4886,6 +4893,13 @@ static std::string ResyncSaveName() {
 			System::PrintDiagnosticLine(line.str());
 			return true;
 		}
+		// No successor took the seat: its ticket names the host it named before, for the rejoin that follows.
+		NetH4TicketRecord record;
+		if (!m_InPlaceTicketHost.empty() && m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded && record.hostAddress != m_InPlaceTicketHost) {
+			record.hostAddress = m_InPlaceTicketHost;
+			(void)m_TicketStore.Store(record, nullptr);
+		}
+		m_InPlaceTicketHost.clear();
 		return false;
 	}
 
@@ -4907,6 +4921,7 @@ static std::string ResyncSaveName() {
 				System::PrintDiagnosticLine("[net-match] held client: the successor peer=" + std::to_string(m_InPlaceMoveHost) + " admitted the seat; its tail is asked from " +
 				                            std::to_string(m_WorldCatchUp.appliedThrough));
 				m_InPlaceMoveHost = 0;
+				m_InPlaceTicketHost.clear();
 				return true;
 			}
 		}
@@ -5020,7 +5035,7 @@ static std::string ResyncSaveName() {
 		}
 		// No tail reaches its state: it comes back through the image on a new connection.
 		System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(member) + " cannot catch up in place: " + error + " (sessions=" + std::to_string(m_WorldJoin.Sessions().size()) + ")");
-		m_Session->DisconnectReadyPeer(connection, NetRejectReason::HostNotAccepting, "slow player: rejoin from the host's image");
+		m_Session->DisconnectReadyPeer(connection, NetRejectReason::HostNotAccepting, c_ImageRejoinDetail);
 	}
 
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
@@ -5072,7 +5087,8 @@ static std::string ResyncSaveName() {
 			// A held seat with nobody left to rejoin is the match now: it hosts it from its own committed state.
 			if (m_InPlaceCatchUp && !HeldSeatHasSuccessorLocked() && HostAloneFromOwnStateLocked()) return;
 			// A host that is gone hands the catch-up to its successor, and the seat keeps the world it holds.
-			if (m_InPlaceCatchUp && ClientSessionLossIsHostDeparture(*m_Session) && BeginInPlaceMoveLocked(nowMs)) return;
+			if (m_InPlaceCatchUp && ClientSessionLossIsHostDeparture(*m_Session) && m_Session->BuildRejectText().find(c_ImageRejoinDetail) == std::string::npos &&
+			    BeginInPlaceMoveLocked(nowMs)) return;
 			ScenarioRunner::SetControllerReplayError(m_WorldCatchUp.privateMatch
 			    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
 			    : "PeerLeft:The host connection was lost while joining the world");
