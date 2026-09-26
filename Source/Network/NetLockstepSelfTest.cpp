@@ -54,6 +54,7 @@
 #include <barrier>
 #include <cstring>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -81,6 +82,8 @@ namespace RTE {
 	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error);
 	bool TestAThinLeadIsRaisedBeforeASpike(std::string* error);
 	bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
+	bool TestPlaneScopesKeepTheirOwnCounts(std::string* error);
+	bool TestPlaneCheckTripsOnAnUnguardedAccess(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -20235,6 +20238,106 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	namespace {
+		// Opens a scope on another thread, runs the simulation thread's steps while it is open, then closes it there.
+		template <typename Scope> void WithScopeOnAnotherThread(const std::function<void()>& between) {
+			std::promise<void> opened;
+			std::promise<void> release;
+			std::shared_future<void> released = release.get_future().share();
+			std::thread other([&opened, released] {
+				Scope scope("another thread's scope");
+				opened.set_value();
+				released.wait();
+			});
+			opened.get_future().wait();
+			between();
+			release.set_value();
+			other.join();
+		}
+	}
+
+	// A gap keeps the plane from ticking until it ends, whatever opens and closes inside it, and a scope
+	// opened off the simulation thread is refused rather than moving the simulation thread's counts.
+	bool TestPlaneScopesKeepTheirOwnCounts(std::string* error) {
+		const auto fail = [error](const std::string& message) {
+			if (error) *error = message;
+			return false;
+		};
+		if (NetLockstepPlane::TicksPermitted()) return fail("the plane may tick before any window opened");
+		const uint64_t refusedBefore = NetLockstepPlane::ScopeRefusals();
+		{
+			NetLockstepPlane::Window frame;
+			if (!NetLockstepPlane::TicksPermitted()) return fail("an open window does not let the plane tick");
+			bool reopened = false;
+			{
+				NetLockstepPlane::Gap outer;
+				{
+					NetLockstepPlane::Window inner;
+					{ NetLockstepPlane::Gap nested; }
+					reopened = NetLockstepPlane::TicksPermitted();
+				}
+				reopened = reopened || NetLockstepPlane::TicksPermitted();
+			}
+			if (reopened) return fail("a gap that ended inside another gap let the plane tick while the outer gap still allowed unguarded access");
+			if (!NetLockstepPlane::TicksPermitted()) return fail("the window did not reopen when every gap inside it ended");
+		}
+		bool closedByOtherGap = false;
+		bool openAfterClose = false;
+		{
+			std::optional<NetLockstepPlane::Window> frame(std::in_place);
+			WithScopeOnAnotherThread<NetLockstepPlane::Gap>([&] {
+				closedByOtherGap = !NetLockstepPlane::TicksPermitted();
+				frame.reset();
+				openAfterClose = NetLockstepPlane::TicksPermitted();
+			});
+		}
+		if (openAfterClose) return fail("a gap on another thread left the plane open after the simulation thread's only window closed");
+		if (closedByOtherGap) return fail("a gap on another thread closed the simulation thread's window");
+		bool openedByOtherWindow = false;
+		WithScopeOnAnotherThread<NetLockstepPlane::Window>([&] { openedByOtherWindow = NetLockstepPlane::TicksPermitted(); });
+		if (openedByOtherWindow) return fail("a window opened off the simulation thread let the plane tick");
+		if (NetLockstepPlane::ScopeRefusals() != refusedBefore + 2)
+			return fail("refused " + std::to_string(NetLockstepPlane::ScopeRefusals() - refusedBefore) + " scopes opened off the simulation thread, expected 2");
+		if (NetLockstepPlane::TicksPermitted()) return fail("the plane may tick after every scope closed");
+		return true;
+	}
+
+	// The check behind the plane: inside an open window an unguarded coordinator access trips it, a guarded access or one
+	// inside a gap does not, and a gap opened off the simulation thread trips it as well.
+	bool TestPlaneCheckTripsOnAnUnguardedAccess(std::string* error) {
+		const auto fail = [error](const std::string& message) {
+			if (error) *error = message;
+			return false;
+		};
+		if (NetLockstepPlane::ChecksArmed()) return fail("the checks were armed before the row");
+		NetLockstepCoordinator coordinator;
+		NetLockstepPlane::Target(&coordinator);
+		NetLockstepPlane::ArmChecks(true);
+		const uint64_t before = NetLockstepPlane::CheckTrips();
+		std::string failure;
+		{
+			NetLockstepPlane::Window frame;
+			{
+				NetLockstepPlaneGuard plane;
+				static_cast<void>(coordinator.GetState());
+			}
+			if (NetLockstepPlane::CheckTrips() != before) failure = "a guarded access tripped the check";
+			{
+				NetLockstepPlane::Gap gap;
+				static_cast<void>(coordinator.GetState());
+			}
+			if (failure.empty() && NetLockstepPlane::CheckTrips() != before) failure = "an access inside a gap tripped the check";
+			static_cast<void>(coordinator.GetState());
+			if (failure.empty() && NetLockstepPlane::CheckTrips() != before + 1) failure = "an unguarded access inside an open window did not trip the check";
+			std::thread([] { NetLockstepPlane::Gap gap("another thread's gap"); }).join();
+			if (failure.empty() && NetLockstepPlane::CheckTrips() != before + 2) failure = "a gap opened off the simulation thread did not trip the check";
+			// The window's close stops the process on a trip while the checks are armed.
+			NetLockstepPlane::ArmChecks(false);
+		}
+		NetLockstepPlane::Target(nullptr);
+		return failure.empty() ? true : fail(failure);
+	}
+
 	int NetLockstepSelfTest::RunOrdering() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		std::string error;
@@ -20298,6 +20401,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestASlowLoaderIsHeldAtTheStartupBudget, "a_slow_loader_is_held_at_the_startup_budget");
 		row(&TestAReturningSeatsRampIsTheBound, "a_returning_seats_ramp_is_the_bound");
 		row(&TestAgreedStartNamesEachSeatsDevice, "the_agreed_start_names_each_seats_device");
+		row(&TestPlaneScopesKeepTheirOwnCounts, "plane_scopes_keep_their_own_counts");
+		row(&TestPlaneCheckTripsOnAnUnguardedAccess, "plane_check_trips_on_an_unguarded_access");
 		row(&TestALinkBlipIsBridgedByAResend, "a_link_blip_is_bridged_by_a_resend");
 		row(&TestALinkBlipIsBridgedInAStar, "a_link_blip_is_bridged_in_a_star");
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");

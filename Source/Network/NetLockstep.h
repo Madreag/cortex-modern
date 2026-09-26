@@ -819,6 +819,10 @@ namespace RTE {
 		static bool ChecksArmed();
 		/// How many accesses broke the rule this process.
 		static uint64_t CheckTrips();
+		/// Whether the plane may tick now, for the harness: a window is open on the simulation thread and no gap is.
+		static bool TicksPermitted();
+		/// How many windows and gaps were refused this process for opening off the simulation thread.
+		static uint64_t ScopeRefusals();
 		/// Whether the calling thread holds Lock().
 		static bool HeldHere() { return LockDepth() > 0; }
 		/// The calling thread's hold count on Lock(), kept by every guard and by the plane's own ticks.
