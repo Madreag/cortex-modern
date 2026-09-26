@@ -24,7 +24,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import statistics
 import subprocess
 import sys
@@ -709,7 +708,8 @@ def find_key(node, key):
     return None
 
 
-ROUTE = re.compile(r'\[net-ice\][^\n]*(?:selected|candidate|fail|timeout)[^\n]*|\[net-route\][^\n]*|\[net-transport\][^\n]*'
+ROUTE = re.compile(r'\[net-ice\][^\n]*(?:selected|candidate|fail|timeout|retrying)[^\n]*|\[net-route\][^\n]*|\[net-transport\][^\n]*'
+                   r'|\[net-session\] admission refused[^\n]*|\[net-match-service-e2e\] setup failed[^\n]*'
                    r'|[^\n]*(?:ProblemDetectedLocally|ClosedByPeer|ConnectionState|connect(?:ion)? (?:failed|timed out|refused))[^\n]*', re.I)
 
 
@@ -757,6 +757,7 @@ def analyze_match(h, root, meta):
     write_json(root / 'verdict.json', verdict)
     cell = lambda key, fmt='{}': '/'.join('-' if peers[peer][key] is None else fmt.format(peers[peer][key]) for peer in ('host', 'client'))
     route = next((line for peer in (meta['local_peer'], 'host', 'client') for line in peers[peer]['route'] if 'selected' in line or 'RouteAllowed' in line), None)
+    route = route or next((f'{peer}: {line}' for peer in ('client', 'host') for line in peers[peer]['route']), None)
     say(f'RUN {meta["name"]} {"PASS" if passed else "FAIL"} host@{peers["host"]["machine"]} {peers["host"]["live_ticks"]}/{mismatched} '
         f'client@{peers["client"]["machine"]} {peers["client"]["live_ticks"]}/{mismatched} compared={compared} desyncs={mismatched} '
         f'holds={holds} exits={cell("exit_code")} waits>50ms={cell("waits_over_50")} (steady {cell("steady_waits_over_50")}) '
@@ -825,10 +826,11 @@ def parse_args(argv=None):
     parser.add_argument('--quiet-wait', type=int, default=1200, help='seconds to wait for other builds on this box to end')
     parser.add_argument('--box-wait', type=int, default=2700, help='seconds to wait while the inventory feel matrix holds this box')
     parser.add_argument('--dry-run', action='store_true', help='print the launches, copies and ssh commands instead of running them')
+    parser.add_argument('--reanalyze', type=Path, help='re-reduce one fetched match directory (no launch)')
     parser.add_argument('--remote-peer', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--bridge-edith', action='store_true', help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
-    if options.remote_peer is None and not options.bridge_edith:
+    if options.remote_peer is None and not options.bridge_edith and options.reanalyze is None:
         if options.relay_bridge and options.path != 'relay':
             parser.error('--relay-bridge needs --path relay')
         if not options.scenario or not options.out:
@@ -848,6 +850,9 @@ def main(argv=None):
         return remote_peer(options.remote_peer)
     if options.bridge_edith:
         return bridge_edith()
+    if options.reanalyze is not None:
+        root = options.reanalyze.resolve()
+        return 0 if analyze_match(harness(HERE), root, read_json(root / 'manifest.json'))['passed'] else 1
     DRY_RUN = options.dry_run
     os.environ.update(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
     h = harness(HERE)
