@@ -1216,6 +1216,7 @@ namespace RTE {
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -1603,6 +1604,17 @@ namespace RTE {
 		uint32_t m_StartsSentNamed = 0; //!< A returning seat's starts named so far.
 		uint8_t m_NamedAiAuthority = 0; //!< The AI authority last named at a delivered frame.
 		std::set<uint8_t> m_ReturnerFirstFrameNamed; //!< Host: returning seats whose first frame after their reclaim was named.
+		enum class SeatTransition : uint8_t { Held, Back, Left };
+		/// Every agreed hold, return and leave by seat and frame. A simulation behind its commits (a host held for its own, a peer that
+		/// took a return before reaching its frame) reads a frame older than a seat's newest transition here, not from the current state.
+		std::map<uint8_t, std::map<uint64_t, SeatTransition>> m_SeatTransitions;
+		/// A leave that a hold records at its own frame does not overwrite the hold.
+		void NoteSeatTransition(uint8_t peer, uint64_t frame, SeatTransition kind) {
+			auto& seat = m_SeatTransitions[peer];
+			if (kind == SeatTransition::Left) seat.emplace(frame, kind); else seat[frame] = kind;
+		}
+		/// The seat's state at a frame before its newest transition; empty when the current state answers for the frame.
+		std::optional<SeatTransition> SeatStateBeforeNewest(uint8_t peer, uint64_t frame) const;
 		uint64_t m_ReturnerInputsNamedFor = 0; //!< The reclaim frame our own first returning inputs were named for.
 		uint32_t m_ReturnerInputsNamed = 0;
 		uint64_t m_LastProducedFrame = UINT64_MAX; //!< The produced frame of this peer's last queued local input.

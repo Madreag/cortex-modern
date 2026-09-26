@@ -72,6 +72,7 @@ namespace RTE {
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -19578,6 +19579,44 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	/// A host whose own simulation stops producing is held like any seat: once every other seat's input for a frame is in hand
 	/// and its own is missing past the bound, its seat goes to the AI of the next peer of its succession, the others commit
 	/// without it, what it produces for the frames the AI played is dropped, and it takes its seat back when it has caught up.
+	// A peer whose simulation is behind its commits (a host held for its own) reads each seat as it was at the frame it simulates: a hold
+	// that ends an agreed return replaces the older hold, and the frames between the return and the new hold read the seat back.
+	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error) {
+		NetLockstepCoordinator client;
+		auto config = MakeCoordinatorConfig(3, 1, 0x9A12, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 36;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A12);
+		config.matchConfig.successorOrder = {2, 3};
+		client.m_Config = config;
+		client.m_State = NetLockstepState::Running;
+		client.m_RoundId = 36;
+		client.m_RemotePeerIds = {1, 2};
+		client.m_RemoteTransports[1] = 7;
+		for (uint8_t peer: {1, 2, 3}) client.m_PeerEffectiveStart[peer] = 5;
+		client.m_Stats.nextFrame = 500;
+		const auto decision = [&](NetTimingAction action, NetTimingPhase phase, uint64_t frame, uint32_t incarnation) {
+			NetLockstepTiming timing;
+			timing.senderPeerId = 1; timing.peerId = 2; timing.action = action; timing.phase = phase;
+			timing.sessionId = config.sessionId; timing.roundId = 36; timing.revision = frame;
+			timing.applyFrame = timing.cutoffFrame = frame; timing.heldPeers = 1U << 1; timing.seatIncarnations[1] = incarnation;
+			timing.delayFrames = 4; timing.neutralThroughFrame = frame + 5;
+			return timing;
+		};
+		client.ApplyTiming(decision(NetTimingAction::Hold, NetTimingPhase::HoldAtFrame, 525, 1));
+		client.ApplyTiming(decision(NetTimingAction::Reclaim, NetTimingPhase::ReclaimAtFrame, 640, 2));
+		// The seat is held again at 650 before this peer has simulated its return at 640.
+		client.ApplyTiming(decision(NetTimingAction::Hold, NetTimingPhase::HoldAtFrame, 650, 2));
+		const auto read = [&](uint64_t frame) { return std::to_string(client.IsSeatUnderAI(2, frame)) + std::to_string(client.IsPeerGoneAtFrame(2, frame)); };
+		const std::string seen = read(600) + "/" + read(642) + "/" + read(655);
+		if (seen != "11/00/11" || client.m_AiHeldSeats.at(2) != 650) {
+			*error = "a-lagging-peer-reads-a-seat-at-its-frame: held at 525, back at 640, held at 650 read (under_ai, gone) at 600/642/655 as " + seen +
+			         " with the hold recorded at " + std::to_string(client.m_AiHeldSeats.contains(2) ? client.m_AiHeldSeats.at(2) : 0) + "; expected 11/00/11 at 650";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -20385,6 +20424,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
+		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
 		    !TestASurvivorsRunwayIsTheRounds(&error) ||
 		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
 		    !TestNoSeatIsJudgedPastTheLastTick(&error) ||
