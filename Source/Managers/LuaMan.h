@@ -935,6 +935,10 @@ namespace RTE {
 		/// @param phase Per-hook salt so an MO's different hooks don't correlate.
 		/// @param enabled When false the scope is a no-op (leaves collision callbacks on the per-state RNG).
 		DeterministicMORNGScope(long uniqueID, uint64_t phase, bool enabled = true);
+
+		/// Seeds from the sim tick the work belongs to: work the thread pool runs past the tick that launched it must not read the live clock.
+		/// @param simTick The sim tick that launched the work.
+		DeterministicMORNGScope(long uniqueID, uint64_t phase, uint64_t simTick, bool enabled);
 		~DeterministicMORNGScope();
 
 		DeterministicMORNGScope(const DeterministicMORNGScope&) = delete;
