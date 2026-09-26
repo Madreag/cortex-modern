@@ -4362,6 +4362,7 @@ namespace RTE {
 		m_EvictAfterReclaim.clear();
 		m_HoldTransactions.clear();
 		m_ReclaimTransactions.clear();
+		m_RetiredReclaimGaps.clear();
 		m_ConsumerWaitingFrame.reset();
 		m_FirstMissingFrame.reset();
 		m_LastDeliveredFrame.reset();
@@ -5158,7 +5159,14 @@ namespace RTE {
 			SetObservationEpoch(timing.applyFrame);
 		} else if (timing.action == NetTimingAction::Hold) {
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((timing.heldPeers & (1U << (peer - 1))) != 0) {
-				m_ReclaimTransactions.erase(peer);
+				// A hold ends a return from its own frame on; the return's neutral gap still covers the frames before it that this peer
+				// has yet to commit, exactly as it did on the host that committed them before it held the seat again.
+				if (const auto back = m_ReclaimTransactions.find(peer); back != m_ReclaimTransactions.end()) {
+					const uint64_t gapEnd = std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames);
+					if (timing.applyFrame > back->second.activationFrame && gapEnd >= m_Stats.nextFrame)
+						m_RetiredReclaimGaps[peer] = {back->second.activationFrame, std::min(gapEnd, timing.applyFrame - 1)};
+					m_ReclaimTransactions.erase(back);
+				}
 				m_HoldTransactions[peer] = {peer, timing.authorityGeneration, timing.revision, timing.seatIncarnations[peer - 1], timing.cutoffFrame};
 				m_Config.peerIncarnations[peer] = timing.seatIncarnations[peer - 1];
 			}
@@ -5367,6 +5375,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const {
+		if (const auto retired = m_RetiredReclaimGaps.find(peerId); retired != m_RetiredReclaimGaps.end() && frame >= retired->second.first && frame <= retired->second.second)
+			return true;
 		const auto found = m_ReclaimTransactions.find(peerId);
 		if (found == m_ReclaimTransactions.end()) return false;
 		const auto& reclaim = found->second;
