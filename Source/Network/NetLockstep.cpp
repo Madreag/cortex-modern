@@ -5275,6 +5275,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
 		NET_PLANE_CHECK();
+		// The replay's own maps are read here too.
+		NetLockstepPlane::Check(&replay, "AdoptReplayedSeatTransitions (the replay)");
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (peer == m_Config.localPeerId) continue;
 			const auto back = replay.m_ReclaimTransactions.find(peer);
