@@ -4436,6 +4436,7 @@ namespace RTE {
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitStartMs = 0;
 		m_AuthorityLastHeardMs = 0;
+		m_AuthorityGaps.clear();
 		m_LastStallFrame = UINT64_MAX;
 		m_RemoteFrames.clear();
 		m_RemoteCommands.clear();
@@ -4893,7 +4894,22 @@ namespace RTE {
 	void NetLockstepCoordinator::NoteReturnerCatchingUp(uint8_t peerId, uint64_t nowMs) {
 		if (!IsReturningSeatBeforeItsFirstInput(peerId)) return;
 		auto& stats = m_Stats.peers[peerId];
+		// A seat catching up in place started its round before its reclaim frame; one still replaying when its first input falls due
+		// is late like any seat, and the survivors do not wait on it.
+		if (stats.returnsInPlace) return;
 		stats.reclaimAdmittedMs = std::max(stats.reclaimAdmittedMs, nowMs);
+	}
+
+	void NetLockstepCoordinator::NoteAuthorityHeard(uint64_t nowMs) {
+		// The gaps a live host leaves between its packets are its jitter as a talker: a loaded host that stalls for a frame now and then
+		// is read against the longest of its recent ones, never as gone inside them. Its start work and announced captures are busy
+		// spans the silence check excuses anyway, so they are not its jitter.
+		if (m_AuthorityLastHeardMs != 0 && nowMs > m_AuthorityLastHeardMs && IsRunning() && m_PeersPlayedThisRound.contains(GetHostPeerId()) &&
+		    !HostBusyWithAnnouncedCapture(m_Stats.nextFrame)) {
+			m_AuthorityGaps.push_back(static_cast<uint32_t>(std::min<uint64_t>(nowMs - m_AuthorityLastHeardMs, UINT32_MAX)));
+			while (m_AuthorityGaps.size() > c_AuthorityGapSamples) m_AuthorityGaps.pop_front();
+		}
+		m_AuthorityLastHeardMs = std::max(m_AuthorityLastHeardMs, nowMs);
 	}
 
 	void NetLockstepCoordinator::NoteAnnouncedCapture(uint64_t tick) {
@@ -4913,6 +4929,7 @@ namespace RTE {
 	void NetLockstepCoordinator::NoteInPlaceReturn(uint8_t peerId) {
 		if (!m_AiHeldSeats.contains(peerId)) return;
 		m_Stats.peers[peerId].startParkMs = 0;
+		m_Stats.peers[peerId].returnsInPlace = true;
 	}
 
 	void NetLockstepCoordinator::NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs) {
@@ -5121,6 +5138,7 @@ namespace RTE {
 				// The seat's lead is measured afresh once it is back; what arrived before the hold says nothing of it.
 				m_ArrivalLeads.erase(peer);
 				m_Stats.peers[peer].returnerCaughtUpMs = 0;
+				m_Stats.peers[peer].returnsInPlace = false;
 				// The held seat keeps its connection: its player catches up in place on the committed tail and reclaims over it.
 				// The hold goes to it here too, since a queue flushed after its link left the round would drop it.
 				if (m_Config.localPeerId == GetHostPeerId() && m_Transport && !m_ReleaseWhenHeld.contains(peer))
@@ -5486,9 +5504,10 @@ namespace RTE {
 					// The window the seat was admitted on was sized for its restart; what its machine costs past that
 					// window is its own, so the survivors lend it the slow-player bound and no more.
 					const uint64_t restartMs = std::min<uint64_t>(peerStats.startParkMs, boundMs);
-					// A seat whose catch-up reached its reclaim frame knew that frame before the round did and has no restart left to
-					// pay: its window covers its link like any seat's, so the survivors lend it nothing more.
-					const uint64_t ramp = peerStats.returnerCaughtUpMs != 0 ? 0 : std::max<uint64_t>(windowMs, 2 * static_cast<uint64_t>(linkMs) + linkJitterMs + restartMs);
+					// A seat that caught up in place, or whose catch-up reached its reclaim frame, started its round before that frame and has
+					// no restart to pay: its window covers its link like any seat's, so the survivors lend it nothing more.
+					const uint64_t ramp = peerStats.returnerCaughtUpMs != 0 || peerStats.returnsInPlace ? 0 :
+					    std::max<uint64_t>(windowMs, 2 * static_cast<uint64_t>(linkMs) + linkJitterMs + restartMs);
 					// The clock starts at the admission, never at a dryness that began while the seat was away.
 					const uint64_t clockFrom = std::max({firstMissingMs, peerStats.reclaimAdmittedMs, peerStats.returnerCaughtUpMs});
 					if (nowMs < clockFrom) continue;
@@ -8894,7 +8913,7 @@ namespace RTE {
 					if (decoded.error.code == NetLockstepErrorCode::BadMagic && (sessionPacket.ok || chatTyped)) {
 						// A loading authority keeps its authenticated connection alive through session heartbeats.
 						if (sessionPacket.ok && std::holds_alternative<NetHeartbeat>(sessionPacket.message.payload) &&
-						    !m_RelayHost && LockstepPeerOfTransport(event.peerId) == GetHostPeerId()) m_AuthorityLastHeardMs = nowMs;
+						    !m_RelayHost && LockstepPeerOfTransport(event.peerId) == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 						// Session-protocol traffic mid-match is a reconnect handshake; hand it over.
 						if (m_SessionEventSink) {
 							m_SessionEventSink(event);
@@ -8933,7 +8952,7 @@ namespace RTE {
 
 	void NetLockstepCoordinator::HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport) {
 		if (!m_RelayHost && LockstepPeerOfTransport(fromTransport) == GetHostPeerId())
-			m_AuthorityLastHeardMs = nowMs;
+			NoteAuthorityHeard(nowMs);
 		// Any traffic proves the sender is alive, whatever the packet turns out to say; the host's
 		// drop adjudication runs off this and nothing else.
 		const uint8_t sender = std::visit(Overloaded{
@@ -10171,11 +10190,14 @@ namespace RTE {
 		}
 		const uint64_t lastAuthorityTraffic = std::max(m_WaitStartMs, m_AuthorityLastHeardMs);
 		const uint64_t silenceBoundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		// One reading and one threshold: the slow-player bound plus the jitter of the host's link. A live host talks every tick even
-		// while it waits, so a late tick of its own is not its link's jitter; its announced captures are its busy spans below.
+		// One reading and one threshold: the slow-player bound plus the host's jitter - its link's, its recent talk gaps and the start
+		// work its machine published. A live host talks every tick even while it waits; its announced captures are busy spans below.
 		uint64_t jitterMs = 0;
 		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = host->second.jitterMs;
 		if (const auto estimate = m_DelayEstimators.find(GetHostPeerId()); estimate != m_DelayEstimators.end()) jitterMs = std::max<uint64_t>(jitterMs, estimate->second.JitterMs());
+		for (const uint32_t gap: m_AuthorityGaps) jitterMs = std::max<uint64_t>(jitterMs, gap);
+		// The start work the host published is how long its machine stalls for its own work; a stall no longer than that is not a death.
+		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = std::max<uint64_t>(jitterMs, host->second.startParkMs);
 		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, silenceBoundMs + jitterMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs)));
 		// A host still in its start work (no frame from it yet this round) or in a capture park it announced is busy, not gone:
 		// only its link's close or the round's timeout ends that wait.
