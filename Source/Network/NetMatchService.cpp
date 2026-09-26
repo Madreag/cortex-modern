@@ -1982,6 +1982,7 @@ static std::string ResyncSaveName() {
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
 		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear(); m_RejoinFitReasons.clear();
+		m_PrivateBaseRequested = false; m_PrivateBaseTick = 0; m_PrivateBasePending.reset();
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateCaptureCosts.clear(); m_PrivateCaptureCold = false; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
 		m_LastJoinRoute.reset();
@@ -3002,6 +3003,31 @@ static std::string ResyncSaveName() {
 		return !fresh && PrivateBaseRefreshDue(true, 0, m_WorldJoin.Image().tick, SteadyCaptureMs(m_PrivateCaptureCosts));
 	}
 
+	bool NetMatchService::ReadPrivateBaseLocked(uint64_t tick, NetWorldCheckpointImage& image, std::string* error) {
+		const auto& config = m_Coordinator->GetConfig();
+		const uint64_t round = m_Coordinator->GetRoundId();
+		NetResyncState state;
+		if (!ScenarioRunner::CaptureNetResyncState(tick, state, error)) return false;
+		state.pendingInputs.clear(); state.pendingCommands.clear(); state.pendingPlayerBindings.clear(); state.admittedReseats.clear();
+		image.privateSessionId = config.sessionId; image.round = round; image.tick = tick;
+		image.pauseState = ScenarioRunner::CaptureLockstepPauseState();
+		image.authorityGeneration = config.migrationGeneration;
+		image.authorityPeerId = m_Coordinator->GetHostPeerId();
+		for (const auto& [peer, frame]: m_Coordinator->GetPeerLeaveFrames()) if (frame <= tick) image.departedPeers[peer] = frame;
+		image.roundConfigHash = NetIdentity::HashHex(m_Coordinator->GetRoundConfigHash());
+		image.configRevision = config.matchConfig.configRevision;
+		image.matchConfigHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config.matchConfig));
+		std::vector<uint8_t> side;
+		if (!EncodeConfigPayload(config.matchConfig, image.checkpointConfig) || !NetResyncCodec::Encode(state, {0}, side, error)) return false;
+		image.sideState = ResumeHex(side);
+		NetLockstepFrame holds;
+		holds.targetFrame = tick; holds.roundId = round;
+		for (const auto& [peer, hold]: m_Coordinator->HeldTransactions()) holds.commands.push_back({m_Coordinator->GetHostPeerId(), hold});
+		if (!EncodeCommittedJoinFrame(holds, side, error)) return false;
+		image.heldState = ResumeHex(side);
+		return true;
+	}
+
 	void NetMatchService::PreparePrivateRejoinCheckpoint() {
 		const char* held = !m_IsHost ? nullptr : m_State != NetMatchServiceState::Running ? "the service is not running" : !m_Coordinator ? "there is no round" :
 		                   !m_Coordinator->IsRunning() ? "the round is not running" : !m_Coordinator->UsesBoundedWait() ? "the round has no bounded wait" :
@@ -3041,8 +3067,32 @@ static std::string ResyncSaveName() {
 		const bool transferring = std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [](const NetWorldJoinSession& session) {
 			return session.phase == NetWorldJoinPhase::SnapshotTransfer && session.transferStarted;
 		});
-		if (!PrivateBaseWantedLocked(nowMs) || m_PrivateImageTask.valid() || transferring ||
+		// A returning seat's base is an announced capture: the checkpoint schedule names its tick on the committed stream, every
+		// peer collects every Lua state at that tick's end and takes the capture with no save hook, so the image holds exactly
+		// the state every live peer holds, its garbage included.
+		const bool announcedBase = !m_AutosaveMatchId.empty();
+		if (announcedBase && m_PrivateBaseTick != 0) {
+			const uint64_t baseTick = std::exchange(m_PrivateBaseTick, 0);
+			if (baseTick == static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) {
+				NetWorldCheckpointImage image;
+				if (!ReadPrivateBaseLocked(baseTick, image, &error)) { m_PrivateJoinError = error; m_PrivateBaseRequested = true; m_WorldCapturePending = true; return; }
+				m_PrivateBasePending = std::move(image);
+				System::PrintDiagnosticLine("[net-match] private base taken at the announced tick " + std::to_string(baseTick) + "; its archive follows from the writer");
+				return;
+			}
+		}
+		if (!PrivateBaseWantedLocked(nowMs) || m_PrivateImageTask.valid() || transferring || m_PrivateBasePending || m_PrivateBaseRequested ||
 		    m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()))) return;
+		if (announcedBase) {
+			m_PrivateCaptureCold = m_PrivateImageTakenMs == 0;
+			m_PrivateImageTakenMs = nowMs;
+			m_PrivateImageRecapture = false;
+			m_PrivateJoinError.clear();
+			m_PrivateBaseRequested = true;
+			m_WorldCapturePending = true;
+			System::PrintDiagnosticLine("[net-match] private base asked of the checkpoint schedule at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()));
+			return;
+		}
 		const bool ownsKeepalive = !m_SnapshotLoadKeepalive.joinable();
 		StartSnapshotLoadKeepalive();
 		struct FinishCapture {
@@ -3110,6 +3160,8 @@ static std::string ResyncSaveName() {
 	void NetMatchService::ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived) {
 		if (!archived) {
 			if (joinCapture) m_WorldCapturePending = true;
+			// A refused base is asked again; the metadata read at its tick stands for nothing.
+			if (joinCapture && m_PrivateBasePending && m_PrivateBasePending->tick == tick) { m_PrivateBasePending.reset(); m_PrivateBaseRequested = true; }
 			ScenarioRunner::DropPendingLockstepWorldSegment("the checkpoint at tick " + std::to_string(tick) + " was refused");
 			return;
 		}
@@ -3265,6 +3317,11 @@ static std::string ResyncSaveName() {
 			}
 			if (taken) {
 				if (input.unwritten > 0) System::PrintDiagnosticLine(std::format("[autosave] named tick={} taken with unwritten={}", tick, input.unwritten));
+				// The capture a returning seat's base was asked of: its metadata is read at this tick's end, its archive from the writer.
+				if (m_IsHost && joinCapture && m_WorldJoin.IsPrivateMatch() && m_PrivateBaseRequested) {
+					m_PrivateBaseRequested = false;
+					m_PrivateBaseTick = tick;
+				}
 				// The queue is not the verdict: the worker walks the graph off this thread and may still refuse.
 				m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture});
 				// The segment holds this tick's frames from here; it opens when the archive validates and is
@@ -3385,6 +3442,23 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::PublishFinishedWorldJoinImage() {
+		if (m_WorldJoin.IsPrivateMatch() && m_PrivateBasePending) {
+			const std::optional<ActivityMan::CompletedAutosave> entry = g_ActivityMan.LastCompletedAutosave();
+			if (!entry || entry->tick != m_PrivateBasePending->tick || entry->archive == nullptr || entry->archive->empty() || entry->bytes != entry->archive->size()) return;
+			NetWorldCheckpointImage image = std::move(*m_PrivateBasePending);
+			m_PrivateBasePending.reset();
+			image.path = entry->path; image.bytes = entry->bytes; image.digest = entry->digest; image.captureMs = g_ActivityMan.LastAutosaveCaptureMs();
+			m_WorldJoinImageArchive = entry->archive;
+			m_WorldJoinImageDigest = image.digest;
+			m_PrivateImageLastCaptureMs = image.captureMs;
+			if (!m_PrivateCaptureCold) {
+				m_PrivateCaptureCosts.push_back(image.captureMs);
+				if (m_PrivateCaptureCosts.size() > 3) m_PrivateCaptureCosts.pop_front();
+			}
+			System::PrintDiagnosticLine("[net-match] private base published from the announced capture at tick " + std::to_string(image.tick) + " bytes=" + std::to_string(image.bytes));
+			m_WorldJoin.PublishImage(image);
+			return;
+		}
 		if (m_WorldJoin.IsPrivateMatch()) {
 			if (!m_PrivateImageTask.valid() || m_PrivateImageTask.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
 			auto ready = m_PrivateImageTask.get();
