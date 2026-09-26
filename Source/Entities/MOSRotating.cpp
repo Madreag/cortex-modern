@@ -343,7 +343,7 @@ int MOSRotating::Create(const MOSRotating& reference) {
 		m_FaithfulAttachableOrder = reference.m_FaithfulAttachableOrder;
 	}
 	m_PersistedMOSRotatingRuntime = reference.m_PersistedMOSRotatingRuntime;
-	if (IsFaithfulClone() && m_PersistedMOSRotatingRuntime.empty()) m_PersistedMOSRotatingRuntime = reference.SaveMOSRotatingRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedMOSRotatingRuntime.empty()) m_PersistedMOSRotatingRuntime = reference.SaveMOSRotatingRuntime();
 	return 0;
 }
 

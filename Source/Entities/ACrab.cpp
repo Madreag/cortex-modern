@@ -286,7 +286,7 @@ int ACrab::Create(const ACrab& reference) {
 		}
 	}
 	m_PersistedACrabRuntime = reference.m_PersistedACrabRuntime;
-	if (IsFaithfulClone() && m_PersistedACrabRuntime.empty()) m_PersistedACrabRuntime = reference.SaveACrabRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedACrabRuntime.empty()) m_PersistedACrabRuntime = reference.SaveACrabRuntime();
 	return 0;
 }
 

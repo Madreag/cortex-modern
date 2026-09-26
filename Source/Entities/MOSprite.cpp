@@ -198,7 +198,7 @@ int MOSprite::Create(const MOSprite& reference) {
 		m_SpriteModified = reference.m_SpriteModified;
 	}
 	m_PersistedMOSpriteRuntime = reference.m_PersistedMOSpriteRuntime;
-	if (IsFaithfulClone() && m_PersistedMOSpriteRuntime.empty()) m_PersistedMOSpriteRuntime = reference.SaveMOSpriteRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedMOSpriteRuntime.empty()) m_PersistedMOSpriteRuntime = reference.SaveMOSpriteRuntime();
 	return 0;
 }
 

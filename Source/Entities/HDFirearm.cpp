@@ -193,7 +193,7 @@ int HDFirearm::Create(const HDFirearm& reference) {
 		m_AIBulletAccScalar = reference.m_AIBulletAccScalar;
 	}
 	m_PersistedHDFirearmRuntime = reference.m_PersistedHDFirearmRuntime;
-	if (IsFaithfulClone() && m_PersistedHDFirearmRuntime.empty()) m_PersistedHDFirearmRuntime = reference.SaveHDFirearmRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedHDFirearmRuntime.empty()) m_PersistedHDFirearmRuntime = reference.SaveHDFirearmRuntime();
 	return 0;
 }
 

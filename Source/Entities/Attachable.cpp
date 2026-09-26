@@ -157,7 +157,7 @@ int Attachable::Create(const Attachable& reference) {
 		m_PreUpdateHasRunThisFrame = reference.m_PreUpdateHasRunThisFrame;
 	}
 	m_PersistedAttachableRuntime = reference.m_PersistedAttachableRuntime;
-	if (IsFaithfulClone() && m_PersistedAttachableRuntime.empty()) m_PersistedAttachableRuntime = reference.SaveAttachableRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedAttachableRuntime.empty()) m_PersistedAttachableRuntime = reference.SaveAttachableRuntime();
 	return 0;
 }
 

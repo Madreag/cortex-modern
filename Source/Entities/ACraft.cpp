@@ -310,7 +310,7 @@ int ACraft::Create(const ACraft& reference) {
 		}
 	}
 	m_PersistedACraftRuntime = reference.m_PersistedACraftRuntime;
-	if (IsFaithfulClone() && m_PersistedACraftRuntime.empty()) m_PersistedACraftRuntime = reference.SaveACraftRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedACraftRuntime.empty()) m_PersistedACraftRuntime = reference.SaveACraftRuntime();
 	return 0;
 }
 

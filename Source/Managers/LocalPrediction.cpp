@@ -24,6 +24,7 @@
 #include "ScenarioRunner.h"
 #include "SceneMan.h"
 #include "SettingsMan.h"
+#include "PageWriteFence.h"
 #include "TerrainLayerSnapshot.h"
 #include "TimerMan.h"
 
@@ -47,6 +48,8 @@ namespace RTE {
 	uint64_t LocalPrediction::s_PreviewCount = 0;
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
 	double LocalPrediction::s_PreviewMs = 0.0;
+	std::array<double, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseMs{};
+	const std::array<const char*, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseNames{"drop", "wait", "fence", "terrain_capture", "self_copies", "clone", "scripts_in", "links", "step", "discard", "terrain_restore", "restore", "scripts_out"};
 
 	// Gives the clone the MOIDs its original holds this frame, so its own rays and hits ignore the original.
 	static void AdoptMOIDs(Actor* clone, const Actor* original) {
@@ -102,7 +105,9 @@ namespace RTE {
 		if (!s_Previews.empty() && s_PreviewedTick == g_TimerMan.GetSimUpdateCount()) {
 			return;
 		}
+		const auto dropStart = std::chrono::steady_clock::now();
 		Clear();
+		s_PhaseMs[0] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dropStart).count();
 		const int delay = s_DepthOverride > 0 ? s_DepthOverride : static_cast<int>(ScenarioRunner::GetLockstepLocalInputDelay());
 		const int depth = ScenarioRunner::UsesBoundedLockstepWait() ? delay : std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks()));
 		if (depth <= 0) {
@@ -143,9 +148,16 @@ namespace RTE {
 		Trace("preview start");
 
 		const auto start = std::chrono::steady_clock::now();
+		auto lapStart = start;
+		const auto lap = [&lapStart](int phase) {
+			const auto now = std::chrono::steady_clock::now();
+			s_PhaseMs[phase] += std::chrono::duration<double, std::milli>(now - lapStart).count();
+			lapStart = now;
+		};
 		// The seeing pass and the MOID draw still walk the live actor trees.
 		g_MovableMan.WaitForActorsSeeTask();
 		g_MovableMan.CompleteQueuedMOIDDrawings();
+		lap(1);
 		// Fence everything a preview tick can touch; all of it goes back before the canonical sim resumes.
 		const long long simCount = g_TimerMan.GetSimUpdateCount();
 		const long long simTicks = g_TimerMan.GetSimTimeTicks();
@@ -155,10 +167,14 @@ namespace RTE {
 		const uint64_t soundIdentityCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		Activity::RollbackState activityState;
 		activity->CaptureRollbackState(activityState);
+		lap(2);
 		static TerrainLayerSnapshot terrain;
+		// Only the pages a preview writes are copied; the platforms without a page fence copy the whole terrain.
+		terrain.fencePixels = true;
 		if (!terrain.Capture()) {
 			return;
 		}
+		lap(3);
 		Trace("fenced");
 		const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
 		const MovableMan::SpeculationStats statsBefore = g_MovableMan.GetSpeculationStats();
@@ -181,13 +197,17 @@ namespace RTE {
 		}
 		LuaMan::CapturePreviewSelfCopies(originals, PreviewScriptSelfTest::SharedSlot());
 		g_MovableMan.BeginSpeculation();
+		lap(4);
 		{
-			MovableObject::FaithfulCloneScope scope(false);
+			// Each atom asks whether its last hit bodies still exist; one sorted copy of the registry answers them all.
+			MovableMan::KnownObjectsScope knownObjects;
+			MovableObject::FaithfulCloneScope scope(false, true);
 			for (Preview& preview: targets) {
 				preview.clone = dynamic_cast<Actor*>(preview.original->Clone());
 			}
 		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
+		lap(5);
 		std::vector<MovableObject*> clones;
 		std::vector<const MovableObject*> cloned;
 		clones.reserve(targets.size());
@@ -199,6 +219,7 @@ namespace RTE {
 			}
 		}
 		LuaMan::BeginPreviewScripts(clones, PreviewScriptSelfTest::SharedSlot(), cloned);
+		lap(6);
 		if (PreviewScriptSelfTest::StrideCounterRequested()) {
 			for (MovableObject* clone: clones) {
 				PreviewScriptSelfTest::InstallStrideCounter(clone);
@@ -213,6 +234,7 @@ namespace RTE {
 			AdoptMOIDs(preview.clone, preview.original);
 		}
 		Trace("resolved");
+		lap(7);
 
 		std::string error;
 		std::vector<ControllerFrame> frames;
@@ -259,6 +281,7 @@ namespace RTE {
 			g_MovableMan.HarvestSpeculativeSpawns();
 		}
 		Trace("stepped");
+		lap(8);
 
 		Outcome outcome;
 		for (const Preview& preview: targets) {
@@ -293,6 +316,7 @@ namespace RTE {
 		}
 		PreviewEventLedger::AddPreviewedEmitters(takenEmitters);
 		Trace("discarded");
+		lap(9);
 		const MovableMan::SpeculationStats statsAfter = g_MovableMan.GetSpeculationStats();
 		outcome.shadows = statsAfter.shadows - statsBefore.shadows;
 		outcome.taken = statsAfter.taken - statsBefore.taken;
@@ -309,7 +333,10 @@ namespace RTE {
 				g_MovableMan.RemoveMO(resident);
 			}
 		}
-		terrain.Restore();
+		if (!terrain.Restore()) {
+			std::cout << "[localpred] ERROR: the terrain could not be put back after the preview at tick " << simCount << std::endl;
+		}
+		lap(10);
 		activity->RestoreRollbackState(activityState);
 		// The peek runs on the canonical tick, not this preview's advanced clock; the horizon only dates unstamped orders.
 		s_LastFillTick = static_cast<uint64_t>(simCount);
@@ -323,6 +350,7 @@ namespace RTE {
 			}
 		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
+		lap(11);
 		// The rounds a preview pops take fresh sound identities with them; the canonical cursor keeps its place.
 		g_AudioMan.SetCheckpointSoundContainerCursor(soundIdentityCursor);
 		PreviewEventLedger::Disarm();
@@ -339,6 +367,7 @@ namespace RTE {
 			}
 		}
 		Trace("restored");
+		lap(12);
 		s_Previews = std::move(targets);
 		s_TakenResidents = std::move(taken);
 		s_LastOutcome = outcome;
@@ -476,9 +505,13 @@ namespace RTE {
 		}
 		const MovableMan::SpeculationStats& stats = g_MovableMan.GetSpeculationStats();
 		const std::string events = PreviewEventLedger::Describe();
+		std::string phases;
+		for (int phase = 0; phase < PhaseCount; ++phase) {
+			phases += (phase ? "," : "") + std::string(s_PhaseNames[phase]) + ":" + std::to_string(s_PhaseMs[phase] / static_cast<double>(s_PreviewCount));
+		}
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
 		       " preview_ghosts_peak=" + std::to_string(g_MovableMan.GetPreviewGhostPeak()) +
-		       (events.empty() ? std::string() : " " + events);
+		       (events.empty() ? std::string() : " " + events) + " terrain_pages_written=" + std::to_string(PageWriteFence::GetFaultCount()) + " phase_avg_ms=" + phases + " window_avg_ms=" + LuaMan::DescribePreviewWindowCost();
 	}
 } // namespace RTE

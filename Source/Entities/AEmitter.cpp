@@ -130,7 +130,7 @@ int AEmitter::Create(const AEmitter& reference) {
 		m_AvgImpulse = reference.m_AvgImpulse;
 	}
 	m_PersistedAEmitterRuntime = reference.m_PersistedAEmitterRuntime;
-	if (IsFaithfulClone() && m_PersistedAEmitterRuntime.empty()) m_PersistedAEmitterRuntime = reference.SaveAEmitterRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedAEmitterRuntime.empty()) m_PersistedAEmitterRuntime = reference.SaveAEmitterRuntime();
 	return 0;
 }
 
