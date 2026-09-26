@@ -8,11 +8,17 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <source_location>
 
 namespace RTE::AudioCheckpoint {
 
-inline void Require(FMOD_RESULT result, const char* operation = "restore audio control") {
-	if (result != FMOD_OK) throw std::runtime_error(std::string("audio checkpoint: ") + operation + ": " + FMOD_ErrorString(result));
+// The refusal names the call that failed, so a restore that dies on a mixer answer says which one.
+inline void Require(FMOD_RESULT result, const char* operation = "restore audio control", std::source_location where = std::source_location::current()) {
+	if (result == FMOD_OK) return;
+	const std::string_view file = where.file_name();
+	const size_t slash = file.find_last_of("/\\");
+	throw std::runtime_error(std::string("audio checkpoint: ") + operation + " (" + std::string(slash == std::string_view::npos ? file : file.substr(slash + 1)) + ":" +
+	                         std::to_string(where.line()) + "): " + FMOD_ErrorString(result));
 }
 
 class MixerLock {
@@ -261,8 +267,11 @@ struct Voice {
 		return voice;
 	}
 	void Apply(FMOD::System* system, FMOD::Channel* channel) const {
-		Require(channel->setFrequency(frequency)); Require(channel->setPriority(priority)); Require(channel->setLoopCount(loops));
-		Require(channel->setLoopPoints(loopStart, FMOD_TIMEUNIT_PCM, loopEnd, FMOD_TIMEUNIT_PCM)); Require(channel->setPosition(position, FMOD_TIMEUNIT_PCM));
+		// A voice captured with no channel (its sample still loading) carries no rate or loop range; it starts on its sample's own.
+		if (frequency != 0) Require(channel->setFrequency(frequency));
+		Require(channel->setPriority(priority)); Require(channel->setLoopCount(loops));
+		if (loopEnd > loopStart) Require(channel->setLoopPoints(loopStart, FMOD_TIMEUNIT_PCM, loopEnd, FMOD_TIMEUNIT_PCM));
+		Require(channel->setPosition(position, FMOD_TIMEUNIT_PCM));
 		control.Apply(system, channel, false);
 	}
 };

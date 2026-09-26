@@ -96,6 +96,27 @@ def fullstate_pairs(root: Path) -> dict:
     return results
 
 
+PERTURB = re.compile(r"^\[net-test\] live perturb frame=(\d+)$", re.MULTILINE)
+
+
+def expect_injected_divergence(root: Path, verdicts: dict) -> None:
+    """The anchor arm advances the host's sim RNG at one tick (Main.cpp's live perturbation) so the match heals: the
+    oracle must name exactly that sample, in the sim RNG alone, and nothing else. Anything more or less fails."""
+    host = Path(root) / "host" / "stdout.log"
+    injected = PERTURB.search(host.read_text(encoding="utf-8", errors="replace")) if host.is_file() else None
+    for verdict in verdicts.values():
+        divergences = verdict.get("divergences", [])
+        expected = [{"tick": int(injected[1]), "sections": ["globals.sim_rng"]}] if injected else []
+        seen = [{"tick": entry["tick"], "sections": entry["sections"]} for entry in divergences]
+        verdict["injected_divergence"] = expected
+        if seen == expected and verdict.get("compared_samples", 0) > 0:
+            verdict["passed"] = True
+            verdict["reasons"] = []
+        elif injected and seen != expected:
+            verdict["passed"] = False
+            verdict["reasons"] = [f"the injected divergence at tick {injected[1]} was expected alone in globals.sim_rng, the oracle saw {seen}"]
+
+
 def _seat_rows(root: Path, who: str) -> dict:
     """The seats the peer's own match report names, keyed by stable seat."""
     path = root / f"{who}_report.json"
@@ -722,7 +743,7 @@ def _world_checkpoint_state(manifest: str, host_log: str, world_id: str, tick: i
 
 
 def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "", round_ticks: int = 600,
-                      client_lacks_checkpoint: bool = False) -> dict:
+                      client_lacks_checkpoint: bool = False, rejoin_from_first_capture: bool = False) -> dict:
     """A persistent world host is KILLED and restarted on the same install with the same UUID,
     the seats the checkpoint held, and the client's stored ticket.
 
@@ -745,7 +766,33 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
         tick, milliseconds = (int(part) for part in client_stall.split(":"))
         return {**extra, "client": [*extra.get("client", []), "-net-test-live-stall", f"{start + tick}:{milliseconds}"]}
 
-    records = _run_world_round(repo, first, port, 1200, stall(0, {}), kill_past=kill_tick)
+    first_extra = stall(0, {})
+    if rejoin_from_first_capture:
+        # The rejoin lever: the world keeps serving its first capture (CC_TEST_WORLD_JOIN_FIRST_IMAGE) and the client is held
+        # at tick 124, so it rejoins from the first capture and catches up across everything since it, the old-image rejoin
+        # a loaded box produced by chance.
+        first_extra = {**first_extra, "client": [*first_extra.get("client", []), *([] if client_stall else ["-net-test-live-stall", "124:300"])]}
+        os.environ["CC_TEST_WORLD_JOIN_FIRST_IMAGE"] = "1"
+    try:
+        records = _run_world_round(repo, first, port, 1200, first_extra, kill_past=kill_tick)
+    finally:
+        os.environ.pop("CC_TEST_WORLD_JOIN_FIRST_IMAGE", None)
+    if rejoin_from_first_capture:
+        first_capture = min((int(row[0]) for row in CAPTURE.findall(peer_log(first, "host"))), default=None)
+        images = [int(tick) for tick in re.findall(r"^\[net-match\] bootstrap checkpoint=(\d+) ", peer_log(first, "client"), re.MULTILINE)]
+        assert images and first_capture is not None and images[0] == first_capture, \
+            f"the lever did not rejoin the client from the first capture: capture {first_capture}, images {images}"
+        desync = re.findall(r"^\[lockstep\] desync at frame \d+[^\n]*$", peer_log(first, "host"), re.MULTILINE)
+        assert not desync, f"the rejoin from capture {first_capture} diverged: {desync[:2]}"
+        # Every tick from the image to the last one both peers simulated, the replayed catch-up included, agrees.
+        window = first / "lever-window"
+        window.mkdir()
+        rows = {who: read_live_hashes(first / f"{who}-live.jsonl") for who in ("host", "client")}
+        last_shared = min(max(row["tick"] for row in rows["host"]), max(row["tick"] for row in rows["client"]))
+        for who, peer_rows in rows.items():
+            (window / f"{who}-live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in peer_rows if row["tick"] <= last_shared),
+                                                      encoding="utf-8")
+        compare_live_window(window, first_capture + 1, last_shared, {"client": held_away(peer_log(first, "client"))})
     assert records["_killed"], f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}"
     identity = WORLD_IDENTITY.findall(peer_log(first, "host"))
     assert identity, "the world host never printed its identity"
@@ -995,6 +1042,9 @@ def main() -> int:
                         help="every N committed ticks both peers hash their whole capture (-net-fullstate-hash-every); 0 is off")
     parser.add_argument("--client-lacks-checkpoint", action="store_true",
                         help="world-restart only: the client loses its copy of the resume checkpoint and is streamed the host's")
+    parser.add_argument("--rejoin-from-first-capture", action="store_true",
+                        help="world-restart only: the first boot's world keeps serving its first capture and the client is held at "
+                        "tick 124, so its rejoin takes the first capture and catches up across everything since it")
     parser.add_argument("--pause-slow-peers", action="store_true",
                         help="anchor only: the host pauses for a slow peer instead of holding it, so a sanitizer build's heal lands")
     args = parser.parse_args()
@@ -1012,7 +1062,7 @@ def main() -> int:
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"restore": arm_restore, "retention": arm_retention, "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers), "resume": arm_resume,
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks,
-                                                                        args.client_lacks_checkpoint),
+                                                                        args.client_lacks_checkpoint, args.rejoin_from_first_capture),
             "park": arm_park}
     if args.arm != "all":
         arms = {args.arm: arms[args.arm]}
@@ -1031,6 +1081,8 @@ def main() -> int:
             print(f"FAIL {arm}: {error}", flush=True)
         if FULLSTATE_EVERY:
             details["fullstate"] = fullstate_pairs(root / arm)
+            if arm == "anchor":
+                expect_injected_divergence(root / arm, details["fullstate"])
             tripped = [name for name, verdict in details["fullstate"].items() if not verdict["passed"]]
             if tripped or not details["fullstate"]:
                 details["passed"] = False

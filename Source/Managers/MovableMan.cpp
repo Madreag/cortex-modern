@@ -565,6 +565,10 @@ static void NeutralizeUnframedLockstepActors(const std::deque<Actor*>& actors, c
 			if (canonicalStartup) {
 				actor->GetController()->ApplyWireMode(Controller::CIM_NETWORK, Players::NoPlayer);
 				actor->GetController()->ApplyWireEnabled();
+				// A menu this machine's own input opened before the round is closed on every peer alike, not animated shut here only.
+				if (PieMenu* pieMenu = actor->GetPieMenu()) {
+					pieMenu->CloseForCanonicalStart();
+				}
 			}
 		}
 	}
@@ -7872,7 +7876,9 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	bool brainLastDitch = false;
 	const bool brainSeats = g_ActivityMan.GetActivity() && recordActor && m_Actors.size() > 1 &&
 	                        g_ActivityMan.GetActivity()->RunPlayerBrainRecordSelfTest(recordActor, m_Actors[1], &brainLegacyReseeded, &brainLastDitch);
-	const bool sharedSeats = Activity::RunSharedSeatSelfTest();
+	Actor* switchable = nullptr;
+	for (Actor* actor: m_Actors) if (IsActor(actor) && actor->IsPlayerControllable() && !actor->GetController()->IsPlayerControlled()) { switchable = actor; break; }
+	const bool sharedSeats = Activity::RunSharedSeatSelfTest(switchable);
 
 	// The shape the crashed resync archives carried: an index entry for an actor the world does not have.
 	WorldStructure clean;

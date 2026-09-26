@@ -282,8 +282,13 @@ namespace RTE {
 		/// Rebuilds local input and screen bindings from the current coordinator without changing shared seat facts.
 		void RefreshLockstepLocalPlayers();
 
+		/// Names the roster a restore that runs before its round's coordinator knows one maps this machine's seats from; null clears it.
+		/// @param config The match's roster, or null.
+		/// @param localPeer This machine's peer in it.
+		static void SetRestoreRoster(const NetMatchConfig* config, uint8_t localPeer);
+
 		/// Checks roster order, local input mapping and unchanged offline seats.
-		static bool RunSharedSeatSelfTest();
+		static bool RunSharedSeatSelfTest(Actor* switchable = nullptr);
 
 		/// Turns off a player if they were active. Should only be done if brain etc are already taken care of and disposed of properly.
 		/// Will also deactivate the team this player is on, if there's no other active players still on it.

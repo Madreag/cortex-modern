@@ -677,8 +677,18 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	for (const SoundData* soundData: selectedSoundData) {
 		const float selectedPitch = pitches[sampleIndex++];
 		if (adoptedIndex < adoptedVoices.size()) {
-			AdoptPredictedVoice(adoptedVoices[adoptedIndex++], soundContainer, selectedPitch, soundData);
-			continue;
+			const int predicted = adoptedVoices[adoptedIndex++];
+			const auto prediction = m_PlayingVoices.find(predicted);
+			if (prediction != m_PlayingVoices.end() && prediction->second.soundPath == soundData->SoundFile.GetDataPath()) {
+				AdoptPredictedVoice(predicted, soundContainer, selectedPitch, soundData);
+				continue;
+			}
+			// The event picked another sample than its prediction played: the prediction stops and the pick plays, so a voice
+			// never names one sample while its lifetime runs another's.
+			if (prediction != m_PlayingVoices.end() && prediction->second.predicted) {
+				if (FMOD::Channel* stale = prediction->second.Channel()) StopDetached(stale);
+				RetireVoice(predicted);
+			}
 		}
 		if (!physical && !predicting) continue;
 		if (!MakeVoiceSlotAvailable()) { if (logical) continue; return false; }
@@ -2782,6 +2792,36 @@ bool AudioMan::RunCheckpointEffectsSelfTest() {
 			StopAll();
 		}
 	}
+	// A voice captured while its sample was still loading carries no rate or loop range of its own (Voice::Capture); a restore
+	// where the sample is ready starts it, and that start must not refuse the whole checkpoint.
+	{
+		std::string refusal;
+		try {
+			const auto* preset = dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", "Funds Changed", "Base.rte"));
+			if (!preset) throw std::runtime_error("missing sound preset");
+			std::unique_ptr<SoundContainer> source(static_cast<SoundContainer*>(preset->Clone()));
+			AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+			if (!source->Play() || source->GetPlayingChannels()->empty()) throw std::runtime_error("sound did not play");
+			const std::string path = m_PlayingVoices.at(*source->GetPlayingChannels()->begin()).soundPath;
+			StopAll();
+			const auto cached = ContentFile::s_LoadedSamples.find(path);
+			if (cached == ContentFile::s_LoadedSamples.end() || !cached->second) throw std::runtime_error("missing loaded sample " + path);
+			const AudioCheckpoint::Voice pending = AudioCheckpoint::Voice::Capture(1, 0, path, 0, nullptr, 0, true);
+			FMOD::Channel* channel = nullptr;
+			AudioCheckpoint::Require(m_AudioSystem->playSound(cached->second, m_SFXChannelGroup, true, &channel));
+			try {
+				pending.Apply(m_AudioSystem, channel);
+			} catch (const std::exception& error) {
+				refusal = error.what();
+			}
+			StopDetached(channel);
+		} catch (const std::exception& error) {
+			refusal = std::string("fixture: ") + error.what();
+		}
+		System::PrintDiagnosticLine(std::format("[checkpoint-audio-effects-selftest] {} a_voice_captured_before_its_sample_loaded_restores refusal={}\n",
+		    refusal.empty() ? "PASS" : "FAIL", refusal.empty() ? "none" : refusal));
+		passed = refusal.empty() && passed;
+	}
 	g_ConsoleMan.SaveAllText(System::GetWorkingDirectory() + "checkpoint-audio-console.log");
 	System::PrintDiagnosticLine(std::string("[checkpoint-audio-effects-selftest] ") + (passed ? "PASS\n" : "FAIL\n"));
 	return passed;
@@ -4273,6 +4313,62 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 		FMOD::Channel* strayChannel = nullptr;
 		if (strayVoice > 0 && GetVoiceChannel(strayVoice, &strayChannel) == FMOD_OK && strayChannel) StopDetached(strayChannel);
 		if (strayVoice > 0) RetireVoice(strayVoice);
+		PreviewEventLedger::Clear();
+	}
+	{
+		// A commit adopts a prediction only when both play one sample: another sample's prediction left the voice's path
+		// naming one sample and its loop range the other's, and restoring that voice refused the whole checkpoint.
+		const char* committedPath = "Base.rte/Sounds/Actors/JetpackEnd2.flac";
+		SoundContainer swapped;
+		swapped.Create("Base.rte/Sounds/Actors/JetpackEnd3.flac", false, true, SoundContainer::SFX);
+		PreviewEventLedger::Clear();
+		PreviewEventLedger::Arm(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), GetCheckpointSoundContainerCursor(), {4245});
+		{
+			SoundSimulationScope preview(4245, phase);
+			swapped.Play();
+		}
+		PreviewEventLedger::Disarm();
+		const int predictedVoice = swapped.GetPlayingChannels()->size() == 1 ? *swapped.GetPlayingChannels()->begin() : 0;
+		// The commit picks the other sample, as a sound set's pick does when the preview drew differently.
+		std::vector<SoundData*> picked;
+		swapped.GetTopLevelSoundSet().GetFlattenedSoundData(picked, false);
+		const std::string predictedPath = picked.empty() ? std::string() : picked.front()->SoundFile.GetDataPath();
+		swapped.GetTopLevelSoundSet().AddSoundNow(committedPath, Vector(), 0, -1, false);
+		swapped.GetTopLevelSoundSet().RemoveSoundNow(predictedPath, false);
+		s_PlaybackSuppressed = false;
+		{
+			SoundSimulationScope canonical(4245, phase);
+			swapped.Play();
+		}
+		s_PlaybackSuppressed = true;
+		std::string refusal = "no committed voice";
+		std::string path;
+		if (swapped.GetPlayingChannels()->size() == 1) {
+			const int committed = *swapped.GetPlayingChannels()->begin();
+			AudioRuntime state;
+			const bool loaded = state.Load(SaveCheckpoint());
+			const auto voice = std::find_if(state.voices.begin(), state.voices.end(), [committed](const AudioCheckpoint::Voice& entry) { return entry.identity == committed; });
+			refusal = !loaded ? "checkpoint did not load" : voice == state.voices.end() ? "committed voice not in the checkpoint" : "";
+			if (refusal.empty()) {
+				path = voice->path;
+				// The restore's own step: the archived voice starts on the sample its path names.
+				const auto cached = ContentFile::s_LoadedSamples.find(voice->path);
+				FMOD::Channel* channel = nullptr;
+				if (cached == ContentFile::s_LoadedSamples.end() || !cached->second || m_AudioSystem->playSound(cached->second, m_SFXChannelGroup, true, &channel) != FMOD_OK) {
+					refusal = "no loaded sample for " + voice->path;
+				} else {
+					try {
+						voice->Apply(m_AudioSystem, channel);
+					} catch (const std::exception& error) {
+						refusal = error.what();
+					}
+					StopDetached(channel);
+				}
+			}
+		}
+		check("a_commit_adopts_only_a_prediction_of_its_own_sample", predictedVoice > 0 && refusal.empty() && path.ends_with("JetpackEnd2.flac"),
+		      "predicted=" + predictedPath + " committed_voice_path=" + path + " refusal=" + (refusal.empty() ? "none" : refusal));
+		swapped.Stop();
 		PreviewEventLedger::Clear();
 	}
 	g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);
