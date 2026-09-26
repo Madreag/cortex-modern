@@ -5043,7 +5043,7 @@ static std::string ResyncSaveName() {
 			{
 				std::ostringstream line;
 				line << "[net-match] private catch-up complete frame=" << m_WorldCatchUp.activationTick << " in_place=" << m_InPlaceCatchUp
-				     << " from=" << m_WorldCatchUp.snapshotTick;
+				     << " from=" << m_WorldCatchUp.snapshotTick << " clock=" << NetLockstepSharedClockMs();
 				System::PrintDiagnosticLine(line.str());
 			}
 			m_InPlaceCatchUp = false;
