@@ -5721,6 +5721,13 @@ namespace RTE {
 		timing.requiredPeers = static_cast<uint8_t>(1U << (GetHostPeerId() - 1)); timing.seatIncarnations[peerId - 1] = incarnation;
 		m_RemoteTransports[peerId] = transport;
 		m_TimingDecisions[timing.revision] = {timing, timing.requiredPeers, true, m_TimingNowMs};
+		{
+			// Every seat this return reaches, so a seat that plays on without it says whether it was sent.
+			std::ostringstream line;
+			line << "[net-lockstep] return of peer " << static_cast<int>(peerId) << " at " << timing.applyFrame << " goes to";
+			for (const auto& [seat, connection]: m_RemoteTransports) line << ' ' << static_cast<int>(seat);
+			std::cout << line.str() << std::endl;
+		}
 		QueueTiming(timing); FlushTimingOutgoing(); ApplyTiming(timing);
 		for (const auto& [revision, decision]: m_TimingDecisions) {
 			if (decision.proposal.action != NetTimingAction::Delay || decision.proposal.applyFrame < frame) continue;
