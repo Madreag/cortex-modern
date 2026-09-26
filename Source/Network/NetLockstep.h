@@ -1220,6 +1220,7 @@ namespace RTE {
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
+		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -1403,6 +1404,8 @@ namespace RTE {
 		NetLockstepSeatState SeatStateOf(uint8_t peerId, NetPeerId transportPeerId) const;
 		/// Re-resolves which left seats are still held. Runs from the tick, never from a query.
 		void RefreshLeftSeatHolds();
+		/// A hold taken from the record drops the seat as the live hold did, so the claims on its units last as long as they do there.
+		void DropRecordedHeldSeat(uint8_t peerId);
 		/// Whether any peer that has left still holds a seat a returning player can reclaim.
 		bool AnyLeftSeatHeld() const;
 		/// A resync round already named this peer; a leftover drop or the old socket's close is not a new hold.

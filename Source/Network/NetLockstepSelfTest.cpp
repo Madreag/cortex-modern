@@ -74,6 +74,7 @@ namespace RTE {
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
+	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -19648,6 +19649,29 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error) {
+		// A round started from a replayed tail holds seat 3 and our own seat 2 as the record does; the live peers dropped seat 3 at its hold.
+		NetLockstepCoordinator returner;
+		auto config = MakeCoordinatorConfig(2, 1, 0x9A14, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 640; config.roundId = 38; config.authorityPeerId = 1; config.substituteSlowPeers = true;
+		for (uint8_t peer: {uint8_t{2}, uint8_t{3}}) config.initialSeatHolds[peer] = {peer, 0, peer, 1, 180};
+		returner.m_Config = config;
+		returner.ResetRoundState();
+		const bool live = returner.IsSeatHeldForReclaim(3), liveOwn = returner.IsSeatHeldForReclaim(2);
+		NetLockstepCoordinator replay;
+		replay.m_Config = config;
+		replay.ResetRoundState();
+		replay.m_Playback = true;
+		for (const auto& [peer, hold]: config.initialSeatHolds) replay.DropRecordedHeldSeat(peer);
+		const bool replayed = replay.IsSeatHeldForReclaim(3), replayedOwn = replay.IsSeatHeldForReclaim(2);
+		if (!live || liveOwn || !replayed || !replayedOwn) {
+			*error = "a-recorded-hold-keeps-its-seats-claims: seats 3 and 2 held from the record read held-for-reclaim " + std::to_string(live) + std::to_string(liveOwn) +
+			         " live and " + std::to_string(replayed) + std::to_string(replayedOwn) + " replayed; expected 10 and 11";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -20457,6 +20481,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
 		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
+		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||
 		    !TestASurvivorsRunwayIsTheRounds(&error) ||
 		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
 		    !TestNoSeatIsJudgedPastTheLastTick(&error) ||
