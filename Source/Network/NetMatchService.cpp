@@ -5184,6 +5184,7 @@ static std::string ResyncSaveName() {
 				live.initialPeerLeaves = m_CatchUpCoordinator->GetPeerLeaveFrames();
 				live.seatStateThroughFrame = m_WorldCatchUp.appliedThrough;
 				std::vector<NetLockstepTiming> returns;
+				std::map<uint8_t, std::map<uint64_t, uint16_t>> earlierDelays;
 				for (const auto& event: m_CatchUpWirePackets) {
 					if (event.bytes.size() < NetLockstepCodec::c_HeaderBytes || event.bytes[8] != static_cast<uint8_t>(NetLockstepPacketType::Timing)) continue;
 					const auto decoded = NetLockstepCodec::Decode(event.bytes);
@@ -5192,6 +5193,8 @@ static std::string ResyncSaveName() {
 					if (!decision || decision->senderPeerId != m_CatchUpCoordinator->GetHostPeerId() || decision->sessionId != live.sessionId || decision->roundId != live.roundId || decision->authorityGeneration != live.migrationGeneration || decision->peerId > live.peerCount) continue;
 					if (decision->action == NetTimingAction::Delay && decision->phase == NetTimingPhase::Commit && decision->applyFrame >= m_WorldCatchUp.activationTick)
 						live.initialDelayChanges[decision->peerId][decision->applyFrame] = decision->delayFrames;
+					else if (decision->action == NetTimingAction::Delay && decision->phase == NetTimingPhase::Commit)
+						earlierDelays[decision->peerId][decision->applyFrame] = decision->delayFrames;
 					if (decision->phase == NetTimingPhase::ReclaimAtFrame && decision->peerId == m_LocalPeerId && decision->applyFrame == m_WorldCatchUp.activationTick)
 						live.initialSeatReclaims[m_LocalPeerId] = {m_LocalPeerId, decision->authorityGeneration, decision->revision,
 						    decision->seatIncarnations[m_LocalPeerId - 1], decision->applyFrame, decision->delayFrames, decision->neutralThroughFrame};
@@ -5206,6 +5209,11 @@ static std::string ResyncSaveName() {
 				// The delay changes the round committed in the tail this seat has just replayed stay changes: every peer's
 				// start still matches its opening delay, and each produces on the delay in force at the activation.
 				for (const auto& [peer, changes]: m_CatchUpCoordinator->GetDelayChanges()) {
+					const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);
+					if (peer > 0 && peer <= live.peerCount && at != changes.begin()) live.initialDelayChanges[peer].emplace(std::prev(at)->first, std::prev(at)->second);
+				}
+				// So do those committed on the wire while the replay had not reached them.
+				for (const auto& [peer, changes]: earlierDelays) {
 					const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);
 					if (peer > 0 && peer <= live.peerCount && at != changes.begin()) live.initialDelayChanges[peer].emplace(std::prev(at)->first, std::prev(at)->second);
 				}

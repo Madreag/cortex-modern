@@ -4529,7 +4529,7 @@ namespace RTE {
 		};
 		if (start.sessionId != m_Config.sessionId) note("session", start.sessionId, m_Config.sessionId);
 		if (start.startFrame != (admitted ? admission->second.frame : m_Config.startFrame)) note("start_frame", start.startFrame, admitted ? admission->second.frame : m_Config.startFrame);
-		if (start.inputDelayFrames != (admitted ? admission->second.delay : PeerInputDelay(start.localPeerId))) note("delay", start.inputDelayFrames, admitted ? admission->second.delay : PeerInputDelay(start.localPeerId));
+		if (start.inputDelayFrames != (admitted ? admission->second.delay : MemberStartDelay(start))) note("delay", start.inputDelayFrames, admitted ? admission->second.delay : MemberStartDelay(start));
 		if (start.controllerFrameVersion != ControllerFrame::c_Version) note("controller_version", start.controllerFrameVersion, ControllerFrame::c_Version);
 		if (start.controllerFrameEncodedSize != ControllerFrame::c_EncodedSize) note("controller_size", start.controllerFrameEncodedSize, ControllerFrame::c_EncodedSize);
 		if (!IsKnownRemotePeer(start.localPeerId)) note("unknown_peer", start.localPeerId, start.localPeerId);
@@ -4540,12 +4540,17 @@ namespace RTE {
 		return named;
 	}
 
+	uint16_t NetLockstepCoordinator::MemberStartDelay(const NetLockstepStart& start) const {
+		// The host hands a seat joining a running round each member's start at the delay in force at that start, changes the tail committed included.
+		return m_Config.joinsRunningRound ? InputDelayAt(start.localPeerId, start.startFrame) : PeerInputDelay(start.localPeerId);
+	}
+
 	bool NetLockstepCoordinator::StartMatchesConfig(const NetLockstepStart& start) const {
 		const auto admission = m_PeerAdmissions.find(start.localPeerId);
 		const bool admitted = admission != m_PeerAdmissions.end();
 		return start.sessionId == m_Config.sessionId &&
 		       start.startFrame == (admitted ? admission->second.frame : m_Config.startFrame) &&
-		       start.inputDelayFrames == (admitted ? admission->second.delay : PeerInputDelay(start.localPeerId)) &&
+		       start.inputDelayFrames == (admitted ? admission->second.delay : MemberStartDelay(start)) &&
 		       start.controllerFrameVersion == ControllerFrame::c_Version &&
 		       start.controllerFrameEncodedSize == ControllerFrame::c_EncodedSize &&
 		       IsKnownRemotePeer(start.localPeerId) &&
