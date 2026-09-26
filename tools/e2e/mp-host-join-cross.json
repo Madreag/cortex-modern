@@ -95,7 +95,7 @@
       ],
       "sim_progress": 600,
       "what": "The host plays at least 600 simulation updates in the same running round.",
-      "assert": "Running before and after the play leg with at least 600 updates."
+      "assert": "the round's committed frames from the round-running wait (round frame 60) to the closing assert, which follows the round's own frame 760 (and no sooner than 10.5 s), so a loaded box stretches the window instead of thinning it"
     },
     {
       "id": "cross-identity-host",
@@ -147,7 +147,7 @@
       ],
       "sim_progress": 600,
       "what": "The client plays at least 600 simulation updates in the same running round.",
-      "assert": "Running before and after the play leg with at least 600 updates."
+      "assert": "the round's committed frames from the round-running wait (round frame 60) to the closing assert, which follows the round's own frame 760 (and no sooner than 10.5 s), so a loaded box stretches the window instead of thinning it"
     },
     {
       "id": "cross-identity-client",

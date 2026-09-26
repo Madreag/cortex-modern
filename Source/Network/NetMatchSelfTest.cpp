@@ -3570,6 +3570,74 @@ namespace RTE {
 			return true;
 		}
 
+		// The Start rides behind the last chunk, so a queue that chunk left full refuses the Start as it refused the
+		// chunk: the Start goes out on a later tick instead of failing the round.
+		bool TestLobbyStartWaitsOutAFullSendQueue(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetPeerId hostPeer = 0, clientPeer = 0;
+			if (!StartLoopbackTransports(43135, hostTransport, clientTransport, hostPeer, clientPeer, error)) return false;
+			NetLobbySession host, client;
+			NetLobbySessionConfig config;
+			config.host = true;
+			config.localPeerId = 1;
+			config.remotePeerId = 2;
+			config.remoteTransportPeerId = hostPeer;
+			config.matchConfig = MakeConfig();
+			config.autoStart = false;
+			if (!host.Start(hostTransport, config, error)) return false;
+			config.host = false;
+			config.localPeerId = 2;
+			config.remotePeerId = 1;
+			config.remoteTransportPeerId = clientPeer;
+			if (!client.Start(clientTransport, config, error)) return false;
+			uint64_t now = 0;
+			const auto tick = [&] { host.Tick(now); client.Tick(now++); };
+			for (int i = 0; i < 4; ++i) tick();
+			NetLobbyStateChunk sample;
+			sample.transferId = 1;
+			sample.totalBytes = static_cast<uint32_t>(2 * NetLobbyProtocol::c_MaxStateChunkBytes);
+			sample.chunkCount = 2;
+			sample.bytes.assign(NetLobbyProtocol::c_MaxStateChunkBytes, 0);
+			std::vector<uint8_t> encoded;
+			NetLobbyError encodeError;
+			if (!NetLobbyProtocol::Encode({sample}, encoded, &encodeError)) {
+				*error = "full state chunk did not encode: " + encodeError.message;
+				return false;
+			}
+			const uint32_t chunkWire = static_cast<uint32_t>(encoded.size());
+			LoopbackTransportConfig queue;
+			queue.sendBufferBytes = chunkWire + 64;
+			hostTransport.SetFaultConfig(queue);
+			const auto drain = [&](uint32_t bytes) {
+				queue.drainBytesPerSecond = bytes * 1000U;
+				hostTransport.SetFaultConfig(queue);
+				hostTransport.AdvanceTimeMs(1);
+				queue.drainBytesPerSecond = 0;
+				hostTransport.SetFaultConfig(queue);
+			};
+			const std::vector<uint8_t> state(2 * NetLobbyProtocol::c_MaxStateChunkBytes, 0x5A);
+			host.BeginStateTransfer(state);
+			host.RequestStart();
+			tick();
+			const uint64_t firstChunks = host.GetStateTransferProgressSerial();
+			// All but 60 bytes drain: the last chunk fits and leaves no room for the Start behind it.
+			drain(chunkWire - 60);
+			tick();
+			const uint64_t lastChunks = host.GetStateTransferProgressSerial();
+			const bool heldTheRound = !host.IsFailed() && !host.IsStarted();
+			const std::string heldReason = host.GetFailureReason();
+			drain(chunkWire);
+			for (int i = 0; i < 4 && !(host.IsStarted() && client.IsStarted()); ++i) tick();
+			const bool received = client.IsStarted() && client.TakeReceivedState() == state;
+			if (firstChunks != 1 || lastChunks != 2 || !heldTheRound || !host.IsStarted() || !received) {
+				*error = "a Start refused behind the last state chunk: chunks after the first tick " + std::to_string(firstChunks) + " (expected 1), after the drain " +
+				         std::to_string(lastChunks) + " (expected 2); round held " + std::to_string(heldTheRound) + (heldReason.empty() ? "" : " (" + heldReason + ")") +
+				         "; host started " + std::to_string(host.IsStarted()) + ", client started with the whole state " + std::to_string(received);
+				return false;
+			}
+			return true;
+		}
+
 		bool TestRunnerStateTransferProgress(std::string* error, bool returned = false) {
 			for (const bool stalled: {false, true}) {
 				LoopbackTransport hostTransport, clientTransport;
@@ -3588,7 +3656,15 @@ namespace RTE {
 				config.sessionWaitMs = 1000;
 				config.lockstepWaitMs = 500;
 				config.postSessionSettleMs = config.postLobbySettleMs = 0;
-				config.nowMs = nowMs;
+				// The runner reads its clock first thing in each lobby iteration, before the tick that may move the
+				// transfer; the first read after a publish is that reading, so progress is timed as the runner times it.
+				uint64_t iterationClock = 0;
+				bool publishedSinceRead = true;
+				config.nowMs = [&] {
+					const uint64_t value = nowMs();
+					if (std::exchange(publishedSinceRead, false)) iterationClock = value;
+					return value;
+				};
 				config.sessionConfig.port = stalled ? 43134 : 43133;
 				config.sessionConfig.sessionId = config.matchConfig.sessionId;
 				config.sessionConfig.displayName = "Host";
@@ -3655,8 +3731,9 @@ namespace RTE {
 					const uint64_t progress = runner.GetLobbySession().GetStateTransferProgressSerial();
 					if (transferActive && progress != lastProgress) {
 						lastProgress = progress;
-						progressTimes.push_back(nowMs() - transferStartedAt);
+						progressTimes.push_back(iterationClock - transferStartedAt);
 					}
+					publishedSinceRead = true;
 				};
 				if (!runner.Start(tap, hostSession, hostCoordinator, config, error) || !clientCoordinator.IsRunning()) {
 					*error = "state transfer runner setup failed: " + *error + "; peer=" + peerError;
@@ -3679,36 +3756,70 @@ namespace RTE {
 				const uint32_t messagesBefore = hostSession.GetStats().receivedMessages;
 				transferActive = true;
 				transferStartedAt = nowMs();
+				publishedSinceRead = true;
 				std::string transferError;
 				const bool ok = runner.StartNextMatch(tap, hostSession, hostCoordinator, &transferError, state);
 				const uint64_t elapsed = nowMs() - transferStartedAt;
-				if (progressTimes.empty() || !peerError.empty() || elapsed <= config.lobbyWaitMs || tap.wrongLane) {
-					*error = "runner state transfer did not exercise its elapsed deadline; peer=" + peerError;
+				// Each failing clause is named with what it read, so a red run says which one tripped.
+				std::string clauses;
+				const auto clause = [&clauses](bool failed, const std::string& text) {
+					if (failed) clauses += (clauses.empty() ? "" : "; ") + text;
+				};
+				const std::string arm = stalled ? "stalled" : "throttled";
+				clause(progressTimes.empty(), "no transfer progress was published");
+				clause(!peerError.empty(), "peer error '" + peerError + "'");
+				clause(elapsed <= config.lobbyWaitMs, "elapsed " + std::to_string(elapsed) + " ms <= lobby wait " + std::to_string(config.lobbyWaitMs) + " ms");
+				clause(tap.wrongLane, "a chunk rode the wrong lane");
+				if (!clauses.empty()) {
+					*error = "runner " + arm + " state transfer did not exercise its elapsed deadline: " + clauses;
 					return false;
 				}
 				if (stalled) {
-					if (ok || transferError != "timed out waiting for lobby start" || lastProgress != 1 || received.size() != 0 ||
-					    elapsed - progressTimes.back() <= config.lobbyWaitMs || hostSession.GetStats().receivedMessages < messagesBefore + 2) {
-						*error = "runner stalled state transfer did not time out amid session keepalives: " + transferError;
+					const uint64_t stallMs = elapsed - progressTimes.back();
+					const uint32_t heard = hostSession.GetStats().receivedMessages - messagesBefore;
+					clause(ok, "the transfer succeeded");
+					clause(transferError != "timed out waiting for lobby start", "error '" + transferError + "'");
+					clause(lastProgress != 1, "progress " + std::to_string(lastProgress) + ", expected 1");
+					clause(received.size() != 0, "the client received " + std::to_string(received.size()) + " bytes");
+					clause(stallMs <= config.lobbyWaitMs, "timed out " + std::to_string(stallMs) + " ms after the last progress (elapsed " + std::to_string(elapsed) +
+					                                         " ms, last progress at " + std::to_string(progressTimes.back()) + " ms), not after more than " + std::to_string(config.lobbyWaitMs));
+					clause(heard < 2, "the host heard " + std::to_string(heard) + " session message(s) during the stall, expected 2 or more");
+					if (!clauses.empty()) {
+						*error = "runner stalled state transfer did not time out amid session keepalives: " + clauses;
 						return false;
 					}
 				} else {
 					uint64_t previous = 0;
 					for (const uint64_t progressAt: progressTimes) {
-						if (progressAt - previous > config.lobbyWaitMs) { *error = "throttled transfer had a real progress stall"; return false; }
+						if (progressAt - previous > config.lobbyWaitMs) {
+							std::string times;
+							for (const uint64_t at: progressTimes) times += (times.empty() ? "" : ",") + std::to_string(at);
+							*error = "throttled transfer had a real progress stall: " + std::to_string(progressAt - previous) + " ms between progress at " + std::to_string(previous) +
+							         " and " + std::to_string(progressAt) + " ms, over the lobby wait " + std::to_string(config.lobbyWaitMs) + " ms (progress at " + times + ")";
+							return false;
+						}
 						previous = progressAt;
 					}
-					// The host's completed handshake can leave its Start queued for the client.
-					while (ok && startPublishedAt && !clientCoordinator.IsRunning() && nowMs() - *startPublishedAt < config.lockstepWaitMs) {
+					// The host's completed handshake can leave its Start queued for the client. The wait is counted in the
+					// host's pumps, one per 5 ms step of the lockstep wait, so a stalled scheduler cannot spend it.
+					const uint32_t budgetPumps = config.lockstepWaitMs / 5;
+					uint32_t pumps = 0;
+					while (ok && startPublishedAt && !clientCoordinator.IsRunning() && pumps < budgetPumps) {
 						hostCoordinator.Tick(NetLockstepNowMs());
+						++pumps;
 						std::this_thread::sleep_for(std::chrono::milliseconds(5));
 					}
-					const bool joinedInBudget = startPublishedAt && clientCoordinator.IsRunning() && nowMs() - *startPublishedAt <= config.lockstepWaitMs;
-					if (!ok || received != state || lastProgress != 12 || progressTimes.back() <= config.lobbyWaitMs || !joinedInBudget) {
-						*error = "runner state transfer: ok=" + std::to_string(ok) + " received=" + std::to_string(received.size()) +
-						         " bytes_equal=" + std::to_string(received == state) + " progress=" + std::to_string(lastProgress) +
-						         " last_progress_ms=" + std::to_string(progressTimes.back()) + " client=" + NetLockstepCoordinator::StateName(clientCoordinator.GetState()) +
-						         " error=" + transferError;
+					const uint64_t joinedAfterMs = startPublishedAt ? nowMs() - *startPublishedAt : 0;
+					const bool joinedInBudget = startPublishedAt && clientCoordinator.IsRunning();
+					clause(!ok, "the transfer failed: " + transferError);
+					clause(received != state, "the client received " + std::to_string(received.size()) + " bytes, equal=" + std::to_string(received == state));
+					clause(lastProgress != 12, "progress " + std::to_string(lastProgress) + ", expected 12");
+					clause(progressTimes.back() <= config.lobbyWaitMs, "the last progress came at " + std::to_string(progressTimes.back()) + " ms, inside the lobby wait " + std::to_string(config.lobbyWaitMs) + " ms");
+					clause(!joinedInBudget, "the client coordinator is " + std::string(NetLockstepCoordinator::StateName(clientCoordinator.GetState())) +
+					                            (startPublishedAt ? " after " + std::to_string(pumps) + " host pumps of " + std::to_string(budgetPumps) + ", " + std::to_string(joinedAfterMs) + " ms after the Start"
+					                                              : std::string(" and no Start was published")));
+					if (!clauses.empty()) {
+						*error = "runner state transfer: " + clauses;
 						return false;
 					}
 				}
@@ -13603,6 +13714,7 @@ namespace RTE {
 		if (!TestLobbyStateChunkConsistency(&error)) return fail(error);
 		if (!TestLobbyStateTransferRestart(&error)) return fail(error);
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
+		if (!TestLobbyStartWaitsOutAFullSendQueue(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error, true)) return fail("resync after private return: " + error);
 		// The host options transaction: each arm reports its own verdict so one red cannot hide another.
