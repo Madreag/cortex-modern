@@ -921,6 +921,9 @@ namespace RTE {
 		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
 		void NoteInPlaceReturn(uint8_t peerId);
+		/// Host: a returning seat bound to the round again is sent every frame from its reclaim frame the round sent while it was away,
+		/// so its live round starts with the inputs every other peer already holds. Returns how many went.
+		size_t SendReturnerTheRoundFrom(uint8_t peerId, uint64_t fromFrame);
 		/// Every peer captures at the end of each tick that is a multiple of this (0 = none): the host is busy there, not gone.
 		void SetAnnouncedCaptureEvery(uint32_t every) { m_AnnouncedCaptureEvery = every; }
 		/// A capture every peer takes at the end of the tick: the host's silence behind it is its capture, not its death.

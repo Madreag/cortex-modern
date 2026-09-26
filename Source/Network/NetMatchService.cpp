@@ -3820,6 +3820,7 @@ static std::string ResyncSaveName() {
 					m_PrivateJoinError = error; continue;
 				}
 				m_PrivateActivations.insert(session.connection);
+				(void)m_Coordinator->SendReturnerTheRoundFrom(session.assignedPeerId, session.activationTick);
 				std::erase_if(m_PendingHeldReseats, [&](const auto& pending) { return pending.newOwnerPeerId == session.assignedPeerId; });
 				std::erase_if(m_PendingHeldResolutions, [&](const auto& pending) { return pending.lockstepPeerId == session.assignedPeerId; });
 			}
