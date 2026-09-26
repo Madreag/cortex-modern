@@ -337,13 +337,14 @@ def ancestor_commands(limit: int = 32) -> list[str]:
 def lane_script_desktop_uses(commands: Sequence[str] | None = None) -> list[str]:
     """Lines of the calling lane's scripts (the ancestors' script arguments) that run a desktop tool."""
     hits: list[str] = []
-    own = Path(__file__).resolve()
+    seen = {Path(__file__).resolve()}
     for command in ancestor_commands() if commands is None else commands:
         for token in command.split():
             path = Path(token)
             try:
-                if not path.is_file() or path.resolve() == own or path.stat().st_size > (4 << 20):
+                if not path.is_file() or path.resolve() in seen or path.stat().st_size > (4 << 20):
                     continue
+                seen.add(path.resolve())
                 data = path.read_bytes()
             except OSError:
                 continue
