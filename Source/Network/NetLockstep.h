@@ -920,6 +920,12 @@ namespace RTE {
 		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
 		void NoteInPlaceReturn(uint8_t peerId);
+		/// Every peer captures at the end of each tick that is a multiple of this (0 = none): the host is busy there, not gone.
+		void SetAnnouncedCaptureEvery(uint32_t every) { m_AnnouncedCaptureEvery = every; }
+		/// A capture every peer takes at the end of the tick: the host's silence behind it is its capture, not its death.
+		void NoteAnnouncedCapture(uint64_t tick);
+		/// Whether the frame waited on is one the host produces only after a capture every peer announced.
+		bool HostBusyWithAnnouncedCapture(uint64_t frame) const;
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
@@ -1481,6 +1487,11 @@ namespace RTE {
 		uint64_t m_WaitStartMs = 0;
 		uint64_t m_AuthorityLastHeardMs = 0;
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
+		uint64_t m_OwnFramesSent = 0; //!< Frames of its own this peer has sent.
+		uint64_t m_LivenessFramesSeen = 0; //!< Host: the count its liveness last saw move.
+		uint64_t m_LivenessQuietSinceMs = 0; //!< Host: since when it has sent no frame of its own.
+		uint32_t m_AnnouncedCaptureEvery = 0; //!< Period of the captures every peer takes; 0 when there are none.
+		std::set<uint64_t> m_AnnouncedCaptureTicks; //!< Named captures every peer takes at the end of these ticks.
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)

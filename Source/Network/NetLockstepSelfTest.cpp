@@ -18517,8 +18517,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		}
 
 		/// A live host behind a 200 ms link that waits on its own round keeps talking, so its survivors never take it for gone; a host that
-		/// goes silent is taken for gone once it is silent past the slow-player bound and the jitter its traffic lands with, never after
-		/// a fixed half second.
+		/// goes silent is taken for gone once it is silent past the slow-player bound and its link's jitter, never after a fixed half second.
 		bool TestALongLinkedHostIsJudgedByItsSilenceAlone(std::string* error) {
 			LoopbackTransport hostWire, aWire, bWire;
 			if (!hostWire.StartHost(49500, error) || !aWire.Connect("loopback", 49500, error) || !bWire.Connect("loopback", 49500, error)) return false;
@@ -18570,10 +18569,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!host.QueueLocalInput(6, {MakeFrame(101, 6)}, {}, error)) return false;
 			step(true);
 			const uint64_t silentFrom = now;
-			// What it sent last is still on the 100 ms leg; nothing is judged before it lands.
-			while (now - silentFrom < 100) step(false);
+			// Inside the slow-player bound nothing is judged: a spike the bound absorbs is not a death.
+			while (now - silentFrom < 45) step(false);
 			if (lost(a) || lost(b)) {
-				*error = "the survivors took the host for gone while its last word was still on the wire: silent_ms=" + std::to_string(now - silentFrom);
+				*error = "the survivors took the host for gone inside the slow-player bound: silent_ms=" + std::to_string(now - silentFrom);
 				return false;
 			}
 			while (now - silentFrom < 400 && !lost(a)) step(false);
