@@ -528,7 +528,8 @@ namespace RTE {
 	/// Applies the committed frame's departures before its game commands.
 	void ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors);
 	/// A committed frame's controller inputs in the order every peer applies them: by sender, the committing peer's own at its place.
-	std::vector<const ControllerFrame*> CommittedControllerFramesInSenderOrder(const NetLockstepReadyFrame& ready);
+	/// A frame that does not name its committing peer is placed by localPeerId.
+	std::vector<const ControllerFrame*> CommittedControllerFramesInSenderOrder(const NetLockstepReadyFrame& ready, uint8_t localPeerId = 0);
 	void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused);
 
 	/// The applied frame with the frames a synced pause committed discounted: a pause commits frames the

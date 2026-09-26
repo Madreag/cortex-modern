@@ -33,7 +33,8 @@ namespace RTE {
 		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - base).count());
 	}
 
-	std::vector<const ControllerFrame*> CommittedControllerFramesInSenderOrder(const NetLockstepReadyFrame& ready) {
+	std::vector<const ControllerFrame*> CommittedControllerFramesInSenderOrder(const NetLockstepReadyFrame& ready, uint8_t localPeerId) {
+		const uint8_t localPeer = ready.localPeerId != 0 ? ready.localPeerId : localPeerId;
 		std::vector<const ControllerFrame*> ordered;
 		ordered.reserve(ready.localFrames.size() + ready.remoteFrames.size());
 		bool localPlaced = false;
@@ -43,7 +44,7 @@ namespace RTE {
 		};
 		size_t offset = 0;
 		for (const auto& [peer, count]: ready.remoteFrameCounts) {
-			if (!localPlaced && peer > ready.localPeerId) placeLocal();
+			if (!localPlaced && peer > localPeer) placeLocal();
 			for (size_t index = 0; index < count && offset < ready.remoteFrames.size(); ++index) ordered.push_back(&ready.remoteFrames[offset++]);
 		}
 		if (!localPlaced) placeLocal();
