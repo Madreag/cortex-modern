@@ -433,6 +433,7 @@ namespace RTE {
 		std::function<void(const NetMatchConfig&)> publishLiveConfig;
 		bool substituteSlowPeers = false;
 		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
+		uint32_t authorityKeepaliveMs = 0; //!< How often the host's session talks while its simulation is busy with its own work.
 		// Service matches wait for every peer's measured activity startup before the agreed first frame.
 		bool requirePublishedStart = false;
 	};
@@ -568,6 +569,8 @@ namespace RTE {
 		uint64_t lastHeardMs = 0;
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
+		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
+		bool returnsInPlace = false; //!< This seat's return replays on its own state and connection: it starts its round before its reclaim frame.
 		uint64_t startParkMs = 0; //!< The start work THIS peer's machine measured, as it published it.
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
@@ -915,6 +918,24 @@ namespace RTE {
 		void NoteSeatReclaimed(uint8_t peerId);
 		/// Host: a returning seat whose catch-up is still replaying toward its reclaim frame; its first-input allowance starts at the catch-up's end.
 		void NoteReturnerCatchingUp(uint8_t peerId, uint64_t nowMs);
+		/// Host: a returning seat whose catch-up reached its reclaim frame; its first input is judged like any seat's from here.
+		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
+		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
+		void NoteInPlaceReturn(uint8_t peerId);
+		/// A joining round whose seat state was read before its first frame takes every hold and return of another seat that the replay
+		/// of its committed tail applied after that read, through the frame before its first; the host's own notice of them may never reach it.
+		void AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame);
+		/// Host: a returning seat bound to the round again is sent every frame from its reclaim frame the round sent while it was away,
+		/// so its live round starts with the inputs every other peer already holds. Returns how many went.
+		size_t SendReturnerTheRoundFrom(uint8_t peerId, uint64_t fromFrame);
+		/// Every peer captures at the end of each tick that is a multiple of this (0 = none): the host is busy there, not gone.
+		void SetAnnouncedCaptureEvery(uint32_t every) { m_AnnouncedCaptureEvery = every; }
+		/// A capture every peer takes at the end of the tick: the host's silence behind it is its capture, not its death.
+		void NoteAnnouncedCapture(uint64_t tick);
+		/// Client: the host was heard now; the gap since it was last heard is its talk jitter.
+		void NoteAuthorityHeard(uint64_t nowMs);
+		/// Whether the frame waited on is one the host produces only after a capture every peer announced.
+		bool HostBusyWithAnnouncedCapture(uint64_t frame) const;
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
@@ -1288,6 +1309,8 @@ namespace RTE {
 		/// Whether a scheduled resync owns the end of this round; a last-player leave must not take it.
 		bool ReclaimResyncPending() const;
 		bool IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const;
+		/// Whether a committed frame carries this remote's input: exactly the senders the round requires at it.
+		bool CommitsRemoteInput(uint8_t peerId, uint64_t frame) const;
 		/// Records, and on the relay host announces, that the round stops requiring a fenced peer's frames.
 		bool WaiveRemoteFrames(uint8_t peerId, uint64_t fromFrame, uint64_t nowMs, bool announce);
 		static bool IsFrameWaiver(const NetLockstepStop& stop);
@@ -1475,6 +1498,16 @@ namespace RTE {
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;
 		uint64_t m_AuthorityLastHeardMs = 0;
+		std::deque<uint32_t> m_AuthorityGaps; //!< Client: the recent gaps between the host's packets while it played.
+		static constexpr size_t c_AuthorityGapSamples = 256;
+		uint32_t m_AuthorityLongestGapMs = 0; //!< Client: the longest gap the host left while it played this round.
+		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
+		uint64_t m_OwnFramesSent = 0; //!< Frames of its own this peer has sent.
+		uint64_t m_LivenessFramesSeen = 0; //!< Host: the count its liveness last saw move.
+		uint64_t m_LivenessQuietSinceMs = 0; //!< Host: since when it has sent no frame of its own.
+		uint32_t m_AnnouncedCaptureEvery = 0; //!< Period of the captures every peer takes; 0 when there are none.
+		bool m_AwaitingReplayedSeatState = false; //!< A round joined from a replayed tail: no commit until that tail's seat changes are taken.
+		std::set<uint64_t> m_AnnouncedCaptureTicks; //!< Named captures every peer takes at the end of these ticks.
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)

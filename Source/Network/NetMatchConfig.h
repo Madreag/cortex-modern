@@ -193,6 +193,9 @@ namespace RTE {
 		static std::string BuildReportJson(const NetMatchConfig& config);
 		/// The peer's input delay: its per-sender entry, or the uniform value when no set rides the config.
 		static uint16_t PeerInputDelay(const NetMatchConfig& config, uint8_t peerId);
+		/// Frames an automatic delay keeps past its link under the bounded wait: the slow-player bound's worth of lead, so a spike
+		/// the bound absorbs never holds a seat from the round's first frame on.
+		static uint16_t HoldMarginFrames(const NetMatchConfig& config);
 
 		static const char* ModeName(NetMatchMode mode);
 		/// The mode's menu-facing word, for rows that show a user label instead of the wire token.

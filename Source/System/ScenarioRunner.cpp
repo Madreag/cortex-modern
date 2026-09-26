@@ -813,6 +813,10 @@ namespace RTE {
 		s_GoodbyeToPendingReturners = std::move(goodbyeToPendingReturners);
 	}
 
+	void ScenarioRunner::SetLockstepAnnouncedCaptureEvery(uint32_t every) {
+		if (s_LockstepCoordinator) s_LockstepCoordinator->SetAnnouncedCaptureEvery(every);
+	}
+
 	void ScenarioRunner::SetHeldCatchUp(std::function<bool()> begin) {
 		s_HeldCatchUp = std::move(begin);
 	}
