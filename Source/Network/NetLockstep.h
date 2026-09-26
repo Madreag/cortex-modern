@@ -999,6 +999,12 @@ namespace RTE {
 		/// Host: the current capture park covers the frame or may still grow to cover it.
 		bool CaptureParkMayReach(uint64_t frame) const;
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
+		/// The peer whose AI drives the seats the AI holds at a frame: the host, or while the host's own seat is held, the first playing peer of its succession.
+		uint8_t AiAuthorityAt(uint64_t frame) const;
+		/// Who produces an actor's frames that its owner would: the owner, unless the owner is a host whose own seat the AI holds.
+		uint8_t AiProducerOf(uint8_t ownerPeerId) const;
+		/// Whether the host's own seat is held by the AI and not yet taken back.
+		bool IsOwnHostSeatHeld() const;
 		/// The frame the host held this peer's seat from; 0 when the hold was not taken on the wire (a closed link).
 		uint64_t GetLocalHoldFrame() const { return m_LocalHoldFrame; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
@@ -1160,6 +1166,7 @@ namespace RTE {
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
+		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -1391,6 +1398,12 @@ namespace RTE {
 		void RetryLateStartReclaims();
 		void FlushDeferredParkTimings();
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
+		/// Host: holds its own seat when every other seat's input for the frame is in hand and its own simulation has not produced its input within the bound.
+		bool JudgeOwnSeat(uint64_t frame, uint64_t nowMs);
+		/// Host: takes its own held seat back once its simulation has caught up to the committed frames.
+		void ReclaimOwnSeat(uint64_t nowMs);
+		std::optional<uint64_t> m_OwnMissingFrame; //!< Host: the frame its own input was first missing for with every other seat's in hand.
+		uint64_t m_OwnMissingSinceMs = 0;
 		uint64_t FutureTimingFrame() const;
 		struct TimingDecision {
 			NetLockstepTiming proposal;
@@ -1445,6 +1458,7 @@ namespace RTE {
 		std::atomic<uint64_t> m_SimTickedMs{0}; //!< The simulation thread's last Tick; the plane stands in once it is a tick old.
 		bool m_PlaneTicking = false; //!< Inside PlaneTick: events that call out of the coordinator are deferred.
 		std::vector<NetTransportEvent> m_PlaneDeferredEvents; //!< What the plane left for the simulation thread's next tick, in arrival order.
+		std::set<NetPeerId> m_PlaneHeldTransports; //!< Connections whose later packets wait behind a deferred start, stop or lifecycle event.
 		void HandleTransportEvents(uint64_t nowMs);
 		uint32_t m_LocalStartParkMs = 0; //!< Our own activity restart, as it goes out in our start.
 		uint8_t m_LocalDeviceClass = 0; //!< Our own seat device, as it goes out in our start.

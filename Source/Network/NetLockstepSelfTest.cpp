@@ -71,6 +71,7 @@ namespace RTE {
 
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 	bool TestAStarvedSeatIsNotLate(std::string* error);
+	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -19574,6 +19575,124 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// A host whose own simulation stops producing is held like any seat: once every other seat's input for a frame is in hand
+	/// and its own is missing past the bound, its seat goes to the AI of the next peer of its succession, the others commit
+	/// without it, what it produces for the frames the AI played is dropped, and it takes its seat back when it has caught up.
+	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		NetLockstepCoordinator client;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A11, 6, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 35;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A11);
+		config.matchConfig.successorOrder = {3, 2};
+		if (!wire.StartHost(48895, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RoundId = 35;
+		host.m_RemotePeerIds = {2, 3};
+		host.m_PeersPlayedThisRound = {1, 2, 3};
+		for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 7;
+		host.m_Stats.nextFrame = 200;
+		host.m_LastQueuedTargetFrame = 199;
+		host.m_LastCompletedSimulationTick = 193;
+		// Every other seat's input for frame 200 is in hand; the host's own is not.
+		host.m_RemoteFrames[200][2] = {};
+		host.m_RemoteFrames[200][3] = {};
+		if (host.JudgeOwnSeat(200, 1000) || host.JudgeOwnSeat(200, 1040) || host.IsSeatUnderAI(1, 200)) {
+			*error = "a host whose own input was missing inside the bound (40 ms) was held";
+			return false;
+		}
+		if (!host.JudgeOwnSeat(200, 1051) || !host.IsSeatUnderAI(1, 200) || host.IsSeatUnderAI(1, 199)) {
+			*error = "a host whose own input was missing past the bound was not held at the first frame it had not sent: under_ai_200=" +
+			         std::to_string(host.IsSeatUnderAI(1, 200));
+			return false;
+		}
+		NetLockstepTiming hold;
+		for (const auto& [revision, decision]: host.m_TimingDecisions) if (decision.proposal.action == NetTimingAction::Hold) hold = decision.proposal;
+		std::vector<uint8_t> bytes;
+		if (hold.applyFrame != 200 || !NetLockstepCodec::Encode({hold}, bytes)) {
+			*error = "the host's own hold cannot reach its peers: frame=" + std::to_string(hold.applyFrame) + " encoded=" + std::to_string(!bytes.empty());
+			return false;
+		}
+		host.m_LastDeliveredFrame = 200;
+		if (host.AiAuthorityAt(200) != 3 || host.AiProducerOf(1) != 3 || host.AiAuthorityAt(199) != 1) {
+			*error = "the held host's actors are not driven by the first playing peer of its succession: authority=" + std::to_string(host.AiAuthorityAt(200));
+			return false;
+		}
+		// What the host produces for a frame its held seat does not play is dropped, never refused as already committed.
+		if (!host.QueueLocalInput(195, {}, {}, error) || host.m_LocalFrames.contains(201)) {
+			if (error->empty()) *error = "the held host queued input for a frame the AI plays";
+			return false;
+		}
+		// Every other peer keeps its link to the held host and stops waiting on the host's seat from the hold frame.
+		auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A11, 6, NetTransportLane::ControlReliable);
+		clientConfig.peerCount = 3; clientConfig.startFrame = 1; clientConfig.roundId = 35;
+		clientConfig.substituteSlowPeers = true; clientConfig.simTickMs = 1000.0 / 60.0; clientConfig.slowPlayerBoundTicks = 3;
+		clientConfig.matchConfig = config.matchConfig;
+		// Only the client's decisions are read here, so it takes the round's configuration without a wire of its own.
+		client.m_Config = clientConfig;
+		client.m_State = NetLockstepState::Running;
+		client.m_RoundId = 35;
+		client.m_RemotePeerIds = {1, 3};
+		client.m_RemoteTransports[1] = 7;
+		for (uint8_t peer: {1, 2, 3}) client.m_PeerEffectiveStart[peer] = 7;
+		client.m_Stats.nextFrame = 200;
+		client.ApplyTiming(hold);
+		if (!client.IsRemoteRequiredForFrame(1, 200) || client.CommitsRemoteInput(1, 200) || !client.m_RemoteTransports.contains(1) || client.IsPeerGoneAtFrame(1, 200)) {
+			*error = "a client left its held host's link, stopped following the host's commits or committed the held host's input: commits_200=" +
+			         std::to_string(client.CommitsRemoteInput(1, 200));
+			return false;
+		}
+		// The held host commits frame 200 on the others' input alone and sends its empty frame for it.
+		host.AdvanceReadyFrames(1060);
+		if (host.GetStats().nextFrame != 201 || host.SentInputThrough() != 200 || host.m_LocalFrames.contains(200)) {
+			*error = "the held host did not commit and announce frame 200 on the others' input: next=" + std::to_string(host.GetStats().nextFrame) +
+			         " sent_through=" + std::to_string(host.SentInputThrough());
+			return false;
+		}
+		// Caught up to within its delay of the committed frames, the host takes its seat back past everything already committed.
+		host.m_LastCompletedSimulationTick = 199;
+		host.m_Stats.nextFrame = 205;
+		host.m_LastQueuedTargetFrame = 204;
+		host.ReclaimOwnSeat(1200);
+		const auto back = host.m_ReclaimTransactions.find(1);
+		if (back == host.m_ReclaimTransactions.end() || back->second.activationFrame <= 205 || host.IsSeatUnderAI(1, back->second.activationFrame) ||
+		    !host.IsSeatUnderAI(1, back->second.activationFrame - 1)) {
+			*error = "the caught-up host did not take its seat back at a frame past the committed ones";
+			return false;
+		}
+		NetLockstepTiming reclaim;
+		for (const auto& [revision, decision]: host.m_TimingDecisions) if (decision.proposal.action == NetTimingAction::Reclaim) reclaim = decision.proposal;
+		bytes.clear();
+		if (!NetLockstepCodec::Encode({reclaim}, bytes)) {
+			*error = "the host's own return cannot reach its peers";
+			return false;
+		}
+		// The frames between the host's horizon and its new start are the AI's, and nobody waits on the host for them: it commits
+		// them on the others' input without a frame of its own, never refusing to because its new start is later.
+		host.m_RemoteFrames[205][2] = {};
+		host.m_RemoteFrames[205][3] = {};
+		host.AdvanceReadyFrames(1210);
+		if (host.GetStats().nextFrame != 206 || host.SentInputThrough() != 204) {
+			*error = "the returning host stopped committing below its new start: next=" + std::to_string(host.GetStats().nextFrame) +
+			         " sent_through=" + std::to_string(host.SentInputThrough());
+			return false;
+		}
+		client.ApplyTiming(reclaim);
+		const uint64_t firstRequired = back->second.activationFrame + back->second.delayFrames + 1;
+		if (!client.IsRemoteRequiredForFrame(1, firstRequired) || client.IsRemoteRequiredForFrame(1, firstRequired - 1)) {
+			*error = "a client does not wait on the host's seat again after its return's gap: first_required=" + std::to_string(firstRequired);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_hosts_own_late_seat_is_held_and_taken_back hold=200 back=" << back->second.activationFrame
+		          << " ai_of=" << static_cast<int>(host.AiAuthorityAt(200)) << std::endl;
+		return true;
+	}
+
 	/// The runway that defers a judgment is the shortest any survivor has: a survivor ahead of this host runs dry
 	/// first, and it waits on the silent seat for as long as the host's own ready frames last.
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error) {
@@ -20250,6 +20369,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestFirstStartWaitsForPublishedStartup(&error) ||
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestAStarvedSeatIsNotLate(&error) ||
+		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
 		    !TestASurvivorsRunwayIsTheRounds(&error) ||
 		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
 		    !TestNoSeatIsJudgedPastTheLastTick(&error) ||

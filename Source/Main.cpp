@@ -5318,7 +5318,9 @@ void RunGameLoop() {
 			}
 			// The session plane keeps the round's frames moving while this machine's simulation is away.
 			NetLockstepPlane::Window planeWindow;
+			const uint64_t planeTicksBefore = NetLockstepPlane::Ticks();
 			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
+			System::PrintDiagnosticLine("[selftest] frame stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
 		}
 		if (ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
 			for (auto& stall: s_netLiveStalls) if (!stall.fired && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= stall.tick) {
@@ -5381,7 +5383,8 @@ void RunGameLoop() {
 					g_TimerMan.GrantSimUpdates(1);
 				}
 			} else if (!g_TimerMan.TimeForSimUpdate()) {
-				break;
+				if (!ScenarioRunner::TakeOwnSeatCatchUpGrant(nextSimTick)) break;
+				g_TimerMan.GrantSimUpdates(1);
 			}
 			if (!ScenarioRunner::WorldCatchUpActive() && !ScenarioRunner::PollLockstepSimulationTick(nextSimTick)) {
 				if (ScenarioRunner::HasControllerReplayError()) HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
