@@ -746,6 +746,10 @@
       <IgnoreSpecificDefaultLibraries>libcmt.lib</IgnoreSpecificDefaultLibraries>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
     </Link>
+    <PreLinkEvent>
+      <!-- A link that reuses the last PDB bumps its age into the image, so one tree would hash by its build history. -->
+      <Command>if exist "$(OutDir)$(TargetName).pdb" del "$(OutDir)$(TargetName).pdb"</Command>
+    </PreLinkEvent>
     <Manifest>
       <OutputManifestFile>$(IntDir)$(TargetName).manifest</OutputManifestFile>
       <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>
