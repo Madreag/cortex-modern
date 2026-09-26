@@ -76,6 +76,11 @@ namespace RTE {
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
+	bool TestAQueuedReturnLeavesALaterHold(std::string* error);
+	bool TestAHostIsJudgedAgainAfterItsOwnReturn(std::string* error);
+	bool TestARepeatedStartHoldsNoFramesBehindIt(std::string* error);
+	bool TestALaggingSimulationReadsTheFrameItTook(std::string* error);
+	bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -19675,6 +19680,164 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAQueuedReturnLeavesALaterHold(std::string* error) {
+		// Seat 2 is held at 100, returns at 200 (gap through 206) and is held again at 207 while survivor 3 still has 200..206 queued.
+		NetLockstepCoordinator survivor;
+		auto config = MakeCoordinatorConfig(3, 1, 0x9A15, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 39; config.authorityPeerId = 1;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A15);
+		survivor.m_Config = config;
+		survivor.m_State = NetLockstepState::Running;
+		survivor.m_RoundId = 39;
+		survivor.m_RemotePeerIds = {1, 2};
+		survivor.m_Stats.nextFrame = 207;
+		const auto decision = [&](NetTimingAction action, NetTimingPhase phase, uint64_t frame, uint32_t incarnation, uint64_t revision) {
+			NetLockstepTiming timing;
+			timing.senderPeerId = 1; timing.peerId = 2; timing.action = action; timing.phase = phase;
+			timing.sessionId = config.sessionId; timing.roundId = 39; timing.revision = revision;
+			timing.applyFrame = timing.cutoffFrame = frame; timing.heldPeers = 1U << 1; timing.seatIncarnations[1] = incarnation;
+			timing.delayFrames = 4; timing.neutralThroughFrame = 206;
+			return timing;
+		};
+		survivor.ApplyTiming(decision(NetTimingAction::Hold, NetTimingPhase::HoldAtFrame, 100, 1, 1));
+		survivor.ApplyTiming(decision(NetTimingAction::Reclaim, NetTimingPhase::ReclaimAtFrame, 200, 2, 2));
+		survivor.ApplyTiming(decision(NetTimingAction::Hold, NetTimingPhase::HoldAtFrame, 207, 2, 3));
+		NetLockstepReadyFrame queued;
+		queued.frame = 200;
+		queued.remoteCommands.push_back({1, NetGameSeatReclaim{2, 0, 2, 2, 200, 4, 206}});
+		survivor.m_ReadyFrames.push_back(queued);
+		NetLockstepReadyFrame delivered;
+		const bool popped = survivor.PopReadyFrame(delivered);
+		const auto hold = survivor.m_HoldTransactions.find(2);
+		const auto ai = survivor.m_AiHeldSeats.find(2);
+		const auto leave = survivor.m_PeerLeaveFrames.find(2);
+		const std::string seen = std::to_string(hold == survivor.m_HoldTransactions.end() ? 0 : hold->second.cutoffFrame) + "/" +
+		    std::to_string(ai == survivor.m_AiHeldSeats.end() ? 0 : ai->second) + "/" + std::to_string(leave == survivor.m_PeerLeaveFrames.end() ? 0 : leave->second) + "/" +
+		    std::to_string(survivor.IsSeatUnderAI(2, 150)) + std::to_string(survivor.IsSeatUnderAI(2, 203)) + std::to_string(survivor.IsSeatUnderAI(2, 207));
+		if (!popped || seen != "207/207/207/101") {
+			*error = "a-queued-return-leaves-a-later-hold: held at 100, back at 200, held at 207, then 200 delivered read hold/ai/leave/under_ai(150,203,207) " + seen +
+			         "; expected 207/207/207/101";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestAHostIsJudgedAgainAfterItsOwnReturn(std::string* error) {
+		// The host was held at 150 and agreed its own return at 200 (delay 4, gap through 205); it stalls again right after.
+		const auto makeHost = [](NetLockstepCoordinator& host, bool delivered) {
+			auto config = MakeCoordinatorConfig(1, 2, 0x9A16, 4, NetTransportLane::ControlReliable);
+			config.peerCount = 3; config.startFrame = 1; config.roundId = 40; config.authorityPeerId = 1;
+			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A16);
+			config.matchConfig.successorOrder = {2, 3};
+			host.m_Config = config;
+			host.m_State = NetLockstepState::Running;
+			host.m_RoundId = 40;
+			host.m_RemotePeerIds = {2, 3};
+			host.m_PeersPlayedThisRound = {1, 2, 3};
+			for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 5;
+			host.m_ReclaimTransactions[1] = {1, 0, 2, 1, 200, 4, 205};
+			if (delivered) host.m_PeerEffectiveStart[1] = 204;
+			else host.m_AiHeldSeats[1] = 150;
+			host.m_LastCompletedSimulationTick = 201;
+		};
+		std::string seen;
+		for (const auto& [delivered, frame]: {std::pair{false, uint64_t{206}}, std::pair{true, uint64_t{220}}}) {
+			NetLockstepCoordinator host;
+			makeHost(host, delivered);
+			host.m_Stats.nextFrame = frame;
+			host.m_LastQueuedTargetFrame = frame - 1;
+			host.m_RemoteFrames[frame][2] = {};
+			host.m_RemoteFrames[frame][3] = {};
+			(void)host.JudgeOwnSeat(frame, 1000);
+			seen += std::to_string(host.JudgeOwnSeat(frame, 1051));
+		}
+		if (seen != "11") {
+			*error = "a-host-is-judged-again-after-its-own-return: a host stalled past the bound right after its return at 200 was held (before the return's delivery, after it) " + seen +
+			         "; expected 11";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestARepeatedStartHoldsNoFramesBehindIt(std::string* error) {
+		// While the plane ticks, a start from a seat this round already took is left for the simulation thread without holding that seat's frames.
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A17, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 41; config.authorityPeerId = 1;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A17);
+		host.m_Config = config;
+		host.m_State = NetLockstepState::Running;
+		host.m_RoundId = 41;
+		host.m_RemotePeerIds = {2, 3};
+		host.m_RemoteTransports = {{2, 5}, {3, 6}};
+		host.m_RemoteStartsReceived = {2, 3};
+		NetLockstepStart start;
+		start.sessionId = config.sessionId; start.startFrame = 1; start.inputDelayFrames = 4;
+		start.controllerFrameVersion = ControllerFrame::c_Version; start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+		start.localPeerId = 2; start.peerCount = 3; start.scenario = config.scenario; start.ownershipPolicy = config.ownershipPolicy; start.roundId = 41;
+		NetTransportEvent event;
+		event.type = NetTransportEventType::PacketReceived; event.peerId = 5; event.lane = NetTransportLane::ControlReliable;
+		if (!NetLockstepCodec::Encode({start}, event.bytes)) { *error = "a-repeated-start-holds-no-frames-behind-it: the start did not encode"; return false; }
+		host.m_PlaneTicking = true;
+		host.HandleEvent(event, 1000);
+		host.m_PlaneTicking = false;
+		if (host.m_PlaneDeferredEvents.size() != 1 || host.m_PlaneHeldTransports.contains(5)) {
+			*error = "a-repeated-start-holds-no-frames-behind-it: a repeated start while the plane ticked left " + std::to_string(host.m_PlaneDeferredEvents.size()) +
+			         " deferred and held its seat's transport " + std::to_string(host.m_PlaneHeldTransports.contains(5)) + "; expected 1 and 0";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestALaggingSimulationReadsTheFrameItTook(std::string* error) {
+		// A held host's simulation took 193; the plane commits 194..400 meanwhile. The simulation then takes 194 and reads it at the tick's end.
+		NetLockstepCoordinator host;
+		host.m_Config = MakeCoordinatorConfig(1, 2, 0x9A18, 4, NetTransportLane::ControlReliable);
+		host.m_State = NetLockstepState::Running;
+		host.m_LastDeliveredFrame = 193;
+		for (uint64_t frame = 194; frame <= 400; ++frame) {
+			NetLockstepReadyFrame ready;
+			ready.frame = frame;
+			host.RememberCommittedFrame(ready);
+			host.m_ReadyFrames.push_back(ready);
+		}
+		NetLockstepReadyFrame taken, read;
+		const bool popped = host.PopReadyFrame(taken);
+		if (!popped || taken.frame != 194 || !host.PeekReadyFrame(194, read) || read.frame != 194) {
+			*error = "a-lagging-simulation-reads-the-frame-it-took: after the plane committed 194..400 the simulation took " + std::to_string(taken.frame) +
+			         " and read it back " + std::to_string(host.PeekReadyFrame(194, read)) + " with history from " +
+			         std::to_string(host.m_ReadyHistory.empty() ? 0 : host.m_ReadyHistory.begin()->first) + "; expected 194 read back";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestAHeldHostsFrameCrossesAMigration(std::string* error) {
+		// At the host's own hold frame a survivor's record has no input from the host, only the host's hold command.
+		NetLockstepCoordinator survivor;
+		auto config = MakeCoordinatorConfig(2, 1, 0x9A19, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.authorityPeerId = 1;
+		survivor.m_Config = config;
+		NetLockstepReadyFrame ready;
+		ready.frame = 300; ready.hasLocalInput = true;
+		ready.localFrames.resize(1);
+		ready.remoteFrameCounts[3] = 1; ready.remoteFrames.resize(1);
+		ready.remoteCommands.push_back({1, NetGameSeatHold{1, 0, 5, 1, 300}});
+		std::vector<uint8_t> bytes;
+		NetLockstepReadyFrame decoded;
+		const bool encoded = survivor.EncodeMigrationFrame(ready, bytes);
+		const bool read = encoded && survivor.DecodeMigrationFrame(bytes, 300, decoded);
+		if (!read || decoded.remoteCommands.size() != 1 || decoded.remoteFrameCounts.contains(1) || !decoded.remoteFrameCounts.contains(3)) {
+			*error = "a-held-hosts-frame-crosses-a-migration: the frame of a held host's hold encoded " + std::to_string(encoded) + " and read back " + std::to_string(read) +
+			         " with " + std::to_string(decoded.remoteCommands.size()) + " command(s); expected 1 1 1";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -20587,6 +20750,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
 		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
 		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||
+		    !TestAQueuedReturnLeavesALaterHold(&error) ||
+		    !TestAHostIsJudgedAgainAfterItsOwnReturn(&error) ||
+		    !TestARepeatedStartHoldsNoFramesBehindIt(&error) ||
+		    !TestALaggingSimulationReadsTheFrameItTook(&error) ||
+		    !TestAHeldHostsFrameCrossesAMigration(&error) ||
 		    !TestASurvivorsRunwayIsTheRounds(&error) ||
 		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
 		    !TestNoSeatIsJudgedPastTheLastTick(&error) ||

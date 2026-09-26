@@ -1233,6 +1233,13 @@ namespace RTE {
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
+		friend bool TestAQueuedReturnLeavesALaterHold(std::string* error);
+		friend bool TestAHostIsJudgedAgainAfterItsOwnReturn(std::string* error);
+		friend bool TestARepeatedStartHoldsNoFramesBehindIt(std::string* error);
+		friend bool TestALaggingSimulationReadsTheFrameItTook(std::string* error);
+		friend bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
+		/// Records a committed frame in the history the tick boundary and the relays read.
+		void RememberCommittedFrame(const NetLockstepReadyFrame& ready);
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
