@@ -1625,7 +1625,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	}
 	if (m_HostNetSlowPolicyCombo) {
 		m_HostNetSlowPolicyCombo->ClearList();
-		m_HostNetSlowPolicyCombo->AddItem("Hand the seat to the AI and let them rejoin");
+		m_HostNetSlowPolicyCombo->AddItem("Give the seat to the AI (host too) until they catch up");
 		m_HostNetSlowPolicyCombo->AddItem("Pause for them (up to 20 s)");
 	}
 	if (m_HostNetSlowBoundBox) {

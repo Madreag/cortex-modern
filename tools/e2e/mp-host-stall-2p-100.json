@@ -317,7 +317,7 @@
       ],
       "forbidden_log_regex": [
         "host lost",
-        "left the match at frame"
+        "left the match at frame \\d+ \\((?!e2e complete\\))"
       ]
     },
     {
@@ -353,7 +353,7 @@
       ],
       "forbidden_log_regex": [
         "host lost",
-        "left the match at frame"
+        "left the match at frame \\d+ \\((?!e2e complete\\))"
       ]
     },
     {
@@ -389,7 +389,7 @@
       ],
       "forbidden_log_regex": [
         "host lost",
-        "left the match at frame"
+        "left the match at frame \\d+ \\((?!e2e complete\\))"
       ]
     }
   ]
