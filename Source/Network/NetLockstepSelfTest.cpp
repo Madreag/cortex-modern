@@ -11813,7 +11813,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					         std::to_string(s.longestCongestionHoldMs) + "ms): " + host.BuildReportJson();
 					return false;
 				}
-				if (host.GetPeerLeaveFrames().size() != 1 || host.GetPeerLeaveFrames().find(2) == host.GetPeerLeaveFrames().end()) {
+				if (host.GetPeerLeaveFrames().size() != 1 || !host.GetPeerLeaveFrames().contains(2)) {
 					*error = "a healthy peer paid for the dead link: " + host.BuildReportJson();
 					return false;
 				}
@@ -18821,8 +18821,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "a held seat's send on its open link was reported as controller failure: " + *error; return false;
 			}
 			for (uint64_t now = 20; now < 40 && !client.IsLocalSeatHeld(); ++now) client.Tick(now);
-			const auto heldAt = host.GetPeerLeaveFrames().find(2);
-			if (!client.IsLocalSeatHeld() || heldAt == host.GetPeerLeaveFrames().end() || client.GetLocalHoldFrame() != heldAt->second || client.IsFailed() ||
+			const auto hostLeaves = host.GetPeerLeaveFrames();
+			const auto heldAt = hostLeaves.find(2);
+			if (!client.IsLocalSeatHeld() || heldAt == hostLeaves.end() || client.GetLocalHoldFrame() != heldAt->second || client.IsFailed() ||
 			    host.GetStats().connectionsClosedOnEviction != 0) {
 				*error = "a held seat did not learn its hold over the link the host kept open: held=" + std::to_string(client.IsLocalSeatHeld()) +
 				         " frame=" + std::to_string(client.GetLocalHoldFrame()) + " closed=" + std::to_string(host.GetStats().connectionsClosedOnEviction);
@@ -19212,10 +19213,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 				}
 				if (delayedAnswer) {
-					const auto localDeparture = a.GetPeerLeaveFrames().find(2);
+					const auto departures = a.GetPeerLeaveFrames();
+					const auto localDeparture = departures.find(2);
 					if (schedule->delayedAnswers == 0 || schedule->releasedAnswers == 0 || schedule->successors != std::set<uint8_t>{3} || a.GetHostPeerId() != 3 || b.GetHostPeerId() != 3 ||
 					    a.GetMigrationResult().boundary != 4 || b.GetMigrationResult().boundary != 4 || !b.GetConfig().relayToOtherPeers || a.GetConfig().relayToOtherPeers ||
-					    localDeparture == a.GetPeerLeaveFrames().end() || localDeparture->second != 5 || !b.IsPeerGoneAtFrame(2, 5)) {
+					    localDeparture == departures.end() || localDeparture->second != 5 || !b.IsPeerGoneAtFrame(2, 5)) {
 						*error = "delayed answers=" + std::to_string(schedule->delayedAnswers) + " released=" + std::to_string(schedule->releasedAnswers) + " successors=" + nlohmann::json(schedule->successors).dump() + " local departures=" + nlohmann::json(a.GetPeerLeaveFrames()).dump() + " A=" + a.BuildReportJson() + " B=" + b.BuildReportJson();
 						return false;
 					}
