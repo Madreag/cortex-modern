@@ -5316,6 +5316,8 @@ void RunGameLoop() {
 				line << "[selftest] frame stall tick=" << s_frameStallTick << " ms=" << s_frameStallMs;
 				System::PrintDiagnosticLine(line.str());
 			}
+			// The session plane keeps the round's frames moving while this machine's simulation is away.
+			NetLockstepPlane::Window planeWindow;
 			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
 		}
 		if (ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
@@ -5325,7 +5327,10 @@ void RunGameLoop() {
 				stall.fired = true;
 				s_netLiveStallActivation = activation;
 				System::PrintDiagnosticLine("[net-test] live stall frame=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(stall.milliseconds));
-				std::this_thread::sleep_for(std::chrono::milliseconds(stall.milliseconds));
+				{
+					NetLockstepPlane::Window planeWindow;
+					std::this_thread::sleep_for(std::chrono::milliseconds(stall.milliseconds));
+				}
 				break;
 			}
 		}
@@ -5879,6 +5884,8 @@ void RunGameLoop() {
 				{
 					static const uint64_t soundPhase = Hash("Tick");
 					SoundSimulationScope simulationSounds(0, soundPhase);
+					// A long update is this machine's own: the plane commits for the round meanwhile, and the update reads the coordinator only through guarded calls.
+					NetLockstepPlane::Window planeWindow;
 					g_ActivityMan.Update();
 
 					if (g_SceneMan.GetScene()) {

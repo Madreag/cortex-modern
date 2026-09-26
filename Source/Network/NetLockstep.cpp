@@ -3214,6 +3214,9 @@ namespace RTE {
 	bool NetLockstepCoordinator::BeginHostMigration(uint64_t nowMs) {
 		if (IsMigrating())
 			return true;
+		// An election is the simulation thread's to start: the plane only keeps the round's frames moving.
+		if (m_PlaneTicking)
+			return false;
 		if (!IsRunning() || m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld || m_Config.matchConfig.successorOrder.empty() || !m_Config.migrationTransportFactory ||
 		    m_Config.localPeerId == GetHostPeerId() || m_RoundId == 0 || m_MigrationGeneration == UINT64_MAX || std::all_of(m_Config.migrationKey.begin(), m_Config.migrationKey.end(), [](uint8_t value) { return value == 0; }))
 			return false;
@@ -4019,6 +4022,91 @@ namespace RTE {
 		// Our own end outlives the handover: the new host hears it as our leave, and this peer stays ended.
 		if (const auto ownEnd = std::exchange(m_OwnEndDuringMigration, std::nullopt); ownEnd && IsRunning()) {
 			if (ownEnd->reason == NetLockstepStopReason::Complete) Complete(ownEnd->message); else Leave(ownEnd->message);
+		}
+	}
+
+	namespace {
+		// One plane per process, like the one round it serves. The thread is the last member, so it is joined before the lock goes.
+		struct PlaneState {
+			std::recursive_mutex lock;
+			NetLockstepCoordinator* target = nullptr;
+			std::atomic<int> windows{0};
+			std::atomic<uint64_t> ticks{0};
+			std::once_flag started;
+			std::jthread thread;
+		};
+
+		PlaneState& Plane() {
+			static PlaneState state;
+			return state;
+		}
+
+		void RunPlane(std::stop_token stop) {
+			PlaneState& plane = Plane();
+			while (!stop.stop_requested()) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				if (plane.windows.load(std::memory_order_acquire) == 0) continue;
+				std::unique_lock<std::recursive_mutex> lock(plane.lock, std::try_to_lock);
+				if (!lock.owns_lock() || !plane.target || plane.windows.load(std::memory_order_acquire) == 0) continue;
+				const uint64_t nowMs = NetLockstepNowMs();
+				if (!plane.target->PlaneShouldTick(nowMs)) continue;
+				plane.target->PlaneTick(nowMs);
+				plane.ticks.fetch_add(1, std::memory_order_relaxed);
+			}
+		}
+	}
+
+	std::recursive_mutex& NetLockstepPlane::Lock() { return Plane().lock; }
+
+	void NetLockstepPlane::Target(NetLockstepCoordinator* coordinator) {
+		PlaneState& plane = Plane();
+		std::lock_guard<std::recursive_mutex> lock(plane.lock);
+		plane.target = coordinator;
+		if (coordinator) std::call_once(plane.started, [&plane] { plane.thread = std::jthread(RunPlane); });
+	}
+
+	void NetLockstepPlane::Forget(const NetLockstepCoordinator* coordinator) {
+		PlaneState& plane = Plane();
+		std::lock_guard<std::recursive_mutex> lock(plane.lock);
+		if (plane.target == coordinator) plane.target = nullptr;
+	}
+
+	uint64_t NetLockstepPlane::Ticks() { return Plane().ticks.load(std::memory_order_relaxed); }
+
+	NetLockstepPlane::Window::Window() { Plane().windows.fetch_add(1, std::memory_order_acq_rel); }
+	NetLockstepPlane::Window::~Window() { Plane().windows.fetch_sub(1, std::memory_order_acq_rel); }
+
+	NetLockstepCoordinator::~NetLockstepCoordinator() { NetLockstepPlane::Forget(this); }
+
+	bool NetLockstepCoordinator::PlaneShouldTick(uint64_t nowMs) const {
+		// The host is the round's hub: its relay and its commits are what every other peer waits on.
+		if (m_State != NetLockstepState::Running || !m_Transport || m_Playback || IsMigrating() || m_Config.localPeerId != GetHostPeerId()) return false;
+		const uint64_t simTickedMs = m_SimTickedMs.load(std::memory_order_acquire);
+		return simTickedMs != 0 && nowMs >= simTickedMs && static_cast<double>(nowMs - simTickedMs) >= std::max(1.0, m_Config.simTickMs);
+	}
+
+	void NetLockstepCoordinator::PlaneTick(uint64_t nowMs) {
+		m_PlaneTicking = true;
+		Tick(nowMs);
+		m_PlaneTicking = false;
+	}
+
+	void NetLockstepCoordinator::HandleTransportEvents(uint64_t nowMs) {
+		// What the plane left behind arrived first, so it is handled first.
+		if (!m_PlaneTicking && !m_PlaneDeferredEvents.empty()) {
+			std::vector<NetTransportEvent> deferred = std::exchange(m_PlaneDeferredEvents, {});
+			for (size_t i = 0; i < deferred.size(); ++i) {
+				HandleEvent(deferred[i], nowMs);
+				if (IsMigrating()) {
+					m_PlaneDeferredEvents.insert(m_PlaneDeferredEvents.begin(), std::make_move_iterator(deferred.begin() + i + 1), std::make_move_iterator(deferred.end()));
+					return;
+				}
+			}
+		}
+		for (const NetTransportEvent& event : m_Transport->PollEvents()) {
+			HandleEvent(event, nowMs);
+			if (IsMigrating())
+				break;
 		}
 	}
 
@@ -7612,20 +7700,17 @@ namespace RTE {
 		if (!m_Transport || m_State == NetLockstepState::Idle) {
 			return;
 		}
+		if (!m_PlaneTicking) m_SimTickedMs.store(nowMs, std::memory_order_release);
 		TickStartupWait(nowMs);
 		ShiftDeadlinesPastOurOwnPark(nowMs);
 		m_TimingNowMs = nowMs;
-		TickMigrationRollCallLinks(nowMs);
+		if (!m_PlaneTicking) TickMigrationRollCallLinks(nowMs);
 		if (IsMigrating()) {
-			TickHostMigration(nowMs);
+			if (!m_PlaneTicking) TickHostMigration(nowMs);
 			return;
 		}
 		RefreshLeftSeatHolds();
-		for (const NetTransportEvent& event : m_Transport->PollEvents()) {
-			HandleEvent(event, nowMs);
-			if (IsMigrating())
-				break;
-		}
+		HandleTransportEvents(nowMs);
 		if (IsMigrating()) {
 			TickHostMigration(nowMs);
 			return;
@@ -8836,6 +8921,13 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::HandleEvent(const NetTransportEvent& event, uint64_t nowMs) {
+		// The plane handles only the round's own frames, acks, decisions and checksums; everything that reaches the session or the
+		// transport's lifecycle waits for the simulation thread, in order.
+		if (m_PlaneTicking && (event.type != NetTransportEventType::PacketReceived || NetHostMigrationCodec::LooksLikePacket(event.bytes) ||
+		                       m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped)) {
+			m_PlaneDeferredEvents.push_back(event);
+			return;
+		}
 		if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {
 			HandleMigrationEvent(event, nowMs);
 			return;
@@ -8984,6 +9076,10 @@ namespace RTE {
 					const bool chatTyped = NetProtocol::PeekMessageType(event.bytes.data(), event.bytes.size(), peekedType) &&
 					                       peekedType == static_cast<uint16_t>(NetMessageType::Chat);
 					const auto sessionPacket = decoded.error.code == NetLockstepErrorCode::BadMagic ? NetProtocol::Decode(event.bytes) : NetDecodeResult{};
+					if (m_PlaneTicking && decoded.error.code == NetLockstepErrorCode::BadMagic) {
+						m_PlaneDeferredEvents.push_back(event);
+						return;
+					}
 					if (decoded.error.code == NetLockstepErrorCode::BadMagic && (sessionPacket.ok || chatTyped)) {
 						// A loading authority keeps its authenticated connection alive through session heartbeats.
 						if (sessionPacket.ok && std::holds_alternative<NetHeartbeat>(sessionPacket.message.payload) &&
@@ -9016,6 +9112,11 @@ namespace RTE {
 				}
 				if ((std::holds_alternative<NetLockstepRecoveryChunk>(decoded.packet.payload) || std::holds_alternative<NetLockstepTiming>(decoded.packet.payload)) && event.lane != NetTransportLane::ControlReliable) {
 					if (UsesTransportPeer(event.peerId)) Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "recovery input requires the reliable control lane");
+					return;
+				}
+				// A start or a stop may end or reshape the round; the simulation thread takes it.
+				if (m_PlaneTicking && (std::holds_alternative<NetLockstepStart>(decoded.packet.payload) || std::holds_alternative<NetLockstepStop>(decoded.packet.payload))) {
+					m_PlaneDeferredEvents.push_back(event);
 					return;
 				}
 				HandlePacket(decoded.packet, nowMs, event.peerId);

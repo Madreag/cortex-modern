@@ -7,12 +7,14 @@
 #include <algorithm>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -790,8 +792,45 @@ namespace RTE {
 		bool heldForReclaim = false;  //!< The seat is committed and may still come back.
 	};
 
+	class NetLockstepCoordinator;
+
+	/// The session plane: a thread that receives, relays and commits for the round's coordinator whenever the simulation thread is
+	/// busy past a tick inside a window it opened, so no peer waits on this machine's simulation for frames it never needed from it.
+	/// Every access to the targeted coordinator from any other thread holds Lock() while a window is open.
+	class NetLockstepPlane {
+	public:
+		/// Serializes the plane's ticks with every other access to the targeted coordinator. Recursive: a guarded call may call another.
+		static std::recursive_mutex& Lock();
+		/// Names the coordinator the plane ticks; nullptr stops it. The caller's own accesses are unaffected.
+		static void Target(NetLockstepCoordinator* coordinator);
+		/// Drops a coordinator that is going away, waiting out a tick in flight.
+		static void Forget(const NetLockstepCoordinator* coordinator);
+		/// How many plane ticks have run this process, for the harness.
+		static uint64_t Ticks();
+		/// Opens a stretch of the simulation thread in which the plane may tick; only guarded accesses happen inside it.
+		class Window {
+		public:
+			Window();
+			~Window();
+			Window(const Window&) = delete;
+			Window& operator=(const Window&) = delete;
+		};
+	};
+
+	/// Holds the plane's lock for a scope.
+	class NetLockstepPlaneGuard {
+	public:
+		NetLockstepPlaneGuard(): m_Lock(NetLockstepPlane::Lock()) {}
+	private:
+		std::lock_guard<std::recursive_mutex> m_Lock;
+	};
+
 	class NetLockstepCoordinator {
 	public:
+		NetLockstepCoordinator() = default;
+		~NetLockstepCoordinator();
+		NetLockstepCoordinator(const NetLockstepCoordinator&) = delete;
+		NetLockstepCoordinator& operator=(const NetLockstepCoordinator&) = delete;
 		bool Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
 		/// Starts in playback mode: no remotes, no handshake — every frame commits from the local
 		/// queue, which the replay reader feeds through QueueReplayFrame.
@@ -819,6 +858,11 @@ namespace RTE {
 		std::vector<NetResyncPendingCommand> CapturePendingCommands(uint64_t afterFrame) const;
 		std::vector<NetResyncPendingCommand> CapturePendingPlayerBindings(uint64_t afterFrame) const;
 		void Tick(uint64_t nowMs);
+		/// Whether the plane should tick for a simulation thread that has not ticked us for a tick.
+		bool PlaneShouldTick(uint64_t nowMs) const;
+		/// The plane's tick: receive, relay, commit and judge seats, off the simulation thread. Anything that calls out of the
+		/// coordinator (session traffic, transport lifecycle, migration, starts and stops) waits for the simulation thread's next tick.
+		void PlaneTick(uint64_t nowMs);
 
 		/// This machine's own measured start work, published so every peer judges us by it and not by theirs.
 		void NoteLocalStartPark(uint32_t restartMs);
@@ -1398,6 +1442,10 @@ namespace RTE {
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
+		std::atomic<uint64_t> m_SimTickedMs{0}; //!< The simulation thread's last Tick; the plane stands in once it is a tick old.
+		bool m_PlaneTicking = false; //!< Inside PlaneTick: events that call out of the coordinator are deferred.
+		std::vector<NetTransportEvent> m_PlaneDeferredEvents; //!< What the plane left for the simulation thread's next tick, in arrival order.
+		void HandleTransportEvents(uint64_t nowMs);
 		uint32_t m_LocalStartParkMs = 0; //!< Our own activity restart, as it goes out in our start.
 		uint8_t m_LocalDeviceClass = 0; //!< Our own seat device, as it goes out in our start.
 		std::array<uint8_t, 16> m_PeerDeviceClasses{}; //!< Host: each seat's device from its latest start.
