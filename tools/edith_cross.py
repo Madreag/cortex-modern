@@ -409,17 +409,18 @@ def pump_frames(connection, deliver, counts, key):
         return
 
 
-def bridge_edith(udp_port=None, tcp_port=None):
-    """Runs on EDITH in the ssh session: the engine's TURN socket talks UDP to 127.0.0.1:<udp_port>; each source address
+def bridge_edith(bind, udp_port=None, tcp_port=None):
+    """Runs on EDITH in the ssh session: the engine's TURN socket talks UDP to <bind>:<udp_port> (EDITH's own LAN address:
+    the ICE sockets are bound to interface addresses, so a loopback TURN server is never tried); each source address
     gets its own TCP stream through the ssh -R forward to this box's end, which speaks UDP to the TURN server."""
     import socket
     import struct
     import threading
     udp_port, tcp_port = udp_port or BRIDGE_UDP, tcp_port or EDITH_TCP[BRIDGE_TCP]
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('127.0.0.1', udp_port))
+    sock.bind((bind, udp_port))
     flows, counts = {}, dict(up=0, down=0, flows=0)
-    print(f'{stamp()} bridge listening udp 127.0.0.1:{udp_port} -> tcp 127.0.0.1:{tcp_port}', flush=True)
+    print(f'{stamp()} bridge listening udp {bind}:{udp_port} -> tcp 127.0.0.1:{tcp_port}', flush=True)
     last = time.monotonic()
     while True:
         try:
@@ -443,7 +444,7 @@ def bridge_edith(udp_port=None, tcp_port=None):
 class BridgeHere:
     """This box's end of the relay bridge: each tunnel stream becomes one UDP flow to the TURN server."""
 
-    def __init__(self, turn_url, log_path):
+    def __init__(self, turn_url, log_path, bind):
         import socket
         host, port = re.match(r'turn:([^:?]+):(\d+)', turn_url).groups()
         self.target, self.log_path = (host, int(port)), Path(log_path)
@@ -452,7 +453,7 @@ class BridgeHere:
         self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.listener.bind(('127.0.0.1', BRIDGE_TCP))
         self.listener.listen(8)
-        self.remote = None
+        self.remote, self.bind = None, bind
 
     def serve(self):
         import socket
@@ -482,7 +483,7 @@ class BridgeHere:
     def open(self):
         import threading
         threading.Thread(target=self.serve, daemon=True).start()
-        argv = ['ssh', 'edith', f"python '{(PAYLOAD / 'edith_cross.py').as_posix()}' --bridge-edith"]
+        argv = ['ssh', 'edith', f"python '{(PAYLOAD / 'edith_cross.py').as_posix()}' --bridge-edith --bridge-bind {self.bind}"]
         self.remote = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'), stderr=subprocess.STDOUT,
                                        creationflags=subprocess.CREATE_NO_WINDOW)
         time.sleep(4)
@@ -829,6 +830,7 @@ def parse_args(argv=None):
     parser.add_argument('--reanalyze', type=Path, help='re-reduce one fetched match directory (no launch)')
     parser.add_argument('--remote-peer', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--bridge-edith', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--bridge-bind', default='', help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
     if options.remote_peer is None and not options.bridge_edith and options.reanalyze is None:
         if options.relay_bridge and options.path != 'relay':
@@ -849,7 +851,7 @@ def main(argv=None):
     if options.remote_peer is not None:
         return remote_peer(options.remote_peer)
     if options.bridge_edith:
-        return bridge_edith()
+        return bridge_edith(options.bridge_bind)
     if options.reanalyze is not None:
         root = options.reanalyze.resolve()
         return 0 if analyze_match(harness(HERE), root, read_json(root / 'manifest.json'))['passed'] else 1
@@ -882,11 +884,12 @@ def main(argv=None):
         if tunnel:
             tunnel.open()
         if options.relay_bridge:
-            TURN['edith'] = f'turn:127.0.0.1:{BRIDGE_UDP}?transport=udp'
+            lan = '192.168.3.55' if DRY_RUN else ssh('(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address.IPAddress').strip()
+            TURN['edith'] = f'turn:{lan}:{BRIDGE_UDP}?transport=udp'
             if DRY_RUN:
-                say(f'dry-run: relay bridge EDITH udp 127.0.0.1:{BRIDGE_UDP} -> ssh -R tcp {BRIDGE_TCP} -> {TURN["here"]}')
+                say(f'dry-run: relay bridge EDITH udp {lan}:{BRIDGE_UDP} -> ssh -R tcp {BRIDGE_TCP} -> {TURN["here"]}')
             else:
-                bridge = BridgeHere(TURN['here'], options.out.resolve() / f'bridge-{label}.log')
+                bridge = BridgeHere(TURN['here'], options.out.resolve() / f'bridge-{label}.log', lan)
                 bridge.open()
         for index in range(1, options.runs + 1):
             if not DRY_RUN and not wait_box(options.box_wait):
