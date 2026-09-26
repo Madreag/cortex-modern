@@ -1053,6 +1053,8 @@ namespace RTE {
 		bool IsOwnHostSeatHeld() const;
 		/// The frame the host held this peer's seat from; 0 when the hold was not taken on the wire (a closed link).
 		uint64_t GetLocalHoldFrame() const { NET_PLANE_CHECK(); return m_LocalHoldFrame; }
+		/// Whether the host held this seat at or after a frame: a hold this round took, or one still waiting for its start.
+		bool HeldLocalSeatSince(uint64_t frame) const;
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
@@ -1217,6 +1219,7 @@ namespace RTE {
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
+		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);

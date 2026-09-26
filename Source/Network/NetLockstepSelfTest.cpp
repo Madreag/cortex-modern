@@ -73,6 +73,7 @@ namespace RTE {
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
+	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -19617,6 +19618,36 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error) {
+		NetLockstepCoordinator returner;
+		auto config = MakeCoordinatorConfig(2, 1, 0x9A13, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 644; config.roundId = 37; config.joinsRunningRound = true;
+		returner.m_Config = config;
+		returner.m_State = NetLockstepState::WaitingForStart;
+		returner.m_RoundId = 37;
+		const auto hold = [&](uint64_t frame) {
+			NetLockstepTiming timing;
+			timing.senderPeerId = 1; timing.peerId = 2; timing.action = NetTimingAction::Hold; timing.phase = NetTimingPhase::HoldAtFrame;
+			timing.sessionId = config.sessionId; timing.roundId = 37; timing.revision = frame;
+			timing.applyFrame = timing.cutoffFrame = frame; timing.heldPeers = 1U << 1; timing.seatIncarnations[1] = 2;
+			return timing;
+		};
+		// The hold the return at 644 ends is not a new one; the hold at 650 takes that return back.
+		returner.m_PreStartTiming.emplace_back(hold(525), 7);
+		const bool before = returner.HeldLocalSeatSince(644);
+		returner.m_PreStartTiming.emplace_back(hold(650), 7);
+		const bool waiting = returner.HeldLocalSeatSince(644);
+		returner.m_PreStartTiming.clear();
+		returner.m_LocalSeatHeld = true; returner.m_LocalHoldFrame = 650;
+		const bool taken = returner.HeldLocalSeatSince(644);
+		if (before || !waiting || !taken) {
+			*error = "a-returner-sees-its-seat-held-again-before-its-start: returning at 644, held at 525 read " + std::to_string(before) + ", a hold at 650 waiting for the start read " +
+			         std::to_string(waiting) + ", taken read " + std::to_string(taken) + "; expected 0, 1, 1";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -20425,6 +20456,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
+		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
 		    !TestASurvivorsRunwayIsTheRounds(&error) ||
 		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
 		    !TestNoSeatIsJudgedPastTheLastTick(&error) ||

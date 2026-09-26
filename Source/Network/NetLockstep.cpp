@@ -6032,7 +6032,22 @@ namespace RTE {
 		m_RemoteStartsReceived.insert(peer);
 	}
 
+	bool NetLockstepCoordinator::HeldLocalSeatSince(uint64_t frame) const {
+		NET_PLANE_CHECK();
+		if (m_Config.localPeerId == GetHostPeerId()) return false;
+		if (m_LocalSeatHeld && m_LocalHoldFrame >= frame) return true;
+		const uint32_t local = 1U << (m_Config.localPeerId - 1);
+		return std::any_of(m_PreStartTiming.begin(), m_PreStartTiming.end(), [&](const auto& pending) {
+			const NetLockstepTiming& timing = pending.first;
+			return timing.phase == NetTimingPhase::HoldAtFrame && (timing.heldPeers & local) != 0 && timing.senderPeerId == GetHostPeerId() && timing.applyFrame >= frame;
+		});
+	}
+
 	void NetLockstepCoordinator::HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport) {
+		if (timing.phase == NetTimingPhase::HoldAtFrame && m_Config.localPeerId != GetHostPeerId() && (timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0)
+			std::cout << "[net-lockstep] hold of this seat at " << timing.applyFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[m_Config.localPeerId - 1]
+			          << " state=" << StateName(m_State) << " known_incarnation=" << m_Config.peerIncarnations[m_Config.localPeerId] << " next=" << m_Stats.nextFrame
+			          << " round_ok=" << (timing.roundId == m_RoundId) << " clock=" << NetLockstepSharedClockMs() << std::endl;
 		// A hold or a return that lands by a joining round's first frame is taken at once, even before the round runs: the starts
 		// the handshake waits for depend on it, and nothing later in the round revisits a frame behind its first.
 		if (m_Config.joinsRunningRound && timing.applyFrame <= m_Config.startFrame &&
