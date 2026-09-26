@@ -217,8 +217,12 @@ def _interrupt(signum, _frame):
     raise Interrupted(signal.Signals(signum).name)
 
 
-def engines_running():
-    """Every engine process on the box as name:pid, or None when the process list cannot be read."""
+# A compiler or linker loads the box as much as another engine does.
+BUILD_PROCESSES = {"cl.exe", "link.exe", "cc1", "cc1plus", "clang", "clang++", "ld", "ninja"}
+
+
+def load_processes():
+    """The engines and the builds running on the box as name:pid lists, or None when the process list cannot be read."""
     try:
         if sys.platform == "win32":
             listing = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=60).stdout
@@ -228,26 +232,28 @@ def engines_running():
             rows = [(Path(comm.strip()).name, pid) for pid, _, comm in (line.strip().partition(" ") for line in listing.splitlines())]
     except (OSError, subprocess.SubprocessError):
         return None
-    return [f"{name}:{pid}" for name, pid in rows if name.lower().startswith("cortex command") or name == "CortexCommand"]
+    return {"engines": [f"{name}:{pid}" for name, pid in rows if name.lower().startswith("cortex command") or name == "CortexCommand"],
+            "builds": [f"{name}:{pid}" for name, pid in rows if name.lower() in BUILD_PROCESSES]}
 
 
 def box_state():
-    state = {"engines": engines_running()}
+    state = load_processes() or {"engines": None, "builds": None}
     if hasattr(os, "getloadavg"):
         state["load"] = [round(value, 2) for value in os.getloadavg()]
     return state
 
 
 def wait_for_quiet_box(limit_s=QUIET_WAIT_S, poll_s=5.0):
-    """Waits until no engine runs on the box (other lanes' included), up to limit_s; the rerun starts either way."""
+    """Waits until no engine and no build runs on the box (other lanes' included), up to limit_s; the rerun starts either way."""
     start = time.monotonic()
     while True:
         state = box_state()
         state["waited_s"] = round(time.monotonic() - start, 1)
         if state["engines"] is None:
             return {**state, "quiet": None}
-        if not state["engines"] or state["waited_s"] >= limit_s:
-            return {**state, "quiet": not state["engines"]}
+        busy = state["engines"] or state["builds"]
+        if not busy or state["waited_s"] >= limit_s:
+            return {**state, "quiet": not busy}
         time.sleep(poll_s)
 
 
