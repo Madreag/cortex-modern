@@ -1008,6 +1008,14 @@ namespace RTE {
 		}
 	}
 
+	bool NetWorldFrameLog::AdoptRecords(const NetWorldFrameLog& other) {
+		if (!m_Records.empty()) return false;
+		m_Records = other.m_Records;
+		m_Bytes = other.m_Bytes;
+		Trim();
+		return true;
+	}
+
 	void NetWorldFrameLog::Clear() {
 		m_Journal.reset();
 		m_JournalFirst = m_JournalLast = 0;
