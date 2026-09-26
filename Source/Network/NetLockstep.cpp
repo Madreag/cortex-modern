@@ -33,6 +33,24 @@ namespace RTE {
 		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - base).count());
 	}
 
+	std::vector<const ControllerFrame*> CommittedControllerFramesInSenderOrder(const NetLockstepReadyFrame& ready) {
+		std::vector<const ControllerFrame*> ordered;
+		ordered.reserve(ready.localFrames.size() + ready.remoteFrames.size());
+		bool localPlaced = false;
+		const auto placeLocal = [&] {
+			for (const ControllerFrame& frame: ready.localFrames) ordered.push_back(&frame);
+			localPlaced = true;
+		};
+		size_t offset = 0;
+		for (const auto& [peer, count]: ready.remoteFrameCounts) {
+			if (!localPlaced && peer > ready.localPeerId) placeLocal();
+			for (size_t index = 0; index < count && offset < ready.remoteFrames.size(); ++index) ordered.push_back(&ready.remoteFrames[offset++]);
+		}
+		if (!localPlaced) placeLocal();
+		while (offset < ready.remoteFrames.size()) ordered.push_back(&ready.remoteFrames[offset++]);
+		return ordered;
+	}
+
 	uint64_t NetLockstepSharedClockMs() {
 		// The machine's monotonic clock, the same in every process on it, for diagnostics that compare peers.
 		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -10662,6 +10680,7 @@ namespace RTE {
 			m_FirstMissingFrame.reset();
 			NetLockstepReadyFrame ready;
 			ready.frame = m_Stats.nextFrame;
+			ready.localPeerId = m_Config.localPeerId;
 			if (localIt != m_LocalFrames.end()) {
 				ready.hasLocalInput = true;
 				if (m_Playback || !IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localFrames = std::move(localIt->second);

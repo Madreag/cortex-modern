@@ -527,26 +527,6 @@ static std::vector<ControllerFrame> SnapshotLockstepControllerFrames(const std::
 	return frames;
 }
 
-// A committed frame's inputs in the order every peer applies them: by sender, this peer's own at its place among the others.
-static std::vector<const ControllerFrame*> CommittedFramesInSenderOrder(const NetLockstepReadyFrame& ready) {
-	std::vector<const ControllerFrame*> ordered;
-	ordered.reserve(ready.localFrames.size() + ready.remoteFrames.size());
-	const uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();
-	bool localPlaced = false;
-	const auto placeLocal = [&] {
-		for (const ControllerFrame& frame: ready.localFrames) ordered.push_back(&frame);
-		localPlaced = true;
-	};
-	size_t offset = 0;
-	for (const auto& [peer, count]: ready.remoteFrameCounts) {
-		if (!localPlaced && peer > localPeer) placeLocal();
-		for (size_t index = 0; index < count && offset < ready.remoteFrames.size(); ++index) ordered.push_back(&ready.remoteFrames[offset++]);
-	}
-	if (!localPlaced) placeLocal();
-	while (offset < ready.remoteFrames.size()) ordered.push_back(&ready.remoteFrames[offset++]);
-	return ordered;
-}
-
 // Every committed input drives its actor on every peer, whoever produces that actor now: a producer that changed inside the delay
 // window still sent what it produced, and a peer that dropped its own copy for that would be the only one to.
 static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& actors, const std::vector<const ControllerFrame*>& frames, std::unordered_set<int64_t>& applied, std::string& error) {
@@ -7285,7 +7265,7 @@ void MovableMan::UpdateControllers() {
 		}
 		std::unordered_set<int64_t> applied;
 		ApplyLockstepSeatReclaims(readyFrame, m_Actors);
-		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedFramesInSenderOrder(readyFrame), applied, error)) {
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedControllerFramesInSenderOrder(readyFrame), applied, error)) {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " world catch-up apply: " + error);
 			return;
 		}
@@ -7326,7 +7306,7 @@ void MovableMan::UpdateControllers() {
 		}
 		std::unordered_set<int64_t> applied;
 		ApplyLockstepSeatReclaims(readyFrame, m_Actors);
-		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedFramesInSenderOrder(readyFrame), applied, error)) {
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedControllerFramesInSenderOrder(readyFrame), applied, error)) {
 			DumpControllerDebugSnapshot("lockstep_apply_error", simTick, m_Actors, &readyFrame.remoteFrames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep apply: " + error);
 			return;
