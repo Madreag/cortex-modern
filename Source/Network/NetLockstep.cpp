@@ -8441,6 +8441,15 @@ namespace RTE {
 		return true;
 	}
 
+	void NetLockstepCoordinator::RememberCommittedFrame(const NetLockstepReadyFrame& ready) {
+		m_ReadyHistory[ready.frame] = ready;
+		// The history keeps its last frames, and never one the simulation has not yet finished: a simulation behind its commits
+		// still reads the frame it last took at that tick's end, however far the round has committed meanwhile.
+		while (m_ReadyHistory.size() > 180 && m_LastDeliveredFrame && m_ReadyHistory.begin()->first < *m_LastDeliveredFrame) {
+			m_ReadyHistory.erase(m_ReadyHistory.begin());
+		}
+	}
+
 	void NetLockstepCoordinator::RememberAppliedFrameInputs(const NetLockstepReadyFrame& ready) {
 		NET_PLANE_CHECK();
 		if (!m_LastDeliveredFrame || ready.frame != *m_LastDeliveredFrame) return;
@@ -10940,10 +10949,7 @@ namespace RTE {
 				commands.push_back(NetGameCommand{GetHostPeerId(), reclaim});
 				if (reclaim.worldTransition) commands.push_back(NetGameCommand{GetHostPeerId(), *reclaim.worldTransition});
 			}
-			m_ReadyHistory[ready.frame] = ready;
-			while (m_ReadyHistory.size() > 180) {
-				m_ReadyHistory.erase(m_ReadyHistory.begin());
-			}
+			RememberCommittedFrame(ready);
 			m_ReadyFrames.push_back(std::move(ready));
 			m_HostAcceptedLocalFrames.erase(m_Stats.nextFrame);
 			if (UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
