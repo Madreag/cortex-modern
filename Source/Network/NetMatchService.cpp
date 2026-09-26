@@ -1010,6 +1010,8 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::CanResyncMatch() const {
+		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
+		NetLockstepPlane::Gap plane("repair availability");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_State == NetMatchServiceState::Running && ActiveWireLocked() && m_Session && m_Runner &&
 		       m_Session->IsReady() && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->HasPendingRecoveryStop() &&
@@ -1017,6 +1019,8 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::RequestHostRepair(std::string* error) {
+		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
+		NetLockstepPlane::Gap plane("host repair");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		auto refuse = [error](const char* reason) {
 			if (error) *error = reason;
@@ -1045,6 +1049,8 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const {
+		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
+		NetLockstepPlane::Gap plane("repair status");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		const bool queued = m_HostRepairPending && m_State == NetMatchServiceState::Running && m_Coordinator && !m_HostRepairDeferred &&
 		                    m_Coordinator->IsRunning() && m_Coordinator->HasPendingRecoveryStop();
@@ -2269,6 +2275,8 @@ static std::string ResyncSaveName() {
 
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
+		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
+		NetLockstepPlane::Gap plane("finish match");
 		std::string displayResult = result;
 		bool heldSeatNeedsAnswer = false;
 		{
@@ -6556,6 +6564,8 @@ static std::string ResyncSaveName() {
 	}
 
 	NetLobbySnapshot NetMatchService::GetLobbySnapshot() const {
+		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
+		NetLockstepPlane::Gap plane("lobby snapshot");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		NetLobbySnapshot snapshot = m_LobbySnapshot;
 		snapshot.hostPeerId = m_Coordinator ? m_Coordinator->GetHostPeerId() : m_MigrationAuthority != 0 ? m_MigrationAuthority
@@ -6673,6 +6683,8 @@ static std::string ResyncSaveName() {
 	}
 
 	NetMatchConfig NetMatchService::GetLobbyMatchConfig() const {
+		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
+		NetLockstepPlane::Gap plane("lobby match config");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_Coordinator && m_State == NetMatchServiceState::Running) return m_Coordinator->GetConfig().matchConfig;
 		// A lobby publish names the agreed config on every peer; before one arrives the request's
@@ -7101,6 +7113,8 @@ static std::string ResyncSaveName() {
 	}
 
 	std::string NetMatchService::GetInputDelayText() const {
+		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
+		NetLockstepPlane::Gap plane("input delay text");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return LiveInputDelayTextLocked();
 	}
