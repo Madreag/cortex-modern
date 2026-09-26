@@ -145,7 +145,25 @@ int SoundContainer::Create(const SoundContainer& reference) {
 	m_Paused = reference.m_Paused;
 	m_MusicPreEntryTime = reference.m_MusicPreEntryTime;
 	m_MusicExitTime = reference.m_MusicExitTime;
-	if (Entity::IsCheckpointClone()) {
+	if (MovableObject::FaithfulCloneForPreview()) {
+		// A preview's clone takes the checkpoint's state field by field; the text round trip is for images.
+		if (!reference.m_CheckpointIdentity) throw std::runtime_error("could not clone sound container checkpoint");
+		m_CopiedFromPresetName = reference.m_CopiedFromPresetName;
+		m_FormattedReaderPosition = reference.m_FormattedReaderPosition;
+		m_IsOriginalPreset = reference.m_IsOriginalPreset;
+		const std::set<std::string> groups(reference.m_Groups.begin(), reference.m_Groups.end());
+		m_Groups.clear();
+		m_Groups.insert(groups.begin(), groups.end());
+		ReidentifyCheckpoint(reference.m_CheckpointIdentity);
+		std::set<int> playing;
+		for (int identity: reference.m_PlayingChannels) {
+			if (!g_AudioMan.IsPredictedVoice(identity)) playing.insert(identity);
+		}
+		m_PlayingChannels.insert(playing.begin(), playing.end());
+		m_SoundPropertiesUpToDate = reference.m_SoundPropertiesUpToDate;
+		m_LogicalPlayback = reference.m_LogicalPlayback;
+		g_AudioMan.RefreshLogicalSound(this);
+	} else if (Entity::IsCheckpointClone()) {
 		if (!LoadCheckpoint(reference.SaveCheckpoint())) throw std::runtime_error("could not clone sound container checkpoint");
 	}
 

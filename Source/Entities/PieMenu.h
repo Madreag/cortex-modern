@@ -423,6 +423,8 @@ namespace RTE {
 		std::string m_PersistedRuntime;
 		std::string SaveRuntimeCheckpoint() const;
 		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false);
+		/// What LoadRuntimeCheckpoint(reference.SaveRuntimeCheckpoint()) leaves, copied field by field for a preview's clone.
+		void CopyRuntimeForPreview(const PieMenu& reference);
 		bool m_BGBitmapNeedsRedrawing; //!< Whether the BG bitmap should be redrawn during the next Update call.
 		bool m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing; //!< Whether the BG bitmap for PieSlices with sub-PieMenus should be redrawn when the BGBitmap is redrawn.
 
