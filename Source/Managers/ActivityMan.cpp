@@ -2224,7 +2224,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 const std::vector<ActivityMan::RuntimeManagerSaver>& ActivityMan::RuntimeManagerSavers() {
 	// The camera is each machine's own screens; the two inputs are what a network restore keeps from the local machine; the
 	// post effects are dropped at the first sim update after each drawn frame, so they follow this machine's drawing; the
-	// GUI sounds play this machine's own interface.
+	// GUI sounds play this machine's own interface. The seats' committed input is what the round's scripts read on every peer.
 	static const std::vector<RuntimeManagerSaver> savers = {
 		{"movable", [] { return g_MovableMan.SaveCheckpoint(); }, CheckpointScope::Shared},
 		{"scene", [] { return g_SceneMan.SaveCheckpoint(); }, CheckpointScope::Shared},
@@ -2236,6 +2236,7 @@ const std::vector<ActivityMan::RuntimeManagerSaver>& ActivityMan::RuntimeManager
 		{"primitives", [] { return g_PrimitiveMan.SaveCheckpoint(); }, CheckpointScope::Shared},
 		{"gui_sound", [] { return g_GUISound.SaveCheckpoint(); }, CheckpointScope::PerPeer},
 		{"music", [] { return g_MusicMan.SaveCheckpoint(); }, CheckpointScope::Shared},
+		{"committed_seats", [] { return g_UInputMan.SaveCommittedSeats(); }, CheckpointScope::Shared},
 	};
 	return savers;
 }
@@ -2248,7 +2249,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
 	if (collectGarbage) g_LuaMan.CollectGarbageForCheckpoint();
 	if (sections && !managerParts) throw std::logic_error("the runtime globals' sections need the manager parts");
-	CheckpointWriter writer("RuntimeGlobals9");
+	CheckpointWriter writer("RuntimeGlobals10");
 	const auto record = [&](const char* name, const std::function<void()>& capture) {
 		const auto start = std::chrono::steady_clock::now();
 		capture();
@@ -2301,6 +2302,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 		record("primitives", [&] { writer(CheckpointWriter::Native([] { return g_PrimitiveMan.SaveCheckpoint(); })); });
 		record("gui_sound", [&] { writer(CheckpointWriter::Native([] { return g_GUISound.SaveCheckpoint(); })); });
 		record("music", [&] { writer(CheckpointWriter::Native([] { return g_MusicMan.SaveCheckpoint(); })); });
+		record("committed_seats", [&] { writer(CheckpointWriter::Native([] { return g_UInputMan.SaveCommittedSeats(); })); });
 	}
 	record("audio", [&] {
 		// Audio read earlier in the capture is written the same way once its sound owners are known.
@@ -2333,7 +2335,8 @@ bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly
 		const bool version6 = text.starts_with("15 RuntimeGlobals6 ");
 		const bool version7 = text.starts_with("15 RuntimeGlobals7 ");
 		const bool version8 = text.starts_with("15 RuntimeGlobals8 ");
-		CheckpointReader reader(text, legacy ? "RuntimeGlobals1" : version2 ? "RuntimeGlobals2" : version3 ? "RuntimeGlobals3" : version4 ? "RuntimeGlobals4" : version5 ? "RuntimeGlobals5" : version6 ? "RuntimeGlobals6" : version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : "RuntimeGlobals9", validateOnly);
+		const bool version9 = text.starts_with("15 RuntimeGlobals9 ");
+		CheckpointReader reader(text, legacy ? "RuntimeGlobals1" : version2 ? "RuntimeGlobals2" : version3 ? "RuntimeGlobals3" : version4 ? "RuntimeGlobals4" : version5 ? "RuntimeGlobals5" : version6 ? "RuntimeGlobals6" : version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : "RuntimeGlobals10", validateOnly);
 		std::string simState, renderState;
 		reader.Value(simState); reader.Value(renderState);
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
@@ -2370,6 +2373,12 @@ bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly
 				reader.Value(music);
 				if (!g_MusicMan.LoadCheckpoint(music, true)) throw std::runtime_error("invalid MusicMan checkpoint");
 			}
+			if (hasGUI && !version9) {
+				std::string seats;
+				reader.Value(seats);
+				if (!g_UInputMan.LoadCommittedSeats(seats, true)) throw std::runtime_error("invalid committed seats checkpoint");
+				reader.OnCommit([seats] { if (!g_UInputMan.LoadCommittedSeats(seats)) throw std::runtime_error("could not restore committed seats checkpoint"); });
+			}
 			std::string audio; reader.Value(audio);
 			std::string audioRefusal;
 			if (!g_AudioMan.LoadCheckpoint(audio, true, nullptr, &audioRefusal)) throw std::runtime_error("invalid AudioMan checkpoint: " + audioRefusal);
@@ -2395,9 +2404,9 @@ bool ActivityMan::PrepareCheckpointMaterials(std::string_view runtimeGlobals) {
 	if (runtimeGlobals.empty()) return true;
 	try {
 		std::string version;
-		for (int number = 1; number <= 9; ++number) {
+		for (int number = 1; number <= 10; ++number) {
 			const std::string candidate = "RuntimeGlobals" + std::to_string(number);
-			if (runtimeGlobals.starts_with("15 " + candidate + " ")) { version = candidate; break; }
+			if (runtimeGlobals.starts_with(std::to_string(candidate.size()) + " " + candidate + " ")) { version = candidate; break; }
 		}
 		if (version.empty()) return false;
 		CheckpointReader reader(runtimeGlobals, version, true);
@@ -2412,9 +2421,10 @@ bool ActivityMan::PrepareCheckpointPrimitives(std::string_view runtimeGlobals) {
 	const bool version7 = runtimeGlobals.starts_with("15 RuntimeGlobals7 ");
 	const bool version8 = runtimeGlobals.starts_with("15 RuntimeGlobals8 ");
 	const bool version9 = runtimeGlobals.starts_with("15 RuntimeGlobals9 ");
-	if (!version7 && !version8 && !version9) return true;
+	const bool version10 = runtimeGlobals.starts_with("16 RuntimeGlobals10 ");
+	if (!version7 && !version8 && !version9 && !version10) return true;
 	try {
-		CheckpointReader reader(runtimeGlobals, version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : "RuntimeGlobals9", true);
+		CheckpointReader reader(runtimeGlobals, version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : "RuntimeGlobals10", true);
 		std::string state;
 		for (int field = 0; field < 9; ++field) reader.Value(state); // RNGs, five managers and two default-activity names.
 		bool flag;
@@ -2499,7 +2509,7 @@ bool ActivityMan::RestartActivity() {
 		if (committedImages) committedImages->Commit();
 		PendingCheckpoint completed = std::move(m_PendingCheckpoint);
 		m_PendingCheckpoint = PendingCheckpoint{};
-		if (!completed.runtimeGlobals.starts_with("15 RuntimeGlobals5 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals6 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals7 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals8 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals9 ")) {
+		if (!completed.runtimeGlobals.starts_with("15 RuntimeGlobals5 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals6 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals7 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals8 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals9 ") && !completed.runtimeGlobals.starts_with("16 RuntimeGlobals10 ")) {
 			g_AudioMan.StopAll();
 			g_MusicMan.ResetMusicState();
 			g_AudioMan.PauseIngameSounds(m_Activity && m_Activity->IsPaused());
