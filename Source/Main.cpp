@@ -3209,6 +3209,8 @@ static void PollStallEventsForCapture() {
 }
 
 static void DrawFrameWithPreviews() {
+	// Only the named stretches below leave the round to the plane: the rest of the draw reads the round and the match service unguarded.
+	NetLockstepPlane::Gap body;
 	if (!FrameMan::FeelBeginDraw()) return;
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
@@ -3237,23 +3239,24 @@ static void DrawFrameWithPreviews() {
 		g_MenuMan.DrawLocalPauseMenu();
 	}
 	FrameMan::FeelBeforePresent();
-	if (s_drawStallMs > 0 && !s_drawStallFired && g_TimerMan.GetSimUpdateCount() >= s_drawStallTick) {
-		// A present the driver holds: the main thread is away inside the frame's draw, not its simulation.
-		s_drawStallFired = true;
-		System::PrintDiagnosticLine("[selftest] draw stall tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(s_drawStallMs));
-		const uint64_t planeTicksBefore = NetLockstepPlane::Ticks();
-		std::this_thread::sleep_for(std::chrono::milliseconds(s_drawStallMs));
-		System::PrintDiagnosticLine("[selftest] draw stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
-	}
 	{
 		NetLockstepPlane::Window present("present");
+		if (s_drawStallMs > 0 && !s_drawStallFired && g_TimerMan.GetSimUpdateCount() >= s_drawStallTick) {
+			// A present the driver holds: the main thread is away inside the frame's draw, not its simulation.
+			s_drawStallFired = true;
+			System::PrintDiagnosticLine("[selftest] draw stall tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(s_drawStallMs));
+			const uint64_t planeTicksBefore = NetLockstepPlane::Ticks();
+			std::this_thread::sleep_for(std::chrono::milliseconds(s_drawStallMs));
+			System::PrintDiagnosticLine("[selftest] draw stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
+		}
 		g_WindowMan.UploadFrame();
 	}
 	g_FrameMan.FeelAfterPresent();
 	if (FrameRecorder::Instance().Enabled()) {
 		const std::string serviceState = [] { NetLockstepPlane::Gap plane("recorder's service state"); return g_NetMatchService.GetLobbySnapshot().serviceState; }();
+		const std::string screen = RecordedScreenName();
 		NetLockstepPlane::Window recorder("recorder");
-		g_FrameMan.RecordVideoFrame(RecordedScreenName(), serviceState);
+		g_FrameMan.RecordVideoFrame(screen, serviceState);
 	}
 	if (NetMatchScreenshotDue()) {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
