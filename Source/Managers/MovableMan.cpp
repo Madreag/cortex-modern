@@ -7265,7 +7265,7 @@ void MovableMan::UpdateControllers() {
 		}
 		std::unordered_set<int64_t> applied;
 		ApplyLockstepSeatReclaims(readyFrame, m_Actors);
-		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedControllerFramesInSenderOrder(readyFrame), applied, error)) {
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedControllerFramesInSenderOrder(readyFrame, ScenarioRunner::GetLockstepLocalPeerId()), applied, error)) {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " world catch-up apply: " + error);
 			return;
 		}
@@ -7306,7 +7306,7 @@ void MovableMan::UpdateControllers() {
 		}
 		std::unordered_set<int64_t> applied;
 		ApplyLockstepSeatReclaims(readyFrame, m_Actors);
-		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedControllerFramesInSenderOrder(readyFrame), applied, error)) {
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, CommittedControllerFramesInSenderOrder(readyFrame, ScenarioRunner::GetLockstepLocalPeerId()), applied, error)) {
 			DumpControllerDebugSnapshot("lockstep_apply_error", simTick, m_Actors, &readyFrame.remoteFrames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep apply: " + error);
 			return;
