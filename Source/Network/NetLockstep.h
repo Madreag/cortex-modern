@@ -801,8 +801,9 @@ namespace RTE {
 	class NetLockstepCoordinator;
 
 	/// The session plane: a thread that receives, relays and commits for the round's coordinator whenever the simulation thread is
-	/// busy past a tick inside a window it opened, so no peer waits on this machine's simulation for frames it never needed from it.
-	/// Every access to the targeted coordinator from any other thread holds Lock() while a window is open.
+	/// busy past a tick inside a window it opened and outside every gap, so no peer waits on this machine's simulation for frames it
+	/// never needed from it. Every access to the targeted coordinator from any other thread holds Lock() while the plane may tick.
+	/// Windows and gaps belong to the simulation thread: one opened elsewhere is refused and, with the checks armed, trips them.
 	class NetLockstepPlane {
 	public:
 		/// Serializes the plane's ticks with every other access to the targeted coordinator. Recursive: a guarded call may call another.
@@ -829,7 +830,7 @@ namespace RTE {
 		static int& LockDepth();
 		/// Records an access to a coordinator from a thread that does not hold Lock() while a window is open on the targeted coordinator.
 		static void Check(const void* coordinator, const char* where);
-		/// Opens a stretch of the simulation thread in which the plane may tick; only guarded accesses happen inside it.
+		/// Opens a stretch of the simulation thread in which the plane may tick unless a gap is open; only guarded accesses happen inside it.
 		/// A window closing on accesses that broke the rule stops the process when the checks are armed.
 		class Window {
 		public:
@@ -839,12 +840,14 @@ namespace RTE {
 			Window(const Window&) = delete;
 			Window& operator=(const Window&) = delete;
 		private:
+			bool m_Counted = false;
 			const char* m_Name = nullptr;
 			uint64_t m_OpenedMs = 0;
 			uint64_t m_TicksAtOpen = 0;
 		};
-		/// Closes every open window for a stretch that reaches the coordinator through code that does not take the lock, such as the
-		/// match service; a tick in flight finishes first, and the windows reopen when it ends. Holds no lock while it lasts.
+		/// Keeps the plane from ticking for a stretch that reaches the coordinator through code that does not take the lock, such as the
+		/// match service, whatever windows open and close inside it; a tick in flight finishes first, and the plane may tick again once
+		/// every gap has ended and a window is open. Holds no lock while it lasts.
 		class Gap {
 		public:
 			/// A named gap says how long it lasted when that was a quarter second or more.
@@ -853,7 +856,8 @@ namespace RTE {
 			Gap(const Gap&) = delete;
 			Gap& operator=(const Gap&) = delete;
 		private:
-			int m_Closed = 0;
+			bool m_Counted = false;
+			bool m_ClosedWindow = false;
 			const char* m_Name = nullptr;
 			uint64_t m_OpenedMs = 0;
 		};
