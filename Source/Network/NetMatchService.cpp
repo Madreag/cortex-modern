@@ -3287,7 +3287,7 @@ static std::string ResyncSaveName() {
 				m_ScheduledCaptures.insert(takenAt);
 				if (m_Coordinator) m_Coordinator->NoteAnnouncedCapture(takenAt);
 				// The writers report the tick they took, so that is the capture the host waits on.
-				if (m_IsHost && note.tick == m_OpenCaptureTick) m_OpenCaptureTick = takenAt;
+				if (m_IsHost && note.tick == m_OpenCaptureTick) { m_OpenCaptureTick = takenAt; m_OpenCaptureApplied = true; }
 			} else if (note.kind == NetGameCheckpoint::Written && m_IsHost && note.tick == m_OpenCaptureTick) {
 				m_CaptureWriters.erase(note.sender);
 			}
@@ -3299,6 +3299,13 @@ static std::string ResyncSaveName() {
 			output.capture = true;
 		}
 		if (!m_IsHost) return output;
+		// A capture whose tick passed without reaching the stream rode a frame the round never played (the host's own, while its seat
+		// was held): no writer takes it, so the schedule names the next one instead of waiting on it for the rest of the round.
+		if (m_OpenCaptureTick != 0 && !m_OpenCaptureApplied && input.tick > m_OpenCaptureTick) {
+			System::PrintDiagnosticLine(std::format("[autosave] named tick={} never reached the stream; naming the next", m_OpenCaptureTick));
+			m_OpenCaptureTick = 0;
+			m_CaptureWriters.clear();
+		}
 		for (auto writer = m_CaptureWriters.begin(); writer != m_CaptureWriters.end();) {
 			writer = input.writers.contains(*writer) ? std::next(writer) : m_CaptureWriters.erase(writer);
 		}
@@ -3314,7 +3321,7 @@ static std::string ResyncSaveName() {
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
 		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
 		// reaches a writer and the schedule would wait on it for the rest of the round.
-		if (input.activationPending || input.startupPending) return output;
+		if (input.activationPending || input.startupPending || input.ownSeatHeld) return output;
 		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
 		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
@@ -3326,6 +3333,7 @@ static std::string ResyncSaveName() {
 		if (!joinCapture && takenAt < m_NextAutosaveSimTime) return output;
 		if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
 		m_OpenCaptureTick = input.tick + input.lead;
+		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
 		m_CaptureWriters = input.writers;
 		output.send.push_back({0, NetGameCheckpoint::Capture, m_OpenCaptureTick});
@@ -3393,6 +3401,7 @@ static std::string ResyncSaveName() {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
 			input.activationPending = m_Coordinator->HasPendingSeatActivation();
+			input.ownSeatHeld = m_Coordinator->IsOwnHostSeatHeld();
 			const auto& start = m_Coordinator->GetAgreedStartRecord();
 			input.startupPending = start && tick < start->agreedFirstFrame;
 		}
