@@ -122,8 +122,8 @@ BINDING_WALK_ARGS = ["-net-replay", "tools/fixtures/pickup_fire.ccreplay", "-inp
                      "-max-ticks", "155", "-preview-binding-exhaustive-selftest"]
 BINDING_WALK_FIXTURES = ["pickup_fire.ccreplay", "pickup_fire.txt"]
 BINDING_WALK_TIMEOUT = 1800
-# A sanitizer build instruments every access, so the walk gets its own budget, measured alone with headroom.
-BINDING_WALK_SANITIZER_TIMEOUT = {"tsan": 7200}
+# The TSan walk takes about 1030 s alone on the Mac and about 3100 s in a throttled GUI-session job.
+BINDING_WALK_SANITIZER_TIMEOUT = {"tsan": 3600}
 BINDING_WALK_CLASS = re.compile(r"^\[bindx\] class \S+ ", re.M)
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",
