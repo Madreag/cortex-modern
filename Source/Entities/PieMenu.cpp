@@ -753,6 +753,27 @@ void PieMenu::SetEnabled(bool enable, bool playSounds) {
 	}
 }
 
+void PieMenu::CloseForCanonicalStart() {
+	if (m_ActiveSubPieMenu) {
+		m_ActiveSubPieMenu->CloseForCanonicalStart();
+		m_ActiveSubPieMenu = nullptr;
+	}
+	SetHoveredPieSlice(nullptr);
+	if (m_EnabledState != EnabledState::Disabled) {
+		m_BGBitmapNeedsRedrawing = true;
+	}
+	m_MenuMode = MenuMode::Normal;
+	m_FrozenForView = false;
+	m_EnabledState = EnabledState::Disabled;
+	m_CurrentInnerRadius = 0;
+	m_ActivatedPieSlice = nullptr;
+	m_AlreadyActivatedPieSlice = nullptr;
+	m_EnableDisableAnimationTimer.Reset();
+	m_HoverTimer.SetSimTimeLimitMS(100);
+	m_HoverTimer.Reset();
+	m_SubPieMenuHoverOpenTimer.Reset();
+}
+
 const PieSlice* PieMenu::GetActivatedPieSlice() const {
 	if (m_ActiveSubPieMenu) {
 		return m_ActiveSubPieMenu->GetActivatedPieSlice();

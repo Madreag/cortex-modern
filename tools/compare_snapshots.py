@@ -304,10 +304,22 @@ def parse_graph(data):
 _ACTOR_CLASSES = {"Actor", "AHuman", "ACrab", "ACraft", "ACDropShip", "ACRocket", "ADoor"}
 
 
+# An actor's move path is its owner machine's pathfinder answer, with what the path code derives from it and the MO it is
+# loaded to follow (Actor::SaveSnapshotConfiguration and Scene::SaveSceneObject write them in per-peer runs).
+_ACTOR_OWN_PATH = {"SpecialBehaviour_AddMovePathPoint", "SpecialBehaviour_WaypointCursor", "SpecialBehaviour_MoveTarget",
+                   "SpecialBehaviour_PrevPathTarget", "SpecialBehaviour_MoveVector", "SpecialBehaviour_UpdateMovePath", "MOMoveTargetUniqueID"}
+
+
 def native_projection(text):
     """Project only fields identified by the completed-tick peer audit, at their native owner."""
     output, ancestry, actors, projected = [], [], set(), {}
+    skip_below = None
     for line in text.splitlines(keepends=True):
+        depth = len(line) - len(line.lstrip("\t"))
+        if skip_below is not None:
+            if depth > skip_below and line.strip():
+                continue
+            skip_below = None
         match = re.match(r"^(\t*)([^=\r\n]+?)(\s*=\s*)([^\r\n]*)(\r?\n)?$", line)
         if not match:
             output.append(line)
@@ -316,6 +328,10 @@ def native_projection(text):
         name = name.strip()
         ancestry = ancestry[:len(tabs)]
         owner = ancestry[-1] if ancestry else (None, None)
+        if name in _ACTOR_OWN_PATH and owner[1] in _ACTOR_CLASSES:
+            projected["actor move path"] = projected.get("actor move path", 0) + 1
+            skip_below = len(tabs)
+            continue
         replacement, reason = value, None
         if name == "UniqueID" and owner[1] in _ACTOR_CLASSES:
             actors.add(value.strip().encode())

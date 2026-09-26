@@ -503,9 +503,9 @@ bool GameActivity::LockControlledActor(Players player, bool lock, Controller::In
 }
 
 bool GameActivity::SwitchToActor(Actor* pActor, int player, int team) {
-	// Computer players don't focus on any Actor
+	// Computer players don't focus on any Actor; a seat another peer presents only takes the switch's team (Activity).
 	if (!IsLocalHumanSeat(player))
-		return false;
+		return Activity::SwitchToActor(pActor, player, team);
 
 	m_InventoryMenuGUI[player]->SetEnabled(false);
 

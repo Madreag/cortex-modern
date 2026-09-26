@@ -269,6 +269,18 @@ class SnapshotComparisonTests(unittest.TestCase):
                 self.assertEqual(self.compare(first, second), 0 if allowed else 1)
                 self.assertEqual(self.compare(first, second, full=True), 1)
 
+    def test_an_actors_own_move_path_is_local_and_its_order_is_not(self):
+        first = ACTOR + ("\t\tSpecialBehaviour_AddMovePathPoint = Vector\n\t\t\tX = 1\n\t\t\tY = 2\n"
+                         "\t\tSpecialBehaviour_MoveTarget = Vector\n\t\t\tX = 3\n\t\t\tY = 4\n\t\tMOMoveTargetUniqueID = 7\n"
+                         "\t\tSpecialBehaviour_AddAISceneWaypoint = Vector\n\t\t\tX = 5\n\t\t\tY = 6\n")
+        second = ACTOR + ("\t\tSpecialBehaviour_AddMovePathPoint = Vector\n\t\t\tX = 8\n\t\t\tY = 9\n"
+                          "\t\tSpecialBehaviour_AddMovePathPoint = Vector\n\t\t\tX = 1\n\t\t\tY = 2\n"
+                          "\t\tSpecialBehaviour_MoveTarget = Vector\n\t\t\tX = 0\n\t\t\tY = 0\n"
+                          "\t\tSpecialBehaviour_AddAISceneWaypoint = Vector\n\t\t\tX = 5\n\t\t\tY = 6\n")
+        self.assertEqual(self.compare(first, second), 0)
+        self.assertEqual(self.compare(first, second, full=True), 1)
+        self.assertEqual(self.compare(first, second.replace("X = 5", "X = 50")), 1)
+
     def test_muzzle_frame_does_not_hide_other_sprite_or_physics_fields(self):
         first = ACTOR + "\t\tHeldDevice = HDFirearm\n\t\t\tFlash = Attachable\n\t\t\t\tFrame = 1\n\t\t\t\tMass = 1\n"
         second = first.replace("Frame = 1", "Frame = 4")
@@ -549,6 +561,35 @@ class RuntimeProjectionTests(unittest.TestCase):
         for key in ("sim_rng", "render_rng", "extra_shared"):
             with self.subTest(key=key):
                 self.assert_field(value, (key,), key == "render_rng", b"changed")
+
+    def test_only_the_sim_rngs_draw_count_is_local(self):
+        words = [b"MT1", b"5489", b"1234"] + [str(index).encode() for index in range(624)]
+        value = dict(version="RuntimeGlobals9", sim_rng=b" ".join(words), postprocess=b"effects", timer=b"t")
+        counted = dict(value, sim_rng=b" ".join(words[:2] + [b"99"] + words[3:]))
+        self.assertEqual(runtime.project(value, True), runtime.project(counted, True))
+        for index in (1, 3, 626):
+            changed = list(words)
+            changed[index] = b"7"
+            with self.subTest(word=index):
+                self.assertNotEqual(runtime.project(value, True), runtime.project(dict(value, sim_rng=b" ".join(changed)), True))
+        self.assert_field(value, ("postprocess",), True, b"changed")
+        self.assert_field(value, ("timer",), False, b"changed")
+
+    def test_the_drawn_fields_are_local_and_the_orders_are_not(self):
+        pie = dict(version="PieMenuRuntime1", center=dict(x=1, y=2), cursor_visual_angle=3, cursor_angle=4, direction=1)
+        for key in ("center", "cursor_visual_angle", "cursor_angle", "direction"):
+            with self.subTest(key=key):
+                self.assert_field(pie, (key,), key in ("center", "cursor_visual_angle"))
+        actor = dict(version="ActorRuntime3", waypoint_cursor=1, draw_waypoints=1, move_target=dict(x=1, y=2), previous_path_target=dict(x=3, y=4),
+                     move_vector=dict(x=0, y=0), update_path=0, last_ordered_waypoint=dict(x=5, y=6), has_ordered_waypoint=1, ai_mode=1)
+        local = {"waypoint_cursor", "draw_waypoints", "move_target", "previous_path_target", "move_vector", "update_path"}
+        for key in actor.keys() - {"version"}:
+            with self.subTest(key=key):
+                self.assert_field(actor, (key,), key in local)
+        activity = dict(version="Activity4", funds_changed=[0, 0, 0, 0], team_funds=[1, 2, 3, 4], player_team=[0, 1, 2, 3], team_funds_share=[1, 1, 1, 1],
+                        funds_contribution=[0, 0, 0, 0], human=[1, 1, 0, 0], actor_links=[[0, 0, 0]] * 4)
+        self.assert_field(activity, ("funds_changed",), True, [1, 0, 0, 0], local_seat=0)
+        self.assert_field(activity, ("team_funds",), False, [9, 2, 3, 4], local_seat=0)
 
     def test_the_resyncs_own_input_records_are_local_and_the_rest_of_the_block_is_not(self):
         # NetMatchService.cpp:822-823, 831 keeps this machine's UInputMan and shared GUI input over the host's.
@@ -1029,8 +1070,9 @@ class RuntimeProjectionTests(unittest.TestCase):
     def test_sprite_pool_frames_and_pie_bitmaps_remain_strict(self):
         for version, keys in (("MOSpriteRuntime2", ("sprite_file", "icon_file", "images", "frames", "icon_index", "frame")),
                 ("MOSRotatingRuntime2", ("flip_bitmap", "silhouette_bitmap", "travel_impulse")),
-                ("PieMenuRuntime1", ("quadrants", "center", "cursor_angle", "background_bitmap", "rotation_bitmap", "slices_bitmap")),
-                ("RuntimeGlobals7", ("primitive", "postprocess", "audio"))):
+                # The drawn center and the post effects are each machine's own (test_the_drawn_fields_are_local_and_the_orders_are_not).
+                ("PieMenuRuntime1", ("quadrants", "cursor_angle", "background_bitmap", "rotation_bitmap", "slices_bitmap")),
+                ("RuntimeGlobals7", ("primitive", "audio"))):
             value = dict(version=version, **dict.fromkeys(keys, 1))
             for key in keys:
                 with self.subTest(version=version, key=key):
