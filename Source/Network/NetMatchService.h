@@ -453,6 +453,7 @@ namespace RTE {
 			uint16_t lead = 0; //!< Host: ticks between naming a capture and taking it.
 			bool activationPending = false; //!< Host: a seat's agreed activation is still ahead.
 			bool startupPending = false; //!< Host: the round's agreed first frame is still ahead.
+			bool ownSeatHeld = false; //!< Host: its own seat is held, so what it sends rides no frame the round plays.
 		};
 		struct AutosaveTickOutput {
 			bool capture = false; //!< This peer captures at this tick.
@@ -1126,6 +1127,7 @@ namespace RTE {
 		friend bool TestWorldBootstrapWaitsForLobby(std::string* error);
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
+		friend bool TestALostCaptureIsNamedAgain(std::string* error);
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
@@ -1519,6 +1521,7 @@ namespace RTE {
 		std::vector<AwaitedAutosave> m_AwaitedAutosaves;
 		std::set<uint64_t> m_ScheduledCaptures; //!< Ticks the host named that this peer has not reached.
 		uint64_t m_OpenCaptureTick = 0; //!< Host: the capture it named last, until every writer reported it.
+		bool m_OpenCaptureApplied = false; //!< Host: the capture it named reached the committed stream.
 		std::set<uint8_t> m_CaptureWriters; //!< Host: the peers still writing the open capture.
 		bool m_OpenCaptureForJoin = false;
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
