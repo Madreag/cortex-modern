@@ -167,6 +167,9 @@
     {
       "op": "menu",
       "command": "activate ButtonEndMatch"
+    },
+    {
+      "op": "finish"
     }
   ]
 }
