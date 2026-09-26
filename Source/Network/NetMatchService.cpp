@@ -1555,6 +1555,25 @@ static std::string ResyncSaveName() {
 				m_CatchUpCoordinator = std::make_unique<NetLockstepCoordinator>();
 				if (!m_CatchUpCoordinator->StartReplay(*m_CatchUpTransport, config, error)) return false;
 				ScenarioRunner::SetLockstepCoordinator(m_CatchUpCoordinator.get());
+			} else if (m_Runner && m_Session) {
+				// A world's tail replays on the same kind of coordinator, so a seat held in it goes to the AI at its frame.
+				NetLockstepConfig config;
+				config.sessionId = m_Session->GetSessionId();
+				config.roundId = m_WorldCatchUp.roundId;
+				config.matchConfig = m_Runner->GetMatchConfig();
+				config.peerCount = config.matchConfig.peerCount; config.localPeerId = m_LocalPeerId;
+				config.authorityPeerId = m_WorldCatchUp.authorityPeerId;
+				config.initialPeerLeaves = m_WorldCatchUp.initialPeerLeaves;
+				config.startFrame = m_WorldCatchUp.snapshotTick + 1;
+				config.migrationGeneration = m_WorldCatchUp.authorityGeneration;
+				config.simTickMs = g_TimerMan.GetDeltaTimeMS();
+				auto transport = std::make_unique<LoopbackTransport>();
+				auto replay = std::make_unique<NetLockstepCoordinator>();
+				if (config.peerCount != 0 && m_LocalPeerId != 0 && m_LocalPeerId <= config.peerCount && replay->StartReplay(*transport, config, error)) {
+					m_CatchUpTransport = std::move(transport);
+					m_CatchUpCoordinator = std::move(replay);
+					ScenarioRunner::SetLockstepCoordinator(m_CatchUpCoordinator.get());
+				}
 			}
 			const uint64_t stagingBeganMs = SteadyNowMs();
 			SetRejoinPhaseLocked(NetSession::RejoinPhase::Loading);
@@ -1902,7 +1921,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMatchRunner> runner;
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
-		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear();
+		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear(); m_RejoinFitReasons.clear();
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateCaptureCosts.clear(); m_PrivateCaptureCold = false; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
 		m_LastJoinRoute.reset();
@@ -3123,6 +3142,7 @@ static std::string ResyncSaveName() {
 				// A capture named for a tick already behind this frame is taken here, on every peer alike.
 				const uint64_t takenAt = std::max(note.tick, input.tick);
 				m_ScheduledCaptures.insert(takenAt);
+				if (m_Coordinator) m_Coordinator->NoteAnnouncedCapture(takenAt);
 				// The writers report the tick they took, so that is the capture the host waits on.
 				if (m_IsHost && note.tick == m_OpenCaptureTick) m_OpenCaptureTick = takenAt;
 			} else if (note.kind == NetGameCheckpoint::Written && m_IsHost && note.tick == m_OpenCaptureTick) {
@@ -3840,11 +3860,14 @@ static std::string ResyncSaveName() {
 					m_PrivateJoinError = error; continue;
 				}
 				m_PrivateActivations.insert(session.connection);
+				(void)m_Coordinator->SendReturnerTheRoundFrom(session.assignedPeerId, session.activationTick);
 				std::erase_if(m_PendingHeldReseats, [&](const auto& pending) { return pending.newOwnerPeerId == session.assignedPeerId; });
 				std::erase_if(m_PendingHeldResolutions, [&](const auto& pending) { return pending.lockstepPeerId == session.assignedPeerId; });
 			}
-			if (session.acknowledgedThrough + 1 >= session.activationTick)
+			if (session.acknowledgedThrough + 1 >= session.activationTick) {
+				m_Coordinator->NoteReturnerCaughtUp(session.assignedPeerId, NetLockstepNowMs());
 				m_WorldJoin.CompleteActivation(session.connection, session.activationTick, nullptr);
+			}
 			// A returner still replaying toward its reclaim frame is judged from its catch-up's end, not from the reclaim.
 			else if (session.lastCatchUpReportMs != 0 && nowMs >= session.lastCatchUpReportMs && nowMs - session.lastCatchUpReportMs < c_ReturnerReportGapMs)
 				m_Coordinator->NoteReturnerCatchingUp(session.assignedPeerId, NetLockstepNowMs());
@@ -4597,10 +4620,21 @@ static std::string ResyncSaveName() {
 		const auto link = std::find_if(readyPeers.begin(), readyPeers.end(), [&](const NetSessionPeerInfo& peer) { return peer.assignedPeerId + 1 == member; });
 		if (link == readyPeers.end() || m_Coordinator->UsesTransportPeer(link->transportPeerId)) return;
 		const NetPeerId connection = link->transportPeerId;
-		// A return already on its way, on this connection or a relaunched one, owns the seat's catch-up.
-		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
-			if (session.phase != NetWorldJoinPhase::Active && (session.connection == connection || session.assignedPeerId == member)) return;
 		const auto hold = m_Coordinator->HeldTransactions().find(member);
+		// A return already on its way, on this connection or a relaunched one, owns the seat's catch-up; one whose reclaim frame the
+		// seat was held again at or after is over, and this report opens the next.
+		std::vector<NetPeerId> overtaken;
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+			if (session.phase == NetWorldJoinPhase::Active || (session.connection != connection && session.assignedPeerId != member)) continue;
+			if (session.connection != connection || session.activationTick == 0 || hold == m_Coordinator->HeldTransactions().end() ||
+			    hold->second.cutoffFrame < session.activationTick) return;
+			overtaken.push_back(session.connection);
+		}
+		for (const NetPeerId stale: overtaken) {
+			m_PrivateActivations.erase(stale);
+			m_WorldJoin.CancelJoin(stale, "the seat was held again after its return");
+			System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(member) + " was held again after its return; its next catch-up replaces the last");
+		}
 		const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(connection);
 		NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
 		if (hold == m_Coordinator->HeldTransactions().end() || seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != connection) return;
@@ -4614,6 +4648,7 @@ static std::string ResyncSaveName() {
 		const uint32_t returning = hold->second.seatIncarnation + 1;
 		if (error.empty() && m_WorldJoin.BeginInPlaceRejoin(connection, seat, member, returning, link->displayName, nowMs, heldThrough, &error)) {
 			m_InPlaceIncarnationBumps[member] = returning > incarnation ? returning - incarnation : 0;
+			m_Coordinator->NoteInPlaceReturn(member);
 			(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, connection, nullptr);
 			if (const NetWorldJoinSession* opened = m_WorldJoin.FindSession(connection)) SendWorldJoinTailTo(m_Runner->GetLobbySession(), m_WorldJoin, *opened);
 			std::ostringstream line;
@@ -4765,6 +4800,17 @@ static std::string ResyncSaveName() {
 					if (peer > 0 && peer <= live.peerCount && at != changes.begin()) live.initialDelayChanges[peer].emplace(std::prev(at)->first, std::prev(at)->second);
 				}
 				if (!live.initialSeatReclaims.contains(m_LocalPeerId)) return;
+				{
+					std::ostringstream line;
+					line << "[net-match] live round from the catch-up at " << m_WorldCatchUp.activationTick << ": held";
+					for (const auto& [peer, hold]: live.initialSeatHolds) line << ' ' << static_cast<int>(peer) << '@' << hold.cutoffFrame;
+					line << " left";
+					for (const auto& [peer, frame]: live.initialPeerLeaves) line << ' ' << static_cast<int>(peer) << '@' << frame;
+					line << " returns";
+					for (const auto& [peer, reclaim]: live.initialSeatReclaims) line << ' ' << static_cast<int>(peer) << '@' << reclaim.activationFrame;
+					line << " through=" << live.seatStateThroughFrame;
+					System::PrintDiagnosticLine(line.str());
+				}
 				m_Runner->ConfigurePrivateJoin(live);
 			}
 			if (!m_Runner->IsWorldJoinLockstepStarting())
@@ -4789,6 +4835,7 @@ static std::string ResyncSaveName() {
 			committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
 			const auto activationCaptured = std::chrono::steady_clock::now();
 			const auto pause = ScenarioRunner::CaptureLockstepPauseState();
+			if (m_CatchUpCoordinator) m_Coordinator->AdoptReplayedSeatTransitions(*m_CatchUpCoordinator, m_WorldCatchUp.activationTick - 1);
 			ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
 			if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) {
 				ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return;
@@ -4822,6 +4869,8 @@ static std::string ResyncSaveName() {
 			NotePumpParkedLocked();
 			SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
 			if (NetSession* live = LiveSessionLocked()) live->TickKeepalive(AdmissionNowMs());
+			// The host judges this seat's first input from the moment it knows the replay reached the frame before its return.
+			(void)m_Runner->GetLobbySession().SendPayload(MakeJoinerCatchUpReport(), nullptr);
 			const auto milliseconds = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
 			{
 				std::ostringstream line;
@@ -4839,6 +4888,22 @@ static std::string ResyncSaveName() {
 			m_InPlaceCatchUp = false;
 		}
 		if (m_Coordinator && m_Coordinator->IsRunning() && !m_WorldCatchUp.privateMatch) {
+			// The world's own coordinator takes the round from its replay at the activation, with the committed state it replayed to.
+			if (m_CatchUpCoordinator) {
+				NetResyncState committed;
+				std::string error;
+				if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error, false)) {
+					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: " + error); return;
+				}
+				committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+				committed.sessionId = m_Coordinator->GetConfig().sessionId;
+				const auto pause = ScenarioRunner::CaptureLockstepPauseState();
+				ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
+				if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) {
+					ScenarioRunner::SetControllerReplayError("PeerLeft:world catch-up activation: " + error); return;
+				}
+				m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
+			}
 			for (const auto& event: m_CatchUpWirePackets) {
 				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
 					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
@@ -6011,7 +6076,15 @@ static std::string ResyncSaveName() {
 		for (const auto& peer: m_Session->GetReadyPeers()) {
 			if (peer.assignedPeerId + 1 != peerId) continue;
 			std::string reason;
-			if (m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)) return true;
+			if (m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)) {
+				m_RejoinFitReasons.erase(peerId);
+				return true;
+			}
+			// A returner held back from its seat says why, once per reason.
+			if (auto& said = m_RejoinFitReasons[peerId]; said != reason) {
+				said = reason;
+				System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(peerId) + " waits to rejoin: " + reason);
+			}
 			if (reason.starts_with("Your connection needs")) {
 				m_RejoinOutcome = "waiting_for_delay";
 				if (!m_WorldJoin.IsPrivateMatch()) m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::HostNotAccepting, reason);
