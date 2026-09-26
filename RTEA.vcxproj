@@ -728,7 +728,7 @@
       <ConformanceMode>true</ConformanceMode>
       <IncludeInUnityFile>false</IncludeInUnityFile>
       <AddCodeAfterSourceInclude>#undef GetClassName</AddCodeAfterSourceInclude>
-      <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/bigobj /Brepro %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>winhttp.lib;bcrypt.lib;crypt32.lib;winmm.lib;ws2_32.lib;dinput8.lib;ddraw.lib;dxguid.lib;dsound.lib;imm32.lib;setupapi.lib;version.lib;fmod_vc.lib;liblz4_release_static.lib;opengl32.lib;SDL3-static.lib;SDL3_image-static.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -742,10 +742,14 @@
       <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
       <FixedBaseAddress>false</FixedBaseAddress>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
-      <AdditionalOptions>/ignore:4099 /ignore:4098 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/ignore:4099 /ignore:4098 /Brepro %(AdditionalOptions)</AdditionalOptions>
       <IgnoreSpecificDefaultLibraries>libcmt.lib</IgnoreSpecificDefaultLibraries>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
     </Link>
+    <PreLinkEvent>
+      <!-- A link that reuses the last PDB bumps its age into the image, so one tree would hash by its build history. -->
+      <Command>if exist "$(OutDir)$(TargetName).pdb" del "$(OutDir)$(TargetName).pdb"</Command>
+    </PreLinkEvent>
     <Manifest>
       <OutputManifestFile>$(IntDir)$(TargetName).manifest</OutputManifestFile>
       <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>

@@ -142,16 +142,24 @@
       "run": "injected-desync",
       "peer": "host",
       "screen": "game",
-      "mark": "injected-play-resumed",
-      "sim_progress": 120,
+      "sim_ticks": [
+        900,
+        null
+      ],
       "what": "Both peers continue playing through tick 900 after the automatic repair.",
-      "assert": "The probe observes Running gameplay at or after tick 900 following the completion toast.",
+      "assert": "The engine's own records after the completion: the relaunch line, the relaunched round's first frame, every tick committed from it through tick 900 in the trace, actors moving across them and alive in the match report.",
       "forbidden_log_regex": [
         "\\[net-match\\] resync failed:",
         "^ERROR:",
         "RTE Aborted",
         "Assertion failed"
-      ]
+      ],
+      "resumed_play": {
+        "relaunch": "\\[net-match\\] resync: match relaunched from the snapshot",
+        "through_tick": 900,
+        "trace": "{peer}_trace.json",
+        "report": "{peer}-match.json"
+      }
     },
     {
       "id": "injected-before-client",
@@ -213,16 +221,24 @@
       "run": "injected-desync",
       "peer": "client",
       "screen": "game",
-      "mark": "injected-play-resumed",
-      "sim_progress": 120,
+      "sim_ticks": [
+        900,
+        null
+      ],
       "what": "Both peers continue playing through tick 900 after the automatic repair.",
-      "assert": "The probe observes Running gameplay at or after tick 900 following the completion toast.",
+      "assert": "The engine's own records after the completion: the relaunch line, the relaunched round's first frame, every tick committed from it through tick 900 in the trace, actors moving across them and alive in the match report.",
       "forbidden_log_regex": [
         "\\[net-match\\] resync failed:",
         "^ERROR:",
         "RTE Aborted",
         "Assertion failed"
-      ]
+      ],
+      "resumed_play": {
+        "relaunch": "\\[net-match\\] resync: match relaunched from the snapshot",
+        "through_tick": 900,
+        "trace": "{peer}_trace.json",
+        "report": "{peer}-match.json"
+      }
     }
   ],
   "runs": [

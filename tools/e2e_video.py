@@ -592,6 +592,70 @@ def completed_probe(path):
         return False
 
 
+def window_progress(observed, required):
+    """The ticks the engine committed across a marked window, by its own counters at the window's two ends: the
+    round's committed frame when a lockstep round runs through both, else every sim update. The window's own length
+    on the engine's clock is reported beside it; the window itself is bounded by the probe's step, not by the wall."""
+    if len(observed) < 2:
+        return {"observed": 0, "required": required, "counted": None, "window_ms": None, "pass": False}
+    first, last = observed[0], observed[-1]
+    lockstep = all(row.get("lockstep_frame", 0) > 0 for row in (first, last))
+    counter = "lockstep_frame" if lockstep else "sim_frame"
+    progress = last[counter] - first[counter]
+    window_ms = last["at_ms"] - first["at_ms"] if all("at_ms" in row for row in (first, last)) else None
+    return {"observed": progress, "required": required, "counted": counter, "from": first[counter], "to": last[counter],
+            "window_ms": window_ms, "ticks_per_s": round(progress * 1000 / window_ms, 2) if window_ms else None,
+            "pass": progress >= required}
+
+
+ROUND_START_FRAME = re.compile(r"^\[net-lockstep\] start round=\d+ frame=(\d+)")
+
+
+def resumed_play_evidence(record, spec):
+    """Play after an automatic repair, read from the engine's own records only: its relaunch line, the frame the
+    relaunched round starts on, every tick it committed from there through the required tick (the -tick-hashes
+    trace), actors the sim moved across them and the actors alive at the end (the match report)."""
+    root = Path(record["root"])
+    path = root / "stdout.log"
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.is_file() else []
+    relaunch = next((index for index, line in enumerate(lines) if re.search(spec["relaunch"], line)), None)
+    starts = [int(found[1]) for found in (ROUND_START_FRAME.match(line) for line in lines[:relaunch or 0]) if found]
+    resume = starts[-1] if starts else None
+    evidence = {"log": str(path), "relaunch_line": relaunch + 1 if relaunch is not None else None, "resume_frame": resume,
+                "through_tick": spec["through_tick"]}
+    trace = root.parent / spec["trace"].format(peer=record["peer"])
+    report = root.parent / spec["report"].format(peer=record["peer"])
+    try:
+        rows = json.loads(trace.read_text(encoding="utf-8"))["runs"][0]["tick_hashes"]
+    except (OSError, ValueError, KeyError, IndexError):
+        rows = []
+    try:
+        match = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        match = {}
+    # The repaired round re-commits its resume frame, so its records start at the last one naming that frame.
+    begin = max((index for index, row in enumerate(rows) if row.get("tick") == resume), default=None)
+    after = rows[begin:] if begin is not None else []
+    ticks = [row.get("tick") for row in after]
+    committed = set(ticks)
+    wanted = range(resume, spec["through_tick"] + 1) if resume is not None else range(0)
+    gaps = [tick for tick in wanted if tick not in committed]
+    actor_states = {row["subsystems"].get("actors") for row in after if row.get("tick", 0) <= spec["through_tick"] and row.get("subsystems")}
+    evidence.update(trace=str(trace), report=str(report), first_committed_after_repair=ticks[0] if ticks else None,
+                    last_committed=ticks[-1] if ticks else None, missing_ticks=gaps[:10], missing_count=len(gaps),
+                    actor_states=len(actor_states), live_actors=match.get("actors"), resyncs=match.get("resyncs"))
+    reasons = [text for failed, text in (
+        (relaunch is None, "no relaunch line"),
+        (resume is None, "no relaunched round start before the relaunch line"),
+        (not ticks or ticks[0] != resume, "the trace does not resume at the relaunched round's frame"),
+        (bool(gaps), f"{len(gaps)} tick(s) from the resume frame through {spec['through_tick']} were never committed"),
+        (len(actor_states) < 2, "no actor changed across the resumed ticks"),
+        (not match.get("actors"), "no live actor at the end of the match"),
+        (not match.get("resyncs"), "the match report records no resync")) if failed]
+    evidence.update({"pass": not reasons, "reason": "; ".join(reasons) or None})
+    return evidence
+
+
 def item_evidence(record, item, port=None):
     rows = record["index"]
     events_path = Path(record["video_dir"]) / "events.jsonl"
@@ -639,13 +703,18 @@ def item_evidence(record, item, port=None):
                                      if index < len(observed.get("script", {}).get("steps", [])) else None,
                                      "observed": steps.get(index)} for index in required], path=str(path))
         if item.get("sim_progress") is not None:
-            ticks = [steps[index]["observed"]["sim_frame"] for index in required if index in steps]
-            progress = ticks[-1] - ticks[0] if len(ticks) > 1 else 0
-            evidence["simulation_progress"] = {"observed": progress, "required": item["sim_progress"]}
-            if progress < item["sim_progress"]:
+            evidence["simulation_progress"] = window_progress([steps[index]["observed"] for index in required if index in steps],
+                                                              item["sim_progress"])
+            if not evidence["simulation_progress"]["pass"]:
                 evidence["probe"] = "fail"
     else:
         evidence.update(probe_verdict(record.get("probe_dir", ""), item))
+    if item.get("resumed_play"):
+        # The engine's own records decide this item; a probe step that a script may never reach does not.
+        evidence["resumed_play"] = resumed_play_evidence(record, item["resumed_play"])
+        evidence["probe"] = "pass" if evidence["resumed_play"]["pass"] else "fail"
+        if not evidence["resumed_play"]["pass"]:
+            evidence["reason"] = evidence["resumed_play"]["reason"]
     if item.get("log_regex") or item.get("forbidden_log_regex"):
         assertions = log_assertions(record["root"], item.get("log_regex", []), item.get("forbidden_log_regex", []))
         passed = all(bool(value["matches"]) != value["forbidden"] for value in assertions)
