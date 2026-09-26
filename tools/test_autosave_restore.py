@@ -100,21 +100,27 @@ PERTURB = re.compile(r"^\[net-test\] live perturb frame=(\d+)$", re.MULTILINE)
 
 
 def expect_injected_divergence(root: Path, verdicts: dict) -> None:
-    """The anchor arm advances the host's sim RNG at one tick (Main.cpp's live perturbation) so the match heals: the
-    oracle must name exactly that sample, in the sim RNG alone, and nothing else. Anything more or less fails."""
+    """The anchor arm advances the host's sim RNG at the start of one tick (Main.cpp's live perturbation) so the match
+    heals. The oracle samples the end of that tick, after the tick has drawn from the advanced stream, so the sample
+    differs in the sim RNG and in whatever the tick's draws reached. It must name exactly that one sample, the sim RNG
+    among its sections, and every sample before and after it must agree, with at least one after it: that is the heal."""
     host = Path(root) / "host" / "stdout.log"
     injected = PERTURB.search(host.read_text(encoding="utf-8", errors="replace")) if host.is_file() else None
     for verdict in verdicts.values():
-        divergences = verdict.get("divergences", [])
-        expected = [{"tick": int(injected[1]), "sections": ["globals.sim_rng"]}] if injected else []
+        divergences = verdict.get("divergences") or []
         seen = [{"tick": entry["tick"], "sections": entry["sections"]} for entry in divergences]
-        verdict["injected_divergence"] = expected
-        if seen == expected and verdict.get("compared_samples", 0) > 0:
+        verdict["injected_divergence"] = {"tick": int(injected[1]), "requires": "globals.sim_rng"} if injected else None
+        if not injected:
+            continue
+        tick = int(injected[1])
+        after = [sample for sample in verdict.get("sampled_ticks", []) if sample > tick]
+        if len(seen) == 1 and seen[0]["tick"] == tick and "globals.sim_rng" in seen[0]["sections"] and after:
             verdict["passed"] = True
             verdict["reasons"] = []
-        elif injected and seen != expected:
+        else:
             verdict["passed"] = False
-            verdict["reasons"] = [f"the injected divergence at tick {injected[1]} was expected alone in globals.sim_rng, the oracle saw {seen}"]
+            verdict["reasons"] = [f"the injected divergence at tick {tick} was expected as the one divergent sample, naming globals.sim_rng, "
+                                  f"with every later sample equal ({len(after)} sampled after it); the oracle saw {seen}"]
 
 
 def _seat_rows(root: Path, who: str) -> dict:
@@ -1026,6 +1032,29 @@ class WorldRestartOracleTests(unittest.TestCase):
         empty = "TransferUid = 0\n"
         with self.assertRaisesRegex(AssertionError, "lacks its bound peers"):
             _world_checkpoint_state(empty, f"[autosave] agreed match=world tick=421 state={json.dumps(empty)}\n", "world", 421, {1, 2})
+
+    def test_injected_divergence_is_one_sample_naming_the_sim_rng_then_healed(self):
+        import tempfile
+        spread = ["globals.sim_rng", "structure", "scene_runtime", "scene", "layer.Mat", "layer.FG"]
+        cases = {
+            "the injected tick alone, healed": ([(720, spread)], [660, 720, 780], True),
+            "the sim RNG alone": ([(720, ["globals.sim_rng"])], [720, 780], True),
+            "a second divergent sample": ([(720, spread), (780, ["globals.movable"])], [720, 780], False),
+            "the injected tick without the sim RNG": ([(720, ["globals.movable"])], [720, 780], False),
+            "another tick": ([(660, spread)], [660, 720, 780], False),
+            "nothing sampled after it": ([(720, spread)], [660, 720], False),
+            "the injection unseen": ([], [660, 720, 780], False),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "host").mkdir()
+            (root / "host" / "stdout.log").write_text("[net-test] live perturb frame=720\n", encoding="utf-8")
+            for name, (divergences, sampled, passes) in cases.items():
+                with self.subTest(name):
+                    verdict = {"passed": not divergences, "reasons": [], "compared_samples": len(sampled), "sampled_ticks": sampled,
+                               "divergences": [{"round": 1, "tick": tick, "sections": sections} for tick, sections in divergences]}
+                    expect_injected_divergence(root, {".": verdict})
+                    self.assertEqual(verdict["passed"], passes, verdict["reasons"])
 
 
 def main() -> int:
