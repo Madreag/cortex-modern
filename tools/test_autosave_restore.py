@@ -140,7 +140,7 @@ def pin_settings(run, values: dict) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict, settings: dict | None = None) -> dict:
+def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict, settings: dict | None = None, load_objects: int = 0) -> dict:
     """Two peers of one match, each with the arm's own extra flags and Settings.ini values."""
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
@@ -157,7 +157,7 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         args += extra.get(who, []) + fullstate_args()
         runs[who] = make_run(repo, args, root / who, 420, env={"CCCP_HEADLESS": "1"})
-        stage_baseline(runs[who], ticks)
+        stage_baseline(runs[who], ticks, load_objects=load_objects)
         if settings and settings.get(who):
             pin_settings(runs[who], settings[who])
 

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <string>
 
 namespace RTE {
 
@@ -77,5 +80,46 @@ namespace RTE {
 		inline static std::atomic<bool> s_Enabled{c_DefaultEnabled};
 		inline static std::atomic<int> s_ParallelPhases{0};
 		inline static std::atomic<int> s_Hits{0};
+	};
+
+	/// The spans of one checkpoint capture's work, printed per capture with CCCP_CHECKPOINT_TRACE set: which thread ran
+	/// what and when, from the freeze's start. Costs one relaxed load where it is off.
+	class CaptureTrace {
+	public:
+		/// One timed piece of a capture's work.
+		class Span {
+		public:
+			/// @param label The kind of work. @param detail What it worked on. @param queuedAt When it was handed to a pool.
+			explicit Span(const char* label, std::string detail = {}, std::chrono::steady_clock::time_point queuedAt = {}) {
+				if (Active()) Start(label, std::move(detail), queuedAt);
+			}
+			~Span() { if (m_Label) Stop(); }
+			Span(const Span&) = delete;
+			Span& operator=(const Span&) = delete;
+
+		private:
+			void Start(const char* label, std::string detail, std::chrono::steady_clock::time_point queuedAt);
+			void Stop();
+			const char* m_Label = nullptr;
+			std::string m_Detail;
+			std::chrono::steady_clock::time_point m_Queued, m_Start;
+		};
+
+		/// Whether the environment asked for traces.
+		static bool Enabled();
+		/// Whether the environment asked a capture to run every part on the capturing thread, one after another
+		/// (CCCP_CHECKPOINT_SERIAL): what each part costs one thread, without the pool.
+		static bool Serial();
+		/// Whether a traced capture is running now.
+		static bool Active() { return s_Active.load(std::memory_order_relaxed); }
+		/// How deep a nested object write is still traced (CCCP_CHECKPOINT_TRACE's value, 1 by default).
+		static int ObjectDepth();
+		/// Starts one capture's trace at its freeze.
+		static void Begin(uint64_t tick);
+		/// Prints the capture's spans and stops tracing.
+		static void End();
+
+	private:
+		inline static std::atomic<bool> s_Active{false};
 	};
 } // namespace RTE
