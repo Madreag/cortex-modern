@@ -101,6 +101,7 @@ PERTURB = re.compile(r"^\[net-test\] live perturb frame=(\d+)$", re.MULTILINE)
 
 FULLSTATE_LABELLED = re.compile(r"^\[fullstate-(canonical|restored)\] tick=(\d+) hash=[0-9a-f]{16} sections=(\S+) round=\d+\s*$", re.MULTILINE)
 FULLSTATE_SCOPE = re.compile(r"^\[fullstate-scope\] tick=(\d+) round=(\d+) label=sample per_peer=(\S*)\s*$", re.MULTILINE)
+FULLSTATE_LABELLED_SCOPE = re.compile(r"^\[fullstate-scope\] tick=(\d+) round=\d+ label=(canonical|restored) per_peer=(\S*)\s*$", re.MULTILINE)
 ANCHOR_TICKS = 1400
 
 
@@ -140,18 +141,25 @@ def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: l
             previous = names
     labelled = {who: [(label, int(sampled), dict(item.rsplit(":", 1) for item in sections.split(",")))
                       for label, sampled, sections in FULLSTATE_LABELLED.findall(text)] for who, text in texts.items()}
+    # A section one capture keeps for itself (a Lua state that holds actors, per machine) is named in that capture's scope line.
+    own = {who: {(label, int(sampled)): set(filter(None, sections.split(","))) for sampled, label, sections in FULLSTATE_LABELLED_SCOPE.findall(text)}
+           for who, text in texts.items()}
     canonical = [(sampled, sections) for label, sampled, sections in labelled["host"] if label == "canonical" and sampled >= tick]
     if not canonical:
         reasons.append("the host logged no canonical capture of the snapshot it healed from")
         return reasons
     canonical_tick, canonical_sections = canonical[0]
+    canonical_own = own["host"].get(("canonical", canonical_tick), set())
     for who in texts:
         restored = [(sampled, sections) for label, sampled, sections in labelled[who] if label == "restored" and sampled >= tick]
         if not restored:
             reasons.append(f"{who} logged no restored world after the heal")
             continue
         restored_tick, restored_sections = restored[0]
-        differing = sorted(name for name in canonical_sections.keys() | restored_sections.keys() if canonical_sections.get(name) != restored_sections.get(name))
+        restored_own = own[who].get(("restored", restored_tick), set())
+        differing = sorted(name for name in canonical_sections.keys() | restored_sections.keys()
+                           if canonical_sections.get(name) != restored_sections.get(name)
+                           and not (name not in canonical_sections and name in canonical_own) and not (name not in restored_sections and name in restored_own))
         if restored_tick != canonical_tick or differing:
             reasons.append(f"{who}'s first restored world (tick {restored_tick}) differs from the canonical snapshot (tick {canonical_tick}) in {differing}")
     return reasons
@@ -1088,7 +1096,7 @@ class WorldRestartOracleTests(unittest.TestCase):
         def line(tag, tick, sections, round_id):
             return f"[{tag}] tick={tick} hash={'e' * 16} sections={','.join(f'{name}:{value}' for name, value in sections.items())} round={round_id}\n"
 
-        def logs(client_last=1380, dropped_from=0, named=False, restored=None, canonical=True):
+        def logs(client_last=1380, dropped_from=0, named=False, restored=None, canonical=True, canonical_own=None):
             texts = {"host": "[net-test] live perturb frame=720\n", "client": ""}
             for who in texts:
                 for tick in range(60, 1381, 60):
@@ -1104,7 +1112,10 @@ class WorldRestartOracleTests(unittest.TestCase):
                     if named and dropped_from and tick >= dropped_from:
                         texts[who] += f"[fullstate-scope] tick={tick} round={round_id} label=sample per_peer=graph.3\n"
                 if who == "host" and canonical:
-                    texts[who] += line("fullstate-canonical", 725, base, 7)
+                    kept = {name: value for name, value in base.items() if canonical_own is None or name != "graph.3"}
+                    texts[who] += line("fullstate-canonical", 725, kept, 7)
+                    if canonical_own:
+                        texts[who] += f"[fullstate-scope] tick=725 round=7 label=canonical per_peer={canonical_own}" + chr(10)
                 texts[who] += line("fullstate-restored", 725, restored or base, 8)
             return texts
 
@@ -1115,6 +1126,8 @@ class WorldRestartOracleTests(unittest.TestCase):
             "a section dropped with no reason": (logs(dropped_from=900), False),
             "both peers restore the same wrong state": (logs(restored={**base, "scene": "9" * 16}), False),
             "no canonical snapshot": (logs(canonical=False), False),
+            "a section the canonical capture keeps for itself": (logs(canonical_own="graph.3"), True),
+            "a section the canonical capture drops unnamed": (logs(canonical_own=""), False),
         }
         global FULLSTATE_EVERY
         every = FULLSTATE_EVERY

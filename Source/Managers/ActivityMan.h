@@ -182,7 +182,9 @@ namespace RTE {
 		bool RunCheckpointCaptureSelfTest(uint64_t tick);
 		/// Test lever: takes the autosave's capture at a completed tick and logs a hash of each shared section of it from the
 		/// writer thread. A dump directory also receives every section's bytes. Whether the capture was taken.
-		bool CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory = {});
+		/// A label names a capture outside the sample schedule (the heal's canonical snapshot, a peer's first restored world) and
+		/// tags its line instead of [fullstate].
+		bool CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory = {}, const std::string& label = {});
 		/// Waits for every queued checkpoint and reports what the worker refused; whether they all completed.
 		bool WaitForAutosaveVerdict();
 		/// Reports on the simulation thread the refusals the checkpoint worker found off it.
@@ -445,6 +447,9 @@ namespace RTE {
 		std::vector<std::shared_future<bool>> m_FullStateTasks; //!< The oracle's captures awaiting their hash.
 		std::string m_FullStateDumpDirectory; //!< Where the oracle's capture writes its sections; empty writes none.
 		uint64_t m_FullStateRound = 0; //!< The lockstep round the oracle's capture belongs to.
+		std::string m_FullStateLabel; //!< The label of the oracle capture being queued; empty for a scheduled sample.
+		std::string m_FullStateDumpRoot; //!< The dump directory the scheduled samples name; labelled captures dump beneath it.
+		bool m_FullStateLever = false; //!< Whether this run samples the full state, so saves and restores log theirs too.
 		std::string m_LastAutosavePath;
 		uint64_t m_LastAutosaveTick = 0;
 		size_t m_LastAutosaveBytes = 0;
