@@ -377,6 +377,7 @@ namespace RTE {
 		GUIComboBox* m_HostNetPolicyCombo = nullptr;
 		GUIComboBox* m_HostNetSlowPolicyCombo = nullptr;
 		GUITextBox* m_HostNetSlowBoundBox = nullptr;
+		GUILabel* m_HostNetSlowPolicyHintLabel = nullptr; //!< What the bound and the policy do to a late player, host included.
 		GUIComboBox* m_HostNetRedundancyCombo = nullptr;
 		GUITextBox* m_HostNetMinDelayBox = nullptr;
 		GUILabel* m_HostNetEffectiveLabel = nullptr;

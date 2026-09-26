@@ -5,12 +5,49 @@
 #include "NetMatchService.h"
 #include "SettingsMan.h"
 
+#include <cmath>
 #include <string>
 
 namespace RTE {
 
 	inline const char* NetHostNatTraversalState(bool enabled) {
 		return enabled ? "Automatic" : "Off (LAN or port-forwarded only)";
+	}
+
+	/// The slow-player policy's words, shared by the Network page's combo and the read-only summary.
+	inline const char* NetSlowPlayerPolicyText(NetSlowPlayerPolicy policy) {
+		return policy == NetSlowPlayerPolicy::Pause ? "Pause for them (up to 20 s)" : "Give the seat to the AI (host too) until they catch up";
+	}
+
+	/// What happens to a player whose input is late, under the policy and bound the host picked.
+	inline std::string NetSlowPlayerHint(NetSlowPlayerPolicy policy, uint16_t boundTicks, double tickMs) {
+		if (policy == NetSlowPlayerPolicy::Pause) return "Everyone waits for a late player, host included, for up to 20 s.";
+		return "A player late past " + std::to_string(boundTicks) + (boundTicks == 1 ? " tick (" : " ticks (") + std::to_string(std::lround(boundTicks * tickMs)) +
+		       " ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.";
+	}
+
+	/// How the automatic input delay is sized, in the words every delay readout uses.
+	inline std::string NetAutoDelayText(uint16_t marginTicks) {
+		return "ping plus a " + std::to_string(marginTicks) + "-tick margin, raised live if inputs arrive late";
+	}
+
+	/// The autosave interval row's range.
+	inline const char* NetAutosaveRangeHint() {
+		return "Every 60 s to 60 min, or off (default)";
+	}
+
+	/// What a match checkpoint is to the players.
+	inline const char* NetAutosaveNote() {
+		return "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.";
+	}
+
+	/// Settings > Network > Connection's hint for each route choice.
+	inline const char* NetConnectionModeHint(SettingsMan::NetworkConnectionMode mode) {
+		switch (mode) {
+			case SettingsMan::NetworkConnectionMode::DirectOnly: return "Direct only: lowest latency; fails when routers block a direct route.";
+			case SettingsMan::NetworkConnectionMode::RelayOnly: return "Relay only: every packet uses the relay and adds its round trip.";
+			default: return "Direct first: lowest latency; relay adds a round trip if direct fails.";
+		}
 	}
 
 	inline std::string NetHostNatModeText(const SettingsMan& settings) {
@@ -130,14 +167,16 @@ namespace RTE {
 		// L33's row, in the same words the Rules page's combo uses.
 		line(std::string("When every human brain is lost: ") +
 		     (config.brainlessHumansSpectate ? "Keep playing, humans spectate" : "End the match"));
+		// The live figure drops the service's own row name, which this line already carries.
+		std::string live = snapshot.inputDelayText;
+		if (live.starts_with("Input delay: ")) live.erase(0, 13);
 		line(std::string("Input delay: ") +
 		     (config.delayPolicy == NetMatchDelayPolicy::Fixed
 		          ? "Fixed " + std::to_string(config.inputDelayFrames) + " ticks"
-		          : "Automatic (" + snapshot.inputDelayText + ")"));
+		          : "Automatic, " + NetAutoDelayText(config.slowPlayerBoundTicks) + (live.empty() ? "" : " - now " + live)));
 		line("Frame redundancy: " + std::to_string(config.frameRedundancyTicks) + " ticks");
 		line("Slow player bound: " + std::to_string(config.slowPlayerBoundTicks) + " ticks");
-		line(std::string("When a player falls behind: ") + (config.slowPlayerPolicy == NetSlowPlayerPolicy::Pause
-		    ? "Pause for them (up to 20 s)" : "Give the seat to the AI (host too) until they catch up"));
+		line(std::string("When a player falls behind: ") + NetSlowPlayerPolicyText(config.slowPlayerPolicy));
 		line(config.autosaveEnabled
 		         ? "Autosaves: every " + std::to_string(config.autosaveIntervalSeconds) + " sim seconds"
 		         : "Autosaves: off");
