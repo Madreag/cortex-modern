@@ -1414,6 +1414,19 @@ namespace RTE {
 		return Find(connection)->assignedPeerId == peerId;
 	}
 
+	bool NetWorldJoinHost::BeginInPlaceRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, uint64_t heldThrough, std::string* error) {
+		if (!IsPrivateMatch() || !m_Tail.Covers(heldThrough + 1)) {
+			if (error) *error = "the committed tail no longer reaches the held state";
+			return false;
+		}
+		if (!BeginRejoin(connection, stableSeat, peerId, incarnation, name, nowMs, error)) return false;
+		NetWorldJoinSession* session = Find(connection);
+		session->snapshotTick = session->deliveredThrough = session->acknowledgedThrough = heldThrough;
+		session->transferStarted = session->matchConfigSent = true;
+		session->phase = NetWorldJoinPhase::CatchingUp;
+		return true;
+	}
+
 	bool NetWorldJoinHost::NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough) {
 		auto* session = Find(connection);
 		if (!session || (!IsPrivateMatch() && !session->returnsToHeldSeat)) return false;
@@ -1756,6 +1769,16 @@ namespace RTE {
 			return false;
 		}
 		session->acknowledgedThrough = appliedThrough;
+		// The replay's own progress against the round's committed horizon, both in frames: a loaded machine slows the round too,
+		// so no wall clock enters it.
+		if (session->closingAnchorHorizon == 0 || nowFrame < session->closingAnchorHorizon) {
+			session->closingAnchorApplied = appliedThrough; session->closingAnchorHorizon = nowFrame;
+		} else if (nowFrame - session->closingAnchorHorizon >= c_NetWorldClosingWindowFrames) {
+			const double round = static_cast<double>(nowFrame - session->closingAnchorHorizon);
+			session->closingRate = (static_cast<double>(appliedThrough - session->closingAnchorApplied) - round) / round;
+			session->closingMeasured = true;
+			session->closingAnchorApplied = appliedThrough; session->closingAnchorHorizon = nowFrame;
+		}
 		session->catchUpTicks += ticksReplayed;
 		session->catchUpMs += elapsedMs;
 		// The first report carries the whole replay so far against no clock; only timed reports measure the rate.
@@ -1772,9 +1795,9 @@ namespace RTE {
 		} else {
 			session->atHeadSinceFrame = 0;
 		}
-		if (provesHeadroom && (!session->linkFits || !ShowsReplayHeadroom(*session))) {
+		if (provesHeadroom && !session->linkFits) {
 			// A returner held back from its activation says why, once per reason.
-			const char* reason = !session->linkFits ? "its link does not fit the round's delay" : "its replay has not shown headroom over the round";
+			const char* reason = "its link does not fit the round's delay";
 			if (reason != session->activationHeldReason) {
 				std::ostringstream line;
 				line << "[net-world] activation waits peer=" << static_cast<int>(session->assignedPeerId) << ": " << reason << " (replay ratio " << session->headroom.Ratio() << ")";
@@ -1791,17 +1814,16 @@ namespace RTE {
 		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame) {
 			return true;
 		}
+		// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline. One still closing
+		// is given the frames its measured rate needs to reach the horizon too, so it is at its activation before the round is.
+		const uint64_t behind = nowFrame > appliedThrough ? nowFrame - appliedThrough : 0;
 		uint64_t activation = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
-		// A returning seat closes on the round only by the difference of the two rates: activated before it has caught
-		// up, it reaches its first frame after the round does and every peer waits on it.
-		const double roundRate = 1000.0 / m_SimTickMs;
-		const double replayRate = session->wallCatchUpMs > 0 ? session->wallCatchUpTicks * 1000.0 / session->wallCatchUpMs : 0.0;
-		// A returner that kept the round's pace at the head of its tail has nothing to close: the lead primes it. One that showed
-		// headroom closes by at least the margin its headroom proved, never by a wall-rate difference that may be near zero.
-		const double provenGap = session->headroom.Ready() ? std::max(replayRate - roundRate, (session->headroom.Ratio() - 1.0) * roundRate) : 0.0;
-		if (provesHeadroom && provenGap > 0.0 && nowFrame > appliedThrough) {
-			const double frames = std::ceil((nowFrame - appliedThrough) * roundRate / provenGap);
-			activation = std::max(activation, nowFrame + static_cast<uint64_t>(frames) + c_NetWorldActivationLeadFrames);
+		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4) {
+			// Not yet measured over a window, or losing ground on the round: it keeps replaying.
+			if (!session->closingMeasured || session->closingRate < -0.1) return true;
+			// One at the round's pace stands behind by its link, which its input delay already covers.
+			if (session->closingRate > 0.1)
+				activation = std::max(activation, nowFrame + static_cast<uint64_t>(std::ceil(behind / session->closingRate)) + c_NetWorldActivationLeadFrames);
 		}
 		session->activationTick = activation;
 		if (outActivationTick) *outActivationTick = session->activationTick;
@@ -1947,7 +1969,7 @@ namespace RTE {
 	}
 
 	bool NetWorldJoinHost::ShowsReplayHeadroom(const NetWorldJoinSession& session) {
-		return session.headroom.Ready() || (session.atHeadSinceFrame != 0 && session.acknowledgedThrough >= session.atHeadSinceFrame + c_NetWorldPaceProofTicks);
+		return session.atHeadSinceFrame != 0;
 	}
 
 	std::vector<NetPeerId> NetWorldJoinHost::ReturnersWithoutHeadroom(uint64_t nowMs, uint64_t boundMs) const {
