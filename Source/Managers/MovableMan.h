@@ -1225,6 +1225,10 @@ namespace RTE {
 		// Global map which stores all objects so they could be foud by their unique ID
 		std::map<long int, MovableObject*> m_KnownObjects;
 		std::atomic<uint64_t> m_KnownObjectsVersion{0}; //!< Moves with every change to m_KnownObjects, under its lock.
+		std::unordered_map<const MovableObject*, uint32_t> m_KnownAddresses; //!< How many entries of m_KnownObjects name each object, as of m_KnownAddressesVersion.
+		uint64_t m_KnownAddressesVersion = UINT64_MAX; //!< The m_KnownObjectsVersion m_KnownAddresses answers for; any other rebuilds it at its next use.
+		/// Drops one entry's count of an object from the address index. Called with the registry locked.
+		void ForgetKnownAddress(const MovableObject* mo);
 		std::atomic<KnownObjectsScope*> m_KnownObjectsScope{nullptr}; //!< The innermost live known-objects scope.
 		std::vector<std::map<long int, MovableObject*>*> m_HeldRegistries; //!< Registry copies a scope will put back.
 		std::string m_ScriptGraphFailure; //!< Why the last set-aside could not carry the script graphs, empty when it could.
