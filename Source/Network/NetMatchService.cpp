@@ -5015,7 +5015,9 @@ static std::string ResyncSaveName() {
 		if (m_WorldJoin.FindSession(connection)) m_WorldJoin.CancelJoin(connection, "the seat was held again");
 		m_PrivateActivations.erase(connection);
 		m_PrivateTransferHeldReasons.erase(connection);
-		const uint32_t returning = hold->second.seatIncarnation + 1;
+		// A return a lost host agreed and this round passed still spent its incarnation on every peer.
+		const auto& known = m_Coordinator->GetConfig().peerIncarnations;
+		const uint32_t returning = std::max(hold->second.seatIncarnation, known.contains(member) ? known.at(member) : 0U) + 1;
 		if (error.empty() && m_WorldJoin.BeginInPlaceRejoin(connection, seat, member, returning, link->displayName, nowMs, heldThrough, &error)) {
 			m_InPlaceIncarnationBumps[member] = returning > incarnation ? returning - incarnation : 0;
 			m_Coordinator->NoteInPlaceReturn(member);
