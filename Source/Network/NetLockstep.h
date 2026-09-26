@@ -1032,6 +1032,8 @@ namespace RTE {
 		void NoteAuthorityHeard(uint64_t nowMs);
 		/// Whether the frame waited on is one the host produces only after a capture every peer announced.
 		bool HostBusyWithAnnouncedCapture(uint64_t frame) const;
+		/// The announced capture tick whose aftermath covers a frame, if any.
+		std::optional<uint64_t> AnnouncedCaptureCovering(uint64_t frame) const;
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { NET_PLANE_CHECK(); return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;

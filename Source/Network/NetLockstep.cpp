@@ -5253,12 +5253,20 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::HostBusyWithAnnouncedCapture(uint64_t frame) const {
 		NET_PLANE_CHECK();
+		return AnnouncedCaptureCovering(frame).has_value();
+	}
+
+	std::optional<uint64_t> NetLockstepCoordinator::AnnouncedCaptureCovering(uint64_t frame) const {
 		// The host's first input after a capture at the end of tick T is the one it produces simulating T + 1, which targets a delay later.
 		const uint64_t delay = InputDelayAt(GetHostPeerId(), frame);
 		const auto covers = [&](uint64_t tick) { return tick < frame && frame <= tick + delay + 2; };
-		if (m_AnnouncedCaptureEvery > 0 && frame > 1 && covers((frame - 1) / m_AnnouncedCaptureEvery * m_AnnouncedCaptureEvery)) return true;
+		if (m_AnnouncedCaptureEvery > 0 && frame > 1) {
+			const uint64_t tick = (frame - 1) / m_AnnouncedCaptureEvery * m_AnnouncedCaptureEvery;
+			if (covers(tick)) return tick;
+		}
 		const auto after = m_AnnouncedCaptureTicks.lower_bound(frame > delay + 2 ? frame - delay - 2 : 0);
-		return after != m_AnnouncedCaptureTicks.end() && covers(*after);
+		if (after != m_AnnouncedCaptureTicks.end() && covers(*after)) return *after;
+		return std::nullopt;
 	}
 
 	void NetLockstepCoordinator::AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
@@ -8536,10 +8544,19 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::JudgeOwnSeat(uint64_t frame, uint64_t nowMs) {
 		const uint8_t local = m_Config.localPeerId;
-		if (!UsesBoundedWait() || local != GetHostPeerId() || m_GoodbyeDrain || frame > m_FinalFrame || IsOwnHostSeatHeld() || m_RemotePeerIds.empty()) return false;
-		// The host's start work, a park every peer is in, and a capture it announced excuse its ticks exactly as they excuse a client's.
-		if (frame <= EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks) || IsSynchronizedCapturePark(frame) ||
-		    m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || HostBusyWithAnnouncedCapture(frame)) {
+		// A return the round agreed ends the hold from its own frame, whether or not this simulation has delivered it yet.
+		const auto back = m_ReclaimTransactions.find(local);
+		const bool backBy = back != m_ReclaimTransactions.end() && back->second.activationFrame <= frame;
+		if (!UsesBoundedWait() || local != GetHostPeerId() || m_GoodbyeDrain || frame > m_FinalFrame || (IsOwnHostSeatHeld() && !backBy) || m_RemotePeerIds.empty()) return false;
+		// The host's start work excuses its first ticks once; after a return only the return's own gap carries none of its input.
+		const uint64_t excusedThrough = back != m_ReclaimTransactions.end()
+			? std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames)
+			: EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks);
+		// An announced capture excuses the ticks after it only while its tick is still the last this simulation completed.
+		const auto capture = AnnouncedCaptureCovering(frame);
+		const bool capturing = capture && (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick <= *capture);
+		// A park every peer is in and a pending timing decision excuse its ticks exactly as they excuse a client's.
+		if (frame <= excusedThrough || IsSynchronizedCapturePark(frame) || m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || capturing) {
 			m_OwnMissingFrame.reset();
 			return false;
 		}
