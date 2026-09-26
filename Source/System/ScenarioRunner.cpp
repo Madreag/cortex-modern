@@ -88,6 +88,7 @@ namespace RTE {
 		bool s_WorldCatchUpActive = false;
 		bool s_WorldCatchUpHeld = false;
 		int s_WorldCatchUpBudget = 0;
+		int s_OwnSeatCatchUpBudget = 0;
 		uint64_t s_WorldCatchUpAppliedThrough = 0;
 		uint64_t s_WorldCatchUpActivationTick = 0;
 		std::deque<NetLockstepFrame> s_WorldCatchUpTail;
@@ -814,6 +815,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::SetLockstepAnnouncedCaptureEvery(uint32_t every) {
+		NetLockstepPlaneGuard plane;
 		if (s_LockstepCoordinator) s_LockstepCoordinator->SetAnnouncedCaptureEvery(every);
 	}
 
@@ -826,6 +828,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId) {
+		NetLockstepPlaneGuard plane;
 		// Selftests drive the service before the managers are built, so there is no sim clock to stamp with.
 		uint64_t tick = 0;
 		if (s_LockstepCoordinator) {
@@ -853,10 +856,12 @@ namespace RTE {
 	}
 
 	uint32_t ScenarioRunner::GetLockstepSeatReclaimEpoch() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->LocalSeatReclaims() : 0;
 	}
 
 	bool ScenarioRunner::IsLockstepLocalMachineSlow(uint64_t nowMs) {
+		NetLockstepPlaneGuard plane;
 		if (nowMs == UINT64_MAX) nowMs = NetLockstepNowMs();
 		const bool unhealthy = (s_LockstepCoordinator && !s_LockstepCoordinator->IsMigrating() && s_LockstepCoordinator->GetStats().localMachineSlow) ||
 		    (s_WorldCatchUpActive && WorldCatchUpWorkTicks() >= 120 && s_CatchUpHeadroom.Ratio() <= 1.0);
@@ -870,6 +875,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::NoteLockstepLocalTickCost(uint64_t producedFrame, double computeMs) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) return;
 		s_LockstepCoordinator->NoteLocalTickCost(producedFrame, computeMs);
 	}
@@ -934,6 +940,7 @@ namespace RTE {
 	}
 
 	std::string ScenarioRunner::GetLockstepMissingPeers() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->DescribeMissingPeers() : std::string();
 	}
 
@@ -950,6 +957,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands) {
+		NetLockstepPlaneGuard plane;
 		// Every coordinator reaches the sim here, a menu-started session's too; its peers' Lua worlds must agree.
 		if (coordinator) {
 			LuaMan::SetDeterministicCollection(true);
@@ -980,6 +988,7 @@ namespace RTE {
 		}
 		if (coordinator) s_CommittedSeatsRound = coordinator->GetRoundId();
 		s_LockstepCoordinator = coordinator;
+		NetLockstepPlane::Target(coordinator);
 		s_PreSimWait.reset();
 		s_LocalStartParkPublished = false;
 		if (!coordinator) {
@@ -1026,10 +1035,12 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepControllerSyncActive() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning();
 	}
 
 	bool ScenarioRunner::FinishLockstepSimulationTick(uint64_t completedTick) {
+		NetLockstepPlaneGuard plane;
 		std::erase_if(s_RecoveredInputs, [&](const auto& input) { return input.targetFrame <= completedTick; });
 		std::erase_if(s_RecoveredCommands, [&](const auto& command) { return command.frame <= completedTick; });
 		std::erase_if(s_RecoveredPlayerBindings, [&](const auto& binding) { return binding.frame <= completedTick; });
@@ -1037,14 +1048,17 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::HasLockstepCoordinator() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator != nullptr;
 	}
 
 	std::string ScenarioRunner::GetLockstepStopReason() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetStats().timeoutReason : std::string();
 	}
 
 	bool ScenarioRunner::IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		NetLockstepPlaneGuard plane;
 		// Playback owns no actor: the file drives everything through the remote apply.
 		if (s_ReplayReader.IsOpen() || s_WorldCatchUpActive) {
 			return false;
@@ -1055,34 +1069,37 @@ namespace RTE {
 		// A synced control handoff overrides the per-team policy for that actor.
 		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
 		if (overrideIt != s_LockstepControlOverrides.end()) {
-			return overrideIt->second == s_LockstepCoordinator->GetConfig().localPeerId;
+			return s_LockstepCoordinator->AiProducerOf(overrideIt->second) == s_LockstepCoordinator->GetConfig().localPeerId;
 		}
 		return s_LockstepCoordinator->IsLocalActor(actorUniqueID, actorTeam, cpuControlled);
 	}
 
 	bool ScenarioRunner::IsLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint8_t peerId) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return true;
 		}
 		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
 		if (overrideIt != s_LockstepControlOverrides.end()) {
-			return overrideIt->second == peerId;
+			return s_LockstepCoordinator->AiProducerOf(overrideIt->second) == peerId;
 		}
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled) == peerId;
 	}
 
 	uint8_t ScenarioRunner::GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return 0;
 		}
 		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
 		if (overrideIt != s_LockstepControlOverrides.end()) {
-			return overrideIt->second;
+			return s_LockstepCoordinator->AiProducerOf(overrideIt->second);
 		}
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
 	}
 
 	uint8_t ScenarioRunner::GetLockstepPolicyActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return 0;
 		}
@@ -1090,6 +1107,7 @@ namespace RTE {
 	}
 
 	uint8_t ScenarioRunner::GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return 0;
 		}
@@ -1107,10 +1125,12 @@ namespace RTE {
 	}
 
 	uint8_t ScenarioRunner::GetLockstepHostPeerId() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetHostPeerId() : 0;
 	}
 
 	bool ScenarioRunner::IsHostMigrationCatchUp() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsMigrationCatchUp();
 	}
 
@@ -1120,6 +1140,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsWorldAuthor() {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return true;
 		}
@@ -1143,6 +1164,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::SubmitWorldTransition(const NetGameWorldTransition& transition) {
+		NetLockstepPlaneGuard plane;
 		if (s_LockstepCoordinator && !IsPersistentWorld()) {
 			return false;
 		}
@@ -1157,6 +1179,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::SubmitCheckpoint(const NetGameCheckpoint& checkpoint) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) return false;
 		NetGameCommand command;
 		command.senderPeerId = GetLockstepLocalPeerId();
@@ -1174,6 +1197,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error) {
+		NetLockstepPlaneGuard plane;
 		// The mirror of the send gate above: an ordinary round decodes these packets now, so without
 		// this it would spawn an actor and rebind a brain on a host-stamped transition.
 		if (s_LockstepCoordinator && !IsPersistentWorld()) {
@@ -1294,6 +1318,14 @@ namespace RTE {
 
 	void ScenarioRunner::BeginWorldCatchUpFrame() {
 		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
+		s_OwnSeatCatchUpBudget = c_WorldCatchUpTicksPerRealFrame;
+	}
+
+	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick) {
+		NetLockstepPlaneGuard plane;
+		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->IsOwnHostSeatHeld() || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
+		--s_OwnSeatCatchUpBudget;
+		return true;
 	}
 
 	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick) {
@@ -1315,6 +1347,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error) {
+		NetLockstepPlaneGuard plane;
 		if (!s_WorldCatchUpActive) {
 			return false;
 		}
@@ -1364,6 +1397,7 @@ namespace RTE {
 	}
 
 	uint8_t ScenarioRunner::ResolveTeamCommandAuthority(int team) {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->ResolveTeamCommandAuthority(team) : 0;
 	}
 
@@ -1402,6 +1436,7 @@ namespace RTE {
 	}
 
 	uint64_t ScenarioRunner::GetLockstepRoundId() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetRoundId() : 0;
 	}
 
@@ -1410,10 +1445,12 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::SetLockstepFinalFrame(uint64_t frame) {
+		NetLockstepPlaneGuard plane;
 		if (s_LockstepCoordinator) s_LockstepCoordinator->SetFinalFrame(frame);
 	}
 
 	ScenarioRunner::LockstepChecksumCounters ScenarioRunner::GetLockstepChecksumCounters() {
+		NetLockstepPlaneGuard plane;
 		LockstepChecksumCounters totals = s_RetiredChecksumCounters;
 		if (s_LockstepCoordinator) {
 			const NetLockstepStats& live = s_LockstepCoordinator->GetStats();
@@ -1435,10 +1472,12 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame) {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatUnderAI(peerId, frame);
 	}
 
 	bool ScenarioRunner::IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame) {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatReclaimGap(peerId, frame);
 	}
 
@@ -1447,6 +1486,7 @@ namespace RTE {
 	// there the seat that owns the actor in the world is the one reclaiming it, which is the same seat
 	// every survivor reads out of its own claim. Outside a reclaim gap nothing changes.
 	uint8_t ScenarioRunner::GetLockstepReclaimSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
+		NetLockstepPlaneGuard plane;
 		const uint8_t owner = GetLockstepDropTimeActorOwner(actorUniqueID, actorTeam, cpuControlled);
 		if (!s_LockstepCoordinator || !cpuControlled || owner != GetLockstepHostPeerId() ||
 		    s_LockstepCoordinator->IsSeatReclaimGap(owner, frame)) {
@@ -1457,6 +1497,7 @@ namespace RTE {
 	}
 
 	uint8_t ScenarioRunner::GetLockstepHeldSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
+		NetLockstepPlaneGuard plane;
 		const uint8_t owner = GetLockstepDropTimeActorOwner(actorUniqueID, actorTeam, cpuControlled);
 		if (!s_LockstepCoordinator || owner != GetLockstepHostPeerId()) return owner;
 		const uint8_t seeded = NetActorOwnership::GetSeededOwner(actorUniqueID);
@@ -1464,6 +1505,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::FilterReclaimControllerInputs(NetLockstepReadyFrame& ready) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || (!s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) && !s_LockstepCoordinator->HasSeatHoldGap(ready.frame)) || !MovableMan::IsConstructed()) return;
 		size_t seen = 0, fenced = 0;
 		const auto suppressed = [&](const ControllerFrame& input) {
@@ -1514,6 +1556,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(uint64_t frame) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || s_LockstepControlOverrides.empty()) {
 			return;
 		}
@@ -1551,6 +1594,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return false;
 		}
@@ -1567,6 +1611,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || team < 0) {
 			return true;
 		}
@@ -1609,6 +1654,7 @@ namespace RTE {
 	}
 
 	int ScenarioRunner::GetLockstepHumanSlotIndex(int team) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || team < 0) {
 			return -1;
 		}
@@ -1627,18 +1673,22 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::SubmitLockstepChecksum(uint64_t tick, const std::array<uint8_t, 32>& hash) {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->SubmitLocalChecksum(tick, hash, nullptr, s_AppliedCommandSequences);
 	}
 
 	uint16_t ScenarioRunner::GetLockstepInputDelayFrames() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->InputDelayAt(s_LockstepCoordinator->GetConfig().localPeerId, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) : 0;
 	}
 
 	uint8_t ScenarioRunner::GetLockstepLocalPeerId() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().localPeerId : 0;
 	}
 
 	const NetMatchConfig* ScenarioRunner::GetLockstepMatchConfig() {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return nullptr;
 		}
@@ -1709,6 +1759,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepHumanTeam(int team) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return false;
 		}
@@ -1721,6 +1772,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepActiveTeam(int team) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return false;
 		}
@@ -1733,6 +1785,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepHoldingSeatForReclaim() {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return false;
 		}
@@ -1744,6 +1797,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::DescribeLockstepHoldPause(std::string& outWho, uint32_t& outSecondsLeft) {
+		NetLockstepPlaneGuard plane;
 		outWho.clear();
 		outSecondsLeft = 0;
 		if (!s_LockstepCoordinator || s_LockstepCoordinator->UsesBoundedWait() || !s_LockstepCoordinator->AnyDroppedSeatHeld()) {
@@ -1766,6 +1820,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepActorOwnerGone(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return false;
 		}
@@ -1779,6 +1834,7 @@ namespace RTE {
 	}
 
 	static bool PrimeRestoredLockstepInputs(std::string* error) {
+		NetLockstepPlaneGuard plane;
 		const auto& config = s_LockstepCoordinator->GetConfig();
 		if (s_LockstepCoordinator->NeedsResyncPriming()) {
 			std::vector<NetLockstepFrame> batches(config.inputDelayFrames);
@@ -1803,6 +1859,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			if (error) *error = "lockstep coordinator is not active";
 			return false;
@@ -1980,6 +2037,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || !s_LockstepCoordinator->IsRunning()) {
 			return false;
 		}
@@ -2027,10 +2085,12 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::UsesBoundedLockstepWait() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->UsesBoundedWait();
 	}
 
 	bool ScenarioRunner::IsLockstepPeerGone(uint8_t peerId, uint64_t frame) {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsPeerGoneAtFrame(peerId, frame);
 	}
 
@@ -2047,10 +2107,12 @@ namespace RTE {
 	}
 
 	uint16_t ScenarioRunner::GetLockstepLocalInputDelay() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? GetLockstepInputDelayFrames() : 0;
 	}
 
 	uint64_t ScenarioRunner::GetLockstepEffectiveStartFrame() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? s_LockstepCoordinator->GetStats().effectiveStartFrame : 0;
 	}
 
@@ -2160,6 +2222,7 @@ namespace RTE {
 	}
 
 	uint64_t ScenarioRunner::GetLockstepResumeFrame() {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetResumeFrame() : 0;
 	}
 
@@ -2219,6 +2282,7 @@ namespace RTE {
 	}
 
 	AutosaveSideState ScenarioRunner::CaptureAgreedSideState() {
+		NetLockstepPlaneGuard plane;
 		AutosaveSideState agreed;
 		agreed.controlOwners = s_LockstepControlOverrides;
 		agreed.droppedControlOwners = s_LockstepDroppedControlOverrides;
@@ -2235,6 +2299,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error, bool captureLocalBindings) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || savedTick == UINT64_MAX) return false;
 		NetResyncState captured;
 		captured.sessionId = s_LockstepCoordinator->GetConfig().sessionId;
@@ -2302,6 +2367,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::RestoreCommittedCatchUpState(const NetResyncState& state, std::string* error) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || state.sessionId != s_LockstepCoordinator->GetConfig().sessionId || state.savedTick == UINT64_MAX ||
 		    state.savedTick + 1 != s_LockstepCoordinator->GetConfig().startFrame || !state.pendingInputs.empty() || !state.pendingCommands.empty() ||
 		    !state.pendingPlayerBindings.empty() || !state.admittedReseats.empty()) {
@@ -2328,6 +2394,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::RestoreNetResyncState(const NetResyncState& state, std::string* error) {
+		NetLockstepPlaneGuard plane;
 		const auto fail = [&] { if (error) *error = "resync command or ownership state is inconsistent"; return false; };
 		if (!s_LockstepCoordinator || state.sessionId != s_LockstepCoordinator->GetConfig().sessionId || state.savedTick == UINT64_MAX ||
 			state.savedTick + 1 != s_LockstepCoordinator->GetConfig().startFrame) return fail();
@@ -2496,6 +2563,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::RewindReplayForProbe(uint64_t firstFrame, std::string* error) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || !s_ReplayReader.IsOpen()) {
 			if (error) *error = "no replay playback to rewind";
 			return false;
@@ -2604,6 +2672,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::SealLockstepWorldSegment(const std::string& worldDigest, std::string* error) {
+		NetLockstepPlaneGuard plane;
 		if (!s_PendingWorldSegment) {
 			if (error) *error = "no world segment is waiting for its checkpoint";
 			return false;
@@ -2760,6 +2829,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::DrainLockstepRelay(uint32_t budgetMs, uint32_t lingerMs, uint32_t totalCapMs) {
+		NetLockstepPlaneGuard plane;
 		const auto start = std::chrono::steady_clock::now();
 		auto elapsed = [&start] {
 			return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
@@ -2823,6 +2893,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::PublishLocalStartup() {
+		NetLockstepPlaneGuard plane;
 		// The seat's device goes out with the startup reading, so the agreed record names it before any frame does.
 		if (UInputMan::IsConstructed()) {
 			s_LockstepCoordinator->NoteLocalDeviceClass(static_cast<uint8_t>(Controller::ClassifyDevice(g_UInputMan.GetControlScheme(Players::PlayerOne)->GetDevice())));
@@ -2831,10 +2902,12 @@ namespace RTE {
 	}
 
 	uint8_t ScenarioRunner::GetLockstepAgreedSeatDeviceClass(int seat) {
+		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->AgreedSeatDeviceClass(seat) : 0;
 	}
 
 	bool ScenarioRunner::PollLockstepSimulationTick(uint64_t tick) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || s_LockstepCoordinator->IsReplayPlayback() || WorldCatchUpActive()) return true;
 		const auto now = std::chrono::steady_clock::now();
 		if (s_PreSimWait) s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(now - *s_PreSimWait).count();
@@ -2870,6 +2943,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {
+		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			if (error) *error = "lockstep coordinator is not active";
 			return false;

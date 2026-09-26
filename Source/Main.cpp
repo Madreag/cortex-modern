@@ -5316,7 +5316,11 @@ void RunGameLoop() {
 				line << "[selftest] frame stall tick=" << s_frameStallTick << " ms=" << s_frameStallMs;
 				System::PrintDiagnosticLine(line.str());
 			}
+			// The session plane keeps the round's frames moving while this machine's simulation is away.
+			NetLockstepPlane::Window planeWindow;
+			const uint64_t planeTicksBefore = NetLockstepPlane::Ticks();
 			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
+			System::PrintDiagnosticLine("[selftest] frame stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
 		}
 		if (ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
 			for (auto& stall: s_netLiveStalls) if (!stall.fired && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= stall.tick) {
@@ -5325,7 +5329,10 @@ void RunGameLoop() {
 				stall.fired = true;
 				s_netLiveStallActivation = activation;
 				System::PrintDiagnosticLine("[net-test] live stall frame=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(stall.milliseconds));
-				std::this_thread::sleep_for(std::chrono::milliseconds(stall.milliseconds));
+				{
+					NetLockstepPlane::Window planeWindow;
+					std::this_thread::sleep_for(std::chrono::milliseconds(stall.milliseconds));
+				}
 				break;
 			}
 		}
@@ -5376,7 +5383,8 @@ void RunGameLoop() {
 					g_TimerMan.GrantSimUpdates(1);
 				}
 			} else if (!g_TimerMan.TimeForSimUpdate()) {
-				break;
+				if (!ScenarioRunner::TakeOwnSeatCatchUpGrant(nextSimTick)) break;
+				g_TimerMan.GrantSimUpdates(1);
 			}
 			if (!ScenarioRunner::WorldCatchUpActive() && !ScenarioRunner::PollLockstepSimulationTick(nextSimTick)) {
 				if (ScenarioRunner::HasControllerReplayError()) HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
@@ -5879,6 +5887,8 @@ void RunGameLoop() {
 				{
 					static const uint64_t soundPhase = Hash("Tick");
 					SoundSimulationScope simulationSounds(0, soundPhase);
+					// A long update is this machine's own: the plane commits for the round meanwhile, and the update reads the coordinator only through guarded calls.
+					NetLockstepPlane::Window planeWindow;
 					g_ActivityMan.Update();
 
 					if (g_SceneMan.GetScene()) {
