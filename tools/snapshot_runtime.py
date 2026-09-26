@@ -79,6 +79,8 @@ SCHEMAS["RuntimeGlobals6"] = [*SCHEMAS["RuntimeGlobals4"], *fields("input postpr
 SCHEMAS["RuntimeGlobals7"] = [*SCHEMAS["RuntimeGlobals4"], *fields("input postprocess primitive audio", "o")]
 SCHEMAS["RuntimeGlobals8"] = [*SCHEMAS["RuntimeGlobals4"], *fields("input postprocess primitive music audio", "o")]
 SCHEMAS["RuntimeGlobals9"] = [*SCHEMAS["RuntimeGlobals4"], *fields("input postprocess primitive gui_sound music audio", "o")]
+SCHEMAS["RuntimeGlobals10"] = [*SCHEMAS["RuntimeGlobals4"], *fields("input postprocess primitive gui_sound music committed_seats audio", "o")]
+SCHEMAS["UInputSeats1"] = [("seats", array(4, structure(("movement", VECTOR), *fields("device_class buttons tick"))))]
 SCHEMAS["PrimitiveMan1"] = [("images", sequence("o")), ("vertices", sequence(VECTOR)), ("primitives", sequence("o"))]
 SCHEMAS["PrimitiveValue1"] = SCHEMAS["PrimitiveMan1"]
 SCHEMAS["GraphicalPrimitive1"] = [("type", "n"), *fields("start end", VECTOR), *fields("draw_radius_squared color player blend_mode"),
@@ -609,7 +611,7 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
     if shared:
         for key in _LOCAL_FIELDS.get(version, ()):
             mask(key)
-        if version in ("RuntimeGlobals1", "RuntimeGlobals2", "RuntimeGlobals3", "RuntimeGlobals4", "RuntimeGlobals5", "RuntimeGlobals6", "RuntimeGlobals7", "RuntimeGlobals8", "RuntimeGlobals9"):
+        if version in ("RuntimeGlobals1", "RuntimeGlobals2", "RuntimeGlobals3", "RuntimeGlobals4", "RuntimeGlobals5", "RuntimeGlobals6", "RuntimeGlobals7", "RuntimeGlobals8", "RuntimeGlobals9", "RuntimeGlobals10"):
             mask("render_rng")
             # The sim RNG's draw count also counts each process's menu and loading draws; its seed and state are shared.
             words = result.get("sim_rng").split(b" ") if isinstance(result.get("sim_rng"), bytes) else []
@@ -859,6 +861,11 @@ def selftest():
           globals_projected["timer"]["sim_update_count"] != "LOCAL" and
           globals_projected["movable"]["sim_update_frame"] != "LOCAL" and
           all(globals_projected[name] != "LOCAL" for name in ("audio", "camera", "scene", "movable", "timer")))
+    # The seats' committed input is what every peer's scripts read, so it stays compared beside this machine's own input.
+    seats_state = decode(_payload("RuntimeGlobals10", committed_seats=_payload("UInputSeats1"), input=_payload("UInputMan1")))
+    seats_projected = project(seats_state, shared=True, masked=[], cross_process=True)
+    check("runtime_globals10_committed_seats_shared",
+          len(seats_state["committed_seats"]["seats"]) == 4 and seats_projected["committed_seats"] != "LOCAL" and seats_projected["input"] == "LOCAL")
     return all(checks)
 
 

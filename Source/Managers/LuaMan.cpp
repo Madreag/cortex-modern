@@ -8610,6 +8610,19 @@ end
 	checkpointValues = g_MusicMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_GUISound.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_UInputMan.RunCheckpointSelfTest() && checkpointValues;
+	{
+		// A seat's committed input travels in the runtime globals, so a peer restored from an image reads what the round committed.
+		const std::string before = g_UInputMan.SaveCommittedSeats();
+		g_UInputMan.NoteCommittedSeatMouse(Players::PlayerThree, Vector(-4.0F, 6.0F), 3, 0x12, 91);
+		const std::string noted = g_UInputMan.SaveCommittedSeats();
+		const std::string globals = g_ActivityMan.CaptureRuntimeGlobals();
+		g_UInputMan.ResetCommittedSeats();
+		const bool restored = g_ActivityMan.RestoreRuntimeGlobals(globals);
+		const bool carried = restored && g_UInputMan.SaveCommittedSeats() == noted;
+		g_UInputMan.LoadCommittedSeats(before);
+		std::cout << "[script-graph-selftest] " << (carried ? "PASS" : "FAIL") << " committed_seats_travel_in_the_runtime_globals restored=" << restored << " carried=" << carried << std::endl;
+		checkpointValues = carried && checkpointValues;
+	}
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
 	checkpointValues = System::RunPrintDisciplineSelfTest() && checkpointValues;
 	checkpointValues = ContentFile::RunImageLoadSelfTest() && checkpointValues;

@@ -374,6 +374,12 @@ namespace RTE {
 		/// Forgets every seat's committed mouse; a new round numbers its ticks afresh and has committed nothing yet.
 		void ResetCommittedSeats() { m_CommittedSeatMouse.fill({}); }
 
+		/// The seats' committed mouse as the round last applied it: the same on every peer, so a checkpoint carries it.
+		std::string SaveCommittedSeats() const;
+
+		/// Restores what SaveCommittedSeats wrote; nothing changes unless the whole text is valid.
+		bool LoadCommittedSeats(std::string_view text, bool validateOnly = false);
+
 		/// The device class a script inside a lockstep round reads for a seat: the one the seat's committed frame carries, else the agreed start's.
 		/// @param whichPlayer The seat's player.
 		/// @param deviceClass Set to the committed class (Controller::WireDeviceClass) when this returns true.
