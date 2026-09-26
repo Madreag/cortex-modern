@@ -4088,12 +4088,14 @@ namespace RTE {
 			std::recursive_mutex lock;
 			std::atomic<NetLockstepCoordinator*> target{nullptr};
 			std::atomic<int> windows{0};
+			std::atomic<int> gaps{0};
 			std::atomic<uint64_t> ticks{0};
 			std::atomic<bool> checksArmed{false};
 			std::atomic<uint64_t> checkTrips{0};
 			std::atomic<uint64_t> scopeRefusals{0};
 			std::mutex checkSitesLock;
 			std::set<std::string> checkSites;
+			std::set<std::string> refusedSites;
 			std::once_flag started;
 			std::jthread thread;
 		};
@@ -4103,14 +4105,39 @@ namespace RTE {
 			return state;
 		}
 
+		// The thread that runs main() runs the simulation; only it opens the plane's windows and gaps.
+		const std::thread::id s_SimulationThread = std::this_thread::get_id();
+
+		// The plane ticks only while a window is open and every gap is closed.
+		bool PlaneOpen(const PlaneState& plane) { return plane.windows.load(std::memory_order_acquire) > 0 && plane.gaps.load(std::memory_order_acquire) == 0; }
+
+		// A scope opened off the simulation thread moves no count: it could close the simulation's window under it or open one it never opened.
+		bool RefuseForeignScope(const char* kind, const char* name) {
+			if (std::this_thread::get_id() == s_SimulationThread) return false;
+			PlaneState& plane = Plane();
+			plane.scopeRefusals.fetch_add(1, std::memory_order_acq_rel);
+			const std::string site = std::string(kind) + (name ? std::string(" '") + name + "'" : std::string()) + " off the simulation thread";
+			std::lock_guard<std::mutex> sites(plane.checkSitesLock);
+			if (plane.checksArmed.load(std::memory_order_relaxed)) {
+				plane.checkTrips.fetch_add(1, std::memory_order_acq_rel);
+				plane.checkSites.insert(site);
+			}
+			if (plane.refusedSites.insert(site).second) {
+				std::ostringstream thread;
+				thread << "thread=" << std::this_thread::get_id() << " simulation_thread=" << s_SimulationThread;
+				std::cout << "[net-plane] refused a " << site << ": " << thread.str() << " from " << CallerNames() << std::endl;
+			}
+			return true;
+		}
+
 		void RunPlane(std::stop_token stop) {
 			PlaneState& plane = Plane();
 			while (!stop.stop_requested()) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-				if (plane.windows.load(std::memory_order_acquire) == 0) continue;
+				if (!PlaneOpen(plane)) continue;
 				std::unique_lock<std::recursive_mutex> lock(plane.lock, std::try_to_lock);
 				NetLockstepCoordinator* target = plane.target.load(std::memory_order_acquire);
-				if (!lock.owns_lock() || !target || plane.windows.load(std::memory_order_acquire) == 0) continue;
+				if (!lock.owns_lock() || !target || !PlaneOpen(plane)) continue;
 				++NetLockstepPlane::LockDepth();
 				const uint64_t nowMs = NetLockstepNowMs();
 				if (target->PlaneShouldTick(nowMs)) {
@@ -4148,7 +4175,7 @@ namespace RTE {
 
 	uint64_t NetLockstepPlane::CheckTrips() { return Plane().checkTrips.load(std::memory_order_acquire); }
 
-	bool NetLockstepPlane::TicksPermitted() { return Plane().windows.load(std::memory_order_acquire) != 0; }
+	bool NetLockstepPlane::TicksPermitted() { return PlaneOpen(Plane()); }
 
 	uint64_t NetLockstepPlane::ScopeRefusals() { return Plane().scopeRefusals.load(std::memory_order_acquire); }
 
@@ -4159,7 +4186,7 @@ namespace RTE {
 
 	void NetLockstepPlane::Check(const void* coordinator, const char* where) {
 		PlaneState& plane = Plane();
-		if (!plane.checksArmed.load(std::memory_order_relaxed) || plane.windows.load(std::memory_order_acquire) == 0 || LockDepth() > 0 ||
+		if (!plane.checksArmed.load(std::memory_order_relaxed) || !PlaneOpen(plane) || LockDepth() > 0 ||
 		    coordinator != plane.target.load(std::memory_order_acquire)) return;
 		const uint64_t trips = plane.checkTrips.fetch_add(1, std::memory_order_acq_rel) + 1;
 		std::lock_guard<std::mutex> sites(plane.checkSitesLock);
@@ -4172,25 +4199,33 @@ namespace RTE {
 	}
 
 	NetLockstepPlane::Gap::Gap(const char* name) : m_Name(name) {
+		if (RefuseForeignScope("gap", name)) return;
 		if (m_Name) m_OpenedMs = NetLockstepNowMs();
 		PlaneState& plane = Plane();
+		// A tick in flight holds the lock; the plane reads the gaps again under it before its next tick.
 		std::lock_guard<std::recursive_mutex> lock(plane.lock);
-		m_Closed = plane.windows.exchange(0, std::memory_order_acq_rel);
+		m_ClosedWindow = PlaneOpen(plane);
+		plane.gaps.fetch_add(1, std::memory_order_acq_rel);
+		m_Counted = true;
 	}
 
 	NetLockstepPlane::Gap::~Gap() {
-		Plane().windows.fetch_add(m_Closed, std::memory_order_acq_rel);
-		if (m_Name && m_Closed > 0) {
+		if (!m_Counted) return;
+		Plane().gaps.fetch_sub(1, std::memory_order_acq_rel);
+		if (m_Name && m_ClosedWindow) {
 			const uint64_t lastedMs = NetLockstepNowMs() - m_OpenedMs;
 			if (lastedMs >= 250) std::cout << "[net-plane] the " << m_Name << " gap lasted " << lastedMs << " ms clock=" << NetLockstepSharedClockMs() << std::endl;
 		}
 	}
 
 	NetLockstepPlane::Window::Window(const char* name) : m_Name(name) {
+		if (RefuseForeignScope("window", name)) return;
 		if (m_Name) { m_OpenedMs = NetLockstepNowMs(); m_TicksAtOpen = Ticks(); }
 		Plane().windows.fetch_add(1, std::memory_order_acq_rel);
+		m_Counted = true;
 	}
 	NetLockstepPlane::Window::~Window() {
+		if (!m_Counted) return;
 		// A tick in flight finishes before the simulation thread goes on to code that reads the coordinator unguarded.
 		PlaneState& plane = Plane();
 		std::lock_guard<std::recursive_mutex> lock(plane.lock);
@@ -4202,7 +4237,7 @@ namespace RTE {
 		}
 		if (plane.checksArmed.load(std::memory_order_relaxed) && plane.checkTrips.load(std::memory_order_acquire) > 0) {
 			std::lock_guard<std::mutex> sites(plane.checkSitesLock);
-			std::cout << "[net-plane] ASSERT: " << plane.checkTrips.load() << " coordinator accesses without the plane's lock inside open windows at " << plane.checkSites.size() << " sites; stopping" << std::endl;
+			std::cout << "[net-plane] ASSERT: " << plane.checkTrips.load() << " coordinator accesses without the plane's lock inside open windows or scopes off the simulation thread at " << plane.checkSites.size() << " sites; stopping" << std::endl;
 			std::fflush(stdout);
 			std::abort();
 		}
