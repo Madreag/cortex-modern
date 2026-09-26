@@ -848,7 +848,8 @@ namespace RTE {
 				const uint32_t rttMs = m_Transport->GetPeerPingMs(peer.transportPeerId);
 				auto& sample = m_InputDelaySamples[peerId];
 				sample.Observe(m_TimingClockMs, rttMs);
-				const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(sample.RequiredFrames(g_TimerMan.GetDeltaTimeMS(), m_Config.matchConfig.inputDelayFrames), NetMatchConfigUtil::c_MaxInputDelayFrames));
+				const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(sample.RequiredFrames(g_TimerMan.GetDeltaTimeMS(), m_Config.matchConfig.inputDelayFrames) +
+				    NetMatchConfigUtil::HoldMarginFrames(m_Config.matchConfig), NetMatchConfigUtil::c_MaxInputDelayFrames));
 				delays.at(peerId - 1) = std::max(m_Config.matchConfig.inputDelayFrames, delay);
 			}
 		}
