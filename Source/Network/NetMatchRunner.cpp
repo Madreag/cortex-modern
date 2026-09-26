@@ -607,6 +607,9 @@ namespace RTE {
 				}
 			}
 			if (relayReady && m_Config.startRequested && m_Config.startRequested->exchange(false)) {
+				if (m_Config.host && m_Config.roundStartScripts) {
+					if (std::vector<uint8_t> scripts = m_Config.roundStartScripts(); !scripts.empty()) m_Lobby.BeginStateTransfer(std::move(scripts));
+				}
 				m_Lobby.RequestStart();
 			}
 			// An accepted host-options draft becomes this round's next configuration revision here, on
