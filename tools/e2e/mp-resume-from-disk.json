@@ -27,7 +27,7 @@
             "1200"
           ],
           "menu_script": "mp-resume-from-disk.host.menu.txt",
-          "input_script": "play-input.txt",
+          "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.before.probe.json",
           "kill_at_tick": 601,
           "observe_after_failure": true,
@@ -57,7 +57,7 @@
             "1200"
           ],
           "menu_script": "mp-resume-from-disk.client.menu.txt",
-          "input_script": "play-input.txt",
+          "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.before.probe.json",
           "kill_at_tick": 601,
           "observe_after_failure": true,
@@ -122,7 +122,7 @@
             "peer": "host",
             "ended": true
           },
-          "input_script": "play-input.txt",
+          "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.after.probe.json",
           "observe_after_failure": true,
           "settings": {
@@ -168,7 +168,7 @@
             "peer": "client",
             "ended": true
           },
-          "input_script": "play-input.txt",
+          "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.after.probe.json",
           "observe_after_failure": true,
           "settings": {

@@ -216,7 +216,9 @@ int PieMenu::Create(const PieMenu& reference) {
 	RecreateBackgroundBitmaps();
 
 	RepopulateAndRealignCurrentPieSlices();
-	if (faithful) {
+	if (MovableObject::FaithfulCloneForPreview()) {
+		CopyRuntimeForPreview(reference);
+	} else if (faithful) {
 		if (!LoadRuntimeCheckpoint(reference.SaveRuntimeCheckpoint())) return -1;
 	}
 
@@ -448,6 +450,66 @@ bool PieMenu::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly) {
 		reader.Finish();
 		return true;
 	} catch (const std::exception&) { return false; }
+}
+
+void PieMenu::CopyRuntimeForPreview(const PieMenu& reference) {
+	m_PresetName = reference.m_PresetName;
+	m_CopiedFromPresetName = reference.m_CopiedFromPresetName;
+	m_PresetDescription = reference.m_PresetDescription;
+	m_FormattedReaderPosition = reference.m_FormattedReaderPosition;
+	m_IsOriginalPreset = reference.m_IsOriginalPreset;
+	m_DefinedInModule = reference.m_DefinedInModule;
+	m_RandomWeight = reference.m_RandomWeight;
+	const std::set<std::string> groups(reference.m_Groups.begin(), reference.m_Groups.end());
+	m_Groups.clear();
+	m_Groups.insert(groups.begin(), groups.end());
+	m_DirectionIfSubPieMenu = reference.m_DirectionIfSubPieMenu;
+	m_MenuMode = reference.m_MenuMode;
+	m_CenterPos = reference.m_CenterPos;
+	m_Rotation = reference.m_Rotation;
+	m_EnabledState = reference.m_EnabledState;
+	m_EnableDisableAnimationTimer = reference.m_EnableDisableAnimationTimer;
+	m_HoverTimer = reference.m_HoverTimer;
+	m_SubPieMenuHoverOpenTimer = reference.m_SubPieMenuHoverOpenTimer;
+	m_IconSeparatorMode = reference.m_IconSeparatorMode;
+	m_FullInnerRadius = reference.m_FullInnerRadius;
+	m_BackgroundThickness = reference.m_BackgroundThickness;
+	m_BackgroundSeparatorSize = reference.m_BackgroundSeparatorSize;
+	m_DrawBackgroundTransparent = reference.m_DrawBackgroundTransparent;
+	m_BackgroundColor = reference.m_BackgroundColor;
+	m_BackgroundBorderColor = reference.m_BackgroundBorderColor;
+	m_SelectedItemBackgroundColor = reference.m_SelectedItemBackgroundColor;
+	for (size_t i = 0; i < m_PieQuadrants.size(); ++i) {
+		m_PieQuadrants[i].m_Enabled = reference.m_PieQuadrants[i].m_Enabled;
+		m_PieQuadrants[i].m_Direction = reference.m_PieQuadrants[i].m_Direction;
+	}
+	m_CurrentInnerRadius = reference.m_CurrentInnerRadius;
+	m_CursorInVisiblePosition = reference.m_CursorInVisiblePosition;
+	m_CursorAngle = reference.m_CursorAngle;
+	m_CursorVisualAngle = reference.m_CursorVisualAngle;
+	m_BGBitmapNeedsRedrawing = reference.m_BGBitmapNeedsRedrawing;
+	m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing = reference.m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing;
+	// A bitmap of the same shape takes the pixels in place; any other is replaced, as the checkpoint's staging does.
+	const auto copyBitmap = [](BITMAP*& target, const BITMAP* source) {
+		if (!source) {
+			if (target) destroy_bitmap(target);
+			target = nullptr;
+			return;
+		}
+		const int depth = bitmap_color_depth(const_cast<BITMAP*>(source));
+		if (!target || target->w != source->w || target->h != source->h || bitmap_color_depth(target) != depth) {
+			if (target) destroy_bitmap(target);
+			target = create_bitmap_ex(depth, source->w, source->h);
+			if (!target) throw std::runtime_error("could not allocate a preview's pie menu bitmap");
+		}
+		const size_t stride = static_cast<size_t>(source->w) * ((depth + 7) / 8);
+		for (int y = 0; y < source->h; ++y) std::memcpy(target->line[y], source->line[y], stride);
+		target->clip = source->clip; target->cl = source->cl; target->ct = source->ct;
+		target->cr = source->cr; target->cb = source->cb;
+	};
+	copyBitmap(m_BGBitmap, reference.m_BGBitmap);
+	copyBitmap(m_BGRotationBitmap, reference.m_BGRotationBitmap);
+	copyBitmap(m_BGPieSlicesWithSubPieMenuBitmap, reference.m_BGPieSlicesWithSubPieMenuBitmap);
 }
 
 bool PieMenu::RunCheckpointSelfTest() {
