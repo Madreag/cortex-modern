@@ -3682,20 +3682,44 @@ namespace RTE {
 				std::string transferError;
 				const bool ok = runner.StartNextMatch(tap, hostSession, hostCoordinator, &transferError, state);
 				const uint64_t elapsed = nowMs() - transferStartedAt;
-				if (progressTimes.empty() || !peerError.empty() || elapsed <= config.lobbyWaitMs || tap.wrongLane) {
-					*error = "runner state transfer did not exercise its elapsed deadline; peer=" + peerError;
+				// Each failing clause is named with what it read, so a red run says which one tripped.
+				std::string clauses;
+				const auto clause = [&clauses](bool failed, const std::string& text) {
+					if (failed) clauses += (clauses.empty() ? "" : "; ") + text;
+				};
+				const std::string arm = stalled ? "stalled" : "throttled";
+				clause(progressTimes.empty(), "no transfer progress was published");
+				clause(!peerError.empty(), "peer error '" + peerError + "'");
+				clause(elapsed <= config.lobbyWaitMs, "elapsed " + std::to_string(elapsed) + " ms <= lobby wait " + std::to_string(config.lobbyWaitMs) + " ms");
+				clause(tap.wrongLane, "a chunk rode the wrong lane");
+				if (!clauses.empty()) {
+					*error = "runner " + arm + " state transfer did not exercise its elapsed deadline: " + clauses;
 					return false;
 				}
 				if (stalled) {
-					if (ok || transferError != "timed out waiting for lobby start" || lastProgress != 1 || received.size() != 0 ||
-					    elapsed - progressTimes.back() <= config.lobbyWaitMs || hostSession.GetStats().receivedMessages < messagesBefore + 2) {
-						*error = "runner stalled state transfer did not time out amid session keepalives: " + transferError;
+					const uint64_t stallMs = elapsed - progressTimes.back();
+					const uint32_t heard = hostSession.GetStats().receivedMessages - messagesBefore;
+					clause(ok, "the transfer succeeded");
+					clause(transferError != "timed out waiting for lobby start", "error '" + transferError + "'");
+					clause(lastProgress != 1, "progress " + std::to_string(lastProgress) + ", expected 1");
+					clause(received.size() != 0, "the client received " + std::to_string(received.size()) + " bytes");
+					clause(stallMs <= config.lobbyWaitMs, "timed out " + std::to_string(stallMs) + " ms after the last progress (elapsed " + std::to_string(elapsed) +
+					                                         " ms, last progress at " + std::to_string(progressTimes.back()) + " ms), not after more than " + std::to_string(config.lobbyWaitMs));
+					clause(heard < 2, "the host heard " + std::to_string(heard) + " session message(s) during the stall, expected 2 or more");
+					if (!clauses.empty()) {
+						*error = "runner stalled state transfer did not time out amid session keepalives: " + clauses;
 						return false;
 					}
 				} else {
 					uint64_t previous = 0;
 					for (const uint64_t progressAt: progressTimes) {
-						if (progressAt - previous > config.lobbyWaitMs) { *error = "throttled transfer had a real progress stall"; return false; }
+						if (progressAt - previous > config.lobbyWaitMs) {
+							std::string times;
+							for (const uint64_t at: progressTimes) times += (times.empty() ? "" : ",") + std::to_string(at);
+							*error = "throttled transfer had a real progress stall: " + std::to_string(progressAt - previous) + " ms between progress at " + std::to_string(previous) +
+							         " and " + std::to_string(progressAt) + " ms, over the lobby wait " + std::to_string(config.lobbyWaitMs) + " ms (progress at " + times + ")";
+							return false;
+						}
 						previous = progressAt;
 					}
 					// The host's completed handshake can leave its Start queued for the client.
@@ -3703,12 +3727,17 @@ namespace RTE {
 						hostCoordinator.Tick(NetLockstepNowMs());
 						std::this_thread::sleep_for(std::chrono::milliseconds(5));
 					}
-					const bool joinedInBudget = startPublishedAt && clientCoordinator.IsRunning() && nowMs() - *startPublishedAt <= config.lockstepWaitMs;
-					if (!ok || received != state || lastProgress != 12 || progressTimes.back() <= config.lobbyWaitMs || !joinedInBudget) {
-						*error = "runner state transfer: ok=" + std::to_string(ok) + " received=" + std::to_string(received.size()) +
-						         " bytes_equal=" + std::to_string(received == state) + " progress=" + std::to_string(lastProgress) +
-						         " last_progress_ms=" + std::to_string(progressTimes.back()) + " client=" + NetLockstepCoordinator::StateName(clientCoordinator.GetState()) +
-						         " error=" + transferError;
+					const uint64_t joinedAfterMs = startPublishedAt ? nowMs() - *startPublishedAt : 0;
+					const bool joinedInBudget = startPublishedAt && clientCoordinator.IsRunning() && joinedAfterMs <= config.lockstepWaitMs;
+					clause(!ok, "the transfer failed: " + transferError);
+					clause(received != state, "the client received " + std::to_string(received.size()) + " bytes, equal=" + std::to_string(received == state));
+					clause(lastProgress != 12, "progress " + std::to_string(lastProgress) + ", expected 12");
+					clause(progressTimes.back() <= config.lobbyWaitMs, "the last progress came at " + std::to_string(progressTimes.back()) + " ms, inside the lobby wait " + std::to_string(config.lobbyWaitMs) + " ms");
+					clause(!joinedInBudget, "the client coordinator is " + std::string(NetLockstepCoordinator::StateName(clientCoordinator.GetState())) +
+					                            (startPublishedAt ? " " + std::to_string(joinedAfterMs) + " ms after the Start" : std::string(" and no Start was published")) +
+					                            ", budget " + std::to_string(config.lockstepWaitMs) + " ms");
+					if (!clauses.empty()) {
+						*error = "runner state transfer: " + clauses;
 						return false;
 					}
 				}
