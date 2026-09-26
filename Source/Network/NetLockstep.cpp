@@ -4074,7 +4074,12 @@ namespace RTE {
 	uint64_t NetLockstepPlane::Ticks() { return Plane().ticks.load(std::memory_order_relaxed); }
 
 	NetLockstepPlane::Window::Window() { Plane().windows.fetch_add(1, std::memory_order_acq_rel); }
-	NetLockstepPlane::Window::~Window() { Plane().windows.fetch_sub(1, std::memory_order_acq_rel); }
+	NetLockstepPlane::Window::~Window() {
+		// A tick in flight finishes before the simulation thread goes on to code that reads the coordinator unguarded.
+		PlaneState& plane = Plane();
+		std::lock_guard<std::recursive_mutex> lock(plane.lock);
+		plane.windows.fetch_sub(1, std::memory_order_acq_rel);
+	}
 
 	NetLockstepCoordinator::~NetLockstepCoordinator() { NetLockstepPlane::Forget(this); }
 
