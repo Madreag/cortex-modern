@@ -3059,9 +3059,15 @@ namespace RTE {
 		NetLockstepConfig replayConfig;
 		replayConfig.localPeerId = 1; replayConfig.startFrame = 11; replayConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x54504F52ULL);
 		const bool replayed = read && replay.StartReplay(transport, replayConfig, &codecError) && replay.QueueReplayFrame(11, decoded.frames, {}, &codecError);
-		if (!replayed || states(decoded) != "123")
+		// The returner's replay hands the apply the three inputs in the order the live peers applied them, so the last one wins alike.
+		NetLockstepReadyFrame applied;
+		if (replayed) replay.Tick(0);
+		const bool delivered = replayed && replay.PopReadyFrame(applied);
+		std::string appliedStates;
+		for (const ControllerFrame* input: CommittedControllerFramesInSenderOrder(applied, 1)) appliedStates += std::to_string(input->stateMask);
+		if (!delivered || states(decoded) != "123" || appliedStates != "123")
 			return Fail("tail-pack-order: one actor's inputs from three senders encoded " + std::to_string(encoded) + ", read back " + std::to_string(read) + " as " +
-			            states(decoded) + " and replayed " + std::to_string(replayed) + ": " + codecError + "; expected 1, 1 as 123 and 1");
+			            states(decoded) + ", replayed " + std::to_string(replayed) + " and applied as " + appliedStates + ": " + codecError + "; expected 1, 1 as 123, 1 and 123");
 		return 0;
 	}
 
