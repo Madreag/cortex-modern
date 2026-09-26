@@ -952,6 +952,15 @@ Controller::InputMode Actor::SwapControllerModes(Controller::InputMode newMode, 
 }
 
 bool Actor::Look(float FOVSpread, float range) {
+	SeeRay seeRay;
+	if (!LookRay(FOVSpread, range, seeRay)) {
+		return false;
+	}
+	Vector ignored(0, 0);
+	return g_SceneMan.CastSeeRay(seeRay.team, seeRay.start, seeRay.ray, ignored, seeRay.strengthLimit, seeRay.skip);
+}
+
+bool Actor::LookRay(float FOVSpread, float range, SeeRay& seeRay) {
 	if (!g_SceneMan.AnythingUnseen(m_Team) || m_CanRevealUnseen == false) {
 		return false;
 	}
@@ -989,8 +998,8 @@ bool Actor::Look(float FOVSpread, float range) {
 
 	// TODO: generate an alarm event if we spot an enemy actor?
 
-	Vector ignored(0, 0);
-	return g_SceneMan.CastSeeRay(m_Team, aimPos, lookVector, ignored, 25, step);
+	seeRay = {m_Team, aimPos, lookVector, 25, step};
+	return true;
 }
 
 void Actor::AddGold(float goldOz) {
@@ -2617,18 +2626,16 @@ void Actor::Update() {
 	if (m_Health != checkpointHealth || m_Status != checkpointStatus) TouchCheckpoint();
 }
 
-void RTE::Actor::CastSeeRays(uint64_t launchTick) {
-	// See-ray casting runs on the thread pool and reaches g_SimRNG via Look(); redirect to a per-actor stream.
+void RTE::Actor::PrepareSeeRays(uint64_t launchTick, std::vector<SeeRay>& rays) {
+	// The rays' spread draws a per-actor stream of the launching tick, as it did when the pool aimed them.
 	DeterministicMORNGScope rngScope(GetUniqueID(), Hash("CastSeeRays"), launchTick, true);
-	// Vision reads the frozen terrain copy so concurrent carving can't race the see-ray reads.
-	SceneMan::ScopedTerrainCopyRead terrainCopyScope;
 
 	// "See" the location and surroundings of this actor on the unseen map
 	if (m_Status != Actor::INACTIVE) {
 		const int lookIterations = 6; // How many see rays to cast per frame
 		for (int i = 0; i < lookIterations; ++i) {
 			// Every peer reveals its own unseen map, so scale sight by the default screen, not this window.
-			Look(45 * m_Perceptiveness, c_DefaultResX * 0.51 * m_Perceptiveness);
+			if (SeeRay seeRay; LookRay(45 * m_Perceptiveness, c_DefaultResX * 0.51 * m_Perceptiveness, seeRay)) rays.push_back(seeRay);
 		}
 	}
 }

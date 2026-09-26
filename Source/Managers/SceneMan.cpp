@@ -1431,14 +1431,9 @@ bool SceneMan::CastTerrainPenetrationRay(const Vector& start, const Vector& ray,
 }
 
 // TODO Every raycast should use some shared line drawing method (or maybe something more efficient if it exists, that needs looking into) instead of having a ton of duplicated code.
-bool SceneMan::CastUnseenRay(int team, const Vector& start, const Vector& ray, Vector& endPos, int strengthLimit, int skip, bool reveal) {
-	if (!m_pCurrentScene->GetUnseenLayer(team))
-		return false;
-
+void SceneMan::WalkUnseenRay(const Vector& start, const Vector& ray, int strengthLimit, int skip, Vector& endPos, const std::function<void(int, int)>& visit, const std::function<void(int, int)>& passed) {
 	int error, dom, sub, domSteps, skipped = skip;
-	int size = 40 - GetUnseenResolution(team).GetLargest();
 	int intPos[2], delta[2], delta2[2], increment[2];
-	bool affectedAny = false;
 	unsigned char materialID;
 	Material const* foundMaterial;
 	int totalStrength = 0;
@@ -1451,7 +1446,7 @@ bool SceneMan::CastUnseenRay(int team, const Vector& start, const Vector& ray, V
 	delta[Y] = std::floor(start.m_Y + ray.m_Y) - intPos[Y];
 
 	if (delta[X] == 0 && delta[Y] == 0)
-		return false;
+		return;
 
 	/////////////////////////////////////////////////////
 	// Bresenham's line drawing algorithm preparation
@@ -1499,20 +1494,7 @@ bool SceneMan::CastUnseenRay(int team, const Vector& start, const Vector& ray, V
 			// Scene wrapping
 			WrapPosition(intPos[X], intPos[Y]);
 
-			bool is_unseen = IsUnseen(intPos[X], intPos[Y], team) || IsUnseen(intPos[X] - size, intPos[Y] - size, team) || IsUnseen(intPos[X] + size, intPos[Y] - size, team) || IsUnseen(intPos[X] + size, intPos[Y] + size, team) || IsUnseen(intPos[X] - size, intPos[Y] + size, team) || IsUnseen(intPos[X] - size, intPos[Y], team) || IsUnseen(intPos[X] + size, intPos[Y], team) || IsUnseen(intPos[X], intPos[Y] - size, team) || IsUnseen(intPos[X], intPos[Y] + size, team);
-
-			// Reveal if we can, save the result
-			if (reveal) {
-				if (is_unseen) {
-					RevealUnseenBox(intPos[X] - size / 2, intPos[Y] - size / 2, size, size, team);
-					affectedAny = true;
-				}
-			} else {
-				if (!is_unseen) {
-					RestoreUnseenBox(intPos[X] - size / 2, intPos[Y] - size / 2, size, size, team);
-					affectedAny = true;
-				}
-			}
+			visit(intPos[X], intPos[Y]);
 
 			// Check the strength of the terrain to see if we can penetrate further
 			materialID = GetTerrMatter(intPos[X], intPos[Y]);
@@ -1528,13 +1510,72 @@ bool SceneMan::CastUnseenRay(int team, const Vector& start, const Vector& ray, V
 			}
 			// Reset skip counter
 			skipped = 0;
-			if (m_pDebugLayer && m_DrawRayCastVisualizations) {
-				m_pDebugLayer->SetPixel(intPos[X], intPos[Y], 13);
-			}
+			passed(intPos[X], intPos[Y]);
 		}
 	}
+}
+
+bool SceneMan::CastUnseenRay(int team, const Vector& start, const Vector& ray, Vector& endPos, int strengthLimit, int skip, bool reveal) {
+	if (!m_pCurrentScene->GetUnseenLayer(team))
+		return false;
+
+	int size = 40 - GetUnseenResolution(team).GetLargest();
+	bool affectedAny = false;
+	const auto visit = [&](int x, int y) {
+		bool is_unseen = IsUnseen(x, y, team) || IsUnseen(x - size, y - size, team) || IsUnseen(x + size, y - size, team) || IsUnseen(x + size, y + size, team) || IsUnseen(x - size, y + size, team) || IsUnseen(x - size, y, team) || IsUnseen(x + size, y, team) || IsUnseen(x, y - size, team) || IsUnseen(x, y + size, team);
+
+		// Reveal if we can, save the result
+		if (reveal) {
+			if (is_unseen) {
+				RevealUnseenBox(x - size / 2, y - size / 2, size, size, team);
+				affectedAny = true;
+			}
+		} else {
+			if (!is_unseen) {
+				RestoreUnseenBox(x - size / 2, y - size / 2, size, size, team);
+				affectedAny = true;
+			}
+		}
+	};
+	const auto passed = [this](int x, int y) {
+		if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+			m_pDebugLayer->SetPixel(x, y, 13);
+		}
+	};
+	WalkUnseenRay(start, ray, strengthLimit, skip, endPos, visit, passed);
 
 	return affectedAny;
+}
+
+void SceneMan::TraceSeeRay(const SeeRay& seeRay, BITMAP* fog, const Vector& fogScale, bool visualize, SeeRayTrace& trace) {
+	const int size = 40 - fogScale.GetLargest();
+	trace.size = size;
+	// The same reading IsUnseen makes, of the pass's own copy of the fog.
+	const auto unseen = [fog, &fogScale](int posX, int posY) {
+		int scaledX = posX / fogScale.m_X;
+		int scaledY = posY / fogScale.m_Y;
+		return getpixel(fog, scaledX, scaledY) != g_MaskColor;
+	};
+	Vector ignored;
+	const auto visit = [&](int x, int y) {
+		if (unseen(x, y) || unseen(x - size, y - size) || unseen(x + size, y - size) || unseen(x + size, y + size) || unseen(x - size, y + size) ||
+		    unseen(x - size, y) || unseen(x + size, y) || unseen(x, y - size) || unseen(x, y + size)) {
+			trace.reveals.emplace_back(x, y);
+		}
+	};
+	const auto passed = [&](int x, int y) {
+		if (visualize) trace.visualized.emplace_back(x, y);
+	};
+	WalkUnseenRay(seeRay.start, seeRay.ray, seeRay.strengthLimit, seeRay.skip, ignored, visit, passed);
+}
+
+void SceneMan::RevealSeeRay(int team, const SeeRayTrace& trace) {
+	for (const auto& [x, y]: trace.reveals) {
+		RevealUnseenBox(x - trace.size / 2, y - trace.size / 2, trace.size, trace.size, team);
+	}
+	if (m_pDebugLayer && m_DrawRayCastVisualizations) {
+		for (const auto& [x, y]: trace.visualized) m_pDebugLayer->SetPixel(x, y, 13);
+	}
 }
 
 bool SceneMan::CastSeeRay(int team, const Vector& start, const Vector& ray, Vector& endPos, int strengthLimit, int skip) {

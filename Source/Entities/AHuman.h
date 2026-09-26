@@ -467,7 +467,7 @@ namespace RTE {
 		/// casting. A random ray will be chosen out of this +-range.
 		/// @param range The range, in pixels, beyond the actors sharp aim that the ray will have.
 		/// @return Whether any unseen pixels were revealed by this look.
-		bool Look(float FOVSpread, float range) override;
+		bool LookRay(float FOVSpread, float range, SeeRay& seeRay) override;
 
 		/// Casts a material detecting ray in the direction of where this is facing.
 		/// @param FOVSpread The degree angle to deviate from the current view point in the ray

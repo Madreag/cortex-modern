@@ -19,6 +19,7 @@ namespace RTE {
 
 	class AtomGroup;
 	class HeldDevice;
+	struct SeeRay;
 	struct PathRequest;
 	enum class PieSliceType : int;
 
@@ -404,6 +405,13 @@ namespace RTE {
 		/// @param range The range, in pixels, that the ray will have.
 		/// @return Whether any unseen pixels were revealed by this look.
 		virtual bool Look(float FOVSpread, float range);
+
+		/// Aims an unseen-revealing ray the way Look casts it, drawing the same random spread, without casting it.
+		/// @param FOVSpread The degree angle to deviate from the current view point in the ray casting.
+		/// @param range The range, in pixels, that the ray will have.
+		/// @param seeRay Receives the ray.
+		/// @return Whether there is a ray to cast.
+		virtual bool LookRay(float FOVSpread, float range, SeeRay& seeRay);
 
 		/// Adds a certain amount of ounces of gold to this' team's total funds.
 		/// @param goldOz The amount in Oz with which to change this' team's gold tally.
@@ -903,9 +911,10 @@ namespace RTE {
 		/// Applies the saved wire-applied controller mode; runs after the activity's AI setup so it can't be overwritten.
 		void ApplyPersistedControllerMode();
 
-		/// Cast see rays for this actor. They run on the thread pool past the tick that launched them, so they seed from that tick.
+		/// Aims this actor's see rays for the pass the sim thread launches; the pool casts them from these values alone.
 		/// @param launchTick The sim tick that launched the pass.
-		void CastSeeRays(uint64_t launchTick);
+		/// @param rays Receives the rays.
+		void PrepareSeeRays(uint64_t launchTick, std::vector<SeeRay>& rays);
 
 		/// Updates the full state of this object in one call. (PreControllerUpdate(), Controller::Update(), and Update())
 		virtual void FullUpdate() override;
