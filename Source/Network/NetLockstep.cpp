@@ -3150,7 +3150,9 @@ namespace RTE {
 			NetLockstepFrame input;
 			if (!NetLockstepCodec::DecodeRecoveryInput(std::vector<uint8_t>(data, data + size), input) || input.senderPeerId != peer || input.targetFrame != frame || input.roundId != m_Config.matchConfig.roundId)
 				return false;
-			if (!present && (!input.frames.empty() || !input.commands.empty() || !input.observations.empty() || !input.valueObservations.empty()))
+			// A seat absent from a frame sends nothing of its own, but the authority's commands for it ride its record: a held host's hold
+			// is carried in the host's own record at the frame its input is absent.
+			if (!present && (!input.frames.empty() || !input.observations.empty() || !input.valueObservations.empty()))
 				return false;
 			if (peer == m_Config.localPeerId) {
 				decoded.hasLocalInput = present != 0;
