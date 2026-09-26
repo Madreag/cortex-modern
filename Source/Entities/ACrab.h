@@ -206,7 +206,7 @@ namespace RTE {
 		/// casting. A random ray will be chosen out of this +-range.
 		/// @param range The range, in pixels, beyond the actors sharp aim that the ray will have.
 		/// @return Whether any unseen pixels were revealed by this look.
-		bool Look(float FOVSpread, float range) override;
+		bool LookRay(float FOVSpread, float range, SeeRay& seeRay) override;
 
 		/// Casts an MO detecting ray in the direction of where the head is looking
 		/// at the time. Factors including head rotation, sharp aim mode, and
