@@ -5020,7 +5020,10 @@ static std::string ResyncSaveName() {
 			m_InPlaceIncarnationBumps[member] = returning > incarnation ? returning - incarnation : 0;
 			m_Coordinator->NoteInPlaceReturn(member);
 			(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, connection, nullptr);
-			if (m_HandoverFrame != 0 && heldThrough < m_HandoverFrame) {
+			// A seat that was not in the handover holds a state from before it; a survivor's replay already runs under this host.
+			const bool crossesHandover = m_HandoverFrame != 0 && heldThrough < m_HandoverFrame &&
+			                             std::find(m_MigrationMembers.begin(), m_MigrationMembers.end(), member) == m_MigrationMembers.end();
+			if (crossesHandover) {
 				// Ahead of the tail: where it changed hands, so the returner replays each side under the authority that committed it.
 				NetWorldHandover handover;
 				handover.frame = m_HandoverFrame;
@@ -5034,7 +5037,7 @@ static std::string ResyncSaveName() {
 			std::ostringstream line;
 			line << "[net-match] held seat catches up in place peer=" << static_cast<int>(member) << " from=" << heldThrough << " hold=" << hold->second.cutoffFrame
 			     << " incarnation=" << returning << " horizon=" << m_Coordinator->GetStats().nextFrame;
-			if (m_HandoverFrame != 0 && heldThrough < m_HandoverFrame) line << " handover=" << m_HandoverFrame << " tail_first=" << m_WorldJoin.Tail().FirstServableFrame();
+			if (crossesHandover) line << " handover=" << m_HandoverFrame << " tail_first=" << m_WorldJoin.Tail().FirstServableFrame();
 			System::PrintDiagnosticLine(line.str());
 			return;
 		}
