@@ -5,6 +5,7 @@
 #include "NetMatchService.h"
 #include "SettingsMan.h"
 
+#include <cmath>
 #include <string>
 
 namespace RTE {
@@ -20,22 +21,24 @@ namespace RTE {
 
 	/// What happens to a player whose input is late, under the policy and bound the host picked.
 	inline std::string NetSlowPlayerHint(NetSlowPlayerPolicy policy, uint16_t boundTicks, double tickMs) {
-		return "";
+		if (policy == NetSlowPlayerPolicy::Pause) return "Everyone waits for a late player, host included, for up to 20 s.";
+		return "A player late past " + std::to_string(boundTicks) + (boundTicks == 1 ? " tick (" : " ticks (") + std::to_string(std::lround(boundTicks * tickMs)) +
+		       " ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.";
 	}
 
 	/// How the automatic input delay is sized, in the words every delay readout uses.
 	inline std::string NetAutoDelayText(uint16_t marginTicks) {
-		return "auto, re-sized live from ping";
+		return "ping plus a " + std::to_string(marginTicks) + "-tick margin, raised live if inputs arrive late";
 	}
 
 	/// The autosave interval row's range.
 	inline const char* NetAutosaveRangeHint() {
-		return "Autosaves every 60 s to 60 min, or off";
+		return "Every 60 s to 60 min, or off (default)";
 	}
 
 	/// What a match checkpoint is to the players.
 	inline const char* NetAutosaveNote() {
-		return "";
+		return "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.";
 	}
 
 	/// Settings > Network > Connection's hint for each route choice.
@@ -164,10 +167,13 @@ namespace RTE {
 		// L33's row, in the same words the Rules page's combo uses.
 		line(std::string("When every human brain is lost: ") +
 		     (config.brainlessHumansSpectate ? "Keep playing, humans spectate" : "End the match"));
+		// The live figure drops the service's own row name, which this line already carries.
+		std::string live = snapshot.inputDelayText;
+		if (live.starts_with("Input delay: ")) live.erase(0, 13);
 		line(std::string("Input delay: ") +
 		     (config.delayPolicy == NetMatchDelayPolicy::Fixed
 		          ? "Fixed " + std::to_string(config.inputDelayFrames) + " ticks"
-		          : "Automatic (" + snapshot.inputDelayText + ")"));
+		          : "Automatic, " + NetAutoDelayText(config.slowPlayerBoundTicks) + (live.empty() ? "" : " - now " + live)));
 		line("Frame redundancy: " + std::to_string(config.frameRedundancyTicks) + " ticks");
 		line("Slow player bound: " + std::to_string(config.slowPlayerBoundTicks) + " ticks");
 		line(std::string("When a player falls behind: ") + NetSlowPlayerPolicyText(config.slowPlayerPolicy));

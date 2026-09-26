@@ -1529,6 +1529,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	if (m_HostRelayBoxes[2]) m_HostRelayBoxes[2]->SetPasswordMask(true);
 	if (m_HostRelayHint) m_HostRelayHint->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	if (m_HostNetModeLabel) m_HostNetModeLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	if (m_HostNetEffectiveLabel) m_HostNetEffectiveLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	if (m_HostNetSlowPolicyHintLabel) m_HostNetSlowPolicyHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	if (auto* rangeHint = dynamic_cast<GUILabel*>(get("LabelHostRecAutosaveHint"))) rangeHint->SetText(NetAutosaveRangeHint());
 	if (auto* autosaveNote = dynamic_cast<GUILabel*>(get("LabelHostRecAutosaveNote"))) {
@@ -2020,10 +2021,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		m_HostNetMinDelayBox->SetText(std::to_string(m_HostOptionsDraft.inputDelayFrames));
 	}
 	if (m_HostNetEffectiveLabel) {
-		// H22: the floor in ticks and in milliseconds, then the announced per-sender figure.
-		std::string effective = "Effective delay: " + std::to_string(m_HostOptionsDraft.inputDelayFrames) + " ticks (" +
-		                        std::to_string(static_cast<int>(m_HostOptionsDraft.inputDelayFrames * g_TimerMan.GetDeltaTimeMS())) + " ms)";
-		if (m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto) effective += " (" + NetAutoDelayText(m_HostOptionsDraft.slowPlayerBoundTicks) + ")";
+		// H22: what an automatic delay adds, then the floor in ticks and milliseconds and the announced per-sender figure.
+		const std::string floor = std::to_string(m_HostOptionsDraft.inputDelayFrames) + " ticks (" +
+		                          std::to_string(static_cast<int>(m_HostOptionsDraft.inputDelayFrames * g_TimerMan.GetDeltaTimeMS())) + " ms)";
+		std::string effective = m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto
+		                            ? "Effective delay: " + NetAutoDelayText(m_HostOptionsDraft.slowPlayerBoundTicks) + ", at least " + floor
+		                            : "Effective delay: " + floor;
 		if (!snapshot.inputDelayText.empty()) effective += " - " + snapshot.inputDelayText;
 		m_HostNetEffectiveLabel->SetText(effective);
 	}
