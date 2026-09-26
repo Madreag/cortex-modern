@@ -59,6 +59,8 @@ Atom::Atom(const Vector& offset, unsigned char materialID, MovableObject* owner,
 }
 
 Atom::~Atom() {
+	// Clear touches a dying atom's owners first thing; comparing its fields before and after would only touch them again.
+	m_CheckpointInitialized = false;
 	Destroy();
 }
 
