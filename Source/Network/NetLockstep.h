@@ -1422,6 +1422,8 @@ namespace RTE {
 		bool WaiveRemoteFrames(uint8_t peerId, uint64_t fromFrame, uint64_t nowMs, bool announce);
 		static bool IsFrameWaiver(const NetLockstepStop& stop);
 		uint16_t PeerInputDelay(uint8_t peerId) const;
+		/// The delay a member's start must carry: its own, or in a round joined while running, the one in force at the start.
+		uint16_t MemberStartDelay(const NetLockstepStart& start) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
 		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
 		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
