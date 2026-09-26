@@ -1559,6 +1559,7 @@ namespace RTE {
 		std::unique_ptr<INetTransport> m_InPlaceMoveTransport; //!< Held client: the new connection while the successor admits it.
 		uint8_t m_InPlaceMoveHost = 0; //!< Held client: the successor being dialed; 0 when no move is under way.
 		std::string m_InPlaceMoveAddress;
+		std::string m_InPlaceTicketHost; //!< Held client: the host its ticket named before the move, restored if no successor takes the seat.
 		uint64_t m_InPlaceMoveSinceMs = 0;
 		static constexpr uint64_t c_InPlaceMoveBudgetMs = 10000; //!< How long one successor has to admit a moving seat.
 		static constexpr uint64_t c_ReturnerReportGapMs = 500; //!< Host: a returner that has reported within this is still catching up.
