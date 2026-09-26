@@ -686,7 +686,7 @@ def scripts(case, port, root, size="960x540"):
                  "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 6 ticks\n"
                  "assert_label TextHostNetSlowBound 3\n"
-                 "assert_label ComboHostNetSlowPolicy Hand the seat to the AI and let them rejoin\n"
+                 "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
                  "activate ButtonHostOptApply\nwait 3\nassert_enabled ButtonHostOptApply 0\n"
                  "combo_select ComboHostNetRedundancy 7 ticks\nwait 3\n"
                  "set_text TextHostNetSlowBound 7\nwait 3\n"
@@ -697,7 +697,7 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label ComboHostNetRedundancy 7 ticks\nassert_label TextHostNetSlowBound 7\n"
                  "combo_select ComboHostNetSlowPolicy Pause for them (up to 20 s)\nwait 3\n"
                  "assert_enabled TextHostNetSlowBound 0\n"
-                 "combo_select ComboHostNetSlowPolicy Hand the seat to the AI and let them rejoin\nwait 3\n"
+                 "combo_select ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\nwait 3\n"
                  "assert_enabled TextHostNetSlowBound 1\ndump_host_options\nexit\n")
     elif case == "landing":
         text = LANDING + "assert_label LabelMultiplayerNamePrompt Multiplayer name:\n"
@@ -1297,7 +1297,7 @@ def scripts(case, port, root, size="960x540"):
         for control in ("LabelHostNetSlowBound", "TextHostNetSlowBound", "LabelHostNetSlowBoundHint", "LabelHostNetSlowPolicy", "ComboHostNetSlowPolicy"):
             text += checks(control, "CollectionBoxHostPageNetwork")
         text += "assert_label TextHostNetSlowBound 3\n"
-        text += "assert_label ComboHostNetSlowPolicy Hand the seat to the AI and let them rejoin\n"
+        text += "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
         text += checks("LabelHostNetEffective", "CollectionBoxHostPageNetwork")
         text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageNetwork")
         # H34: the host row names mode/capacity/seated humans off the adopted config; the three
