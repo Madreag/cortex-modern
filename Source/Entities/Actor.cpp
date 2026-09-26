@@ -2617,9 +2617,9 @@ void Actor::Update() {
 	if (m_Health != checkpointHealth || m_Status != checkpointStatus) TouchCheckpoint();
 }
 
-void RTE::Actor::CastSeeRays() {
+void RTE::Actor::CastSeeRays(uint64_t launchTick) {
 	// See-ray casting runs on the thread pool and reaches g_SimRNG via Look(); redirect to a per-actor stream.
-	DeterministicMORNGScope rngScope(GetUniqueID(), Hash("CastSeeRays"));
+	DeterministicMORNGScope rngScope(GetUniqueID(), Hash("CastSeeRays"), launchTick, true);
 	// Vision reads the frozen terrain copy so concurrent carving can't race the see-ray reads.
 	SceneMan::ScopedTerrainCopyRead terrainCopyScope;
 

@@ -6851,12 +6851,13 @@ void MovableMan::Update() {
 		terrain->UpdateMaterialCopy();
 	}
 
-	// Run seeing rays for all actors
+	// Run seeing rays for all actors; they finish while the next tick moves the clock, so they carry this one
+	const uint64_t seeTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	m_ActorsSeeFuture = g_ThreadMan.GetPriorityThreadPool().parallelize_loop(m_Actors.size(),
-	                                                                         [&](int start, int end) {
+	                                                                         [&, seeTick](int start, int end) {
 		                                                                         ZoneScopedN("Actors See");
 		                                                                         for (int i = start; i < end; ++i) {
-			                                                                         m_Actors[i]->CastSeeRays();
+			                                                                         m_Actors[i]->CastSeeRays(seeTick);
 		                                                                         }
 	                                                                         });
 
