@@ -568,6 +568,7 @@ namespace RTE {
 		uint64_t lastHeardMs = 0;
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
+		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
 		uint64_t startParkMs = 0; //!< The start work THIS peer's machine measured, as it published it.
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
@@ -915,6 +916,10 @@ namespace RTE {
 		void NoteSeatReclaimed(uint8_t peerId);
 		/// Host: a returning seat whose catch-up is still replaying toward its reclaim frame; its first-input allowance starts at the catch-up's end.
 		void NoteReturnerCatchingUp(uint8_t peerId, uint64_t nowMs);
+		/// Host: a returning seat whose catch-up reached its reclaim frame; its first input is judged like any seat's from here.
+		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
+		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
+		void NoteInPlaceReturn(uint8_t peerId);
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
