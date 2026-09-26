@@ -10210,8 +10210,10 @@ namespace RTE {
 		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = host->second.jitterMs;
 		if (const auto estimate = m_DelayEstimators.find(GetHostPeerId()); estimate != m_DelayEstimators.end()) jitterMs = std::max<uint64_t>(jitterMs, estimate->second.JitterMs());
 		for (const uint32_t gap: m_AuthorityGaps) jitterMs = std::max<uint64_t>(jitterMs, gap);
-		// The start work the host published is how long its machine stalls for its own work; a stall no longer than that is not a death.
+		// The start work the host published is how long its machine stalls for its own work, and while it does its session still talks
+		// at its keepalive cadence: a silence no longer than those is not a death.
 		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = std::max<uint64_t>(jitterMs, host->second.startParkMs);
+		jitterMs = std::max<uint64_t>(jitterMs, m_Config.authorityKeepaliveMs);
 		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, silenceBoundMs + jitterMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs)));
 		// A host still in its start work (no frame from it yet this round) or in a capture park it announced is busy, not gone:
 		// only its link's close or the round's timeout ends that wait.
