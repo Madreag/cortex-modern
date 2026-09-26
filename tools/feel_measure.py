@@ -136,6 +136,12 @@ AUTOSAVE_CASES = (
     ('autosave-200ms', 200, 1),
 )
 
+# The same arms with a third peer that stays in the match; only --cases runs them.
+AUTOSAVE_THREE_CASES = (
+    ('autosave3-100ms', 100, 1),
+    ('autosave3-200ms', 200, 1),
+)
+
 
 def engine_placements(peers):
     """Three engines on one box each get their own cores and the host a third of them at above-normal priority: a
@@ -198,10 +204,10 @@ def case_peers(sp=False, silent_tick=None):
 DRY_RUN_PLAN = None
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0):
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False):
     if DRY_RUN_PLAN is not None:
         DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, loss_percent=loss_percent, silent_tick=silent_tick,
-                                 autosave_seconds=autosave_seconds, peers=case_peers(sp, silent_tick)))
+                                 autosave_seconds=autosave_seconds, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
         return None
     out = root / name
     out.mkdir(exist_ok=False)
@@ -217,7 +223,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                     exe=file_record(engine_executable(REPO)), lua_states=lua_states, pre_match_history=pre_match_history,
                     lua_states_note='retired: the engine fixes the count at build time')
     write_json(out / 'manifest.json', manifest)
-    peers = case_peers(sp, silent_tick)
+    peers = ['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
     placements = engine_placements(peers)
     manifest['engine_placement'] = {}
@@ -692,7 +698,7 @@ def parse_args(argv=None):
     parser.add_argument('--client-lua-states', type=int, default=4, help='retired: the build fixes the Lua state count')
     parser.add_argument('--host-pre-match-history', type=int, default=0, help='objects the host runtime spends before the match')
     parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
-    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES] + [name for name, *_ in TIMING_CASES],
+    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES] + [name for name, *_ in TIMING_CASES],
                         help='run only the selected autosave or timing arms, without baselines or the full matrix')
     parser.add_argument('--lag-arms', nargs='+', choices=LAG_ARMS,
                         help='run only these lag arms (each on and off) and the single-player baselines of their caps')
@@ -714,7 +720,7 @@ def launch_autosave_arm(root, index, case, port_base, script, exe_hash, timeout,
     """One autosave arm, launched the same way by the full matrix and by --cases."""
     name, lag, seconds = case
     return launch_case(root, name, lag, 60, True, port_base + 8 + index % 2, script, exe_hash, timeout,
-                       window_ticks=2 * TICKS, autosave_seconds=seconds, **counts)
+                       window_ticks=2 * TICKS, autosave_seconds=seconds, three_peers=case in AUTOSAVE_THREE_CASES, **counts)
 
 
 def dry_run_plan(launch_all):
@@ -747,7 +753,7 @@ def main(argv=None):
     counts = dict(host_lua_states=args.host_lua_states, client_lua_states=args.client_lua_states,
                   host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
     if args.cases:
-        selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES) if case[0] in args.cases] + \
+        selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES) if case[0] in args.cases] + \
                    [(index, case) for index, case in enumerate(TIMING_CASES) if case[0] in args.cases]
         launch_selected = lambda script, exe_hash: [(launch_timing_arm if len(case) == 4 else launch_autosave_arm)(root, index, case, args.port, script, exe_hash, args.timeout, counts)
                                                     for index, case in selected]
