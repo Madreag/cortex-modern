@@ -64,7 +64,7 @@ int AEJetpack::Create(const AEJetpack& reference) {
 		m_JetThrustBonusMultiplier = reference.m_JetThrustBonusMultiplier;
 	}
 	m_PersistedAEJetpackRuntime = reference.m_PersistedAEJetpackRuntime;
-	if (IsFaithfulClone() && m_PersistedAEJetpackRuntime.empty()) m_PersistedAEJetpackRuntime = reference.SaveAEJetpackRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedAEJetpackRuntime.empty()) m_PersistedAEJetpackRuntime = reference.SaveAEJetpackRuntime();
 	return 0;
 }
 

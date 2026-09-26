@@ -44,6 +44,10 @@ namespace RTE {
 		std::vector<Scene::HorizonTerrainBox> horizonBoxes;
 		std::array<HorizonFenceState, Activity::Teams::MaxTeamCount + 1> horizonFinders;
 		bool horizonHeld = false;
+		/// Set before Capture: the terrain's pixels are fenced page by page instead of copied, and Restore puts back only
+		/// the pages written. Capture falls back to the copy where the platform has no fence.
+		bool fencePixels = false;
+		bool pixelsFenced = false;
 
 		static void CopyFrom(BITMAP* bitmap, std::vector<uint8_t>& out);
 		static bool CopyTo(BITMAP* bitmap, const std::vector<uint8_t>& in);
@@ -55,6 +59,9 @@ namespace RTE {
 		static CheckpointText CaptureMetadata();
 		bool LoadMetadata(std::string_view text, bool validateOnly = false);
 	private:
+		std::vector<BITMAP*> fencedBitmaps;
+		static std::vector<BITMAP*> PixelBitmaps();
+		bool FencedPixelsIntact() const;
 		static void CaptureLayer(SceneLayer* source, Layer& target, bool pixels);
 		static void RestoreLayer(SceneLayer* target, const Layer& source);
 	};

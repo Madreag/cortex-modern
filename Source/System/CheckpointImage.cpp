@@ -1,4 +1,5 @@
 #include "CheckpointImage.h"
+#include "PageWriteFence.h"
 #include "CheckpointArchive.h"
 #include "ContentFile.h"
 #include "Writer.h"
@@ -1187,6 +1188,16 @@ bool RTE::RunCheckpointImageSelfTest() {
 			const std::string missed = ContentFile::LoadedBitmapChangeMissedByIndex();
 			if (missed.empty()) pass("a_loaded_bitmap_change_by_any_way_reaches_the_next_index", "ways=12");
 			else fail("a_loaded_bitmap_change_by_any_way_reaches_the_next_index", "missed_way=" + missed);
+		}
+		// A preview's page fence puts back exactly the bytes written under it, edges included, and nothing after it lifts.
+		{
+			if (!PageWriteFence::IsSupported()) {
+				pass("a_page_fence_puts_back_exactly_what_was_written", "platform=copies");
+			} else if (const std::string mismatch = PageWriteFence::SelfTestMismatch(); mismatch.empty()) {
+				pass("a_page_fence_puts_back_exactly_what_was_written", "rounds=2");
+			} else {
+				fail("a_page_fence_puts_back_exactly_what_was_written", mismatch);
+			}
 		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what());

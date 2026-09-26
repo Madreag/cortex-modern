@@ -114,7 +114,7 @@ int PEmitter::Create(const PEmitter& reference) {
 		m_AvgImpulse = reference.m_AvgImpulse;
 	}
 	m_PersistedPEmitterRuntime = reference.m_PersistedPEmitterRuntime;
-	if (IsFaithfulClone() && m_PersistedPEmitterRuntime.empty()) m_PersistedPEmitterRuntime = reference.SavePEmitterRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedPEmitterRuntime.empty()) m_PersistedPEmitterRuntime = reference.SavePEmitterRuntime();
 	return 0;
 }
 

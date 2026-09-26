@@ -4,6 +4,7 @@
 #include "Scene.h"
 #include "SLTerrain.h"
 #include "CheckpointArchive.h"
+#include "PageWriteFence.h"
 
 #include "allegro.h"
 
@@ -30,18 +31,68 @@ namespace RTE {
 		return true;
 	}
 
+	std::vector<BITMAP*> TerrainLayerSnapshot::PixelBitmaps() {
+		SLTerrain* terrain = g_SceneMan.GetScene() ? g_SceneMan.GetScene()->GetTerrain() : nullptr;
+		if (!terrain) return {};
+		return {terrain->GetMaterialBitmap(), terrain->GetFGColorBitmap(), terrain->GetBGColorBitmap(), terrain->m_MaterialCopy};
+	}
+
+	// A bitmap's pixels as one buffer, or nothing when its rows are not laid out back to back.
+	static PageWriteFence::Buffer PixelBuffer(BITMAP* bitmap) {
+		if (!bitmap || bitmap_color_depth(bitmap) != 8 || bitmap->w <= 0 || bitmap->h <= 0 || !is_memory_bitmap(bitmap)) return {};
+		for (int y = 1; y < bitmap->h; ++y) {
+			if (bitmap->line[y] != bitmap->line[0] + static_cast<size_t>(y) * bitmap->w) return {};
+		}
+		return {bitmap->line[0], static_cast<size_t>(bitmap->w) * bitmap->h};
+	}
+
+	static bool FencePixels(const std::vector<BITMAP*>& bitmaps, std::vector<PageWriteFence::Buffer>& buffers) {
+		buffers.clear();
+		for (BITMAP* bitmap: bitmaps) {
+			const PageWriteFence::Buffer buffer = PixelBuffer(bitmap);
+			if (bitmap && !buffer.data) return false;
+			buffers.push_back(buffer);
+		}
+		return true;
+	}
+
+	// The fence holds the pixels of these very bitmaps; one replaced since would have lost them. A material copy made
+	// where there was none is dropped at the restore, as the copy path drops it.
+	bool TerrainLayerSnapshot::FencedPixelsIntact() const {
+		std::vector<BITMAP*> live = PixelBitmaps();
+		if (live.size() == fencedBitmaps.size() && !fencedBitmaps.empty() && !fencedBitmaps.back()) live.back() = nullptr;
+		std::vector<PageWriteFence::Buffer> buffers;
+		return live == fencedBitmaps && FencePixels(fencedBitmaps, buffers) && PageWriteFence::Covers(buffers);
+	}
+
 	bool TerrainLayerSnapshot::Capture() {
 		Scene* scene = g_SceneMan.GetScene();
 		SLTerrain* terrain = scene ? scene->GetTerrain() : nullptr;
 		if (!terrain) {
 			return false;
 		}
-		CopyFrom(terrain->GetMaterialBitmap(), mat);
-		CopyFrom(terrain->GetFGColorBitmap(), fg);
-		CopyFrom(terrain->GetBGColorBitmap(), bg);
 		width = terrain->GetMaterialBitmap()->w;
 		height = terrain->GetMaterialBitmap()->h;
-		CopyFrom(terrain->m_MaterialCopy, materialCopy);
+		fencedBitmaps.clear();
+		pixelsFenced = false;
+		if (fencePixels) {
+			std::vector<PageWriteFence::Buffer> buffers;
+			const std::vector<BITMAP*> bitmaps = PixelBitmaps();
+			if (FencePixels(bitmaps, buffers) && PageWriteFence::Arm(buffers)) {
+				pixelsFenced = true;
+				fencedBitmaps = bitmaps;
+				mat.clear();
+				fg.clear();
+				bg.clear();
+				materialCopy.clear();
+			}
+		}
+		if (!pixelsFenced) {
+			CopyFrom(terrain->GetMaterialBitmap(), mat);
+			CopyFrom(terrain->GetFGColorBitmap(), fg);
+			CopyFrom(terrain->GetBGColorBitmap(), bg);
+			CopyFrom(terrain->m_MaterialCopy, materialCopy);
+		}
 		CaptureLayer(terrain, terrainLayers[0], false);
 		CaptureLayer(terrain->GetFGSceneLayer(), terrainLayers[1], false);
 		CaptureLayer(terrain->GetBGSceneLayer(), terrainLayers[2], false);
@@ -81,6 +132,11 @@ namespace RTE {
 	bool TerrainLayerSnapshot::CanRestore() const {
 		SLTerrain* terrain = g_SceneMan.GetScene() ? g_SceneMan.GetScene()->GetTerrain() : nullptr;
 		if (!terrain || width <= 0 || height <= 0) return false;
+		if (pixelsFenced) {
+			if (!FencedPixelsIntact()) return false;
+			for (const Layer& layer: unseen) if (layer.width < 0 || layer.height < 0 || layer.pixels.size() != static_cast<size_t>(layer.width) * layer.height) return false;
+			return true;
+		}
 		const size_t size = static_cast<size_t>(width) * height;
 		const auto compatible = [this](BITMAP* bitmap) { return bitmap && bitmap_color_depth(bitmap) == 8 && bitmap->w == width && bitmap->h == height; };
 		if (!compatible(terrain->GetMaterialBitmap()) || !compatible(terrain->GetFGColorBitmap()) || !compatible(terrain->GetBGColorBitmap()) || mat.size() != size || fg.size() != size || bg.size() != size || (!materialCopy.empty() && materialCopy.size() != size)) return false;
@@ -89,7 +145,11 @@ namespace RTE {
 	}
 
 	bool TerrainLayerSnapshot::Restore() const {
-		if (!CanRestore()) return false;
+		if (!CanRestore()) {
+			// Pixels that cannot go back are not held read-only either.
+			if (pixelsFenced) PageWriteFence::Release();
+			return false;
+		}
 		Scene* scene = g_SceneMan.GetScene();
 		SLTerrain* terrain = scene->GetTerrain();
 		// Construct changed fog layers before changing any live pixels.
@@ -100,16 +160,22 @@ namespace RTE {
 			BITMAP* bitmap = live ? live->GetBitmap() : nullptr;
 			if (saved.width && (!bitmap || bitmap->w != saved.width || bitmap->h != saved.height)) {
 				BITMAP* pixels = create_bitmap_ex(8, saved.width, saved.height);
-				if (!pixels) return false;
-				replacements[team] = std::make_unique<SceneLayer>();
-				if (replacements[team]->Create(pixels, saved.masked, saved.offset, saved.wrapX, saved.wrapY, saved.scrollInfo) < 0) return false;
+				if (!pixels || (replacements[team] = std::make_unique<SceneLayer>())->Create(pixels, saved.masked, saved.offset, saved.wrapX, saved.wrapY, saved.scrollInfo) < 0) {
+					if (pixelsFenced) PageWriteFence::Release();
+					return false;
+				}
 			}
 		}
-		CopyTo(terrain->GetMaterialBitmap(), mat);
-		CopyTo(terrain->GetFGColorBitmap(), fg);
-		CopyTo(terrain->GetBGColorBitmap(), bg);
-		if (!materialCopy.empty()) { terrain->UpdateMaterialCopy(); CopyTo(terrain->m_MaterialCopy, materialCopy); }
-		else if (terrain->m_MaterialCopy) { destroy_bitmap(terrain->m_MaterialCopy); terrain->m_MaterialCopy = nullptr; }
+		if (pixelsFenced) {
+			PageWriteFence::Restore();
+			if (!fencedBitmaps.back() && terrain->m_MaterialCopy) { destroy_bitmap(terrain->m_MaterialCopy); terrain->m_MaterialCopy = nullptr; }
+		} else {
+			CopyTo(terrain->GetMaterialBitmap(), mat);
+			CopyTo(terrain->GetFGColorBitmap(), fg);
+			CopyTo(terrain->GetBGColorBitmap(), bg);
+			if (!materialCopy.empty()) { terrain->UpdateMaterialCopy(); CopyTo(terrain->m_MaterialCopy, materialCopy); }
+			else if (terrain->m_MaterialCopy) { destroy_bitmap(terrain->m_MaterialCopy); terrain->m_MaterialCopy = nullptr; }
+		}
 		RestoreLayer(terrain, terrainLayers[0]);
 		RestoreLayer(terrain->GetFGSceneLayer(), terrainLayers[1]);
 		RestoreLayer(terrain->GetBGSceneLayer(), terrainLayers[2]);

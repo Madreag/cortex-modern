@@ -135,7 +135,7 @@ int ADoor::Create(const ADoor& reference) {
 		m_LastDoorMaterialPos = reference.m_LastDoorMaterialPos;
 	}
 	m_PersistedADoorRuntime = reference.m_PersistedADoorRuntime;
-	if (IsFaithfulClone() && m_PersistedADoorRuntime.empty()) m_PersistedADoorRuntime = reference.SaveADoorRuntime();
+	if (FaithfulCloneKeepsRuntime() && m_PersistedADoorRuntime.empty()) m_PersistedADoorRuntime = reference.SaveADoorRuntime();
 	return 0;
 }
 

@@ -1006,6 +1006,7 @@
     <ClInclude Include="Source\System\Vector.h" />
     <ClInclude Include="Source\System\Writer.h" />
     <ClInclude Include="Source\System\CheckpointImage.h" />
+    <ClInclude Include="Source\System\PageWriteFence.h" />
     <ClInclude Include="Source\System\MicroPather\micropather.h" />
     <ClInclude Include="Source\Renderer\raylib\raylib.h" />
     <ClInclude Include="Source\Renderer\raylib\rlconfig.h" />
@@ -1654,6 +1655,7 @@
     <ClCompile Include="Source\System\Vector.cpp" />
     <ClCompile Include="Source\System\Writer.cpp" />
     <ClCompile Include="Source\System\CheckpointImage.cpp" />
+    <ClCompile Include="Source\System\PageWriteFence.cpp" />
     <ClCompile Include="Source\Managers\AchievementMan.cpp" />
     <ClCompile Include="Source\Managers\ActivityMan.cpp" />
     <ClCompile Include="Source\Managers\AudioMan.cpp" />
