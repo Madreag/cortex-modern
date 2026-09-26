@@ -2378,6 +2378,9 @@ bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly
 				reader.Value(seats);
 				if (!g_UInputMan.LoadCommittedSeats(seats, true)) throw std::runtime_error("invalid committed seats checkpoint");
 				reader.OnCommit([seats] { if (!g_UInputMan.LoadCommittedSeats(seats)) throw std::runtime_error("could not restore committed seats checkpoint"); });
+			} else {
+				// An older image carries no seat's committed input, so the round's next frames supply it.
+				reader.OnCommit([] { g_UInputMan.ResetCommittedSeats(); });
 			}
 			std::string audio; reader.Value(audio);
 			std::string audioRefusal;

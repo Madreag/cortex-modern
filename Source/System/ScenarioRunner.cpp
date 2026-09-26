@@ -59,6 +59,7 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
+		uint64_t s_CommittedSeatsRound = 0; //!< The round whose frames the seats' committed input comes from.
 		bool s_LocalStartParkPublished = false;
 		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
@@ -969,8 +970,11 @@ namespace RTE {
 			s_RetiredChecksumCounters.compares += retiring.checksumCompares;
 			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
 		}
-		// Every seat's committed mouse comes from the new coordinator's own frames, never an earlier round's.
-		if (coordinator && coordinator != s_LockstepCoordinator && UInputMan::IsConstructed()) g_UInputMan.ResetCommittedSeats();
+		// A new round's seats start from its own frames; a coordinator taking over the same round keeps what it committed, which a restored image supplies.
+		if (coordinator && coordinator != s_LockstepCoordinator && coordinator->GetRoundId() != s_CommittedSeatsRound && UInputMan::IsConstructed()) {
+			g_UInputMan.ResetCommittedSeats();
+		}
+		if (coordinator) s_CommittedSeatsRound = coordinator->GetRoundId();
 		s_LockstepCoordinator = coordinator;
 		s_PreSimWait.reset();
 		s_LocalStartParkPublished = false;
