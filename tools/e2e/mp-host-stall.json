@@ -1,0 +1,942 @@
+{
+  "schema": 1,
+  "name": "mp-host-stall",
+  "port_base": 49413,
+  "title": "A live host whose simulation stalls 300 to 1000 ms keeps its round: its clients never elect it away",
+  "size": "960x540",
+  "timeout_s": 120,
+  "runs": [
+    {
+      "name": "stall-300",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host",
+            "-selftest-frame-stall",
+            "600:300"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    },
+    {
+      "name": "stall-450",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host",
+            "-selftest-frame-stall",
+            "600:450"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    },
+    {
+      "name": "stall-600",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host",
+            "-selftest-frame-stall",
+            "600:600"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    },
+    {
+      "name": "stall-800",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host",
+            "-selftest-frame-stall",
+            "600:800"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    },
+    {
+      "name": "stall-1000",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host",
+            "-selftest-frame-stall",
+            "600:1000"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "stall-300-client-keeps-its-host",
+      "run": "stall-300",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The client waits out the host's 300 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-300-survivor-keeps-its-host",
+      "run": "stall-300",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The survivor waits out the host's 300 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-300-host-plays-on",
+      "run": "stall-300",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The host stalls 300 ms at tick 600 and keeps hosting.",
+      "log_regex": [
+        "\\[selftest\\] frame stall tick=600"
+      ],
+      "forbidden_log_regex": [
+        "host lost",
+        "left the match at frame"
+      ]
+    },
+    {
+      "id": "stall-450-client-keeps-its-host",
+      "run": "stall-450",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The client waits out the host's 450 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-450-survivor-keeps-its-host",
+      "run": "stall-450",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The survivor waits out the host's 450 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-450-host-plays-on",
+      "run": "stall-450",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The host stalls 450 ms at tick 600 and keeps hosting.",
+      "log_regex": [
+        "\\[selftest\\] frame stall tick=600"
+      ],
+      "forbidden_log_regex": [
+        "host lost",
+        "left the match at frame"
+      ]
+    },
+    {
+      "id": "stall-600-client-keeps-its-host",
+      "run": "stall-600",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The client waits out the host's 600 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-600-survivor-keeps-its-host",
+      "run": "stall-600",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The survivor waits out the host's 600 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-600-host-plays-on",
+      "run": "stall-600",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The host stalls 600 ms at tick 600 and keeps hosting.",
+      "log_regex": [
+        "\\[selftest\\] frame stall tick=600"
+      ],
+      "forbidden_log_regex": [
+        "host lost",
+        "left the match at frame"
+      ]
+    },
+    {
+      "id": "stall-800-client-keeps-its-host",
+      "run": "stall-800",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The client waits out the host's 800 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-800-survivor-keeps-its-host",
+      "run": "stall-800",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The survivor waits out the host's 800 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-800-host-plays-on",
+      "run": "stall-800",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The host stalls 800 ms at tick 600 and keeps hosting.",
+      "log_regex": [
+        "\\[selftest\\] frame stall tick=600"
+      ],
+      "forbidden_log_regex": [
+        "host lost",
+        "left the match at frame"
+      ]
+    },
+    {
+      "id": "stall-1000-client-keeps-its-host",
+      "run": "stall-1000",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The client waits out the host's 1000 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-1000-survivor-keeps-its-host",
+      "run": "stall-1000",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The survivor waits out the host's 1000 ms stall and plays on under the same host.",
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "Host left",
+        "resync failed",
+        "lockstep stopped"
+      ]
+    },
+    {
+      "id": "stall-1000-host-plays-on",
+      "run": "stall-1000",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The host stalls 1000 ms at tick 600 and keeps hosting.",
+      "log_regex": [
+        "\\[selftest\\] frame stall tick=600"
+      ],
+      "forbidden_log_regex": [
+        "host lost",
+        "left the match at frame"
+      ]
+    }
+  ]
+}

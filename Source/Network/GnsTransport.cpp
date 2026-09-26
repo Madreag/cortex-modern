@@ -1147,14 +1147,25 @@ namespace RTE {
 
 #endif
 
+	namespace {
+		// One lock for every call into any transport: GNS dispatches a connection's callbacks from whichever transport pumps, and the
+		// session thread may send beside the simulation thread's pump.
+		std::recursive_mutex& GnsCallLock() {
+			static std::recursive_mutex lock;
+			return lock;
+		}
+	}
+
 	GnsTransport::GnsTransport() : m_Impl(new Impl()) {}
 
 	GnsTransport::~GnsTransport() {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		delete m_Impl;
 		m_Impl = nullptr;
 	}
 
 	bool GnsTransport::StartHost(uint16_t port, std::string* error) {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
 			m_Impl->Stop();
 			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
@@ -1164,6 +1175,7 @@ namespace RTE {
 	}
 
 	bool GnsTransport::Connect(const std::string& address, uint16_t port, std::string* error) {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
 			m_Impl->Stop();
 			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
@@ -1173,42 +1185,52 @@ namespace RTE {
 	}
 
 	bool GnsTransport::Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->Send(peerId, lane, bytes, error, congested);
 	}
 
 	void GnsTransport::Disconnect(NetPeerId peerId, const std::string& reason) {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		m_Impl->Disconnect(peerId, reason);
 	}
 
 	void GnsTransport::Stop() {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		m_Impl->Stop();
 	}
 
 	std::vector<NetTransportEvent> GnsTransport::PollEvents() {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->PollEvents();
 	}
 
 	uint32_t GnsTransport::GetPeerPingMs(NetPeerId peerId) const {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->GetPeerPingMs(peerId);
 	}
 
 	bool GnsTransport::StartHostP2P(int virtualPort, const GnsP2PConfig& config, std::string* error) {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->StartHostP2P(virtualPort, config, error);
 	}
 
 	bool GnsTransport::ConnectP2P(ISteamNetworkingConnectionSignaling* signaling, const std::string& peerIdentity, int remoteVirtualPort, const GnsP2PConfig& config, std::string* error) {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->ConnectP2P(signaling, peerIdentity, remoteVirtualPort, config, error);
 	}
 
 	bool GnsTransport::ReceiveP2PSignal(const void* blob, int size, ISteamNetworkingSignalingRecvContext* context) {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->ReceiveP2PSignal(blob, size, context);
 	}
 
 	GnsPeerConnectionInfo GnsTransport::GetPeerConnectionInfo(NetPeerId peerId) const {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->GetPeerConnectionInfo(peerId);
 	}
 
 	std::string GnsTransport::GetPeerDetailedStatus(NetPeerId peerId) const {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->GetPeerDetailedStatus(peerId);
 	}
 
@@ -1225,6 +1247,7 @@ namespace RTE {
 	}
 
 	void GnsTransport::UpdateListenerIceServers(const GnsP2PConfig& config) {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 #ifdef CCCP_WITH_GNS
 		m_Impl->UpdateListenerIceServers(config);
 #else

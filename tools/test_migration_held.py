@@ -81,6 +81,16 @@ def judge(out: Path, repo: Path) -> dict:
         failures.append("ClientB's private catch-up never completed")
     if landed:
         failures.append("ClientB was sent to the landing")
+    # Every survivor ends clean: no protocol error on any peer, and each exits 0 (the host is the one dropped on purpose).
+    for name, text in logs.items():
+        errors = re.findall(r"ProtocolError:\S*", text)
+        if errors:
+            failures.append(f"{name} stopped on a protocol error: {errors[0][:240]}")
+        launch = run / name / "launch.json"
+        exit_code = json.loads(launch.read_text(encoding="utf-8-sig")).get("exit_code") if launch.is_file() else None
+        if exit_code != 0:
+            failures.append(f"{name} exited {exit_code}")
+    verdict["protocol_errors"] = {name: len(re.findall(r"ProtocolError:", text)) for name, text in logs.items()}
     if hosted:
         boundary = int(hosted[0][1])
         # A survivor held later in the run is compared from the image it loaded, as every peer's coverage is (ruling D2).

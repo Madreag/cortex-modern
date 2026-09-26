@@ -4188,6 +4188,69 @@ namespace RTE {
 			return true;
 		}
 
+		// A survivor behind the host hears the host hold a returning seat again before it has committed the frames of that seat's
+		// neutral gap. The host committed those frames with the gap in force; so must the survivor, or it takes the returner's input
+		// there that the host fenced.
+		bool TestAHoldKeepsTheGapItsReturnLeftBehindIt(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(49591, error) || !clientWire.Connect("loopback", 49591, error)) return false;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A59; config.roundId = 59; config.localPeerId = 2; config.peerCount = 3; config.authorityPeerId = 1;
+			config.startFrame = 40; config.joinsRunningRound = true; config.inputDelayFrames = 2; config.substituteSlowPeers = true;
+			config.timeoutMs = 60000; config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.remoteTransportPeerIds = {{1, 1}};
+			config.scenario = "LockstepSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 3; config.matchConfig.players.push_back({3, 2, false, "Other"});
+			config.activePeerIds = {1, 2, 3};
+			// Peer 3 came back at 38 with its neutral gap running to 48.
+			NetGameSeatReclaim back; back.peerId = 3; back.eventSequence = 5; back.seatIncarnation = 2; back.activationFrame = 38; back.delayFrames = 2; back.neutralThroughFrame = 48;
+			config.initialSeatReclaims[3] = back; config.peerIncarnations[3] = 2;
+			NetLockstepCoordinator client;
+			if (!client.Start(clientWire, config, error)) return false;
+			const auto wire = [](const NetLockstepPacket& packet) {
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+				if (!NetLockstepCodec::Encode(packet, event.bytes)) event.bytes.clear();
+				return event;
+			};
+			const auto startOf = [](uint8_t peer) {
+				NetLockstepStart start;
+				start.sessionId = 0x9A59; start.roundId = 59; start.localPeerId = peer; start.peerCount = 3; start.startFrame = 40; start.inputDelayFrames = 2;
+				start.controllerFrameVersion = ControllerFrame::c_Version;
+				start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+				start.scenario = "LockstepSelfTest"; start.ownershipPolicy = "unique-id-split";
+				return start;
+			};
+			uint64_t now = 0;
+			for (const NetTransportEvent& event: {wire({startOf(1)}), wire({startOf(3)})}) {
+				if (event.bytes.empty()) { *error = "a packet of the joining round's handshake would not encode"; return false; }
+				client.InjectEvent(event, now);
+				for (uint64_t until = now + 20; now < until; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			}
+			if (!client.IsRunning() || !client.IsSeatReclaimGap(3, 45)) {
+				*error = std::string("the fixture's joining round did not start inside peer 3's neutral gap: state=") + NetLockstepCoordinator::StateName(client.GetState());
+				return false;
+			}
+			// The host, which committed through 50, holds peer 3 again at 51; this peer has committed none of 40..48 yet.
+			NetLockstepTiming again;
+			again.senderPeerId = 1; again.peerId = 3; again.action = NetTimingAction::Hold; again.phase = NetTimingPhase::HoldAtFrame;
+			again.sessionId = 0x9A59; again.roundId = 59; again.revision = 6; again.applyFrame = again.cutoffFrame = 51;
+			again.heldPeers = 0x4; again.requiredPeers = 0x1; again.seatIncarnations[2] = 2;
+			client.InjectEvent(wire({again}), now);
+			for (uint64_t until = now + 20; now < until; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			bool gapKept = true;
+			for (uint64_t frame = 40; frame <= 48; ++frame) gapKept = gapKept && client.IsSeatReclaimGap(3, frame);
+			if (!client.IsRunning() || !gapKept || client.IsSeatReclaimGap(3, 49) || !client.IsSeatUnderAI(3, 51) || client.IsSeatUnderAI(3, 50)) {
+				*error = std::string("a hold heard ahead of a return's neutral gap changed the frames before it: state=") + NetLockstepCoordinator::StateName(client.GetState()) +
+				         " gap_kept=" + std::to_string(gapKept) + " gap_49=" + std::to_string(client.IsSeatReclaimGap(3, 49)) +
+				         " under_ai_51=" + std::to_string(client.IsSeatUnderAI(3, 51)) + " under_ai_50=" + std::to_string(client.IsSeatUnderAI(3, 50));
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_hold_keeps_the_gap_its_return_left_behind_it" << std::endl;
+			return true;
+		}
+
 		// A link the round has measured must survive the connection that measured it: a peer that comes
 		// back on a new transport reports no samples yet, and reading that as an instant link left the
 		// returning seat's allowance with nothing to size itself from.
@@ -20226,6 +20289,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAReturnerHearsAHoldTheHostAlreadyApplied(&error) ||
 		    !TestAJoinerIgnoresTransitionsItsStateAlreadyHolds(&error) ||
 		    !TestAJoinerEndsAHoldItsStateStillCarries(&error) ||
+		    !TestAHoldKeepsTheGapItsReturnLeftBehindIt(&error) ||
 		    !TestReclaimedSeatRestartsItsWaitReadings(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
