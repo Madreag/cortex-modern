@@ -4849,6 +4849,27 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::DropReturnStartLocked(const std::string& why) {
+		if (m_Runner) m_Runner->CancelWorldJoinLockstepStart();
+		if (m_Coordinator) {
+			// The decisions for the other seats that round heard before its start are the round's own; the next start takes them.
+			for (const auto& [timing, transport]: m_Coordinator->TakePreStartTiming()) {
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = transport; event.lane = NetTransportLane::ControlReliable;
+				if (!NetLockstepCodec::Encode({timing}, event.bytes)) continue;
+				m_CatchUpWireBytes += event.bytes.size();
+				m_CatchUpWirePackets.push_back(std::move(event));
+			}
+			if (m_Coordinator->IsRunning()) m_Coordinator->Complete(why);
+		}
+		// Every start on the wire answered the return that is over.
+		std::erase_if(m_CatchUpWirePackets, [this](const NetTransportEvent& event) {
+			const bool start = event.bytes.size() >= NetLockstepCodec::c_HeaderBytes && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start);
+			if (start) m_CatchUpWireBytes -= event.bytes.size();
+			return start;
+		});
+	}
+
 	bool NetMatchService::BeginInPlaceMoveLocked(uint64_t nowMs) {
 		if (!m_InPlaceCatchUp || !m_Coordinator || !m_Session || !m_Runner || !m_CatchUpCoordinator || m_InPlaceRoutes.empty()) return false;
 		// A return the lost host agreed passes without this seat: the successor holds it again there and agrees its own.
@@ -5119,7 +5140,15 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		uint64_t refusal = 0;
+		const uint64_t priorActivation = m_WorldCatchUp.activationTick;
 		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal);
+		// A different frame is the host's next return for this seat: it held the seat again after the last one, and the start that
+		// return began is over whether or not this peer saw the hold.
+		if (m_WorldCatchUp.privateMatch && priorActivation != 0 && m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.activationTick != priorActivation) {
+			System::PrintDiagnosticLine("[net-match] held client: the host moved this seat's return from " + std::to_string(priorActivation) + " to " +
+			                            std::to_string(m_WorldCatchUp.activationTick) + " at replayed frame " + std::to_string(m_WorldCatchUp.appliedThrough));
+			DropReturnStartLocked("the host moved this seat's return");
+		}
 		if (refusal != 0) {
 			m_State = NetMatchServiceState::Failed; m_ErrorText = NetWorldJoinRefusalText(refusal); return;
 		}
@@ -5181,12 +5210,10 @@ static std::string ResyncSaveName() {
 			if (heldAgain) {
 				System::PrintDiagnosticLine("[net-match] held client: the host held this seat again before its return at " + std::to_string(m_WorldCatchUp.activationTick) +
 				                            "; catching up on from " + std::to_string(m_WorldCatchUp.appliedThrough));
-				m_Runner->CancelWorldJoinLockstepStart();
-				if (m_Coordinator->IsRunning()) m_Coordinator->Complete("the host held this seat again before its return");
+				DropReturnStartLocked("the host held this seat again before its return");
 				m_WorldCatchUp.activationTick = 0;
 				m_WorldCatchUp.activationCommitted = false;
 				ScenarioRunner::SetWorldCatchUpActivation(0);
-				m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 				// The next report asks for the tail from here, and the host answers it as a fresh in-place return.
 				(void)lobby.SendPayload(MakeJoinerCatchUpReport(), nullptr);
 			}

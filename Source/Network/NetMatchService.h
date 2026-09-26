@@ -938,6 +938,8 @@ namespace RTE {
 		/// Held client: its host is gone, so its catch-up moves to the next successor on a new connection with the world it holds.
 		/// Returns whether a successor is being tried; otherwise the seat takes the image path.
 		bool BeginInPlaceMoveLocked(uint64_t nowMs);
+		/// Ends the start a held client's return began; what that start's round heard of the others goes back on the catch-up wire.
+		void DropReturnStartLocked(const std::string& why);
 		/// Held client: dials the next successor route. Returns whether one is being dialed.
 		bool DialNextInPlaceRouteLocked(uint64_t nowMs);
 		/// Held client: drives the move's connection until the successor admits the seat, then asks it for the tail.

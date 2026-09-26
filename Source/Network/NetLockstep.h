@@ -1073,6 +1073,8 @@ namespace RTE {
 
 		NetLockstepState GetState() const { NET_PLANE_CHECK(); return m_State; }
 		bool IsRunning() const { NET_PLANE_CHECK(); return m_State == NetLockstepState::Running; }
+		/// Hands back the decisions a round heard before its start, for a round that will not start.
+		std::vector<std::pair<NetLockstepTiming, NetPeerId>> TakePreStartTiming() { NET_PLANE_CHECK(); return std::exchange(m_PreStartTiming, {}); }
 		bool HasReceivedAllRemoteStarts() const { NET_PLANE_CHECK(); return AllRemoteStartsReceived(); }
 		bool IsFailed() const { NET_PLANE_CHECK(); return m_State == NetLockstepState::Failed; }
 		bool IsStopped() const { NET_PLANE_CHECK(); return m_State == NetLockstepState::Stopped; }
