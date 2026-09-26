@@ -160,3 +160,102 @@ void CaptureSentinel::Flush() {
 	System::PrintDiagnosticLine(std::format("[checkpoint-sentinel] {} task={} thread={} hit={} stack={}\n", message, pending.task ? pending.task : "?", thread.str(), hit, stack.str()));
 	RTEAssert(false, message);
 }
+
+namespace {
+	struct TraceRecord {
+		const char* label;
+		std::string detail;
+		size_t thread;
+		int64_t queuedUs, startUs, endUs;
+	};
+	struct TraceState {
+		std::mutex mutex;
+		std::chrono::steady_clock::time_point origin;
+		uint64_t tick = 0;
+		std::vector<TraceRecord> records;
+	};
+	TraceState& Trace() {
+		static TraceState state;
+		return state;
+	}
+	// A short name for the thread a span ran on.
+	size_t ThreadOrdinal() {
+		static std::atomic<size_t> next{0};
+		thread_local const size_t ordinal = ++next;
+		return ordinal;
+	}
+} // namespace
+
+bool CaptureTrace::Enabled() {
+	static const bool enabled = [] {
+		const char* value = std::getenv("CCCP_CHECKPOINT_TRACE");
+		return value && *value && std::strcmp(value, "0") != 0;
+	}();
+	return enabled;
+}
+
+bool CaptureTrace::Serial() {
+	static const bool serial = [] {
+		const char* value = std::getenv("CCCP_CHECKPOINT_SERIAL");
+		return value && *value && std::strcmp(value, "0") != 0;
+	}();
+	return serial;
+}
+
+int CaptureTrace::ObjectDepth() {
+	static const int depth = [] {
+		const char* value = std::getenv("CCCP_CHECKPOINT_TRACE");
+		const int parsed = value ? std::atoi(value) : 0;
+		return parsed > 1 ? parsed : 1;
+	}();
+	return depth;
+}
+
+void CaptureTrace::Begin(uint64_t tick) {
+	if (!Enabled()) return;
+	TraceState& state = Trace();
+	std::lock_guard lock(state.mutex);
+	state.origin = std::chrono::steady_clock::now();
+	state.tick = tick;
+	state.records.clear();
+	s_Active.store(true, std::memory_order_relaxed);
+}
+
+void CaptureTrace::End() {
+	if (!Active()) return;
+	s_Active.store(false, std::memory_order_relaxed);
+	TraceState& state = Trace();
+	std::vector<TraceRecord> records;
+	uint64_t tick = 0;
+	{
+		std::lock_guard lock(state.mutex);
+		records.swap(state.records);
+		tick = state.tick;
+	}
+	std::string out;
+	for (const TraceRecord& record: records) {
+		out += std::format("[capture-span] tick={} label={} thread={} queued_us={} start_us={} end_us={} us={} detail={}\n", tick, record.label, record.thread,
+		                   record.queuedUs, record.startUs, record.endUs, record.endUs - record.startUs, record.detail.empty() ? "-" : record.detail);
+	}
+	out += std::format("[capture-trace] tick={} spans={}\n", tick, records.size());
+	System::PrintDiagnosticLine(out);
+}
+
+void CaptureTrace::Span::Start(const char* label, std::string detail, std::chrono::steady_clock::time_point queuedAt) {
+	m_Label = label;
+	m_Detail = std::move(detail);
+	m_Queued = queuedAt;
+	m_Start = std::chrono::steady_clock::now();
+}
+
+void CaptureTrace::Span::Stop() {
+	const auto end = std::chrono::steady_clock::now();
+	TraceState& state = Trace();
+	const auto offset = [&state](std::chrono::steady_clock::time_point at) {
+		return std::chrono::duration_cast<std::chrono::microseconds>(at - state.origin).count();
+	};
+	std::lock_guard lock(state.mutex);
+	if (!Active()) return;
+	state.records.push_back({m_Label, std::move(m_Detail), ThreadOrdinal(),
+	                         m_Queued == std::chrono::steady_clock::time_point{} ? -1 : offset(m_Queued), offset(m_Start), offset(end)});
+}

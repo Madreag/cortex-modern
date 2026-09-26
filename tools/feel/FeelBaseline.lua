@@ -4,6 +4,8 @@ local startDuel = FeelBaseline.StartActivity;
 local updateDuel = FeelBaseline.UpdateActivity;
 -- The driver rewrites this line with the run's tick target before it stages the script.
 local WINDOW_TICKS = 1200;
+-- The checkpoint cost driver rewrites this line to fill the sky with that many pinned, scripted objects.
+local LOAD_OBJECTS = 0;
 
 local function CollectTeamActors(team)
     local actors = {};
@@ -83,6 +85,20 @@ function FeelBaseline:StartActivity(startNewGame)
     end
     self:DisableAIs(true, Activity.NOTEAM);
     print("[feel-baseline] parked brains out of reach");
+    for i = 1, LOAD_OBJECTS do
+        local object = CreateMOSRotating("Dropship Hull Panel Gib A", "Base.rte");
+        object.Pos = Vector((i * 97) % SceneMan.SceneWidth, 60 + (i % 16) * 8);
+        object.PinStrength = 1000;
+        object.ToSettle = false;
+        object.LifeTime = 0;
+        object.HitsMOs = false;
+        object.GetsHitByMOs = false;
+        object:AddScript("UserScenes.rte/FeelLoad.lua");
+        MovableMan:AddParticle(object);
+    end
+    if LOAD_OBJECTS > 0 then
+        print("[feel-baseline] load objects " .. LOAD_OBJECTS);
+    end
 end
 
 function FeelBaseline:UpdateActivity()
