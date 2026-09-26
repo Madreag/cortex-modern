@@ -1999,7 +1999,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMatchRunner> runner;
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
-		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear(); m_RejoinFitReasons.clear(); m_CommittedRing.Clear(); m_CommittedRingRound = 0;
+		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear(); m_RejoinFitReasons.clear(); m_CommittedRing.Clear(); m_CommittedRingRound = 0; m_CommittedRingGeneration = 0;
 		m_HandoverFrame = 0; m_InPlaceRoutes.clear(); m_InPlaceMoveHost = 0; m_InPlaceMoveAddress.clear(); m_InPlaceTicketHost.clear();
 		m_PrivateBaseRequested = false; m_PrivateBaseTick = 0; m_PrivateBasePending.reset();
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateCaptureCosts.clear(); m_PrivateCaptureCold = false; m_PrivateJoinError.clear();
@@ -3341,9 +3341,15 @@ static std::string ResyncSaveName() {
 			const NetLockstepConfig& config = m_Coordinator->GetConfig();
 			uint32_t margin = 0;
 			for (uint8_t peer = 1; peer <= config.peerCount; ++peer) margin = std::max<uint32_t>(margin, NetMatchConfigUtil::PeerInputDelay(config.matchConfig, peer));
-			m_CommittedRing.Clear();
+			// A handover renames the round, not its history: the successor keeps the record it made under the lost host, whichever of
+			// this append and the rejoin plane's opening comes first after the boundary.
+			const bool handover = m_CommittedRingRound != 0 && config.migrationGeneration > m_CommittedRingGeneration && m_CommittedRing.Count() > 0;
+			if (handover) System::PrintDiagnosticLine("[net-match] the committed record goes on through the handover: frames " + std::to_string(m_CommittedRing.FirstFrame()) + ".." +
+			                                          std::to_string(m_CommittedRing.LastFrame()) + " round=" + std::to_string(round));
+			else m_CommittedRing.Clear();
 			m_CommittedRing.Configure(NetWorldFrameLog::RingFrames(config.matchConfig.slowPlayerBoundTicks, margin, c_PrivateImageMinIntervalMs, g_TimerMan.GetDeltaTimeMS()), 0);
 			m_CommittedRingRound = round;
+			m_CommittedRingGeneration = config.migrationGeneration;
 		}
 		const bool ring = !m_WorldJoin.IsPrivateMatch() && round != 0 && m_CommittedRingRound == round;
 		if (!m_WorldJoin.IsConfigured() && !ring) return;
