@@ -196,7 +196,7 @@
       "screen": "game",
       "mark": "vw-mp-play-host",
       "what": "The input script drives real gameplay for at least 600 simulation updates.",
-      "assert": "recorded menu/probe assertions in this marked interval",
+      "assert": "the round's committed frames across the marked window, which closes on the round's own frame 700 (and no sooner than 10.5 s), so a loaded box stretches the window instead of thinning it",
       "sim_progress": 600
     },
     {
@@ -277,7 +277,7 @@
       "screen": "game",
       "mark": "vw-mp-play-client",
       "what": "The input script drives real gameplay for at least 600 simulation updates.",
-      "assert": "recorded menu/probe assertions in this marked interval",
+      "assert": "the round's committed frames across the marked window, which closes on the round's own frame 700 (and no sooner than 10.5 s), so a loaded box stretches the window instead of thinning it",
       "sim_progress": 600
     },
     {
