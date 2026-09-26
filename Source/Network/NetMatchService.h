@@ -1521,6 +1521,7 @@ namespace RTE {
 		static constexpr uint64_t c_InPlaceHostSilenceMs = 3000; //!< A host that feeds a held seat nothing this long is gone.
 		static constexpr uint64_t c_ReturnerReportGapMs = 500; //!< Host: a returner that has reported within this is still catching up.
 		std::map<uint8_t, uint32_t> m_InPlaceIncarnationBumps; //!< Host: in-place returns per seat since its holder last bound, over the admission plane's count.
+		std::map<uint8_t, std::string> m_RejoinFitReasons; //!< Host: the last reason each held seat's return was held back for.
 		std::function<bool(Activity&)> m_ActivateCatchUpLocalSeat;
 		struct PrivateJoinImage {
 			NetWorldCheckpointImage image;
