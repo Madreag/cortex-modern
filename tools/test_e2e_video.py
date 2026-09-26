@@ -404,6 +404,89 @@ def check_item_assertions(results, scratch):
     return ok
 
 
+def check_committed_window(results, scratch, scenario_texts=None):
+    """A play window counts the round's committed frames and closes on the round's own frame count: the discovery
+    run's loaded windows (581 and 587 committed in a 10.5 s wall window) are a load artefact, not missing play."""
+    loaded = [{"sim_frame": 9000, "lockstep_frame": 17, "at_ms": 1000}, {"sim_frame": 9581, "lockstep_frame": 598, "at_ms": 11900}]
+    progress = driver.window_progress(loaded, 600)
+    ok = row(results, "window/counts-committed-round-frames", progress["counted"] == "lockstep_frame" and progress["observed"] == 581
+             and progress["window_ms"] == 10900 and not progress["pass"])
+    solo = [{"sim_frame": 100, "lockstep_frame": 0, "at_ms": 0}, {"sim_frame": 700, "lockstep_frame": 0, "at_ms": 10000}]
+    ok &= row(results, "window/single-player-counts-sim-updates", driver.window_progress(solo, 600)["counted"] == "sim_frame"
+              and driver.window_progress(solo, 600)["pass"])
+    scenario = driver.load_scenario("mod-void-wanderers-multiplayer")
+    for item in [item for item in scenario["checklist"] if item.get("sim_progress")]:
+        peer = next(peer for peer in scenario["peers"] if peer["name"] == item["peer"])
+        text = (scenario_texts or {}).get(peer["probe"]) or driver.scenario_text(scenario, peer["probe"])
+        steps = json.loads(text)["steps"]
+        mark = next(index for index, step in enumerate(steps) if step.get("command") == "video_mark " + item["mark"])
+        closing = steps[mark + 1]
+        # The mark lands within the round's first 100 frames, so a window closing at frame >= 100 + the requirement holds it.
+        ok &= row(results, f"window/{item['id']}-closes-on-committed-frames",
+                  closing.get("op") == "wait" and closing.get("lockstep_frame_at_least", 0) >= item["sim_progress"] + 100, json.dumps(closing))
+    return ok
+
+
+def check_resumed_play(results, scratch):
+    """Play after the automatic repair is judged on the engine's own records, never on probe steps a script may skip."""
+    root = scratch / "resumed-play" / "injected-desync"
+    peer = root / "client"
+    probe = root / "client-stage" / "probe"
+    probe.mkdir(parents=True)
+    peer.mkdir(parents=True)
+    lines = ["[net-lockstep] start round=11 frame=1 local_peer=2 peers=2 input_delay=3",
+             "[net-match] resync: reloading from the host snapshot",
+             "[net-lockstep] start round=22 frame=241 local_peer=2 peers=2 input_delay=3",
+             "[net-match] resync: match relaunched from the snapshot"]
+    (peer / "stdout.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def trace(last, moving=True):
+        rows = [{"tick": tick, "subsystems": {"actors": f"a{tick}"}} for tick in range(1, 244)]
+        rows += [{"tick": tick, "subsystems": {"actors": f"b{tick}" if moving else "still"}} for tick in range(241, last + 1)]
+        (root / "client_trace.json").write_text(json.dumps({"runs": [{"tick_hashes": rows}]}), encoding="utf-8")
+
+    (root / "client-match.json").write_text(json.dumps({"actors": 2, "resyncs": 1}), encoding="utf-8")
+    # The discovery run's red: the probe stopped after the completion toast, so the steps from the play mark on are absent.
+    script = [{"op": "menu", "command": "video_mark injected-repair-complete"}, {"op": "menu", "command": "video_mark injected-play-resumed"},
+              {"op": "wait", "service": "Running", "sim_at_least": 900}, {"op": "finish"}]
+    (probe / "net-ui-result.json").write_text(json.dumps({"complete": False, "pass": False, "script": {"steps": script},
+                                                           "steps": [{"index": 0, "observed": {"sim_frame": 300}}]}), encoding="utf-8")
+    video = peer / "video"
+    video.mkdir()
+    (video / "events.jsonl").write_text("\n".join(json.dumps({"wall_ms": ms, "message": message}) for ms, message in (
+        (100, "video_mark injected-repair-complete"), (200, "video_mark injected-play-resumed"))) + "\n", encoding="utf-8")
+    record = {"root": str(peer), "peer": "client", "video_dir": str(video), "index": [], "probe_dir": str(probe)}
+    spec = {"relaunch": r"\[net-match\] resync: match relaunched from the snapshot", "through_tick": 900,
+            "trace": "{peer}_trace.json", "report": "{peer}-match.json"}
+    trace(1200)
+    _, old = driver.item_evidence(record, {"mark": "injected-play-resumed", "sim_progress": 120})
+    _, new = driver.item_evidence(record, {"resumed_play": spec})
+    ok = row(results, "resumed-play/probe-steps-a-script-skipped-were-the-red", old["probe"] in ("not-reached", "fail")
+             and not any(row["observed"] for row in old["assertions"]), old["probe"])
+    ok &= row(results, "resumed-play/engine-records-decide", new["probe"] == "pass" and new["resumed_play"]["resume_frame"] == 241
+              and new["resumed_play"]["first_committed_after_repair"] == 241 and new["resumed_play"]["missing_count"] == 0,
+              json.dumps(new["resumed_play"])[:300])
+    trace(700)
+    _, short = driver.item_evidence(record, {"resumed_play": spec})
+    ok &= row(results, "resumed-play/a-trace-short-of-the-tick-is-red", short["probe"] == "fail" and short["resumed_play"]["missing_count"] == 200)
+    trace(1200, moving=False)
+    _, still = driver.item_evidence(record, {"resumed_play": spec})
+    ok &= row(results, "resumed-play/frozen-actors-are-red", still["probe"] == "fail")
+    trace(1200)
+    (peer / "stdout.log").write_text("\n".join(lines[:3]) + "\n", encoding="utf-8")
+    _, unhealed = driver.item_evidence(record, {"resumed_play": spec})
+    ok &= row(results, "resumed-play/no-relaunch-line-is-red", unhealed["probe"] == "fail")
+    (root / "client-match.json").write_text(json.dumps({"actors": 0, "resyncs": 1}), encoding="utf-8")
+    (peer / "stdout.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _, empty = driver.item_evidence(record, {"resumed_play": spec})
+    ok &= row(results, "resumed-play/no-live-actor-is-red", empty["probe"] == "fail")
+    scenario = driver.load_scenario("mp-rematch")
+    resumed = [item for item in scenario["checklist"] if item["id"].startswith("injected-play-resumed-")]
+    ok &= row(results, "resumed-play/rematch-items-read-engine-records", len(resumed) == 2 and all(
+        item.get("resumed_play", {}).get("through_tick") == 900 and not item.get("mark") and not item.get("probe_steps") for item in resumed))
+    return ok
+
+
 def check_listed_rows(results, scratch):
     root = scratch / "listed-rows"
     root.mkdir(parents=True)
@@ -1036,6 +1119,8 @@ def main():
         ok &= check_review(results, scratch)
         ok &= check_interruption(results, scratch)
         ok &= check_item_assertions(results, scratch)
+        ok &= check_committed_window(results, scratch)
+        ok &= check_resumed_play(results, scratch)
         ok &= check_listed_rows(results, scratch)
         ok &= check_frame_gaps(results, scratch)
         ok &= check_stop_request(results, scratch)
