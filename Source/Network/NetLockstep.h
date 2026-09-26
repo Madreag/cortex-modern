@@ -825,10 +825,26 @@ namespace RTE {
 		/// A window closing on accesses that broke the rule stops the process when the checks are armed.
 		class Window {
 		public:
-			Window();
+			/// A named window says how long it stayed open when that was a quarter second or more.
+			explicit Window(const char* name = nullptr);
 			~Window();
 			Window(const Window&) = delete;
 			Window& operator=(const Window&) = delete;
+		private:
+			const char* m_Name = nullptr;
+			uint64_t m_OpenedMs = 0;
+			uint64_t m_TicksAtOpen = 0;
+		};
+		/// Closes every open window for a stretch that reaches the coordinator through code that does not take the lock, such as the
+		/// match service; a tick in flight finishes first, and the windows reopen when it ends. Holds no lock while it lasts.
+		class Gap {
+		public:
+			Gap();
+			~Gap();
+			Gap(const Gap&) = delete;
+			Gap& operator=(const Gap&) = delete;
+		private:
+			int m_Closed = 0;
 		};
 	};
 
