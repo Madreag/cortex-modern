@@ -4558,7 +4558,7 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 	}
 	// The agreed config the roster carries is the launch descriptor here, on every remote peer and on a
 	// dedicated host, so all of them build the identical activity from the identical rules.
-	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
 	if (!config) {
 		m_MultiplayerErrorLabel->SetText("The launching match carries no agreed setup.");
 		g_NetMatchService.Destroy();

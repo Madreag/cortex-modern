@@ -1,0 +1,404 @@
+{
+  "schema": 1,
+  "name": "mp-host-migration-hostheld",
+  "port_base": 49458,
+  "title": "A host held for its own stall is lost before it takes its seat back: the successor replays the agreed history across the host's hold frame and no peer needs a repair",
+  "size": "960x540",
+  "timeout_s": 150,
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "900",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/host_trace.json",
+        "-net-match-report",
+        "{OUT}/host-match.json",
+        "-selftest-frame-stall",
+        "560:1500"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "Host",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "kill_at_tick": 601,
+      "menu_script": "mp-host-migration.host.menu.txt"
+    },
+    {
+      "name": "clienta",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "900",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/clienta_trace.json",
+        "-net-match-report",
+        "{OUT}/clienta-match.json"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "ClientA",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "probe": "mp-host-migration.survivor.probe.json",
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark migration-listening",
+        "timeout_s": 90
+      }
+    },
+    {
+      "name": "clientb",
+      "args": [
+        "-seed",
+        "42",
+        "-max-ticks",
+        "900",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/clientb_trace.json",
+        "-net-match-report",
+        "{OUT}/clientb-match.json"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "ClientB",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "probe": "mp-host-migration.survivor.probe.json",
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "clienta",
+        "event": "video_mark migration-client-admitted",
+        "timeout_s": 90
+      }
+    }
+  ],
+  "checklist": [
+    {
+      "id": "migration-host-last-frame",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        650
+      ],
+      "what": "The original host video ends at its recorded process drop after tick 600; injected-drop.json identifies the frame.",
+      "drop_tick": 601
+    },
+    {
+      "id": "migration-before-clienta",
+      "peer": "clienta",
+      "mark": "migration-play",
+      "screen": "game",
+      "sim_ticks": [
+        1,
+        600
+      ],
+      "what": "The survivor plays in the original three-peer match before the host drops."
+    },
+    {
+      "id": "migration-drop-clienta",
+      "peer": "clienta",
+      "mark": "migration-host-drop",
+      "what": "The survivor video spans the recorded host drop until the on-screen host-loss status appears."
+    },
+    {
+      "id": "migration-named-clienta",
+      "peer": "clienta",
+      "mark": "migration-new-host",
+      "screen": "game",
+      "what": "The migration toast names ClientA as the new host.",
+      "log_regex": [
+        "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "readback": [
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "is now hosting"
+        },
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ClientA"
+        },
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "migration-continued-clienta",
+      "peer": "clienta",
+      "mark": "migration-continued",
+      "screen": "game",
+      "sim_ticks": [
+        602,
+        900
+      ],
+      "what": "The survivor resumes play and reaches at least tick 880 after handover."
+    },
+    {
+      "id": "migration-completion-clienta",
+      "peer": "clienta",
+      "screen": "game",
+      "sim_ticks": [
+        601,
+        900
+      ],
+      "what": "The resumed view is backed by the committed handover line naming the new host and boundary.",
+      "log_regex": [
+        "\\[net-match\\] Host left - .*ClientA.* is now hosting; boundary=\\d+ round=\\d+"
+      ]
+    },
+    {
+      "id": "migration-hashes-clienta",
+      "peer": "clienta",
+      "screen": "game",
+      "sim_ticks": [
+        602,
+        900
+      ],
+      "what": "Both surviving worlds agree on every tick hash from the committed migration boundary through tick 900.",
+      "log_regex": [
+        "\\[net-match\\] Host left - .* is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "gate": "migration-hashes"
+    },
+    {
+      "id": "migration-before-clientb",
+      "peer": "clientb",
+      "mark": "migration-play",
+      "screen": "game",
+      "sim_ticks": [
+        1,
+        600
+      ],
+      "what": "The survivor plays in the original three-peer match before the host drops."
+    },
+    {
+      "id": "migration-drop-clientb",
+      "peer": "clientb",
+      "mark": "migration-host-drop",
+      "what": "The survivor video spans the recorded host drop until the on-screen host-loss status appears."
+    },
+    {
+      "id": "migration-named-clientb",
+      "peer": "clientb",
+      "mark": "migration-new-host",
+      "screen": "game",
+      "what": "The migration toast names ClientA as the new host.",
+      "log_regex": [
+        "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "readback": [
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "is now hosting"
+        },
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ClientA"
+        },
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "migration-continued-clientb",
+      "peer": "clientb",
+      "mark": "migration-continued",
+      "screen": "game",
+      "sim_ticks": [
+        602,
+        900
+      ],
+      "what": "The survivor resumes play and reaches at least tick 880 after handover."
+    },
+    {
+      "id": "migration-completion-clientb",
+      "peer": "clientb",
+      "screen": "game",
+      "sim_ticks": [
+        601,
+        900
+      ],
+      "what": "The resumed view is backed by the committed handover line naming the new host and boundary.",
+      "log_regex": [
+        "\\[net-match\\] Host left - .*ClientA.* is now hosting; boundary=\\d+ round=\\d+"
+      ]
+    },
+    {
+      "id": "migration-hashes-clientb",
+      "peer": "clientb",
+      "screen": "game",
+      "sim_ticks": [
+        602,
+        900
+      ],
+      "what": "Both surviving worlds agree on every tick hash from the committed migration boundary through tick 900.",
+      "log_regex": [
+        "\\[net-match\\] Host left - .* is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "gate": "migration-hashes"
+    },
+    {
+      "id": "migration-loss-overlay-clienta",
+      "peer": "clienta",
+      "mark": "migration-host-drop",
+      "screen": "game",
+      "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no LIVE band, and the recorder observes the host-lost status state.",
+      "assert": "Native readback of LabelNetMatchStatus at the probe's wait for the loss text, plus the recorded host_lost=1 status.",
+      "events": [
+        "net_status peer=\\d+ host_lost=1"
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "migration-loss-overlay-clientb",
+      "peer": "clientb",
+      "mark": "migration-host-drop",
+      "screen": "game",
+      "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no LIVE band, and the recorder observes the host-lost status state.",
+      "assert": "Native readback of LabelNetMatchStatus at the probe's wait for the loss text, plus the recorded host_lost=1 status.",
+      "events": [
+        "net_status peer=\\d+ host_lost=1"
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
+      ]
+    }
+  ],
+  "migration_gate": {
+    "peers": [
+      "clienta",
+      "clientb"
+    ],
+    "cap": 900
+  }
+}

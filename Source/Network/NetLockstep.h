@@ -801,8 +801,9 @@ namespace RTE {
 	class NetLockstepCoordinator;
 
 	/// The session plane: a thread that receives, relays and commits for the round's coordinator whenever the simulation thread is
-	/// busy past a tick inside a window it opened, so no peer waits on this machine's simulation for frames it never needed from it.
-	/// Every access to the targeted coordinator from any other thread holds Lock() while a window is open.
+	/// busy past a tick inside a window it opened and outside every gap, so no peer waits on this machine's simulation for frames it
+	/// never needed from it. Every access to the targeted coordinator from any other thread holds Lock() while the plane may tick.
+	/// Windows and gaps belong to the simulation thread: one opened elsewhere is refused and, with the checks armed, trips them.
 	class NetLockstepPlane {
 	public:
 		/// Serializes the plane's ticks with every other access to the targeted coordinator. Recursive: a guarded call may call another.
@@ -819,13 +820,17 @@ namespace RTE {
 		static bool ChecksArmed();
 		/// How many accesses broke the rule this process.
 		static uint64_t CheckTrips();
+		/// Whether the plane may tick now, for the harness: a window is open on the simulation thread and no gap is.
+		static bool TicksPermitted();
+		/// How many windows and gaps were refused this process for opening off the simulation thread.
+		static uint64_t ScopeRefusals();
 		/// Whether the calling thread holds Lock().
 		static bool HeldHere() { return LockDepth() > 0; }
 		/// The calling thread's hold count on Lock(), kept by every guard and by the plane's own ticks.
 		static int& LockDepth();
 		/// Records an access to a coordinator from a thread that does not hold Lock() while a window is open on the targeted coordinator.
 		static void Check(const void* coordinator, const char* where);
-		/// Opens a stretch of the simulation thread in which the plane may tick; only guarded accesses happen inside it.
+		/// Opens a stretch of the simulation thread in which the plane may tick unless a gap is open; only guarded accesses happen inside it.
 		/// A window closing on accesses that broke the rule stops the process when the checks are armed.
 		class Window {
 		public:
@@ -835,12 +840,14 @@ namespace RTE {
 			Window(const Window&) = delete;
 			Window& operator=(const Window&) = delete;
 		private:
+			bool m_Counted = false;
 			const char* m_Name = nullptr;
 			uint64_t m_OpenedMs = 0;
 			uint64_t m_TicksAtOpen = 0;
 		};
-		/// Closes every open window for a stretch that reaches the coordinator through code that does not take the lock, such as the
-		/// match service; a tick in flight finishes first, and the windows reopen when it ends. Holds no lock while it lasts.
+		/// Keeps the plane from ticking for a stretch that reaches the coordinator through code that does not take the lock, such as the
+		/// match service, whatever windows open and close inside it; a tick in flight finishes first, and the plane may tick again once
+		/// every gap has ended and a window is open. Holds no lock while it lasts.
 		class Gap {
 		public:
 			/// A named gap says how long it lasted when that was a quarter second or more.
@@ -849,7 +856,8 @@ namespace RTE {
 			Gap(const Gap&) = delete;
 			Gap& operator=(const Gap&) = delete;
 		private:
-			int m_Closed = 0;
+			bool m_Counted = false;
+			bool m_ClosedWindow = false;
 			const char* m_Name = nullptr;
 			uint64_t m_OpenedMs = 0;
 		};
@@ -989,7 +997,8 @@ namespace RTE {
 		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { NET_PLANE_CHECK(); return m_Config.substituteSlowPeers; }
-		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { NET_PLANE_CHECK(); return m_HoldTransactions; }
+		/// A copy of the agreed holds: a reader outside the plane's lock never keeps a reference into what a plane tick changes.
+		std::map<uint8_t, NetGameSeatHold> HeldTransactions() const { NET_PLANE_CHECK(); return m_HoldTransactions; }
 		/// Moves each seat the round took back before a joining seat's first frame out of the held state its replayed tail ended on.
 		/// @param config The joining round's configuration; its holds, departures, incarnations and reclaims are updated.
 		/// @param reclaims The host's ReclaimAtFrame decisions the joining seat has received.
@@ -1024,6 +1033,8 @@ namespace RTE {
 		void NoteAuthorityHeard(uint64_t nowMs);
 		/// Whether the frame waited on is one the host produces only after a capture every peer announced.
 		bool HostBusyWithAnnouncedCapture(uint64_t frame) const;
+		/// The announced capture tick whose aftermath covers a frame, if any.
+		std::optional<uint64_t> AnnouncedCaptureCovering(uint64_t frame) const;
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { NET_PLANE_CHECK(); return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
@@ -1053,6 +1064,8 @@ namespace RTE {
 		bool IsOwnHostSeatHeld() const;
 		/// The frame the host held this peer's seat from; 0 when the hold was not taken on the wire (a closed link).
 		uint64_t GetLocalHoldFrame() const { NET_PLANE_CHECK(); return m_LocalHoldFrame; }
+		/// Whether the host held this seat at or after a frame: a hold this round took, or one still waiting for its start.
+		bool HeldLocalSeatSince(uint64_t frame) const;
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
@@ -1119,6 +1132,8 @@ namespace RTE {
 		bool IsHoldingSeatForReclaim() const;
 		/// Whether this peer's left seat is still held, from the same set AnyLeftSeatHeld reads.
 		bool IsSeatHeldForReclaim(uint8_t peerId) const;
+		/// Whether a seat the AI holds comes back to its player by a frame: its agreed return lands at or before it.
+		bool HeldSeatReturnsBy(uint8_t peerId, uint64_t frame) const;
 		// Kept for UI estimates that still speak in frames (HoldSeconds(1200) == 20). The hold itself
 		// is the admission wall-clock; commits do not advance while a dropped seat is unresolved.
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
@@ -1216,6 +1231,17 @@ namespace RTE {
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
+		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
+		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
+		friend bool TestAQueuedReturnLeavesALaterHold(std::string* error);
+		friend bool TestAHostIsJudgedAgainAfterItsOwnReturn(std::string* error);
+		friend bool TestARepeatedStartHoldsNoFramesBehindIt(std::string* error);
+		friend bool TestALaggingSimulationReadsTheFrameItTook(std::string* error);
+		friend bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
+		friend bool TestAHeldMapReadKeepsNoLiveReference(std::string* error);
+		/// Records a committed frame in the history the tick boundary and the relays read.
+		void RememberCommittedFrame(const NetLockstepReadyFrame& ready);
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
@@ -1399,6 +1425,8 @@ namespace RTE {
 		NetLockstepSeatState SeatStateOf(uint8_t peerId, NetPeerId transportPeerId) const;
 		/// Re-resolves which left seats are still held. Runs from the tick, never from a query.
 		void RefreshLeftSeatHolds();
+		/// A hold taken from the record drops the seat as the live hold did, so the claims on its units last as long as they do there.
+		void DropRecordedHeldSeat(uint8_t peerId);
 		/// Whether any peer that has left still holds a seat a returning player can reclaim.
 		bool AnyLeftSeatHeld() const;
 		/// A resync round already named this peer; a leftover drop or the old socket's close is not a new hold.
@@ -1418,6 +1446,8 @@ namespace RTE {
 		bool WaiveRemoteFrames(uint8_t peerId, uint64_t fromFrame, uint64_t nowMs, bool announce);
 		static bool IsFrameWaiver(const NetLockstepStop& stop);
 		uint16_t PeerInputDelay(uint8_t peerId) const;
+		/// The delay a member's start must carry: its own, or in a round joined while running, the one in force at the start.
+		uint16_t MemberStartDelay(const NetLockstepStart& start) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
 		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
 		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
@@ -1603,6 +1633,17 @@ namespace RTE {
 		uint32_t m_StartsSentNamed = 0; //!< A returning seat's starts named so far.
 		uint8_t m_NamedAiAuthority = 0; //!< The AI authority last named at a delivered frame.
 		std::set<uint8_t> m_ReturnerFirstFrameNamed; //!< Host: returning seats whose first frame after their reclaim was named.
+		enum class SeatTransition : uint8_t { Held, Back, Left };
+		/// Every agreed hold, return and leave by seat and frame. A simulation behind its commits (a host held for its own, a peer that
+		/// took a return before reaching its frame) reads a frame older than a seat's newest transition here, not from the current state.
+		std::map<uint8_t, std::map<uint64_t, SeatTransition>> m_SeatTransitions;
+		/// A leave that a hold records at its own frame does not overwrite the hold.
+		void NoteSeatTransition(uint8_t peer, uint64_t frame, SeatTransition kind) {
+			auto& seat = m_SeatTransitions[peer];
+			if (kind == SeatTransition::Left) seat.emplace(frame, kind); else seat[frame] = kind;
+		}
+		/// The seat's state at a frame before its newest transition; empty when the current state answers for the frame.
+		std::optional<SeatTransition> SeatStateBeforeNewest(uint8_t peer, uint64_t frame) const;
 		uint64_t m_ReturnerInputsNamedFor = 0; //!< The reclaim frame our own first returning inputs were named for.
 		uint32_t m_ReturnerInputsNamed = 0;
 		uint64_t m_LastProducedFrame = UINT64_MAX; //!< The produced frame of this peer's last queued local input.

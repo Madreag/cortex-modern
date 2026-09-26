@@ -1456,13 +1456,13 @@ namespace RTE {
 			} detach;
 			ScenarioRunner::ClearControllerReplayError();
 			ScenarioRunner::SetLockstepCoordinator(&seated);
-			const NetMatchConfig* adopted = ScenarioRunner::GetLockstepMatchConfig();
+			const auto adopted = ScenarioRunner::GetLockstepMatchConfig();
 			if (!adopted || adopted->players != lockstep.matchConfig.players || ScenarioRunner::HasControllerReplayError()) {
 				*error = "a seated match did not answer from its adopted roster";
 				return false;
 			}
 			ScenarioRunner::SetLockstepCoordinator(&rosterless);
-			if (ScenarioRunner::GetLockstepMatchConfig() != nullptr) {
+			if (ScenarioRunner::GetLockstepMatchConfig()) {
 				*error = "a rosterless match handed out a config";
 				return false;
 			}

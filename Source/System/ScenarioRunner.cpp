@@ -1138,8 +1138,8 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsPersistentWorld() {
-		const NetMatchConfig* config = GetLockstepMatchConfig();
-		return config != nullptr && config->persistentWorld;
+		const auto config = GetLockstepMatchConfig();
+		return config && config->persistentWorld;
 	}
 
 	bool ScenarioRunner::IsWorldAuthor() {
@@ -1152,12 +1152,12 @@ namespace RTE {
 	}
 
 	std::string ScenarioRunner::GetWorldId() {
-		const NetMatchConfig* config = GetLockstepMatchConfig();
-		return config != nullptr ? config->worldId : std::string();
+		const auto config = GetLockstepMatchConfig();
+		return config ? config->worldId : std::string();
 	}
 
 	int ScenarioRunner::GetWorldRespawnDelayFrames() {
-		if (const NetMatchConfig* config = GetLockstepMatchConfig(); config != nullptr) {
+		if (const auto config = GetLockstepMatchConfig()) {
 			return static_cast<int>(WorldRespawnDelayFrames(*config));
 		}
 		// With no round attached the preset runs alone on the world's own default. Built once: a
@@ -1723,21 +1723,21 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().localPeerId : 0;
 	}
 
-	const NetMatchConfig* ScenarioRunner::GetLockstepMatchConfig() {
+	std::optional<NetMatchConfig> ScenarioRunner::GetLockstepMatchConfig() {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
-			return nullptr;
+			return std::nullopt;
 		}
 		const NetMatchConfig& matchConfig = s_LockstepCoordinator->GetConfig().matchConfig;
 		if (!matchConfig.players.empty()) {
-			return &matchConfig;
+			return matchConfig;
 		}
 		// A running match has adopted a roster. Without one the shared rules it answers would come from
 		// this machine's own settings, so the match stops instead of deciding per peer.
 		if (s_LockstepCoordinator->IsRunning() && !HasControllerReplayError()) {
 			SetControllerReplayError("the running match has no adopted roster at tick " + std::to_string(GetLockstepAppliedFrame()));
 		}
-		return nullptr;
+		return std::nullopt;
 	}
 
 	bool ScenarioRunner::IsLockstepPaused() {
@@ -2014,6 +2014,24 @@ namespace RTE {
 		}
 		std::vector<NetGameCommand> commands;
 		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
+		// The AI of a held seat writes nothing that lands once the seat is its player's again: every peer would refuse it there.
+		const auto ownerAtTarget = [&](int64_t uid, int team) {
+			if (const auto claim = s_LockstepDroppedControlOverrides.find(uid); claim != s_LockstepDroppedControlOverrides.end() && producing->HeldSeatReturnsBy(claim->second, targetFrame))
+				return claim->second;
+			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(uid)));
+			return GetLockstepActorOwner(uid, team, !actor || !actor->IsPlayerControlled());
+		};
+		const auto writesAtTarget = [&](int32_t team, int64_t actorUID, int64_t writerUID) {
+			if (IsLockstepTeamCommandSender(team, config.localPeerId) || ownerAtTarget(actorUID, team) == config.localPeerId) return true;
+			const Actor* writer = writerUID != 0 ? dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(writerUID))) : nullptr;
+			return writerUID != 0 && (writer ? writer->GetTeam() : team) == team && ownerAtTarget(writerUID, writer ? writer->GetTeam() : team) == config.localPeerId;
+		};
+		std::erase_if(s_PendingLocalGameCommands, [&](const NetGameCommand& command) {
+			if (const auto* order = std::get_if<NetGameAIOrder>(&command.payload)) return !writesAtTarget(order->team, order->actorUID, order->writerUID);
+			if (const auto* message = std::get_if<NetGameAIScriptMessage>(&command.payload)) return !writesAtTarget(message->team, message->writerUID, message->writerUID);
+			if (const auto* gib = std::get_if<NetGameAIGib>(&command.payload)) return !writesAtTarget(gib->team, gib->writerUID, gib->writerUID);
+			return false;
+		});
 		if ((!s_RequeuedCommands.empty() && s_RequeuedCommands.begin()->first < targetFrame) ||
 			(!s_RequeuedPlayerBindings.empty() && s_RequeuedPlayerBindings.begin()->first < targetFrame) ||
 			(!s_RequeuedInputs.empty() && s_RequeuedInputs.begin()->first < targetFrame)) {
@@ -2989,9 +3007,10 @@ namespace RTE {
 		// The recorder captures every committed tick: all peers' frames and commands. The codec wants one
 		// UID-sorted set; command order re-sorts by sender at apply.
 		const auto record = [tick](const NetLockstepReadyFrame& ready) {
-			std::vector<ControllerFrame> allFrames = ready.localFrames;
-			allFrames.insert(allFrames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
-			std::sort(allFrames.begin(), allFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
+			// Two inputs for one actor keep the order every peer applies them in, so the recording replays to the same one.
+			std::vector<ControllerFrame> allFrames;
+			for (const ControllerFrame* input: CommittedControllerFramesInSenderOrder(ready, GetLockstepLocalPeerId())) allFrames.push_back(*input);
+			std::stable_sort(allFrames.begin(), allFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
 				return lhs.actorUniqueID < rhs.actorUniqueID;
 			});
 			std::vector<NetGameCommand> allCommands = ready.localCommands;

@@ -285,9 +285,15 @@ static bool s_frameStallFired = false;
 static bool s_scriptedLeaveDue = false; //!< The -net-match-e2e-leave tick has run; the leave follows at its end.
 static long long s_frameStallTick = 0;
 static int s_frameStallMs = 0;
+static long long s_frameStallAgainTick = 0; //!< A second frame stall, for a seat held again soon after its return.
+static int s_frameStallAgainMs = 0;
+static bool s_frameStallAgainFired = false;
 static long long s_drawStallTick = 0; //!< A present that blocks the main thread at this tick, for the plane's draw window.
 static int s_drawStallMs = 0;
 static bool s_drawStallFired = false;
+static long long s_lateScriptStallTick = 0; //!< A late global script that blocks the main thread at this tick, for the plane's window over it.
+static int s_lateScriptStallMs = 0;
+static bool s_lateScriptStallFired = false;
 struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; };
 static std::vector<NetLiveStall> s_netLiveStalls;
 // Test lever: how many ticks the e2e synced pause lasts before its unpause.
@@ -1066,6 +1072,28 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				s_drawStallMs = static_cast<int>(std::strtol(spec.substr(separator + 1).c_str(), nullptr, 10));
 			}
 			if (s_drawStallMs <= 0) System::PrintDiagnosticErrorLine("[selftest] draw stall expected <tick>:<ms>, got " + spec);
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-selftest-late-script-stall" && i + 1 < argCount) {
+			const std::string spec = argValue[i + 1];
+			const size_t separator = spec.find(':');
+			if (separator != std::string::npos) {
+				s_lateScriptStallTick = std::strtoll(spec.substr(0, separator).c_str(), nullptr, 10);
+				s_lateScriptStallMs = static_cast<int>(std::strtol(spec.substr(separator + 1).c_str(), nullptr, 10));
+			}
+			if (s_lateScriptStallMs <= 0) System::PrintDiagnosticErrorLine("[selftest] late script stall expected <tick>:<ms>, got " + spec);
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-selftest-frame-stall-again" && i + 1 < argCount) {
+			const std::string spec = argValue[i + 1];
+			const size_t separator = spec.find(':');
+			if (separator != std::string::npos) {
+				s_frameStallAgainTick = std::strtoll(spec.substr(0, separator).c_str(), nullptr, 10);
+				s_frameStallAgainMs = static_cast<int>(std::strtol(spec.substr(separator + 1).c_str(), nullptr, 10));
+			}
+			if (s_frameStallAgainMs <= 0) System::PrintDiagnosticErrorLine("[selftest] second frame stall expected <tick>:<ms>, got " + spec);
 			i += 2;
 			continue;
 		}
@@ -3237,23 +3265,29 @@ static void DrawFrameWithPreviews() {
 		g_MenuMan.DrawLocalPauseMenu();
 	}
 	FrameMan::FeelBeforePresent();
-	if (s_drawStallMs > 0 && !s_drawStallFired && g_TimerMan.GetSimUpdateCount() >= s_drawStallTick) {
-		// A present the driver holds: the main thread is away inside the frame's draw, not its simulation.
-		s_drawStallFired = true;
-		System::PrintDiagnosticLine("[selftest] draw stall tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(s_drawStallMs));
-		const uint64_t planeTicksBefore = NetLockstepPlane::Ticks();
-		std::this_thread::sleep_for(std::chrono::milliseconds(s_drawStallMs));
-		System::PrintDiagnosticLine("[selftest] draw stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
-	}
 	{
 		NetLockstepPlane::Window present("present");
+		if (s_drawStallMs > 0 && !s_drawStallFired && g_TimerMan.GetSimUpdateCount() >= s_drawStallTick) {
+			// A present the driver holds: the main thread is away inside the frame's draw, not its simulation.
+			s_drawStallFired = true;
+			System::PrintDiagnosticLine("[selftest] draw stall tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(s_drawStallMs));
+			const uint64_t planeTicksBefore = NetLockstepPlane::Ticks();
+			std::this_thread::sleep_for(std::chrono::milliseconds(s_drawStallMs));
+			System::PrintDiagnosticLine("[selftest] draw stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
+		}
 		g_WindowMan.UploadFrame();
 	}
 	g_FrameMan.FeelAfterPresent();
 	if (FrameRecorder::Instance().Enabled()) {
-		const std::string serviceState = [] { NetLockstepPlane::Gap plane("recorder's service state"); return g_NetMatchService.GetLobbySnapshot().serviceState; }();
+		std::string screen;
+		const std::string serviceState = [&screen] {
+			// The screen's name comes from the menus, which read the match service.
+			NetLockstepPlane::Gap plane("recorder's service state");
+			screen = RecordedScreenName();
+			return g_NetMatchService.GetLobbySnapshot().serviceState;
+		}();
 		NetLockstepPlane::Window recorder("recorder");
-		g_FrameMan.RecordVideoFrame(RecordedScreenName(), serviceState);
+		g_FrameMan.RecordVideoFrame(screen, serviceState);
 	}
 	if (NetMatchScreenshotDue()) {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
@@ -5359,6 +5393,14 @@ void RunGameLoop() {
 			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
 			System::PrintDiagnosticLine("[selftest] frame stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
 		}
+		if (s_frameStallAgainMs > 0 && s_frameStallFired && !s_frameStallAgainFired && g_TimerMan.GetSimUpdateCount() >= s_frameStallAgainTick) {
+			s_frameStallAgainFired = true;
+			System::PrintDiagnosticLine("[selftest] frame stall again tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(s_frameStallAgainMs));
+			NetLockstepPlane::Window planeWindow;
+			const uint64_t planeTicksBefore = NetLockstepPlane::Ticks();
+			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallAgainMs));
+			System::PrintDiagnosticLine("[selftest] frame stall again done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
+		}
 		if (ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
 			for (auto& stall: s_netLiveStalls) if (!stall.fired && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= stall.tick) {
 				const uint64_t activation = ScenarioRunner::WorldCatchUpActivationTick();
@@ -5501,7 +5543,7 @@ void RunGameLoop() {
 			bool perturbDue = simTick == ScenarioRunner::GetArgs().selftestPerturbTick;
 			if (s_netPerturbWhenLive) {
 				perturbDue = simTick >= ScenarioRunner::GetArgs().selftestPerturbTick && simTick % c_DesyncCheckIntervalTicks == 0 && ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive();
-				const auto* match = ScenarioRunner::GetLockstepMatchConfig();
+				const auto match = ScenarioRunner::GetLockstepMatchConfig();
 				if (!match) perturbDue = false;
 				else for (uint8_t peer = 1; peer <= match->peerCount; ++peer)
 					if (ScenarioRunner::IsLockstepPeerGone(peer, simTick) || ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick)) perturbDue = false;
@@ -5594,7 +5636,11 @@ void RunGameLoop() {
 				}
 			}
 			if (!lockstepPausedTick) {
-				g_LuaMan.Update();
+				{
+					// The scripts' own housekeeping reads the round only through guarded calls, as the update below does.
+					NetLockstepPlane::Window planeWindow;
+					g_LuaMan.Update();
+				}
 
 				// E2E control: host-issued funds command at tick 50; both peers must apply it identically.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestFundsCommand && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == 50) {
@@ -5948,6 +5994,16 @@ void RunGameLoop() {
 			g_MusicMan.Update();
 
 			if (!lockstepPausedTick) {
+				// A long late script is this machine's own like the update's: the plane commits for the round meanwhile.
+				NetLockstepPlane::Window planeWindow;
+				if (s_lateScriptStallMs > 0 && !s_lateScriptStallFired && g_TimerMan.GetSimUpdateCount() >= s_lateScriptStallTick) {
+					// A late global script that runs long: the main thread is inside the tick's scripts, not waiting on the round.
+					s_lateScriptStallFired = true;
+					System::PrintDiagnosticLine("[selftest] late script stall tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(s_lateScriptStallMs));
+					const uint64_t planeTicksBefore = NetLockstepPlane::Ticks();
+					std::this_thread::sleep_for(std::chrono::milliseconds(s_lateScriptStallMs));
+					System::PrintDiagnosticLine("[selftest] late script stall done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
+				}
 				g_ActivityMan.LateUpdateGlobalScripts();
 				// Kick the async MOID draw after the last main-thread sim mutation of the tick; it
 				// completes before the render frames below, which share draw scratch state with it.
@@ -7521,7 +7577,7 @@ bool ConfigureNetMatchActivity(const NetMatchConfig& config, int localTeam, std:
 
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error) {
 	// The roster's agreed config is the launch descriptor on every peer, the dedicated host and here.
-	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
 	if (!config) {
 		if (error) *error = "the launching match carries no agreed config";
 		return false;
@@ -7955,7 +8011,7 @@ int RunNetMatchServiceE2E() {
 
 	if (setupError.empty() && !setupCancelled) {
 		// A reconnecting peer's first lobby round carried the live match's snapshot; launch from it.
-		if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
+		if (const auto config = ScenarioRunner::GetLockstepMatchConfig()) {
 			{
 				std::ostringstream line;
 				line << "[net-match-service-e2e] roster:";

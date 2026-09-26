@@ -204,7 +204,8 @@ namespace RTE {
 		static uint16_t GetLockstepInputDelayFrames();
 		static uint8_t GetLockstepLocalPeerId();
 		/// The synced match roster, or null when no roster is attached.
-		static const NetMatchConfig* GetLockstepMatchConfig();
+		/// A copy of the running match's config, read under the plane's lock: the coordinator's own may change while the caller reads it.
+		static std::optional<NetMatchConfig> GetLockstepMatchConfig();
 
 		/// Whether the round is a persistent world: it keeps ticking with no human seated, and its
 		/// membership, respawns and bindings are the host's ordered transitions.

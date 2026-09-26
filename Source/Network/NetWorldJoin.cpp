@@ -481,10 +481,12 @@ namespace RTE {
 			++packets;
 			return true;
 		};
-		for (size_t first = 0; first < frame.frames.size(); first += NetLockstepCodec::c_MaxFramesPerPacket) {
+		// A fragment names each actor once: a second input for one actor, from another sender, opens the next fragment, in the order it applies.
+		for (size_t first = 0; first < frame.frames.size();) {
 			NetLockstepFrame part;
 			part.senderPeerId = 1;
-			part.frames.assign(frame.frames.begin() + first, frame.frames.begin() + std::min(frame.frames.size(), first + NetLockstepCodec::c_MaxFramesPerPacket));
+			do { part.frames.push_back(frame.frames[first++]); }
+			while (first < frame.frames.size() && part.frames.size() < NetLockstepCodec::c_MaxFramesPerPacket && frame.frames[first].actorUniqueID != part.frames.back().actorUniqueID);
 			if (!append(std::move(part))) return false;
 		}
 		for (const auto& command: frame.commands) {
@@ -547,9 +549,9 @@ namespace RTE {
 			decoded.observations.insert(decoded.observations.end(), part.observations.begin(), part.observations.end());
 			decoded.valueObservations.insert(decoded.valueObservations.end(), part.valueObservations.begin(), part.valueObservations.end());
 		}
-		if (cursor != end || !std::is_sorted(decoded.frames.begin(), decoded.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID < rhs.actorUniqueID; }) ||
-		    std::adjacent_find(decoded.frames.begin(), decoded.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID == rhs.actorUniqueID; }) != decoded.frames.end()) {
-			if (error) *error = "committed join frame has trailing bytes or duplicate controllers";
+		// Two inputs for one actor, from two senders, stay in the order they apply; the fragments are sorted with each other.
+		if (cursor != end || !std::is_sorted(decoded.frames.begin(), decoded.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID < rhs.actorUniqueID; })) {
+			if (error) *error = "committed join frame has trailing bytes or unsorted controllers";
 			return false;
 		}
 		frame = std::move(decoded);
