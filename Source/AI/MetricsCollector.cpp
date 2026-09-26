@@ -71,6 +71,17 @@ namespace RTE {
 		    std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
 	}
 
+	void MetricsCollector::SetNativeOutcome(bool completed, const std::string& reason, uint64_t finalTick) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_Result.resultSet) {
+			m_Result.passed = completed;
+			m_Result.resultSet = true;
+		}
+		m_Strings["completion"] = completed ? "completed" : "failed";
+		m_Strings["completion_reason"] = reason;
+		m_Numeric.try_emplace("final_tick", static_cast<double>(finalTick));
+	}
+
 	void MetricsCollector::Record(const std::string& name, double value) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_Numeric[name] = value;

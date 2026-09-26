@@ -48,6 +48,10 @@ namespace RTE {
 			m_Result.resultSet = true;
 		}
 
+		/// Records how the engine's own run ended: whether it completed, why, and the last tick it simulated. A verdict the scenario set
+		/// stands; the completion is kept beside it, and a scenario's own final_tick wins.
+		void SetNativeOutcome(bool completed, const std::string& reason, uint64_t finalTick);
+
 		/// Record an arbitrary numeric metric. Called from scenario Lua via `metrics.record(name, value)`.
 		void Record(const std::string& name, double value);
 
