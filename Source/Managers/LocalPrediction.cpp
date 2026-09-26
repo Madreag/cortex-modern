@@ -24,6 +24,7 @@
 #include "ScenarioRunner.h"
 #include "SceneMan.h"
 #include "SettingsMan.h"
+#include "PageWriteFence.h"
 #include "TerrainLayerSnapshot.h"
 #include "TimerMan.h"
 
@@ -168,6 +169,8 @@ namespace RTE {
 		activity->CaptureRollbackState(activityState);
 		lap(2);
 		static TerrainLayerSnapshot terrain;
+		// Only the pages a preview writes are copied; the platforms without a page fence copy the whole terrain.
+		terrain.fencePixels = true;
 		if (!terrain.Capture()) {
 			return;
 		}
@@ -328,7 +331,9 @@ namespace RTE {
 				g_MovableMan.RemoveMO(resident);
 			}
 		}
-		terrain.Restore();
+		if (!terrain.Restore()) {
+			std::cout << "[localpred] ERROR: the terrain could not be put back after the preview at tick " << simCount << std::endl;
+		}
 		lap(10);
 		activity->RestoreRollbackState(activityState);
 		// The peek runs on the canonical tick, not this preview's advanced clock; the horizon only dates unstamped orders.
@@ -505,6 +510,6 @@ namespace RTE {
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
 		       " preview_ghosts_peak=" + std::to_string(g_MovableMan.GetPreviewGhostPeak()) +
-		       (events.empty() ? std::string() : " " + events) + " phase_avg_ms=" + phases;
+		       (events.empty() ? std::string() : " " + events) + " terrain_pages_written=" + std::to_string(PageWriteFence::GetFaultCount()) + " phase_avg_ms=" + phases;
 	}
 } // namespace RTE
