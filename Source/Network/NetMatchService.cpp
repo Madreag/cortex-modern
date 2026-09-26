@@ -5020,9 +5020,8 @@ static std::string ResyncSaveName() {
 			m_InPlaceIncarnationBumps[member] = returning > incarnation ? returning - incarnation : 0;
 			m_Coordinator->NoteInPlaceReturn(member);
 			(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, connection, nullptr);
-			// A seat that was not in the handover holds a state from before it; a survivor's replay already runs under this host.
-			const bool crossesHandover = m_HandoverFrame != 0 && heldThrough < m_HandoverFrame &&
-			                             std::find(m_MigrationMembers.begin(), m_MigrationMembers.end(), member) == m_MigrationMembers.end();
+			// A state from before the handover replays across it, a survivor's included: the frame the lost host left at is in no command.
+			const bool crossesHandover = m_HandoverFrame != 0 && heldThrough < m_HandoverFrame;
 			if (crossesHandover) {
 				// Ahead of the tail: where it changed hands, so the returner replays each side under the authority that committed it.
 				NetWorldHandover handover;
