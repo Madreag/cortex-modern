@@ -383,6 +383,10 @@ namespace luabind { namespace detail
 		// datamembers, some members may be readonly, and
 		// only have a getter function
 		std::map<const char*, callback, ltstr> m_getters;
+		// The getters a script read last, by the address of the interned name it read them with: the map's nodes are cold
+		// on a state the caller has just switched to, and a hit checks its name, so a reused address never misleads it.
+		struct getter_cache_entry { const char* key = 0; const char* name = 0; callback* getter = 0; };
+		getter_cache_entry m_getter_cache[16];
 		std::map<const char*, callback, ltstr> m_setters;
 
 		std::vector<operator_callback> m_operators[number_of_operators]; // the operators in lua

@@ -7835,6 +7835,59 @@ static bool RunGarbageCollectionThreadSelfTest() {
 	return collected && onSimThread && sentinelHeld;
 }
 
+// A class's getter cache answers only for the name it cached: a property read through a second interned copy of the
+// name finds the same getter, and another name interned where a collected one stood finds its own.
+static bool RunGetterCacheSelfTest() {
+	LuaStateWrapper wrapper;
+	wrapper.Initialize();
+	lua_State* L = wrapper.GetLuaState();
+	std::lock_guard<std::recursive_mutex> lock(wrapper.GetMutex());
+	const int top = lua_gettop(L);
+	bool made = luaL_dostring(L, "_GetterCacheVector = Vector(3, 4)") == 0;
+	lua_getglobal(L, "_GetterCacheVector");
+	const int vector = lua_gettop(L);
+	made = made && lua_isuserdata(L, vector);
+	const auto read = [L, vector](const char* name, const void** key) {
+		lua_pushstring(L, name);
+		if (key) *key = lua_tostring(L, -1);
+		lua_gettable(L, vector);
+		const double value = lua_tonumber(L, -1);
+		lua_pop(L, 1);
+		return value;
+	};
+	double magnitude = 0.0, again = 0.0, square = 0.0;
+	const void* firstKey = nullptr;
+	const void* againKey = nullptr;
+	int reusedAt = 0;
+	if (made) {
+		lua_gc(L, LUA_GCCOLLECT, 0);
+		magnitude = read("Magnitude", &firstKey);
+		lua_gc(L, LUA_GCCOLLECT, 0);
+		// The same name interned again after its first copy died.
+		again = read("Magnitude", &againKey);
+		// Another name interned where a collected one stood: the cache still holds the address the dead name had.
+		for (int attempt = 1; attempt <= 16 && reusedAt == 0; ++attempt) {
+			const void* cachedKey = nullptr;
+			read("Magnitude", &cachedKey);
+			lua_gc(L, LUA_GCCOLLECT, 0);
+			lua_pushstring(L, "SqrMagnitude");
+			if (lua_tostring(L, -1) == cachedKey) {
+				reusedAt = attempt;
+				lua_gettable(L, vector);
+				square = lua_tonumber(L, -1);
+			}
+			lua_pop(L, 1);
+		}
+	}
+	lua_settop(L, top);
+	const bool passed = made && magnitude == 5.0 && again == 5.0 && reusedAt > 0 && square == 25.0;
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_getter_cache_answers_only_for_its_own_name magnitude=" << magnitude
+	          << " magnitude_through_a_new_copy=" << again << " new_copy_address_differs=" << (againKey != firstKey ? 1 : 0)
+	          << " reused_address_at_attempt=" << reusedAt << " sqr_magnitude_at_the_reused_address=" << square
+	          << (passed ? "" : reusedAt == 0 ? " (no collected name's address was reused, so the row proved nothing)" : " (a getter answered for a name it was not cached for)") << std::endl;
+	return passed;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
@@ -7856,6 +7909,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool luaStateIdentity = g_MovableMan.RunLuaStateIdentitySelfTest();
 	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
 	const bool lazySeed = RunLazySeedSelfTest();
+	const bool getterCache = RunGetterCacheSelfTest();
 	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
 	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
 	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
@@ -7949,7 +8003,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && getterCache && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
