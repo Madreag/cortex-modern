@@ -47,6 +47,8 @@ namespace RTE {
 	uint64_t LocalPrediction::s_PreviewCount = 0;
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
 	double LocalPrediction::s_PreviewMs = 0.0;
+	std::array<double, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseMs{};
+	const std::array<const char*, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseNames{"drop", "wait", "fence", "self_copies", "clone", "scripts_in", "links", "step", "discard", "restore", "scripts_out"};
 
 	// Gives the clone the MOIDs its original holds this frame, so its own rays and hits ignore the original.
 	static void AdoptMOIDs(Actor* clone, const Actor* original) {
@@ -102,7 +104,9 @@ namespace RTE {
 		if (!s_Previews.empty() && s_PreviewedTick == g_TimerMan.GetSimUpdateCount()) {
 			return;
 		}
+		const auto dropStart = std::chrono::steady_clock::now();
 		Clear();
+		s_PhaseMs[0] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - dropStart).count();
 		const int delay = s_DepthOverride > 0 ? s_DepthOverride : static_cast<int>(ScenarioRunner::GetLockstepLocalInputDelay());
 		const int depth = ScenarioRunner::UsesBoundedLockstepWait() ? delay : std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks()));
 		if (depth <= 0) {
@@ -143,9 +147,16 @@ namespace RTE {
 		Trace("preview start");
 
 		const auto start = std::chrono::steady_clock::now();
+		auto lapStart = start;
+		const auto lap = [&lapStart](int phase) {
+			const auto now = std::chrono::steady_clock::now();
+			s_PhaseMs[phase] += std::chrono::duration<double, std::milli>(now - lapStart).count();
+			lapStart = now;
+		};
 		// The seeing pass and the MOID draw still walk the live actor trees.
 		g_MovableMan.WaitForActorsSeeTask();
 		g_MovableMan.CompleteQueuedMOIDDrawings();
+		lap(1);
 		// Fence everything a preview tick can touch; all of it goes back before the canonical sim resumes.
 		const long long simCount = g_TimerMan.GetSimUpdateCount();
 		const long long simTicks = g_TimerMan.GetSimTimeTicks();
@@ -159,6 +170,7 @@ namespace RTE {
 		if (!terrain.Capture()) {
 			return;
 		}
+		lap(2);
 		Trace("fenced");
 		const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
 		const MovableMan::SpeculationStats statsBefore = g_MovableMan.GetSpeculationStats();
@@ -181,6 +193,7 @@ namespace RTE {
 		}
 		LuaMan::CapturePreviewSelfCopies(originals, PreviewScriptSelfTest::SharedSlot());
 		g_MovableMan.BeginSpeculation();
+		lap(3);
 		{
 			MovableObject::FaithfulCloneScope scope(false);
 			for (Preview& preview: targets) {
@@ -188,6 +201,7 @@ namespace RTE {
 			}
 		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
+		lap(4);
 		std::vector<MovableObject*> clones;
 		std::vector<const MovableObject*> cloned;
 		clones.reserve(targets.size());
@@ -199,6 +213,7 @@ namespace RTE {
 			}
 		}
 		LuaMan::BeginPreviewScripts(clones, PreviewScriptSelfTest::SharedSlot(), cloned);
+		lap(5);
 		if (PreviewScriptSelfTest::StrideCounterRequested()) {
 			for (MovableObject* clone: clones) {
 				PreviewScriptSelfTest::InstallStrideCounter(clone);
@@ -213,6 +228,7 @@ namespace RTE {
 			AdoptMOIDs(preview.clone, preview.original);
 		}
 		Trace("resolved");
+		lap(6);
 
 		std::string error;
 		std::vector<ControllerFrame> frames;
@@ -259,6 +275,7 @@ namespace RTE {
 			g_MovableMan.HarvestSpeculativeSpawns();
 		}
 		Trace("stepped");
+		lap(7);
 
 		Outcome outcome;
 		for (const Preview& preview: targets) {
@@ -293,6 +310,7 @@ namespace RTE {
 		}
 		PreviewEventLedger::AddPreviewedEmitters(takenEmitters);
 		Trace("discarded");
+		lap(8);
 		const MovableMan::SpeculationStats statsAfter = g_MovableMan.GetSpeculationStats();
 		outcome.shadows = statsAfter.shadows - statsBefore.shadows;
 		outcome.taken = statsAfter.taken - statsBefore.taken;
@@ -323,6 +341,7 @@ namespace RTE {
 			}
 		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
+		lap(9);
 		// The rounds a preview pops take fresh sound identities with them; the canonical cursor keeps its place.
 		g_AudioMan.SetCheckpointSoundContainerCursor(soundIdentityCursor);
 		PreviewEventLedger::Disarm();
@@ -339,6 +358,7 @@ namespace RTE {
 			}
 		}
 		Trace("restored");
+		lap(10);
 		s_Previews = std::move(targets);
 		s_TakenResidents = std::move(taken);
 		s_LastOutcome = outcome;
@@ -476,9 +496,13 @@ namespace RTE {
 		}
 		const MovableMan::SpeculationStats& stats = g_MovableMan.GetSpeculationStats();
 		const std::string events = PreviewEventLedger::Describe();
+		std::string phases;
+		for (int phase = 0; phase < PhaseCount; ++phase) {
+			phases += (phase ? "," : "") + std::string(s_PhaseNames[phase]) + ":" + std::to_string(s_PhaseMs[phase] / static_cast<double>(s_PreviewCount));
+		}
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
 		       " preview_ghosts_peak=" + std::to_string(g_MovableMan.GetPreviewGhostPeak()) +
-		       (events.empty() ? std::string() : " " + events);
+		       (events.empty() ? std::string() : " " + events) + " phase_avg_ms=" + phases;
 	}
 } // namespace RTE
