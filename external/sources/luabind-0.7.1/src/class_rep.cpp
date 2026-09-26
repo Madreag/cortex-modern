@@ -261,12 +261,28 @@ int luabind::detail::class_rep::gettable(lua_State* L)
 	}
 	lua_pop(L, 2);
 
-	std::map<const char*, callback, ltstr>::iterator j = m_getters.find(key);
-	if (j != m_getters.end())
+	getter_cache_entry& cached = m_getter_cache[(reinterpret_cast<std::size_t>(key) >> 4) & 15];
+	callback* getter = 0;
+	if (cached.key == key && cached.name && !std::strcmp(cached.name, key))
+	{
+		getter = cached.getter;
+	}
+	else
+	{
+		std::map<const char*, callback, ltstr>::iterator j = m_getters.find(key);
+		if (j != m_getters.end())
+		{
+			cached.key = key;
+			cached.name = j->first;
+			cached.getter = &j->second;
+			getter = &j->second;
+		}
+	}
+	if (getter)
 	{
 		// the name is a data member
 		preview_fence_call call(obj);
-		return j->second.func(L, j->second.pointer_offset);
+		return getter->func(L, getter->pointer_offset);
 	}
 
 	lua_pushnil(L);
