@@ -21,11 +21,35 @@
 #include <thread>
 #include <utility>
 
+#ifdef _WIN32
+#include "Windows.h"
+#include <dbghelp.h>
+#endif
+
 namespace RTE {
 
 	uint64_t NetLockstepNowMs() {
 		static const std::chrono::steady_clock::time_point base = std::chrono::steady_clock::now();
 		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - base).count());
+	}
+
+	std::vector<const ControllerFrame*> CommittedControllerFramesInSenderOrder(const NetLockstepReadyFrame& ready, uint8_t localPeerId) {
+		const uint8_t localPeer = ready.localPeerId != 0 ? ready.localPeerId : localPeerId;
+		std::vector<const ControllerFrame*> ordered;
+		ordered.reserve(ready.localFrames.size() + ready.remoteFrames.size());
+		bool localPlaced = false;
+		const auto placeLocal = [&] {
+			for (const ControllerFrame& frame: ready.localFrames) ordered.push_back(&frame);
+			localPlaced = true;
+		};
+		size_t offset = 0;
+		for (const auto& [peer, count]: ready.remoteFrameCounts) {
+			if (!localPlaced && peer > localPeer) placeLocal();
+			for (size_t index = 0; index < count && offset < ready.remoteFrames.size(); ++index) ordered.push_back(&ready.remoteFrames[offset++]);
+		}
+		if (!localPlaced) placeLocal();
+		while (offset < ready.remoteFrames.size()) ordered.push_back(&ready.remoteFrames[offset++]);
+		return ordered;
 	}
 
 	uint64_t NetLockstepSharedClockMs() {
@@ -4033,6 +4057,32 @@ namespace RTE {
 	}
 
 	namespace {
+		// The callers of a broken access, named so the site that needs the lock is found in one run.
+		std::string CallerNames() {
+#ifdef _WIN32
+			void* frames[12] = {};
+			const USHORT count = CaptureStackBackTrace(3, 12, frames, nullptr);
+			HANDLE process = GetCurrentProcess();
+			SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+			const bool initialized = SymInitialize(process, nullptr, TRUE);
+			const bool usable = initialized || GetLastError() == ERROR_INVALID_PARAMETER;
+			std::string names;
+			for (USHORT index = 0; index < count; ++index) {
+				char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+				auto* symbol = reinterpret_cast<PSYMBOL_INFO>(buffer);
+				symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+				symbol->MaxNameLen = MAX_SYM_NAME;
+				DWORD64 displacement = 0;
+				if (!names.empty()) names += " < ";
+				names += usable && SymFromAddr(process, reinterpret_cast<DWORD64>(frames[index]), &displacement, symbol) ? std::string(symbol->Name) : std::string("?");
+			}
+			if (initialized) SymCleanup(process);
+			return names;
+#else
+			return "?";
+#endif
+		}
+
 		// One plane per process, like the one round it serves. The thread is the last member, so it is joined before the lock goes.
 		struct PlaneState {
 			std::recursive_mutex lock;
@@ -4111,16 +4161,40 @@ namespace RTE {
 		if (plane.checkSites.insert(where).second) {
 			std::ostringstream thread;
 			thread << std::this_thread::get_id();
-			std::cout << "[net-plane] unguarded coordinator access in " << where << " inside an open window: thread=" << thread.str() << " trips=" << trips << std::endl;
+			std::cout << "[net-plane] unguarded coordinator access in " << where << " inside an open window: thread=" << thread.str() << " trips=" << trips
+			          << " from " << CallerNames() << std::endl;
 		}
 	}
 
-	NetLockstepPlane::Window::Window() { Plane().windows.fetch_add(1, std::memory_order_acq_rel); }
+	NetLockstepPlane::Gap::Gap(const char* name) : m_Name(name) {
+		if (m_Name) m_OpenedMs = NetLockstepNowMs();
+		PlaneState& plane = Plane();
+		std::lock_guard<std::recursive_mutex> lock(plane.lock);
+		m_Closed = plane.windows.exchange(0, std::memory_order_acq_rel);
+	}
+
+	NetLockstepPlane::Gap::~Gap() {
+		Plane().windows.fetch_add(m_Closed, std::memory_order_acq_rel);
+		if (m_Name && m_Closed > 0) {
+			const uint64_t lastedMs = NetLockstepNowMs() - m_OpenedMs;
+			if (lastedMs >= 250) std::cout << "[net-plane] the " << m_Name << " gap lasted " << lastedMs << " ms clock=" << NetLockstepSharedClockMs() << std::endl;
+		}
+	}
+
+	NetLockstepPlane::Window::Window(const char* name) : m_Name(name) {
+		if (m_Name) { m_OpenedMs = NetLockstepNowMs(); m_TicksAtOpen = Ticks(); }
+		Plane().windows.fetch_add(1, std::memory_order_acq_rel);
+	}
 	NetLockstepPlane::Window::~Window() {
 		// A tick in flight finishes before the simulation thread goes on to code that reads the coordinator unguarded.
 		PlaneState& plane = Plane();
 		std::lock_guard<std::recursive_mutex> lock(plane.lock);
 		plane.windows.fetch_sub(1, std::memory_order_acq_rel);
+		if (m_Name) {
+			const uint64_t openMs = NetLockstepNowMs() - m_OpenedMs;
+			if (openMs >= 250)
+				std::cout << "[net-plane] the " << m_Name << " stayed open " << openMs << " ms: plane_ticks=" << Ticks() - m_TicksAtOpen << " clock=" << NetLockstepSharedClockMs() << std::endl;
+		}
 		if (plane.checksArmed.load(std::memory_order_relaxed) && plane.checkTrips.load(std::memory_order_acquire) > 0) {
 			std::lock_guard<std::mutex> sites(plane.checkSitesLock);
 			std::cout << "[net-plane] ASSERT: " << plane.checkTrips.load() << " coordinator accesses without the plane's lock inside open windows at " << plane.checkSites.size() << " sites; stopping" << std::endl;
@@ -5447,6 +5521,9 @@ namespace RTE {
 		// peer must see the hold at or after its accepted horizon.
 		// The host's own first frame without input is the one after the last it put on the wire.
 		timing.applyFrame = std::max(ownSeat ? SentInputThrough() + 1 : FirstFrameWithout(peerId), m_Stats.nextFrame);
+		// A returning seat's reclaim gap carries none of its input, so the survivors commit through it without the seat: a hold starts after it.
+		if (const auto back = m_ReclaimTransactions.find(peerId); back != m_ReclaimTransactions.end() && timing.applyFrame >= back->second.activationFrame)
+			timing.applyFrame = std::max(timing.applyFrame, std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames) + 1);
 		for (uint8_t peer: m_RemotePeerIds) {
 			if (peer == peerId || IsPeerGoneAtFrame(peer, timing.applyFrame)) continue;
 			timing.applyFrame = std::max(timing.applyFrame, m_Stats.peers[peer].reportedNextFrame);
@@ -5542,6 +5619,9 @@ namespace RTE {
 		timing.neutralThroughFrame = frame + InputDelayAt(peerId, frame);
 		for (uint64_t produced = frame > NetLockstepCodec::c_MaxInputDelayFrames ? frame - NetLockstepCodec::c_MaxInputDelayFrames : 0; produced <= frame; ++produced)
 			timing.neutralThroughFrame = std::max(timing.neutralThroughFrame, produced + InputDelayAt(GetHostPeerId(), produced));
+		// A seat that catches up in place activates from the committed tail, a trip behind the round's inputs: its first required frame is a link later.
+		if (const NetLockstepPeerStats& link = m_Stats.peers[peerId]; link.returnsInPlace && std::isfinite(m_Config.simTickMs) && m_Config.simTickMs > 0)
+			timing.neutralThroughFrame += static_cast<uint64_t>(std::ceil((static_cast<double>(link.pingMs) + link.jitterMs) / m_Config.simTickMs)) + 1;
 		timing.delayFrames = InputDelayAt(peerId, frame); timing.heldPeers = static_cast<uint8_t>(1U << (peerId - 1));
 		timing.requiredPeers = static_cast<uint8_t>(1U << (GetHostPeerId() - 1)); timing.seatIncarnations[peerId - 1] = incarnation;
 		m_RemoteTransports[peerId] = transport;
@@ -10614,6 +10694,7 @@ namespace RTE {
 			m_FirstMissingFrame.reset();
 			NetLockstepReadyFrame ready;
 			ready.frame = m_Stats.nextFrame;
+			ready.localPeerId = m_Config.localPeerId;
 			if (localIt != m_LocalFrames.end()) {
 				ready.hasLocalInput = true;
 				if (m_Playback || !IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localFrames = std::move(localIt->second);

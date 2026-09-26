@@ -440,9 +440,9 @@ namespace RTE {
 	NetLockstepFrame PackWorldJoinReadyFrame(const NetLockstepReadyFrame& ready) {
 		NetLockstepFrame frame;
 		frame.targetFrame = ready.frame;
-		frame.frames = ready.localFrames;
-		frame.frames.insert(frame.frames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
-		std::sort(frame.frames.begin(), frame.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID < rhs.actorUniqueID; });
+		// Two inputs for one actor keep the order every live peer applies them in, so a replay of the tail ends on the same one.
+		for (const ControllerFrame* input: CommittedControllerFramesInSenderOrder(ready)) frame.frames.push_back(*input);
+		std::stable_sort(frame.frames.begin(), frame.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID < rhs.actorUniqueID; });
 		frame.commands = ready.localCommands;
 		frame.commands.insert(frame.commands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
 		frame.observations = ready.localObservations;

@@ -513,6 +513,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> committedPeerLeaves;
 		std::map<uint8_t, uint64_t> committedFrameWaivers;
 		bool hasLocalInput = false;
+		uint8_t localPeerId = 0; //!< The peer that committed this frame, whose own inputs are localFrames.
 		std::map<uint8_t, size_t> remoteFrameCounts;
 		std::vector<ControllerFrame> localFrames;
 		std::vector<ControllerFrame> remoteFrames;
@@ -526,6 +527,9 @@ namespace RTE {
 
 	/// Applies the committed frame's departures before its game commands.
 	void ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors);
+	/// A committed frame's controller inputs in the order every peer applies them: by sender, the committing peer's own at its place.
+	/// A frame that does not name its committing peer is placed by localPeerId.
+	std::vector<const ControllerFrame*> CommittedControllerFramesInSenderOrder(const NetLockstepReadyFrame& ready, uint8_t localPeerId = 0);
 	void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused);
 
 	/// The applied frame with the frames a synced pause committed discounted: a pause commits frames the
@@ -825,10 +829,29 @@ namespace RTE {
 		/// A window closing on accesses that broke the rule stops the process when the checks are armed.
 		class Window {
 		public:
-			Window();
+			/// A named window says how long it stayed open when that was a quarter second or more.
+			explicit Window(const char* name = nullptr);
 			~Window();
 			Window(const Window&) = delete;
 			Window& operator=(const Window&) = delete;
+		private:
+			const char* m_Name = nullptr;
+			uint64_t m_OpenedMs = 0;
+			uint64_t m_TicksAtOpen = 0;
+		};
+		/// Closes every open window for a stretch that reaches the coordinator through code that does not take the lock, such as the
+		/// match service; a tick in flight finishes first, and the windows reopen when it ends. Holds no lock while it lasts.
+		class Gap {
+		public:
+			/// A named gap says how long it lasted when that was a quarter second or more.
+			explicit Gap(const char* name = nullptr);
+			~Gap();
+			Gap(const Gap&) = delete;
+			Gap& operator=(const Gap&) = delete;
+		private:
+			int m_Closed = 0;
+			const char* m_Name = nullptr;
+			uint64_t m_OpenedMs = 0;
 		};
 	};
 
