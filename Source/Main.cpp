@@ -5543,7 +5543,7 @@ void RunGameLoop() {
 			bool perturbDue = simTick == ScenarioRunner::GetArgs().selftestPerturbTick;
 			if (s_netPerturbWhenLive) {
 				perturbDue = simTick >= ScenarioRunner::GetArgs().selftestPerturbTick && simTick % c_DesyncCheckIntervalTicks == 0 && ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive();
-				const auto* match = ScenarioRunner::GetLockstepMatchConfig();
+				const auto match = ScenarioRunner::GetLockstepMatchConfig();
 				if (!match) perturbDue = false;
 				else for (uint8_t peer = 1; peer <= match->peerCount; ++peer)
 					if (ScenarioRunner::IsLockstepPeerGone(peer, simTick) || ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick)) perturbDue = false;
@@ -7577,7 +7577,7 @@ bool ConfigureNetMatchActivity(const NetMatchConfig& config, int localTeam, std:
 
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error) {
 	// The roster's agreed config is the launch descriptor on every peer, the dedicated host and here.
-	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
 	if (!config) {
 		if (error) *error = "the launching match carries no agreed config";
 		return false;
@@ -8011,7 +8011,7 @@ int RunNetMatchServiceE2E() {
 
 	if (setupError.empty() && !setupCancelled) {
 		// A reconnecting peer's first lobby round carried the live match's snapshot; launch from it.
-		if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
+		if (const auto config = ScenarioRunner::GetLockstepMatchConfig()) {
 			{
 				std::ostringstream line;
 				line << "[net-match-service-e2e] roster:";

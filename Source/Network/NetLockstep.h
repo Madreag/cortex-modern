@@ -997,7 +997,8 @@ namespace RTE {
 		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { NET_PLANE_CHECK(); return m_Config.substituteSlowPeers; }
-		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { NET_PLANE_CHECK(); return m_HoldTransactions; }
+		/// A copy of the agreed holds: a reader outside the plane's lock never keeps a reference into what a plane tick changes.
+		std::map<uint8_t, NetGameSeatHold> HeldTransactions() const { NET_PLANE_CHECK(); return m_HoldTransactions; }
 		/// Moves each seat the round took back before a joining seat's first frame out of the held state its replayed tail ended on.
 		/// @param config The joining round's configuration; its holds, departures, incarnations and reclaims are updated.
 		/// @param reclaims The host's ReclaimAtFrame decisions the joining seat has received.
@@ -1238,6 +1239,7 @@ namespace RTE {
 		friend bool TestARepeatedStartHoldsNoFramesBehindIt(std::string* error);
 		friend bool TestALaggingSimulationReadsTheFrameItTook(std::string* error);
 		friend bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
+		friend bool TestAHeldMapReadKeepsNoLiveReference(std::string* error);
 		/// Records a committed frame in the history the tick boundary and the relays read.
 		void RememberCommittedFrame(const NetLockstepReadyFrame& ready);
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
