@@ -474,6 +474,8 @@ namespace RTE {
 		EndRender();
 		{
 			MovableObject::FaithfulCloneScope scope(false);
+			// The clones die whole: each part's change touches without comparing its fields, which only ever touches more.
+			CheckpointChangeUncompared uncompared;
 			for (Preview& preview: s_Previews) {
 				delete preview.clone;
 			}
