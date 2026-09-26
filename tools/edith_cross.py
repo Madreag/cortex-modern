@@ -40,6 +40,8 @@ TASK = 'cortex-session1'
 REPO = Path('D:/Projects/takeover-build')
 GAME_PORT, DIRECTORY_PORT = 49860, 49875  # the lane's block is 49860-49879 on both boxes
 BRIDGE_UDP, BRIDGE_TCP = 49876, 49877
+# EDITH reserves TCP 49675-49974 (netsh int ipv4 show excludedportrange), so the tunnel's loopback ends there sit outside it.
+EDITH_TCP = {DIRECTORY_PORT: 49985, BRIDGE_TCP: 49986}
 ADDRESS = {'here': '68.3.162.151', 'edith': '24.251.145.96'}
 MACHINE = {'here': 'EROL-PC', 'edith': 'EDITH'}
 # The TURN URL each side can reach; EDITH reaches this site only through its public address.
@@ -350,7 +352,7 @@ def make_cert(root):
 
 
 class Tunnel:
-    """ssh -R: EDITH's 127.0.0.1:<directory port> reaches the directory on this box's loopback (signalling only); with the
+    """ssh -R: EDITH's 127.0.0.1:<its directory port> reaches the directory on this box's loopback (signalling only); with the
     bridge, EDITH's 127.0.0.1:<bridge TCP port> reaches this box's end of the relay bridge too."""
 
     def __init__(self, log_path, bridge=False):
@@ -359,14 +361,14 @@ class Tunnel:
     def open(self):
         forwards = [DIRECTORY_PORT] + ([BRIDGE_TCP] if self.bridge else [])
         argv = ['ssh', '-N', '-o', 'ExitOnForwardFailure=yes',
-                *[part for port in forwards for part in ('-R', f'127.0.0.1:{port}:127.0.0.1:{port}')], 'edith']
+                *[part for port in forwards for part in ('-R', f'127.0.0.1:{EDITH_TCP[port]}:127.0.0.1:{port}')], 'edith']
         if DRY_RUN:
             say('dry-run: ' + ' '.join(argv))
             return
         self.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'), stderr=subprocess.STDOUT,
                                         creationflags=subprocess.CREATE_NO_WINDOW)
         time.sleep(4)
-        probe = ssh(f"$c = New-Object Net.Sockets.TcpClient; try {{ $c.Connect('127.0.0.1', {DIRECTORY_PORT}); 'open' }} "
+        probe = ssh(f"$c = New-Object Net.Sockets.TcpClient; try {{ $c.Connect('127.0.0.1', {EDITH_TCP[DIRECTORY_PORT]}); 'open' }} "
                     f"catch {{ 'closed' }} finally {{ $c.Close() }}").strip()
         if self.process.poll() is not None or probe != 'open':
             raise RuntimeError(f'the ssh -R tunnel did not open on EDITH (probe {probe}); see {self.log_path}')
@@ -407,7 +409,7 @@ def bridge_edith(udp_port=None, tcp_port=None):
     import socket
     import struct
     import threading
-    udp_port, tcp_port = udp_port or BRIDGE_UDP, tcp_port or BRIDGE_TCP
+    udp_port, tcp_port = udp_port or BRIDGE_UDP, tcp_port or EDITH_TCP[BRIDGE_TCP]
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(('127.0.0.1', udp_port))
     flows, counts = {}, dict(up=0, down=0, flows=0)
@@ -519,7 +521,7 @@ def turn_login():
 def network_settings(path, side, pin, login):
     if path == 'ip':
         return {'NetworkIceEnable': '0'}
-    rendezvous = {'SessionDirectoryUrl': f'127.0.0.1:{DIRECTORY_PORT}', 'SessionDirectoryCertSha256': pin,
+    rendezvous = {'SessionDirectoryUrl': f'127.0.0.1:{DIRECTORY_PORT if side == "here" else EDITH_TCP[DIRECTORY_PORT]}', 'SessionDirectoryCertSha256': pin,
                   'SessionDirectoryInstallKey': f'edith-cross-{side}-install'}
     if path == 'direct':
         return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
