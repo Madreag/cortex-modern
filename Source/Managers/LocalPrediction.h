@@ -81,7 +81,7 @@ namespace RTE {
 		static uint64_t s_PreviewCount;
 		static uint64_t s_PreviewTicks;
 		static double s_PreviewMs;
-		static constexpr int PhaseCount = 11;
+		static constexpr int PhaseCount = 13;
 		static std::array<double, PhaseCount> s_PhaseMs; //!< Wall time per preview stage; "drop" is the previous previews' teardown outside the preview's own time.
 		static const std::array<const char*, PhaseCount> s_PhaseNames;
 	};

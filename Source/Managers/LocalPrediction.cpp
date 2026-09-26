@@ -48,7 +48,7 @@ namespace RTE {
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
 	double LocalPrediction::s_PreviewMs = 0.0;
 	std::array<double, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseMs{};
-	const std::array<const char*, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseNames{"drop", "wait", "fence", "self_copies", "clone", "scripts_in", "links", "step", "discard", "restore", "scripts_out"};
+	const std::array<const char*, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseNames{"drop", "wait", "fence", "terrain_capture", "self_copies", "clone", "scripts_in", "links", "step", "discard", "terrain_restore", "restore", "scripts_out"};
 
 	// Gives the clone the MOIDs its original holds this frame, so its own rays and hits ignore the original.
 	static void AdoptMOIDs(Actor* clone, const Actor* original) {
@@ -166,11 +166,12 @@ namespace RTE {
 		const uint64_t soundIdentityCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		Activity::RollbackState activityState;
 		activity->CaptureRollbackState(activityState);
+		lap(2);
 		static TerrainLayerSnapshot terrain;
 		if (!terrain.Capture()) {
 			return;
 		}
-		lap(2);
+		lap(3);
 		Trace("fenced");
 		const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
 		const MovableMan::SpeculationStats statsBefore = g_MovableMan.GetSpeculationStats();
@@ -193,7 +194,7 @@ namespace RTE {
 		}
 		LuaMan::CapturePreviewSelfCopies(originals, PreviewScriptSelfTest::SharedSlot());
 		g_MovableMan.BeginSpeculation();
-		lap(3);
+		lap(4);
 		{
 			MovableObject::FaithfulCloneScope scope(false);
 			for (Preview& preview: targets) {
@@ -201,7 +202,7 @@ namespace RTE {
 			}
 		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
-		lap(4);
+		lap(5);
 		std::vector<MovableObject*> clones;
 		std::vector<const MovableObject*> cloned;
 		clones.reserve(targets.size());
@@ -213,7 +214,7 @@ namespace RTE {
 			}
 		}
 		LuaMan::BeginPreviewScripts(clones, PreviewScriptSelfTest::SharedSlot(), cloned);
-		lap(5);
+		lap(6);
 		if (PreviewScriptSelfTest::StrideCounterRequested()) {
 			for (MovableObject* clone: clones) {
 				PreviewScriptSelfTest::InstallStrideCounter(clone);
@@ -228,7 +229,7 @@ namespace RTE {
 			AdoptMOIDs(preview.clone, preview.original);
 		}
 		Trace("resolved");
-		lap(6);
+		lap(7);
 
 		std::string error;
 		std::vector<ControllerFrame> frames;
@@ -275,7 +276,7 @@ namespace RTE {
 			g_MovableMan.HarvestSpeculativeSpawns();
 		}
 		Trace("stepped");
-		lap(7);
+		lap(8);
 
 		Outcome outcome;
 		for (const Preview& preview: targets) {
@@ -310,7 +311,7 @@ namespace RTE {
 		}
 		PreviewEventLedger::AddPreviewedEmitters(takenEmitters);
 		Trace("discarded");
-		lap(8);
+		lap(9);
 		const MovableMan::SpeculationStats statsAfter = g_MovableMan.GetSpeculationStats();
 		outcome.shadows = statsAfter.shadows - statsBefore.shadows;
 		outcome.taken = statsAfter.taken - statsBefore.taken;
@@ -328,6 +329,7 @@ namespace RTE {
 			}
 		}
 		terrain.Restore();
+		lap(10);
 		activity->RestoreRollbackState(activityState);
 		// The peek runs on the canonical tick, not this preview's advanced clock; the horizon only dates unstamped orders.
 		s_LastFillTick = static_cast<uint64_t>(simCount);
@@ -341,7 +343,7 @@ namespace RTE {
 			}
 		}
 		MovableObject::PinUniqueIDCounter(uidCounter);
-		lap(9);
+		lap(11);
 		// The rounds a preview pops take fresh sound identities with them; the canonical cursor keeps its place.
 		g_AudioMan.SetCheckpointSoundContainerCursor(soundIdentityCursor);
 		PreviewEventLedger::Disarm();
@@ -358,7 +360,7 @@ namespace RTE {
 			}
 		}
 		Trace("restored");
-		lap(10);
+		lap(12);
 		s_Previews = std::move(targets);
 		s_TakenResidents = std::move(taken);
 		s_LastOutcome = outcome;
