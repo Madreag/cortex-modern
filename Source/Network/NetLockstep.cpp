@@ -21,6 +21,11 @@
 #include <thread>
 #include <utility>
 
+#ifdef _WIN32
+#include "Windows.h"
+#include <dbghelp.h>
+#endif
+
 namespace RTE {
 
 	uint64_t NetLockstepNowMs() {
@@ -4033,6 +4038,32 @@ namespace RTE {
 	}
 
 	namespace {
+		// The callers of a broken access, named so the site that needs the lock is found in one run.
+		std::string CallerNames() {
+#ifdef _WIN32
+			void* frames[12] = {};
+			const USHORT count = CaptureStackBackTrace(3, 12, frames, nullptr);
+			HANDLE process = GetCurrentProcess();
+			SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+			const bool initialized = SymInitialize(process, nullptr, TRUE);
+			const bool usable = initialized || GetLastError() == ERROR_INVALID_PARAMETER;
+			std::string names;
+			for (USHORT index = 0; index < count; ++index) {
+				char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = {};
+				auto* symbol = reinterpret_cast<PSYMBOL_INFO>(buffer);
+				symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+				symbol->MaxNameLen = MAX_SYM_NAME;
+				DWORD64 displacement = 0;
+				if (!names.empty()) names += " < ";
+				names += usable && SymFromAddr(process, reinterpret_cast<DWORD64>(frames[index]), &displacement, symbol) ? std::string(symbol->Name) : std::string("?");
+			}
+			if (initialized) SymCleanup(process);
+			return names;
+#else
+			return "?";
+#endif
+		}
+
 		// One plane per process, like the one round it serves. The thread is the last member, so it is joined before the lock goes.
 		struct PlaneState {
 			std::recursive_mutex lock;
@@ -4111,16 +4142,33 @@ namespace RTE {
 		if (plane.checkSites.insert(where).second) {
 			std::ostringstream thread;
 			thread << std::this_thread::get_id();
-			std::cout << "[net-plane] unguarded coordinator access in " << where << " inside an open window: thread=" << thread.str() << " trips=" << trips << std::endl;
+			std::cout << "[net-plane] unguarded coordinator access in " << where << " inside an open window: thread=" << thread.str() << " trips=" << trips
+			          << " from " << CallerNames() << std::endl;
 		}
 	}
 
-	NetLockstepPlane::Window::Window() { Plane().windows.fetch_add(1, std::memory_order_acq_rel); }
+	NetLockstepPlane::Gap::Gap() {
+		PlaneState& plane = Plane();
+		std::lock_guard<std::recursive_mutex> lock(plane.lock);
+		m_Closed = plane.windows.exchange(0, std::memory_order_acq_rel);
+	}
+
+	NetLockstepPlane::Gap::~Gap() { Plane().windows.fetch_add(m_Closed, std::memory_order_acq_rel); }
+
+	NetLockstepPlane::Window::Window(const char* name) : m_Name(name) {
+		if (m_Name) { m_OpenedMs = NetLockstepNowMs(); m_TicksAtOpen = Ticks(); }
+		Plane().windows.fetch_add(1, std::memory_order_acq_rel);
+	}
 	NetLockstepPlane::Window::~Window() {
 		// A tick in flight finishes before the simulation thread goes on to code that reads the coordinator unguarded.
 		PlaneState& plane = Plane();
 		std::lock_guard<std::recursive_mutex> lock(plane.lock);
 		plane.windows.fetch_sub(1, std::memory_order_acq_rel);
+		if (m_Name) {
+			const uint64_t openMs = NetLockstepNowMs() - m_OpenedMs;
+			if (openMs >= 250)
+				std::cout << "[net-plane] the " << m_Name << " stayed open " << openMs << " ms: plane_ticks=" << Ticks() - m_TicksAtOpen << " clock=" << NetLockstepSharedClockMs() << std::endl;
+		}
 		if (plane.checksArmed.load(std::memory_order_relaxed) && plane.checkTrips.load(std::memory_order_acquire) > 0) {
 			std::lock_guard<std::mutex> sites(plane.checkSitesLock);
 			std::cout << "[net-plane] ASSERT: " << plane.checkTrips.load() << " coordinator accesses without the plane's lock inside open windows at " << plane.checkSites.size() << " sites; stopping" << std::endl;
