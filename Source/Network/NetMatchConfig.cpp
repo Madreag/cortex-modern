@@ -801,6 +801,10 @@ namespace RTE {
 		return config.peerInputDelayFrames[peerId - 1];
 	}
 
+	uint16_t NetMatchConfigUtil::HoldMarginFrames(const NetMatchConfig& config) {
+		return config.version >= c_TimingOptionsVersion && config.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute ? config.slowPlayerBoundTicks : 0;
+	}
+
 	const char* NetMatchConfigUtil::ModeName(NetMatchMode mode) {
 		switch (mode) {
 			case NetMatchMode::PvPSkirmish: return "pvp-skirmish";
