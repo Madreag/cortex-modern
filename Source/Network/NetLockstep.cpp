@@ -5112,6 +5112,8 @@ namespace RTE {
 			if (timing.peerId != m_Config.localPeerId && !IsKnownRemotePeer(timing.peerId)) { m_RemotePeerIds.push_back(timing.peerId); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
 			m_ReclaimTransactions[timing.peerId] = {timing.peerId, timing.authorityGeneration, timing.revision,
 			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame, timing.worldTransition};
+			std::cout << "[net-lockstep] return of peer " << static_cast<int>(timing.peerId) << " at " << timing.applyFrame << " delay=" << timing.delayFrames
+			          << " neutral_through=" << timing.neutralThroughFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[timing.peerId - 1] << std::endl;
 			m_Config.peerIncarnations[timing.peerId] = timing.seatIncarnations[timing.peerId - 1];
 			m_PeerEffectiveStart[timing.peerId] = timing.applyFrame + timing.delayFrames;
 			m_PeerAdmissions[timing.peerId] = {timing.applyFrame, timing.delayFrames};
@@ -6383,6 +6385,15 @@ namespace RTE {
 			std::cout << "[lockstep] resent " << resent << " relayed ticks " << fromFrame << ".." << last << " of peer " << static_cast<int>(senderPeerId)
 			          << " to peer " << static_cast<int>(requesterPeerId) << " on the reliable lane" << std::endl;
 		return resent;
+	}
+
+	size_t NetLockstepCoordinator::SendReturnerTheRoundFrom(uint8_t peerId, uint64_t fromFrame) {
+		if (!m_RelayHost || m_Config.localPeerId != GetHostPeerId() || !m_RemoteTransports.contains(peerId)) return 0;
+		// The frames already sent for the reclaim frame on went only to the links bound then; the returner asks for none of them
+		// until it misses them, a round trip too late for its first input.
+		size_t sent = ResendOwnFramesFrom(peerId, fromFrame);
+		for (uint8_t sender: m_RemotePeerIds) if (sender != peerId) sent += ResendRelayedFramesFrom(peerId, sender, fromFrame);
+		return sent;
 	}
 
 	size_t NetLockstepCoordinator::ResendOwnFramesFrom(uint8_t requesterPeerId, uint64_t fromFrame) {
@@ -7833,6 +7844,9 @@ namespace RTE {
 				if (command.senderPeerId != GetHostPeerId() || reclaim->peerId == GetHostPeerId() || reclaim->peerId > m_Config.peerCount || reclaim->activationFrame != outFrame.frame) {
 					Fail(NetLockstepStopReason::ProtocolError, outFrame.frame, "recorded reclaim has invalid authority or frame"); return false;
 				}
+				if (const auto held = m_ReclaimTransactions.find(reclaim->peerId); held == m_ReclaimTransactions.end() || !(held->second == *reclaim))
+					std::cout << "[net-lockstep] return of peer " << static_cast<int>(reclaim->peerId) << " committed at " << outFrame.frame << " delay=" << reclaim->delayFrames
+					          << " neutral_through=" << reclaim->neutralThroughFrame << " revision=" << reclaim->eventSequence << " differs from the one this peer held" << std::endl;
 				m_ReclaimTransactions[reclaim->peerId] = *reclaim;
 				m_Config.peerIncarnations[reclaim->peerId] = reclaim->seatIncarnation;
 				m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
