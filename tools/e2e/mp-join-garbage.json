@@ -1,0 +1,274 @@
+{
+  "schema": 1,
+  "name": "mp-join-garbage",
+  "port_base": 49418,
+  "title": "A client rejoined from the host's image answers a unique-ID lookup of dropped Lua objects exactly as the survivor does",
+  "size": "960x540",
+  "timeout_s": 300,
+  "runs": [
+    {
+      "name": "reconnect",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-ticks",
+            "1500",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/host.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkAutoReconnect": "1"
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 3000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/JoinGarbageProbe.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "copy": "tools/fixtures/join_garbage_probe.lua",
+              "to": "Userdata/UserScenes.rte/JoinGarbageProbe.lua"
+            }
+          ]
+        },
+        {
+          "name": "client-dropped",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-ticks",
+            "1500",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkAutoReconnect": "1",
+            "NetworkOfferStoredRejoin": "1"
+          },
+          "start_delay_s": 3.0,
+          "kill_at_tick": 700,
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 3000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/JoinGarbageProbe.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "copy": "tools/fixtures/join_garbage_probe.lua",
+              "to": "Userdata/UserScenes.rte/JoinGarbageProbe.lua"
+            }
+          ]
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-ticks",
+            "1500",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/survivor.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkAutoReconnect": "1",
+            "NetworkOfferStoredRejoin": "1"
+          },
+          "start_delay_s": 5.0,
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 3000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/JoinGarbageProbe.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "copy": "tools/fixtures/join_garbage_probe.lua",
+              "to": "Userdata/UserScenes.rte/JoinGarbageProbe.lua"
+            }
+          ]
+        },
+        {
+          "name": "client-rejoined",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-ticks",
+            "1500",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-report",
+            "{OUT}/rejoin-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkAutoReconnect": "1",
+            "NetworkOfferStoredRejoin": "1"
+          },
+          "start_when": {
+            "peer": "client-dropped",
+            "ended": true
+          },
+          "after_gate_delay_s": 2,
+          "retain_runtime_from": {
+            "run": "reconnect",
+            "peer": "client-dropped"
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 3000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/JoinGarbageProbe.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "copy": "tools/fixtures/join_garbage_probe.lua",
+              "to": "Userdata/UserScenes.rte/JoinGarbageProbe.lua"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "jg-probe-host",
+      "run": "reconnect",
+      "peer": "host",
+      "screen": "game",
+      "what": "The host's activity drops and probes objects every update.",
+      "log_regex": [
+        "\\[uidprobe\\] update=\\d+ found=\\d+"
+      ]
+    },
+    {
+      "id": "jg-probe-survivor",
+      "run": "reconnect",
+      "peer": "survivor",
+      "screen": "game",
+      "what": "The survivor probes the same objects.",
+      "log_regex": [
+        "\\[uidprobe\\] update=\\d+ found=\\d+"
+      ]
+    },
+    {
+      "id": "jg-rejoined-from-image",
+      "run": "reconnect",
+      "peer": "client-rejoined",
+      "screen": "game",
+      "what": "The relaunched client rejoins from the host's image and probes on.",
+      "log_regex": [
+        "\\[net-match\\] bootstrap checkpoint=\\d+",
+        "\\[uidprobe\\] update=\\d+ found=\\d+"
+      ]
+    }
+  ]
+}
