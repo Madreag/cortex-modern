@@ -309,6 +309,14 @@ namespace RTE::CheckpointLua {
 		static constexpr size_t c_CommitStep = size_t(1) << 20;
 		static constexpr size_t c_LargeLimit = size_t(1) << 18; // Above this a block takes whole pages of its own.
 		static constexpr size_t c_ClassCount = 64 + 56 + 62;
+		// Heaps sit whole gigabytes apart and lay out alike, so each starts its blocks on its own cache sets.
+		static constexpr size_t c_ColorStride = 33 * 64;
+		static constexpr size_t c_Colors = 64;
+
+		static size_t NextColorOffset() {
+			static std::atomic<size_t> next{0};
+			return next.fetch_add(1, std::memory_order_relaxed) % c_Colors * c_ColorStride;
+		}
 
 		HeapOwner() = default;
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
@@ -480,6 +488,7 @@ namespace RTE::CheckpointLua {
 			throw std::runtime_error("frozen Lua heap capture requires the GC64 allocator interface");
 #else
 			Reserve();
+			m_Used = NextColorOffset();
 			m_Bootstrap.reset(luaL_newstate());
 			if (!m_Bootstrap) throw std::runtime_error("could not create the Lua allocator bootstrap");
 			const lua_CFunction panic = G(m_Bootstrap.get())->panic;
