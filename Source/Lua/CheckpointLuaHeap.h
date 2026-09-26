@@ -309,10 +309,22 @@ namespace RTE::CheckpointLua {
 		static constexpr size_t c_CommitStep = size_t(1) << 20;
 		static constexpr size_t c_LargeLimit = size_t(1) << 18; // Above this a block takes whole pages of its own.
 		static constexpr size_t c_ClassCount = 64 + 56 + 62;
+		// Heaps are reserved whole gigabytes apart and lay out alike, so each one starts its blocks on its own
+		// cache sets and its own pages: an odd count of lines along, and an odd count of the largest page a
+		// platform maps (16 KB) along, so the same block of every state takes neither one set nor one TLB entry.
+		static constexpr size_t c_ColorStride = 33 * 64;
+		static constexpr size_t c_PageStride = 13 * 16384;
+		static constexpr size_t c_Colors = 64;
+
+		static size_t NextColor() {
+			static std::atomic<size_t> next{0};
+			return next.fetch_add(1, std::memory_order_relaxed) % c_Colors;
+		}
 
 		HeapOwner() = default;
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
 		lua_State* m_State = nullptr;
+		uintptr_t m_Reservation = 0;
 		uintptr_t m_Base = 0;
 		size_t m_Committed = 0;
 		size_t m_Used = 0;
@@ -479,7 +491,9 @@ namespace RTE::CheckpointLua {
 #if !LJ_GC64
 			throw std::runtime_error("frozen Lua heap capture requires the GC64 allocator interface");
 #else
-			Reserve();
+			const size_t color = NextColor();
+			Reserve(color * c_PageStride);
+			m_Used = color * c_ColorStride;
 			m_Bootstrap.reset(luaL_newstate());
 			if (!m_Bootstrap) throw std::runtime_error("could not create the Lua allocator bootstrap");
 			const lua_CFunction panic = G(m_Bootstrap.get())->panic;
@@ -509,17 +523,18 @@ namespace RTE::CheckpointLua {
 #ifdef _WIN32
 		static void* MapPages(size_t bytes) noexcept { return VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE); }
 		static void Unmap(void* pages, size_t) noexcept { VirtualFree(pages, 0, MEM_RELEASE); }
-		void Reserve() {
-			void* base = VirtualAlloc(nullptr, c_ReserveBytes, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
+		void Reserve(size_t shift) {
+			void* base = VirtualAlloc(nullptr, c_ReserveBytes + c_Colors * c_PageStride, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
 			if (!base) throw std::runtime_error("could not reserve the tracked Lua heap");
-			m_Base = reinterpret_cast<uintptr_t>(base);
+			m_Reservation = reinterpret_cast<uintptr_t>(base);
+			m_Base = m_Reservation + shift;
 		}
 		bool Commit(size_t bytes) noexcept {
 			return VirtualAlloc(reinterpret_cast<void*>(m_Base + m_Committed), bytes, MEM_COMMIT, PAGE_READWRITE) != nullptr;
 		}
 		void Release() noexcept {
-			if (m_Base) VirtualFree(reinterpret_cast<void*>(m_Base), 0, MEM_RELEASE);
-			m_Base = 0;
+			if (m_Reservation) VirtualFree(reinterpret_cast<void*>(m_Reservation), 0, MEM_RELEASE);
+			m_Reservation = m_Base = 0;
 		}
 		// The pages written since the last freeze, and the kernel's bits cleared for the next one.
 		size_t WrittenPages() {
@@ -537,17 +552,18 @@ namespace RTE::CheckpointLua {
 			return pages == MAP_FAILED ? nullptr : pages;
 		}
 		static void Unmap(void* pages, size_t bytes) noexcept { munmap(pages, bytes); }
-		void Reserve() {
-			void* base = mmap(nullptr, c_ReserveBytes, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+		void Reserve(size_t shift) {
+			void* base = mmap(nullptr, c_ReserveBytes + c_Colors * c_PageStride, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
 			if (base == MAP_FAILED) throw std::runtime_error("could not reserve the tracked Lua heap");
-			m_Base = reinterpret_cast<uintptr_t>(base);
+			m_Reservation = reinterpret_cast<uintptr_t>(base);
+			m_Base = m_Reservation + shift;
 		}
 		bool Commit(size_t bytes) noexcept {
 			return mprotect(reinterpret_cast<void*>(m_Base + m_Committed), bytes, PROT_READ | PROT_WRITE) == 0;
 		}
 		void Release() noexcept {
-			if (m_Base) munmap(reinterpret_cast<void*>(m_Base), c_ReserveBytes);
-			m_Base = 0;
+			if (m_Reservation) munmap(reinterpret_cast<void*>(m_Reservation), c_ReserveBytes + c_Colors * c_PageStride);
+			m_Reservation = m_Base = 0;
 		}
 		// Without page-written bits every committed page is copied; correct, not incremental.
 		size_t WrittenPages() {

@@ -256,7 +256,8 @@
       "sim_progress": 120,
       "log_regex": [
         "\\[autosave\\] tick=\\d+ capture_ms="
-      ]
+      ],
+      "assert": "the resumed round's committed frames across the marked window, which closes on the round's own frame 850 (and no sooner than 5 s), so a loaded box stretches the window instead of thinning it"
     },
     {
       "id": "resume-original-play-client",
@@ -311,7 +312,8 @@
       "sim_progress": 120,
       "log_regex": [
         "\\[autosave\\] tick=\\d+ capture_ms="
-      ]
+      ],
+      "assert": "the resumed round's committed frames across the marked window, which closes on the round's own frame 850 (and no sooner than 5 s), so a loaded box stretches the window instead of thinning it"
     }
   ]
 }
