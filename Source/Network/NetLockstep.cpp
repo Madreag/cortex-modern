@@ -10111,6 +10111,17 @@ namespace RTE {
 			m_WaitingFrame = m_Stats.nextFrame;
 			m_WaitStartMs = nowMs;
 		}
+		// A waiting host keeps talking every tick: its clients read a silent host as a gone one, so its wait must never look like that.
+		if (m_Config.localPeerId == GetHostPeerId() && m_RelayHost && m_Transport && !m_RemoteTransports.empty() && nowMs >= m_WaitStartMs &&
+		    static_cast<double>(nowMs - m_WaitStartMs) >= m_Config.simTickMs && (nowMs < m_LastLivenessMs || static_cast<double>(nowMs - m_LastLivenessMs) >= m_Config.simTickMs)) {
+			m_LastLivenessMs = nowMs;
+			NetLockstepAck alive;
+			alive.senderPeerId = m_Config.localPeerId;
+			alive.highestContiguousFrame = m_Stats.nextFrame;
+			if (ConfiguredWindowTicks() > 1 && FrameWindowAllRemotesAdvertised()) alive.receivedMask = NetLockstepCodec::c_FrameWindowCapabilityMask;
+			std::string ignored;
+			(void)SendPacket({alive}, m_Config.frameLane, &ignored);
+		}
 		if (m_LastStallFrame != m_Stats.nextFrame) {
 			++m_Stats.missingFrameStalls;
 			m_LastStallFrame = m_Stats.nextFrame;
@@ -10120,15 +10131,18 @@ namespace RTE {
 			m_Stats.lastMissingPeers = DescribeMissingPeers();
 		}
 		const uint64_t lastAuthorityTraffic = std::max(m_WaitStartMs, m_AuthorityLastHeardMs);
-		// A reliable lane holds everything behind a lost packet for a round trip at a time, so a live host is silent for
-		// as long as its link can make it: the host is gone only past a few of those and the bound.
-		uint64_t hostLinkMs = 0;
-		if (const auto transport = m_RemoteTransports.find(GetHostPeerId()); transport != m_RemoteTransports.end() && m_Transport)
-			hostLinkMs = m_Transport->GetPeerPingMs(transport->second);
-		if (const auto estimate = m_DelayEstimators.find(GetHostPeerId()); estimate != m_DelayEstimators.end())
-			hostLinkMs = std::max<uint64_t>(hostLinkMs, estimate->second.P95Ms());
 		const uint64_t silenceBoundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, std::max<uint64_t>(500, 3 * hostLinkMs + silenceBoundMs));
+		// One reading and one threshold: the slow-player bound plus the jitter the host's traffic lands with. A live host talks every
+		// tick even while it waits, and its announced captures are its busy spans below.
+		uint64_t jitterMs = 0;
+		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = host->second.jitterMs;
+		if (const auto estimate = m_DelayEstimators.find(GetHostPeerId()); estimate != m_DelayEstimators.end()) jitterMs = std::max<uint64_t>(jitterMs, estimate->second.JitterMs());
+		if (const auto lateness = m_ArrivalLateness.find(GetHostPeerId()); lateness != m_ArrivalLateness.end() && !lateness->second.empty()) {
+			std::vector<uint32_t> sorted(lateness->second.begin(), lateness->second.end());
+			std::sort(sorted.begin(), sorted.end());
+			jitterMs = std::max<uint64_t>(jitterMs, sorted[std::min(sorted.size() - 1, sorted.size() * 95 / 100)]);
+		}
+		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, silenceBoundMs + jitterMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs)));
 		// A host still in its start work (no frame from it yet this round) or in a capture park it announced is busy, not gone:
 		// only its link's close or the round's timeout ends that wait.
 		const bool hostBusy = !m_PeersPlayedThisRound.contains(GetHostPeerId()) ||
