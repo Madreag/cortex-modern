@@ -6070,6 +6070,11 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport) {
+		// A seat that joined while the round ran names each other seat's return it hears, so a return it never takes says where it went.
+		if (timing.phase == NetTimingPhase::ReclaimAtFrame && m_Config.joinsRunningRound && timing.peerId != m_Config.localPeerId)
+			std::cout << "[net-lockstep] heard peer " << static_cast<int>(timing.peerId) << "'s return at " << timing.applyFrame << " revision=" << timing.revision
+			          << " incarnation=" << timing.seatIncarnations[timing.peerId - 1] << " known=" << m_Config.peerIncarnations[timing.peerId] << " state=" << StateName(m_State)
+			          << " start=" << m_Config.startFrame << " next=" << m_Stats.nextFrame << " awaiting_tail=" << m_AwaitingReplayedSeatState << std::endl;
 		if (timing.phase == NetTimingPhase::HoldAtFrame && m_Config.localPeerId != GetHostPeerId() && (timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0)
 			std::cout << "[net-lockstep] hold of this seat at " << timing.applyFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[m_Config.localPeerId - 1]
 			          << " state=" << StateName(m_State) << " known_incarnation=" << m_Config.peerIncarnations[m_Config.localPeerId] << " next=" << m_Stats.nextFrame
