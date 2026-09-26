@@ -842,12 +842,15 @@ namespace RTE {
 		/// match service; a tick in flight finishes first, and the windows reopen when it ends. Holds no lock while it lasts.
 		class Gap {
 		public:
-			Gap();
+			/// A named gap says how long it lasted when that was a quarter second or more.
+			explicit Gap(const char* name = nullptr);
 			~Gap();
 			Gap(const Gap&) = delete;
 			Gap& operator=(const Gap&) = delete;
 		private:
 			int m_Closed = 0;
+			const char* m_Name = nullptr;
+			uint64_t m_OpenedMs = 0;
 		};
 	};
 
