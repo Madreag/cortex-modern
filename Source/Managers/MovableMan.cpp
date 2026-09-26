@@ -2701,6 +2701,15 @@ std::string MovableMan::KnownObjectsScopeMissedChange() {
 	return missed;
 }
 
+std::vector<MovableObject*> MovableMan::KnownObjectsAbove(long floor) {
+	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+	std::vector<MovableObject*> objects;
+	for (auto entry = m_KnownObjects.upper_bound(floor); entry != m_KnownObjects.end(); ++entry) {
+		objects.push_back(entry->second);
+	}
+	return objects;
+}
+
 std::vector<MovableObject*> MovableMan::SnapshotKnownObjects() {
 	if (const KnownObjectsScope* scope = m_KnownObjectsScope.load(std::memory_order_acquire); scope && scope->m_Version == m_KnownObjectsVersion.load(std::memory_order_acquire)) {
 		scope->Copy();

@@ -303,6 +303,9 @@ namespace RTE {
 		/// A copy of every object known by unique id.
 		std::vector<MovableObject*> SnapshotKnownObjects();
 
+		/// The known objects whose unique id is above the floor, in id order.
+		std::vector<MovableObject*> KnownObjectsAbove(long floor);
+
 		/// Lays the saved script graphs onto the live world: each root's scripts go to the saved state and start without Create,
 		/// then the graph fills the fields and the script-made globals; false with the reasons when anything did not restore.
 		bool RestoreScriptGraphs(const std::vector<std::string>& graphs, std::string* error, bool reuseHeld = false);
