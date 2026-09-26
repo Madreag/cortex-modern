@@ -11046,6 +11046,7 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
+	const int stackStart = lua_gettop(m_State);
 	lua_pushcfunction(m_State, &AddFileAndLineToError);
 	functionObject->GetLuabindObject()->push(m_State);
 
@@ -11116,7 +11117,8 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 		timing->m_CallCount++;
 	}
 
-	lua_pop(m_State, 1);
+	// A hook's return values go with the error handler.
+	lua_settop(m_State, stackStart);
 
 	m_CurrentlyRunningScriptPath = "";
 	return status;
@@ -11129,6 +11131,7 @@ int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectW
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
+	const int stackStart = lua_gettop(m_State);
 	lua_pushcfunction(m_State, &AddFileAndLineToError);
 	functionObject->GetLuabindObject()->push(m_State);
 
@@ -11187,7 +11190,7 @@ int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectW
 		m_ScriptTimings[path].m_CallCount++;
 	}
 
-	lua_pop(m_State, 1);
+	lua_settop(m_State, stackStart);
 
 	m_CurrentlyRunningScriptPath = "";
 	return status;
