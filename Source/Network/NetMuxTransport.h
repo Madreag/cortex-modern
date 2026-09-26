@@ -13,8 +13,9 @@ namespace RTE {
 
 	/// A host's direct-IP listen and its ICE listen behind one INetTransport. Peer ids from the ICE
 	/// half carry c_P2PTag, so Send, Disconnect and every event route back to the half they came from.
-	/// Everything that touches a half runs on the thread that calls PollEvents: GnsTransport has no
-	/// locks, so other threads hand work over with Post().
+	/// Everything that touches a half runs on the thread that calls PollEvents: GnsTransport takes one
+	/// process-wide recursive lock per call, but the mux's own halves and state take none, so other
+	/// threads hand work over with Post().
 	class NetMuxTransport final : public INetTransport {
 	public:
 		/// What a session-id join dials instead of an address.

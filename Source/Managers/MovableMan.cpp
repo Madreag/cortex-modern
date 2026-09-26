@@ -5114,55 +5114,45 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 		return;
 	}
 
-	struct Cursor {
-		LuaStateWrapper* state = nullptr;
-		std::vector<SyncedUpdateEntry> objects;
-		size_t next = 0;
-	};
-	struct Pending {
+	struct Visit {
 		SyncedUpdateEntry entry;
-		size_t cursor = 0;
+		LuaStateWrapper* state = nullptr;
 	};
-	// Orders on the identity stored at snapshot time, never on the object: an earlier script in this
-	// same pass may have deleted it.
-	const auto earlier = [](const Pending& lhs, const Pending& rhs) {
-		return SyncedUpdateEntryEarlier(rhs.entry, lhs.entry);
-	};
-
-	std::vector<Cursor> cursors;
-	cursors.reserve(g_LuaMan.GetThreadedScriptStates().size());
-	std::priority_queue<Pending, std::vector<Pending>, decltype(earlier)> pending(earlier);
-	for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
-		Cursor& cursor = cursors.emplace_back();
-		cursor.state = &luaState;
-		cursor.objects = SnapshotRegisteredMOs(luaState);
-		if (!cursor.objects.empty()) pending.push({cursor.objects.front(), cursors.size() - 1});
+	// Every state's registered set in one sort: the snapshot order is total, so this is the order a merge
+	// of the per-state lists gives, without a heap operation per object. It orders on the identity stored
+	// at snapshot time, never on the object: an earlier script in this same pass may have deleted it.
+	size_t registeredCount = 0;
+	for (const LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
+		registeredCount += luaState.GetRegisteredMOs().size();
 	}
+	std::vector<Visit> visits;
+	visits.reserve(registeredCount);
+	for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
+		for (MovableObject* mo: luaState.GetRegisteredMOs()) {
+			visits.push_back({{mo, mo->GetUniqueID(), mo->GetID(), mo->GetScriptRegistrationSerial()}, &luaState});
+		}
+	}
+	std::sort(visits.begin(), visits.end(), [](const Visit& lhs, const Visit& rhs) { return SyncedUpdateEntryEarlier(lhs.entry, rhs.entry); });
 
 	LuaStateWrapper* currentState = nullptr;
-	while (!pending.empty()) {
-		const Pending next = pending.top();
-		pending.pop();
-		Cursor& cursor = cursors[next.cursor];
-		if (currentState != cursor.state) {
-			g_LuaMan.SetThreadLuaStateOverride(cursor.state);
-			currentState = cursor.state;
+	for (const Visit& visit: visits) {
+		if (currentState != visit.state) {
+			g_LuaMan.SetThreadLuaStateOverride(visit.state);
+			currentState = visit.state;
 		}
-		MovableObject* mo = next.entry.object;
-		// Ordered on the identity read at snapshot time and reached only while the object is still
-		// registered: an earlier script in this same pass may have freed it, on any state.
-		if (!stillRegistered(*cursor.state, mo)) {
+		MovableObject* mo = visit.entry.object;
+		// Reached only while the object is still registered: an earlier script in this same pass may
+		// have freed it, on any state.
+		if (!stillRegistered(*visit.state, mo)) {
 			++m_SyncedPassSkippedDeadEntries;
 		} else if (mo->HasRequestedSyncedUpdate()) {
 			mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
-			if (stillRegistered(*cursor.state, mo)) {
+			if (stillRegistered(*visit.state, mo)) {
 				mo->ResetRequestedSyncedUpdateFlag();
 			} else {
 				++m_SyncedPassSkippedDeadEntries;
 			}
 		}
-		++cursor.next;
-		if (cursor.next < cursor.objects.size()) pending.push({cursor.objects[cursor.next], next.cursor});
 	}
 	g_LuaMan.SetThreadLuaStateOverride(nullptr);
 }
