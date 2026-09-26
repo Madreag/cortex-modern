@@ -171,6 +171,10 @@ def merge_halves(roots, out):
         for kind in ('video', 'contact_sheet'):
             if item.get(kind) and (not peer or item[kind] != (peer.get(kind) or {}).get('path')):
                 item['finding'] = {'class': 'harness', 'reason': f'Review {kind} does not reference its verified peer media'}
+        # Both halves count the round's committed frames, so the two play windows read one counter.
+        progress = item.get('simulation_progress')
+        if progress is not None and progress.get('counted') != 'lockstep_frame':
+            item['finding'] = {'class': 'harness', 'reason': f"The {item.get('peer')} play window counted {progress.get('counted')}, not the round's committed frames", 'evidence': progress}
         if not agreed:
             item['finding'] = {'class': 'harness', 'reason': 'The pair identity gate failed; this is an unrelated or incomplete half'}
     manifest = {'schema': 1, 'scenario': 'mp-host-join-cross', 'source_captures': sources, 'sources': [value['source'] for value in manifests], 'frame_count': sum(value['frame_count'] for value in manifests), 'peers': peers, 'match_identity_gate': gate, 'finished': driver.stamp(), 'findings': findings,

@@ -44,6 +44,7 @@
 #include "GUICheckpoint.h"
 #include "OwnedMovableObjects.h"
 #include "PreviewScriptSelfTest.h"
+#include "NetRoundStartScripts.h"
 #include "Vector.h"
 #include "SLBackground.h"
 #include "Writer.h"
@@ -274,7 +275,8 @@ DeterministicMORNGScope::DeterministicMORNGScope(long uniqueID, uint64_t phase, 
 	if (!enabled) {
 		return;
 	}
-	s_workerMORNG.Seed(DeriveMORNGSeed(uniqueID, g_TimerMan.GetSimUpdateCount(), phase));
+	// Most hooks draw nothing, so the generator seeds at its first draw.
+	s_workerMORNG.SeedOnFirstDraw(DeriveMORNGSeed(uniqueID, g_TimerMan.GetSimUpdateCount(), phase));
 	m_PrevSimOverride = t_simRNGOverride;
 	m_PrevLuaOverride = s_luaRNGOverride;
 	t_simRNGOverride = &s_workerMORNG;
@@ -286,6 +288,75 @@ DeterministicMORNGScope::~DeterministicMORNGScope() {
 		t_simRNGOverride = m_PrevSimOverride;
 		s_luaRNGOverride = m_PrevLuaOverride;
 	}
+}
+
+// A generator seeded at its first draw must be the generator Seed makes, to every reader: its draws, its checkpoint text,
+// its hash text, its engine state, a copy of it and a restore of its checkpoint, before and after it draws.
+static bool RunLazySeedSelfTest() {
+	const auto draws = [](RandomGenerator& rng, int count) {
+		std::vector<uint64_t> values;
+		values.reserve(count);
+		for (int draw = 0; draw < count; ++draw) values.push_back(rng.RandomNum<uint64_t>(0, ~0ULL));
+		return values;
+	};
+	std::vector<std::string> failed;
+	const auto check = [&failed](bool ok, const char* clause) {
+		if (!ok) failed.emplace_back(clause);
+	};
+	constexpr uint64_t c_Seed = 0x9E3779B97F4A7C15ULL;
+	constexpr uint64_t c_Reseed = 0xBF58476D1CE4E5B9ULL;
+	constexpr int c_Draws = 400; // 800 raw draws, past the engine's first twist of 624 words.
+
+	// Both have drawn before the seed, so the lazy one's engine holds a state its seed must replace.
+	RandomGenerator eager, lazy;
+	eager.RandomNum<uint64_t>(0, ~0ULL);
+	eager.Seed(c_Seed);
+	lazy.RandomNum<uint64_t>(0, ~0ULL);
+	lazy.SeedOnFirstDraw(c_Seed);
+	check(lazy.GetSeed() == eager.GetSeed() && lazy.GetDrawCount() == eager.GetDrawCount(), "seed");
+	check(lazy.SerializeCheckpoint() == eager.SerializeCheckpoint(), "checkpoint_before_a_draw");
+	check(lazy.SerializeStateForHashing() == eager.SerializeStateForHashing(), "hash_before_a_draw");
+	check(lazy.GetEngineState() == eager.GetEngineState(), "engine_state_before_a_draw");
+	RandomGenerator copy = lazy;
+	RandomGenerator restored;
+	check(restored.RestoreCheckpoint(lazy.SerializeCheckpoint()), "checkpoint_restores");
+	RandomGenerator eagerCopy = eager;
+	const std::vector<uint64_t> expected = draws(eagerCopy, c_Draws);
+	check(draws(lazy, c_Draws) == expected, "draws");
+	check(draws(copy, c_Draws) == expected, "copy_draws");
+	check(draws(restored, c_Draws) == expected, "restored_draws");
+	check(lazy.SerializeStateForHashing() == eagerCopy.SerializeStateForHashing(), "hash_after_draws");
+
+	// A second lazy seed over a generator that has drawn, as the next hook's scope gives the same thread's generator.
+	RandomGenerator reseeded;
+	reseeded.Seed(c_Reseed);
+	lazy.SeedOnFirstDraw(c_Reseed);
+	check(draws(lazy, c_Draws) == draws(reseeded, c_Draws), "reseed_draws");
+	lazy.SeedOnFirstDraw(c_Seed);
+	RandomGenerator set;
+	set.SeedOnFirstDraw(c_Reseed);
+	set.SetEngineState(eager.GetEngineState());
+	RandomGenerator eagerAgain;
+	eagerAgain.Seed(c_Seed);
+	check(draws(set, c_Draws) == draws(eagerAgain, c_Draws), "set_engine_state_over_a_pending_seed");
+
+	// The hook scope itself: nothing drawn leaves the thread's generator as Seed would have, the first draw is Seed's.
+	const long uniqueID = 4242;
+	const uint64_t phase = Hash(std::string("LazySeedSelfTest"));
+	RandomGenerator scopeEager;
+	scopeEager.Seed(DeriveMORNGSeed(uniqueID, g_TimerMan.GetSimUpdateCount(), phase));
+	{
+		DeterministicMORNGScope scope(uniqueID, phase, true);
+		check(GetSimRNG().GetEngineState() == scopeEager.GetEngineState(), "scope_state_before_a_draw");
+		check(&GetSimRNG() == &s_workerMORNG, "scope_routes_the_sim_draws");
+		check(RandomNum<float>() == scopeEager.RandomNum<float>(), "scope_first_draw");
+	}
+	const bool passed = failed.empty();
+	std::string clauses;
+	for (const std::string& clause: failed) clauses += (clauses.empty() ? "" : ",") + clause;
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_lazily_seeded_generator_is_the_seeded_one draws=" << c_Draws * 2
+	          << (passed ? "" : " failed=" + clauses) << std::endl;
+	return passed;
 }
 
 std::string LuaStateWrapper::DescribeScriptObjectIdentity(long uniqueID) {
@@ -6678,6 +6749,9 @@ bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::
 	return restored;
 }
 
+// Set while a round's start scripts are captured or laid down.
+static bool s_RoundStartScripts = false;
+
 void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	const int top = lua_gettop(m_State);
 	FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats;
@@ -6710,7 +6784,7 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	lua_pop(m_State, 1);
 	lua_setfield(m_State, callbacks, "roots");
 	if (stats) part(stats->receiversUs);
-	if (this == &g_LuaMan.GetMasterScriptState()) {
+	if (this == &g_LuaMan.GetMasterScriptState() && !s_RoundStartScripts) {
 		if (const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity())) {
 			PushScriptGraphScratchTable(m_State);
 			lua_pushstring(m_State, activity->GetLuaClassName().c_str());
@@ -6740,7 +6814,8 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 		}
 	}
 	if (stats) part(stats->activityUs);
-	g_LuaMan.PushPathCallbacks(m_State);
+	if (s_RoundStartScripts) PushScriptGraphScratchTable(m_State);
+	else g_LuaMan.PushPathCallbacks(m_State);
 	lua_setfield(m_State, callbacks, "async");
 	if (stats) part(stats->asyncUs);
 	PushScriptGraphScratchTable(m_State);
@@ -6789,6 +6864,8 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 }
 
 void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems, bool restoreAsync) {
+	// A round's start scripts carry no activity: the one in play is about to be replaced, and its pending paths go with it.
+	restoreAsync = restoreAsync && !s_RoundStartScripts;
 	const int top = lua_gettop(m_State);
 	lua_pushliteral(m_State, "_ScriptGraphCallbacks");
 	lua_rawget(m_State, LUA_GLOBALSINDEX);
@@ -6797,7 +6874,7 @@ void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems,
 		return;
 	}
 	const int callbacks = lua_gettop(m_State);
-	if (this == &g_LuaMan.GetMasterScriptState()) {
+	if (this == &g_LuaMan.GetMasterScriptState() && !s_RoundStartScripts) {
 		if (auto* activity = dynamic_cast<GAScripted*>(g_ActivityMan.GetActivity())) {
 			lua_getfield(m_State, callbacks, "activity");
 			if (lua_istable(m_State, -1)) {
@@ -7778,6 +7855,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool luaStateRestoreBoundary = g_MovableMan.RunLuaStateRestoreBoundarySelfTest();
 	const bool luaStateIdentity = g_MovableMan.RunLuaStateIdentitySelfTest();
 	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
+	const bool lazySeed = RunLazySeedSelfTest();
 	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
 	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
 	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
@@ -7818,7 +7896,60 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
 	// No state is locked here, so a worker's save can ask every state about its aliases.
 	const bool retainedOwners = SceneEditorGUI::RunRetainedOwnerCaptureSelfTest();
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	const bool graphRows = m_MasterScriptState.RunScriptGraphSelfTest();
+	bool roundStart = false;
+	{
+		// A peer's own history before a round - a global, a package path entry, a compiled script, births - is replaced by the round's start scripts.
+		LuaStateWrapper& threaded = m_ScriptStates.front();
+		std::vector<uint8_t> blob, again;
+		std::string captureError, restoreError;
+		// A global holding what no capture can name (a class dropped under its instance) is nil after any restore, so the start state is taken twice.
+		const bool normalized = CaptureRoundStartScripts(blob, &captureError) && RestoreRoundStartScripts(blob, &restoreError);
+		const bool captured = normalized && CaptureRoundStartScripts(blob, &captureError);
+		const uint64_t masterBirths = luaJIT_state_serial(m_MasterScriptState.GetLuaState());
+		const uint64_t threadedBirths = luaJIT_state_serial(threaded.GetLuaState());
+		const long registrations = MovableObject::GetScriptRegistrationSerialCounter();
+		const auto cacheBefore = threaded.DescribeScriptCache();
+		m_MasterScriptState.RunScriptString("RoundStartHistory = { 1, 2, 3 }; package.path = package.path .. ';Data/RoundStartHistory.rte/?.lua'");
+		threaded.RunScriptString("RoundStartHistory = {}; for i = 1, 40 do RoundStartHistory[i] = {} end");
+		std::unordered_map<std::string, LuabindObjectWrapper*> functions;
+		const bool compiled = threaded.RunScriptFileAndRetrieveFunctions(g_PresetMan.GetFullModulePath("Tests.rte/PreviewCompat.lua"), {"Create", "Update"}, functions) == 0;
+		for (auto& [name, function]: functions) delete function;
+		MovableObject::PinScriptRegistrationSerial(registrations + 17);
+		const bool restored = captured && RestoreRoundStartScripts(blob, &restoreError);
+		const bool birthsBack = luaJIT_state_serial(m_MasterScriptState.GetLuaState()) == masterBirths && luaJIT_state_serial(threaded.GetLuaState()) == threadedBirths;
+		const bool registrationsBack = MovableObject::GetScriptRegistrationSerialCounter() == registrations;
+		const bool cacheBack = threaded.DescribeScriptCache() == cacheBefore;
+		const bool same = restored && CaptureRoundStartScripts(again, &captureError) && again == blob;
+		size_t firstDifference = 0;
+		while (firstDifference < std::min(blob.size(), again.size()) && blob[firstDifference] == again[firstDifference]) ++firstDifference;
+		const bool globalGone = restored && m_MasterScriptState.RunScriptString("assert(RoundStartHistory == nil, 'a history global survived')", false) == 0 &&
+		                        threaded.RunScriptString("assert(RoundStartHistory == nil, 'a history global survived')", false) == 0;
+		const bool pathBack = restored && m_MasterScriptState.RunScriptString("assert(not string.find(package.path, 'RoundStartHistory', 1, true), 'a history path entry survived')", false) == 0;
+		roundStart = captured && compiled && restored && globalGone && pathBack && cacheBack && birthsBack && registrationsBack && same;
+		std::cout << "[script-graph-selftest] " << (roundStart ? "PASS" : "FAIL") << " round_start_scripts_replace_a_peers_history captured=" << captured << " bytes=" << blob.size()
+		          << " compiled=" << compiled << " restored=" << restored << " globals=" << globalGone << " path=" << pathBack << " cache=" << cacheBack << " births=" << birthsBack
+		          << " registrations=" << registrationsBack << " recaptured_same=" << same << " first_difference=" << firstDifference << "/" << again.size()
+		          << (captureError.empty() ? "" : " capture_error=" + captureError) << (restoreError.empty() ? "" : " restore_error=" + restoreError) << std::endl;
+		if (!same && firstDifference < again.size()) {
+			// The tokens only one capture holds name what the restore did not carry.
+			const auto tokens = [](const std::vector<uint8_t>& bytes) {
+				std::multiset<std::string> out;
+				std::string token;
+				for (const uint8_t byte: bytes) {
+					if (byte == ';') { out.insert(token); token.clear(); } else if (token.size() < 120) token.push_back(static_cast<char>(byte));
+				}
+				return out;
+			};
+			const auto before = tokens(blob), after = tokens(again);
+			std::vector<std::string> lost, gained;
+			std::set_difference(before.begin(), before.end(), after.begin(), after.end(), std::back_inserter(lost));
+			std::set_difference(after.begin(), after.end(), before.begin(), before.end(), std::back_inserter(gained));
+			for (size_t i = 0; i < lost.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start lost: " << lost[i] << std::endl;
+			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
+		}
+	}
+	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
@@ -11006,6 +11137,72 @@ bool LuaStateWrapper::RetrieveFunctions(const std::string& funcObjectName, const
 		}
 	}
 
+	return true;
+}
+
+std::vector<std::pair<std::string, std::vector<std::string>>> LuaStateWrapper::DescribeScriptCache() {
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	std::vector<std::pair<std::string, std::vector<std::string>>> described;
+	for (const auto& [owner, cached]: m_ScriptCache) {
+		lua_getglobal(m_State, owner.c_str());
+		const bool held = !lua_isnil(m_State, -1);
+		lua_pop(m_State, 1);
+		if (!held) continue;
+		std::vector<std::string> names;
+		for (const auto& [name, function]: cached.functionNamesAndObjects) names.push_back(name);
+		std::sort(names.begin(), names.end());
+		described.emplace_back(owner, std::move(names));
+	}
+	std::sort(described.begin(), described.end());
+	return described;
+}
+
+bool LuaMan::CaptureRoundStartScripts(std::vector<uint8_t>& blob, std::string* error) {
+	// An earlier game's world goes first: its objects' Destroy scripts and the sound identities their teardown draws
+	// are that game's, never the round's.
+	g_MovableMan.PurgeAllMOs();
+	s_RoundStartScripts = true;
+	struct Scope { ~Scope() { s_RoundStartScripts = false; } } scope;
+	std::vector<std::string> graphs, problems;
+	if (!g_MovableMan.SerializeScriptGraphs(graphs, problems)) {
+		if (error) *error = problems.empty() ? "the script state could not be captured" : problems.front();
+		return false;
+	}
+	CheckpointWriter writer("RoundStartScripts1");
+	writer(static_cast<int64_t>(MovableObject::GetScriptRegistrationSerialCounter()), graphs);
+	const std::string text = writer.Text();
+	blob.assign(std::begin(c_RoundStartScriptsMagic), std::end(c_RoundStartScriptsMagic));
+	blob.insert(blob.end(), text.begin(), text.end());
+	return true;
+}
+
+bool LuaMan::RestoreRoundStartScripts(const std::vector<uint8_t>& blob, std::string* error) {
+	const auto fail = [error](const std::string& reason) {
+		if (error) *error = reason;
+		return false;
+	};
+	if (!IsRoundStartScriptBlob(blob)) return fail("the round's start scripts are not a start-scripts blob");
+	int64_t registrationSerial = 0;
+	std::vector<std::string> graphs;
+	try {
+		CheckpointReader reader(std::string_view(reinterpret_cast<const char*>(blob.data()) + 4, blob.size() - 4), "RoundStartScripts1");
+		reader.Value(registrationSerial);
+		reader.Value(graphs);
+		reader.Finish();
+	} catch (const std::exception& exception) {
+		return fail(std::string("the round's start scripts do not read: ") + exception.what());
+	}
+	const size_t states = 1 + g_LuaMan.GetThreadedScriptStates().size();
+	if (graphs.size() != states) {
+		return fail("the host runs " + std::to_string(graphs.size()) + " script states, this peer " + std::to_string(states));
+	}
+	g_MovableMan.PurgeAllMOs();
+	// The graph carries each state's compiled scripts too, so a script the host already compiled never runs again here.
+	s_RoundStartScripts = true;
+	struct Scope { ~Scope() { s_RoundStartScripts = false; } } scope;
+	std::string restoreError;
+	if (!g_MovableMan.RestoreScriptGraphs(graphs, &restoreError)) return fail("the host's script state did not restore: " + restoreError);
+	MovableObject::PinScriptRegistrationSerial(static_cast<long>(registrationSerial));
 	return true;
 }
 

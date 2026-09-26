@@ -38,6 +38,9 @@ EXTRA_FIELDS = {
         'Field(path + ".Controller.m_CommittedInput.mouseMovement", object.m_CommittedInput.mouseMovement);',
         'Field(path + ".Controller.m_ProducingLocalInput", object.m_ProducingLocalInput);',
     ],
+    "RandomGenerator": [
+        'Field(path + ".RandomGenerator.m_SeedPending", object.m_SeedPending);',
+    ],
     "GameActivity": [
         'Field(path + ".GameActivity.m_LockstepPlacementSubmitted", object.m_LockstepPlacementSubmitted);',
         'Field(path + ".GameActivity.m_LockstepSeatBrains", object.m_LockstepSeatBrains);',
