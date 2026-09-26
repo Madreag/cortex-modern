@@ -1033,7 +1033,7 @@ namespace RTE::MenuAutomation {
 			const auto same = [&check](const char* label, const std::string& actual, const std::string& expected) {
 				check(label, actual == expected, "\"" + actual + "\"");
 			};
-			same("hint_policy_substitute", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute), "The AI holds their seat until they catch up");
+			same("hint_policy_substitute", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute), "Give the seat to the AI (host too) until they catch up");
 			same("hint_policy_pause", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Pause), "Pause for them (up to 20 s)");
 			same("hint_bound_substitute", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 3, tickMs),
 			     "A player late past 3 ticks (50 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.");
@@ -1053,7 +1053,7 @@ namespace RTE::MenuAutomation {
 			NetLobbySnapshot snapshot;
 			snapshot.inputDelayText = "Input delay: 4 (auto, 50ms ping)";
 			const std::string summary = NetHostOptionsSummary(config, snapshot);
-			check("hint_summary_policy", summary.find("\nWhen a player falls behind: The AI holds their seat until they catch up\n") != std::string::npos, summary);
+			check("hint_summary_policy", summary.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, summary);
 			check("hint_summary_delay", summary.find("\nInput delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n") != std::string::npos, summary);
 			check("hint_summary_no_rejoin", summary.find("rejoin") == std::string::npos, summary);
 		}
