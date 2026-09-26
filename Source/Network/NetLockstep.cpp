@@ -8095,7 +8095,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::CommitsRemoteInput(uint8_t peerId, uint64_t frame) const {
-		if (IsSeatReclaimGap(peerId, frame)) return false;
+		// A seat gone at the frame - held by the AI, left or dropped - contributes nothing, whatever of its input landed anyway.
+		if (IsSeatReclaimGap(peerId, frame) || (peerId != GetHostPeerId() && IsPeerGoneAtFrame(peerId, frame))) return false;
 		// A returning seat contributes from the start it was admitted on, never whatever it sent earlier and happened to land in time:
 		// every peer commits the same set of senders at the frame.
 		const auto reclaim = m_ReclaimTransactions.find(peerId);
