@@ -28,6 +28,11 @@ namespace RTE {
 		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - base).count());
 	}
 
+	uint64_t NetLockstepSharedClockMs() {
+		// The machine's monotonic clock, the same in every process on it, for diagnostics that compare peers.
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	}
+
 	namespace {
 		constexpr uint64_t c_StartRetransmitMs = 250;
 		// A round configured without an answer budget still bounds a capture park.
@@ -4420,7 +4425,7 @@ namespace RTE {
 			++m_StartsSentNamed;
 			std::cout << "[lockstep] returning seat sends its start: frame=" << start.startFrame << " delay=" << start.inputDelayFrames << " reclaim=" << own->second.activationFrame
 			          << "/" << own->second.delayFrames << " admitted=" << m_PeerAdmissions.contains(m_Config.localPeerId) << " config_start=" << m_Config.startFrame
-			          << " config_delay=" << m_Config.inputDelayFrames << " state=" << StateName(m_State) << std::endl;
+			          << " config_delay=" << m_Config.inputDelayFrames << " state=" << StateName(m_State) << " clock=" << NetLockstepSharedClockMs() << std::endl;
 		}
 		if (!SendPacket({start}, NetTransportLane::ControlReliable, error, nullptr, nullptr, onlyPeerId)) {
 			return false;
@@ -4974,6 +4979,16 @@ namespace RTE {
 		const uint16_t delay = InputDelayAt(m_Config.localPeerId, producedFrame);
 		if (producedFrame > UINT64_MAX - delay) { if (error) *error = "input target overflow"; return false; }
 		const uint64_t target = producedFrame + delay;
+		// Our return's first inputs past its gap, on the shared clock, so the host's reading of them can be timed.
+		if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId); own != m_ReclaimTransactions.end() && m_Config.localPeerId != GetHostPeerId() &&
+		    !IsSeatReclaimGap(m_Config.localPeerId, target)) {
+			if (m_ReturnerInputsNamedFor != own->second.activationFrame) { m_ReturnerInputsNamedFor = own->second.activationFrame; m_ReturnerInputsNamed = 0; }
+			if (m_ReturnerInputsNamed < 3) {
+				++m_ReturnerInputsNamed;
+				std::cout << "[lockstep] returning seat queues input produced=" << producedFrame << " target=" << target << " reclaim=" << own->second.activationFrame
+				          << " next=" << m_Stats.nextFrame << " clock=" << NetLockstepSharedClockMs() << std::endl;
+			}
+		}
 		if (IsSeatReclaimGap(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
 		// A host whose own seat the AI holds catches up in place: its input for the frames the AI played is discarded, as on every peer.
 		if (m_Config.localPeerId == GetHostPeerId() && IsSeatUnderAI(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
@@ -5328,7 +5343,9 @@ namespace RTE {
 			m_ReclaimTransactions[timing.peerId] = {timing.peerId, timing.authorityGeneration, timing.revision,
 			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame, timing.worldTransition};
 			std::cout << "[net-lockstep] return of peer " << static_cast<int>(timing.peerId) << " at " << timing.applyFrame << " delay=" << timing.delayFrames
-			          << " neutral_through=" << timing.neutralThroughFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[timing.peerId - 1] << std::endl;
+			          << " neutral_through=" << timing.neutralThroughFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[timing.peerId - 1]
+			          << " next=" << m_Stats.nextFrame << " clock=" << NetLockstepSharedClockMs() << std::endl;
+			m_ReturnerFirstFrameNamed.erase(timing.peerId);
 			m_Config.peerIncarnations[timing.peerId] = timing.seatIncarnations[timing.peerId - 1];
 			m_PeerEffectiveStart[timing.peerId] = timing.applyFrame + timing.delayFrames;
 			m_PeerAdmissions[timing.peerId] = {timing.applyFrame, timing.delayFrames};
@@ -5770,7 +5787,7 @@ namespace RTE {
 					          << ": since_missing=" << since << "ms deadline=" << declarationDeadline
 					          << "ms ramp=" << ramp << "ms ping=" << peerStats.pingMs << "ms link=" << linkMs << "ms jitter=" << linkJitterMs
 					          << "ms own_park=" << m_Stats.longestOwnParkMs << "ms peer_park=" << restartMs
-					          << "ms heard_through=" << peerStats.highestTargetFrame << std::endl;
+					          << "ms heard_through=" << peerStats.highestTargetFrame << " clock=" << NetLockstepSharedClockMs() << std::endl;
 				} else if (feeding) {
 					continue;
 				}
@@ -6854,6 +6871,11 @@ namespace RTE {
 		}
 		peerFrames[frame.senderPeerId] = frame.frames;
 		peerStats.acceptedThroughFrame = std::max(peerStats.acceptedThroughFrame, frame.targetFrame);
+		// A returning seat's first frame after its reclaim is when its stream is back; named once per return, on the shared clock.
+		if (const auto back = m_ReclaimTransactions.find(frame.senderPeerId); back != m_ReclaimTransactions.end() && frame.targetFrame >= back->second.activationFrame &&
+		    m_ReturnerFirstFrameNamed.insert(frame.senderPeerId).second)
+			std::cout << "[lockstep] first frame of returning peer " << static_cast<int>(frame.senderPeerId) << " accepted: target=" << frame.targetFrame << " next=" << m_Stats.nextFrame
+			          << " reclaim=" << back->second.activationFrame << " window=" << windowCopy << " clock=" << NetLockstepSharedClockMs() << std::endl;
 		if (!windowCopy && m_Config.adaptiveInputDelay && m_Config.localPeerId == GetHostPeerId()) {
 			const uint64_t simNext = m_LastDeliveredFrame ? *m_LastDeliveredFrame + 1 : m_Config.startFrame;
 			auto& leads = m_ArrivalLeads[frame.senderPeerId];
@@ -9484,7 +9506,7 @@ namespace RTE {
 		// A returning seat's start is the first thing its round sends; when it lands says whether its frames can be in time.
 		if (m_RelayHost && m_ReclaimTransactions.contains(start.localPeerId) && !m_RemoteStartsReceived.contains(start.localPeerId))
 			std::cout << "[lockstep] start of returning peer " << static_cast<int>(start.localPeerId) << " landed: frame=" << start.startFrame << " next=" << m_Stats.nextFrame
-			          << " reclaim=" << m_ReclaimTransactions.at(start.localPeerId).activationFrame << std::endl;
+			          << " reclaim=" << m_ReclaimTransactions.at(start.localPeerId).activationFrame << " clock=" << NetLockstepSharedClockMs() << std::endl;
 		// The peer we take our round from has started another one and ours has committed nothing, so that
 		// is the round we are in. Bounded to our own start frame, so a straggler from before a resync still
 		// takes the rule below, and to the peer that owns the transport it came in on: starts ride the

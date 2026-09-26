@@ -32,6 +32,8 @@ namespace RTE {
 	/// reads, so the missing-frame grace is wall time and never steps back between setup and play.
 	/// Selftests inject their own values instead.
 	uint64_t NetLockstepNowMs();
+	/// The machine's monotonic clock in milliseconds, the same in every process on it; diagnostics that compare peers read it.
+	uint64_t NetLockstepSharedClockMs();
 
 	enum class NetLockstepPacketType : uint16_t {
 		Start = 1,
@@ -1577,6 +1579,9 @@ namespace RTE {
 		void NameDroppedPacket(const NetTransportEvent& event, const char* reason, const std::string& detail = {});
 		uint32_t m_StartsSentNamed = 0; //!< A returning seat's starts named so far.
 		uint8_t m_NamedAiAuthority = 0; //!< The AI authority last named at a delivered frame.
+		std::set<uint8_t> m_ReturnerFirstFrameNamed; //!< Host: returning seats whose first frame after their reclaim was named.
+		uint64_t m_ReturnerInputsNamedFor = 0; //!< The reclaim frame our own first returning inputs were named for.
+		uint32_t m_ReturnerInputsNamed = 0;
 		uint64_t m_LastProducedFrame = UINT64_MAX; //!< The produced frame of this peer's last queued local input.
 		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;
