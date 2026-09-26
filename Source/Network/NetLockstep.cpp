@@ -5160,10 +5160,10 @@ namespace RTE {
 		} else if (timing.action == NetTimingAction::Hold) {
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((timing.heldPeers & (1U << (peer - 1))) != 0) {
 				// A hold ends a return from its own frame on; the return's neutral gap still covers the frames before it that this peer
-				// has yet to commit, exactly as it did on the host that committed them before it held the seat again.
+				// has yet to commit or to apply, exactly as it did on the host that applied them before it held the seat again.
 				if (const auto back = m_ReclaimTransactions.find(peer); back != m_ReclaimTransactions.end()) {
 					const uint64_t gapEnd = std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames);
-					if (timing.applyFrame > back->second.activationFrame && gapEnd >= m_Stats.nextFrame)
+					if (timing.applyFrame > back->second.activationFrame)
 						m_RetiredReclaimGaps[peer] = {back->second.activationFrame, std::min(gapEnd, timing.applyFrame - 1)};
 					m_ReclaimTransactions.erase(back);
 				}
