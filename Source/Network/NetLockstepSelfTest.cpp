@@ -4129,6 +4129,65 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat that came back after this joiner's seat state was taken is still held in that state; the host's return for it,
+		// which lands by the joiner's first frame, must end the hold there, or the joiner's first frame hands the seat to the AI
+		// while every peer that simulated the return keeps it with its player.
+		bool TestAJoinerEndsAHoldItsStateStillCarries(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(49549, error) || !clientWire.Connect("loopback", 49549, error)) return false;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A58; config.roundId = 58; config.localPeerId = 2; config.peerCount = 3; config.authorityPeerId = 1;
+			config.startFrame = 40; config.joinsRunningRound = true; config.inputDelayFrames = 2; config.substituteSlowPeers = true;
+			config.timeoutMs = 60000; config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.remoteTransportPeerIds = {{1, 1}};
+			config.scenario = "LockstepSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 3; config.matchConfig.players.push_back({3, 2, false, "Other"});
+			config.activePeerIds = {1, 2, 3};
+			// This seat's state was read at 30, with peer 3 held since 20.
+			config.seatStateThroughFrame = 30;
+			NetGameSeatHold held; held.peerId = 3; held.eventSequence = 4; held.seatIncarnation = 1; held.cutoffFrame = 20;
+			config.initialSeatHolds[3] = held; config.initialPeerLeaves[3] = 20; config.peerIncarnations[3] = 1;
+			NetLockstepCoordinator client;
+			if (!client.Start(clientWire, config, error)) return false;
+			const auto wire = [](const NetLockstepPacket& packet) {
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+				if (!NetLockstepCodec::Encode(packet, event.bytes)) event.bytes.clear();
+				return event;
+			};
+			const auto startOf = [](uint8_t peer) {
+				NetLockstepStart start;
+				start.sessionId = 0x9A58; start.roundId = 58; start.localPeerId = peer; start.peerCount = 3; start.startFrame = 40; start.inputDelayFrames = 2;
+				start.controllerFrameVersion = ControllerFrame::c_Version;
+				start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+				start.scenario = "LockstepSelfTest"; start.ownershipPolicy = "unique-id-split";
+				return start;
+			};
+			// Peer 3 came back at 35: after this seat's state was read, before its first frame.
+			NetLockstepTiming back;
+			back.senderPeerId = 1; back.peerId = 3; back.action = NetTimingAction::Reclaim; back.phase = NetTimingPhase::ReclaimAtFrame;
+			back.sessionId = 0x9A58; back.roundId = 58; back.revision = 5; back.applyFrame = back.cutoffFrame = 35; back.delayFrames = 2;
+			back.neutralThroughFrame = 37; back.heldPeers = 0x4; back.requiredPeers = 0x1; back.seatIncarnations[2] = 2;
+			uint64_t now = 0;
+			for (const NetTransportEvent& event: {wire({startOf(1)}), wire({back}), wire({startOf(3)})}) {
+				if (event.bytes.empty()) { *error = "a packet of the joining round's handshake would not encode"; return false; }
+				client.InjectEvent(event, now);
+				for (uint64_t until = now + 20; now < until; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			}
+			// Every frame from the first one names its departed seats from the leaves the round holds; a returned seat is not one.
+			const bool stillLeft = client.GetPeerLeaveFrames().contains(3);
+			if (!client.IsRunning() || client.HasHeldAISeat(3) || stillLeft || client.IsSeatUnderAI(3, 40) || client.IsPeerGoneAtFrame(3, 40)) {
+				*error = std::string("a return that landed before the joiner's first frame left its seat held: state=") +
+				         NetLockstepCoordinator::StateName(client.GetState()) + " reason=" + client.GetStats().timeoutReason +
+				         " held=" + std::to_string(client.HasHeldAISeat(3)) + " left=" + std::to_string(stillLeft) +
+				         " under_ai=" + std::to_string(client.IsSeatUnderAI(3, 40)) + " gone=" + std::to_string(client.IsPeerGoneAtFrame(3, 40));
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_joiner_ends_a_hold_its_state_still_carries" << std::endl;
+			return true;
+		}
+
 		// A link the round has measured must survive the connection that measured it: a peer that comes
 		// back on a new transport reports no samples yet, and reading that as an instant link left the
 		// returning seat's allowance with nothing to size itself from.
@@ -18457,9 +18516,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
-		/// A reliable lane holds everything behind a lost packet for a round trip, so a live host behind a 200 ms link can
-		/// be silent for longer than one on a LAN: the survivors wait out its retransmission before they take it for gone.
-		bool TestALongLinkedHostIsNotLostInsideItsRetransmission(std::string* error) {
+		/// A live host behind a 200 ms link that waits on its own round keeps talking, so its survivors never take it for gone; a host that
+		/// goes silent is taken for gone once it is silent past the slow-player bound and its link's jitter, never after a fixed half second.
+		bool TestALongLinkedHostIsJudgedByItsSilenceAlone(std::string* error) {
 			LoopbackTransport hostWire, aWire, bWire;
 			if (!hostWire.StartHost(49500, error) || !aWire.Connect("loopback", 49500, error) || !bWire.Connect("loopback", 49500, error)) return false;
 			// The survivors' link to the host measures 200 ms a round trip.
@@ -18471,6 +18530,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			auto config = [&](uint8_t peer) {
 				NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match; value.peerCount = 3; value.localPeerId = peer;
 				value.startFrame = 1; value.timeoutMs = 20000; value.roundId = peer == 1 ? 0x15301 : 0; value.relayToOtherPeers = peer == 1;
+				// The silence threshold is the bound in the round's own ticks, so the round names its tick as every live round does.
+				value.simTickMs = 1000.0 / 60.0;
 				value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
 				value.migrationKey.fill(0x39); value.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); }; return value;
 			};
@@ -18494,24 +18555,33 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 			for (uint64_t frame = 6; frame <= 7; ++frame)
 				for (auto* peer: {&a, &b}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
-			// The host's last word is its frame 6; after it the survivors wait on the host with the host silent.
-			if (!host.QueueLocalInput(6, {MakeFrame(101, 6)}, {}, error)) return false;
-			const uint64_t silentFrom = now;
 			// A survivor that took the host for gone has begun, or already finished, handing the round to a successor.
 			const auto lost = [&](const NetLockstepCoordinator& peer) { return peer.IsMigrating() || peer.GetHostPeerId() != 1; };
-			while (now - silentFrom < 600) step(false);
+			// The host waits on its own frame 6 for 600 ms and ticks all along: the survivors wait with it and hear it.
+			const uint64_t waitFrom = now;
+			while (now - waitFrom < 600) step(true);
 			if (lost(a) || lost(b)) {
-				*error = "a host silent for 600 ms behind a 200 ms link was taken for gone: a_lost=" + std::to_string(lost(a)) +
+				*error = "a live host waiting 600 ms on its round behind a 200 ms link was taken for gone: a_lost=" + std::to_string(lost(a)) +
 				         " b_lost=" + std::to_string(lost(b)) + " ping=" + std::to_string(aWire.GetPeerPingMs(1));
 				return false;
 			}
-			while (now - silentFrom < 1500 && !lost(a)) step(false);
+			// The host's last word is its frame 6; after it the survivors wait on its frame 7 with the host silent.
+			if (!host.QueueLocalInput(6, {MakeFrame(101, 6)}, {}, error)) return false;
+			step(true);
+			const uint64_t silentFrom = now;
+			// Inside the slow-player bound nothing is judged: a spike the bound absorbs is not a death.
+			while (now - silentFrom < 45) step(false);
+			if (lost(a) || lost(b)) {
+				*error = "the survivors took the host for gone inside the slow-player bound: silent_ms=" + std::to_string(now - silentFrom);
+				return false;
+			}
+			while (now - silentFrom < 400 && !lost(a)) step(false);
 			if (!lost(a)) {
-				*error = "a host silent past its retransmission and the bound was never taken for gone: state=" + std::string(NetLockstepCoordinator::StateName(a.GetState())) +
+				*error = "a host silent past its link, the bound and its jitter was not taken for gone within 400 ms: state=" + std::string(NetLockstepCoordinator::StateName(a.GetState())) +
 				         " next=" + std::to_string(a.GetStats().nextFrame);
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS a_long_linked_host_is_not_lost_inside_its_retransmission migrated_after_ms=" << (now - silentFrom) << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS a_long_linked_host_is_judged_by_its_silence_alone waited_live_ms=600 migrated_after_ms=" << (now - silentFrom) << std::endl;
 			return true;
 		}
 
@@ -20087,7 +20157,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (!leavePassed) return fail(error);
 		if (!followupsPassed) return fail(followupError);
 		if (!TestSilentHostResumesWithinTwoSeconds(&error) ||
-		    !TestALongLinkedHostIsNotLostInsideItsRetransmission(&error) ||
+		    !TestALongLinkedHostIsJudgedByItsSilenceAlone(&error) ||
 		    !TestAHostQuietPastTheLastTickIsNotLost(&error) ||
 		    !TestLoadingHostKeepsItsAuthority(&error) ||
 		    !TestHoldArrivesBeforeFailedSend(&error) ||
@@ -20155,6 +20225,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame(&error) ||
 		    !TestAReturnerHearsAHoldTheHostAlreadyApplied(&error) ||
 		    !TestAJoinerIgnoresTransitionsItsStateAlreadyHolds(&error) ||
+		    !TestAJoinerEndsAHoldItsStateStillCarries(&error) ||
 		    !TestReclaimedSeatRestartsItsWaitReadings(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
