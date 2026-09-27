@@ -3,6 +3,8 @@
   "boxes": [
     {
       "name": "EROL-PC", "kind": "windows-local",
+      "peers_per_box": 1,
+      "guard_file": "D:/mx/inventory-confirming-3b-20260926/S3-DONE",
       "tree": "D:/Projects/alias-walk", "executable": "D:/Projects/alias-walk/Cortex Command.exe",
       "runner": "tools/win32_test_runner.py via run_sim_test.make_run",
       "ports": [49900, 49919], "directory_port": 49918,
@@ -11,6 +13,7 @@
     },
     {
       "name": "EDITH", "kind": "windows-task", "ssh": "edith",
+      "peers_per_box": 1,
       "tree": "D:/Projects/takeover-build", "executable": "D:/Projects/takeover-build/Cortex Command.exe",
       "runner": "cortex-session1", "task_script": "D:/mx/session1/run.ps1",
       "ports": [49900, 49919], "directory_port": 49985,
@@ -19,6 +22,7 @@
     },
     {
       "name": "Mac", "kind": "posix-ssh", "ssh": "Erol-Mac",
+      "peers_per_box": 1,
       "tree": "/Users/erol/cortex-workers/astra-cross-peers-build-20260926/repo",
       "executable": "/Users/erol/cortex-workers/astra-cross-peers-build-20260926/repo/build-gcc/CortexCommand",
       "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
