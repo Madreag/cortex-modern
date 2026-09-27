@@ -5,7 +5,7 @@ import cross_report
 
 class AttemptOracles(unittest.TestCase):
     def fixture(self):
-        manifest=dict(scenario='match',ticks=1201,faults=[],capture_rows_pending=[1,2])
+        manifest=dict(scenario='match',ticks=1201,faults=[],fullstate_every=600,capture_rows_pending=[1,2])
         checks=dict.fromkeys(cross_report.CORE_CHECKS,True)
         checks.update(shared_fullstate=False,no_engine_findings=False,quiet_feel=True,bounded_recovery=True)
         peers={name:dict(feel_gated=False,feel_status='REPORTED; quiet window not scheduled',
@@ -40,6 +40,21 @@ class AttemptOracles(unittest.TestCase):
         for name in ('recovery','memory','feel','full_state','engine_findings'):
             self.assertEqual(summary['oracles'][name]['status'],'FAIL',name)
         self.assertEqual(summary['oracles']['coverage']['status'],'NOT COVERED')
+
+    def test_disabled_capture_cannot_qualify_for_gate_b(self):
+        args=copy.deepcopy(self.fixture()); args[0]['fullstate_every']=0
+        self.assertFalse(cross_report.judge_attempt(*args)['gate_b_eligible'])
+
+    def test_every_incarnation_exit_needs_its_own_expected_cause(self):
+        good=dict(started=True,exit_code=0,timed_out=False)
+        crash=dict(started=True,exit_code=137,timed_out=False,injected_termination='scheduled crash drop')
+        fault=dict(id='drop',action='crash-restart',peer='a',incarnation=0)
+        receipt=dict(id='drop',peer='a',incarnation=0,phase='fault_applied',native=dict(action='crash-restart',applied=True))
+        self.assertTrue(cross_report.judge_exit(good,'a',0,[],[])['passed'])
+        self.assertFalse(cross_report.judge_exit(crash,'a',0,[fault],[])['passed'])
+        self.assertTrue(cross_report.judge_exit(crash,'a',0,[fault],[receipt])['passed'])
+        self.assertFalse(cross_report.judge_exit(crash,'a',1,[fault],[receipt])['passed'])
+        self.assertFalse(cross_report.judge_exit(dict(good,timed_out=True),'a',0,[],[])['passed'])
 
 
 if __name__=='__main__': unittest.main()
