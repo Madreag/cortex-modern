@@ -9,8 +9,8 @@
 
 namespace RTE {
 
-	/// Appends text lines to one file on its own thread, so a record written every tick or every loop pass never
-	/// waits on the disk. Lines keep their order; Flush and Close wait until everything queued is on disk.
+	/// Appends text to one file on its own thread, so a record written every tick or every loop pass never waits on
+	/// the disk. Writes keep their order; Flush and Close wait until everything queued is on disk.
 	class AsyncLineWriter {
 
 	public:
@@ -35,9 +35,15 @@ namespace RTE {
 
 		/// Queues one line; the newline is added.
 		void Write(std::string line) {
+			line += '\n';
+			WriteBlock(std::move(line));
+		}
+
+		/// Queues text written exactly as it is.
+		void WriteBlock(std::string text) {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
-				m_Queue.push_back(std::move(line));
+				m_Queue.push_back(std::move(text));
 			}
 			m_Wake.notify_one();
 		}
@@ -73,8 +79,8 @@ namespace RTE {
 				m_Queued += batch.size();
 				const bool stopping = m_Stopping;
 				lock.unlock();
-				for (const std::string& line: batch) {
-					m_Out << line << '\n';
+				for (const std::string& text: batch) {
+					m_Out << text;
 				}
 				m_Out.flush();
 				lock.lock();
