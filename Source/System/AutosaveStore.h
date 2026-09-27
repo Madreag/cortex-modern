@@ -71,6 +71,7 @@ namespace RTE {
 		std::string scenePreset;
 		std::vector<std::string> peerNames;
 		AutosaveSideState sideState; //!< The agreed lockstep state of that committed tick.
+		bool savedByHost = false; //!< The host saved the match by hand at this tick; the schedule named every other checkpoint.
 		std::filesystem::path path; //!< Where it was found; never part of the stored text.
 	};
 
@@ -118,6 +119,7 @@ namespace RTE {
 		std::vector<std::string> peerNames;
 		/// The agreed lockstep state of the tick being captured, read on the sim thread at the boundary.
 		AutosaveSideState sideState;
+		bool savedByHost = false; //!< The capture being taken is one the host asked for by hand.
 		/// The agreed rewind point, read where retention runs rather than where the capture starts, so an
 		/// anchor named while a capture is in flight still protects its archive.
 		std::shared_ptr<const AutosavePinSource> pinnedCheckpointSource;

@@ -806,7 +806,7 @@ namespace RTE {
 					}
 					case NetGameCommandType::Checkpoint: {
 						const auto& checkpoint = std::get<NetGameCheckpoint>(command.payload);
-						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written) {
+						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written && checkpoint.kind != NetGameCheckpoint::ManualCapture) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, out.size(), "checkpoint kind is not a known kind");
 							return false;
 						}
@@ -1832,7 +1832,7 @@ namespace RTE {
 							return false;
 						}
 						if (!ReadOrTruncated(reader.ReadU8(checkpoint.kind) && reader.ReadU64LE(checkpoint.tick), reader, error, "checkpoint")) return false;
-						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written) {
+						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written && checkpoint.kind != NetGameCheckpoint::ManualCapture) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "checkpoint kind is not a known kind");
 							return false;
 						}

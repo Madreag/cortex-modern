@@ -386,7 +386,8 @@ namespace RTE {
 	/// The match's checkpoint schedule on the committed stream: the host names the tick every peer
 	/// captures at, and each peer says when its writer has finished one.
 	struct NetGameCheckpoint {
-		enum Kind : uint8_t { Capture = 1, Written = 2 };
+		/// ManualCapture is a Capture the host asked for by hand; every peer marks that checkpoint as saved by the host.
+		enum Kind : uint8_t { Capture = 1, Written = 2, ManualCapture = 3 };
 		uint8_t kind = Capture;
 		uint64_t tick = 0; //!< Capture: the tick every peer captures at. Written: the capture this peer's writer finished.
 		bool operator==(const NetGameCheckpoint&) const = default;
