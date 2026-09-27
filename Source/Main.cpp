@@ -492,6 +492,8 @@ static std::string s_netJoinSessionId; //!< -net-join-session: the directory ses
 static constexpr uint32_t c_CappedStopDrainMs = 8000;
 static constexpr uint32_t c_CappedStopLingerMs = 1500;
 static constexpr uint64_t c_NetMatchE2EEditorTickCap = 120; //!< A synchronized setup editor that has not finished by here is stuck, not slow.
+static constexpr uint64_t c_NetMatchE2EAdmissionWaitTicks = 1800; //!< How long past its cap a host waits for a seat still coming into the round.
+static uint64_t s_netMatchE2EOwedSampleFrame = 0; //!< The full-state sample frame the host owes a seat admitted late; 0 when none.
 static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
@@ -6933,6 +6935,7 @@ void RunGameLoop() {
 					}
 					// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
 					s_netMatchE2ETicks.OnNewMatch();
+					s_netMatchE2EOwedSampleFrame = 0;
 					break;
 				}
 				// A legitimate game-over may end the activity mid-run; the sim keeps ticking to the cap so
@@ -6952,9 +6955,25 @@ void RunGameLoop() {
 					s_netMatchE2EActorCensus = g_MovableMan.GetActorCount();
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const bool unlimitedWorld = (s_netWorldDaemon || s_netPersistentWorld) && !s_netMatchTicksExplicit;
-					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
+					const uint64_t roundTicks = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					// A peer counts its cap from its own first tick, a world joiner too.
 					const uint64_t completedTicks = s_netMatchE2ETicks.Total();
+					// The round never ends with a seat mid-admission and unsampled: the host waits for a seat still coming in,
+					// then for the first full-state sample after it, so the returner shares one with the round (bounded).
+					uint64_t tickCap = roundTicks;
+					if (s_netFullStateEvery > 0 && g_NetMatchService.IsHost() && ScenarioRunner::HasLockstepCoordinator()) {
+						const uint64_t applied = ScenarioRunner::GetLockstepAppliedFrame();
+						if (completedTicks + s_netFullStateEvery >= roundTicks && g_NetMatchService.SeatMidAdmission(applied))
+							s_netMatchE2EOwedSampleFrame = (applied / s_netFullStateEvery + 1) * s_netFullStateEvery;
+						if (s_netMatchE2EOwedSampleFrame >= applied)
+							tickCap = std::min(roundTicks + c_NetMatchE2EAdmissionWaitTicks, std::max(roundTicks, completedTicks + (s_netMatchE2EOwedSampleFrame - applied) + 1));
+						static uint64_t s_admissionWaitLogged = 0;
+						if (tickCap > roundTicks && completedTicks >= roundTicks && s_admissionWaitLogged != s_netMatchE2EOwedSampleFrame) {
+							s_admissionWaitLogged = s_netMatchE2EOwedSampleFrame;
+							System::PrintDiagnosticLine("[net-match-service-e2e] cap waits for a seat coming in: sample owed at " + std::to_string(s_netMatchE2EOwedSampleFrame) +
+							                            " (applied " + std::to_string(applied) + ")");
+						}
+					}
 					// Every peer stops at the cap, so the round knows the last frame anyone will feed.
 					if (!unlimitedWorld && completedTicks <= tickCap && ScenarioRunner::HasLockstepCoordinator())
 						ScenarioRunner::SetLockstepFinalFrame(ScenarioRunner::GetLockstepAppliedFrame() + (tickCap + 1 - completedTicks));

@@ -936,6 +936,25 @@ static std::string ResyncSaveName() {
 		return sum;
 	}
 
+	bool NetMatchService::SeatMidAdmission(uint64_t frame) const {
+		NetLockstepPlane::Gap plane("admission wait");
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost || !m_Coordinator) return false;
+		if (m_Session && m_Session->GetHandshakingPeerCount() > 0) return true;
+		// A held seat whose player is still connected is catching up to its return; one whose player is gone is not coming in yet.
+		if (m_Session) {
+			for (const auto& [seat, transport]: m_Coordinator->RemoteTransports()) {
+				if (!m_Coordinator->IsSeatHeldForReclaim(seat)) continue;
+				for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers())
+					if (peer.transportPeerId == transport) return true;
+			}
+		}
+		return std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [frame](const auto& session) {
+			if (session.phase == NetWorldJoinPhase::Failed || session.phase == NetWorldJoinPhase::Spectating) return false;
+			return session.phase != NetWorldJoinPhase::Active || session.activationTick >= frame;
+		});
+	}
+
 	void NetMatchService::SetRejoinPhaseLocked(NetSession::RejoinPhase phase) {
 		const NetSession* live = m_Session ? m_Session.get() : m_WorkerSession;
 		if (live && live->GetRejoinPhase() != phase) {

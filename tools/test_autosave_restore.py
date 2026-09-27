@@ -86,13 +86,33 @@ def fullstate_args() -> list:
     return ["-net-fullstate-hash-every", str(FULLSTATE_EVERY)] if FULLSTATE_EVERY else []
 
 
-def fullstate_pairs(root: Path) -> dict:
-    """The full-state oracle's verdict for every two-peer round under an arm's directory, keyed by the round's directory."""
+SEAT_HELD = re.compile(r"^\[net-match\] hold peer=\d+ frame=(\d+) AI in control", re.MULTILINE)
+SEAT_ADMITTED = re.compile(r"^\[net-match\] private catch-up complete frame=(\d+)", re.MULTILINE)
+
+
+def unsampled_admissions(verdict: dict, host_log: Path, client_log: Path) -> str:
+    """A round never ends with a seat mid-admission and unsampled: every hold and every return must be followed by a shared sample."""
+    sampled = verdict.get("sampled_ticks") or []
+    if not sampled:
+        return ""
+    last = max(sampled)
+    held = [int(frame) for frame in SEAT_HELD.findall(host_log.read_text(encoding="utf-8", errors="replace")) if int(frame) > last]
+    admitted = [int(frame) for frame in SEAT_ADMITTED.findall(client_log.read_text(encoding="utf-8", errors="replace")) if int(frame) > last]
+    return f"a seat came in after the last shared sample {last}: held at {held}, admitted at {admitted}" if held or admitted else ""
+
+
+def fullstate_pairs(root: Path, admissions: bool = False) -> dict:
+    """The full-state oracle's verdict for every two-peer round under an arm's directory, keyed by the round's directory.
+    admissions: a seat that comes in after the round's last shared sample fails the round too."""
     results = {}
     for host_log in sorted(Path(root).rglob("host/stdout.log")):
         client_log = host_log.parent.parent / "client" / "stdout.log"
         if client_log.is_file():
-            results[host_log.parent.parent.relative_to(root).as_posix()] = compare_fullstate(host_log, client_log)
+            verdict = compare_fullstate(host_log, client_log)
+            if admissions and (reason := unsampled_admissions(verdict, host_log, client_log)):
+                verdict["reasons"].append(reason)
+                verdict["passed"] = False
+            results[host_log.parent.parent.relative_to(root).as_posix()] = verdict
     return results
 
 
@@ -1080,7 +1100,7 @@ def main() -> int:
             details.update(passed=False, error=str(error))
             print(f"FAIL {arm}: {error}", flush=True)
         if FULLSTATE_EVERY:
-            details["fullstate"] = fullstate_pairs(root / arm)
+            details["fullstate"] = fullstate_pairs(root / arm, admissions=arm == "world-restart")
             if arm == "anchor":
                 expect_injected_divergence(root / arm, details["fullstate"])
             tripped = [name for name, verdict in details["fullstate"].items() if not verdict["passed"]]

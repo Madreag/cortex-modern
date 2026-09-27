@@ -675,6 +675,8 @@ namespace RTE {
 		/// it, the transfer it has acknowledged and the tail it has consumed. The goodbye drain watches this
 		/// beside the round's own progress, because a rejoin commits no frame until it is back in the round.
 		uint64_t RejoinProgressSum() const;
+		/// Whether a seat is still on its way into the host's round at this frame: held for its player, handshaking back, or joining the world until its activation frame.
+		bool SeatMidAdmission(uint64_t frame) const;
 		/// Whether the host's goodbye has been heard, and the frame the round ended on (0 when it named none).
 		bool HostGoodbyeSeen(uint64_t& finalFrame) const;
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
