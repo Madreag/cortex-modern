@@ -433,6 +433,7 @@ def build_report(root):
         peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=int(own.name.split('-')[-1]), frames=len(live[name]),
             observed_waits_over_50=sum(r['wait_ms']>50 for r in waits) if log else None, observed_wait_records=len(waits),
             native=native, record=record, timing=timing, presentation_window=presentation_window,
+            retired_diagnostics=[r for fragment in fragments for r in source_rows(fragment/'retired-diagnostics.jsonl',root)],
             presentation_by_incarnation=presentation_by_incarnation,presentation_valid=presentation_valid,
             tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
             tick_timing_valid=bool(tick_cost) and all(r.get('partition_valid') for r in tick_cost),
@@ -603,6 +604,7 @@ def write_page(root, result, events):
         ''.join(f'<details><summary>{escape(name)} — {escape(row["status"])}</summary><p>{escape(row["reason"])}</p></details>' for name,row in result['oracles'].items()))
     parts.append('<h2>Every hold, classified</h2><p>CORE-ENGINE-RED means every unscheduled hold is capture-induced, with zero live mismatches and native completion. Missing live frames and full-state failures remain red in their own oracles. Repeated log observations of the same boundary are all retained. Unknown causes are other.</p><pre>'+escape(json.dumps({name:peer['holds'] for name,peer in result['peers'].items()},indent=2))+'</pre>')
     parts.append('<h2>Presentation retention</h2><p>'+escape(manifest.get('storage',{}).get('presentation_window','Legacy unbounded live presentation stream; compressed after exit.'))+'</p><p>Feel statistics describe the last incarnation’s retained window, not discarded rows. CRC, decoded byte counts and sequence continuity are checked for every retained chunk and incarnation. Native bounds must match the declared bounds; a normal exit must close its index.</p><pre>'+escape(json.dumps({name:peer.get('presentation_by_incarnation',{}) for name,peer in result['peers'].items()},indent=2))+'</pre>')
+    parts.append('<h2>Diagnostic dump window</h2><p>'+escape(manifest.get('storage',{}).get('diagnostic_window','No live diagnostic window was declared for this historical run. Any later archival retirement is separately receipted.'))+'</p><pre>'+escape(json.dumps({name:peer.get('retired_diagnostics',[]) for name,peer in result['peers'].items()},indent=2))+'</pre>')
     parts.append('<h2>Coverage</h2>')
     parts.append('<div style="overflow-x:auto"><table><thead><tr><th>Coverage / minimum</th>' +
         ''.join(f'<th>{escape(b["name"])}</th>' for b in manifest['boxes']) + '</tr></thead><tbody>')

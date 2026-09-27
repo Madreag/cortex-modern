@@ -4,11 +4,31 @@ from pathlib import Path
 import tempfile
 import unittest
 import zlib
-from feel.records import presentation_records
+from feel.records import presentation_records, DiagnosticWindow
 import cross_report
 
 
 class PresentationRetention(unittest.TestCase):
+    def test_diagnostic_window_retires_only_completed_captures_and_pngs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            own=Path(temporary);window=DiagnosticWindow(own,captures=2,pngs=1)
+            captures=[]
+            for n in range(3):
+                path=own/f'fullstate/capture-{n}';path.mkdir(parents=True)
+                (path/'scene.txt.gz').write_bytes(gzip.compress(str(n).encode()));captures.append(path)
+                window.completed_capture(path)
+            self.assertFalse((captures[0]/'scene.txt.gz').exists())
+            self.assertTrue((captures[1]/'scene.txt.gz').exists())
+            pending=own/'fullstate/pending';pending.mkdir();(pending/'scene.txt').write_text('writer still active')
+            images=own/'engine/feel';images.mkdir(parents=True)
+            for n in range(3):(images/f'{n}.png').write_bytes(b'\x89PNG\r\n\x1a\n'+str(n).encode()+b'\x00\x00\x00\x00IEND\xaeB`\x82')
+            (images/'active.png').write_bytes(b'\x89PNG\r\n\x1a\n')
+            window.poll_pngs()
+            self.assertEqual(len(list(images.glob('*.png'))),2)
+            self.assertTrue((images/'active.png').exists());self.assertTrue((pending/'scene.txt').exists())
+            receipts=[json.loads(s) for s in (own/'retired-diagnostics.jsonl').read_text().splitlines()]
+            self.assertEqual(len(receipts),3);self.assertTrue(all(len(r['sha256'])==64 for r in receipts))
+
     def fixture(self, root):
         raw=b'{"type":"frame","frame":91}\n{"type":"end","frames":91}\n'
         (root/'raw.4.jsonl.gz').write_bytes(gzip.compress(raw))
