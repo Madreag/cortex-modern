@@ -32,7 +32,7 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parent
 MODULE = "VoidWanderers.rte"
 PRESET = "Void Wanderers"
-RECORDED_DIGEST = "d1220ef2b4ac541ab5950ee5b223f9f995c0737e3be7b8196088e8b01cd18c2a"  # the user's copy, 2026-09-14
+RECORDED_DIGEST = "d1220ef2b4ac541ab5950ee5b223f9f995c0737e3be7b8196088e8b01cd18c2a"  # the manifest digest of the user's copy
 DEFAULT_SOURCE = Path("C:/Users/egerm/Downloads/voidwanderersrte-1ign/VoidWanderers.rte")
 TICKS = 600
 # The paired e2e scenario's forbidden lines (tools/e2e/mod-void-wanderers.json) plus the engine's own assert text.
