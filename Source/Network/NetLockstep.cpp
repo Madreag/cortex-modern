@@ -59,6 +59,8 @@ namespace RTE {
 
 	namespace {
 		constexpr uint64_t c_StartRetransmitMs = 250;
+		// How long a survivor with nobody beside it hears nothing from the host before it takes the host for gone.
+		constexpr uint64_t c_LoneElectionConfirmMs = 1000;
 		// A round configured without an answer budget still bounds a capture park.
 		constexpr uint64_t c_DefaultCaptureParkBudgetMs = 500;
 		constexpr uint32_t c_RecoveryInputMagic = 0x314e4952;
@@ -11140,8 +11142,14 @@ namespace RTE {
 		// only its link's close or the round's timeout ends that wait.
 		const bool hostBusy = !m_PeersPlayedThisRound.contains(GetHostPeerId()) || HostBusyWithAnnouncedCapture(m_Stats.nextFrame) ||
 		    (m_SynchronizedCaptureStartFrame != UINT64_MAX && m_Stats.nextFrame >= m_SynchronizedCaptureStartFrame && m_Stats.nextFrame <= m_SynchronizedCaptureEndFrame + 1);
+		// A survivor with no other playing peer beside it has nobody to confirm the host's death: a loss burst on its own link must not
+		// make it host a second match beside a live one, so it hears nothing for a confirmation window first.
+		const bool loneSurvivor = std::none_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
+			return peer != GetHostPeerId() && !IsPeerGoneAtFrame(peer, m_Stats.nextFrame) && !IsSeatUnderAI(peer, m_Stats.nextFrame);
+		});
+		const uint64_t electionSilenceMs = loneSurvivor ? std::min<uint64_t>(m_Config.timeoutMs, std::max<uint64_t>(hostSilenceMs, c_LoneElectionConfirmMs)) : hostSilenceMs;
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
-		if (!hostBusy && hostSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= hostSilenceMs &&
+		if (!hostBusy && electionSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= electionSilenceMs &&
 		    BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();
