@@ -129,7 +129,7 @@ def run_case(repo: Path, out: Path, timeout: float) -> dict:
     }
 
 
-def score_detect(case: dict) -> dict:
+def score_detect(case: dict, sanitizer: str | None = None) -> dict:
     rate = float(case.get("presentations_per_second") or 0.0)
     interval = float(case.get("interval_s") or 0.0)
     frames = int(case.get("frames") or 0)
@@ -137,24 +137,29 @@ def score_detect(case: dict) -> dict:
     rate_ok = rate <= MAX_PRESENT_HZ
     measured = frames >= MIN_FRAMES and interval >= MIN_INTERVAL_S
     process_ok = case.get("exit_code") == 0 and case.get("timed_out") is not True
-    ok = bool(process_ok and cap_ok and measured and rate_ok)
+    # A sanitizer build presents a few frames a second: its frame floor is measured, never the cap or the rate ceiling.
+    floor_measured_only = bool(sanitizer) and not measured and frames > 0
+    ok = bool(process_ok and cap_ok and (measured or floor_measured_only) and rate_ok)
     if case.get("timed_out"):
         reason = "timed_out"
     elif case.get("exit_code") != 0:
         reason = f"exit_code={case.get('exit_code')}"
     elif not cap_ok:
         reason = f"missing cap=60hz line, saw {case.get('cap_line') or 'none'}"
-    elif not measured:
+    elif not measured and not floor_measured_only:
         reason = f"frames={frames} interval_s={interval:.3f}"
     elif not rate_ok:
         reason = f"presentations_per_second={rate:.3f} > {MAX_PRESENT_HZ}"
+    elif floor_measured_only:
+        reason = f"sanitizer: budget not gated ({sanitizer} build), measured: frames={frames} interval_s={interval:.3f}"
     else:
         reason = ""
     token = "[headless-render-cap] PASS" if ok else "[headless-render-cap] FAIL"
     print(
         f"{token} cap={case.get('cap') or 'none'} frames={frames} "
         f"interval_s={interval:.3f} presentations_per_second={rate:.3f} "
-        f"gpu_max={case.get('gpu_max')} gpu_avg={case.get('gpu_avg')}",
+        f"gpu_max={case.get('gpu_max')} gpu_avg={case.get('gpu_avg')}"
+        + (f" sanitizer: budget not gated ({sanitizer})" if ok and floor_measured_only else ""),
         flush=True,
     )
     return {

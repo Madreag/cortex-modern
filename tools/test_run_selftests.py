@@ -25,6 +25,8 @@ class SanitizerBudgetRows(unittest.TestCase):
         self.assertTrue(scored["pass"], scored)
         self.assertEqual(scored["informational_budget_lines"], [TIMING, LOADED])
         self.assertIn("asan build", scored["reason"])
+        self.assertIn("sanitizer: budget not gated", scored["reason"])
+        self.assertIn("added_us=2569 budget_us=150", scored["reason"])
 
     def test_any_other_named_fail_keeps_the_row_red(self):
         scored = self.score(log(TIMING, f"{TAG} FAIL threaded_synced_update_permitted_writes global_writes=0", f"{TAG} PASS"))
@@ -56,6 +58,53 @@ class SanitizerBudgetRows(unittest.TestCase):
             self.assertIsNone(runner.sanitizer_build(plain))
             self.assertEqual(runner.sanitizer_build(asan), "asan")
             self.assertEqual(runner.sanitizer_build(tsan), "tsan")
+
+
+class SanitizerRowTimeout(unittest.TestCase):
+    def test_tsan_script_graph_gets_its_own_cap_and_an_ordinary_build_keeps_the_suite_cap(self):
+        self.assertGreater(runner.SANITIZER_ROW_TIMEOUT["script-graph"]["tsan"], 1800)
+        self.assertNotIn(None, runner.SANITIZER_ROW_TIMEOUT["script-graph"])
+
+
+class ScoreStdoutSanitizer(unittest.TestCase):
+    def run_cli(self, stdout, *extra):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as scratch:
+            log_path, result = Path(scratch) / "stdout.log", Path(scratch) / "result.json"
+            log_path.write_text(stdout, encoding="utf-8")
+            done = subprocess.run([sys.executable, "-B", str(Path(runner.__file__)), "--score-stdout", str(log_path),
+                                   "--exit-code", "1", "--name", "script-graph-selftest", "--result-json", str(result),
+                                   *extra], capture_output=True, text=True, timeout=60)
+            import json
+            return done.returncode, json.loads(result.read_text(encoding="utf-8"))
+
+    def test_a_sanitizer_log_is_measured_and_an_ordinary_log_is_judged(self):
+        code, scored = self.run_cli(log(TIMING, LOADED, f"{TAG} PASS"), "--sanitizer", "tsan")
+        self.assertEqual((code, scored["pass"]), (0, True), scored)
+        self.assertIn("sanitizer: budget not gated (tsan build)", scored["reason"])
+        code, scored = self.run_cli(log(TIMING, LOADED, f"{TAG} PASS"))
+        self.assertEqual((code, scored["pass"]), (1, False), scored)
+
+
+class RenderCapSanitizer(unittest.TestCase):
+    CASE = {"exit_code": 0, "timed_out": False, "cap": "60hz", "frames": 11, "interval_s": 3.06, "presentations_per_second": 3.27}
+
+    def score(self, sanitizer=None, **change):
+        from test_headless_render_cap import score_detect  # noqa: PLC0415
+        return score_detect({**self.CASE, **change}, sanitizer)
+
+    def test_an_ordinary_build_gates_the_frame_floor(self):
+        self.assertFalse(self.score()["pass"])
+
+    def test_a_sanitizer_build_measures_the_floor_and_still_gates_the_cap(self):
+        scored = self.score("tsan")
+        self.assertTrue(scored["pass"], scored)
+        self.assertIn("sanitizer: budget not gated", scored["reason"])
+        self.assertFalse(self.score("tsan", presentations_per_second=120.0)["pass"])
+        self.assertFalse(self.score("tsan", cap=None)["pass"])
+        self.assertFalse(self.score("tsan", frames=0)["pass"])
+        self.assertFalse(self.score("tsan", exit_code=1)["pass"])
 
 
 if __name__ == "__main__":

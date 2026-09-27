@@ -78,6 +78,8 @@ QUIET_WAIT_S = 300
 # The wall-clock budget checks inside those rows. A sanitizer build instruments every access, so its timings measure
 # the instrumentation: there the budget lines are reported, not judged, and every other check still decides the row.
 WALL_CLOCK_CHECKS = {"script-graph": ("threaded_synced_update_pass_timing", "threaded_synced_update_pass_timing_under_load")}
+# A load-sensitive row's time cap per sanitizer: the Mac TSan script-graph row ran past 1800 s (exit 124) on 2026-09-26.
+SANITIZER_ROW_TIMEOUT = {"script-graph": {"tsan": 3600}}
 SANITIZER_MARKERS = {b"clang_rt.asan": "asan", b"__asan_init": "asan", b"clang_rt.tsan": "tsan", b"__tsan_init": "tsan"}
 
 
@@ -111,7 +113,8 @@ def score_wall_clock_informational(stdout: str, record: dict, name: str, sanitiz
                and record.get("exit_code") == 1 and not record.get("timed_out"))
     scored = score_selftest(stdout, record.get("exit_code"), record.get("timed_out"), tag)
     if excused:
-        scored.update(**{"pass": True, "reason": f"{sanitizer} build: {len(budget)} wall-clock budget line(s) reported, not judged"})
+        measured = "; ".join(re.sub(rf"^\[{re.escape(tag)}\] FAIL ", "", line)[:200] for line in budget)
+        scored.update(**{"pass": True, "reason": f"sanitizer: budget not gated ({sanitizer} build), measured: {measured}"})
     scored["sanitizer"] = sanitizer
     scored["informational_budget_lines"] = budget
     return scored
@@ -264,7 +267,8 @@ def attempt_summary(scored, case):
 
 def run_row(options, make_run, name, case, sanitizer):
     if name in LOAD_SENSITIVE:
-        run = make_run(options.repo, LOAD_SENSITIVE[name], case, options.timeout, fixtures=SELFTEST_FIXTURES.get(name))
+        budget = max(options.timeout, SANITIZER_ROW_TIMEOUT.get(name, {}).get(sanitizer, 0))
+        run = make_run(options.repo, LOAD_SENSITIVE[name], case, budget, fixtures=SELFTEST_FIXTURES.get(name))
         try:
             record = run.start().finish()
         finally:
@@ -295,7 +299,7 @@ def run_row(options, make_run, name, case, sanitizer):
         from test_headless_render_cap import run_case, score_detect  # noqa: PLC0415
 
         case_data = run_case(options.repo, case, options.timeout)
-        scored = score_detect(case_data)
+        scored = score_detect(case_data, sanitizer)
         scored["binary"] = case_data.get("exe_sha256")
     elif name == "preview-invariance":
         from test_preview_invariance import run_case as invariance_case  # noqa: PLC0415
@@ -409,6 +413,9 @@ def main():
     parser.add_argument("--exit-code", type=int, default=0)
     parser.add_argument("--timed-out", action="store_true")
     parser.add_argument("--name", default="controller-frame-selftest")
+    parser.add_argument("--sanitizer", choices=("asan", "tsan"),
+                        help="with --score-stdout: the log is a sanitizer build's, so its wall-clock budget lines are measured")
+    parser.add_argument("--result-json", type=Path, help="with --score-stdout: also write the score here")
     parser.add_argument("--quiet-rows", nargs="?", const="last", choices=("last", "only"),
                         help="also run every load-sensitive row in the quiet tail (only: the tail alone)")
     parser.add_argument("--only", action="append", default=[], metavar="ROW",
@@ -421,6 +428,13 @@ def main():
     if options.score_stdout:
         stdout = options.score_stdout.read_text(encoding="utf-8", errors="replace")
         scored = score_selftest(stdout, options.exit_code, options.timed_out, options.name)
+        row = options.name.removesuffix("-selftest")
+        if options.sanitizer and not scored["pass"] and row in WALL_CLOCK_CHECKS:
+            scored = score_wall_clock_informational(stdout, {"exit_code": options.exit_code, "timed_out": options.timed_out},
+                                                    row, options.sanitizer)
+        if options.result_json:
+            options.result_json.write_text(json.dumps({**scored, "case": row, "scored_by": "run_selftests.py --score-stdout"},
+                                                      indent=2), encoding="utf-8")
         print(json.dumps(scored, indent=2))
         if scored["pass"]:
             print(f"PASS {options.name} pass_lines={scored['pass_lines']}")
