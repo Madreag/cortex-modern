@@ -8315,8 +8315,10 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 				return table.concat(out, ",")
 			end
 			local array, last, keys = rest(walks.array), rest(walks.last), rest(walks.hash)
-			_F_TraversalContinued = array == "12,13,14,done" and last == "done" and keys == table.concat(expected, ",") and #expected == 4
-			_F_TraversalResult = string.format("array=%s last=%s hash=%s restored_order=%s host_order=%s", array, last, keys, table.concat(expected, ","), _F_Traversal.hostOrder)
+			-- The hash loop resumes at the key it recorded and goes on in the restored table's own order.
+			_F_TraversalContinued = array == "12,13,14,done" and last == "done" and keys == table.concat(expected, ",") and expected[1] == tostring(_F_Traversal.next)
+			_F_TraversalResult = string.format("array=%s last=%s hash=%s restored_order=%s host_order=%s host_order_kept=%s", array, last, keys, table.concat(expected, ","),
+				_F_Traversal.hostOrder, tostring(keys == _F_Traversal.hostOrder))
 		)lua") == 0;
 		bool continued = false;
 		std::string detail = "not_resumed";
