@@ -1938,6 +1938,9 @@ int ActivityMan::StartActivity(Activity* activity) {
 
 	g_MusicMan.PrepareForActivityStart();
 
+	// A fresh simulation starts with no seat's committed input; a restored one keeps what its image supplies.
+	if (!g_MovableMan.IsRestoringSnapshot()) g_UInputMan.ResetCommittedSeats();
+
 	m_Activity->SetupPlayers();
 	int error = m_Activity->Start();
 
