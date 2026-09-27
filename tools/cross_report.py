@@ -98,6 +98,7 @@ def classify_hold(hold,events,peers):
         if not configs: continue
         notices=[r for r in peers[name].get('own_hold_notifications',[]) if r['tick']==hold['tick'] and r['source_round']==hold.get('source_round')]
         incarnations={r['incarnation'] for r in notices}
+        if len(incarnations)!=1: continue
         timing=[r for r in records if r.get('type')=='tick_timing' and r.get('phase')=='live' and r.get('peer')==hold['peer'] and
                 r.get('source_round')==hold.get('source_round') and r.get('tick',float('inf'))<=hold['tick'] and
                 (not incarnations or r.get('incarnation') in incarnations)]
@@ -296,6 +297,8 @@ def build_report(root):
                 waits.append(dict(tick=int(match[1]), wait_ms=int(match[2]), line=number))
             if match := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
                 holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number,source_round=observed_round,path=str(log_path.relative_to(root))))
+                if any(r.get('type')=='adopted_config' and r.get('peer')==int(match[1]) and r.get('source_round')==observed_round for r in events[name]):
+                    own_hold_notifications.append(dict(tick=int(match[2]),source_round=observed_round,incarnation=int(log_path.parent.parent.name.split('-')[-1]),path=str(log_path.relative_to(root)),line=number))
             if match := re.search(r'\[net-lockstep\] hold of this seat at (\d+)',line):
                 own_hold_notifications.append(dict(tick=int(match[1]),source_round=observed_round,incarnation=int(log_path.parent.parent.name.split('-')[-1]),path=str(log_path.relative_to(root)),line=number))
             if re.search(r'RTE Assert|FATAL:|EXCEPTION_ACCESS_VIOLATION|Runtime Error due to unhandled exception|Rejected .*command|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|\[net-plane\].*ASSERT|\[fullstate(?:-refusal)?\].*(?:failed:|refused:|problem=)|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
