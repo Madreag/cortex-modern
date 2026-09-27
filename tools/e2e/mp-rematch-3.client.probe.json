@@ -1,0 +1,149 @@
+{
+  "schema": 1,
+  "timeout_ms": 290000,
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round1-play"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round1-play-end"
+    },
+    {
+      "op": "wait",
+      "service": "Starting",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800,
+      "scope": "menu"
+    },
+    {
+      "op": "signal",
+      "name": "round-1-done",
+      "scope": "menu"
+    },
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-epoch-2.json",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round2-play"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round2-play-end"
+    },
+    {
+      "op": "wait",
+      "service": "Starting",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800,
+      "scope": "menu"
+    },
+    {
+      "op": "signal",
+      "name": "round-2-done",
+      "scope": "menu"
+    },
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-epoch-3.json",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round3-play"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round3-play-end"
+    },
+    {
+      "op": "wait",
+      "service": "Starting",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800,
+      "scope": "menu"
+    },
+    {
+      "op": "signal",
+      "name": "round-3-done",
+      "scope": "menu"
+    },
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-epoch-4.json",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round4-play"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 550
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      },
+      "sim_at_least": 550
+    },
+    {
+      "op": "signal",
+      "name": "done"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}
