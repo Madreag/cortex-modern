@@ -92,6 +92,17 @@ def attempt_label(result):
     return 'CORE PASS; FULL GATE RED' if result.get('core_passed') else 'CORE FAIL; FULL GATE RED'
 
 
+def verdict_line(result):
+    peers=result['peers']; comparison=result['comparison']
+    holds=sum(len(p['holds']) for p in peers.values())
+    classifications=dict(Counter(h.get('classification','other') for p in peers.values() for h in p['holds']))
+    text=f'{attempt_label(result)} {result["run"]}: '+', '.join(f'{n}={p["frames"]} frames' for n,p in peers.items())
+    text+=f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds} unscheduled={result["unscheduled_holds"]} classifications={classifications}; '
+    text+='; '.join(name+'='+oracle['status'] for name,oracle in result['oracles'].items())
+    if result.get('assigned_capture_rows'): text+='; full-state NOT COVERED by capture-rows lane rows '+','.join(result['assigned_capture_rows'])
+    return text
+
+
 def classify_hold(hold,events,peers):
     result=dict(classification='other',reason='Held peer timing or adopted hold bound is missing or ambiguous.',
                 held_instance=None,incarnation=None,execution=None,capture_tick=None,capture_us=None,compute_us=None,wait_us=None,
@@ -537,9 +548,7 @@ def build_report(root):
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
     write_index(root.parent)
-    classifications=dict(Counter(h['classification'] for p in peers.values() for h in p['holds']))
-    verdict = f'{attempt_label(result)} {result["run"]}: ' + ', '.join(f'{n}={p["frames"]} frames' for n,p in peers.items()) + f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds} unscheduled={unscheduled_holds} classifications={classifications}; ' + '; '.join(name+'='+oracle['status'] for name,oracle in result['oracles'].items())
-    if result['assigned_capture_rows']: verdict+='; full-state NOT COVERED by capture-rows lane rows '+','.join(result['assigned_capture_rows'])
+    verdict=verdict_line(result)
     (root / 'verdict.txt').write_text(verdict + '\n', encoding='utf-8'); print(verdict)
     return result
 
