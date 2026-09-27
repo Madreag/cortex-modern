@@ -193,6 +193,7 @@ namespace RTE {
 	bool RunCrossExecutionPhaseSelfTest(std::string* error);
 	bool RunCrossAuthorityRecordSelfTest(std::string* error);
 	bool RunCrossHistoryRecordSelfTest(std::string* error);
+	bool RunCrossReadyRevisionSelfTest(std::string* error);
 }
 
 using namespace RTE;
@@ -238,6 +239,26 @@ static nlohmann::json CrossAuthorityFromReport(const nlohmann::json& report, uin
 
 static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, [[maybe_unused]] uint64_t nextFrameCursor) {
 	return configuredStart == 1 && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
+}
+
+static bool CrossReadyRevision(uint64_t, uint64_t&) { return false; }
+
+bool RTE::RunCrossReadyRevisionSelfTest(std::string* error) {
+	uint64_t last = UINT64_MAX;
+	if (!CrossReadyRevision(1, last) || CrossReadyRevision(1, last) || !CrossReadyRevision(4, last) || last != 4) {
+		*error = "ready/start intent is not re-armed once for each adopted configuration"; return false;
+	}
+	std::cout << "[net-match-selftest] PASS cross_ready_start_follows_adopted_config_revisions" << std::endl;
+	return true;
+}
+
+static void CrossReadyForCurrentConfig(uint64_t& previous) {
+	if (s_crossHostOptions.empty() || g_NetMatchService.GetState() != NetMatchServiceState::Starting) return;
+	const auto revision = g_NetMatchService.GetLobbyMatchConfig().configRevision;
+	if (!CrossReadyRevision(revision, previous)) return;
+	g_NetMatchService.SetReady();
+	if (g_NetMatchService.IsHost()) g_NetMatchService.RequestStart();
+	System::PrintDiagnosticLine("[cross-ready] revision=" + std::to_string(revision) + " host=" + std::to_string(g_NetMatchService.IsHost()));
 }
 
 bool RTE::RunCrossHistoryRecordSelfTest(std::string* error) {
@@ -7168,8 +7189,10 @@ void RunGameLoop() {
 					}
 					std::string rematchPreset;
 					bool rematchReady = false;
+					uint64_t crossReadyRevision = UINT64_MAX;
 					const auto rematchWaitStart = std::chrono::steady_clock::now();
 					while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rematchWaitStart).count() < 60) {
+						CrossReadyForCurrentConfig(crossReadyRevision);
 						if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
 							rematchReady = true;
 							break;
@@ -8369,6 +8392,7 @@ int RunNetMatchServiceE2E() {
 	if (setupError.empty()) {
 		g_NetMatchService.SetReady();
 		bool crossOptionsApplied = s_crossHostOptions.empty() || !e2eHost;
+		uint64_t crossReadyRevision = UINT64_MAX;
 		if (e2eHost && crossOptionsApplied) {
 			g_NetMatchService.RequestStart();
 		}
@@ -8380,6 +8404,7 @@ int RunNetMatchServiceE2E() {
 				std::string optionsError;
 				if (CrossHostOptions(0, &optionsError)) { crossOptionsApplied = true; g_NetMatchService.SetReady(); g_NetMatchService.RequestStart(); }
 			}
+			if (crossOptionsApplied) CrossReadyForCurrentConfig(crossReadyRevision);
 			if (System::IsSetToQuit()) {
 				setupCancelled = true;
 				g_NetMatchService.Destroy();
