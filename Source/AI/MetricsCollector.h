@@ -18,6 +18,8 @@
 
 namespace RTE {
 	class MovableObject;
+	bool CrossCaptureBarrier(const nlohmann::json& spec, const std::string& directory, const std::string& phase, uint64_t tick, uint64_t round);
+	void CrossCaptureBarrierFromEnvironment(const char* phase, uint64_t tick, uint64_t round);
 
 	/// Metrics collector for the determinism scenario runner.
 	///

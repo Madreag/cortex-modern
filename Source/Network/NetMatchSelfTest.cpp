@@ -67,6 +67,29 @@ namespace RTE {
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 
 	namespace {
+		bool TestCrossCaptureBarrier(std::string* error) {
+			const auto root = std::filesystem::path("Userdata") / "cross-barrier-selftest";
+			std::filesystem::create_directories(root);
+			const nlohmann::json spec{{"id", "capture"}, {"phase", "capture_announced"}, {"tick", 77}, {"round", 9}, {"timeout_ms", 200}};
+			bool released = false;
+			std::thread worker([&] { released = CrossCaptureBarrier(spec, root.string(), "capture_announced", 77, 9); });
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+			const auto entered = root / "capture.capture_announced.77.enter.json";
+			while (!std::filesystem::exists(entered) && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			std::ofstream(root / "capture.release").put('1');
+			worker.join();
+			if (!released || !std::filesystem::exists(entered)) { *error = "the announced capture barrier neither signalled nor waited for its release"; return false; }
+			auto timeout = spec; timeout["id"] = "writer"; timeout["phase"] = "writer_pending"; timeout["timeout_ms"] = 3;
+			if (CrossCaptureBarrier(timeout, root.string(), "writer_pending", 77, 9)) { *error = "an unreleased writer barrier did not time out"; return false; }
+			if (CrossCaptureBarrier(spec, root.string(), "writer_pending", 77, 9) || CrossCaptureBarrier(spec, root.string(), "capture_announced", 78, 9)) {
+				*error = "barrier ignored its phase/tick selector"; return false;
+			}
+			std::ifstream timed(root / "writer.writer_pending.77.exit.json");
+			if (!timed || nlohmann::json::parse(timed).value("outcome", "") != "timeout") { *error = "writer timeout has no terminal receipt"; return false; }
+			std::cout << "[net-match-selftest] PASS capture_and_writer_barriers_are_selected_releasable_and_bounded" << std::endl;
+			return true;
+		}
 		bool TestCrossRecordKinds(std::string* error) {
 			const std::vector<std::string> kinds{"round_fired", "reload_completed", "thrown_release", "device_pickup", "door_open_completed",
 			    "door_close_completed", "gold_deposited", "wound_damage", "dying", "dead", "wound_added", "gibbed", "craft_refund",
@@ -13819,6 +13842,7 @@ namespace RTE {
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
+		row(&TestCrossCaptureBarrier, "capture_and_writer_barriers_are_selected_releasable_and_bounded");
 		row(&TestCrossRecordKinds, "action_record_fields");
 		row(&TestCrossTickTiming, "exclusive_tick_timing");
 		row(&TestCrossTimedTransport, "timed_transport_reset");
