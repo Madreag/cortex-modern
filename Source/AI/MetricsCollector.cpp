@@ -17,6 +17,7 @@
 #include <thread>
 #include <deque>
 #include <cmath>
+#include <algorithm>
 
 namespace RTE {
 
@@ -83,6 +84,7 @@ namespace RTE {
 		json context;
 		std::vector<json> pending;
 		std::deque<json> producedInputs;
+		std::map<uint64_t, uint64_t> lastObservedInputTarget;
 		uint64_t inputSerial = 0;
 		size_t bytes = 0, partBytes = 0, limit = 0, part = 0, sequence = 0, overflow = 0;
 		bool active = false;
@@ -201,14 +203,33 @@ namespace RTE {
 	bool MetricsCollector::IsFreshControllerRecovery(const json& sample, uint64_t round, uint64_t tick, long actor,
 	    int64_t wireTick, bool controllable, bool held, bool catchup, double afterWallMs) {
 		try {
-			return controllable && !held && !catchup && wireTick >= 0 && static_cast<uint64_t>(wireTick) == tick &&
+			return controllable && !held && !catchup && sample.value("queue_confirmed", false) && wireTick >= 0 && static_cast<uint64_t>(wireTick) == tick &&
 			    sample.value("input_serial", uint64_t{0}) > 0 && sample.at("input_round") == round && sample.at("target_tick") == tick &&
 			    sample.at("actor") == actor && std::isfinite(sample.at("produced_wall_ms").get<double>()) &&
 			    std::isfinite(afterWallMs) && sample.at("produced_wall_ms").get<double>() >= afterWallMs;
 		} catch (const json::exception&) { return false; }
 	}
 	void MetricsCollector::ConfirmProducedControllers(uint64_t round, uint64_t producedTick, uint64_t targetTick, const std::vector<long>& queuedActors, uint64_t priorInputThrough) {
-		// RED control: a produced sample has no confirmed queue readback yet.
+		if (!EventsEnabled() || (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative())) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		auto& last = m_EventStream->lastObservedInputTarget[round];
+		const bool freshTarget = targetTick > last && targetTick > priorInputThrough;
+		last = std::max(last, targetTick);
+		if (!freshTarget) return;
+		for (auto& sample: m_EventStream->producedInputs) {
+			if (sample.at("input_round") != round || sample.at("produced_tick") != producedTick || sample.at("target_tick") != targetTick ||
+			    std::find(queuedActors.begin(), queuedActors.end(), sample.at("actor").get<long>()) == queuedActors.end()) continue;
+			sample["queue_confirmed"] = true;
+			sample["queue_readback"] = "ScenarioRunner::PeekLockstepLocalControllerFrames";
+			sample["restored_input_through"] = priorInputThrough;
+			try {
+				auto receipt = sample; receipt["type"] = "controller_input_queued";
+				m_EventStream->Write(receipt);
+			} catch (const std::exception& error) {
+				System::PrintDiagnosticLine("[cross-record] FAIL queued input: " + std::string(error.what()));
+				m_EventsEnabled.store(false);
+			}
+		}
 	}
 
 	void MetricsCollector::CloseEvents() {
