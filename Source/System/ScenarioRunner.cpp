@@ -817,6 +817,45 @@ namespace RTE {
 		s_GoodbyeToPendingReturners = std::move(goodbyeToPendingReturners);
 	}
 
+	std::string ScenarioRunner::MemoryCensus() {
+		NetLockstepPlaneGuard plane;
+		std::ostringstream line;
+		line << "runner: local_input_history=" << s_LocalInputHistory.size() << " requeued_inputs=" << s_RequeuedInputs.size()
+		     << " command_outbox=" << s_LocalCommandOutbox.size() << " applied_checkpoints=" << s_AppliedCheckpoints.size()
+		     << " catch_up_tail=" << s_WorldCatchUpTail.size() << " toast_log=" << s_NetUiToastLog.size()
+		     << " control_overrides=" << s_LockstepControlOverrides.size() << " dropped_overrides=" << s_LockstepDroppedControlOverrides.size()
+		     << " rewind_keep=" << s_ReplayRewindKeep.size() << " lookahead=" << s_ReplayLookahead.size();
+		if (s_LockstepCoordinator) line << " round:" << s_LockstepCoordinator->MemoryCensus();
+		return line.str();
+	}
+
+	bool ScenarioRunner::RunCommittedSeatHandoffSelfTest() {
+		if (!UInputMan::IsConstructed() || s_LockstepCoordinator) return false;
+		// A coordinator installed over a restored image, or taking the round over, keeps the seats' committed input
+		// whatever round id it carries: a world image names the world's round, a successor the wire round.
+		const std::string before = g_UInputMan.SaveCommittedSeats();
+		const bool collection = LuaMan::IsDeterministicCollection();
+		const bool sinking = LuaMan::IsCheckpointAllocationSinking();
+		g_UInputMan.NoteCommittedSeatMouse(Players::PlayerTwo, Vector(5.0F, -3.0F), 2, 0x24, 61);
+		const std::string noted = g_UInputMan.SaveCommittedSeats();
+		bool kept = false;
+		{
+			NetLockstepCoordinator image, live;
+			image.m_RoundId = 360;
+			live.m_RoundId = 4242;
+			SetLockstepCoordinator(&image);
+			const bool afterImage = g_UInputMan.SaveCommittedSeats() == noted;
+			SetLockstepCoordinator(&live);
+			kept = afterImage && g_UInputMan.SaveCommittedSeats() == noted;
+			SetLockstepCoordinator(nullptr);
+		}
+		LuaMan::SetDeterministicCollection(collection);
+		LuaMan::SetCheckpointAllocationSinking(sinking);
+		g_UInputMan.LoadCommittedSeats(before);
+		std::cout << "[script-graph-selftest] " << (kept ? "PASS" : "FAIL") << " a_coordinator_handoff_keeps_committed_seats" << std::endl;
+		return kept;
+	}
+
 	void ScenarioRunner::SetLockstepAnnouncedCaptureEvery(uint32_t every) {
 		NetLockstepPlaneGuard plane;
 		if (s_LockstepCoordinator) s_LockstepCoordinator->SetAnnouncedCaptureEvery(every);

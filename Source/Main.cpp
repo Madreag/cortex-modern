@@ -144,6 +144,8 @@
 #ifdef _WIN32
 #include "windows.h"
 #include <crtdbg.h>
+#include <psapi.h>
+#include <tlhelp32.h>
 #endif
 
 #include <algorithm>
@@ -194,6 +196,40 @@ using namespace RTE;
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
 static std::string s_netLiveTickHashPath;
+static uint64_t s_memoryCensusTicks = 0; //!< Every this many ticks one line names what each record holds; 0 = never.
+
+// Private bytes, and what the process heaps hold allocated and committed, for the memory census.
+static std::string ProcessHeapCensus() {
+#ifdef _WIN32
+	PROCESS_MEMORY_COUNTERS_EX counters{};
+	K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters));
+	HANDLE heaps[256];
+	const DWORD count = std::min<DWORD>(GetProcessHeaps(256, heaps), 256);
+	unsigned long long allocated = 0, committed = 0;
+	for (DWORD index = 0; index < count; ++index) {
+		HEAP_SUMMARY summary{};
+		summary.cb = sizeof(summary);
+		if (HeapSummary(heaps[index], 0, &summary)) {
+			allocated += summary.cbAllocated;
+			committed += summary.cbCommitted;
+		}
+	}
+	DWORD handles = 0;
+	GetProcessHandleCount(GetCurrentProcess(), &handles);
+	size_t threads = 0;
+	if (HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); snapshot != INVALID_HANDLE_VALUE) {
+		THREADENTRY32 entry{};
+		entry.dwSize = sizeof(entry);
+		for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
+			if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++threads;
+		}
+		CloseHandle(snapshot);
+	}
+	return std::format(" private_mb={} heaps={} heap_allocated_mb={} heap_committed_mb={} threads={} handles={}", counters.PrivateUsage >> 20, count, allocated >> 20, committed >> 20, threads, handles);
+#else
+	return {};
+#endif
+}
 // Test lever: every N committed lockstep ticks each peer hashes its whole capture; 0 is off.
 static uint32_t s_netFullStateEvery = 0;
 static std::string s_netFullStateDump;
@@ -882,6 +918,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_recordTickHashes = true;
 			// Deterministic runs drain async path solves each frame so they can't race the node-cost rewrite.
 			g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
+		}
+		if (currentArg == "-memory-census-ticks") {
+			if (lastArg) return false;
+			s_memoryCensusTicks = std::strtoull(argValue[i + 1], nullptr, 10);
+			i += 2;
+			continue;
 		}
 		if (currentArg == "-net-live-tick-hashes") {
 			if (lastArg) return false;
@@ -6079,6 +6121,13 @@ void RunGameLoop() {
 			{
 				NetLockstepPlane::Window collectionWindow("tick-end collection wait");
 				g_LuaMan.WaitForAsyncGarbageCollection();
+			}
+			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) {
+				std::ostringstream line;
+				line << "[mem-census] tick=" << simTick << ProcessHeapCensus() << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << g_LuaMan.GetTotalHeapBytes()
+				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << CheckpointCow::Get().Cache().Census()
+				     << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus();
+				System::PrintDiagnosticLine(line.str());
 			}
 			if (s_scriptedLeaveDue) {
 				s_scriptedLeaveDue = false;

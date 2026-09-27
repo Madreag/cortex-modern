@@ -891,6 +891,8 @@ namespace RTE {
 		bool ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool IsReplayPlayback() const { NET_PLANE_CHECK(); return m_Playback; }
 		std::optional<NetLockstepStart> GetAgreedStartRecord() const { NET_PLANE_CHECK(); return m_AgreedStartRecord; }
+		/// One line of every record the round keeps and its entry count, for the memory census.
+		std::string MemoryCensus() const;
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
 		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {});
@@ -1254,6 +1256,7 @@ namespace RTE {
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
+		friend class ScenarioRunner;
 
 	private:
 		void TickHostMigration(uint64_t nowMs);

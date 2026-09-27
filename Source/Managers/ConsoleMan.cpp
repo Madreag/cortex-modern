@@ -1,4 +1,5 @@
 #include "ConsoleMan.h"
+#include <algorithm>
 #include <limits>
 
 #include "LuaMan.h"
@@ -201,6 +202,15 @@ bool ConsoleMan::SaveAllText(const std::string& filePath) {
 void ConsoleMan::AppendLogEntry(const std::string& text) {
 	std::lock_guard lock(m_OutputLogMutex);
 	m_OutputLog.emplace_back(text);
+}
+
+std::string ConsoleMan::LogCensus() const {
+	std::lock_guard lock(m_OutputLogMutex);
+	size_t bytes = 0;
+	for (const std::string& entry: m_OutputLog) bytes += entry.size();
+	std::string newest = m_OutputLog.empty() ? std::string() : m_OutputLog.back().substr(0, 120);
+	std::replace_if(newest.begin(), newest.end(), [](char c) { return c == '\n' || c == '\r' || c == ' '; }, '_');
+	return "console_lines=" + std::to_string(m_OutputLog.size()) + " console_kb=" + std::to_string(bytes >> 10) + " console_newest=" + newest;
 }
 
 std::string ConsoleMan::CopyLogTail(size_t limit) const {
