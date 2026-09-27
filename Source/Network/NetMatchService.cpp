@@ -36,6 +36,7 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <ctime>
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -3219,6 +3220,8 @@ static std::string ResyncSaveName() {
 	// The capture's verdict comes from the writer thread a tick or more after the simulation queued it.
 	// A world capture's bookkeeping follows that verdict, so nothing stands on an archive that never lands.
 	void NetMatchService::ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived) {
+		if (archived) m_LastMatchSaveTime = static_cast<int64_t>(std::time(nullptr));
+		if (!archived && m_IsHost && tick == m_ManualSaveTakenTick) m_ManualSaveFailure = "this machine's capture was refused";
 		if (!archived) {
 			if (joinCapture) m_WorldCapturePending = true;
 			// A refused base is asked again; the metadata read at its tick stands for nothing.
@@ -3258,6 +3261,15 @@ static std::string ResyncSaveName() {
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
 		m_OpenCaptureForJoin = false;
+		m_ManualCaptures.clear();
+		m_OpenCaptureManual = false;
+		m_ManualSaveAsked = false;
+		m_ManualSaveWaitShown = false;
+		m_ManualSaveTakenTick = 0;
+		m_ManualSaveFailure.clear();
+		m_ManualSaveBusy = false;
+		m_ManualSaveFailed = false;
+		m_LastMatchSaveTime = 0;
 		(void)ScenarioRunner::TakeAppliedCheckpoints();
 	}
 
@@ -3266,6 +3278,9 @@ static std::string ResyncSaveName() {
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
 		m_OpenCaptureForJoin = false;
+		// The host's ask the heal cut short is taken again after it.
+		if (m_OpenCaptureManual) m_ManualSaveAsked = true;
+		m_OpenCaptureManual = false;
 	}
 
 	std::set<uint8_t> NetMatchService::CheckpointWriters(uint64_t tick) const {
@@ -3282,15 +3297,17 @@ static std::string ResyncSaveName() {
 	NetMatchService::AutosaveTickOutput NetMatchService::StepAutosaveSchedule(const AutosaveTickInput& input) {
 		AutosaveTickOutput output;
 		for (const CheckpointNote& note: input.applied) {
-			if (note.kind == NetGameCheckpoint::Capture) {
+			if (note.kind == NetGameCheckpoint::Capture || note.kind == NetGameCheckpoint::ManualCapture) {
 				// A capture named for a tick already behind this frame is taken here, on every peer alike.
 				const uint64_t takenAt = std::max(note.tick, input.tick);
 				m_ScheduledCaptures.insert(takenAt);
+				if (note.kind == NetGameCheckpoint::ManualCapture) m_ManualCaptures.insert(takenAt);
 				if (m_Coordinator) m_Coordinator->NoteAnnouncedCapture(takenAt);
 				// The writers report the tick they took, so that is the capture the host waits on.
 				if (m_IsHost && note.tick == m_OpenCaptureTick) { m_OpenCaptureTick = takenAt; m_OpenCaptureApplied = true; }
 			} else if (note.kind == NetGameCheckpoint::Written && m_IsHost && note.tick == m_OpenCaptureTick) {
 				m_CaptureWriters.erase(note.sender);
+				if (m_OpenCaptureManual) m_ManualSaveReported.insert(note.sender);
 			}
 		}
 		// A finished capture frees this peer's writer, and the host schedules on nothing else.
@@ -3299,17 +3316,34 @@ static std::string ResyncSaveName() {
 			m_ScheduledCaptures.erase(m_ScheduledCaptures.begin(), m_ScheduledCaptures.upper_bound(input.tick));
 			output.capture = true;
 		}
+		if (output.capture && !m_ManualCaptures.empty() && *m_ManualCaptures.begin() <= input.tick) {
+			m_ManualCaptures.erase(m_ManualCaptures.begin(), m_ManualCaptures.upper_bound(input.tick));
+			output.manual = true;
+		}
 		if (!m_IsHost) return output;
+		bool ask = input.manualRequested;
 		// A capture whose tick passed without reaching the stream rode a frame the round never played (the host's own, while its seat
 		// was held): no writer takes it, so the schedule names the next one instead of waiting on it for the rest of the round.
 		if (m_OpenCaptureTick != 0 && !m_OpenCaptureApplied && input.tick > m_OpenCaptureTick) {
 			System::PrintDiagnosticLine(std::format("[autosave] named tick={} never reached the stream; naming the next", m_OpenCaptureTick));
 			m_OpenCaptureTick = 0;
 			m_CaptureWriters.clear();
+			// The host's ask was never taken, so it is asked again.
+			ask = ask || m_OpenCaptureManual;
+			m_OpenCaptureManual = false;
 		}
 		for (auto writer = m_CaptureWriters.begin(); writer != m_CaptureWriters.end();) {
 			writer = input.writers.contains(*writer) ? std::next(writer) : m_CaptureWriters.erase(writer);
 		}
+		// A second ask before the capture it would name is taken is that same capture.
+		if (ask && m_OpenCaptureManual && m_OpenCaptureTick != 0 && input.tick <= m_OpenCaptureTick) ask = false;
+		if (m_OpenCaptureManual && m_OpenCaptureTick != 0 && input.tick > m_OpenCaptureTick && m_CaptureWriters.empty()) {
+			output.manualSaved = true;
+			output.manualReported = m_ManualSaveReported.size();
+			output.manualWriters = m_ManualSaveWriters;
+			m_OpenCaptureManual = false;
+		}
+		output.manualPending = ask;
 		if (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty())) return output;
 		m_OpenCaptureTick = 0;
 		m_OpenCaptureForJoin = false;
@@ -3318,7 +3352,7 @@ static std::string ResyncSaveName() {
 		// A join asks for one capture and waits for its verdict; only a refused one asks again.
 		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured() &&
 		                         std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.joinCapture; });
-		if (!joinCapture && seconds == 0) return output;
+		if (!joinCapture && !ask && seconds == 0) return output;
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
 		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
 		// reaches a writer and the schedule would wait on it for the rest of the round.
@@ -3331,13 +3365,20 @@ static std::string ResyncSaveName() {
 		m_LastAutosaveSimTime = input.now;
 		// The capture is named `lead` ticks ahead, so it reaches every peer's stream before its tick.
 		const int64_t takenAt = input.now + static_cast<int64_t>(input.lead) * tickLength;
-		if (!joinCapture && takenAt < m_NextAutosaveSimTime) return output;
+		// The host's ask never moves the interval: it is advanced only when its own capture is due.
+		if (!joinCapture && !ask && takenAt < m_NextAutosaveSimTime) return output;
 		if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
 		m_OpenCaptureTick = input.tick + input.lead;
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
 		m_CaptureWriters = input.writers;
-		output.send.push_back({0, NetGameCheckpoint::Capture, m_OpenCaptureTick});
+		m_OpenCaptureManual = ask;
+		if (ask) {
+			m_ManualSaveReported.clear();
+			m_ManualSaveWriters = input.writers.size();
+			output.manualPending = false;
+		}
+		output.send.push_back({0, ask ? NetGameCheckpoint::ManualCapture : NetGameCheckpoint::Capture, m_OpenCaptureTick});
 		return output;
 	}
 
@@ -3405,8 +3446,27 @@ static std::string ResyncSaveName() {
 			input.ownSeatHeld = m_Coordinator->IsOwnHostSeatHeld();
 			const auto& start = m_Coordinator->GetAgreedStartRecord();
 			input.startupPending = start && tick < start->agreedFirstFrame;
+			input.manualRequested = m_ManualSaveAsked.exchange(false);
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
+		if (output.manualPending) {
+			m_ManualSaveAsked = true;
+			if (!m_ManualSaveWaitShown) ScenarioRunner::PushNetUiToast("match_save", "Saving at the next safe tick");
+			m_ManualSaveWaitShown = true;
+		} else if (input.manualRequested) {
+			m_ManualSaveWaitShown = false;
+		}
+		if (output.manualSaved) {
+			const bool saved = m_ManualSaveFailure.empty();
+			const std::string peers = output.manualReported == 1 ? "1 peer" : std::to_string(output.manualReported) + " peers";
+			const std::string line = !saved ? "Match not saved: " + m_ManualSaveFailure
+			                                : output.manualReported == output.manualWriters ? "Match saved (" + peers + ")"
+			                                                                                : "Match saved (" + std::to_string(output.manualReported) + " of " + std::to_string(output.manualWriters) + " peers)";
+			ScenarioRunner::PushNetUiToast("match_save", line);
+			System::PrintDiagnosticLine(std::format("[autosave] manual save {} tick={} writers={}/{}", saved ? "saved" : "failed", m_ManualSaveTakenTick, output.manualReported, output.manualWriters));
+			m_ManualSaveFailed = !saved;
+			m_ManualSaveBusy = m_ManualSaveAsked.load();
+		}
 		if (output.capture) {
 			const bool joinCapture = IsJoinCaptureTick(tick);
 			// A peer replaying its catch-up is not live at this tick, and the host does not wait on it.
@@ -3414,9 +3474,18 @@ static std::string ResyncSaveName() {
 			if (!ScenarioRunner::WorldCatchUpActive() && g_ActivityMan.ActivityRunning()) {
 				if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
 				const auto captureBegan = std::chrono::steady_clock::now();
+				m_AutosaveIdentity.savedByHost = output.manual;
 				taken = SaveStampedAutosave(tick);
+				m_AutosaveIdentity.savedByHost = false;
 				const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureBegan).count();
 				if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, taken ? std::max(g_ActivityMan.LastAutosaveCaptureMs(), captureMs) : captureMs);
+			}
+			if (output.manual) {
+				System::PrintDiagnosticLine(std::format("[autosave] manual save {} tick={}", taken ? "taken" : "not taken", tick));
+				if (m_IsHost) {
+					m_ManualSaveTakenTick = tick;
+					if (!taken) m_ManualSaveFailure = "the capture was not taken";
+				}
 			}
 			if (taken) {
 				if (input.unwritten > 0) System::PrintDiagnosticLine(std::format("[autosave] named tick={} taken with unwritten={}", tick, input.unwritten));
@@ -3444,8 +3513,58 @@ static std::string ResyncSaveName() {
 		}
 		for (const CheckpointNote& note: output.send) {
 			if (note.kind == NetGameCheckpoint::Capture) System::PrintDiagnosticLine(std::format("[autosave] named tick={} at={} writers={}", note.tick, tick, input.writers.size()));
+			if (note.kind == NetGameCheckpoint::ManualCapture) {
+				System::PrintDiagnosticLine(std::format("[autosave] manual save named tick={} at={} writers={}", note.tick, tick, input.writers.size()));
+				m_ManualSaveFailure.clear();
+				m_ManualSaveBusy = true;
+			}
 			(void)ScenarioRunner::SubmitCheckpoint(NetGameCheckpoint{note.kind, note.tick});
 		}
+	}
+
+	bool NetMatchService::RequestManualSave() {
+		bool host = false, running = false;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			host = m_IsHost;
+			running = m_State == NetMatchServiceState::Running && !m_AutosaveMatchId.empty();
+		}
+		// A client's own save would be a world no other peer holds.
+		if (!host) {
+			ScenarioRunner::PushNetUiToast("match_save", "The host saves the match");
+			return false;
+		}
+		if (!running) {
+			ScenarioRunner::PushNetUiToast("match_save", "The match cannot be saved until it runs");
+			return false;
+		}
+		m_ManualSaveAsked = true;
+		m_ManualSaveBusy = true;
+		ScenarioRunner::PushNetUiToast("match_save", ScenarioRunner::IsLockstepPaused() ? "Saving when the match resumes" : "Saving...");
+		System::PrintDiagnosticLine("[autosave] manual save asked");
+		return true;
+	}
+
+	NetMatchService::MatchSaveRow NetMatchService::GetMatchSaveRow() const {
+		MatchSaveRow row;
+		bool host = false;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			host = m_IsHost;
+			row.enabled = host && m_State == NetMatchServiceState::Running && !m_AutosaveMatchId.empty();
+		}
+		const int64_t saved = m_LastMatchSaveTime.load();
+		const std::string at = saved == 0 ? "" : System::LocalTimeText(static_cast<std::time_t>(saved), "%H:%M");
+		if (!host) {
+			row.hint = at.empty() ? "The host saves the match" : "The host saves the match - last saved at " + at;
+		} else if (m_ManualSaveBusy) {
+			row.hint = "Saving...";
+		} else if (m_ManualSaveFailed) {
+			row.hint = at.empty() ? "The last save failed" : "The last save failed - last saved at " + at;
+		} else {
+			row.hint = at.empty() ? "Not saved yet" : "Last saved at " + at;
+		}
+		return row;
 	}
 
 	void NetMatchService::RollWorldReplaySegment(uint64_t tick) {
