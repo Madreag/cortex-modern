@@ -190,6 +190,7 @@ namespace RTE {
 	bool RunModApiShimsSelfTest();
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 	bool RunCrossRosterSelfTest(std::string* error);
+	bool RunCrossExecutionPhaseSelfTest(std::string* error);
 }
 
 using namespace RTE;
@@ -214,6 +215,19 @@ static nlohmann::json s_crossHostOptions = nlohmann::json::array();
 static std::string CrossEnvironment(const char* name, const char* fallback = "") {
 	const char* value = std::getenv(name);
 	return value ? value : fallback;
+}
+
+static const char* CrossTickPhase(bool catchup, uint64_t tick, uint64_t previousCommitted, unsigned execution) {
+	return catchup ? "catchup" : execution > 0 ? "reexecution" : "live";
+}
+
+bool RTE::RunCrossExecutionPhaseSelfTest(std::string* error) {
+	if (std::string(CrossTickPhase(true, 99, 100, 1)) != "catchup" || std::string(CrossTickPhase(false, 99, 100, 1)) != "reexecution" ||
+	    std::string(CrossTickPhase(false, 101, 100, 1)) != "live" || std::string(CrossTickPhase(false, 1, 0, 1)) != "live") {
+		*error = "new committed ticks or a new round remain labelled as old replay work"; return false;
+	}
+	std::cout << "[net-match-selftest] PASS cross_phase_returns_to_live_after_reexecution_or_new_round" << std::endl;
+	return true;
 }
 
 static void BeginCrossTick(uint64_t tick) {
@@ -248,7 +262,7 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"history_branch", ScenarioRunner::GetLockstepResumeFrame() > 0 ? nlohmann::json(nullptr) : nlohmann::json("initial")},
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
 	    {"config_hash", NetMatchConfigUtil::StoredConfigHash(*config)}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
-	    {"phase", catchup ? "catchup" : execution > 0 ? "reexecution" : "live"}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
+	    {"phase", CrossTickPhase(catchup, tick, s_crossLastCommitted.contains(config->roundId) ? s_crossLastCommitted.at(config->roundId) : 0, execution)}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
 	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
 	if (const auto& snapshot = g_NetMatchService.GetSeatPresence().GetSnapshot()) {
 		for (const auto& seat: snapshot->seats) if (seat.peerId == ScenarioRunner::GetLockstepLocalPeerId()) {
