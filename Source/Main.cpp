@@ -6603,6 +6603,13 @@ void RunGameLoop() {
 			}
 			CrossEliminationAtCommittedTick(simTick);
 			CrossEndTargetObservation(simTick);
+			if (g_MetricsCollector.EventsEnabled() && ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
+				const uint64_t target = simTick + ScenarioRunner::GetLockstepInputDelayFrames();
+				std::vector<ControllerFrame> queued; std::vector<long> actors;
+				if (ScenarioRunner::PeekLockstepLocalControllerFrames(target, queued))
+					for (const auto& input: queued) actors.push_back(static_cast<long>(input.actorUniqueID));
+				g_MetricsCollector.ConfirmProducedControllers(ScenarioRunner::GetLockstepRoundId(), simTick, target, actors, ScenarioRunner::WorldCatchUpPriorInputThrough());
+			}
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (hashThisTick) {
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
