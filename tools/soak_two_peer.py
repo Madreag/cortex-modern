@@ -104,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--census-probe-size", type=int, default=0, help="print the first bytes of heap blocks of this size")
     parser.add_argument("--census-atom-stacks", action="store_true", help="the census samples where Atoms are constructed")
     parser.add_argument("--census-ticks", type=int, default=3600, help="ticks between the engine's memory census lines; 0 = none")
+    parser.add_argument("--cross-records", action="store_true", help="both peers write the cross harness's event records (CC_TEST_CROSS_RECORDS) beside their runs")
+    parser.add_argument("--cross-event-limit", type=int, default=0, help="with --cross-records: the records' byte budget (CC_TEST_CROSS_EVENT_RAW_LIMIT); 0 = the engine's")
     options = parser.parse_args(argv)
     low, _, high = options.port_block.partition("-")
     if not (low.isdigit() and high.isdigit() and int(low) <= options.port <= int(high) - 4):
@@ -173,6 +175,11 @@ def main(argv: list[str] | None = None) -> int:
             if options.end_round_tick:
                 flags += ["-net-match-e2e-end-round-tick", str(options.end_round_tick)]
             env = {"CCCP_HEADLESS": "1"}
+            if options.cross_records:
+                env["CC_TEST_CROSS_RECORDS"] = str(root / f"{peer}-records" / "events.jsonl")
+                (root / f"{peer}-records").mkdir()
+                if options.cross_event_limit:
+                    env["CC_TEST_CROSS_EVENT_RAW_LIMIT"] = str(options.cross_event_limit)
             if peer == "client" and options.mute_input:
                 env["CC_TEST_LOCKSTEP_MUTE_INPUT"] = options.mute_input
             run = make_run(repo, flags, root / peer, timeout=options.minutes * 60 + 600, env=env)
