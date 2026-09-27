@@ -2,7 +2,7 @@
 set -eu
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 export CCCP_HEADLESS=1
-LANE=/Users/erol/cortex-workers/astra-cross-peers-build-20260926
+LANE=${CROSS_LANE_ROOT:?set CROSS_LANE_ROOT to the lane directory, e.g. /Users/erol/cortex-workers/<lane>}
 GUARD=/Users/erol/cortex-workers/inventory-confirming-6-20260926/exit.txt
 D=/Users/erol/projects/cccp/deps-audit-20260907
 REPO=$LANE/repo

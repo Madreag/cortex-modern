@@ -249,6 +249,7 @@ def write_rerun_command(root,manifest):
           '--capture-budget-ms',str(manifest['deadlines']['capture_ms'])]
     for name in inputs: args += ['--'+name,str(root/f'rerun-{name}.json')]
     if manifest.get('chaos_seed') is not None: args += ['--chaos-seed',str(manifest['chaos_seed'])]
+    if manifest.get('lane'): args += ['--lane',manifest['lane']]
     args += ['--out',root.as_posix()+'-rerun']
     return subprocess.list2cmdline(args)
 
