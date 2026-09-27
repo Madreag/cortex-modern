@@ -76,6 +76,7 @@ namespace RTE {
 	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
 	bool TestAnExpiredHolderWindowKeepsTheAiSeat(std::string* error);
 	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
+	bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
@@ -19968,6 +19969,27 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAHeldClientsHashIsNotTheRounds(std::string* error) {
+		// A client held at 3000 had already run 3000 on its own input: its hash there is its private simulation's, never the round's desync.
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A1E, 3, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.substituteSlowPeers = true;
+		host.m_Config = config;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_AiHeldSeats[2] = 3000;
+		host.m_LocalChecksums[3000] = {};
+		std::array<uint8_t, 32> own{};
+		own[0] = 1;
+		host.m_RemoteChecksums[3000][2] = own;
+		host.CompareChecksums(3000);
+		if (host.HasPendingRecoveryStop() || host.m_Stats.checksumMismatches != 0) {
+			*error = "a-held-clients-hash-is-not-the-rounds: the host stopped the round on the hash of a client held at that frame";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error) {
 		// A return before this round's first frame makes the seat a member from it, on the delay the round runs there.
 		NetLockstepCoordinator joiner;
@@ -20956,6 +20978,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestACaptureNotYetBegunExcusesNoStall(&error) ||
 		    !TestAnExpiredHolderWindowKeepsTheAiSeat(&error) ||
 		    !TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(&error) ||
+		    !TestAHeldClientsHashIsNotTheRounds(&error) ||
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
 		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
 		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||
