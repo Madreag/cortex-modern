@@ -579,7 +579,7 @@ def remote_commands(path, local_peer, first_tick=1, last_tick=TICKS):
     launch = json.loads(launch_path.read_text(encoding='utf-8-sig'))
     verify = json.loads(verify_path.read_text(encoding='utf-8-sig'))
     complete = (launch.get('exit_code') == 0 and launch.get('evidence_complete') is True and not launch.get('timed_out')
-                and verify.get('ok') is True and verify.get('first_frame') <= first_tick and verify.get('last_frame', 0) >= last_tick)
+                and verify.get('ok') is True and verify.get('first_frame') == first_tick and verify.get('last_frame', 0) >= last_tick)
     return commands, complete
 
 
@@ -750,7 +750,10 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     trace = run / f'{peer}_trace.json'
     trace_document = json.loads(trace.read_text(encoding='utf-8-sig'))
     segments = trace_document['runs'] if trace_run is None else [trace_document['runs'][trace_run]]
-    trace_ticks = [row for segment in segments for row in segment['tick_hashes'] if first_tick <= row['tick'] <= ticks]
+    # The ship-feel gate (the default window) counts every trace row: a row outside 1..TICKS fails coverage as it always did;
+    # only an explicit window (a cross-run round) reduces the rows inside it.
+    windowed = (first_tick, ticks) != (1, TICKS)
+    trace_ticks = [row for segment in segments for row in segment['tick_hashes'] if not windowed or first_tick <= row['tick'] <= ticks]
     coverage = [row['tick'] for row in trace_ticks] == list(range(first_tick, ticks + 1))
     ended = any(row['type'] == 'end' for row in rows)
     draw = distribution([frame['draw_ms'] for frame in frames])
@@ -781,7 +784,7 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     for source in (() if expected_input_schedule is not None else ('input_script', 'input_schedule')):
         if file_record(manifest[source]['path'])['sha256'] != manifest[source]['sha256']:
             raise ValueError(f'{run}: {source} changed after launch')
-    lag = manifest.get('lag_ms', 0)
+    lag = manifest.get('lag_ms', 0) if windowed else manifest['lag_ms']
     schedule = expected_input_schedule if expected_input_schedule is not None else json.loads(Path(manifest['input_schedule']['path']).read_text(encoding='utf-8'))
     expected_inputs = {(row['tick'], row['action'], row['held']) for row in schedule['probes']}
     actual_inputs = {(row['tick'], change['action'], change['held']) for row in inputs for change in row['changes']}
