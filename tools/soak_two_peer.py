@@ -95,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fullstate-every", type=int, default=0)
     parser.add_argument("--sample-seconds", type=float, default=60)
     parser.add_argument("--rematch", action="store_true", help="both peers ride the e2e rematch: when match 1 ends they return to the lobby and play match 2")
+    parser.add_argument("--end-round-tick", type=int, default=0, help="both peers end the round at this sim tick (team 0 wins), so a rematch starts while a seat may still be held")
+    parser.add_argument("--rematches", type=int, default=0, help="with --rematch: ride that many rematches in a row")
     parser.add_argument("--mute-input", default="", help="FRAME:COUNT - the client sends none of its own input for those frames while it keeps simulating them")
     parser.add_argument("--census-histogram", action="store_true", help="the census also walks the heap by block size (seconds per line)")
     parser.add_argument("--census-probe-size", type=int, default=0, help="print the first bytes of heap blocks of this size")
@@ -164,6 +166,10 @@ def main(argv: list[str] | None = None) -> int:
                     flags += ["-net-test-live-stall", f"{tick}:{options.stall_ms}"]
             if options.rematch:
                 flags += ["-net-match-e2e-rematch"]
+                if options.rematches > 1:
+                    flags += ["-net-match-e2e-rematches", str(options.rematches)]
+            if options.end_round_tick:
+                flags += ["-net-match-e2e-end-round-tick", str(options.end_round_tick)]
             env = {"CCCP_HEADLESS": "1"}
             if peer == "client" and options.mute_input:
                 env["CC_TEST_LOCKSTEP_MUTE_INPUT"] = options.mute_input
