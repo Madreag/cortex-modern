@@ -3134,6 +3134,7 @@ namespace RTE {
 		const uint8_t* data = nullptr;
 		NetLockstepReadyFrame decoded;
 		decoded.frame = frame;
+		decoded.localPeerId = m_Config.localPeerId;
 		if (!reader.ReadU8(departures) || departures > m_Config.peerCount || !reader.ReadBytes(data, departures))
 			return false;
 		decoded.departedPeerIds.assign(data, data + departures);
@@ -3881,6 +3882,8 @@ namespace RTE {
 					m_MigrationNeedsResync = true;
 				else {
 					m_Stats.nextFrame = ready.frame + 1;
+					// A frame the migration hands over is committed like any other: the boundary append and a returner's tail read it back.
+					RememberCommittedFrame(ready);
 					m_ReadyFrames.push_back(std::move(ready));
 				}
 			}

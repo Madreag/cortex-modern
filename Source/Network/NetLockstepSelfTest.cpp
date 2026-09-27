@@ -19872,6 +19872,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			         " with " + std::to_string(decoded.remoteCommands.size()) + " command(s); expected 1 1 1";
 			return false;
 		}
+		// The frame names the peer that committed it, so packing it for a returner keeps the order the live round applied.
+		if (decoded.localPeerId != 2) {
+			*error = "a-held-hosts-frame-crosses-a-migration: a migration frame read back naming committing peer " + std::to_string(decoded.localPeerId) + "; expected 2";
+			return false;
+		}
 		return true;
 	}
 
