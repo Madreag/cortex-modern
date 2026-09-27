@@ -493,7 +493,7 @@ static constexpr uint32_t c_CappedStopDrainMs = 8000;
 static constexpr uint32_t c_CappedStopLingerMs = 1500;
 static constexpr uint64_t c_NetMatchE2EEditorTickCap = 120; //!< A synchronized setup editor that has not finished by here is stuck, not slow.
 static constexpr uint64_t c_NetMatchE2EAdmissionWaitTicks = 1800; //!< How long past its cap a host waits for a seat still coming into the round.
-static uint64_t s_netMatchE2EOwedSampleFrame = 0; //!< The full-state sample frame the host owes a seat admitted late; 0 when none.
+static uint64_t s_netMatchE2EOwedSampleFrame = 0; //!< The full-state sample frame a round owes a seat admitted late; 0 when none.
 static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
@@ -6961,9 +6961,11 @@ void RunGameLoop() {
 					// The round never ends with a seat mid-admission and unsampled: the host waits for a seat still coming in,
 					// then for the first full-state sample after it, so the returner shares one with the round (bounded).
 					uint64_t tickCap = roundTicks;
-					if (s_netFullStateEvery > 0 && g_NetMatchService.IsHost() && ScenarioRunner::HasLockstepCoordinator()) {
+					if (s_netFullStateEvery > 0 && ScenarioRunner::HasLockstepCoordinator()) {
 						const uint64_t applied = ScenarioRunner::GetLockstepAppliedFrame();
-						if (completedTicks + s_netFullStateEvery >= roundTicks && g_NetMatchService.SeatMidAdmission(applied))
+						// The host sees the seat coming in; the seat sees its own catch-up. Both end on the same frame before its activation.
+						const bool comingIn = g_NetMatchService.IsHost() ? g_NetMatchService.SeatMidAdmission(applied) : ScenarioRunner::WorldCatchUpActive();
+						if (completedTicks + s_netFullStateEvery >= roundTicks && comingIn)
 							s_netMatchE2EOwedSampleFrame = (applied / s_netFullStateEvery + 1) * s_netFullStateEvery;
 						if (s_netMatchE2EOwedSampleFrame >= applied)
 							tickCap = std::min(roundTicks + c_NetMatchE2EAdmissionWaitTicks, std::max(roundTicks, completedTicks + (s_netMatchE2EOwedSampleFrame - applied) + 1));

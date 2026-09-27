@@ -96,8 +96,11 @@ def unsampled_admissions(verdict: dict, host_log: Path, client_log: Path) -> str
     if not sampled:
         return ""
     last = max(sampled)
-    held = [int(frame) for frame in SEAT_HELD.findall(host_log.read_text(encoding="utf-8", errors="replace")) if int(frame) > last]
-    admitted = [int(frame) for frame in SEAT_ADMITTED.findall(client_log.read_text(encoding="utf-8", errors="replace")) if int(frame) > last]
+    # A hold agreed for a frame past the round's last tick (the capped stop's drain) never touched the round.
+    ticks = [row["tick"] for row in read_live_hashes(host_log.parent.parent / "host-live.jsonl")]
+    end = max(ticks) if ticks else float("inf")
+    held = [int(frame) for frame in SEAT_HELD.findall(host_log.read_text(encoding="utf-8", errors="replace")) if last < int(frame) <= end]
+    admitted = [int(frame) for frame in SEAT_ADMITTED.findall(client_log.read_text(encoding="utf-8", errors="replace")) if last < int(frame) <= end]
     return f"a seat came in after the last shared sample {last}: held at {held}, admitted at {admitted}" if held or admitted else ""
 
 
