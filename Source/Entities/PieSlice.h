@@ -230,6 +230,7 @@ namespace RTE {
 	private:
 		/// Custom deleter for PieMenu to avoid include problems with unique_ptr.
 		struct PieMenuCustomDeleter {
+			bool owned = false; //!< Whether this slice made the sub-PieMenu as its own copy; one read from data is its DataModule's.
 			void operator()(PieMenu* pieMenu) const;
 		};
 

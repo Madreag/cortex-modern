@@ -73,6 +73,9 @@ namespace RTE {
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
+	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
+	bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
@@ -15304,6 +15307,79 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		bool TestReplayTrailersFollowTheirPackets(std::string* error) {
+			// A client's record: its own binding, the others', then the host's hold. Each command reads back from its own sender, in order.
+			NetGamePlayerBindings binding;
+			binding.players[0].active = true;
+			std::vector<NetGameCommand> commands{{2, binding}, {1, binding}, {3, binding}, {1, NetGameSeatHold{3, 0, 9, 1, 40}}};
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-trailer-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			std::error_code created;
+			std::filesystem::create_directories(directory, created);
+			const auto path = directory / "match.ccreplay";
+			struct Cleanup {
+				std::filesystem::path path;
+				~Cleanup() {
+					std::error_code ignored;
+					std::filesystem::remove(path, ignored);
+					std::filesystem::remove(path.parent_path(), ignored);
+				}
+			} cleanup{path};
+			NetMatchReplayWriter writer;
+			if (created || !writer.Open(path.string(), NetMatchConfigUtil::MakeDefault(0x5452414CULL), error) || !writer.WriteFrame(40, {MakeFrame(100, 1)}, commands, {}, {}, error)) {
+				if (error->empty()) *error = "replay-trailers-follow-their-packets: the record could not be written";
+				return false;
+			}
+			writer.Close();
+			NetMatchReplayReader reader;
+			NetLockstepFrame recorded;
+			bool eof = false;
+			if (!reader.Open(path.string(), error) || !reader.ReadFrame(recorded, eof, error)) {
+				*error = "replay-trailers-follow-their-packets: the record did not read back: " + *error;
+				return false;
+			}
+			std::string written, read;
+			for (const NetGameCommand& command: commands) written += std::to_string(command.senderPeerId) + (std::holds_alternative<NetGameSeatHold>(command.payload) ? "h" : "b");
+			for (const NetGameCommand& command: recorded.commands) read += std::to_string(command.senderPeerId) + (std::holds_alternative<NetGameSeatHold>(command.payload) ? "h" : "b");
+			if (read != written) {
+				*error = "replay-trailers-follow-their-packets: commands written as " + written + " read back as " + read;
+				return false;
+			}
+			return true;
+		}
+
+		bool TestAMergedTickOfManyControllersReplays(std::string* error) {
+			// Two senders of 300 controllers each make one legal tick of 600: the record keeps all of them and reads them back.
+			std::vector<ControllerFrame> frames;
+			for (int64_t actor = 1; actor <= 600; ++actor) frames.push_back(MakeFrame(actor, 1));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-merged-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			std::error_code created;
+			std::filesystem::create_directories(directory, created);
+			const auto path = directory / "match.ccreplay";
+			struct Cleanup {
+				std::filesystem::path path;
+				~Cleanup() {
+					std::error_code ignored;
+					std::filesystem::remove(path, ignored);
+					std::filesystem::remove(path.parent_path(), ignored);
+				}
+			} cleanup{path};
+			NetMatchReplayWriter writer;
+			std::string writeError;
+			const bool written = !created && writer.Open(path.string(), NetMatchConfigUtil::MakeDefault(0x4D455247ULL), &writeError) && writer.WriteFrame(41, frames, {}, {}, {}, &writeError);
+			writer.Close();
+			NetMatchReplayReader reader;
+			NetLockstepFrame recorded;
+			bool eof = false;
+			std::string readError;
+			const bool read = written && reader.Open(path.string(), &readError) && reader.ReadFrame(recorded, eof, &readError);
+			if (!read || recorded.frames.size() != frames.size()) {
+				*error = "a-merged-tick-of-many-controllers-replays: a tick of 600 controllers wrote " + std::to_string(written) + " (" + writeError + ") and read back " +
+				         std::to_string(recorded.frames.size()) + " (" + readError + ")";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestValueObservationNonOwnerDropped(std::string* error) {
 			LoopbackTransport hostTransport, clientTransport;
 			NetLockstepCoordinator host, client;
@@ -19869,6 +19945,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			         " with " + std::to_string(decoded.remoteCommands.size()) + " command(s); expected 1 1 1";
 			return false;
 		}
+		// The frame names the peer that committed it, so packing it for a returner keeps the order the live round applied.
+		if (decoded.localPeerId != 2) {
+			*error = "a-held-hosts-frame-crosses-a-migration: a migration frame read back naming committing peer " + std::to_string(decoded.localPeerId) + "; expected 2";
+			return false;
+		}
 		return true;
 	}
 
@@ -19882,6 +19963,78 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_HoldTransactions[3] = {3, 0, 8, 1, 160};
 		if (!read.contains(2) || read.at(2).cutoffFrame != 150 || read.contains(3)) {
 			*error = "a-held-map-read-keeps-no-live-reference: a read of the holds changed under the reader when the round's own changed";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestAHeldClientsHashIsNotTheRounds(std::string* error) {
+		// A client held at 3000 had already run 3000 on its own input: its hash there is its private simulation's, never the round's desync.
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A1E, 3, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.substituteSlowPeers = true;
+		host.m_Config = config;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_AiHeldSeats[2] = 3000;
+		host.m_LocalChecksums[3000] = {};
+		std::array<uint8_t, 32> own{};
+		own[0] = 1;
+		host.m_RemoteChecksums[3000][2] = own;
+		host.CompareChecksums(3000);
+		if (host.HasPendingRecoveryStop() || host.m_Stats.checksumMismatches != 0) {
+			*error = "a-held-clients-hash-is-not-the-rounds: the host stopped the round on the hash of a client held at that frame";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error) {
+		// A return before this round's first frame makes the seat a member from it, on the delay the round runs there.
+		NetLockstepCoordinator joiner;
+		auto config = MakeCoordinatorConfig(2, 1, 0x9A1D, 6, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 300;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		joiner.m_Config = config;
+		joiner.m_DelayChanges[3][280] = 12;
+		NetLockstepTiming reclaim;
+		reclaim.peerId = 3; reclaim.applyFrame = 250; reclaim.delayFrames = 6; reclaim.seatIncarnations[2] = 1;
+		joiner.TakeReturnBeforeFirstFrame(reclaim);
+		const auto admission = joiner.m_PeerAdmissions.find(3);
+		if (admission == joiner.m_PeerAdmissions.end() || admission->second.frame != 300 || admission->second.delay != 12) {
+			*error = "an-early-return-is-admitted-on-the-rounds-delay: the seat returned at 250 was admitted at 300 on delay " +
+			         std::to_string(admission == joiner.m_PeerAdmissions.end() ? 0 : admission->second.delay) + "; the round runs delay 12 there";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error) {
+		// A capture announced at 600 excuses the host only once its simulation completed 600; a host stalled at 594 is late.
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A1B, 6, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 36;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1B);
+		config.matchConfig.successorOrder = {3, 2};
+		if (!wire.StartHost(48896, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RoundId = 36;
+		host.m_RemotePeerIds = {2, 3};
+		host.m_PeersPlayedThisRound = {1, 2, 3};
+		for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 7;
+		host.m_AnnouncedCaptureEvery = 600;
+		host.m_Stats.nextFrame = 601;
+		host.m_LastQueuedTargetFrame = 600;
+		host.m_LastCompletedSimulationTick = 594;
+		host.m_RemoteFrames[601][2] = {};
+		host.m_RemoteFrames[601][3] = {};
+		if (host.JudgeOwnSeat(601, 1000) || !host.JudgeOwnSeat(601, 1051)) {
+			*error = "a-capture-not-yet-begun-excuses-no-stall: a host stalled at 594 before the capture at 600 was not held past the bound";
 			return false;
 		}
 		return true;
@@ -20800,6 +20953,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
+		    !TestACaptureNotYetBegunExcusesNoStall(&error) ||
+		    !TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(&error) ||
+		    !TestAHeldClientsHashIsNotTheRounds(&error) ||
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
 		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
 		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||
@@ -20960,6 +21116,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestValueObservationRelay(&error) ||
 		    !TestValueObservationReplay(&error) ||
 		    !TestReplayPlayerBindings(&error) ||
+		    !TestReplayTrailersFollowTheirPackets(&error) ||
+		    !TestAMergedTickOfManyControllersReplays(&error) ||
 		    !TestValueObservationNonOwnerDropped(&error) ||
 		    !TestValueObservationOverflowCarry(&error) ||
 		    !TestStaleRoundFrameStillCountsAsTraffic(&error) ||

@@ -73,6 +73,18 @@ namespace RTE {
 			return parsed.ec == std::errc{} && parsed.ptr == end ? std::optional<uint64_t>(frame) : std::nullopt;
 		}
 
+		/// A "first:count" frame range from the environment; nullopt when unset or malformed.
+		std::optional<std::pair<uint64_t, uint64_t>> TestRangeFromEnvironment(const char* name) {
+			const char* text = std::getenv(name);
+			if (!text) return std::nullopt;
+			const char* end = text + std::strlen(text);
+			uint64_t first = 0, count = 0;
+			const auto head = std::from_chars(text, end, first);
+			if (head.ec != std::errc{} || head.ptr == end || *head.ptr != ':') return std::nullopt;
+			const auto tail = std::from_chars(head.ptr + 1, end, count);
+			return tail.ec == std::errc{} && tail.ptr == end && count > 0 ? std::optional(std::pair(first, count)) : std::nullopt;
+		}
+
 		template <class... T>
 		struct Overloaded : T... {
 			using T::operator()...;
@@ -438,7 +450,8 @@ namespace RTE {
 
 		/// One sender's frames name each actor once; a committed tick merges every sender's, so two for one actor stand in sender order there.
 		bool ValidateSortedFrames(const std::vector<ControllerFrame>& frames, NetLockstepError* error, bool mergedSenders = false) {
-			if (frames.size() > NetLockstepCodec::c_MaxFramesPerPacket) {
+			// A merged tick carries every sender's packet, each within its own bound.
+			if (frames.size() > NetLockstepCodec::c_MaxFramesPerPacket * (mergedSenders ? NetLockstepCodec::c_MaxPeerCount : 1)) {
 				SetError(error, NetLockstepErrorCode::PayloadTooLarge, 0, "frame packet has too many ControllerFrames");
 				return false;
 			}
@@ -3122,6 +3135,7 @@ namespace RTE {
 		const uint8_t* data = nullptr;
 		NetLockstepReadyFrame decoded;
 		decoded.frame = frame;
+		decoded.localPeerId = m_Config.localPeerId;
 		if (!reader.ReadU8(departures) || departures > m_Config.peerCount || !reader.ReadBytes(data, departures))
 			return false;
 		decoded.departedPeerIds.assign(data, data + departures);
@@ -3869,6 +3883,8 @@ namespace RTE {
 					m_MigrationNeedsResync = true;
 				else {
 					m_Stats.nextFrame = ready.frame + 1;
+					// A frame the migration hands over is committed like any other: the boundary append and a returner's tail read it back.
+					RememberCommittedFrame(ready);
 					m_ReadyFrames.push_back(std::move(ready));
 				}
 			}
@@ -4777,8 +4793,9 @@ namespace RTE {
 		// A round joined from a replayed tail commits nothing until the seats that tail changed after its seat state was read are taken.
 		m_AwaitingReplayedSeatState = m_Config.joinsRunningRound && m_Config.seatStateThroughFrame != 0;
 		// A seat taken back before our first frame is a member from it: the start the host hands out for it names that frame.
+		// Its delay is the one the round runs at that frame, delay changes included, which is what the seat's own start carries.
 		for (const auto& [peer, reclaim]: m_ReclaimTransactions)
-			m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
+			m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, InputDelayAt(peer, m_Config.startFrame)} :
 			    PeerAdmission{reclaim.activationFrame, reclaim.delayFrames};
 		// Our own return produces on the delay the host admitted it on, whatever the config this round started from last heard.
 		if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId); own != m_ReclaimTransactions.end() && own->second.activationFrame >= m_Config.startFrame &&
@@ -6109,7 +6126,7 @@ namespace RTE {
 		NoteSeatTransition(peer, reclaim.applyFrame, SeatTransition::Back);
 		m_Config.peerIncarnations[peer] = reclaim.seatIncarnations[peer - 1];
 		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
-		m_PeerAdmissions[peer] = reclaim.applyFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
+		m_PeerAdmissions[peer] = reclaim.applyFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, InputDelayAt(peer, m_Config.startFrame)} :
 		    PeerAdmission{reclaim.applyFrame, reclaim.delayFrames};
 		// The seat state this round started from may still hold the seat; the return ends that hold here, as the frame that
 		// carried it did on every peer that simulated it, or our first frame would hand the returned seat to the AI again.
@@ -6641,9 +6658,16 @@ namespace RTE {
 			ApplyObservationEpoch(m_Config.localPeerId, packet.targetFrame);
 			AttachFrameWindow(packet);
 		}
+		// A test peer silent on the wire while it keeps simulating: its host holds a frame this peer already ran.
+		static const auto muteInput = TestRangeFromEnvironment("CC_TEST_LOCKSTEP_MUTE_INPUT");
+		const bool muted = !recovery && muteInput && targetFrame >= muteInput->first && targetFrame - muteInput->first < muteInput->second;
+		if (muted) {
+			std::cout << "[lockstep-test] muted own input target=" << targetFrame << std::endl;
+			packet.priorWindow.clear();
+		}
 		if (recovery) {
 			if (!QueueRecoveredInput(packet, error)) return false;
-		} else if (!SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded, 0, &valueObservationsEncoded, &ObservationBlocksOf(m_Config.localPeerId, targetFrame))) {
+		} else if (!muted && !SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded, 0, &valueObservationsEncoded, &ObservationBlocksOf(m_Config.localPeerId, targetFrame))) {
 			if (packet.priorWindow.empty()) {
 				return false;
 			}
@@ -7496,6 +7520,9 @@ namespace RTE {
 		// A desync on ANY peer aborts, naming it; only verify (and prune) once every REQUIRED remote
 		// agrees. A cleanly-left peer's last hashes still compare, but nobody waits on it.
 		for (const auto& [peerId, hash]: remoteIt->second) {
+			// A client held at this frame may have run it on its own input, off the round: its hash is its private simulation's until it
+			// returns. A held host still simulates the round.
+			if (peerId != GetHostPeerId() && IsSeatUnderAI(peerId, frame)) continue;
 			++m_Stats.checksumCompares;
 			if (localIt->second != hash) {
 				++m_Stats.checksumMismatches;
@@ -8582,9 +8609,9 @@ namespace RTE {
 		const uint64_t excusedThrough = back != m_ReclaimTransactions.end()
 			? std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames)
 			: EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks);
-		// An announced capture excuses the ticks after it only while its tick is still the last this simulation completed.
+		// An announced capture excuses the ticks after it only while its tick is the last this simulation completed: one not yet begun excuses nothing.
 		const auto capture = AnnouncedCaptureCovering(frame);
-		const bool capturing = capture && (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick <= *capture);
+		const bool capturing = capture && m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick == *capture;
 		// A park every peer is in and a pending timing decision excuse its ticks exactly as they excuse a client's.
 		if (frame <= excusedThrough || IsSynchronizedCapturePark(frame) || m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || capturing) {
 			m_OwnMissingFrame.reset();
@@ -10813,6 +10840,21 @@ namespace RTE {
 			if (localIt == m_LocalFrames.end() && (m_Playback || (m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) &&
 			    !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame) && !IsSeatUnderAI(m_Config.localPeerId, m_Stats.nextFrame)))) {
 				if (!m_Playback && JudgeOwnSeat(m_Stats.nextFrame, nowMs)) continue;
+				// The host judges its own seat only once every other seat's input is in, so a seat missing beside it is judged first, on its
+				// own clock - once a survivor's input is in and it is the one waiting.
+				if (!m_Playback && UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
+					const auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);
+					std::vector<uint8_t> missing;
+					bool survivorWaits = false;
+					for (uint8_t peer: m_RemotePeerIds) {
+						if (!IsRemoteRequiredForFrame(peer, m_Stats.nextFrame)) continue;
+						if (remoteIt == m_RemoteFrames.end() || !remoteIt->second.contains(peer)) missing.push_back(peer); else survivorWaits = true;
+					}
+					if (!missing.empty() && survivorWaits) {
+						if (m_FirstMissingFrame != m_Stats.nextFrame) { m_FirstMissingFrame = m_Stats.nextFrame; m_FirstMissingMs = nowMs; }
+						if (DeclareOverdueInputs(m_Stats.nextFrame, nowMs, m_FirstMissingMs, missing)) continue;
+					}
+				}
 				m_AdvanceBlock = "own-input";
 				break;
 			}
@@ -11058,6 +11100,48 @@ namespace RTE {
 			std::string ignored;
 			(void)SendPacket({stop}, NetTransportLane::ControlReliable, &ignored);
 		}
+	}
+
+	namespace {
+		template <typename T> size_t CensusCount(const T& records) { return records.size(); }
+		template <typename K, typename V> size_t CensusCount(const std::map<K, std::map<uint64_t, V>>& records) {
+			size_t count = 0;
+			for (const auto& [key, inner]: records) count += inner.size();
+			return count;
+		}
+		template <typename K, typename V> size_t CensusCount(const std::map<K, std::deque<V>>& records) {
+			size_t count = 0;
+			for (const auto& [key, inner]: records) count += inner.size();
+			return count;
+		}
+		template <typename K, typename V> size_t CensusCount(const std::map<uint64_t, std::map<K, V>>& records) {
+			size_t count = 0;
+			for (const auto& [frame, inner]: records) count += inner.size();
+			return count;
+		}
+		size_t CensusCount(const std::map<uint8_t, std::set<uint64_t>>& records) {
+			size_t count = 0;
+			for (const auto& [key, inner]: records) count += inner.size();
+			return count;
+		}
+	} // namespace
+
+	std::string NetLockstepCoordinator::MemoryCensus() const {
+		NET_PLANE_CHECK();
+		std::ostringstream line;
+#define CENSUS(member) line << ' ' << (#member + 2) << '=' << CensusCount(member)
+		CENSUS(m_TimingDecisions); CENSUS(m_DelayChanges); CENSUS(m_DeferredControllerFrames); CENSUS(m_SeatTransitions);
+		CENSUS(m_CommittedAtMs); CENSUS(m_DecisionCommittedAtMs); CENSUS(m_ParkCarriedCommands); CENSUS(m_AnnouncedCaptureTicks);
+		CENSUS(m_LocalFrames); CENSUS(m_RemoteFrames); CENSUS(m_LocalCommands); CENSUS(m_RemoteCommands);
+		CENSUS(m_LocalObservations); CENSUS(m_RemoteObservations); CENSUS(m_LocalValueObservations); CENSUS(m_RemoteValueObservations);
+		CENSUS(m_ResendFrames); CENSUS(m_RecoveryOutgoing); CENSUS(m_LocalInputHistory); CENSUS(m_LocalChecksums); CENSUS(m_RemoteChecksums);
+		CENSUS(m_ReadyFrames); CENSUS(m_ReadyHistory); CENSUS(m_RelayedTicks); CENSUS(m_RelayedTickFrames); CENSUS(m_RelayBacklog);
+		CENSUS(m_ObservationEpochs); CENSUS(m_HostAcceptedLocalFrames); CENSUS(m_MigrationHistory); CENSUS(m_MigrationIncoming);
+		CENSUS(m_PreStartFrames); CENSUS(m_ArrivalLeads); CENSUS(m_ArrivalLateness); CENSUS(m_TimingOutgoing); CENSUS(m_AuthorityGaps);
+		CENSUS(m_ParkCaptureHistoryMs); CENSUS(m_DropReasonsNamed); CENSUS(m_PlaneDeferredEvents); CENSUS(m_InstalledResyncTargets);
+		CENSUS(m_ResyncPrimeInputs); CENSUS(m_RetiredReclaimGaps); CENSUS(m_PreStartTiming);
+#undef CENSUS
+		return line.str();
 	}
 
 } // namespace RTE

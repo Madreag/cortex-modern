@@ -1720,6 +1720,15 @@ void AudioMan::StopAll() {
 	ClearPendingAudioArchives();
 }
 
+std::string AudioMan::Census() const {
+	size_t audibility = 0;
+	for (const auto& [key, peers]: m_CommittedAudibility) audibility += peers.size();
+	return "voices=" + std::to_string(m_PlayingVoices.size()) + " backend_voices=" + std::to_string(m_BackendVoiceIdentities.size()) +
+	       " logical_sounds=" + std::to_string(m_ActiveLogicalSounds.size()) + " live_containers=" + std::to_string(m_LiveCheckpointSoundContainers.size()) +
+	       " pending_ops=" + std::to_string(m_PendingSoundOpContainers.size()) + " committed_audibility=" + std::to_string(m_CommittedAudibility.size()) + "/" + std::to_string(audibility) +
+	       " sent_audibility=" + std::to_string(m_LastSentAudibility.size()) + " restored_identities=" + std::to_string(m_RestoredManagerIdentities.size());
+}
+
 void AudioMan::PauseIngameSounds(bool pause) {
 	if (m_AudioEnabled && !s_PlaybackSuppressed) m_SFXChannelGroup->setPaused(pause);
 }

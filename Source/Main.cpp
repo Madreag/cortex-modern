@@ -73,6 +73,7 @@
 #include "ThreadMan.h"
 #include "LuaMan.h"
 #include "MusicMan.h"
+#include "Atom.h"
 #include "AudioMan.h"
 #include "SoundContainer.h"
 #include "SoundSimulation.h"
@@ -144,6 +145,8 @@
 #ifdef _WIN32
 #include "windows.h"
 #include <crtdbg.h>
+#include <psapi.h>
+#include <tlhelp32.h>
 #endif
 
 #include <algorithm>
@@ -194,6 +197,96 @@ using namespace RTE;
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
 static std::string s_netLiveTickHashPath;
+static uint64_t s_memoryCensusTicks = 0; //!< Every this many ticks one line names what each record holds; 0 = never.
+static bool s_memoryCensusHistogram = false; //!< The census also walks the process heap and names the block sizes holding the most.
+static size_t s_memoryCensusProbeSize = 0; //!< Blocks of this size have their first bytes printed, so a leaked object can be named.
+
+// Private bytes, and what the process heaps hold allocated and committed, for the memory census.
+static std::string ProcessHeapCensus() {
+#ifdef _WIN32
+	PROCESS_MEMORY_COUNTERS_EX counters{};
+	K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters));
+	HANDLE heaps[256];
+	const DWORD count = std::min<DWORD>(GetProcessHeaps(256, heaps), 256);
+	unsigned long long allocated = 0, committed = 0;
+	for (DWORD index = 0; index < count; ++index) {
+		HEAP_SUMMARY summary{};
+		summary.cb = sizeof(summary);
+		if (HeapSummary(heaps[index], 0, &summary)) {
+			allocated += summary.cbAllocated;
+			committed += summary.cbCommitted;
+		}
+	}
+	DWORD handles = 0;
+	GetProcessHandleCount(GetCurrentProcess(), &handles);
+	size_t threads = 0;
+	if (HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); snapshot != INVALID_HANDLE_VALUE) {
+		THREADENTRY32 entry{};
+		entry.dwSize = sizeof(entry);
+		for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
+			if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++threads;
+		}
+		CloseHandle(snapshot);
+	}
+	std::string histogram;
+	if (s_memoryCensusHistogram) {
+		// Busy blocks by exact size below 64 KB, larger ones by power of two; the walk allocates nothing while the heap is locked.
+		static std::vector<uint64_t> small(65536), large(64);
+		std::fill(small.begin(), small.end(), 0);
+		std::fill(large.begin(), large.end(), 0);
+		HANDLE heap = GetProcessHeap();
+		PROCESS_HEAP_ENTRY walk{};
+		std::array<std::array<uint8_t, 64>, 4> probes{};
+		size_t probed = 0;
+		HeapLock(heap);
+		while (HeapWalk(heap, &walk)) {
+			if (!(walk.wFlags & PROCESS_HEAP_ENTRY_BUSY)) continue;
+			if (walk.cbData < small.size()) ++small[walk.cbData]; else ++large[std::bit_width(static_cast<uint64_t>(walk.cbData))];
+			if (s_memoryCensusProbeSize != 0 && walk.cbData == s_memoryCensusProbeSize && walk.cbData >= 64 && small[walk.cbData] % 997 == 1) {
+				std::memcpy(probes[probed % probes.size()].data(), walk.lpData, 64);
+				++probed;
+			}
+		}
+		HeapUnlock(heap);
+		const uintptr_t imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+		for (size_t index = 0; index < std::min(probed, probes.size()); ++index) {
+			std::string text = " probe" + std::to_string(index) + "=";
+			for (size_t word = 0; word < 64; word += 8) {
+				uint64_t value = 0;
+				std::memcpy(&value, probes[index].data() + word, 8);
+				text += value >= imageBase && value < imageBase + 0x3000000 ? std::format("exe+0x{:X}|", value - imageBase) : std::format("{:X}|", value);
+			}
+			for (uint8_t byte: probes[index]) text += byte >= 0x21 && byte < 0x7F ? static_cast<char>(byte) : '.';
+			histogram += text;
+		}
+		std::vector<std::pair<uint64_t, std::string>> top;
+		for (size_t size = 0; size < small.size(); ++size) if (small[size]) top.emplace_back(small[size] * size, std::to_string(size) + ":" + std::to_string(small[size]));
+		for (size_t bit = 0; bit < large.size(); ++bit) if (large[bit]) top.emplace_back(large[bit] << bit, "2^" + std::to_string(bit) + ":" + std::to_string(large[bit]));
+		std::partial_sort(top.begin(), top.begin() + std::min<size_t>(top.size(), 12), top.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+		// The sizes whose busy blocks grew most since the last census line, by the bytes they added.
+		static std::vector<uint64_t> lastSmall(65536), lastLarge(64);
+		std::vector<std::pair<int64_t, std::string>> grew;
+		for (size_t size = 0; size < small.size(); ++size) {
+			const int64_t added = static_cast<int64_t>(small[size]) - static_cast<int64_t>(lastSmall[size]);
+			if (added > 0) grew.emplace_back(added * static_cast<int64_t>(size), std::to_string(size) + ":+" + std::to_string(added));
+		}
+		for (size_t bit = 0; bit < large.size(); ++bit) {
+			const int64_t added = static_cast<int64_t>(large[bit]) - static_cast<int64_t>(lastLarge[bit]);
+			if (added > 0) grew.emplace_back(added << bit, "2^" + std::to_string(bit) + ":+" + std::to_string(added));
+		}
+		lastSmall = small;
+		lastLarge = large;
+		std::partial_sort(grew.begin(), grew.begin() + std::min<size_t>(grew.size(), 10), grew.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+		histogram += " heap_grew=";
+		for (size_t index = 0; index < std::min<size_t>(grew.size(), 10); ++index) histogram += (index ? "," : "") + grew[index].second;
+		histogram += " heap_top=";
+		for (size_t index = 0; index < std::min<size_t>(top.size(), 12); ++index) histogram += (index ? "," : "") + top[index].second;
+	}
+	return std::format(" private_mb={} heaps={} heap_allocated_mb={} heap_committed_mb={} threads={} handles={}{}", counters.PrivateUsage >> 20, count, allocated >> 20, committed >> 20, threads, handles, histogram);
+#else
+	return {};
+#endif
+}
 // Test lever: every N committed lockstep ticks each peer hashes its whole capture; 0 is off.
 static uint32_t s_netFullStateEvery = 0;
 static std::string s_netFullStateDump;
@@ -882,6 +975,29 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_recordTickHashes = true;
 			// Deterministic runs drain async path solves each frame so they can't race the node-cost rewrite.
 			g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
+		}
+		if (currentArg == "-memory-census-probe-size") {
+			if (lastArg) return false;
+			s_memoryCensusProbeSize = std::strtoull(argValue[i + 1], nullptr, 10);
+			s_memoryCensusHistogram = true;
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-memory-census-atom-stacks") {
+			Atom::SampleConstructionStacks(2000);
+			++i;
+			continue;
+		}
+		if (currentArg == "-memory-census-histogram") {
+			s_memoryCensusHistogram = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-memory-census-ticks") {
+			if (lastArg) return false;
+			s_memoryCensusTicks = std::strtoull(argValue[i + 1], nullptr, 10);
+			i += 2;
+			continue;
 		}
 		if (currentArg == "-net-live-tick-hashes") {
 			if (lastArg) return false;
@@ -4585,12 +4701,12 @@ static bool RunHarnessCaptureSelfTest() {
 		    "MetricsCollector:BeginRun(\"ScriptOwnedRun\", 0); MetricsCollector:EndRun();");
 		const MetricsCollector::AggregatedRun joined = g_MetricsCollector.GetCurrentRun();
 		const auto named = joined.stringValues.find("scenario");
-		scriptJoinsTheHostRun = scriptError == 0 && armed == 1 && joined.tickHashes.size() == 1 &&
+		scriptJoinsTheHostRun = scriptError == 0 && armed == 1 && joined.tickHashCount == 1 &&
 		                        g_MetricsCollector.IsRecordingTickHashes() && joined.scenario == "HostOwnedRun" &&
 		                        named != joined.stringValues.end() && named->second == "ScriptOwnedRun";
 		{
 			std::ostringstream line;
-			line << "[harness-order] metrics armed=" << armed << " after_script=" << joined.tickHashes.size()
+			line << "[harness-order] metrics armed=" << armed << " after_script=" << joined.tickHashCount
 			     << " recording=" << g_MetricsCollector.IsRecordingTickHashes() << " run=" << joined.scenario
 			     << " script=" << (named != joined.stringValues.end() ? named->second : std::string("-"));
 			System::PrintDiagnosticLine(line.str());
@@ -6082,6 +6198,13 @@ void RunGameLoop() {
 				NetLockstepPlane::Window collectionWindow("tick-end collection wait");
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
+			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) {
+				std::ostringstream line;
+				line << "[mem-census] tick=" << simTick << ProcessHeapCensus() << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << g_LuaMan.GetTotalHeapBytes()
+				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << CheckpointCow::Get().Cache().Census()
+				     << " movable: " << g_MovableMan.Census() << ' ' << Atom::SampledConstructionStacks() << " audio: " << g_AudioMan.Census() << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus();
+				System::PrintDiagnosticLine(line.str());
+			}
 			if (s_scriptedLeaveDue) {
 				s_scriptedLeaveDue = false;
 				{
@@ -6748,7 +6871,8 @@ void RunGameLoop() {
 						break;
 					}
 					g_NetMatchService.SetReady();
-					if (s_netHost || s_netDedicated) {
+					// The peer that hosts the match now asks for the next one: after a migration that is the successor.
+					if (g_NetMatchService.IsHost() || s_netDedicated) {
 						g_NetMatchService.RequestStart();
 					}
 					std::string rematchPreset;
@@ -8055,6 +8179,12 @@ int RunNetMatchServiceE2E() {
 			g_MetricsCollector.SetNativeOutcome(s_netMatchServiceE2EExitCode == 0,
 			                                   s_netMatchServiceE2EExitCode == 0 ? "the match ran to its end" : "exit code " + std::to_string(s_netMatchServiceE2EExitCode) + (setupError.empty() ? "" : ": " + setupError),
 			                                   static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+			// A round no scenario judges (a dedicated world) carries its own verdict: how it ended and the ticks it played.
+			if (!g_MetricsCollector.HasResult()) {
+				g_MetricsCollector.SetResult(s_netMatchServiceE2EExitCode == 0);
+				g_MetricsCollector.RecordString("verdict_source", "round");
+			}
+			if (!g_MetricsCollector.HasNumeric("final_tick")) g_MetricsCollector.Record("final_tick", static_cast<double>(g_TimerMan.GetSimUpdateCount()));
 			g_MetricsCollector.EndRun();
 			const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 			if (!g_MetricsCollector.WriteReport(tracePath)) {

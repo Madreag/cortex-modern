@@ -885,6 +885,8 @@ namespace RTE {
 
 		/// Collects every state fully so a checkpoint captures a settled object graph.
 		void CollectGarbageForCheckpoint();
+		/// The heap every Lua state holds, live and uncollected, in bytes.
+		long long GetTotalHeapBytes();
 
 		/// Every script-owned MovableObject the script graph will capture, every state.
 		void VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit);

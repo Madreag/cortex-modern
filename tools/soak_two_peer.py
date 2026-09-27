@@ -67,6 +67,21 @@ def count(path: Path, needle: str, also: str = "") -> int:
     return sum(line.startswith(needle) and also in line for line in text.splitlines())
 
 
+def census_growth(log: Path, settled_tick: int) -> dict | None:
+    """The engine's [mem-census] lines: the first at or past the settled tick, the last, and every record that grew between them."""
+    rows = []
+    if log.is_file():
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("[mem-census] "):
+                rows.append({key: int(value) for key, _, value in (token.partition("=") for token in line.split()[1:]) if value.lstrip("-").isdigit()})
+    first = next((row for row in rows if row.get("tick", 0) >= settled_tick), None)
+    if not rows or not first:
+        return None
+    last = rows[-1]
+    return {"lines": len(rows), "first_tick": first.get("tick"), "last_tick": last.get("tick"),
+            "grew": {key: [first[key], last[key]] for key in last if key != "tick" and key in first and last[key] > first[key]}}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -76,11 +91,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--holds", type=int, default=3)
     parser.add_argument("--stall-ms", type=int, default=1500)
     parser.add_argument("--port", type=int, default=PORT_LO)
+    parser.add_argument("--port-block", default=f"{PORT_LO}-{PORT_HI}", help="the calling lane's own port block, LO-HI; --port stays inside it")
     parser.add_argument("--fullstate-every", type=int, default=0)
     parser.add_argument("--sample-seconds", type=float, default=60)
+    parser.add_argument("--mute-input", default="", help="FRAME:COUNT - the client sends none of its own input for those frames while it keeps simulating them")
+    parser.add_argument("--census-histogram", action="store_true", help="the census also walks the heap by block size (seconds per line)")
+    parser.add_argument("--census-probe-size", type=int, default=0, help="print the first bytes of heap blocks of this size")
+    parser.add_argument("--census-atom-stacks", action="store_true", help="the census samples where Atoms are constructed")
+    parser.add_argument("--census-ticks", type=int, default=3600, help="ticks between the engine's memory census lines; 0 = none")
     options = parser.parse_args(argv)
-    if not PORT_LO <= options.port <= PORT_HI:
-        parser.error(f"this driver owns ports {PORT_LO}-{PORT_HI}")
+    low, _, high = options.port_block.partition("-")
+    if not (low.isdigit() and high.isdigit() and int(low) <= options.port <= int(high) - 4):
+        parser.error(f"--port leaves room for the peers' ports inside the block {options.port_block}")
     if options.minutes <= 0 or options.holds < 0 or not 0 < options.stall_ms <= 20000 or options.fullstate_every < 0:
         parser.error("--minutes > 0, --holds >= 0, --stall-ms in 1..20000, --fullstate-every >= 0")
     if not 60 <= options.autosave_seconds <= 3600:
@@ -125,13 +147,24 @@ def main(argv: list[str] | None = None) -> int:
                      "-net-match-report", str(root / f"{peer}_report.json")]
             if options.fullstate_every:
                 flags += ["-net-fullstate-hash-every", str(options.fullstate_every)]
+            if options.census_ticks:
+                flags += ["-memory-census-ticks", str(options.census_ticks)]
+            if options.census_histogram:
+                flags += ["-memory-census-histogram"]
+            if options.census_atom_stacks:
+                flags += ["-memory-census-atom-stacks"]
+            if options.census_probe_size:
+                flags += ["-memory-census-probe-size", str(options.census_probe_size)]
             if peer == "host":
                 flags += ["-net-host", "-net-autosave-seconds", str(options.autosave_seconds)]
             else:
                 flags += ["-net-join", "127.0.0.1"]
                 for tick in stalls:
                     flags += ["-net-test-live-stall", f"{tick}:{options.stall_ms}"]
-            run = make_run(repo, flags, root / peer, timeout=options.minutes * 60 + 600, env={"CCCP_HEADLESS": "1"})
+            env = {"CCCP_HEADLESS": "1"}
+            if peer == "client" and options.mute_input:
+                env["CC_TEST_LOCKSTEP_MUTE_INPUT"] = options.mute_input
+            run = make_run(repo, flags, root / peer, timeout=options.minutes * 60 + 600, env=env)
             runs[peer] = run
             private_settings(run, 60)
             stage_baseline(run, ticks, 2)
@@ -175,10 +208,17 @@ def main(argv: list[str] | None = None) -> int:
     growth = {peer: {"first": first[peer]["working_set"], "last": last[peer]["working_set"],
                      "peak": max(row[peer]["working_set"] for row in samples if row.get(peer))}
               for peer in ("host", "client")} if first and last else None
+    # Growth is read from minute 10, past the match's warm-up, to the last sample; the census names the records behind it.
+    settled = next((row for row in samples if row.get("host") and row.get("client") and row["elapsed_s"] >= 600), None)
+    from_minute_10 = {peer: {"minute_10": settled[peer]["working_set"], "last": last[peer]["working_set"],
+                             "percent": round(100.0 * (last[peer]["working_set"] - settled[peer]["working_set"]) / settled[peer]["working_set"], 1)}
+                      for peer in ("host", "client")} if settled and last and settled is not last else None
+    census = {peer: census_growth(root / peer / "stdout.log", TICKS_PER_SECOND * 600) for peer in ("host", "client")}
     result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
               "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
               "autosaves_published": autosaves, "autosaves_owed": owed,
               "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
+              "memory_from_minute_10": from_minute_10, "census": census,
               "plan": plan}
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "
