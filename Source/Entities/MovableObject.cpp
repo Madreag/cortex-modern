@@ -1052,14 +1052,14 @@ int MovableObject::Save(Writer& writer) const {
 	writer.NewProperty("SimUpdatesBetweenScriptedUpdates");
 	writer << m_SimUpdatesBetweenScriptedUpdates;
 
-	for (const auto& [key, value]: m_NumberValueMap) {
+	for (const auto* entry: EntriesByKey(m_NumberValueMap)) {
 		writer.ObjectStart("AddCustomValue = NumberValue");
-		writer.NewPropertyWithValue(key, value);
+		writer.NewPropertyWithValue(entry->first, entry->second);
 	}
 
-	for (const auto& [key, value]: m_StringValueMap) {
+	for (const auto* entry: EntriesByKey(m_StringValueMap)) {
 		writer.ObjectStart("AddCustomValue = StringValue");
-		writer.NewPropertyWithValue(key, value);
+		writer.NewPropertyWithValue(entry->first, entry->second);
 	}
 
 	writer.NewProperty("ForceIntoMasterLuaState");

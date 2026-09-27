@@ -1954,17 +1954,17 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			}
 		}
 
-		for (auto& [key, value]: mosRotatingToSave->GetStringValueMap()) {
+		for (const auto* entry: MovableObject::EntriesByKey(mosRotatingToSave->GetStringValueMap())) {
 			writer.NewProperty("AddCustomValue");
 			writer.ObjectStart("StringValue");
-			writer.NewPropertyWithValue(key, value);
+			writer.NewPropertyWithValue(entry->first, entry->second);
 			writer.ObjectEnd();
 		}
 
-		for (auto& [key, value]: mosRotatingToSave->GetNumberValueMap()) {
+		for (const auto* entry: MovableObject::EntriesByKey(mosRotatingToSave->GetNumberValueMap())) {
 			writer.NewProperty("AddCustomValue");
 			writer.ObjectStart("NumberValue");
-			writer.NewPropertyWithValue(key, value);
+			writer.NewPropertyWithValue(entry->first, entry->second);
 			writer.ObjectEnd();
 		}
 	}
