@@ -2293,6 +2293,8 @@ static bool MenuScriptFileExists(const std::string& pattern) {
 
 static void FinishMenuTickHashes() {
 	if (!s_menuHashCapture) return;
+	g_MetricsCollector.SetNativeOutcome(!s_menuScriptFailed, s_menuScriptFailed ? "the menu script failed" : "the menu recording finished",
+	                                   static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 	g_MetricsCollector.EndRun();
 	const bool saved = g_MetricsCollector.WriteReport(ScenarioRunner::GetArgs().outPath);
 	s_recordTickHashes = false;
@@ -7745,6 +7747,8 @@ int RunNetReplayPlayback() {
 			g_MetricsCollector.RecordString("controller_replay_error", "");
 		}
 		g_MetricsCollector.SetResult(s_netReplayExitCode == 0);
+		g_MetricsCollector.SetNativeOutcome(s_netReplayExitCode == 0, std::string("replay ") + ScenarioRunner::ReplayOutcomeName(finalOutcome) + ", exit code " + std::to_string(s_netReplayExitCode),
+		                                   ScenarioRunner::GetLockstepReplayLastTick());
 		g_MetricsCollector.EndRun();
 		const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 		if (!g_MetricsCollector.WriteReport(tracePath)) {
@@ -8047,6 +8051,10 @@ int RunNetMatchServiceE2E() {
 			s_netMatchServiceE2EExitCode = s_netReplayExitCode;
 		}
 		if (traceRun) {
+			// The match's own ending, once the pending work settled and the exit codes combined.
+			g_MetricsCollector.SetNativeOutcome(s_netMatchServiceE2EExitCode == 0,
+			                                   s_netMatchServiceE2EExitCode == 0 ? "the match ran to its end" : "exit code " + std::to_string(s_netMatchServiceE2EExitCode) + (setupError.empty() ? "" : ": " + setupError),
+			                                   static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 			g_MetricsCollector.EndRun();
 			const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 			if (!g_MetricsCollector.WriteReport(tracePath)) {
@@ -9276,6 +9284,9 @@ int main(int argc, char** argv) {
 					g_MetricsCollector.SetResult(false);
 					scenarioExitCode = 1;
 				}
+				g_MetricsCollector.SetNativeOutcome(scenarioExitCode == 0,
+				                                   scenarioExitCode == 0 ? "the menu round ran to its cap" : "exit code " + std::to_string(scenarioExitCode) + (s_menuMpTraceError.empty() ? "" : ": " + s_menuMpTraceError),
+				                                   static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 				const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 				if (g_MetricsCollector.WriteReport(tracePath)) {
 					{

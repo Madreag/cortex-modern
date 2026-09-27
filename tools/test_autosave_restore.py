@@ -51,7 +51,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from compare_sim_traces import compare_fullstate
+from compare_sim_traces import compare_fullstate, load_fullstate
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, read_live_hashes, split_passes
 from run_sim_test import make_run, engine_executable, file_sha256
 from feel_measure import stage_baseline
@@ -99,28 +99,81 @@ def fullstate_pairs(root: Path) -> dict:
 PERTURB = re.compile(r"^\[net-test\] live perturb frame=(\d+)$", re.MULTILINE)
 
 
-def expect_injected_divergence(root: Path, verdicts: dict) -> None:
-    """The anchor arm advances the host's sim RNG at the start of one tick (Main.cpp's live perturbation) so the match
-    heals. The oracle samples the end of that tick, after the tick has drawn from the advanced stream, so the sample
-    differs in the sim RNG and in whatever the tick's draws reached. It must name exactly that one sample, the sim RNG
-    among its sections, and every sample before and after it must agree, with at least one after it: that is the heal."""
-    host = Path(root) / "host" / "stdout.log"
-    injected = PERTURB.search(host.read_text(encoding="utf-8", errors="replace")) if host.is_file() else None
-    for verdict in verdicts.values():
-        divergences = verdict.get("divergences") or []
-        seen = [{"tick": entry["tick"], "sections": entry["sections"]} for entry in divergences]
-        verdict["injected_divergence"] = {"tick": int(injected[1]), "requires": "globals.sim_rng"} if injected else None
-        if not injected:
+FULLSTATE_LABELLED = re.compile(r"^\[fullstate-(canonical|restored)\] tick=(\d+) hash=[0-9a-f]{16} sections=(\S+) round=\d+\s*$", re.MULTILINE)
+FULLSTATE_SCOPE = re.compile(r"^\[fullstate-scope\] tick=(\d+) round=(\d+) label=sample per_peer=(\S*)\s*$", re.MULTILINE)
+FULLSTATE_LABELLED_SCOPE = re.compile(r"^\[fullstate-scope\] tick=(\d+) round=\d+ label=(canonical|restored) per_peer=(\S*)\s*$", re.MULTILINE)
+ANCHOR_TICKS = 1400
+
+
+def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: list, every: int, last_tick: int) -> list:
+    """What keeps the anchor arm's heal from being proven, from the two peers' logs; empty when it is.
+
+    The arm advances the host's sim RNG at the start of one tick (Main.cpp's live perturbation) and the oracle samples that
+    tick's end, after the tick drew from the advanced stream: that one sample differs, the sim RNG among its sections. The
+    heal is proven only by (1) every scheduled sample after it, to the run's end, taken by both peers in the same round,
+    (2) no shared section leaving either peer's samples unless the capture named it this machine's own, and (3) each
+    peer's first restored world equal to the canonical capture of the snapshot the heal sent: two peers restoring the same
+    wrong state agree with each other, not with it."""
+    texts = {who: path.read_text(encoding="utf-8", errors="replace") if path.is_file() else "" for who, path in (("host", host_log), ("client", client_log))}
+    injected = PERTURB.search(texts["host"])
+    if not injected:
+        return ["the live perturbation was never injected"]
+    tick, reasons = int(injected[1]), []
+    seen = [(entry["tick"], entry["sections"]) for entry in divergences]
+    if len(seen) != 1 or seen[0][0] != tick or "globals.sim_rng" not in seen[0][1]:
+        reasons.append(f"the injected divergence at tick {tick} was expected as the one divergent sample, naming globals.sim_rng; the oracle saw {seen}")
+    samples = {"host": load_fullstate(host_log), "client": load_fullstate(client_log)}
+    for sampled in range(tick - tick % every + every, last_tick + 1, every):
+        rounds = {who: {key[0] for key in samples[who] if key[1] == sampled} for who in samples}
+        missing = [who for who in samples if not rounds[who]]
+        if missing:
+            reasons.append(f"no {' or '.join(missing)} sample at tick {sampled} after the heal")
+        elif rounds["host"] != rounds["client"]:
+            reasons.append(f"the peers sampled tick {sampled} in different rounds: {sorted(rounds['host'])} vs {sorted(rounds['client'])}")
+    for who, text in texts.items():
+        named = {(int(round_id), int(sampled)): set(filter(None, sections.split(","))) for sampled, round_id, sections in FULLSTATE_SCOPE.findall(text)}
+        previous = None
+        for key in sorted(samples[who], key=lambda key: (key[1], key[0])):
+            names = {name for _, sections in samples[who][key] for name, _ in sections}
+            unexplained = sorted((previous or set()) - names - named.get(key, set()))
+            if unexplained:
+                reasons.append(f"{who}: {unexplained} left the compared sections at tick {key[1]} with no reason named")
+            previous = names
+    labelled = {who: [(label, int(sampled), dict(item.rsplit(":", 1) for item in sections.split(",")))
+                      for label, sampled, sections in FULLSTATE_LABELLED.findall(text)] for who, text in texts.items()}
+    # A section one capture keeps for itself (a Lua state that holds actors, per machine) is named in that capture's scope line.
+    own = {who: {(label, int(sampled)): set(filter(None, sections.split(","))) for sampled, label, sections in FULLSTATE_LABELLED_SCOPE.findall(text)}
+           for who, text in texts.items()}
+    canonical = [(sampled, sections) for label, sampled, sections in labelled["host"] if label == "canonical" and sampled >= tick]
+    if not canonical:
+        reasons.append("the host logged no canonical capture of the snapshot it healed from")
+        return reasons
+    canonical_tick, canonical_sections = canonical[0]
+    canonical_own = own["host"].get(("canonical", canonical_tick), set())
+    for who in texts:
+        restored = [(sampled, sections) for label, sampled, sections in labelled[who] if label == "restored" and sampled >= tick]
+        if not restored:
+            reasons.append(f"{who} logged no restored world after the heal")
             continue
-        tick = int(injected[1])
-        after = [sample for sample in verdict.get("sampled_ticks", []) if sample > tick]
-        if len(seen) == 1 and seen[0]["tick"] == tick and "globals.sim_rng" in seen[0]["sections"] and after:
-            verdict["passed"] = True
-            verdict["reasons"] = []
-        else:
-            verdict["passed"] = False
-            verdict["reasons"] = [f"the injected divergence at tick {tick} was expected as the one divergent sample, naming globals.sim_rng, "
-                                  f"with every later sample equal ({len(after)} sampled after it); the oracle saw {seen}"]
+        restored_tick, restored_sections = restored[0]
+        restored_own = own[who].get(("restored", restored_tick), set())
+        differing = sorted(name for name in canonical_sections.keys() | restored_sections.keys()
+                           if canonical_sections.get(name) != restored_sections.get(name)
+                           and not (name not in canonical_sections and name in canonical_own) and not (name not in restored_sections and name in restored_own))
+        if restored_tick != canonical_tick or differing:
+            reasons.append(f"{who}'s first restored world (tick {restored_tick}) differs from the canonical snapshot (tick {canonical_tick}) in {differing}")
+    return reasons
+
+
+def expect_injected_divergence(root: Path, verdicts: dict) -> None:
+    """Holds the anchor arm's full-state verdict to injected_divergence_reasons, run to ANCHOR_TICKS."""
+    for name, verdict in verdicts.items():
+        pair = Path(root) / name
+        reasons = injected_divergence_reasons(pair / "host" / "stdout.log", pair / "client" / "stdout.log",
+                                              verdict.get("divergences") or [], FULLSTATE_EVERY, ANCHOR_TICKS)
+        verdict["injected_divergence"] = {"requires": "globals.sim_rng", "every": FULLSTATE_EVERY, "last_tick": ANCHOR_TICKS}
+        verdict["passed"] = not reasons and verdict.get("compared_samples", 0) > 0
+        verdict["reasons"] = reasons
 
 
 def _seat_rows(root: Path, who: str) -> dict:
@@ -364,7 +417,7 @@ def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False
     name and the row would be red for a reason that is not the anchor mechanism. Tick 700 puts at least
     four checkpoints before the heal, and the 1400-tick cap leaves room for more than the retention limit
     afterwards, so the named one can only survive by being pinned."""
-    ticks, perturb_at = 1400, 700
+    ticks, perturb_at = ANCHOR_TICKS, 700
     # The perturbation waits for both seats to be live; a peer the host holds (a sanitizer build's slow client) keeps it
     # from landing, so such a build asks the host to pause for a slow peer instead.
     records = run_pair(repo, root, port, ticks, 2,
@@ -1033,29 +1086,64 @@ class WorldRestartOracleTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "lacks its bound peers"):
             _world_checkpoint_state(empty, f"[autosave] agreed match=world tick=421 state={json.dumps(empty)}\n", "world", 421, {1, 2})
 
-    def test_injected_divergence_is_one_sample_naming_the_sim_rng_then_healed(self):
+    def test_injected_divergence_is_one_sample_then_a_proven_heal(self):
+        """The anchor arm's full-state verdict from the peers' own logs: one divergent sample at the injected tick, every
+        later scheduled sample on both peers, no shared section dropped without a reason, and each peer's first restored
+        world equal to the canonical snapshot. RED before the change: every failing case below passed."""
         import tempfile
-        spread = ["globals.sim_rng", "structure", "scene_runtime", "scene", "layer.Mat", "layer.FG"]
-        cases = {
-            "the injected tick alone, healed": ([(720, spread)], [660, 720, 780], True),
-            "the sim RNG alone": ([(720, ["globals.sim_rng"])], [720, 780], True),
-            "a second divergent sample": ([(720, spread), (780, ["globals.movable"])], [720, 780], False),
-            "the injected tick without the sim RNG": ([(720, ["globals.movable"])], [720, 780], False),
-            "another tick": ([(660, spread)], [660, 720, 780], False),
-            "nothing sampled after it": ([(720, spread)], [660, 720], False),
-            "the injection unseen": ([], [660, 720, 780], False),
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "host").mkdir()
-            (root / "host" / "stdout.log").write_text("[net-test] live perturb frame=720\n", encoding="utf-8")
-            for name, (divergences, sampled, passes) in cases.items():
-                with self.subTest(name):
-                    verdict = {"passed": not divergences, "reasons": [], "compared_samples": len(sampled), "sampled_ticks": sampled,
-                               "divergences": [{"round": 1, "tick": tick, "sections": sections} for tick, sections in divergences]}
-                    expect_injected_divergence(root, {".": verdict})
-                    self.assertEqual(verdict["passed"], passes, verdict["reasons"])
+        base = {"header": "1" * 16, "globals.sim_rng": "2" * 16, "scene": "3" * 16, "graph.3": "4" * 16}
 
+        def line(tag, tick, sections, round_id):
+            return f"[{tag}] tick={tick} hash={'e' * 16} sections={','.join(f'{name}:{value}' for name, value in sections.items())} round={round_id}\n"
+
+        def logs(client_last=1380, dropped_from=0, named=False, restored=None, canonical=True, canonical_own=None):
+            texts = {"host": "[net-test] live perturb frame=720\n", "client": ""}
+            for who in texts:
+                for tick in range(60, 1381, 60):
+                    if who == "client" and tick > client_last:
+                        break
+                    round_id = 7 if tick <= 720 else 8
+                    sections = dict(base)
+                    if who == "host" and tick == 720:
+                        sections.update({"globals.sim_rng": "5" * 16, "scene": "6" * 16})
+                    if dropped_from and tick >= dropped_from:
+                        del sections["graph.3"]
+                    texts[who] += line("fullstate", tick, sections, round_id)
+                    if named and dropped_from and tick >= dropped_from:
+                        texts[who] += f"[fullstate-scope] tick={tick} round={round_id} label=sample per_peer=graph.3\n"
+                if who == "host" and canonical:
+                    kept = {name: value for name, value in base.items() if canonical_own is None or name != "graph.3"}
+                    texts[who] += line("fullstate-canonical", 725, kept, 7)
+                    if canonical_own:
+                        texts[who] += f"[fullstate-scope] tick=725 round=7 label=canonical per_peer={canonical_own}" + chr(10)
+                texts[who] += line("fullstate-restored", 725, restored or base, 8)
+            return texts
+
+        cases = {
+            "a proven heal": (logs(), True),
+            "a section named this machine's own": (logs(dropped_from=900, named=True), True),
+            "no later client samples": (logs(client_last=780), False),
+            "a section dropped with no reason": (logs(dropped_from=900), False),
+            "both peers restore the same wrong state": (logs(restored={**base, "scene": "9" * 16}), False),
+            "no canonical snapshot": (logs(canonical=False), False),
+            "a section the canonical capture keeps for itself": (logs(canonical_own="graph.3"), True),
+            "a section the canonical capture drops unnamed": (logs(canonical_own=""), False),
+        }
+        global FULLSTATE_EVERY
+        every = FULLSTATE_EVERY
+        FULLSTATE_EVERY = 60
+        try:
+            for name, (texts, passes) in cases.items():
+                with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    for who, text in texts.items():
+                        (root / who).mkdir()
+                        (root / who / "stdout.log").write_text(text, encoding="utf-8")
+                    verdicts = fullstate_pairs(root)
+                    expect_injected_divergence(root, verdicts)
+                    self.assertEqual(verdicts["."]["passed"], passes, verdicts["."]["reasons"])
+        finally:
+            FULLSTATE_EVERY = every
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)

@@ -991,7 +991,7 @@ bool ACrab::IsWithinRange(Vector& point) const {
 	return sqrDistance <= (range * range);
 }
 
-bool ACrab::Look(float FOVSpread, float range) {
+bool ACrab::LookRay(float FOVSpread, float range, SeeRay& seeRay) {
 	if (!g_SceneMan.AnythingUnseen(m_Team) || m_CanRevealUnseen == false) {
 		return false;
 	}
@@ -1024,8 +1024,8 @@ bool ACrab::Look(float FOVSpread, float range) {
 
 	// TODO: generate an alarm event if we spot an enemy actor?
 
-	Vector ignored(0, 0);
-	return g_SceneMan.CastSeeRay(m_Team, aimPos, lookVector, ignored, 25, step);
+	seeRay = {m_Team, aimPos, lookVector, 25, step};
+	return true;
 }
 
 MovableObject* ACrab::LookForMOs(float FOVSpread, unsigned char ignoreMaterial, bool ignoreAllTerrain) {

@@ -78,6 +78,9 @@ extern "C" {
 #include <memory>
 #include <queue>
 #include <set>
+#include <atomic>
+#include <thread>
+#include <cstdlib>
 #include <string>
 #include <sstream>
 #include <tuple>
@@ -88,6 +91,28 @@ using namespace RTE;
 
 namespace {
 	using json = nlohmann::json;
+
+	// Test lever: CC_TEST_SEE_RAY_HOLD=1 holds the see-ray workers until the sim thread reaches the pass's join, the latest they may run.
+	bool SeeRayHoldLever() {
+		static const bool hold = [] { const char* value = std::getenv("CC_TEST_SEE_RAY_HOLD"); return value && value[0] == '1'; }();
+		return hold;
+	}
+	std::atomic<bool> s_SeeRaysReleased{true};
+
+	// The see-ray pass in flight: the rays aimed at launch, each team's fog as the pass began and what the pool traced.
+	struct SeeRayPass {
+		std::vector<SeeRay> rays;
+		std::vector<SeeRayTrace> traces;
+		std::array<BITMAP*, Activity::MaxTeamCount> fog{};
+		std::array<Vector, Activity::MaxTeamCount> fogScale{};
+		bool pending = false;
+	};
+	SeeRayPass s_SeeRayPass;
+
+	void HoldSeeRayWorker() {
+		if (!SeeRayHoldLever()) return;
+		for (int waited = 0; !s_SeeRaysReleased.load(std::memory_order_acquire) && waited < 20000; ++waited) std::this_thread::sleep_for(std::chrono::microseconds(100));
+	}
 
 	json MovableObjectDebugJson(const MovableObject* object) {
 		json j;
@@ -3280,7 +3305,21 @@ bool MovableMan::SwapActorForRender(Actor* original, Actor* substitute) {
 }
 
 void MovableMan::WaitForActorsSeeTask() {
+	s_SeeRaysReleased.store(true, std::memory_order_release);
 	m_ActorsSeeFuture.wait();
+	SeeRayPass& pass = s_SeeRayPass;
+	if (!pass.pending) return;
+	pass.pending = false;
+	// In the order the rays were aimed, so every peer reveals the same way.
+	if (g_SceneMan.GetScene()) {
+		for (size_t ray = 0; ray < pass.rays.size(); ++ray) g_SceneMan.RevealSeeRay(pass.rays[ray].team, pass.traces[ray]);
+	}
+	pass.rays.clear();
+	pass.traces.clear();
+	for (BITMAP*& fog: pass.fog) {
+		if (fog) destroy_bitmap(fog);
+		fog = nullptr;
+	}
 }
 
 std::string MovableMan::DescribeScriptBindings() const {
@@ -6533,7 +6572,7 @@ void MovableMan::Update() {
 	}
 
 	// Finish our Seeing rays from last frame
-	m_ActorsSeeFuture.wait();
+	WaitForActorsSeeTask();
 
 	// Prior to controller/AI update, execute lua callbacks
 	g_LuaMan.ExecuteLuaScriptCallbacks();
@@ -6851,15 +6890,40 @@ void MovableMan::Update() {
 		terrain->UpdateMaterialCopy();
 	}
 
-	// Run seeing rays for all actors; they finish while the next tick moves the clock, so they carry this one
+	// Run seeing rays for all actors. Each ray is aimed here, on the sim thread; the pool walks it over the frozen terrain
+	// against a copy of its team's fog, and the reveals land in aim order when the pass is joined within this tick.
+	WaitForActorsSeeTask();
+	SeeRayPass& pass = s_SeeRayPass;
 	const uint64_t seeTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-	m_ActorsSeeFuture = g_ThreadMan.GetPriorityThreadPool().parallelize_loop(m_Actors.size(),
-	                                                                         [&, seeTick](int start, int end) {
-		                                                                         ZoneScopedN("Actors See");
-		                                                                         for (int i = start; i < end; ++i) {
-			                                                                         m_Actors[i]->CastSeeRays(seeTick);
-		                                                                         }
-	                                                                         });
+	for (Actor* actor: m_Actors) {
+		actor->PrepareSeeRays(seeTick, pass.rays);
+	}
+	if (Scene* scene = g_SceneMan.GetScene(); scene && !pass.rays.empty()) {
+		for (const SeeRay& ray: pass.rays) {
+			SceneLayer* layer = ray.team >= Activity::TeamOne && ray.team < Activity::MaxTeamCount ? scene->GetUnseenLayer(ray.team) : nullptr;
+			if (!layer || pass.fog[ray.team]) continue;
+			BITMAP* live = layer->GetBitmap();
+			pass.fog[ray.team] = create_bitmap_ex(bitmap_color_depth(live), live->w, live->h);
+			blit(live, pass.fog[ray.team], 0, 0, 0, 0, live->w, live->h);
+			pass.fogScale[ray.team] = layer->GetScaleFactor();
+		}
+		pass.traces.assign(pass.rays.size(), {});
+		pass.pending = true;
+	} else {
+		pass.rays.clear();
+	}
+	const bool visualize = g_SceneMan.DrawsRayCastVisualizations();
+	if (SeeRayHoldLever()) s_SeeRaysReleased.store(false, std::memory_order_release);
+	m_ActorsSeeFuture = g_ThreadMan.GetPriorityThreadPool().parallelize_loop(pass.rays.size(), [&pass, visualize](int start, int end) {
+		ZoneScopedN("Actors See");
+		HoldSeeRayWorker();
+		// Vision reads the frozen terrain copy so concurrent carving can't race the see-ray reads.
+		SceneMan::ScopedTerrainCopyRead terrainCopyScope;
+		for (int ray = start; ray < end; ++ray) {
+			const SeeRay& seeRay = pass.rays[ray];
+			if (BITMAP* fog = pass.fog[seeRay.team]) g_SceneMan.TraceSeeRay(seeRay, fog, pass.fogScale[seeRay.team], visualize, pass.traces[ray]);
+		}
+	});
 
 	// GC kicked off from Main after LateUpdateGlobalScripts, when no more Lua runs on main this tick.
 
@@ -7474,6 +7538,8 @@ void MovableMan::UpdateDrawMOIDs() {
 }
 
 void MovableMan::StartMOIDDrawTask() {
+	// The tick's see-ray pass lands here, after the tick's last script and before anything captures or draws it.
+	WaitForActorsSeeTask();
 	m_DrawMOIDsTask = g_ThreadMan.GetPriorityThreadPool().submit([this]() {
 		UpdateDrawMOIDs();
 	});
