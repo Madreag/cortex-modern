@@ -134,6 +134,7 @@
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
 #include "AsyncLineWriter.h"
+#include "StallStackSampler.h"
 #include "ContractAudit.h"
 
 #include "RenderTarget.h"
@@ -5590,6 +5591,7 @@ void RunGameLoop() {
 	if (System::IsSetToQuit()) {
 		return;
 	}
+	StallStackSampler::ArmForCurrentThread();
 	g_TimerMan.PauseSim(false);
 
 	if (g_ActivityMan.ActivitySetToRestart()) {
@@ -5745,6 +5747,7 @@ void RunGameLoop() {
 			NetModerationGUIProbe::OnSimTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
+			StallStackSampler::TickBegin(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
@@ -6568,6 +6571,7 @@ void RunGameLoop() {
 			TelemetryBundle::CaptureAtTickBoundary();
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
+			StallStackSampler::TickEnd();
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
 
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
