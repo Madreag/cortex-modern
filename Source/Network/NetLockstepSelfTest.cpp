@@ -20135,6 +20135,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_LastCompletedSimulationTick = 199;
 		host.m_Stats.nextFrame = 205;
 		host.m_LastQueuedTargetFrame = 204;
+		// Peer 3 drives the held host's actors and has sent its AI orders through 240; a round trip of 50 ms is three more frames of them.
+		host.m_Stats.peers[3].highestTargetFrame = 240;
+		host.m_Stats.peers[3].pingMs = 50;
 		host.ReclaimOwnSeat(1200);
 		const auto back = host.m_ReclaimTransactions.find(1);
 		if (back == host.m_ReclaimTransactions.end() || back->second.activationFrame <= 205 || host.IsSeatUnderAI(1, back->second.activationFrame) ||
