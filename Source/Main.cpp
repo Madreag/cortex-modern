@@ -232,11 +232,12 @@ static const nlohmann::json* CrossMatchingLockstep(const nlohmann::json& report,
 
 static nlohmann::json CrossAuthorityFromReport(const nlohmann::json& report, uint64_t session, uint8_t host) {
 	const auto* value = CrossMatchingLockstep(report, session, host);
-	return value && value->contains("migration_generation") && (*value)["migration_generation"].is_number_unsigned() ? (*value)["migration_generation"] : nlohmann::json(nullptr);
+	return value && value->contains("migration_phase") && (*value)["migration_phase"] == 0 && value->contains("migration_generation") &&
+	    (*value)["migration_generation"].is_number_unsigned() ? (*value)["migration_generation"] : nlohmann::json(nullptr);
 }
 
-static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, uint64_t nextFrameCursor) {
-	return nextFrameCursor > 0 ? nlohmann::json(nullptr) : nlohmann::json("initial");
+static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, [[maybe_unused]] uint64_t nextFrameCursor) {
+	return configuredStart == 1 && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
 }
 
 bool RTE::RunCrossHistoryRecordSelfTest(std::string* error) {
@@ -249,11 +250,13 @@ bool RTE::RunCrossHistoryRecordSelfTest(std::string* error) {
 }
 
 bool RTE::RunCrossAuthorityRecordSelfTest(std::string* error) {
-	const nlohmann::json source{{"runner", {{"lockstep", {{"session_id", uint64_t{81}}, {"host_peer_id", 2}, {"migration_generation", uint64_t{7}}}}}}};
+	const nlohmann::json source{{"runner", {{"lockstep", {{"session_id", uint64_t{81}}, {"host_peer_id", 2}, {"migration_generation", uint64_t{7}}, {"migration_phase", 0}}}}}};
 	if (CrossAuthorityFromReport(source, 81, 2) != 7 || !CrossAuthorityFromReport(source, 82, 2).is_null() ||
 	    !CrossAuthorityFromReport(source, 81, 3).is_null() || !CrossAuthorityFromReport(nlohmann::json::object(), 81, 2).is_null()) {
 		*error = "authority record is absent or accepts another session/host"; return false;
 	}
+	auto election = source; election["runner"]["lockstep"]["migration_phase"] = 1;
+	if (!CrossAuthorityFromReport(election, 81, 2).is_null()) { *error = "an election candidate is reported as settled authority"; return false; }
 	std::cout << "[net-match-selftest] PASS cross_authority_record_is_bound_to_its_session_and_host" << std::endl;
 	return true;
 }
@@ -298,7 +301,7 @@ static void BeginCrossTick(uint64_t tick) {
 	static uint64_t authorityObservedTick = 0;
 	static uint64_t configuredStart = 0;
 	static std::set<std::string> unmappedHistories;
-	if (!catchup && (newRound || host != priorHost || priorCatchup || configuredStart == 0)) {
+	if (!catchup && (newRound || host != priorHost || priorCatchup || configuredStart == 0 || authority.is_null())) {
 		const auto diagnostic = nlohmann::json::parse(g_NetMatchService.BuildReportJson(), nullptr, false);
 		authority = CrossAuthorityFromReport(diagnostic, config->sessionId, host);
 		const auto* lockstep = CrossMatchingLockstep(diagnostic, config->sessionId, host);

@@ -118,13 +118,13 @@ def coverage(events, peers, manifest):
 def requirements(manifest, comparison, metrics):
     items = load(HERE / 'cross_peers/requirements.json', [])
     reasons = {
-        2: 'WAN migration requires NetMatchService.cpp:8244 endpoint publication and NetLockstep.cpp:3304,3334 dialing changes owned by the catch-up lane.',
+        2: 'WAN migration requires NetMatchService.cpp:8284 endpoint publication and NetLockstep.cpp:3304,3334 dialing changes owned by the catch-up lane.',
         3: 'MIXED uses human teams 0,0,1 plus peerless CPU team 2 through real host options; ordinary AI actors supply allied units. Adopted configurations and all roster arms still need run evidence.',
         20: 'SoundContainer.cpp:405 authority and music-transition emissions are outside this lane; muted output proves no audible result.',
         22: 'A fourth real box and its persistent-world arrival arm are absent.',
         35: 'Pre-auth/proof/image/tail/activation overlaps await the WAN endpoint fix; queued/cancelled phases never complete recovery.',
         36: 'Capture-announced and writer-pending barriers have RED/GREEN bounded-release tests; migration overlap, archive validity and restarted writer cadence still await a real endpoint-capable arm.',
-        40: 'Initial histories are compared. Restore branch/checkpoint lineage and authority generation are not exposed by the owned record seams.',
+        40: 'Initial history uses the configured start frame; settled live authority is read from the public runner report. Private catch-up branch/checkpoint lineage remains unexposed at NetMatchService.h:1305,1599 and NetMatchService.cpp:4534, so restored keys stay UNKNOWN.',
         45: 'Checkpoint boot/handover anchors and survivor segment indexing need ScenarioRunner.cpp:2653 and NetMatchService.cpp:3455 outside this lane.',
         50: 'Movement/aim submitted-render measurements are reported; other action/input-sequence stamps require FrameMan.cpp:277,344 outside this lane.',
         51: 'Remote-unit render discontinuities require FrameMan/LocalPrediction records outside this lane; local corrections retain their own labels.',
@@ -235,7 +235,7 @@ def build_report(root):
             native_completion=completion, native_final_tick=final_tick,
             fragments=[str(fragment.relative_to(root)) for fragment in fragments], samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
-            wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:894 detailed status is not a byte counter.',
+            wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:904 detailed-status text is not a per-tick counter API.',
             configs=configs, paths={kind: str(record_path(own / leaf).relative_to(root)) for kind,leaf in [('live','live.jsonl'),('events','events.jsonl'),('log','engine/stdout.log'),('feel','engine/feel/raw.jsonl'),('native','match-report.json')]})
     host_rows = live.get(manifest['host'], [])
     ranges, missing_boundaries = report.declared_history_ranges(host_rows,
