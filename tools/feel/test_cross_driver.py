@@ -13,6 +13,15 @@ class CrossDriverTests(unittest.TestCase):
     def plan(self):
         return cross_peers.make_plan(cross_peers.parse_args(['--dry-run']))
 
+    def test_payload_release_requires_publication_and_respects_cancellation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            with self.assertRaises(TimeoutError): cross_peers.wait_for_payload_release(root,0)
+            (root/'launch-go.json').write_text('{}')
+            cross_peers.wait_for_payload_release(root,0)
+            (root/'stop.json').write_text('{}')
+            with self.assertRaises(RuntimeError): cross_peers.wait_for_payload_release(root,0)
+
     def test_interrupted_json_publication_keeps_the_previous_complete_document(self):
         with tempfile.TemporaryDirectory() as temporary:
             path=Path(temporary)/'session.json'; path.write_text('{"session":"old"}')
@@ -179,6 +188,10 @@ class CrossDriverTests(unittest.TestCase):
             (own/'match-report.json').write_text(json.dumps(dict(lockstep=dict(missing_frame_stalls=0,next_frame=0,steady_missing_frame_stalls=None))))
             result=cross_report.build_report(root)
             self.assertIsNone(result['peers'][plan['specs'][0]['peer']]['timing']['steady_missing_frame_stalls'])
+            own.with_name('incarnation-1').mkdir()
+            result=cross_report.build_report(root)
+            self.assertEqual(result['peers'][plan['specs'][0]['peer']]['incarnation'],1)
+            self.assertEqual(len(result['peers'][plan['specs'][0]['peer']]['fragments']),2)
 
     def test_report_requires_all_peers_shared_capture_and_binary_limit(self):
         with tempfile.TemporaryDirectory() as temporary:

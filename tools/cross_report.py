@@ -221,7 +221,7 @@ def build_report(root):
         trace=load(own/'trace.json',{})
         completion=trace.get('runs',[{}])[-1].get('strings',{}) if trace.get('runs') else {}
         final_tick=trace.get('runs',[{}])[-1].get('numeric',{}).get('final_tick') if trace.get('runs') else None
-        peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=spec['incarnation'], frames=len(live[name]),
+        peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=int(own.name.split('-')[-1]), frames=len(live[name]),
             observed_waits_over_50=sum(r['wait_ms']>50 for r in waits) if log else None, observed_wait_records=len(waits),
             native=native, record=record, timing=timing, tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
             capture_ms=report.distribution([r['capture_us']/1000 for r in tick_cost]),
