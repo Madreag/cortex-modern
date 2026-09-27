@@ -900,6 +900,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), image->imageBytes));
 				return true;
 			} catch (const std::exception& error) {
+				if (const auto* refusal = dynamic_cast<const ScriptGraphRefusal*>(&error))
+					for (const auto& problem: refusal->problems)
+						System::PrintDiagnosticLine(std::format("[fullstate-refusal] tick={} round={} label={} problem={}", image->tick, round, label.empty() ? "sample" : label, problem));
 				System::PrintDiagnosticLine(std::format("[fullstate] tick={} failed: {}", image->tick, error.what()));
 				return false;
 			}
