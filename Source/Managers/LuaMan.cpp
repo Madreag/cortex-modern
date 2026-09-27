@@ -8275,6 +8275,66 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		}
 	}
 	{
+		// A pairs loop suspended in its body keeps its place beside its table as a traversal index, as the base AI's
+		// brain search does while it waits for a path. The graph carries the place and the restored loop goes on.
+		const bool planted = RunScriptString(R"lua(
+			local function walk(t) for key in pairs(t) do coroutine.yield(key) end return "done" end
+			local function clearing(t) for key in pairs(t) do t[key] = nil coroutine.yield(key) end return "done" end
+			_F_Traversal = { array = { 11, 12, 13, 14 }, last = { 21, 22 }, hash = { alpha = 1, beta = 2, gamma = 3, delta = 4 } }
+			local walks = { array = coroutine.create(walk), last = coroutine.create(walk), hash = coroutine.create(clearing) }
+			_F_Traversal.walks = walks
+			coroutine.resume(walks.array, _F_Traversal.array)
+			coroutine.resume(walks.last, _F_Traversal.last)
+			coroutine.resume(walks.last)
+			local _, first = coroutine.resume(walks.hash, _F_Traversal.hash)
+			local order, key = {}, next(_F_Traversal.hash, first)
+			_F_Traversal.next = key
+			while key ~= nil do order[#order + 1] = tostring(key) key = next(_F_Traversal.hash, key) end
+			_F_Traversal.hostOrder = table.concat(order, ",") .. ",done"
+		)lua") == 0;
+		const uint64_t serial = luaJIT_state_serial(m_State);
+		std::string live, restored;
+		CheckpointText frozen;
+		std::vector<std::string> problems;
+		const bool captured = planted && SerializeScriptGraph(live, problems) && CaptureScriptGraph(frozen, problems, true);
+		const bool sameText = captured && live == frozen.Text();
+		const bool rebuilt = sameText && RestoreScriptGraph(live, problems) && SerializeScriptGraph(restored, problems);
+		const uint64_t restoredSerial = luaJIT_state_serial(m_State);
+		const bool recaptured = rebuilt && restored == live && restoredSerial == serial;
+		const bool resumed = recaptured && RunScriptString(R"lua(
+			local walks, hash = _F_Traversal.walks, _F_Traversal.hash
+			local expected, key = {}, _F_Traversal.next
+			while key ~= nil do expected[#expected + 1] = tostring(key) key = next(hash, key) end
+			expected[#expected + 1] = "done"
+			local function rest(co)
+				local out = {}
+				repeat
+					local ok, value = coroutine.resume(co)
+					out[#out + 1] = ok and tostring(value) or ("error:" .. tostring(value))
+				until not ok or coroutine.status(co) == "dead"
+				return table.concat(out, ",")
+			end
+			local array, last, keys = rest(walks.array), rest(walks.last), rest(walks.hash)
+			_F_TraversalContinued = array == "12,13,14,done" and last == "done" and keys == table.concat(expected, ",") and #expected == 4
+			_F_TraversalResult = string.format("array=%s last=%s hash=%s restored_order=%s host_order=%s", array, last, keys, table.concat(expected, ","), _F_Traversal.hostOrder)
+		)lua") == 0;
+		bool continued = false;
+		std::string detail = "not_resumed";
+		if (resumed) {
+			lua_getglobal(m_State, "_F_TraversalContinued");
+			continued = lua_toboolean(m_State, -1) != 0;
+			lua_getglobal(m_State, "_F_TraversalResult");
+			if (lua_isstring(m_State, -1)) detail = lua_tostring(m_State, -1);
+			lua_pop(m_State, 2);
+		}
+		RunScriptString("_F_Traversal = nil; _F_TraversalContinued = nil; _F_TraversalResult = nil");
+		const bool passed = sameText && recaptured && continued;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_pairs_loop_suspended_mid_traversal_restores_and_continues captured=" << captured << " live_equals_frozen=" << sameText
+		          << " recapture_equal=" << recaptured << " serial=" << serial << "/" << restoredSerial << " bytes=" << live.size() << " " << detail << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] pairs traversal: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
 		// A capture of one state alone must leave the other states' recorded tables and dirty roots in place.
 		auto& states = g_LuaMan.GetThreadedScriptStates();
 		if (states.empty()) {
