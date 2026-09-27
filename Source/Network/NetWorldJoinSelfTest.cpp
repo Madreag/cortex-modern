@@ -3405,8 +3405,8 @@ namespace RTE {
 			pair.Pump(4);
 			return true;
 		};
-		NetWorldJoinHost earlier, rematch;
-		if (!serve(earlier, 1) || !serve(rematch, 2)) return Fail("earlier-round fixture: " + error);
+		const auto earlier = std::make_unique<NetWorldJoinHost>(), rematch = std::make_unique<NetWorldJoinHost>();
+		if (!serve(*earlier, 1) || !serve(*rematch, 2)) return Fail("earlier-round fixture: " + error);
 		ScenarioRunner::ClearControllerReplayError();
 		if (!ScenarioRunner::InstallWorldCatchUp(40, {}, &error)) return Fail("earlier-round install: " + error);
 		NetWorldCatchUpClient client; client.active = true; client.privateMatch = true; client.roundId = 2; client.snapshotTick = client.appliedThrough = 40;
