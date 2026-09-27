@@ -12,6 +12,8 @@
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
 #include "AtomGroup.h"
+#include "PieMenu.h"
+#include "PieSlice.h"
 #include "ContentFile.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
@@ -8963,6 +8965,20 @@ end
 		const int64_t after = Atom::LiveCount();
 		std::cout << "[script-graph-selftest] " << (after == before ? "PASS" : "FAIL") << " removed_atoms_are_freed live_before=" << before << " live_after=" << after << std::endl;
 		checkpointValues = after == before && checkpointValues;
+	}
+	{
+		// A slice's copied sub-PieMenu is the slice's own: destroying the copy frees it, as each clone of an actor does.
+		// The pool hands back the count of instances still out when one is returned.
+		auto* pieMenus = const_cast<Entity::ClassInfo*>(Entity::ClassInfo::GetClass("PieMenu"));
+		const auto inUse = [pieMenus] { return pieMenus ? pieMenus->ReturnPoolMemory(pieMenus->GetPoolMemory()) : 0; };
+		PieSlice source;
+		source.SetSubPieMenu(new PieMenu());
+		const int before = inUse();
+		for (int copy = 0; copy < 3; ++copy) delete dynamic_cast<PieSlice*>(source.Clone());
+		const int after = inUse();
+		const bool freed = pieMenus && after == before;
+		std::cout << "[script-graph-selftest] " << (freed ? "PASS" : "FAIL") << " a_copied_slices_sub_pie_menu_is_freed in_use_before=" << before << " in_use_after=" << after << std::endl;
+		checkpointValues = freed && checkpointValues;
 	}
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
 	checkpointValues = System::RunPrintDisciplineSelfTest() && checkpointValues;

@@ -72,6 +72,8 @@ int PieSlice::Create(const PieSlice& reference) {
 
 	if (reference.m_SubPieMenu) {
 		SetSubPieMenu(dynamic_cast<PieMenu*>(reference.m_SubPieMenu->Clone()));
+		// The copy is this slice's own; every clone of an actor clones its slices, so it goes with the slice.
+		if (m_SubPieMenu) m_SubPieMenu.get_deleter().owned = true;
 	}
 
 	m_StartAngle = reference.m_StartAngle;
@@ -122,7 +124,11 @@ int PieSlice::ReadProperty(const std::string_view& propName, Reader& reader) {
 			ReloadScripts();
 		}
 	});
-	MatchProperty("SubPieMenu", { SetSubPieMenu(dynamic_cast<PieMenu*>(g_PresetMan.ReadReflectedPreset(reader))); });
+	MatchProperty("SubPieMenu", {
+		SetSubPieMenu(dynamic_cast<PieMenu*>(g_PresetMan.ReadReflectedPreset(reader)));
+		// A checkpoint's instance joins no DataModule, so the slice owns it.
+		if (m_SubPieMenu) m_SubPieMenu.get_deleter().owned = reader.IsCheckpoint();
+	});
 	MatchProperty("DrawFlippedToMatchAbsoluteAngle", { reader >> m_DrawFlippedToMatchAbsoluteAngle; });
 
 	EndPropertyList;
@@ -199,5 +205,9 @@ void PieSlice::RecalculateMidAngle() {
 }
 
 void PieSlice::PieMenuCustomDeleter::operator()(PieMenu* pieMenu) const {
-	pieMenu->Destroy(true);
+	if (owned) {
+		delete pieMenu;
+	} else {
+		pieMenu->Destroy(true);
+	}
 }
