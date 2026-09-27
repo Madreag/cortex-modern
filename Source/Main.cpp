@@ -190,6 +190,7 @@ namespace RTE {
 	bool RunModApiShimsSelfTest();
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 	bool RunCrossRosterSelfTest(std::string* error);
+	bool RunCrossEndSignalSelfTest(std::string* error);
 	bool RunCrossExecutionPhaseSelfTest(std::string* error);
 	bool RunCrossAuthorityRecordSelfTest(std::string* error);
 	bool RunCrossHistoryRecordSelfTest(std::string* error);
@@ -544,6 +545,24 @@ static bool CrossHostOptions(unsigned match, std::string* error) {
 	if (accepted) System::PrintDiagnosticLine("[cross-host-options] match=" + std::to_string(match) + " accepted=1 revision=" +
 	    std::to_string(draft.configRevision) + " intended_config=" + NetMatchConfigUtil::StoredConfigHash(draft));
 	return accepted;
+}
+
+static bool CrossEndSignalMatches(const std::string& text, uint8_t sender, uint8_t target, const std::string& id,
+    uint64_t session, uint64_t sourceRound, unsigned incarnation) {
+	return false; // Deliberate RED control; restored in the following implementation commit.
+}
+
+bool RTE::RunCrossEndSignalSelfTest(std::string* error) {
+	const std::string message = "[cross-end] " + nlohmann::json{{"id", "end"}, {"session", "81"}, {"source_round", 9},
+	    {"incarnation", 1}, {"phase", "catch_up"}}.dump();
+	if (!CrossEndSignalMatches(message, 3, 3, "end", 81, 9, 1) || CrossEndSignalMatches(message, 2, 3, "end", 81, 9, 1) ||
+	    CrossEndSignalMatches(message, 3, 3, "end", 82, 9, 1) || CrossEndSignalMatches(message, 3, 3, "end", 81, 10, 1) ||
+	    CrossEndSignalMatches(message, 3, 3, "end", 81, 9, 2) || CrossEndSignalMatches(message, 3, 3, "old", 81, 9, 1) ||
+	    CrossEndSignalMatches("[cross-end] broken", 3, 3, "end", 81, 9, 1)) {
+		*error = "forced-end phase signal accepted a stale round, incarnation, sender or id"; return false;
+	}
+	System::PrintDiagnosticLine("[net-match-selftest] PASS forced_end_phase_signal_requires_sender_round_incarnation_and_id");
+	return true;
 }
 
 static void CrossEliminationAtCommittedTick(uint64_t tick) {
