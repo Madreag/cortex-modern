@@ -231,48 +231,114 @@ namespace {
 		return delay;
 	}
 
+	/// Writes captures on its own thread. Each capture holds its whole image until it is written, so a writer slower than
+	/// the captures would hold ever more of them: a series keeps at most c_WaitingPerSeries captures waiting behind the one
+	/// being written, and a newer capture of the series replaces the oldest one waiting.
 	class AutosaveArchiveWriter {
 	public:
-		AutosaveArchiveWriter() : m_Worker([this] {
-			YieldToSimulation();
-			while (true) {
-				std::packaged_task<bool()> task;
-				{
-					std::unique_lock lock(m_Mutex);
-					m_Ready.wait(lock, [this] { return m_Stopping || !m_Tasks.empty(); });
-					if (m_Tasks.empty()) return;
-					task = std::move(m_Tasks.front());
-					m_Tasks.pop_front();
-				}
-				if (const int delay = SaverDelayMs(); delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-				task();
-			}
-		}) {}
+		static constexpr size_t c_WaitingPerSeries = 1;
+
+		/// A task's argument says whether it was replaced before it was written; a replaced task only releases its capture.
+		using Task = std::packaged_task<bool(bool)>;
+
+		struct Submitted {
+			std::shared_future<bool> verdict;
+			std::optional<uint64_t> replacedTick; //!< The waiting capture this one replaced.
+			std::optional<uint64_t> writingTick; //!< The capture the writer held when this one arrived.
+		};
+
+		AutosaveArchiveWriter() : m_Worker([this] { Write(); }), m_Releaser([this] { Release(); }) {}
 		~AutosaveArchiveWriter() {
 			{
 				std::lock_guard lock(m_Mutex);
 				m_Stopping = true;
 			}
-			m_Ready.notify_one();
+			m_Ready.notify_all();
 			m_Worker.join();
+			m_Releaser.join();
 		}
-		std::shared_future<bool> Submit(std::function<bool()> writer) {
-			std::packaged_task<bool()> task(std::move(writer));
-			auto future = task.get_future().share();
+
+		/// Queues a capture's task. A task with no series (a save the player asked for, a labelled oracle capture) is never replaced.
+		Submitted Submit(std::function<bool(bool)> writer, std::string series = {}, uint64_t tick = 0) {
+			Task task(std::move(writer));
+			Submitted submitted{task.get_future().share()};
 			{
 				std::lock_guard lock(m_Mutex);
-				m_Tasks.push_back(std::move(task));
+				const auto sameSeries = [&series](const Waiting& waiting) { return waiting.series == series; };
+				if (!series.empty() && static_cast<size_t>(std::count_if(m_Tasks.begin(), m_Tasks.end(), sameSeries)) >= c_WaitingPerSeries) {
+					const auto oldest = std::find_if(m_Tasks.begin(), m_Tasks.end(), sameSeries);
+					submitted.replacedTick = oldest->tick;
+					m_Replaced.push_back(std::move(oldest->task));
+					m_Tasks.erase(oldest);
+				}
+				m_Tasks.push_back(Waiting{std::move(task), std::move(series), tick});
+				if (m_Writing) submitted.writingTick = m_WritingTick;
 			}
-			m_Ready.notify_one();
-			return future;
+			m_Ready.notify_all();
+			return submitted;
 		}
+
 	private:
+		struct Waiting {
+			Task task;
+			std::string series;
+			uint64_t tick = 0;
+		};
+
+		void Write() {
+			YieldToSimulation();
+			while (true) {
+				Task task;
+				{
+					std::unique_lock lock(m_Mutex);
+					m_Ready.wait(lock, [this] { return m_Stopping || !m_Tasks.empty(); });
+					if (m_Tasks.empty()) return;
+					task = std::move(m_Tasks.front().task);
+					m_WritingTick = m_Tasks.front().tick;
+					m_Writing = true;
+					m_Tasks.pop_front();
+				}
+				if (const int delay = SaverDelayMs(); delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+				task(false);
+				task = Task();
+				std::lock_guard lock(m_Mutex);
+				m_Writing = false;
+			}
+		}
+
+		// A replaced capture is released here at once, never on the simulation thread and never behind the write in progress.
+		void Release() {
+			YieldToSimulation();
+			while (true) {
+				Task task;
+				{
+					std::unique_lock lock(m_Mutex);
+					m_Ready.wait(lock, [this] { return m_Stopping || !m_Replaced.empty(); });
+					if (m_Replaced.empty()) return;
+					task = std::move(m_Replaced.front());
+					m_Replaced.pop_front();
+				}
+				task(true);
+			}
+		}
+
 		std::mutex m_Mutex;
 		std::condition_variable m_Ready;
-		std::deque<std::packaged_task<bool()>> m_Tasks;
+		std::deque<Waiting> m_Tasks;
+		std::deque<Task> m_Replaced;
+		bool m_Writing = false;
+		uint64_t m_WritingTick = 0;
 		bool m_Stopping = false;
 		std::thread m_Worker;
+		std::thread m_Releaser;
 	};
+
+	/// The line a replaced capture leaves, on the thread that asked for the newer one.
+	void PrintCoalescedCapture(std::string_view tag, uint64_t tick, const AutosaveArchiveWriter::Submitted& submitted) {
+		if (!submitted.replacedTick) return;
+		System::PrintDiagnosticLine(std::format("[{}-coalesced] tick={} replaced={} writing={} waiting_bound={}", tag, tick, *submitted.replacedTick,
+		                                        submitted.writingTick ? std::to_string(*submitted.writingTick) : "none", AutosaveArchiveWriter::c_WaitingPerSeries));
+	}
 
 	AutosaveArchiveWriter& AutosaveWriter() {
 		static AutosaveArchiveWriter writer;
@@ -896,12 +962,17 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	bytes = image->imageBytes;
 	auto previousImage = cow.FinishImage(image);
 	if (fullStateOnly) {
-		task = FullStateWriter().Submit([image, dump = m_FullStateDumpDirectory, round = m_FullStateRound, label = m_FullStateLabel, sceneCache, previousImage, retired = std::move(retired),
-		                                retiredLayers = std::move(retiredLayers)]() mutable {
+		// The periodic samples are one series; a labelled capture answers one save or restore and is never replaced.
+		const AutosaveArchiveWriter::Submitted submitted = FullStateWriter().Submit([image, dump = m_FullStateDumpDirectory, round = m_FullStateRound, label = m_FullStateLabel, sceneCache, previousImage, retired = std::move(retired),
+		                                retiredLayers = std::move(retiredLayers)](bool replaced) mutable {
 			retired.clear();
 			retiredLayers.clear();
 			previousImage.reset();
 			sceneCache.reset();
+			if (replaced) {
+				image.reset();
+				return false;
+			}
 			const auto start = std::chrono::steady_clock::now();
 			try {
 				std::string line = FullStateHashLine(*image, dump) + " round=" + std::to_string(round);
@@ -915,6 +986,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				System::PrintDiagnosticLine(std::format("[fullstate-scope] tick={} round={} label={} per_peer={}", image->tick, round, label.empty() ? "sample" : label, perPeer));
 				System::PrintDiagnosticLine(std::format("[fullstate-cost] tick={} freeze_us={} hash_us={} image_bytes={}", image->tick, image->freezeUs,
 				    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), image->imageBytes));
+				// The task outlives its run in the verdict's shared state; the image need not.
+				image.reset();
 				return true;
 			} catch (const std::exception& error) {
 				if (const auto* refusal = dynamic_cast<const ScriptGraphRefusal*>(&error))
@@ -923,7 +996,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				System::PrintDiagnosticLine(std::format("[fullstate] tick={} failed: {}", image->tick, error.what()));
 				return false;
 			}
-		});
+		}, m_FullStateLabel.empty() ? "sample" : "", tick);
+		task = submitted.verdict;
+		PrintCoalescedCapture("fullstate", tick, submitted);
 		return true;
 	}
 	const CheckpointPalette palette = CaptureCheckpointPalette();
@@ -970,10 +1045,21 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		manifest.sideState = identity->sideState;
 		manifest.savedByHost = identity->savedByHost;
 	}
-	// Nothing writes the image once it is published, so the worker keeps its own buffers.
-	task = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel, kind,
+	// Nothing writes the image once it is published, so the worker keeps its own buffers. A match's automatic captures
+	// are one series; a save the player asked for has none and is always written.
+	const AutosaveArchiveWriter::Submitted submitted = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel, kind,
 	                                automatic, descriptor, manifest, pinnedCheckpointSource, sceneCache, previousImage,
-	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers)]() mutable {
+	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers)](bool replaced) mutable {
+		if (replaced) {
+			retired.clear();
+			retiredLayers.clear();
+			previousImage.reset();
+			sceneCache.reset();
+			image.reset();
+			// The capture that replaced it carries a later tick; this one's archive never lands.
+			if (automatic) NoteAutosaveVerdict(tick, false);
+			return false;
+		}
 		const auto start = std::chrono::steady_clock::now();
 		const auto sinceStart = [&start] {
 			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
@@ -1033,7 +1119,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			image.reset();
 			return false;
 		}
-	});
+	}, matchId, tick);
+	task = submitted.verdict;
+	PrintCoalescedCapture("autosave", tick, submitted);
 	return true;
 }
 
