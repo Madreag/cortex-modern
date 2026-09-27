@@ -36,7 +36,7 @@ ENVIRONMENT = {'CCCP_HEADLESS': '1', 'CC_PREVIEW_GLOBALS_FENCE': '1',
                'CC_PREVIEW_FENCE_DEPTH': '1', 'CC_PREVIEW_FENCE_NAMES': '0', 'CC_PREVIEW_BARRIER_STATS': '1'}
 STATS = re.compile(r'\[localpred\] previews=(\d+) actor_ticks=\d+ ms_total=([\d.]+) avg_ms=([\d.]+)')
 NATIVE = re.compile(r'\[preview-write-barrier\] (.*)')
-FAIL = re.compile(r'^\[(?:script-graph-selftest|preview-funds-selftest)\] FAIL(?: (.*))?$', re.M)
+FAIL = re.compile(r'^\[(?:script-graph-selftest|preview-funds-selftest)\] FAIL(?: (\S+))?', re.M)
 OBSERVE = re.compile(r'^\[(?:pie-observe|pie-write-observe|pie-write|preview-module-fixture|preview-compat|preview-modcompat-fixture)[^\]]*\].*$', re.M)
 DRIVER_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 

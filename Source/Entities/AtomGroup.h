@@ -207,7 +207,11 @@ namespace RTE {
 		/// Removes all atoms in this AtomGroup, leaving it empty of Atoms.
 		void RemoveAllAtoms() {
 			if (!m_Atoms.empty() || !m_SubGroups.empty() || m_MomentOfInertia != 0.0F || m_StoredOwnerMass != 0.0F) TouchCheckpoint();
-			for (Atom* atom: m_Atoms) atom->SetCheckpointOwner(nullptr);
+			// The group owns its atoms: a backup foot group cloned from a live one drops its copies here on every clone.
+			for (Atom* atom: m_Atoms) {
+				atom->SetCheckpointOwner(nullptr);
+				delete atom;
+			}
 			m_Atoms.clear();
 			m_SubGroups.clear();
 			m_MomentOfInertia = 0.0F;

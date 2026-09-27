@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <optional>
 #include <vector>
 
 namespace RTE {
@@ -179,6 +180,9 @@ namespace RTE {
 			uint64_t workTicks = 0, workUs = 0, sentThrough = 0;
 		};
 		WorldJoinReport TakeWorldJoinReport();
+		/// The end record of a round that ended while this seat was held or rejoining; the events after it belong to the next lobby.
+		const std::optional<uint64_t>& GetRoundEndedRecord() const { return m_RoundEndedRecord; }
+		std::vector<NetTransportEvent> TakeEventsAfterRoundEnded() { return std::exchange(m_EventsAfterRoundEnded, {}); }
 		std::vector<uint8_t> TakePendingTailBytes();
 		void SetStartFrame(uint64_t startFrame) { m_StartFrame = startFrame; }
 		bool HasCompleteStateTransfer() const { return m_IncomingStateComplete; }
@@ -313,6 +317,8 @@ namespace RTE {
 		bool m_IncomingStateComplete = false;
 		std::vector<uint8_t> m_ReceivedState;
 		std::deque<WorldJoinReport> m_WorldJoinReports;
+		std::optional<uint64_t> m_RoundEndedRecord;
+		std::vector<NetTransportEvent> m_EventsAfterRoundEnded;
 		std::vector<uint8_t> m_PendingTailBytes;
 		NetLobbyStats m_Stats;
 	};

@@ -69,6 +69,7 @@ namespace RTE {
 			bool        saveRefusalDiagnosisSelfTest = false; // -save-refusal-diagnosis-selftest: player-facing save refusal.
 			bool        freeRunSim = false; // -free-run-sim: a lockstep match runs its ticks as fast as the frames arrive, one per loop iteration, drawing nothing.
 			bool        selftestRematch = false; // -net-match-e2e-rematch: when match 1 ends, return to the lobby and run a second match.
+			uint32_t    selftestRematches = 0; // -net-match-e2e-rematches N: that many rematches in a row, each through the lobby.
 			bool        selftestLeave = false; // -net-match-e2e-leave: this peer quits to the menu at tick 300 like a pause-menu leave.
 			uint64_t    selftestLeaveTick = 300; // -net-match-e2e-leave-tick <N>: the tick -net-match-e2e-leave fires at (default 300 = the long-standing hardcoded value).
 			bool        selftestInventoryCommand = false; // -net-match-e2e-inventory-command: host-issued inventory ops at fixed ticks.
@@ -133,6 +134,14 @@ namespace RTE {
 		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands = false);
 		/// The period of the captures every peer takes at a tick's end, handed to the round so its host is busy there, not gone.
 		static void SetLockstepAnnouncedCaptureEvery(uint32_t every);
+		/// Whether installing coordinators with other round ids keeps the seats' committed input; for the script-graph self-test.
+		static bool RunCommittedSeatHandoffSelfTest();
+		/// The runner's and the round's records and their entry counts, one line for the memory census.
+		static std::string MemoryCensus();
+		/// A held seat that had already run frames from its hold on ran them off the round: its hash records drop them from this frame.
+		static void AbandonTicksFrom(uint64_t frame);
+		/// The frame the hash records drop from, once; 0 when nothing was abandoned since the last call.
+		static uint64_t TakeAbandonedTicksFrom();
 		static void ObserveLockstepPlayerBindings(uint8_t peer, uint64_t frame, const NetGamePlayerBindings& bindings);
 		static bool ConsumeLockstepGameCommand(const NetGameCommand& command);
 		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();
@@ -186,8 +195,8 @@ namespace RTE {
 		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		/// Whether the peer produces the actor's frames (control handoffs included); every peer answers identically.
 		static bool IsLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint8_t peerId);
-		/// The peer that produces the actor's frames now (control handoffs included); 0 without a coordinator.
-		static uint8_t GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
+		/// The peer that produces the actor's frames now, or at atFrame (control handoffs included); 0 without a coordinator.
+		static uint8_t GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, std::optional<uint64_t> atFrame = std::nullopt);
 		/// The peer the ownership policy gives the actor, with a live control handoff ignored; 0 without
 		/// a coordinator. The owner map is seeded from this, so a claim cannot become the owner to return to.
 		static uint8_t GetLockstepPolicyActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
@@ -387,7 +396,7 @@ namespace RTE {
 		/// Erases a dropped claim whose claimant is gone and whose seat is no longer held.
 		static bool TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame);
 		/// Whether this peer may issue team commands for the team (any of a shared team's human peers may).
-		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId);
+		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId, uint64_t atFrame = 0);
 		/// Team authority, or the sender owns the target, or writerUID names a same-team actor the sender owns.
 		static bool IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order);
 		/// Whether a peer may make an AI pass's write: it commands the team, drives the written actor, or

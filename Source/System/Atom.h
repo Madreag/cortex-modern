@@ -2,6 +2,8 @@
 
 #include "Matrix.h"
 #include <array>
+#include <atomic>
+#include <string>
 #include "Material.h"
 #include "SceneMan.h"
 
@@ -146,6 +148,15 @@ namespace RTE {
 		/// Entity itself, so a write here has to reach the stamp the owner's shadow is keyed on.
 		void TouchCheckpoint();
 		void SetCheckpointOwner(MovableObject* owner) { m_CheckpointOwner = owner; }
+
+		/// How many Atoms exist right now, for the leak rows.
+		static int64_t LiveCount() { return s_LiveCount.load(std::memory_order_relaxed); }
+
+		/// Samples the call stack of every Nth Atom constructed, for the memory census; 0 stops sampling.
+		static void SampleConstructionStacks(uint32_t every) { s_StackSampleEvery = every; }
+
+		/// The sampled construction stacks as exe offsets, newest last.
+		static std::string SampledConstructionStacks();
 
 		/// Gets the group ID of this Atom.
 		/// @return The group ID of this Atom.
@@ -418,6 +429,11 @@ namespace RTE {
 
 		MovableObject* m_OwnerMO = nullptr; //!< The owner of this Atom. The owner is obviously not owned by this Atom.
 		MovableObject* m_CheckpointOwner = nullptr;
+		static inline std::atomic<int64_t> s_LiveCount{0}; //!< Atoms constructed and not yet destroyed.
+		static inline uint32_t s_StackSampleEvery = 0; //!< Every this many constructions one stack is kept; 0 = none.
+
+		/// Counts a construction and keeps its stack when it is a sampled one.
+		static void NoteConstruction();
 		MOID m_IgnoreMOID; //!< Special ignored MOID.
 		std::vector<MOID> m_IgnoreMOIDs; //!< ignore hits with MOs of these IDs.
 		std::vector<MOID> const* m_IgnoreMOIDsByGroup; //!< Also ignore hits with MOs of these IDs. This one may be set externally by atom group.

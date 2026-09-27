@@ -89,6 +89,8 @@ namespace RTE {
 		uint64_t Total() const { return priorTicks + SegmentTicks(); }
 		bool EarlyOverIsSetupFailure() const { return Total() < 100; }
 		bool EarlyOverIsSetupFailure(uint64_t matchTick) const { return matchTick < 100; }
+		/// A round over before tick 100 is a broken setup unless a team won it: an early win is a win.
+		bool EarlyOverIsSetupFailure(uint64_t matchTick, bool won) const { return !won && EarlyOverIsSetupFailure(matchTick); }
 	};
 
 	inline uint64_t ParseLockstepStopTick(const std::string& error, uint64_t fallbackTick) {
@@ -454,15 +456,31 @@ namespace RTE {
 			bool activationPending = false; //!< Host: a seat's agreed activation is still ahead.
 			bool startupPending = false; //!< Host: the round's agreed first frame is still ahead.
 			bool ownSeatHeld = false; //!< Host: its own seat is held, so what it sends rides no frame the round plays.
+			bool manualRequested = false; //!< Host: the host asked to save the match and no capture has taken the ask yet.
 		};
 		struct AutosaveTickOutput {
 			bool capture = false; //!< This peer captures at this tick.
+			bool manual = false; //!< The capture is one the host asked for by hand.
 			std::vector<CheckpointNote> send; //!< Entries this peer puts on its committed stream.
+			bool manualPending = false; //!< Host: the ask still waits for a tick the schedule may name.
+			bool manualSaved = false; //!< Host: every writer of the capture it asked for has reported.
+			size_t manualReported = 0; //!< Host: how many writers reported that capture.
+			size_t manualWriters = 0; //!< Host: how many writers it named for it.
 		};
 		/// The checkpoint schedule at one tick boundary, with the capture and the stream left to the caller.
 		/// Every peer captures at each tick the host names; the host names the next one only once every
 		/// writer has reported the last one finished, so no peer holds more than one unwritten capture.
 		AutosaveTickOutput StepAutosaveSchedule(const AutosaveTickInput& input);
+		/// Host: asks every peer to save the match at the next tick the schedule may name, through the schedule's own
+		/// capture; the interval stays as it was. A client's ask only tells it who saves.
+		/// @return Whether the ask was taken.
+		bool RequestManualSave();
+		/// What the pause menu's save row shows on this peer.
+		struct MatchSaveRow {
+			bool enabled = false; //!< Only the host of a running match saves it.
+			std::string hint;
+		};
+		MatchSaveRow GetMatchSaveRow() const;
 		/// Whether this host's capture at the tick is the one a joining member waits for.
 		bool IsJoinCaptureTick(uint64_t tick) const { return m_IsHost && m_OpenCaptureForJoin && tick == m_OpenCaptureTick; }
 		/// Whether the round named a capture for this tick: every peer collects every Lua state at its end, so the garbage each
@@ -673,8 +691,14 @@ namespace RTE {
 		/// it, the transfer it has acknowledged and the tail it has consumed. The goodbye drain watches this
 		/// beside the round's own progress, because a rejoin commits no frame until it is back in the round.
 		uint64_t RejoinProgressSum() const;
+		/// Whether a seat is still on its way into the host's round at this frame: held for its player, handshaking back, or joining the world before its activation frame.
+		bool SeatMidAdmission(uint64_t frame) const;
 		/// Whether the host's goodbye has been heard, and the frame the round ended on (0 when it named none).
 		bool HostGoodbyeSeen(uint64_t& finalFrame) const;
+		/// The host's end record for a round that ended while this seat was held or rejoining, once.
+		bool TakeRoundEndRecord(uint64_t& record);
+		/// The result line a seat reads for a round's winner team, as its own team sees it.
+		static std::string RoundEndResultText(int winnerTeam, int localTeam);
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
@@ -685,7 +709,7 @@ namespace RTE {
 		/// schedules activation from.
 		/// One joiner step: the arrived tail, its E and the report it sends back.
 		/// @param outRefusal The world's refusal code when the host turned this joiner away; 0 otherwise.
-		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal = nullptr);
+		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal = nullptr, std::optional<uint64_t>* outRoundEnded = nullptr);
 		/// Sends one bounded run of committed tail frames to a bootstrap and stamps what left.
 		static void SendWorldJoinTailTo(NetLobbySession& lobby, NetWorldJoinHost& host, const NetWorldJoinSession& session);
 		/// Answers one refused connection on the world's reserved refusal id. Binding re-points a
@@ -1131,6 +1155,8 @@ namespace RTE {
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
+		friend bool TestTheHostSavesTheMatchWhenAsked(std::string* error);
+		friend bool TestAManualSaveKeepsTheIntervalAndWaitsForASafeTick(std::string* error);
 		friend bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error);
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
@@ -1150,6 +1176,8 @@ namespace RTE {
 		void PumpCompletedSessionLocked();
 		/// Refuses Ready peers absent from the ended round; caller holds the lock.
 		void RefuseEndedPeersLocked(const std::string& reason);
+		/// Sends every held or rejoining seat the round's end record through the lobby, once; the connection stays for the rematch.
+		void AnswerEndedReturnersLocked(uint64_t finalFrame);
 		void SayGoodbyeToRejoinersLocked();
 		/// Reads a host's goodbye out of a session's refusal; true once one has been heard.
 		bool NoteHostGoodbyeLocked(const NetSession* session);
@@ -1491,6 +1519,10 @@ namespace RTE {
 		/// round is live. The flag is separate because a goodbye may name no frame.
 		uint64_t m_CompletedRoundFinalFrame = 0;
 		bool m_HostGoodbyeSeen = false;
+		std::optional<uint64_t> m_RoundEndRecord;
+		std::set<NetPeerId> m_EndRecordSent;
+		int m_EndWinnerTeam = -1;
+		std::optional<int> m_ReceivedEndWinner; //!< The winner an end record named for the round this seat was held or rejoining in.
 		/// Host: a seat was held when the round ended, so a rejoin still arriving is owed the goodbye.
 		bool m_GoodbyeOwedToRejoiners = false;
 		/// A goodbye belongs to the round it ended; the next round and a torn-down service start without one.
@@ -1524,6 +1556,18 @@ namespace RTE {
 		bool m_OpenCaptureApplied = false; //!< Host: the capture it named reached the committed stream.
 		std::set<uint8_t> m_CaptureWriters; //!< Host: the peers still writing the open capture.
 		bool m_OpenCaptureForJoin = false;
+		std::set<uint64_t> m_ManualCaptures; //!< The named ticks the host asked for by hand.
+		bool m_OpenCaptureManual = false; //!< Host: the open capture is one it asked for by hand.
+		std::set<uint8_t> m_ManualSaveReported; //!< Host: the writers that reported that capture.
+		size_t m_ManualSaveWriters = 0;
+		std::atomic<bool> m_ManualSaveAsked = false; //!< Host: an ask no capture has taken yet.
+		bool m_ManualSaveWaitShown = false; //!< Host: the HUD already said the ask waits for a safe tick.
+		uint64_t m_ManualSaveTakenTick = 0; //!< Host: the tick its own writer took that capture at.
+		std::string m_ManualSaveFailure; //!< Host: why its own writer did not save it.
+		// The pause menu reads these from the game loop while the tick boundary writes them.
+		std::atomic<bool> m_ManualSaveBusy = false; //!< Host: an ask is open until its writers report.
+		std::atomic<bool> m_ManualSaveFailed = false; //!< Host: its last ask was not saved.
+		std::atomic<int64_t> m_LastMatchSaveTime = 0; //!< When this peer's writer last archived a checkpoint of this match.
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
 		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.

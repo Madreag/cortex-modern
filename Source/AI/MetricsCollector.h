@@ -57,6 +57,17 @@ namespace RTE {
 		/// Records how the engine's own run ended: whether it completed, why, and the last tick it simulated. A verdict the scenario set
 		/// stands; the completion is kept beside it, and a scenario's own final_tick wins.
 		void SetNativeOutcome(bool completed, const std::string& reason, uint64_t finalTick);
+		/// Whether anything judged the current run yet.
+		bool HasResult() const {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return m_Result.resultSet;
+		}
+
+		/// Whether a numeric metric of that name was recorded this run.
+		bool HasNumeric(const std::string& name) const {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return m_Numeric.contains(name);
+		}
 
 		/// Record an arbitrary numeric metric. Called from scenario Lua via `metrics.record(name, value)`.
 		void Record(const std::string& name, double value);
@@ -107,6 +118,12 @@ namespace RTE {
 		void RecordTickHash(const SimChecksum::Result& result, bool paused = false);
 
 		/// Number of tick-hash records captured this run. For tests and CLI diagnostics.
+		/// Drops the records of the ticks from this one on: a held seat ran them off the round before it learned of its hold.
+		void RetractTickHashesFrom(uint64_t tick) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			std::erase_if(m_TickHashes, [tick](const TickHashRecord& record) { return record.tick >= tick; });
+		}
+
 		size_t GetTickHashCount() const {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return m_TickHashes.size();
@@ -134,13 +151,13 @@ namespace RTE {
 		/// Write the run report as a JSON file at the given path. Returns true on success.
 		bool WriteReport(const std::string& path) const;
 
-		/// One per-tick hash record. The subsystem map is `std::map` (sorted by name) so the
-		/// JSON output and any diff is order-stable across runs.
+		/// One per-tick hash record, kept as the raw hashes: a whole match's trace stays in memory until the report, so
+		/// each subsystem is named by its index in the run's name table and written out by name, sorted, at the report.
 		struct TickHashRecord {
-			uint64_t                           tick = 0;
-			bool                               paused = false;
-			std::string                        totalHex;
-			std::map<std::string, std::string> subsystemHex;
+			uint64_t                                            tick = 0;
+			bool                                                paused = false;
+			SimChecksum::Hash                                   total{};
+			std::vector<std::pair<uint16_t, SimChecksum::Hash>> subsystems;
 		};
 
 		/// Convenience: write a multi-run aggregated report.
@@ -152,15 +169,17 @@ namespace RTE {
 			std::unordered_map<std::string, double>      numeric;
 			std::unordered_map<std::string, std::string> stringValues;
 			std::string                                  finalTotalHashHex;
-			std::vector<TickHashRecord>                  tickHashes;
+			std::vector<TickHashRecord>                  tickHashes; //!< Only when asked for: the report writes the collector's own.
+			size_t                                       tickHashCount = 0;
+			std::vector<std::string>                     subsystemNames; //!< The names tickHashes' indices read.
 			std::map<std::string, std::string>           simConfig;
 		};
 		static bool WriteAggregatedReport(const std::string& path,
 		                                  const std::vector<AggregatedRun>& runs,
 		                                  const std::string& suiteVersion);
 
-		/// Snapshot of the current run's results.
-		AggregatedRun GetCurrentRun() const;
+		/// Snapshot of the current run's results; the tick-hash trace is copied only when asked for.
+		AggregatedRun GetCurrentRun(bool withTickHashes = false) const;
 
 	private:
 		struct EventStream;
@@ -187,6 +206,13 @@ namespace RTE {
 		// Per-tick hash trace. See SetRecordTickHashes/RecordTickHash above.
 		bool                                          m_RecordTickHashes = false;
 		std::vector<TickHashRecord>                   m_TickHashes;
+		std::vector<std::string>                      m_SubsystemNames;
+		std::unordered_map<std::string, uint16_t>     m_SubsystemIndex;
+
+		AggregatedRun CurrentRunLocked(bool withTickHashes) const;
+		/// Writes the report, streaming each run's trace; the first run's may be the collector's own, read in place.
+		static bool WriteRuns(const std::string& path, const std::vector<AggregatedRun>& runs, const std::string& suiteVersion,
+		                      const std::vector<TickHashRecord>* firstRunHashes, const std::vector<std::string>* firstRunNames);
 		std::map<std::string, std::string>            m_SimConfig;
 	};
 

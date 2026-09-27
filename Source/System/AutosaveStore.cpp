@@ -337,6 +337,7 @@ namespace RTE {
 		Line(out, "ActivityPreset", manifest.activityPreset);
 		Line(out, "ScenePreset", manifest.scenePreset);
 		for (const std::string& name: manifest.peerNames) Line(out, "Peer", name);
+		if (manifest.savedByHost) Line(out, "SavedBy", "host");
 		out << RenderSideState(manifest.sideState);
 		return out.str();
 	}
@@ -386,6 +387,8 @@ namespace RTE {
 				parsed.scenePreset = value;
 			} else if (key == "Peer") {
 				parsed.peerNames.push_back(value);
+			} else if (key == "SavedBy") {
+				parsed.savedByHost = value == "host";
 			} else if (key == "ControlOwner" || key == "DroppedControlOwner" || key == "Applied") {
 				int64_t left = 0;
 				uint64_t right = 0;

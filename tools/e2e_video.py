@@ -1451,6 +1451,7 @@ def peer_completed(peer):
 
 
 def main():
+    global PORT_LO, PORT_HI
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
@@ -1462,6 +1463,7 @@ def main():
     parser.add_argument("--size")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
+    parser.add_argument("--port-block", help=f"the calling lane's own port block LO-HI, used instead of {PORT_LO}-{PORT_HI}; --port is then required")
     parser.add_argument("--sheet-every", type=int, default=15)
     parser.add_argument("--review-only", type=Path)
     parser.add_argument("--finalize-only", type=Path)
@@ -1501,6 +1503,11 @@ def main():
         parser.error("--sheet-every must be positive")
     if options.fullstate_every < 0:
         parser.error("--fullstate-every must be 0 or positive")
+    if options.port_block:
+        low, _, high = options.port_block.partition("-")
+        if not (low.isdigit() and high.isdigit() and int(low) <= int(high)) or options.port is None:
+            parser.error("--port-block takes LO-HI and needs --port inside it")
+        PORT_LO, PORT_HI = int(low), int(high)
     if options.port is not None and not PORT_LO <= options.port <= PORT_HI:
         parser.error(f"this driver owns ports {PORT_LO}-{PORT_HI}")
     if os.environ.get("CCCP_HEADLESS", "1") != "1":

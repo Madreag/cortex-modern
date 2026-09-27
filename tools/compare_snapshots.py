@@ -275,6 +275,9 @@ def parse_graph(data):
                     entry = tag, reader.string()
                 elif tag == "V":
                     entry = tag, reader.token()
+                elif tag == "X":
+                    # A pairs loop's place: the key it returns next, written as a value token.
+                    entry = tag, reader.token()
                 else:
                     raise ValueError("invalid coroutine entry")
                 entries.append(entry)

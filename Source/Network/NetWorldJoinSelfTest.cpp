@@ -714,7 +714,9 @@ namespace RTE {
 				host.Tick(now); client.Tick(now);
 				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
 			}
-			if (!client.IsFailed()) return Fail("an ordinary peer sent bootstrap progress without a bound transfer");
+			// A restarted lobby with no transfer bound drops the last round's progress report: it is neither taken nor a reason to eject the peer.
+			if (host.TakeWorldJoinReport().pending || client.IsFailed() || client.IsRejected())
+				return Fail("a restarted lobby took or refused the last round's progress report: client=" + client.GetFailureReason());
 			return 0;
 		}
 
@@ -1667,6 +1669,111 @@ namespace RTE {
 			if (!joiner.SendPayload(impostor, &error)) return Fail(error);
 			for (int i = 0; i < 10; ++i) pumpLobbies();
 			if (!joiner.IsFailed() || resident.IsFailed()) return Fail("bootstrap identity guard accepted another session's sender");
+			return 0;
+		}
+
+		// A repair restarts the host's lobby while a returner's catch-up reports are still on the wire: the new round drops them and
+		// keeps the member; a state chunk that is no report is still refused.
+		int TestARepairLobbyKeepsAReturnersLateReport(bool imageChunk) {
+			std::string error;
+			LoopbackTransport hostWire, clientWire;
+			NetSession hostSession, clientSession;
+			const uint16_t port = imageChunk ? 48921 : 48920;
+			if (!hostSession.StartHost(hostWire, MakeWorldSessionConfig(port, 11, "Host"), &error) ||
+			    !clientSession.StartClient(clientWire, "loopback", MakeWorldSessionConfig(port, 22, "Client"), &error)) return Fail(error);
+			uint64_t now = 0;
+			while (hostSession.GetReadyPeers().size() < 1 && now < 1000) {
+				hostSession.Tick(now); clientSession.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			}
+			if (hostSession.GetReadyPeers().size() != 1) return Fail("repair lobby fixture: the client session did not become ready");
+			NetLobbySession host, client;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.session = &hostSession; hostConfig.autoStart = false;
+			hostConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x5245504149ULL);
+			hostConfig.matchConfig.peerCount = 2;
+			hostConfig.matchConfig.hostPeerId = 1;
+			hostConfig.matchConfig.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Client"}};
+			hostConfig.remoteTransportPeerIds = {{2, hostSession.GetReadyPeers().front().transportPeerId}};
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+			clientConfig.matchConfig = hostConfig.matchConfig;
+			if (!host.Start(hostWire, hostConfig, &error) || !client.Start(clientWire, clientConfig, &error)) return Fail(error);
+			auto pump = [&] {
+				for (const auto& event: hostWire.PollEvents()) host.HandleTransportEvent(event, now);
+				client.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			};
+			for (int i = 0; i < 10; ++i) pump();
+			if (client.IsFailed() || client.IsRejected() || !host.IsRemoteLobbyUp(2)) return Fail("repair lobby fixture: the client lobby did not come up");
+			NetLobbyStateChunk chunk = MakeWorldJoinReport(c_NetWorldReportCatchUp, 175);
+			if (imageChunk) {
+				chunk.transferId = 7;
+				chunk.bytes.assign(64, 0x5A);
+				chunk.totalBytes = static_cast<uint32_t>(chunk.bytes.size());
+			}
+			if (!client.SendPayload(chunk, &error)) return Fail(error);
+			for (int i = 0; i < 10; ++i) pump();
+			if (imageChunk) {
+				if (!client.IsFailed() && !client.IsRejected()) return Fail("a client's state chunk that is no report was accepted by the host lobby");
+				return 0;
+			}
+			if (client.IsFailed() || client.IsRejected() || !host.IsRemoteLobbyUp(2))
+				return Fail("a returner's late catch-up report ejected it from the repair lobby: " + client.GetFailureReason());
+			std::cout << "[net-world-join-selftest] PASS a_repair_lobby_keeps_a_returners_late_report" << std::endl;
+			return 0;
+		}
+
+		// A held or rejoining seat's lobby takes the host's end record, keeps its link, and leaves what follows to the next lobby.
+		int TestARoundEndedRecordReachesAHeldSeat() {
+			const uint64_t packed = PackRoundEndedRecord(4900, 0);
+			if (RoundEndedFinalFrame(packed) != 4900 || RoundEndedWinnerTeam(packed) != 0 || RoundEndedWinnerTeam(PackRoundEndedRecord(12, -1)) != -1)
+				return Fail("the end record does not carry its final frame and winner");
+			if (NetMatchService::RoundEndResultText(0, 0) != "Victory!" || NetMatchService::RoundEndResultText(0, 1) != "Defeat" ||
+			    NetMatchService::RoundEndResultText(-1, 1) != "Match over: draw")
+				return Fail("the end record's result text does not follow the seat's team");
+			std::string error;
+			LoopbackTransport hostWire, clientWire;
+			NetSession hostSession, clientSession;
+			if (!hostSession.StartHost(hostWire, MakeWorldSessionConfig(48922, 11, "Host"), &error) ||
+			    !clientSession.StartClient(clientWire, "loopback", MakeWorldSessionConfig(48922, 22, "Client"), &error)) return Fail(error);
+			uint64_t now = 0;
+			while (hostSession.GetReadyPeers().size() < 1 && now < 1000) {
+				hostSession.Tick(now); clientSession.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			}
+			if (hostSession.GetReadyPeers().size() != 1) return Fail("end record fixture: the client session did not become ready");
+			const NetPeerId connection = hostSession.GetReadyPeers().front().transportPeerId;
+			NetLobbySession host, client;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.session = &hostSession; hostConfig.autoStart = false;
+			hostConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x454E44ULL);
+			hostConfig.matchConfig.peerCount = 2;
+			hostConfig.matchConfig.hostPeerId = 1;
+			hostConfig.matchConfig.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Client"}};
+			hostConfig.remoteTransportPeerIds = {{2, connection}};
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+			clientConfig.matchConfig = hostConfig.matchConfig;
+			if (!host.Start(hostWire, hostConfig, &error) || !client.Start(clientWire, clientConfig, &error)) return Fail(error);
+			auto pump = [&] {
+				for (const auto& event: hostWire.PollEvents()) host.HandleTransportEvent(event, now);
+				client.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			};
+			for (int i = 0; i < 10; ++i) pump();
+			if (client.IsFailed() || client.IsRejected() || client.GetRoundEndedRecord()) return Fail("end record fixture: the client lobby did not come up clean");
+			NetLobbyPeerState after;
+			after.peerId = 1; after.displayName = "Host";
+			if (!host.BindLateRemote(c_WorldRefusalLobbyPeer, connection, &error) ||
+			    !host.SendPayloadTo(c_WorldRefusalLobbyPeer, MakeWorldJoinReport(c_NetWorldReportRoundEnded, packed), &error) || !host.SendPayloadTo(2, after, &error)) return Fail(error);
+			for (int i = 0; i < 10; ++i) pump();
+			if (client.IsFailed() || client.IsRejected()) return Fail("the end record failed the held seat's lobby: " + client.GetFailureReason());
+			if (!client.GetRoundEndedRecord() || *client.GetRoundEndedRecord() != packed) return Fail("the held seat's lobby did not keep the end record");
+			if (client.TakeEventsAfterRoundEnded().empty()) return Fail("the lobby read what followed the end record instead of leaving it to the next lobby");
+			std::cout << "[net-world-join-selftest] PASS a_round_ended_record_reaches_a_held_seat final=4900 winner=0" << std::endl;
 			return 0;
 		}
 
@@ -5967,8 +6074,8 @@ namespace RTE {
 
 		NetMatchReplayReader reader;
 		if (!reader.Open(segmentPath.string(), error)) return false;
-		if (reader.GetVersion() != 6) {
-			*error = "world-segment-header-lost: the segment reads version " + std::to_string(reader.GetVersion()) + ", the format is 6";
+		if (reader.GetVersion() != NetMatchReplayWriter::c_Version) {
+			*error = "world-segment-header-lost: the segment reads version " + std::to_string(reader.GetVersion()) + ", the format is " + std::to_string(NetMatchReplayWriter::c_Version);
 			return false;
 		}
 		if (!reader.HasWorldSegment() || reader.GetWorldSegment() != header) {
@@ -7313,6 +7420,15 @@ namespace RTE {
 			s_FailTag = "net-world-spectator-seat-selftest";
 			return TestSpectatorNeverTakesASeat();
 		}
+		if (std::strcmp(name, "-net-world-end-record-selftest") == 0) {
+			s_FailTag = "net-world-end-record-selftest";
+			return TestARoundEndedRecordReachesAHeldSeat();
+		}
+		if (std::strcmp(name, "-net-world-repair-lobby-selftest") == 0) {
+			s_FailTag = "net-world-repair-lobby-selftest";
+			if (const int result = TestARepairLobbyKeepsAReturnersLateReport(false); result != 0) return result;
+			return TestARepairLobbyKeepsAReturnersLateReport(true);
+		}
 		if (std::strcmp(name, "spectator-ids") == 0 || std::strcmp(name, "-net-world-spectator-ids-selftest") == 0) {
 			s_FailTag = "net-world-spectator-ids-selftest";
 			return TestSpectatorLobbyIdsRecycle();
@@ -7632,6 +7748,9 @@ namespace RTE {
 		if (const int result = TestLateWorldStartBoundary(); result != 0) return result;
 		if (const int result = TestWorldBootstrapSenderIdentity(); result != 0) return result;
 		if (const int result = TestWorldBootstrapSenderIdentity(true); result != 0) return result;
+		if (const int result = TestARepairLobbyKeepsAReturnersLateReport(false); result != 0) return result;
+		if (const int result = TestARepairLobbyKeepsAReturnersLateReport(true); result != 0) return result;
+		if (const int result = TestARoundEndedRecordReachesAHeldSeat(); result != 0) return result;
 		if (const int result = TestDueActivationAdmits(); result != 0) {
 			return result;
 		}

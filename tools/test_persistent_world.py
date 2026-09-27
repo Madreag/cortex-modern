@@ -218,6 +218,7 @@ RED_SEGMENT_DIGEST = "world-segment-digest-differs-from-its-archive"
 RED_SEGMENT_BOOTED_THE_PRESET = "world-segment-playback-booted-the-preset"
 RED_SEGMENT_CHAIN_BROKE = "world-segment-chain-broke"
 RED_SEGMENT_HASHES_DIVERGED = "world-segment-playback-hashes-diverged"
+RED_WORLD_TRACE_VERDICT = "world-host-trace-reads-failed-or-no-ticks"
 RED_SEGMENT_TAIL_UNRECORDED = "world-segment-chain-left-the-host-tail-unrecorded"
 RED_HOST_TRACE_NO_COMPLETION = "world-host-trace-records-no-completion"
 RED_RESUMED_NO_SEGMENT = "resumed-world-wrote-no-segment"
@@ -913,6 +914,10 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
         windowed[name] = data
     host_last = max(entry["tick"] for entry in windowed["host"]["runs"][0]["tick_hashes"])
     replay_last = max(entry["tick"] for entry in windowed["replay"]["runs"][0]["tick_hashes"])
+    # The world round is judged by no scenario; its own trace carries how it ended and the ticks it played.
+    host_run = windowed["host"]["runs"][0]
+    assert host_run.get("passed") is True and int(host_run.get("ticks") or 0) > 0, \
+        f"{RED_WORLD_TRACE_VERDICT}: passed={host_run.get('passed')} ticks={host_run.get('ticks')}"
     last = min(host_last, replay_last)
     for name, data in windowed.items():
         data["runs"][0]["tick_hashes"] = [entry for entry in data["runs"][0]["tick_hashes"] if first_tick < entry["tick"] <= last]
@@ -1009,7 +1014,7 @@ def host_restart_same_world_id(repo: Path, out: Path) -> None:
         raise AssertionError("world-id-did-not-survive-restart: " + repr(printed))
 
 
-USAGE = """usage: test_persistent_world.py [directory-resume | world-segment REPO [OUT] | host-restart REPO [OUT]] [--fullstate-every N]
+USAGE = """usage: test_persistent_world.py [directory-resume | world-segment REPO [OUT] | host-restart REPO [OUT]] [--fullstate-every N] [--port P]
 
   --fullstate-every N  world-segment only: every N committed ticks both peers of each world round hash their whole
                        capture (-net-fullstate-hash-every) and every round's pair must match; 0 is off"""
@@ -1020,6 +1025,11 @@ if __name__ == "__main__":
         print(USAGE)
         sys.exit(0)
     FULLSTATE_EVERY = 0
+    SEGMENT_RUN_PORT = SEGMENT_PORT
+    if "--port" in sys.argv:
+        at = sys.argv.index("--port")
+        SEGMENT_RUN_PORT = int(sys.argv[at + 1])
+        del sys.argv[at:at + 2]
     if "--fullstate-every" in sys.argv:
         at = sys.argv.index("--fullstate-every")
         FULLSTATE_EVERY = int(sys.argv[at + 1])
@@ -1028,7 +1038,7 @@ if __name__ == "__main__":
         directory_resume_same_world_id()
         print("[directory-resume] PASS")
     elif len(sys.argv) > 1 and sys.argv[1] == "world-segment":
-        world_segment_replay(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()), fullstate_every=FULLSTATE_EVERY)
+        world_segment_replay(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()), port=SEGMENT_RUN_PORT, fullstate_every=FULLSTATE_EVERY)
         print("[world-segment-replay] PASS")
         # Every launch went through run_sim_test.make_run: nothing here starts the executable itself.
     elif len(sys.argv) > 1 and sys.argv[1] == "host-restart":

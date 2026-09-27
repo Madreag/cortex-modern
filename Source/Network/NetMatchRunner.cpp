@@ -639,6 +639,12 @@ namespace RTE {
 			                             : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
 			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), sessionMs);
 			m_Lobby.Tick(clocks.lobbyMs);
+			// A seat told its round ended while it was held or rejoining takes the end record, not a round.
+			if (!m_Config.host && m_Lobby.GetRoundEndedRecord()) {
+				SetFailed("the round ended while this seat was held");
+				if (error) *error = m_SetupError;
+				return false;
+			}
 			if (const uint64_t progress = m_Lobby.GetStateTransferProgressSerial(); progress != transferProgress) {
 				transferProgress = progress;
 				lastTransferProgressMs = clocks.budgetMs;

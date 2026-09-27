@@ -446,7 +446,7 @@ namespace {
 			}
 		} else if (op == "key_down" || op == "key_up") {
 			const std::string key = step.at("key");
-			Require(key == "F6" || key == "Escape" || key == "P" || key == "CHAT", "unsupported probe key");
+			Require(key == "F6" || key == "Escape" || key == "P" || key == "CHAT" || key == "F5" || key == "F9" || key == "RCtrl+F9" || key == "RAlt+F9", "unsupported probe key");
 			if (SimRateKey(key)) {
 				if (step.contains("sim_at_least")) {
 					if (probe.simTick < step["sim_at_least"].get<uint64_t>()) return false;
@@ -465,9 +465,15 @@ namespace {
 			event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
 			// The chat key is whatever the settings name resolves to, so the script never hardcodes it.
 			const SDL_Scancode chatScancode = static_cast<SDL_Scancode>(NetModerationGUI::ChatKeyScancode());
-			event.key.scancode = key == "F6" ? SDL_SCANCODE_F6 : key == "P" ? SDL_SCANCODE_P : key == "CHAT" ? chatScancode : SDL_SCANCODE_ESCAPE;
-			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : key == "CHAT" ? SDL_GetKeyFromScancode(chatScancode, SDL_KMOD_NONE, false) : SDLK_ESCAPE;
+			const bool f9 = key == "F9" || key == "RCtrl+F9" || key == "RAlt+F9";
+			event.key.scancode = key == "F6" ? SDL_SCANCODE_F6 : key == "P" ? SDL_SCANCODE_P : key == "CHAT" ? chatScancode : key == "F5" ? SDL_SCANCODE_F5 : f9 ? SDL_SCANCODE_F9 : SDL_SCANCODE_ESCAPE;
+			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : key == "CHAT" ? SDL_GetKeyFromScancode(chatScancode, SDL_KMOD_NONE, false) : key == "F5" ? SDLK_F5 : f9 ? SDLK_F9 : SDLK_ESCAPE;
 			event.key.down = op == "key_down";
+			// The engine's hotkeys read modifiers from SDL's state, so a combo holds its modifier from its down step to its up step.
+			const SDL_Keymod modifier = static_cast<SDL_Keymod>(key == "RCtrl+F9" ? SDL_KMOD_RCTRL : key == "RAlt+F9" ? SDL_KMOD_RALT : SDL_KMOD_NONE);
+			if (modifier != SDL_KMOD_NONE) {
+				SDL_SetModState(static_cast<SDL_Keymod>(event.key.down ? SDL_GetModState() | modifier : SDL_GetModState() & ~modifier));
+			}
 			Push(event);
 		} else if (op == "pad_down" || op == "pad_up") {
 			const std::string name = step.at("button");
