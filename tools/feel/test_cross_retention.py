@@ -44,5 +44,10 @@ class PresentationRetention(unittest.TestCase):
         self.assertTrue(cross_report.presentation_contract(manifest,dict(document,complete=False),False))
         self.assertFalse(cross_report.presentation_contract(manifest,{},False))
 
+    def test_interrupted_index_is_a_failed_oracle_not_a_report_crash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'raw.index.json'; path.write_text('{"complete":')
+            self.assertIn('index_error',cross_report.presentation_index(path))
+
 
 if __name__=='__main__': unittest.main()

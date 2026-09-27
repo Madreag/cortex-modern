@@ -206,6 +206,11 @@ def presentation_contract(manifest,document,normal_exit):
         (not normal_exit or document.get('complete') is True))
 
 
+def presentation_index(path):
+    try: return load(path,{})
+    except (OSError,ValueError) as error: return dict(index_error=str(error))
+
+
 def write_rerun_command(root,manifest):
     root=Path(root)
     current=load(HERE/'cross_peers/boxes.json',{})
@@ -335,11 +340,11 @@ def build_report(root):
             if re.search(r'RTE Assert|FATAL:|EXCEPTION_ACCESS_VIOLATION|Runtime Error due to unhandled exception|Rejected .*command|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|\[net-plane\].*ASSERT|\[fullstate(?:-refusal)?\].*(?:failed:|refused:|problem=)|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
                 findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
-        presentation_window=load(raw_path.with_name('raw.index.json'),{})
+        presentation_window=presentation_index(raw_path.with_name('raw.index.json'))
         presentation_by_incarnation={}
         presentation_valid=True
         for fragment in fragments:
-            document=load(fragment/'engine/feel/raw.index.json',{})
+            document=presentation_index(fragment/'engine/feel/raw.index.json')
             normal_exit=load(fragment/'record.json',{}).get('exit_code')==0
             valid=presentation_contract(manifest,document,normal_exit)
             if fragment!=own:
