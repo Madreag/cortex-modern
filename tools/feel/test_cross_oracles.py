@@ -60,12 +60,16 @@ class AttemptOracles(unittest.TestCase):
         hold=dict(peer=3,tick=607,source_round=1)
         config=dict(type='adopted_config',peer=3,source_round=1,incarnation=0,tick=1,sim_tick_ms=16.6666,
                     config=dict(rules=dict(slow_player_bound_ticks=3)))
-        timing=dict(type='tick_timing',peer=3,source_round=1,incarnation=0,phase='live',tick=600,capture_us=56323,compute_us=7712,wait_us=27)
+        timing=dict(type='tick_timing',peer=3,source_round=1,incarnation=0,phase='live',tick=600,capture_us=56323,compute_us=7712,wait_us=27,partition_valid=True)
         events={'edith':[config,timing,dict(timing,tick=607,phase='catchup',capture_us=5)]}
         peers={'edith':dict(own_hold_notifications=[dict(tick=607,source_round=1,incarnation=0)])}
         result=cross_report.classify_hold(hold,events,peers)
         self.assertEqual(result['classification'],'capture-induced'); self.assertEqual(result['capture_tick'],600)
         self.assertEqual(result['hold_bound_us'],49000)
+        timing['partition_valid']=False
+        self.assertEqual(cross_report.classify_hold(hold,events,peers)['classification'],'other')
+        timing['partition_valid']=True
+        self.assertEqual(cross_report.classify_hold(dict(hold,round=99),events,peers)['classification'],'other')
         events['edith'].append(dict(timing,tick=601,capture_us=20,compute_us=100000))
         self.assertEqual(cross_report.classify_hold(hold,events,peers)['classification'],'other')
         self.assertEqual(cross_report.classify_hold(dict(hold,source_round=2),events,peers)['classification'],'other')

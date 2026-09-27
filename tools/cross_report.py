@@ -95,13 +95,16 @@ def classify_hold(hold,events,peers):
     result=dict(classification='other',reason='Held peer timing or adopted hold bound is missing or ambiguous.')
     matches=[]
     for name,records in events.items():
-        configs=[r for r in records if r.get('type')=='adopted_config' and r.get('peer')==hold['peer'] and r.get('source_round')==hold.get('source_round')]
+        configs=[r for r in records if r.get('type')=='adopted_config' and r.get('peer')==hold['peer'] and r.get('source_round')==hold.get('source_round') and
+                 (hold.get('round') is None or r.get('round')==hold['round'])]
         if not configs: continue
-        notices=[r for r in peers[name].get('own_hold_notifications',[]) if r['tick']==hold['tick'] and r['source_round']==hold.get('source_round')]
+        notices=[r for r in peers[name].get('own_hold_notifications',[]) if r['tick']==hold['tick'] and r['source_round']==hold.get('source_round') and
+                 (hold.get('round') is None or r.get('round')==hold['round'])]
         incarnations={r['incarnation'] for r in notices}
         if len(incarnations)!=1: continue
         timing=[r for r in records if r.get('type')=='tick_timing' and r.get('phase')=='live' and r.get('peer')==hold['peer'] and
                 r.get('source_round')==hold.get('source_round') and r.get('tick',float('inf'))<=hold['tick'] and
+                (hold.get('round') is None or r.get('round')==hold['round']) and
                 (not incarnations or r.get('incarnation') in incarnations)]
         if not timing: continue
         tick=max(r['tick'] for r in timing); timing=[r for r in timing if r['tick']==tick]
@@ -116,9 +119,13 @@ def classify_hold(hold,events,peers):
         matches.append(dict(held_instance=name,incarnation=row.get('incarnation'),execution=row.get('execution'),
             capture_tick=tick,capture_us=row.get('capture_us'),compute_us=row.get('compute_us'),wait_us=row.get('wait_us'),hold_bound_us=bound,
             evidence_path=row.get('_path'),evidence_line=row.get('_line'),own_hold_notifications=notices,
+            timing_valid=row.get('partition_valid') is True,
             association='Held peer last live committed timing at or before the hold boundary; later catch-up timing excluded.'))
     if len(matches)!=1: return result
     result.update(matches[0])
+    if not result['timing_valid']:
+        result['reason']='Held peer timing partition is invalid; no capture attribution is justified.'
+        return result
     if isinstance(result['capture_us'],(int,float)) and result['capture_us']>result['hold_bound_us']:
         result.update(classification='capture-induced',reason='Inventory engine rows 374/395/403: capture work exceeds the adopted slow-player bound; Source/Main.cpp:7187 timing/capture seam and Source/Network/NetLockstep.cpp:5903.')
     else:
@@ -325,18 +332,19 @@ def build_report(root):
         log = [(fragment/'engine'/leaf,number,line) for fragment in fragments for leaf in ('stdout.log','stderr.log')
                for number,line in read_log(fragment/'engine'/leaf)]
         record, native = load(own / 'record.json', {}), load(own / 'match-report.json', {})
-        waits = []; holds = []; own_hold_notifications=[]; observed_round=None; observed_log=None
+        waits = []; holds = []; own_hold_notifications=[]; observed_round=None; observed_native_round=None; observed_log=None
         for log_path, number, line in log:
-            if log_path!=observed_log: observed_log=log_path; observed_round=None
-            if match := re.search(r'\[cross-context\] round=\d+ source_round=(\d+)',line): observed_round=int(match[1])
+            if log_path!=observed_log: observed_log=log_path; observed_round=None; observed_native_round=None
+            if match := re.search(r'\[cross-context\] round=(\d+) source_round=(\d+)',line):
+                observed_native_round=int(match[1]); observed_round=int(match[2])
             if match := re.search(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', line):
                 waits.append(dict(tick=int(match[1]), wait_ms=int(match[2]), line=number))
             if match := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
-                holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number,source_round=observed_round,path=str(log_path.relative_to(root))))
+                holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number,source_round=observed_round,round=observed_native_round,path=str(log_path.relative_to(root))))
                 if any(r.get('type')=='adopted_config' and r.get('peer')==int(match[1]) and r.get('source_round')==observed_round for r in events[name]):
-                    own_hold_notifications.append(dict(tick=int(match[2]),source_round=observed_round,incarnation=int(log_path.parent.parent.name.split('-')[-1]),path=str(log_path.relative_to(root)),line=number))
+                    own_hold_notifications.append(dict(tick=int(match[2]),source_round=observed_round,round=observed_native_round,incarnation=int(log_path.parent.parent.name.split('-')[-1]),path=str(log_path.relative_to(root)),line=number))
             if match := re.search(r'\[net-lockstep\] hold of this seat at (\d+)',line):
-                own_hold_notifications.append(dict(tick=int(match[1]),source_round=observed_round,incarnation=int(log_path.parent.parent.name.split('-')[-1]),path=str(log_path.relative_to(root)),line=number))
+                own_hold_notifications.append(dict(tick=int(match[1]),source_round=observed_round,round=observed_native_round,incarnation=int(log_path.parent.parent.name.split('-')[-1]),path=str(log_path.relative_to(root)),line=number))
             if re.search(r'RTE Assert|FATAL:|EXCEPTION_ACCESS_VIOLATION|Runtime Error due to unhandled exception|Rejected .*command|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|\[net-plane\].*ASSERT|\[fullstate(?:-refusal)?\].*(?:failed:|refused:|problem=)|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
                 findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
