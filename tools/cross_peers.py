@@ -18,6 +18,7 @@ import sys
 import time
 import copy
 import platform
+import secrets
 
 HERE = Path(__file__).resolve().parent
 SCRATCH = Path('D:/mx/astra-cross-peers-build-20260926')
@@ -198,7 +199,7 @@ def make_plan(options):
                 capture_barriers=barriers,
                 overlap_policy='ordered by committed unique gameplay budget; early ends carry outstanding triggers',
                 deadlines=dict(recovery_ms=options.recovery_deadline_ms, capture_ms=options.capture_budget_ms,
-                               launch_s=options.timeout, payload_ready_s=180, payload_release_s=360, session_publication_s=180),
+                               launch_s=options.timeout, reservation_s=options.timeout, payload_ready_s=180, payload_release_s=360, session_publication_s=180),
                 memory=dict(warmup_s=120, slope_bytes_per_minute=8*1024*1024,
                             retained_bytes=128*1024*1024, sample_seconds=60),
                 storage=dict(total_bytes=LIMIT, event_bytes_per_instance=256*1024*1024,
@@ -300,8 +301,45 @@ def content_manifest(repo):
     return result
 
 
+def owns_reservation(box):
+    if not box.get('exclusive_marker'): return False
+    try: value=json.loads(Path(box['exclusive_marker']).read_text(encoding='utf-8'))
+    except (OSError,ValueError): return False
+    return isinstance(value,dict) and bool(value.get('token')) and value['token']==os.environ.get('CCCP_FEEL_MATRIX_RUN')
+
+
+def acquire_reservation(box,root,timeout):
+    marker=Path(box['exclusive_marker']); deadline=time.monotonic()+timeout; previous=os.environ.get('CCCP_FEEL_MATRIX_RUN')
+    while time.monotonic()<deadline:
+        if marker.exists() or box_load(): time.sleep(.5); continue
+        token=secrets.token_hex(24)
+        value=dict(stream_root=str(root),stamp=dt.datetime.now(MST).isoformat(),pid=os.getpid(),token=token)
+        try:
+            with marker.open('x',encoding='utf-8') as stream: json.dump(value,stream)
+        except FileExistsError: continue
+        os.environ['CCCP_FEEL_MATRIX_RUN']=token
+        claim=dict(marker=str(marker),record=value,previous=previous)
+        if not owns_reservation(box):
+            release_reservation(claim); raise RuntimeError('box reservation was replaced before launch')
+        if box_load(): release_reservation(claim); time.sleep(.5); continue
+        return claim
+    raise TimeoutError(f'box reservation deadline after {timeout} seconds; no engine launched')
+
+
+def release_reservation(claim):
+    marker=Path(claim['marker']); removed=False
+    try:
+        value=json.loads(marker.read_text(encoding='utf-8'))
+        if isinstance(value,dict) and value.get('token')==claim['record']['token']:
+            marker.unlink(); removed=True
+    except (OSError,ValueError): pass
+    if claim['previous'] is None: os.environ.pop('CCCP_FEEL_MATRIX_RUN',None)
+    else: os.environ['CCCP_FEEL_MATRIX_RUN']=claim['previous']
+    return removed
+
+
 def assert_box_guard(box):
-    if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists():
+    if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists() and not owns_reservation(box):
         raise RuntimeError(f'{box["name"]} launch guard active: exclusive measurement reservation {box["exclusive_marker"]}')
     if box.get('guard_file') and not Path(box['guard_file']).is_file():
         raise RuntimeError(f'{box["name"]} launch guard active: {box["guard_file"]} absent')
@@ -639,7 +677,7 @@ def run_payload(path):
             while len(completed) < len(runs):
                 now = time.monotonic()
                 if (root / 'stop.json').is_file(): raise RuntimeError('coordinator cancelled this box payload')
-                if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists():
+                if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists() and not owns_reservation(box):
                     raise RuntimeError(f'{box["name"]}: exclusive measurement reservation appeared during this payload')
                 if box['kind'] == 'windows-local' and (reason := inventory_guard()): raise RuntimeError(reason)
                 if now >= next_sample:
@@ -807,7 +845,11 @@ def run_plan(plan, root):
     local = locals_[0]
     service, processes, tunnels, handles, preflights, payloads = None, {}, [], [], {}, {}
     findings, launched = [], set()
+    claim=None
     try:
+        claim=acquire_reservation(local,root,plan['deadlines'].get('reservation_s',plan['deadlines']['launch_s']))
+        plan['reservation']=dict(claim['record'],policy='One scenario; marker absent and no local Cortex Command process before atomic claim.')
+        write_json(root/'manifest.json',plan)
         for box in boxes.values():
             box_root = str(PurePosixPath(box['scratch']) / plan['run'])
             payload = dict(box=box, specs=sorted([s for s in plan['specs'] if s['box'] == box['name']],key=lambda s:s['role']!='host'), pin='pending')
@@ -903,6 +945,7 @@ def run_plan(plan, root):
             if box['kind']!='windows-local': stage_remote(box,root/'session.json',payloads[box['name']][2]+'/session.json')
         deadline, finished = time.monotonic()+max(s['timeout'] for s in plan['specs'])+60, set()
         while time.monotonic() < deadline and len(finished) < len(boxes):
+            if not owns_reservation(local): raise RuntimeError('this run lost its box reservation')
             for box in boxes.values():
                 if box['name'] in finished: continue
                 done = root / 'done.json' if box['kind'] == 'windows-local' else payloads[box['name']][2] + '/done.json'
@@ -942,6 +985,10 @@ def run_plan(plan, root):
                 proc.terminate()
                 try: proc.wait(timeout=15)
                 except subprocess.TimeoutExpired: proc.kill()
+        if claim:
+            released=release_reservation(claim)
+            plan['reservation']['released']=released
+            if not released: findings.append(dict(kind='reservation',reason='reservation token was absent or replaced; no foreign marker removed'))
         for box in boxes.values():
             if box['kind'] == 'windows-local' or box['name'] not in payloads: continue
             try: fetch_box(box, payloads[box['name']][2], root / 'boxes' / box['name'])

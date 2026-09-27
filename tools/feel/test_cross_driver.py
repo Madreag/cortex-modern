@@ -72,6 +72,36 @@ class CrossDriverTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'exclusive'): cross_peers.read_capabilities(box,root)
                 launch.assert_not_called()
 
+    def test_own_reservation_token_passes_the_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); done=root/'BOX-FREE'; done.touch(); marker=root/'marker'
+            marker.write_text(json.dumps(dict(token='own')))
+            box=copy.deepcopy(self.plan()['boxes'][0]); box.update(guard_file=str(done),exclusive_marker=str(marker),scratch=str(root))
+            with patch.dict(cross_peers.os.environ,{'CCCP_FEEL_MATRIX_RUN':'own'}),patch.object(cross_peers,'box_load',return_value=[]),patch.object(cross_peers,'inventory_guard',return_value=None):
+                cross_peers.assert_box_guard(box)
+                marker.write_text(json.dumps(dict(token='foreign')))
+                with self.assertRaisesRegex(RuntimeError,'exclusive'): cross_peers.assert_box_guard(box)
+
+    def test_reservation_waits_for_engines_and_never_removes_another_token(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); marker=root/'marker'; box=dict(exclusive_marker=str(marker))
+            with patch.object(cross_peers,'box_load',side_effect=[[dict(ProcessId=99)],[],[]]),patch.object(cross_peers.time,'sleep') as sleep:
+                claim=cross_peers.acquire_reservation(box,root/'run',2)
+                sleep.assert_called_once(); self.assertTrue(cross_peers.owns_reservation(box))
+            marker.write_text(json.dumps(dict(token='another-run')))
+            self.assertFalse(cross_peers.release_reservation(claim)); self.assertTrue(marker.is_file())
+            marker.unlink()
+            with patch.object(cross_peers,'box_load',return_value=[]): claim=cross_peers.acquire_reservation(box,root/'run2',2)
+            self.assertTrue(cross_peers.release_reservation(claim)); self.assertFalse(marker.exists())
+
+    def test_existing_marker_is_not_reclaimed_even_if_its_pid_is_stale(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); marker=root/'marker'; marker.write_text(json.dumps(dict(token='foreign',pid=-1)))
+            with patch.object(cross_peers.time,'monotonic',side_effect=[0,0,2]),patch.object(cross_peers.time,'sleep'),patch.object(cross_peers,'box_load') as engines:
+                with self.assertRaises(TimeoutError): cross_peers.acquire_reservation(dict(exclusive_marker=str(marker)),root/'run',1)
+                engines.assert_not_called()
+            self.assertTrue(marker.exists())
+
     def test_quns_release_selftest_starts_no_engine(self):
         with tempfile.TemporaryDirectory() as temporary:
             result=cross_peers.launch_guard_selftest(Path(temporary))
