@@ -1,0 +1,13 @@
+{
+  "name": "multi-box-combat",
+  "driver": "tools/cross_peers.py",
+  "boxes": "tools/cross_peers/boxes.json",
+  "activity": "Multi Box Combat",
+  "module": "UserScenes.rte",
+  "fixture": ["tools/feel/CrossCombat.lua", "tools/feel/CrossCombat.ini"],
+  "scene": "Grasslands",
+  "roster": "three-way",
+  "committed_ticks": 1201,
+  "real_boxes_minimum": 3,
+  "expected": {"desyncs": 0, "unscheduled_holds": 0, "full_history_every_peer": true}
+}

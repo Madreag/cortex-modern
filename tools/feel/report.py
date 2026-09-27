@@ -463,7 +463,7 @@ POSITION = re.compile(r'^(\d+) actor uid=(\d+) .*? pos=(\S+),(\S+) prev=')
 AUTO_DELAY = re.compile(r'^\[net-match\] auto input delay: peer (\d+) rtt (\d+)ms -> (\d+) frames \(manual floor (\d+)\)$')
 
 
-def remote_commands(path, local_peer):
+def remote_commands(path, local_peer, first_tick=1, last_tick=TICKS):
     commands = defaultdict(list)
     if not path.is_file():
         return commands, False
@@ -478,11 +478,11 @@ def remote_commands(path, local_peer):
     launch = json.loads(launch_path.read_text(encoding='utf-8-sig'))
     verify = json.loads(verify_path.read_text(encoding='utf-8-sig'))
     complete = (launch.get('exit_code') == 0 and launch.get('evidence_complete') is True and not launch.get('timed_out')
-                and verify.get('ok') is True and verify.get('first_frame') == 1 and verify.get('last_frame', 0) >= TICKS)
+                and verify.get('ok') is True and verify.get('first_frame') <= first_tick and verify.get('last_frame', 0) >= last_tick)
     return commands, complete
 
 
-def canonical_positions(path, wanted):
+def canonical_positions(path, wanted, first_tick=1, last_tick=TICKS):
     actors, ticks, records = {}, set(), {}
     duplicate = None
     duplicate_count = 0
@@ -509,26 +509,26 @@ def canonical_positions(path, wanted):
                         continue
                     actors[key] = (dict(pos=[float.fromhex(match[3]), float.fromhex(match[4])]), number)
                     records[key] = line
-    if ticks != set(range(1, TICKS + 1)):
+    if (ticks if first_tick == 1 and last_tick == TICKS else {tick for tick in ticks if first_tick <= tick <= last_tick}) != set(range(first_tick, last_tick + 1)):
         raise EarlyDecision(max(ticks) if ticks else 0, path)
     canonical_positions.last_duplicate = dict(first=duplicate, count=duplicate_count) if duplicate else None
     canonical_positions.last_repeats = repeat_count
     return actors
 
 
-def corrections(previews, committed, canonical_path, command_path, local_peer):
+def corrections(previews, committed, canonical_path, command_path, local_peer, first_tick=1, last_tick=TICKS):
     forecasts = {}
     for row in previews:
         key = (row['target_tick'], row['actor']['uid'])
         if key not in forecasts or row['committed_tick'] > forecasts[key]['committed_tick']:
             forecasts[key] = row
-    canonical = canonical_positions(canonical_path, forecasts)
+    canonical = canonical_positions(canonical_path, forecasts, first_tick, last_tick)
     candidate_duplicate = getattr(canonical_positions, 'last_duplicate', None)
     corrections.last_duplicate = candidate_duplicate if isinstance(candidate_duplicate, dict) else None
-    commands, commands_complete = remote_commands(command_path, local_peer)
+    commands, commands_complete = remote_commands(command_path, local_peer, first_tick, last_tick)
     result, missing = [], []
     for (tick, uid), forecast in sorted(forecasts.items()):
-        if tick > TICKS:
+        if not first_tick <= tick <= last_tick:
             continue
         if (tick, uid) not in canonical:
             missing.append(dict(tick=tick, uid=uid, preview_line=forecast['_line']))
@@ -600,24 +600,36 @@ def firing_records(inputs, previews, frames, stdout_path):
     return result
 
 
-def reduce_peer(run, peer, baseline=None):
+def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_natural_end=False,
+                host_peer="host", trace_run=0, expected_input_schedule=None, expected_capture_ticks=None,
+                is_single_player=None, round_id=None):
     run = Path(run)
-    decided = early_decision_tick(run, peer)
-    if decided is not None:
+    if ticks < first_tick or first_tick < 1:
+        raise ValueError("invalid measurement window")
+    single_player = peer == "sp" if is_single_player is None else is_single_player
+    decided = early_decision_tick(run, peer, ticks)
+    if decided is not None and not allow_natural_end:
         raise EarlyDecision(decided, run / f'{peer}_trace.json.simdump.txt')
+    if decided is not None and allow_natural_end:
+        ticks = min(ticks, decided)
     raw = record_path(run / peer / 'feel/raw.jsonl')
     rows = list(read_jsonl(raw))
     if len([row for row in rows if row['type'] == 'schema' and row['version'] == 1]) != 1:
         raise ValueError(f'{raw}: missing or invalid schema')
+    if round_id is not None:
+        typed = [row for row in rows if row['type'] not in ('schema', 'end')]
+        if any('round' not in row for row in typed):
+            raise ValueError('round reduction requires round-labelled raw records')
+        rows = [row for row in rows if row['type'] in ('schema', 'end') or row.get('round') == round_id]
     all_frames = [row for row in rows if row['type'] == 'frame']
     if [row['frame'] for row in all_frames] != list(range(1, len(all_frames) + 1)):
         raise ValueError(f'{raw}: missing or reordered frame')
-    frames = [row for row in all_frames if row['active'] and 0 < row['tick'] <= TICKS]
-    inputs = [row for row in rows if row['type'] == 'input' and 0 < row['tick'] <= TICKS]
-    previews = [row for row in rows if row['type'] == 'preview' and 0 < row['committed_tick'] <= TICKS]
+    frames = [row for row in all_frames if row['active'] and first_tick <= row['tick'] <= ticks]
+    inputs = [row for row in rows if row['type'] == 'input' and first_tick <= row['tick'] <= ticks]
+    previews = [row for row in rows if row['type'] == 'preview' and first_tick <= row['committed_tick'] <= ticks]
     committed = [row for row in rows if row['type'] == 'committed']
     all_iterations = [row for row in rows if row['type'] == 'iteration']
-    iterations = [row for row in all_iterations if row['active'] and 0 < row['tick'] <= TICKS]
+    iterations = [row for row in all_iterations if row['active'] and first_tick <= row['tick'] <= ticks]
     if not frames or not iterations:
         raise ValueError(f'{raw}: no measured match frames or iterations')
     destination = run / peer / 'analysis'
@@ -627,7 +639,7 @@ def reduce_peer(run, peer, baseline=None):
     controller = run / f'{peer}_controller.jsonl'
     canonical_dump = run / f'{peer}_trace.json.simdump.txt'
     command_log = run / 'replay-inspect/stdout.log'
-    correction_rows, correction_missing, commands_complete = corrections(previews, committed, canonical_dump, command_log, frames[-1]['peer'])
+    correction_rows, correction_missing, commands_complete = corrections(previews, committed, canonical_dump, command_log, frames[-1]['peer'], first_tick, ticks)
     duplicate_actor = getattr(corrections, 'last_duplicate', None)
     firing = firing_records(inputs, previews, frames, run / peer / 'stdout.log')
     paths = {name: destination / (name + '.jsonl') for name in ('latencies', 'warps', 'corrections', 'correction-missing', 'firing')}
@@ -636,8 +648,9 @@ def reduce_peer(run, peer, baseline=None):
         write_jsonl(paths[name], values)
     trace = run / f'{peer}_trace.json'
     trace_document = json.loads(trace.read_text(encoding='utf-8-sig'))
-    trace_ticks = trace_document['runs'][0]['tick_hashes']
-    coverage = [row['tick'] for row in trace_ticks] == list(range(1, TICKS + 1))
+    segments = trace_document['runs'] if trace_run is None else [trace_document['runs'][trace_run]]
+    trace_ticks = [row for segment in segments for row in segment['tick_hashes'] if first_tick <= row['tick'] <= ticks]
+    coverage = [row['tick'] for row in trace_ticks] == list(range(first_tick, ticks + 1))
     ended = any(row['type'] == 'end' for row in rows)
     draw = distribution([frame['draw_ms'] for frame in frames])
     present = distribution([frame['present_ms'] for frame in frames])
@@ -664,27 +677,27 @@ def reduce_peer(run, peer, baseline=None):
     cpu_overhead = (cpu_ms / baseline['cpu_ms'] - 1) * 100 if cpu_ms and baseline and baseline['cpu_ms'] else None
     draw_ratio = draw['p99'] / baseline['draw_ms']['p99'] if baseline and baseline['draw_ms']['p99'] else None
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
-    for source in ('input_script', 'input_schedule'):
+    for source in (() if expected_input_schedule is not None else ('input_script', 'input_schedule')):
         if file_record(manifest[source]['path'])['sha256'] != manifest[source]['sha256']:
             raise ValueError(f'{run}: {source} changed after launch')
-    lag = manifest['lag_ms']
-    schedule = json.loads(Path(manifest['input_schedule']['path']).read_text(encoding='utf-8'))
+    lag = manifest.get('lag_ms', 0)
+    schedule = expected_input_schedule if expected_input_schedule is not None else json.loads(Path(manifest['input_schedule']['path']).read_text(encoding='utf-8'))
     expected_inputs = {(row['tick'], row['action'], row['held']) for row in schedule['probes']}
     actual_inputs = {(row['tick'], change['action'], change['held']) for row in inputs for change in row['changes']}
     missing_inputs = sorted(expected_inputs - actual_inputs)
     over_50 = [frame['frame'] for frame in frames if max(frame['draw_ms'], frame['present_ms'], frame['interval_ms'] or 0) > 50]
     captures = [row for row in rows if row['type'] == 'capture']
-    capture_missing = sorted(set(range(60, TICKS + 1, 60)) - {row['requested_tick'] for row in captures if row['saved'] and Path(row['path']).is_file()})
+    capture_missing = sorted(set(range(60, ticks + 1, 60) if expected_capture_ticks is None else expected_capture_ticks) - {row['requested_tick'] for row in captures if row['saved'] and Path(row['path']).is_file()})
     rtts = [row for frame in frames for row in frame['rtt']]
     auto_picks = []
-    host_log = run / 'host/stdout.log'
+    host_log = run / host_peer / 'stdout.log'
     if host_log.is_file():
         for line_no, text in enumerate(host_log.read_text(encoding='utf-8-sig', errors='replace').splitlines(), 1):
             match = AUTO_DELAY.match(text)
             if match:
                 auto_picks.append(dict(peer=int(match[1]), rtt_ms=int(match[2]), delay=int(match[3]), floor=int(match[4]), raw_line=line_no))
     local_picks = [pick for pick in auto_picks if pick['peer'] == frames[-1]['peer']]
-    network = item9a_gates(run, peer, rows) if peer != 'sp' else None
+    network = item9a_gates(run, peer, rows) if not single_player else None
     measured_tick = network['metrics']['sim_tick_ms'] if network else SIM_MS
     delay_math = measured_tick is not None and measured_tick > 0 and all(
         pick['delay'] >= max(pick['floor'], math.ceil(pick['rtt_ms'] / measured_tick) + 1) for pick in local_picks)
@@ -708,15 +721,15 @@ def reduce_peer(run, peer, baseline=None):
                    capture_missing=capture_missing, frame_count=len(frames), cap_hz=cap,
                    effective_hz=(len(frames) - 1) * 1000 / (frames[-1]['present_end_ms'] - frames[0]['present_end_ms']) if len(frames) > 1 else None)
     measured = bool(ended and coverage and latency and not missing_inputs and not duplicate_actor and len(firing) == schedule['fire_presses'] and cpu_ms is not None
-                    and (auto_picks or peer == 'sp')
-                    and not correction_missing and not capture_missing and (commands_complete or peer == 'sp'))
+                    and (auto_picks or single_player)
+                    and not correction_missing and not capture_missing and (commands_complete or single_player))
     pins = {}
     pins['canonical_duplicate_actor'] = pin(duplicate_actor, 'no duplicate committed actor in the simdump', duplicate_actor is None,
                                             [canonical_dump])
     pins['wall_tps'] = pin(pace_tps, '>= 59.5', pace_tps is not None and pace_tps >= 59.5, [raw])
     pins['sim_ms_per_tick'] = pin(sim_cost, '<= 8 ms', sim_cost is not None and sim_cost <= 8, [raw])
     pins['auto_delay'] = pin(delays, 'initial picks cover ceil(measured RTT / measured sim tick) + 1; final draw names the committed live delay',
-                             delay_math and frames[-1]['delay'] == live_delay and (peer == 'sp' or '(auto' in frames[-1]['input_delay_text']),
+                             delay_math and frames[-1]['delay'] == live_delay and (single_player or '(auto' in frames[-1]['input_delay_text']),
                              [raw, host_log, run / f'{peer}_report.json'] if network else [raw])
     latency_value = dict(observed_ms=latency_ms, observed_frames=latency_frames,
                          lower_bounds_ms=metrics['latency_lower_bounds_ms'], unreflected=metrics['latency_unreflected'])
@@ -750,7 +763,7 @@ def reduce_peer(run, peer, baseline=None):
                             'no frame > 50 ms', not over_50, [raw])
     pins['cpu'] = pin(cpu_overhead, '<= 15 percent process CPU time over the same-cap D=0 SP match',
                       cpu_overhead is not None and cpu_overhead <= 15, [raw, baseline['raw_path']] if baseline else [raw])
-    if peer == 'sp':
+    if single_player:
         measured = bool(ended and coverage and cpu_ms is not None and not capture_missing)
         pins = {name: pins[name] for name in ('auto_delay', 'violations', 'frame_max')}
     elif network:
