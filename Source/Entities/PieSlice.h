@@ -228,9 +228,11 @@ namespace RTE {
 		int ReloadScripts() final;
 
 	private:
-		/// Custom deleter for PieMenu to avoid include problems with unique_ptr.
+		/// Custom deleter for PieMenu to avoid include problems with unique_ptr. Its default constructor is written out because GCC
+		/// defers a nested class's member initializers until PieSlice is complete and would find the deleter not default-constructible.
 		struct PieMenuCustomDeleter {
-			bool owned = false; //!< Whether this slice made the sub-PieMenu as its own copy; one read from data is its DataModule's.
+			PieMenuCustomDeleter() noexcept : owned(false) {}
+			bool owned; //!< Whether this slice made the sub-PieMenu as its own copy; one read from data is its DataModule's.
 			void operator()(PieMenu* pieMenu) const;
 		};
 
