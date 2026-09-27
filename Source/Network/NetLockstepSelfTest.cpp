@@ -18773,6 +18773,54 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		/// A survivor with no other playing peer beside it cannot have the host's death confirmed: a loss burst on its own link must not make it
+		/// host a second match beside a live host, so it waits a confirmation window before it elects.
+		bool TestALoneSurvivorConfirmsTheHostIsGone(std::string* error) {
+			LoopbackTransport hostWire, aWire;
+			if (!hostWire.StartHost(49540, error) || !aWire.Connect("loopback", 49540, error)) return false;
+			auto match = NetMatchConfigUtil::MakeDefault(0x154);
+			match.peerCount = 2; match.successorOrder = {2};
+			for (uint8_t peer = 1; peer <= 2; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(49540 + peer), {"loopback"}});
+			auto config = [&](uint8_t peer) {
+				NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match; value.peerCount = 2; value.localPeerId = peer;
+				value.startFrame = 1; value.timeoutMs = 20000; value.roundId = peer == 1 ? 0x15401 : 0; value.relayToOtherPeers = peer == 1;
+				value.simTickMs = 1000.0 / 60.0;
+				value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				value.migrationKey.fill(0x3A); value.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); }; return value;
+			};
+			NetLockstepCoordinator host, a;
+			if (!host.Start(hostWire, config(1), error) || !a.Start(aWire, config(2), error)) return false;
+			for (auto* peer: {&host, &a}) peer->DeferStopsToTickBoundary();
+			uint64_t now = 0;
+			auto step = [&](bool hostAlive) {
+				if (hostAlive) { host.Tick(now); hostWire.AdvanceTimeMs(5); }
+				a.Tick(now); aWire.AdvanceTimeMs(5);
+				for (auto* peer: {&host, &a}) { NetLockstepReadyFrame ready; while (peer->PopReadyFrame(ready)) peer->FinishSimulationTick(ready.frame); }
+				now += 5;
+			};
+			for (int turn = 0; turn < 60; ++turn) step(true);
+			for (uint64_t frame = 1; frame <= 5; ++frame) {
+				for (auto* peer: {&host, &a}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
+				for (int turn = 0; turn < 40; ++turn) step(true);
+			}
+			if (!a.IsRunning() || a.GetStats().nextFrame != 6) {
+				*error = "the lone-survivor fixture did not share frame 5: next=" + std::to_string(a.GetStats().nextFrame); return false;
+			}
+			for (uint64_t frame = 6; frame <= 7; ++frame) if (!a.QueueLocalInput(frame, {MakeFrame(102, frame)}, {}, error)) return false;
+			const auto lost = [&] { return a.IsMigrating() || a.GetHostPeerId() != 1; };
+			const uint64_t silentFrom = now;
+			while (now - silentFrom < 400 && !lost()) step(false);
+			const uint64_t early = lost() ? now - silentFrom : 0;
+			while (now - silentFrom < 1400 && !lost()) step(false);
+			if (early != 0 || !lost()) {
+				*error = "a-lone-survivor-confirms-the-host-is-gone: a survivor with nobody beside it took a silent host for gone after " + std::to_string(early) +
+				         " ms (expected not within 400 ms), lost=" + std::to_string(lost()) + " by 1400 ms (expected 1)";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_lone_survivor_confirms_the_host_is_gone migrated_after_ms=" << (now - silentFrom) << std::endl;
+			return true;
+		}
+
 		/// Past the round's last tick the host has nothing to send, so its quiet there is the round ending, not the host dying.
 		bool TestAHostQuietPastTheLastTickIsNotLost(std::string* error) {
 			LoopbackTransport hostWire, aWire, bWire;
@@ -21017,7 +21065,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		bool passed = true;
 		for (bool (*test)(std::string*): {TestEveryHoldProducerWritesTheSeatLog, TestAnOlderDeliveryLeavesTheNewerSeatState, TestEveryGapStaysForASimulationBehind,
-		                                   TestADeferredStopDoesNotExcuseASeatPastTheBound}) {
+		                                   TestADeferredStopDoesNotExcuseASeatPastTheBound, TestALoneSurvivorConfirmsTheHostIsGone}) {
 			std::string error;
 			if (test(&error)) continue;
 			passed = false;
@@ -21125,6 +21173,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (!followupsPassed) return fail(followupError);
 		if (!TestSilentHostResumesWithinTwoSeconds(&error) ||
 		    !TestALongLinkedHostIsJudgedByItsSilenceAlone(&error) ||
+		    !TestALoneSurvivorConfirmsTheHostIsGone(&error) ||
 		    !TestAHostQuietPastTheLastTickIsNotLost(&error) ||
 		    !TestLoadingHostKeepsItsAuthority(&error) ||
 		    !TestHoldArrivesBeforeFailedSend(&error) ||
