@@ -176,6 +176,7 @@
 #include <map>
 #include <optional>
 #include <sstream>
+#include <set>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -187,6 +188,7 @@ FILE __iob_func[3] = {*stdin, *stdout, *stderr};
 
 namespace RTE {
 	bool RunModApiShimsSelfTest();
+	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 }
 
 using namespace RTE;
@@ -197,6 +199,101 @@ static std::string s_netLiveTickHashPath;
 // Test lever: every N committed lockstep ticks each peer hashes its whole capture; 0 is off.
 static uint32_t s_netFullStateEvery = 0;
 static std::string s_netFullStateDump;
+static nlohmann::json s_crossContext;
+static nlohmann::json s_crossSchedule = nlohmann::json::array();
+static uint64_t s_crossBudget = 0;
+static std::map<uint64_t, uint64_t> s_crossLastCommitted;
+static std::set<std::string> s_crossFired;
+static unsigned s_crossRematches = 0;
+
+static std::string CrossEnvironment(const char* name, const char* fallback = "") {
+	const char* value = std::getenv(name);
+	return value ? value : fallback;
+}
+
+static void BeginCrossTick(uint64_t tick) {
+	static const bool armed = !CrossEnvironment("CC_TEST_CROSS_RECORDS").empty();
+	if (!armed) return;
+	static bool opened = false;
+	if (!opened) {
+		opened = true;
+		if (!g_MetricsCollector.OpenEvents(CrossEnvironment("CC_TEST_CROSS_RECORDS"))) {
+			System::PrintDiagnosticLine("[cross-record] FAIL cannot open event file");
+			return;
+		}
+	}
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config) return;
+	static uint64_t previousRound = 0, previousTick = 0, execution = 0;
+	const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+	if (round == previousRound && tick <= previousTick) ++execution;
+	const bool newRound = previousRound != round;
+	const bool catchup = ScenarioRunner::WorldCatchUpActive();
+	s_crossContext = {{"run", CrossEnvironment("CC_TEST_CROSS_RUN")}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
+	    {"process", System::GetProcessID()}, {"execution", CrossEnvironment("CC_TEST_CROSS_EXECUTION") + "/" + std::to_string(execution)},
+	    {"incarnation", CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0")}, {"seat_incarnation", nullptr},
+	    {"authority_generation", nullptr}, {"session", std::to_string(config->sessionId)}, {"match", std::to_string(config->roundId)},
+	    {"round", round}, {"source_round", config->roundId}, {"tick", tick}, {"peer", ScenarioRunner::GetLockstepLocalPeerId()},
+	    {"history_branch", ScenarioRunner::GetLockstepResumeFrame() > 0 ? nlohmann::json(nullptr) : nlohmann::json("initial")},
+	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
+	    {"config_hash", NetMatchConfigUtil::StoredConfigHash(*config)}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
+	    {"phase", catchup ? "catchup" : execution > 0 ? "reexecution" : "live"},
+	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
+	g_MetricsCollector.BeginEventTick(s_crossContext);
+	if (newRound) {
+		nlohmann::json roster = nlohmann::json::array();
+		for (const auto& slot: config->players) roster.push_back({{"peer", slot.peerId}, {"team", slot.team}, {"human", !slot.cpu}});
+		g_MetricsCollector.WriteObservation({{"type", "adopted_config"}, {"peer_limit", NetMatchConfigUtil::c_MaxPeerCount},
+		    {"peer_count", config->peerCount}, {"players", std::move(roster)}, {"difficulty", config->difficulty},
+		    {"fog", config->fogOfWar}, {"sim_tick_ms", g_TimerMan.GetDeltaTimeSecs() * 1000.0}});
+		System::PrintDiagnosticLine("[cross-context] round=" + std::to_string(round) + " source_round=" + std::to_string(config->roundId) +
+		    " config=" + NetMatchConfigUtil::StoredConfigHash(*config) + " peer_limit=" + std::to_string(NetMatchConfigUtil::c_MaxPeerCount));
+	}
+	previousRound = round; previousTick = tick;
+}
+
+static void ApplyCrossSchedule() {
+	if (s_crossSchedule.empty() || !ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::WorldCatchUpActive()) return;
+	static uint64_t resetAt = 0;
+	if (resetAt && s_crossBudget >= resetAt) {
+		const bool accepted = ApplyCrossTransportFault(0, 0, 0, 0);
+		g_MetricsCollector.WriteObservation({{"type", "fault_reset"}, {"send_recv_armed", accepted}, {"budget_tick", s_crossBudget}});
+		resetAt = 0;
+	}
+	for (const auto& fault: s_crossSchedule) {
+		const std::string id = fault.at("id");
+		if (s_crossFired.contains(id) || s_crossBudget < fault.at("tick").get<uint64_t>()) continue;
+		const std::string action = fault.at("action");
+		if (action == "crash-restart" || action == "announced-leave-rejoin") continue;
+		const auto stamp = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
+		nlohmann::json receipt{{"type", "fault"}, {"id", id}, {"action", action}, {"requested_budget_tick", fault.at("tick")},
+		    {"budget_tick", s_crossBudget}, {"applied_wall_ms", stamp()}, {"applied", false}};
+		s_crossFired.insert(id);
+		if (action == "live-stall" || action == "draw-stall" || action == "late-script-stall") {
+			const auto duration = fault.value("duration_ms", 0u);
+			if (duration > 0 && duration <= 20000 && action == "live-stall") {
+				const uint64_t before = NetLockstepPlane::Ticks();
+				{ NetLockstepPlane::Window window("scheduled live stall"); std::this_thread::sleep_for(std::chrono::milliseconds(duration)); }
+				receipt["applied"] = true;
+				receipt["plane_pumps"] = NetLockstepPlane::Ticks() - before;
+			}
+		} else if (action == "loss" || action == "lag" || action == "jitter" || action == "outage") {
+			const float loss = action == "outage" ? 100.0F : fault.value("percent", 0.0F);
+			receipt["applied"] = ApplyCrossTransportFault(fault.value("lag_ms", 0), loss, fault.value("jitter_ms", 0.0F),
+			    fault.value("duration_ms", fault.value("duration_ticks", uint64_t{1800}) * 1000 / 60));
+			receipt["send_recv_armed"] = receipt["applied"];
+			receipt["direction"] = "send_and_receive_all_GNS_connections";
+			resetAt = s_crossBudget + fault.value("duration_ticks", uint64_t{1800});
+		} else if (action == "ack-drop" || action == "ack-duplicate" || action == "commit-drop") {
+			NetH4SetFault(NetH4FaultFromName(action));
+			receipt["applied"] = true;
+			receipt["scope"] = "H4_acknowledgement_fault";
+		}
+		receipt["completed_wall_ms"] = stamp();
+		g_MetricsCollector.WriteObservation(receipt);
+		System::PrintDiagnosticLine("[cross-fault] " + receipt.dump());
+	}
+}
 // The live desync check. On everywhere by default; -net-desync-check off opts a measurement run out.
 static bool s_netDesyncCheck = true;
 static bool s_telemetryBundleOnExit = false;
@@ -868,6 +965,26 @@ bool HandleMainArgs(int argCount, char** argValue) {
 	for (int i = 0; i < argCount;) {
 		std::string currentArg = argValue[i];
 		bool lastArg = i + 1 == argCount;
+		if (currentArg == "-net-cross-schedule" && !lastArg) {
+			try {
+				if (CrossEnvironment("CCCP_HEADLESS") != "1") throw std::runtime_error("cross schedule requires headless");
+				std::ifstream input(argValue[i + 1]);
+				s_crossSchedule = nlohmann::json::parse(input);
+				if (!s_crossSchedule.is_array() || s_crossSchedule.size() > 256) throw std::runtime_error("invalid cross schedule length");
+				std::set<std::string> ids;
+				for (const auto& fault: s_crossSchedule) {
+					if (!fault.at("tick").is_number_unsigned() || fault.at("tick").get<uint64_t>() == 0 || !ids.insert(fault.at("id")).second)
+						throw std::runtime_error("invalid cross fault tick or duplicate id");
+				}
+			} catch (const std::exception& error) { std::cerr << "[cross-schedule] FAIL " << error.what() << std::endl; return false; }
+			i += 2; continue;
+		}
+		if (currentArg == "-net-cross-rematches" && !lastArg) {
+			const std::string count = argValue[i + 1];
+			if (count.empty() || !std::all_of(count.begin(), count.end(), [](unsigned char c) { return c >= '0' && c <= '9'; }) || count.size() > 4) return false;
+			s_crossRematches = static_cast<unsigned>(std::stoul(count));
+			i += 2; continue;
+		}
 
 		if (currentArg == "-cout") {
 			System::EnableLoggingToCLI();
@@ -4886,8 +5003,9 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 /// </summary>
 static bool IsFirstE2ERematchReady() {
 	const Activity* activity = g_ActivityMan.GetActivity();
-	return s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestRematch && s_netMatchServiceE2ERematches == 0 &&
-	       activity && activity->IsOver() && s_netMatchE2ETicks.Total() >= 100;
+	return s_netMatchServiceE2E && (s_crossRematches ? s_netMatchServiceE2ERematches < s_crossRematches :
+	       ScenarioRunner::GetArgs().selftestRematch && s_netMatchServiceE2ERematches == 0) &&
+	       activity && activity->IsOver() && (s_crossRematches || s_netMatchE2ETicks.Total() >= 100);
 }
 
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
@@ -5371,6 +5489,7 @@ void RunGameLoop() {
 			}
 		}
 		FrameMan::FeelBeginIteration();
+		ApplyCrossSchedule();
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
 		// The host's session plane receives, relays and commits for every stretch of the frame the simulation spends away from its round.
@@ -5498,6 +5617,7 @@ void RunGameLoop() {
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			BeginCrossTick(simTick);
 			if (!s_loadGameName.empty() && ScenarioRunner::GetArgs().maxTicks > 0 &&
 			    simTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
 				System::SetQuit(true);
@@ -6030,6 +6150,13 @@ void RunGameLoop() {
 			// Feed end-of-tick terrain state, finalize this tick's hash, and hand the result to the
 			// MetricsCollector for the per-tick determinism trace (no-op without an active scenario run).
 			std::optional<SimChecksum::Result> probeTickResult;
+			g_MetricsCollector.FlushEventTick();
+			if (g_MetricsCollector.EventsEnabled() && !lockstepPausedTick && !ScenarioRunner::WorldCatchUpActive() && g_ActivityMan.ActivityRunning()) {
+				const uint64_t sourceRound = ScenarioRunner::GetLockstepRoundId();
+				auto& last = s_crossLastCommitted[sourceRound];
+				if (simTick > last) { ++s_crossBudget; last = simTick; }
+				g_MetricsCollector.WriteObservation({{"type", "progress"}, {"budget_tick", s_crossBudget}});
+			}
 			if (hashThisTick) {
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
 				// archive below writes the same deques, so both have to read one instant.
@@ -6040,11 +6167,13 @@ void RunGameLoop() {
 					static std::ofstream trace(s_netLiveTickHashPath, std::ios::trunc);
 					nlohmann::json subsystems = nlohmann::json::object();
 					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
-					trace << nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
+					nlohmann::json observation = s_crossContext.is_object() ? s_crossContext : nlohmann::json::object();
+					observation.update(nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
 					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
 					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
 					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
-					    {"subsystems", std::move(subsystems)}}.dump() << '\n';
+					    {"subsystems", std::move(subsystems)}});
+					trace << observation.dump() << '\n';
 					trace.flush();
 				}
 				if (a7HashTick && ScenarioRunner::GetLockstepAppliedFrame() == simTick) {
@@ -6280,6 +6409,8 @@ void RunGameLoop() {
 			// Test lever: the full-state oracle samples the same boundary the autosave captures at, on every live peer alike.
 			// A round's first tick with committed input is sampled too, so a round shorter than the interval still has a sample
 			// its peers share; the startup ticks before it run each machine's own seat bindings.
+			const long long crossCaptureStartUs = g_TimerMan.GetAbsoluteTime();
+			const long long crossCaptureWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			if (s_netFullStateEvery > 0) ScenarioRunner::SetLockstepAnnouncedCaptureEvery(s_netFullStateEvery);
 			if (s_netFullStateEvery > 0 && !lockstepPausedTick && ScenarioRunner::IsLockstepControllerSyncActive() &&
 			    !ScenarioRunner::WorldCatchUpActive() && ScenarioRunner::GetLockstepAppliedFrame() == simTick && g_ActivityMan.ActivityRunning()) {
@@ -6293,6 +6424,8 @@ void RunGameLoop() {
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
 			TelemetryBundle::CaptureAtTickBoundary();
+			const long long crossCaptureUs = g_TimerMan.GetAbsoluteTime() - crossCaptureStartUs;
+			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
@@ -6303,6 +6436,15 @@ void RunGameLoop() {
 				s_paceSimUs += elapsedUs;
 				if (!lockstepPausedTick) ScenarioRunner::NoteLockstepLocalTickCost(simTick,
 				    std::max(0LL, elapsedUs - (ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs)) / 1000.0);
+				if (g_MetricsCollector.EventsEnabled()) {
+					const long long waitUs = ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs;
+					g_MetricsCollector.WriteObservation({{"type", "tick_timing"}, {"total_us", elapsedUs},
+					    {"compute_us", std::max(0LL, elapsedUs - waitUs - crossCaptureUs + crossCaptureWaitUs)},
+					    {"wait_us", waitUs}, {"capture_us", std::max(0LL, crossCaptureUs - crossCaptureWaitUs)},
+					    {"paused", lockstepPausedTick}, {"actors_alive", g_MovableMan.GetActorCount()},
+					    {"particles_alive", g_MovableMan.GetParticleCount()}, {"record_bytes", g_MetricsCollector.EventBytes()},
+					    {"trace_vector_payload_bytes", g_MetricsCollector.InstrumentationBytes()}});
+				}
 			}
 
 			// Capture both peers after the complete tick, including global callbacks and worker joins.
@@ -6730,8 +6872,10 @@ void RunGameLoop() {
 				// E2E rematch ride-through: match 1 ended, so finish it, reconvene the live session in the
 				// lobby, and relaunch — round 2 is policed by the live desync exchange like any match.
 				if (IsFirstE2ERematchReady()) {
-					s_netMatchServiceE2ERematches = 1;
+					++s_netMatchServiceE2ERematches;
 					const std::string result = BuildNetMatchResultText();
+					g_MetricsCollector.WriteObservation({{"type", "match_boundary"}, {"result", result},
+					    {"final_tick", simTick}, {"rematch", s_netMatchServiceE2ERematches}, {"budget_tick", s_crossBudget}});
 					{
 						std::ostringstream line;
 						line << "[net-match-service-e2e] rematch: match 1 over (" << result << "), returning to lobby";
@@ -6748,7 +6892,7 @@ void RunGameLoop() {
 						break;
 					}
 					g_NetMatchService.SetReady();
-					if (s_netHost || s_netDedicated) {
+					if (g_NetMatchService.IsHost()) {
 						g_NetMatchService.RequestStart();
 					}
 					std::string rematchPreset;
@@ -6800,7 +6944,7 @@ void RunGameLoop() {
 				const uint64_t earlyOverTick = ScenarioRunner::HasLockstepCoordinator()
 					                               ? ScenarioRunner::GetLockstepAppliedFrame()
 					                               : s_netMatchE2ETicks.Total();
-				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure(earlyOverTick))) {
+				if (activityState == Activity::HasError || (activityState == Activity::Over && !s_crossRematches && s_netMatchE2ETicks.EarlyOverIsSetupFailure(earlyOverTick))) {
 					s_netMatchServiceE2EError = std::string("activity ended in state ") + ActivityStateName(activityState);
 					s_netMatchServiceE2EExitCode = 1;
 					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
@@ -8037,10 +8181,10 @@ int RunNetMatchServiceE2E() {
 	if (setupError.empty() && !setupCancelled) {
 		// Per-tick trace for the host/client sim-gated compare. Not SetActive() — that also arms the
 		// -scenario stop path + perturb hook; SetRecordTickHashes arms the trace alone.
-		const bool traceRun = s_recordTickHashes && !ScenarioRunner::GetArgs().outPath.empty();
+		const bool traceRun = (s_recordTickHashes || !CrossEnvironment("CC_TEST_CROSS_RECORDS").empty()) && !ScenarioRunner::GetArgs().outPath.empty();
 		if (traceRun) {
 			g_MetricsCollector.BeginHostRun("P4 Alpha Duel", ScenarioRunner::GetArgs().seed);
-			g_MetricsCollector.SetRecordTickHashes(true);
+			g_MetricsCollector.SetRecordTickHashes(s_recordTickHashes);
 		}
 		RunGameLoop();
 		// A leave is answered on the service worker, and the report below must describe the settled
@@ -8706,6 +8850,11 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			if (NetMatchSelfTest::RunBeforeInitialization() != 0) return EXIT_FAILURE;
 			netMatchSelfTest = true;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-cross-capabilities") {
+			std::cout << "[cross-capabilities] " << nlohmann::json{{"peer_limit", NetMatchConfigUtil::c_MaxPeerCount},
+			    {"player_slots", Players::MaxPlayerCount}, {"team_members", false}, {"schema", 1}}.dump() << std::endl;
+			return EXIT_SUCCESS;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-lobby-lifecycle-selftest") {
 			netMatchSelfTest = true;
