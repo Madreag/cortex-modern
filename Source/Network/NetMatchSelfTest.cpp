@@ -74,7 +74,7 @@ namespace RTE {
 			bool released = false;
 			std::thread worker([&] { released = CrossCaptureBarrier(spec, root.string(), "capture_announced", 77, 9); });
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-			const auto entered = root / "capture.capture_announced.77.enter.json";
+			const auto entered = root / "capture.9.capture_announced.77.enter.json";
 			while (!std::filesystem::exists(entered) && std::chrono::steady_clock::now() < deadline)
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			std::ofstream(root / "capture.release").put('1');
@@ -85,7 +85,7 @@ namespace RTE {
 			if (CrossCaptureBarrier(spec, root.string(), "writer_pending", 77, 9) || CrossCaptureBarrier(spec, root.string(), "capture_announced", 78, 9)) {
 				*error = "barrier ignored its phase/tick selector"; return false;
 			}
-			std::ifstream timed(root / "writer.writer_pending.77.exit.json");
+			std::ifstream timed(root / "writer.9.writer_pending.77.exit.json");
 			if (!timed || nlohmann::json::parse(timed).value("outcome", "") != "timeout") { *error = "writer timeout has no terminal receipt"; return false; }
 			std::cout << "[net-match-selftest] PASS capture_and_writer_barriers_are_selected_releasable_and_bounded" << std::endl;
 			return true;

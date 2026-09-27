@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <sstream>
 #include <filesystem>
+#include <cstdlib>
 #include <set>
 #include <thread>
 
@@ -32,11 +33,13 @@ namespace RTE {
 		json receipt{{"type", "capture_barrier"}, {"id", id}, {"capture_phase", phase}, {"capture_tick", tick},
 		    {"capture_round", round}, {"timeout_ms", timeout}, {"outcome", "entered"},
 		    {"barrier_wall_ms", std::chrono::duration<double, std::milli>(began.time_since_epoch()).count()}};
-		const auto prefix = root / (id + "." + phase + "." + std::to_string(tick));
+		const auto prefix = root / (id + "." + std::to_string(round) + "." + phase + "." + std::to_string(tick));
 		const auto publish = [&](const std::string& suffix) {
-			std::ofstream output(prefix.string() + suffix, std::ios::out | std::ios::trunc);
+			const auto target = prefix.string() + suffix;
+			std::ofstream output(target + ".pending", std::ios::out | std::ios::trunc);
 			output << receipt.dump() << '\n'; output.flush();
 			if (!output) throw std::runtime_error("capture barrier receipt write failed");
+			output.close(); std::filesystem::rename(target + ".pending", target);
 			if (MetricsCollector::IsConstructed()) g_MetricsCollector.WriteObservation(receipt);
 		};
 		publish(".enter.json");
