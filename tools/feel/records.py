@@ -9,6 +9,35 @@ import re
 import zipfile
 
 
+class NativeFaultEffects:
+    """H4 substitution effects are distinct from installing a fault selector."""
+    def __init__(self,path,cases,incarnation):
+        self.path=Path(path); self.incarnation=incarnation; self.offset=0; self.number=0
+        self.cases={c['id']:c for c in cases if c.get('incarnation',0)==incarnation}
+        self.armed={}; self.seen=set(); self.pending=b''
+
+    def poll(self,observed_ms):
+        if not self.path.is_file(): return []
+        with self.path.open('rb') as stream:
+            stream.seek(self.offset); block=stream.read(1024*1024); self.offset=stream.tell()
+        lines=(self.pending+block).split(b'\n'); self.pending=lines.pop(); output=[]
+        for raw in lines:
+            self.number+=1; text=raw.decode('utf-8',errors='replace').strip()
+            if '[cross-fault] ' in text:
+                try: receipt=json.loads(text.split('[cross-fault] ',1)[1])
+                except ValueError: continue
+                if receipt.get('id') in self.cases and receipt.get('applied'):
+                    self.armed[receipt['action']]=receipt['id']
+            match=re.search(r'\[net-h4-fault\] (ack-drop|ack-duplicate|commit-drop):',text)
+            if not match or match[1] not in self.armed: continue
+            id=self.armed[match[1]]
+            if id in self.seen: continue
+            self.seen.add(id)
+            output.append(dict(id=id,incarnation=self.incarnation,action=match[1],path=str(self.path),line=self.number,
+                               text=text,observed_payload_ms=observed_ms))
+        return output
+
+
 class RecoveryLedger:
     """Observe one peer on its owning payload clock, which survives engine restarts.
 

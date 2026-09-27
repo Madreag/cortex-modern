@@ -93,11 +93,16 @@ def schedule_for(options, peers, boxes):
     else:
         remote_windows = next((p['name'] for p in peers if boxes[p['box']]['kind'] == 'windows-task'), peers[1]['name'])
         posix = next((p['name'] for p in peers if boxes[p['box']]['kind'] == 'posix-ssh'), peers[-1]['name'])
-        faults = [dict(tick=7200, peer=remote_windows, action='live-stall', duration_ms=600),
-                  dict(tick=14400, peer=posix, action='announced-leave-rejoin'),
-                  dict(tick=21600, peer=remote_windows, action='crash-restart'),
-                  dict(tick=28800, peer=posix, action='ack-drop'),
-                  dict(tick=28800, peer=posix, action='loss', percent=5, duration_ticks=1800)]
+        host=next(p['name'] for p in peers if p['name']==options.host or p['box']==options.host)
+        faults = [dict(id='edith-live-stall',tick=7200, peer=remote_windows, action='live-stall', duration_ms=600),
+                  dict(id='mac-announced-rejoin',tick=14400, peer=posix, action='announced-leave-rejoin'),
+                  dict(id='edith-crash-restart',tick=21600, peer=remote_windows, action='crash-restart'),
+                  dict(id='mac-ack-drop',tick=28800, peer=posix, action='ack-drop'),
+                  dict(id='mac-loss',tick=28800, peer=posix, action='loss', percent=5, duration_ticks=1800),
+                  dict(id='end-under-hold',tick=7200,peer=host,action='brain-eliminate',phase='hold',target_peer=remote_windows,
+                       target_incarnation=0,recovery_id='edith-live-stall',phase_window_ticks=600),
+                  dict(id='end-under-catchup',tick=14400,peer=host,action='brain-eliminate',phase='catch_up',target_peer=posix,
+                       target_incarnation=1,recovery_id='mac-announced-rejoin',phase_window_ticks=6000)]
     if options.scenario == 'chaos':
         import random
         rng = random.Random(options.chaos_seed)
@@ -178,6 +183,7 @@ def make_plan(options):
             initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
             faults=[f for f in faults if f['peer'] == peer['name']], barriers=[b for b in barriers if b['peer']==peer['name']]))
         specs[-1]['recoveries']=[f for f in specs[-1]['faults'] if f['action']!='brain-eliminate']
+        specs[-1]['forced_ends']=[f for f in faults if f['action']=='brain-eliminate']
         if specs[-1]['barriers']:
             specs[-1]['env']['CC_TEST_CROSS_CAPTURE_BARRIER'] = own+'/barriers.json'
     return dict(version=1, run=stem, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
@@ -395,7 +401,7 @@ def prepare_instance(spec, pin, box, runtime=None):
                  f'player=0 {start+180} {min(start+210, spec["ticks"])} WEAPON_RELOAD'] if start+210 <= spec['ticks'] else [f'player=0 {start} {end} FIRE AIM=-0.9,-0.1']
     (own / 'input.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8')
     write_json(own / 'faults.json', [f for f in spec['faults'] if f['incarnation'] == spec['incarnation']])
-    write_json(own / 'recoveries.json',dict(cases=spec.get('recoveries',spec['faults']),starts=spec.get('recovery_starts',{})))
+    write_json(own / 'recoveries.json',dict(cases=spec.get('recoveries',spec['faults']),starts=spec.get('recovery_starts',{}),forced_ends=spec.get('forced_ends',[])))
     write_json(own / 'barriers.json',spec.get('barriers',[]))
     teams = dict(human_teams=[0,0,1], cpu_teams=[2]) if spec['roster'] in ('mixed','allies') else \
             dict(human_teams=[0,0,0], cpu_teams=[1,2]) if spec['roster'] == 'ai-heavy' else {}
@@ -578,11 +584,12 @@ def launch_guard_selftest(root):
 
 def run_payload(path):
     from run_sim_test import make_run
-    from feel.records import CaptureSealer, RecoveryLedger
+    from feel.records import CaptureSealer, RecoveryLedger, NativeFaultEffects
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
     root, box = Path(path).parent, payload['box']
     runs, started, completed, readers, progress, fired = {}, {}, set(), {}, {}, set()
     capture_sealers = {}
+    effect_readers = {}; effect_rows = {}
     recovery_ledgers={}; clean_reads={}
     specifications = {s['peer']: s for s in payload['specs']}
     next_sample, verdict = 0, 0
@@ -613,6 +620,8 @@ def run_payload(path):
             run.start(); started[spec['peer']] = time.monotonic()
             readers[spec['peer']] = Tail(Path(spec['own']) / 'events.jsonl')
             capture_sealers[spec['peer']] = CaptureSealer(spec['own'])
+            effect_readers[spec['peer']]=NativeFaultEffects(Path(spec['own'])/'engine/stdout.log',spec['faults'],spec['incarnation'])
+            effect_rows[spec['peer']]=[]
             progress[spec['peer']] = {}
             recovery_ledgers[spec['peer']]=RecoveryLedger(root/'recovery-observed.jsonl',spec['peer'],f'payload:{box["name"]}:{os.getpid()}',before_launch,spec.get('recoveries',spec['faults']))
             clean_reads[spec['peer']]=before_launch
@@ -651,6 +660,9 @@ def run_payload(path):
                         if observed.get('type') == 'progress': progress[peer] = observed
                     readers[peer].compress_consumed()
                     capture_sealers[peer].poll()
+                    if effects := effect_readers[peer].poll(observed_at):
+                        effect_rows[peer]+=effects
+                        write_json(Path(spec['own'])/'h4-effects.json',effect_rows[peer])
                     current = progress[peer]
                     due = next((f for f in spec['faults'] if f['action'] == 'crash-restart' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
                                 and current.get('budget_tick', 0) >= f['tick']), None)
@@ -682,6 +694,8 @@ def run_payload(path):
                         runs[peer] = fresh; specifications[peer] = new_spec
                         readers[peer] = Tail(Path(new_spec['own']) / 'events.jsonl')
                         capture_sealers[peer] = CaptureSealer(new_spec['own'])
+                        effect_readers[peer]=NativeFaultEffects(Path(new_spec['own'])/'engine/stdout.log',new_spec['faults'],new_spec['incarnation'])
+                        effect_rows[peer]=[]
                         fresh.start(); started[peer] = time.monotonic()
                         write_json(Path(new_spec['own']) / 'instance.json', new_spec)
                         write_json(Path(new_spec['own']) / 'started.json', dict(peer=peer, incarnation=new_spec['incarnation'], engine_pid=engine_pid(fresh)))

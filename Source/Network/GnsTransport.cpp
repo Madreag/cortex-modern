@@ -1286,7 +1286,6 @@ namespace RTE {
 	}
 
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs) {
-		return false; // Deliberate RED control.
 #ifdef CCCP_WITH_GNS
 		const char* headless = std::getenv("CCCP_HEADLESS");
 		if (!headless || std::string_view(headless) != "1" || lagMs < 0 || lagMs > 20000 ||
