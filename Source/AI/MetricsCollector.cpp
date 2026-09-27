@@ -83,29 +83,33 @@ namespace RTE {
 			System::PrintDiagnosticLine("[cross-record] FAIL capture barrier: " + std::string(error.what()));
 		}
 	}
-	// The tick only queues finished lines: the file writes, the part rotation and the retirement of old parts run on
-	// the stream's own thread, so a record never waits on the disk inside the measured tick.
+	// The tick only queues its records: the context merge, the serialisation, the part rotation and the retirement of old
+	// parts run on the stream's own thread, so a record never costs the measured tick more than its own fields.
 	struct MetricsCollector::EventStream {
 		struct Item {
-			std::string text;
-			size_t part = 0;
-			std::vector<std::string> retire;
+			json record;
+			std::shared_ptr<const json> context;
+			size_t sequence = 0;
 		};
 		using TallyKey = std::tuple<std::string, std::string, long, int>;
 		std::string path;
 		json context;
+		std::shared_ptr<const json> contextSnapshot; //!< The context the queued records carry; rebuilt after a change.
 		std::vector<json> pending;
 		std::map<TallyKey, std::pair<double, uint64_t>> tally; //!< This tick's terrain removals, summed per kind.
 		std::deque<json> producedInputs;
 		std::map<uint64_t, uint64_t> lastObservedInputTarget;
 		uint64_t inputSerial = 0;
-		size_t bytes = 0, partBytes = 0, partLimit = 0, limit = 0, part = 0, sequence = 0, overflow = 0;
-		size_t retainedBytes = 0, retiredParts = 0, retiredBytes = 0;
-		std::deque<std::pair<size_t, size_t>> closedParts; //!< Retained closed parts: number and bytes.
+		size_t limit = 0, partLimit = 0, sequence = 0, overflow = 0;
+		std::atomic<size_t> bytes{0};
 		bool active = false;
 
+		// The writer thread's own state.
+		size_t partBytes = 0, part = 0, retainedBytes = 0, retiredParts = 0, retiredBytes = 0;
+		std::deque<std::pair<size_t, size_t>> closedParts; //!< Retained closed parts: number and bytes.
 		std::ofstream output;
-		size_t openPart = 0;
+		std::string failure;
+
 		std::thread thread;
 		std::mutex queueMutex;
 		std::condition_variable wake, drained;
@@ -128,55 +132,20 @@ namespace RTE {
 			return true;
 		}
 
+		void SetContext(json value) {
+			context = std::move(value);
+			contextSnapshot.reset();
+		}
+
 		void Write(json record) {
 			if (failed.load()) throw std::runtime_error("event record write failed");
-			for (const auto& [key, value]: context.items()) record[key] = value;
-			record["sequence"] = ++sequence;
-			std::string line = record.dump() + '\n';
-			if (line.size() > partLimit) throw std::runtime_error("event record larger than a part");
-			Item item;
-			if (partBytes > 0 && partBytes + line.size() > partLimit) {
-				closedParts.emplace_back(part, partBytes);
-				++part;
-				partBytes = 0;
-			}
-			// At the budget the oldest parts are retired, so recording goes on with the newest records kept.
-			if (retainedBytes + line.size() > limit && !closedParts.empty()) {
-				json rotation = context;
-				rotation["type"] = "record_rotation";
-				rotation["retired_parts"] = json::array();
-				while (retainedBytes + line.size() + 1024 > limit && !closedParts.empty()) {
-					rotation["retired_parts"].push_back(std::filesystem::path(PartPath(closedParts.front().first)).filename().string());
-					item.retire.push_back(PartPath(closedParts.front().first));
-					retainedBytes -= closedParts.front().second;
-					retiredBytes += closedParts.front().second;
-					++retiredParts;
-					closedParts.pop_front();
-				}
-				rotation["retired_parts_total"] = retiredParts;
-				rotation["retired_bytes_total"] = retiredBytes;
-				rotation["byte_budget"] = limit;
-				rotation["sequence"] = sequence;
-				record["sequence"] = ++sequence;
-				line = rotation.dump() + '\n' + record.dump() + '\n';
-			}
-			item.text = std::move(line);
-			item.part = part;
-			bytes += item.text.size();
-			partBytes += item.text.size();
-			retainedBytes += item.text.size();
+			if (!contextSnapshot) contextSnapshot = std::make_shared<const json>(context);
+			Item item{std::move(record), contextSnapshot, ++sequence};
 			{
 				std::lock_guard<std::mutex> lock(queueMutex);
 				queue.push_back(std::move(item));
 			}
 			wake.notify_one();
-		}
-
-		void Flush() {
-			std::unique_lock<std::mutex> lock(queueMutex);
-			const uint64_t target = queued + queue.size();
-			wake.notify_one();
-			drained.wait(lock, [&] { return written >= target || !thread.joinable(); });
 		}
 
 		void Close() {
@@ -191,6 +160,49 @@ namespace RTE {
 		}
 
 	private:
+		void Fail(const std::string& reason) {
+			if (!failed.exchange(true)) failure = reason;
+		}
+
+		// One finished line into the current part: a full part closes, and at the budget the oldest parts retire so
+		// recording goes on with the newest records kept.
+		void Place(json& record, const json& itemContext, size_t itemSequence) {
+			for (const auto& [key, value]: itemContext.items()) record[key] = value;
+			record["sequence"] = itemSequence;
+			std::string line = record.dump() + '\n';
+			if (line.size() > partLimit) return Fail("event record larger than a part");
+			if (partBytes > 0 && partBytes + line.size() > partLimit) {
+				closedParts.emplace_back(part, partBytes);
+				output.close();
+				output.open(PartPath(++part), std::ios::out | std::ios::trunc);
+				partBytes = 0;
+			}
+			if (retainedBytes + line.size() > limit && !closedParts.empty()) {
+				json rotation = itemContext;
+				rotation["type"] = "record_rotation";
+				rotation["retired_parts"] = json::array();
+				while (retainedBytes + line.size() + 1024 > limit && !closedParts.empty()) {
+					rotation["retired_parts"].push_back(std::filesystem::path(PartPath(closedParts.front().first)).filename().string());
+					std::error_code ignored;
+					std::filesystem::remove(PartPath(closedParts.front().first), ignored);
+					retainedBytes -= closedParts.front().second;
+					retiredBytes += closedParts.front().second;
+					++retiredParts;
+					closedParts.pop_front();
+				}
+				rotation["retired_parts_total"] = retiredParts;
+				rotation["retired_bytes_total"] = retiredBytes;
+				rotation["byte_budget"] = limit;
+				rotation["sequence"] = itemSequence;
+				line = rotation.dump() + '\n' + line;
+			}
+			output << line;
+			if (!output) return Fail("event record write failed");
+			partBytes += line.size();
+			retainedBytes += line.size();
+			bytes.fetch_add(line.size());
+		}
+
 		void Run() {
 			std::unique_lock<std::mutex> lock(queueMutex);
 			while (true) {
@@ -200,21 +212,11 @@ namespace RTE {
 				queued += batch.size();
 				const bool stop = stopping;
 				lock.unlock();
-				for (const Item& item: batch) {
-					if (item.part != openPart) {
-						output.close();
-						output.open(PartPath(item.part), std::ios::out | std::ios::trunc);
-						openPart = item.part;
-					}
-					for (const std::string& old: item.retire) {
-						std::error_code ignored;
-						std::filesystem::remove(old, ignored);
-					}
-					output << item.text;
-					if (!output) failed.store(true);
+				for (Item& item: batch) {
+					if (!failed.load()) Place(item.record, *item.context, item.sequence);
 				}
 				output.flush();
-				if (!output) failed.store(true);
+				if (!output) Fail("event record write failed");
 				lock.lock();
 				written += batch.size();
 				drained.notify_all();
@@ -236,7 +238,7 @@ namespace RTE {
 		if (!m_EventStream->pending.empty() || !m_EventStream->tally.empty()) ++m_EventStream->overflow;
 		m_EventStream->pending.clear();
 		m_EventStream->tally.clear();
-		m_EventStream->context = context;
+		m_EventStream->SetContext(context);
 		m_EventStream->active = !prediction;
 	}
 
@@ -261,7 +263,9 @@ namespace RTE {
 	void MetricsCollector::UpdateEventContext(const json& context) {
 		if (!EventsEnabled()) return;
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		m_EventStream->context.update(context);
+		json merged = m_EventStream->context;
+		merged.update(context);
+		m_EventStream->SetContext(std::move(merged));
 	}
 
 	void MetricsCollector::AppendEvent(const json& event) {
@@ -372,7 +376,7 @@ namespace RTE {
 
 	size_t MetricsCollector::EventBytes() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		return m_EventStream ? m_EventStream->bytes : 0;
+		return m_EventStream ? m_EventStream->bytes.load() : 0;
 	}
 
 	size_t MetricsCollector::InstrumentationBytes() const {
@@ -399,15 +403,16 @@ namespace RTE {
 		{
 			EventStream stream;
 			if (!stream.Open(path, budget)) { *error = "event stream open"; return false; }
-			stream.context = {{"tick", 0}};
+			stream.SetContext({{"tick", 0}});
 			try {
 				for (int i = 0; i < records; ++i) {
-					stream.context["tick"] = i;
+					stream.SetContext({{"tick", i}});
 					stream.Write({{"type", "coverage"}, {"index", i}, {"padding", std::string(96, 'x')}});
 					++written;
 				}
 			} catch (const std::exception& failure) { *error = std::string("recording stopped at the budget: ") + failure.what(); return false; }
 			stream.Close();
+			if (stream.failed.load()) { *error = "event stream failed: " + stream.failure; return false; }
 		}
 		size_t retained = 0, rotations = 0;
 		int last = -1;
