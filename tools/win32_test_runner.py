@@ -182,7 +182,90 @@ class ArgumentPolicyError(ValueError):
     """The argument vector is not an explicit, well-formed test launch."""
 
 
-JOB_MEMORY_LIMIT_BYTES = int(os.environ.get("CC_RUNNER_JOB_MEMORY_GB", "8")) * 1024 ** 3
+BOX_MANIFEST = Path(r"D:\Projects\reviews\takeover-20260909\grok-workers\lead-tools\inventory\boxes.json")
+# A 32 GB box reports a little under 32 GiB once the firmware has taken its share.
+LARGE_BOX_BYTES = 30 * 1024 ** 3
+
+
+class MEMSTATUS(C.Structure):
+    _fields_ = [("dwLength", W.DWORD), ("dwMemoryLoad", W.DWORD), ("ullTotalPhys", C.c_uint64),
+                ("ullAvailPhys", C.c_uint64), ("ullTotalPageFile", C.c_uint64), ("ullAvailPageFile", C.c_uint64),
+                ("ullTotalVirtual", C.c_uint64), ("ullAvailVirtual", C.c_uint64), ("ullAvailExtendedVirtual", C.c_uint64)]
+
+
+memory_status = api(K, "GlobalMemoryStatusEx", [C.POINTER(MEMSTATUS)], W.BOOL)
+current_process = api(K, "GetCurrentProcess", [], W.HANDLE)
+process_affinity = api(K, "GetProcessAffinityMask", [W.HANDLE, C.POINTER(SIZE_T), C.POINTER(SIZE_T)], W.BOOL)
+
+
+def physical_memory_bytes():
+    status = MEMSTATUS()
+    status.dwLength = C.sizeof(MEMSTATUS)
+    return status.ullTotalPhys if memory_status(C.byref(status)) else 0
+
+
+def affinity_of(handle):
+    """(process mask, system mask) of a process handle."""
+    mine, system = SIZE_T(), SIZE_T()
+    check(process_affinity(handle, C.byref(mine), C.byref(system)))
+    return mine.value, system.value
+
+
+def _mask_value(text):
+    if text is None or str(text).strip().lower() in ("", "none", "0"):
+        return None
+    value = int(str(text).strip(), 0)
+    if value < 0:
+        raise ValueError(f"negative affinity mask {text!r}")
+    return value
+
+
+def box_runner_limits(environ=None, manifest=None, box=None, physical=None, system_mask=None):
+    """This box's CPU mask and per-engine memory limit: the environment first, then the box manifest's
+    runner entry, then the default (no mask; 12 GB per engine on a 32 GB box, 8 GB below that)."""
+    environ = os.environ if environ is None else environ
+    box = box or environ.get("COMPUTERNAME") or os.environ.get("COMPUTERNAME", "")
+    manifest = Path(environ.get("CC_RUNNER_BOX_MANIFEST", BOX_MANIFEST) if manifest is None else manifest)
+    entry, manifest_note = {}, f"{manifest} absent"
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8-sig"))
+        found = [b for b in document.get("boxes", []) if str(b.get("name", "")).casefold() == box.casefold()]
+        entry = (found[0].get("runner") or {}) if found else {}
+        manifest_note = f"{manifest} {'box ' + box if found else 'has no box ' + box}"
+    except (OSError, ValueError, AttributeError) as error:
+        if manifest.exists():
+            manifest_note = f"{manifest} unreadable: {error}"
+    limits = {"box": box, "manifest": manifest_note}
+    if "CC_RUNNER_AFFINITY_MASK" in environ:
+        mask, source = _mask_value(environ["CC_RUNNER_AFFINITY_MASK"]), "env CC_RUNNER_AFFINITY_MASK"
+    elif "affinity_mask" in entry:
+        mask, source = _mask_value(entry["affinity_mask"]), f"manifest {box}"
+    else:
+        mask, source = None, "default (none)"
+    if mask is not None:
+        system_mask = affinity_of(current_process())[1] if system_mask is None else system_mask
+        limits["affinity_mask_requested"] = f"0x{mask:08x}"
+        if not mask & system_mask:
+            source += f": 0x{mask:08x} holds no processor of the system mask 0x{system_mask:08x}, not applied"
+            mask = None
+        else:
+            mask &= system_mask
+    limits["affinity_mask"] = None if mask is None else f"0x{mask:08x}"
+    limits["affinity_source"] = source
+    if "CC_RUNNER_JOB_MEMORY_GB" in environ:
+        gb, source = float(environ["CC_RUNNER_JOB_MEMORY_GB"]), "env CC_RUNNER_JOB_MEMORY_GB"
+    elif "engine_memory_gb" in entry:
+        gb, source = float(entry["engine_memory_gb"]), f"manifest {box}"
+    else:
+        physical = physical_memory_bytes() if physical is None else physical
+        gb = 12 if physical >= LARGE_BOX_BYTES else 8
+        source = f"default ({physical / 1024 ** 3:.1f} GiB physical)"
+    if gb <= 0:
+        raise ValueError(f"engine memory limit must be positive: {gb} GB ({source})")
+    limits["engine_memory_limit_bytes"] = int(gb * 1024 ** 3)
+    limits["engine_memory_source"] = source
+    return limits
+
 
 class StartupCheckError(RuntimeError):
     """A pre-launch check failed; no process was created."""
@@ -507,12 +590,20 @@ class IsolatedRun:
             wait_while_user_fullscreen(self.record, self._save)
             self.desktop = check(create_desktop(self.name, None, None, 0, 0x01FF, None))
             self.job = check(create_job(None, None))
+            limits = box_runner_limits()
+            self.record["runner_limits"] = limits
             lim = EXT()
-            # KILL_ON_JOB_CLOSE, plus a job-wide commit limit: a runaway test process (one lockstep selftest
-            # reached 26 GB on 2026-09-09) fails its own allocations instead of taking the machine down.
-            lim.BasicLimitInformation.LimitFlags = 0x2000 | 0x200
-            lim.JobMemoryLimit = JOB_MEMORY_LIMIT_BYTES
-            self.record["job_memory_limit_bytes"] = JOB_MEMORY_LIMIT_BYTES
+            # KILL_ON_JOB_CLOSE, plus a commit limit per engine: a runaway test process (one lockstep selftest
+            # reached 26 GB on 2026-09-09) fails its own allocations instead of taking the machine down, and a
+            # second engine in the job keeps its own allowance.
+            lim.BasicLimitInformation.LimitFlags = 0x2000 | 0x100
+            lim.ProcessMemoryLimit = limits["engine_memory_limit_bytes"]
+            self.record["engine_memory_limit_bytes"] = limits["engine_memory_limit_bytes"]
+            # The mask keeps the engines off the processors the desktop runs on.
+            if limits["affinity_mask"]:
+                lim.BasicLimitInformation.LimitFlags |= 0x10
+                lim.BasicLimitInformation.Affinity = int(limits["affinity_mask"], 16)
+            self.record["affinity_mask"] = limits["affinity_mask"]
             check(set_job(self.job, 9, C.byref(lim), C.sizeof(lim)))
             ui = W.DWORD(0x40 | 0x10)
             check(set_job(self.job, 4, C.byref(ui), C.sizeof(ui)))
@@ -562,6 +653,7 @@ class IsolatedRun:
             self.thread = pi.hThread
             self.record["pid"] = pi.dwProcessId
             check(assign_job(self.job, self.process))
+            self.record["process_affinity_after_assign"] = f"0x{affinity_of(self.process)[0]:08x}"
             if resume(self.thread) == 0xFFFFFFFF:
                 raise C.WinError(C.get_last_error())
             close_handle(self.thread)
