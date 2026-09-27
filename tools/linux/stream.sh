@@ -4,19 +4,20 @@
 #   the clang+libc++ build (built when the box's libc++ and deps allow it, else its compiler line is the verdict);
 #   S1   the rejoin/capture rows through the inventory's run_stream.py on the gcc binary, alone on the box;
 #   one GPU row (a menu readback case) on the :0 session;
-#   S4b  the clang TSan build and its suite; S4 the clang ASan+UBSan build and its suite with LeakSanitizer on.
+#   S4b  the clang TSan build and its suite; S4 the clang ASan+UBSan build and its suite with LeakSanitizer on;
+#   a red sanitizer row runs once more alone after both suites (both runs kept), as the inventory reruns a red suite.
 # The load-sensitive legs (S5, S1) run alone; the TSan suite runs in three shards beside the ASan build and suite, whose
 # wall-clock budgets a sanitizer build reports instead of judging.
 # Usage, from a lane directory holding this script, run_official13.py, sanitizer_digest.py and inventory/ (a copy of
 # lead-tools/inventory):
-#   SHA=<full sha> [STEPS="repo gcc s5 libcxx s1 readback tsan asan defects"] nohup bash stream.sh > job.out 2>&1 &
+#   SHA=<full sha> [STEPS="repo gcc s5 libcxx s1 readback tsan asan rerun defects"] nohup bash stream.sh > job.out 2>&1 &
 # A step that runs again replaces its evidence; builds are incremental. exit.txt is written at the end.
 set -u
 : "${SHA:?set SHA to the full tip sha}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 LANE=${LANE:-$HERE}
 BRANCH=${BRANCH:-stage2/fixgroup-6-lead-wave-a}
-STEPS=${STEPS:-repo gcc s5 libcxx s1 readback tsan asan defects}
+STEPS=${STEPS:-repo gcc s5 libcxx s1 readback tsan asan rerun defects}
 export PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 export PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 CCCP_HEADLESS=1
 # The confirming arms run without the full-state instrument (the lead's 2026-09-24 ruling, as the Windows streams run).
@@ -43,6 +44,12 @@ SAN_OPTS=(--buildtype=debugoptimized -Db_lto=false -Db_pch=false -Db_lundef=fals
 # The TSan suite's shards: the script-graph walk alone, the long rows, then every other row of SELFTESTS.
 TSAN_SHARD_A="script-graph"
 TSAN_SHARD_B="preview-binding-exhaustive preview-invariance save-refusal-diagnosis net-match"
+TSAN_ENV=(CCCP_TEST_BINARY=$TSAN_BIN TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:external_symbolizer_path=$SYMBOLIZER)
+# A leak is reported, digested and extracted as a finding; LSan's exit code does not overwrite the row's own verdict.
+ASAN_ENV=(CCCP_TEST_BINARY=$ASAN_BIN
+  ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0:symbolize=1:external_symbolizer_path=$SYMBOLIZER
+  LSAN_OPTIONS=exitcode=0
+  UBSAN_OPTIONS=suppressions=$REPO/tools/sanitizers/ubsan.supp:print_stacktrace=1:halt_on_error=0:external_symbolizer_path=$SYMBOLIZER)
 
 mkdir -p $EV
 stamp() { TZ=America/Phoenix date '+%Y-%m-%d %H:%M:%S MST'; }
@@ -50,7 +57,7 @@ say() { echo "[$(stamp)] $*" | tee -a $EV/steps.log; }
 fail() { say "FAIL: $*"; echo 1 > $LANE/exit.txt; exit 1; }
 want() { case " $STEPS " in *" $1 "*) return 0;; esac; return 1; }
 # rm never follows the runtime/Data symlinks the runner leaves inside a run directory.
-fresh() { rm -rf "$1"; mkdir -p "$1"; }
+fresh() { rm -rf "${1:?}"; mkdir -p "$1"; }
 suite_line() { $PY - "$1" <<'EOF'
 import json, sys
 try:
@@ -108,7 +115,7 @@ if want libcxx; then
   fresh $EV/libcxx
   printf '#include <vector>\nint main() { return std::vector<int>{1}.size() == 1 ? 0 : 1; }\n' > $EV/libcxx/probe.cpp
   clang++ -stdlib=libc++ $EV/libcxx/probe.cpp -o $EV/libcxx/probe > $EV/libcxx/probe.log 2>&1; PRC=$?
-  rm -rf $REPO/build-libcxx
+  rm -rf "${REPO:?}/build-libcxx"
   ( CC=clang CXX=clang++ CXXFLAGS=-stdlib=libc++ LDFLAGS=-stdlib=libc++ meson setup $REPO/build-libcxx $REPO "${GCC_OPTS[@]}" ) > $EV/libcxx/setup.log 2>&1; SRC=$?
   BRC=not-run
   if [ $SRC -eq 0 ]; then
@@ -174,10 +181,10 @@ if want tsan; then
       case $shard in a) rows=$TSAN_SHARD_A;; b) rows=$TSAN_SHARD_B;; c) rows=$SHARD_C;; esac
       only=(); for r in $rows; do only+=(--only $r); done
       echo "$rows" > $EV/S4b/shard-$shard-rows.txt
-      CCCP_TEST_BINARY=$TSAN_BIN TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:external_symbolizer_path=$SYMBOLIZER \
-        $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4b/suite-$shard --timeout 3600 "${only[@]}" > $EV/S4b/suite-$shard-stdout.log 2>&1 &
+      env "${TSAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4b/suite-$shard --timeout 3600 "${only[@]}" > $EV/S4b/suite-$shard-stdout.log 2>&1 &
       TSAN_PIDS+=($!)
     done
+    echo "${TSAN_PIDS[*]}" > $EV/S4b/pids.txt
     say "tsan suite started: shards a b c (pids ${TSAN_PIDS[*]})"
   fi
 fi
@@ -189,7 +196,7 @@ if want asan; then
   [ -e $LANE/deps/gns-turnfix ] || ln -s $DEPS/gns-turnfix $LANE/deps/gns-turnfix
   if [ ! -f $LANE/deps/gns-turnfix-ubsan/lib/libGameNetworkingSockets_s.a ]; then
     ( set -e
-      W=$LANE/deps/gns-ubsan-work; rm -rf $W; mkdir -p $W
+      W=$LANE/deps/gns-ubsan-work; rm -rf "${W:?}"; mkdir -p $W
       git clone -q --no-checkout $GNS_SRC $W/src
       git -C $W/src checkout -q $GNS_COMMIT
       git -C $W/src apply $REPO/external/patches/gns-turn-lifetime.patch
@@ -197,24 +204,20 @@ if want asan; then
       cmake --build $W/build -j 8
       cmake --install $W/build
       nm -C $LANE/deps/gns-turnfix-ubsan/lib/libGameNetworkingSockets_s.a | grep -q "typeinfo for SteamNetworkingSocketsLib::CSteamNetworkingSockets"
-      rm -rf $W
+      rm -rf "${W:?}"
     ) > $EV/gns-ubsan.log 2>&1 && say "gns ubsan prefix built" || say "gns ubsan prefix FAILED (gns-ubsan.log)"
   fi
   if [ ! -f $REPO/build-asan/build.ninja ]; then
     ( CC=clang CXX=clang++ meson setup $REPO/build-asan $REPO "${SAN_OPTS[@]}" -Dgns_root=$LANE/deps/gns -Db_sanitize=address,undefined ) > $EV/engine-asan-setup.log 2>&1 || say "asan meson setup FAILED (engine-asan-setup.log)"
   fi
-  ninja -C $REPO/build-asan -j8 > $EV/engine-asan-build.log 2>&1; RC=$?
+  # LuaJIT's build-time generator (buildvm) never frees its buffers; LeakSanitizer's exit would fail its build steps.
+  ASAN_OPTIONS=detect_leaks=0 ninja -C $REPO/build-asan -j8 > $EV/engine-asan-build.log 2>&1; RC=$?
   echo $RC > $EV/asan-build-exit.txt; tail -30 $EV/engine-asan-build.log > $EV/engine-asan-tail.txt
   say "asan build exit=$RC gns-turnfix-ubsan includes=$(grep -c 'gns-turnfix-ubsan/include' $REPO/build-asan/compile_commands.json 2>/dev/null)"
   if [ $RC -eq 0 ] && [ -f $ASAN_BIN ]; then
     fresh $EV/S4
     say "asan suite start (detect_leaks=1)"
-    # A leak is reported, digested and extracted as a finding; LSan's exit code does not overwrite the row's own verdict.
-    CCCP_TEST_BINARY=$ASAN_BIN \
-      ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0:symbolize=1:external_symbolizer_path=$SYMBOLIZER \
-      LSAN_OPTIONS=exitcode=0 \
-      UBSAN_OPTIONS=suppressions=$REPO/tools/sanitizers/ubsan.supp:print_stacktrace=1:halt_on_error=0:external_symbolizer_path=$SYMBOLIZER \
-      $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4/suite --timeout 2400 --quiet-rows last > $EV/S4/suite-stdout.log 2>&1; RC=$?
+    env "${ASAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4/suite --timeout 2400 --quiet-rows last > $EV/S4/suite-stdout.log 2>&1; RC=$?
     echo $RC > $EV/S4/suite-exit.txt
     say "asan suite exit=$RC $(suite_line $EV/S4/suite/result.json)"
   fi
@@ -223,6 +226,32 @@ fi
 if [ ${#TSAN_PIDS[@]} -gt 0 ]; then
   for pid in "${TSAN_PIDS[@]}"; do wait $pid; done
   for shard in a b c; do say "tsan shard $shard: $(suite_line $EV/S4b/suite-$shard/result.json)"; done
+fi
+
+if want rerun; then
+  # The TSan shards may belong to an earlier run of this script, so they are waited on by their recorded pids.
+  for pid in $(cat $EV/S4b/pids.txt 2>/dev/null); do while kill -0 $pid 2>/dev/null; do sleep 30; done; done
+  for leg in S4b S4; do
+    [ -d $EV/$leg ] || continue
+    # A load-sensitive row has had its quiet rerun inside the suite already.
+    red=$($PY - $EV/$leg <<'EOF'
+import json, pathlib, sys
+rows = []
+for path in sorted(pathlib.Path(sys.argv[1]).glob("suite*/result.json")):
+    for name, row in json.loads(path.read_text()).get("results", {}).items():
+        if not row.get("pass") and not row.get("load_sensitive") and name not in rows:
+            rows.append(name)
+print(" ".join(rows))
+EOF
+)
+    [ -n "$red" ] || { say "rerun $leg: no red row"; continue; }
+    only=(); for r in $red; do only+=(--only $r); done
+    rm -rf "${EV:?}/${leg:?}/rerun"
+    if [ $leg = S4b ]; then envs=("${TSAN_ENV[@]}"); budget=3600; else envs=("${ASAN_ENV[@]}"); budget=2400; fi
+    say "rerun $leg alone: $red"
+    env "${envs[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/$leg/rerun --timeout $budget "${only[@]}" > $EV/$leg/rerun-stdout.log 2>&1
+    say "rerun $leg: $(suite_line $EV/$leg/rerun/result.json)"
+  done
 fi
 
 if want defects; then
