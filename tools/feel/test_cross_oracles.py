@@ -65,5 +65,15 @@ class AttemptOracles(unittest.TestCase):
             self.assertIsNone(cross_report.scheduled_hold(altered,[receipt],[recovery]))
         self.assertIsNone(cross_report.scheduled_hold(hold,[receipt],[dict(recovery,passed=False)]))
 
+    def test_numbered_hash_and_timing_rows_require_complete_measured_evidence(self):
+        peers={n:dict(frames=1201,tick_timing_valid=True,tick_compute_ms=dict(count=1201),timing=dict(
+            complete=True,steady_waits_over_50=2,steady_missing_frame_stalls=4,net_wait_ms=130,waiting_percent=1,longest_stall_ms=70)) for n in 'abc'}
+        claimed={r['number']:r['status'] for r in cross_report.requirements({},dict(passed=True),peers)}
+        for number in (41,52,'reread-4','reread-5'): self.assertEqual(claimed[number],'PASS')
+        peers['b']['tick_timing_valid']=False
+        peers['c']['timing']['complete']=False
+        claimed={r['number']:r['status'] for r in cross_report.requirements({},dict(passed=False),peers)}
+        for number in (41,52,'reread-4','reread-5'): self.assertEqual(claimed[number],'NOT COVERED')
+
 
 if __name__=='__main__': unittest.main()
