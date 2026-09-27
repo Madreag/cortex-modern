@@ -1,4 +1,5 @@
 #include "AHuman.h"
+#include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
@@ -2699,6 +2700,7 @@ void AHuman::PreControllerUpdate() {
 					if (thrownDevice->ActivatesWhenReleased()) {
 						thrownDevice->Activate();
 					}
+					if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("thrown_release", thrownDevice, "success", 1, GetUniqueID());
 					m_ThrowTmr.Reset();
 				}
 			} else if (m_ArmsState == THROWING_RELEASE && m_ThrowTmr.GetElapsedSimTimeMS() > 100) {
@@ -2865,6 +2867,7 @@ void AHuman::PreControllerUpdate() {
 		AddToInventoryBack(pMO);
 		armToUse->SetHandPos(m_pItemInReach->GetJointPos());
 		armToUse->SetHeldDevice(m_pItemInReach);
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("device_pickup", this, "success", 1, m_pItemInReach->GetUniqueID(), m_Controller.GetPlayer());
 		m_pItemInReach = nullptr;
 
 		if (armToUse != m_pBGArm) {
