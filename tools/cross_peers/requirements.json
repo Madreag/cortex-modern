@@ -573,7 +573,7 @@
     "number": "reread-6c",
     "requirement": "Q4: the tuple is insufficient as specified because raw rows lack most fields and per-peer pass ordinals are not common history; preserve a run/process-instance/peer observation identity separately from comparable session/match/history-branch/source-round/tick, map restore/recovery passes to checkpoint digest and original history, retain config revision/authority generation/seat incarnation, and never overwrite previous mismatches (v2:338; Source/Main.cpp:6043; tools/feel/retained_resume.py:44; Source/Network/NetMatchService.cpp:691,3992,4694; Source/Network/NetLockstep.cpp:3950; Source/System/ScenarioRunner.cpp:2358).",
     "reread": "",
-    "reason": "Observation and comparable identities are separate; restored history branch, checkpoint digest and authority generation remain unavailable (40)."
+    "reason": "Observation and comparable identities are separate and settled authority is exposed; private restored history branch and checkpoint digest remain unavailable (40)."
   },
   {
     "number": "reread-7",

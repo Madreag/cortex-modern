@@ -182,7 +182,7 @@ def make_plan(options):
                 capture_barriers=barriers,
                 overlap_policy='ordered by committed unique gameplay budget; early ends carry outstanding triggers',
                 deadlines=dict(recovery_ms=options.recovery_deadline_ms, capture_ms=options.capture_budget_ms,
-                               launch_s=options.timeout),
+                               launch_s=options.timeout, payload_ready_s=180, payload_release_s=360, session_publication_s=180),
                 memory=dict(warmup_s=120, slope_bytes_per_minute=8*1024*1024,
                             retained_bytes=128*1024*1024, sample_seconds=60),
                 storage=dict(total_bytes=LIMIT, event_bytes_per_instance=256*1024*1024,
@@ -486,6 +486,15 @@ def read_capabilities(box, root):
         run.close()
 
 
+def wait_for_payload_release(root, seconds):
+    deadline=time.monotonic()+seconds
+    while True:
+        if (root/'stop.json').is_file(): raise RuntimeError('coordinator cancelled before engine launch')
+        if (root/'launch-go.json').is_file(): return
+        if time.monotonic()>=deadline: raise TimeoutError('all-box launch release deadline')
+        time.sleep(.2)
+
+
 def run_payload(path):
     from run_sim_test import make_run
     from feel.records import CaptureSealer
@@ -505,6 +514,8 @@ def run_payload(path):
         requested = int(requested[requested.index('-net-match-peers') + 1])
         if requested > capabilities['peer_limit']:
             raise RuntimeError(f'admission refused by build capability: requested {requested} peers, limit {capabilities["peer_limit"]}; Main clamps its legacy argument, so the driver refuses to silently shrink the roster')
+        write_json(root/'launch-ready.json',dict(box=box['name'],runner_pid=os.getpid(),capabilities=capabilities))
+        wait_for_payload_release(root,360)
         for spec in payload['specs']:
             if spec['role'] != 'host':
                 session_path = root / 'session.json'
@@ -667,7 +678,7 @@ def run_plan(plan, root):
     try:
         for box in boxes.values():
             box_root = str(PurePosixPath(box['scratch']) / plan['run'])
-            payload = dict(box=box, specs=[s for s in plan['specs'] if s['box'] == box['name']], pin='pending')
+            payload = dict(box=box, specs=sorted([s for s in plan['specs'] if s['box'] == box['name']],key=lambda s:s['role']!='host'), pin='pending')
             local_box = root / 'boxes' / box['name']; local_box.mkdir(parents=True)
             local_payload = local_box / 'payload.json'; write_json(local_payload, payload)
             if box['kind'] == 'windows-local':
@@ -744,20 +755,36 @@ def run_plan(plan, root):
                         stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
                         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                     launched.add(box['name'])
-            if box['name'] == host_box:
-                deadline, session = time.monotonic()+180, None
-                while time.monotonic() < deadline:
-                    rows = directory.list_sessions(local['directory_port'])
-                    if len(rows) == 1:
-                        session = rows[0]['session_id']; break
-                    if box['name'] in processes and processes[box['name']].poll() is not None: break
-                    time.sleep(.5)
-                if not session: raise RuntimeError('host published no session before the 180-second deadline')
-                write_json(root / 'session.json', dict(session=session))
-                plan['session'] = session
-                for remote in boxes.values():
-                    if remote['kind'] != 'windows-local':
-                        stage_remote(remote, root / 'session.json', payloads[remote['name']][2] + '/session.json')
+        # Every owning payload must finish its guarded capability launch before
+        # any match engine starts. Otherwise a remote host can consume its setup
+        # deadline while another box's runner waits for the user's fullscreen app.
+        deadline=time.monotonic()+plan['deadlines']['payload_ready_s']
+        ready=set()
+        while len(ready)<len(boxes) and time.monotonic()<deadline:
+            for box in boxes.values():
+                if box['name'] in ready: continue
+                box_root=payloads[box['name']][2]
+                if ((root/'launch-ready.json').is_file() if box['kind']=='windows-local' else remote_exists(box,box_root+'/launch-ready.json')):
+                    ready.add(box['name'])
+                elif box['name'] in processes and processes[box['name']].poll() is not None:
+                    raise RuntimeError(f'{box["name"]}: owning payload exited before launch readiness')
+            if (root/'stop.json').is_file(): raise RuntimeError('coordinator cancelled before all-box readiness')
+            if len(ready)<len(boxes): time.sleep(.2)
+        if len(ready)!=len(boxes): raise RuntimeError('not every box reached guarded launch readiness before the declared deadline')
+        release=root/'launch-go.json'
+        write_json(release,dict(boxes=sorted(ready),released_wall_ms=time.time()*1000))
+        for box in boxes.values():
+            if box['kind']!='windows-local': stage_remote(box,release,payloads[box['name']][2]+'/launch-go.json')
+        deadline,session=time.monotonic()+plan['deadlines']['session_publication_s'],None
+        while time.monotonic()<deadline:
+            rows=directory.list_sessions(local['directory_port'])
+            if len(rows)==1: session=rows[0]['session_id']; break
+            if host_box in processes and processes[host_box].poll() is not None: break
+            time.sleep(.5)
+        if not session: raise RuntimeError('host published no session before the declared publication deadline')
+        write_json(root/'session.json',dict(session=session)); plan['session']=session
+        for box in boxes.values():
+            if box['kind']!='windows-local': stage_remote(box,root/'session.json',payloads[box['name']][2]+'/session.json')
         deadline, finished = time.monotonic()+max(s['timeout'] for s in plan['specs'])+60, set()
         while time.monotonic() < deadline and len(finished) < len(boxes):
             for box in boxes.values():
