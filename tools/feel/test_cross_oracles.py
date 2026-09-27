@@ -15,7 +15,7 @@ class AttemptOracles(unittest.TestCase):
     def test_assigned_capture_rows_stay_red_beside_core_pass(self):
         summary=cross_report.judge_attempt(*self.fixture())
         self.assertTrue(summary['core_passed'])
-        self.assertTrue(summary['gate_b_eligible'])
+        self.assertFalse(summary['gate_b_eligible'])
         self.assertEqual(summary['oracles']['full_state']['status'],'FAIL')
         self.assertIn('LuaMan.cpp:1613',summary['oracles']['full_state']['reason'])
         self.assertIn('FloatText.h:324',summary['oracles']['full_state']['reason'])
@@ -44,6 +44,31 @@ class AttemptOracles(unittest.TestCase):
     def test_disabled_capture_cannot_qualify_for_gate_b(self):
         args=copy.deepcopy(self.fixture()); args[0]['fullstate_every']=0
         self.assertFalse(cross_report.judge_attempt(*args)['gate_b_eligible'])
+
+    def test_capture_hold_engine_red_keeps_missing_history_red(self):
+        args=copy.deepcopy(self.fixture()); args[0]['capture_rows_pending']=[]
+        args[1].update(shared_fullstate=True,only_capture_induced_holds=True,zero_unscheduled_holds=False,full_history=False)
+        result=cross_report.judge_attempt(*args)
+        self.assertTrue(result['core_engine_red']); self.assertTrue(result['gate_b_eligible'])
+        self.assertFalse(result['core_passed']); self.assertEqual(result['oracles']['live_hashes']['status'],'FAIL')
+        args[1]['only_capture_induced_holds']=False
+        self.assertFalse(cross_report.judge_attempt(*args)['gate_b_eligible'])
+        args[1]['only_capture_induced_holds']=True; args[1]['shared_fullstate']=False
+        self.assertFalse(cross_report.judge_attempt(*args)['gate_b_eligible'])
+
+    def test_hold_uses_held_peer_last_live_timing_and_adopted_bound(self):
+        hold=dict(peer=3,tick=607,source_round=1)
+        config=dict(type='adopted_config',peer=3,source_round=1,incarnation=0,tick=1,sim_tick_ms=16.6666,
+                    config=dict(rules=dict(slow_player_bound_ticks=3)))
+        timing=dict(type='tick_timing',peer=3,source_round=1,incarnation=0,phase='live',tick=600,capture_us=56323,compute_us=7712,wait_us=27)
+        events={'edith':[config,timing,dict(timing,tick=607,phase='catchup',capture_us=5)]}
+        peers={'edith':dict(own_hold_notifications=[dict(tick=607,source_round=1,incarnation=0)])}
+        result=cross_report.classify_hold(hold,events,peers)
+        self.assertEqual(result['classification'],'capture-induced'); self.assertEqual(result['capture_tick'],600)
+        self.assertEqual(result['hold_bound_us'],49000)
+        events['edith'].append(dict(timing,tick=601,capture_us=20,compute_us=100000))
+        self.assertEqual(cross_report.classify_hold(hold,events,peers)['classification'],'other')
+        self.assertEqual(cross_report.classify_hold(dict(hold,source_round=2),events,peers)['classification'],'other')
 
     def test_every_incarnation_exit_needs_its_own_expected_cause(self):
         good=dict(started=True,exit_code=0,timed_out=False)

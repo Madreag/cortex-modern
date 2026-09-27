@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 import html
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 
@@ -24,6 +25,7 @@ CAPTURE_ROWS={
 
 def judge_attempt(manifest,checks,peers,matrix,recoveries):
     core=all(checks.get(name,False) for name in CORE_CHECKS)
+    engine_red=not checks.get('zero_unscheduled_holds',False) and bool(checks.get('only_capture_induced_holds')) and all(checks.get(name,False) for name in CORE_CHECKS if name not in ('full_history','zero_unscheduled_holds'))
     oracle=lambda passed,reason='':dict(status='PASS' if passed else 'FAIL',reason=reason)
     pending=manifest.get('capture_rows_pending',[1,2])
     memory=[value for peer in peers.values() for value in peer.get('memory_by_incarnation',{}).values()]
@@ -52,7 +54,8 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries):
         oracles['forced_ends']=oracle(checks.get('forced_end_during_hold',False) and checks.get('forced_end_during_transfer',False),'Actual activity-over must overlap the named recovery phase; a stale hint is insufficient.')
         oracles['rematches']=oracle(checks.get('changed_settings_rematch',False) and checks.get('fog_on_match',False))
         oracles['autosaves']=oracle(checks.get('validated_autosave_archives',False),'Archive integrity alone does not prove restoration or sealed admission.')
-    return dict(core_passed=core,gate_b_eligible=core and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
+    return dict(core_passed=core,core_engine_red=engine_red,
+        gate_b_eligible=(core or engine_red) and checks.get('shared_fullstate',False) and not pending and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
 
 
 def judge_exit(record,peer,incarnation,faults,receipts):
@@ -83,7 +86,42 @@ def scheduled_hold(hold,receipts,recoveries):
 
 def attempt_label(result):
     if result.get('passed'): return 'PASS'
+    if result.get('core_engine_red'): return 'CORE-ENGINE-RED; FULL GATE RED'
     return 'CORE PASS; FULL GATE RED' if result.get('core_passed') else 'CORE FAIL; FULL GATE RED'
+
+
+def classify_hold(hold,events,peers):
+    result=dict(classification='other',reason='Held peer timing or adopted hold bound is missing or ambiguous.')
+    matches=[]
+    for name,records in events.items():
+        configs=[r for r in records if r.get('type')=='adopted_config' and r.get('peer')==hold['peer'] and r.get('source_round')==hold.get('source_round')]
+        if not configs: continue
+        notices=[r for r in peers[name].get('own_hold_notifications',[]) if r['tick']==hold['tick'] and r['source_round']==hold.get('source_round')]
+        incarnations={r['incarnation'] for r in notices}
+        timing=[r for r in records if r.get('type')=='tick_timing' and r.get('phase')=='live' and r.get('peer')==hold['peer'] and
+                r.get('source_round')==hold.get('source_round') and r.get('tick',float('inf'))<=hold['tick'] and
+                (not incarnations or r.get('incarnation') in incarnations)]
+        if not timing: continue
+        tick=max(r['tick'] for r in timing); timing=[r for r in timing if r['tick']==tick]
+        if len(timing)!=1: continue
+        row=timing[0]
+        config=next((c for c in reversed(configs) if c.get('incarnation')==row.get('incarnation') and c.get('tick',0)<=tick),None)
+        if not config: continue
+        ticks=config.get('config',{}).get('rules',{}).get('slow_player_bound_ticks')
+        ms=config.get('sim_tick_ms')
+        if not isinstance(ticks,(int,float)) or not isinstance(ms,(int,float)): continue
+        bound=max(1,math.floor(ticks*ms))*1000
+        matches.append(dict(held_instance=name,incarnation=row.get('incarnation'),execution=row.get('execution'),
+            capture_tick=tick,capture_us=row.get('capture_us'),compute_us=row.get('compute_us'),wait_us=row.get('wait_us'),hold_bound_us=bound,
+            evidence_path=row.get('_path'),evidence_line=row.get('_line'),own_hold_notifications=notices,
+            association='Held peer last live committed timing at or before the hold boundary; later catch-up timing excluded.'))
+    if len(matches)!=1: return result
+    result.update(matches[0])
+    if isinstance(result['capture_us'],(int,float)) and result['capture_us']>result['hold_bound_us']:
+        result.update(classification='capture-induced',reason='Inventory engine rows 374/395/403: synchronous full-state capture exceeds the adopted slow-player bound; Source/Main.cpp timing/capture seam and NetLockstep.cpp:5903.')
+    else:
+        result['reason']='Capture did not exceed the bound; compute/wait values shown. The record does not identify any further blocking cause.'
+    return result
 
 
 def load(path, default=None):
@@ -250,7 +288,7 @@ def build_report(root):
         log = [(fragment/'engine'/leaf,number,line) for fragment in fragments for leaf in ('stdout.log','stderr.log')
                for number,line in read_log(fragment/'engine'/leaf)]
         record, native = load(own / 'record.json', {}), load(own / 'match-report.json', {})
-        waits = []; holds = []; observed_round=None; observed_log=None
+        waits = []; holds = []; own_hold_notifications=[]; observed_round=None; observed_log=None
         for log_path, number, line in log:
             if log_path!=observed_log: observed_log=log_path; observed_round=None
             if match := re.search(r'\[cross-context\] round=\d+ source_round=(\d+)',line): observed_round=int(match[1])
@@ -258,6 +296,8 @@ def build_report(root):
                 waits.append(dict(tick=int(match[1]), wait_ms=int(match[2]), line=number))
             if match := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
                 holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number,source_round=observed_round,path=str(log_path.relative_to(root))))
+            if match := re.search(r'\[net-lockstep\] hold of this seat at (\d+)',line):
+                own_hold_notifications.append(dict(tick=int(match[1]),source_round=observed_round,incarnation=int(log_path.parent.parent.name.split('-')[-1]),path=str(log_path.relative_to(root)),line=number))
             if re.search(r'RTE Assert|FATAL:|EXCEPTION_ACCESS_VIOLATION|Runtime Error due to unhandled exception|Rejected .*command|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|\[net-plane\].*ASSERT|\[fullstate(?:-refusal)?\].*(?:failed:|refused:|problem=)|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
                 findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
@@ -328,7 +368,7 @@ def build_report(root):
             effective_hz=(len(frames)-1)*1000/(frames[-1]['present_end_ms']-frames[0]['present_end_ms']) if len(frames)>1 and frames[-1]['present_end_ms']>frames[0]['present_end_ms'] else None,
             memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, archives=archives,
             recovery_observations=recovery_observations,payload_clock_last_ms=max([payload_done.get('payload_monotonic_ms',0),*[r.get('payload_monotonic_ms',0) for r in samples],*[r.get('upper_wall_ms',0) for r in recovery_observations]]),
-            native_completion=completion, native_final_tick=final_tick, exits=exits,
+            native_completion=completion, native_final_tick=final_tick, exits=exits,own_hold_notifications=own_hold_notifications,
             fragments=[str(fragment.relative_to(root)) for fragment in fragments], samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:904 detailed-status text is not a per-tick counter API.',
@@ -369,7 +409,9 @@ def build_report(root):
         recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
     for p in peers.values():
-        for hold in p['holds']: hold['scheduled_recovery_id']=scheduled_hold(hold,fault_receipts,recoveries)
+        for hold in p['holds']:
+            hold['scheduled_recovery_id']=scheduled_hold(hold,fault_receipts,recoveries)
+            hold.update(classify_hold(hold,events,peers))
     unscheduled_holds=sum(not h['scheduled_recovery_id'] for p in peers.values() for h in p['holds'])
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
                   preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings'),
@@ -390,6 +432,7 @@ def build_report(root):
                       for values in events.values()),
                   no_engine_findings=not findings)
     checks['all_incarnation_exits']=all(p['exits'] and all(e['passed'] for e in p['exits']) for p in peers.values())
+    checks['only_capture_induced_holds']=all(h['classification']=='capture-induced' for p in peers.values() for h in p['holds'] if not h['scheduled_recovery_id'])
     checks['shared_fullstate']=bool(cadence) and fullstate['passed']
     checks['capture_rows_resolved']=not manifest.get('capture_rows_pending',[1,2])
     barrier_receipts=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='capture_barrier']
@@ -424,7 +467,8 @@ def build_report(root):
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
     write_index(root.parent)
-    verdict = f'{attempt_label(result)} {result["run"]}: ' + ', '.join(f'{n}={p["frames"]} frames' for n,p in peers.items()) + f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds} unscheduled={unscheduled_holds}; ' + '; '.join(name+'='+oracle['status'] for name,oracle in result['oracles'].items())
+    classifications=dict(Counter(h['classification'] for p in peers.values() for h in p['holds']))
+    verdict = f'{attempt_label(result)} {result["run"]}: ' + ', '.join(f'{n}={p["frames"]} frames' for n,p in peers.items()) + f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds} unscheduled={unscheduled_holds} classifications={classifications}; ' + '; '.join(name+'='+oracle['status'] for name,oracle in result['oracles'].items())
     if result['assigned_capture_rows']: verdict+='; full-state NOT COVERED by capture-rows lane rows '+','.join(result['assigned_capture_rows'])
     (root / 'verdict.txt').write_text(verdict + '\n', encoding='utf-8'); print(verdict)
     return result
@@ -478,6 +522,8 @@ def write_page(root, result, events):
     parts.append('<h2>Gates</h2><ul>' + ''.join(f'<li class="{"pass" if ok else "fail"}">{escape(name)}: {"PASS" if ok else "FAIL"}</li>' for name,ok in result['checks'].items()) + '</ul>')
     parts.append('<h2>Independent oracle verdicts</h2><p>CORE PASS requires complete comparable live frames, zero live mismatches, zero unscheduled holds and native completion, with the box/configuration/integrity prerequisites. It does not turn any other oracle green.</p>'+
         ''.join(f'<details><summary>{escape(name)} — {escape(row["status"])}</summary><p>{escape(row["reason"])}</p></details>' for name,row in result['oracles'].items()))
+    parts.append('<h2>Every hold, classified</h2><p>CORE-ENGINE-RED means every unscheduled hold is capture-induced, with zero live mismatches and native completion. Missing live frames and full-state failures remain red in their own oracles. Repeated log observations of the same boundary are all retained. Unknown causes are other.</p><pre>'+escape(json.dumps({name:peer['holds'] for name,peer in result['peers'].items()},indent=2))+'</pre>')
+    parts.append('<h2>Presentation retention</h2><p>'+escape(manifest.get('storage',{}).get('presentation_window','Legacy unbounded live presentation stream; compressed after exit.'))+'</p><p>Feel statistics describe the retained window, not discarded rows. CRC, decoded byte counts and sequence continuity are checked for every retained chunk.</p><pre>'+escape(json.dumps({name:peer.get('presentation_window',{}) for name,peer in result['peers'].items()},indent=2))+'</pre>')
     parts.append('<h2>Coverage</h2>')
     parts.append('<div style="overflow-x:auto"><table><thead><tr><th>Coverage / minimum</th>' +
         ''.join(f'<th>{escape(b["name"])}</th>' for b in manifest['boxes']) + '</tr></thead><tbody>')
