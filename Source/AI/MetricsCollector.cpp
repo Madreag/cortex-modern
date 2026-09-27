@@ -95,7 +95,7 @@ namespace RTE {
 		std::string path;
 		json context;
 		std::vector<json> pending;
-		std::map<TallyKey, std::pair<double, uint64_t>> tally; //!< Object-less events of this tick, summed per kind.
+		std::map<TallyKey, std::pair<double, uint64_t>> tally; //!< This tick's terrain removals, summed per kind.
 		std::deque<json> producedInputs;
 		std::map<uint64_t, uint64_t> lastObservedInputTarget;
 		uint64_t inputSerial = 0;
@@ -242,7 +242,7 @@ namespace RTE {
 
 	void MetricsCollector::RecordEvent(const std::string& event, const MovableObject* object, const std::string& result, double amount, long other, int seat) {
 		if (!EventsEnabled()) return;
-		if (!object) {
+		if (!object && event == "terrain_removed") {
 			// Terrain removal reports one pixel at a time: the tick's record carries their sum.
 			if (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative()) return;
 			std::lock_guard<std::mutex> lock(m_Mutex);
