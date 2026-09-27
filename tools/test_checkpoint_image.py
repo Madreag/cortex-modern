@@ -59,6 +59,7 @@ REQUIRED_SCENE_ROWS = (
     "image_membership_matches_the_world_structure",
     "archive_describes_the_hashed_instant",
     "a_saved_field_write_moves_the_stamp",
+    "custom_values_saved_in_key_order",
     "vector_out_argument_dirties_its_root",
     "an_atomgroup_write_moves_its_owner_stamp",
     "a_gib_write_moves_its_owner_stamp",
