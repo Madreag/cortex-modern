@@ -412,7 +412,7 @@ def build_report(root):
         instrumentation = dict(first_bytes=payload_sizes[0] if payload_sizes else None,
             last_bytes=payload_sizes[-1] if payload_sizes else None, peak_bytes=max(payload_sizes) if payload_sizes else None,
             growth_bytes=payload_sizes[-1]-payload_sizes[0] if payload_sizes else None,
-            scope='Measured trace vector and string capacities only; allocator, map nodes and other buffers excluded. No subtraction from resident/private totals.')
+            scope='Measured raw tick-hash vector and subsystem-vector capacities only; allocator and other buffers excluded. No subtraction from resident/private totals.')
         trace=load(own/'trace.json',{})
         completion=trace.get('runs',[{}])[-1].get('strings',{}) if trace.get('runs') else {}
         final_tick=trace.get('runs',[{}])[-1].get('numeric',{}).get('final_tick') if trace.get('runs') else None
