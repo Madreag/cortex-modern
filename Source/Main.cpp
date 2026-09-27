@@ -298,6 +298,7 @@ bool RTE::RunCrossExecutionPhaseSelfTest(std::string* error) {
 
 static nlohmann::json s_crossRecoveryStarts = nlohmann::json::object();
 static nlohmann::json s_crossRecoveryCases = nlohmann::json::array();
+static nlohmann::json s_crossEndCases = nlohmann::json::array();
 static std::set<std::string> s_crossRecoveryDone;
 static std::map<std::string, std::string> s_crossRecoveryPhase;
 
@@ -322,6 +323,7 @@ static bool EnsureCrossEventsOpen() {
 				std::ifstream input(recoveryPath); const auto document = nlohmann::json::parse(input);
 				s_crossRecoveryStarts = document.value("starts", nlohmann::json::object());
 				s_crossRecoveryCases = document.value("cases", nlohmann::json::array());
+				s_crossEndCases = document.value("forced_ends", nlohmann::json::array());
 			} catch (const std::exception& error) { System::PrintDiagnosticLine("[cross-record] FAIL recovery input: " + std::string(error.what())); }
 		}
 	}
@@ -436,6 +438,7 @@ static void ApplyCrossSchedule() {
 		} else if (action == "ack-drop" || action == "ack-duplicate" || action == "commit-drop") {
 			NetH4SetFault(NetH4FaultFromName(action));
 			receipt["applied"] = true;
+			receipt["effect_observed"] = false;
 			receipt["scope"] = "H4_acknowledgement_fault";
 		} else if (action == "announced-leave-rejoin") {
 			s_crossLeaveRequested = true;
@@ -445,7 +448,8 @@ static void ApplyCrossSchedule() {
 		receipt["completed_wall_ms"] = stamp();
 		if (receipt["applied"] == true) {
 			const bool timed = action == "loss" || action == "lag" || action == "jitter" || action == "outage";
-			s_crossRecoveryStarts[id] = {{"engine_after_wall_ms", receipt["completed_wall_ms"]}, {"effect_finished", !timed},
+			const bool h4 = action == "ack-drop" || action == "ack-duplicate" || action == "commit-drop";
+			s_crossRecoveryStarts[id] = {{"engine_after_wall_ms", receipt["completed_wall_ms"]}, {"effect_finished", !timed && !h4},
 			    {"waiting_for_reset", timed}, {"start_record", receipt}};
 		}
 		g_MetricsCollector.WriteObservation(receipt);
@@ -456,6 +460,20 @@ static void ApplyCrossSchedule() {
 static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
 	if (!g_MetricsCollector.EventsEnabled() || s_crossRecoveryStarts.empty()) return;
 	const unsigned incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
+	const auto effectPath = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() / "h4-effects.json";
+	if (std::filesystem::is_regular_file(effectPath)) {
+		std::ifstream input(effectPath); const auto effects = nlohmann::json::parse(input, nullptr, false);
+		if (effects.is_array()) for (const auto& effect: effects) {
+			const std::string id = effect.value("id", "");
+			if (effect.value("incarnation", ~0u) != incarnation || !s_crossRecoveryStarts.contains(id)) continue;
+			auto& start = s_crossRecoveryStarts[id];
+			if (start.value("effect_finished", false)) continue;
+			NetH4SetFault(NetH4Fault::None);
+			start["effect_finished"] = true;
+			start["engine_after_wall_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+			g_MetricsCollector.WriteObservation({{"type", "fault_effect"}, {"id", id}, {"effect_observed", true}, {"reset", true}, {"evidence", effect}});
+		}
+	}
 	const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 	const uint8_t local = ScenarioRunner::GetLockstepLocalPeerId();
 	const bool catchup = ScenarioRunner::WorldCatchUpActive();
@@ -549,7 +567,12 @@ static bool CrossHostOptions(unsigned match, std::string* error) {
 
 static bool CrossEndSignalMatches(const std::string& text, uint8_t sender, uint8_t target, const std::string& id,
     uint64_t session, uint64_t sourceRound, unsigned incarnation) {
-	return false; // Deliberate RED control; restored in the following implementation commit.
+	if (!target || sender != target || !text.starts_with("[cross-end] ")) return false;
+	try {
+		const auto value = nlohmann::json::parse(text.substr(12), nullptr, false);
+		return value.is_object() && value.value("id", "") == id && value.value("session", "") == std::to_string(session) &&
+		    value.value("source_round", uint64_t{0}) == sourceRound && value.value("incarnation", ~0u) == incarnation && value.value("phase", "") == "catch_up";
+	} catch (const std::exception&) { return false; }
 }
 
 bool RTE::RunCrossEndSignalSelfTest(std::string* error) {
@@ -565,6 +588,32 @@ bool RTE::RunCrossEndSignalSelfTest(std::string* error) {
 	return true;
 }
 
+static void CrossEndTargetObservation(uint64_t tick) {
+	if (s_crossEndCases.empty() || !ScenarioRunner::WorldCatchUpActive()) return;
+	const auto config = ScenarioRunner::GetLockstepMatchConfig();
+	if (!config) return;
+	static std::set<std::string> signalled, ended;
+	const unsigned incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
+	for (const auto& fault: s_crossEndCases) {
+		if (fault.value("phase", "") != "catch_up" || fault.value("target_peer", "") != CrossEnvironment("CC_TEST_CROSS_INSTANCE") ||
+		    fault.value("target_incarnation", ~0u) != incarnation) continue;
+		const std::string id = fault.at("id");
+		const std::string key = id + "/" + std::to_string(config->roundId);
+		if (!signalled.contains(key)) {
+			const nlohmann::json value{{"id", id}, {"session", std::to_string(config->sessionId)}, {"source_round", config->roundId},
+			    {"incarnation", incarnation}, {"phase", "catch_up"}};
+			if (g_NetMatchService.SendChat(c_NetChatScopeAll, "[cross-end] " + value.dump())) {
+				signalled.insert(key);
+				g_MetricsCollector.WriteObservation({{"type", "elimination_phase"}, {"id", id}, {"recovery_id", fault.at("recovery_id")},
+				    {"observed_phase", "catch_up"}, {"signal", value}});
+			}
+		}
+		if (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver() && ended.insert(key).second)
+			g_MetricsCollector.WriteObservation({{"type", "recovery_match_end"}, {"id", id}, {"recovery_id", fault.at("recovery_id")},
+			    {"source_round", config->roundId}, {"catchup_at_end", true}, {"observed_tick", tick}});
+	}
+}
+
 static void CrossEliminationAtCommittedTick(uint64_t tick) {
 	if (s_crossSchedule.empty() || !g_NetMatchService.IsHost() || ScenarioRunner::WorldCatchUpActive()) return;
 	static std::map<std::string, std::set<long>> issued;
@@ -572,6 +621,7 @@ static void CrossEliminationAtCommittedTick(uint64_t tick) {
 		if (fault.at("action") != "brain-eliminate" || s_crossBudget < fault.at("tick").get<uint64_t>()) continue;
 		const std::string id = fault.at("id");
 		if (s_crossFired.contains(id)) continue;
+		if (s_crossBudget > fault.at("tick").get<uint64_t>() + fault.value("phase_window_ticks", uint64_t{6000})) continue;
 		const auto config = ScenarioRunner::GetLockstepMatchConfig();
 		if (!config) continue;
 		uint8_t targetPeer = 0;
@@ -579,8 +629,12 @@ static void CrossEliminationAtCommittedTick(uint64_t tick) {
 		    (slot.peerId && g_NetMatchService.GetPeerDisplayName(slot.peerId) == fault.value("target_peer", ""))) targetPeer = slot.peerId;
 		const std::string phase = fault.value("phase", "hold");
 		const bool held = targetPeer && ScenarioRunner::IsLockstepSeatUnderAI(targetPeer, tick);
-		const bool phaseSignalled = fault.contains("phase_file") && std::filesystem::is_regular_file(fault["phase_file"].get<std::string>());
+		const auto& chats = g_NetMatchService.ChatHistory();
+		const bool phaseSignalled = std::any_of(chats.begin(), chats.end(), [&](const auto& chat) {
+			return CrossEndSignalMatches(chat.text, chat.senderPeerId, targetPeer, id, config->sessionId, config->roundId, fault.value("target_incarnation", ~0u));
+		});
 		if (issued[id].empty() && !(phase == "hold" ? held : phaseSignalled)) continue;
+		if (issued[id].empty() && g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver()) continue;
 		const int survivor = fault.value("survivor_team", 0);
 		Actor* writer = g_MovableMan.GetFirstBrainActor(survivor);
 		if (!writer || !ScenarioRunner::IsLockstepAIWriteAuthorized(ScenarioRunner::GetLockstepLocalPeerId(), writer->GetTeam(), writer->GetUniqueID(), writer->GetUniqueID())) continue;
@@ -589,17 +643,20 @@ static void CrossEliminationAtCommittedTick(uint64_t tick) {
 			if (Actor* brain = g_MovableMan.GetFirstBrainActor(team)) {
 				++enemies;
 				if (issued[id].insert(brain->GetUniqueID()).second) {
+					if (issued[id].size() == 1) g_MetricsCollector.WriteObservation({{"type", "fault"}, {"id", id}, {"action", "brain-eliminate"},
+					    {"applied", true}, {"budget_tick", s_crossBudget}, {"recovery_id", fault.at("recovery_id")}});
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIGib{writer->GetUniqueID(), brain->GetUniqueID(), 0, writer->GetTeam(), 0, 0}});
-					g_MetricsCollector.WriteObservation({{"type", "elimination_request"}, {"id", id}, {"phase", phase},
+					g_MetricsCollector.WriteObservation({{"type", "elimination_request"}, {"id", id}, {"trigger_phase", phase},
 					    {"observed_hold", held}, {"phase_signalled", phaseSignalled}, {"target_actor", brain->GetUniqueID()},
 					    {"target_team", team}, {"writer", writer->GetUniqueID()}, {"requested_at_tick", tick}});
 				}
 			}
 		}
-		if (!enemies && g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver()) {
+		if (!issued[id].empty() && !enemies && g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver()) {
 			s_crossFired.insert(id);
 			g_MetricsCollector.WriteObservation({{"type", "elimination_outcome"}, {"id", id}, {"result", "activity_over"},
-			    {"survivor_team", survivor}, {"overlap_hold_at_end", held}, {"phase", phase}, {"final_tick", tick}});
+			    {"survivor_team", survivor}, {"overlap_hold_at_end", held}, {"trigger_phase", phase}, {"final_tick", tick},
+			    {"recovery_id", fault.at("recovery_id")}, {"target_peer", fault.at("target_peer")}, {"budget_tick", s_crossBudget}});
 		}
 	}
 }
@@ -5937,6 +5994,7 @@ void RunGameLoop() {
 		// A world joiner applies the committed tail faster than real time. 16 is a ceiling, and a
 		// tick is granted only when the tail still holds that next frame.
 		ScenarioRunner::BeginWorldCatchUpFrame();
+		CrossEndTargetObservation(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (true) {
@@ -6544,6 +6602,7 @@ void RunGameLoop() {
 				    {"budget_base", s_crossBudget - (last - first + 1)}, {"budget_basis", "canonical_frame_advance_not_observation_coverage"}});
 			}
 			CrossEliminationAtCommittedTick(simTick);
+			CrossEndTargetObservation(simTick);
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (hashThisTick) {
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint

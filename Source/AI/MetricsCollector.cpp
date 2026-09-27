@@ -231,7 +231,7 @@ namespace RTE {
 
 	json MetricsCollector::TickTiming(long long totalUs, long long waitUs, long long captureUs, long long captureWaitUs) {
 		const long long captureOnly = captureUs - captureWaitUs;
-		const long long compute = 0; // Deliberate RED control.
+		const long long compute = totalUs - waitUs - captureOnly;
 		return {{"type", "tick_timing"}, {"total_us", totalUs}, {"wait_us", waitUs}, {"capture_us", captureOnly}, {"compute_us", compute},
 		    {"partition_valid", totalUs >= 0 && waitUs >= 0 && captureWaitUs >= 0 && captureWaitUs <= waitUs && captureOnly >= 0 && compute >= 0}};
 	}

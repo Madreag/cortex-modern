@@ -330,7 +330,6 @@ namespace {
 	}
 
 	Phase StepPhase(const Json& step) {
-		if (step.at("op") == "assert_buy" || step.at("op") == "assert_pie" || step.at("op") == "assert_window") return Phase::Poll; // RED control.
 		const std::string op = step.at("op");
 		if (op == "menu") {
 			const std::string command = step.at("command");
@@ -393,7 +392,6 @@ namespace {
 			for (const auto& [key, expected]: expectedValues.items()) Require(scope.at(key) == expected, op + " differs: " + key);
 			g_MetricsCollector.WriteObservation({{"type", "probe_scope"}, {"scope", op}, {"observed", scope}});
 		} else if (op == "remove_participant") {
-			return true; // Deliberate RED control.
 			const uint16_t seat = step.at("stable_seat");
 			const auto seats = g_NetMatchService.GetModerationSeats();
 			const auto found = std::find_if(seats.begin(), seats.end(), [=](const auto& row) { return row.stableSeat == seat; });

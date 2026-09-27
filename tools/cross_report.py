@@ -38,6 +38,7 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries):
         full_state=oracle(checks.get('shared_fullstate',False) and not pending,
             'NOT COVERED by '+ '; '.join(CAPTURE_ROWS[row] for row in pending) if pending else 'All promised Shared/canonical/restored observations must compare.'),
         recovery=oracle(checks.get('bounded_recovery',False),'Every recovery id must reach its declared terminal outcome within its declared deadline.'),
+        fault_effects=oracle(checks.get('faults_applied',False) and checks.get('native_fault_effects',False),'Arming H4 is separate from observing its native ack/commit effect.'),
         coverage=dict(status=coverage_status,reason='Each matrix row retains its own minimum, counts and reason.'),
         feel=dict(status=('PASS' if checks.get('quiet_feel',False) else 'FAIL') if any(p.get('feel_gated') for p in peers.values()) else
                          'UNDER LOAD' if any(p.get('feel_status')=='UNDER LOAD' for p in peers.values()) else 'REPORTED',reason='Gated only in a declared quiet window without measured load.'),
@@ -46,6 +47,11 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries):
         engine_findings=oracle(checks.get('no_engine_findings',False),'All findings remain visible, including the named capture rows.'),
         exits=oracle(checks.get('all_incarnation_exits',False),'Each incarnation must exit normally or have its own scheduled, actually injected crash receipt.'))
     if not manifest.get('faults'): oracles['recovery']['status']='NOT APPLICABLE'
+    if not manifest.get('faults'): oracles['fault_effects']['status']='NOT APPLICABLE'
+    if manifest['scenario']!='match':
+        oracles['forced_ends']=oracle(checks.get('forced_end_during_hold',False) and checks.get('forced_end_during_transfer',False),'Actual activity-over must overlap the named recovery phase; a stale hint is insufficient.')
+        oracles['rematches']=oracle(checks.get('changed_settings_rematch',False) and checks.get('fog_on_match',False))
+        oracles['autosaves']=oracle(checks.get('validated_autosave_archives',False),'Archive integrity alone does not prove restoration or sealed admission.')
     return dict(core_passed=core,gate_b_eligible=core and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
 
 
@@ -316,6 +322,9 @@ def build_report(root):
     fault_receipts += [dict(r['native'],source_peer=name,id=r['id'],type='fault',applied=True,source='owning payload termination')
         for name,p in peers.items() for r in p['recovery_observations'] if r.get('phase')=='fault_applied' and r.get('native',{}).get('action')=='crash-restart']
     faults_applied = all(any(r.get('id') == f['id'] and r.get('applied') for r in fault_receipts) for f in manifest['faults'])
+    effects=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='fault_effect']
+    h4_effects=all(any(r.get('id')==f['id'] and r.get('source_peer')==f['peer'] and r.get('effect_observed') for r in effects)
+                  for f in manifest['faults'] if f['action'] in ('ack-drop','ack-duplicate','commit-drop'))
     recovery_events=[r for peer in peers.values() for r in peer['recovery_observations']]
     native_recovery_records=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='recovery']
     recoveries = []
@@ -332,6 +341,7 @@ def build_report(root):
                   adopted_peer_count=all(p['configs'] and all(c['peer_count']==len(manifest['instances']) for c in p['configs']) for p in peers.values()),
                   adopted_roster=all(roster_matches(manifest,p['configs']) for p in peers.values()),
                   faults_applied=faults_applied, bounded_recovery=all(r['passed'] for r in recoveries),
+                  native_fault_effects=h4_effects,
                   native_desync_checks=all(p['native'].get('desync_check', {}).get('mismatches') == 0 and
                       p['native'].get('desync_check', {}).get('compares', 0) > 0 and
                       p['native']['desync_check'].get('compare_margin', -1) >= 0 for p in peers.values()),
@@ -353,7 +363,10 @@ def build_report(root):
         checks['unique_gameplay_budget'] = all(max((r.get('budget_tick',0) for r in values if r.get('type')=='progress'),default=0)>=manifest['ticks'] for values in events.values())
         endings = [r for values in events.values() for r in values if r.get('type')=='elimination_outcome' and r.get('result')=='activity_over']
         checks['forced_end_during_hold'] = any(r.get('overlap_hold_at_end') for r in endings)
-        checks['forced_end_during_transfer'] = any(r.get('overlap_transfer_at_end') for r in endings)
+        witnesses=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='recovery_match_end']
+        checks['forced_end_during_transfer'] = any(r.get('trigger_phase')=='catch_up' and any(
+            w.get('id')==r.get('id') and w.get('source_peer')==r.get('target_peer') and w.get('source_round')==r.get('source_round') and
+            w.get('observed_tick',0)>=r.get('final_tick',1) and w.get('catchup_at_end') for w in witnesses) for r in endings)
         checks['changed_settings_rematch'] = all(changed_settings(p['configs']) for p in peers.values())
         checks['fog_on_match'] = all(any(c.get('fog') for c in p['configs']) for p in peers.values())
         checks['validated_autosave_archives'] = False
@@ -368,7 +381,7 @@ def build_report(root):
                   peers=peers, comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
-                  native_recovery_records=native_recovery_records,
+                  native_recovery_records=native_recovery_records,native_fault_effects=effects,
                   findings=findings, requirements=requirements(manifest, comparison, peers))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
@@ -440,6 +453,7 @@ def write_page(root, result, events):
     for row in result['coverage']:
         parts.append(f'<details><summary>{escape(row["item"])} — {row["status"]}</summary><p>{escape(row["unit"])}; minimum {row["minimum"]}. {escape(row["reason"])}</p><pre>{escape(json.dumps(row["peers"],indent=2))}</pre></details>')
     parts.append('<h2>Faults and recovery</h2><p>Queued admission and cancelled reclaim are phase evidence, never completed recovery. Durations use the owning payload clock across engine incarnations; the deadline judges the conservative upper duration, not subtraction between engine clocks. Native phase/input evidence stays separate. The chaos seed fixes choices only.</p><pre>' + escape(json.dumps(dict(seed=manifest['chaos_seed'],schedule=manifest['faults'],applied=result['fault_receipts'],recoveries=result['recoveries'],native_evidence=result['native_recovery_records']),indent=2)) + '</pre>')
+    parts.append('<p>H4 effects require the native substitution log and a reset receipt; arming alone is insufficient. If no substitution ack is sent, NetReconnectSession.cpp:2513-2515 remains an unexercised engine seam.</p><pre>'+escape(json.dumps(result['native_fault_effects'],indent=2))+'</pre>')
     parts.append('<h2>Wire egress</h2><p>NOT COVERED. Transport wire counters are not exposed at an owned seam. Application bytes and host relayed bytes are not wire egress; no upstream curve is fabricated.</p>')
     parts.append('<h2>Capture and writer barriers</h2><p>Each arm has its own declared timeout; timeout is a failed outcome.</p><pre>' + escape(json.dumps(dict(schedule=manifest.get('capture_barriers',[]),receipts=result['barrier_receipts']),indent=2)) + '</pre>')
     parts.append('<h2>Retained autosaves</h2><p>CRCs, required entries and descriptor/world/manifest identities are checked. Archive restoration and sealed admission remain separate assertions; file integrity alone does not satisfy them.</p><pre>' + escape(json.dumps({name:p['archives'] for name,p in result['peers'].items()},indent=2)) + '</pre>')
