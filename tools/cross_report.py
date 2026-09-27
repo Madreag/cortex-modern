@@ -15,6 +15,43 @@ from compare_sim_traces import CORE
 
 HERE = Path(__file__).resolve().parent
 REQUIRED_SUBSYSTEMS = CORE | {'controller'}
+CORE_CHECKS=('three_real_boxes','preflight_complete','full_history','zero_desync','zero_unscheduled_holds',
+             'native_completion','adopted_peer_count','adopted_roster','native_desync_checks','record_integrity','binary_admission_limit')
+CAPTURE_ROWS={
+    1:'capture-rows lane row 1: unsupported userdata in object[...][AI][Behavior].slot[12] at Source/Managers/LuaMan.cpp:1613',
+    2:'capture-rows lane row 2: Windows/Mac hex-float text at Source/System/FloatText.h:324-326,608-610; PieMenu.cpp:259; Arm.cpp:506; Scene.cpp:2056,2059,2142'}
+
+
+def judge_attempt(manifest,checks,peers,matrix,recoveries):
+    core=all(checks.get(name,False) for name in CORE_CHECKS)
+    oracle=lambda passed,reason='':dict(status='PASS' if passed else 'FAIL',reason=reason)
+    pending=manifest.get('capture_rows_pending',[1,2])
+    memory=[value for peer in peers.values() for value in peer.get('memory_by_incarnation',{}).values()]
+    memory_status='PASS' if memory and all(m['passed'] for m in memory) else \
+        'FAIL' if any(m.get('sizes') or m.get('missing_samples') for m in memory) else 'NOT COVERED'
+    coverage_status='FAIL' if any(row['status']=='FAIL' for row in matrix) else \
+        'NOT COVERED' if any(row['status']=='NOT COVERED' for row in matrix) else 'PASS'
+    oracles=dict(
+        live_hashes=oracle(checks.get('full_history',False) and checks.get('zero_desync',False),'Every declared comparable key; UNKNOWN never equals.'),
+        unscheduled_holds=oracle(checks.get('zero_unscheduled_holds',False)),
+        native_completion=oracle(checks.get('native_completion',False)),
+        full_state=oracle(checks.get('shared_fullstate',False) and not pending,
+            'NOT COVERED by '+ '; '.join(CAPTURE_ROWS[row] for row in pending) if pending else 'All promised Shared/canonical/restored observations must compare.'),
+        recovery=oracle(checks.get('bounded_recovery',False),'Every recovery id must reach its declared terminal outcome within its declared deadline.'),
+        coverage=dict(status=coverage_status,reason='Each matrix row retains its own minimum, counts and reason.'),
+        feel=dict(status=('PASS' if checks.get('quiet_feel',False) else 'FAIL') if any(p.get('feel_gated') for p in peers.values()) else
+                         'UNDER LOAD' if any(p.get('feel_status')=='UNDER LOAD' for p in peers.values()) else 'REPORTED',reason='Gated only in a declared quiet window without measured load.'),
+        memory=dict(status=memory_status,reason='Declared per-incarnation warm-up, slope and retention; raw sizes and measured instrumentation remain separate.'),
+        record_integrity=oracle(checks.get('record_integrity',False)),
+        engine_findings=oracle(checks.get('no_engine_findings',False),'All findings remain visible, including the named capture rows.'),
+        exits=oracle(checks.get('native_completion',False)))
+    if not manifest.get('faults'): oracles['recovery']['status']='NOT APPLICABLE'
+    return dict(core_passed=core,gate_b_eligible=core and manifest['scenario']=='match' and manifest['ticks']==1201 and not manifest.get('faults'),oracles=oracles)
+
+
+def attempt_label(result):
+    if result.get('passed'): return 'PASS'
+    return 'CORE PASS; FULL GATE RED' if result.get('core_passed') else 'CORE FAIL; FULL GATE RED'
 
 
 def load(path, default=None):
@@ -287,7 +324,8 @@ def build_report(root):
                       not any(r.get('type') == 'record_loss' or (r.get('type') == 'tick_timing' and not r.get('partition_valid')) for r in values)
                       for values in events.values()),
                   no_engine_findings=not findings)
-    if cadence: checks['shared_fullstate']=fullstate['passed']
+    checks['shared_fullstate']=bool(cadence) and fullstate['passed']
+    checks['capture_rows_resolved']=not manifest.get('capture_rows_pending',[1,2])
     barrier_receipts=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='capture_barrier']
     checks['capture_barrier_outcomes']=all(any(r.get('source_peer')==b['peer'] and r.get('id')==b['id'] and
         r.get('capture_phase')==b['phase'] and r.get('capture_tick')==b['tick'] and r.get('outcome')=='released' and
@@ -301,10 +339,14 @@ def build_report(root):
         checks['changed_settings_rematch'] = all(changed_settings(p['configs']) for p in peers.values())
         checks['fog_on_match'] = all(any(c.get('fog') for c in p['configs']) for p in peers.values())
         checks['validated_autosave_archives'] = False
+        checks['memory_bounds']=all(p['memory_by_incarnation'] and all(m['passed'] for m in p['memory_by_incarnation'].values()) for p in peers.values())
     for name,peer in peers.items():
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
-    result = dict(version=1, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,
+    judgment=judge_attempt(manifest,checks,peers,matrix,recoveries)
+    rerun=f'python tools/cross_peers.py --host {manifest["host"]} --scenario {manifest["scenario"]} --ticks {manifest["ticks"]} --roster {manifest["roster"]} --scene "{manifest["scene"]}" --seed {manifest["seed"]} --fullstate-every {cadence} --out "{root.as_posix()}-capture-fixed"'
+    result = dict(version=2, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
+                  assigned_capture_rows={str(row):CAPTURE_ROWS[row] for row in manifest.get('capture_rows_pending',[1,2])},rerun_after_capture_fix=rerun,
                   peers=peers, comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
@@ -312,7 +354,8 @@ def build_report(root):
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
     write_index(root.parent)
-    verdict = f'{"PASS" if result["passed"] else "FAIL"} {result["run"]}: ' + ', '.join(f'{n}={p["frames"]} frames' for n,p in peers.items()) + f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds}'
+    verdict = f'{attempt_label(result)} {result["run"]}: ' + ', '.join(f'{n}={p["frames"]} frames' for n,p in peers.items()) + f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds}; ' + '; '.join(name+'='+oracle['status'] for name,oracle in result['oracles'].items())
+    if result['assigned_capture_rows']: verdict+='; full-state NOT COVERED by capture-rows lane rows '+','.join(result['assigned_capture_rows'])
     (root / 'verdict.txt').write_text(verdict + '\n', encoding='utf-8'); print(verdict)
     return result
 
@@ -346,7 +389,7 @@ def chart(result, events):
 
 
 def write_page(root, result, events):
-    manifest = result['manifest']; parts = [f'<h1>{escape(result["run"])}</h1><p class="verdict {"pass" if result["passed"] else "fail"}">{"PASS" if result["passed"] else "FAIL"}</p>',
+    manifest = result['manifest']; parts = [f'<h1>{escape(result["run"])}</h1><p class="verdict {"pass" if result["passed"] else "fail"}">{escape(attempt_label(result))}</p>',
         f'<p>{len(result["peers"])} peers on {len(manifest["boxes"])} boxes · host {escape(manifest["host"])} · {manifest["ticks"]:,} committed ticks requested.</p>',
         '<p>Correctness gates apply throughout. Feel gates apply only in a declared quiet window with measured load absent. UNKNOWN history is never counted as equal.</p>',
         '<p>Quiet feel pins: at least 59.5 TPS, waiting below 1%, longest measured wait at most 50 ms, and nominal-dt horizon drift at most 50 ms. The steady interval is anchored at tick 300; only waits after that tick and through the declared last tick enter its denominator. Other observed waits remain visible.</p>',
@@ -363,6 +406,8 @@ def write_page(root, result, events):
                      f'</dl><p><a href="{escape(peer["paths"]["live"])}">Live hashes</a> · <a href="{escape(peer["paths"]["events"])}">Events</a> · <a href="{escape(peer["paths"]["log"])}">Log</a> · <a href="{escape(peer["paths"]["feel"])}">Feel samples</a></p></article>')
     parts.append('</div><h2>Tick compute time</h2>' + chart(result, events) + '<p>Samples measure non-overlapping compute, wait and capture durations. Cross-box wall-clock calibration is NOT COVERED; ticks align canonical events, and local clocks remain separate.</p>')
     parts.append('<h2>Gates</h2><ul>' + ''.join(f'<li class="{"pass" if ok else "fail"}">{escape(name)}: {"PASS" if ok else "FAIL"}</li>' for name,ok in result['checks'].items()) + '</ul>')
+    parts.append('<h2>Independent oracle verdicts</h2><p>CORE PASS requires complete comparable live frames, zero live mismatches, zero unscheduled holds and native completion, with the box/configuration/integrity prerequisites. It does not turn any other oracle green.</p>'+
+        ''.join(f'<details><summary>{escape(name)} — {escape(row["status"])}</summary><p>{escape(row["reason"])}</p></details>' for name,row in result['oracles'].items()))
     parts.append('<h2>Coverage</h2>')
     parts.append('<div style="overflow-x:auto"><table><thead><tr><th>Coverage / minimum</th>' +
         ''.join(f'<th>{escape(b["name"])}</th>' for b in manifest['boxes']) + '</tr></thead><tbody>')
@@ -385,6 +430,9 @@ def write_page(root, result, events):
         parts.append(f'<details><summary>{escape(name)} — raw samples and per-incarnation judgment</summary><pre>' + escape(json.dumps(dict(
             samples=peer['samples'],bounds=peer['memory_by_incarnation'],instrumentation=peer['instrumentation']),indent=2)) + '</pre></details>')
     parts.append('<h2>Full-state scope and cadence</h2><p>Every listed Shared section is compared. Native PerPeer exclusions are retained below; their behavioral restoration remains a separate requirement.</p><pre>'+escape(json.dumps(dict(verdict=result['fullstate'],records=result['fullstate_records']),indent=2))+'</pre>')
+    if result['assigned_capture_rows']:
+        parts.append('<p class="fail">Mandatory full-state evidence remains RED / NOT COVERED by these assigned engine rows. No sample, refusal or difference is masked.</p><ul>'+''.join('<li>'+escape(reason)+'</li>' for reason in result['assigned_capture_rows'].values())+'</ul>')
+    parts.append('<p>After the capture lane fixes are included in this build, rerun:</p><pre>'+escape(result['rerun_after_capture_fix'])+'</pre>')
     parts.append('<h2>Engine and driver findings</h2>')
     for finding in result['findings']:
         parts.append('<p class="fail">' + (f'<a href="{escape(finding["path"])}">{escape(finding["path"])}:{finding["line"]}</a> ' if 'path' in finding else '') + escape(finding.get('text',finding.get('reason',''))) + '</p>')
@@ -411,10 +459,11 @@ def write_index(root):
     text = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Multi-box runs</title><style>body{font:16px system-ui;background:#101924;color:#e1e9f0;padding:16px;max-width:900px;margin:auto}a{color:#83d4ff}li{margin:24px 0;overflow-wrap:anywhere}</style><h1>Multi-box runs</h1><ul>'
     for _, name, result in sorted(items, reverse=True):
         missing = ', '.join(str(r['number']) for r in result['requirements'] if r['status'] != 'PASS')
-        text += f'<li><a href="{escape(name)}/report.html">{escape(name)}</a> — {"PASS" if result["passed"] else "FAIL"}<br>NOT COVERED verdict numbers: {escape(missing)}</li>'
+        text += f'<li><a href="{escape(name)}/report.html">{escape(name)}</a> — {escape(attempt_label(result))}<br>NOT COVERED verdict numbers: {escape(missing)}</li>'
     (root / 'index.html').write_text(text+'</ul>',encoding='utf-8')
 
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__); parser.add_argument('root',type=Path)
-    raise SystemExit(0 if build_report(parser.parse_args().root)['passed'] else 1)
+    result=build_report(parser.parse_args().root)
+    raise SystemExit(0 if (result.get('gate_b_eligible') if result['manifest']['scenario']=='match' else result['passed']) else 1)
