@@ -3035,7 +3035,11 @@ namespace RTE {
 		if (s_SessionPump) s_SessionPump();
 		if (!s_LockstepCoordinator) return false;
 		if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
-			if (s_LockstepCoordinator->IsStopped() && s_LockstepCoordinator->IsLocalSeatHeld() && s_HeldCatchUp && s_HeldCatchUp()) return false;
+			if (s_LockstepCoordinator->IsStopped() && s_LockstepCoordinator->IsLocalSeatHeld()) {
+				// The ticks this seat ran from its hold on were off the round, however it comes back or if its round ends first.
+				if (const uint64_t hold = s_LockstepCoordinator->GetLocalHoldFrame(); hold != 0 && tick > hold) AbandonTicksFrom(hold);
+				if (s_HeldCatchUp && s_HeldCatchUp()) return false;
+			}
 			SetControllerReplayError("tick " + std::to_string(tick) + " lockstep stopped: " + s_LockstepCoordinator->GetStats().timeoutReason);
 			return false;
 		}
