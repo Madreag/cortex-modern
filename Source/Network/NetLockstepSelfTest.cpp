@@ -79,6 +79,7 @@ namespace RTE {
 	bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error);
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
+	bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 	bool TestAQueuedReturnLeavesALaterHold(std::string* error);
@@ -19769,6 +19770,61 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error) {
+		const auto makePeer = [](NetLockstepCoordinator& peer, uint8_t local, uint64_t salt) {
+			auto config = MakeCoordinatorConfig(local, 1, salt, 4, NetTransportLane::ControlReliable);
+			config.peerCount = 3; config.startFrame = 1; config.roundId = 42; config.authorityPeerId = 1;
+			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(salt);
+			peer.m_Config = config; peer.m_State = NetLockstepState::Running; peer.m_RoundId = 42;
+			peer.m_RemotePeerIds.clear();
+			for (uint8_t other: {1, 2, 3}) if (other != local) peer.m_RemotePeerIds.push_back(other);
+		};
+		const auto hold = [](uint8_t seat, uint64_t frame, uint64_t revision) {
+			NetLockstepTiming timing;
+			timing.senderPeerId = 1; timing.peerId = seat; timing.action = NetTimingAction::Hold; timing.phase = NetTimingPhase::HoldAtFrame;
+			timing.roundId = 42; timing.revision = revision; timing.applyFrame = timing.cutoffFrame = frame; timing.heldPeers = 1U << (seat - 1);
+			timing.seatIncarnations[seat - 1] = 2;
+			return timing;
+		};
+		// A: a returner's replay learns seat 3 came back at 500 after its live round already took seat 3's new hold at 630.
+		NetLockstepCoordinator returner, replay;
+		makePeer(returner, 2, 0x9A1C);
+		makePeer(replay, 2, 0x9A1C);
+		auto sessionHold = hold(3, 630, 5);
+		sessionHold.sessionId = returner.m_Config.sessionId;
+		returner.ApplyTiming(sessionHold);
+		returner.m_Stats.nextFrame = 622;
+		replay.m_ReclaimTransactions[3] = {3, 0, 4, 2, 500, 4, 505, std::nullopt};
+		returner.AdoptReplayedSeatTransitions(replay, 600);
+		const std::string seenA = std::to_string(returner.IsSeatUnderAI(3, 640)) + std::to_string(returner.m_AiHeldSeats.contains(3) ? returner.m_AiHeldSeats.at(3) : 0);
+		// B: a host resumed from a snapshot behind its commits knows seat 2's hold at 207, then delivers the earlier hold at 100 and the return at 200.
+		NetLockstepCoordinator host;
+		makePeer(host, 1, 0x9A1D);
+		host.m_Config.resumeFromSnapshot = true;
+		auto agreed = hold(2, 207, 3);
+		agreed.sessionId = host.m_Config.sessionId;
+		host.ApplyTiming(agreed);
+		NetLockstepReadyFrame earlier, back;
+		earlier.frame = 100;
+		earlier.remoteCommands.push_back({1, NetGameSeatHold{2, 0, 1, 1, 100}});
+		back.frame = 200;
+		back.remoteCommands.push_back({1, NetGameSeatReclaim{2, 0, 2, 2, 200, 4, 206}});
+		host.m_ReadyFrames.push_back(earlier);
+		host.m_ReadyFrames.push_back(back);
+		NetLockstepReadyFrame delivered;
+		const bool popped = host.PopReadyFrame(delivered) && host.PopReadyFrame(delivered);
+		const auto kept = host.m_HoldTransactions.find(2);
+		const std::string seenB = std::to_string(popped) + std::to_string(host.IsSeatUnderAI(2, 150)) + std::to_string(host.IsSeatUnderAI(2, 203)) +
+		    std::to_string(host.IsSeatUnderAI(2, 210)) + "/" + std::to_string(kept == host.m_HoldTransactions.end() ? 0 : kept->second.cutoffFrame);
+		if (seenA != "1630" || seenB != "1101/207") {
+			*error = "an-older-delivery-leaves-the-newer-seat-state: A (live hold 630, replayed return 500) read under_ai(640)/hold as " + seenA +
+			         " (expected 1630); B (hold 207 known, then hold 100 and return 200 delivered) read popped/under_ai(150,203,210)/hold as " + seenB + " (expected 1101/207)";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error) {
 		NetLockstepCoordinator returner;
 		auto config = MakeCoordinatorConfig(2, 1, 0x9A13, 4, NetTransportLane::ControlReliable);
@@ -21018,6 +21074,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAReplayTakesTheRecordedSeatPolicy(&error) ||
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
 		    !TestEveryHoldProducerWritesTheSeatLog(&error) ||
+		    !TestAnOlderDeliveryLeavesTheNewerSeatState(&error) ||
 		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
 		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||
 		    !TestAQueuedReturnLeavesALaterHold(&error) ||

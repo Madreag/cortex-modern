@@ -1243,6 +1243,7 @@ namespace RTE {
 		friend bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error);
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 		friend bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
+		friend bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 		friend bool TestAQueuedReturnLeavesALaterHold(std::string* error);
