@@ -436,10 +436,9 @@ def pause_save_probe(who, root):
     steps = [
         {"op": "wait", "sim_at_least": 150},
         {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
-        {"op": "wait", "screen": "Pause"},
+        {"op": "wait", "screen": "Pause"}, menu_step("dump_host_options"),
         *row_checks("ButtonSaveMatch", "PauseScreen"), *row_checks("LabelSaveMatchHint", "PauseScreen"),
-        menu_step(f"assert_enabled ButtonSaveMatch {1 if who == 'host' else 0}"),
-        menu_step("dump_host_options")]
+        menu_step(f"assert_enabled ButtonSaveMatch {1 if who == 'host' else 0}")]
     if who == "host":
         steps += [menu_step("assert_label LabelSaveMatchHint Not saved yet"),
                   menu_step("activate ButtonSaveMatch"),
