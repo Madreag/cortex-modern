@@ -25,9 +25,13 @@ VALUE_GETTERS = ("HeldTransactions", "GetRoundConfigHash", "GetAgreedStartRecord
                  "GetDelayChanges", "RemoteTransports", "GetPeerLeaveFrames", "GetPeerFrameWaivers", "ObservationEpochs")
 # Reference getters that remain, each with the reason; a new one has to be added here with its own.
 REFERENCE_ALLOWED = {
-    "GetConfig": "72 readers take one field at once under the plane's lock or inside a gap; a copy per read would copy the whole round config",
-    "GetStats": "readers take one number at once under the plane's lock or inside a gap; its per-peer map is read through find/end pairs on one call",
+    "GetConfig": "the plane ticks only inside the frame loop's windows (WINDOW_FILES), and no reference a reader binds lives across one (checked below); "
+                 "a per-tick copy of the whole round config would cost every tick for nothing",
+    "GetStats": "the same windows bound every reference, and its per-peer map's find/end pairs must read one object, which a by-value return would split",
 }
+# The only files that open a plane window: the frame loop. A window anywhere else could hold a reference a reader bound before it opened.
+WINDOW_FILES = {"Source/Main.cpp", "Source/Network/NetLockstep.cpp"}
+BINDING = re.compile(r"const\s+auto&\s+\w+\s*=\s*[^;]*\b(?:GetStats|GetConfig)\(\)[^;]*;")
 GETTER = re.compile(r"^\s*(?:static\s+)?(?P<ret>(?:const\s+)?[\w:<>,\s]+?)\s*(?P<ref>&)?\s*(?P<name>[A-Za-z_]\w*)\s*\([^;{]*\)\s*const\b")
 
 
@@ -67,6 +71,35 @@ def main() -> int:
     for name in VALUE_GETTERS:
         if name not in values and name not in references:
             failures.append(f"{name} is gone from the header; update the list")
+    for path in sorted((args.repo / "Source").rglob("*.cpp")):
+        rel = path.relative_to(args.repo).as_posix()
+        if "SelfTest" in rel:
+            # A friend test reaches a coordinator's members past every check: only the plane's own check row may let the plane tick one.
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for match in re.finditer(r"NetLockstepPlane::Target\((?!nullptr)", text):
+                owners = re.findall(r"\bbool (Test\w+)\(std::string\* error\) \{", text[:match.start()])
+                if not owners or owners[-1] != "TestPlaneCheckTripsOnAnUnguardedAccess":
+                    failures.append(f"{rel}:{text.count(chr(10), 0, match.start()) + 1} lets the plane tick a coordinator a friend test reaches")
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "NetLockstepPlane::Window" in text and rel not in WINDOW_FILES:
+            failures.append(f"{rel} opens a plane window outside the frame loop; review the references its readers keep, then list it")
+        if rel in WINDOW_FILES:
+            continue
+        for match in BINDING.finditer(text):
+            # The rest of the enclosing function: the binding lives until the brace that closes the block it is in.
+            depth, end = 0, len(text)
+            for index in range(match.end(), len(text)):
+                if text[index] == "{":
+                    depth += 1
+                elif text[index] == "}":
+                    if depth == 0:
+                        end = index
+                        break
+                    depth -= 1
+            if "NetLockstepPlane::Window" in text[match.end():end]:
+                line = text.count("\n", 0, match.start()) + 1
+                failures.append(f"{rel}:{line} keeps a GetStats/GetConfig reference across a plane window")
     runner = (args.repo / RUNNER_HEADER).read_text(encoding="utf-8")
     if not re.search(r"static\s+std::optional<NetMatchConfig>\s+GetLockstepMatchConfig\(\)", runner):
         failures.append("ScenarioRunner::GetLockstepMatchConfig no longer returns a copy")
