@@ -63,6 +63,7 @@
 #include <thread>
 #include <vector>
 #include <deque>
+#include <memory>
 #include <zlib.h>
 #include "nlohmann/json.hpp"
 
@@ -129,7 +130,7 @@ namespace {
 	};
 	struct FeelState {
 		std::ofstream out;
-		FeelStream bounded;
+		std::unique_ptr<FeelStream> bounded;
 		bool useBounded = false;
 		std::string directory;
 		std::vector<FeelJson> pending;
@@ -213,7 +214,7 @@ namespace {
 	void FeelWrite(const FeelJson& value) {
 		const std::string line = value.dump() + '\n';
 		if (s_Feel.useBounded) {
-			if (!s_Feel.bounded.Write(line)) { System::PrintDiagnosticLine("[cross-record] FAIL presentation writer"); System::SetQuit(true); }
+			if (!s_Feel.bounded->Write(line)) { System::PrintDiagnosticLine("[cross-record] FAIL presentation writer"); System::SetQuit(true); }
 		} else s_Feel.out << line;
 	}
 
@@ -262,7 +263,10 @@ bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
 	const auto raw = std::filesystem::path(path) / "raw.jsonl";
 	if (std::filesystem::exists(raw)) return false;
 	s_Feel.useBounded = std::getenv("CC_TEST_CROSS_RECORDS") != nullptr;
-	if (s_Feel.useBounded) { if (!s_Feel.bounded.Open(path)) return false; }
+	if (s_Feel.useBounded) {
+		s_Feel.bounded = std::make_unique<FeelStream>();
+		if (!s_Feel.bounded->Open(path)) return false;
+	}
 	else { s_Feel.out.open(raw, std::ios::out); if (!s_Feel.out) return false; }
 	s_Feel.directory = path;
 	FeelWrite({{"type", "schema"}, {"version", 1}, {"clock", "steady_clock milliseconds"}, {"cpu_clock", "GetProcessTimes kernel+user milliseconds"},
@@ -271,7 +275,7 @@ bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
 	return true;
 }
 
-bool FrameMan::FeelRecordingEnabled() { return s_Feel.useBounded ? s_Feel.bounded.Enabled() : s_Feel.out.is_open(); }
+bool FrameMan::FeelRecordingEnabled() { return s_Feel.useBounded ? s_Feel.bounded && s_Feel.bounded->Enabled() : s_Feel.out.is_open(); }
 double FrameMan::FeelClockMS() { return FeelRecordingEnabled() ? FeelNowMS() : 0.0; }
 
 void FrameMan::FeelInputSample(const Actor* actor, int player) {
@@ -414,7 +418,7 @@ void FrameMan::FeelFinish() {
 	FeelWriteSavedCaptures(true);
 	FeelWrite({{"type", "end"}, {"wall_ms", FeelNowMS()}, {"cpu_ms", FeelProcessCPUMS()}, {"frames", s_Feel.frameNumber}});
 	if (s_Feel.useBounded) {
-		if (!s_Feel.bounded.Close()) { System::PrintDiagnosticLine("[cross-record] FAIL presentation close"); System::SetQuit(true); }
+		if (!s_Feel.bounded->Close()) { System::PrintDiagnosticLine("[cross-record] FAIL presentation close"); System::SetQuit(true); }
 	} else s_Feel.out.close();
 }
 
