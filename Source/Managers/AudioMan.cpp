@@ -195,6 +195,14 @@ FMOD_RESULT AudioMan::InitializeAudioSystem(bool silentOutput) {
 		m_AudioSystem->release();
 		m_AudioSystem = nullptr;
 	}
+#ifdef _WIN32
+	// A headless run plays to nobody, so no FMOD thread outranks the desktop (the mixer defaults to time-critical); 0 is THREAD_PRIORITY_NORMAL.
+	if (std::getenv("CCCP_HEADLESS") != nullptr) {
+		for (int type = FMOD_THREAD_TYPE_MIXER; type < FMOD_THREAD_TYPE_MAX; ++type) {
+			FMOD::Thread_SetAttributes(static_cast<FMOD_THREAD_TYPE>(type), FMOD_THREAD_AFFINITY_GROUP_DEFAULT, 0);
+		}
+	}
+#endif
 	FMOD_RESULT audioSystemSetupResult = FMOD::System_Create(&m_AudioSystem);
 	if (silentOutput) {
 		audioSystemSetupResult = audioSystemSetupResult == FMOD_OK ? m_AudioSystem->setOutput(FMOD_OUTPUTTYPE_NOSOUND) : audioSystemSetupResult;
