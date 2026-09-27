@@ -9,6 +9,52 @@ import re
 import zipfile
 
 
+class RecoveryLedger:
+    """Observe one peer on its owning payload clock, which survives engine restarts.
+
+    A native fault-begin is flushed before the fault acts. The previous drained
+    read bounds its start from below; the read that sees a terminal record bounds
+    completion from above. Deadline checks use this conservative duration, never
+    subtraction between native process clocks or clocks on different boxes.
+    """
+    def __init__(self,path,peer,clock_domain,begin_ms,cases):
+        self.path=Path(path); self.peer=peer; self.clock_domain=clock_domain
+        self.begin_ms=begin_ms; self.cases={case['id']:case for case in cases}
+        self.starts={}; self.applied=set(); self.completed=set()
+
+    def write(self,id,incarnation,phase,lower,upper,native):
+        record=dict(id=id,peer=self.peer,incarnation=incarnation,phase=phase,clock_domain=self.clock_domain,
+                    lower_wall_ms=lower,upper_wall_ms=upper,wall_ms=lower if phase=='fault_applied' else upper,
+                    native=native,source_sequence=native.get('sequence'))
+        with self.path.open('a',encoding='utf-8') as stream: stream.write(json.dumps(record)+'\n')
+
+    def observe(self,rows,incarnation,lower,upper):
+        for row in rows:
+            id=row.get('id')
+            if id not in self.cases: continue
+            if row.get('type')=='fault_begin':
+                self.starts.setdefault(id,dict(lower=lower,upper=upper,native=row,incarnation=incarnation))
+            elif row.get('type')=='fault' and row.get('applied') and id not in self.applied:
+                start=self.starts.setdefault(id,dict(lower=self.begin_ms,upper=upper,native=row,incarnation=incarnation))
+                start['upper']=upper
+                self.applied.add(id)
+                self.write(id,incarnation,'fault_applied',start['lower'],start['upper'],row)
+            elif row.get('type')=='recovery':
+                phase=row.get('recovery_phase','unmapped')
+                self.write(id,incarnation,phase,lower,upper,row)
+                if id in self.applied and row.get('terminal') and phase in self.cases[id]['outcomes']:
+                    self.completed.add(id)
+
+    def external_start(self,case,incarnation,lower,upper,progress):
+        id=case['id']; self.starts[id]=dict(lower=lower,upper=upper,native=progress,incarnation=incarnation)
+        self.applied.add(id)
+        self.write(id,incarnation,'fault_applied',lower,upper,dict(action=case['action'] if 'action' in case else 'crash-restart',actual=progress,applied=True))
+
+    def restart_inputs(self,incarnation):
+        return {id:dict(engine_after_wall_ms=0,effect_finished=True,origin=self.starts[id]) for id in self.applied-self.completed
+                if self.cases[id].get('return_incarnation',self.cases[id]['incarnation'])==incarnation}
+
+
 def inspect_checkpoint(path):
     """Check archive CRCs and named identity; do not claim restoration or admission validity."""
     path = Path(path)

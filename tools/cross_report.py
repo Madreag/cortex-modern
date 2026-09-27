@@ -233,6 +233,8 @@ def build_report(root):
         tick_cost = [r for r in events[name] if r.get('type') == 'tick_timing' and r.get('phase') == 'live']
         sample_root = root if next(b for b in manifest['boxes'] if b['name'] == spec['box'])['kind'] == 'windows-local' else root / 'boxes' / spec['box']
         samples = [r for r in rows(sample_root / 'samples.jsonl') if r['peer'] == name]
+        recovery_observations=[r for r in source_rows(sample_root/'recovery-observed.jsonl',root) if r.get('peer')==name]
+        payload_done=load(sample_root/'done.json',{})
         under_load = any(r.get('load') or r.get('same_box_instances', 1) > 1 for r in samples)
         preflight = manifest.get('preflights', {}).get(spec['box'], {})
         under_load |= bool(preflight.get('load'))
@@ -270,6 +272,7 @@ def build_report(root):
             frame_count=len(frames), frames_over_50_ms=[r['frame'] for r in frames if max(r['draw_ms'], r['present_ms'], r.get('interval_ms') or 0) > 50],
             effective_hz=(len(frames)-1)*1000/(frames[-1]['present_end_ms']-frames[0]['present_end_ms']) if len(frames)>1 and frames[-1]['present_end_ms']>frames[0]['present_end_ms'] else None,
             memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, archives=archives,
+            recovery_observations=recovery_observations,payload_clock_last_ms=max([payload_done.get('payload_monotonic_ms',0),*[r.get('payload_monotonic_ms',0) for r in samples],*[r.get('upper_wall_ms',0) for r in recovery_observations]]),
             native_completion=completion, native_final_tick=final_tick,
             fragments=[str(fragment.relative_to(root)) for fragment in fragments], samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
@@ -296,15 +299,14 @@ def build_report(root):
     fullstate=report.compare_fullstate_histories(fullstate_documents,sorted(fullstate_expected)) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
     matrix = coverage(events, peers, manifest)
     fault_receipts = [dict(r, source_peer=name) for name,values in events.items() for r in values if r.get('type') == 'fault']
+    fault_receipts += [dict(r['native'],source_peer=name,id=r['id'],type='fault',applied=True,source='owning payload termination')
+        for name,p in peers.items() for r in p['recovery_observations'] if r.get('phase')=='fault_applied' and r.get('native',{}).get('action')=='crash-restart']
     faults_applied = all(any(r.get('id') == f['id'] and r.get('applied') for r in fault_receipts) for f in manifest['faults'])
-    recovery_events = [dict(id=r['id'], peer=r['source_peer'], incarnation=r['incarnation'], phase='fault_applied',
-        wall_ms=r['applied_wall_ms'], clock_domain='engine_steady_clock', source=dict(path=r['_path'],line=r['_line']))
-        for r in fault_receipts if r.get('applied') and r.get('applied_wall_ms') is not None]
-    # A progress tick is not proof of control restoration. Only explicit terminal records may complete an arm.
-    recovery_events += [dict(r,peer=name) for name,values in events.items() for r in values if r.get('type') == 'recovery']
+    recovery_events=[r for peer in peers.values() for r in peer['recovery_observations']]
+    native_recovery_records=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='recovery']
     recoveries = []
     for fault in manifest['faults']:
-        last_clock = max((r.get('wall_ms',0) for r in events.get(fault['peer'],[])), default=0)
+        last_clock=peers[fault['peer']]['payload_clock_last_ms']
         recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
@@ -350,6 +352,7 @@ def build_report(root):
                   peers=peers, comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
+                  native_recovery_records=native_recovery_records,
                   findings=findings, requirements=requirements(manifest, comparison, peers))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
@@ -420,7 +423,7 @@ def write_page(root, result, events):
     parts.append('</tbody></table></div>')
     for row in result['coverage']:
         parts.append(f'<details><summary>{escape(row["item"])} — {row["status"]}</summary><p>{escape(row["unit"])}; minimum {row["minimum"]}. {escape(row["reason"])}</p><pre>{escape(json.dumps(row["peers"],indent=2))}</pre></details>')
-    parts.append('<h2>Faults and recovery</h2><p>Queued admission and cancelled reclaim are phase evidence, never completed recovery. The chaos seed fixes choices only.</p><pre>' + escape(json.dumps(dict(seed=manifest['chaos_seed'], schedule=manifest['faults'], applied=result['fault_receipts'], recoveries=result['recoveries']),indent=2)) + '</pre>')
+    parts.append('<h2>Faults and recovery</h2><p>Queued admission and cancelled reclaim are phase evidence, never completed recovery. Durations use the owning payload clock across engine incarnations; the deadline judges the conservative upper duration, not subtraction between engine clocks. Native phase/input evidence stays separate. The chaos seed fixes choices only.</p><pre>' + escape(json.dumps(dict(seed=manifest['chaos_seed'],schedule=manifest['faults'],applied=result['fault_receipts'],recoveries=result['recoveries'],native_evidence=result['native_recovery_records']),indent=2)) + '</pre>')
     parts.append('<h2>Wire egress</h2><p>NOT COVERED. Transport wire counters are not exposed at an owned seam. Application bytes and host relayed bytes are not wire egress; no upstream curve is fabricated.</p>')
     parts.append('<h2>Capture and writer barriers</h2><p>Each arm has its own declared timeout; timeout is a failed outcome.</p><pre>' + escape(json.dumps(dict(schedule=manifest.get('capture_barriers',[]),receipts=result['barrier_receipts']),indent=2)) + '</pre>')
     parts.append('<h2>Retained autosaves</h2><p>CRCs, required entries and descriptor/world/manifest identities are checked. Archive restoration and sealed admission remain separate assertions; file integrity alone does not satisfy them.</p><pre>' + escape(json.dumps({name:p['archives'] for name,p in result['peers'].items()},indent=2)) + '</pre>')

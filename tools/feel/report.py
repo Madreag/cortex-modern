@@ -124,10 +124,14 @@ def reduce_recoveries(schedule, events, now_ms):
                          and row['phase'] not in ('queued_admission', 'cancelled_reclaim')
                          and start is not None and row['wall_ms'] >= start), None)
         duration = (terminal['wall_ms'] if terminal else now_ms) - start if start is not None else None
+        start_upper=min((row.get('upper_wall_ms',row['wall_ms']) for row in starts),default=None)
+        lower=max(0,terminal.get('lower_wall_ms',terminal['wall_ms'])-start_upper) if terminal and start_upper is not None else None
+        domains={row.get('clock_domain','legacy_native') for row in [*starts,*([terminal] if terminal else [])]}
         result=dict(case)
         result.update(phases=rows, scheduled_duration_ms=case.get('duration_ms'), duration_ms=duration,
+                      duration_lower_ms=lower,duration_upper_ms=duration,clock_domains=sorted(domains),
                       censored=terminal is None, outcome=terminal['phase'] if terminal else None,
-                      passed=terminal is not None and 0 <= duration <= case['deadline_ms'])
+                      passed=terminal is not None and len(domains)==1 and 0 <= duration <= case['deadline_ms'])
         results.append(result)
     return results
 

@@ -15,6 +15,8 @@
 #include <cstdlib>
 #include <set>
 #include <thread>
+#include <deque>
+#include <cmath>
 
 namespace RTE {
 
@@ -80,6 +82,8 @@ namespace RTE {
 		std::string path;
 		json context;
 		std::vector<json> pending;
+		std::deque<json> producedInputs;
+		uint64_t inputSerial = 0;
 		size_t bytes = 0, partBytes = 0, limit = 0, part = 0, sequence = 0, overflow = 0;
 		bool active = false;
 		void Write(json record) {
@@ -118,7 +122,6 @@ namespace RTE {
 	}
 
 	void MetricsCollector::RecordEvent(const std::string& event, const MovableObject* object, const std::string& result, double amount, long other, int seat) {
-		return; // RED control: the action-record rows must detect missing producer records.
 		if (!EventsEnabled()) return;
 		AppendEvent({{"event", event}, {"result", result}, {"amount", amount}, {"seat", seat}, {"other", other},
 		    {"actor", object ? object->GetRootParent()->GetUniqueID() : 0}, {"object", object ? object->GetUniqueID() : 0},
@@ -171,9 +174,39 @@ namespace RTE {
 		}
 	}
 
-	void MetricsCollector::RecordProducedController(uint64_t, uint64_t, uint64_t, long, int, double) {}
-	json MetricsCollector::ProducedControllerFor(uint64_t, uint64_t, long) const { return json::object(); }
-	bool MetricsCollector::IsFreshControllerRecovery(const json&, uint64_t, uint64_t, long, int64_t, bool, bool, bool, double) { return false; }
+	void MetricsCollector::RecordProducedController(uint64_t round, uint64_t producedTick, uint64_t targetTick, long actor, int seat, double producedWallMs) {
+		if (!EventsEnabled() || (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative())) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_EventStream->active) return;
+		if (producedWallMs < 0) producedWallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		json sample{{"type", "controller_input_produced"}, {"input_serial", ++m_EventStream->inputSerial},
+		    {"input_round", round}, {"produced_tick", producedTick}, {"target_tick", targetTick},
+		    {"actor", actor}, {"seat", seat}, {"produced_wall_ms", producedWallMs}};
+		try {
+			m_EventStream->producedInputs.push_back(sample);
+			if (m_EventStream->producedInputs.size() > 512) m_EventStream->producedInputs.pop_front();
+			m_EventStream->Write(sample);
+		} catch (const std::exception& error) {
+			System::PrintDiagnosticLine("[cross-record] FAIL produced input: " + std::string(error.what()));
+			m_EventsEnabled.store(false);
+		}
+	}
+	json MetricsCollector::ProducedControllerFor(uint64_t round, uint64_t targetTick, long actor) const {
+		if (!EventsEnabled()) return json::object();
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		for (auto found = m_EventStream->producedInputs.rbegin(); found != m_EventStream->producedInputs.rend(); ++found)
+			if (found->at("input_round") == round && found->at("target_tick") == targetTick && found->at("actor") == actor) return *found;
+		return json::object();
+	}
+	bool MetricsCollector::IsFreshControllerRecovery(const json& sample, uint64_t round, uint64_t tick, long actor,
+	    int64_t wireTick, bool controllable, bool held, bool catchup, double afterWallMs) {
+		try {
+			return controllable && !held && !catchup && wireTick >= 0 && static_cast<uint64_t>(wireTick) == tick &&
+			    sample.value("input_serial", uint64_t{0}) > 0 && sample.at("input_round") == round && sample.at("target_tick") == tick &&
+			    sample.at("actor") == actor && std::isfinite(sample.at("produced_wall_ms").get<double>()) &&
+			    std::isfinite(afterWallMs) && sample.at("produced_wall_ms").get<double>() >= afterWallMs;
+		} catch (const json::exception&) { return false; }
+	}
 
 	void MetricsCollector::CloseEvents() {
 		std::lock_guard<std::mutex> lock(m_Mutex);

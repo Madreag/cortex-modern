@@ -15,6 +15,33 @@ def sample(tick, peer='a', execution='one', **changes):
 
 
 class CrossReducers(unittest.TestCase):
+    def test_recovery_observation_bounds_do_not_mix_engine_clock_origins(self):
+        schedule=[dict(id='stall',peer='a',incarnation=0,return_incarnation=0,deadline_ms=240,outcomes=['first_controllable_input'])]
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'recovery.jsonl'
+            ledger=records.RecoveryLedger(path,'a','payload:1',100,schedule)
+            ledger.observe([dict(type='fault_begin',id='stall',fault_started_wall_ms=1e12),
+                            dict(type='fault',id='stall',applied=True)],0,100,120)
+            ledger.observe([dict(type='recovery',id='stall',terminal=True,recovery_phase='first_controllable_input',recovery_wall_ms=8)],0,300,350)
+            rows=[__import__('json').loads(line) for line in path.read_text().splitlines()]
+            result=report.reduce_recoveries(schedule,rows,now_ms=350)[0]
+            self.assertEqual(result['duration_ms'],250)
+            self.assertEqual(result['duration_lower_ms'],180)
+            self.assertFalse(result['passed'])
+            schedule[0]['deadline_ms']=260
+            self.assertTrue(report.reduce_recoveries(schedule,rows,now_ms=350)[0]['passed'])
+
+    def test_restart_recovery_keeps_identity_and_cannot_credit_an_unapplied_fault(self):
+        schedule=[dict(id='crash',peer='a',incarnation=0,return_incarnation=1,deadline_ms=1000,outcomes=['first_controllable_input'])]
+        with tempfile.TemporaryDirectory() as temporary:
+            ledger=records.RecoveryLedger(Path(temporary)/'recovery.jsonl','a','payload:2',0,schedule)
+            ledger.observe([dict(type='fault_begin',id='crash')],0,10,20)
+            self.assertFalse(ledger.restart_inputs(1))
+            ledger.external_start(schedule[0],0,30,40,dict(tick=100))
+            restart=ledger.restart_inputs(1)
+            self.assertIn('crash',restart)
+            self.assertEqual(restart['crash']['engine_after_wall_ms'],0)
+            self.assertTrue(restart['crash']['effect_finished'])
     def histories(self):
         return {p: [sample(t, p) for t in range(1, 5)] for p in ('a', 'b', 'c')}
 

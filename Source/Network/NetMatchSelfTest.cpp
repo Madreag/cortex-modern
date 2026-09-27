@@ -127,13 +127,15 @@ namespace RTE {
 			g_MetricsCollector.BeginEventTick({{"round", 9}, {"tick", 40}, {"phase", "live"}});
 			g_MetricsCollector.RecordProducedController(9, 40, 43, 42, 1, 100);
 			const auto observed = g_MetricsCollector.ProducedControllerFor(9, 43, 42);
+			const bool wrongIdentityAbsent = g_MetricsCollector.ProducedControllerFor(10, 43, 42).empty() &&
+			    g_MetricsCollector.ProducedControllerFor(9, 43, 43).empty();
 			g_MetricsCollector.BeginEventTick({{"round", 9}, {"tick", 41}, {"phase", "prediction"}}, true);
 			g_MetricsCollector.RecordProducedController(9, 41, 44, 42, 1, 101);
 			const bool predictionAbsent = g_MetricsCollector.ProducedControllerFor(9, 44, 42).empty();
 			g_MetricsCollector.CloseEvents();
 			if (observed.value("input_serial", uint64_t{0}) == 0 || observed.value("target_tick", uint64_t{0}) != 43 ||
 			    observed.value("produced_wall_ms", 0.0) != 100 || observed.value("actor", 0L) != 42 ||
-			    !predictionAbsent || !g_MetricsCollector.ProducedControllerFor(10, 43, 42).empty()) {
+			    !predictionAbsent || !wrongIdentityAbsent) {
 				*error = "fresh produced input lost its actor/round/target/time identity or included prediction"; return false;
 			}
 			std::cout << "[net-match-selftest] PASS produced_controller_evidence_keeps_identity_and_excludes_prediction" << std::endl;
