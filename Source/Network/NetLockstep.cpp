@@ -4789,8 +4789,9 @@ namespace RTE {
 		// A round joined from a replayed tail commits nothing until the seats that tail changed after its seat state was read are taken.
 		m_AwaitingReplayedSeatState = m_Config.joinsRunningRound && m_Config.seatStateThroughFrame != 0;
 		// A seat taken back before our first frame is a member from it: the start the host hands out for it names that frame.
+		// Its delay is the one the round runs at that frame, delay changes included, which is what the seat's own start carries.
 		for (const auto& [peer, reclaim]: m_ReclaimTransactions)
-			m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
+			m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, InputDelayAt(peer, m_Config.startFrame)} :
 			    PeerAdmission{reclaim.activationFrame, reclaim.delayFrames};
 		// Our own return produces on the delay the host admitted it on, whatever the config this round started from last heard.
 		if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId); own != m_ReclaimTransactions.end() && own->second.activationFrame >= m_Config.startFrame &&
@@ -6121,7 +6122,7 @@ namespace RTE {
 		NoteSeatTransition(peer, reclaim.applyFrame, SeatTransition::Back);
 		m_Config.peerIncarnations[peer] = reclaim.seatIncarnations[peer - 1];
 		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
-		m_PeerAdmissions[peer] = reclaim.applyFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
+		m_PeerAdmissions[peer] = reclaim.applyFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, InputDelayAt(peer, m_Config.startFrame)} :
 		    PeerAdmission{reclaim.applyFrame, reclaim.delayFrames};
 		// The seat state this round started from may still hold the seat; the return ends that hold here, as the frame that
 		// carried it did on every peer that simulated it, or our first frame would hand the returned seat to the AI again.
@@ -8601,9 +8602,9 @@ namespace RTE {
 		const uint64_t excusedThrough = back != m_ReclaimTransactions.end()
 			? std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames)
 			: EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks);
-		// An announced capture excuses the ticks after it only while its tick is still the last this simulation completed.
+		// An announced capture excuses the ticks after it only while its tick is the last this simulation completed: one not yet begun excuses nothing.
 		const auto capture = AnnouncedCaptureCovering(frame);
-		const bool capturing = capture && (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick <= *capture);
+		const bool capturing = capture && m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick == *capture;
 		// A park every peer is in and a pending timing decision excuse its ticks exactly as they excuse a client's.
 		if (frame <= excusedThrough || IsSynchronizedCapturePark(frame) || m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || capturing) {
 			m_OwnMissingFrame.reset();
@@ -10480,8 +10481,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay) {
 		if (UsesBoundedWait() && m_AiHeldSeats.contains(peerId)) {
-			// A seat whose returner is already agreed has nothing left to release: the return stands.
-			if (resolution == NetLockstepHoldResolution::Expired && !m_ReclaimTransactions.contains(peerId)) ReleaseHeldSeat(peerId, nowMs, relay, "its hold expired");
+			// The round never waits on a seat the AI plays, so its holder's window passing releases nothing: the seat stays its returner's
+			// to reclaim, and only a clean leave, a removal or the match's end gives the AI its units for good.
 			return;
 		}
 		if (resolution == NetLockstepHoldResolution::None || m_DroppedSeats.find(peerId) == m_DroppedSeats.end()) {
@@ -10832,6 +10833,17 @@ namespace RTE {
 			if (localIt == m_LocalFrames.end() && (m_Playback || (m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) &&
 			    !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame) && !IsSeatUnderAI(m_Config.localPeerId, m_Stats.nextFrame)))) {
 				if (!m_Playback && JudgeOwnSeat(m_Stats.nextFrame, nowMs)) continue;
+				// The host judges its own seat only once every other seat's input is in, so a seat missing beside it is judged first, on its own clock.
+				if (!m_Playback && UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
+					const auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);
+					std::vector<uint8_t> missing;
+					for (uint8_t peer: m_RemotePeerIds) if (IsRemoteRequiredForFrame(peer, m_Stats.nextFrame) &&
+					    (remoteIt == m_RemoteFrames.end() || !remoteIt->second.contains(peer))) missing.push_back(peer);
+					if (!missing.empty()) {
+						if (m_FirstMissingFrame != m_Stats.nextFrame) { m_FirstMissingFrame = m_Stats.nextFrame; m_FirstMissingMs = nowMs; }
+						if (DeclareOverdueInputs(m_Stats.nextFrame, nowMs, m_FirstMissingMs, missing)) continue;
+					}
+				}
 				m_AdvanceBlock = "own-input";
 				break;
 			}

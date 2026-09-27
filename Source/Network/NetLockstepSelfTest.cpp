@@ -73,6 +73,9 @@ namespace RTE {
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
+	bool TestAnExpiredHolderWindowKeepsTheAiSeat(std::string* error);
+	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
@@ -19887,6 +19890,82 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error) {
+		// A return before this round's first frame makes the seat a member from it, on the delay the round runs there.
+		NetLockstepCoordinator joiner;
+		auto config = MakeCoordinatorConfig(2, 1, 0x9A1D, 6, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 300;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		joiner.m_Config = config;
+		joiner.m_DelayChanges[3][280] = 12;
+		NetLockstepTiming reclaim;
+		reclaim.peerId = 3; reclaim.applyFrame = 250; reclaim.delayFrames = 6; reclaim.seatIncarnations[2] = 1;
+		joiner.TakeReturnBeforeFirstFrame(reclaim);
+		const auto admission = joiner.m_PeerAdmissions.find(3);
+		if (admission == joiner.m_PeerAdmissions.end() || admission->second.frame != 300 || admission->second.delay != 12) {
+			*error = "an-early-return-is-admitted-on-the-rounds-delay: the seat returned at 250 was admitted at 300 on delay " +
+			         std::to_string(admission == joiner.m_PeerAdmissions.end() ? 0 : admission->second.delay) + "; the round runs delay 12 there";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestAnExpiredHolderWindowKeepsTheAiSeat(std::string* error) {
+		// A returner still rejoining past its holder's window keeps its seat: the AI plays it, the round waits on nothing.
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A1C, 6, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 37;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}};
+		config.remoteTransportPeerIds = {{2, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1C);
+		if (!wire.StartHost(48897, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RoundId = 37;
+		host.m_RemotePeerIds = {2};
+		host.m_AiHeldSeats[2] = 5504;
+		host.m_HoldTransactions[2] = {2, 0, 6, 2, 5504};
+		host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, 30000);
+		if (!host.HasHeldAISeat(2) || host.m_ReleasedAiSeats.contains(2)) {
+			*error = "an-expired-holder-window-keeps-the-ai-seat: the holder's window passing released a seat the AI plays, so its returner is refused";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error) {
+		// A capture announced at 600 excuses the host only once its simulation completed 600; a host stalled at 594 is late.
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A1B, 6, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 36;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1B);
+		config.matchConfig.successorOrder = {3, 2};
+		if (!wire.StartHost(48896, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RoundId = 36;
+		host.m_RemotePeerIds = {2, 3};
+		host.m_PeersPlayedThisRound = {1, 2, 3};
+		for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 7;
+		host.m_AnnouncedCaptureEvery = 600;
+		host.m_Stats.nextFrame = 601;
+		host.m_LastQueuedTargetFrame = 600;
+		host.m_LastCompletedSimulationTick = 594;
+		host.m_RemoteFrames[601][2] = {};
+		host.m_RemoteFrames[601][3] = {};
+		if (host.JudgeOwnSeat(601, 1000) || !host.JudgeOwnSeat(601, 1051)) {
+			*error = "a-capture-not-yet-begun-excuses-no-stall: a host stalled at 594 before the capture at 600 was not held past the bound";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -20796,6 +20875,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
+		    !TestACaptureNotYetBegunExcusesNoStall(&error) ||
+		    !TestAnExpiredHolderWindowKeepsTheAiSeat(&error) ||
+		    !TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(&error) ||
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
 		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
 		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||

@@ -6480,7 +6480,14 @@ static std::string ResyncSaveName() {
 				for (auto it = m_PendingHeldResolutions.begin(); it != m_PendingHeldResolutions.end();) {
 					const NetHoldResolutionNotice& notice = *it;
 					if (notice.resolution == NetHoldResolution::Reclaimed && m_Coordinator->HasAgreedSeatReclaim(notice.lockstepPeerId)) { it = m_PendingHeldResolutions.erase(it); continue; }
-					if (m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(notice.lockstepPeerId) && notice.resolution != NetHoldResolution::Expired) { ++it; continue; }
+					if (m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(notice.lockstepPeerId)) {
+						// The AI plays the seat, so the holder's window passing keeps nothing waiting: the seat and its reseats stay for its return.
+						if (notice.resolution == NetHoldResolution::Expired) {
+							System::PrintDiagnosticLine("[net-reconnect] the held seat of peer " + std::to_string(static_cast<int>(notice.lockstepPeerId)) + " passed its holder's window; the AI keeps it for the return");
+							it = m_PendingHeldResolutions.erase(it);
+						} else ++it;
+						continue;
+					}
 					if (notice.resolution == NetHoldResolution::Reclaimed && !PrepareHeldPeerRejoinLocked(notice.lockstepPeerId)) { ++it; continue; }
 					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
 					switch (notice.resolution) {
