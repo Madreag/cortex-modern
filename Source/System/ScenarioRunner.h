@@ -69,6 +69,7 @@ namespace RTE {
 			bool        saveRefusalDiagnosisSelfTest = false; // -save-refusal-diagnosis-selftest: player-facing save refusal.
 			bool        freeRunSim = false; // -free-run-sim: a lockstep match runs its ticks as fast as the frames arrive, one per loop iteration, drawing nothing.
 			bool        selftestRematch = false; // -net-match-e2e-rematch: when match 1 ends, return to the lobby and run a second match.
+			uint32_t    selftestRematches = 0; // -net-match-e2e-rematches N: that many rematches in a row, each through the lobby.
 			bool        selftestLeave = false; // -net-match-e2e-leave: this peer quits to the menu at tick 300 like a pause-menu leave.
 			uint64_t    selftestLeaveTick = 300; // -net-match-e2e-leave-tick <N>: the tick -net-match-e2e-leave fires at (default 300 = the long-standing hardcoded value).
 			bool        selftestInventoryCommand = false; // -net-match-e2e-inventory-command: host-issued inventory ops at fixed ticks.

@@ -4998,10 +4998,18 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 }
 
 /// </summary>
-static bool IsFirstE2ERematchReady() {
+/// Whether the activity ended with a winning team: a won round, however short.
+static bool NetMatchActivityHasWinner(const Activity* activity) {
+	const GameActivity* game = dynamic_cast<const GameActivity*>(activity);
+	return game && game->GetWinnerTeam() != Activity::NoTeam;
+}
+
+static bool IsE2ERematchReady() {
 	const Activity* activity = g_ActivityMan.GetActivity();
-	return s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestRematch && s_netMatchServiceE2ERematches == 0 &&
-	       activity && activity->IsOver() && s_netMatchE2ETicks.Total() >= 100;
+	const auto& args = ScenarioRunner::GetArgs();
+	const int rematches = static_cast<int>(std::max<uint32_t>(args.selftestRematch ? 1 : 0, args.selftestRematches));
+	return s_netMatchServiceE2E && s_netMatchServiceE2ERematches < rematches && activity && activity->IsOver() &&
+	       !s_netMatchE2ETicks.EarlyOverIsSetupFailure(s_netMatchE2ETicks.Total(), NetMatchActivityHasWinner(activity));
 }
 
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
@@ -6461,7 +6469,7 @@ void RunGameLoop() {
 			if (ScenarioRunner::FinishLockstepSimulationTick(simTick)) {
 				const std::string reason = ScenarioRunner::GetLockstepStopReason();
 				// A completed first round still takes the shared rematch transition below.
-				if (!reason.starts_with("Complete:") || !IsFirstE2ERematchReady()) {
+				if (!reason.starts_with("Complete:") || !IsE2ERematchReady()) {
 					ScenarioRunner::SetControllerReplayError(reason);
 					HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
 					break;
@@ -6860,12 +6868,12 @@ void RunGameLoop() {
 				}
 				// E2E rematch ride-through: match 1 ended, so finish it, reconvene the live session in the
 				// lobby, and relaunch — round 2 is policed by the live desync exchange like any match.
-				if (IsFirstE2ERematchReady()) {
-					s_netMatchServiceE2ERematches = 1;
+				if (IsE2ERematchReady()) {
+					++s_netMatchServiceE2ERematches;
 					const std::string result = BuildNetMatchResultText();
 					{
 						std::ostringstream line;
-						line << "[net-match-service-e2e] rematch: match 1 over (" << result << "), returning to lobby";
+						line << "[net-match-service-e2e] rematch: match " << s_netMatchServiceE2ERematches << " over (" << result << "), returning to lobby";
 						System::PrintDiagnosticLine(line.str());
 					}
 					g_NetMatchService.FinishMatch(result);
@@ -6920,7 +6928,7 @@ void RunGameLoop() {
 					}
 					{
 						std::ostringstream line;
-						line << "[net-match-service-e2e] rematch: round 2 launching";
+						line << "[net-match-service-e2e] rematch: round " << (s_netMatchServiceE2ERematches + 1) << " launching";
 						System::PrintDiagnosticLine(line.str());
 					}
 					// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
@@ -6928,11 +6936,11 @@ void RunGameLoop() {
 					break;
 				}
 				// A legitimate game-over may end the activity mid-run; the sim keeps ticking to the cap so
-				// the trace stays bounded. An end in the first 100 ticks still means a broken setup.
+				// the trace stays bounded. An end in the first 100 ticks with no winner still means a broken setup.
 				const uint64_t earlyOverTick = ScenarioRunner::HasLockstepCoordinator()
 					                               ? ScenarioRunner::GetLockstepAppliedFrame()
 					                               : s_netMatchE2ETicks.Total();
-				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure(earlyOverTick))) {
+				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure(earlyOverTick, NetMatchActivityHasWinner(activity)))) {
 					s_netMatchServiceE2EError = std::string("activity ended in state ") + ActivityStateName(activityState);
 					s_netMatchServiceE2EExitCode = 1;
 					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);

@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port-block", default=f"{PORT_LO}-{PORT_HI}", help="the calling lane's own port block, LO-HI; --port stays inside it")
     parser.add_argument("--fullstate-every", type=int, default=0)
     parser.add_argument("--sample-seconds", type=float, default=60)
+    parser.add_argument("--rematch", action="store_true", help="both peers ride the e2e rematch: when match 1 ends they return to the lobby and play match 2")
     parser.add_argument("--mute-input", default="", help="FRAME:COUNT - the client sends none of its own input for those frames while it keeps simulating them")
     parser.add_argument("--census-histogram", action="store_true", help="the census also walks the heap by block size (seconds per line)")
     parser.add_argument("--census-probe-size", type=int, default=0, help="print the first bytes of heap blocks of this size")
@@ -161,6 +162,8 @@ def main(argv: list[str] | None = None) -> int:
                 flags += ["-net-join", "127.0.0.1"]
                 for tick in stalls:
                     flags += ["-net-test-live-stall", f"{tick}:{options.stall_ms}"]
+            if options.rematch:
+                flags += ["-net-match-e2e-rematch"]
             env = {"CCCP_HEADLESS": "1"}
             if peer == "client" and options.mute_input:
                 env["CC_TEST_LOCKSTEP_MUTE_INPUT"] = options.mute_input
