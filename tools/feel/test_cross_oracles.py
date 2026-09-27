@@ -56,5 +56,14 @@ class AttemptOracles(unittest.TestCase):
         self.assertFalse(cross_report.judge_exit(crash,'a',1,[fault],[receipt])['passed'])
         self.assertFalse(cross_report.judge_exit(dict(good,timed_out=True),'a',0,[],[])['passed'])
 
+    def test_hold_is_scheduled_only_with_matching_native_start_and_completed_recovery(self):
+        recovery=dict(id='stall',peer='a',passed=True,phases=[dict(phase='first_controllable_input',native=dict(source_round=1,tick=45))])
+        receipt=dict(id='stall',source_peer='a',peer=3,source_round=1,tick=40,applied=True,action='live-stall')
+        hold=dict(peer=3,source_round=1,tick=42)
+        self.assertEqual(cross_report.scheduled_hold(hold,[receipt],[recovery]),'stall')
+        for altered in [dict(hold,peer=2),dict(hold,source_round=2),dict(hold,tick=46),dict(hold,tick=39)]:
+            self.assertIsNone(cross_report.scheduled_hold(altered,[receipt],[recovery]))
+        self.assertIsNone(cross_report.scheduled_hold(hold,[receipt],[dict(recovery,passed=False)]))
+
 
 if __name__=='__main__': unittest.main()
