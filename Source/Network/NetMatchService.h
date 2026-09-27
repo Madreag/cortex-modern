@@ -991,6 +991,14 @@ namespace RTE {
 		std::vector<uint8_t> m_MigrationMembers;
 		std::string m_MigrationDirectorySession;
 		std::string m_MigrationDirectoryToken;
+		/// What the handover's ICE route reads, under its own lock: the migration runs on the plane, which may hold m_Mutex.
+		struct MigrationIce {
+			bool route = false;
+			std::string session;
+			std::string token;
+		};
+		mutable std::mutex m_MigrationIceMutex;
+		MigrationIce m_MigrationIce;
 		uint64_t m_MigrationStatusUntilMs = 0;
 		bool m_MigrationDirectoryResumePending = false;
 		bool m_MigrationRepairPending = false;
@@ -1072,6 +1080,14 @@ namespace RTE {
 		static std::string SetupFailureStatus(const NetSession* session, bool noDirectRoute, bool relayFailed = false);
 		/// The ICE virtual port a host listens on and a joiner dials.
 		static constexpr int c_IceVirtualPort = 41011;
+		/// The ICE virtual port every peer's handover listener takes, and a survivor dials on its successor.
+		static constexpr int c_MigrationVirtualPort = 41012;
+		/// A handover transport: a plain one, or, when the match's links run through the directory, one whose ICE half listens too.
+		std::unique_ptr<INetTransport> MakeMigrationTransport(bool ice);
+		/// Dials a successor's ICE route through the directory session the migration capsule named.
+		bool DialMigrationIce(INetTransport& transport, const std::string& identity, std::string* error);
+		/// Opens the directory's host end on this successor's handover listener, so the survivors' ICE dials reach it.
+		void HostMigrationIce(INetTransport& listener);
 		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
 		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
 		static constexpr uint32_t c_IceConnectBudgetMs = 15000;
