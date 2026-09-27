@@ -16,6 +16,8 @@ import shlex
 import subprocess
 import sys
 import time
+import copy
+import platform
 
 HERE = Path(__file__).resolve().parent
 SCRATCH = Path('D:/mx/astra-cross-peers-build-20260926')
@@ -94,12 +96,18 @@ def schedule_for(options, peers, boxes):
                        action='live-stall', duration_ms=rng.choice([200, 600, 1500])) for _ in range(options.chaos_faults)]
         faults.sort(key=lambda f: (f['tick'], f['peer']))
     names = {p['name'] for p in peers}
+    incarnations = dict.fromkeys(names, 0)
+    faults.sort(key=lambda f: (f['tick'], f['peer']))
     for number, fault in enumerate(faults, 1):
         if fault['peer'] not in names or fault['tick'] < 1: raise ValueError('invalid fault target or tick')
         if fault['action'] == 'host-kill': raise ValueError('migration with EDITH is NOT COVERED until the endpoint fix')
-        fault.update(id=fault.get('id', f'fault-{number}'), incarnation=fault.get('incarnation', 0),
+        incarnation = fault.get('incarnation', incarnations[fault['peer']])
+        restarting = fault['action'] in ('announced-leave-rejoin', 'crash-restart')
+        fault.update(id=fault.get('id', f'fault-{number}'), incarnation=incarnation,
+                     return_incarnation=incarnation+int(restarting),
                      deadline_ms=fault.get('deadline_ms', options.recovery_deadline_ms),
                      outcomes=fault.get('outcomes', ['first_controllable_input', 'match_over_goodbye']))
+        if restarting: incarnations[fault['peer']] = incarnation + 1
     return faults
 
 
@@ -129,7 +137,7 @@ def make_plan(options):
                  '-net-match-cpu-slots', '2' if options.roster in ('ai-heavy', 'mixed') else '1',
                  '-net-match-service-preset', 'Multi Box Combat', '-net-match-service-module', 'UserScenes.rte',
                  '-net-match-service-scene', options.scene, '-net-match-service-scene-module', 'Base.rte',
-                 '-net-match-auto-delay', '-net-local-prediction', 'on', '-net-ice', 'on',
+                 '-net-match-auto-delay', '-net-local-prediction', 'on', '-net-ice', 'on', '-net-player-name', peer['name'],
                  '-net-reconnect-ticket', str(PurePosixPath(root) / peer['name'] / 'participant.ticket'), '-net-match-report', own + '/match-report.json',
                  '-net-cross-schedule', own + '/faults.json']
         if options.fullstate_every:
@@ -139,12 +147,14 @@ def make_plan(options):
             if options.scenario != 'match': flags += ['-net-autosave-seconds', '180']
         else:
             flags += ['-net-join-session', '<published-session-id>']
+        if options.scenario != 'match':
+            flags += ['-net-cross-rematches', '4096', '-net-cross-host-options', own + '/host-options.json']
         specs.append(dict(peer=peer['name'], box=peer['box'], role='host' if peer['name'] == host else peer.get('seat', 'player'),
             incarnation=0, root=root, own=own, repo=box['tree'], executable=box['executable'], flags=flags,
             env={'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
                  'CC_TEST_CROSS_RUN': stem, 'CC_TEST_CROSS_INSTANCE': peer['name'], 'CC_TEST_CROSS_EXECUTION': 'process-0',
                  'CC_TEST_CROSS_INCARNATION': '0', 'CC_TEST_NET_UI_SCRIPT': own + '/probe.json',
-                 'CC_TEST_CROSS_BOT': own + '/bot.json'}, timeout=options.timeout, ticks=options.ticks,
+                 'CC_TEST_CROSS_BOT': own + '/bot.json', 'CC_TEST_CROSS_EVENT_RAW_LIMIT': str(64*1024**3)}, timeout=options.timeout, ticks=options.ticks,
             settings={}, faults=[f for f in faults if f['peer'] == peer['name']]))
     return dict(version=1, run=stem, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
                 boxes=manifest['boxes'], instances=peers, specs=specs, host=host, ticks=options.ticks,
@@ -157,6 +167,7 @@ def make_plan(options):
                 memory=dict(warmup_s=120, slope_bytes_per_minute=8*1024*1024,
                             retained_bytes=128*1024*1024, sample_seconds=60),
                 storage=dict(total_bytes=LIMIT, event_bytes_per_instance=256*1024*1024,
+                             event_expanded_bytes_per_instance=64*1024**3,
                              live_bytes_per_instance=512*1024*1024, failure_window_ticks=600),
                 quiet_window=options.quiet_window, pathfinding='production asynchronous; no -tick-hashes override',
                 required_gates=['three_real_boxes', 'matching_content', 'same_commit', 'full_history', 'zero_desync',
@@ -264,7 +275,20 @@ def preflight_payload(path):
     head = command(['git', '-C', repo, 'rev-parse', 'HEAD'], check=False).strip()
     stamp_path = repo / 'tools/cross_peers/build.json'
     build = json.loads(stamp_path.read_text(encoding='utf-8')) if stamp_path.is_file() else {}
+    if sys.platform == 'win32':
+        identity = command(['pwsh','-NoProfile','-Command','(Get-CimInstance Win32_ComputerSystemProduct).UUID']).strip()
+        cpu = command(['pwsh','-NoProfile','-Command','(Get-CimInstance Win32_Processor).Name']).strip()
+    elif sys.platform == 'darwin':
+        hardware = command(['ioreg','-rd1','-c','IOPlatformExpertDevice'])
+        match = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', hardware)
+        if not match: raise RuntimeError('Mac hardware identity unavailable')
+        identity, cpu = match[1], command(['sysctl','-n','machdep.cpu.brand_string']).strip()
+    else:
+        identity, cpu = Path('/etc/machine-id').read_text().strip(), platform.processor()
+    if not identity: raise RuntimeError('box hardware identity unavailable')
     result = dict(box=box['name'], kind=box['kind'], head=head, build=build,
+                  machine_id=hashlib.sha256((platform.system()+':'+identity).encode()).hexdigest(),
+                  hostname=platform.node(), cpu=cpu, architecture=platform.machine(), os=platform.platform(),
                   executable_sha256=digest_file(box['executable']), content=content,
                   modules={p: h for p, h in content.items() if p.endswith('/Index.ini')},
                   fixture={name: digest_file(repo / 'tools/feel' / name) for name in ('CrossCombat.lua', 'CrossCombat.ini')},
@@ -302,7 +326,7 @@ def sample_memory(run):
     return dict(resident=int(fields[0])*1024, virtual=int(fields[1])*1024) if len(fields) == 2 else None
 
 
-def prepare_instance(spec, pin, box):
+def prepare_instance(spec, pin, box, runtime=None):
     from run_sim_test import make_run, seed_settings
     own = Path(spec['own']); own.mkdir(parents=True, exist_ok=False)
     rows = []
@@ -312,7 +336,9 @@ def prepare_instance(spec, pin, box):
         rows += [f'player=0 {start} {end} {direction} FIRE AIM=0.9,-0.1',
                  f'player=0 {start+180} {min(start+210, spec["ticks"])} WEAPON_RELOAD'] if start+210 <= spec['ticks'] else [f'player=0 {start} {end} FIRE AIM=-0.9,-0.1']
     (own / 'input.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8')
-    write_json(own / 'faults.json', spec['faults'])
+    write_json(own / 'faults.json', [f for f in spec['faults'] if f['incarnation'] == spec['incarnation']])
+    write_json(own / 'host-options.json', [dict(difficulty=50, ai_skill=50, fog=False, scene='Grasslands', scene_module='Base.rte'),
+                                          dict(difficulty=100, ai_skill=100, fog=True, scene='Ketanot Hills', scene_module='Base.rte')])
     write_json(own / 'bot.json', [dict(round=0, **{'from': 3601, 'to': spec['ticks']})] if spec['ticks'] >= 3601 else [])
     write_json(own / 'probe.json', dict(schema=1, timeout_ms=120000, activate_at_tick=30, steps=[
         dict(op='assert_window', equals=dict(width=960, height=540)),
@@ -323,17 +349,60 @@ def prepare_instance(spec, pin, box):
     settings = {'SessionDirectoryUrl': f'127.0.0.1:{box["directory_port"]}', 'SessionDirectoryCertSha256': pin,
                 'SessionDirectoryInstallKey': f'cross-{spec["peer"]}-install', 'NetworkIceEnable': '1',
                 'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
-    run = make_run(Path(spec['repo']), spec['flags'], own / 'engine', timeout=spec['timeout'], env=spec['env'])
-    stage_combat(run, spec)
+    run = make_run(Path(spec['repo']), spec['flags'], own / 'engine', timeout=spec['timeout'], env=spec['env'], runtime=runtime)
+    if runtime is None:
+        stage_combat(run, spec)
+    else:
+        (own / 'engine/feel').mkdir(exist_ok=True)
     seed_settings(run, settings)
     return run
+
+
+class Tail:
+    def __init__(self, path):
+        self.path, self.offset, self.pending, self.part = Path(path), 0, b'', 0
+
+    def read(self):
+        path = self.path if not self.part else Path(str(self.path) + f'.part{self.part}')
+        if not path.is_file(): return []
+        with path.open('rb') as stream:
+            stream.seek(self.offset); block = stream.read(4*1024*1024); self.offset += len(block)
+        pieces = (self.pending + block).split(b'\n'); self.pending = pieces.pop()
+        rows = [json.loads(line) for line in pieces if line.strip()]
+        if not block and not self.pending and Path(str(self.path) + f'.part{self.part+1}').is_file():
+            self.part += 1; self.offset = 0
+        return rows
+
+    def compress_consumed(self):
+        from feel.records import compress_closed_record
+        for number in range(self.part):
+            path = self.path if number == 0 else Path(str(self.path)+f'.part{number}')
+            if path.is_file(): compress_closed_record(path, self.path.parent)
+
+
+def restart_spec(spec, progress):
+    next_spec = copy.deepcopy(spec)
+    next_spec['incarnation'] += 1
+    old = spec['own']
+    own = str(PurePosixPath(old).parent / f'incarnation-{next_spec["incarnation"]}')
+    next_spec['own'] = own
+    next_spec['flags'] = [flag.replace(old, own) for flag in spec['flags']]
+    next_spec['flags'].append('-net-cross-ticket-rejoin')
+    next_spec['env'] = {key: str(val).replace(old, own) for key,val in spec['env'].items()}
+    next_spec['env'].update(CC_TEST_CROSS_INCARNATION=str(next_spec['incarnation']),
+                            CC_TEST_CROSS_EXECUTION=f'process-{next_spec["incarnation"]}',
+                            CC_TEST_CROSS_BUDGET_BASE=str(progress.get('budget_base', 0)),
+                            CC_TEST_CROSS_MATCH_FIRST_TICK=str(progress.get('first_gameplay_tick', 1)))
+    next_spec['faults'] = [f for f in next_spec['faults'] if f['tick'] > progress.get('budget_tick', 0)]
+    return next_spec
 
 
 def run_payload(path):
     from run_sim_test import make_run
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
     root, box = Path(path).parent, payload['box']
-    runs, started, completed = {}, {}, set()
+    runs, started, completed, readers, progress, fired = {}, {}, set(), {}, {}, set()
+    specifications = {s['peer']: s for s in payload['specs']}
     next_sample, verdict = 0, 0
     try:
         assert_box_guard(box)
@@ -351,6 +420,9 @@ def run_payload(path):
             run = prepare_instance(spec, payload['pin'], box)
             runs[spec['peer']] = run
             run.start(); started[spec['peer']] = time.monotonic()
+            readers[spec['peer']] = Tail(Path(spec['own']) / 'events.jsonl')
+            progress[spec['peer']] = {}
+            write_json(Path(spec['own']) / 'instance.json', spec)
             write_json(Path(spec['own']) / 'started.json', dict(peer=spec['peer'], incarnation=0, engine_pid=engine_pid(run)))
         with (root / 'samples.jsonl').open('w', encoding='utf-8') as samples:
             while len(completed) < len(runs):
@@ -360,18 +432,48 @@ def run_payload(path):
                 if now >= next_sample:
                     own_pids = [engine_pid(r) for r in runs.values()]
                     load = box_load(own_pids)
-                    for spec in payload['specs']:
+                    for spec in specifications.values():
                         peer = spec['peer']; run = runs[peer]
                         if peer in completed: continue
-                        row = dict(peer=peer, incarnation=0, execution='process-0', engine_pid=engine_pid(run),
+                        row = dict(peer=peer, incarnation=spec['incarnation'], execution=f'process-{spec["incarnation"]}', engine_pid=engine_pid(run),
                                    elapsed_s=now-started[peer], load=load, same_box_instances=len(runs),
                                    **(sample_memory(run) or {}))
                         samples.write(json.dumps(row) + '\n'); samples.flush()
                     next_sample = now + 60
                     assert_box_guard({**box, 'kind': 'windows-task'} if box['kind'] == 'windows-local' else box)
-                for spec in payload['specs']:
+                for spec in list(specifications.values()):
                     peer = spec['peer']; run = runs[peer]
                     if peer in completed: continue
+                    for observed in readers[peer].read():
+                        if observed.get('type') == 'progress': progress[peer] = observed
+                    readers[peer].compress_consumed()
+                    current = progress[peer]
+                    due = next((f for f in spec['faults'] if f['action'] == 'crash-restart' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
+                                and current.get('budget_tick', 0) >= f['tick']), None)
+                    leaving = next((f for f in spec['faults'] if f['action'] == 'announced-leave-rejoin' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
+                                    and current.get('budget_tick', 0) >= f['tick']), None)
+                    if due or (leaving and run.poll() is not None):
+                        fault = due or leaving; fired.add(fault['id'])
+                        receipt = dict(type='lifecycle', id=fault['id'], peer=peer, incarnation=spec['incarnation'],
+                                       action=fault['action'], requested_tick=fault['tick'], actual=current,
+                                       observed_wall_ms=time.monotonic()*1000, engine_pid=engine_pid(run))
+                        with (root / 'lifecycle.jsonl').open('a', encoding='utf-8') as lifecycle:
+                            lifecycle.write(json.dumps(receipt)+'\n')
+                        retained = Path(run.cwd)
+                        if due and run.poll() is None: run.terminate(reason=f'scheduled crash {fault["id"]}')
+                        record = run.finish(); run.close()
+                        write_json(Path(spec['own']) / 'record.json', record)
+                        new_spec = restart_spec(spec, current)
+                        render = new_spec['flags'].index('-feel-render-settings') + 1
+                        new_spec['flags'][render] = str(retained / 'Userdata/FeelRender.ini')
+                        assert_box_guard(box)
+                        fresh = prepare_instance(new_spec, payload['pin'], box, runtime=retained)
+                        runs[peer] = fresh; specifications[peer] = new_spec
+                        readers[peer] = Tail(Path(new_spec['own']) / 'events.jsonl')
+                        fresh.start(); started[peer] = time.monotonic()
+                        write_json(Path(new_spec['own']) / 'instance.json', new_spec)
+                        write_json(Path(new_spec['own']) / 'started.json', dict(peer=peer, incarnation=new_spec['incarnation'], engine_pid=engine_pid(fresh)))
+                        continue
                     if run.poll() is not None or now - started[peer] > spec['timeout']:
                         record = run.finish(); run.close(); completed.add(peer)
                         write_json(Path(spec['own']) / 'record.json', record)
@@ -384,7 +486,7 @@ def run_payload(path):
     finally:
         for peer, run in runs.items():
             run.close()
-            write_json(Path(next(s['own'] for s in payload['specs'] if s['peer'] == peer)) / 'record.json', run.record)
+            write_json(Path(specifications[peer]['own']) / 'record.json', run.record)
         write_json(root / 'done.json', dict(exit_code=verdict, completed=sorted(completed)))
     return verdict
 
@@ -465,6 +567,8 @@ def run_plan(plan, root):
                 preflights[box['name']] = json.loads((local_box / 'preflight.json').read_text())
             payloads[box['name']] = (payload, local_payload, box_root)
         reference = preflights[local['name']]
+        if len({p['machine_id'] for p in preflights.values()}) < 3:
+            raise RuntimeError('the manifest resolves to fewer than three real machines')
         for box in boxes.values():
             value = preflights[box['name']]
             if any(value[k] != reference[k] for k in ('content', 'modules', 'fixture')):

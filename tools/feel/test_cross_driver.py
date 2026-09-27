@@ -44,6 +44,30 @@ class CrossDriverTests(unittest.TestCase):
         self.assertEqual(first['faults'], second['faults'])
         self.assertIn('choices only',first['seed_scope'])
 
+    def test_faults_follow_the_declared_restart_incarnation(self):
+        plan=cross_peers.make_plan(cross_peers.parse_args(['--scenario','soak']))
+        mac=[row for row in plan['faults'] if row['peer']=='mac']
+        self.assertEqual([row['incarnation'] for row in mac],[0,1,1])
+        spec=next(s for s in plan['specs'] if s['peer']=='mac')
+        restarted=cross_peers.restart_spec(spec,dict(tick=400,budget_tick=14400,budget_base=14000,first_gameplay_tick=1))
+        self.assertNotEqual(restarted['own'],spec['own'])
+        old_ticket=spec['flags'][spec['flags'].index('-net-reconnect-ticket')+1]
+        new_ticket=restarted['flags'][restarted['flags'].index('-net-reconnect-ticket')+1]
+        self.assertEqual(old_ticket,new_ticket)
+        self.assertEqual(restarted['incarnation'],1)
+
+    def test_tail_keeps_partial_lines_and_rotated_parts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'events.jsonl'
+            path.write_bytes(b'{"tick":1}\n{"tick":')
+            tail=cross_peers.Tail(path)
+            self.assertEqual(tail.read(),[dict(tick=1)])
+            with path.open('ab') as stream: stream.write(b'2}\n')
+            self.assertEqual(tail.read(),[dict(tick=2)])
+            Path(str(path)+'.part1').write_text('{"tick":3}\n')
+            self.assertEqual(tail.read(),[])
+            self.assertEqual(tail.read(),[dict(tick=3)])
+
     def test_missing_every_peer_produces_failure_and_phone_report(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)/'run'; root.mkdir()

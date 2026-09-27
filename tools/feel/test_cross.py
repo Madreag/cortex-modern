@@ -99,6 +99,16 @@ class CrossReducers(unittest.TestCase):
                 for t in range(20): writer.write(dict(tick=t, event='shot'))
             self.assertEqual([row['tick'] for row in records.read_records(root / 'events.index.json')], list(range(20)))
 
+    def test_sealed_record_is_verified_before_raw_retirement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); path=root/'events.jsonl'
+            original=b'{"tick":1,"event":"shot"}\r\n'*50
+            path.write_bytes(original)
+            receipt=records.compress_closed_record(path,root)
+            self.assertFalse(path.exists())
+            self.assertEqual(receipt['original_bytes'],len(original))
+            with records.open_record(path,'rb') as source: self.assertEqual(source.read(),original)
+
 
 if __name__ == '__main__':
     unittest.main()
