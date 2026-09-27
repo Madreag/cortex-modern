@@ -121,6 +121,40 @@ namespace RTE {
 			return passed;
 		}
 
+		bool TestCrossProducedControllerEvidence(std::string* error) {
+			const auto path = std::filesystem::path("Userdata") / "cross-input-evidence.jsonl";
+			if (!g_MetricsCollector.OpenEvents(path.string(), 65536)) { *error = "input evidence stream did not open"; return false; }
+			g_MetricsCollector.BeginEventTick({{"round", 9}, {"tick", 40}, {"phase", "live"}});
+			g_MetricsCollector.RecordProducedController(9, 40, 43, 42, 1, 100);
+			const auto observed = g_MetricsCollector.ProducedControllerFor(9, 43, 42);
+			g_MetricsCollector.BeginEventTick({{"round", 9}, {"tick", 41}, {"phase", "prediction"}}, true);
+			g_MetricsCollector.RecordProducedController(9, 41, 44, 42, 1, 101);
+			const bool predictionAbsent = g_MetricsCollector.ProducedControllerFor(9, 44, 42).empty();
+			g_MetricsCollector.CloseEvents();
+			if (observed.value("input_serial", uint64_t{0}) == 0 || observed.value("target_tick", uint64_t{0}) != 43 ||
+			    observed.value("produced_wall_ms", 0.0) != 100 || observed.value("actor", 0L) != 42 ||
+			    !predictionAbsent || !g_MetricsCollector.ProducedControllerFor(10, 43, 42).empty()) {
+				*error = "fresh produced input lost its actor/round/target/time identity or included prediction"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS produced_controller_evidence_keeps_identity_and_excludes_prediction" << std::endl;
+			return true;
+		}
+
+		bool TestCrossFreshRecoveryProof(std::string* error) {
+			const nlohmann::json sample{{"input_serial", 4}, {"input_round", 9}, {"target_tick", 43}, {"actor", 42}, {"produced_wall_ms", 101.0}};
+			const auto accepts = [&](uint64_t round, uint64_t tick, int64_t wire, bool control, bool held, bool catchup, double after) {
+				return MetricsCollector::IsFreshControllerRecovery(sample, round, tick, 42, wire, control, held, catchup, after);
+			};
+			if (!accepts(9, 43, 43, true, false, false, 100) || accepts(10, 43, 43, true, false, false, 100) ||
+			    accepts(9, 44, 44, true, false, false, 100) || accepts(9, 43, 42, true, false, false, 100) ||
+			    accepts(9, 43, 43, false, false, false, 100) || accepts(9, 43, 43, true, true, false, 100) ||
+			    accepts(9, 43, 43, true, false, true, 100) || accepts(9, 43, 43, true, false, false, 102)) {
+				*error = "recovery accepted stale, wrong-history, held, replayed or unapplied controller input"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS recovery_requires_fresh_produced_and_applied_controllable_input" << std::endl;
+			return true;
+		}
+
 		bool TestCrossTickTiming(std::string* error) {
 			const auto timing = MetricsCollector::TickTiming(1000, 200, 300, 100);
 			if (timing["compute_us"] != 600 || timing["capture_us"] != 200 || timing["wait_us"] != 200 || timing["partition_valid"] != true ||
@@ -13852,6 +13886,8 @@ namespace RTE {
 		row(&RunCrossReadyRevisionSelfTest, "cross_ready_start_retries_across_configuration_changes");
 		row(&TestCrossCaptureBarrier, "capture_and_writer_barriers_are_selected_releasable_and_bounded");
 		row(&TestCrossRecordKinds, "action_record_fields");
+		row(&TestCrossProducedControllerEvidence, "produced_controller_evidence");
+		row(&TestCrossFreshRecoveryProof, "fresh_controller_recovery_proof");
 		row(&TestCrossTickTiming, "exclusive_tick_timing");
 		row(&TestCrossTimedTransport, "timed_transport_reset");
 		row(&NetModerationGUIProbe::RunCrossScopeSelfTest, "gameplay_probe_scopes");

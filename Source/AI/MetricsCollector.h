@@ -72,6 +72,10 @@ namespace RTE {
 		void AppendEvent(const nlohmann::json& event);
 		void FlushEventTick();
 		void WriteObservation(const nlohmann::json& observation);
+		void RecordProducedController(uint64_t round, uint64_t producedTick, uint64_t targetTick, long actor, int seat, double producedWallMs = -1);
+		nlohmann::json ProducedControllerFor(uint64_t round, uint64_t targetTick, long actor) const;
+		static bool IsFreshControllerRecovery(const nlohmann::json& sample, uint64_t round, uint64_t tick, long actor,
+		    int64_t wireTick, bool controllable, bool held, bool catchup, double afterWallMs);
 		void CloseEvents();
 		bool EventsEnabled() const { return m_EventsEnabled.load(std::memory_order_relaxed); }
 		size_t EventBytes() const;

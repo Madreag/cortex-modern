@@ -118,6 +118,7 @@ namespace RTE {
 	}
 
 	void MetricsCollector::RecordEvent(const std::string& event, const MovableObject* object, const std::string& result, double amount, long other, int seat) {
+		return; // RED control: the action-record rows must detect missing producer records.
 		if (!EventsEnabled()) return;
 		AppendEvent({{"event", event}, {"result", result}, {"amount", amount}, {"seat", seat}, {"other", other},
 		    {"actor", object ? object->GetRootParent()->GetUniqueID() : 0}, {"object", object ? object->GetUniqueID() : 0},
@@ -169,6 +170,10 @@ namespace RTE {
 			m_EventsEnabled.store(false);
 		}
 	}
+
+	void MetricsCollector::RecordProducedController(uint64_t, uint64_t, uint64_t, long, int, double) {}
+	json MetricsCollector::ProducedControllerFor(uint64_t, uint64_t, long) const { return json::object(); }
+	bool MetricsCollector::IsFreshControllerRecovery(const json&, uint64_t, uint64_t, long, int64_t, bool, bool, bool, double) { return false; }
 
 	void MetricsCollector::CloseEvents() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
