@@ -148,6 +148,7 @@ namespace RTE {
 			AppendInt(hasher, "supported_world_lockstep_codec_version", config.supportedWorldLockstepCodecVersion);
 			AppendInt(hasher, "supported_match_config_version", config.supportedMatchConfigVersion);
 			AppendInt(hasher, "supported_world_match_config_version", config.supportedWorldMatchConfigVersion);
+			AppendInt(hasher, "committed_record_version", NetLockstepCodec::c_CommittedRecordVersion);
 			AppendInt(hasher, "lobby_protocol_version", config.lobbyProtocolVersion);
 			AppendField(hasher, "enabled_global_scripts", config.enabledGlobalScripts);
 			return hasher.Finalize();

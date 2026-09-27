@@ -128,8 +128,8 @@ namespace RTE {
 		UpdateSummarySeatsLocked();
 		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
 		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
-		m_CurrentMatchSummary.winnerTeam = activity ? activity->GetWinnerTeam() : Activity::NoTeam;
-		m_CurrentMatchSummary.runningTicks = ScenarioRunner::GetLockstepAppliedFrame();
+		m_CurrentMatchSummary.winnerTeam = m_ReceivedEndWinner ? *m_ReceivedEndWinner : activity ? activity->GetWinnerTeam() : Activity::NoTeam;
+		m_CurrentMatchSummary.runningTicks = m_ReceivedEndWinner ? m_CompletedRoundFinalFrame : ScenarioRunner::GetLockstepAppliedFrame();
 		m_CurrentMatchSummary.paceJson = ::BuildLoopPaceJson();
 		for (auto& peer: m_CurrentMatchSummary.peers) {
 			NetLockstepPeerStats totals;
@@ -786,6 +786,9 @@ static std::string ResyncSaveName() {
 				return false;
 			}
 			m_FreshRelayRequested = true;
+			m_EndRecordSent.clear();
+			m_EndWinnerTeam = Activity::NoTeam;
+			m_ReceivedEndWinner.reset();
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
@@ -820,7 +823,8 @@ static std::string ResyncSaveName() {
 					}
 				}
 				NetMatchConfig played = m_Runner->GetMatchConfig();
-				if (m_Coordinator)
+				// A seat that took the end record on its way back never ran a round here: the host's config names the hub.
+				if (m_Coordinator && m_Coordinator->GetRoundId() != 0)
 					played.hostPeerId = m_Coordinator->GetHostPeerId();
 				m_Runner->SetRematchRoster(NetMatchRunner::DeriveRematchSurvivors(played, leaves, refilled, seats ? &*seats : nullptr));
 			}
@@ -867,7 +871,10 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_RejoinOutcome = "match_over";
-			RefuseEndedPeersLocked(text);
+			if (m_IsHost && m_Coordinator) {
+				const uint64_t resume = m_Coordinator->GetResumeFrame();
+				AnswerEndedReturnersLocked(m_CompletedRoundFinalFrame != 0 ? m_CompletedRoundFinalFrame : (resume > 0 ? resume - 1 : 0));
+			}
 		}
 		// The main loop owns coordinator teardown.
 		Complete(text);
@@ -886,9 +893,9 @@ static std::string ResyncSaveName() {
 		// lobby peer is owed the next round.
 		if (!m_Coordinator->AnyHeldAISeat()) return;
 		m_GoodbyeOwedToRejoiners = true;
-		// That seat is not a member, so the Stop never reaches it. Told the round is over and where it ended,
-		// it finishes its match instead of timing out on a host that is on its way out.
-		if (m_Session) RefuseEndedPeers(*m_Session, *m_Coordinator, MatchOverGoodbyeText(m_CompletedRoundFinalFrame), true);
+		// That seat is not a member, so the Stop never reaches it. Told the round is over and how it ended, it shows the
+		// result and stays for the rematch; one still in its handshake is answered once it is in.
+		AnswerEndedReturnersLocked(m_CompletedRoundFinalFrame);
 	}
 
 	bool NetMatchService::NoteHostGoodbyeLocked(const NetSession* session) {
@@ -907,6 +914,19 @@ static std::string ResyncSaveName() {
 			digits = true;
 		}
 		if (digits) m_CompletedRoundFinalFrame = parsed;
+		return true;
+	}
+
+	std::string NetMatchService::RoundEndResultText(int winnerTeam, int localTeam) {
+		if (winnerTeam < 0) return "Match over: draw";
+		if (localTeam == Activity::NoTeam) return "Match over";
+		return winnerTeam == localTeam ? "Victory!" : "Defeat";
+	}
+
+	bool NetMatchService::TakeRoundEndRecord(uint64_t& record) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_RoundEndRecord) return false;
+		record = *std::exchange(m_RoundEndRecord, std::nullopt);
 		return true;
 	}
 
@@ -980,6 +1000,31 @@ static std::string ResyncSaveName() {
 		}
 		// A returning seat still in its handshake is owed the same answer, or it reads the host leaving as a lost link.
 		if (joiningToo) session.DisconnectJoiningPeers(NetRejectReason::SessionEnded, reason);
+	}
+
+	void NetMatchService::AnswerEndedReturnersLocked(uint64_t finalFrame) {
+		if (!m_IsHost || !m_Session || !m_Coordinator) return;
+		if (const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity()); activity && activity->IsOver()) m_EndWinnerTeam = activity->GetWinnerTeam();
+		const uint64_t resume = m_Coordinator->GetResumeFrame();
+		const uint64_t lastFrame = resume > 0 ? resume - 1 : 0;
+		for (const NetSessionPeerInfo& peer : m_Session->GetReadyPeers()) {
+			if (m_EndRecordSent.contains(peer.transportPeerId)) continue;
+			uint8_t seat = 0;
+			for (const auto& [peerId, transport]: m_Coordinator->RemoteTransports()) if (transport == peer.transportPeerId) seat = peerId;
+			if (!EndedRoundOwesGoodbye(m_Coordinator->UsesTransportPeer(peer.transportPeerId), seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame))) continue;
+			// A held or rejoining seat is a participant of the results and of the rematch: it is told how the round ended and stays.
+			m_WorldJoin.CancelJoin(peer.transportPeerId, "the round ended");
+			const bool answered = m_Runner && m_Runner->GetLobbySession().BindLateRemote(c_WorldRefusalLobbyPeer, peer.transportPeerId, nullptr) &&
+			                      m_Runner->GetLobbySession().SendPayloadTo(c_WorldRefusalLobbyPeer, MakeWorldJoinReport(c_NetWorldReportRoundEnded, PackRoundEndedRecord(finalFrame, m_EndWinnerTeam)), nullptr);
+			if (!answered) {
+				m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::SessionEnded, MatchOverGoodbyeText(finalFrame));
+				continue;
+			}
+			m_EndRecordSent.insert(peer.transportPeerId);
+			m_GoodbyeOwedToRejoiners = false;
+			System::PrintDiagnosticLine("[net-match] end record sent peer=" + std::to_string(peer.assignedPeerId + 1) + " connection=" + std::to_string(peer.transportPeerId) +
+			                            " final=" + std::to_string(finalFrame) + " winner_team=" + std::to_string(m_EndWinnerTeam));
+		}
 	}
 
 	uint64_t NetLobbyLastStateTransferMs();
@@ -2833,7 +2878,7 @@ static std::string ResyncSaveName() {
 			if (!m_IsHost || !m_Session || !m_Coordinator) return;
 			const uint64_t resume = m_Coordinator->GetResumeFrame();
 			const uint64_t finalFrame = m_CompletedRoundFinalFrame != 0 ? m_CompletedRoundFinalFrame : (resume > 0 ? resume - 1 : 0);
-			RefuseEndedPeers(*m_Session, *m_Coordinator, MatchOverGoodbyeText(finalFrame), true);
+			AnswerEndedReturnersLocked(finalFrame);
 		});
 		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		ScenarioRunner::SetHeldCatchUp([this] { return BeginInPlaceCatchUp(); });
@@ -4253,9 +4298,12 @@ static std::string ResyncSaveName() {
 			for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
 				if (!session.spectator && session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) ended.push_back(session.connection);
 			for (const NetPeerId connection: ended) {
-				System::PrintDiagnosticLine("[net-match] rejoin refused connection=" + std::to_string(connection) + ": the match is over");
-				m_Session->DisconnectReadyPeer(connection, NetRejectReason::SessionEnded, MatchOverGoodbyeText(0));
+				System::PrintDiagnosticLine("[net-match] rejoin answered connection=" + std::to_string(connection) + ": the match is over");
 				m_WorldJoin.CancelJoin(connection, "the match is over");
+			}
+			if (!ended.empty() && m_Coordinator) {
+				const uint64_t resume = m_Coordinator->GetResumeFrame();
+				AnswerEndedReturnersLocked(resume > 0 ? resume - 1 : 0);
 			}
 		}
 		// A returner whose base never comes (the round cannot capture one) is told so, never left waiting on it.
@@ -4701,7 +4749,7 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	void NetMatchService::StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal) {
+	void NetMatchService::StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal, std::optional<uint64_t>* outRoundEnded) {
 		if (outRefusal) *outRefusal = 0;
 		std::vector<uint8_t> incoming = lobby.TakePendingTailBytes();
 		if (incoming.size() + catchUp.partialTail.size() > 32ULL * 1024 * 1024) {
@@ -4732,6 +4780,11 @@ static std::string ResyncSaveName() {
 			ScenarioRunner::AppendWorldCatchUp(std::move(later));
 		}
 		for (NetLobbySession::WorldJoinReport report = lobby.TakeWorldJoinReport(); report.pending; report = lobby.TakeWorldJoinReport()) {
+			if (report.kind == c_NetWorldReportRoundEnded) {
+				// The round ended while this seat caught up: the caller ends the catch-up on the host's end record.
+				if (outRoundEnded) *outRoundEnded = report.value;
+				return;
+			}
 			if (report.kind == c_NetWorldReportRefused) {
 				// The world turned this joiner away before any transfer; the caller ends the join.
 				if (outRefusal) *outRefusal = report.value;
@@ -5289,8 +5342,21 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		uint64_t refusal = 0;
+		std::optional<uint64_t> roundEnded;
 		const uint64_t priorActivation = m_WorldCatchUp.activationTick;
-		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal);
+		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal, &roundEnded);
+		if (roundEnded) {
+			// The round ended while this seat caught up: the host's end record is its result, and the lobby that follows is the rematch's.
+			m_RoundEndRecord = *roundEnded;
+			m_ReceivedEndWinner = RoundEndedWinnerTeam(*roundEnded);
+			m_HostGoodbyeSeen = true;
+			m_CompletedRoundFinalFrame = RoundEndedFinalFrame(*roundEnded);
+			for (const NetTransportEvent& event: lobby.TakeEventsAfterRoundEnded()) QueueLobbyEvent(event);
+			System::PrintDiagnosticLine("[net-match] end record received final=" + std::to_string(m_CompletedRoundFinalFrame) + " winner_team=" +
+			                            std::to_string(*m_ReceivedEndWinner) + " local_team=" + std::to_string(m_LocalTeam) + " in_place=1");
+			ScenarioRunner::SetControllerReplayError("MatchOver: the round ended while this seat caught up");
+			return;
+		}
 		// A different frame is the host's next return for this seat: it held the seat again after the last one, and the start that
 		// return began is over whether or not this peer saw the hold.
 		if (m_WorldCatchUp.privateMatch && priorActivation != 0 && m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.activationTick != priorActivation) {
@@ -6497,7 +6563,10 @@ static std::string ResyncSaveName() {
 			}
 		}
 		m_Session->Tick(nowMs, false);
-		RefuseEndedPeersLocked("match over");
+		if (m_IsHost && m_Coordinator) {
+			const uint64_t resume = m_Coordinator->GetResumeFrame();
+			AnswerEndedReturnersLocked(m_CompletedRoundFinalFrame != 0 ? m_CompletedRoundFinalFrame : (resume > 0 ? resume - 1 : 0));
+		}
 	}
 
 	void NetMatchService::PumpSessionEvents() {
@@ -6660,15 +6729,7 @@ static std::string ResyncSaveName() {
 		}
 		// The round has already said goodbye: a rejoin that lands in the drain window is answered with it,
 		// never left to measure a host that is on its way out.
-		if (m_IsHost && m_GoodbyeOwedToRejoiners && m_Session && m_Coordinator) {
-			m_Session->DisconnectJoiningPeers(NetRejectReason::SessionEnded, MatchOverGoodbyeText(m_CompletedRoundFinalFrame));
-			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
-				if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) continue;
-				m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::SessionEnded,
-				                               MatchOverGoodbyeText(m_CompletedRoundFinalFrame));
-				m_GoodbyeOwedToRejoiners = false;
-			}
-		}
+		if (m_IsHost && m_GoodbyeOwedToRejoiners && m_Session && m_Coordinator) AnswerEndedReturnersLocked(m_CompletedRoundFinalFrame);
 		// A transport peer that reached session-Ready but carries no lockstep remote is a
 		// reconnector: the host ends the round so everyone reconvenes around its snapshot.
 		// A persistent world never takes that path: a fresh join is a bootstrap, not a ResyncMatch.
@@ -8565,6 +8626,34 @@ static std::string ResyncSaveName() {
 				m_Session = std::move(session);
 				m_Coordinator = std::move(coordinator);
 				m_Runner = std::move(runner);
+				// A seat told its round ended while it was held or rejoining completes on the host's end record,
+				// its session kept for the rematch lobby that follows.
+				if (const auto record = !request.host && m_Runner && m_Session && m_Session->IsReady() ? m_Runner->GetLobbySession().GetRoundEndedRecord() : std::nullopt) {
+					const uint8_t localLockstepId = static_cast<uint8_t>(m_Session->GetLocalPeerId() + 1);
+					for (const NetMatchPlayerSlot& slot : m_Runner->GetMatchConfig().players)
+						if (slot.peerId == localLockstepId) m_LocalTeam = slot.team;
+					m_LocalPeerId = localLockstepId;
+					m_RoundEndRecord = *record;
+					m_ReceivedEndWinner = RoundEndedWinnerTeam(*record);
+					m_HostGoodbyeSeen = true;
+					m_CompletedRoundFinalFrame = RoundEndedFinalFrame(*record);
+					for (const NetTransportEvent& event: m_Runner->GetLobbySession().TakeEventsAfterRoundEnded()) QueueLobbyEvent(event);
+					NetMatchSummary summary;
+					summary.winnerTeam = RoundEndedWinnerTeam(*record);
+					summary.result = RoundEndResultText(summary.winnerTeam, m_LocalTeam);
+					summary.runningTicks = m_CompletedRoundFinalFrame;
+					for (const NetMatchPlayerSlot& slot : m_Runner->GetMatchConfig().players)
+						if (!slot.cpu) summary.peers.push_back(NetMatchSummary::Peer{slot.peerId, slot.displayName, slot.team});
+					m_LastMatchSummary = summary;
+					m_State = NetMatchServiceState::Completed;
+					m_CompletedLobbySinceMs = SteadyNowMs();
+					m_StatusText = summary.result;
+					m_ErrorText.clear();
+					System::PrintDiagnosticLine("[net-match] end record received final=" + std::to_string(m_CompletedRoundFinalFrame) +
+					                            " winner_team=" + std::to_string(RoundEndedWinnerTeam(*record)) + " local_team=" + std::to_string(m_LocalTeam));
+					m_WorkerDone = true;
+					return;
+				}
 				m_State = NetMatchServiceState::Failed;
 				// A start that died with the host's session is the departure itself, not a start fault.
 				const bool lostHost = !request.host &&

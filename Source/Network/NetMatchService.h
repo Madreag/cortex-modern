@@ -695,6 +695,10 @@ namespace RTE {
 		bool SeatMidAdmission(uint64_t frame) const;
 		/// Whether the host's goodbye has been heard, and the frame the round ended on (0 when it named none).
 		bool HostGoodbyeSeen(uint64_t& finalFrame) const;
+		/// The host's end record for a round that ended while this seat was held or rejoining, once.
+		bool TakeRoundEndRecord(uint64_t& record);
+		/// The result line a seat reads for a round's winner team, as its own team sees it.
+		static std::string RoundEndResultText(int winnerTeam, int localTeam);
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
@@ -705,7 +709,7 @@ namespace RTE {
 		/// schedules activation from.
 		/// One joiner step: the arrived tail, its E and the report it sends back.
 		/// @param outRefusal The world's refusal code when the host turned this joiner away; 0 otherwise.
-		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal = nullptr);
+		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal = nullptr, std::optional<uint64_t>* outRoundEnded = nullptr);
 		/// Sends one bounded run of committed tail frames to a bootstrap and stamps what left.
 		static void SendWorldJoinTailTo(NetLobbySession& lobby, NetWorldJoinHost& host, const NetWorldJoinSession& session);
 		/// Answers one refused connection on the world's reserved refusal id. Binding re-points a
@@ -1172,6 +1176,8 @@ namespace RTE {
 		void PumpCompletedSessionLocked();
 		/// Refuses Ready peers absent from the ended round; caller holds the lock.
 		void RefuseEndedPeersLocked(const std::string& reason);
+		/// Sends every held or rejoining seat the round's end record through the lobby, once; the connection stays for the rematch.
+		void AnswerEndedReturnersLocked(uint64_t finalFrame);
 		void SayGoodbyeToRejoinersLocked();
 		/// Reads a host's goodbye out of a session's refusal; true once one has been heard.
 		bool NoteHostGoodbyeLocked(const NetSession* session);
@@ -1513,6 +1519,10 @@ namespace RTE {
 		/// round is live. The flag is separate because a goodbye may name no frame.
 		uint64_t m_CompletedRoundFinalFrame = 0;
 		bool m_HostGoodbyeSeen = false;
+		std::optional<uint64_t> m_RoundEndRecord;
+		std::set<NetPeerId> m_EndRecordSent;
+		int m_EndWinnerTeam = -1;
+		std::optional<int> m_ReceivedEndWinner; //!< The winner an end record named for the round this seat was held or rejoining in.
 		/// Host: a seat was held when the round ended, so a rejoin still arriving is owed the goodbye.
 		bool m_GoodbyeOwedToRejoiners = false;
 		/// A goodbye belongs to the round it ended; the next round and a torn-down service start without one.

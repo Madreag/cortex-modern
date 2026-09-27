@@ -278,7 +278,7 @@ namespace RTE {
 			if (!reader.Open(path.string(), error)) return false;
 			NetLockstepFrame decoded;
 			bool eof = false;
-			if (reader.GetVersion() != 6 || reader.HasWorldSegment() || reader.GetStartFrame() != 43 ||
+			if (reader.GetVersion() != NetMatchReplayWriter::c_Version || reader.HasWorldSegment() || reader.GetStartFrame() != 43 ||
 			    !reader.ReadFrame(decoded, eof, error) || decoded != first ||
 			    !reader.ReadFrame(decoded, eof, error) || decoded != second ||
 			    reader.ReadFrame(decoded, eof, error) || !eof) {
