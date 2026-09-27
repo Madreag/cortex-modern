@@ -191,6 +191,7 @@ namespace RTE {
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 	bool RunCrossRosterSelfTest(std::string* error);
 	bool RunCrossExecutionPhaseSelfTest(std::string* error);
+	bool RunCrossAuthorityRecordSelfTest(std::string* error);
 }
 
 using namespace RTE;
@@ -219,6 +220,18 @@ static std::string CrossEnvironment(const char* name, const char* fallback = "")
 
 static const char* CrossTickPhase(bool catchup, uint64_t tick, uint64_t previousCommitted, [[maybe_unused]] uint64_t execution) {
 	return catchup ? "catchup" : tick <= previousCommitted ? "reexecution" : "live";
+}
+
+static nlohmann::json CrossAuthorityFromReport(const nlohmann::json&, uint64_t, uint8_t) { return nullptr; }
+
+bool RTE::RunCrossAuthorityRecordSelfTest(std::string* error) {
+	const nlohmann::json source{{"runner", {{"lockstep", {{"session_id", uint64_t{81}}, {"host_peer_id", 2}, {"migration_generation", uint64_t{7}}}}}}};
+	if (CrossAuthorityFromReport(source, 81, 2) != 7 || !CrossAuthorityFromReport(source, 82, 2).is_null() ||
+	    !CrossAuthorityFromReport(source, 81, 3).is_null() || !CrossAuthorityFromReport(nlohmann::json::object(), 81, 2).is_null()) {
+		*error = "authority record is absent or accepts another session/host"; return false;
+	}
+	std::cout << "[net-match-selftest] PASS cross_authority_record_is_bound_to_its_session_and_host" << std::endl;
+	return true;
 }
 
 bool RTE::RunCrossExecutionPhaseSelfTest(std::string* error) {
@@ -254,10 +267,22 @@ static void BeginCrossTick(uint64_t tick) {
 	if (round == previousRound && tick <= previousTick) ++execution;
 	const bool newRound = previousRound != round;
 	const bool catchup = ScenarioRunner::WorldCatchUpActive();
+	const auto host = ScenarioRunner::GetLockstepHostPeerId();
+	static nlohmann::json authority = nullptr;
+	static uint8_t priorHost = 0;
+	static bool priorCatchup = false;
+	static uint64_t authorityObservedTick = 0;
+	if (!catchup && (newRound || host != priorHost || priorCatchup)) {
+		authority = CrossAuthorityFromReport(nlohmann::json::parse(g_NetMatchService.BuildReportJson()), config->sessionId, host);
+		authorityObservedTick = tick;
+	}
+	priorHost = host; priorCatchup = catchup;
 	s_crossContext = {{"run", CrossEnvironment("CC_TEST_CROSS_RUN")}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
 	    {"process", System::GetProcessID()}, {"execution", CrossEnvironment("CC_TEST_CROSS_EXECUTION") + "/" + std::to_string(execution)},
 	    {"incarnation", std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"))}, {"seat_incarnation", nullptr},
-	    {"authority_generation", nullptr}, {"session", std::to_string(config->sessionId)}, {"match", std::to_string(config->roundId)},
+	    {"authority_generation", catchup ? nlohmann::json(nullptr) : authority}, {"authority_generation_observed_at_tick", authorityObservedTick},
+	    {"authority_generation_source", "service.runner.lockstep; refreshed on round/host/catch-up transition"},
+	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(config->roundId)},
 	    {"round", round}, {"source_round", config->roundId}, {"tick", tick}, {"peer", ScenarioRunner::GetLockstepLocalPeerId()},
 	    {"history_branch", ScenarioRunner::GetLockstepResumeFrame() > 0 ? nlohmann::json(nullptr) : nlohmann::json("initial")},
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
