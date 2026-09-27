@@ -301,6 +301,15 @@ static nlohmann::json s_crossRecoveryCases = nlohmann::json::array();
 static nlohmann::json s_crossEndCases = nlohmann::json::array();
 static std::set<std::string> s_crossRecoveryDone;
 static std::map<std::string, std::string> s_crossRecoveryPhase;
+static std::map<uint64_t, uint64_t> s_crossRestoredInputThrough;
+
+static void CrossRememberRestoredInput() {
+	if (!g_MetricsCollector.EventsEnabled() || !ScenarioRunner::WorldCatchUpActive()) return;
+	// ReleaseWorldCatchUp clears the public cursor; retain its observed bound for
+	// this round so restored future inputs cannot be called newly queued input.
+	auto& through = s_crossRestoredInputThrough[ScenarioRunner::GetLockstepRoundId()];
+	through = std::max(through, ScenarioRunner::WorldCatchUpPriorInputThrough());
+}
 
 static bool EnsureCrossEventsOpen() {
 	static const bool armed = !CrossEnvironment("CC_TEST_CROSS_RECORDS").empty();
@@ -343,6 +352,7 @@ static void BeginCrossTick(uint64_t tick) {
 	if (round == previousRound && tick <= previousTick) ++execution;
 	const bool newRound = previousRound != round;
 	const bool catchup = ScenarioRunner::WorldCatchUpActive();
+	CrossRememberRestoredInput();
 	const auto host = ScenarioRunner::GetLockstepHostPeerId();
 	static nlohmann::json authority = nullptr;
 	static uint8_t priorHost = 0;
@@ -458,6 +468,7 @@ static void ApplyCrossSchedule() {
 }
 
 static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
+	CrossRememberRestoredInput();
 	if (!g_MetricsCollector.EventsEnabled() || s_crossRecoveryStarts.empty()) return;
 	const unsigned incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
 	const auto effectPath = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() / "h4-effects.json";
@@ -589,6 +600,7 @@ bool RTE::RunCrossEndSignalSelfTest(std::string* error) {
 }
 
 static void CrossEndTargetObservation(uint64_t tick) {
+	CrossRememberRestoredInput();
 	if (s_crossEndCases.empty() || !ScenarioRunner::WorldCatchUpActive()) return;
 	const auto config = ScenarioRunner::GetLockstepMatchConfig();
 	if (!config) return;
@@ -6608,7 +6620,8 @@ void RunGameLoop() {
 				std::vector<ControllerFrame> queued; std::vector<long> actors;
 				if (ScenarioRunner::PeekLockstepLocalControllerFrames(target, queued))
 					for (const auto& input: queued) actors.push_back(static_cast<long>(input.actorUniqueID));
-				g_MetricsCollector.ConfirmProducedControllers(ScenarioRunner::GetLockstepRoundId(), simTick, target, actors, ScenarioRunner::WorldCatchUpPriorInputThrough());
+				const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+				g_MetricsCollector.ConfirmProducedControllers(round, simTick, target, actors, s_crossRestoredInputThrough[round]);
 			}
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (hashThisTick) {
