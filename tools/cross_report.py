@@ -120,7 +120,7 @@ def classify_hold(hold,events,peers):
     if len(matches)!=1: return result
     result.update(matches[0])
     if isinstance(result['capture_us'],(int,float)) and result['capture_us']>result['hold_bound_us']:
-        result.update(classification='capture-induced',reason='Inventory engine rows 374/395/403: synchronous full-state capture exceeds the adopted slow-player bound; Source/Main.cpp timing/capture seam and NetLockstep.cpp:5903.')
+        result.update(classification='capture-induced',reason='Inventory engine rows 374/395/403: capture work exceeds the adopted slow-player bound; Source/Main.cpp:7187 timing/capture seam and Source/Network/NetLockstep.cpp:5903.')
     else:
         result['reason']='Capture did not exceed the bound; compute/wait values shown. The record does not identify any further blocking cause.'
     return result
@@ -276,7 +276,7 @@ def requirements(manifest, comparison, metrics):
         34: 'Hold and catch-up ends are wired into the default schedule with peer/round/incarnation-bound phase signals and native end witnesses. Both executed overlaps and the post-migration end are not yet demonstrated; migration awaits the endpoint seam.',
         35: 'Pre-auth/proof/image/tail/activation overlaps await the WAN endpoint fix; queued/cancelled phases never complete recovery.',
         36: 'Capture-announced and writer-pending barriers have RED/GREEN bounded-release tests; migration overlap, archive validity and restarted writer cadence still await a real endpoint-capable arm.',
-        40: 'Initial history uses the configured start frame; settled live authority is read from the public runner report. Private catch-up branch/checkpoint lineage remains unexposed at NetMatchService.h:1305,1599 and NetMatchService.cpp:4534, so restored keys stay UNKNOWN.',
+        40: 'Initial history uses the configured start frame; settled live authority is read from the public runner report. NetMatchService.cpp:7831 omits the private catch-up branch/checkpoint digest (NetMatchService.h:1590,1643), so restored keys stay UNKNOWN.',
         45: 'Checkpoint boot/handover anchors and survivor segment indexing need ScenarioRunner.cpp:2653 and NetMatchService.cpp:3455 outside this lane.',
         50: 'Movement/aim submitted-render measurements are reported; other action/input-sequence stamps require FrameMan.cpp:277,344 outside this lane.',
         51: 'Remote-unit render discontinuities require FrameMan/LocalPrediction records outside this lane; local corrections retain their own labels.',
