@@ -78,6 +78,24 @@ class ReportTests(unittest.TestCase):
             self.assertEqual([row['mismatched_ticks'] for row in compared], [1, 0])
             self.assertEqual(compared[0]['first_mismatches'], [13])
 
+    def test_abandoned_ticks_leave_the_live_hash_comparison_and_nothing_else(self):
+        from tempfile import TemporaryDirectory
+        from feel.retained_resume import compare_live_hashes
+        with TemporaryDirectory() as folder:
+            host, client = Path(folder) / 'host.jsonl', Path(folder) / 'client.jsonl'
+            rows = [dict(tick=tick, sim_gated=str(tick), subsystems={'controller': str(tick)}) for tick in range(1, 21)]
+            host.write_text('\n'.join(map(json.dumps, rows)), encoding='utf-8')
+            offround = [dict(row, sim_gated='held') for row in rows[9:12]]
+            held = rows[:9] + offround + [dict(abandon_from=10)] + rows[9:]
+            client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
+            compared = compare_live_hashes(host, client, 1)
+            self.assertEqual(sum(row['compared_ticks'] for row in compared), 20)
+            self.assertEqual(sum(row['mismatched_ticks'] for row in compared), 0)
+            # A tick before the abandoned frame is still compared.
+            held[3] = dict(held[3], sim_gated='different')
+            client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
+            self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
+
     def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
