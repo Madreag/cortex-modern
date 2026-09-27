@@ -4,6 +4,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import zipfile
@@ -249,6 +250,7 @@ class CaptureSealer:
     those captures remain raw until the owning process exits.
     """
     def __init__(self, own):
+        self.announced_own=Path(os.path.abspath(own))
         self.own=Path(own).resolve()
         self.log=self.own/'engine/stdout.log'
         self.offset=0; self.pending=b''; self.contexts={}; self.sealed=set()
@@ -262,15 +264,20 @@ class CaptureSealer:
             line=raw.decode('utf-8',errors='replace').strip()
             if match:=re.match(r'^\[fullstate-context\] tick=(\d+) round=(\d+) label=(\S+) path=(.+)$',line):
                 key=match.group(1,2,3)
-                path=Path(match[4]).resolve()/match[1]
-                if not path.is_relative_to(self.own/'fullstate'):
-                    raise ValueError('capture context leaves its owning instance')
+                # Announcements precede directory creation. Resolve physical
+                # ownership only after the matching writer-complete scope.
+                path=Path(os.path.abspath(match[4]))/match[1]
+                if not path.is_relative_to(self.announced_own/'fullstate'):
+                    raise ValueError(f'capture context leaves its owning instance: {path}; owner={self.announced_own}')
                 self.contexts.setdefault(key,[]).append(path)
             elif match:=re.match(r'^\[fullstate-scope\] tick=(\d+) round=(\d+) label=(\S+) per_peer=',line):
                 paths=self.contexts.get(match.group(1,2,3),[])
                 if len(paths)!=1 or paths[0] in self.sealed: continue
                 path=paths[0]
                 if not path.is_dir(): continue
+                path=path.resolve(strict=True)
+                if not path.is_relative_to(self.own/'fullstate'):
+                    raise ValueError(f'completed capture leaves its owning instance: {path}; owner={self.own}')
                 for section in sorted(path.glob('*.txt')):
                     compress_closed_record(section,self.own)
                 self.sealed.add(path)
