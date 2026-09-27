@@ -31,6 +31,7 @@
 #include "SLBackground.h"
 #include "Scene.h"
 #include "System.h"
+#include "MetricsCollector.h"
 
 #include "RenderTarget.h"
 
@@ -62,6 +63,9 @@
 #include <future>
 #include <string_view>
 #include <thread>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
 #include <vector>
 #include <deque>
 #include <memory>
@@ -134,9 +138,67 @@ namespace {
 		uLong m_CRC = 0;
 		bool m_Trim = true;
 	};
+	// Compresses, seals and retires the chunks on its own thread, so the frame only queues finished lines.
+	class AsyncFeelStream {
+	public:
+		~AsyncFeelStream() { Stop(); }
+		bool Open(const std::filesystem::path& directory) {
+			if (!m_Stream.Open(directory)) return false;
+			m_Thread = std::thread([this] { Run(); });
+			return true;
+		}
+		/// False once a queued line failed to reach its chunk; the failure shows on the next write.
+		bool Write(std::string text) {
+			if (m_Failed.load()) return false;
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_Queue.push_back(std::move(text));
+			}
+			m_Wake.notify_one();
+			return true;
+		}
+		bool Enabled() const { return m_Thread.joinable() && !m_Failed.load(); }
+		bool Close() {
+			if (!m_Thread.joinable()) return false;
+			Stop();
+			return !m_Failed.load() && m_Stream.Close();
+		}
+	private:
+		void Stop() {
+			if (!m_Thread.joinable()) return;
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_Stopping = true;
+			}
+			m_Wake.notify_one();
+			m_Thread.join();
+		}
+		void Run() {
+			std::unique_lock<std::mutex> lock(m_Mutex);
+			while (true) {
+				m_Wake.wait(lock, [this] { return m_Stopping || !m_Queue.empty(); });
+				std::deque<std::string> batch;
+				batch.swap(m_Queue);
+				const bool stopping = m_Stopping;
+				lock.unlock();
+				for (const std::string& text: batch) {
+					if (!m_Failed.load() && !m_Stream.Write(text)) m_Failed.store(true);
+				}
+				lock.lock();
+				if (stopping && m_Queue.empty()) return;
+			}
+		}
+		FeelStream m_Stream;
+		std::thread m_Thread;
+		std::mutex m_Mutex;
+		std::condition_variable m_Wake;
+		std::deque<std::string> m_Queue;
+		bool m_Stopping = false;
+		std::atomic<bool> m_Failed{false};
+	};
 	struct FeelState {
 		AsyncLineWriter out; //!< Written every loop pass, so the disk never holds the loop.
-		std::unique_ptr<FeelStream> bounded; //!< Cross runs only: gzip chunks retained under a bound.
+		std::unique_ptr<AsyncFeelStream> bounded; //!< Cross runs only: gzip chunks retained under a bound.
 		bool useBounded = false;
 		std::string directory;
 		std::vector<FeelJson> pending;
@@ -269,7 +331,7 @@ bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
 	if (std::filesystem::exists(raw)) return false;
 	s_Feel.useBounded = std::getenv("CC_TEST_CROSS_RECORDS") != nullptr;
 	if (s_Feel.useBounded) {
-		s_Feel.bounded = std::make_unique<FeelStream>();
+		s_Feel.bounded = std::make_unique<AsyncFeelStream>();
 		if (!s_Feel.bounded->Open(path)) return false;
 	}
 	else if (!s_Feel.out.Open(raw.string())) return false;
@@ -428,6 +490,7 @@ void FrameMan::FeelFinish() {
 
 bool RTE::RunCrossPresentationRetentionSelfTest(std::string* error) {
 	const auto directory = std::filesystem::path(System::GetUserdataDirectory()) / "cross-retention-selftest";
+	if (!MetricsCollector::RunEventRotationSelfTest((directory.parent_path() / "cross-event-rotation-selftest").string(), error)) return false;
 	std::filesystem::create_directories(directory);
 	FeelStream stream;
 	if (!stream.Open(directory, 1024, 2, std::getenv("CC_TEST_CROSS_RETENTION_RED") == nullptr)) { *error = "retention writer open"; return false; }
