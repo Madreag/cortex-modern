@@ -119,6 +119,13 @@ def requirements(manifest, comparison, metrics):
 def build_report(root):
     root = Path(root).resolve(); manifest = load(root / 'manifest.json', {})
     live, events, peers, findings, paths = {}, {}, {}, list(manifest.get('driver_findings', [])), {}
+    capabilities = {}
+    for box in manifest['boxes']:
+        box_root = root if box['kind'] == 'windows-local' else root / 'boxes' / box['name']
+        capabilities[box['name']] = load(box_root / 'capabilities.json', {})
+        for leaf in ('payload-error.json', 'seal-error.json'):
+            if error := load(box_root / leaf):
+                findings.append(dict(kind='payload', box=box['name'], reason=error.get('error', str(error))))
     for spec in manifest['specs']:
         name = spec['peer']; first_own = peer_root(root, manifest, spec)
         fragments=sorted(first_own.parent.glob('incarnation-*'),key=lambda p:int(p.name.split('-')[-1])) or [first_own]
@@ -174,6 +181,12 @@ def build_report(root):
             memory_by_incarnation[str(incarnation)]=report.reduce_memory([r for r in samples if r.get('incarnation',0)==incarnation],
                 **manifest['memory'],elapsed_s=fragment_record.get('elapsed_seconds',0))
         memory=memory_by_incarnation[str(int(own.name.split('-')[-1]))]
+        payload_sizes = [r['trace_vector_payload_bytes'] for r in events[name]
+                         if r.get('type') == 'tick_timing' and 'trace_vector_payload_bytes' in r]
+        instrumentation = dict(first_bytes=payload_sizes[0] if payload_sizes else None,
+            last_bytes=payload_sizes[-1] if payload_sizes else None, peak_bytes=max(payload_sizes) if payload_sizes else None,
+            growth_bytes=payload_sizes[-1]-payload_sizes[0] if payload_sizes else None,
+            scope='Measured trace vector and string capacities only; allocator, map nodes and other buffers excluded. No subtraction from resident/private totals.')
         trace=load(own/'trace.json',{})
         completion=trace.get('runs',[{}])[-1].get('strings',{}) if trace.get('runs') else {}
         peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=spec['incarnation'], frames=len(live[name]),
@@ -186,7 +199,7 @@ def build_report(root):
             frame_interval_ms=report.distribution([r['interval_ms'] for r in frames if r.get('interval_ms') is not None]),
             frame_count=len(frames), frames_over_50_ms=[r['frame'] for r in frames if max(r['draw_ms'], r['present_ms'], r.get('interval_ms') or 0) > 50],
             effective_hz=(len(frames)-1)*1000/(frames[-1]['present_end_ms']-frames[0]['present_end_ms']) if len(frames)>1 and frames[-1]['present_end_ms']>frames[0]['present_end_ms'] else None,
-            memory=memory, memory_by_incarnation=memory_by_incarnation, native_completion=completion,
+            memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, native_completion=completion,
             fragments=[str(fragment.relative_to(root)) for fragment in fragments], samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:894 detailed status is not a byte counter.',
@@ -224,6 +237,10 @@ def build_report(root):
                   adopted_peer_count=all(p['configs'] and all(c['peer_count']==len(manifest['instances']) for c in p['configs']) for p in peers.values()),
                   faults_applied=faults_applied, bounded_recovery=all(r['passed'] for r in recoveries),
                   quiet_feel=all(not p['feel_gated'] or p['feel_pass'] for p in peers.values()),
+                  binary_admission_limit=all(c.get('peer_limit', 0) >= len(manifest['instances']) for c in capabilities.values()),
+                  record_integrity=all(any(r.get('type') == 'tick_timing' for r in values) and
+                      not any(r.get('type') == 'record_loss' or (r.get('type') == 'tick_timing' and not r.get('partition_valid')) for r in values)
+                      for values in events.values()),
                   no_engine_findings=not findings)
     if cadence: checks['shared_fullstate']=fullstate['passed']
     if manifest['scenario'] != 'match':
@@ -234,7 +251,7 @@ def build_report(root):
         peer['frames']=comparison['peers'][name]['present']
     result = dict(version=1, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,
                   peers=peers, comparison=comparison, fullstate=fullstate, fullstate_records=fullstate_documents,
-                  coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts,
+                  coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities,
                   findings=findings, requirements=requirements(manifest, comparison, peers))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
@@ -260,12 +277,15 @@ def chart(result, events):
     maxima = [r['compute_us']/1000 for rows_ in events.values() for r in rows_ if r.get('type') == 'tick_timing']
     ceiling = max(1,max(maxima, default=1))
     for index, (peer, rows_) in enumerate(events.items()):
-        timed = [r for r in rows_ if r.get('type') == 'tick_timing']
-        stride = max(1, len(timed)//400)
-        selected = timed[::stride]
-        points = ' '.join(f'{20+min(r["tick"],budget)/budget*720:.1f},{150-min(r["compute_us"]/1000/ceiling,1)*125:.1f}' for r in selected)
-        parts.append(f'<polyline fill="none" stroke="{colors[index%len(colors)]}" stroke-width="1.5" points="{points}"><title>{escape(peer)}</title></polyline>')
-    parts.append(f'<text x="20" y="175" fill="#b9c5d3" font-size="12">0 ticks · shared committed-tick axis · {budget:,} ticks</text></svg>')
+        segments = defaultdict(list)
+        for row in rows_:
+            if row.get('type') == 'tick_timing' and row.get('phase') == 'live' and not row.get('paused'):
+                segments[(row.get('source_round'),row.get('execution'),row.get('incarnation'))].append(row)
+        for identity,timed in segments.items():
+            selected = timed[::max(1,len(timed)//400)]
+            points = ' '.join(f'{20+min(r.get("budget_tick",r["tick"]),budget)/budget*720:.1f},{150-min(r["compute_us"]/1000/ceiling,1)*125:.1f}' for r in selected)
+            parts.append(f'<polyline fill="none" stroke="{colors[index%len(colors)]}" stroke-width="1.5" points="{points}"><title>{escape(peer)} {escape(identity)}</title></polyline>')
+    parts.append(f'<text x="20" y="175" fill="#b9c5d3" font-size="12">0 · unique gameplay budget (separate round segments) · {budget:,} ticks</text></svg>')
     return ''.join(parts)
 
 
@@ -287,10 +307,24 @@ def write_page(root, result, events):
     parts.append('</div><h2>Tick compute time</h2>' + chart(result, events) + '<p>Samples measure non-overlapping compute, wait and capture durations. Cross-box wall-clock calibration is NOT COVERED; ticks align canonical events, and local clocks remain separate.</p>')
     parts.append('<h2>Gates</h2><ul>' + ''.join(f'<li class="{"pass" if ok else "fail"}">{escape(name)}: {"PASS" if ok else "FAIL"}</li>' for name,ok in result['checks'].items()) + '</ul>')
     parts.append('<h2>Coverage</h2>')
+    parts.append('<div style="overflow-x:auto"><table><thead><tr><th>Coverage / minimum</th>' +
+        ''.join(f'<th>{escape(b["name"])}</th>' for b in manifest['boxes']) + '</tr></thead><tbody>')
+    for row in result['coverage']:
+        parts.append(f'<tr><th>{escape(row["item"])}<br>{row["status"]}<br>{row["minimum"]} · {escape(row["unit"])}</th>')
+        for box in manifest['boxes']:
+            values = {name: row['peers'][name] for name,p in result['peers'].items() if p['box'] == box['name']}
+            parts.append('<td><pre>' + escape(json.dumps(values,indent=2)) + '</pre></td>')
+        parts.append('</tr>')
+    parts.append('</tbody></table></div>')
     for row in result['coverage']:
         parts.append(f'<details><summary>{escape(row["item"])} — {row["status"]}</summary><p>{escape(row["unit"])}; minimum {row["minimum"]}. {escape(row["reason"])}</p><pre>{escape(json.dumps(row["peers"],indent=2))}</pre></details>')
     parts.append('<h2>Faults and recovery</h2><p>Queued admission and cancelled reclaim are phase evidence, never completed recovery. The chaos seed fixes choices only.</p><pre>' + escape(json.dumps(dict(seed=manifest['chaos_seed'], schedule=manifest['faults'], applied=result['fault_receipts'], recoveries=result['recoveries']),indent=2)) + '</pre>')
     parts.append('<h2>Wire egress</h2><p>NOT COVERED. Transport wire counters are not exposed at an owned seam. Application bytes and host relayed bytes are not wire egress; no upstream curve is fabricated.</p>')
+    parts.append('<h2>Admission limits reported by each binary</h2><pre>' + escape(json.dumps(result['capabilities'],indent=2)) + '</pre>')
+    parts.append('<h2>Memory and measured instrumentation</h2><p>Finite samples judge the declared bounds; they do not prove the absence of leaks. Resident/working-set and virtual/private bytes remain separate.</p>')
+    for name,peer in result['peers'].items():
+        parts.append(f'<details><summary>{escape(name)} — raw samples and per-incarnation judgment</summary><pre>' + escape(json.dumps(dict(
+            samples=peer['samples'],bounds=peer['memory_by_incarnation'],instrumentation=peer['instrumentation']),indent=2)) + '</pre></details>')
     parts.append('<h2>Full-state scope and cadence</h2><p>Every listed Shared section is compared. Native PerPeer exclusions are retained below; their behavioral restoration remains a separate requirement.</p><pre>'+escape(json.dumps(dict(verdict=result['fullstate'],records=result['fullstate_records']),indent=2))+'</pre>')
     parts.append('<h2>Engine and driver findings</h2>')
     for finding in result['findings']:

@@ -63,6 +63,7 @@
 
 namespace RTE {
 	bool RunCrossBotRangeSelfTest(std::string* error);
+	bool RunCrossRosterSelfTest(std::string* error);
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 
 	namespace {
@@ -13817,6 +13818,7 @@ namespace RTE {
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
+		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
 		row(&TestCrossRecordKinds, "action_record_fields");
 		row(&TestCrossTickTiming, "exclusive_tick_timing");
 		row(&TestCrossTimedTransport, "timed_transport_reset");

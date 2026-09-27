@@ -415,6 +415,27 @@ def seal_evidence(own):
             compress_closed_record(path, own)
 
 
+def read_capabilities(box, root):
+    from run_sim_test import make_run
+    assert_box_guard(box)
+    if box['kind'] == 'posix-ssh':
+        os.environ['CCCP_TEST_BINARY'] = box['executable']
+        os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform == 'darwin' else 'off'
+    run = make_run(Path(box['tree']), ['-net-cross-capabilities'], root / 'capabilities', timeout=30,
+                   env={'CCCP_HEADLESS': '1'})
+    try:
+        record = run.start().finish()
+        if record.get('exit_code') != 0: raise RuntimeError('binary capability query failed')
+        with (root / 'capabilities/stdout.log').open(encoding='utf-8-sig', errors='replace') as stream:
+            values = [json.loads(line.split('] ', 1)[1]) for line in stream if line.startswith('[cross-capabilities] ')]
+        if len(values) != 1 or values[0].get('schema') != 1 or not values[0].get('peer_limit'):
+            raise RuntimeError('binary did not produce one valid capability record')
+        write_json(root / 'capabilities.json', dict(**values[0], executable_sha256=digest_file(box['executable'])))
+        return values[0]
+    finally:
+        run.close()
+
+
 def run_payload(path):
     from run_sim_test import make_run
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
@@ -426,6 +447,11 @@ def run_payload(path):
         assert_box_guard(box)
         if box['kind'] == 'windows-local' and len(payload['specs']) != 1:
             raise RuntimeError('this lane permits only one local engine at a time; dry-run supports larger manifests')
+        capabilities = read_capabilities(box, root)
+        requested = payload['specs'][0]['flags']
+        requested = int(requested[requested.index('-net-match-peers') + 1])
+        if requested > capabilities['peer_limit']:
+            raise RuntimeError(f'admission refused by build capability: requested {requested} peers, limit {capabilities["peer_limit"]}; Main clamps its legacy argument, so the driver refuses to silently shrink the roster')
         for spec in payload['specs']:
             if spec['role'] != 'host':
                 session_path = root / 'session.json'
