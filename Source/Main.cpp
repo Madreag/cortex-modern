@@ -902,7 +902,8 @@ static bool s_drawStallFired = false;
 static long long s_lateScriptStallTick = 0; //!< A late global script that blocks the main thread at this tick, for the plane's window over it.
 static int s_lateScriptStallMs = 0;
 static bool s_lateScriptStallFired = false;
-struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; };
+// An each-round stall fires once in every round of a rematch chain, keyed by the rematch count.
+struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; bool eachRound = false; int firedRound = -1; };
 static std::vector<NetLiveStall> s_netLiveStalls;
 // Test lever: how many ticks the e2e synced pause lasts before its unpause.
 static uint64_t s_netTestPauseTicks = 180;
@@ -1702,11 +1703,15 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			++i;
 			continue;
 		}
-		if (currentArg == "-net-test-live-stall" && i + 1 < argCount) {
+		if ((currentArg == "-net-test-live-stall" || currentArg == "-net-test-live-stall-each-round") && i + 1 < argCount) {
 			const std::string spec = argValue[++i];
 			const size_t separator = spec.find(':');
 			NetLiveStall stall{};
-			if (separator != std::string::npos) {
+			stall.eachRound = currentArg == "-net-test-live-stall-each-round";
+			const char* headless = std::getenv("CCCP_HEADLESS");
+			if (stall.eachRound && (headless == nullptr || std::string(headless) != "1")) {
+				System::PrintDiagnosticLine("[net-test] -net-test-live-stall-each-round requires CCCP_HEADLESS=1: ignored");
+			} else if (separator != std::string::npos) {
 				const auto tick = std::from_chars(spec.data(), spec.data() + separator, stall.tick);
 				const auto duration = std::from_chars(spec.data() + separator + 1, spec.data() + spec.size(), stall.milliseconds);
 				if (tick.ec == std::errc{} && tick.ptr == spec.data() + separator && duration.ec == std::errc{} &&
@@ -6280,12 +6285,17 @@ void RunGameLoop() {
 			System::PrintDiagnosticLine("[selftest] frame stall again done plane_ticks=" + std::to_string(NetLockstepPlane::Ticks() - planeTicksBefore));
 		}
 		if (ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
-			for (auto& stall: s_netLiveStalls) if (!stall.fired && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= stall.tick) {
-				const uint64_t activation = ScenarioRunner::WorldCatchUpActivationTick();
-				if (s_netLiveStallActivation && activation <= *s_netLiveStallActivation) break;
-				stall.fired = true;
-				s_netLiveStallActivation = activation;
-				System::PrintDiagnosticLine("[net-test] live stall frame=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(stall.milliseconds));
+			for (auto& stall: s_netLiveStalls) if ((stall.eachRound ? stall.firedRound != s_netMatchServiceE2ERematches : !stall.fired) && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= stall.tick) {
+				if (stall.eachRound) {
+					stall.firedRound = s_netMatchServiceE2ERematches;
+				} else {
+					const uint64_t activation = ScenarioRunner::WorldCatchUpActivationTick();
+					if (s_netLiveStallActivation && activation <= *s_netLiveStallActivation) break;
+					stall.fired = true;
+					s_netLiveStallActivation = activation;
+				}
+				System::PrintDiagnosticLine("[net-test] live stall frame=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(stall.milliseconds) +
+				                            (stall.eachRound ? " round_index=" + std::to_string(s_netMatchServiceE2ERematches) : std::string()));
 				{
 					NetLockstepPlane::Window planeWindow;
 					std::this_thread::sleep_for(std::chrono::milliseconds(stall.milliseconds));
