@@ -44,6 +44,38 @@ inline const char* ContinuationName(ASMFunction function) {
 	return nullptr;
 }
 
+/// A pairs loop keeps its place in its control slot as a traversal index, the next array slot or hash node of its
+/// table to scan. The value is typed as a light userdata but is no script value.
+inline bool IsTraversalIndex(const TValue& value) { return value.u32.hi == LJ_KEYINDEX; }
+
+/// Reads the running heap in place, where a capture reads its frozen copy.
+struct LiveHeap {
+	template<class T> T Read(const T* address) const { return *address; }
+};
+
+/// The key a traversal at index returns next, or false when nothing is left to return. The key names the loop's
+/// place whatever the table's layout, which a restore rebuilds in its own order.
+template<class Heap> bool TraversalNextKey(const Heap& heap, const GCtab* source, uint32_t index, TValue& key) {
+	const GCtab table = heap.template Read<GCtab>(source);
+	const TValue* array = tvref(table.array);
+	for (; index < table.asize; ++index) {
+		const TValue slot = heap.template Read<TValue>(array + index);
+		if (!tvisnil(&slot)) {
+			setnumV(&key, static_cast<lua_Number>(index));
+			return true;
+		}
+	}
+	const Node* nodes = noderef(table.node);
+	for (uint32_t node = index - table.asize; node <= table.hmask; ++node) {
+		const Node entry = heap.template Read<Node>(nodes + node);
+		if (!tvisnil(&entry.val)) {
+			key = entry.key;
+			return true;
+		}
+	}
+	return false;
+}
+
 template<class Heap> const char* Status(const Heap& heap, const lua_State* original, const lua_State& thread) {
 	const TValue* stack = tvref(thread.stack);
 	if (original == heap.State()) return "running";
@@ -177,6 +209,10 @@ template<class View> int PushThreadDescription(lua_State* destination, View& vie
 	const int links = lua_gettop(destination);
 	lua_newtable(destination);
 	const int conts = lua_gettop(destination);
+	lua_newtable(destination);
+	const int traversals = lua_gettop(destination);
+	lua_newtable(destination);
+	const int traversalKeys = lua_gettop(destination);
 	for (const auto& link: resolved) {
 		lua_newtable(destination);
 		if (link.type >= 0) {
@@ -207,9 +243,24 @@ template<class View> int PushThreadDescription(lua_State* destination, View& vie
 		if (kind[index] != 0) continue;
 		const TValue value = heap.template Read<TValue>(stack + index);
 		if (tvisnil(&value)) continue;
+		if (IsTraversalIndex(value)) {
+			// A loop's place stands beside its table; one left in a dead register past its loop is never read again.
+			const TValue state = heap.template Read<TValue>(stack + index - 1);
+			if (!tvistab(&state)) continue;
+			TValue key;
+			if (TraversalNextKey(heap, tabV(&state), value.u32.lo, key)) {
+				view.Push(destination, key);
+				lua_rawseti(destination, traversalKeys, static_cast<int>(remap(index)));
+			}
+			lua_pushboolean(destination, 1);
+			lua_rawseti(destination, traversals, static_cast<int>(remap(index)));
+			continue;
+		}
 		view.Push(destination, value);
 		lua_rawseti(destination, slots, static_cast<int>(remap(index)));
 	}
+	lua_setfield(destination, description, "traversalKeys");
+	lua_setfield(destination, description, "traversals");
 	lua_setfield(destination, description, "conts");
 	lua_setfield(destination, description, "links");
 	lua_setfield(destination, description, "slots");
