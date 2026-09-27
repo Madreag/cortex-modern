@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "boxes": [
+    {
+      "name": "EROL-PC", "kind": "windows-local",
+      "tree": "D:/Projects/alias-walk", "executable": "D:/Projects/alias-walk/Cortex Command.exe",
+      "runner": "tools/win32_test_runner.py via run_sim_test.make_run",
+      "ports": [49900, 49919], "directory_port": 49918,
+      "sampler": "engine-process-handle", "scratch": "D:/mx/astra-cross-peers-build-20260926",
+      "python": "python"
+    },
+    {
+      "name": "EDITH", "kind": "windows-task", "ssh": "edith",
+      "tree": "D:/Projects/takeover-build", "executable": "D:/Projects/takeover-build/Cortex Command.exe",
+      "runner": "cortex-session1", "task_script": "D:/mx/session1/run.ps1",
+      "ports": [49900, 49919], "directory_port": 49985,
+      "sampler": "engine-process-handle", "scratch": "D:/mx/astra-cross-peers-build-20260926",
+      "python": "python"
+    },
+    {
+      "name": "Mac", "kind": "posix-ssh", "ssh": "Erol-Mac",
+      "tree": "/Users/erol/cortex-workers/astra-cross-peers-build-20260926/repo",
+      "executable": "/Users/erol/cortex-workers/astra-cross-peers-build-20260926/repo/build-gcc/CortexCommand",
+      "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
+      "ports": [49900, 49919], "directory_port": 49918,
+      "sampler": "engine-pid-ps", "scratch": "/Users/erol/cortex-workers/astra-cross-peers-build-20260926",
+      "python": "/opt/homebrew/bin/python3",
+      "guard_file": "/Users/erol/cortex-workers/inventory-confirming-6-20260926/exit.txt"
+    }
+  ],
+  "instances": [
+    {"name": "erol", "box": "EROL-PC", "port_block": [49900, 49904], "seat": "player"},
+    {"name": "edith", "box": "EDITH", "port_block": [49900, 49904], "seat": "player"},
+    {"name": "mac", "box": "Mac", "port_block": [49900, 49904], "seat": "player"}
+  ]
+}
