@@ -16,6 +16,8 @@
 namespace RTE {
 
 	using json = nlohmann::json;
+	bool CrossCaptureBarrier(const json&, const std::string&, const std::string&, uint64_t, uint64_t) { return false; }
+	void CrossCaptureBarrierFromEnvironment(const char*, uint64_t, uint64_t) {}
 	struct MetricsCollector::EventStream {
 		std::ofstream output;
 		std::string path;
