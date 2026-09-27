@@ -383,7 +383,7 @@ def prepare_instance(spec, pin, box, runtime=None):
                                               scene=spec['scene'], scene_module='Base.rte', **teams),
                                           dict(difficulty=100, ai_skill=100, fog=True, scene='Ketanot Hills', scene_module='Base.rte', **teams)])
     write_json(own / 'bot.json', [dict(round=0, **{'from': 3601, 'to': spec['ticks']})] if spec['ticks'] >= 3601 else [])
-    write_json(own / 'probe.json', dict(schema=1, timeout_ms=120000, activate_at_tick=30, repeat_rounds=True, steps=[
+    write_json(own / 'probe.json', dict(schema=1, timeout_ms=120000, activate_at_tick=1, activate_phase='Running', repeat_rounds=True, steps=[
         dict(op='assert_window', equals=dict(width=960, height=540)),
         dict(op='assert_buy', input_player=0), dict(op='assert_pie', input_player=0), dict(op='finish')]))
     if box['kind'] == 'posix-ssh':

@@ -61,6 +61,12 @@ class CrossDriverTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'host removal'):
                 cross_peers.make_plan(cross_peers.parse_args(['--scenario','soak','--host',host]))
 
+    def test_new_round_hash_does_not_prove_changed_settings(self):
+        rows=[dict(config_hash='first',difficulty=50,fog=False),dict(config_hash='next',difficulty=50,fog=False)]
+        self.assertFalse(cross_report.changed_settings(rows))
+        rows[1]['fog']=True
+        self.assertTrue(cross_report.changed_settings(rows))
+
     def test_faults_follow_the_declared_restart_incarnation(self):
         plan=cross_peers.make_plan(cross_peers.parse_args(['--scenario','soak']))
         mac=[row for row in plan['faults'] if row['peer']=='mac']
@@ -119,7 +125,10 @@ class CrossDriverTests(unittest.TestCase):
                     instance=spec['peer'],execution='one',incarnation=0,phase='live',wall_ms=t*20,gameplay_tick=True,
                     effective_start_frame=1,sim_gated='a'*64,subsystems={key:'b'*64 for key in cross_report.REQUIRED_SUBSYSTEMS}) for t in range(1,5)]
                 (own/'live.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in live))
-                (own/'events.jsonl').write_text(json.dumps(dict(type='adopted_config',peer_count=3,sim_tick_ms=1000/60))+'\n'+
+                config=dict(type='adopted_config',peer_count=3,sim_tick_ms=1000/60,difficulty=50,
+                    players=[dict(peer=p+1,team=p,human=True) for p in range(3)]+[dict(peer=0,team=3,human=False)],
+                    config=dict(mode='pvpve',activity_preset='Multi Box Combat',scene_name='Grasslands',rules=dict(teams=[dict(ai_skill=50)]*4)))
+                (own/'events.jsonl').write_text(json.dumps(config)+'\n'+
                     ''.join(json.dumps(dict(**row,type='tick_timing',compute_us=10,capture_us=0,partition_valid=True))+'\n' for row in live))
                 (own/'engine/stdout.log').write_text(''.join(
                     f'[fullstate-context] tick={t} round=1 label=sample path=/instance/capture-{t}\n'

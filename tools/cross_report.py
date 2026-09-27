@@ -57,6 +57,30 @@ def read_log(path):
             yield from enumerate(stream, 1)
 
 
+def roster_matches(manifest, configs):
+    if not configs: return False
+    humans=sum(p.get('seat','player')=='player' for p in manifest['instances'])
+    roster=manifest['roster']
+    human_teams=[0]*humans if roster=='ai-heavy' else [0,0,1] if roster in ('mixed','allies') else list(range(humans))
+    cpu_teams=[1,2] if roster=='ai-heavy' else [2] if roster in ('mixed','allies') else [humans]
+    mode='coop-pve' if roster=='ai-heavy' else 'pvpve'
+    for config in configs:
+        players=config.get('players',[]); native=config.get('config',{})
+        if sorted(p.get('team',-1) for p in players if p.get('human'))!=human_teams or \
+           sorted(p.get('team',-1) for p in players if not p.get('human'))!=cpu_teams or \
+           any(p.get('peer')!=0 for p in players if not p.get('human')) or \
+           native.get('mode')!=mode or native.get('activity_preset')!='Multi Box Combat': return False
+    skill=manifest['specs'][0]['initial_skill']; initial=configs[0]
+    teams=initial.get('config',{}).get('rules',{}).get('teams',[])
+    return initial.get('difficulty')==skill and len(teams)==4 and all(t.get('ai_skill')==skill for t in teams) and \
+           initial.get('config',{}).get('scene_name')==manifest['scene']
+
+
+def changed_settings(configs):
+    return len({(c.get('difficulty'),c.get('fog'),c.get('config',{}).get('scene_name'),
+        tuple(t.get('ai_skill') for t in c.get('config',{}).get('rules',{}).get('teams',[]))) for c in configs})>1
+
+
 def coverage(events, peers, manifest):
     definitions = [
         ('movement', 'Movement, jetpack, climb and impact', [], 5, 'each kind per originating seat per ten minutes', 'Movement, climb and impact success hooks and obstacle fixtures are incomplete.'),
@@ -251,6 +275,7 @@ def build_report(root):
                   zero_unscheduled_holds=holds == 0, native_completion=all(p['record'].get('exit_code') == 0 and
                       not p['record'].get('timed_out') and p['native'].get('exit_code') == 0 and p['native_completion'].get('completion') == 'completed' for p in peers.values()),
                   adopted_peer_count=all(p['configs'] and all(c['peer_count']==len(manifest['instances']) for c in p['configs']) for p in peers.values()),
+                  adopted_roster=all(roster_matches(manifest,p['configs']) for p in peers.values()),
                   faults_applied=faults_applied, bounded_recovery=all(r['passed'] for r in recoveries),
                   native_desync_checks=all(p['native'].get('desync_check', {}).get('mismatches') == 0 and
                       p['native'].get('desync_check', {}).get('compares', 0) > 0 and
@@ -272,7 +297,7 @@ def build_report(root):
         endings = [r for values in events.values() for r in values if r.get('type')=='elimination_outcome' and r.get('result')=='activity_over']
         checks['forced_end_during_hold'] = any(r.get('overlap_hold_at_end') for r in endings)
         checks['forced_end_during_transfer'] = any(r.get('overlap_transfer_at_end') for r in endings)
-        checks['changed_settings_rematch'] = all(len({(c.get('difficulty'),c.get('fog'),c.get('config_hash')) for c in p['configs']})>1 for p in peers.values())
+        checks['changed_settings_rematch'] = all(changed_settings(p['configs']) for p in peers.values())
         checks['fog_on_match'] = all(any(c.get('fog') for c in p['configs']) for p in peers.values())
         checks['validated_autosave_archives'] = False
     for name,peer in peers.items():
