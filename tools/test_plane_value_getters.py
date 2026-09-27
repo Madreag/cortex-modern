@@ -74,6 +74,12 @@ def main() -> int:
     for path in sorted((args.repo / "Source").rglob("*.cpp")):
         rel = path.relative_to(args.repo).as_posix()
         if "SelfTest" in rel:
+            # A friend test reaches a coordinator's members past every check: only the plane's own check row may let the plane tick one.
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for match in re.finditer(r"NetLockstepPlane::Target\((?!nullptr)", text):
+                owners = re.findall(r"\bbool (Test\w+)\(std::string\* error\) \{", text[:match.start()])
+                if not owners or owners[-1] != "TestPlaneCheckTripsOnAnUnguardedAccess":
+                    failures.append(f"{rel}:{text.count(chr(10), 0, match.start()) + 1} lets the plane tick a coordinator a friend test reaches")
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         if "NetLockstepPlane::Window" in text and rel not in WINDOW_FILES:
