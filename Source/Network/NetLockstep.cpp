@@ -8659,6 +8659,12 @@ namespace RTE {
 		timing.revision = m_NextTimingRevision++;
 		uint64_t applyFrame = std::max(m_Stats.nextFrame, SentInputThrough() + 1) + 1;
 		for (uint8_t peer: m_RemotePeerIds) if (!IsPeerGoneAtFrame(peer, applyFrame)) applyFrame = std::max(applyFrame, m_Stats.peers[peer].reportedNextFrame + 1);
+		// Every AI order the seat's producer sent, and those it sends before it hears of this return, lands before it: the round takes them all.
+		if (const uint8_t producer = AiProducerOf(local); producer != 0 && producer != local) {
+			const auto& stats = m_Stats.peers[producer];
+			const uint64_t transit = m_Config.simTickMs > 0 ? static_cast<uint64_t>(std::ceil(stats.pingMs / m_Config.simTickMs)) : 0;
+			applyFrame = std::max(applyFrame, stats.highestTargetFrame + transit + 1);
+		}
 		timing.applyFrame = timing.cutoffFrame = applyFrame;
 		timing.delayFrames = delay;
 		timing.neutralThroughFrame = applyFrame + delay;
