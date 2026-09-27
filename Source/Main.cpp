@@ -506,9 +506,20 @@ static void BeginCrossTick(uint64_t tick) {
 	const std::string historyKey = std::to_string(config->sessionId) + "/" + std::to_string(CrossRecordRound(round, config->roundId));
 	if (catchup || configuredStart > 1 || s_crossTicketRejoin || (round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
 	priorHost = host; priorCatchup = catchup;
-	s_crossContext = {{"run", CrossEnvironment("CC_TEST_CROSS_RUN")}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
-	    {"process", System::GetProcessID()}, {"execution", CrossEnvironment("CC_TEST_CROSS_EXECUTION") + "/" + std::to_string(execution)},
-	    {"incarnation", std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"))}, {"seat_incarnation", nullptr},
+	// The process's own names and the config's hash change rarely; each tick reads them from here.
+	static const std::string run = CrossEnvironment("CC_TEST_CROSS_RUN"), instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
+	static const std::string executionBase = CrossEnvironment("CC_TEST_CROSS_EXECUTION") + "/";
+	static const unsigned long incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
+	static std::tuple<uint64_t, uint64_t, uint64_t> hashedConfig{0, 0, 0};
+	static std::string configHash;
+	if (const auto key = std::make_tuple(static_cast<uint64_t>(config->sessionId), static_cast<uint64_t>(config->roundId), static_cast<uint64_t>(config->configRevision));
+	    configHash.empty() || key != hashedConfig) {
+		hashedConfig = key;
+		configHash = NetMatchConfigUtil::StoredConfigHash(*config);
+	}
+	s_crossContext = {{"run", run}, {"instance", instance},
+	    {"process", System::GetProcessID()}, {"execution", executionBase + std::to_string(execution)},
+	    {"incarnation", incarnation}, {"seat_incarnation", nullptr},
 	    {"authority_generation", catchup ? nlohmann::json(nullptr) : authority}, {"authority_generation_observed_at_tick", authorityObservedTick},
 	    {"authority_generation_source", "service.runner.lockstep; refreshed on round/host/catch-up transition"},
 	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(CrossRecordRound(round, config->roundId))},
@@ -516,7 +527,7 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"history_branch", CrossHistoryBranch(configuredStart, unmappedHistories.contains(historyKey), ScenarioRunner::GetLockstepResumeFrame())},
 	    {"configured_start_frame", catchup ? nlohmann::json(nullptr) : nlohmann::json(configuredStart)},
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
-	    {"config_hash", NetMatchConfigUtil::StoredConfigHash(*config)}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
+	    {"config_hash", configHash}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
 	    {"phase", CrossTickPhase(catchup, tick, s_crossLastCommitted.contains(round) ? s_crossLastCommitted.at(round) : 0, execution)}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
 	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
 	if (const auto& snapshot = g_NetMatchService.GetSeatPresence().GetSnapshot()) {
