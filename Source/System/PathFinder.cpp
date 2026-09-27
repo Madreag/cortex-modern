@@ -19,6 +19,7 @@
 #include "NetMatchConfig.h"
 #include "ScenarioRunner.h"
 #include "TerrainLayerSnapshot.h"
+#include "AsyncLineWriter.h"
 
 #include "tracy/Tracy.hpp"
 
@@ -109,6 +110,12 @@ namespace {
 	std::atomic<std::thread::id>& HorizonReportOpener() {
 		static std::atomic<std::thread::id> opener;
 		return opener;
+	}
+
+	/// The report is refreshed from the simulation thread, which hands the text to this writer and never touches the disk.
+	AsyncFileRewriter& HorizonReportWriter() {
+		static AsyncFileRewriter writer;
+		return writer;
 	}
 
 	void RecordHorizonWait(int64_t waitUs) {
@@ -1779,16 +1786,12 @@ void PathFinder::WriteHorizonWaitReport() {
 		     << ",\"request_wait_last_us\":" << stats.requestWaitLastUs
 		     << ",\"request_wait_max_us\":" << stats.requestWaitMaxUs << "}\n";
 	}
-	const std::string path = System::GetWorkingDirectory() + "Userdata/horizon_path_grid.json";
-	HorizonReportOpener().store(std::this_thread::get_id());
-	std::ofstream out(path, std::ios::trunc);
-	if (!out) {
-		return;
-	}
-	out << json.str();
+	HorizonReportWriter().Rewrite(System::GetWorkingDirectory() + "Userdata/horizon_path_grid.json", json.str(), &HorizonReportOpener());
 }
 
-void PathFinder::FlushHorizonWaitReport() {}
+void PathFinder::FlushHorizonWaitReport() {
+	HorizonReportWriter().Flush();
+}
 
 void PathFinder::TestInstallGrid(int width, int height, int nodeDimension, const Material* fill) {
 	WaitForPathingRequests();
