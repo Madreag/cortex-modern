@@ -940,18 +940,11 @@ static std::string ResyncSaveName() {
 		NetLockstepPlane::Gap plane("admission wait");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_IsHost || !m_Coordinator) return false;
-		if (m_Session && m_Session->GetHandshakingPeerCount() > 0) return true;
-		// A held seat whose player is still connected is catching up to its return; one whose player is gone is not coming in yet.
-		if (m_Session) {
-			for (const auto& [seat, transport]: m_Coordinator->RemoteTransports()) {
-				if (!m_Coordinator->IsSeatHeldForReclaim(seat)) continue;
-				for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers())
-					if (peer.transportPeerId == transport) return true;
-			}
-		}
+		// A seat the AI holds for its player is coming back until it is taken back or released, its link up or not.
+		if (m_Coordinator->AnyHeldAISeat() || (m_Session && m_Session->GetHandshakingPeerCount() > 0)) return true;
 		return std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [frame](const auto& session) {
 			if (session.phase == NetWorldJoinPhase::Failed || session.phase == NetWorldJoinPhase::Spectating) return false;
-			return session.phase != NetWorldJoinPhase::Active || session.activationTick >= frame;
+			return session.phase != NetWorldJoinPhase::Active || session.activationTick > frame;
 		});
 	}
 
