@@ -710,7 +710,7 @@ def run_plan(plan, root):
                     script = (HERE / 'edith/cross_session.ps1').read_text(encoding='utf-8')
                     for field, value in dict(PYTHON=box['python'], DRIVER=box['tree'] + '/tools/cross_peers.py', ROOT=box_root).items():
                         script = script.replace('{{' + field + '}}', str(value))
-                    local_script = root / 'cross-session.ps1'; local_script.write_text(script, encoding='utf-8')
+                    local_script = root / f'cross-session-{box["name"]}.ps1'; local_script.write_text(script, encoding='utf-8')
                     stage_remote(box, local_script, box['task_script'])
                     command(['ssh', box['ssh'], f'Start-ScheduledTask -TaskName {box["runner"]}'])
                     launched.add(box['name'])
