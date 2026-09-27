@@ -11,6 +11,9 @@
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
+#include "AtomGroup.h"
+#include "PieMenu.h"
+#include "PieSlice.h"
 #include "ContentFile.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
@@ -59,6 +62,7 @@ extern "C" {
 #include "lj_dispatch.h"
 #include "lj_gc.h"
 #include "lj_state.h"
+#include "lj_tab.h"
 }
 
 // lj_dispatch.h drags in windows.h, whose A/W macros rewrite our own GetClassName and LoadBitmap.
@@ -1126,9 +1130,12 @@ function Graph.canonicalThread(desc)
 		for _, cont in ipairs(stitched) do if slot > cont + 1 then shift = shift + 3 end end
 		return slot - shift
 	end
-	local out = { status = desc.status, first = desc.first, base = remap(desc.base), top = remap(desc.top), slots = {}, links = {}, conts = {} }
+	local out = { status = desc.status, first = desc.first, base = remap(desc.base), top = remap(desc.top), slots = {}, links = {}, conts = {}, traversals = {}, traversalKeys = {} }
 	for index, value in pairs(desc.slots) do
 		if not dropped(index) then out.slots[remap(index)] = value end
+	end
+	for index in pairs(desc.traversals or {}) do
+		if not dropped(index) then out.traversals[remap(index)], out.traversalKeys[remap(index)] = true, desc.traversalKeys[index] end
 	end
 	for index, link in pairs(desc.links) do
 		local callee = nil
@@ -1760,9 +1767,15 @@ local function visitThread(value, ctx)
 	local entries = {}
 	for i = desc.first, desc.top - 1 do
 		local link, cont = desc.links[i], desc.conts[i]
+		-- A pairs loop's place is written as the key it returns next; the frozen codec names it, the live one hands it over raw.
+		local traversal, nextKey = desc.traversals and desc.traversals[i], nil
+		if traversal then nextKey = desc.traversalKeys[i]
+		elseif _ScriptGraphTraversal and not link and not cont and type(desc.slots[i]) == "userdata" then traversal, nextKey = _ScriptGraphTraversal(desc.slots[i], desc.slots[i - 1]) end
 		if link and link.pcslot then entries[#entries + 1] = "P" .. outputNumber(link.pcslot) .. ":" .. outputNumber(link.pos) .. ";"
 		elseif link then entries[#entries + 1] = "L" .. outputNumber(link.ftsz) .. ";"
 		elseif cont then entries[#entries + 1] = "K" .. stringToken(cont)
+		elseif traversal then entries[#entries + 1] = "X" .. visitAt(nextKey, ctx, (ctx.location or "coroutine") .. ".slot[" .. i .. "].next")
+		elseif traversal == false then entries[#entries + 1] = "Vz;"
 		else entries[#entries + 1] = "V" .. visitAt(desc.slots[i], ctx, (ctx.location or "coroutine") .. ".slot[" .. i .. "]") end
 	end
 	-- A coroutine's stack slots move with no write barrier behind them, so this chunk is never reused.
@@ -2319,6 +2332,7 @@ local function parse(text)
 				elseif c == "L" then node.entries[i] = { kind = "L", ftsz = reader:integer(reader:readUntil(";"), 0) }
 				elseif c == "K" then node.entries[i] = { kind = "K", name = reader:readString() }
 				elseif c == "V" then node.entries[i] = { kind = "V", value = reader:readToken() }
+				elseif c == "X" then node.entries[i] = { kind = "X", value = reader:readToken() }
 				else reader:bad("invalid coroutine slot") end
 			end
 		else reader:bad("unknown node kind '" .. kind .. "'") end
@@ -2754,25 +2768,33 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		end
 	end
 	-- Coroutines are rebuilt slot for slot once every table and function they hold exists.
+	local traversals = {}
 	for _, id in ipairs(ids) do
 		local node = graph.nodes[id]
 		if node.kind == "H" then
 			if not _ScriptGraphThreadRestore then
 				fail("no coroutine codec in this state")
 			else
-				local desc = { status = node.status == "s" and "suspended" or (node.status == "n" and "notstarted" or "dead"), first = node.first, base = node.base, top = node.top, slots = {}, links = {}, conts = {} }
+				local desc = { status = node.status == "s" and "suspended" or (node.status == "n" and "notstarted" or "dead"), first = node.first, base = node.base, top = node.top, slots = {}, links = {}, conts = {}, traversals = {}, traversalKeys = {} }
 				for i, entry in ipairs(node.entries) do
 					local index = node.first + i - 1
 					if entry.kind == "P" then desc.links[index] = { pcslot = entry.pcslot, pos = entry.pos }
 )lua"
 	    R"lua(					elseif entry.kind == "L" then desc.links[index] = { ftsz = entry.ftsz }
 					elseif entry.kind == "K" then desc.conts[index] = entry.name
+					elseif entry.kind == "X" then desc.traversals[index], desc.traversalKeys[index] = true, resolve(entry.value)
 					else desc.slots[index] = resolve(entry.value) end
 				end
 				local canonical, problem = Graph.canonicalThread(desc)
 				if not canonical then fail("a coroutine could not be rebuilt: " .. tostring(problem)) end
 				local thread, message = _ScriptGraphThreadRestore(canonical or desc, objects[id])
-				if thread then objects[id] = thread else fail("a coroutine could not be rebuilt: " .. tostring(message)) end
+				if thread then
+					objects[id] = thread
+					-- A loop's place is an index into its table's layout, so it is set once the tables are filled.
+					for index in pairs((canonical or desc).traversals) do
+						traversals[#traversals + 1] = { thread = thread, slot = index, key = (canonical or desc).traversalKeys[index] }
+					end
+				else fail("a coroutine could not be rebuilt: " .. tostring(message)) end
 			end
 		end
 	end
@@ -2803,6 +2825,10 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 				if key ~= nil then rawset(object, key, resolve(pair[2])) end
 			end
 		end
+	end
+	for _, place in ipairs(traversals) do
+		local ok, message = _ScriptGraphRestoreTraversal(place.thread, place.slot, place.key)
+		if not ok then fail("a coroutine's loop could not be restored: " .. tostring(message)) end
 	end
 	local cellOwners = {}
 	for _, id in ipairs(ids) do
@@ -4438,6 +4464,55 @@ static lua_CFunction ScriptGraphIteratorHook(lua_State* L, int index, const char
 	}
 	lua_settop(L, top);
 	return nullptr;
+}
+
+// (control, table) -> true and the key a pairs loop returns next, true alone once it has none left, false for a loop
+// place whose table is gone (a dead register), or nothing for any other value.
+static int ScriptGraphTraversal(lua_State* L) {
+	if (lua_gettop(L) < 1 || !CheckpointLua::ThreadDetail::IsTraversalIndex(L->base[0])) return 0;
+	if (lua_gettop(L) < 2 || !tvistab(L->base + 1)) {
+		lua_pushboolean(L, 0);
+		return 1;
+	}
+	TValue key;
+	const bool more = CheckpointLua::ThreadDetail::TraversalNextKey(CheckpointLua::ThreadDetail::LiveHeap{}, tabV(L->base + 1), L->base[0].u32.lo, key);
+	lua_pushboolean(L, 1);
+	if (!more) return 1;
+	copyTV(L, L->top, &key);
+	incr_top(L);
+	return 2;
+}
+
+// (coroutine, slot [, key]) -> true, or nil and a message. Puts a pairs loop back at its place in the restored table
+// beside it: at the key it returns next, or past the end when no key is given.
+static int ScriptGraphRestoreTraversal(lua_State* L) {
+	lua_State* co = lua_tothread(L, 1);
+	const lua_Integer slot = lua_tointeger(L, 2);
+	if (!co) {
+		lua_pushnil(L);
+		lua_pushliteral(L, "a loop's place names no coroutine");
+		return 2;
+	}
+	TValue* stack = tvref(co->stack);
+	if (slot < 2 + LJ_FR2 || stack + slot >= co->top || !tvistab(stack + slot - 1)) {
+		lua_pushnil(L);
+		lua_pushliteral(L, "a loop's place has no table beside it");
+		return 2;
+	}
+	GCtab* table = tabV(stack + slot - 1);
+	uint32_t index = table->asize + table->hmask + 1;
+	if (!lua_isnoneornil(L, 3)) {
+		const uint32_t successor = lj_tab_keyindex(table, L->base + 2);
+		if (successor == 0 || successor == ~0u) {
+			lua_pushnil(L);
+			lua_pushliteral(L, "a loop's next key is not in its table");
+			return 2;
+		}
+		index = successor - 1;
+	}
+	stack[slot].u64 = (static_cast<uint64_t>(LJ_KEYINDEX) << 32) | index;
+	lua_pushboolean(L, 1);
+	return 1;
 }
 
 static int ScriptGraphIteratorSnapshot(lua_State* L) {
@@ -6163,6 +6238,10 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_pushcfunction(m_State, ScriptGraphIteratorRewind);
 		lua_setglobal(m_State, "_ScriptGraphIteratorRewind");
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphIteratorSnapshot", ScriptGraphIteratorSnapshot);
+		lua_pushcfunction(m_State, ScriptGraphTraversal);
+		lua_setglobal(m_State, "_ScriptGraphTraversal");
+		lua_pushcfunction(m_State, ScriptGraphRestoreTraversal);
+		lua_setglobal(m_State, "_ScriptGraphRestoreTraversal");
 		lua_pushcfunction(m_State, ScriptGraphIteratorRestore);
 		lua_setglobal(m_State, "_ScriptGraphIteratorRestore");
 		lua_pushcfunction(m_State, ScriptGraphIteratorFromValues);
@@ -8272,6 +8351,68 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		}
 	}
 	{
+		// A pairs loop suspended in its body keeps its place beside its table as a traversal index, as the base AI's
+		// brain search does while it waits for a path. The graph carries the place and the restored loop goes on.
+		const bool planted = RunScriptString(R"lua(
+			local function walk(t) for key in pairs(t) do coroutine.yield(key) end return "done" end
+			local function clearing(t) for key in pairs(t) do t[key] = nil coroutine.yield(key) end return "done" end
+			_F_Traversal = { array = { 11, 12, 13, 14 }, last = { 21, 22 }, hash = { alpha = 1, beta = 2, gamma = 3, delta = 4 } }
+			local walks = { array = coroutine.create(walk), last = coroutine.create(walk), hash = coroutine.create(clearing) }
+			_F_Traversal.walks = walks
+			coroutine.resume(walks.array, _F_Traversal.array)
+			coroutine.resume(walks.last, _F_Traversal.last)
+			coroutine.resume(walks.last)
+			local _, first = coroutine.resume(walks.hash, _F_Traversal.hash)
+			local order, key = {}, next(_F_Traversal.hash, first)
+			_F_Traversal.next = key
+			while key ~= nil do order[#order + 1] = tostring(key) key = next(_F_Traversal.hash, key) end
+			_F_Traversal.hostOrder = table.concat(order, ",") .. ",done"
+		)lua") == 0;
+		const uint64_t serial = luaJIT_state_serial(m_State);
+		std::string live, restored;
+		CheckpointText frozen;
+		std::vector<std::string> problems;
+		const bool captured = planted && SerializeScriptGraph(live, problems) && CaptureScriptGraph(frozen, problems, true);
+		const bool sameText = captured && live == frozen.Text();
+		const bool rebuilt = sameText && RestoreScriptGraph(live, problems) && SerializeScriptGraph(restored, problems);
+		const uint64_t restoredSerial = luaJIT_state_serial(m_State);
+		const bool recaptured = rebuilt && restored == live && restoredSerial == serial;
+		const bool resumed = recaptured && RunScriptString(R"lua(
+			local walks, hash = _F_Traversal.walks, _F_Traversal.hash
+			local expected, key = {}, _F_Traversal.next
+			while key ~= nil do expected[#expected + 1] = tostring(key) key = next(hash, key) end
+			expected[#expected + 1] = "done"
+			local function rest(co)
+				local out = {}
+				repeat
+					local ok, value = coroutine.resume(co)
+					out[#out + 1] = ok and tostring(value) or ("error:" .. tostring(value))
+				until not ok or coroutine.status(co) == "dead"
+				return table.concat(out, ",")
+			end
+			local array, last, keys = rest(walks.array), rest(walks.last), rest(walks.hash)
+			-- The hash loop resumes at the key it recorded and goes on in the restored table's own order.
+			_F_TraversalContinued = array == "2,3,4,done" and last == "done" and keys == table.concat(expected, ",") and expected[1] == tostring(_F_Traversal.next)
+			_F_TraversalResult = string.format("array=%s last=%s hash=%s restored_order=%s host_order=%s host_order_kept=%s", array, last, keys, table.concat(expected, ","),
+				_F_Traversal.hostOrder, tostring(keys == _F_Traversal.hostOrder))
+		)lua") == 0;
+		bool continued = false;
+		std::string detail = "not_resumed";
+		if (resumed) {
+			lua_getglobal(m_State, "_F_TraversalContinued");
+			continued = lua_toboolean(m_State, -1) != 0;
+			lua_getglobal(m_State, "_F_TraversalResult");
+			if (lua_isstring(m_State, -1)) detail = lua_tostring(m_State, -1);
+			lua_pop(m_State, 2);
+		}
+		RunScriptString("_F_Traversal = nil; _F_TraversalContinued = nil; _F_TraversalResult = nil");
+		const bool passed = sameText && recaptured && continued;
+		std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_pairs_loop_suspended_mid_traversal_restores_and_continues captured=" << captured << " live_equals_frozen=" << sameText
+		          << " recapture_equal=" << recaptured << " serial=" << serial << "/" << restoredSerial << " bytes=" << live.size() << " " << detail << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] pairs traversal: " << problem << std::endl;
+		checkpointValues = passed && checkpointValues;
+	}
+	{
 		// A capture of one state alone must leave the other states' recorded tables and dirty roots in place.
 		auto& states = g_LuaMan.GetThreadedScriptStates();
 		if (states.empty()) {
@@ -8978,6 +9119,43 @@ end
 		g_UInputMan.LoadCommittedSeats(before);
 		std::cout << "[script-graph-selftest] " << (carried ? "PASS" : "FAIL") << " committed_seats_travel_in_the_runtime_globals restored=" << restored << " carried=" << carried << std::endl;
 		checkpointValues = carried && checkpointValues;
+	}
+	checkpointValues = ScenarioRunner::RunCommittedSeatHandoffSelfTest() && checkpointValues;
+	{
+		// A group's atoms are its own copies; removing a subgroup or every atom frees them, as each clone of a walking actor does.
+		const int64_t before = Atom::LiveCount();
+		{
+			AtomGroup group;
+			std::vector<Atom*> feet{new Atom(), new Atom()};
+			group.AddAtoms(feet, 7);
+			group.RemoveAtoms(7);
+			group.AddAtoms(feet, 8);
+			group.RemoveAllAtoms();
+			group.AddAtoms(feet, 9);
+			for (Atom* atom: feet) delete atom;
+		}
+		const int64_t after = Atom::LiveCount();
+		std::cout << "[script-graph-selftest] " << (after == before ? "PASS" : "FAIL") << " removed_atoms_are_freed live_before=" << before << " live_after=" << after << std::endl;
+		checkpointValues = after == before && checkpointValues;
+	}
+	{
+		// A slice's copied sub-PieMenu is the slice's own: destroying the copy frees it, as each clone of an actor does.
+		// The pool hands back the count of instances still out when one is returned.
+		auto* pieMenus = const_cast<Entity::ClassInfo*>(Entity::ClassInfo::GetClass("PieMenu"));
+		const auto inUse = [pieMenus] { return pieMenus ? pieMenus->ReturnPoolMemory(pieMenus->GetPoolMemory()) : 0; };
+		const auto* slicePreset = dynamic_cast<const PieSlice*>(g_PresetMan.GetEntityPreset("PieSlice", "Empty Slice"));
+		const auto* menuPreset = dynamic_cast<const PieMenu*>(g_PresetMan.GetEntityPreset("PieMenu", "Empty Pie Menu"));
+		int before = 0, after = -1;
+		if (slicePreset && menuPreset) {
+			std::unique_ptr<PieSlice> source(dynamic_cast<PieSlice*>(slicePreset->Clone()));
+			source->SetSubPieMenu(dynamic_cast<PieMenu*>(menuPreset->Clone()));
+			before = inUse();
+			for (int copy = 0; copy < 3; ++copy) delete dynamic_cast<PieSlice*>(source->Clone());
+			after = inUse();
+		}
+		const bool freed = pieMenus && after == before;
+		std::cout << "[script-graph-selftest] " << (freed ? "PASS" : "FAIL") << " a_copied_slices_sub_pie_menu_is_freed in_use_before=" << before << " in_use_after=" << after << std::endl;
+		checkpointValues = freed && checkpointValues;
 	}
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
 	checkpointValues = System::RunPrintDisciplineSelfTest() && checkpointValues;
@@ -11909,6 +12087,19 @@ void LuaMan::WaitForAsyncGarbageCollection() {
 	m_GarbageCollectionTask.wait();
 	// The collecting threads only unlink; the destructors are ours to run, in state order.
 	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+}
+
+long long LuaMan::GetTotalHeapBytes() {
+	const auto bytes = [](LuaStateWrapper& luaState) {
+		std::lock_guard<std::recursive_mutex> lock(luaState.GetMutex());
+		lua_State* state = luaState.GetLuaState();
+		return static_cast<long long>(lua_gc(state, LUA_GCCOUNT, 0)) * 1024 + lua_gc(state, LUA_GCCOUNTB, 0);
+	};
+	long long total = bytes(m_MasterScriptState);
+	for (LuaStateWrapper& luaState: m_ScriptStates) {
+		total += bytes(luaState);
+	}
+	return total;
 }
 
 void LuaMan::CollectGarbageForCheckpoint() {

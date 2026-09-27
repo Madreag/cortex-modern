@@ -10,6 +10,7 @@
 #include "Reader.h"
 #include "Timer.h"
 
+#include <format>
 #include <iomanip>
 #include <fstream>
 #include <mutex>
@@ -577,6 +578,16 @@ CheckpointText CheckpointCache::CapturePixels(const BITMAP* bitmap) {
 	previous.snapshot = std::move(snapshot);
 	previous.text = std::move(text);
 	return previous.text;
+}
+
+std::string CheckpointCache::Census() const {
+	size_t entries = 0, bytes = 0, retiredBytes = 0;
+	for (const auto& [owner, channels]: m_Entries) {
+		entries += channels.size();
+		for (const auto& [channel, entry]: channels) bytes += entry.text.OwnedBytes();
+	}
+	for (const CheckpointText& text: m_Retired) retiredBytes += text.OwnedBytes();
+	return std::format("entries={} entry_mb={} pixels={} retired={} retired_mb={}", entries, bytes >> 20, m_Pixels.size(), m_Retired.size(), retiredBytes >> 20);
 }
 
 std::vector<CheckpointText> CheckpointCache::RetireUnused() {

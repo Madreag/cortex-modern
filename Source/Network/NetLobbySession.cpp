@@ -56,6 +56,8 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::Start(INetTransport& transport, const NetLobbySessionConfig& config, std::string* error) {
+		m_RoundEndedRecord.reset();
+		m_EventsAfterRoundEnded.clear();
 		m_InputDelaySamples.clear();
 		m_TimingClockMs = 0;
 		if (config.localPeerId == 0) {
@@ -1169,6 +1171,11 @@ namespace RTE {
 	}
 
 	void NetLobbySession::HandleEvent(const NetTransportEvent& event, uint64_t nowMs) {
+		// A seat told its round ended stops here: what follows is the next lobby's, and that lobby reads it.
+		if (m_RoundEndedRecord && event.type == NetTransportEventType::PacketReceived) {
+			m_EventsAfterRoundEnded.push_back(event);
+			return;
+		}
 		switch (event.type) {
 			case NetTransportEventType::PeerConnected:
 				break;
@@ -1268,6 +1275,17 @@ namespace RTE {
 					return true;
 				}, decoded.message.payload);
 				if (!allowed) {
+					// A returner's catch-up and transfer reports can still be in flight when a repair restarts this lobby: they belong to the
+					// round the repair replaced, and the member who sent them is owed the repair, not an ejection.
+					if (const NetLobbyStateChunk* chunk = std::get_if<NetLobbyStateChunk>(&decoded.message.payload); m_Config.host && chunk && !worldSender) {
+						uint8_t kind = 0;
+						uint64_t value = 0;
+						if (ParseWorldJoinReport(*chunk, kind, value) && (kind == c_NetWorldReportProgress || kind == c_NetWorldReportCatchUp || kind == c_NetWorldReportDecline ||
+						                                                  kind == c_NetWorldReportActivationAck)) {
+							++m_Stats.ignoredSessionPackets;
+							return;
+						}
+					}
 					const std::string type = NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload));
 					const std::optional<uint32_t> claimedPeer = std::visit([](const auto& payload) -> std::optional<uint32_t> {
 						if constexpr (requires { payload.peerId; }) return payload.peerId;
@@ -1275,8 +1293,10 @@ namespace RTE {
 					}, decoded.message.payload);
 					// A payload that names no peer claims nothing: it is refused by its own rule, and the line says which.
 					if (claimedPeer) {
+						// A world route's sender is the session identity it was admitted as; the route is named beside it.
 						System::PrintDiagnosticLine("[net-lobby] sender mismatch type=" + type + " connection=" + std::to_string(event.peerId) +
-						                            " expected=" + std::to_string(sender->first) + " claimed=" + std::to_string(*claimedPeer));
+						                            " expected=" + std::to_string(worldSender ? sessionSender : sender->first) + " claimed=" + std::to_string(*claimedPeer) +
+						                            (worldSender ? " route=" + std::to_string(sender->first) : std::string()));
 					} else {
 						System::PrintDiagnosticLine("[net-lobby] refused " + type + " connection=" + std::to_string(event.peerId) + " peer=" + std::to_string(sender->first) + ": " +
 						                            (event.lane != NetTransportLane::ControlReliable ? "not on the reliable control lane" : "no transfer is bound to that peer"));
@@ -1299,6 +1319,7 @@ namespace RTE {
 					WorldJoinReport report;
 					if (ParseWorldJoinReport(*chunk, kind, value, &report.workTicks, &report.workUs, &report.sentThrough)) {
 						report.kind = kind; report.value = value; report.fromPeer = sender->first; report.pending = true;
+						if (kind == c_NetWorldReportRoundEnded && !m_Config.host) m_RoundEndedRecord = value;
 						std::erase_if(m_WorldJoinReports, [&](const auto& pending) { return pending.kind == kind && pending.fromPeer == sender->first; });
 						m_WorldJoinReports.push_back(report);
 						break;

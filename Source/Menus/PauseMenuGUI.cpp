@@ -76,6 +76,7 @@ void PauseMenuGUI::Clear() {
 	m_MatchOptionsLabel = nullptr;
 	m_MatchOptionsShown = false;
 	m_MatchRepairHint = nullptr;
+	m_SaveMatchHint = nullptr;
 	m_MatchRepairArmed = false;
 	m_MatchRepairRefusal.clear();
 }
@@ -103,6 +104,18 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	    "LabelMatchRepairHint", "LABEL", m_MatchOptionsBox, 12, 252, 544, 34));
 	m_MatchRepairHint->SetHAlignment(GUIFont::Left);
 	m_MatchRepairHint->SetVAlignment(GUIFont::Top);
+
+	m_PauseMenuButtons[PauseMenuButton::SaveMatchButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->AddControl(
+	    "ButtonSaveMatch", "BUTTON", m_PauseMenuBox, 0, 0, 224, 20));
+	m_PauseMenuButtons[PauseMenuButton::SaveMatchButton]->SetText("Save Match");
+	// A match row, hidden like the skin's own until the menu serves a match.
+	m_PauseMenuButtons[PauseMenuButton::SaveMatchButton]->SetVisible(false);
+	m_PauseMenuButtons[PauseMenuButton::SaveMatchButton]->SetEnabled(false);
+	m_SaveMatchHint = dynamic_cast<GUILabel*>(m_GUIControlManager->AddControl(
+	    "LabelSaveMatchHint", "LABEL", m_PauseMenuBox, 0, 0, 300, 20));
+	m_SaveMatchHint->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	m_SaveMatchHint->SetHAlignment(GUIFont::Centre);
+	m_SaveMatchHint->SetVisible(false);
 
 	m_PauseMenuButtons[PauseMenuButton::BackToMainButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonBackToMain"));
 	m_PauseMenuButtons[PauseMenuButton::SaveOrLoadGameButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSaveOrLoadGame"));
@@ -245,14 +258,16 @@ void PauseMenuGUI::SetNetworkMatchMode(bool networkMatch) {
 				return 20;
 			case PauseMenuButton::PauseMatchButton:
 				return 40;
-			case PauseMenuButton::SettingsButton:
+			case PauseMenuButton::SaveMatchButton:
 				return 60;
-			case PauseMenuButton::SaveDiagnosticsButton:
-				return 80;
-			case PauseMenuButton::EndMatchButton:
+			case PauseMenuButton::SettingsButton:
 				return 100;
-			case PauseMenuButton::ResumeButton:
+			case PauseMenuButton::SaveDiagnosticsButton:
 				return 120;
+			case PauseMenuButton::EndMatchButton:
+				return 140;
+			case PauseMenuButton::ResumeButton:
+				return 160;
 			default:
 				return -1;
 		}
@@ -269,11 +284,15 @@ void PauseMenuGUI::SetNetworkMatchMode(bool networkMatch) {
 		const int matchRow = matchRowOffset(button);
 		const bool onMenu = networkMatch ? matchRow >= 0
 		                                 : button != PauseMenuButton::PauseMatchButton && button != PauseMenuButton::LeaveMatchButton &&
-		                                       button != PauseMenuButton::MatchOptionsButton && button != PauseMenuButton::EndMatchButton;
+		                                       button != PauseMenuButton::MatchOptionsButton && button != PauseMenuButton::EndMatchButton &&
+		                                       button != PauseMenuButton::SaveMatchButton;
 		PlaceButtonRow(button, networkMatch && onMenu ? matchRow : m_ButtonHomeY[button]);
 		m_PauseMenuButtons[button]->SetEnabled(onMenu);
 		m_PauseMenuButtons[button]->SetVisible(onMenu);
 	}
+	// The save row's hint takes the slot under it.
+	m_SaveMatchHint->SetPositionRel(0, 80);
+	m_SaveMatchHint->SetVisible(networkMatch);
 	// The single-player pass owns the mod manager row again and re-derives it from the Activity.
 	m_ModManagerButtonDisabled = false;
 	UpdateMatchPauseRow(true);
@@ -286,6 +305,10 @@ void PauseMenuGUI::UpdateMatchPauseRow(bool force) {
 	const bool matchPaused = ScenarioRunner::IsLockstepPaused();
 	// End Match is the host's: it finishes the round the way the match's own end would.
 	m_PauseMenuButtons[PauseMenuButton::EndMatchButton]->SetEnabled(g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running);
+	// Saving is the host's too; every peer reads when the match was last saved.
+	const NetMatchService::MatchSaveRow saveRow = g_NetMatchService.GetMatchSaveRow();
+	m_PauseMenuButtons[PauseMenuButton::SaveMatchButton]->SetEnabled(saveRow.enabled);
+	if (m_SaveMatchHint->GetText() != saveRow.hint) m_SaveMatchHint->SetText(saveRow.hint);
 	if (!force && matchPaused == m_MatchPausedShown) {
 		return;
 	}
@@ -507,6 +530,13 @@ bool PauseMenuGUI::HandleInputEvents() {
 					g_GUISound.BackButtonPressSound()->Play();
 				}
 				RefreshMatchOptions();
+			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::SaveMatchButton]) {
+				// Every peer writes the capture this names; the HUD says when they all have.
+				if (g_NetMatchService.RequestManualSave()) {
+					g_GUISound.ButtonPressSound()->Play();
+				} else {
+					g_GUISound.BackButtonPressSound()->Play();
+				}
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::EndMatchButton]) {
 				// H33: the host's End Match is the round's own completion, so every peer takes the
 				// same rematch path a played-out match takes. Leave stays the session's way out.

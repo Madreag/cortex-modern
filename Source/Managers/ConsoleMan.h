@@ -97,6 +97,9 @@ namespace RTE {
 		/// Copies the console's newest bytes without touching the filesystem.
 		std::string CopyLogTail(size_t limit) const;
 
+		/// The output log's line count, its bytes and its newest line, for the memory census.
+		std::string LogCensus() const;
+
 		/// Clears all previous input.
 		void ClearLog();
 #pragma endregion

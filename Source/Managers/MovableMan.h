@@ -644,6 +644,9 @@ namespace RTE {
 		/// @return The number of particles.
 		long GetParticleCount() const { return m_Particles.size(); }
 
+		/// The object registries and their counts, for the memory census.
+		std::string Census() const;
+
 		/// Gets the global setting for how much splash MOPixels should be created
 		/// an MO penetrates the terrain deeply.
 		/// @return A float with the global splash amount setting, form 1.0 to 0.0.

@@ -11,6 +11,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+# The inventory tools live beside the lead's tools, outside the repository; a box without them reports N/A.
+INVENTORY = Path("D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory")
 SUITES = (
     ("compare-snapshots", ["test_compare_snapshots.py"]),
     ("snapshot-inventory-roles", ["test_snapshot_inventory_roles.py"]),
@@ -21,7 +23,16 @@ SUITES = (
     ("selftest-sanitizer-rows", ["test_run_selftests.py"]),
     ("selftest-runner-quiet-tail", ["run_selftests.py", "--self-test"]),
     ("plane-value-getters", ["test_plane_value_getters.py"]),
+    ("edith-remote-box", ["edith/remote_box.py", "--self-test"]),
+    ("ubsan-suppressions", ["sanitizers/check_ubsan_supp.py", "--self-test"]),
+    ("vw-battery", ["vw_battery.py", "--self-test"]),
+    ("mod-api-census-guard", ["mod_api_census.py", "--self-test"]),
+    ("runner-feel-marker", ["test_win32_runner_feel_marker.py"]),
+    ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
+    ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),
+    ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),
 )
+WINDOWS_ONLY = {"runner-feel-marker"}
 
 
 def run(repo: Path, name: str, argv: list[str], timeout: float) -> tuple[str, int, str]:
@@ -42,6 +53,10 @@ def main() -> int:
     worst = 0
     for name, argv in SUITES:
         if args.only and name not in args.only:
+            continue
+        script = Path(argv[0])
+        if name in WINDOWS_ONLY and sys.platform != "win32" or script.is_absolute() and not script.is_file():
+            print(f"[tools-suites] N/A {name}: {'Windows only' if name in WINDOWS_ONLY else f'{script} is absent on this box'}")
             continue
         name, code, output = run(args.repo.resolve(), name, argv, args.timeout)
         print(f"[tools-suites] {'PASS' if code == 0 else 'FAIL'} {name} exit={code}")

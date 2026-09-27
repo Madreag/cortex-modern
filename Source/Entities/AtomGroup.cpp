@@ -586,7 +586,9 @@ bool AtomGroup::RemoveAtoms(long removeID) {
 	    std::remove_if(m_Atoms.begin(), m_Atoms.end(),
 	                   [removeID](Atom* atom) {
 		                   if (atom->GetSubID() != removeID) return false;
+		                   // The subgroup's atoms are this group's own copies (AddAtoms copies them), so they go with it.
 		                   atom->SetCheckpointOwner(nullptr);
+		                   delete atom;
 		                   return true;
 	                   }),
 	    m_Atoms.end());

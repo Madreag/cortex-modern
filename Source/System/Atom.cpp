@@ -14,6 +14,13 @@
 
 #include <bit>
 
+#include <format>
+#include <mutex>
+#ifdef _WIN32
+#include <windows.h>
+#undef GetClassName
+#endif
+
 using namespace RTE;
 
 const std::string Atom::c_ClassName = "Atom";
@@ -26,10 +33,12 @@ int Atom::s_InstancesInUse = 0;
 const int Atom::s_NormalChecks[c_NormalCheckCount][2] = {{0, -3}, {1, -3}, {2, -2}, {3, -1}, {3, 0}, {3, 1}, {2, 2}, {1, 3}, {0, 3}, {-1, 3}, {-2, 2}, {-3, 1}, {-3, 0}, {-3, -1}, {-2, -2}, {-1, -3}};
 
 Atom::Atom() {
+	NoteConstruction();
 	Clear();
 }
 
 Atom::Atom(const Atom& reference) {
+	NoteConstruction();
 	if (this != &reference) {
 		Clear();
 		Create(reference);
@@ -43,6 +52,7 @@ Atom::Atom(const Atom& reference) {
 /// @param trailColor The trail color.
 /// @param trailLength The trail length. If 0, no trail will be drawn.
 Atom::Atom(const Vector& offset, Material const* material, MovableObject* owner, Color trailColor, int trailLength) {
+	NoteConstruction();
 	Clear();
 	Create(offset, material, owner, trailColor, trailLength);
 }
@@ -54,11 +64,49 @@ Atom::Atom(const Vector& offset, Material const* material, MovableObject* owner,
 /// @param trailColor The trail color.
 /// @param trailLength The trail length. If 0, no trail will be drawn.
 Atom::Atom(const Vector& offset, unsigned char materialID, MovableObject* owner, Color trailColor, int trailLength) {
+	NoteConstruction();
 	Clear();
 	Create(offset, g_SceneMan.GetMaterialFromID(materialID), owner, trailColor, trailLength);
 }
 
+namespace {
+	std::mutex s_StackSamplesMutex;
+	std::array<std::array<void*, 14>, 8> s_StackSamples{};
+	uint64_t s_StackSamplesTaken = 0;
+	std::atomic<uint64_t> s_Constructions{0};
+} // namespace
+
+void Atom::NoteConstruction() {
+	s_LiveCount.fetch_add(1, std::memory_order_relaxed);
+	const uint64_t count = s_Constructions.fetch_add(1, std::memory_order_relaxed) + 1;
+#ifdef _WIN32
+	if (s_StackSampleEvery != 0 && count % s_StackSampleEvery == 0) {
+		std::array<void*, 14> frames{};
+		CaptureStackBackTrace(2, static_cast<DWORD>(frames.size()), frames.data(), nullptr);
+		std::lock_guard lock(s_StackSamplesMutex);
+		s_StackSamples[s_StackSamplesTaken++ % s_StackSamples.size()] = frames;
+	}
+#endif
+}
+
+std::string Atom::SampledConstructionStacks() {
+	std::lock_guard lock(s_StackSamplesMutex);
+	std::string text = "atom_constructions=" + std::to_string(s_Constructions.load());
+#ifdef _WIN32
+	const uintptr_t imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+	for (uint64_t index = s_StackSamplesTaken > s_StackSamples.size() ? s_StackSamplesTaken - s_StackSamples.size() : 0; index < s_StackSamplesTaken; ++index) {
+		text += " stack=";
+		for (void* frame: s_StackSamples[index % s_StackSamples.size()]) {
+			const uintptr_t address = reinterpret_cast<uintptr_t>(frame);
+			if (address >= imageBase && address < imageBase + 0x3000000) text += std::format("{:X},", address - imageBase);
+		}
+	}
+#endif
+	return text;
+}
+
 Atom::~Atom() {
+	s_LiveCount.fetch_sub(1, std::memory_order_relaxed);
 	// Clear touches a dying atom's owners first thing; comparing its fields before and after would only touch them again.
 	m_CheckpointInitialized = false;
 	Destroy();

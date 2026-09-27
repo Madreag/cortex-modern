@@ -36,9 +36,19 @@ MIN_SHARED_TICKS = 30
 
 
 def read_live_hashes(path: Path) -> list[dict]:
+    """The stream's ticks in order; an abandon_from line drops the ticks a held seat ran off the round before its hold arrived."""
     if not path.is_file():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if "abandon_from" in row:
+            rows = [kept for kept in rows if kept["tick"] < row["abandon_from"]]
+        else:
+            rows.append(row)
+    return rows
 
 
 def split_passes(lines: list[dict]) -> list[list[dict]]:

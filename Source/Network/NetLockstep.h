@@ -696,6 +696,9 @@ namespace RTE {
 		static constexpr uint16_t c_TimingWithdrawVersion = 36;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_CheckpointVersion = 40; //!< The newest wire: frames that carry the checkpoint schedule.
+		/// A committed tick and a replay record may name one actor once per sender, in sender order; a build that reads them as unique
+		/// per actor is refused at admission through the deterministic config hash.
+		static constexpr uint16_t c_CommittedRecordVersion = 2;
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;
@@ -891,6 +894,8 @@ namespace RTE {
 		bool ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool IsReplayPlayback() const { NET_PLANE_CHECK(); return m_Playback; }
 		std::optional<NetLockstepStart> GetAgreedStartRecord() const { NET_PLANE_CHECK(); return m_AgreedStartRecord; }
+		/// One line of every record the round keeps and its entry count, for the memory census.
+		std::string MemoryCensus() const;
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
 		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {});
@@ -1038,12 +1043,17 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> RemoteTransports() const { NET_PLANE_CHECK(); return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
-		bool HasSeatHoldGap(uint64_t frame) const { NET_PLANE_CHECK(); for (const auto& [peer, hold]: m_AiHeldSeats) if (IsSeatHoldGap(peer, frame)) return true; return false; }
+		bool HasSeatHoldGap(uint64_t frame) const {
+			NET_PLANE_CHECK();
+			for (const auto& [peer, hold]: m_AiHeldSeats) if (IsSeatHoldGap(peer, frame)) return true;
+			for (const auto& [peer, transitions]: m_SeatTransitions) if (IsSeatHoldGap(peer, frame)) return true;
+			return false;
+		}
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatReclaimGap(uint64_t frame) const {
 			NET_PLANE_CHECK();
 			for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true;
-			for (const auto& [peer, gap]: m_RetiredReclaimGaps) if (frame >= gap.first && frame <= gap.second) return true;
+			for (const auto& [peer, gaps]: m_RetiredReclaimGaps) if (IsSeatReclaimGap(peer, frame)) return true;
 			return false;
 		}
 		/// A seat the AI holds for its returner. A released seat stays under the AI but no longer waits for anyone.
@@ -1059,7 +1069,8 @@ namespace RTE {
 		/// The peer whose AI drives the seats the AI holds at a frame: the host, or while the host's own seat is held, the first playing peer of its succession.
 		uint8_t AiAuthorityAt(uint64_t frame) const;
 		/// Who produces an actor's frames that its owner would: the owner, unless the owner is a host whose own seat the AI holds.
-		uint8_t AiProducerOf(uint8_t ownerPeerId) const;
+		/// Read at the last delivered frame, or at atFrame for a write that lands there.
+		uint8_t AiProducerOf(uint8_t ownerPeerId, std::optional<uint64_t> atFrame = std::nullopt) const;
 		/// Whether the host's own seat is held by the AI and not yet taken back.
 		bool IsOwnHostSeatHeld() const;
 		/// The frame the host held this peer's seat from; 0 when the hold was not taken on the wire (a closed link).
@@ -1112,7 +1123,8 @@ namespace RTE {
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		/// The peer that produces the actor's frames under the match's ownership policy, leaves applied; every peer resolves it identically.
-		uint8_t ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
+		/// Read at the last delivered frame, or at atFrame for a write that lands there.
+		uint8_t ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, std::optional<uint64_t> atFrame = std::nullopt) const;
 		/// The same, with leaves NOT applied: who HELD the actor, which is what the drop ledger records.
 		uint8_t ResolveActorOwnerBeforeLeaves(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		uint8_t ResolveTeamCommandAuthority(int team) const;
@@ -1233,7 +1245,15 @@ namespace RTE {
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
+		friend bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
+		friend bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
+		friend bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error);
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
+		friend bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
+		friend bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
+		friend bool TestEveryGapStaysForASimulationBehind(std::string* error);
+		friend bool TestADeferredStopDoesNotExcuseASeatPastTheBound(std::string* error);
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 		friend bool TestAQueuedReturnLeavesALaterHold(std::string* error);
@@ -1254,6 +1274,7 @@ namespace RTE {
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
+		friend class ScenarioRunner;
 
 	private:
 		void TickHostMigration(uint64_t nowMs);
@@ -1324,6 +1345,7 @@ namespace RTE {
 		void HandleEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport);
+		void NameStaleStart(const NetLockstepStart& start, const std::string& why);
 		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport, bool relay = true, bool recovered = false);
 		void HandleRecoveryChunk(const NetLockstepRecoveryChunk& chunk, uint64_t nowMs, NetPeerId fromTransport);
 		bool RetainRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t> bytes, bool commitLocal, std::string* error);
@@ -1540,6 +1562,7 @@ namespace RTE {
 		bool m_PlaneTicking = false; //!< Inside PlaneTick: events that call out of the coordinator are deferred.
 		std::vector<NetTransportEvent> m_PlaneDeferredEvents; //!< What the plane left for the simulation thread's next tick, in arrival order.
 		std::set<NetPeerId> m_PlaneHeldTransports; //!< Connections whose later packets wait behind a deferred start, stop or lifecycle event.
+		std::map<NetPeerId, uint64_t> m_PlaneHeldSinceMs; //!< When the plane first set each held connection aside.
 		void HandleTransportEvents(uint64_t nowMs);
 		uint32_t m_LocalStartParkMs = 0; //!< Our own activity restart, as it goes out in our start.
 		uint8_t m_LocalDeviceClass = 0; //!< Our own seat device, as it goes out in our start.
@@ -1594,6 +1617,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		struct PeerAdmission { uint64_t frame; uint16_t delay; };
 		std::map<uint8_t, PeerAdmission> m_PeerAdmissions;
+		std::map<uint8_t, uint64_t> m_StaleStartNamed; //!< The start frame each seat's straggler was last named at.
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::set<uint64_t> m_ObservationEpochs;        //!< Every announced frame senders spell their keys out from again.
 		std::set<uint64_t> m_HostAcceptedLocalFrames;
@@ -1674,7 +1698,8 @@ namespace RTE {
 		uint64_t m_LivenessQuietSinceMs = 0; //!< Host: since when it has sent no frame of its own.
 		uint32_t m_AnnouncedCaptureEvery = 0; //!< Period of the captures every peer takes; 0 when there are none.
 		bool m_AwaitingReplayedSeatState = false; //!< A round joined from a replayed tail: no commit until that tail's seat changes are taken.
-		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_RetiredReclaimGaps; //!< A return's neutral gap that still covers frames before the hold that ended it.
+		/// Each return's neutral gap that still covers frames before the hold that ended it, by its first frame; kept until the simulation passes it.
+		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_RetiredReclaimGaps;
 		std::set<uint64_t> m_AnnouncedCaptureTicks; //!< Named captures every peer takes at the end of these ticks.
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;

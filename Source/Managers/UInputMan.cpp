@@ -23,6 +23,7 @@
 #include "GameActivity.h"
 #include "System.h"
 #include "MetricsCollector.h"
+#include "NetMatchService.h"
 
 #include <SDL3/SDL.h>
 #include <array>
@@ -1464,7 +1465,12 @@ void UInputMan::HandleSpecialInput() {
 		} else if (KeyPressed(SDLK_F2)) {
 			g_PresetMan.QuickReloadEntityPreset();
 		} else if (KeyPressed(SDLK_F9)) {
-			g_ActivityMan.LoadAndLaunchGame("AutoSave");
+			// A network match is loaded from the lobby, where every peer resumes the same save.
+			if (ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				ScenarioRunner::PushNetUiToast("match_save", "Resume a saved match from the lobby");
+			} else {
+				g_ActivityMan.LoadAndLaunchGame("AutoSave");
+			}
 		} else if (g_PerformanceMan.IsShowingPerformanceStats()) {
 			if (KeyHeld(SDLK_1)) {
 				g_TimerMan.SetTimeScale(1.0F);
@@ -1496,13 +1502,20 @@ void UInputMan::HandleSpecialInput() {
 		} else if (KeyPressed(SDLK_F4)) {
 			g_ConsoleMan.SaveInputLog("Console.input.log");
 		} else if (KeyPressed(SDLK_F5)) {
-			if (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CanBeUserSaved()) {
+			// A network match is saved by its host for every peer: a local save would be a world no other peer holds.
+			if (ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				g_NetMatchService.RequestManualSave();
+			} else if (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CanBeUserSaved()) {
 				g_ActivityMan.SaveCurrentGame("QuickSave");
 			} else {
 				RTEError::ShowMessageBox("Cannot Save Game - This Activity Does Not Allow QuickSaving!");
 			}
 		} else if (KeyPressed(SDLK_F9)) {
-			g_ActivityMan.LoadAndLaunchGame("QuickSave");
+			if (ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				ScenarioRunner::PushNetUiToast("match_save", "Resume a saved match from the lobby");
+			} else {
+				g_ActivityMan.LoadAndLaunchGame("QuickSave");
+			}
 		} else if (KeyPressed(SDLK_F10)) {
 			g_ConsoleMan.ClearLog();
 			// F12 to save a single ScreenDump - Note that F12 triggers a breakpoint when the VS debugger is attached, regardless of config - this is by design. Thanks Microsoft.
