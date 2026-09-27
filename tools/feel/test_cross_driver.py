@@ -45,6 +45,16 @@ class CrossDriverTests(unittest.TestCase):
             path=Path(directory)/'boxes.json'; path.write_text(json.dumps(manifest))
             with self.assertRaisesRegex(ValueError,'unique'): cross_peers.load_boxes(path)
 
+    def test_renewed_feel_reservation_blocks_an_already_released_s3_box(self):
+        import run_sim_test
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); done=root/'S3-DONE'; marker=root/'FEEL-MATRIX-RUNNING'
+            done.touch(); marker.touch()
+            box=copy.deepcopy(self.plan()['boxes'][0]); box.update(guard_file=str(done),exclusive_marker=str(marker),scratch=str(root))
+            with patch.object(run_sim_test,'make_run') as launch:
+                with self.assertRaisesRegex(RuntimeError,'exclusive'): cross_peers.read_capabilities(box,root)
+                launch.assert_not_called()
+
     def test_quns_release_selftest_starts_no_engine(self):
         with tempfile.TemporaryDirectory() as temporary:
             result=cross_peers.launch_guard_selftest(Path(temporary))

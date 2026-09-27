@@ -299,6 +299,8 @@ def content_manifest(repo):
 
 
 def assert_box_guard(box):
+    if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists():
+        raise RuntimeError(f'{box["name"]} exclusive measurement reservation active: {box["exclusive_marker"]}')
     if box.get('guard_file') and not Path(box['guard_file']).is_file():
         raise RuntimeError(f'{box["name"]} launch guard active: {box["guard_file"]} absent')
     if box['kind'] == 'windows-local':
