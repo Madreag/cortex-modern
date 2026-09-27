@@ -7338,7 +7338,8 @@ static std::string ResyncSaveName() {
 			{"supported_world_lockstep_codec_version", config.supportedWorldLockstepCodecVersion},
 			{"supported_match_config_version", config.supportedMatchConfigVersion},
 			{"supported_world_match_config_version", config.supportedWorldMatchConfigVersion},
-			{"lobby_protocol_version", config.lobbyProtocolVersion}, {"enabled_global_scripts", config.enabledGlobalScripts}};
+			{"lobby_protocol_version", config.lobbyProtocolVersion}, {"committed_record_version", config.committedRecordVersion},
+			{"enabled_global_scripts", config.enabledGlobalScripts}};
 		const json identity{{"schema", manifest.schema}, {"build_id", manifest.buildId}, {"game_version", manifest.gameVersion},
 			{"platform", manifest.platform}, {"deterministic_config", fields},
 			{"module_manifest_hash", NetIdentity::HashHex(manifest.moduleManifestHash)},

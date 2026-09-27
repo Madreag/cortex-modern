@@ -476,6 +476,20 @@ namespace RTE {
 			joiner.deterministicConfig.enabledGlobalScripts += ",different-script";
 			joiner.deterministicConfigHash = NetIdentity::HashDeterministicConfig(joiner.deterministicConfig);
 			if (!ExpectMismatchKey(world, joiner, "deterministic_config_hash", error)) return false;
+			// A build that reads a committed tick as naming each actor once decodes merged ticks wrongly: its admission is refused.
+			if (supported.committedRecordVersion != NetLockstepCodec::c_CommittedRecordVersion) {
+				*error = "the admission identity lost the committed-record version: " + std::to_string(supported.committedRecordVersion);
+				return false;
+			}
+			joiner.deterministicConfig = defaultInputs.deterministicConfig;
+			joiner.deterministicConfig.committedRecordVersion = NetLockstepCodec::c_CommittedRecordVersion - 1;
+			joiner.deterministicConfigHash = NetIdentity::HashDeterministicConfig(joiner.deterministicConfig);
+			if (NetIdentity::HashDeterministicConfig(joiner.deterministicConfig) == NetIdentity::HashDeterministicConfig(defaultInputs.deterministicConfig)) {
+				*error = "a build on committed-record version " + std::to_string(joiner.deterministicConfig.committedRecordVersion) + " hashes like version " +
+				         std::to_string(NetLockstepCodec::c_CommittedRecordVersion) + ", so its admission is not refused";
+				return false;
+			}
+			if (!ExpectMismatchKey(world, joiner, "deterministic_config_hash", error)) return false;
 			std::cout << "[net-identity-selftest] PASS preset-independent admission identity and settings refusal" << std::endl;
 			return true;
 		}
