@@ -212,6 +212,8 @@ namespace RTE {
 		static int64_t HorizonWaitP99Us();
 		static void ResetHorizonWaitStats();
 		static void WriteHorizonWaitReport();
+		/// Returns once every horizon report queued before the call has been written.
+		static void FlushHorizonWaitReport();
 
 		/// Records what one Note cost: how many terrain patches it captured and how long the capture took.
 		static void RecordHorizonNote(int captures, int64_t microseconds);

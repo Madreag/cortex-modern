@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <execution>
@@ -102,6 +103,12 @@ namespace {
 	HorizonWaitStats& HorizonStats() {
 		static HorizonWaitStats stats;
 		return stats;
+	}
+
+	/// The thread that last opened the horizon report file, so the self-test can hold the committing thread to never being it.
+	std::atomic<std::thread::id>& HorizonReportOpener() {
+		static std::atomic<std::thread::id> opener;
+		return opener;
 	}
 
 	void RecordHorizonWait(int64_t waitUs) {
@@ -1773,12 +1780,15 @@ void PathFinder::WriteHorizonWaitReport() {
 		     << ",\"request_wait_max_us\":" << stats.requestWaitMaxUs << "}\n";
 	}
 	const std::string path = System::GetWorkingDirectory() + "Userdata/horizon_path_grid.json";
+	HorizonReportOpener().store(std::this_thread::get_id());
 	std::ofstream out(path, std::ios::trunc);
 	if (!out) {
 		return;
 	}
 	out << json.str();
 }
+
+void PathFinder::FlushHorizonWaitReport() {}
 
 void PathFinder::TestInstallGrid(int width, int height, int nodeDimension, const Material* fill) {
 	WaitForPathingRequests();
@@ -2711,6 +2721,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 	PathFinder late;
 	late.TestInstallGrid(8, 4, 20, &air);
 	late.QueueHorizonDelta(1, 1, wall, blocked);
+	HorizonReportOpener().store(std::thread::id());
 	late.CommitHorizonThrough(2);
 	TestArmFaultInject("");
 	// A wall-clock window around the injected sleep false-REDs under load; the recorded wait itself is the contract.
@@ -2719,6 +2730,13 @@ int PathFinder::RunHorizonGridSelfTest() {
 		return 1;
 	}
 	std::cout << Tag << " PASS stall-instrumentation" << std::endl;
+	// A stalled commit writes the report at once, and the committing thread (the simulation's) never opens the file itself.
+	FlushHorizonWaitReport();
+	if (const std::thread::id opener = HorizonReportOpener().load(); opener == std::thread::id() || opener == std::this_thread::get_id()) {
+		std::cout << Tag << " FAIL report-off-sim-thread opener=" << (opener == std::thread::id() ? "none" : "committing-thread") << std::endl;
+		return 1;
+	}
+	std::cout << Tag << " PASS report-off-sim-thread" << std::endl;
 	std::cout << Tag << " PASS" << std::endl;
 	return 0;
 }
