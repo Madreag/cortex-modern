@@ -10488,8 +10488,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay) {
 		if (UsesBoundedWait() && m_AiHeldSeats.contains(peerId)) {
-			// The round never waits on a seat the AI plays, so its holder's window passing releases nothing: the seat stays its returner's
-			// to reclaim, and only a clean leave, a removal or the match's end gives the AI its units for good.
+			// A seat whose returner is already agreed has nothing left to release: the return stands.
+			if (resolution == NetLockstepHoldResolution::Expired && !m_ReclaimTransactions.contains(peerId)) ReleaseHeldSeat(peerId, nowMs, relay, "its hold expired");
 			return;
 		}
 		if (resolution == NetLockstepHoldResolution::None || m_DroppedSeats.find(peerId) == m_DroppedSeats.end()) {

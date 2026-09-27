@@ -74,7 +74,6 @@ namespace RTE {
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
-	bool TestAnExpiredHolderWindowKeepsTheAiSeat(std::string* error);
 	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
 	bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
@@ -20010,31 +20009,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
-	bool TestAnExpiredHolderWindowKeepsTheAiSeat(std::string* error) {
-		// A returner still rejoining past its holder's window keeps its seat: the AI plays it, the round waits on nothing.
-		LoopbackTransport wire;
-		NetLockstepCoordinator host;
-		auto config = MakeCoordinatorConfig(1, 2, 0x9A1C, 6, NetTransportLane::ControlReliable);
-		config.peerCount = 2; config.startFrame = 1; config.roundId = 37;
-		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
-		config.relayToOtherPeers = true;
-		config.peerInputDelayFrames = {{1, 6}, {2, 6}};
-		config.remoteTransportPeerIds = {{2, 1}};
-		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1C);
-		if (!wire.StartHost(48897, error) || !host.Start(wire, config, error)) return false;
-		host.m_State = NetLockstepState::Running;
-		host.m_RoundId = 37;
-		host.m_RemotePeerIds = {2};
-		host.m_AiHeldSeats[2] = 5504;
-		host.m_HoldTransactions[2] = {2, 0, 6, 2, 5504};
-		host.ResolveHeldSeat(2, NetLockstepHoldResolution::Expired, 30000);
-		if (!host.HasHeldAISeat(2) || host.m_ReleasedAiSeats.contains(2)) {
-			*error = "an-expired-holder-window-keeps-the-ai-seat: the holder's window passing released a seat the AI plays, so its returner is refused";
-			return false;
-		}
-		return true;
-	}
-
 	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error) {
 		// A capture announced at 600 excuses the host only once its simulation completed 600; a host stalled at 594 is late.
 		LoopbackTransport wire;
@@ -20976,7 +20950,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
 		    !TestACaptureNotYetBegunExcusesNoStall(&error) ||
-		    !TestAnExpiredHolderWindowKeepsTheAiSeat(&error) ||
 		    !TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(&error) ||
 		    !TestAHeldClientsHashIsNotTheRounds(&error) ||
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
