@@ -493,7 +493,10 @@ static void BeginCrossTick(uint64_t tick) {
 	static uint64_t authorityObservedTick = 0;
 	static uint64_t configuredStart = 0;
 	static std::set<std::string> unmappedHistories;
-	if (!catchup && (newRound || host != priorHost || priorCatchup || configuredStart == 0 || authority.is_null())) {
+	// An unresolved authority is asked again twice a second, not every tick: the report is built under the service's lock.
+	const bool transition = newRound || host != priorHost || priorCatchup;
+	const bool unresolved = configuredStart == 0 || authority.is_null();
+	if (!catchup && (transition || (unresolved && (authorityObservedTick == 0 || tick < authorityObservedTick || tick >= authorityObservedTick + 30)))) {
 		const auto diagnostic = nlohmann::json::parse(g_NetMatchService.BuildReportJson(), nullptr, false);
 		authority = CrossAuthorityFromReport(diagnostic, config->sessionId, host);
 		const auto* lockstep = CrossMatchingLockstep(diagnostic, config->sessionId, host);
@@ -503,9 +506,20 @@ static void BeginCrossTick(uint64_t tick) {
 	const std::string historyKey = std::to_string(config->sessionId) + "/" + std::to_string(CrossRecordRound(round, config->roundId));
 	if (catchup || configuredStart > 1 || s_crossTicketRejoin || (round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
 	priorHost = host; priorCatchup = catchup;
-	s_crossContext = {{"run", CrossEnvironment("CC_TEST_CROSS_RUN")}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
-	    {"process", System::GetProcessID()}, {"execution", CrossEnvironment("CC_TEST_CROSS_EXECUTION") + "/" + std::to_string(execution)},
-	    {"incarnation", std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"))}, {"seat_incarnation", nullptr},
+	// The process's own names and the config's hash change rarely; each tick reads them from here.
+	static const std::string run = CrossEnvironment("CC_TEST_CROSS_RUN"), instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
+	static const std::string executionBase = CrossEnvironment("CC_TEST_CROSS_EXECUTION") + "/";
+	static const unsigned long incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
+	static std::tuple<uint64_t, uint64_t, uint64_t> hashedConfig{0, 0, 0};
+	static std::string configHash;
+	if (const auto key = std::make_tuple(static_cast<uint64_t>(config->sessionId), static_cast<uint64_t>(config->roundId), static_cast<uint64_t>(config->configRevision));
+	    configHash.empty() || key != hashedConfig) {
+		hashedConfig = key;
+		configHash = NetMatchConfigUtil::StoredConfigHash(*config);
+	}
+	s_crossContext = {{"run", run}, {"instance", instance},
+	    {"process", System::GetProcessID()}, {"execution", executionBase + std::to_string(execution)},
+	    {"incarnation", incarnation}, {"seat_incarnation", nullptr},
 	    {"authority_generation", catchup ? nlohmann::json(nullptr) : authority}, {"authority_generation_observed_at_tick", authorityObservedTick},
 	    {"authority_generation_source", "service.runner.lockstep; refreshed on round/host/catch-up transition"},
 	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(CrossRecordRound(round, config->roundId))},
@@ -513,7 +527,7 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"history_branch", CrossHistoryBranch(configuredStart, unmappedHistories.contains(historyKey), ScenarioRunner::GetLockstepResumeFrame())},
 	    {"configured_start_frame", catchup ? nlohmann::json(nullptr) : nlohmann::json(configuredStart)},
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
-	    {"config_hash", NetMatchConfigUtil::StoredConfigHash(*config)}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
+	    {"config_hash", configHash}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
 	    {"phase", CrossTickPhase(catchup, tick, s_crossLastCommitted.contains(round) ? s_crossLastCommitted.at(round) : 0, execution)}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
 	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
 	if (const auto& snapshot = g_NetMatchService.GetSeatPresence().GetSnapshot()) {
@@ -600,14 +614,50 @@ static void ApplyCrossSchedule() {
 	}
 }
 
+// The harness writes h4-effects.json beside the records; a watcher thread re-reads it when it changes, so no committed
+// tick stats or parses it.
+static bool CrossEffectsChanged(uint64_t& seenGeneration, nlohmann::json& effects) {
+	static std::mutex mutex;
+	static nlohmann::json latest = nlohmann::json::array();
+	static std::atomic<uint64_t> generation{0};
+	static std::jthread watcher([](std::stop_token stop) {
+		const auto path = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() / "h4-effects.json";
+		std::filesystem::file_time_type seenTime{};
+		uintmax_t seenSize = UINTMAX_MAX;
+		while (!stop.stop_requested()) {
+			std::error_code error;
+			const auto time = std::filesystem::last_write_time(path, error);
+			const uintmax_t size = error ? 0 : std::filesystem::file_size(path, error);
+			if (!error && (time != seenTime || size != seenSize)) {
+				std::ifstream input(path);
+				auto parsed = nlohmann::json::parse(input, nullptr, false);
+				if (parsed.is_array()) {
+					seenTime = time;
+					seenSize = size;
+					std::lock_guard<std::mutex> lock(mutex);
+					latest = std::move(parsed);
+					generation.fetch_add(1);
+				}
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+	});
+	if (generation.load() == seenGeneration) return false;
+	std::lock_guard<std::mutex> lock(mutex);
+	effects = latest;
+	seenGeneration = generation.load();
+	return true;
+}
+
 static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
 	CrossRememberRestoredInput();
 	if (!g_MetricsCollector.EventsEnabled() || s_crossRecoveryStarts.empty()) return;
 	const unsigned incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
-	const auto effectPath = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() / "h4-effects.json";
-	if (std::filesystem::is_regular_file(effectPath)) {
-		std::ifstream input(effectPath); const auto effects = nlohmann::json::parse(input, nullptr, false);
-		if (effects.is_array()) for (const auto& effect: effects) {
+	static nlohmann::json effects = nlohmann::json::array();
+	static uint64_t effectsGeneration = 0;
+	CrossEffectsChanged(effectsGeneration, effects);
+	if (effects.is_array()) {
+		for (const auto& effect: effects) {
 			const std::string id = effect.value("id", "");
 			if (effect.value("incarnation", ~0u) != incarnation || !s_crossRecoveryStarts.contains(id)) continue;
 			auto& start = s_crossRecoveryStarts[id];
@@ -1479,7 +1529,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 	for (int i = 0; i < argCount;) {
 		std::string currentArg = argValue[i];
 		bool lastArg = i + 1 == argCount;
-		if (currentArg == "-net-cross-ticket-rejoin") { s_crossTicketRejoin = true; ++i; continue; }
+		if (currentArg == "-net-cross-ticket-rejoin") {
+			if (CrossEnvironment("CCCP_HEADLESS") != "1") { std::cerr << "[cross-ticket-rejoin] FAIL cross ticket rejoin requires headless" << std::endl; return false; }
+			s_crossTicketRejoin = true; ++i; continue;
+		}
 		if (currentArg == "-net-cross-host-options" && !lastArg) {
 			try {
 				if (CrossEnvironment("CCCP_HEADLESS") != "1") throw std::runtime_error("cross options require headless");
@@ -1505,6 +1558,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-net-cross-rematches" && !lastArg) {
 			const std::string count = argValue[i + 1];
 			if (count.empty() || !std::all_of(count.begin(), count.end(), [](unsigned char c) { return c >= '0' && c <= '9'; }) || count.size() > 4) return false;
+			// The rematch budget counts committed ticks through the cross records; without them it never advances.
+			if (CrossEnvironment("CCCP_HEADLESS") != "1" || CrossEnvironment("CC_TEST_CROSS_RECORDS").empty()) {
+				std::cerr << "[cross-rematches] FAIL cross rematches require headless and CC_TEST_CROSS_RECORDS" << std::endl;
+				return false;
+			}
 			s_crossRematches = static_cast<unsigned>(std::stoul(count));
 			i += 2; continue;
 		}
