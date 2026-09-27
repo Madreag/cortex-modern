@@ -26,7 +26,10 @@ MST = dt.timezone(dt.timedelta(hours=-7))
 
 
 def write_json(path, value):
-    Path(path).write_text(json.dumps(value, indent=2, allow_nan=False) + '\n', encoding='utf-8')
+    path=Path(path)
+    temporary=path.with_name(path.name+f'.incoming-{os.getpid()}-{time.monotonic_ns()}')
+    temporary.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n', encoding='utf-8')
+    temporary.replace(path)
 
 
 def command(argv, timeout=60, check=True):
@@ -607,7 +610,13 @@ def remote_command(box, args):
 
 
 def stage_remote(box, local, remote):
-    command(['scp', '-q', str(local), f'{box["ssh"]}:{remote}'], timeout=120)
+    # Payloads poll publication names. SCP creates a destination before its writer
+    # closes, so expose the final name only after the transfer has completed.
+    incoming=remote+f'.incoming-{os.getpid()}-{time.monotonic_ns()}'
+    command(['scp', '-q', str(local), f'{box["ssh"]}:{incoming}'], timeout=120)
+    publish=(f'Move-Item -LiteralPath {quote_ps(incoming)} -Destination {quote_ps(remote)} -Force'
+             if box['kind']=='windows-task' else f'mv -f -- {shlex.quote(incoming)} {shlex.quote(remote)}')
+    command(['ssh',box['ssh'],publish])
 
 
 def remote_exists(box, path):

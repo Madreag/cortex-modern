@@ -13,6 +13,34 @@ class CrossDriverTests(unittest.TestCase):
     def plan(self):
         return cross_peers.make_plan(cross_peers.parse_args(['--dry-run']))
 
+    def test_interrupted_json_publication_keeps_the_previous_complete_document(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'session.json'; path.write_text('{"session":"old"}')
+            def fail_document(*args,**kwargs): raise ValueError('serialization interrupted')
+            with patch.object(cross_peers.json,'dumps',side_effect=fail_document):
+                with self.assertRaises(ValueError): cross_peers.write_json(path,dict(session='new'))
+            self.assertEqual(json.loads(path.read_text()),dict(session='old'))
+            original=Path.write_text
+            def interrupted(target,text,**kwargs):
+                original(target,'partial',**kwargs)
+                raise OSError('writer interrupted before close')
+            with patch.object(Path,'write_text',interrupted):
+                with self.assertRaises(OSError): cross_peers.write_json(path,dict(session='new'))
+            self.assertEqual(json.loads(path.read_text()),dict(session='old'))
+
+    def test_remote_publication_hides_the_name_until_scp_closes(self):
+        for kind in ('windows-task','posix-ssh'):
+            published='D:/scratch/session.json' if kind=='windows-task' else '/scratch/session.json'
+            calls=[]
+            def transfer(argv,**kwargs):
+                calls.append(argv)
+                if argv[0]=='scp': self.assertNotEqual(argv[-1],f'box:{published}')
+                return ''
+            with patch.object(cross_peers,'command',side_effect=transfer):
+                cross_peers.stage_remote(dict(kind=kind,ssh='box'),'session.json',published)
+            self.assertEqual([row[0] for row in calls],['scp','ssh'])
+            self.assertIn(published,calls[-1][-1])
+
     def test_storage_sample_tolerates_a_file_sealed_after_enumeration(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
