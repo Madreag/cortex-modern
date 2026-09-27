@@ -92,7 +92,7 @@ def requirements(manifest, comparison, metrics):
     items = load(HERE / 'cross_peers/requirements.json', [])
     reasons = {
         2: 'WAN migration requires NetMatchService.cpp:8244 endpoint publication and NetLockstep.cpp:3304,3334 dialing changes owned by the catch-up lane.',
-        3: 'MIXED is refused: NetMatchConfig.cpp:647 prohibits a CPU slot sharing a human team; all roster arms are not proven.',
+        3: 'MIXED uses human teams 0,0,1 plus peerless CPU team 2 through real host options; ordinary AI actors supply allied units. Adopted configurations and all roster arms still need run evidence.',
         20: 'SoundContainer.cpp:405 authority and music-transition emissions are outside this lane; muted output proves no audible result.',
         22: 'A fourth real box and its persistent-world arrival arm are absent.',
         35: 'Pre-auth/proof/image/tail/activation overlaps await the WAN endpoint fix; queued/cancelled phases never complete recovery.',

@@ -320,6 +320,17 @@ static void ApplyCrossSchedule() {
 }
 
 static void CrossHostOptionFields(NetMatchConfig& draft, const nlohmann::json& options) {
+	for (bool cpu: {false, true}) {
+		const char* key = cpu ? "cpu_teams" : "human_teams";
+		if (!options.contains(key)) continue;
+		const auto teams = options.at(key).get<std::vector<int>>();
+		const auto expected = std::count_if(draft.players.begin(), draft.players.end(), [=](const auto& slot) { return slot.cpu == cpu; });
+		if (teams.size() != static_cast<size_t>(expected)) throw std::runtime_error(std::string(key) + " count differs from the adopted roster");
+		if (std::any_of(teams.begin(), teams.end(), [](int team) { return team < 0 || team >= Activity::MaxTeamCount; }))
+			throw std::runtime_error(std::string(key) + " contains an invalid team");
+		size_t index = 0;
+		for (auto& slot: draft.players) if (slot.cpu == cpu) slot.team = static_cast<uint8_t>(teams[index++]);
+	}
 	if (options.contains("difficulty")) draft.difficulty = options["difficulty"].get<uint8_t>();
 	if (options.contains("ai_skill")) for (auto& team: draft.teamRules) team.aiSkill = options["ai_skill"].get<uint8_t>();
 	if (options.contains("fog")) draft.fogOfWar = options["fog"].get<bool>();
@@ -339,6 +350,9 @@ bool RTE::RunCrossRosterSelfTest(std::string* error) {
 	}
 	config.players[3].team = 0;
 	if (NetMatchConfigUtil::ValidateLocalAlpha(config, nullptr)) { *error = "CPU slot sharing a human team was accepted"; return false; }
+	bool refused = false;
+	try { CrossHostOptionFields(config, {{"human_teams", {0, 0}}}); } catch (const std::exception&) { refused = true; }
+	if (!refused) { *error = "team edit changed the roster size silently"; return false; }
 	std::cout << "[net-match-selftest] PASS cross_mixed_roster_preserves_seats_and_cpu_rules" << std::endl;
 	return true;
 }
@@ -347,7 +361,8 @@ static bool CrossHostOptions(unsigned match, std::string* error) {
 	if (s_crossHostOptions.empty() || !g_NetMatchService.IsHost()) return true;
 	auto draft = g_NetMatchService.GetLobbyMatchConfig();
 	const auto& options = s_crossHostOptions[(match / 2) % s_crossHostOptions.size()];
-	CrossHostOptionFields(draft, options);
+	try { CrossHostOptionFields(draft, options); }
+	catch (const std::exception& failure) { if (error) *error = failure.what(); return false; }
 	const bool accepted = g_NetMatchService.SubmitHostOptions(draft.configRevision, draft, error);
 	if (accepted) System::PrintDiagnosticLine("[cross-host-options] match=" + std::to_string(match) + " accepted=1 revision=" +
 	    std::to_string(draft.configRevision) + " intended_config=" + NetMatchConfigUtil::StoredConfigHash(draft));
