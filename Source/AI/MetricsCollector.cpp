@@ -2,16 +2,129 @@
 
 #include "ScenarioRunner.h"
 #include "SimChecksum.h"
+#include "MovableObject.h"
+#include "MovableMan.h"
+#include "System.h"
 
 #include "nlohmann/json.hpp"
 
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <filesystem>
 
 namespace RTE {
 
 	using json = nlohmann::json;
+	struct MetricsCollector::EventStream {
+		std::ofstream output;
+		std::string path;
+		json context;
+		std::vector<json> pending;
+		size_t bytes = 0, partBytes = 0, limit = 0, part = 0, sequence = 0, overflow = 0;
+		bool active = false;
+		void Write(json record) {
+			for (const auto& [key, value]: context.items()) record[key] = value;
+			record["sequence"] = ++sequence;
+			const std::string line = record.dump() + '\n';
+			if (bytes + line.size() > limit) throw std::runtime_error("event byte budget exhausted");
+			if (partBytes >= 8 * 1024 * 1024) {
+				output.close();
+				output.open(path + ".part" + std::to_string(++part), std::ios::out | std::ios::trunc);
+				partBytes = 0;
+			}
+			output << line;
+			if (!output) throw std::runtime_error("event record write failed");
+			bytes += line.size(); partBytes += line.size();
+		}
+	};
+
+	bool MetricsCollector::OpenEvents(const std::string& path, size_t byteLimit) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_EventStream = std::make_unique<EventStream>();
+		m_EventStream->output.open(path, std::ios::out | std::ios::trunc);
+		m_EventStream->path = path;
+		m_EventStream->limit = byteLimit;
+		m_EventsEnabled.store(m_EventStream->output.good());
+		return m_EventsEnabled.load();
+	}
+
+	void MetricsCollector::BeginEventTick(const json& context, bool prediction) {
+		if (!EventsEnabled()) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_EventStream->pending.empty()) ++m_EventStream->overflow;
+		m_EventStream->pending.clear();
+		m_EventStream->context = context;
+		m_EventStream->active = !prediction;
+	}
+
+	void MetricsCollector::RecordEvent(const std::string& event, const MovableObject* object, const std::string& result, double amount, long other, int seat) {
+		if (!EventsEnabled()) return;
+		AppendEvent({{"event", event}, {"result", result}, {"amount", amount}, {"seat", seat}, {"other", other},
+		    {"actor", object ? object->GetRootParent()->GetUniqueID() : 0}, {"object", object ? object->GetUniqueID() : 0},
+		    {"team", object ? object->GetTeam() : -1}, {"preset", object ? object->GetPresetName() : ""},
+		    {"class", object ? object->GetClassName() : ""}});
+	}
+
+	void MetricsCollector::AppendEvent(const json& event) {
+		if (!EventsEnabled() || (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative())) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_EventStream->active) return;
+		if (m_EventStream->pending.size() >= 4096) { ++m_EventStream->overflow; return; }
+		m_EventStream->pending.push_back(event);
+	}
+
+	void MetricsCollector::FlushEventTick() {
+		if (!EventsEnabled()) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		try {
+			for (auto& event: m_EventStream->pending) {
+				event["type"] = "coverage";
+				m_EventStream->Write(std::move(event));
+			}
+			if (m_EventStream->overflow) {
+				m_EventStream->Write({{"type", "record_loss"}, {"count", m_EventStream->overflow}});
+				m_EventStream->overflow = 0;
+			}
+			m_EventStream->output.flush();
+		} catch (const std::exception& error) {
+			System::PrintDiagnosticLine("[cross-record] FAIL " + std::string(error.what()));
+			m_EventsEnabled.store(false);
+		}
+		m_EventStream->pending.clear();
+		m_EventStream->active = false;
+	}
+
+	void MetricsCollector::WriteObservation(const json& observation) {
+		if (!EventsEnabled()) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		try { m_EventStream->Write(observation); m_EventStream->output.flush(); }
+		catch (const std::exception& error) {
+			System::PrintDiagnosticLine("[cross-record] FAIL " + std::string(error.what()));
+			m_EventsEnabled.store(false);
+		}
+	}
+
+	void MetricsCollector::CloseEvents() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_EventsEnabled.store(false);
+		if (m_EventStream) m_EventStream->output.close();
+	}
+
+	size_t MetricsCollector::EventBytes() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_EventStream ? m_EventStream->bytes : 0;
+	}
+
+	size_t MetricsCollector::InstrumentationBytes() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		size_t bytes = m_TickHashes.capacity() * sizeof(TickHashRecord);
+		for (const auto& record: m_TickHashes) {
+			bytes += record.totalHex.capacity();
+			for (const auto& [key, value]: record.subsystemHex) bytes += key.capacity() + value.capacity();
+		}
+		return bytes;
+	}
 
 	MetricsCollector::MetricsCollector() = default;
 	MetricsCollector::~MetricsCollector() = default;

@@ -59,8 +59,35 @@
 #include <vector>
 
 namespace RTE {
+	bool RunCrossBotRangeSelfTest(std::string* error);
 
 	namespace {
+		bool TestCommittedEventStream(std::string* error) {
+			const auto path = std::filesystem::path("Userdata") / "cross-events-selftest.jsonl";
+			MetricsCollector& collector = g_MetricsCollector;
+			if (!collector.OpenEvents(path.string(), 8192)) { *error = "cannot open event record"; return false; }
+			collector.AppendEvent({{"event", "outside_tick"}});
+			collector.BeginEventTick({{"tick", 7}, {"round", 2}, {"phase", "live"}});
+			collector.AppendEvent({{"event", "round_fired"}, {"actor", 11}, {"amount", 1}});
+			collector.AppendEvent({{"event", "round_fired"}, {"actor", 11}, {"amount", 1}});
+			collector.FlushEventTick();
+			collector.BeginEventTick({{"tick", 8}, {"round", 2}}, true);
+			collector.AppendEvent({{"event", "predicted_round"}});
+			collector.FlushEventTick();
+			collector.BeginEventTick({{"tick", 7}, {"round", 2}, {"phase", "catchup"}});
+			collector.AppendEvent({{"event", "round_fired"}, {"actor", 11}});
+			collector.FlushEventTick();
+			collector.CloseEvents();
+			std::ifstream input(path);
+			std::vector<nlohmann::json> events;
+			for (std::string line; std::getline(input, line);) events.push_back(nlohmann::json::parse(line));
+			if (events.size() != 3 || events[0]["tick"] != 7 || events[1]["event"] != "round_fired" || events[2]["phase"] != "catchup") {
+				*error = "committed events missing, overwritten, speculative or unlabelled";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS committed_events_append_exclude_prediction_and_label_reexecution" << std::endl;
+			return true;
+		}
 		bool TestRemovedWoundReleasesItsRadiusCache(std::string* error) {
 			MOSRotating body;
 			auto* wound = new AEmitter;
@@ -13729,6 +13756,8 @@ namespace RTE {
 			rowsPassed = false;
 		};
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
+		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
+		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay, "a_rejoin_walks_its_phases_and_the_goodbye_ends_its_tail_replay");
 		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;

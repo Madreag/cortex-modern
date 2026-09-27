@@ -1,4 +1,5 @@
 #include "HDFirearm.h"
+#include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 
@@ -885,6 +886,7 @@ void HDFirearm::Update() {
 				m_RoundsFired++;
 
 				pRound = m_pMagazine->PopNextRound();
+				if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("round_fired", this);
 				shake = (m_ShakeRange - ((m_ShakeRange - m_SharpShakeRange) * m_SharpAim)) *
 				        (m_Supported ? 1.0F : m_NoSupportFactor) * RandomNormalNum();
 				tempNozzle = m_MuzzleOff.GetYFlipped(m_HFlipped);
@@ -1036,6 +1038,7 @@ void HDFirearm::Update() {
 		m_HasPlayedEndReloadSound = false;
 		m_Reloading = false;
 		m_DoneReloading = true;
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("reload_completed", this);
 	}
 
 	// Do stuff to deactivate after being activated

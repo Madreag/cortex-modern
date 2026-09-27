@@ -1,6 +1,7 @@
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
 #include "Activity.h"
+#include "MetricsCollector.h"
 #include "CaptureSentinel.h"
 #include "GameActivity.h"
 
@@ -1281,6 +1282,8 @@ void Activity::NoteLockstepControlBinding(int64_t uid, int player) {
 	}
 	for (int seat = Players::PlayerOne; seat < Players::MaxPlayerCount; ++seat) {
 		if (seat == player) {
+			if (m_LockstepControlUID[seat] != uid) if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.AppendEvent({{"event", "control_binding"}, {"result", "committed"},
+			    {"old_actor", m_LockstepControlUID[seat]}, {"actor", uid}, {"seat", player}, {"amount", 1}});
 			m_LockstepControlUID[seat] = uid;
 		} else if (m_LockstepControlUID[seat] == uid) {
 			m_LockstepControlUID[seat] = 0;
@@ -1417,6 +1420,7 @@ void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
 	}
 	if (totalValue > 0.0F) {
 		m_TeamFunds[orbitedCraftTeam] += totalValue;
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("craft_refund", orbitedCraft, "success", totalValue);
 		std::snprintf(messageString, sizeof(messageString), "%s added %.0f oz to funds!", craftText.c_str(), totalValue);
 	}
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -1436,6 +1440,7 @@ void Activity::HandleCraftEnteringOrbit(ACraft* orbitedCraft) {
 	}
 
 	orbitedCraft->SetGoldCarried(0);
+	if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("craft_departure", orbitedCraft);
 	orbitedCraft->SetHealth(orbitedCraft->GetMaxHealth());
 
 	// The craft entering orbit will count as a death for the team because it's being deleted, so we need to decrement the team's death count to keep it correct.

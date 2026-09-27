@@ -4,16 +4,20 @@
 #include "Singleton.h"
 
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 #define g_MetricsCollector MetricsCollector::Instance()
 
 namespace RTE {
+	class MovableObject;
 
 	/// Metrics collector for the determinism scenario runner.
 	///
@@ -57,6 +61,18 @@ namespace RTE {
 
 		/// Record a string-valued metric (e.g. a status code).
 		void RecordString(const std::string& name, const std::string& value);
+
+		/// Streams opt-in observations at committed tick boundaries.
+		bool OpenEvents(const std::string& path, size_t byteLimit = 268435456);
+		void BeginEventTick(const nlohmann::json& context, bool prediction = false);
+		void RecordEvent(const std::string& event, const MovableObject* object = nullptr, const std::string& result = "success", double amount = 1, long other = 0, int seat = -1);
+		void AppendEvent(const nlohmann::json& event);
+		void FlushEventTick();
+		void WriteObservation(const nlohmann::json& observation);
+		void CloseEvents();
+		bool EventsEnabled() const { return m_EventsEnabled.load(std::memory_order_relaxed); }
+		size_t EventBytes() const;
+		size_t InstrumentationBytes() const;
 
 		/// Per-tick hash trace recording for the determinism CI check.
 		///
@@ -138,6 +154,9 @@ namespace RTE {
 		AggregatedRun GetCurrentRun() const;
 
 	private:
+		struct EventStream;
+		std::unique_ptr<EventStream> m_EventStream;
+		std::atomic<bool> m_EventsEnabled{false};
 		mutable std::mutex                            m_Mutex;
 		std::string                                   m_Scenario;
 		uint64_t                                      m_Seed = 0;
