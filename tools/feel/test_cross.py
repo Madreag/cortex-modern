@@ -55,6 +55,13 @@ class CrossReducers(unittest.TestCase):
         peers = self.histories(); peers['b'][-1]['source_round'] = 2
         self.assertEqual(self.compare(peers)['peers']['b']['missing'], 1)
 
+    def test_soak_ranges_require_native_boundaries_and_do_not_infer_missing_tails(self):
+        first=sample(1); second=sample(1); second.update(match='m2',source_round=2)
+        ranges,missing=report.declared_history_ranges([first,second],[],['a','b','c'],final_tick=7)
+        self.assertEqual(len(missing),1); self.assertEqual(ranges[0]['last'],7)
+        ranges,missing=report.declared_history_ranges([first,second],[dict(first,final_tick=20)],['a','b','c'],final_tick=7)
+        self.assertFalse(missing); self.assertEqual([r['last'] for r in ranges],[20,7])
+
     def test_admission_and_cancel_are_not_terminal(self):
         schedule = [dict(id='r1', peer='c', incarnation=0, deadline_ms=1000,
                          outcomes=['first_controllable_input'])]

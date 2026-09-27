@@ -159,6 +159,10 @@ def make_plan(options):
             initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
             faults=[f for f in faults if f['peer'] == peer['name']]))
     return dict(version=1, run=stem, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
+                driver_commit=command(['git','-C',HERE.parent,'rev-parse','HEAD']).strip(),
+                driver_tracked_changes=command(['git','-C',HERE.parent,'status','--porcelain','--untracked-files=no']).splitlines(),
+                driver_sources={str(path.relative_to(HERE)):digest_file(path) for path in
+                    (HERE/'cross_peers.py',HERE/'cross_report.py',HERE/'feel/report.py',HERE/'feel/records.py')},
                 boxes=manifest['boxes'], instances=peers, specs=specs, host=host, ticks=options.ticks,
                 scenario=options.scenario, roster=options.roster, scene=options.scene, seed=options.seed,
                 chaos_seed=options.chaos_seed if options.scenario == 'chaos' else None,
@@ -450,6 +454,7 @@ def run_payload(path):
     next_sample, verdict = 0, 0
     try:
         assert_box_guard(box)
+        write_json(root / 'payload-owned.json', dict(box=box['name'], runner_pid=os.getpid()))
         if box['kind'] == 'windows-local' and len(payload['specs']) != 1:
             raise RuntimeError('this lane permits only one local engine at a time; dry-run supports larger manifests')
         capabilities = read_capabilities(box, root)
@@ -648,7 +653,8 @@ def run_plan(plan, root):
         time.sleep(1)
         if any(p.poll() is not None for p in tunnels): raise RuntimeError('directory tunnel failed')
         host_box = next(s['box'] for s in plan['specs'] if s['peer'] == plan['host'])
-        ordered = sorted(boxes.values(), key=lambda b: b['name'] != host_box)
+        # The task payload claims EDITH first and waits for publication if it is a client.
+        ordered = sorted(boxes.values(), key=lambda b: 0 if b['kind']=='windows-task' else 1 if b['name']==host_box else 2)
         for box in ordered:
             payload, local_payload, box_root = payloads[box['name']]
             payload['pin'] = pin
@@ -671,6 +677,11 @@ def run_plan(plan, root):
                     stage_remote(box, local_script, box['task_script'])
                     command(['ssh', box['ssh'], f'Start-ScheduledTask -TaskName {box["runner"]}'])
                     launched.add(box['name'])
+                    ownership_deadline = time.monotonic()+30
+                    while not remote_exists(box, box_root+'/payload-owned.json') and time.monotonic()<ownership_deadline:
+                        time.sleep(.25)
+                    if not remote_exists(box, box_root+'/payload-owned.json'):
+                        raise RuntimeError(f'{box["name"]}: task did not acknowledge this payload; no other engines are launched')
                 else:
                     handle = (root / f'payload-{box["name"]}.log').open('w', encoding='utf-8'); handles.append(handle)
                     processes[box['name']] = subprocess.Popen(remote_command(box, [box['python'], box['tree'] + '/tools/cross_peers.py', '--payload', box_root + '/payload.json']),
