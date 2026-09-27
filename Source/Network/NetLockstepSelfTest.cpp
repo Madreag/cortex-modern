@@ -78,6 +78,7 @@ namespace RTE {
 	bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
 	bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error);
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
+	bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 	bool TestAQueuedReturnLeavesALaterHold(std::string* error);
@@ -19738,6 +19739,36 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestEveryHoldProducerWritesTheSeatLog(std::string* error) {
+		// A hold this peer takes from a replayed tail, then a return at 90: a simulation still at 40 reads the seat held.
+		auto config = MakeCoordinatorConfig(2, 1, 0x9A1B, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 41;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1B);
+		NetLockstepCoordinator live, replay;
+		live.m_Config = config; live.m_State = NetLockstepState::Running; live.m_RoundId = 41;
+		live.m_RemotePeerIds = {1, 3}; live.m_RemoteTransports[1] = 7;
+		for (uint8_t peer: {1, 2, 3}) live.m_PeerEffectiveStart[peer] = 5;
+		live.m_Stats.nextFrame = 40;
+		replay.m_Config = config;
+		NetGameSeatHold hold{3, 0, 3, 1, 25};
+		replay.m_HoldTransactions[3] = hold;
+		replay.m_AiHeldSeats[3] = 25;
+		live.AdoptReplayedSeatTransitions(replay, 100);
+		NetLockstepTiming back;
+		back.senderPeerId = 1; back.peerId = 3; back.action = NetTimingAction::Reclaim; back.phase = NetTimingPhase::ReclaimAtFrame;
+		back.sessionId = config.sessionId; back.roundId = 41; back.revision = 90;
+		back.applyFrame = back.cutoffFrame = 90; back.seatIncarnations[2] = 2; back.delayFrames = 4; back.neutralThroughFrame = 95;
+		live.ApplyTiming(back);
+		const std::string seen = std::to_string(live.IsSeatUnderAI(3, 40)) + std::to_string(live.IsPeerGoneAtFrame(3, 40)) + "/" +
+		                         std::to_string(live.IsSeatUnderAI(3, 96)) + std::to_string(live.IsPeerGoneAtFrame(3, 96));
+		if (seen != "11/00") {
+			*error = "every-hold-producer-writes-the-seat-log: a hold adopted from a replayed tail at 25, back at 90, read (under_ai, gone) at 40/96 as " + seen + "; expected 11/00";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error) {
 		NetLockstepCoordinator returner;
 		auto config = MakeCoordinatorConfig(2, 1, 0x9A13, 4, NetTransportLane::ControlReliable);
@@ -20986,6 +21017,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAHeldClientsHashIsNotTheRounds(&error) ||
 		    !TestAReplayTakesTheRecordedSeatPolicy(&error) ||
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
+		    !TestEveryHoldProducerWritesTheSeatLog(&error) ||
 		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
 		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||
 		    !TestAQueuedReturnLeavesALaterHold(&error) ||
