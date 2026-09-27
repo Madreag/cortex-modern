@@ -62,6 +62,8 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+#include <deque>
+#include <zlib.h>
 #include "nlohmann/json.hpp"
 
 #ifdef _WIN32
@@ -72,11 +74,63 @@
 #endif
 
 using namespace RTE;
+namespace RTE { bool RunCrossPresentationRetentionSelfTest(std::string* error); }
 
 namespace {
 	using FeelJson = nlohmann::json;
+	class FeelStream {
+	public:
+		bool Open(const std::filesystem::path& directory, size_t chunkBytes = 8 * 1024 * 1024, size_t chunks = 16, bool trim = true) {
+			m_Directory = directory; m_ChunkBytes = chunkBytes; m_Chunks = chunks; m_Trim = trim;
+			if (std::filesystem::exists(directory / "raw.index.json")) return false;
+			return Next();
+		}
+		bool Write(const std::string& text) {
+			if (!m_Output || text.size() > m_ChunkBytes) return false;
+			if (m_Bytes && m_Bytes + text.size() > m_ChunkBytes) { if (!Seal(false) || !Next()) return false; }
+			if (gzwrite(m_Output, text.data(), static_cast<unsigned>(text.size())) != static_cast<int>(text.size())) return false;
+			m_CRC = crc32(m_CRC, reinterpret_cast<const Bytef*>(text.data()), static_cast<uInt>(text.size()));
+			m_Bytes += text.size(); ++m_Lines; ++m_TotalLines; return true;
+		}
+		bool Enabled() const { return m_Output != nullptr; }
+		bool Close() { return Seal(true); }
+		~FeelStream() { if (m_Output) gzclose(m_Output); }
+	private:
+		bool Next() {
+			m_Name = "raw." + std::to_string(m_Number++) + ".jsonl.gz";
+			m_Bytes = m_Lines = 0; m_CRC = crc32(0, nullptr, 0);
+			m_Output = gzopen((m_Directory / m_Name).string().c_str(), "wb1");
+			if (m_Output) gzbuffer(m_Output, 128 * 1024);
+			return m_Output != nullptr;
+		}
+		bool Seal(bool complete) {
+			if (!m_Output) return false;
+			const int status = gzclose(m_Output); m_Output = nullptr;
+			if (status != Z_OK) return false;
+			m_Parts.push_back({{"path", m_Name}, {"bytes", m_Bytes}, {"lines", m_Lines}, {"crc32", m_CRC},
+			    {"first_sequence", m_TotalLines - m_Lines}, {"last_sequence", m_TotalLines - 1}});
+			while (m_Trim && m_Parts.size() > m_Chunks) {
+				std::filesystem::remove(m_Directory / m_Parts.front()["path"].get<std::string>());
+				m_DroppedLines += m_Parts.front()["lines"].get<size_t>(); m_Parts.pop_front();
+			}
+			std::ofstream index(m_Directory / "raw.index.json", std::ios::trunc);
+			index << FeelJson({{"version", 1}, {"complete", complete}, {"parts", m_Parts}, {"total_lines", m_TotalLines},
+			    {"dropped_lines", m_DroppedLines}, {"chunk_bytes", m_ChunkBytes}, {"retained_chunks", m_Chunks},
+			    {"window", "last sealed chunks plus one active chunk; byte bound, no tick-duration guarantee"}}).dump();
+			return static_cast<bool>(index);
+		}
+		gzFile m_Output = nullptr;
+		std::filesystem::path m_Directory;
+		std::string m_Name;
+		std::deque<FeelJson> m_Parts;
+		size_t m_ChunkBytes = 0, m_Chunks = 0, m_Number = 0, m_Bytes = 0, m_Lines = 0, m_TotalLines = 0, m_DroppedLines = 0;
+		uLong m_CRC = 0;
+		bool m_Trim = true;
+	};
 	struct FeelState {
 		std::ofstream out;
+		FeelStream bounded;
+		bool useBounded = false;
 		std::string directory;
 		std::vector<FeelJson> pending;
 		std::map<std::pair<int64_t, int>, uint64_t> sampled;
@@ -157,7 +211,10 @@ namespace {
 	}
 
 	void FeelWrite(const FeelJson& value) {
-		s_Feel.out << value.dump() << '\n';
+		const std::string line = value.dump() + '\n';
+		if (s_Feel.useBounded) {
+			if (!s_Feel.bounded.Write(line)) { System::PrintDiagnosticLine("[cross-record] FAIL presentation writer"); System::SetQuit(true); }
+		} else s_Feel.out << line;
 	}
 
 	void FeelWriteSavedCaptures(bool wait) {
@@ -201,11 +258,12 @@ void FrameMan::ApplyHeadlessPresentationDefault() {
 
 bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
 	const char* headless = std::getenv("CCCP_HEADLESS");
-	if (!headless || std::string(headless) != "1" || !std::filesystem::is_directory(path) || s_Feel.out.is_open()) return false;
+	if (!headless || std::string(headless) != "1" || !std::filesystem::is_directory(path) || FeelRecordingEnabled()) return false;
 	const auto raw = std::filesystem::path(path) / "raw.jsonl";
 	if (std::filesystem::exists(raw)) return false;
-	s_Feel.out.open(raw, std::ios::out);
-	if (!s_Feel.out) return false;
+	s_Feel.useBounded = std::getenv("CC_TEST_CROSS_RECORDS") != nullptr;
+	if (s_Feel.useBounded) { if (!s_Feel.bounded.Open(path)) return false; }
+	else { s_Feel.out.open(raw, std::ios::out); if (!s_Feel.out) return false; }
 	s_Feel.directory = path;
 	FeelWrite({{"type", "schema"}, {"version", 1}, {"clock", "steady_clock milliseconds"}, {"cpu_clock", "GetProcessTimes kernel+user milliseconds"},
 	    {"presentation_boundary", "UploadFrame return (upload, swap, and frame housekeeping)"}, {"pixels_per_meter", c_PPM},
@@ -213,7 +271,7 @@ bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
 	return true;
 }
 
-bool FrameMan::FeelRecordingEnabled() { return s_Feel.out.is_open(); }
+bool FrameMan::FeelRecordingEnabled() { return s_Feel.useBounded ? s_Feel.bounded.Enabled() : s_Feel.out.is_open(); }
 double FrameMan::FeelClockMS() { return FeelRecordingEnabled() ? FeelNowMS() : 0.0; }
 
 void FrameMan::FeelInputSample(const Actor* actor, int player) {
@@ -346,7 +404,7 @@ void FrameMan::FeelEndIteration(uint64_t ticks, long long simUS, long long updat
 	FeelWrite({{"type", "iteration"}, {"tick", g_TimerMan.GetSimUpdateCount()}, {"active", s_Feel.iterationActive && g_ActivityMan.ActivityRunning()},
 	    {"begin_ms", s_Feel.iterationBeginMS}, {"end_ms", FeelNowMS()}, {"cpu_begin_ms", s_Feel.iterationCPUMS}, {"cpu_end_ms", FeelProcessCPUMS()},
 	    {"pace_sim_ticks", ticks}, {"pace_sim_us", simUS}, {"pace_update_us", updateUS}, {"pace_draw_us", drawUS}});
-	s_Feel.out.flush();
+	if (!s_Feel.useBounded) s_Feel.out.flush();
 }
 
 void FrameMan::FeelFinish() {
@@ -355,7 +413,33 @@ void FrameMan::FeelFinish() {
 	s_Feel.pending.clear();
 	FeelWriteSavedCaptures(true);
 	FeelWrite({{"type", "end"}, {"wall_ms", FeelNowMS()}, {"cpu_ms", FeelProcessCPUMS()}, {"frames", s_Feel.frameNumber}});
-	s_Feel.out.close();
+	if (s_Feel.useBounded) {
+		if (!s_Feel.bounded.Close()) { System::PrintDiagnosticLine("[cross-record] FAIL presentation close"); System::SetQuit(true); }
+	} else s_Feel.out.close();
+}
+
+bool RTE::RunCrossPresentationRetentionSelfTest(std::string* error) {
+	const auto directory = std::filesystem::path(System::GetUserdataDirectory()) / "cross-retention-selftest";
+	std::filesystem::create_directories(directory);
+	FeelStream stream;
+	if (!stream.Open(directory, 1024, 2, std::getenv("CC_TEST_CROSS_RETENTION_RED") == nullptr)) { *error = "retention writer open"; return false; }
+	for (int i = 0; i < 200; ++i) if (!stream.Write(FeelJson({{"sequence", i}, {"padding", std::string(100, 'x')}}).dump() + '\n')) { *error = "retention write"; return false; }
+	std::ifstream liveInput(directory / "raw.index.json"); FeelJson liveIndex; liveInput >> liveIndex; liveInput.close();
+	const bool boundedWhileLive = !liveIndex["complete"].get<bool>() && liveIndex["parts"].size() == 2 && liveIndex["dropped_lines"].get<int>() > 0;
+	if (!stream.Close()) { *error = "retention close"; return false; }
+	std::ifstream input(directory / "raw.index.json"); FeelJson index; input >> index;
+	if (!boundedWhileLive || !index["complete"].get<bool>() || index["parts"].size() != 2 || index["dropped_lines"].get<int>() <= 0) { *error = "presentation retention is not bounded in flight"; return false; }
+	size_t count = 0;
+	for (const auto& part: index["parts"]) {
+		gzFile packed = gzopen((directory / part["path"].get<std::string>()).string().c_str(), "rb");
+		if (!packed) { *error = "retained chunk missing"; return false; }
+		std::array<char, 2048> buffer{}; const int size = gzread(packed, buffer.data(), static_cast<unsigned>(buffer.size()));
+		const int closed = gzclose(packed);
+		if (size < 0 || closed != Z_OK || static_cast<size_t>(size) != part["bytes"].get<size_t>() || crc32(0, reinterpret_cast<const Bytef*>(buffer.data()), size) != part["crc32"].get<uLong>()) { *error = "retained chunk integrity"; return false; }
+		++count;
+	}
+	System::PrintDiagnosticLine("[net-match-selftest] PASS presentation_retention_bounded_verified_chunks=" + std::to_string(count));
+	return true;
 }
 
 void BitmapDeleter::operator()(BITMAP* bitmap) const { destroy_bitmap(bitmap); }

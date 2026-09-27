@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 
 from feel import report
-from feel.records import open_record, record_path
+from feel.records import open_record, record_path, presentation_records
 from compare_sim_traces import CORE
 
 HERE = Path(__file__).resolve().parent
@@ -91,6 +91,13 @@ def load(path, default=None):
 
 
 def rows(path):
+    index=Path(path).with_name('raw.index.json')
+    if Path(path).name=='raw.jsonl' and index.is_file():
+        try:
+            for number,row in enumerate(presentation_records(index),1): yield dict(row,_line=number)
+        except (OSError,ValueError,KeyError,EOFError) as error:
+            yield dict(type='malformed_record',error=str(error),_line=0)
+        return
     if record_path(path).is_file():
         with open_record(path,encoding='utf-8-sig') as stream:
             for number,line in enumerate(stream,1):
@@ -254,6 +261,9 @@ def build_report(root):
             if re.search(r'RTE Assert|FATAL:|EXCEPTION_ACCESS_VIOLATION|Runtime Error due to unhandled exception|Rejected .*command|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|\[net-plane\].*ASSERT|\[fullstate(?:-refusal)?\].*(?:failed:|refused:|problem=)|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
                 findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
+        presentation_window=load(raw_path.with_name('raw.index.json'),{})
+        for row in raw:
+            if row.get('type')=='malformed_record': findings.append(dict(peer=name,path=str(raw_path.relative_to(root)),line=row['_line'],text=row['error']))
         frames = [r for r in raw if r.get('type') == 'frame' and r.get('active')]
         inputs = [r for r in raw if r.get('type') == 'input']
         latency = report.input_latencies(inputs, frames) if inputs and frames else []
@@ -306,7 +316,7 @@ def build_report(root):
         final_tick=trace.get('runs',[{}])[-1].get('numeric',{}).get('final_tick') if trace.get('runs') else None
         peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=int(own.name.split('-')[-1]), frames=len(live[name]),
             observed_waits_over_50=sum(r['wait_ms']>50 for r in waits) if log else None, observed_wait_records=len(waits),
-            native=native, record=record, timing=timing, tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
+            native=native, record=record, timing=timing, presentation_window=presentation_window, tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
             tick_timing_valid=bool(tick_cost) and all(r.get('partition_valid') for r in tick_cost),
             capture_ms=report.distribution([r['capture_us']/1000 for r in tick_cost]),
             latency_ms=report.distribution([r['ms'] for r in latency if r['ms'] is not None]),

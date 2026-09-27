@@ -8,6 +8,27 @@ import os
 from pathlib import Path
 import re
 import zipfile
+import zlib
+
+
+def presentation_records(index):
+    """Validate the explicitly retained native window; never imply full-run coverage."""
+    index=Path(index); document=json.loads(index.read_text(encoding='utf-8'))
+    previous=document['dropped_lines']
+    if len(document['parts'])>document['retained_chunks']: raise ValueError('presentation window exceeds its declared bound')
+    for part in document['parts']:
+        path=index.parent/part['path']
+        if path.is_symlink() or path.resolve().parent!=index.parent.resolve(): raise ValueError('presentation chunk leaves its directory')
+        if part['first_sequence']!=previous or part['bytes']>document['chunk_bytes']: raise ValueError('presentation sequence or chunk bound differs')
+        crc=size=count=0
+        with gzip.open(path,'rb') as stream:
+            for line in stream:
+                crc=zlib.crc32(line,crc); size+=len(line); count+=1
+                yield json.loads(line)
+        if (crc,size,count)!=(part['crc32'],part['bytes'],part['lines']): raise ValueError('presentation chunk integrity differs')
+        previous+=count
+        if previous-1!=part['last_sequence']: raise ValueError('presentation last sequence differs')
+    if previous!=document['total_lines']: raise ValueError('presentation retained count differs')
 
 
 class NativeFaultEffects:
