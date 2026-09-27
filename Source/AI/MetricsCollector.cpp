@@ -12,12 +12,65 @@
 #include <iomanip>
 #include <sstream>
 #include <filesystem>
+#include <set>
+#include <thread>
 
 namespace RTE {
 
 	using json = nlohmann::json;
-	bool CrossCaptureBarrier(const json&, const std::string&, const std::string&, uint64_t, uint64_t) { return false; }
-	void CrossCaptureBarrierFromEnvironment(const char*, uint64_t, uint64_t) {}
+	bool CrossCaptureBarrier(const json& spec, const std::string& directory, const std::string& phase, uint64_t tick, uint64_t round) {
+		if (spec.at("phase") != phase || spec.at("tick").get<uint64_t>() != tick ||
+		    (spec.value("round", uint64_t{0}) != 0 && spec.at("round").get<uint64_t>() != round)) return false;
+		const std::string id = spec.at("id");
+		const auto timeout = spec.at("timeout_ms").get<uint64_t>();
+		if (id.empty() || id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::string::npos ||
+		    (phase != "capture_announced" && phase != "writer_pending") || timeout == 0 || timeout > 120000)
+			throw std::runtime_error("invalid capture barrier identity, phase or timeout");
+		const auto root = std::filesystem::path(directory);
+		std::filesystem::create_directories(root);
+		const auto began = std::chrono::steady_clock::now();
+		json receipt{{"type", "capture_barrier"}, {"id", id}, {"capture_phase", phase}, {"capture_tick", tick},
+		    {"capture_round", round}, {"timeout_ms", timeout}, {"outcome", "entered"},
+		    {"barrier_wall_ms", std::chrono::duration<double, std::milli>(began.time_since_epoch()).count()}};
+		const auto prefix = root / (id + "." + phase + "." + std::to_string(tick));
+		const auto publish = [&](const std::string& suffix) {
+			std::ofstream output(prefix.string() + suffix, std::ios::out | std::ios::trunc);
+			output << receipt.dump() << '\n'; output.flush();
+			if (!output) throw std::runtime_error("capture barrier receipt write failed");
+			if (MetricsCollector::IsConstructed()) g_MetricsCollector.WriteObservation(receipt);
+		};
+		publish(".enter.json");
+		const auto released = [&] { return std::filesystem::is_regular_file(root / (id + ".release")); };
+		while (!released() && std::chrono::steady_clock::now() - began < std::chrono::milliseconds(timeout))
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		const bool passed = released();
+		receipt["outcome"] = passed ? "released" : "timeout";
+		receipt["wait_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+		publish(".exit.json");
+		return passed;
+	}
+
+	void CrossCaptureBarrierFromEnvironment(const char* phase, uint64_t tick, uint64_t round) {
+		const char* path = std::getenv("CC_TEST_CROSS_CAPTURE_BARRIER");
+		if (!path || !*path) return;
+		try {
+			const char* headless = std::getenv("CCCP_HEADLESS");
+			if (!headless || std::string(headless) != "1") throw std::runtime_error("capture barrier requires headless");
+			std::ifstream input(path); const auto specs = json::parse(input);
+			if (!specs.is_array() || specs.size() > 64) throw std::runtime_error("invalid capture barrier schedule");
+			static std::mutex mutex;
+			static std::set<std::string> fired;
+			for (const auto& spec: specs) {
+				if (spec.at("phase") != phase || spec.at("tick").get<uint64_t>() != tick ||
+				    (spec.value("round", uint64_t{0}) != 0 && spec.at("round").get<uint64_t>() != round)) continue;
+				const std::string key = spec.at("id").get<std::string>() + "/" + phase + "/" + std::to_string(round) + "/" + std::to_string(tick);
+				{ std::lock_guard<std::mutex> lock(mutex); if (!fired.insert(key).second) continue; }
+				CrossCaptureBarrier(spec, std::filesystem::path(path).parent_path().string(), phase, tick, round);
+			}
+		} catch (const std::exception& error) {
+			System::PrintDiagnosticLine("[cross-record] FAIL capture barrier: " + std::string(error.what()));
+		}
+	}
 	struct MetricsCollector::EventStream {
 		std::ofstream output;
 		std::string path;
