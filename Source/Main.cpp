@@ -252,7 +252,7 @@ bool RTE::RunCrossReadyRevisionSelfTest(std::string* error) {
 	if (!CrossReadyRevision(1, last) || CrossReadyRevision(1, last) || !CrossReadyRevision(4, last) || last != 4) {
 		*error = "ready/start intent is not re-armed once per retry window"; return false;
 	}
-	std::cout << "[net-match-selftest] PASS cross_ready_start_follows_adopted_config_revisions" << std::endl;
+	std::cout << "[net-match-selftest] PASS cross_ready_start_retries_across_configuration_changes" << std::endl;
 	return true;
 }
 
