@@ -4,7 +4,7 @@
     {
       "name": "EROL-PC", "kind": "windows-local",
       "peers_per_box": 1,
-      "guard_file": "D:/mx/inventory-confirming-3b-20260926/S3-DONE",
+      "guard_file": "D:/mx/BOX-FREE-FOR-CROSS",
       "exclusive_marker": "D:/mx/FEEL-MATRIX-RUNNING",
       "tree": "D:/Projects/alias-walk", "executable": "D:/Projects/alias-walk/Cortex Command.exe",
       "runner": "tools/win32_test_runner.py via run_sim_test.make_run",
