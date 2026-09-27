@@ -294,17 +294,22 @@ def requirements(manifest, comparison, metrics):
         3: 'MIXED uses human teams 0,0,1 plus peerless CPU team 2 through real host options; ordinary AI actors supply allied units. Adopted configurations and all roster arms still need run evidence.',
         20: 'SoundContainer.cpp:405 authority and music-transition emissions are outside this lane; muted output proves no audible result.',
         22: 'A fourth real box and its persistent-world arrival arm are absent.',
+        32: 'The adopted wave supplies held-seat end records at NetMatchService.cpp:1026,5357,8654. Three-box faulted final-tail equality and completed-lobby outcomes remain unproved; an end-record notification alone is not a full hash history.',
         34: 'Hold and catch-up ends are wired into the default schedule with peer/round/incarnation-bound phase signals and native end witnesses. Both executed overlaps and the post-migration end are not yet demonstrated; migration awaits the endpoint seam.',
         35: 'Pre-auth/proof/image/tail/activation overlaps await the WAN endpoint fix; queued/cancelled phases never complete recovery.',
         36: 'Capture-announced and writer-pending barriers have RED/GREEN bounded-release tests; migration overlap, archive validity and restarted writer cadence still await a real endpoint-capable arm.',
         40: 'Initial history uses the configured start frame; settled live authority is read from the public runner report. NetMatchService.cpp:7831 omits the private catch-up branch/checkpoint digest (NetMatchService.h:1590,1643), so restored keys stay UNKNOWN.',
         45: 'Checkpoint boot/handover anchors and survivor segment indexing need ScenarioRunner.cpp:2653 and NetMatchService.cpp:3455 outside this lane.',
+        47: 'Raw memory samples, measured instrumentation and declared bounds are judged per attempt. A complete comparable workload across every round, checkpoint and recovery is absent; any observed bound failure remains RED.',
         50: 'Movement/aim submitted-render measurements are reported; other action/input-sequence stamps require FrameMan.cpp:277,344 outside this lane.',
         51: 'Remote-unit render discontinuities require FrameMan/LocalPrediction records outside this lane; local corrections retain their own labels.',
         53: 'Fresh produced/applied controller input and authenticated goodbye now have native terminal records, bound to a continuous payload clock. Full phase-specific queued/cancelled admission and survivor end-to-end runs remain incomplete at NetMatchService.cpp:939,5319 and NetWorldJoin.cpp:1139.',
         54: 'FrameMan.cpp:277,344 lacks round/execution ids; multi-round raw presentation reduction cannot safely reuse single-round identities.',
         69: 'The real Void Wanderers mission/economy/scene-transition and unchanged-reference arm has not run.',
-        71: 'Fog-on reveal/capture/rejoin is not yet demonstrated; a fog-off fight does not cover it.'}
+        71: 'Fog-on reveal/capture/rejoin is not yet demonstrated; a fog-off fight does not cover it.',
+        'reread-2b': 'Success-positioned throw, ejection, door and first-controllable-input records exist. Full melee/shield/emitter/bleeding/settling/script assertions and every scheduled recovery outcome remain unproved (6,11,14,18,53).',
+        'reread-2c': 'Exclusive tick timing and native fresh-input recovery terminals exist at Main.cpp:625. Complete phase-specific recovery identity, deadline and survivor evidence have not been demonstrated (52,53).',
+        'reread-7': 'First soak excludes host kill and declares fault budgets. The adopted wave has held-seat end records; every queued/cancelled/refused outcome, full terminal hash history and 36000-tick chain remain unproved (32,35,62).'}
     for item in items:
         item['status'] = 'NOT COVERED'
         item['reason'] = reasons.get(item['number'], item['reason'])
