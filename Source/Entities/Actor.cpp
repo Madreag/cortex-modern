@@ -2527,6 +2527,7 @@ void Actor::Update() {
 		const float impulse = std::sqrt(travelImpulseMagnitudeSqr) - m_TravelImpulseDamage;
 		const float damage = std::max(impulse / (m_GibImpulseLimit - m_TravelImpulseDamage) * m_MaxHealth, 0.0F);
 		m_Health -= damage;
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled() && damage > 0) g_MetricsCollector.RecordEvent("impact_damage", this, "unattributed", damage);
 		m_ForceDeepCheck = true;
 	}
 

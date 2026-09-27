@@ -203,8 +203,12 @@ static nlohmann::json s_crossContext;
 static nlohmann::json s_crossSchedule = nlohmann::json::array();
 static uint64_t s_crossBudget = 0;
 static std::map<uint64_t, uint64_t> s_crossLastCommitted;
+static std::map<uint64_t, uint64_t> s_crossFirstGameplayTick;
 static std::set<std::string> s_crossFired;
 static unsigned s_crossRematches = 0;
+static bool s_crossTicketRejoin = false;
+static bool s_crossLeaveRequested = false;
+static nlohmann::json s_crossHostOptions = nlohmann::json::array();
 
 static std::string CrossEnvironment(const char* name, const char* fallback = "") {
 	const char* value = std::getenv(name);
@@ -217,13 +221,19 @@ static void BeginCrossTick(uint64_t tick) {
 	static bool opened = false;
 	if (!opened) {
 		opened = true;
-		if (!g_MetricsCollector.OpenEvents(CrossEnvironment("CC_TEST_CROSS_RECORDS"))) {
+		s_crossBudget = std::stoull(CrossEnvironment("CC_TEST_CROSS_BUDGET_BASE", "0"));
+		const auto eventBudget = static_cast<size_t>(std::stoull(CrossEnvironment("CC_TEST_CROSS_EVENT_RAW_LIMIT", "268435456")));
+		if (!g_MetricsCollector.OpenEvents(CrossEnvironment("CC_TEST_CROSS_RECORDS"), eventBudget)) {
 			System::PrintDiagnosticLine("[cross-record] FAIL cannot open event file");
 			return;
 		}
 	}
 	const auto config = ScenarioRunner::GetLockstepMatchConfig();
-	if (!config) return;
+	if (!config) {
+		s_crossContext = {{"tick", tick}, {"phase", "unmapped"}, {"history_branch", nullptr}};
+		g_MetricsCollector.BeginEventTick(s_crossContext);
+		return;
+	}
 	static uint64_t previousRound = 0, previousTick = 0, execution = 0;
 	const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 	if (round == previousRound && tick <= previousTick) ++execution;
@@ -231,21 +241,30 @@ static void BeginCrossTick(uint64_t tick) {
 	const bool catchup = ScenarioRunner::WorldCatchUpActive();
 	s_crossContext = {{"run", CrossEnvironment("CC_TEST_CROSS_RUN")}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
 	    {"process", System::GetProcessID()}, {"execution", CrossEnvironment("CC_TEST_CROSS_EXECUTION") + "/" + std::to_string(execution)},
-	    {"incarnation", CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0")}, {"seat_incarnation", nullptr},
+	    {"incarnation", std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"))}, {"seat_incarnation", nullptr},
 	    {"authority_generation", nullptr}, {"session", std::to_string(config->sessionId)}, {"match", std::to_string(config->roundId)},
 	    {"round", round}, {"source_round", config->roundId}, {"tick", tick}, {"peer", ScenarioRunner::GetLockstepLocalPeerId()},
 	    {"history_branch", ScenarioRunner::GetLockstepResumeFrame() > 0 ? nlohmann::json(nullptr) : nlohmann::json("initial")},
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
 	    {"config_hash", NetMatchConfigUtil::StoredConfigHash(*config)}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
-	    {"phase", catchup ? "catchup" : execution > 0 ? "reexecution" : "live"},
+	    {"phase", catchup ? "catchup" : execution > 0 ? "reexecution" : "live"}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
 	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
+	if (const auto& snapshot = g_NetMatchService.GetSeatPresence().GetSnapshot()) {
+		for (const auto& seat: snapshot->seats) if (seat.peerId == ScenarioRunner::GetLockstepLocalPeerId()) {
+			s_crossContext["seat_incarnation"] = seat.incarnation;
+			s_crossContext["holder_generation"] = seat.holderGeneration;
+			s_crossContext["seat_generation"] = seat.seatGeneration;
+			s_crossContext["seat_revision"] = snapshot->revision;
+		}
+	}
 	g_MetricsCollector.BeginEventTick(s_crossContext);
 	if (newRound) {
 		nlohmann::json roster = nlohmann::json::array();
 		for (const auto& slot: config->players) roster.push_back({{"peer", slot.peerId}, {"team", slot.team}, {"human", !slot.cpu}});
 		g_MetricsCollector.WriteObservation({{"type", "adopted_config"}, {"peer_limit", NetMatchConfigUtil::c_MaxPeerCount},
 		    {"peer_count", config->peerCount}, {"players", std::move(roster)}, {"difficulty", config->difficulty},
-		    {"fog", config->fogOfWar}, {"sim_tick_ms", g_TimerMan.GetDeltaTimeSecs() * 1000.0}});
+		    {"fog", config->fogOfWar}, {"config", nlohmann::json::parse(NetMatchConfigUtil::BuildReportJson(*config))},
+		    {"sim_tick_ms", g_TimerMan.GetDeltaTimeSecs() * 1000.0}});
 		System::PrintDiagnosticLine("[cross-context] round=" + std::to_string(round) + " source_round=" + std::to_string(config->roundId) +
 		    " config=" + NetMatchConfigUtil::StoredConfigHash(*config) + " peer_limit=" + std::to_string(NetMatchConfigUtil::c_MaxPeerCount));
 	}
@@ -264,7 +283,7 @@ static void ApplyCrossSchedule() {
 		const std::string id = fault.at("id");
 		if (s_crossFired.contains(id) || s_crossBudget < fault.at("tick").get<uint64_t>()) continue;
 		const std::string action = fault.at("action");
-		if (action == "crash-restart" || action == "announced-leave-rejoin") continue;
+		if (action == "crash-restart" || action == "brain-eliminate") continue;
 		const auto stamp = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
 		nlohmann::json receipt{{"type", "fault"}, {"id", id}, {"action", action}, {"requested_budget_tick", fault.at("tick")},
 		    {"budget_tick", s_crossBudget}, {"applied_wall_ms", stamp()}, {"applied", false}};
@@ -288,10 +307,68 @@ static void ApplyCrossSchedule() {
 			NetH4SetFault(NetH4FaultFromName(action));
 			receipt["applied"] = true;
 			receipt["scope"] = "H4_acknowledgement_fault";
+		} else if (action == "announced-leave-rejoin") {
+			s_crossLeaveRequested = true;
+			receipt["applied"] = true;
+			receipt["scope"] = "announced_leave_at_next_committed_tick_end";
 		}
 		receipt["completed_wall_ms"] = stamp();
 		g_MetricsCollector.WriteObservation(receipt);
 		System::PrintDiagnosticLine("[cross-fault] " + receipt.dump());
+	}
+}
+
+static bool CrossHostOptions(unsigned match, std::string* error) {
+	if (s_crossHostOptions.empty() || !g_NetMatchService.IsHost()) return true;
+	auto draft = g_NetMatchService.GetLobbyMatchConfig();
+	const auto& options = s_crossHostOptions[(match / 2) % s_crossHostOptions.size()];
+	if (options.contains("difficulty")) draft.difficulty = options["difficulty"].get<uint8_t>();
+	if (options.contains("ai_skill")) for (auto& team: draft.teamRules) team.aiSkill = options["ai_skill"].get<uint8_t>();
+	if (options.contains("fog")) draft.fogOfWar = options["fog"].get<bool>();
+	if (options.contains("scene")) draft.sceneName = options["scene"].get<std::string>();
+	if (options.contains("scene_module")) draft.sceneModule = options["scene_module"].get<std::string>();
+	const bool accepted = g_NetMatchService.SubmitHostOptions(draft.configRevision, draft, error);
+	if (accepted) System::PrintDiagnosticLine("[cross-host-options] match=" + std::to_string(match) + " accepted=1 revision=" +
+	    std::to_string(draft.configRevision) + " intended_config=" + NetMatchConfigUtil::StoredConfigHash(draft));
+	return accepted;
+}
+
+static void CrossEliminationAtCommittedTick(uint64_t tick) {
+	if (s_crossSchedule.empty() || !g_NetMatchService.IsHost() || ScenarioRunner::WorldCatchUpActive()) return;
+	static std::map<std::string, std::set<long>> issued;
+	for (const auto& fault: s_crossSchedule) {
+		if (fault.at("action") != "brain-eliminate" || s_crossBudget < fault.at("tick").get<uint64_t>()) continue;
+		const std::string id = fault.at("id");
+		if (s_crossFired.contains(id)) continue;
+		const auto config = ScenarioRunner::GetLockstepMatchConfig();
+		if (!config) continue;
+		uint8_t targetPeer = 0;
+		for (const auto& slot: config->players) if (slot.displayName == fault.value("target_peer", "") ||
+		    (slot.peerId && g_NetMatchService.GetPeerDisplayName(slot.peerId) == fault.value("target_peer", ""))) targetPeer = slot.peerId;
+		const std::string phase = fault.value("phase", "hold");
+		const bool held = targetPeer && ScenarioRunner::IsLockstepSeatUnderAI(targetPeer, tick);
+		const bool phaseSignalled = fault.contains("phase_file") && std::filesystem::is_regular_file(fault["phase_file"].get<std::string>());
+		if (issued[id].empty() && !(phase == "hold" ? held : phaseSignalled)) continue;
+		const int survivor = fault.value("survivor_team", 0);
+		Actor* writer = g_MovableMan.GetFirstBrainActor(survivor);
+		if (!writer || !ScenarioRunner::IsLockstepAIWriteAuthorized(ScenarioRunner::GetLockstepLocalPeerId(), writer->GetTeam(), writer->GetUniqueID(), writer->GetUniqueID())) continue;
+		unsigned enemies = 0;
+		for (int team = 0; team < Activity::MaxTeamCount; ++team) if (team != survivor) {
+			if (Actor* brain = g_MovableMan.GetFirstBrainActor(team)) {
+				++enemies;
+				if (issued[id].insert(brain->GetUniqueID()).second) {
+					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameAIGib{writer->GetUniqueID(), brain->GetUniqueID(), 0, writer->GetTeam(), 0, 0}});
+					g_MetricsCollector.WriteObservation({{"type", "elimination_request"}, {"id", id}, {"phase", phase},
+					    {"observed_hold", held}, {"phase_signalled", phaseSignalled}, {"target_actor", brain->GetUniqueID()},
+					    {"target_team", team}, {"writer", writer->GetUniqueID()}, {"requested_at_tick", tick}});
+				}
+			}
+		}
+		if (!enemies && g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver()) {
+			s_crossFired.insert(id);
+			g_MetricsCollector.WriteObservation({{"type", "elimination_outcome"}, {"id", id}, {"result", "activity_over"},
+			    {"survivor_team", survivor}, {"overlap_hold_at_end", held}, {"phase", phase}, {"final_tick", tick}});
+		}
 	}
 }
 // The live desync check. On everywhere by default; -net-desync-check off opts a measurement run out.
@@ -965,6 +1042,15 @@ bool HandleMainArgs(int argCount, char** argValue) {
 	for (int i = 0; i < argCount;) {
 		std::string currentArg = argValue[i];
 		bool lastArg = i + 1 == argCount;
+		if (currentArg == "-net-cross-ticket-rejoin") { s_crossTicketRejoin = true; ++i; continue; }
+		if (currentArg == "-net-cross-host-options" && !lastArg) {
+			try {
+				if (CrossEnvironment("CCCP_HEADLESS") != "1") throw std::runtime_error("cross options require headless");
+				std::ifstream input(argValue[i + 1]); s_crossHostOptions = nlohmann::json::parse(input);
+				if (!s_crossHostOptions.is_array() || s_crossHostOptions.empty() || s_crossHostOptions.size() > 32) throw std::runtime_error("invalid host options list");
+			} catch (const std::exception& error) { std::cerr << "[cross-host-options] FAIL " << error.what() << std::endl; return false; }
+			i += 2; continue;
+		}
 		if (currentArg == "-net-cross-schedule" && !lastArg) {
 			try {
 				if (CrossEnvironment("CCCP_HEADLESS") != "1") throw std::runtime_error("cross schedule requires headless");
@@ -973,7 +1059,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				if (!s_crossSchedule.is_array() || s_crossSchedule.size() > 256) throw std::runtime_error("invalid cross schedule length");
 				std::set<std::string> ids;
 				for (const auto& fault: s_crossSchedule) {
-					if (!fault.at("tick").is_number_unsigned() || fault.at("tick").get<uint64_t>() == 0 || !ids.insert(fault.at("id")).second)
+					if (!fault.at("tick").is_number_unsigned() || fault.at("tick").get<uint64_t>() == 0 || !ids.insert(fault.at("id").get<std::string>()).second)
 						throw std::runtime_error("invalid cross fault tick or duplicate id");
 				}
 			} catch (const std::exception& error) { std::cerr << "[cross-schedule] FAIL " << error.what() << std::endl; return false; }
@@ -5008,6 +5094,57 @@ static bool IsFirstE2ERematchReady() {
 	       activity && activity->IsOver() && (s_crossRematches || s_netMatchE2ETicks.Total() >= 100);
 }
 
+static bool CrossWinSurfaceReady() {
+	if (!s_crossRematches) return true;
+	static uint64_t round = 0, began = 0;
+	const uint64_t current = ScenarioRunner::GetLockstepRoundId(), tick = g_TimerMan.GetSimUpdateCount();
+	if (round != current) { round = current; began = tick; }
+	if (tick - began < 300) return false;
+	const auto path = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() /
+	    ("round-" + std::to_string(current) + "-win.png");
+	const bool saved = g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0;
+	g_MetricsCollector.WriteObservation({{"type", "win_surface"}, {"result", BuildNetMatchResultText()},
+	    {"screen_text", g_FrameMan.GetScreenText(0)}, {"grace_ticks", tick - began}, {"screenshot", path.string()}, {"saved", saved}});
+	return true;
+}
+
+static bool CrossDrawLobbySurface(std::string* error) {
+	if (!s_crossRematches) return true;
+	g_TimerMan.PauseSim(true);
+	g_MenuMan.HandleTransitionIntoMenuLoop();
+	g_MenuMan.SkipTitleIntroForAutomation();
+	g_MenuMan.SetIsInMenuScreen(true);
+	g_UInputMan.DisableKeys(false);
+	g_UInputMan.TrapMousePos(false);
+	auto* menu = g_MenuMan.GetMainMenu();
+	menu->OfferRematchLobbyOnEntry();
+	const auto draw = [&] {
+		PollSDLEvents(); g_WindowMan.Update(); g_UInputMan.Update(); g_TimerMan.Update();
+		g_WindowMan.ClearBackbuffer();
+		g_MenuMan.Update();
+		g_WindowMan.GetScreenBuffer()->Begin(); g_MenuMan.Draw(); g_WindowMan.GetScreenBuffer()->End();
+		g_WindowMan.UploadFrame(); g_UInputMan.EndFrame();
+	};
+	for (unsigned frame = 0; frame < 20 && !System::IsSetToQuit(); ++frame) { draw(); std::this_thread::sleep_for(std::chrono::milliseconds(16)); }
+	std::string summary, details;
+	const bool summaryRead = menu->AutomationLabelText("LabelLastMatchSummary", summary);
+	const bool opened = menu->AutomationActivateControl("ButtonLastMatchDetails");
+	draw();
+	const bool detailsRead = menu->AutomationLabelText("LabelLastMatchDetails", details);
+	const auto path = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() /
+	    ("match-" + std::to_string(s_netMatchServiceE2ERematches) + "-lobby.png");
+	const bool saved = g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), path.string().c_str()) == 0;
+	const auto summaryRecord = g_NetMatchService.GetLastMatchSummary();
+	const bool equal = summaryRecord && summary == summaryRecord->LineText() && details == summaryRecord->DetailsText();
+	g_MetricsCollector.WriteObservation({{"type", "lobby_surface"}, {"summary", summary}, {"details", details},
+	    {"screen", menu->AutomationActiveScreenName()}, {"subscreen", menu->AutomationMultiplayerSubScreen()},
+	    {"summary_matches", equal}, {"details_opened", opened}, {"screenshot", path.string()}, {"saved", saved}});
+	menu->AutomationActivateControl("ButtonLastMatchClose");
+	g_MenuMan.SetIsInMenuScreen(false);
+	if (!summaryRead || !detailsRead || !opened || !equal || !saved) { *error = "the drawn lobby summary/details did not match the retained result"; return false; }
+	return true;
+}
+
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	const std::string error = ScenarioRunner::GetControllerReplayError();
 	if (error.find("Desync") != std::string::npos) {
@@ -6150,13 +6287,31 @@ void RunGameLoop() {
 			// Feed end-of-tick terrain state, finalize this tick's hash, and hand the result to the
 			// MetricsCollector for the per-tick determinism trace (no-op without an active scenario run).
 			std::optional<SimChecksum::Result> probeTickResult;
-			g_MetricsCollector.FlushEventTick();
-			if (g_MetricsCollector.EventsEnabled() && !lockstepPausedTick && !ScenarioRunner::WorldCatchUpActive() && g_ActivityMan.ActivityRunning()) {
-				const uint64_t sourceRound = ScenarioRunner::GetLockstepRoundId();
-				auto& last = s_crossLastCommitted[sourceRound];
-				if (simTick > last) { ++s_crossBudget; last = simTick; }
-				g_MetricsCollector.WriteObservation({{"type", "progress"}, {"budget_tick", s_crossBudget}});
+			if (g_MetricsCollector.EventsEnabled()) {
+				if (const auto config = ScenarioRunner::GetLockstepMatchConfig()) {
+					s_crossContext["config_revision"] = config->configRevision;
+					s_crossContext["config_hash"] = NetMatchConfigUtil::StoredConfigHash(*config);
+				}
+				s_crossContext["applied_frame"] = ScenarioRunner::GetLockstepAppliedFrame();
+				s_crossContext["effective_start_frame"] = ScenarioRunner::GetLockstepEffectiveStartFrame();
+				s_crossContext["wall_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+				g_MetricsCollector.UpdateEventContext(s_crossContext);
 			}
+			g_MetricsCollector.FlushEventTick();
+			if (g_MetricsCollector.EventsEnabled() && !lockstepPausedTick && !ScenarioRunner::WorldCatchUpActive() && s_crossContext.value("gameplay_tick", false)) {
+				const uint64_t sourceRound = s_crossContext.value("source_round", uint64_t{0});
+				if (!s_crossLastCommitted.contains(sourceRound)) {
+					const uint64_t first = s_crossLastCommitted.empty() && s_crossTicketRejoin ? std::stoull(CrossEnvironment("CC_TEST_CROSS_MATCH_FIRST_TICK", "1")) : simTick;
+					s_crossFirstGameplayTick[sourceRound] = first;
+					s_crossLastCommitted[sourceRound] = first - 1;
+				}
+				auto& last = s_crossLastCommitted[sourceRound];
+				if (simTick > last) { s_crossBudget += simTick - last; last = simTick; }
+				const uint64_t first = s_crossFirstGameplayTick[sourceRound];
+				g_MetricsCollector.WriteObservation({{"type", "progress"}, {"budget_tick", s_crossBudget}, {"first_gameplay_tick", first},
+				    {"budget_base", s_crossBudget - (last - first + 1)}, {"budget_basis", "canonical_frame_advance_not_observation_coverage"}});
+			}
+			CrossEliminationAtCommittedTick(simTick);
 			if (hashThisTick) {
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
 				// archive below writes the same deques, so both have to read one instant.
@@ -6211,6 +6366,7 @@ void RunGameLoop() {
 				NetLockstepPlane::Window collectionWindow("tick-end collection wait");
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
+			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
 			if (s_scriptedLeaveDue) {
 				s_scriptedLeaveDue = false;
 				{
@@ -6438,12 +6594,12 @@ void RunGameLoop() {
 				    std::max(0LL, elapsedUs - (ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs)) / 1000.0);
 				if (g_MetricsCollector.EventsEnabled()) {
 					const long long waitUs = ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs;
-					g_MetricsCollector.WriteObservation({{"type", "tick_timing"}, {"total_us", elapsedUs},
-					    {"compute_us", std::max(0LL, elapsedUs - waitUs - crossCaptureUs + crossCaptureWaitUs)},
-					    {"wait_us", waitUs}, {"capture_us", std::max(0LL, crossCaptureUs - crossCaptureWaitUs)},
+					auto timing = MetricsCollector::TickTiming(elapsedUs, waitUs, crossCaptureUs, crossCaptureWaitUs);
+					timing.update(nlohmann::json{
 					    {"paused", lockstepPausedTick}, {"actors_alive", g_MovableMan.GetActorCount()},
 					    {"particles_alive", g_MovableMan.GetParticleCount()}, {"record_bytes", g_MetricsCollector.EventBytes()},
-					    {"trace_vector_payload_bytes", g_MetricsCollector.InstrumentationBytes()}});
+					    {"trace_vector_payload_bytes", g_MetricsCollector.InstrumentationBytes()}, {"budget_tick", s_crossBudget}});
+					g_MetricsCollector.WriteObservation(timing);
 				}
 			}
 
@@ -6871,21 +7027,22 @@ void RunGameLoop() {
 				}
 				// E2E rematch ride-through: match 1 ended, so finish it, reconvene the live session in the
 				// lobby, and relaunch — round 2 is policed by the live desync exchange like any match.
-				if (IsFirstE2ERematchReady()) {
+				if (IsFirstE2ERematchReady() && CrossWinSurfaceReady() && (!s_crossRematches || s_crossBudget <= s_netLockstepTicks)) {
 					++s_netMatchServiceE2ERematches;
 					const std::string result = BuildNetMatchResultText();
 					g_MetricsCollector.WriteObservation({{"type", "match_boundary"}, {"result", result},
 					    {"final_tick", simTick}, {"rematch", s_netMatchServiceE2ERematches}, {"budget_tick", s_crossBudget}});
 					{
 						std::ostringstream line;
-						line << "[net-match-service-e2e] rematch: match 1 over (" << result << "), returning to lobby";
+						line << "[net-match-service-e2e] rematch: match " << s_netMatchServiceE2ERematches << " over (" << result << "), returning to lobby";
 						System::PrintDiagnosticLine(line.str());
 					}
 					g_NetMatchService.FinishMatch(result);
 					g_ActivityMan.EndActivity();
 					g_ActivityMan.SetInActivity(false);
 					std::string rematchError;
-					if (!g_NetMatchService.ReturnToLobby(&rematchError)) {
+					if (!CrossDrawLobbySurface(&rematchError) ||
+					    (g_NetMatchService.GetState() == NetMatchServiceState::Completed && !g_NetMatchService.ReturnToLobby(&rematchError))) {
 						s_netMatchServiceE2EError = "rematch return-to-lobby failed: " + rematchError;
 						s_netMatchServiceE2EExitCode = 1;
 						System::SetQuit(true);
@@ -6893,6 +7050,10 @@ void RunGameLoop() {
 					}
 					g_NetMatchService.SetReady();
 					if (g_NetMatchService.IsHost()) {
+						if (!CrossHostOptions(s_netMatchServiceE2ERematches, &rematchError)) {
+							s_netMatchServiceE2EError = "rematch host options: " + rematchError;
+							s_netMatchServiceE2EExitCode = 1; System::SetQuit(true); break;
+						}
 						g_NetMatchService.RequestStart();
 					}
 					std::string rematchPreset;
@@ -6932,7 +7093,7 @@ void RunGameLoop() {
 					}
 					{
 						std::ostringstream line;
-						line << "[net-match-service-e2e] rematch: round 2 launching";
+						line << "[net-match-service-e2e] rematch: round " << s_netMatchServiceE2ERematches + 1 << " launching";
 						System::PrintDiagnosticLine(line.str());
 					}
 					// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
@@ -6958,7 +7119,7 @@ void RunGameLoop() {
 					const bool unlimitedWorld = (s_netWorldDaemon || s_netPersistentWorld) && !s_netMatchTicksExplicit;
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					// A peer counts its cap from its own first tick, a world joiner too.
-					const uint64_t completedTicks = s_netMatchE2ETicks.Total();
+					const uint64_t completedTicks = s_crossRematches ? s_crossBudget : s_netMatchE2ETicks.Total();
 					// Every peer stops at the cap, so the round knows the last frame anyone will feed.
 					if (!unlimitedWorld && completedTicks <= tickCap && ScenarioRunner::HasLockstepCoordinator())
 						ScenarioRunner::SetLockstepFinalFrame(ScenarioRunner::GetLockstepAppliedFrame() + (tickCap + 1 - completedTicks));
@@ -8076,6 +8237,7 @@ int RunNetMatchServiceE2E() {
 			request.mode = parsedMode;
 		}
 		request.resyncOnDesync = s_netMatchResyncOnDesync;
+		if (s_crossTicketRejoin) { request.rejoin = true; request.resyncOnDesync = true; }
 		request.autoInputDelay = s_netMatchAutoDelay;
 		if (s_netPersistentWorld && e2eHost) {
 			request.persistentWorld = true;
@@ -8096,13 +8258,18 @@ int RunNetMatchServiceE2E() {
 	std::string activityPreset;
 	if (setupError.empty()) {
 		g_NetMatchService.SetReady();
-		if (e2eHost) {
+		bool crossOptionsApplied = s_crossHostOptions.empty() || !e2eHost;
+		if (e2eHost && crossOptionsApplied) {
 			g_NetMatchService.RequestStart();
 		}
 		const bool unlimitedWorld = e2eHost && s_netPersistentWorld && !s_netMatchTicksExplicit;
 		const auto waitStart = std::chrono::steady_clock::now();
 		while (true) {
 			PollSDLEvents();
+			if (!crossOptionsApplied) {
+				std::string optionsError;
+				if (CrossHostOptions(0, &optionsError)) { crossOptionsApplied = true; g_NetMatchService.SetReady(); g_NetMatchService.RequestStart(); }
+			}
 			if (System::IsSetToQuit()) {
 				setupCancelled = true;
 				g_NetMatchService.Destroy();

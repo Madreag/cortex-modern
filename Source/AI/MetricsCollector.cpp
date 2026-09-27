@@ -66,6 +66,12 @@ namespace RTE {
 		    {"class", object ? object->GetClassName() : ""}});
 	}
 
+	void MetricsCollector::UpdateEventContext(const json& context) {
+		if (!EventsEnabled()) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_EventStream->context.update(context);
+	}
+
 	void MetricsCollector::AppendEvent(const json& event) {
 		if (!EventsEnabled() || (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative())) return;
 		std::lock_guard<std::mutex> lock(m_Mutex);
@@ -124,6 +130,13 @@ namespace RTE {
 			for (const auto& [key, value]: record.subsystemHex) bytes += key.capacity() + value.capacity();
 		}
 		return bytes;
+	}
+
+	json MetricsCollector::TickTiming(long long totalUs, long long waitUs, long long captureUs, long long captureWaitUs) {
+		const long long captureOnly = captureUs - captureWaitUs;
+		const long long compute = totalUs - waitUs - captureOnly;
+		return {{"type", "tick_timing"}, {"total_us", totalUs}, {"wait_us", waitUs}, {"capture_us", captureOnly}, {"compute_us", compute},
+		    {"partition_valid", totalUs >= 0 && waitUs >= 0 && captureWaitUs >= 0 && captureWaitUs <= waitUs && captureOnly >= 0 && compute >= 0}};
 	}
 
 	MetricsCollector::MetricsCollector() = default;
