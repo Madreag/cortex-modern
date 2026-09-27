@@ -365,17 +365,80 @@ namespace RTE::FloatTextSelfTest {
 			if (!SceneMan::IsConstructed()) SceneMan::Construct();
 		}
 
-		/// The hexadecimal text the codec writes has to be the text the streams wrote before it, or every
-		/// saved game and packed state would change shape. Only meaningful in the C locale.
-		void CheckHexFloatMatchesTheStream() {
-			for (const float value: {1.5F, -0.25F, 0.75F, 0.1F, 3.14159265F, 0.0F, -0.0F, 1e-30F}) {
-				std::ostringstream stream;
-				stream << std::hexfloat << value;
-				const std::string expected = stream.str();
+		struct CanonicalHex {
+			uint64_t bits;
+			const char* text;
+		};
+
+		/// The hexadecimal text every platform must write, byte for byte. The first rows are the values a three-box
+		/// match's full-state capture wrote on the Mac, in the Mac's spelling; the rest pin the rule at its edges.
+		constexpr CanonicalHex CanonicalHexTexts[] = {
+		    {0x0000000000000000, "0x0p+0"},
+		    {0x3fe282b7e0000000, "0x1.282b7ep-1"},
+		    {0xbfe3d69600000000, "-0x1.3d696p-1"},
+		    {0xbfe51a82a0000000, "-0x1.51a82ap-1"},
+		    {0xbff0512820000000, "-0x1.051282p+0"},
+		    {0x3ffcd11d40000000, "0x1.cd11d4p+0"},
+		    {0xbffcd979a0000000, "-0x1.cd979ap+0"},
+		    {0xbffd40d320000000, "-0x1.d40d32p+0"},
+		    {0xbffd46b900000000, "-0x1.d46b9p+0"},
+		    {0x3ffd520280000000, "0x1.d52028p+0"},
+		    {0x400e5a8580000000, "0x1.e5a858p+1"},
+		    {0x4019ad9160000000, "0x1.9ad916p+2"},
+		    {0x4019dda700000000, "0x1.9dda7p+2"},
+		    {0xc01bad9000000000, "-0x1.bad9p+2"},
+		    {0xc01e6c1000000000, "-0x1.e6c1p+2"},
+		    {0x4026c4cd20000000, "0x1.6c4cd2p+3"},
+		    {0x4027b7f000000000, "0x1.7b7fp+3"},
+		    {0x4027b827a0000000, "0x1.7b827ap+3"},
+		    {0x4027b844e0000000, "0x1.7b844ep+3"},
+		    {0x4027ba3f00000000, "0x1.7ba3fp+3"},
+		    {0x4027ba67c0000000, "0x1.7ba67cp+3"},
+		    {0x4027f7cba0000000, "0x1.7f7cbap+3"},
+		    {0xc027f8dba0000000, "-0x1.7f8dbap+3"},
+		    {0x40a0680000000000, "0x1.068p+11"},
+		    {0x8000000000000000, "-0x0p+0"},
+		    {0x3ff0000000000000, "0x1p+0"},
+		    {0x3ff8000000000000, "0x1.8p+0"},
+		    {0xbfd0000000000000, "-0x1p-2"},
+		    {0x3fe8000000000000, "0x1.8p-1"},
+		    {0x3fb999999999999a, "0x1.999999999999ap-4"},
+		    {0x3fb99999a0000000, "0x1.99999ap-4"},
+		    {0x400921fb60000000, "0x1.921fb6p+1"},
+		    {0x39b4484c00000000, "0x1.4484cp-100"},
+		    {0x4330000000000000, "0x1p+52"},
+		    {0x36a0000000000000, "0x1p-149"},
+		    {0x0010000000000000, "0x1p-1022"},
+		    {0x7fefffffffffffff, "0x1.fffffffffffffp+1023"},
+		    {0x0000000000000001, "0x0.0000000000001p-1022"},
+		    {0x0008000000000000, "0x0.8p-1022"},
+		    {0x000fffffffffffff, "0x0.fffffffffffffp-1022"},
+		    {0x7e37e43c8800759c, "0x1.7e43c8800759cp+996"},
+		    {0x81a56e1fc2f8f359, "-0x1.56e1fc2f8f359p-997"},
+		    {0x7ff0000000000000, "inf"},
+		    {0xfff0000000000000, "-inf"},
+		    {0x7ff8000000000000, "nan"},
+		    {0xfff8000000000000, "-nan"},
+		};
+
+		/// Full-state text is compared across machines, so the codec's hexadecimal spelling is one form on every
+		/// platform, never the local printf's %a, and every spelling reads back to the value that wrote it.
+		void CheckHexFloatCanonical() {
+			for (const CanonicalHex& row: CanonicalHexTexts) {
+				const double value = std::bit_cast<double>(row.bits);
 				const std::string written = HexFloatString(value);
-				if (written != expected) {
-					Fail(std::string("hexfloat text '") + written + "' but a stream writes '" + expected + "'");
+				if (written != row.text) {
+					Fail(std::string("hexfloat ") + Hex(value) + " written '" + written + "', canonical '" + row.text + "'");
 				}
+				double readBack = 0.0;
+				const std::string canonical = row.text;
+				const std::from_chars_result parsed = ParseHexFloatExact(canonical.data(), canonical.data() + canonical.size(), readBack);
+				if (parsed.ec != std::errc() || parsed.ptr != canonical.data() + canonical.size() || !SameValue(readBack, value)) {
+					Fail(std::string("hexfloat round trip '") + canonical + "' got " + Hex(readBack));
+				}
+			}
+			for (const float value: {1.5F, -0.25F, 0.75F, 0.1F, 3.14159265F, 0.0F, -0.0F, 1e-30F}) {
+				const std::string written = HexFloatString(value);
 				float readBack = 0.0F;
 				const std::from_chars_result parsed = ParseHexFloatExact(written.data(), written.data() + written.size(), readBack);
 				if (parsed.ec != std::errc() || parsed.ptr != written.data() + written.size() || !SameValue(readBack, value)) {
@@ -434,15 +497,13 @@ namespace RTE::FloatTextSelfTest {
 		/// than building a manager graph to satisfy a destructor.
 		template <class EntityType> EntityType& KeptAlive() { return *(new EntityType()); }
 
-		/// The hexadecimal spelling is the platform's %a - UCRT pads the mantissa to 13 digits where the BSD
-		/// and glibc libcs trim it - so these two expectations are built, not written out. What pins the
-		/// spelling itself is CheckHexFloatMatchesTheStream, against the stream that wrote today's saves.
-		std::string ArmHandTargetText() { return HexFloatString(1.5F) + "|" + HexFloatString(-0.25F) + "|" + HexFloatString(0.75F) + "|1|reach"; }
+		/// Both sites write the canonical hexadecimal spelling, so their packed text is the same on every platform.
+		constexpr const char* ArmHandTargetText = "0x1.8p+0|-0x1p-2|0x1.8p-1|1|reach";
 
-		std::string PieMenuStateText() { return "0|0|0|0|0|" + HexFloatString(1.5F) + "|1|-1|-1|-1|-1"; }
+		constexpr const char* PieMenuStateText = "0|0|0|0|0|0x1.8p+0|1|-1|-1|-1|-1";
 
 		std::string ProbeArmHandTarget() {
-			const std::string packed = ArmHandTargetText();
+			const std::string packed = ArmHandTargetText;
 			Arm& arm = KeptAlive<Arm>();
 			arm.AddHandTargetFromSave(packed);
 			const std::vector<std::string> saved = arm.GetHandTargetsForSave();
@@ -451,7 +512,7 @@ namespace RTE::FloatTextSelfTest {
 
 		std::string ProbePieMenuState() {
 			PieMenu& menu = KeptAlive<PieMenu>();
-			menu.UnpackInteractionState(PieMenuStateText());
+			menu.UnpackInteractionState(PieMenuStateText);
 			return menu.PackInteractionState();
 		}
 
@@ -475,8 +536,7 @@ namespace RTE::FloatTextSelfTest {
 		struct LocaleProbe {
 			const char* name;
 			std::string (*run)();
-			const char* expected; //!< The text or bits the site must produce in any locale, or null when it is built below.
-			std::string (*expectedText)() = nullptr; //!< Built expectation, for text whose spelling is the platform's %a.
+			const char* expected; //!< The text or bits the site must produce in any locale, or null when only the C locale run fixes it.
 		};
 
 		constexpr const char* CommaLocaleNames[] = {"de-DE", "de_DE.UTF-8", "German_Germany.1252", "de_DE"};
@@ -532,7 +592,7 @@ namespace RTE::FloatTextSelfTest {
 		void CheckLocaleIndependence() {
 			ConstructManagersForEntities();
 			std::cout << Tag << " stage=managers" << std::endl;
-			CheckHexFloatMatchesTheStream();
+			CheckHexFloatCanonical();
 			std::cout << Tag << " stage=hexfloat" << std::endl;
 			static const LocaleProbe probes[] = {
 			    {"reader_float", ProbeReaderFloat, "0x3fc00000/0x3f800000"},
@@ -542,12 +602,12 @@ namespace RTE::FloatTextSelfTest {
 			    // Measured on the pre-change build: the stream stored an infinity, and zero on underflow.
 			    {"reader_out_of_range", ProbeReaderOutOfRange, "0x7ff0000000000000:fail/0xfff0000000000000:fail/0x0:fail"},
 			    {"writer_float", ProbeWriter, "1.5|-0.1"},
-			    {"arm_hand_target", ProbeArmHandTarget, nullptr, ArmHandTargetText},
-			    {"pie_menu_cursor_angle", ProbePieMenuState, nullptr, PieMenuStateText},
+			    {"arm_hand_target", ProbeArmHandTarget, ArmHandTargetText},
+			    {"pie_menu_cursor_angle", ProbePieMenuState, PieMenuStateText},
 			    {"attachable_deg_offset", ProbeInheritedRotAngleDegOffset, nullptr},
 			    {"custom_number_value", ProbeCustomNumberValue, "0x3ff8000000000000"},
 			};
-			const auto expectationOf = [](const LocaleProbe& probe) { return probe.expectedText ? probe.expectedText() : std::string(probe.expected ? probe.expected : ""); };
+			const auto expectationOf = [](const LocaleProbe& probe) { return std::string(probe.expected ? probe.expected : ""); };
 			std::string references[std::size(probes)];
 			for (size_t index = 0; index < std::size(probes); ++index) {
 				// Named as it starts: a site that reaches for an engine manager it has not got dies here.
