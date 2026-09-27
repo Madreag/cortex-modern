@@ -4,6 +4,7 @@
 #include "NetAuthCrypto.h"
 
 #include "ActivityMan.h"
+#include "MetricsCollector.h"
 #include "Constants.h"
 #include "GameActivity.h"
 #include "Scene.h"
@@ -3413,6 +3414,7 @@ static std::string ResyncSaveName() {
 			if (!ScenarioRunner::WorldCatchUpActive() && g_ActivityMan.ActivityRunning()) {
 				if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
 				const auto captureBegan = std::chrono::steady_clock::now();
+				CrossCaptureBarrierFromEnvironment("capture_announced", tick, m_AutosaveIdentity.roundId);
 				taken = SaveStampedAutosave(tick);
 				const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureBegan).count();
 				if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, taken ? std::max(g_ActivityMan.LastAutosaveCaptureMs(), captureMs) : captureMs);

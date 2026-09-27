@@ -1,5 +1,6 @@
 #include "ActivityMan.h"
 #include "AutosaveStore.h"
+#include "MetricsCollector.h"
 #include "CaptureSentinel.h"
 #include "GameVersion.h"
 #include "GUIInput.h"
@@ -958,6 +959,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		};
 		try {
 			if (std::this_thread::get_id() == simThread) throw std::logic_error("autosave serializer missing a worker thread");
+			if (automatic) CrossCaptureBarrierFromEnvironment("writer_pending", tick, descriptor.roundId);
 			retired.clear();
 			retiredLayers.clear();
 			previousImage.reset();
