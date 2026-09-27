@@ -206,6 +206,8 @@ def make_plan(options):
                              event_expanded_bytes_per_instance=64*1024**3,
                              live_bytes_per_instance=512*1024*1024, failure_window_ticks=600,
                              presentation_chunk_bytes=8*1024*1024, presentation_retained_chunks=16,
+                             fullstate_dump_captures_per_incarnation=2, periodic_pngs_per_incarnation=10,
+                             diagnostic_window='Last two writer-complete full-state dump directories and ten completed periodic PNGs per incarnation. All native hashes, scope lines, live hashes, event records and retirement SHA256 receipts retained. No tick-duration guarantee; win/lobby screenshots retained.',
                              presentation_window='Last 16 sealed gzip chunks plus one active chunk, at most 136 MiB expanded; no tick-duration guarantee. Feel statistics cover retained rows only.'),
                 quiet_window=options.quiet_window, pathfinding='production asynchronous; no -tick-hashes override',
                 fullstate_every=options.fullstate_every,

@@ -11,6 +11,49 @@ import zipfile
 import zlib
 
 
+def retire_diagnostic(path, own, kind):
+    path=Path(path); own=Path(own).resolve()
+    if path.is_symlink() or not path.resolve().is_relative_to(own): raise ValueError('diagnostic leaves its owning instance')
+    digest=hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda:stream.read(1024*1024),b''):digest.update(block)
+    receipt=dict(type='diagnostic_retired',kind=kind,path=str(path.relative_to(own)),bytes=path.stat().st_size,sha256=digest.hexdigest())
+    path.unlink()
+    with (own/'retired-diagnostics.jsonl').open('a',encoding='utf-8') as stream:stream.write(json.dumps(receipt)+'\n')
+
+
+class DiagnosticWindow:
+    def __init__(self, own, captures=2, pngs=10):
+        self.own=Path(own).resolve();self.captures=captures;self.pngs=pngs;self.completed=[];self.next_png_scan=0
+
+    def completed_capture(self,path):
+        path=Path(path)
+        if path in self.completed:return
+        self.completed.append(path)
+        while len(self.completed)>self.captures:
+            old=self.completed.pop(0)
+            for part in sorted(old.glob('*.txt.gz')):retire_diagnostic(part,self.own,'fullstate dump; native hashes and scope retained')
+
+    def poll_pngs(self):
+        import time
+        if time.monotonic()<self.next_png_scan:return
+        self.next_png_scan=time.monotonic()+2
+        complete=[]
+        for path in (self.own/'engine/feel').glob('*.png'):
+            if path.is_symlink():raise ValueError('presentation image is a link')
+            try:
+                with path.open('rb') as stream:
+                    if stream.read(8)!=b'\x89PNG\r\n\x1a\n':continue
+                    stream.seek(-12,2)
+                    if stream.read()!=b'\x00\x00\x00\x00IEND\xaeB`\x82':continue
+                complete.append(path)
+            except OSError:continue
+        complete.sort(key=lambda p:(p.stat().st_mtime_ns,p.name))
+        for path in complete[:-self.pngs]:
+            try:retire_diagnostic(path,self.own,'periodic presentation PNG; frame records retained')
+            except PermissionError:continue
+
+
 def presentation_records(index):
     """Validate the explicitly retained native window; never imply full-run coverage."""
     index=Path(index); document=json.loads(index.read_text(encoding='utf-8'))
@@ -275,8 +318,10 @@ class CaptureSealer:
         self.own=Path(own).resolve()
         self.log=self.own/'engine/stdout.log'
         self.offset=0; self.pending=b''; self.contexts={}; self.sealed=set()
+        self.window=DiagnosticWindow(self.own)
 
     def poll(self):
+        self.window.poll_pngs()
         if not self.log.is_file(): return
         with self.log.open('rb') as stream:
             stream.seek(self.offset); block=stream.read(4*1024*1024); self.offset+=len(block)
@@ -302,6 +347,7 @@ class CaptureSealer:
                 for section in sorted(path.glob('*.txt')):
                     compress_closed_record(section,self.own)
                 self.sealed.add(path)
+                self.window.completed_capture(path)
 
 
 def compress_case_records(root):

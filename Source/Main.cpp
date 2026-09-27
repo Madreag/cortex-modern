@@ -337,6 +337,8 @@ static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored
 	return configuredStart == 1 && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
 }
 
+static uint64_t CrossRecordRound(uint64_t nativeRound, [[maybe_unused]] uint64_t sourceRound) { return nativeRound; }
+
 static bool CrossReadyRevision(uint64_t attemptWindow, uint64_t& previous) {
 	if (attemptWindow == previous) return false;
 	previous = attemptWindow;
@@ -362,6 +364,14 @@ static void CrossReadyForCurrentConfig(uint64_t& previous) {
 }
 
 bool RTE::RunCrossHistoryRecordSelfTest(std::string* error) {
+	const auto roundKey = std::getenv("CC_TEST_CROSS_MATCH_IDENTITY_RED") ? +[](uint64_t, uint64_t sourceRound) { return sourceRound; } : &CrossRecordRound;
+	std::map<uint64_t, uint64_t> last;
+	uint64_t budget = 0;
+	for (const auto [round, tick]: {std::pair<uint64_t,uint64_t>{101,1}, {101,2}, {102,1}, {102,2}}) {
+		auto& previous = last[roundKey(round, 1)];
+		if (tick > previous) { budget += tick - previous; previous = tick; }
+	}
+	if (budget != 4 || roundKey(101, 1) == roundKey(102, 1)) { *error = "distinct rematches alias their checkpoint source round"; return false; }
 	if (CrossHistoryBranch(1, false, 601) != "initial" || !CrossHistoryBranch(600, false, 601).is_null() ||
 	    !CrossHistoryBranch(1, true, 601).is_null() || !CrossHistoryBranch(0, false, 601).is_null()) {
 		*error = "a next-frame cursor is mistaken for a checkpoint, or unknown restoration is mapped as initial"; return false;
@@ -462,7 +472,7 @@ static void BeginCrossTick(uint64_t tick) {
 		configuredStart = lockstep && lockstep->contains("configured_start_frame") && (*lockstep)["configured_start_frame"].is_number_unsigned() ? (*lockstep)["configured_start_frame"].get<uint64_t>() : 0;
 		authorityObservedTick = tick;
 	}
-	const std::string historyKey = std::to_string(config->sessionId) + "/" + std::to_string(config->roundId);
+	const std::string historyKey = std::to_string(config->sessionId) + "/" + std::to_string(CrossRecordRound(round, config->roundId));
 	if (catchup || configuredStart > 1 || s_crossTicketRejoin || (round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
 	priorHost = host; priorCatchup = catchup;
 	s_crossContext = {{"run", CrossEnvironment("CC_TEST_CROSS_RUN")}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
@@ -470,13 +480,13 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"incarnation", std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"))}, {"seat_incarnation", nullptr},
 	    {"authority_generation", catchup ? nlohmann::json(nullptr) : authority}, {"authority_generation_observed_at_tick", authorityObservedTick},
 	    {"authority_generation_source", "service.runner.lockstep; refreshed on round/host/catch-up transition"},
-	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(config->roundId)},
+	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(CrossRecordRound(round, config->roundId))},
 	    {"round", round}, {"source_round", config->roundId}, {"tick", tick}, {"peer", ScenarioRunner::GetLockstepLocalPeerId()},
 	    {"history_branch", CrossHistoryBranch(configuredStart, unmappedHistories.contains(historyKey), ScenarioRunner::GetLockstepResumeFrame())},
 	    {"configured_start_frame", catchup ? nlohmann::json(nullptr) : nlohmann::json(configuredStart)},
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
 	    {"config_hash", NetMatchConfigUtil::StoredConfigHash(*config)}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
-	    {"phase", CrossTickPhase(catchup, tick, s_crossLastCommitted.contains(config->roundId) ? s_crossLastCommitted.at(config->roundId) : 0, execution)}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
+	    {"phase", CrossTickPhase(catchup, tick, s_crossLastCommitted.contains(round) ? s_crossLastCommitted.at(round) : 0, execution)}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
 	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
 	if (const auto& snapshot = g_NetMatchService.GetSeatPresence().GetSnapshot()) {
 		for (const auto& seat: snapshot->seats) if (seat.peerId == ScenarioRunner::GetLockstepLocalPeerId()) {
@@ -6876,7 +6886,7 @@ void RunGameLoop() {
 			}
 			g_MetricsCollector.FlushEventTick();
 			if (g_MetricsCollector.EventsEnabled() && !lockstepPausedTick && !ScenarioRunner::WorldCatchUpActive() && s_crossContext.value("gameplay_tick", false)) {
-				const uint64_t sourceRound = s_crossContext.value("source_round", uint64_t{0});
+				const uint64_t sourceRound = CrossRecordRound(s_crossContext.value("round", uint64_t{0}), s_crossContext.value("source_round", uint64_t{0}));
 				if (!s_crossLastCommitted.contains(sourceRound)) {
 					const uint64_t first = s_crossLastCommitted.empty() && s_crossTicketRejoin ? std::stoull(CrossEnvironment("CC_TEST_CROSS_MATCH_FIRST_TICK", "1")) : simTick;
 					s_crossFirstGameplayTick[sourceRound] = first;
