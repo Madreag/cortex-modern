@@ -263,6 +263,22 @@ static std::string ProcessHeapCensus() {
 		for (size_t size = 0; size < small.size(); ++size) if (small[size]) top.emplace_back(small[size] * size, std::to_string(size) + ":" + std::to_string(small[size]));
 		for (size_t bit = 0; bit < large.size(); ++bit) if (large[bit]) top.emplace_back(large[bit] << bit, "2^" + std::to_string(bit) + ":" + std::to_string(large[bit]));
 		std::partial_sort(top.begin(), top.begin() + std::min<size_t>(top.size(), 12), top.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+		// The sizes whose busy blocks grew most since the last census line, by the bytes they added.
+		static std::vector<uint64_t> lastSmall(65536), lastLarge(64);
+		std::vector<std::pair<int64_t, std::string>> grew;
+		for (size_t size = 0; size < small.size(); ++size) {
+			const int64_t added = static_cast<int64_t>(small[size]) - static_cast<int64_t>(lastSmall[size]);
+			if (added > 0) grew.emplace_back(added * static_cast<int64_t>(size), std::to_string(size) + ":+" + std::to_string(added));
+		}
+		for (size_t bit = 0; bit < large.size(); ++bit) {
+			const int64_t added = static_cast<int64_t>(large[bit]) - static_cast<int64_t>(lastLarge[bit]);
+			if (added > 0) grew.emplace_back(added << bit, "2^" + std::to_string(bit) + ":+" + std::to_string(added));
+		}
+		lastSmall = small;
+		lastLarge = large;
+		std::partial_sort(grew.begin(), grew.begin() + std::min<size_t>(grew.size(), 10), grew.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+		histogram += " heap_grew=";
+		for (size_t index = 0; index < std::min<size_t>(grew.size(), 10); ++index) histogram += (index ? "," : "") + grew[index].second;
 		histogram += " heap_top=";
 		for (size_t index = 0; index < std::min<size_t>(top.size(), 12); ++index) histogram += (index ? "," : "") + top[index].second;
 	}
