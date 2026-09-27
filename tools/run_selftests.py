@@ -78,7 +78,7 @@ QUIET_WAIT_S = 300
 # The wall-clock budget checks inside those rows. A sanitizer build instruments every access, so its timings measure
 # the instrumentation: there the budget lines are reported, not judged, and every other check still decides the row.
 WALL_CLOCK_CHECKS = {"script-graph": ("threaded_synced_update_pass_timing", "threaded_synced_update_pass_timing_under_load")}
-# A load-sensitive row's time cap per sanitizer: the Mac TSan script-graph row ran past 1800 s (exit 124) on 2026-09-26.
+# A load-sensitive row's time cap per sanitizer: TSan's script-graph walk runs past the suite's 1800 s on the Mac.
 SANITIZER_ROW_TIMEOUT = {"script-graph": {"tsan": 3600}}
 SANITIZER_MARKERS = {b"clang_rt.asan": "asan", b"__asan_init": "asan", b"clang_rt.tsan": "tsan", b"__tsan_init": "tsan"}
 
