@@ -48,8 +48,8 @@ def load_boxes(path):
     manifest = json.loads(Path(path).read_text(encoding='utf-8-sig'))
     boxes, peers = manifest['boxes'], manifest['instances']
     by_name = {box['name']: box for box in boxes}
-    if len(by_name) != len(boxes) or len({p['name'] for p in peers}) != len(peers):
-        raise ValueError('box names and instance names must each be unique')
+    if len({box['name'].casefold() for box in boxes}) != len(boxes) or len({p['name'].casefold() for p in peers}) != len(peers):
+        raise ValueError('box names and instance names must each be unique, including Windows case aliases')
     if len({p['box'] for p in peers}) < 3:
         raise ValueError('every match requires three real boxes')
     for box in boxes:
