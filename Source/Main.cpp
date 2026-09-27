@@ -1478,7 +1478,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 	for (int i = 0; i < argCount;) {
 		std::string currentArg = argValue[i];
 		bool lastArg = i + 1 == argCount;
-		if (currentArg == "-net-cross-ticket-rejoin") { s_crossTicketRejoin = true; ++i; continue; }
+		if (currentArg == "-net-cross-ticket-rejoin") {
+			if (CrossEnvironment("CCCP_HEADLESS") != "1") { std::cerr << "[cross-ticket-rejoin] FAIL cross ticket rejoin requires headless" << std::endl; return false; }
+			s_crossTicketRejoin = true; ++i; continue;
+		}
 		if (currentArg == "-net-cross-host-options" && !lastArg) {
 			try {
 				if (CrossEnvironment("CCCP_HEADLESS") != "1") throw std::runtime_error("cross options require headless");
@@ -1504,6 +1507,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-net-cross-rematches" && !lastArg) {
 			const std::string count = argValue[i + 1];
 			if (count.empty() || !std::all_of(count.begin(), count.end(), [](unsigned char c) { return c >= '0' && c <= '9'; }) || count.size() > 4) return false;
+			// The rematch budget counts committed ticks through the cross records; without them it never advances.
+			if (CrossEnvironment("CCCP_HEADLESS") != "1" || CrossEnvironment("CC_TEST_CROSS_RECORDS").empty()) {
+				std::cerr << "[cross-rematches] FAIL cross rematches require headless and CC_TEST_CROSS_RECORDS" << std::endl;
+				return false;
+			}
 			s_crossRematches = static_cast<unsigned>(std::stoul(count));
 			i += 2; continue;
 		}
