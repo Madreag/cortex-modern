@@ -250,8 +250,22 @@ def write_rerun_command(root,manifest):
     for name in inputs: args += ['--'+name,str(root/f'rerun-{name}.json')]
     if manifest.get('chaos_seed') is not None: args += ['--chaos-seed',str(manifest['chaos_seed'])]
     if manifest.get('lane'): args += ['--lane',manifest['lane']]
+    if manifest.get('mac_guard'): args += ['--mac-guard',manifest['mac_guard']]
     args += ['--out',root.as_posix()+'-rerun']
     return subprocess.list2cmdline(args)
+
+
+def fullstate_expected(host_rows, cadence):
+    """The periodic samples every peer owes: each live gameplay tick on the cadence and each round's first eligible tick."""
+    expected, first_eligible = set(), {}
+    for observed in host_rows:
+        if observed.get('phase')!='live' or observed.get('paused') or not observed.get('gameplay_tick') or not observed.get('effective_start_frame'):
+            continue
+        if observed['tick'] < observed['effective_start_frame']: continue
+        round_id=observed['round']; first_eligible.setdefault(round_id,observed['tick'])
+        if observed['tick'] % cadence == 0: expected.add((round_id,observed['tick'],'sample'))
+    expected.update((r,t,'sample') for r,t in first_eligible.items())
+    return sorted(expected)
 
 
 def coverage(events, peers, manifest):
