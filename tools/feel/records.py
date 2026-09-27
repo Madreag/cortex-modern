@@ -7,6 +7,77 @@ import json
 from pathlib import Path
 
 
+class RecordWriter:
+    """Bound compressed chunks without discarding a record or following a link."""
+
+    def __init__(self, base, chunk_bytes=4 * 1024 * 1024, total_bytes=256 * 1024 * 1024):
+        self.base = Path(base)
+        if chunk_bytes <= 0 or total_bytes <= 0:
+            raise ValueError('record budgets must be positive')
+        self.chunk_bytes, self.total_bytes = chunk_bytes, total_bytes
+        self.parts, self.stream, self.size, self.total, self.lines = [], None, 0, 0, 0
+        self.index = self.base.with_name(self.base.name + '.index.json')
+        if self.index.exists():
+            raise FileExistsError(self.index)
+
+    def write(self, row):
+        data = (json.dumps(row, allow_nan=False, separators=(',', ':')) + '\n').encode('utf-8')
+        if self.total + len(data) > self.total_bytes:
+            raise RuntimeError(f'record byte budget exceeded: {self.base}')
+        if self.stream is not None and self.size + len(data) > self.chunk_bytes:
+            self._seal()
+        if self.stream is None:
+            self.path = self.base.with_name(f'{self.base.name}.{len(self.parts):05d}.jsonl.gz')
+            self.raw = self.path.open('xb')
+            self.stream = gzip.GzipFile(filename='', fileobj=self.raw, mode='wb', compresslevel=3, mtime=0)
+            self.digest = hashlib.sha256()
+            self.size = self.lines = 0
+        self.stream.write(data)
+        self.digest.update(data)
+        self.size += len(data); self.total += len(data); self.lines += 1
+
+    def _seal(self):
+        if self.stream is None:
+            return
+        self.stream.close(); self.raw.close(); self.stream = None
+        self.parts.append(dict(path=self.path.name, bytes=self.size, lines=self.lines,
+                               sha256=self.digest.hexdigest(), compressed_bytes=self.path.stat().st_size))
+        temporary = self.index.with_suffix('.tmp')
+        temporary.write_text(json.dumps(dict(version=1, complete=False, parts=self.parts,
+                                             uncompressed_bytes=self.total)), encoding='utf-8')
+        temporary.replace(self.index)
+
+    def close(self):
+        self._seal()
+        self.index.write_text(json.dumps(dict(version=1, complete=True, parts=self.parts,
+                                             uncompressed_bytes=self.total)), encoding='utf-8')
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exception):
+        self.close()
+        if exception[0] is not None:
+            value = json.loads(self.index.read_text(encoding='utf-8')); value['complete'] = False
+            self.index.write_text(json.dumps(value), encoding='utf-8')
+
+
+def read_records(index):
+    index = Path(index)
+    document = json.loads(index.read_text(encoding='utf-8'))
+    for part in document['parts']:
+        path = index.parent / part['path']
+        if path.is_symlink() or path.parent.resolve() != index.parent.resolve():
+            raise ValueError('record chunk leaves its directory')
+        digest, size, lines = hashlib.sha256(), 0, 0
+        with gzip.open(path, 'rb') as stream:
+            for raw in stream:
+                digest.update(raw); size += len(raw); lines += 1
+                yield json.loads(raw)
+        if digest.hexdigest() != part['sha256'] or size != part['bytes'] or lines != part['lines']:
+            raise ValueError(f'record chunk digest or count differs: {path}')
+
+
 def record_path(path):
     path = Path(path)
     packed = path.with_name(path.name + '.gz')
