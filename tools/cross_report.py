@@ -515,7 +515,7 @@ def build_report(root):
                   quiet_feel=all(not p['feel_gated'] or p['feel_pass'] for p in peers.values()),
                   binary_admission_limit=all(c.get('peer_limit', 0) >= len(manifest['instances']) for c in capabilities.values()),
                   record_integrity=all(any(r.get('type') == 'tick_timing' for r in values) and
-                      not any(r.get('type') == 'record_loss' or (r.get('type') == 'tick_timing' and not r.get('partition_valid')) for r in values)
+                      not any(r.get('type') in ('record_loss', 'record_rotation') or (r.get('type') == 'tick_timing' and not r.get('partition_valid')) for r in values)
                       for values in events.values()),
                   no_engine_findings=not findings)
     checks['all_incarnation_exits']=all(p['exits'] and all(e['passed'] for e in p['exits']) for p in peers.values())
