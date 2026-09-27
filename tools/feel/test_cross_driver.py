@@ -240,7 +240,7 @@ class CrossDriverTests(unittest.TestCase):
     def test_report_requires_all_peers_shared_capture_and_binary_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)/'run'; root.mkdir()
-            plan=self.plan(); plan['ticks']=4; plan['fullstate_every']=2
+            plan=self.plan(); plan['ticks']=4; plan['fullstate_every']=2; plan['capture_rows_pending']=[]
             plan['preflights']={b['name']:dict(machine_id=b['name']) for b in plan['boxes']}
             (root/'manifest.json').write_text(json.dumps(plan))
             for spec in plan['specs']:

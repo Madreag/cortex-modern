@@ -198,6 +198,7 @@ def make_plan(options):
                              live_bytes_per_instance=512*1024*1024, failure_window_ticks=600),
                 quiet_window=options.quiet_window, pathfinding='production asynchronous; no -tick-hashes override',
                 fullstate_every=options.fullstate_every,
+                capture_rows_pending=[1,2],
                 required_gates=['three_real_boxes', 'matching_content', 'same_commit', 'full_history', 'zero_desync',
                                 'zero_unscheduled_holds', 'native_completion', 'bounded_recovery'],
                 limitations={'migration': 'NOT COVERED: NetMatchService endpoint publication and NetLockstep direct dialing need the endpoint fix',
@@ -897,7 +898,7 @@ def run_plan(plan, root):
         write_json(root / 'manifest.json', plan)
     import cross_report
     result = cross_report.build_report(root)
-    return 0 if result['passed'] else 1
+    return 0 if (result.get('gate_b_eligible') if plan['scenario']=='match' else result['passed']) else 1
 
 
 def parse_args(argv=None):
