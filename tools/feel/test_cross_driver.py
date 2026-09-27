@@ -94,5 +94,37 @@ class CrossDriverTests(unittest.TestCase):
             self.assertEqual(len([r for r in result['requirements'] if isinstance(r['number'],int)]),71)
             self.assertTrue((root.parent/'index.html').is_file())
 
+    def test_report_requires_all_peers_shared_capture_and_binary_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)/'run'; root.mkdir()
+            plan=self.plan(); plan['ticks']=4; plan['fullstate_every']=2
+            plan['preflights']={b['name']:dict(machine_id=b['name']) for b in plan['boxes']}
+            (root/'manifest.json').write_text(json.dumps(plan))
+            for spec in plan['specs']:
+                own=cross_report.peer_root(root,plan,spec); (own/'engine').mkdir(parents=True)
+                box=next(b for b in plan['boxes'] if b['name']==spec['box'])
+                box_root=root if box['kind']=='windows-local' else root/'boxes'/box['name']
+                (box_root/'capabilities.json').write_text(json.dumps(dict(peer_limit=4)))
+                (box_root/'samples.jsonl').write_text(json.dumps(dict(peer=spec['peer'],incarnation=0,engine_pid=99,
+                    elapsed_s=0,working_set=1000,private=1000,load=[]))+'\n')
+                (own/'record.json').write_text(json.dumps(dict(started=True,exit_code=0,elapsed_seconds=1,timed_out=False)))
+                (own/'trace.json').write_text(json.dumps(dict(runs=[dict(strings=dict(completion='completed'))])))
+                (own/'match-report.json').write_text(json.dumps(dict(exit_code=0,desync_check=dict(mismatches=0,compares=1,compare_margin=0))))
+                live=[dict(session='s',match='m',history_branch='initial',source_round=1,round=1,tick=t,
+                    instance=spec['peer'],execution='one',incarnation=0,phase='live',wall_ms=t*20,gameplay_tick=True,
+                    effective_start_frame=1,sim_gated='aa',subsystems={key:'bb' for key in cross_report.REQUIRED_SUBSYSTEMS}) for t in range(1,5)]
+                (own/'live.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in live))
+                (own/'events.jsonl').write_text(json.dumps(dict(type='adopted_config',peer_count=3,sim_tick_ms=1000/60))+'\n'+
+                    ''.join(json.dumps(dict(**row,type='tick_timing',compute_us=10,capture_us=0,partition_valid=True))+'\n' for row in live))
+                (own/'engine/stdout.log').write_text(''.join(
+                    f'[fullstate-context] tick={t} round=1 label=sample path=/instance/capture-{t}\n'
+                    f'[fullstate] tick={t} hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round=1\n'
+                    f'[fullstate-scope] tick={t} round=1 label=sample per_peer=camera\n' for t in (1,2,4)))
+            self.assertTrue(cross_report.build_report(root)['passed'])
+            own=cross_report.peer_root(root,plan,plan['specs'][-1])
+            with (own/'live.jsonl').open('a') as stream: stream.write(json.dumps(live[-1])+'\n')
+            failed=cross_report.build_report(root)
+            self.assertFalse(failed['passed']); self.assertEqual(failed['comparison']['duplicates'],1)
+
 
 if __name__ == '__main__': unittest.main()

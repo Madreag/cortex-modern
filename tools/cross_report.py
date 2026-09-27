@@ -135,7 +135,8 @@ def build_report(root):
         for observed in [*live[name],*events[name]]:
             if observed.get('type')=='malformed_record':
                 findings.append(dict(peer=name,path=observed['_path'],line=observed['_line'],text='Malformed or truncated record: '+observed['error']))
-        log = [(fragment/'engine/stdout.log',number,line) for fragment in fragments for number,line in read_log(fragment/'engine/stdout.log')]
+        log = [(fragment/'engine'/leaf,number,line) for fragment in fragments for leaf in ('stdout.log','stderr.log')
+               for number,line in read_log(fragment/'engine'/leaf)]
         record, native = load(own / 'record.json', {}), load(own / 'match-report.json', {})
         waits = []; holds = []
         for log_path, number, line in log:
@@ -143,7 +144,7 @@ def build_report(root):
                 waits.append(dict(tick=int(match[1]), wait_ms=int(match[2]), line=number))
             if match := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
                 holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number))
-            if re.search(r'RTE Assert|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
+            if re.search(r'RTE Assert|FATAL:|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\] FAIL|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
                 findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
         frames = [r for r in raw if r.get('type') == 'frame' and r.get('active')]
@@ -189,6 +190,7 @@ def build_report(root):
             scope='Measured trace vector and string capacities only; allocator, map nodes and other buffers excluded. No subtraction from resident/private totals.')
         trace=load(own/'trace.json',{})
         completion=trace.get('runs',[{}])[-1].get('strings',{}) if trace.get('runs') else {}
+        final_tick=trace.get('runs',[{}])[-1].get('numeric',{}).get('final_tick') if trace.get('runs') else None
         peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=spec['incarnation'], frames=len(live[name]),
             native=native, record=record, timing=timing, tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
             capture_ms=report.distribution([r['capture_us']/1000 for r in tick_cost]),
@@ -199,17 +201,16 @@ def build_report(root):
             frame_interval_ms=report.distribution([r['interval_ms'] for r in frames if r.get('interval_ms') is not None]),
             frame_count=len(frames), frames_over_50_ms=[r['frame'] for r in frames if max(r['draw_ms'], r['present_ms'], r.get('interval_ms') or 0) > 50],
             effective_hz=(len(frames)-1)*1000/(frames[-1]['present_end_ms']-frames[0]['present_end_ms']) if len(frames)>1 and frames[-1]['present_end_ms']>frames[0]['present_end_ms'] else None,
-            memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, native_completion=completion,
+            memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, native_completion=completion, native_final_tick=final_tick,
             fragments=[str(fragment.relative_to(root)) for fragment in fragments], samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:894 detailed status is not a byte counter.',
             configs=configs, paths={kind: str(record_path(own / leaf).relative_to(root)) for kind,leaf in [('live','live.jsonl'),('events','events.jsonl'),('log','engine/stdout.log'),('feel','engine/feel/raw.jsonl'),('native','match-report.json')]})
     host_rows = live.get(manifest['host'], [])
-    ranges = []
-    if host_rows:
-        first = host_rows[0]
-        if all(first.get(field) is not None for field in report.HISTORY_FIELDS[:-1]):
-            ranges = [dict(**{field:first[field] for field in report.HISTORY_FIELDS[:-1]}, first=1, last=manifest['ticks'], peers=list(peers))]
+    ranges, missing_boundaries = report.declared_history_ranges(host_rows,
+        [r for r in events.get(manifest['host'],[]) if r.get('type')=='match_boundary'], peers,
+        smoke_ticks=manifest['ticks'] if manifest['scenario']=='match' else None,
+        final_tick=peers[manifest['host']]['native_final_tick'])
     comparison = report.compare_histories(live, ranges, REQUIRED_SUBSYSTEMS)
     fullstate_documents={name:report.parse_fullstate([root/fragment/'engine/stdout.log' for fragment in peer['fragments']]) for name,peer in peers.items()}
     fullstate_expected=set()
@@ -225,17 +226,28 @@ def build_report(root):
         fullstate_expected.update((r,t,'sample') for r,t in first_eligible.items())
     fullstate=report.compare_fullstate_histories(fullstate_documents,sorted(fullstate_expected)) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
     matrix = coverage(events, peers, manifest)
-    fault_receipts = [r for values in events.values() for r in values if r.get('type') == 'fault']
+    fault_receipts = [dict(r, source_peer=name) for name,values in events.items() for r in values if r.get('type') == 'fault']
     faults_applied = all(any(r.get('id') == f['id'] and r.get('applied') for r in fault_receipts) for f in manifest['faults'])
-    recoveries = report.reduce_recoveries(manifest['faults'], [], now_ms=0)
+    recovery_events = [dict(id=r['id'], peer=r['source_peer'], incarnation=r['incarnation'], phase='fault_applied',
+        wall_ms=r['applied_wall_ms'], clock_domain='engine_steady_clock', source=dict(path=r['_path'],line=r['_line']))
+        for r in fault_receipts if r.get('applied') and r.get('applied_wall_ms') is not None]
+    # A progress tick is not proof of control restoration. Only explicit terminal records may complete an arm.
+    recovery_events += [dict(r,peer=name) for name,values in events.items() for r in values if r.get('type') == 'recovery']
+    recoveries = []
+    for fault in manifest['faults']:
+        last_clock = max((r.get('wall_ms',0) for r in events.get(fault['peer'],[])), default=0)
+        recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
                   preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings'),
-                  full_history=comparison['passed'], zero_desync=comparison['unequal_keys'] == 0 and bool(ranges),
+                  full_history=comparison['passed'] and not missing_boundaries, zero_desync=comparison['unequal_keys'] == 0 and bool(ranges),
                   zero_unscheduled_holds=holds == 0, native_completion=all(p['record'].get('exit_code') == 0 and
                       not p['record'].get('timed_out') and p['native'].get('exit_code') == 0 and p['native_completion'].get('completion') == 'completed' for p in peers.values()),
                   adopted_peer_count=all(p['configs'] and all(c['peer_count']==len(manifest['instances']) for c in p['configs']) for p in peers.values()),
                   faults_applied=faults_applied, bounded_recovery=all(r['passed'] for r in recoveries),
+                  native_desync_checks=all(p['native'].get('desync_check', {}).get('mismatches') == 0 and
+                      p['native'].get('desync_check', {}).get('compares', 0) > 0 and
+                      p['native']['desync_check'].get('compare_margin', -1) >= 0 for p in peers.values()),
                   quiet_feel=all(not p['feel_gated'] or p['feel_pass'] for p in peers.values()),
                   binary_admission_limit=all(c.get('peer_limit', 0) >= len(manifest['instances']) for c in capabilities.values()),
                   record_integrity=all(any(r.get('type') == 'tick_timing' for r in values) and
@@ -245,12 +257,19 @@ def build_report(root):
     if cadence: checks['shared_fullstate']=fullstate['passed']
     if manifest['scenario'] != 'match':
         checks['coverage_minima'] = all(r['status'] in ('PASS', 'NOT COVERED', 'NOT APPLICABLE') for r in matrix)
-        checks['required_soak_evidence'] = False
+        checks['unique_gameplay_budget'] = all(max((r.get('budget_tick',0) for r in values if r.get('type')=='progress'),default=0)>=manifest['ticks'] for values in events.values())
+        endings = [r for values in events.values() for r in values if r.get('type')=='elimination_outcome' and r.get('result')=='activity_over']
+        checks['forced_end_during_hold'] = any(r.get('overlap_hold_at_end') for r in endings)
+        checks['forced_end_during_transfer'] = any(r.get('overlap_transfer_at_end') for r in endings)
+        checks['changed_settings_rematch'] = all(len({(c.get('difficulty'),c.get('fog'),c.get('config_hash')) for c in p['configs']})>1 for p in peers.values())
+        checks['fog_on_match'] = all(any(c.get('fog') for c in p['configs']) for p in peers.values())
+        checks['validated_autosave_archives'] = False
     for name,peer in peers.items():
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
     result = dict(version=1, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,
-                  peers=peers, comparison=comparison, fullstate=fullstate, fullstate_records=fullstate_documents,
+                  peers=peers, comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
+                  fullstate=fullstate, fullstate_records=fullstate_documents,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities,
                   findings=findings, requirements=requirements(manifest, comparison, peers))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')

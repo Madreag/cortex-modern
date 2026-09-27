@@ -14,6 +14,23 @@ SIM_MS = 1000 / 60
 HISTORY_FIELDS = ('session', 'match', 'history_branch', 'source_round', 'tick')
 
 
+def declared_history_ranges(host_rows, boundaries, peers, *, smoke_ticks=None, final_tick=None):
+    """Use native round boundaries and final outcome, never the largest observed tail as an oracle."""
+    prefixes = []
+    for row in host_rows:
+        prefix = tuple(row.get(field) for field in HISTORY_FIELDS[:-1])
+        if None not in prefix and prefix not in prefixes: prefixes.append(prefix)
+    ranges, missing = [], []
+    for index,prefix in enumerate(prefixes):
+        endings = [r['final_tick'] for r in boundaries if tuple(r.get(field) for field in HISTORY_FIELDS[:-1]) == prefix and r.get('final_tick')]
+        end = smoke_ticks if smoke_ticks is not None and len(prefixes) == 1 else \
+              max(endings) if endings else final_tick if index == len(prefixes)-1 else None
+        if end is None or int(end) != end or end < 1:
+            missing.append(dict(zip(HISTORY_FIELDS[:-1],prefix))); continue
+        ranges.append(dict(**dict(zip(HISTORY_FIELDS[:-1],prefix)),first=1,last=int(end),peers=list(peers)))
+    return ranges, missing
+
+
 def compare_histories(peers, ranges, required_subsystems):
     """Compare every observation, preserving disagreement in earlier executions."""
     indexed, invalid, duplicates, first_difference = {}, [], 0, None
