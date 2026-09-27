@@ -173,6 +173,19 @@ class CrossDriverTests(unittest.TestCase):
             (own/'engine/stdout.log').write_text(f'[fullstate-context] tick=1 round=2 label=sample path={own}/fullstate/../../outside\n')
             with self.assertRaisesRegex(ValueError,'leaves'): CaptureSealer(own).poll()
 
+    def test_completed_capture_rechecks_physical_ownership(self):
+        from feel.records import CaptureSealer
+        with tempfile.TemporaryDirectory() as directory:
+            own=Path(directory); (own/'engine').mkdir()
+            dump=own/'fullstate/process-1/round-2/capture-3/sample'
+            (dump/'600').mkdir(parents=True)
+            (own/'engine/stdout.log').write_text(f'[fullstate-context] tick=600 round=2 label=sample path={dump}\n'
+                '[fullstate-scope] tick=600 round=2 label=sample per_peer=camera\n')
+            sealer=CaptureSealer(own); original=Path.resolve
+            def escaped(path,*args,**kwargs):
+                return own/'outside' if path==dump/'600' else original(path,*args,**kwargs)
+            with patch.object(Path,'resolve',escaped),self.assertRaisesRegex(ValueError,'completed capture leaves'): sealer.poll()
+
     def test_live_capture_compression_defers_ambiguous_reexecutions(self):
         from feel.records import CaptureSealer
         with tempfile.TemporaryDirectory() as temporary:
