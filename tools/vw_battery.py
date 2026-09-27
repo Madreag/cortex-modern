@@ -1,14 +1,15 @@
 """The Void Wanderers battery: the two scenarios of the 2026-09-14 design, run-only on one tree's executable.
 
-    python tools/vw_battery.py --repo <tree> --out <dir> [--port 43620] [--timeout 900] [--source <user copy>]
+    python tools/vw_battery.py --repo <tree> --out <dir> [--port 43620] [--timeout 900] [--source <user copy>] [--parts sp,mp]
     python tools/vw_battery.py --self-test
 
 Manifests first: the installed package <repo>/Data/VoidWanderers.rte against the recorded content digest (the sha256
 of its `sha256sum -b` manifest) and against the user's copy when that is present, and the module manifest (Index.ini's
 ModuleName, Version, SupportedGameVersion). Then the two scenarios, the mod never edited:
-  sp  -scenario VoidWanderers -seed 42 -max-ticks 600 -tick-hashes, the mod's own "Void Wanderers" activity staged as
-      the "Determinism VoidWanderers" preset in the run's private Mods/: exit 0, the trace written, CF.InitFactions
-      printed, no forbidden line in the console or stdout.
+  sp  -module VoidWanderers.rte -scenario "VoidWanderers.rte/Void Wanderers" -seed 42 -max-ticks 600 -tick-hashes: the
+      mod's own "Void Wanderers" preset, so its scripts resolve under their own module name, beside a global script in
+      the run's private Userdata that begins the trace and grades it: exit 0, the trace written and passed with 600 tick
+      hashes, CF.InitFactions printed, no forbidden line in the console or stdout.
   mp  two peers on the mod's "Void Wanderers" activity (-net-match-service-preset): both exit 0, both match reports
       written, host and client tick hashes identical (tools/compare_sim_traces.py), no forbidden line on either peer.
 Every launch goes through run_sim_test.make_run (private desktop, CCCP_HEADLESS=1). Each part writes
@@ -37,19 +38,31 @@ DEFAULT_SOURCE = Path("C:/Users/egerm/Downloads/voidwanderersrte-1ign/VoidWander
 TICKS = 600
 # The paired e2e scenario's forbidden lines (tools/e2e/mod-void-wanderers.json) plus the engine's own assert text.
 FORBIDDEN = re.compile(r"^ERROR:|RTE Aborted|Assertion failed|RTE Assert", re.M)
-FIXTURE_INDEX = """DataModule
-\tModuleName = VW Battery Fixture
-\tSupportedGameVersion = 7.0.0
-\tAddActivity = GAScripted
-\t\tPresetName = Determinism VoidWanderers
-\t\tSceneName = Void Wanderers
-\t\tScriptPath = VoidWanderers.rte/Scripts/MissionLauncher.lua
-\t\tMaxPlayerSupport = 4
-\t\tTeamOfPlayer1 = 0
-\t\tCPUTeam = 1
-\t\tTeam1Name = Wanderers
-\t\tTeam2Name = Void
-\t\tLuaClassName = VoidWanderers
+# The mod's activity never begins a metrics run, so a global script beside it begins the trace and grades it: passed
+# when the activity was still running at the cap. -module loads only this userdata module (PresetMan::LoadAllDataModules).
+TRACE_MODULE = "UserSavedGames.rte"
+TRACE_SCRIPT = "VW Battery Trace"
+TRACE_INDEX = f"""DataModule
+\tModuleName = Scripted Activity Saves
+\tAddGlobalScript = GlobalScript
+\t\tPresetName = {TRACE_SCRIPT}
+\t\tScriptPath = {TRACE_MODULE}/VWBatteryTrace.lua
+\t\tLuaClassName = VWBatteryTrace
+"""
+TRACE_LUA = f"""function VWBatteryTrace:StartScript()
+\tself.ticks = 0;
+\tMetricsCollector:BeginRun("VoidWanderers", 0);
+end
+
+function VWBatteryTrace:UpdateScript()
+\tself.ticks = self.ticks + 1;
+end
+
+function VWBatteryTrace:EndScript()
+\tMetricsCollector:Record("vw_battery_script_ticks", self.ticks);
+\tMetricsCollector:SetResult(self.ticks >= {TICKS - 1});
+\tMetricsCollector:EndRun();
+end
 """
 
 
@@ -116,16 +129,36 @@ def launch(make_run, repo: Path, args: list[str], out: Path, timeout: float, sta
         run.close()
 
 
+def sp_args(trace: Path) -> list[str]:
+    # -scenario prefixes "Determinism " to the module part, which then names no module, so the lookup searches every
+    # module for the mod's own preset; a copy defined in another module would run the mod's scripts under that name.
+    return ["-module", MODULE, "-scenario", f"{MODULE}/{PRESET}", "-seed", "42", "-max-ticks", str(TICKS),
+            "-tick-hashes", "-out", str(trace)]
+
+
+def stage_trace_script(runtime: Path) -> None:
+    module = runtime / "Userdata" / TRACE_MODULE
+    module.mkdir()
+    (module / "Index.ini").write_text(TRACE_INDEX, encoding="utf-8", newline="\n")
+    (module / "VWBatteryTrace.lua").write_text(TRACE_LUA, encoding="utf-8", newline="\n")
+    with (runtime / "Userdata" / "Settings.ini").open("a", encoding="utf-8") as settings:
+        settings.write(f"\n\tEnableGlobalScript = {TRACE_MODULE}/{TRACE_SCRIPT}\n")
+
+
+def trace_problems(trace: Path) -> list[str]:
+    try:
+        run = json.loads(trace.read_text(encoding="utf-8"))["runs"][-1]
+    except (ValueError, KeyError, IndexError) as error:
+        return [f"unreadable trace: {error!r}"]
+    problems = [] if run.get("passed") is True else [f"the trace's run did not pass: passed={run.get('passed')}"]
+    if len(run.get("tick_hashes", [])) != TICKS:
+        problems.append(f"{len(run.get('tick_hashes', []))} tick hashes, not {TICKS}")
+    return problems
+
+
 def scenario_sp(make_run, repo: Path, out: Path, timeout: float) -> dict:
     trace = out / "trace.json"
-
-    def stage(runtime: Path) -> None:
-        fixture = runtime / "Mods" / "VWBattery.rte"
-        fixture.mkdir(parents=True)
-        (fixture / "Index.ini").write_text(FIXTURE_INDEX, encoding="utf-8", newline="\n")
-
-    record = launch(make_run, repo, ["-scenario", "VoidWanderers", "-seed", "42", "-max-ticks", str(TICKS),
-                                     "-tick-hashes", "-out", str(trace)], out / "run", timeout, stage)
+    record = launch(make_run, repo, sp_args(trace), out / "run", timeout, stage_trace_script)
     stdout = out / "run" / "stdout.log"
     console = Path(str(trace) + ".console.txt")
     text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in (stdout, console) if p.is_file())
@@ -134,6 +167,8 @@ def scenario_sp(make_run, repo: Path, out: Path, timeout: float) -> dict:
         problems.append(f"exit_code={record.get('exit_code')} timed_out={record.get('timed_out')}")
     if not trace.is_file():
         problems.append("no trace written")
+    else:
+        problems += trace_problems(trace)
     if "CF.InitFactions" not in text:
         problems.append("the mod's CF.InitFactions print is absent")
     problems += [f"forbidden line {hit}" for hit in forbidden_lines(stdout, console)]
@@ -212,6 +247,16 @@ def self_test() -> int:
         hits = forbidden_lines(log)
         if len(hits) != 2:
             failures.append(f"forbidden lines {hits}")
+        args = sp_args(Path(scratch) / "trace.json")
+        if args[args.index("-scenario") + 1] != f"{MODULE}/{PRESET}" or args[args.index("-module") + 1] != MODULE:
+            failures.append(f"sp does not launch the mod's own preset from its own module: {args}")
+        trace = Path(scratch) / "trace.json"
+        for run, expected in (({"passed": True, "tick_hashes": ["h"] * TICKS}, 0),
+                              ({"passed": True, "tick_hashes": ["h"] * (TICKS - 1)}, 1),
+                              ({"passed": False, "tick_hashes": ["h"] * TICKS}, 1)):
+            trace.write_text(json.dumps({"runs": [run]}), encoding="utf-8")
+            if len(trace_problems(trace)) != expected:
+                failures.append(f"trace oracle on passed={run['passed']} hashes={len(run['tick_hashes'])}: {trace_problems(trace)}")
     for failure in failures:
         print(f"[vw_battery self-test] FAIL {failure}")
     print(f"[vw_battery self-test] {'PASS' if not failures else 'FAIL'} {len(failures)} failure(s)")
@@ -225,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=43620)
     parser.add_argument("--timeout", type=float, default=900)
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument("--parts", default="sp,mp", help="the scenarios to run, comma-separated; the manifests always run")
     parser.add_argument("--self-test", action="store_true")
     options = parser.parse_args(argv)
     if options.self_test:
@@ -241,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
     write_result(out / "manifests", results[0])
     for name, run_scenario in (("sp", lambda d: scenario_sp(make_run, repo, d, options.timeout)),
                                ("mp", lambda d: scenario_mp(make_run, repo, d, options.timeout, options.port))):
+        if name not in options.parts.split(","):
+            continue
         directory = out / name
         directory.mkdir()
         try:
