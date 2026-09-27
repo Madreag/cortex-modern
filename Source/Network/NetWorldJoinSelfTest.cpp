@@ -3059,9 +3059,15 @@ namespace RTE {
 		NetLockstepConfig replayConfig;
 		replayConfig.localPeerId = 1; replayConfig.startFrame = 11; replayConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x54504F52ULL);
 		const bool replayed = read && replay.StartReplay(transport, replayConfig, &codecError) && replay.QueueReplayFrame(11, decoded.frames, {}, &codecError);
-		if (!replayed || states(decoded) != "123")
+		// The returner's replay hands the apply the three inputs in the order the live peers applied them, so the last one wins alike.
+		NetLockstepReadyFrame applied;
+		if (replayed) replay.Tick(0);
+		const bool delivered = replayed && replay.PopReadyFrame(applied);
+		std::string appliedStates;
+		for (const ControllerFrame* input: CommittedControllerFramesInSenderOrder(applied, 1)) appliedStates += std::to_string(input->stateMask);
+		if (!delivered || states(decoded) != "123" || appliedStates != "123")
 			return Fail("tail-pack-order: one actor's inputs from three senders encoded " + std::to_string(encoded) + ", read back " + std::to_string(read) + " as " +
-			            states(decoded) + " and replayed " + std::to_string(replayed) + ": " + codecError + "; expected 1, 1 as 123 and 1");
+			            states(decoded) + ", replayed " + std::to_string(replayed) + " and applied as " + appliedStates + ": " + codecError + "; expected 1, 1 as 123, 1 and 123");
 		return 0;
 	}
 
@@ -6212,6 +6218,38 @@ namespace RTE {
 	// A capture the writer has not finished holds a frozen copy of every Lua heap. A world whose join is
 	// waiting and whose writer is slower than its one-second schedule keeps one such capture in flight,
 	// asks for the join's capture once, and ends with nothing awaited once the writer catches up.
+	// The host names a capture and its seat is held before the command commits: the capture never reaches the stream, and the
+	// schedule names the next one rather than waiting on it for the rest of the round.
+	bool TestALostCaptureIsNamedAgain(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-0000000000000005";
+		service.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::vector<uint64_t> named;
+		for (uint64_t tick = 1; tick <= 400; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+			if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+			input.writers = {1}; input.lead = 5;
+			const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+			for (NetMatchService::CheckpointNote note: output.send) {
+				note.sender = 1;
+				if (note.kind == NetGameCheckpoint::Capture) named.push_back(note.tick);
+				// The first capture rode a frame the round did not play; every other entry commits four ticks on.
+				if (note.kind == NetGameCheckpoint::Capture && named.size() == 1) continue;
+				stream[tick + 4].push_back(note);
+			}
+			if (output.capture) stream[tick + 4].push_back({1, NetGameCheckpoint::Written, tick});
+		}
+		if (named.size() < 3) {
+			*error = "a-lost-capture-is-named-again: the schedule named " + std::to_string(named.size()) + " capture(s) in 400 ticks after its first never reached the stream; expected 3 or more";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestWorldCaptureKeepsOneImageInFlight(std::string* error) {
 		NetMatchService service;
 		service.m_IsHost = true;
@@ -7677,6 +7715,7 @@ namespace RTE {
 			if (!TestWorldRecorderRollsAtCheckpoint(&error)) return Fail(error);
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
+			if (!TestALostCaptureIsNamedAgain(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);

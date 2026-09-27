@@ -3287,7 +3287,7 @@ static std::string ResyncSaveName() {
 				m_ScheduledCaptures.insert(takenAt);
 				if (m_Coordinator) m_Coordinator->NoteAnnouncedCapture(takenAt);
 				// The writers report the tick they took, so that is the capture the host waits on.
-				if (m_IsHost && note.tick == m_OpenCaptureTick) m_OpenCaptureTick = takenAt;
+				if (m_IsHost && note.tick == m_OpenCaptureTick) { m_OpenCaptureTick = takenAt; m_OpenCaptureApplied = true; }
 			} else if (note.kind == NetGameCheckpoint::Written && m_IsHost && note.tick == m_OpenCaptureTick) {
 				m_CaptureWriters.erase(note.sender);
 			}
@@ -3299,6 +3299,13 @@ static std::string ResyncSaveName() {
 			output.capture = true;
 		}
 		if (!m_IsHost) return output;
+		// A capture whose tick passed without reaching the stream rode a frame the round never played (the host's own, while its seat
+		// was held): no writer takes it, so the schedule names the next one instead of waiting on it for the rest of the round.
+		if (m_OpenCaptureTick != 0 && !m_OpenCaptureApplied && input.tick > m_OpenCaptureTick) {
+			System::PrintDiagnosticLine(std::format("[autosave] named tick={} never reached the stream; naming the next", m_OpenCaptureTick));
+			m_OpenCaptureTick = 0;
+			m_CaptureWriters.clear();
+		}
 		for (auto writer = m_CaptureWriters.begin(); writer != m_CaptureWriters.end();) {
 			writer = input.writers.contains(*writer) ? std::next(writer) : m_CaptureWriters.erase(writer);
 		}
@@ -3314,7 +3321,7 @@ static std::string ResyncSaveName() {
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
 		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
 		// reaches a writer and the schedule would wait on it for the rest of the round.
-		if (input.activationPending || input.startupPending) return output;
+		if (input.activationPending || input.startupPending || input.ownSeatHeld) return output;
 		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
 		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
@@ -3326,6 +3333,7 @@ static std::string ResyncSaveName() {
 		if (!joinCapture && takenAt < m_NextAutosaveSimTime) return output;
 		if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
 		m_OpenCaptureTick = input.tick + input.lead;
+		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
 		m_CaptureWriters = input.writers;
 		output.send.push_back({0, NetGameCheckpoint::Capture, m_OpenCaptureTick});
@@ -3393,6 +3401,7 @@ static std::string ResyncSaveName() {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
 			input.activationPending = m_Coordinator->HasPendingSeatActivation();
+			input.ownSeatHeld = m_Coordinator->IsOwnHostSeatHeld();
 			const auto& start = m_Coordinator->GetAgreedStartRecord();
 			input.startupPending = start && tick < start->agreedFirstFrame;
 		}
@@ -4849,6 +4858,27 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::DropReturnStartLocked(const std::string& why) {
+		if (m_Runner) m_Runner->CancelWorldJoinLockstepStart();
+		if (m_Coordinator) {
+			// The decisions for the other seats that round heard before its start are the round's own; the next start takes them.
+			for (const auto& [timing, transport]: m_Coordinator->TakePreStartTiming()) {
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = transport; event.lane = NetTransportLane::ControlReliable;
+				if (!NetLockstepCodec::Encode({timing}, event.bytes)) continue;
+				m_CatchUpWireBytes += event.bytes.size();
+				m_CatchUpWirePackets.push_back(std::move(event));
+			}
+			if (m_Coordinator->IsRunning()) m_Coordinator->Complete(why);
+		}
+		// Every start on the wire answered the return that is over.
+		std::erase_if(m_CatchUpWirePackets, [this](const NetTransportEvent& event) {
+			const bool start = event.bytes.size() >= NetLockstepCodec::c_HeaderBytes && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start);
+			if (start) m_CatchUpWireBytes -= event.bytes.size();
+			return start;
+		});
+	}
+
 	bool NetMatchService::BeginInPlaceMoveLocked(uint64_t nowMs) {
 		if (!m_InPlaceCatchUp || !m_Coordinator || !m_Session || !m_Runner || !m_CatchUpCoordinator || m_InPlaceRoutes.empty()) return false;
 		// A return the lost host agreed passes without this seat: the successor holds it again there and agrees its own.
@@ -5119,7 +5149,15 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		uint64_t refusal = 0;
+		const uint64_t priorActivation = m_WorldCatchUp.activationTick;
 		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal);
+		// A different frame is the host's next return for this seat: it held the seat again after the last one, and the start that
+		// return began is over whether or not this peer saw the hold.
+		if (m_WorldCatchUp.privateMatch && priorActivation != 0 && m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.activationTick != priorActivation) {
+			System::PrintDiagnosticLine("[net-match] held client: the host moved this seat's return from " + std::to_string(priorActivation) + " to " +
+			                            std::to_string(m_WorldCatchUp.activationTick) + " at replayed frame " + std::to_string(m_WorldCatchUp.appliedThrough));
+			DropReturnStartLocked("the host moved this seat's return");
+		}
 		if (refusal != 0) {
 			m_State = NetMatchServiceState::Failed; m_ErrorText = NetWorldJoinRefusalText(refusal); return;
 		}
@@ -5181,12 +5219,10 @@ static std::string ResyncSaveName() {
 			if (heldAgain) {
 				System::PrintDiagnosticLine("[net-match] held client: the host held this seat again before its return at " + std::to_string(m_WorldCatchUp.activationTick) +
 				                            "; catching up on from " + std::to_string(m_WorldCatchUp.appliedThrough));
-				m_Runner->CancelWorldJoinLockstepStart();
-				if (m_Coordinator->IsRunning()) m_Coordinator->Complete("the host held this seat again before its return");
+				DropReturnStartLocked("the host held this seat again before its return");
 				m_WorldCatchUp.activationTick = 0;
 				m_WorldCatchUp.activationCommitted = false;
 				ScenarioRunner::SetWorldCatchUpActivation(0);
-				m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 				// The next report asks for the tail from here, and the host answers it as a fresh in-place return.
 				(void)lobby.SendPayload(MakeJoinerCatchUpReport(), nullptr);
 			}
@@ -6452,6 +6488,8 @@ static std::string ResyncSaveName() {
 						case NetHoldResolution::Reclaimed: resolution = NetLockstepHoldResolution::Reclaimed; break;
 						case NetHoldResolution::Substituted: resolution = NetLockstepHoldResolution::Substituted; break;
 					}
+					if (notice.resolution == NetHoldResolution::Expired)
+						System::PrintDiagnosticLine("[net-reconnect] the held seat of peer " + std::to_string(static_cast<int>(notice.lockstepPeerId)) + " expired at its holder's window");
 					m_Coordinator->ResolveHeldSeat(notice.lockstepPeerId, resolution, nowMs);
 					if (notice.resolution == NetHoldResolution::Expired)
 						std::erase_if(m_PendingHeldReseats, [&](const auto& reseat) { return reseat.newOwnerPeerId == notice.lockstepPeerId; });

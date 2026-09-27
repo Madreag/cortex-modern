@@ -2533,6 +2533,37 @@ namespace RTE {
 			return true;
 		}
 
+		// A replay takes the host's recorded return and then its recorded hold: the hold hands the host's seat to its successor's AI, as live.
+		bool TestARecordedHoldAfterAReturnHoldsTheSeat(std::string* error) {
+			LoopbackTransport transport;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.localPeerId = 2; config.authorityPeerId = 1; config.peerCount = 3; config.startFrame = 10;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1B);
+			config.matchConfig.successorOrder = {3, 2};
+			if (!replay.StartReplay(transport, config, error)) return false;
+			const std::vector<std::vector<NetGameCommand>> frames = {
+				{{1, NetGameSeatHold{1, 0, 1, 1, 10}}}, {{1, NetGameSeatReclaim{1, 0, 2, 1, 11, 4, 12}}}, {{1, NetGameSeatHold{3, 0, 4, 1, 12}}}, {{1, NetGameSeatHold{1, 0, 3, 1, 13}}}};
+			std::string seen;
+			for (uint64_t index = 0; index < frames.size(); ++index) {
+				NetLockstepReadyFrame ready;
+				if (!replay.QueueReplayFrame(10 + index, {}, frames[index], error)) return false;
+				replay.Tick(index);
+				if (!replay.PopReadyFrame(ready)) { *error = "a-recorded-hold-after-a-return-holds-the-seat: frame " + std::to_string(10 + index) + " was not delivered"; return false; }
+				seen += std::to_string(replay.IsSeatUnderAI(1, ready.frame)) + std::to_string(replay.AiAuthorityAt(ready.frame));
+			}
+			if (seen != "13010112") {
+				*error = "a-recorded-hold-after-a-return-holds-the-seat: held at 10, back at 11, held again at 13 (seat 3 held at 12) read (under_ai, authority) per frame " + seen + "; expected 13010112";
+				return false;
+			}
+			// The replay drops no seat, yet the claims on a held seat's units last as they do live.
+			if (!replay.IsSeatHeldForReclaim(3)) {
+				*error = "a-recorded-hold-after-a-return-holds-the-seat: seat 3, held by its record at 12, reads as not held for reclaim in the replay";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestRecordedHoldReplaysAtItsFrame(std::string* error) {
 			NetLockstepFrame record;
 			record.senderPeerId = 1; record.targetFrame = 40;
@@ -11787,7 +11818,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					         std::to_string(s.longestCongestionHoldMs) + "ms): " + host.BuildReportJson();
 					return false;
 				}
-				if (host.GetPeerLeaveFrames().size() != 1 || host.GetPeerLeaveFrames().find(2) == host.GetPeerLeaveFrames().end()) {
+				if (host.GetPeerLeaveFrames().size() != 1 || !host.GetPeerLeaveFrames().contains(2)) {
 					*error = "a healthy peer paid for the dead link: " + host.BuildReportJson();
 					return false;
 				}
@@ -18795,8 +18826,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "a held seat's send on its open link was reported as controller failure: " + *error; return false;
 			}
 			for (uint64_t now = 20; now < 40 && !client.IsLocalSeatHeld(); ++now) client.Tick(now);
-			const auto heldAt = host.GetPeerLeaveFrames().find(2);
-			if (!client.IsLocalSeatHeld() || heldAt == host.GetPeerLeaveFrames().end() || client.GetLocalHoldFrame() != heldAt->second || client.IsFailed() ||
+			const auto hostLeaves = host.GetPeerLeaveFrames();
+			const auto heldAt = hostLeaves.find(2);
+			if (!client.IsLocalSeatHeld() || heldAt == hostLeaves.end() || client.GetLocalHoldFrame() != heldAt->second || client.IsFailed() ||
 			    host.GetStats().connectionsClosedOnEviction != 0) {
 				*error = "a held seat did not learn its hold over the link the host kept open: held=" + std::to_string(client.IsLocalSeatHeld()) +
 				         " frame=" + std::to_string(client.GetLocalHoldFrame()) + " closed=" + std::to_string(host.GetStats().connectionsClosedOnEviction);
@@ -19186,10 +19218,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 				}
 				if (delayedAnswer) {
-					const auto localDeparture = a.GetPeerLeaveFrames().find(2);
+					const auto departures = a.GetPeerLeaveFrames();
+					const auto localDeparture = departures.find(2);
 					if (schedule->delayedAnswers == 0 || schedule->releasedAnswers == 0 || schedule->successors != std::set<uint8_t>{3} || a.GetHostPeerId() != 3 || b.GetHostPeerId() != 3 ||
 					    a.GetMigrationResult().boundary != 4 || b.GetMigrationResult().boundary != 4 || !b.GetConfig().relayToOtherPeers || a.GetConfig().relayToOtherPeers ||
-					    localDeparture == a.GetPeerLeaveFrames().end() || localDeparture->second != 5 || !b.IsPeerGoneAtFrame(2, 5)) {
+					    localDeparture == departures.end() || localDeparture->second != 5 || !b.IsPeerGoneAtFrame(2, 5)) {
 						*error = "delayed answers=" + std::to_string(schedule->delayedAnswers) + " released=" + std::to_string(schedule->releasedAnswers) + " successors=" + nlohmann::json(schedule->successors).dump() + " local departures=" + nlohmann::json(a.GetPeerLeaveFrames()).dump() + " A=" + a.BuildReportJson() + " B=" + b.BuildReportJson();
 						return false;
 					}
@@ -20784,6 +20817,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
+		    !TestARecordedHoldAfterAReturnHoldsTheSeat(&error) ||
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
 		    !TestAWorldTailHandsAHeldSeatToTheAI(&error) ||
 		    !TestCatchUpFencesTheReclaimGap(&error) ||
