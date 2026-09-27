@@ -545,7 +545,7 @@ def build_report(root):
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
                   native_recovery_records=native_recovery_records,native_fault_effects=effects,unscheduled_holds=unscheduled_holds,
-                  findings=findings, requirements=requirements(manifest, comparison, peers))
+                  findings=findings, triage=load(root/'triage.json',[]), requirements=requirements(manifest, comparison, peers))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
     write_index(root.parent)
@@ -634,6 +634,8 @@ def write_page(root, result, events):
     parts.append('<h2>Engine and driver findings</h2>')
     for finding in result['findings']:
         parts.append('<p class="fail">' + (f'<a href="{escape(finding["path"])}">{escape(finding["path"])}:{finding["line"]}</a> ' if 'path' in finding else '') + escape(finding.get('text',finding.get('reason',''))) + '</p>')
+    if result.get('triage'):
+        parts.append('<h2>Source triage</h2><p>Inspection notes link observed failures to source seams. These notes do not change any oracle or classify missing evidence as passing.</p><pre>'+escape(json.dumps(result['triage'],indent=2))+'</pre>')
     parts.append('<h2>Numbered requirements</h2><p>Each verdict number retains its complete original assertion set. Partial observations do not satisfy the whole requirement.</p>')
     for item in result['requirements']:
         parts.append(f'<details id="requirement-{escape(item["number"])}"><summary>{escape(item["number"])} — {item["status"]}</summary><p>{escape(item["reason"])}</p><p>{escape(item["requirement"])}</p><p>{escape(item["reread"])}</p></details>')
