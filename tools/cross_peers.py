@@ -485,9 +485,11 @@ def read_capabilities(box, root):
 
 def run_payload(path):
     from run_sim_test import make_run
+    from feel.records import CaptureSealer
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
     root, box = Path(path).parent, payload['box']
     runs, started, completed, readers, progress, fired = {}, {}, set(), {}, {}, set()
+    capture_sealers = {}
     specifications = {s['peer']: s for s in payload['specs']}
     next_sample, verdict = 0, 0
     try:
@@ -513,6 +515,7 @@ def run_payload(path):
             runs[spec['peer']] = run
             run.start(); started[spec['peer']] = time.monotonic()
             readers[spec['peer']] = Tail(Path(spec['own']) / 'events.jsonl')
+            capture_sealers[spec['peer']] = CaptureSealer(spec['own'])
             progress[spec['peer']] = {}
             write_json(Path(spec['own']) / 'instance.json', spec)
             write_json(Path(spec['own']) / 'started.json', dict(peer=spec['peer'], incarnation=0, engine_pid=engine_pid(run)))
@@ -543,6 +546,7 @@ def run_payload(path):
                     for observed in readers[peer].read():
                         if observed.get('type') == 'progress': progress[peer] = observed
                     readers[peer].compress_consumed()
+                    capture_sealers[peer].poll()
                     current = progress[peer]
                     due = next((f for f in spec['faults'] if f['action'] == 'crash-restart' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
                                 and current.get('budget_tick', 0) >= f['tick']), None)
@@ -568,6 +572,7 @@ def run_payload(path):
                         fresh = prepare_instance(new_spec, payload['pin'], box, runtime=retained)
                         runs[peer] = fresh; specifications[peer] = new_spec
                         readers[peer] = Tail(Path(new_spec['own']) / 'events.jsonl')
+                        capture_sealers[peer] = CaptureSealer(new_spec['own'])
                         fresh.start(); started[peer] = time.monotonic()
                         write_json(Path(new_spec['own']) / 'instance.json', new_spec)
                         write_json(Path(new_spec['own']) / 'started.json', dict(peer=peer, incarnation=new_spec['incarnation'], engine_pid=engine_pid(fresh)))
