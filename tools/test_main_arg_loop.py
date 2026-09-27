@@ -24,6 +24,10 @@ SOURCE = "Source/Main.cpp"
 LOOP_HEAD = "for (int i = 0; i < argCount;)"
 # Flags whose handlers must be present and must advance; the two that hung the world runs.
 REQUIRED_FLAGS = ("-net-persistent-world", "-net-world-fresh")
+# The cross-harness flags steer a headless run's faults and budgets; each handler refuses a run without the headless
+# environment, and the rematch count also needs the records that advance its budget.
+CROSS_FLAGS = {"-net-cross-ticket-rejoin": ("CCCP_HEADLESS",), "-net-cross-host-options": ("CCCP_HEADLESS",),
+               "-net-cross-schedule": ("CCCP_HEADLESS",), "-net-cross-rematches": ("CCCP_HEADLESS", "CC_TEST_CROSS_RECORDS")}
 ADVANCE = re.compile(r"\+\+i\b|\bi\s*\+=|\bi\s*=\s*i\s*\+|argValue\[\s*\+\+i\s*\]")
 HANDLER = re.compile(r"currentArg\s*==\s*\"(?P<flag>[^\"]+)\"")
 
@@ -52,11 +56,22 @@ def enclosing_handler(body: list[str], index: int) -> tuple[int, str]:
     return index, "<no enclosing currentArg test>"
 
 
+def handler_extent(body: list[str], start: int) -> int:
+    """The last line of the handler block that opens on `start`."""
+    depth = 0
+    for n in range(start, len(body)):
+        depth += body[n].count("{") - body[n].count("}")
+        if depth <= 0 and (n > start or "{" in body[n]):
+            return n
+    return start
+
+
 def check(repo: Path) -> dict[str, list[dict]]:
     path = repo / SOURCE
     text = path.read_text(encoding="utf-8", errors="replace")
     first, _last, body = loop_body(text)
-    rows: dict[str, list[dict]] = {"every_continue_advances_the_index": [], "world_flags_are_handled_and_advance": []}
+    rows: dict[str, list[dict]] = {"every_continue_advances_the_index": [], "world_flags_are_handled_and_advance": [],
+                                   "cross_flags_require_headless": []}
 
     for n, line in enumerate(body):
         if line.strip() != "continue;":
@@ -87,6 +102,16 @@ def check(repo: Path) -> dict[str, list[dict]]:
         if not ADVANCE.search("\n".join(body[start:end + 1])):
             rows["world_flags_are_handled_and_advance"].append(
                 {"file": str(path), "line": first + start, "text": f"{flag}'s handler never advances i - the loop re-reads it forever"})
+    for flag, needed in CROSS_FLAGS.items():
+        start = handled.get(flag)
+        if start is None:
+            rows["cross_flags_require_headless"].append({"file": str(path), "line": first, "text": f"no handler for {flag}"})
+            continue
+        block = "\n".join(body[start:handler_extent(body, start) + 1])
+        for name in needed:
+            if name not in block:
+                rows["cross_flags_require_headless"].append(
+                    {"file": str(path), "line": first + start, "text": f"{flag}'s handler never checks {name}"})
     return rows
 
 
