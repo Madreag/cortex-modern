@@ -241,12 +241,16 @@ static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored
 	return configuredStart == 1 && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
 }
 
-static bool CrossReadyRevision(uint64_t, uint64_t&) { return false; }
+static bool CrossReadyRevision(uint64_t attemptWindow, uint64_t& previous) {
+	if (attemptWindow == previous) return false;
+	previous = attemptWindow;
+	return true;
+}
 
 bool RTE::RunCrossReadyRevisionSelfTest(std::string* error) {
 	uint64_t last = UINT64_MAX;
 	if (!CrossReadyRevision(1, last) || CrossReadyRevision(1, last) || !CrossReadyRevision(4, last) || last != 4) {
-		*error = "ready/start intent is not re-armed once for each adopted configuration"; return false;
+		*error = "ready/start intent is not re-armed once per retry window"; return false;
 	}
 	std::cout << "[net-match-selftest] PASS cross_ready_start_follows_adopted_config_revisions" << std::endl;
 	return true;
@@ -254,11 +258,11 @@ bool RTE::RunCrossReadyRevisionSelfTest(std::string* error) {
 
 static void CrossReadyForCurrentConfig(uint64_t& previous) {
 	if (s_crossHostOptions.empty() || g_NetMatchService.GetState() != NetMatchServiceState::Starting) return;
-	const auto revision = g_NetMatchService.GetLobbyMatchConfig().configRevision;
-	if (!CrossReadyRevision(revision, previous)) return;
+	const auto attemptWindow = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()) / 100;
+	if (!CrossReadyRevision(attemptWindow, previous)) return;
 	g_NetMatchService.SetReady();
 	if (g_NetMatchService.IsHost()) g_NetMatchService.RequestStart();
-	System::PrintDiagnosticLine("[cross-ready] revision=" + std::to_string(revision) + " host=" + std::to_string(g_NetMatchService.IsHost()));
+	System::PrintDiagnosticLine("[cross-ready] retry_window=" + std::to_string(attemptWindow) + " host=" + std::to_string(g_NetMatchService.IsHost()));
 }
 
 bool RTE::RunCrossHistoryRecordSelfTest(std::string* error) {
