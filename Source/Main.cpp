@@ -4583,12 +4583,12 @@ static bool RunHarnessCaptureSelfTest() {
 		    "MetricsCollector:BeginRun(\"ScriptOwnedRun\", 0); MetricsCollector:EndRun();");
 		const MetricsCollector::AggregatedRun joined = g_MetricsCollector.GetCurrentRun();
 		const auto named = joined.stringValues.find("scenario");
-		scriptJoinsTheHostRun = scriptError == 0 && armed == 1 && joined.tickHashes.size() == 1 &&
+		scriptJoinsTheHostRun = scriptError == 0 && armed == 1 && joined.tickHashCount == 1 &&
 		                        g_MetricsCollector.IsRecordingTickHashes() && joined.scenario == "HostOwnedRun" &&
 		                        named != joined.stringValues.end() && named->second == "ScriptOwnedRun";
 		{
 			std::ostringstream line;
-			line << "[harness-order] metrics armed=" << armed << " after_script=" << joined.tickHashes.size()
+			line << "[harness-order] metrics armed=" << armed << " after_script=" << joined.tickHashCount
 			     << " recording=" << g_MetricsCollector.IsRecordingTickHashes() << " run=" << joined.scenario
 			     << " script=" << (named != joined.stringValues.end() ? named->second : std::string("-"));
 			System::PrintDiagnosticLine(line.str());
