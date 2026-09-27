@@ -378,6 +378,9 @@ class Tail:
         for number in range(self.part):
             path = self.path if number == 0 else Path(str(self.path)+f'.part{number}')
             if path.is_file(): compress_closed_record(path, self.path.parent)
+        retained=sum(path.stat().st_size for path in self.path.parent.glob('events.jsonl*') if path.is_file())
+        if retained >= 256*1024*1024:
+            raise RuntimeError(f'event retention budget reached for {self.path}: {retained} bytes')
 
 
 def restart_spec(spec, progress):
