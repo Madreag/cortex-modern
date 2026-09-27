@@ -172,10 +172,12 @@ def make_plan(options):
             env={'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
                  'CC_TEST_CROSS_RUN': stem, 'CC_TEST_CROSS_INSTANCE': peer['name'], 'CC_TEST_CROSS_EXECUTION': 'process-0',
                  'CC_TEST_CROSS_INCARNATION': '0', 'CC_TEST_NET_UI_SCRIPT': own + '/probe.json',
+                 'CC_TEST_CROSS_RECOVERIES': own + '/recoveries.json',
                  'CC_TEST_CROSS_BOT': own + '/bot.json', 'CC_TEST_CROSS_EVENT_RAW_LIMIT': str(64*1024**3)}, timeout=options.timeout, ticks=options.ticks,
             settings={}, roster=options.roster, scene=options.scene,
             initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
             faults=[f for f in faults if f['peer'] == peer['name']], barriers=[b for b in barriers if b['peer']==peer['name']]))
+        specs[-1]['recoveries']=[f for f in specs[-1]['faults'] if f['action']!='brain-eliminate']
         if specs[-1]['barriers']:
             specs[-1]['env']['CC_TEST_CROSS_CAPTURE_BARRIER'] = own+'/barriers.json'
     return dict(version=1, run=stem, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
@@ -393,6 +395,7 @@ def prepare_instance(spec, pin, box, runtime=None):
                  f'player=0 {start+180} {min(start+210, spec["ticks"])} WEAPON_RELOAD'] if start+210 <= spec['ticks'] else [f'player=0 {start} {end} FIRE AIM=-0.9,-0.1']
     (own / 'input.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8')
     write_json(own / 'faults.json', [f for f in spec['faults'] if f['incarnation'] == spec['incarnation']])
+    write_json(own / 'recoveries.json',dict(cases=spec.get('recoveries',spec['faults']),starts=spec.get('recovery_starts',{})))
     write_json(own / 'barriers.json',spec.get('barriers',[]))
     teams = dict(human_teams=[0,0,1], cpu_teams=[2]) if spec['roster'] in ('mixed','allies') else \
             dict(human_teams=[0,0,0], cpu_teams=[1,2]) if spec['roster'] == 'ai-heavy' else {}
@@ -421,14 +424,17 @@ def prepare_instance(spec, pin, box, runtime=None):
 class Tail:
     def __init__(self, path):
         self.path, self.offset, self.pending, self.part = Path(path), 0, b'', 0
+        self.drained=False
 
     def read(self):
+        self.drained=False
         path = self.path if not self.part else Path(str(self.path) + f'.part{self.part}')
         if not path.is_file(): return []
         with path.open('rb') as stream:
             stream.seek(self.offset); block = stream.read(4*1024*1024); self.offset += len(block)
         pieces = (self.pending + block).split(b'\n'); self.pending = pieces.pop()
         rows = [json.loads(line) for line in pieces if line.strip()]
+        self.drained=not self.pending and self.offset>=path.stat().st_size and not Path(str(self.path)+f'.part{self.part+1}').is_file()
         if not block and not self.pending and Path(str(self.path) + f'.part{self.part+1}').is_file():
             self.part += 1; self.offset = 0
         return rows
@@ -572,11 +578,12 @@ def launch_guard_selftest(root):
 
 def run_payload(path):
     from run_sim_test import make_run
-    from feel.records import CaptureSealer
+    from feel.records import CaptureSealer, RecoveryLedger
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
     root, box = Path(path).parent, payload['box']
     runs, started, completed, readers, progress, fired = {}, {}, set(), {}, {}, set()
     capture_sealers = {}
+    recovery_ledgers={}; clean_reads={}
     specifications = {s['peer']: s for s in payload['specs']}
     next_sample, verdict = 0, 0
     try:
@@ -602,10 +609,13 @@ def run_payload(path):
             assert_box_guard(box)
             run = prepare_instance(spec, payload['pin'], box)
             runs[spec['peer']] = run
+            before_launch=time.monotonic()*1000
             run.start(); started[spec['peer']] = time.monotonic()
             readers[spec['peer']] = Tail(Path(spec['own']) / 'events.jsonl')
             capture_sealers[spec['peer']] = CaptureSealer(spec['own'])
             progress[spec['peer']] = {}
+            recovery_ledgers[spec['peer']]=RecoveryLedger(root/'recovery-observed.jsonl',spec['peer'],f'payload:{box["name"]}:{os.getpid()}',before_launch,spec.get('recoveries',spec['faults']))
+            clean_reads[spec['peer']]=before_launch
             write_json(Path(spec['own']) / 'instance.json', spec)
             write_json(Path(spec['own']) / 'started.json', dict(peer=spec['peer'], incarnation=0, engine_pid=engine_pid(run)))
         with (root / 'samples.jsonl').open('w', encoding='utf-8') as samples:
@@ -623,7 +633,7 @@ def run_payload(path):
                         measured = sample_memory(run)
                         all_sampled &= bool(measured and engine_pid(run))
                         row = dict(peer=peer, incarnation=spec['incarnation'], execution=f'process-{spec["incarnation"]}', engine_pid=engine_pid(run),
-                                   elapsed_s=now-started[peer], load=load, same_box_instances=len(runs),
+                                   elapsed_s=now-started[peer],payload_monotonic_ms=now*1000,load=load,same_box_instances=len(runs),
                                    **(measured or {}))
                         samples.write(json.dumps(row) + '\n'); samples.flush()
                         retain_checkpoints(run, spec)
@@ -632,7 +642,12 @@ def run_payload(path):
                 for spec in list(specifications.values()):
                     peer = spec['peer']; run = runs[peer]
                     if peer in completed: continue
-                    for observed in readers[peer].read():
+                    read_began=time.monotonic()*1000
+                    observed_rows=readers[peer].read()
+                    observed_at=time.monotonic()*1000
+                    recovery_ledgers[peer].observe(observed_rows,spec['incarnation'],clean_reads[peer],observed_at)
+                    if readers[peer].drained: clean_reads[peer]=read_began
+                    for observed in observed_rows:
                         if observed.get('type') == 'progress': progress[peer] = observed
                     readers[peer].compress_consumed()
                     capture_sealers[peer].poll()
@@ -643,18 +658,23 @@ def run_payload(path):
                                     and current.get('budget_tick', 0) >= f['tick']), None)
                     if due or (leaving and run.poll() is not None):
                         fault = due or leaving; fired.add(fault['id'])
+                        if due and run.poll() is not None: raise RuntimeError(f'{peer}: process exited before scheduled crash {fault["id"]}')
                         receipt = dict(type='lifecycle', id=fault['id'], peer=peer, incarnation=spec['incarnation'],
                                        action=fault['action'], requested_tick=fault['tick'], actual=current,
                                        observed_wall_ms=time.monotonic()*1000, engine_pid=engine_pid(run))
                         with (root / 'lifecycle.jsonl').open('a', encoding='utf-8') as lifecycle:
                             lifecycle.write(json.dumps(receipt)+'\n')
                         retained = Path(run.cwd)
-                        if due and run.poll() is None: run.terminate(reason=f'scheduled crash {fault["id"]}')
+                        if due:
+                            crash_before=time.monotonic()*1000
+                            run.terminate(reason=f'scheduled crash {fault["id"]}')
+                            recovery_ledgers[peer].external_start(fault,spec['incarnation'],crash_before,time.monotonic()*1000,current)
                         record = run.finish(); run.close()
                         write_json(Path(spec['own']) / 'record.json', record)
                         retain_checkpoints(run, spec, final=True)
                         seal_evidence(spec['own'])
                         new_spec = restart_spec(spec, current)
+                        new_spec['recovery_starts']=recovery_ledgers[peer].restart_inputs(new_spec['incarnation'])
                         render = new_spec['flags'].index('-feel-render-settings') + 1
                         new_spec['flags'][render] = str(retained / 'Userdata/FeelRender.ini')
                         assert_box_guard(box)
@@ -668,6 +688,11 @@ def run_payload(path):
                         continue
                     if run.poll() is not None or now - started[peer] > spec['timeout']:
                         record = run.finish(); run.close(); completed.add(peer)
+                        for _ in range(64):
+                            tail_rows=readers[peer].read()
+                            observed_at=time.monotonic()*1000
+                            recovery_ledgers[peer].observe(tail_rows,spec['incarnation'],clean_reads[peer],observed_at)
+                            if readers[peer].drained or not tail_rows: break
                         write_json(Path(spec['own']) / 'record.json', record)
                         if record.get('exit_code') != 0 or record.get('timed_out'): verdict = 1
                 time.sleep(.05)
@@ -685,7 +710,7 @@ def run_payload(path):
             except Exception as error:
                 verdict = 1
                 write_json(root / 'seal-error.json', dict(peer=peer, error=str(error)))
-        write_json(root / 'done.json', dict(exit_code=verdict, completed=sorted(completed)))
+        write_json(root / 'done.json', dict(exit_code=verdict,completed=sorted(completed),payload_monotonic_ms=time.monotonic()*1000,runner_pid=os.getpid()))
     return verdict
 
 
