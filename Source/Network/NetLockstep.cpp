@@ -73,6 +73,18 @@ namespace RTE {
 			return parsed.ec == std::errc{} && parsed.ptr == end ? std::optional<uint64_t>(frame) : std::nullopt;
 		}
 
+		/// A "first:count" frame range from the environment; nullopt when unset or malformed.
+		std::optional<std::pair<uint64_t, uint64_t>> TestRangeFromEnvironment(const char* name) {
+			const char* text = std::getenv(name);
+			if (!text) return std::nullopt;
+			const char* end = text + std::strlen(text);
+			uint64_t first = 0, count = 0;
+			const auto head = std::from_chars(text, end, first);
+			if (head.ec != std::errc{} || head.ptr == end || *head.ptr != ':') return std::nullopt;
+			const auto tail = std::from_chars(head.ptr + 1, end, count);
+			return tail.ec == std::errc{} && tail.ptr == end && count > 0 ? std::optional(std::pair(first, count)) : std::nullopt;
+		}
+
 		template <class... T>
 		struct Overloaded : T... {
 			using T::operator()...;
@@ -6641,9 +6653,16 @@ namespace RTE {
 			ApplyObservationEpoch(m_Config.localPeerId, packet.targetFrame);
 			AttachFrameWindow(packet);
 		}
+		// A test peer silent on the wire while it keeps simulating: its host holds a frame this peer already ran.
+		static const auto muteInput = TestRangeFromEnvironment("CC_TEST_LOCKSTEP_MUTE_INPUT");
+		const bool muted = !recovery && muteInput && targetFrame >= muteInput->first && targetFrame - muteInput->first < muteInput->second;
+		if (muted) {
+			std::cout << "[lockstep-test] muted own input target=" << targetFrame << std::endl;
+			packet.priorWindow.clear();
+		}
 		if (recovery) {
 			if (!QueueRecoveredInput(packet, error)) return false;
-		} else if (!SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded, 0, &valueObservationsEncoded, &ObservationBlocksOf(m_Config.localPeerId, targetFrame))) {
+		} else if (!muted && !SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded, 0, &valueObservationsEncoded, &ObservationBlocksOf(m_Config.localPeerId, targetFrame))) {
 			if (packet.priorWindow.empty()) {
 				return false;
 			}
