@@ -192,6 +192,7 @@ namespace RTE {
 	bool RunCrossRosterSelfTest(std::string* error);
 	bool RunCrossExecutionPhaseSelfTest(std::string* error);
 	bool RunCrossAuthorityRecordSelfTest(std::string* error);
+	bool RunCrossHistoryRecordSelfTest(std::string* error);
 }
 
 using namespace RTE;
@@ -222,7 +223,30 @@ static const char* CrossTickPhase(bool catchup, uint64_t tick, uint64_t previous
 	return catchup ? "catchup" : tick <= previousCommitted ? "reexecution" : "live";
 }
 
-static nlohmann::json CrossAuthorityFromReport(const nlohmann::json&, uint64_t, uint8_t) { return nullptr; }
+static const nlohmann::json* CrossMatchingLockstep(const nlohmann::json& report, uint64_t session, uint8_t host) {
+	if (!report.is_object() || !report.contains("runner") || !report["runner"].is_object() || !report["runner"].contains("lockstep")) return nullptr;
+	const auto& value = report["runner"]["lockstep"];
+	if (!value.is_object() || !value.contains("session_id") || !value.contains("host_peer_id") || value["session_id"] != session || value["host_peer_id"] != host) return nullptr;
+	return &value;
+}
+
+static nlohmann::json CrossAuthorityFromReport(const nlohmann::json& report, uint64_t session, uint8_t host) {
+	const auto* value = CrossMatchingLockstep(report, session, host);
+	return value && value->contains("migration_generation") && (*value)["migration_generation"].is_number_unsigned() ? (*value)["migration_generation"] : nlohmann::json(nullptr);
+}
+
+static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, uint64_t nextFrameCursor) {
+	return nextFrameCursor > 0 ? nlohmann::json(nullptr) : nlohmann::json("initial");
+}
+
+bool RTE::RunCrossHistoryRecordSelfTest(std::string* error) {
+	if (CrossHistoryBranch(1, false, 601) != "initial" || !CrossHistoryBranch(600, false, 601).is_null() ||
+	    !CrossHistoryBranch(1, true, 601).is_null() || !CrossHistoryBranch(0, false, 601).is_null()) {
+		*error = "a next-frame cursor is mistaken for a checkpoint, or unknown restoration is mapped as initial"; return false;
+	}
+	std::cout << "[net-match-selftest] PASS initial_history_uses_configured_start_not_the_next_frame_cursor" << std::endl;
+	return true;
+}
 
 bool RTE::RunCrossAuthorityRecordSelfTest(std::string* error) {
 	const nlohmann::json source{{"runner", {{"lockstep", {{"session_id", uint64_t{81}}, {"host_peer_id", 2}, {"migration_generation", uint64_t{7}}}}}}};
@@ -272,10 +296,17 @@ static void BeginCrossTick(uint64_t tick) {
 	static uint8_t priorHost = 0;
 	static bool priorCatchup = false;
 	static uint64_t authorityObservedTick = 0;
-	if (!catchup && (newRound || host != priorHost || priorCatchup)) {
-		authority = CrossAuthorityFromReport(nlohmann::json::parse(g_NetMatchService.BuildReportJson()), config->sessionId, host);
+	static uint64_t configuredStart = 0;
+	static std::set<std::string> unmappedHistories;
+	if (!catchup && (newRound || host != priorHost || priorCatchup || configuredStart == 0)) {
+		const auto diagnostic = nlohmann::json::parse(g_NetMatchService.BuildReportJson(), nullptr, false);
+		authority = CrossAuthorityFromReport(diagnostic, config->sessionId, host);
+		const auto* lockstep = CrossMatchingLockstep(diagnostic, config->sessionId, host);
+		configuredStart = lockstep && lockstep->contains("configured_start_frame") && (*lockstep)["configured_start_frame"].is_number_unsigned() ? (*lockstep)["configured_start_frame"].get<uint64_t>() : 0;
 		authorityObservedTick = tick;
 	}
+	const std::string historyKey = std::to_string(config->sessionId) + "/" + std::to_string(config->roundId);
+	if (catchup || configuredStart > 1 || s_crossTicketRejoin || (round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
 	priorHost = host; priorCatchup = catchup;
 	s_crossContext = {{"run", CrossEnvironment("CC_TEST_CROSS_RUN")}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
 	    {"process", System::GetProcessID()}, {"execution", CrossEnvironment("CC_TEST_CROSS_EXECUTION") + "/" + std::to_string(execution)},
@@ -284,7 +315,8 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"authority_generation_source", "service.runner.lockstep; refreshed on round/host/catch-up transition"},
 	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(config->roundId)},
 	    {"round", round}, {"source_round", config->roundId}, {"tick", tick}, {"peer", ScenarioRunner::GetLockstepLocalPeerId()},
-	    {"history_branch", ScenarioRunner::GetLockstepResumeFrame() > 0 ? nlohmann::json(nullptr) : nlohmann::json("initial")},
+	    {"history_branch", CrossHistoryBranch(configuredStart, unmappedHistories.contains(historyKey), ScenarioRunner::GetLockstepResumeFrame())},
+	    {"configured_start_frame", catchup ? nlohmann::json(nullptr) : nlohmann::json(configuredStart)},
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
 	    {"config_hash", NetMatchConfigUtil::StoredConfigHash(*config)}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
 	    {"phase", CrossTickPhase(catchup, tick, s_crossLastCommitted.contains(config->roundId) ? s_crossLastCommitted.at(config->roundId) : 0, execution)}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
