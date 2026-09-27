@@ -29,11 +29,12 @@ SUITES = (
     ("mod-api-census-guard", ["mod_api_census.py", "--self-test"]),
     ("runner-feel-marker", ["test_win32_runner_feel_marker.py"]),
     ("runner-limits", ["test_win32_runner_limits.py"]),
+    ("feel-engine-placement", ["test_feel_placement.py"]),
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
     ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),
     ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),
 )
-WINDOWS_ONLY = {"runner-feel-marker", "runner-limits"}
+WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement"}
 
 
 def run(repo: Path, name: str, argv: list[str], timeout: float) -> tuple[str, int, str]:

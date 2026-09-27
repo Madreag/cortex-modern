@@ -143,20 +143,48 @@ AUTOSAVE_THREE_CASES = (
 )
 
 
-def engine_placements(peers):
+def runner_cpu_basis():
+    """The CPU mask the runner's job gives every engine on this box, read the way the runner reads it; None when the
+    box names none."""
+    import win32_test_runner
+    limits = win32_test_runner.box_runner_limits()
+    return dict(mask=int(limits['affinity_mask'], 16) if limits['affinity_mask'] else None,
+                runner_affinity_mask=limits['affinity_mask'], source=limits['affinity_source'])
+
+
+def cpu_ranges(cpus):
+    """'0-5' or '3-5,8-9': the logical processors of a placement."""
+    spans = []
+    for cpu in cpus:
+        if spans and spans[-1][1] == cpu - 1:
+            spans[-1][1] = cpu
+        else:
+            spans.append([cpu, cpu])
+    return ','.join(f'{first}-{last}' for first, last in spans)
+
+
+def engine_placements(peers, basis=None):
     """Three engines on one box each get their own cores and the host a third of them at above-normal priority: a
     real match runs one engine per machine, so a host starved by its neighbours is the harness's limit, not the round's.
-    Whole SMT pairs, the host's third rounded up."""
+    Whole SMT pairs, the host's third rounded up, all inside the runner's job mask (a job with an affinity limit keeps
+    its processes inside it); a box with no mask splits every whole pair of the machine."""
     if len(peers) != 3 or sys.platform != 'win32':
         return {}
-    pairs = (os.cpu_count() or 0) // 2
-    if pairs < 3:
+    mask = (basis or runner_cpu_basis())['mask']
+    cpus = [cpu for cpu in range(mask.bit_length()) if mask >> cpu & 1] if mask else list(range(2 * ((os.cpu_count() or 0) // 2)))
+    units = []
+    for cpu in cpus:
+        if cpu % 2 and units and units[-1] == [cpu - 1]:
+            units[-1].append(cpu)
+        else:
+            units.append([cpu])
+    if len(units) < 3:
         return {}
-    host_pairs = -(-pairs // 3)
-    client_pairs = -(-(pairs - host_pairs) // 2)
-    spans = dict(host=(0, 2 * host_pairs), client=(2 * host_pairs, 2 * (host_pairs + client_pairs)),
-                 survivor=(2 * (host_pairs + client_pairs), 2 * pairs))
-    return {peer: dict(mask=sum(1 << cpu for cpu in range(*spans[peer])), logical=f'{spans[peer][0]}-{spans[peer][1] - 1}',
+    host_units = -(-len(units) // 3)
+    client_units = -(-(len(units) - host_units) // 2)
+    spans = dict(host=units[:host_units], client=units[host_units:host_units + client_units], survivor=units[host_units + client_units:])
+    placed = {peer: [cpu for unit in spans[peer] for cpu in unit] for peer in peers}
+    return {peer: dict(mask=sum(1 << cpu for cpu in placed[peer]), logical=cpu_ranges(placed[peer]),
                        priority='above_normal' if peer == 'host' else 'normal') for peer in peers}
 
 
@@ -174,6 +202,9 @@ def place_engine(run, placement):
     kernel.GetPriorityClass.argtypes = [wintypes.HANDLE]
     kernel.GetPriorityClass.restype = wintypes.DWORD
     handle = run.process
+    job = run.record.get('affinity_mask')
+    if job and placement['mask'] & ~int(job, 16):
+        raise OSError(f'the placement {placement["mask"]:#x} leaves the runner job mask {job}')
     if not kernel.SetProcessAffinityMask(handle, placement['mask']):
         raise OSError(f'SetProcessAffinityMask failed: {ctypes.get_last_error()}')
     if not kernel.SetPriorityClass(handle, 0x8000 if placement['priority'] == 'above_normal' else 0x20):
@@ -225,8 +256,12 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     write_json(out / 'manifest.json', manifest)
     peers = ['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
-    placements = engine_placements(peers)
+    basis = runner_cpu_basis() if len(peers) == 3 and sys.platform == 'win32' else None
+    placements = engine_placements(peers, basis)
     manifest['engine_placement'] = {}
+    if basis:
+        manifest['engine_placement_basis'] = dict(runner_affinity_mask=basis['runner_affinity_mask'], source=basis['source'],
+                                                  planned={peer: dict(mask=hex(p['mask']), logical=p['logical']) for peer, p in placements.items()})
     write_json(out / 'manifest.json', manifest)
     runs, records = {}, {}
     try:
@@ -689,6 +724,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--port', type=int, default=48231)
+    parser.add_argument('--port-block', default='48231-48240', help="the calling lane's own port block, LO-HI; --port stays inside it")
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--analyze-only', action='store_true')
     parser.add_argument('--skip-gates', action='store_true', help='retain gates as unverified')
@@ -737,8 +773,9 @@ def dry_run_plan(launch_all):
 def main(argv=None):
     parser, args = parse_args(argv)
     root = args.out.resolve()
-    if not 48231 <= args.port <= 48240:
-        parser.error('the ten match ports must stay within 48231..48240')
+    low, _, high = args.port_block.partition('-')
+    if not (low.isdigit() and high.isdigit() and int(low) <= args.port <= int(high)):
+        parser.error(f'the ten match ports must stay within the port block {args.port_block}')
     if args.host_lua_states < 1 or args.client_lua_states < 1:
         parser.error('--host-lua-states and --client-lua-states must be positive')
     if args.fullstate_every < 0:
