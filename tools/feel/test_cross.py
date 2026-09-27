@@ -78,6 +78,18 @@ class CrossReducers(unittest.TestCase):
         self.assertFalse(result[0]['passed'])
         self.assertTrue(result[0]['censored'])
 
+    def test_fault_duration_is_distinct_from_measured_recovery(self):
+        schedule=[dict(id='stall',peer='c',incarnation=0,duration_ms=600,deadline_ms=2000,
+                       outcomes=['first_controllable_input'])]
+        events=[dict(id='stall',peer='c',incarnation=0,phase=phase,wall_ms=stamp)
+                for phase,stamp in [('fault_applied',100),('first_controllable_input',1300)]]
+        result=report.reduce_recoveries(schedule,events,now_ms=1500)[0]
+        self.assertTrue(result['passed'])
+        self.assertEqual(result['duration_ms'],1200)
+        self.assertEqual(result['scheduled_duration_ms'],600)
+        missing=report.reduce_recoveries(schedule,[],now_ms=1500)[0]
+        self.assertFalse(missing['passed']); self.assertIsNone(missing['duration_ms'])
+
     def test_wrong_incarnation_cannot_complete_recovery(self):
         schedule = [dict(id='r1', peer='c', incarnation=1, deadline_ms=1000,
                          outcomes=['first_controllable_input'])]

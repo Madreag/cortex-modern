@@ -124,9 +124,11 @@ def reduce_recoveries(schedule, events, now_ms):
                          and row['phase'] not in ('queued_admission', 'cancelled_reclaim')
                          and start is not None and row['wall_ms'] >= start), None)
         duration = (terminal['wall_ms'] if terminal else now_ms) - start if start is not None else None
-        results.append(dict(**case, phases=rows, duration_ms=duration, censored=terminal is None,
-                            outcome=terminal['phase'] if terminal else None,
-                            passed=terminal is not None and 0 <= duration <= case['deadline_ms']))
+        result=dict(case)
+        result.update(phases=rows, scheduled_duration_ms=case.get('duration_ms'), duration_ms=duration,
+                      censored=terminal is None, outcome=terminal['phase'] if terminal else None,
+                      passed=terminal is not None and 0 <= duration <= case['deadline_ms'])
+        results.append(result)
     return results
 
 
