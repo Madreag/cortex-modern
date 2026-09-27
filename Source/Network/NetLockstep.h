@@ -426,6 +426,10 @@ namespace RTE {
 		std::vector<uint8_t> activePeerIds;
 		std::array<uint8_t, 32> migrationKey{};
 		std::function<std::unique_ptr<INetTransport>()> migrationTransportFactory;
+		/// Dials a handover endpoint that names an ICE route through the session's rendezvous; the identity may be empty.
+		std::function<bool(INetTransport& transport, const std::string& identity, std::string* error)> migrationIceDial;
+		/// Opens the rendezvous on this peer's handover listener once it hosts the handover.
+		std::function<void(INetTransport& listener)> migrationIceHost;
 		/// How many ticks a negotiated window packet repeats. 1 keeps the classic one-tick send; 0 uses 4.
 		uint8_t frameRedundancyTicks = 1;
 		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
@@ -1108,7 +1112,19 @@ namespace RTE {
 		NetHostMigrationPhase GetMigrationPhase() const { NET_PLANE_CHECK(); return m_MigrationPhase; }
 		NetHostMigrationResult GetMigrationResult() const { NET_PLANE_CHECK(); return m_MigrationResult; }
 		std::string GetMigrationAddress() const { NET_PLANE_CHECK(); return m_MigrationAddress; }
-		static bool ConnectMigrationEndpoint(INetTransport& transport, const NetMatchMigrationPeer& peer, size_t& nextAddress, std::string& connectedAddress, std::string* error = nullptr);
+		/// A handover endpoint entry that names the listener's ICE route: this prefix and the listener's GNS identity.
+		static constexpr std::string_view c_MigrationIcePrefix = "ice:";
+		/// How long a survivor gives an ICE dial to the successor: candidates are gathered and traded through the directory first.
+		static constexpr uint64_t c_MigrationIceDialMs = 8000;
+		static bool IsMigrationIceEndpoint(const std::string& address) { return address.starts_with(c_MigrationIcePrefix); }
+		/// What a peer publishes for its handover listener, in ICE order: its LAN address (the host candidate a direct dial
+		/// reaches), then, when the match's links run through the session directory, its ICE route, whose rendezvous offers
+		/// the listener's host, server-reflexive (STUN) and relay (TURN) candidates.
+		static std::vector<std::string> MigrationListenAddrs(const std::string& lanAddress, bool iceRoute);
+		using MigrationIceDial = std::function<bool(INetTransport& transport, const std::string& identity, std::string* error)>;
+		/// Dials the endpoint's entries in order from nextAddress; an ICE entry goes through iceDial and is skipped without one.
+		static bool ConnectMigrationEndpoint(INetTransport& transport, const NetMatchMigrationPeer& peer, size_t& nextAddress, std::string& connectedAddress, std::string* error = nullptr,
+		                                     const MigrationIceDial* iceDial = nullptr);
 		bool NeedsMigrationSnapshot() const { NET_PLANE_CHECK(); return m_MigrationResult.snapshotProviderPeerId != 0 && m_Config.localPeerId == GetHostPeerId(); }
 		std::unique_ptr<INetTransport> TakeMigrationTransport() { NET_PLANE_CHECK(); return std::move(m_MigrationTransport); }
 		bool TakeMigrationNotice() { NET_PLANE_CHECK(); return std::exchange(m_MigrationNotice, false); }
@@ -1285,7 +1301,9 @@ namespace RTE {
 		bool ContactMigrationSuccessor(uint64_t nowMs);
 		bool RestartHostMigrationAfterSuccessorLoss(uint64_t nowMs);
 		bool IsLostMigrationSuccessor(uint8_t peerId) const;
-		uint64_t MigrationStepBudgetMs() const { return std::clamp<uint32_t>(m_Config.timeoutMs, 1, 1000); }
+		uint64_t MigrationStepBudgetMs() const;
+		/// How long a survivor waits on its dial to the successor before it dials the next entry.
+		uint64_t MigrationDialPatienceMs() const { return IsMigrationIceEndpoint(m_MigrationAddress) ? c_MigrationIceDialMs : 250; }
 		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);

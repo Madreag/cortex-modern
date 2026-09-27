@@ -1238,6 +1238,19 @@ namespace RTE {
 		return m_Impl->GetLocalIdentity();
 	}
 
+	std::string GnsTransport::ProcessIdentity() {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+#ifdef CCCP_WITH_GNS
+		SteamNetworkingIdentity identity;
+		if (!g_GnsInitialized || !SteamNetworkingSockets() || !SteamNetworkingSockets()->GetIdentity(&identity)) return {};
+		char text[SteamNetworkingIdentity::k_cchMaxString] = {};
+		identity.ToString(text, sizeof(text));
+		return text;
+#else
+		return {};
+#endif
+	}
+
 	bool GnsTransport::IsCompiledIn() {
 #ifdef CCCP_WITH_GNS
 		return true;
