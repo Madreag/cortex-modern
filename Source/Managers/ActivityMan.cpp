@@ -1,5 +1,6 @@
 #include "ActivityMan.h"
 #include "AutosaveStore.h"
+#include "MetricsCollector.h"
 #include "CaptureSentinel.h"
 #include "GameVersion.h"
 #include "GUIInput.h"
@@ -899,6 +900,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), image->imageBytes));
 				return true;
 			} catch (const std::exception& error) {
+				if (const auto* refusal = dynamic_cast<const ScriptGraphRefusal*>(&error))
+					for (const auto& problem: refusal->problems)
+						System::PrintDiagnosticLine(std::format("[fullstate-refusal] tick={} round={} label={} problem={}", image->tick, round, label.empty() ? "sample" : label, problem));
 				System::PrintDiagnosticLine(std::format("[fullstate] tick={} failed: {}", image->tick, error.what()));
 				return false;
 			}
@@ -959,6 +963,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		};
 		try {
 			if (std::this_thread::get_id() == simThread) throw std::logic_error("autosave serializer missing a worker thread");
+			if (automatic) CrossCaptureBarrierFromEnvironment("writer_pending", tick, descriptor.roundId);
 			retired.clear();
 			retiredLayers.clear();
 			previousImage.reset();
@@ -1026,6 +1031,13 @@ bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std:
 	// A labelled capture shares the tick of a scheduled one, so it dumps into a folder of its own under the run's.
 	if (label.empty()) m_FullStateDumpRoot = dumpDirectory;
 	m_FullStateDumpDirectory = label.empty() || m_FullStateDumpRoot.empty() ? m_FullStateDumpRoot : m_FullStateDumpRoot + "/" + label;
+	if (std::getenv("CC_TEST_CROSS_RECORDS") && !m_FullStateDumpRoot.empty()) {
+		static uint64_t capture = 0;
+		m_FullStateDumpDirectory = m_FullStateDumpRoot + "/process-" + std::to_string(System::GetProcessID()) + "/round-" +
+		    std::to_string(round) + "/capture-" + std::to_string(++capture) + "/" + (label.empty() ? "sample" : label);
+		System::PrintDiagnosticLine("[fullstate-context] tick=" + std::to_string(tick) + " round=" + std::to_string(round) +
+		    " label=" + (label.empty() ? "sample" : label) + " path=" + m_FullStateDumpDirectory);
+	}
 	m_FullStateRound = round;
 	m_FullStateLabel = label;
 	std::shared_future<bool> task;

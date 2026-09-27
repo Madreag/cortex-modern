@@ -1,4 +1,5 @@
 #include "Actor.h"
+#include "MetricsCollector.h"
 #include <iostream>
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
@@ -1008,6 +1009,7 @@ void Actor::AddGold(float goldOz) {
 	if (g_SettingsMan.GetAutomaticGoldDeposit() || !isHumanTeam) {
 		// TODO: Allow AI to reliably deliver gold via craft
 		g_ActivityMan.GetActivity()->ChangeTeamFunds(goldOz, m_Team);
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("gold_deposited", this, "success", goldOz);
 	} else {
 		m_GoldCarried += goldOz;
 		m_GoldPicked = true;
@@ -2480,6 +2482,7 @@ void Actor::Update() {
 			SceneMan::TraceTerrainEvent("hdmw", std::bit_cast<int32_t>(m_Health), std::bit_cast<int32_t>(damage), static_cast<int>(wound->GetUniqueID()), 0, static_cast<int>(GetUniqueID()));
 		}
 		m_Health -= damage;
+		if (damage > 0) if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("wound_damage", this, "unattributed", damage, wound->GetUniqueID());
 	}
 	for (Attachable* attachable: m_Attachables) {
 		const float damage = attachable->CollectDamage();
@@ -2524,6 +2527,7 @@ void Actor::Update() {
 		const float impulse = std::sqrt(travelImpulseMagnitudeSqr) - m_TravelImpulseDamage;
 		const float damage = std::max(impulse / (m_GibImpulseLimit - m_TravelImpulseDamage) * m_MaxHealth, 0.0F);
 		m_Health -= damage;
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled() && damage > 0) g_MetricsCollector.RecordEvent("impact_damage", this, "unattributed", damage);
 		m_ForceDeepCheck = true;
 	}
 
@@ -2547,6 +2551,7 @@ void Actor::Update() {
 		}
 		DropAllInventory();
 		m_Status = DYING;
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("dying", this, "health_exhausted_unattributed");
 		m_DeathTmr.Reset();
 	}
 
@@ -2557,6 +2562,7 @@ void Actor::Update() {
 
 	if (m_Status == DYING && m_DeathTmr.GetElapsedSimTimeMS() > 1000) {
 		m_Status = DEAD;
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("dead", this, "death_timer");
 	}
 
 	//////////////////////////////////////////////////////

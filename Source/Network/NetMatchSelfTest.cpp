@@ -8,6 +8,7 @@
 #include "System.h"
 #ifdef CCCP_WITH_GNS
 #include "GnsSignaling.h"
+#include <steam/isteamnetworkingutils.h>
 #endif
 #include "NetIdentity.h"
 #include "NetLobbySession.h"
@@ -22,11 +23,13 @@
 #include "NetModerationGUI.h"
 #include "NetHostOptionsText.h"
 #include "Activity.h"
+#include "Actor.h"
 #include "AEmitter.h"
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
 #include "MovableMan.h"
 #include "ScenarioRunner.h"
+#include "NetModerationGUIProbe.h"
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -59,8 +62,180 @@
 #include <vector>
 
 namespace RTE {
+	bool RunCrossBotRangeSelfTest(std::string* error);
+	bool RunCrossRosterSelfTest(std::string* error);
+	bool RunCrossEndSignalSelfTest(std::string* error);
+	bool RunCrossLobbyResourcesSelfTest(std::string* error);
+	bool RunCrossPresentationRetentionSelfTest(std::string* error);
+	bool RunCrossExecutionPhaseSelfTest(std::string* error);
+	bool RunCrossAuthorityRecordSelfTest(std::string* error);
+	bool RunCrossHistoryRecordSelfTest(std::string* error);
+	bool RunCrossReadyRevisionSelfTest(std::string* error);
+	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 
 	namespace {
+		bool TestCrossCaptureBarrier(std::string* error) {
+			const auto root = std::filesystem::path("Userdata") / "cross-barrier-selftest";
+			std::filesystem::create_directories(root);
+			const nlohmann::json spec{{"id", "capture"}, {"phase", "capture_announced"}, {"tick", 77}, {"round", 9}, {"timeout_ms", 200}};
+			bool released = false;
+			std::thread worker([&] { released = CrossCaptureBarrier(spec, root.string(), "capture_announced", 77, 9); });
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+			const auto entered = root / "capture.9.capture_announced.77.enter.json";
+			while (!std::filesystem::exists(entered) && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			std::ofstream(root / "capture.9.capture_announced.77.release").put('1');
+			worker.join();
+			if (!released || !std::filesystem::exists(entered)) { *error = "the announced capture barrier neither signalled nor waited for its release"; return false; }
+			auto timeout = spec; timeout["id"] = "writer"; timeout["phase"] = "writer_pending"; timeout["timeout_ms"] = 3;
+			if (CrossCaptureBarrier(timeout, root.string(), "writer_pending", 77, 9)) { *error = "an unreleased writer barrier did not time out"; return false; }
+			if (CrossCaptureBarrier(spec, root.string(), "writer_pending", 77, 9) || CrossCaptureBarrier(spec, root.string(), "capture_announced", 78, 9)) {
+				*error = "barrier ignored its phase/tick selector"; return false;
+			}
+			std::ifstream timed(root / "writer.9.writer_pending.77.exit.json");
+			if (!timed || nlohmann::json::parse(timed).value("outcome", "") != "timeout") { *error = "writer timeout has no terminal receipt"; return false; }
+			std::cout << "[net-match-selftest] PASS capture_and_writer_barriers_are_selected_releasable_and_bounded" << std::endl;
+			return true;
+		}
+		bool TestCrossRecordKinds(std::string* error) {
+			const std::vector<std::string> kinds{"round_fired", "reload_completed", "thrown_release", "device_pickup", "door_open_completed",
+			    "door_close_completed", "gold_deposited", "wound_damage", "dying", "dead", "wound_added", "gibbed", "craft_refund",
+			    "craft_departure", "cargo_ejected", "terrain_removed", "impact_damage", "climb_limb_push", "delivery_arrived", "bot_transition"};
+			const std::filesystem::path path = "Userdata/cross-record-kinds.jsonl";
+			if (!g_MetricsCollector.OpenEvents(path.string(), 65536)) { *error = "event stream did not open"; return false; }
+			Actor subject;
+			for (size_t index = 0; index < kinds.size(); ++index) {
+				g_MetricsCollector.BeginEventTick({{"tick", index + 1}, {"round", 9}, {"phase", "live"}});
+				g_MetricsCollector.RecordEvent(kinds[index], &subject, "success", 7, 81, 2);
+				g_MetricsCollector.FlushEventTick();
+			}
+			g_MetricsCollector.CloseEvents();
+			std::ifstream input(path);
+			bool passed = true;
+			for (size_t index = 0; index < kinds.size(); ++index) {
+				std::string line; std::getline(input, line);
+				const auto row = line.empty() ? nlohmann::json::object() : nlohmann::json::parse(line);
+				const bool same = row.value("event", "") == kinds[index] && row.value("amount", 0) == 7 && row.value("seat", -1) == 2 &&
+				    row.value("other", 0) == 81 && row.value("actor", -1L) == subject.GetUniqueID() && row.value("class", "") == subject.GetClassName();
+				std::cout << "[net-match-selftest] " << (same ? "PASS " : "FAIL ") << kinds[index] << "_record_preserves_identity_result_and_amount" << std::endl;
+				passed &= same;
+			}
+			if (!passed) *error = "one or more action records lost their fields";
+			return passed;
+		}
+
+		bool TestCrossProducedControllerEvidence(std::string* error) {
+			const auto path = std::filesystem::path("Userdata") / "cross-input-evidence.jsonl";
+			if (!g_MetricsCollector.OpenEvents(path.string(), 65536)) { *error = "input evidence stream did not open"; return false; }
+			g_MetricsCollector.BeginEventTick({{"round", 9}, {"tick", 40}, {"phase", "live"}});
+			g_MetricsCollector.RecordProducedController(9, 40, 43, 42, 1, 100);
+			const auto observed = g_MetricsCollector.ProducedControllerFor(9, 43, 42);
+			const bool wrongIdentityAbsent = g_MetricsCollector.ProducedControllerFor(10, 43, 42).empty() &&
+			    g_MetricsCollector.ProducedControllerFor(9, 43, 43).empty();
+			g_MetricsCollector.BeginEventTick({{"round", 9}, {"tick", 41}, {"phase", "prediction"}}, true);
+			g_MetricsCollector.RecordProducedController(9, 41, 44, 42, 1, 101);
+			const bool predictionAbsent = g_MetricsCollector.ProducedControllerFor(9, 44, 42).empty();
+			g_MetricsCollector.CloseEvents();
+			if (observed.value("input_serial", uint64_t{0}) == 0 || observed.value("target_tick", uint64_t{0}) != 43 ||
+			    observed.value("produced_wall_ms", 0.0) != 100 || observed.value("actor", 0L) != 42 ||
+			    !predictionAbsent || !wrongIdentityAbsent) {
+				*error = "fresh produced input lost its actor/round/target/time identity or included prediction"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS produced_controller_evidence_keeps_identity_and_excludes_prediction" << std::endl;
+			return true;
+		}
+
+		bool TestCrossFreshRecoveryProof(std::string* error) {
+			const nlohmann::json sample{{"input_serial", 4}, {"input_round", 9}, {"target_tick", 43}, {"actor", 42}, {"produced_wall_ms", 101.0}, {"queue_confirmed", true}};
+			const auto accepts = [&](uint64_t round, uint64_t tick, int64_t wire, bool control, bool held, bool catchup, double after) {
+				return MetricsCollector::IsFreshControllerRecovery(sample, round, tick, 42, wire, control, held, catchup, after);
+			};
+			if (!accepts(9, 43, 43, true, false, false, 100) || accepts(10, 43, 43, true, false, false, 100) ||
+			    accepts(9, 44, 44, true, false, false, 100) || accepts(9, 43, 42, true, false, false, 100) ||
+			    accepts(9, 43, 43, false, false, false, 100) || accepts(9, 43, 43, true, true, false, 100) ||
+			    accepts(9, 43, 43, true, false, true, 100) || accepts(9, 43, 43, true, false, false, 102)) {
+				*error = "recovery accepted stale, wrong-history, held, replayed or unapplied controller input"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS recovery_requires_fresh_produced_and_applied_controllable_input" << std::endl;
+			return true;
+		}
+
+		bool TestCrossQueuedControllerEvidence(std::string* error) {
+			if (!g_MetricsCollector.OpenEvents("Userdata/cross-queued-input.jsonl", 65536)) { *error = "input stream did not open"; return false; }
+			g_MetricsCollector.BeginEventTick({{"round", 9}, {"tick", 40}, {"phase", "live"}});
+			bool passed = true;
+			const auto sample = [&](uint64_t produced, uint64_t predicted, uint64_t queued, const std::vector<long>& actors, uint64_t prior, bool wanted) {
+				g_MetricsCollector.RecordProducedController(9, produced, predicted, 42, 1, 100 + produced);
+				g_MetricsCollector.ConfirmProducedControllers(9, produced, queued, actors, prior);
+				passed &= g_MetricsCollector.ProducedControllerFor(9, predicted, 42).value("queue_confirmed", false) == wanted;
+			};
+			sample(40, 43, 44, {42}, 0, false);
+			sample(41, 44, 44, {42}, 0, false);
+			sample(42, 45, 45, {41}, 0, false);
+			sample(43, 46, 46, {42}, 46, false);
+			sample(44, 47, 47, {42}, 46, true);
+			auto unconfirmed = g_MetricsCollector.ProducedControllerFor(9, 47, 42); unconfirmed["queue_confirmed"] = false;
+			passed &= !MetricsCollector::IsFreshControllerRecovery(unconfirmed, 9, 47, 42, 47, true, false, false, 100);
+			g_MetricsCollector.CloseEvents();
+			if (!passed) { *error = "input confirmation accepted deferred, retimed, restored or unqueued input"; return false; }
+			std::cout << "[net-match-selftest] PASS controller_recovery_requires_new_queue_readback_beyond_restored_input" << std::endl;
+			return true;
+		}
+
+		bool TestCrossTickTiming(std::string* error) {
+			const auto timing = MetricsCollector::TickTiming(1000, 200, 300, 100);
+			if (timing["compute_us"] != 600 || timing["capture_us"] != 200 || timing["wait_us"] != 200 || timing["partition_valid"] != true ||
+			    MetricsCollector::TickTiming(100, 200, 0, 0)["partition_valid"] != false) {
+				*error = "tick timing overlaps wait/capture or accepts a negative compute interval"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS tick_timing_partitions_compute_wait_and_capture" << std::endl;
+			return true;
+		}
+
+		bool TestCrossTimedTransport(std::string* error) {
+#ifdef CCCP_WITH_GNS
+			GnsTransport transport;
+			if (!transport.StartHost(49915, error)) return false;
+			if (ApplyCrossTransportFault(-1, 0, 0, 10) || ApplyCrossTransportFault(0, 101, 0, 10) || !ApplyCrossTransportFault(10, 5, 2, 1)) {
+				*error = "transport hook accepted invalid bounds or refused a valid timed setting"; return false;
+			}
+			float loss = 0; size_t bytes = sizeof(loss); ESteamNetworkingConfigDataType type;
+			const auto read = [&] { bytes = sizeof(loss); return SteamNetworkingUtils()->GetConfigValue(k_ESteamNetworkingConfig_FakePacketLoss_Send,
+			    k_ESteamNetworkingConfig_Global, 0, &type, &loss, &bytes) > 0; };
+			if (!read() || loss != 5) { *error = "loss hook has no GNS readback"; return false; }
+			std::this_thread::sleep_for(std::chrono::milliseconds(3));
+			transport.PollEvents();
+			if (!read() || loss != 0) { *error = "timed fault did not reset without simulation progress"; return false; }
+			std::cout << "[net-match-selftest] PASS timed_transport_faults_reset_without_committed_progress" << std::endl;
+#endif
+			return true;
+		}
+		bool TestCommittedEventStream(std::string* error) {
+			const auto path = std::filesystem::path("Userdata") / "cross-events-selftest.jsonl";
+			MetricsCollector& collector = g_MetricsCollector;
+			if (!collector.OpenEvents(path.string(), 8192)) { *error = "cannot open event record"; return false; }
+			collector.AppendEvent({{"event", "outside_tick"}});
+			collector.BeginEventTick({{"tick", 7}, {"round", 2}, {"phase", "live"}});
+			collector.AppendEvent({{"event", "round_fired"}, {"actor", 11}, {"amount", 1}});
+			collector.AppendEvent({{"event", "round_fired"}, {"actor", 11}, {"amount", 1}});
+			collector.FlushEventTick();
+			collector.BeginEventTick({{"tick", 8}, {"round", 2}}, true);
+			collector.AppendEvent({{"event", "predicted_round"}});
+			collector.FlushEventTick();
+			collector.BeginEventTick({{"tick", 7}, {"round", 2}, {"phase", "catchup"}});
+			collector.AppendEvent({{"event", "round_fired"}, {"actor", 11}});
+			collector.FlushEventTick();
+			collector.CloseEvents();
+			std::ifstream input(path);
+			std::vector<nlohmann::json> events;
+			for (std::string line; std::getline(input, line);) events.push_back(nlohmann::json::parse(line));
+			if (events.size() != 3 || events[0]["tick"] != 7 || events[1]["event"] != "round_fired" || events[2]["phase"] != "catchup") {
+				*error = "committed events missing, overwritten, speculative or unlabelled";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS committed_events_append_exclude_prediction_and_label_reexecution" << std::endl;
+			return true;
+		}
 		bool TestRemovedWoundReleasesItsRadiusCache(std::string* error) {
 			MOSRotating body;
 			auto* wound = new AEmitter;
@@ -13919,6 +14094,24 @@ namespace RTE {
 			rowsPassed = false;
 		};
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
+		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
+		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
+		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
+		row(&RunCrossEndSignalSelfTest, "forced_end_phase_signal_requires_sender_round_incarnation_and_id");
+		row(&RunCrossLobbyResourcesSelfTest, "cross_lobby_loads_all_device_icons_before_draw");
+		row(&RunCrossPresentationRetentionSelfTest, "cross_presentation_retention_bounds_live_and_closed_chunks");
+		row(&RunCrossExecutionPhaseSelfTest, "cross_phase_returns_to_live_after_reexecution_or_new_round");
+		row(&RunCrossAuthorityRecordSelfTest, "cross_authority_record_is_bound_to_its_session_and_host");
+		row(&RunCrossHistoryRecordSelfTest, "initial_history_uses_configured_start_not_the_next_frame_cursor");
+		row(&RunCrossReadyRevisionSelfTest, "cross_ready_start_retries_across_configuration_changes");
+		row(&TestCrossCaptureBarrier, "capture_and_writer_barriers_are_selected_releasable_and_bounded");
+		row(&TestCrossRecordKinds, "action_record_fields");
+		row(&TestCrossProducedControllerEvidence, "produced_controller_evidence");
+		row(&TestCrossFreshRecoveryProof, "fresh_controller_recovery_proof");
+		row(&TestCrossQueuedControllerEvidence, "controller_recovery_requires_new_queue_readback_beyond_restored_input");
+		row(&TestCrossTickTiming, "exclusive_tick_timing");
+		row(&TestCrossTimedTransport, "timed_transport_reset");
+		row(&NetModerationGUIProbe::RunCrossScopeSelfTest, "gameplay_probe_scopes");
 		row(&TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay, "a_rejoin_walks_its_phases_and_the_goodbye_ends_its_tail_replay");
 		row(&TestTheHostSavesTheMatchWhenAsked, "the_host_saves_the_match_when_asked");
 		row(&TestAManualSaveKeepsTheIntervalAndWaitsForASafeTick, "a_manual_save_keeps_the_interval_and_waits_for_a_safe_tick");

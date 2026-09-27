@@ -4,16 +4,22 @@
 #include "Singleton.h"
 
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 #define g_MetricsCollector MetricsCollector::Instance()
 
 namespace RTE {
+	class MovableObject;
+	bool CrossCaptureBarrier(const nlohmann::json& spec, const std::string& directory, const std::string& phase, uint64_t tick, uint64_t round);
+	void CrossCaptureBarrierFromEnvironment(const char* phase, uint64_t tick, uint64_t round);
 
 	/// Metrics collector for the determinism scenario runner.
 	///
@@ -68,6 +74,25 @@ namespace RTE {
 
 		/// Record a string-valued metric (e.g. a status code).
 		void RecordString(const std::string& name, const std::string& value);
+
+		/// Streams opt-in observations at committed tick boundaries.
+		bool OpenEvents(const std::string& path, size_t byteLimit = 268435456);
+		void BeginEventTick(const nlohmann::json& context, bool prediction = false);
+		void UpdateEventContext(const nlohmann::json& context);
+		void RecordEvent(const std::string& event, const MovableObject* object = nullptr, const std::string& result = "success", double amount = 1, long other = 0, int seat = -1);
+		void AppendEvent(const nlohmann::json& event);
+		void FlushEventTick();
+		void WriteObservation(const nlohmann::json& observation);
+		void RecordProducedController(uint64_t round, uint64_t producedTick, uint64_t targetTick, long actor, int seat, double producedWallMs = -1);
+		void ConfirmProducedControllers(uint64_t round, uint64_t producedTick, uint64_t targetTick, const std::vector<long>& queuedActors, uint64_t priorInputThrough);
+		nlohmann::json ProducedControllerFor(uint64_t round, uint64_t targetTick, long actor) const;
+		static bool IsFreshControllerRecovery(const nlohmann::json& sample, uint64_t round, uint64_t tick, long actor,
+		    int64_t wireTick, bool controllable, bool held, bool catchup, double afterWallMs);
+		void CloseEvents();
+		bool EventsEnabled() const { return m_EventsEnabled.load(std::memory_order_relaxed); }
+		size_t EventBytes() const;
+		size_t InstrumentationBytes() const;
+		static nlohmann::json TickTiming(long long totalUs, long long waitUs, long long captureUs, long long captureWaitUs);
 
 		/// Per-tick hash trace recording for the determinism CI check.
 		///
@@ -157,6 +182,9 @@ namespace RTE {
 		AggregatedRun GetCurrentRun(bool withTickHashes = false) const;
 
 	private:
+		struct EventStream;
+		std::unique_ptr<EventStream> m_EventStream;
+		std::atomic<bool> m_EventsEnabled{false};
 		mutable std::mutex                            m_Mutex;
 		std::string                                   m_Scenario;
 		uint64_t                                      m_Seed = 0;

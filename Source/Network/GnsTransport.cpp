@@ -15,6 +15,8 @@
 #include <sstream>
 #include <string_view>
 #include <functional>
+#include <cmath>
+#include <cstdlib>
 
 #ifdef CCCP_WITH_GNS
 #include <steam/isteamnetworkingutils.h>
@@ -27,6 +29,8 @@
 #endif
 
 namespace RTE {
+	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
+	static std::atomic<uint64_t> s_CrossTransportResetMs{0};
 
 	namespace {
 		void SetError(std::string* error, const std::string& message) {
@@ -522,6 +526,12 @@ namespace RTE {
 		}
 
 		void PollCallbacks() {
+			const uint64_t reset = s_CrossTransportResetMs.load();
+			const uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+			if (reset && now >= reset && s_CrossTransportResetMs.exchange(0)) {
+				const bool accepted = ApplyCrossTransportFault(0, 0, 0, 0);
+				System::PrintDiagnosticLine("[cross-transport] timed_reset send_recv_armed=" + std::to_string(accepted));
+			}
 			m_Interface->RunCallbacks();
 		}
 
@@ -1285,6 +1295,32 @@ namespace RTE {
 		s_SimulatedLagMs = lagMs;
 #else
 		(void)lagMs;
+#endif
+	}
+
+	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs) {
+#ifdef CCCP_WITH_GNS
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		if (!headless || std::string_view(headless) != "1" || lagMs < 0 || lagMs > 20000 ||
+		    !std::isfinite(lossPercent) || !std::isfinite(jitterMs) || lossPercent < 0 || lossPercent > 100 || jitterMs < 0 || jitterMs > 10000 || durationMs > 600000) return false;
+		auto* utils = SteamNetworkingUtils();
+		if (!utils) return false;
+		bool accepted = true;
+		accepted &= utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, lagMs / 2);
+		accepted &= utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, lagMs - lagMs / 2);
+		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, lossPercent);
+		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, lossPercent);
+		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Avg, jitterMs / 2);
+		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Avg, jitterMs / 2);
+		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Max, jitterMs);
+		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Max, jitterMs);
+		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, jitterMs > 0 ? 100.0F : 0.0F);
+		accepted &= utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Pct, jitterMs > 0 ? 100.0F : 0.0F);
+		s_CrossTransportResetMs.store(durationMs ? std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count() + durationMs : 0);
+		return accepted;
+#else
+		(void)lagMs; (void)lossPercent; (void)jitterMs; (void)durationMs;
+		return false;
 #endif
 	}
 

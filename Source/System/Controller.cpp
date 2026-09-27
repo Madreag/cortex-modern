@@ -11,8 +11,55 @@
 #include "CheckpointImage.h"
 #include "ActivityMan.h"
 #include "FrameMan.h"
+#include "MetricsCollector.h"
+#include "TimerMan.h"
+#include "System.h"
 
 #include <array>
+#include <algorithm>
+#include <cstdlib>
+#include <fstream>
+#include <map>
+#include <iostream>
+
+namespace {
+	bool CrossBotSelected(const nlohmann::json& ranges, uint64_t round, uint64_t tick) {
+		return std::any_of(ranges.begin(), ranges.end(), [=](const auto& row) {
+			return (row.value("round", uint64_t{0}) == 0 || row.value("round", uint64_t{0}) == round) &&
+			       tick >= row.at("from").template get<uint64_t>() && tick <= row.at("to").template get<uint64_t>();
+		});
+	}
+	const nlohmann::json& CrossBotRanges() {
+		static const auto ranges = [] {
+			const char* path = std::getenv("CC_TEST_CROSS_BOT");
+			const char* headless = std::getenv("CCCP_HEADLESS");
+			if (!path || !headless || std::string(headless) != "1") return nlohmann::json::array();
+			try {
+				std::ifstream input(path);
+				auto parsed = nlohmann::json::parse(input);
+				if (!parsed.is_array() || parsed.size() > 128) throw std::runtime_error("invalid bot ranges");
+				for (const auto& row: parsed) if (row.at("from").get<uint64_t>() > row.at("to").get<uint64_t>()) throw std::runtime_error("reversed bot range");
+				return parsed;
+			} catch (const std::exception& error) {
+				RTE::System::PrintDiagnosticLine("[cross-bot] FAIL " + std::string(error.what()));
+				return nlohmann::json::array();
+			}
+		}();
+		return ranges;
+	}
+}
+
+namespace RTE {
+	bool RunCrossBotRangeSelfTest(std::string* error) {
+		const nlohmann::json ranges = {{{"round", 2}, {"from", 10}, {"to", 12}}};
+		if (CrossBotSelected(ranges, 1, 10) || CrossBotSelected(ranges, 2, 9) || !CrossBotSelected(ranges, 2, 10) ||
+		    !CrossBotSelected(ranges, 2, 12) || CrossBotSelected(ranges, 2, 13)) {
+			*error = "bot producer escaped its round/tick range"; return false;
+		}
+		std::cout << "[net-match-selftest] PASS bot_producer_respects_round_and_tick_ranges" << std::endl;
+		return true;
+	}
+}
 
 using namespace RTE;
 
@@ -377,6 +424,33 @@ void Controller::Update() {
 	switch (m_SeatMode) {
 		case InputMode::CIM_PLAYER:
 			GetInputFromPlayer();
+			if (m_ProducingLocalInput && m_ControlledActor && GetInputPlayer() >= 0 && !CrossBotRanges().empty() && !g_MenuMan.IsLiveMenuOwningInput()) {
+				const uint64_t tick = g_TimerMan.GetSimUpdateCount(), round = ScenarioRunner::GetLockstepRoundId();
+				const bool bot = CrossBotSelected(CrossBotRanges(), round, tick);
+				static std::map<std::pair<uint64_t, long>, bool> previous;
+				auto& wasBot = previous[{round, m_ControlledActor->GetUniqueID()}];
+				if (bot != wasBot) {
+					g_MetricsCollector.RecordEvent("bot_transition", m_ControlledActor, bot ? "enabled" : "scripted_input", 1, 0, m_SeatPlayer);
+					wasBot = bot;
+				}
+				if (bot) {
+					Vector distance;
+					const Actor* target = g_MovableMan.GetClosestEnemyActor(m_Team, m_ControlledActor->GetPos(), 2000, distance);
+					ResetCommandState();
+					if (target && distance.GetSqrMagnitude() > 0) {
+						m_AnalogAim = distance.GetNormalized();
+						m_ControlStates[ControlState::MOVE_RIGHT] = distance.m_X > 100;
+						m_ControlStates[ControlState::MOVE_LEFT] = distance.m_X < -100;
+						m_ControlStates[ControlState::WEAPON_FIRE] = tick % 120 < 100;
+						m_ControlStates[ControlState::WEAPON_RELOAD] = tick % 120 == 110;
+						m_ControlStates[ControlState::BODY_JUMP] = tick % 300 < 20;
+						m_ControlStates[ControlState::BODY_JUMPSTART] = tick % 300 == 0;
+					}
+					g_MetricsCollector.AppendEvent({{"event", "bot_input"}, {"result", "produced"}, {"seat", m_SeatPlayer},
+					    {"actor", m_ControlledActor->GetUniqueID()}, {"team", m_Team}, {"target_tick", tick + ScenarioRunner::GetLockstepInputDelayFrames()},
+					    {"target_actor", target ? target->GetUniqueID() : 0}, {"fire", m_ControlStates[ControlState::WEAPON_FIRE]}});
+				}
+			}
 			break;
 		case InputMode::CIM_AI:
 			if (ShouldUpdateAIThisFrame()) {
@@ -476,6 +550,11 @@ void Controller::DropLocalProduction() {
 void Controller::EndLocalProduction() {
 	if (!m_ProducingLocalInput) {
 		return;
+	}
+	if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled() && m_ControlledActor && m_InputMode == InputMode::CIM_PLAYER && GetInputPlayer() >= 0) {
+		const uint64_t tick = g_TimerMan.GetSimUpdateCount();
+		g_MetricsCollector.RecordProducedController(ScenarioRunner::GetLockstepRoundId(), tick,
+		    tick + ScenarioRunner::GetLockstepInputDelayFrames(), m_ControlledActor->GetUniqueID(), m_SeatPlayer);
 	}
 	m_LocalProduction.controlStates = m_ControlStates;
 	m_LocalProduction.analogMove = m_AnalogMove;
