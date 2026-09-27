@@ -197,6 +197,8 @@ def parse_fullstate(paths):
                     samples.append(dict(key=key,hash=match[3],sections=sections,log=str(path),line=number))
                 elif re.match(r'^\[fullstate(?:-[^]]+)?\] tick=\d+ (?:not taken|refused:|failed:)',line):
                     refusals.append(dict(log=str(path),line=number,text=line.strip()))
+                elif line.startswith('[fullstate-refusal] '):
+                    refusals.append(dict(log=str(path),line=number,text=line.strip()))
     ordinal=Counter()
     for sample in samples:
         key=sample['key']; index=ordinal[key]; ordinal[key]+=1

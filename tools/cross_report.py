@@ -172,7 +172,7 @@ def build_report(root):
                 waits.append(dict(tick=int(match[1]), wait_ms=int(match[2]), line=number))
             if match := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
                 holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number))
-            if re.search(r'RTE Assert|FATAL:|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\] FAIL|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
+            if re.search(r'RTE Assert|FATAL:|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|\[net-plane\].*ASSERT|\[fullstate(?:-refusal)?\].*(?:failed:|refused:|problem=)|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
                 findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
         frames = [r for r in raw if r.get('type') == 'frame' and r.get('active')]
