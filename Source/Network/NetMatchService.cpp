@@ -799,6 +799,12 @@ static std::string ResyncSaveName() {
 			m_MigrationMembers.clear();
 			m_MigrationGeneration = 0;
 			m_MigrationRepairPending = false;
+			// The rejoin plane and its committed tail belong to the round that ended: the next round opens its own.
+			if (m_WorldJoin.IsPrivateMatch()) {
+				m_WorldJoin.Reset();
+				m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_InPlaceIncarnationBumps.clear();
+				m_PrivateBaseRequested = false; m_PrivateBaseTick = 0; m_PrivateBasePending.reset(); m_PrivateJoinError.clear();
+			}
 			if (m_IsHost)
 				(void)GetNetAuthCrypto().RandomBytes(m_MigrationKey.data(), m_MigrationKey.size());
 			// The round that just ended is the only thing that knows who left it; the next lobby is
@@ -3170,7 +3176,13 @@ static std::string ResyncSaveName() {
 			m_PrivateJoinError.clear();
 			m_InPlaceIncarnationBumps.clear();
 			auto admissionConfig = config.matchConfig; admissionConfig.hostPeerId = m_Coordinator->GetHostPeerId();
-			if (!m_WorldJoin.ConfigureMatchRejoins(admissionConfig, round, config.simTickMs, &error)) { m_PrivateJoinError = error; return; }
+			if (!m_WorldJoin.ConfigureMatchRejoins(admissionConfig, round, config.simTickMs, &error)) {
+				// A plane of an earlier round never serves this one's returners.
+				m_WorldJoin.Reset();
+				m_PrivateJoinError = error.empty() ? "the rejoin plane did not open" : error;
+				System::PrintDiagnosticLine("[net-match] the rejoin plane of round " + std::to_string(round) + " did not open: " + m_PrivateJoinError);
+				return;
+			}
 			// A successor serves the seats its predecessor held from its own record of the round, so a held seat keeps its world.
 			if (m_CommittedRing.Count() > 0 && m_CommittedRing.LastFrame() + 1 >= static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) && m_WorldJoin.Tail().AdoptRecords(m_CommittedRing)) {
 				System::PrintDiagnosticLine("[net-match] the rejoin plane opens on this peer's own record of the round: frames " + std::to_string(m_CommittedRing.FirstFrame()) +
@@ -3728,6 +3740,10 @@ static std::string ResyncSaveName() {
 			if (!entry || entry->tick != m_PrivateBasePending->tick || entry->archive == nullptr || entry->archive->empty() || entry->bytes != entry->archive->size()) return;
 			NetWorldCheckpointImage image = std::move(*m_PrivateBasePending);
 			m_PrivateBasePending.reset();
+			if (image.round != m_WorldJoin.TailRound()) {
+				System::PrintDiagnosticLine("[net-match] a private base of round " + std::to_string(image.round) + " is not published into round " + std::to_string(m_WorldJoin.TailRound()));
+				return;
+			}
 			image.path = entry->path; image.bytes = entry->bytes; image.digest = entry->digest; image.captureMs = g_ActivityMan.LastAutosaveCaptureMs();
 			m_WorldJoinImageArchive = entry->archive;
 			m_WorldJoinImageDigest = image.digest;
@@ -3743,6 +3759,10 @@ static std::string ResyncSaveName() {
 		if (m_WorldJoin.IsPrivateMatch()) {
 			if (!m_PrivateImageTask.valid() || m_PrivateImageTask.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
 			auto ready = m_PrivateImageTask.get();
+			if (ready.error.empty() && ready.image.IsValid() && ready.image.round != m_WorldJoin.TailRound()) {
+				System::PrintDiagnosticLine("[net-match] a private base of round " + std::to_string(ready.image.round) + " is not published into round " + std::to_string(m_WorldJoin.TailRound()));
+				return;
+			}
 			if (!ready.error.empty() || !ready.image.IsValid()) {
 				m_PrivateJoinError = ready.error.empty() ? "the private checkpoint is invalid" : ready.error;
 				{
@@ -4091,18 +4111,13 @@ static std::string ResyncSaveName() {
 		}
 		std::vector<uint8_t> packed;
 		if (!host.NextTailChunk(session.connection, packed)) return;
-		NetLobbyStateChunk chunk;
-		chunk.transferId = c_NetWorldTailTransferId;
-		chunk.totalBytes = static_cast<uint32_t>(packed.size());
-		chunk.chunkIndex = 0;
-		chunk.chunkCount = 1;
-		chunk.bytes = std::move(packed);
+		const NetLobbyStateChunk chunk = MakeWorldTailChunk(host.TailRound(), packed);
 		const uint8_t lobbyPeer = WorldJoinLobbyPeer(session);
 		if (lobbyPeer == 0) {
 			return;
 		}
 		if (lobby.SendPayloadTo(lobbyPeer, chunk, nullptr)) {
-			host.NoteTailChunkSent(session.connection, chunk.bytes.size());
+			host.NoteTailChunkSent(session.connection, packed.size());
 		}
 	}
 
@@ -4744,7 +4759,10 @@ static std::string ResyncSaveName() {
 			if (!DecodeCommittedJoinFrame(encoded, frame, error)) {
 				return false;
 			}
-			if (m_WorldCatchUp.privateMatch && frame.roundId != image.round) { if (error) *error = "private tail belongs to another round"; return false; }
+			if (m_WorldCatchUp.privateMatch && frame.roundId != image.round) {
+				if (error) *error = "private tail belongs to another round: frame " + std::to_string(frame.targetFrame) + " is of round " + std::to_string(frame.roundId) + ", the image's is " + std::to_string(image.round);
+				return false;
+			}
 			m_WorldCatchUp.tail.push_back(std::move(frame));
 		}
 		pendingLoad = name;
@@ -4753,7 +4771,13 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal, std::optional<uint64_t>* outRoundEnded) {
 		if (outRefusal) *outRefusal = 0;
-		std::vector<uint8_t> incoming = lobby.TakePendingTailBytes();
+		std::vector<std::pair<uint64_t, size_t>> foreign;
+		// A private catch-up replays one round: a chunk of any other round is dropped, never replayed.
+		std::vector<uint8_t> incoming = lobby.TakePendingTailBytes(catchUp.privateMatch ? std::optional<uint64_t>(catchUp.roundId) : std::nullopt, &foreign);
+		for (const auto& [round, bytes]: foreign) {
+			if (!catchUp.droppedForeignRounds.insert(round).second) continue;
+			System::PrintDiagnosticLine("[net-match] dropped a tail chunk of round " + std::to_string(round) + " (" + std::to_string(bytes) + " bytes): this catch-up replays round " + std::to_string(catchUp.roundId));
+		}
 		if (incoming.size() + catchUp.partialTail.size() > 32ULL * 1024 * 1024) {
 			ScenarioRunner::SetControllerReplayError("private tail exceeds its bounded receive buffer"); return;
 		}
@@ -4774,7 +4798,10 @@ static std::string ResyncSaveName() {
 			if (!DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + offset, packed.begin() + offset + size), frame, &error)) {
 				ScenarioRunner::SetControllerReplayError("invalid committed tail: " + error); return;
 			}
-			if (catchUp.privateMatch && frame.roundId != catchUp.roundId) { ScenarioRunner::SetControllerReplayError("private tail belongs to another round"); return; }
+			if (catchUp.privateMatch && frame.roundId != catchUp.roundId) {
+				ScenarioRunner::SetControllerReplayError("private tail belongs to another round: frame " + std::to_string(frame.targetFrame) + " is of round " + std::to_string(frame.roundId) + ", the catch-up's is " + std::to_string(catchUp.roundId));
+				return;
+			}
 			later.push_back(std::move(frame)); offset += size;
 		}
 		catchUp.partialTail.erase(catchUp.partialTail.begin(), catchUp.partialTail.begin() + offset);

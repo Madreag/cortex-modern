@@ -684,6 +684,25 @@ namespace RTE {
 		return chunk;
 	}
 
+	NetLobbyStateChunk MakeWorldTailChunk(uint64_t round, const std::vector<uint8_t>& slice) {
+		NetLobbyStateChunk chunk;
+		chunk.transferId = c_NetWorldTailTransferId;
+		chunk.chunkIndex = 0;
+		chunk.chunkCount = 1;
+		chunk.bytes.reserve(c_NetWorldTailRoundBytes + slice.size());
+		AppendU64LE(chunk.bytes, round);
+		chunk.bytes.insert(chunk.bytes.end(), slice.begin(), slice.end());
+		chunk.totalBytes = static_cast<uint32_t>(chunk.bytes.size());
+		return chunk;
+	}
+
+	bool ParseWorldTailChunkRound(const NetLobbyStateChunk& chunk, uint64_t& round) {
+		round = 0;
+		if (chunk.transferId != c_NetWorldTailTransferId || chunk.bytes.size() <= c_NetWorldTailRoundBytes) return false;
+		for (size_t i = 0; i < c_NetWorldTailRoundBytes; ++i) round |= static_cast<uint64_t>(chunk.bytes[i]) << (8 * i);
+		return true;
+	}
+
 	NetLobbyStateChunk MakeWorldJoinHandoverReport(const NetWorldHandover& handover) {
 		auto report = MakeWorldJoinReport(c_NetWorldReportHandover, handover.frame);
 		AppendU64LE(report.bytes, handover.generation);
@@ -977,12 +996,17 @@ namespace RTE {
 	}
 
 	bool NetWorldFrameLog::Append(const NetLockstepFrame& frame, std::string* error) {
+		if (m_Round != 0 && frame.roundId != m_Round) {
+			if (error) *error = "the committed tail of round " + std::to_string(m_Round) + " cannot take frame " + std::to_string(frame.targetFrame) + " of round " + std::to_string(frame.roundId);
+			return false;
+		}
 		if (!m_Records.empty() && frame.targetFrame != m_Records.back().frame + 1) {
 			if (error) *error = "the committed tail cannot skip from frame " + std::to_string(m_Records.back().frame) + " to " + std::to_string(frame.targetFrame);
 			return false;
 		}
 		Record record;
 		record.frame = frame.targetFrame;
+		record.round = frame.roundId;
 		if (!EncodeCommittedJoinFrame(frame, record.bytes, error)) {
 			return false;
 		}
@@ -1046,6 +1070,7 @@ namespace RTE {
 
 	bool NetWorldFrameLog::AdoptRecords(const NetWorldFrameLog& other) {
 		if (!m_Records.empty()) return false;
+		if (m_Round != 0 && std::any_of(other.m_Records.begin(), other.m_Records.end(), [this](const Record& record) { return record.round != m_Round; })) return false;
 		m_Records = other.m_Records;
 		m_Bytes = other.m_Bytes;
 		Trim();
@@ -1058,6 +1083,7 @@ namespace RTE {
 		m_Records.clear();
 		m_Bytes = 0;
 		m_Evicted = 0;
+		m_Round = 0;
 	}
 
 #pragma endregion
@@ -1443,7 +1469,7 @@ namespace RTE {
 		if (config.persistentWorld || config.sessionId == 0 || roundId == 0 || config.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute ||
 		    !std::isfinite(tickMs) || tickMs <= 0 || !m_Membership.Configure(config, error, true)) return false;
 		m_Config = config; m_PrivateRound = roundId; m_SimTickMs = tickMs;
-		m_Identity = {}; m_Sessions.clear(); m_Image = {}; m_Tail.Clear();
+		m_Identity = {}; m_Sessions.clear(); m_Image = {}; m_Tail.Clear(); m_Tail.SetRound(roundId);
 		return true;
 	}
 
@@ -1757,7 +1783,7 @@ namespace RTE {
 			}
 			session->pendingTailOffset = 0;
 		}
-		const size_t end = std::min(session->pendingTail.size(), session->pendingTailOffset + NetLobbyProtocol::c_MaxStateChunkBytes);
+		const size_t end = std::min(session->pendingTail.size(), session->pendingTailOffset + NetLobbyProtocol::c_MaxStateChunkBytes - c_NetWorldTailRoundBytes);
 		chunk.assign(session->pendingTail.begin() + session->pendingTailOffset, session->pendingTail.begin() + end);
 		return !chunk.empty();
 	}

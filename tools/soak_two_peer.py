@@ -110,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end-round-tick", type=int, default=0, help="both peers end the round at this sim tick (team 0 wins), so a rematch starts while a seat may still be held")
     parser.add_argument("--rematches", type=int, default=0, help="with --rematch: ride that many rematches in a row")
     parser.add_argument("--mute-input", default="", help="FRAME:COUNT - the client sends none of its own input for those frames while it keeps simulating them")
+    parser.add_argument("--stall-each-round", type=int, default=0,
+                        help="TICK - the client also stalls --stall-ms at this tick of every round, so each round of a rematch chain holds its seat and catches up")
     parser.add_argument("--census-histogram", action="store_true", help="the census also walks the heap by block size (seconds per line)")
     parser.add_argument("--no-tick-trace", action="store_true",
                         help="keep no per-tick trace in memory: the checks read the live stream, and over an endurance soak the trace is its own grower")
@@ -121,8 +123,8 @@ def main(argv: list[str] | None = None) -> int:
     low, _, high = options.port_block.partition("-")
     if not (low.isdigit() and high.isdigit() and int(low) <= options.port <= int(high) - 4):
         parser.error(f"--port leaves room for the peers' ports inside the block {options.port_block}")
-    if options.minutes <= 0 or options.holds < 0 or not 0 < options.stall_ms <= 20000 or options.fullstate_every < 0:
-        parser.error("--minutes > 0, --holds >= 0, --stall-ms in 1..20000, --fullstate-every >= 0")
+    if options.minutes <= 0 or options.holds < 0 or not 0 < options.stall_ms <= 20000 or options.fullstate_every < 0 or options.stall_each_round < 0:
+        parser.error("--minutes > 0, --holds >= 0, --stall-ms in 1..20000, --fullstate-every >= 0, --stall-each-round >= 0")
     if not 0 <= options.saver_delay_ms <= 60000:
         parser.error("--saver-delay-ms in 0..60000")
     if not 60 <= options.autosave_seconds <= 3600:
@@ -139,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     plan = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "repo": str(repo), "ticks": ticks, "minutes": options.minutes,
             "autosave_seconds": options.autosave_seconds, "stalls": [f"{tick}:{options.stall_ms}" for tick in stalls],
             "port": options.port, "fullstate_every": options.fullstate_every, "sample_seconds": options.sample_seconds,
-            "saver_delay_ms": options.saver_delay_ms}
+            "saver_delay_ms": options.saver_delay_ms, "stall_each_round": options.stall_each_round}
     (root / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     runs, records = {}, {}
     samples: list[dict] = []
@@ -182,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
                 flags += ["-net-join", "127.0.0.1"]
                 for tick in stalls:
                     flags += ["-net-test-live-stall", f"{tick}:{options.stall_ms}"]
+                if options.stall_each_round:
+                    flags += ["-net-test-live-stall-each-round", f"{options.stall_each_round}:{options.stall_ms}"]
             if options.rematch:
                 flags += ["-net-match-e2e-rematch"]
                 if options.rematches > 1:
@@ -220,6 +224,10 @@ def main(argv: list[str] | None = None) -> int:
     fullstate = compare_fullstate(root / "host" / "stdout.log", root / "client" / "stdout.log") if options.fullstate_every else None
     holds = count(root / "host" / "stdout.log", "[net-match] hold peer=")
     rejoins = count(root / "client" / "stdout.log", "[net-match] private catch-up complete")
+    # Every round's own stall ends in an in-place catch-up, the rematches' rounds included.
+    rounds = 1 + (max(1, options.rematches) if options.rematch else 0)
+    each_round = count(root / "client" / "stdout.log", "[net-test] live stall frame=", " round_index=")
+    in_place = count(root / "client" / "stdout.log", "[net-match] private catch-up complete", " in_place=1")
     # The host is never killed here, so a client that names a new host has split the match in two.
     split = count(root / "client" / "stdout.log", "[net-match] Host left - ")
     autosaves = count(root / "host" / "stdout.log", "[autosave] tick=", "capture_ms=")
@@ -232,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
               "hashes_equal": hashes_equal, "fullstate": fullstate is None or bool(fullstate.get("passed")),
               "holds": holds >= options.holds, "rejoins": rejoins >= options.holds, "no_split_brain": split == 0,
               "autosaves": autosaves >= max(0, owed), "memory_sampled": minutes_sampled >= int(options.minutes)}
+    if options.stall_each_round:
+        checks["each_round_caught_up"] = each_round >= rounds and in_place >= rounds
     first = next((row for row in samples if row.get("host") and row.get("client")), None)
     last = next((row for row in reversed(samples) if row.get("host") and row.get("client")), None)
     growth = {peer: {"first": first[peer]["working_set"], "last": last[peer]["working_set"],
@@ -250,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
               "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
               "autosaves_published": autosaves, "autosaves_owed": owed,
+              "each_round_stalls": each_round, "in_place_catch_ups": in_place, "rounds": rounds,
               "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
               "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
               "plan": plan}
