@@ -65,6 +65,21 @@ if LuaMan:FileExists(writePath) then
 	LuaMan:FileRemove(writePath)
 end
 
+-- Void Wanderers' own optional hooks, called only behind `if self.X ~= nil` or a flag it never sets: an engine binding under
+-- any of these names would make the activity's lookup find it and run engine code where the mod expects nothing.
+for _, member in ipairs({"MissionDestroy", "ProcessBeforeAnything", "RestoreAI"}) do
+	local bound = {}
+	for _, className in ipairs({"Entity", "Activity", "GameActivity"}) do
+		local class = _G[className]
+		local ok, value = pcall(function() return class[member] end)
+		local unbound = class ~= nil and ((ok and value == nil) or (not ok and tostring(value):find("no static", 1, true) ~= nil))
+		if not unbound then
+			bound[#bound + 1] = className .. "=" .. tostring(value)
+		end
+	end
+	check("vw_hook_unbound_" .. member, #bound == 0, table.concat(bound, ","))
+end
+
 if actor then
 	DeleteEntity(actor)
 	actor = nil
