@@ -6074,8 +6074,8 @@ namespace RTE {
 
 		NetMatchReplayReader reader;
 		if (!reader.Open(segmentPath.string(), error)) return false;
-		if (reader.GetVersion() != 6) {
-			*error = "world-segment-header-lost: the segment reads version " + std::to_string(reader.GetVersion()) + ", the format is 6";
+		if (reader.GetVersion() != NetMatchReplayWriter::c_Version) {
+			*error = "world-segment-header-lost: the segment reads version " + std::to_string(reader.GetVersion()) + ", the format is " + std::to_string(NetMatchReplayWriter::c_Version);
 			return false;
 		}
 		if (!reader.HasWorldSegment() || reader.GetWorldSegment() != header) {
