@@ -24,6 +24,10 @@
 #include "TimerMan.h"
 #include "UInputMan.h"
 #include "WindowMan.h"
+#include "BuyMenuGUI.h"
+#include "PieMenu.h"
+#include "PieSlice.h"
+#include "MetricsCollector.h"
 
 #include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
@@ -56,6 +60,8 @@ namespace {
 		std::string hintAtLoad;
 		bool hintAtLoadPresent = false;
 		bool holdsPad = false;
+		uint64_t round = 0;
+		bool phaseArmed = false;
 	};
 	Probe probe;
 	std::atomic<uint64_t> rendezvousCount{0};
@@ -249,7 +255,8 @@ namespace {
 	}
 
 	void WriteResult() {
-		std::ofstream output(probe.directory / "net-ui-result.json");
+		const std::string name = probe.script.value("repeat_rounds", false) ? "net-ui-result.round" + std::to_string(probe.round) + ".json" : "net-ui-result.json";
+		std::ofstream output(probe.directory / name);
 		output << probe.result.dump(2) << '\n';
 		Require(static_cast<bool>(output), "cannot write probe result");
 	}
@@ -329,6 +336,7 @@ namespace {
 			return command.starts_with("assert_") || command.starts_with("dump_") ? Phase::Draw : Phase::Poll;
 		}
 		if (op == "assert" || op == "assert_control" || op == "assert_editor" || op == "assert_net_ui_clear" ||
+		    op == "assert_buy" || op == "assert_pie" || op == "assert_window" ||
 		    op == "screenshot" || op == "screenshot_pair" || op == "finish") return Phase::Draw;
 		if ((op == "key_down" || op == "key_up") && SimRateKey(step.value("key", ""))) return Phase::Sim;
 		return Phase::Poll;
@@ -343,7 +351,57 @@ namespace {
 
 	bool Step(const Json& step, Json& observed) {
 		const std::string op = step.at("op");
-		if (op == "wait") {
+		if (op == "assert_buy" || op == "assert_pie" || op == "assert_window") {
+			Json scope;
+			int player = step.value("player", 0);
+			if (step.contains("input_player")) {
+				const auto* activity = g_ActivityMan.GetActivity();
+				player = -1;
+				for (int seat = 0; activity && seat < Players::MaxPlayerCount; ++seat)
+					if (activity->LocalInputOfPlayer(seat) == step["input_player"].get<int>()) { player = seat; break; }
+			}
+			if (op == "assert_buy") {
+				auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+				auto* buy = activity && player >= 0 && player < Players::MaxPlayerCount ? activity->GetBuyGUI(player) : nullptr;
+				Require(buy != nullptr, "buy scope has no local seat manager");
+				std::list<const SceneObject*> order;
+				buy->GetOrderList(order);
+				Json cart = Json::array();
+				for (const auto* item: order) cart.push_back(item->GetModuleAndPresetName());
+				const auto* craft = buy->GetDeliveryCraftPreset();
+				scope = {{"player", player}, {"visible", buy->IsVisible()}, {"enabled", buy->IsEnabled()},
+				    {"buy_allowed", activity->GetBuyMenuEnabled()}, {"cart", std::move(cart)},
+				    {"craft", craft ? craft->GetModuleAndPresetName() : ""}, {"cost", buy->GetTotalOrderCost()},
+				    {"mass", buy->GetTotalOrderMass()}, {"passengers", buy->GetTotalOrderPassengers()}};
+			} else if (op == "assert_pie") {
+				auto* activity = g_ActivityMan.GetActivity();
+				auto* actor = activity && player >= 0 && player < Players::MaxPlayerCount ? activity->GetControlledActor(player) : nullptr;
+				auto* pie = actor ? actor->GetPieMenu() : nullptr;
+				Require(pie != nullptr, "pie scope has no controlled actor");
+				Json commands = Json::array();
+				for (const auto* slice: pie->GetPieSlices()) commands.push_back(static_cast<int>(slice->GetType()));
+				scope = {{"player", player}, {"actor", actor->GetUniqueID()}, {"visible", pie->IsVisible()},
+				    {"enabled", pie->IsEnabled()}, {"command", static_cast<int>(pie->GetPieCommand())}, {"commands", std::move(commands)}};
+			} else {
+				const auto flags = SDL_GetWindowFlags(g_WindowMan.GetWindow());
+				scope = {{"width", g_WindowMan.GetResX()}, {"height", g_WindowMan.GetResY()}, {"fullscreen", g_WindowMan.IsFullscreen()},
+				    {"minimized", (flags & SDL_WINDOW_MINIMIZED) != 0}, {"hidden", (flags & SDL_WINDOW_HIDDEN) != 0}};
+			}
+			observed["scope"] = scope;
+			for (const auto& [key, expected]: step.value("equals", Json::object()).items()) Require(scope.at(key) == expected, op + " differs: " + key);
+			g_MetricsCollector.WriteObservation({{"type", "probe_scope"}, {"scope", op}, {"observed", scope}});
+		} else if (op == "remove_participant") {
+			const uint16_t seat = step.at("stable_seat");
+			const auto seats = g_NetMatchService.GetModerationSeats();
+			const auto found = std::find_if(seats.begin(), seats.end(), [=](const auto& row) { return row.stableSeat == seat; });
+			Require(found != seats.end(), "participant selection is absent");
+			const auto selection = NetSelectModerationSeat(*found);
+			const auto action = step.value("ban", false) ? NetParticipantRemovalAction::BanUntilRemoved : NetParticipantRemovalAction::Kick;
+			const auto result = g_NetMatchService.RemoveParticipant(selection, action);
+			observed["removal"] = {{"seat", seat}, {"incarnation", selection.incarnation}, {"result", NetKickBanResultName(result)}};
+			Require(std::string(NetKickBanResultName(result)) == step.value("expected", "Ok"), "participant removal result differs");
+			g_MetricsCollector.WriteObservation({{"type", "participant_removal"}, {"observed", observed["removal"]}});
+		} else if (op == "wait") {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
@@ -749,7 +807,20 @@ namespace {
 				if (phase == Phase::Sim) return;
 				Load();
 			}
-			if (!probe.enabled || probe.done) return;
+			if (!probe.enabled) return;
+			const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+			if (probe.script.value("repeat_rounds", false) && round > 0 && round != probe.round) {
+				probe.round = round; probe.index = 0; probe.done = false; probe.phaseArmed = false;
+				probe.result["steps"] = Json::array(); probe.result["complete"] = false; probe.result["pass"] = false;
+				probe.result["round"] = round; probe.started = Clock::now();
+				probe.stepMs = probe.resultWrittenMs = 0; probe.gestureIndex = SIZE_MAX;
+			}
+			if (probe.done) return;
+			if (!probe.phaseArmed) {
+				if (probe.script.contains("activate_at_tick") && g_TimerMan.GetSimUpdateCount() < probe.script["activate_at_tick"].get<uint64_t>()) return;
+				if (probe.script.contains("activate_phase") && g_NetMatchService.GetLobbySnapshot().serviceState != probe.script["activate_phase"].get<std::string>()) return;
+				probe.phaseArmed = true; probe.started = Clock::now();
+			}
 			if (phase == Phase::Draw) ++probe.renders;
 			Require(NowMs() <= probe.script.at("timeout_ms").get<uint64_t>(), "script deadline at step " + std::to_string(probe.index));
 			Require(probe.index < probe.script["steps"].size(), "script did not finish explicitly");
