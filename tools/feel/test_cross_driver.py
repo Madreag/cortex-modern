@@ -22,6 +22,17 @@ class CrossDriverTests(unittest.TestCase):
             (root/'stop.json').write_text('{}')
             with self.assertRaises(RuntimeError): cross_peers.wait_for_payload_release(root,0)
 
+    def test_index_orders_launches_not_report_regeneration_times(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            for name,started,modified in [('older','2026-09-26 20:00:00 MST',20),('newer','2026-09-27 01:00:00 MST',10)]:
+                own=root/name; own.mkdir(); result=own/'result.json'
+                result.write_text(json.dumps(dict(passed=False,requirements=[],manifest=dict(started=started))))
+                cross_peers.os.utime(result,(modified,modified))
+            cross_report.write_index(root)
+            page=(root/'index.html').read_text()
+            self.assertLess(page.index('newer/report.html'),page.index('older/report.html'))
+
     def test_interrupted_json_publication_keeps_the_previous_complete_document(self):
         with tempfile.TemporaryDirectory() as temporary:
             path=Path(temporary)/'session.json'; path.write_text('{"session":"old"}')
