@@ -3951,14 +3951,18 @@ void MainMenuGUI::RefreshResumeList() {
 		NetMatchSummary reached;
 		reached.runningTicks = checkpoint.savedTick;
 		std::string age = "just now";
+		std::string savedAt;
 		std::error_code status;
 		const auto written = std::filesystem::last_write_time(checkpoint.path, status);
 		if (!status) {
 			const auto minutes = std::chrono::duration_cast<std::chrono::minutes>(std::filesystem::file_time_type::clock::now() - written).count();
 			age = minutes >= 1440 ? std::to_string(minutes / 1440) + "d ago" : (minutes >= 60 ? std::to_string(minutes / 60) + "h ago" : std::to_string(std::max<long long>(minutes, 0)) + "m ago");
+			const auto wall = std::chrono::system_clock::now() + std::chrono::duration_cast<std::chrono::system_clock::duration>(written - std::filesystem::file_time_type::clock::now());
+			savedAt = System::LocalTimeText(std::chrono::system_clock::to_time_t(wall), "%Y-%m-%d %H:%M");
 		}
-		row.text = manifest.activityPreset + " / " + manifest.scenePreset + " | " + reached.DurationText() + " in | " + age;
-		row.details = "Checkpoint " + std::to_string(checkpoint.savedTick) + " of match " + checkpoint.matchId + ".";
+		row.text = manifest.activityPreset + " / " + manifest.scenePreset + " | " + reached.DurationText() + " in | " + (manifest.savedByHost ? "saved by the host " : "") + age;
+		row.details = manifest.savedByHost ? "Saved by the host at tick " + std::to_string(checkpoint.savedTick) + (savedAt.empty() ? "" : ", " + savedAt) + ". Match " + checkpoint.matchId + "."
+		                                   : "Checkpoint " + std::to_string(checkpoint.savedTick) + " of match " + checkpoint.matchId + ".";
 		if (!manifest.peerNames.empty()) {
 			row.details += "\nPlayers: ";
 			for (size_t index = 0; index < manifest.peerNames.size(); ++index) {

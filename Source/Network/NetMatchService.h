@@ -454,15 +454,31 @@ namespace RTE {
 			bool activationPending = false; //!< Host: a seat's agreed activation is still ahead.
 			bool startupPending = false; //!< Host: the round's agreed first frame is still ahead.
 			bool ownSeatHeld = false; //!< Host: its own seat is held, so what it sends rides no frame the round plays.
+			bool manualRequested = false; //!< Host: the host asked to save the match and no capture has taken the ask yet.
 		};
 		struct AutosaveTickOutput {
 			bool capture = false; //!< This peer captures at this tick.
+			bool manual = false; //!< The capture is one the host asked for by hand.
 			std::vector<CheckpointNote> send; //!< Entries this peer puts on its committed stream.
+			bool manualPending = false; //!< Host: the ask still waits for a tick the schedule may name.
+			bool manualSaved = false; //!< Host: every writer of the capture it asked for has reported.
+			size_t manualReported = 0; //!< Host: how many writers reported that capture.
+			size_t manualWriters = 0; //!< Host: how many writers it named for it.
 		};
 		/// The checkpoint schedule at one tick boundary, with the capture and the stream left to the caller.
 		/// Every peer captures at each tick the host names; the host names the next one only once every
 		/// writer has reported the last one finished, so no peer holds more than one unwritten capture.
 		AutosaveTickOutput StepAutosaveSchedule(const AutosaveTickInput& input);
+		/// Host: asks every peer to save the match at the next tick the schedule may name, through the schedule's own
+		/// capture; the interval stays as it was. A client's ask only tells it who saves.
+		/// @return Whether the ask was taken.
+		bool RequestManualSave();
+		/// What the pause menu's save row shows on this peer.
+		struct MatchSaveRow {
+			bool enabled = false; //!< Only the host of a running match saves it.
+			std::string hint;
+		};
+		MatchSaveRow GetMatchSaveRow() const;
 		/// Whether this host's capture at the tick is the one a joining member waits for.
 		bool IsJoinCaptureTick(uint64_t tick) const { return m_IsHost && m_OpenCaptureForJoin && tick == m_OpenCaptureTick; }
 		/// Whether the round named a capture for this tick: every peer collects every Lua state at its end, so the garbage each
@@ -1131,6 +1147,8 @@ namespace RTE {
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
+		friend bool TestTheHostSavesTheMatchWhenAsked(std::string* error);
+		friend bool TestAManualSaveKeepsTheIntervalAndWaitsForASafeTick(std::string* error);
 		friend bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error);
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
@@ -1524,6 +1542,18 @@ namespace RTE {
 		bool m_OpenCaptureApplied = false; //!< Host: the capture it named reached the committed stream.
 		std::set<uint8_t> m_CaptureWriters; //!< Host: the peers still writing the open capture.
 		bool m_OpenCaptureForJoin = false;
+		std::set<uint64_t> m_ManualCaptures; //!< The named ticks the host asked for by hand.
+		bool m_OpenCaptureManual = false; //!< Host: the open capture is one it asked for by hand.
+		std::set<uint8_t> m_ManualSaveReported; //!< Host: the writers that reported that capture.
+		size_t m_ManualSaveWriters = 0;
+		std::atomic<bool> m_ManualSaveAsked = false; //!< Host: an ask no capture has taken yet.
+		bool m_ManualSaveWaitShown = false; //!< Host: the HUD already said the ask waits for a safe tick.
+		uint64_t m_ManualSaveTakenTick = 0; //!< Host: the tick its own writer took that capture at.
+		std::string m_ManualSaveFailure; //!< Host: why its own writer did not save it.
+		// The pause menu reads these from the game loop while the tick boundary writes them.
+		std::atomic<bool> m_ManualSaveBusy = false; //!< Host: an ask is open until its writers report.
+		std::atomic<bool> m_ManualSaveFailed = false; //!< Host: its last ask was not saved.
+		std::atomic<int64_t> m_LastMatchSaveTime = 0; //!< When this peer's writer last archived a checkpoint of this match.
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
 		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
