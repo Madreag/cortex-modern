@@ -685,7 +685,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		if (!ScenarioRunner::ConsumeLockstepGameCommand(command)) continue;
 		if (const auto* checkpoint = std::get_if<NetGameCheckpoint>(&command.payload)) {
 			// The schedule is the host's; any peer may report its own writer.
-			if (checkpoint->kind == NetGameCheckpoint::Capture && command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
+			if (checkpoint->kind != NetGameCheckpoint::Written && command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a checkpoint schedule from a peer that is not the host");
 				continue;
 			}

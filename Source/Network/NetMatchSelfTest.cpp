@@ -7834,6 +7834,188 @@ namespace RTE {
 		return true;
 	}
 
+	namespace {
+		/// One peer of a scripted checkpoint schedule: its service, its writer's unfinished captures and what it captured.
+		struct SchedulePeer {
+			uint8_t id = 0;
+			uint64_t writeTicks = 0;
+			NetMatchService service;
+			std::vector<std::pair<uint64_t, uint64_t>> writer; //!< Unwritten captures: tick, the tick the writer finishes it.
+			std::vector<uint64_t> captures, manual;
+		};
+
+		/// What the host heard back about the saves it asked for.
+		struct ScheduleRun {
+			std::vector<uint64_t> saved; //!< Ticks the host learned every writer reported its ask.
+			std::vector<size_t> reported, named;
+			std::vector<uint64_t> waited; //!< Ticks an ask was left waiting.
+			std::vector<uint64_t> manualNotes; //!< Ticks the host named with the manual mark on the stream.
+		};
+
+		/// Drives two peers' schedules over one committed stream, the way AutosaveAtTickBoundary does: the host carries its
+		/// ask into the boundary and keeps it while the schedule says it waits.
+		ScheduleRun RunSchedule(std::array<SchedulePeer, 2>& peers, uint64_t lastTick, const std::set<uint64_t>& askAt,
+		                        const std::function<void(uint64_t, NetMatchService::AutosaveTickInput&)>& shape = {}) {
+			const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+			constexpr uint64_t streamDelay = 4;
+			constexpr uint16_t lead = 5;
+			ScheduleRun run;
+			std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+			bool asked = false;
+			for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+				std::vector<NetMatchService::CheckpointNote> applied;
+				if (const auto due = stream.find(tick); due != stream.end()) applied = due->second;
+				if (askAt.contains(tick)) asked = true;
+				for (SchedulePeer& peer: peers) {
+					NetMatchService::AutosaveTickInput input;
+					input.tick = tick;
+					input.now = static_cast<int64_t>(tick) * tickLength;
+					input.applied = applied;
+					input.lead = lead;
+					input.writers = {1, 2};
+					if (shape) shape(tick, input);
+					const bool host = peer.id == 1;
+					if (host) input.manualRequested = std::exchange(asked, false);
+					while (!peer.writer.empty() && peer.writer.front().second <= tick) {
+						input.finished.push_back(peer.writer.front().first);
+						peer.writer.erase(peer.writer.begin());
+					}
+					input.unwritten = peer.writer.size();
+					const NetMatchService::AutosaveTickOutput output = peer.service.StepAutosaveSchedule(input);
+					if (host && output.manualPending) {
+						asked = true;
+						run.waited.push_back(tick);
+					}
+					if (host && output.manualSaved) {
+						run.saved.push_back(tick);
+						run.reported.push_back(output.manualReported);
+						run.named.push_back(output.manualWriters);
+					}
+					if (output.capture) {
+						peer.captures.push_back(tick);
+						if (output.manual) peer.manual.push_back(tick);
+						peer.writer.emplace_back(tick, (peer.writer.empty() ? tick : peer.writer.back().second) + peer.writeTicks);
+					}
+					for (NetMatchService::CheckpointNote note: output.send) {
+						note.sender = peer.id;
+						if (note.kind == NetGameCheckpoint::ManualCapture) run.manualNotes.push_back(note.tick);
+						// A held seat's reports ride no frame, so its writer never reaches the host.
+						if (note.kind == NetGameCheckpoint::Written && !input.writers.contains(peer.id)) continue;
+						stream[tick + streamDelay].push_back(note);
+					}
+				}
+			}
+			return run;
+		}
+
+		/// Peer 1 hosts and writes an archive in 40 ticks, peer 2 in 90.
+		void SetUpSchedulePeers(std::array<SchedulePeer, 2>& peers) {
+			peers[0].id = 1; peers[0].writeTicks = 40;
+			peers[1].id = 2; peers[1].writeTicks = 90;
+		}
+
+		std::string TickList(const std::vector<uint64_t>& ticks) {
+			std::string text;
+			for (const uint64_t tick: ticks) text += (text.empty() ? "" : ",") + std::to_string(tick);
+			return text.empty() ? "none" : text;
+		}
+	} // namespace
+
+	// The host saves when it chooses, with autosaves off (the default): both peers capture the tick the ask names, the stream
+	// carries it marked as the host's save, and the host hears back from both writers. A second ask before that tick is the
+	// same save; an ask after it is a new one.
+	bool TestTheHostSavesTheMatchWhenAsked(std::string* error) {
+		std::array<SchedulePeer, 2> peers;
+		SetUpSchedulePeers(peers);
+		peers[0].service.m_IsHost = true;
+		for (SchedulePeer& peer: peers) {
+			peer.service.m_AutosaveMatchId = "00000000deadbeef-0000000000000011";
+			peer.service.m_MatchAutosaveSeconds = 0;
+		}
+		const ScheduleRun run = RunSchedule(peers, 1000, {600, 603, 800});
+		const std::vector<uint64_t> expected{605, 805};
+		std::string failures;
+		const auto fail = [&](const std::string& text) { failures += (failures.empty() ? "" : " | ") + text; };
+		for (const SchedulePeer& peer: peers) {
+			const std::string who = peer.id == 1 ? "host" : "client";
+			if (peer.captures != expected) fail(who + "-captured " + TickList(peer.captures) + ", expected " + TickList(expected));
+			if (peer.manual != expected) fail(who + "-marked-manual " + TickList(peer.manual) + ", expected " + TickList(expected));
+		}
+		if (run.manualNotes != expected) fail("stream-named-manual " + TickList(run.manualNotes) + ", expected " + TickList(expected));
+		if (run.saved.size() != 2 || run.reported != std::vector<size_t>{2, 2} || run.named != std::vector<size_t>{2, 2}) {
+			fail("host-heard " + std::to_string(run.saved.size()) + " saves at " + TickList(run.saved) + ", expected two with both writers reported");
+		}
+		if (!failures.empty()) {
+			*error = failures;
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS the_host_saves_the_match_when_asked captures=" << TickList(peers[0].captures) << " saved_at=" << TickList(run.saved)
+		          << " writers=" << run.reported.front() << std::endl;
+		return true;
+	}
+
+	// A save the host asks for leaves the interval exactly where it was, waits out the startup frames and a pending activation
+	// the way the schedule does, and saves the match as it is while a seat is held.
+	bool TestAManualSaveKeepsTheIntervalAndWaitsForASafeTick(std::string* error) {
+		std::string failures;
+		const auto fail = [&](const std::string& text) { failures += (failures.empty() ? "" : " | ") + text; };
+		const auto interval = [](const SchedulePeer& peer) {
+			std::vector<uint64_t> ticks;
+			std::copy_if(peer.captures.begin(), peer.captures.end(), std::back_inserter(ticks), [&](uint64_t tick) { return std::find(peer.manual.begin(), peer.manual.end(), tick) == peer.manual.end(); });
+			return ticks;
+		};
+		const auto setUp = [](std::array<SchedulePeer, 2>& peers, uint32_t autosaveSeconds, const std::string& matchId) {
+			SetUpSchedulePeers(peers);
+			peers[0].service.m_IsHost = true;
+			for (SchedulePeer& peer: peers) {
+				peer.service.m_AutosaveMatchId = matchId;
+				peer.service.m_MatchAutosaveSeconds = autosaveSeconds;
+			}
+		};
+		// Ten-second autosaves: the ask at 300 adds one save and moves none of the interval's.
+		std::array<SchedulePeer, 2> plain;
+		setUp(plain, 10, "00000000deadbeef-0000000000000012");
+		(void)RunSchedule(plain, 1900, {});
+		std::array<SchedulePeer, 2> asked;
+		setUp(asked, 10, "00000000deadbeef-0000000000000012");
+		(void)RunSchedule(asked, 1900, {300});
+		for (size_t index = 0; index < 2; ++index) {
+			if (interval(asked[index]) != plain[index].captures) fail("interval-moved: " + TickList(interval(asked[index])) + " against " + TickList(plain[index].captures));
+			if (asked[index].manual != std::vector<uint64_t>{305}) fail("interval-run-manual " + TickList(asked[index].manual) + ", expected 305");
+		}
+		if (asked[0].service.m_NextAutosaveSimTime != plain[0].service.m_NextAutosaveSimTime) {
+			fail("interval-schedule-changed: next " + std::to_string(asked[0].service.m_NextAutosaveSimTime) + " against " + std::to_string(plain[0].service.m_NextAutosaveSimTime));
+		}
+		// An ask in the startup frames lands at the first tick the schedule may name, and one over a pending activation after it.
+		std::array<SchedulePeer, 2> early;
+		setUp(early, 0, "00000000deadbeef-0000000000000013");
+		const ScheduleRun waiting = RunSchedule(early, 700, {50, 410}, [](uint64_t tick, NetMatchService::AutosaveTickInput& input) {
+			input.startupPending = tick < 100;
+			input.activationPending = tick >= 400 && tick < 450;
+		});
+		const std::vector<uint64_t> safe{105, 455};
+		for (const SchedulePeer& peer: early) {
+			if (peer.manual != safe) fail("unsafe-tick-" + std::to_string(peer.id) + " " + TickList(peer.manual) + ", expected " + TickList(safe));
+		}
+		if (waiting.waited.empty() || waiting.waited.front() != 50 || std::find(waiting.waited.begin(), waiting.waited.end(), 410) == waiting.waited.end()) {
+			fail("wait-not-said: waited at " + TickList(waiting.waited));
+		}
+		// A held client neither captures nor reports: the host saves the match as it is and hears back from itself.
+		std::array<SchedulePeer, 2> held;
+		setUp(held, 0, "00000000deadbeef-0000000000000014");
+		const ScheduleRun alone = RunSchedule(held, 500, {200}, [](uint64_t, NetMatchService::AutosaveTickInput& input) { input.writers = {1}; });
+		if (held[0].manual != std::vector<uint64_t>{205} || alone.saved.size() != 1 || alone.reported != std::vector<size_t>{1} || alone.named != std::vector<size_t>{1}) {
+			fail("held-seat-save: host marked " + TickList(held[0].manual) + " heard " + TickList(alone.saved));
+		}
+		if (!failures.empty()) {
+			*error = failures;
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_manual_save_keeps_the_interval_and_waits_for_a_safe_tick interval=" << TickList(plain[0].captures)
+		          << " safe=" << TickList(early[0].manual) << " held_seat_saved_at=" << TickList(alone.saved) << std::endl;
+		return true;
+	}
+
 	bool TestServiceKick(std::string* error) {
 		class ScriptedAuthCrypto : public NetAuthCrypto {
 		public:
@@ -13730,6 +13912,8 @@ namespace RTE {
 		};
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
 		row(&TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay, "a_rejoin_walks_its_phases_and_the_goodbye_ends_its_tail_replay");
+		row(&TestTheHostSavesTheMatchWhenAsked, "the_host_saves_the_match_when_asked");
+		row(&TestAManualSaveKeepsTheIntervalAndWaitsForASafeTick, "a_manual_save_keeps_the_interval_and_waits_for_a_safe_tick");
 		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);

@@ -947,6 +947,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		manifest.scenePreset = descriptor.scenePreset;
 		manifest.peerNames = identity->peerNames;
 		manifest.sideState = identity->sideState;
+		manifest.savedByHost = identity->savedByHost;
 	}
 	// Nothing writes the image once it is published, so the worker keeps its own buffers.
 	task = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel, kind,
