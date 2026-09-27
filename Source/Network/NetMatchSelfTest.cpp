@@ -66,6 +66,7 @@ namespace RTE {
 	bool RunCrossRosterSelfTest(std::string* error);
 	bool RunCrossExecutionPhaseSelfTest(std::string* error);
 	bool RunCrossAuthorityRecordSelfTest(std::string* error);
+	bool RunCrossHistoryRecordSelfTest(std::string* error);
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 
 	namespace {
@@ -13846,6 +13847,7 @@ namespace RTE {
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
 		row(&RunCrossExecutionPhaseSelfTest, "cross_phase_returns_to_live_after_reexecution_or_new_round");
 		row(&RunCrossAuthorityRecordSelfTest, "cross_authority_record_is_bound_to_its_session_and_host");
+		row(&RunCrossHistoryRecordSelfTest, "initial_history_uses_configured_start_not_the_next_frame_cursor");
 		row(&TestCrossCaptureBarrier, "capture_and_writer_barriers_are_selected_releasable_and_bounded");
 		row(&TestCrossRecordKinds, "action_record_fields");
 		row(&TestCrossTickTiming, "exclusive_tick_timing");
