@@ -15,6 +15,7 @@
 #include "MovableMan.h"
 #include "PreviewEventLedger.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -1087,6 +1088,19 @@ namespace RTE {
 		/// Gets a const reference to this MOSRotating's map of number values.
 		/// @return A const reference to this MOSRotating's map of number values.
 		const std::unordered_map<std::string, double>& GetNumberValueMap() const { return m_NumberValueMap; }
+
+		/// Gets a custom value map's entries in key order, the order saved text names them in, so the text never follows the map's insertion history.
+		/// @param map The map to order.
+		/// @return Pointers to the map's entries, sorted by key.
+		template <typename Map> static std::vector<const typename Map::value_type*> EntriesByKey(const Map& map) {
+			std::vector<const typename Map::value_type*> entries;
+			entries.reserve(map.size());
+			for (const auto& entry: map) {
+				entries.push_back(&entry);
+			}
+			std::sort(entries.begin(), entries.end(), [](const auto* lhs, const auto* rhs) { return lhs->first < rhs->first; });
+			return entries;
+		}
 
 		/// Returns the string value associated with the specified key or "" if it does not exist.
 		/// @param key Key to retrieve value.
