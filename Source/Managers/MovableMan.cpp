@@ -6448,7 +6448,8 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	// across 32 states, median of 32 interleaved passes.
 	constexpr long long c_AddedBudgetUs = 150;
 	const long long addedUs = globalUs - perStateUs;
-	const bool timingGreen = perStateUs > 0 && addedUs <= c_AddedBudgetUs;
+	const bool timingMeasured = perStateUs > 0;
+	const bool timingGreen = timingMeasured && addedUs <= c_AddedBudgetUs;
 	const bool retiredGreen = !retiredExpectedHash.empty() && retiredExpectedHash == retiredActualHash;
 	const bool duplicateGreen = !duplicateHashes[0].empty() && duplicateHashes[0] == duplicateHashes[1];
 	const bool freedAcrossStatesGreen = freedAcrossStatesReady && !freedAcrossStatesHashes[0].empty() &&
@@ -6467,9 +6468,26 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	constexpr long long c_LoadBudgetUs = c_AddedBudgetUs * 5000 / c_ObjectCount;
 	const long long loadAddedUs = loadGlobalUs - loadPerStateUs;
 	const long long loadAddedWithLookupUs = loadGlobalAfterADeletionUs - loadPerStateUs;
-	const bool loadTimingGreen = loadObjectsRegistered == 5000 && loadPerStateUs > 0 &&
-	                             loadAddedUs <= c_LoadBudgetUs && loadAddedWithLookupUs <= c_LoadBudgetUs;
-	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan && freedAcrossStatesGreen && permittedWritesGreen && loadTimingGreen;
+	const bool loadTimingMeasured = loadObjectsRegistered == 5000 && loadPerStateUs > 0;
+	const bool loadTimingGreen = loadTimingMeasured && loadAddedUs <= c_LoadBudgetUs && loadAddedWithLookupUs <= c_LoadBudgetUs;
+	// A sanitizer build's timings measure its instrumentation, so there the budgets are printed, not judged.
+	const char* sanitizer = nullptr;
+#if defined(__SANITIZE_ADDRESS__)
+	sanitizer = "asan";
+#elif defined(__SANITIZE_THREAD__)
+	sanitizer = "tsan";
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+	sanitizer = "asan";
+#elif __has_feature(thread_sanitizer)
+	sanitizer = "tsan";
+#endif
+#endif
+	const std::string unjudged = sanitizer ? std::string("sanitizer: budget not gated (") + sanitizer + " build), measured:" : std::string();
+	const auto budgetVerdict = [&unjudged](bool measured, bool green) { return !unjudged.empty() && measured ? unjudged : std::string(green ? "PASS" : "FAIL"); };
+	const bool timingDecides = sanitizer ? timingMeasured : timingGreen;
+	const bool loadTimingDecides = sanitizer ? loadTimingMeasured : loadTimingGreen;
+	passed = passed && perStateRed && globalGreen && timingDecides && retiredGreen && duplicateGreen && unlistedRootRan && freedAcrossStatesGreen && permittedWritesGreen && loadTimingDecides;
 	std::cout << "[script-graph-selftest] " << (perStateRed ? "PASS" : "FAIL")
 	          << " threaded_synced_update_per_state_order_red states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
 	          << " hash_placed=" << perStateHashes[0] << " hash_shifted=" << perStateHashes[1]
@@ -6506,16 +6524,16 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	          << " victim_shifted=" << freedAcrossStatesVictimID[1] << " victim_ran=" << (freedAcrossStatesVictimRan ? 1 : 0)
 	          << " poison_over_the_freed_block=" << freedAcrossStatesPoisonHit[0] << "," << freedAcrossStatesPoisonHit[1]
 	          << (freedAcrossStatesGreen ? "" : " (the pass reached an object a script in the same pass had freed)") << std::endl;
-	std::cout << "[script-graph-selftest] " << (timingGreen ? "PASS" : "FAIL")
+	std::cout << "[script-graph-selftest] " << budgetVerdict(timingMeasured, timingGreen)
 	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=" << c_LuaStateCount << " before_us=" << perStateUs
 	          << " after_us=" << globalUs << " added_us=" << addedUs << " budget_us=" << c_AddedBudgetUs
 	          << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent << std::endl;
-	std::cout << "[script-graph-selftest] " << (loadTimingGreen ? "PASS" : "FAIL")
+	std::cout << "[script-graph-selftest] " << budgetVerdict(loadTimingMeasured, loadTimingGreen)
 	          << " threaded_synced_update_pass_timing_under_load registered=" << loadObjectsRegistered
 	          << " states=" << c_LuaStateCount << " before_us=" << loadPerStateUs << " after_us=" << loadGlobalUs
 	          << " added_us=" << loadAddedUs << " after_a_deletion_us=" << loadGlobalAfterADeletionUs
 	          << " added_with_lookup_us=" << loadAddedWithLookupUs << " budget_us=" << c_LoadBudgetUs
-	          << (loadTimingGreen ? "" : " (the walk costs more per registered MO than 1,024 said it would)") << std::endl;
+	          << (loadTimingDecides ? "" : " (the walk costs more per registered MO than 1,024 said it would)") << std::endl;
 	std::cout << "[script-graph-selftest] " << (permittedWritesGreen ? "PASS" : "FAIL")
 	          << " threaded_synced_update_permitted_writes states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
 	          << " global_writes=" << globalWriteTotals[0]
