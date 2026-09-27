@@ -249,10 +249,7 @@ namespace RTE {
 	size_t MetricsCollector::InstrumentationBytes() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		size_t bytes = m_TickHashes.capacity() * sizeof(TickHashRecord);
-		for (const auto& record: m_TickHashes) {
-			bytes += record.totalHex.capacity();
-			for (const auto& [key, value]: record.subsystemHex) bytes += key.capacity() + value.capacity();
-		}
+		for (const auto& record: m_TickHashes) bytes += record.subsystems.capacity() * sizeof(decltype(record.subsystems)::value_type);
 		return bytes;
 	}
 
