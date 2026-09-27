@@ -197,6 +197,25 @@ using namespace RTE;
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
 static std::string s_netLiveTickHashPath;
+
+static std::ofstream& LiveTickHashStream() {
+	static std::ofstream trace(s_netLiveTickHashPath, std::ios::trunc);
+	return trace;
+}
+
+// Ticks a held seat ran off the round leave both hash records; the live stream names the round they belong to.
+static void RetractAbandonedTickHashes() {
+	uint64_t round = 0;
+	const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(round);
+	if (abandoned == 0) {
+		return;
+	}
+	g_MetricsCollector.RetractTickHashesFrom(abandoned);
+	if (!s_netLiveTickHashPath.empty()) {
+		LiveTickHashStream() << nlohmann::json{{"abandon_from", abandoned}, {"round", round}}.dump() << '\n' << std::flush;
+	}
+}
+
 static uint64_t s_memoryCensusTicks = 0; //!< Every this many ticks one line names what each record holds; 0 = never.
 static bool s_memoryCensusHistogram = false; //!< The census also walks the process heap and names the block sizes holding the most.
 static size_t s_memoryCensusProbeSize = 0; //!< Blocks of this size have their first bytes printed, so a leaked object can be named.
@@ -5189,6 +5208,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			// A seat the host sent its end record reads the round's result from it and stays for the rematch.
 			uint64_t endRecord = 0;
 			const bool endedByRecord = g_NetMatchService.TakeRoundEndRecord(endRecord);
+			// The round ends before another tick would write what the hold abandoned.
+			RetractAbandonedTickHashes();
 			{
 				std::ostringstream line;
 				line << (endedByRecord ? "[net-match] completed_by_end_record=1 held_from=" : "[net-match] completed_by_host_goodbye=1 held_from=") << s_netMatchHeldFromTick
@@ -5365,6 +5386,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				const std::string result = NetMatchService::RoundEndResultText(RoundEndedWinnerTeam(endRecord), g_NetMatchService.GetLocalTeam());
 				s_netMatchCompletedByHostGoodbye = heldRejoin;
 				s_netMatchGoodbyeFinalFrame = RoundEndedFinalFrame(endRecord);
+				RetractAbandonedTickHashes();
 				{
 					std::ostringstream line;
 					line << "[net-match] completed_by_end_record=1 held_from=" << s_netMatchHeldFromTick << " final=" << s_netMatchGoodbyeFinalFrame << " result=" << result;
@@ -6273,18 +6295,9 @@ void RunGameLoop() {
 				g_MovableMan.FeedTickEndChecksum();
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
-				// Ticks a held seat ran off the round leave both hash records before this tick is written.
-				static uint64_t liveAbandonedFrom = 0;
-				if (const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(); abandoned != 0) {
-					g_MetricsCollector.RetractTickHashesFrom(abandoned);
-					liveAbandonedFrom = liveAbandonedFrom == 0 ? abandoned : std::min(liveAbandonedFrom, abandoned);
-				}
+				RetractAbandonedTickHashes();
 				if (liveHashTick) {
-					static std::ofstream trace(s_netLiveTickHashPath, std::ios::trunc);
-					if (liveAbandonedFrom != 0) {
-						trace << nlohmann::json{{"abandon_from", liveAbandonedFrom}}.dump() << '\n';
-						liveAbandonedFrom = 0;
-					}
+					std::ofstream& trace = LiveTickHashStream();
 					nlohmann::json subsystems = nlohmann::json::object();
 					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
 					trace << nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
@@ -8265,6 +8278,7 @@ int RunNetMatchServiceE2E() {
 				g_MetricsCollector.RecordString("verdict_source", "round");
 			}
 			if (!g_MetricsCollector.HasNumeric("final_tick")) g_MetricsCollector.Record("final_tick", static_cast<double>(g_TimerMan.GetSimUpdateCount()));
+			RetractAbandonedTickHashes();
 			g_MetricsCollector.EndRun();
 			const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 			if (!g_MetricsCollector.WriteReport(tracePath)) {
