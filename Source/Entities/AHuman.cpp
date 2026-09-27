@@ -2348,6 +2348,12 @@ void AHuman::UpdateLimbPathSpeed() {
 
 void AHuman::PreControllerUpdate() {
 	ZoneScoped;
+	if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) {
+		const Vector travelled = g_SceneMan.ShortestDistance(m_PrevPos, m_Pos, g_SceneMan.SceneWrapsX());
+		if (travelled.GetSqrMagnitude() > 0) g_MetricsCollector.AppendEvent({{"event", "movement_observed"}, {"result", "success"},
+		    {"actor", GetUniqueID()}, {"team", m_Team}, {"movement_state", static_cast<int>(m_MovementState)},
+		    {"dx", travelled.m_X}, {"dy", travelled.m_Y}, {"crouch_amount", m_CrouchAmount}, {"amount", 1}});
+	}
 
 	Actor::PreControllerUpdate();
 
@@ -3003,7 +3009,8 @@ void AHuman::PreControllerUpdate() {
 					if (m_Paths[FGROUND][CLIMB].PathEnded() || m_Paths[FGROUND][CLIMB].PathIsAtStart()) {
 						m_StrideTimer.Reset();
 					}
-					m_pFGHandGroup->PushAsLimb(m_Pos + Vector(0, m_pFGArm->GetParentOffset().m_Y).RadRotate(-rot), m_pFGArm->GetMaxLength(), m_Vel, Matrix(), m_Paths[FGROUND][CLIMB], deltaTime, 0, false);
+					const bool pushed = m_pFGHandGroup->PushAsLimb(m_Pos + Vector(0, m_pFGArm->GetParentOffset().m_Y).RadRotate(-rot), m_pFGArm->GetMaxLength(), m_Vel, Matrix(), m_Paths[FGROUND][CLIMB], deltaTime, 0, false);
+					if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("climb_limb_push", this, pushed ? "success" : "attempt", 1, m_pFGArm->GetUniqueID());
 				} else {
 					m_ArmClimbing[FGROUND] = false;
 					m_Paths[FGROUND][CLIMB].Terminate();
@@ -3016,7 +3023,8 @@ void AHuman::PreControllerUpdate() {
 					if (m_Paths[BGROUND][CLIMB].PathEnded() || m_Paths[BGROUND][CLIMB].PathIsAtStart()) {
 						m_StrideTimer.Reset();
 					}
-					m_pBGHandGroup->PushAsLimb(m_Pos + Vector(0, m_pBGArm->GetParentOffset().m_Y).RadRotate(-rot), m_pBGArm->GetMaxLength(), m_Vel, Matrix(), m_Paths[BGROUND][CLIMB], deltaTime, 0, false);
+					const bool pushed = m_pBGHandGroup->PushAsLimb(m_Pos + Vector(0, m_pBGArm->GetParentOffset().m_Y).RadRotate(-rot), m_pBGArm->GetMaxLength(), m_Vel, Matrix(), m_Paths[BGROUND][CLIMB], deltaTime, 0, false);
+					if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("climb_limb_push", this, pushed ? "success" : "attempt", 1, m_pBGArm->GetUniqueID());
 				} else {
 					m_ArmClimbing[BGROUND] = false;
 					m_Paths[BGROUND][CLIMB].Terminate();
@@ -3434,6 +3442,7 @@ void AHuman::Update() {
 			m_Vel.m_X += (rotTarget > 0 ? -std::abs(rotDiff) : std::abs(rotDiff)) * velScalar * 0.5F;
 		} else {
 			m_Status = DEAD;
+			if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("dead", this, "human_death_motion");
 		}
 	}
 	m_Rotation.SetRadAngle(rot);

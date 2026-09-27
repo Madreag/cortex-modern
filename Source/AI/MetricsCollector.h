@@ -65,6 +65,7 @@ namespace RTE {
 		/// Streams opt-in observations at committed tick boundaries.
 		bool OpenEvents(const std::string& path, size_t byteLimit = 268435456);
 		void BeginEventTick(const nlohmann::json& context, bool prediction = false);
+		void UpdateEventContext(const nlohmann::json& context);
 		void RecordEvent(const std::string& event, const MovableObject* object = nullptr, const std::string& result = "success", double amount = 1, long other = 0, int seat = -1);
 		void AppendEvent(const nlohmann::json& event);
 		void FlushEventTick();
@@ -73,6 +74,7 @@ namespace RTE {
 		bool EventsEnabled() const { return m_EventsEnabled.load(std::memory_order_relaxed); }
 		size_t EventBytes() const;
 		size_t InstrumentationBytes() const;
+		static nlohmann::json TickTiming(long long totalUs, long long waitUs, long long captureUs, long long captureWaitUs);
 
 		/// Per-tick hash trace recording for the determinism CI check.
 		///

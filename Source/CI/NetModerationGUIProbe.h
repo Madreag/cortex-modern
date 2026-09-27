@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace RTE::NetModerationGUIProbe {
 	/// Runs an opt-in input script through the ordinary SDL event queue.
@@ -21,4 +22,5 @@ namespace RTE::NetModerationGUIProbe {
 	/// Whether a loaded probe still has steps to run: a harness teardown waits for it the way a player's
 	/// own pause menu waits for the player.
 	bool Running();
+	bool RunCrossScopeSelfTest(std::string* error);
 }

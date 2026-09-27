@@ -8,6 +8,7 @@
 #include "System.h"
 #ifdef CCCP_WITH_GNS
 #include "GnsSignaling.h"
+#include <steam/isteamnetworkingutils.h>
 #endif
 #include "NetIdentity.h"
 #include "NetLobbySession.h"
@@ -27,6 +28,7 @@
 #include "MetricsCollector.h"
 #include "MovableMan.h"
 #include "ScenarioRunner.h"
+#include "NetModerationGUIProbe.h"
 
 #ifdef SYSTEM_MINIZIP
 #include <minizip/zip.h>
@@ -60,8 +62,64 @@
 
 namespace RTE {
 	bool RunCrossBotRangeSelfTest(std::string* error);
+	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 
 	namespace {
+		bool TestCrossRecordKinds(std::string* error) {
+			const std::vector<std::string> kinds{"round_fired", "reload_completed", "thrown_release", "device_pickup", "door_open_completed",
+			    "door_close_completed", "gold_deposited", "wound_damage", "dying", "dead", "wound_added", "gibbed", "craft_refund",
+			    "craft_departure", "cargo_ejected", "terrain_removed", "impact_damage", "climb_limb_push", "delivery_arrived", "bot_transition"};
+			const std::filesystem::path path = "Userdata/cross-record-kinds.jsonl";
+			if (!g_MetricsCollector.OpenEvents(path.string(), 65536)) { *error = "event stream did not open"; return false; }
+			Actor subject;
+			for (size_t index = 0; index < kinds.size(); ++index) {
+				g_MetricsCollector.BeginEventTick({{"tick", index + 1}, {"round", 9}, {"phase", "live"}});
+				g_MetricsCollector.RecordEvent(kinds[index], &subject, "success", 7, 81, 2);
+				g_MetricsCollector.FlushEventTick();
+			}
+			g_MetricsCollector.CloseEvents();
+			std::ifstream input(path);
+			bool passed = true;
+			for (size_t index = 0; index < kinds.size(); ++index) {
+				std::string line; std::getline(input, line);
+				const auto row = line.empty() ? nlohmann::json::object() : nlohmann::json::parse(line);
+				const bool same = row.value("event", "") == kinds[index] && row.value("amount", 0) == 7 && row.value("seat", -1) == 2 &&
+				    row.value("other", 0) == 81 && row.value("actor", -1L) == subject.GetUniqueID() && row.value("class", "") == subject.GetClassName();
+				std::cout << "[net-match-selftest] " << (same ? "PASS " : "FAIL ") << kinds[index] << "_record_preserves_identity_result_and_amount" << std::endl;
+				passed &= same;
+			}
+			if (!passed) *error = "one or more action records lost their fields";
+			return passed;
+		}
+
+		bool TestCrossTickTiming(std::string* error) {
+			const auto timing = MetricsCollector::TickTiming(1000, 200, 300, 100);
+			if (timing["compute_us"] != 600 || timing["capture_us"] != 200 || timing["wait_us"] != 200 || timing["partition_valid"] != true ||
+			    MetricsCollector::TickTiming(100, 200, 0, 0)["partition_valid"] != false) {
+				*error = "tick timing overlaps wait/capture or accepts a negative compute interval"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS tick_timing_partitions_compute_wait_and_capture" << std::endl;
+			return true;
+		}
+
+		bool TestCrossTimedTransport(std::string* error) {
+#ifdef CCCP_WITH_GNS
+			GnsTransport transport;
+			if (!transport.StartHost(49915, error)) return false;
+			if (ApplyCrossTransportFault(-1, 0, 0, 10) || ApplyCrossTransportFault(0, 101, 0, 10) || !ApplyCrossTransportFault(10, 5, 2, 1)) {
+				*error = "transport hook accepted invalid bounds or refused a valid timed setting"; return false;
+			}
+			float loss = 0; size_t bytes = sizeof(loss); ESteamNetworkingConfigDataType type;
+			const auto read = [&] { bytes = sizeof(loss); return SteamNetworkingUtils()->GetConfigValue(k_ESteamNetworkingConfig_FakePacketLoss_Send,
+			    k_ESteamNetworkingConfig_Global, 0, &type, &loss, &bytes) > 0; };
+			if (!read() || loss != 5) { *error = "loss hook has no GNS readback"; return false; }
+			std::this_thread::sleep_for(std::chrono::milliseconds(3));
+			transport.PollEvents();
+			if (!read() || loss != 0) { *error = "timed fault did not reset without simulation progress"; return false; }
+			std::cout << "[net-match-selftest] PASS timed_transport_faults_reset_without_committed_progress" << std::endl;
+#endif
+			return true;
+		}
 		bool TestCommittedEventStream(std::string* error) {
 			const auto path = std::filesystem::path("Userdata") / "cross-events-selftest.jsonl";
 			MetricsCollector& collector = g_MetricsCollector;
@@ -13758,6 +13816,10 @@ namespace RTE {
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
+		row(&TestCrossRecordKinds, "action_record_fields");
+		row(&TestCrossTickTiming, "exclusive_tick_timing");
+		row(&TestCrossTimedTransport, "timed_transport_reset");
+		row(&NetModerationGUIProbe::RunCrossScopeSelfTest, "gameplay_probe_scopes");
 		row(&TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay, "a_rejoin_walks_its_phases_and_the_goodbye_ends_its_tail_replay");
 		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;

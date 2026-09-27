@@ -388,7 +388,8 @@ namespace {
 				    {"minimized", (flags & SDL_WINDOW_MINIMIZED) != 0}, {"hidden", (flags & SDL_WINDOW_HIDDEN) != 0}};
 			}
 			observed["scope"] = scope;
-			for (const auto& [key, expected]: step.value("equals", Json::object()).items()) Require(scope.at(key) == expected, op + " differs: " + key);
+			const Json expectedValues = step.value("equals", Json::object());
+			for (const auto& [key, expected]: expectedValues.items()) Require(scope.at(key) == expected, op + " differs: " + key);
 			g_MetricsCollector.WriteObservation({{"type", "probe_scope"}, {"scope", op}, {"observed", scope}});
 		} else if (op == "remove_participant") {
 			const uint16_t seat = step.at("stable_seat");
@@ -861,6 +862,25 @@ namespace {
 
 uint64_t RendezvousCount() { return rendezvousCount.load(); }
 bool Running() { return probe.loaded && probe.enabled && !probe.done; }
+
+bool RunCrossScopeSelfTest(std::string* error) {
+	for (const char* name: {"assert_buy", "assert_pie", "assert_window"}) {
+		if (StepPhase({{"op", name}}) != Phase::Draw) { *error = std::string(name) + " is not checked after drawing"; return false; }
+		System::PrintDiagnosticLine("[net-match-selftest] PASS " + std::string(name) + "_is_scheduled_after_draw");
+	}
+	Json observed;
+	const bool alreadyConstructed = NetMatchService::IsConstructed();
+	if (!alreadyConstructed) NetMatchService::Construct();
+	std::string rejection;
+	try { Step({{"op", "remove_participant"}, {"stable_seat", 65535}}, observed); }
+	catch (const std::exception& rejected) { rejection = rejected.what(); }
+	if (!alreadyConstructed) NetMatchService::Destruct();
+	if (rejection == "participant selection is absent") {
+		System::PrintDiagnosticLine("[net-match-selftest] PASS participant_probe_refuses_an_absent_selection");
+		return true;
+	}
+	*error = rejection.empty() ? "the participant probe accepted an absent selection" : rejection; return false;
+}
 
 void BeforePoll() { Process(Phase::Poll); }
 void AfterDraw() { Process(Phase::Draw); }

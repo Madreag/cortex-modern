@@ -766,7 +766,7 @@ void ACraft::DropAllInventory() {
 
 				// Remove from inventory
 				m_Inventory.erase(exitee);
-				if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("cargo_ejected", this, "success", 1, pPassenger->GetUniqueID());
+				if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("cargo_ejected", this, g_MovableMan.IsActor(pPassenger) ? "success" : "refused", 1, pPassenger->GetUniqueID());
 				// Reset timer interval and quit until next one is due
 				m_ExitTimer.Reset();
 				break;
@@ -922,8 +922,9 @@ void ACraft::Update() {
 						if (pCaughtActor->GetTeam() == m_Team && g_ActivityMan.GetActivity() && pCaughtActor->GetController()->IsSeatedByPlayer())
 							g_ActivityMan.GetActivity()->SwitchToActor(this, pCaughtActor->GetController()->GetSeatPlayer(), pCaughtActor->GetTeam());
 						// Add (copy) of caught Actor to this' inventory
+						const size_t priorInventory = m_Inventory.size();
 						AddInventoryItem(dynamic_cast<MovableObject*>(pCaughtActor->Clone()));
-						if (!m_Inventory.empty()) if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.AppendEvent({{"event", "actor_boarded"}, {"result", "success"},
+						if (m_Inventory.size() == priorInventory + 1 && MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.AppendEvent({{"event", "actor_boarded"}, {"result", "success"},
 						    {"actor", pCaughtActor->GetUniqueID()}, {"clone", m_Inventory.back()->GetUniqueID()}, {"craft", GetUniqueID()},
 						    {"team", m_Team}, {"amount", 1}});
 						// Delete the original from scene - this is safer than 'removing' or handing over ownership halfway through MovableMan's update
