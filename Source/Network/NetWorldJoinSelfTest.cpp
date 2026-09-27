@@ -3385,6 +3385,45 @@ namespace RTE {
 		return exact ? 0 : Fail("a controller roster larger than one lobby chunk was truncated: " + error);
 	}
 
+	/// A rematch restarts its frames at 1, so a chunk an earlier round's plane sent names the same frames as the rematch's own:
+	/// the rematch's private catch-up drops it by its round and replays only its own round's frames.
+	int TestAnEarlierRoundsTailChunkIsDropped() {
+		std::string error;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A41);
+		WorldLobbyPair pair;
+		if (!pair.Open(47141, &error) || !pair.host.BindLateRemote(2, pair.hostRemote, &error)) return Fail("earlier-round fixture: " + error);
+		const auto serve = [&](NetWorldJoinHost& host, uint64_t round) -> bool {
+			if (!host.ConfigureMatchRejoins(config, round, 1000.0 / 60.0, &error)) return false;
+			for (uint64_t tick = 30; tick <= 45; ++tick) {
+				NetLockstepFrame frame = MakeCommittedFrame(tick);
+				frame.roundId = round;
+				frame.frames.front().actorUniqueID = static_cast<int64_t>(round * 100 + tick);
+				if (!host.Tail().Append(frame, &error)) return false;
+			}
+			if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 40, &error)) return false;
+			NetMatchService::SendWorldJoinTailTo(pair.host, host, *host.FindSession(42));
+			pair.Pump(4);
+			return true;
+		};
+		NetWorldJoinHost earlier, rematch;
+		if (!serve(earlier, 1) || !serve(rematch, 2)) return Fail("earlier-round fixture: " + error);
+		ScenarioRunner::ClearControllerReplayError();
+		if (!ScenarioRunner::InstallWorldCatchUp(40, {}, &error)) return Fail("earlier-round install: " + error);
+		NetWorldCatchUpClient client; client.active = true; client.privateMatch = true; client.roundId = 2; client.snapshotTick = client.appliedThrough = 40;
+		NetMatchService::StepWorldJoinCatchUpClient(pair.client, client);
+		const std::string refused = ScenarioRunner::HasControllerReplayError() ? ScenarioRunner::GetControllerReplayError() : std::string();
+		NetLockstepReadyFrame applied;
+		const bool took = refused.empty() && ScenarioRunner::TakeWorldCatchUpReadyFrame(41, applied, &error);
+		ScenarioRunner::ReleaseWorldCatchUp();
+		ScenarioRunner::ClearControllerReplayError();
+		if (!refused.empty()) return Fail("an-earlier-rounds-tail-reached-the-rematch: " + refused);
+		if (!took || applied.remoteFrames.size() != 1 || applied.remoteFrames.front().actorUniqueID != 241) {
+			return Fail("the rematch's catch-up did not replay its own frame 41: " + (took && !applied.remoteFrames.empty() ? "actor " + std::to_string(applied.remoteFrames.front().actorUniqueID) : error));
+		}
+		if (client.droppedForeignRounds != std::set<uint64_t>{1}) return Fail("the dropped chunk was not named as round 1's");
+		return 0;
+	}
+
 	/// A held seat whose player kept its state catches up on the committed tail from its own tick: no image is staged or sent,
 	/// the tail starts at the next frame, and a state the kept tail no longer reaches is refused so the seat takes the image.
 	int TestAHeldSeatCatchesUpInPlaceWithoutAnImage() {
@@ -7567,6 +7606,7 @@ namespace RTE {
 		}
 		if (std::strcmp(name, "private-neutral-prelude") == 0 || std::strcmp(name, "-net-world-private-neutral-prelude-selftest") == 0) return TestPrivateNeutralPrelude();
 		if (std::strcmp(name, "private-large-tail") == 0 || std::strcmp(name, "-net-world-private-large-tail-selftest") == 0) return TestLargePrivateTailChunks();
+		if (std::strcmp(name, "earlier-round-tail") == 0 || std::strcmp(name, "-net-world-earlier-round-tail-selftest") == 0) return TestAnEarlierRoundsTailChunkIsDropped();
 		if (std::strcmp(name, "private-rejoin-headroom") == 0 || std::strcmp(name, "-net-world-private-rejoin-headroom-selftest") == 0) return TestPrivateRejoinHeadroom();
 		if (std::strcmp(name, "-net-world-private-journal-selftest") == 0) return TestCommittedTailJournal();
 		if (std::strcmp(name, "restart") == 0 || std::strcmp(name, "-net-world-restart-selftest") == 0) {
@@ -7819,6 +7859,7 @@ namespace RTE {
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;
 		if (const int result = TestAReturnerKeepingPaceAtTheHeadIsActivated(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
+		if (const int result = TestAnEarlierRoundsTailChunkIsDropped(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
 		if (const int result = TestEveryPeersRecordServesTheHostsTail(); result != 0) return result;

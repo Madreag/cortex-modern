@@ -139,7 +139,7 @@ namespace RTE {
 		m_OutgoingStateId = 0;
 		m_StateTransferOnlyPeer = 0;
 		m_WorldJoinReports.clear();
-		m_PendingTailBytes.clear();
+		m_PendingTail.clear();
 		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = 0;
 		m_ChunkSendStall = 0;
@@ -482,8 +482,17 @@ namespace RTE {
 		return report;
 	}
 
-	std::vector<uint8_t> NetLobbySession::TakePendingTailBytes() {
-		return std::move(m_PendingTailBytes);
+	std::vector<uint8_t> NetLobbySession::TakePendingTailBytes(std::optional<uint64_t> round, std::vector<std::pair<uint64_t, size_t>>* dropped) {
+		std::vector<uint8_t> taken;
+		for (auto& [chunkRound, bytes]: m_PendingTail) {
+			if (!round || chunkRound == *round) {
+				taken.insert(taken.end(), bytes.begin(), bytes.end());
+			} else if (dropped) {
+				dropped->emplace_back(chunkRound, bytes.size());
+			}
+		}
+		m_PendingTail.clear();
+		return taken;
 	}
 
 	void NetLobbySession::HandleStateChunk(const NetLobbyStateChunk& message) {
@@ -1326,8 +1335,10 @@ namespace RTE {
 					}
 					if (chunk->transferId == c_NetWorldTailTransferId) {
 						// Only a joiner drains this; on the host it would grow for the world's life.
-						if (!m_Config.host) {
-							m_PendingTailBytes.insert(m_PendingTailBytes.end(), chunk->bytes.begin(), chunk->bytes.end());
+						uint64_t round = 0;
+						if (!m_Config.host && ParseWorldTailChunkRound(*chunk, round)) {
+							if (m_PendingTail.empty() || m_PendingTail.back().first != round) m_PendingTail.emplace_back(round, std::vector<uint8_t>());
+							m_PendingTail.back().second.insert(m_PendingTail.back().second.end(), chunk->bytes.begin() + c_NetWorldTailRoundBytes, chunk->bytes.end());
 						}
 						break;
 					}
