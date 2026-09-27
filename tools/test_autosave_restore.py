@@ -88,6 +88,14 @@ def fullstate_args() -> list:
 
 SEAT_HELD = re.compile(r"^\[net-match\] hold peer=\d+ frame=(\d+) AI in control", re.MULTILINE)
 SEAT_ADMITTED = re.compile(r"^\[net-match\] private catch-up complete frame=(\d+)", re.MULTILINE)
+SEAT_BACK = re.compile(r"^\[net-match\] seat-reclaimed peer=\d+ frame=(\d+)", re.MULTILINE)
+# How long a kill waits on a held seat's return before it ends the phase anyway, so a seat that never returns still fails the oracle.
+WORLD_KILL_RETURN_WAIT_POLLS = 300
+
+
+def _seat_mid_return(host_log: str) -> bool:
+    """The host has held a seat it has not reclaimed yet: ending the phase now leaves that seat unsampled after its hold."""
+    return len(SEAT_HELD.findall(host_log)) > len(SEAT_BACK.findall(host_log))
 
 
 def unsampled_admissions(verdict: dict, host_log: Path, client_log: Path) -> str:
@@ -748,6 +756,7 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
         threads[1].start()
         if kill_past:
             waiter = threading.Event()
+            waited_on_return = 0
             for _ in range(4200):
                 waiter.wait(0.1)
                 host_log, client_log = peer_log(root, "host"), peer_log(root, "client")
@@ -759,7 +768,13 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
                     store = root / "host/runtime/Autosaves"
                     published = [int(path.stem.rsplit("-", 1)[1]) for path in store.glob(f"{identity[1]}-*.ccmanifest")
                                  if path.with_suffix(".ccsave").exists() and (store / f"{identity[1]}.admission").exists()]
-                if _world_kill_ready(host_log, client_log, kill_past, published, ticket.exists()):
+                ready = _world_kill_ready(host_log, client_log, kill_past, published, ticket.exists())
+                # The kill waits for a held seat to come back, as a player's host would not die mid-rejoin on cue.
+                if ready and _seat_mid_return(host_log) and waited_on_return < WORLD_KILL_RETURN_WAIT_POLLS:
+                    waited_on_return += 1
+                    ready = False
+                if ready:
+                    records["_kill_waited_on_return_s"] = waited_on_return / 10
                     runs["host"].terminate(code=137, reason="world host process killed")
                     killed = True
                     records["_kill_capture_tick"] = max(captures)
@@ -1052,6 +1067,12 @@ class WorldRestartOracleTests(unittest.TestCase):
     CLIENT_LOBBY = ("[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=1 local_ready=1 "
                     "remote_ready=0 activity=Persistent World scene=Grasslands mode=pvp-skirmish | peer2=Client(team0,local,ready,ping0ms)\n")
     CAPTURES = '[autosave] tick=61 capture_ms=149.037 bytes=29499529\n[net-world] offer {"tick":61}\n[autosave] tick=421 capture_ms=190.0 bytes=29499529\n'
+
+    def test_a_held_seat_is_mid_return_until_the_host_reclaims_it(self):
+        held = "[net-match] hold peer=2 frame=44 AI in control\n"
+        self.assertFalse(_seat_mid_return(self.HOST_START))
+        self.assertTrue(_seat_mid_return(self.HOST_START + held))
+        self.assertFalse(_seat_mid_return(self.HOST_START + held + "[net-match] seat-reclaimed peer=2 frame=300 live_actors=2\n"))
 
     def test_lobby_join_with_published_offers_can_be_killed(self):
         host = self.HOST_START + self.HOST_LOBBY + self.CAPTURES

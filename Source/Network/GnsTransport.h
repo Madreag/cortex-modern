@@ -68,6 +68,8 @@ namespace RTE {
 		std::string GetPeerDetailedStatus(NetPeerId peerId) const;
 		/// The GNS identity of this process; every transport in it shares one.
 		std::string GetLocalIdentity() const;
+		/// The same identity read without a transport of its own; empty while GNS is not running in this process.
+		static std::string ProcessIdentity();
 		/// Updates the credentials used by subsequent ICE connections on this listener.
 		static void ApplyIceServers(const GnsP2PConfig& config);
 		/// Also hands a changed relay login to the TURN allocations of the live P2P connections.

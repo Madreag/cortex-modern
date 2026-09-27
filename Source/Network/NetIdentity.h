@@ -33,6 +33,7 @@ namespace RTE {
 		uint16_t supportedMatchConfigVersion = 0;
 		uint16_t supportedWorldMatchConfigVersion = 0;
 		uint16_t lobbyProtocolVersion = 0;
+		uint16_t committedRecordVersion = 0; //!< How a committed tick names an actor; hashed, so a build that reads it another way is refused.
 		std::string enabledGlobalScripts; //!< Sim-mutating global scripts run off per-machine Settings; a mismatch must reject at join.
 
 		bool operator==(const NetIdentityDeterministicConfig&) const = default;

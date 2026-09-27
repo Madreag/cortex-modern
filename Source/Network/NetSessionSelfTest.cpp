@@ -708,6 +708,29 @@ namespace RTE {
 					return false;
 				}
 			}
+			// A build that reads committed ticks another way is refused, and the player is told which side is newer.
+			for (size_t index = 0; index < 2; ++index) {
+				const uint16_t port = static_cast<uint16_t>(42160 + index);
+				const bool hostCurrent = index == 0;
+				LoopbackTransport hostTransport, clientTransport;
+				NetSession host, client;
+				auto hostConfig = MakeConfig(port, 1507, "Host");
+				auto clientConfig = MakeConfig(port, 1508, "Client");
+				for (auto* config: {&hostConfig, &clientConfig}) {
+					const bool isCurrent = (config == &hostConfig) == hostCurrent;
+					config->localIdentity.deterministicConfig.committedRecordVersion = isCurrent ? NetLockstepCodec::c_CommittedRecordVersion : static_cast<uint16_t>(NetLockstepCodec::c_CommittedRecordVersion - 1);
+					config->localIdentity.deterministicConfigHash = NetIdentity::HashDeterministicConfig(config->localIdentity.deterministicConfig);
+				}
+				if (!StartPair(port, host, client, hostTransport, clientTransport, hostConfig, clientConfig, error) ||
+				    !DrivePair(hostTransport, clientTransport, host, client, [&] { return (host.IsReady() && client.IsReady()) || client.IsRejected(); }, error)) return false;
+				const std::string expectedText = hostCurrent ? "This host runs a newer game version." : "This host runs an older game version.";
+				if (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::DeterministicConfigMismatch || client.BuildPlayerRefusalText() != expectedText) {
+					*error = std::string("a committed-record version refusal (") + (hostCurrent ? "current host" : "previous host") + ") told the player \"" +
+					         client.BuildPlayerRefusalText() + "\" where it must say \"" + expectedText + "\"";
+					return false;
+				}
+				std::cout << "[net-session-selftest] committed_record_refusal " << (hostCurrent ? "current_host previous_client" : "previous_host current_client") << " text=\"" << client.BuildPlayerRefusalText() << "\"" << std::endl;
+			}
 			// A game version refusal names the newer side too, whichever of the two noticed it.
 			for (size_t index = 0; index < 2; ++index) {
 				const uint16_t port = static_cast<uint16_t>(42158 + index);

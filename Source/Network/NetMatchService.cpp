@@ -4874,8 +4874,6 @@ static std::string ResyncSaveName() {
 		// A sim that ran the hold frame played input the round never committed; only one short of it holds the round's state.
 		if (holdFrame == 0 || tick == 0 || tick >= holdFrame) {
 			System::PrintDiagnosticLine("[net-match] held client: no in-place catch-up (sim at " + std::to_string(tick) + ", held from " + std::to_string(holdFrame) + ")");
-			// The frames from the hold on that this simulation already ran were off the round; the image it rejoins through replaces them.
-			if (holdFrame != 0 && tick >= holdFrame) ScenarioRunner::AbandonTicksFrom(holdFrame);
 			return false;
 		}
 		NetResyncState committed;
@@ -4897,6 +4895,8 @@ static std::string ResyncSaveName() {
 		config.migrationGeneration = live.migrationGeneration;
 		config.migrationKey = live.migrationKey;
 		config.migrationTransportFactory = live.migrationTransportFactory;
+		config.migrationIceDial = live.migrationIceDial;
+		config.migrationIceHost = live.migrationIceHost;
 		config.originalRoundConfigHash = m_Coordinator->GetRoundConfigHash();
 		config.simTickMs = g_TimerMan.GetDeltaTimeMS();
 		for (const auto& [peer, frame]: m_Coordinator->GetPeerLeaveFrames()) if (frame <= tick) config.initialPeerLeaves[peer] = frame;
@@ -5100,10 +5100,11 @@ static std::string ResyncSaveName() {
 			}
 			NetSessionConfig sessionConfig = m_Session->GetConfig();
 			sessionConfig.port = route.endpoint.listenPort;
-			sessionConfig.p2pJoin.connect = [peer = route.endpoint](INetTransport& transport, std::string* connectError) {
+			sessionConfig.p2pJoin.connect = [this, peer = route.endpoint](INetTransport& transport, std::string* connectError) {
 				size_t nextAddress = 0;
 				std::string connectedAddress;
-				return NetLockstepCoordinator::ConnectMigrationEndpoint(transport, peer, nextAddress, connectedAddress, connectError);
+				const NetLockstepCoordinator::MigrationIceDial dial = [this](INetTransport& link, const std::string& identity, std::string* dialError) { return DialMigrationIce(link, identity, dialError); };
+				return NetLockstepCoordinator::ConnectMigrationEndpoint(transport, peer, nextAddress, connectedAddress, connectError, &dial);
 			};
 			NetMatchServiceRequest request;
 			request.host = false;
@@ -5181,6 +5182,8 @@ static std::string ResyncSaveName() {
 		config.migrationGeneration = handover.generation;
 		config.migrationKey = replayed.migrationKey;
 		config.migrationTransportFactory = replayed.migrationTransportFactory;
+		config.migrationIceDial = replayed.migrationIceDial;
+		config.migrationIceHost = replayed.migrationIceHost;
 		config.originalRoundConfigHash = replayed.originalRoundConfigHash;
 		config.simTickMs = replayed.simTickMs;
 		config.initialPeerLeaves = m_CatchUpCoordinator->GetPeerLeaveFrames();
@@ -6257,6 +6260,11 @@ static std::string ResyncSaveName() {
 			}
 			m_MigrationDirectorySession = directorySession;
 			m_MigrationDirectoryToken = directoryToken;
+			{
+				std::lock_guard<std::mutex> iceLock(m_MigrationIceMutex);
+				m_MigrationIce.session = directorySession;
+				m_MigrationIce.token = directoryToken;
+			}
 			m_DirectoryRow = std::move(row);
 			std::fill(plaintext.begin(), plaintext.end(), 0);
 			return true;
@@ -6448,10 +6456,11 @@ static std::string ResyncSaveName() {
 				if (m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission) {
 					NetSessionConfig sessionConfig = m_Session->GetConfig();
 					sessionConfig.port = endpoint->listenPort;
-					sessionConfig.p2pJoin.connect = [peer = *endpoint](INetTransport& transport, std::string* connectError) {
+					sessionConfig.p2pJoin.connect = [this, peer = *endpoint](INetTransport& transport, std::string* connectError) {
 						size_t nextAddress = 0;
 						std::string connectedAddress;
-						return NetLockstepCoordinator::ConnectMigrationEndpoint(transport, peer, nextAddress, connectedAddress, connectError);
+						const NetLockstepCoordinator::MigrationIceDial dial = [this](INetTransport& link, const std::string& identity, std::string* dialError) { return DialMigrationIce(link, identity, dialError); };
+						return NetLockstepCoordinator::ConnectMigrationEndpoint(transport, peer, nextAddress, connectedAddress, connectError, &dial);
 					};
 					std::string error;
 					if (!m_Session->StartClient(*m_MigratedTransport, address, sessionConfig, &error))
@@ -6459,6 +6468,7 @@ static std::string ResyncSaveName() {
 				}
 			} else {
 				m_DirectoryRow.listenAddrs = endpoint->listenAddrs;
+				std::erase_if(m_DirectoryRow.listenAddrs, [](const std::string& address) { return NetLockstepCoordinator::IsMigrationIceEndpoint(address); });
 				m_DirectoryRow.listenPort = endpoint->listenPort;
 				m_DirectoryRow.joinMode = "ip";
 				m_DirectoryRow.resumeSessionId = m_MigrationDirectorySession;
@@ -7457,7 +7467,8 @@ static std::string ResyncSaveName() {
 			{"supported_world_lockstep_codec_version", config.supportedWorldLockstepCodecVersion},
 			{"supported_match_config_version", config.supportedMatchConfigVersion},
 			{"supported_world_match_config_version", config.supportedWorldMatchConfigVersion},
-			{"lobby_protocol_version", config.lobbyProtocolVersion}, {"enabled_global_scripts", config.enabledGlobalScripts}};
+			{"lobby_protocol_version", config.lobbyProtocolVersion}, {"committed_record_version", config.committedRecordVersion},
+			{"enabled_global_scripts", config.enabledGlobalScripts}};
 		const json identity{{"schema", manifest.schema}, {"build_id", manifest.buildId}, {"game_version", manifest.gameVersion},
 			{"platform", manifest.platform}, {"deterministic_config", fields},
 			{"module_manifest_hash", NetIdentity::HashHex(manifest.moduleManifestHash)},
@@ -7920,6 +7931,93 @@ static std::string ResyncSaveName() {
 		config.localIdentity = localIdentity;
 		config.localVirtualPort = localVirtualPort;
 		return config;
+	}
+
+	std::unique_ptr<INetTransport> NetMatchService::MakeMigrationTransport(bool ice) {
+#ifdef CCCP_WITH_GNS
+		if (ice) {
+			const auto snapshot = m_RelaySnapshot.load();
+			auto mux = std::make_unique<NetMuxTransport>();
+			mux->SetHostP2P(c_MigrationVirtualPort, BuildIceConfig(g_SettingsMan, std::string(), c_MigrationVirtualPort, snapshot ? *snapshot : NetRelayConfig{}));
+			return mux;
+		}
+#else
+		(void)ice;
+#endif
+		return std::make_unique<GnsTransport>();
+	}
+
+	bool NetMatchService::DialMigrationIce(INetTransport& transport, const std::string& identity, std::string* error) {
+#ifdef CCCP_WITH_GNS
+		auto* mux = dynamic_cast<NetMuxTransport*>(&transport);
+		MigrationIce ice;
+		{
+			std::lock_guard<std::mutex> iceLock(m_MigrationIceMutex);
+			ice = m_MigrationIce;
+		}
+		if (!mux || !mux->P2PGns() || ice.session.empty()) {
+			if (error) *error = "the handover has no ICE route: " + std::string(!mux || !mux->P2PGns() ? "its transport has no ICE half" : "no directory session reached this peer");
+			return false;
+		}
+		auto dispatcher = std::make_shared<GnsDirectorySignalDispatcher>();
+		GnsDirectorySignalDispatcher::Config config;
+		config.role = GnsDirectorySignalDispatcher::Role::Joiner;
+		config.baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
+		config.installKey = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
+		config.certPinSha256 = g_SettingsMan.GetSessionDirectoryCertSha256();
+		config.sessionId = ice.session;
+		if (!dispatcher->Start(*mux->P2PGns(), config)) {
+			if (error) *error = "the handover's signal channel would not open";
+			return false;
+		}
+		dispatcher->SetPolling(true, SteadyNowMs());
+		mux->SetPump([dispatcher] { dispatcher->Update(SteadyNowMs()); });
+		const auto snapshot = m_RelaySnapshot.load();
+		NetMuxTransport::JoinSpec spec;
+		spec.peerIdentity = identity;
+		spec.remoteVirtualPort = c_MigrationVirtualPort;
+		spec.p2p = BuildIceConfig(g_SettingsMan, std::string(), c_MigrationVirtualPort, snapshot ? *snapshot : NetRelayConfig{});
+		spec.makeSignaling = [raw = dispatcher.get()] { return raw->CreateJoinSignaling(); };
+		mux->SetJoinSpec(std::move(spec));
+		System::PrintDiagnosticLine("[net-migration] dialing the successor's ICE route identity=" + (identity.empty() ? std::string("(any)") : identity) + " session=" + ice.session);
+		return mux->Connect(std::string(), 0, error);
+#else
+		(void)transport; (void)identity;
+		if (error) *error = "an ICE route needs GameNetworkingSockets";
+		return false;
+#endif
+	}
+
+	void NetMatchService::HostMigrationIce(INetTransport& listener) {
+#ifdef CCCP_WITH_GNS
+		auto* mux = dynamic_cast<NetMuxTransport*>(&listener);
+		MigrationIce ice;
+		{
+			std::lock_guard<std::mutex> iceLock(m_MigrationIceMutex);
+			ice = m_MigrationIce;
+		}
+		if (!mux || !mux->P2PGns() || ice.session.empty() || ice.token.empty()) {
+			System::PrintDiagnosticLine("[net-migration] the successor's ICE route stays closed: " + std::string(!mux || !mux->P2PGns() ? "its listener has no ICE half" : "no directory credential reached this peer"));
+			return;
+		}
+		auto dispatcher = std::make_shared<GnsDirectorySignalDispatcher>();
+		GnsDirectorySignalDispatcher::Config config;
+		config.role = GnsDirectorySignalDispatcher::Role::Host;
+		config.baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
+		config.installKey = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
+		config.certPinSha256 = g_SettingsMan.GetSessionDirectoryCertSha256();
+		config.sessionId = ice.session;
+		config.sessionToken = ice.token;
+		if (!dispatcher->Start(*mux->P2PGns(), config)) {
+			System::PrintDiagnosticLine("[net-migration] the successor's signal channel would not open");
+			return;
+		}
+		dispatcher->SetPolling(true, SteadyNowMs());
+		mux->SetPump([dispatcher] { dispatcher->Update(SteadyNowMs()); });
+		System::PrintDiagnosticLine("[net-migration] the successor answers ICE dials as the directory's host end: session=" + ice.session + " identity=" + GnsTransport::ProcessIdentity());
+#else
+		(void)listener;
+#endif
 	}
 
 	void NetMatchService::SetRelayOfferLocked(const NetRelayConfig& offer) {
@@ -8490,9 +8588,11 @@ static std::string ResyncSaveName() {
 			}
 		}
 		runnerConfig.enableMigration = s_AdmissionEnabled && !request.dedicated && !runnerConfig.matchConfig.persistentWorld && GetNetAuthCrypto().IsRealCrypto();
-		runnerConfig.migrationListenAddrs = {NetLanDiscovery::GetPrimaryLocalAddress()};
-		if (runnerConfig.migrationListenAddrs.front().empty())
-			runnerConfig.migrationListenAddrs.front() = "127.0.0.1";
+		runnerConfig.migrationListenAddrs = NetLockstepCoordinator::MigrationListenAddrs(NetLanDiscovery::GetPrimaryLocalAddress(), false);
+		{
+			std::lock_guard<std::mutex> iceLock(m_MigrationIceMutex);
+			m_MigrationIce.route = false;
+		}
 		runnerConfig.sealMigration = [this](uint8_t peer, const NetHash32& hash, std::vector<uint8_t>& sealed) { return SealMigrationCapsule(peer, hash, sealed); };
 		runnerConfig.openMigration = [this](const NetLobbyMigration& capsule) { return OpenMigrationCapsule(capsule); };
 		runnerConfig.configureMigration = [this](NetLockstepConfig& config) {
@@ -8501,7 +8601,16 @@ static std::string ResyncSaveName() {
 				return;
 			config.migrationKey = m_MigrationKey;
 			config.migrationGeneration = m_MigrationGeneration;
-			config.migrationTransportFactory = [] { return std::make_unique<GnsTransport>(); };
+			bool ice = false;
+			{
+				std::lock_guard<std::mutex> iceLock(m_MigrationIceMutex);
+				ice = m_MigrationIce.route;
+			}
+			config.migrationTransportFactory = [this, ice] { return MakeMigrationTransport(ice); };
+			if (ice) {
+				config.migrationIceDial = [this](INetTransport& transport, const std::string& identity, std::string* error) { return DialMigrationIce(transport, identity, error); };
+				config.migrationIceHost = [this](INetTransport& listener) { HostMigrationIce(listener); };
+			}
 			if (m_MigrationAuthority != 0)
 				config.authorityPeerId = m_MigrationAuthority;
 			if (!m_MigrationMembers.empty())
@@ -8520,6 +8629,12 @@ static std::string ResyncSaveName() {
 			started = SetUpIceTransport(request, manifest, *mux, runnerConfig.sessionConfig, runnerConfig.joinAddress, iceTarget, &error);
 			iceSetupFailed = !started && !request.host && NetIcePrefersP2P(iceTarget, iceWanted);
 #ifdef CCCP_WITH_GNS
+			// A match whose links run through the directory hands over through it too: the successor takes its host end.
+			if (started && m_Dispatcher) {
+				runnerConfig.migrationListenAddrs = NetLockstepCoordinator::MigrationListenAddrs(runnerConfig.migrationListenAddrs.front(), true);
+				std::lock_guard<std::mutex> iceLock(m_MigrationIceMutex);
+				m_MigrationIce.route = true;
+			}
 			if (started && m_Dispatcher) {
 				GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
 				mux->SetPump([this, dispatcher, p2p = mux->P2PGns(), previous = NetRelayConfig{},

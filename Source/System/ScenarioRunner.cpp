@@ -43,7 +43,7 @@
 #include <optional>
 #include <set>
 #include <memory>
-#include <atomic>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -823,16 +823,23 @@ namespace RTE {
 	}
 
 	namespace {
-		std::atomic<uint64_t> s_AbandonedTicksFrom{0};
+		std::mutex s_AbandonedTicksMutex;
+		uint64_t s_AbandonedTicksFrom = 0;
+		uint64_t s_AbandonedTicksRound = 0;
 	}
 
 	void ScenarioRunner::AbandonTicksFrom(uint64_t frame) {
-		uint64_t current = s_AbandonedTicksFrom.load();
-		while ((current == 0 || frame < current) && !s_AbandonedTicksFrom.compare_exchange_weak(current, frame)) {}
+		const uint64_t round = GetLockstepRoundId();
+		std::lock_guard<std::mutex> lock(s_AbandonedTicksMutex);
+		if (s_AbandonedTicksFrom != 0 && s_AbandonedTicksRound == round && s_AbandonedTicksFrom <= frame) return;
+		s_AbandonedTicksFrom = frame;
+		s_AbandonedTicksRound = round;
 	}
 
-	uint64_t ScenarioRunner::TakeAbandonedTicksFrom() {
-		return s_AbandonedTicksFrom.exchange(0);
+	uint64_t ScenarioRunner::TakeAbandonedTicksFrom(uint64_t& round) {
+		std::lock_guard<std::mutex> lock(s_AbandonedTicksMutex);
+		round = s_AbandonedTicksRound;
+		return std::exchange(s_AbandonedTicksFrom, 0);
 	}
 
 	std::string ScenarioRunner::MemoryCensus() {
@@ -3028,7 +3035,11 @@ namespace RTE {
 		if (s_SessionPump) s_SessionPump();
 		if (!s_LockstepCoordinator) return false;
 		if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
-			if (s_LockstepCoordinator->IsStopped() && s_LockstepCoordinator->IsLocalSeatHeld() && s_HeldCatchUp && s_HeldCatchUp()) return false;
+			if (s_LockstepCoordinator->IsStopped() && s_LockstepCoordinator->IsLocalSeatHeld()) {
+				// The ticks this seat ran from its hold on were off the round, however it comes back or if its round ends first.
+				if (const uint64_t hold = s_LockstepCoordinator->GetLocalHoldFrame(); hold != 0 && tick > hold) AbandonTicksFrom(hold);
+				if (s_HeldCatchUp && s_HeldCatchUp()) return false;
+			}
 			SetControllerReplayError("tick " + std::to_string(tick) + " lockstep stopped: " + s_LockstepCoordinator->GetStats().timeoutReason);
 			return false;
 		}
