@@ -96,6 +96,27 @@ class ReportTests(unittest.TestCase):
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
 
+    def test_a_rematch_compares_each_round_with_its_own_round(self):
+        from tempfile import TemporaryDirectory
+        from feel.retained_resume import compare_live_hashes
+        with TemporaryDirectory() as folder:
+            host, client = Path(folder) / 'host.jsonl', Path(folder) / 'client.jsonl'
+            first = [dict(round=1, tick=tick, sim_gated=f'a{tick}', subsystems={'controller': f'a{tick}'}) for tick in range(1, 21)]
+            second = [dict(round=2, tick=tick, sim_gated=f'b{tick}', subsystems={'controller': f'b{tick}'}) for tick in range(1, 21)]
+            host.write_text('\n'.join(map(json.dumps, first + second)), encoding='utf-8')
+            # Round 2's hold abandons 15-17, which the client ran off the round; round 1's 15-17 stay compared.
+            offround = [dict(row, sim_gated='held') for row in second[14:17]]
+            held = first + second[:14] + offround + [dict(abandon_from=15, round=2)]
+            client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
+            compared = compare_live_hashes(host, client, 1)
+            self.assertEqual(sum(row['compared_ticks'] for row in compared), 34)
+            self.assertEqual(sum(row['mismatched_ticks'] for row in compared), 0)
+            self.assertEqual(sum(row['mismatched_applied_input_ticks'] for row in compared), 0)
+            # A round-2 tick that differs from round 2 is still caught.
+            held[25] = dict(held[25], sim_gated='different')
+            client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
+            self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
+
     def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
