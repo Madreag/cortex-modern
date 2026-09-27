@@ -43,6 +43,7 @@
 #include <optional>
 #include <set>
 #include <memory>
+#include <atomic>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -522,6 +523,11 @@ namespace RTE {
 			s_Args.selftestRematch = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-rematches" && hasValue) {
+			s_Args.selftestRematches = static_cast<uint32_t>(std::strtoul(argValue[startIndex + 1], nullptr, 10));
+			s_Args.selftestRematch = s_Args.selftestRematches > 0;
+			return 2;
+		}
 		if (a == "-net-match-e2e-leave") {
 			// Arm the one-shot quit-to-menu at tick 300. Boolean flag.
 			s_Args.selftestLeave = true;
@@ -814,6 +820,19 @@ namespace RTE {
 		s_PendingSessionTail = std::move(pendingTail);
 		s_SessionProgress = std::move(sessionProgress);
 		s_GoodbyeToPendingReturners = std::move(goodbyeToPendingReturners);
+	}
+
+	namespace {
+		std::atomic<uint64_t> s_AbandonedTicksFrom{0};
+	}
+
+	void ScenarioRunner::AbandonTicksFrom(uint64_t frame) {
+		uint64_t current = s_AbandonedTicksFrom.load();
+		while ((current == 0 || frame < current) && !s_AbandonedTicksFrom.compare_exchange_weak(current, frame)) {}
+	}
+
+	uint64_t ScenarioRunner::TakeAbandonedTicksFrom() {
+		return s_AbandonedTicksFrom.exchange(0);
 	}
 
 	std::string ScenarioRunner::MemoryCensus() {
@@ -1122,16 +1141,16 @@ namespace RTE {
 		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled) == peerId;
 	}
 
-	uint8_t ScenarioRunner::GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
+	uint8_t ScenarioRunner::GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, std::optional<uint64_t> atFrame) {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator) {
 			return 0;
 		}
 		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
 		if (overrideIt != s_LockstepControlOverrides.end()) {
-			return s_LockstepCoordinator->AiProducerOf(overrideIt->second);
+			return s_LockstepCoordinator->AiProducerOf(overrideIt->second, atFrame);
 		}
-		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled);
+		return s_LockstepCoordinator->ResolveActorOwner(actorUniqueID, actorTeam, cpuControlled, atFrame);
 	}
 
 	uint8_t ScenarioRunner::GetLockstepPolicyActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
@@ -2053,7 +2072,8 @@ namespace RTE {
 			if (const auto claim = s_LockstepDroppedControlOverrides.find(uid); claim != s_LockstepDroppedControlOverrides.end() && producing->HeldSeatReturnsBy(claim->second, targetFrame))
 				return claim->second;
 			const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(uid)));
-			return GetLockstepActorOwner(uid, team, !actor || !actor->IsPlayerControlled());
+			// The seat table at the frame the write lands on decides it: a return agreed before then hands the actors back there.
+			return GetLockstepActorOwner(uid, team, !actor || !actor->IsPlayerControlled(), targetFrame);
 		};
 		const auto writesAtTarget = [&](int32_t team, int64_t actorUID, int64_t writerUID) {
 			if (IsLockstepTeamCommandSender(team, config.localPeerId, targetFrame) || ownerAtTarget(actorUID, team) == config.localPeerId) return true;

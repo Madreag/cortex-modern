@@ -937,6 +937,18 @@ static std::string ResyncSaveName() {
 		return sum;
 	}
 
+	bool NetMatchService::SeatMidAdmission(uint64_t frame) const {
+		NetLockstepPlane::Gap plane("admission wait");
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost || !m_Coordinator) return false;
+		// A seat the AI holds for its player is coming back until it is taken back or released, its link up or not.
+		if (m_Coordinator->AnyHeldAISeat() || (m_Session && m_Session->GetHandshakingPeerCount() > 0)) return true;
+		return std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [frame](const auto& session) {
+			if (session.phase == NetWorldJoinPhase::Failed || session.phase == NetWorldJoinPhase::Spectating) return false;
+			return session.phase != NetWorldJoinPhase::Active || session.activationTick > frame;
+		});
+	}
+
 	void NetMatchService::SetRejoinPhaseLocked(NetSession::RejoinPhase phase) {
 		const NetSession* live = m_Session ? m_Session.get() : m_WorkerSession;
 		if (live && live->GetRejoinPhase() != phase) {
@@ -4809,6 +4821,8 @@ static std::string ResyncSaveName() {
 		// A sim that ran the hold frame played input the round never committed; only one short of it holds the round's state.
 		if (holdFrame == 0 || tick == 0 || tick >= holdFrame) {
 			System::PrintDiagnosticLine("[net-match] held client: no in-place catch-up (sim at " + std::to_string(tick) + ", held from " + std::to_string(holdFrame) + ")");
+			// The frames from the hold on that this simulation already ran were off the round; the image it rejoins through replaces them.
+			if (holdFrame != 0 && tick >= holdFrame) ScenarioRunner::AbandonTicksFrom(holdFrame);
 			return false;
 		}
 		NetResyncState committed;
