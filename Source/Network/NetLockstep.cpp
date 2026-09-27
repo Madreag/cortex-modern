@@ -4999,6 +4999,9 @@ namespace RTE {
 		m_RemotePeerIds.clear();
 		m_RemoteTransports.clear();
 		m_RelayHost = false;
+		// A replay reads its seats under the recording's own slow-player policy, so a recorded hold keeps its seat's claims as it did live.
+		if (config.matchConfig.version >= NetMatchConfigUtil::c_TimingOptionsVersion && config.matchConfig.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute)
+			m_Config.substituteSlowPeers = true;
 		m_DeferStops = false;
 		m_State = NetLockstepState::Running;
 		ResetRoundState();
