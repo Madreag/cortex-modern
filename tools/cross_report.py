@@ -188,7 +188,8 @@ def build_report(root):
             elif isinstance(value, list):
                 for nested in value: visit(nested)
         visit(native)
-        stalls = sum(r['steady_missing_frame_stalls'] for r in native_steps if 'steady_missing_frame_stalls' in r) if native_steps else None
+        stall_values=[r.get('steady_missing_frame_stalls') for r in native_steps]
+        stalls=sum(stall_values) if stall_values and all(isinstance(v,(int,float)) for v in stall_values) else None
         clock = [r for r in live[name] if r.get('phase') == 'live']
         timing = report.reduce_net_window(clock, waits, 300, manifest['ticks'], initial.get('sim_tick_ms'), stalls) if len(configs) <= 1 else {'complete': False, 'reason': 'multiple rounds require explicit segmented windows'}
         timing['sim_ms_per_tick'] = native.get('pace', {}).get('sim_ms_per_tick')

@@ -104,6 +104,10 @@ class CrossDriverTests(unittest.TestCase):
             self.assertNotIn('<link ',page)
             self.assertEqual(len([r for r in result['requirements'] if isinstance(r['number'],int)]),71)
             self.assertTrue((root.parent/'index.html').is_file())
+            own=cross_report.peer_root(root,plan,plan['specs'][0]); own.mkdir(parents=True,exist_ok=True)
+            (own/'match-report.json').write_text(json.dumps(dict(lockstep=dict(missing_frame_stalls=0,next_frame=0,steady_missing_frame_stalls=None))))
+            result=cross_report.build_report(root)
+            self.assertIsNone(result['peers'][plan['specs'][0]['peer']]['timing']['steady_missing_frame_stalls'])
 
     def test_report_requires_all_peers_shared_capture_and_binary_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
