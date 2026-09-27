@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -319,12 +320,43 @@ namespace RTE::FloatText {
 #endif
 	}
 
-	/// Writes a number the way printf's %a and an ostream's std::hexfloat do, in the C locale. Hexadecimal
-	/// text is exact, so this is the codec for state that is written once and read back bit for bit.
+	/// Writes a number exactly in the one hexadecimal spelling every platform shares, read from the IEEE fields: trailing
+	/// zero digits dropped, a subnormal as 0x0.<fraction>p-1022. printf's %a pads or renormalises per libc, so it is never asked.
 	inline std::to_chars_result FormatHex(char* first, char* last, double value) {
-		char buffer[64] = {};
-		const int written = FormatC(buffer, sizeof(buffer), "%a", value);
-		if (written <= 0 || static_cast<size_t>(written) >= sizeof(buffer) || last - first < written) {
+		uint64_t bits = 0;
+		static_assert(sizeof(bits) == sizeof(value), "FormatHex reads a double's bits");
+		std::memcpy(&bits, &value, sizeof(bits));
+		char buffer[32];
+		char* cursor = buffer;
+		if (bits >> 63) {
+			*cursor++ = '-';
+		}
+		const unsigned exponentField = static_cast<unsigned>((bits >> 52) & 0x7FF);
+		uint64_t fraction = bits & ((uint64_t(1) << 52) - 1);
+		if (exponentField == 0x7FF) {
+			std::memcpy(cursor, fraction ? "nan" : "inf", 3);
+			cursor += 3;
+		} else {
+			*cursor++ = '0';
+			*cursor++ = 'x';
+			*cursor++ = exponentField == 0 ? '0' : '1';
+			const int exponent = exponentField != 0 ? static_cast<int>(exponentField) - 1023 : (fraction != 0 ? -1022 : 0);
+			if (fraction != 0) {
+				int digits = 13;
+				for (; (fraction & 0xF) == 0; fraction >>= 4) {
+					--digits;
+				}
+				*cursor++ = '.';
+				for (int digit = digits - 1; digit >= 0; --digit) {
+					*cursor++ = "0123456789abcdef"[(fraction >> (digit * 4)) & 0xF];
+				}
+			}
+			*cursor++ = 'p';
+			*cursor++ = exponent < 0 ? '-' : '+';
+			cursor = std::to_chars(cursor, buffer + sizeof(buffer), exponent < 0 ? -exponent : exponent).ptr;
+		}
+		const auto written = cursor - buffer;
+		if (last - first < written) {
 			return {last, std::errc::value_too_large};
 		}
 		std::memcpy(first, buffer, static_cast<size_t>(written));
@@ -600,11 +632,11 @@ namespace RTE {
 	/// Parses one float or double in printf's %a grammar, locale-free and without allocating.
 	inline std::from_chars_result ParseHexFloatExact(const char* first, const char* last, double& value) { return FloatText::ParseHexFallback(first, last, value); }
 
-	/// Writes a float or double in printf's %a form, locale-free, exactly as an ostream's std::hexfloat does.
-	/// Floats promote to double first, which is what an ostream insertion does, so the text is unchanged.
+	/// Writes a float or double in the canonical hexadecimal form, the same bytes on every platform and in any locale.
+	/// Floats promote to double first, which is exact, so a float and its double spell the same.
 	inline std::to_chars_result FormatHexFloatExact(char* first, char* last, double value) { return FloatText::FormatHex(first, last, value); }
 
-	/// Writes one float or double in printf's %a form into a std::string, locale-free.
+	/// Writes one float or double in the canonical hexadecimal form into a std::string.
 	inline std::string HexFloatString(double value) {
 		char buffer[64];
 		const std::to_chars_result result = FormatHexFloatExact(buffer, buffer + sizeof(buffer), value);
