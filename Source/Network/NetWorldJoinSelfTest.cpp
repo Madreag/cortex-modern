@@ -21,6 +21,7 @@
 #include "MovableMan.h"
 #include "PresetMan.h"
 #include "SettingsMan.h"
+#include "MetricsCollector.h"
 #include "TimerMan.h"
 #include "AutosaveStore.h"
 #include "System/ScenarioRunner.h"
@@ -3388,6 +3389,7 @@ namespace RTE {
 	/// A rematch restarts its frames at 1, so a chunk an earlier round's plane sent names the same frames as the rematch's own:
 	/// the rematch's private catch-up drops it by its round and replays only its own round's frames.
 	int TestAnEarlierRoundsTailChunkIsDropped() {
+		if (!MetricsCollector::IsConstructed()) MetricsCollector::Construct(); // SetControllerReplayError records into it.
 		std::string error;
 		auto config = NetMatchConfigUtil::MakeDefault(0x9A41);
 		WorldLobbyPair pair;
