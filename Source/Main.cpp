@@ -28,6 +28,7 @@
 #include "MainMenuGUI.h"
 #include "NetModerationGUI.h"
 #include "NetModerationGUIProbe.h"
+#include "Icon.h"
 #include "AllegroScreen.h"
 #include "AllegroBitmap.h"
 
@@ -191,6 +192,7 @@ namespace RTE {
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 	bool RunCrossRosterSelfTest(std::string* error);
 	bool RunCrossEndSignalSelfTest(std::string* error);
+	bool RunCrossLobbyResourcesSelfTest(std::string* error);
 	bool RunCrossExecutionPhaseSelfTest(std::string* error);
 	bool RunCrossAuthorityRecordSelfTest(std::string* error);
 	bool RunCrossHistoryRecordSelfTest(std::string* error);
@@ -5409,8 +5411,25 @@ static bool CrossWinSurfaceReady() {
 	return true;
 }
 
+static bool PrepareCrossLobbyResources(std::string* error) {
+	for (int device = InputDevice::DEVICE_KEYB_ONLY; device < InputDevice::DEVICE_COUNT; ++device) {
+		const Icon* icon = g_UInputMan.GetDeviceIcon(device);
+		if (!icon || icon->GetBitmaps32().empty() || !icon->GetBitmaps32().front()) {
+			*error = "post-match lobby device icon is not loaded: " + std::to_string(device); return false;
+		}
+	}
+	return true;
+}
+
+bool RTE::RunCrossLobbyResourcesSelfTest(std::string* error) {
+	if (!PrepareCrossLobbyResources(error)) return false;
+	System::PrintDiagnosticLine("[net-match-selftest] PASS cross_lobby_loads_keyboard_mouse_and_all_gamepad_icons_before_draw");
+	return true;
+}
+
 static bool CrossDrawLobbySurface(std::string* error) {
 	if (!s_crossRematches) return true;
+	if (!PrepareCrossLobbyResources(error)) return false;
 	g_TimerMan.PauseSim(true);
 	g_MenuMan.HandleTransitionIntoMenuLoop();
 	g_MenuMan.SkipTitleIntroForAutomation();

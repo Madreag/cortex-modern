@@ -65,6 +65,7 @@ namespace RTE {
 	bool RunCrossBotRangeSelfTest(std::string* error);
 	bool RunCrossRosterSelfTest(std::string* error);
 	bool RunCrossEndSignalSelfTest(std::string* error);
+	bool RunCrossLobbyResourcesSelfTest(std::string* error);
 	bool RunCrossExecutionPhaseSelfTest(std::string* error);
 	bool RunCrossAuthorityRecordSelfTest(std::string* error);
 	bool RunCrossHistoryRecordSelfTest(std::string* error);
@@ -13906,6 +13907,7 @@ namespace RTE {
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
 		row(&RunCrossEndSignalSelfTest, "forced_end_phase_signal_requires_sender_round_incarnation_and_id");
+		row(&RunCrossLobbyResourcesSelfTest, "cross_lobby_loads_all_device_icons_before_draw");
 		row(&RunCrossExecutionPhaseSelfTest, "cross_phase_returns_to_live_after_reexecution_or_new_round");
 		row(&RunCrossAuthorityRecordSelfTest, "cross_authority_record_is_bound_to_its_session_and_host");
 		row(&RunCrossHistoryRecordSelfTest, "initial_history_uses_configured_start_not_the_next_frame_cursor");
