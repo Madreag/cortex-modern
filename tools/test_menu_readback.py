@@ -18,7 +18,7 @@ from test_lobby_lifecycle import wait_for_log
 from test_telemetry_bundle import set_visual_resolution
 
 
-CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
+CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
          "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
@@ -137,7 +137,7 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Misc": "CheckboxShowToolTips",
 }
 SIZE_GATES = (
-    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause", "network", "net-host-left", "net-host-left-early")
+    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause", "pause-save", "network", "net-host-left", "net-host-left-early")
       for size in ("640x360", "960x540", "1280x720")),
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
@@ -431,6 +431,33 @@ def pause_probe(who, root):
     return {"schema": 1, "timeout_ms": 90000, "steps": steps}
 
 
+def pause_save_probe(who, root):
+    """The match pause menu's save row: the host saves the match from it; a client reads who saves and when it last did."""
+    steps = [
+        {"op": "wait", "sim_at_least": 150},
+        {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
+        {"op": "wait", "screen": "Pause"},
+        *row_checks("ButtonSaveMatch", "PauseScreen"), *row_checks("LabelSaveMatchHint", "PauseScreen"),
+        menu_step(f"assert_enabled ButtonSaveMatch {1 if who == 'host' else 0}"),
+        menu_step("dump_host_options")]
+    if who == "host":
+        steps += [menu_step("assert_label LabelSaveMatchHint Not saved yet"),
+                  menu_step("activate ButtonSaveMatch"),
+                  {"op": "wait", "scope": "menu", "control": "LabelSaveMatchHint", "text_contains": "Last saved at"},
+                  menu_step("dump_host_options"),
+                  {"op": "signal", "name": "done"},
+                  {"op": "wait_file", "path": str(probe_root(root, "client") / "done.json")}]
+    else:
+        # The client's own writer takes the same capture, so its row reads the save once that archive is written.
+        steps += [menu_step("assert_label LabelSaveMatchHint The host saves the match"),
+                  {"op": "wait_file", "path": str(probe_root(root, "host") / "done.json")},
+                  {"op": "wait", "scope": "menu", "control": "LabelSaveMatchHint", "text_contains": "last saved at"},
+                  menu_step("dump_host_options"),
+                  {"op": "signal", "name": "done"}]
+    steps += [{"op": "finish"}]
+    return {"schema": 1, "timeout_ms": 90000, "steps": steps}
+
+
 def host_activity_label(row):
     module = row.get("module") or ""
     return row["preset"] + (f" - {module}" if module else "")
@@ -666,6 +693,10 @@ def scripts(case, port, root, size="960x540"):
     if case == "repair":
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
                 {who: repair_probe(who, root, size != "640x360") for who in ("host", "client")})
+    if case == "pause-save":
+        # Both peers stay until the client has read the save the host made.
+        return ({who: f"wait_file {probe_root(root, 'client') / 'done.json'} 90\nexit\n" for who in ("host", "client")},
+                {who: pause_save_probe(who, root) for who in ("host", "client")})
     if case == "pause":
         # Keep both peers until the leave has completed.
         return ({who: f"wait_file {probe_root(root, 'client') / 'left.json'} 90\nexit\n"
@@ -1729,7 +1760,7 @@ def run_case(options, case, root, failing=None):
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in ("pause", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
+    paired = case in ("pause", "pause-save", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
     menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early")
     seeded = {} if failing else seeds(case)
@@ -1753,7 +1784,7 @@ def run_case(options, case, root, failing=None):
                 args += ["-net-player-name", "F" * (DISPLAY_NAME_MAX_BYTES + 1)]
             if paired and not menu_driven:
                 # A repair round is long enough for a seat held at its start to finish its rejoin before the repair runs.
-                round_ticks = "2400" if case == "repair" else "400"
+                round_ticks = "2400" if case == "repair" else "1200" if case == "pause-save" else "400"
                 args += ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
                          "-net-match-ticks", round_ticks, "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
                          "-input-script", str(inputs), "-net-match-report", str(root / f"{who}-match.json")]
@@ -1973,6 +2004,27 @@ def run_case(options, case, root, failing=None):
             assert focused[0] == focused[1], f"the focused control changed across the run: {focused}"
             assert first["screen"] == last["screen"] == "MultiplayerScreen"
             assert first["service"] == last["service"], (first["service"], last["service"])
+        if case == "pause-save":
+            # The row is the host's to press and a client's to read; both peers write the one capture it names, marked as
+            # the host's save, and the host hears back from both writers.
+            for who in ("host", "client"):
+                pauses = [capture for capture in images if capture["peer"] == who and capture["screen"] == "Pause"]
+                assert len(pauses) == 2, (who, [capture["screen"] for capture in images if capture["peer"] == who])
+                row = next(control for control in pauses[0]["controls"] if control["name"] == "ButtonSaveMatch")
+                assert row["text"].lower() == "save match" and row["enabled"] is (who == "host"), (who, row)
+                hint = next(control for control in pauses[-1]["controls"] if control["name"] == "LabelSaveMatchHint")
+                assert ("Last saved at" if who == "host" else "The host saves the match - last saved at") in hint["text"], (who, hint)
+            named = re.findall(r"^\[autosave\] manual save named tick=(\d+)", logs["host"], re.MULTILINE)
+            assert len(named) == 1, named
+            for who in ("host", "client"):
+                taken = re.findall(r"^\[autosave\] manual save taken tick=(\d+)", logs[who], re.MULTILINE)
+                assert taken == named, (who, taken, named)
+                manifests = sorted((runs[who].cwd / "Autosaves").glob(f"*-{named[0]}.ccmanifest"))
+                assert len(manifests) == 1 and "SavedBy = host" in manifests[0].read_text(encoding="utf-8").splitlines(), (who, manifests)
+            report = json.loads((root / "host-match.json").read_text(encoding="utf-8"))
+            texts = [toast["text"] for toast in report["ui"]["toasts"] if toast["kind"] == "match_save"]
+            assert texts[:1] == ["Saving..."] and "Match saved (2 peers)" in texts, texts
+            result["pause_save"] = {"tick": int(named[0]), "toasts": texts}
         if case == "pause":
             # Both peers read the same menu: the match rows, no single-player row, and the two settings
             # pages. The client goes on to drive the leave-confirm surface its match rows open.
@@ -2542,8 +2594,8 @@ def main():
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
     if not (any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190))
-            or 49470 <= options.port <= 49478 or 49820 <= options.port <= 49839):
-        parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559, 48840-48849, 48850-48859, 49180-49199, 49470-49478 and 49820-49839")
+            or 49440 <= options.port <= 49459 or 49470 <= options.port <= 49478 or 49820 <= options.port <= 49839):
+        parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559, 48840-48849, 48850-48859, 49180-49199, 49440-49459, 49470-49478 and 49820-49839")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()
