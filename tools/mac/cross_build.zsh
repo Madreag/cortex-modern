@@ -11,6 +11,7 @@ test -f "$GUARD" || { echo 'REFUSED: Mac inventory owns the box'; exit 3; }
 test -f "$LANE/include-scan.json" || { echo 'REFUSED: include scan missing'; exit 3; }
 test "$(git -C "$REPO" rev-parse HEAD)" = "$SHA" || exit 4
 mkdir -p "$LANE/build-evidence"
+trap 'crossBuildExit=$?; print -r -- "$crossBuildExit" > "$LANE/build-evidence/exit.txt"' EXIT
 python3 - "$LANE/include-scan.json" "$SHA" <<'PY'
 import json,sys
 scan=json.load(open(sys.argv[1]))
@@ -23,7 +24,19 @@ if [[ ! -f "$REPO/build-gcc/build.ninja" ]]; then
     -Dwith_gns=enabled -Dgns_root=$D/gns --wrap-mode=nodownload > "$LANE/build-evidence/setup.log" 2>&1
 fi
 test -f "$GUARD" || exit 3
-ninja -C "$REPO/build-gcc" -j8 > "$LANE/build-evidence/build.log" 2>&1
+ninja -C "$REPO/build-gcc" -j8 > "$LANE/build-evidence/build.log" 2>&1 &
+crossBuildPid=$!
+while kill -0 "$crossBuildPid" 2>/dev/null; do
+  crossBuildKB=$(du -sk "$LANE" | awk '{print $1}')
+  if (( crossBuildKB * 1024 >= 4000000000 )); then
+    print -r -- "STOP: scratch reached 4 GB ($crossBuildKB KiB)" > "$LANE/build-evidence/budget-stop.txt"
+    kill -TERM "$crossBuildPid"
+    wait "$crossBuildPid" || true
+    exit 5
+  fi
+  sleep 5
+done
+wait "$crossBuildPid"
 python3 - "$REPO" "$SHA" <<'PY'
 from pathlib import Path
 import hashlib,json,subprocess,sys

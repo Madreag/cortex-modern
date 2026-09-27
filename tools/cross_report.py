@@ -21,7 +21,15 @@ def load(path, default=None):
 
 def rows(path):
     if record_path(path).is_file():
-        yield from report.read_jsonl(path)
+        with open_record(path,encoding='utf-8-sig') as stream:
+            for number,line in enumerate(stream,1):
+                try:
+                    row=json.loads(line)
+                    if not isinstance(row,dict): raise ValueError('record is not an object')
+                    row['_line']=number
+                    yield row
+                except ValueError as error:
+                    yield dict(type='malformed_record',error=str(error),_line=number)
 
 
 def event_paths(own):
@@ -116,6 +124,9 @@ def build_report(root):
         own=fragments[-1]; paths[name] = own
         live[name] = [row for fragment in fragments for row in source_rows(fragment/'live.jsonl',root)]
         events[name] = [row for fragment in fragments for path in event_paths(fragment) for row in source_rows(path,root)]
+        for observed in [*live[name],*events[name]]:
+            if observed.get('type')=='malformed_record':
+                findings.append(dict(peer=name,path=observed['_path'],line=observed['_line'],text='Malformed or truncated record: '+observed['error']))
         log = [(fragment/'engine/stdout.log',number,line) for fragment in fragments for number,line in read_log(fragment/'engine/stdout.log')]
         record, native = load(own / 'record.json', {}), load(own / 'match-report.json', {})
         waits = []; holds = []
@@ -203,6 +214,9 @@ def build_report(root):
     if manifest['scenario'] != 'match':
         checks['coverage_minima'] = all(r['status'] in ('PASS', 'NOT COVERED', 'NOT APPLICABLE') for r in matrix)
         checks['required_soak_evidence'] = False
+    for name,peer in peers.items():
+        peer['observations']=len(live[name])
+        peer['frames']=comparison['peers'][name]['present']
     result = dict(version=1, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,
                   peers=peers, comparison=comparison, coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts,
                   findings=findings, requirements=requirements(manifest, comparison, peers))
