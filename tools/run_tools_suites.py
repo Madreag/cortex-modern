@@ -20,6 +20,7 @@ SUITES = (
     ("checkpoint-field-stamps", ["test_checkpoint_field_stamps.py"]),
     ("selftest-sanitizer-rows", ["test_run_selftests.py"]),
     ("selftest-runner-quiet-tail", ["run_selftests.py", "--self-test"]),
+    ("plane-value-getters", ["test_plane_value_getters.py"]),
 )
 
 
