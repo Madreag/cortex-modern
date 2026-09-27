@@ -34,6 +34,7 @@ namespace RTE {
 		    {"capture_round", round}, {"timeout_ms", timeout}, {"outcome", "entered"},
 		    {"barrier_wall_ms", std::chrono::duration<double, std::milli>(began.time_since_epoch()).count()}};
 		const auto prefix = root / (id + "." + std::to_string(round) + "." + phase + "." + std::to_string(tick));
+		receipt["release_file"] = prefix.string() + ".release";
 		const auto publish = [&](const std::string& suffix) {
 			const auto target = prefix.string() + suffix;
 			std::ofstream output(target + ".pending", std::ios::out | std::ios::trunc);
@@ -43,7 +44,7 @@ namespace RTE {
 			if (MetricsCollector::IsConstructed()) g_MetricsCollector.WriteObservation(receipt);
 		};
 		publish(".enter.json");
-		const auto released = [&] { return std::filesystem::is_regular_file(root / (id + ".release")); };
+		const auto released = [&] { return std::filesystem::is_regular_file(prefix.string() + ".release"); };
 		while (!released() && std::chrono::steady_clock::now() - began < std::chrono::milliseconds(timeout))
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
 		const bool passed = released();
