@@ -238,8 +238,10 @@ def inventory_guard():
     if not paths: return None
     newest = max(paths, key=lambda p: p.stat().st_mtime)
     # Only the newest stream owns the box; old unfinished logs stay evidence.
-    with newest.open(encoding='utf-8', errors='replace') as stream:
-        last = next(reversed([line.strip() for line in stream if re.search(r'\] S\d+ (start|exit)', line)]), '')
+    with newest.open('rb') as stream:
+        stream.seek(max(0,newest.stat().st_size-65536))
+        tail=stream.read().decode('utf-8',errors='replace').splitlines()
+        last = next(reversed([line.strip() for line in tail if re.search(r'\] S\d+ (start|exit)', line)]), '')
     return f'{newest}: {last}' if re.search(r'\] S3 start\s*$', last) else None
 
 
@@ -521,12 +523,14 @@ def release_ready_payloads(boxes,payloads,root,processes,seconds):
     ready=set()
     while len(ready)<len(boxes) and time.monotonic()<deadline:
         for box in boxes.values():
-            if box['name'] in ready: continue
             box_root=payloads[box['name']][2]
+            if box['name'] in processes and processes[box['name']].poll() is not None:
+                raise RuntimeError(f'{box["name"]}: owning payload exited before all-box launch release')
+            if ((root/'done.json').is_file() if box['kind']=='windows-local' else remote_exists(box,box_root+'/done.json')):
+                raise RuntimeError(f'{box["name"]}: owning payload exited before all-box launch release')
+            if box['name'] in ready: continue
             if ((root/'launch-ready.json').is_file() if box['kind']=='windows-local' else remote_exists(box,box_root+'/launch-ready.json')):
                 ready.add(box['name'])
-            elif box['name'] in processes and processes[box['name']].poll() is not None:
-                raise RuntimeError(f'{box["name"]}: owning payload exited before launch readiness')
         if (root/'stop.json').is_file(): raise RuntimeError('coordinator cancelled before all-box readiness')
         if len(ready)<len(boxes): time.sleep(.2)
     if len(ready)!=len(boxes): raise RuntimeError('not every box reached guarded launch readiness before the declared deadline')
@@ -653,6 +657,14 @@ def run_payload(path):
                     if peer in completed: continue
                     read_began=time.monotonic()*1000
                     observed_rows=readers[peer].read()
+                    if run.poll() is not None:
+                        # An announced leave can exit with its final progress record
+                        # behind a chunk boundary. Consume the sealed tail before
+                        # deciding whether this incarnation requires a restart.
+                        for _ in range(256):
+                            if readers[peer].drained: break
+                            observed_rows.extend(readers[peer].read())
+                        if not readers[peer].drained: raise RuntimeError(f'{peer}: exited event stream did not drain')
                     observed_at=time.monotonic()*1000
                     recovery_ledgers[peer].observe(observed_rows,spec['incarnation'],clean_reads[peer],observed_at)
                     if readers[peer].drained: clean_reads[peer]=read_began
