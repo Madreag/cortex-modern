@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import cross_peers
 import cross_report
@@ -11,6 +12,15 @@ import cross_report
 class CrossDriverTests(unittest.TestCase):
     def plan(self):
         return cross_peers.make_plan(cross_peers.parse_args(['--dry-run']))
+
+    def test_storage_sample_tolerates_a_file_sealed_after_enumeration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/'retained.gz').write_bytes(b'closed')
+            # A payload may verify its gzip and remove the raw input after os.walk
+            # lists it but before the coordinator samples that path.
+            with patch.object(cross_peers.os,'walk',return_value=[(str(root),[],['gone.txt','retained.gz'])]):
+                self.assertEqual(cross_peers.scratch_bytes(root),6)
 
     def test_closed_instance_sealing_preserves_nested_record_paths(self):
         from feel.records import open_record

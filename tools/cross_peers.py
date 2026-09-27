@@ -230,7 +230,12 @@ def scratch_bytes(root):
                     and not getattr(Path(directory, n), 'is_junction', lambda: False)()]
         for name in files:
             path = Path(directory, name)
-            if not path.is_symlink(): total += path.stat().st_size
+            try:
+                if not path.is_symlink(): total += path.stat().st_size
+            except FileNotFoundError:
+                # Closed evidence is compressed and its verified source removed
+                # by the owning payload while the coordinator samples storage.
+                continue
     return total
 
 
