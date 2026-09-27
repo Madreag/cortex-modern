@@ -5301,6 +5301,12 @@ namespace RTE {
 			if (peer == m_Config.localPeerId) continue;
 			const auto back = replay.m_ReclaimTransactions.find(peer);
 			const auto ours = m_ReclaimTransactions.find(peer);
+			// A hold this round took after the replayed return is the seat's newer state: the return is history, never a reason to drop that hold.
+			const bool newerHold = back != replay.m_ReclaimTransactions.end() && m_AiHeldSeats.contains(peer) && m_AiHeldSeats.at(peer) > back->second.activationFrame;
+			if (newerHold && back->second.activationFrame > m_Config.seatStateThroughFrame && back->second.activationFrame <= throughFrame) {
+				NoteSeatTransition(peer, back->second.activationFrame, SeatTransition::Back);
+				continue;
+			}
 			if (back != replay.m_ReclaimTransactions.end() && back->second.activationFrame > m_Config.seatStateThroughFrame && back->second.activationFrame <= throughFrame &&
 			    (ours == m_ReclaimTransactions.end() || ours->second.eventSequence < back->second.eventSequence) &&
 			    (m_AiHeldSeats.contains(peer) || m_PeerLeaveFrames.contains(peer))) {
@@ -8407,6 +8413,14 @@ namespace RTE {
 							Fail(NetLockstepStopReason::ProtocolError, outFrame.frame, "recorded seat hold has invalid authority");
 							return false;
 						}
+						// A simulation behind its commits already holds the seat's newer hold or return: this older hold is its history only.
+						const auto newerHold = m_HoldTransactions.find(hold->peerId);
+						const auto newerBack = m_ReclaimTransactions.find(hold->peerId);
+						if ((newerHold != m_HoldTransactions.end() && newerHold->second.cutoffFrame > outFrame.frame) ||
+						    (newerBack != m_ReclaimTransactions.end() && newerBack->second.activationFrame > outFrame.frame)) {
+							NoteSeatTransition(hold->peerId, outFrame.frame, SeatTransition::Held);
+							continue;
+						}
 						// A recorded hold ends the seat's recorded return before it, as the live hold ended it on every peer that took it.
 						if (const auto back = m_ReclaimTransactions.find(hold->peerId); back != m_ReclaimTransactions.end() && back->second.activationFrame <= outFrame.frame)
 							m_ReclaimTransactions.erase(back);
@@ -8428,9 +8442,13 @@ namespace RTE {
 				// A hold the round agreed for a later frame is the seat's newer state: a simulation behind its commits (a host held for
 				// its own) delivers the return after that hold was taken, and the return's delivery must leave it standing.
 				const auto laterHold = m_HoldTransactions.find(reclaim->peerId);
+				const auto laterBack = m_ReclaimTransactions.find(reclaim->peerId);
 				if (laterHold != m_HoldTransactions.end() && laterHold->second.cutoffFrame > outFrame.frame) {
 					std::cout << "[net-lockstep] return of peer " << static_cast<int>(reclaim->peerId) << " delivered at " << outFrame.frame
 					          << " after its hold at " << laterHold->second.cutoffFrame << " was agreed: the hold stands" << std::endl;
+					NoteSeatTransition(reclaim->peerId, outFrame.frame, SeatTransition::Back);
+				} else if (laterBack != m_ReclaimTransactions.end() && laterBack->second.activationFrame > outFrame.frame) {
+					NoteSeatTransition(reclaim->peerId, outFrame.frame, SeatTransition::Back);
 				} else {
 					if (const auto held = m_ReclaimTransactions.find(reclaim->peerId); held == m_ReclaimTransactions.end() || !(held->second == *reclaim))
 						std::cout << "[net-lockstep] return of peer " << static_cast<int>(reclaim->peerId) << " committed at " << outFrame.frame << " delay=" << reclaim->delayFrames
