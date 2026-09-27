@@ -90,6 +90,12 @@ namespace RTE {
 		void RecordTickHash(const SimChecksum::Result& result, bool paused = false);
 
 		/// Number of tick-hash records captured this run. For tests and CLI diagnostics.
+		/// Drops the records of the ticks from this one on: a held seat ran them off the round before it learned of its hold.
+		void RetractTickHashesFrom(uint64_t tick) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			std::erase_if(m_TickHashes, [tick](const TickHashRecord& record) { return record.tick >= tick; });
+		}
+
 		size_t GetTickHashCount() const {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return m_TickHashes.size();
