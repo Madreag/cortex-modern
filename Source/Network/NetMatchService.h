@@ -89,6 +89,8 @@ namespace RTE {
 		uint64_t Total() const { return priorTicks + SegmentTicks(); }
 		bool EarlyOverIsSetupFailure() const { return Total() < 100; }
 		bool EarlyOverIsSetupFailure(uint64_t matchTick) const { return matchTick < 100; }
+		/// A round over before tick 100 is a broken setup unless a team won it: an early win is a win.
+		bool EarlyOverIsSetupFailure(uint64_t matchTick, bool won) const { return !won && EarlyOverIsSetupFailure(matchTick); }
 	};
 
 	inline uint64_t ParseLockstepStopTick(const std::string& error, uint64_t fallbackTick) {

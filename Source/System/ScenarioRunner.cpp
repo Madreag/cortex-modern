@@ -523,6 +523,11 @@ namespace RTE {
 			s_Args.selftestRematch = true;
 			return 1;
 		}
+		if (a == "-net-match-e2e-rematches" && hasValue) {
+			s_Args.selftestRematches = static_cast<uint32_t>(std::strtoul(argValue[startIndex + 1], nullptr, 10));
+			s_Args.selftestRematch = s_Args.selftestRematches > 0;
+			return 2;
+		}
 		if (a == "-net-match-e2e-leave") {
 			// Arm the one-shot quit-to-menu at tick 300. Boolean flag.
 			s_Args.selftestLeave = true;
