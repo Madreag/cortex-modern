@@ -93,6 +93,8 @@ namespace RTE {
 		size_t EventBytes() const;
 		size_t InstrumentationBytes() const;
 		static nlohmann::json TickTiming(long long totalUs, long long waitUs, long long captureUs, long long captureWaitUs);
+		/// Writes past a small byte budget into a scratch directory and checks that the oldest parts retire while recording goes on.
+		static bool RunEventRotationSelfTest(const std::string& directory, std::string* error);
 
 		/// Per-tick hash trace recording for the determinism CI check.
 		///

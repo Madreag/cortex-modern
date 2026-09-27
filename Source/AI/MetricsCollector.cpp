@@ -18,6 +18,8 @@
 #include <cstdlib>
 #include <set>
 #include <thread>
+#include <condition_variable>
+#include <tuple>
 #include <deque>
 #include <cmath>
 #include <algorithm>
@@ -81,53 +83,175 @@ namespace RTE {
 			System::PrintDiagnosticLine("[cross-record] FAIL capture barrier: " + std::string(error.what()));
 		}
 	}
+	// The tick only queues finished lines: the file writes, the part rotation and the retirement of old parts run on
+	// the stream's own thread, so a record never waits on the disk inside the measured tick.
 	struct MetricsCollector::EventStream {
-		std::ofstream output;
+		struct Item {
+			std::string text;
+			size_t part = 0;
+			std::vector<std::string> retire;
+		};
+		using TallyKey = std::tuple<std::string, std::string, long, int>;
 		std::string path;
 		json context;
 		std::vector<json> pending;
+		std::map<TallyKey, std::pair<double, uint64_t>> tally; //!< Object-less events of this tick, summed per kind.
 		std::deque<json> producedInputs;
 		std::map<uint64_t, uint64_t> lastObservedInputTarget;
 		uint64_t inputSerial = 0;
-		size_t bytes = 0, partBytes = 0, limit = 0, part = 0, sequence = 0, overflow = 0;
+		size_t bytes = 0, partBytes = 0, partLimit = 0, limit = 0, part = 0, sequence = 0, overflow = 0;
+		size_t retainedBytes = 0, retiredParts = 0, retiredBytes = 0;
+		std::deque<std::pair<size_t, size_t>> closedParts; //!< Retained closed parts: number and bytes.
 		bool active = false;
+
+		std::ofstream output;
+		size_t openPart = 0;
+		std::thread thread;
+		std::mutex queueMutex;
+		std::condition_variable wake, drained;
+		std::deque<Item> queue;
+		uint64_t queued = 0, written = 0;
+		bool stopping = false;
+		std::atomic<bool> failed{false};
+
+		~EventStream() { Close(); }
+
+		std::string PartPath(size_t number) const { return number == 0 ? path : path + ".part" + std::to_string(number); }
+
+		bool Open(const std::string& file, size_t byteLimit) {
+			path = file;
+			limit = byteLimit;
+			partLimit = std::clamp<size_t>(byteLimit / 4, 1, 8 * 1024 * 1024);
+			output.open(path, std::ios::out | std::ios::trunc);
+			if (!output) return false;
+			thread = std::thread([this] { Run(); });
+			return true;
+		}
+
 		void Write(json record) {
+			if (failed.load()) throw std::runtime_error("event record write failed");
 			for (const auto& [key, value]: context.items()) record[key] = value;
 			record["sequence"] = ++sequence;
-			const std::string line = record.dump() + '\n';
-			if (bytes + line.size() > limit) throw std::runtime_error("event byte budget exhausted");
-			if (partBytes >= 8 * 1024 * 1024) {
-				output.close();
-				output.open(path + ".part" + std::to_string(++part), std::ios::out | std::ios::trunc);
+			std::string line = record.dump() + '\n';
+			if (line.size() > partLimit) throw std::runtime_error("event record larger than a part");
+			Item item;
+			if (partBytes > 0 && partBytes + line.size() > partLimit) {
+				closedParts.emplace_back(part, partBytes);
+				++part;
 				partBytes = 0;
 			}
-			output << line;
-			if (!output) throw std::runtime_error("event record write failed");
-			bytes += line.size(); partBytes += line.size();
+			// At the budget the oldest parts are retired, so recording goes on with the newest records kept.
+			if (retainedBytes + line.size() > limit && !closedParts.empty()) {
+				json rotation = context;
+				rotation["type"] = "record_rotation";
+				rotation["retired_parts"] = json::array();
+				while (retainedBytes + line.size() + 1024 > limit && !closedParts.empty()) {
+					rotation["retired_parts"].push_back(std::filesystem::path(PartPath(closedParts.front().first)).filename().string());
+					item.retire.push_back(PartPath(closedParts.front().first));
+					retainedBytes -= closedParts.front().second;
+					retiredBytes += closedParts.front().second;
+					++retiredParts;
+					closedParts.pop_front();
+				}
+				rotation["retired_parts_total"] = retiredParts;
+				rotation["retired_bytes_total"] = retiredBytes;
+				rotation["byte_budget"] = limit;
+				rotation["sequence"] = sequence;
+				record["sequence"] = ++sequence;
+				line = rotation.dump() + '\n' + record.dump() + '\n';
+			}
+			item.text = std::move(line);
+			item.part = part;
+			bytes += item.text.size();
+			partBytes += item.text.size();
+			retainedBytes += item.text.size();
+			{
+				std::lock_guard<std::mutex> lock(queueMutex);
+				queue.push_back(std::move(item));
+			}
+			wake.notify_one();
+		}
+
+		void Flush() {
+			std::unique_lock<std::mutex> lock(queueMutex);
+			const uint64_t target = queued + queue.size();
+			wake.notify_one();
+			drained.wait(lock, [&] { return written >= target || !thread.joinable(); });
+		}
+
+		void Close() {
+			if (!thread.joinable()) return;
+			{
+				std::lock_guard<std::mutex> lock(queueMutex);
+				stopping = true;
+			}
+			wake.notify_one();
+			thread.join();
+			output.close();
+		}
+
+	private:
+		void Run() {
+			std::unique_lock<std::mutex> lock(queueMutex);
+			while (true) {
+				wake.wait(lock, [this] { return stopping || !queue.empty(); });
+				std::deque<Item> batch;
+				batch.swap(queue);
+				queued += batch.size();
+				const bool stop = stopping;
+				lock.unlock();
+				for (const Item& item: batch) {
+					if (item.part != openPart) {
+						output.close();
+						output.open(PartPath(item.part), std::ios::out | std::ios::trunc);
+						openPart = item.part;
+					}
+					for (const std::string& old: item.retire) {
+						std::error_code ignored;
+						std::filesystem::remove(old, ignored);
+					}
+					output << item.text;
+					if (!output) failed.store(true);
+				}
+				output.flush();
+				if (!output) failed.store(true);
+				lock.lock();
+				written += batch.size();
+				drained.notify_all();
+				if (stop && queue.empty()) return;
+			}
 		}
 	};
 
 	bool MetricsCollector::OpenEvents(const std::string& path, size_t byteLimit) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_EventStream = std::make_unique<EventStream>();
-		m_EventStream->output.open(path, std::ios::out | std::ios::trunc);
-		m_EventStream->path = path;
-		m_EventStream->limit = byteLimit;
-		m_EventsEnabled.store(m_EventStream->output.good());
+		m_EventsEnabled.store(m_EventStream->Open(path, byteLimit));
 		return m_EventsEnabled.load();
 	}
 
 	void MetricsCollector::BeginEventTick(const json& context, bool prediction) {
 		if (!EventsEnabled()) return;
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (!m_EventStream->pending.empty()) ++m_EventStream->overflow;
+		if (!m_EventStream->pending.empty() || !m_EventStream->tally.empty()) ++m_EventStream->overflow;
 		m_EventStream->pending.clear();
+		m_EventStream->tally.clear();
 		m_EventStream->context = context;
 		m_EventStream->active = !prediction;
 	}
 
 	void MetricsCollector::RecordEvent(const std::string& event, const MovableObject* object, const std::string& result, double amount, long other, int seat) {
 		if (!EventsEnabled()) return;
+		if (!object) {
+			// Terrain removal reports one pixel at a time: the tick's record carries their sum.
+			if (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative()) return;
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_EventStream->active) return;
+			auto& [total, calls] = m_EventStream->tally[{event, result, other, seat}];
+			total += amount;
+			++calls;
+			return;
+		}
 		AppendEvent({{"event", event}, {"result", result}, {"amount", amount}, {"seat", seat}, {"other", other},
 		    {"actor", object ? object->GetRootParent()->GetUniqueID() : 0}, {"object", object ? object->GetUniqueID() : 0},
 		    {"team", object ? object->GetTeam() : -1}, {"preset", object ? object->GetPresetName() : ""},
@@ -156,23 +280,28 @@ namespace RTE {
 				event["type"] = "coverage";
 				m_EventStream->Write(std::move(event));
 			}
+			for (const auto& [key, sum]: m_EventStream->tally) {
+				const auto& [event, result, other, seat] = key;
+				m_EventStream->Write({{"type", "coverage"}, {"event", event}, {"result", result}, {"amount", sum.first}, {"seat", seat},
+				    {"other", other}, {"actor", 0}, {"object", 0}, {"team", -1}, {"preset", ""}, {"class", ""}, {"merged_calls", sum.second}});
+			}
 			if (m_EventStream->overflow) {
 				m_EventStream->Write({{"type", "record_loss"}, {"count", m_EventStream->overflow}});
 				m_EventStream->overflow = 0;
 			}
-			m_EventStream->output.flush();
 		} catch (const std::exception& error) {
 			System::PrintDiagnosticLine("[cross-record] FAIL " + std::string(error.what()));
 			m_EventsEnabled.store(false);
 		}
 		m_EventStream->pending.clear();
+		m_EventStream->tally.clear();
 		m_EventStream->active = false;
 	}
 
 	void MetricsCollector::WriteObservation(const json& observation) {
 		if (!EventsEnabled()) return;
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		try { m_EventStream->Write(observation); m_EventStream->output.flush(); }
+		try { m_EventStream->Write(observation); }
 		catch (const std::exception& error) {
 			System::PrintDiagnosticLine("[cross-record] FAIL " + std::string(error.what()));
 			m_EventsEnabled.store(false);
@@ -238,7 +367,7 @@ namespace RTE {
 	void MetricsCollector::CloseEvents() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_EventsEnabled.store(false);
-		if (m_EventStream) m_EventStream->output.close();
+		if (m_EventStream) m_EventStream->Close();
 	}
 
 	size_t MetricsCollector::EventBytes() const {
@@ -258,6 +387,48 @@ namespace RTE {
 		const long long compute = totalUs - waitUs - captureOnly;
 		return {{"type", "tick_timing"}, {"total_us", totalUs}, {"wait_us", waitUs}, {"capture_us", captureOnly}, {"compute_us", compute},
 		    {"partition_valid", totalUs >= 0 && waitUs >= 0 && captureWaitUs >= 0 && captureWaitUs <= waitUs && captureOnly >= 0 && compute >= 0}};
+	}
+
+	bool MetricsCollector::RunEventRotationSelfTest(const std::string& directory, std::string* error) {
+		std::filesystem::remove_all(directory);
+		std::filesystem::create_directories(directory);
+		const auto path = (std::filesystem::path(directory) / "events.jsonl").string();
+		constexpr size_t budget = 16 * 1024;
+		constexpr int records = 600;
+		size_t written = 0;
+		{
+			EventStream stream;
+			if (!stream.Open(path, budget)) { *error = "event stream open"; return false; }
+			stream.context = {{"tick", 0}};
+			try {
+				for (int i = 0; i < records; ++i) {
+					stream.context["tick"] = i;
+					stream.Write({{"type", "coverage"}, {"index", i}, {"padding", std::string(96, 'x')}});
+					++written;
+				}
+			} catch (const std::exception& failure) { *error = std::string("recording stopped at the budget: ") + failure.what(); return false; }
+			stream.Close();
+		}
+		size_t retained = 0, rotations = 0;
+		int last = -1;
+		for (const auto& file: std::filesystem::directory_iterator(directory)) {
+			retained += static_cast<size_t>(file.file_size());
+			std::ifstream input(file.path());
+			for (std::string line; std::getline(input, line);) {
+				const auto row = json::parse(line, nullptr, false);
+				if (row.is_discarded()) { *error = "unreadable retained record"; return false; }
+				if (row.value("type", "") == "record_rotation") ++rotations;
+				else last = std::max(last, row.value("index", -1));
+			}
+		}
+		const bool oldestRetired = !std::filesystem::exists(path);
+		const bool pass = written == records && last == records - 1 && retained <= budget && rotations > 0 && oldestRetired;
+		System::PrintDiagnosticLine(std::string("[net-match-selftest] ") + (pass ? "PASS" : "FAIL") + " event_budget_rotates_parts written=" + std::to_string(written) +
+		    " last_retained=" + std::to_string(last) + " retained_bytes=" + std::to_string(retained) + " budget=" + std::to_string(budget) +
+		    " rotations=" + std::to_string(rotations) + " oldest_retired=" + std::to_string(oldestRetired));
+		if (!pass) *error = "the event budget did not rotate its parts";
+		std::filesystem::remove_all(directory);
+		return pass;
 	}
 
 	MetricsCollector::MetricsCollector() = default;
