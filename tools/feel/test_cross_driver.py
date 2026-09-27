@@ -33,8 +33,25 @@ class CrossDriverTests(unittest.TestCase):
             self.assertEqual(next(b for b in rerun['boxes'] if b['name']=='Mac')['peers_per_box'],2)
             self.assertEqual(next(b for b in rerun['boxes'] if b['kind']=='windows-local')['guard_file'],'D:/mx/BOX-FREE-FOR-CROSS')
 
+    def test_the_lane_root_is_an_argument_with_no_default(self):
+        manifest=(cross_peers.HERE/'cross_peers/boxes.json').read_text()
+        self.assertNotIn('astra-cross-peers-build',manifest)
+        self.assertNotIn('astra-cross-peers-build',(cross_peers.HERE/'mac/cross_build.zsh').read_text())
+        with patch.dict(cross_peers.os.environ,{},clear=False):
+            cross_peers.os.environ.pop(cross_peers.LANE_ENV,None)
+            with self.assertRaises(SystemExit): cross_peers.parse_args(['--dry-run'])
+        plan=self.plan()
+        self.assertEqual(plan['lane'],'test-lane')
+        for box in plan['boxes']:
+            self.assertTrue(box['scratch'].endswith('/test-lane'),box['scratch'])
+        self.assertTrue(all('/test-lane/' in spec['root']+'/' for spec in plan['specs']))
+        self.assertEqual(cross_peers.SCRATCH,cross_peers.Path('D:/mx/test-lane'))
+        with patch.dict(cross_peers.os.environ,{cross_peers.LANE_ENV:'env-lane'}):
+            self.assertEqual(cross_peers.parse_args(['--dry-run']).lane,'env-lane')
+        self.plan()
+
     def plan(self):
-        return cross_peers.make_plan(cross_peers.parse_args(['--dry-run']))
+        return cross_peers.make_plan(cross_peers.parse_args(['--lane','test-lane','--dry-run']))
 
     def test_declared_peer_count_matches_private_instances_on_a_box(self):
         manifest=json.loads((cross_peers.HERE/'cross_peers/boxes.json').read_text())
@@ -42,7 +59,7 @@ class CrossDriverTests(unittest.TestCase):
         next(b for b in manifest['boxes'] if b['name']=='Mac')['peers_per_box']=2
         with tempfile.TemporaryDirectory() as temporary:
             path=Path(temporary)/'boxes.json'; path.write_text(json.dumps(manifest))
-            plan=cross_peers.make_plan(cross_peers.parse_args(['--boxes',str(path),'--dry-run']))
+            plan=cross_peers.make_plan(cross_peers.parse_args(['--lane','test-lane','--boxes',str(path),'--dry-run']))
             peers=[s for s in plan['specs'] if s['box']=='Mac']
             self.assertEqual(len({s['own'] for s in peers}),2)
             self.assertEqual(len({s['participant_key_root'] for s in peers}),2)
@@ -291,7 +308,7 @@ class CrossDriverTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'share a port'): cross_peers.load_boxes(path)
 
     def test_chaos_seed_reproduces_choices(self):
-        args = ['--scenario','chaos','--ticks','36000','--chaos-seed','71']
+        args = ['--lane','test-lane','--scenario','chaos','--ticks','36000','--chaos-seed','71']
         first = cross_peers.make_plan(cross_peers.parse_args(args))
         second = cross_peers.make_plan(cross_peers.parse_args(args))
         self.assertEqual(first['faults'], second['faults'])
@@ -300,7 +317,7 @@ class CrossDriverTests(unittest.TestCase):
     def test_first_soak_cannot_accidentally_remove_its_host(self):
         for host in ('edith','mac'):
             with self.assertRaisesRegex(ValueError,'host removal'):
-                cross_peers.make_plan(cross_peers.parse_args(['--scenario','soak','--host',host]))
+                cross_peers.make_plan(cross_peers.parse_args(['--lane','test-lane','--scenario','soak','--host',host]))
 
     def test_new_round_hash_does_not_prove_changed_settings(self):
         rows=[dict(config_hash='first',difficulty=50,fog=False),dict(config_hash='next',difficulty=50,fog=False)]
@@ -309,7 +326,7 @@ class CrossDriverTests(unittest.TestCase):
         self.assertTrue(cross_report.changed_settings(rows))
 
     def test_faults_follow_the_declared_restart_incarnation(self):
-        plan=cross_peers.make_plan(cross_peers.parse_args(['--scenario','soak']))
+        plan=cross_peers.make_plan(cross_peers.parse_args(['--lane','test-lane','--scenario','soak']))
         mac=[row for row in plan['faults'] if row['peer']=='mac']
         self.assertEqual([row['incarnation'] for row in mac],[0,1,1])
         spec=next(s for s in plan['specs'] if s['peer']=='mac')

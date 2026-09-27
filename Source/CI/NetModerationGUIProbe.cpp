@@ -127,6 +127,15 @@ namespace {
 		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - probe.started).count());
 	}
 
+	// The wait for a script's activation tick or phase has its own deadline, counted from the load or the round's reset.
+	constexpr uint64_t c_DefaultActivationTimeoutMs = 600000;
+	bool ActivationPending(const Json& script, bool pending, uint64_t waitedMs) {
+		if (!pending) return false;
+		const uint64_t deadline = script.value("activation_timeout_ms", c_DefaultActivationTimeoutMs);
+		Require(waitedMs <= deadline, "script deadline waiting " + std::to_string(waitedMs) + " ms for activation");
+		return true;
+	}
+
 	std::filesystem::path Leaf(const std::string& name) {
 		Require(!name.empty() && name.size() <= 100 && std::all_of(name.begin(), name.end(), [](unsigned char c) {
 			return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
@@ -281,6 +290,8 @@ namespace {
 		Require(!probe.script["steps"].empty() && probe.script["steps"].size() <= 256, "invalid script length");
 		const auto timeout = probe.script.at("timeout_ms").get<uint64_t>();
 		Require(timeout > 0 && timeout <= 180000, "invalid script deadline");
+		const auto activation = probe.script.value("activation_timeout_ms", c_DefaultActivationTimeoutMs);
+		Require(activation > 0 && activation <= c_DefaultActivationTimeoutMs, "invalid activation deadline");
 		for (const auto& step: probe.script["steps"]) {
 			const std::string op = step.value("op", "");
 			if (op != "key_down" && op != "key_up") continue;
@@ -824,8 +835,9 @@ namespace {
 			}
 			if (probe.done) return;
 			if (!probe.phaseArmed) {
-				if (probe.script.contains("activate_at_tick") && g_TimerMan.GetSimUpdateCount() < probe.script["activate_at_tick"].get<uint64_t>()) return;
-				if (probe.script.contains("activate_phase") && g_NetMatchService.GetLobbySnapshot().serviceState != probe.script["activate_phase"].get<std::string>()) return;
+				const bool tickPending = probe.script.contains("activate_at_tick") && g_TimerMan.GetSimUpdateCount() < probe.script["activate_at_tick"].get<uint64_t>();
+				const bool phasePending = !tickPending && probe.script.contains("activate_phase") && g_NetMatchService.GetLobbySnapshot().serviceState != probe.script["activate_phase"].get<std::string>();
+				if (ActivationPending(probe.script, tickPending || phasePending, NowMs())) return;
 				probe.phaseArmed = true; probe.started = Clock::now();
 			}
 			if (phase == Phase::Draw) ++probe.renders;
@@ -876,6 +888,15 @@ bool RunCrossScopeSelfTest(std::string* error) {
 		passed &= good;
 		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(good ? "PASS " : "FAIL ") + name + "_is_scheduled_after_draw");
 	}
+	const auto expired = [](const Json& script, uint64_t waitedMs) {
+		try { ActivationPending(script, true, waitedMs); } catch (const std::exception&) { return true; }
+		return false;
+	};
+	const bool bounded = !expired({{"activation_timeout_ms", 100}}, 100) && expired({{"activation_timeout_ms", 100}}, 101) &&
+	    !expired(Json::object(), c_DefaultActivationTimeoutMs) && expired(Json::object(), c_DefaultActivationTimeoutMs + 1) &&
+	    !ActivationPending({{"activation_timeout_ms", 1}}, false, UINT64_MAX);
+	passed &= bounded;
+	System::PrintDiagnosticLine("[net-match-selftest] " + std::string(bounded ? "PASS" : "FAIL") + " probe_activation_wait_has_a_deadline");
 	Json observed;
 	const bool alreadyConstructed = NetMatchService::IsConstructed();
 	if (!alreadyConstructed) NetMatchService::Construct();
@@ -885,7 +906,7 @@ bool RunCrossScopeSelfTest(std::string* error) {
 	if (!alreadyConstructed) NetMatchService::Destruct();
 	if (rejection == "participant selection is absent") {
 		System::PrintDiagnosticLine("[net-match-selftest] PASS participant_probe_refuses_an_absent_selection");
-		if (!passed) *error = "one or more gameplay scopes were not scheduled after drawing";
+		if (!passed) *error = bounded ? "one or more gameplay scopes were not scheduled after drawing" : "the probe's activation wait has no deadline";
 		return passed;
 	}
 	System::PrintDiagnosticLine("[net-match-selftest] FAIL participant_probe_refuses_an_absent_selection");

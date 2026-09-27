@@ -9,26 +9,26 @@
       "tree": "D:/Projects/alias-walk", "executable": "D:/Projects/alias-walk/Cortex Command.exe",
       "runner": "tools/win32_test_runner.py via run_sim_test.make_run",
       "ports": [49900, 49919], "directory_port": 49918,
-      "sampler": "engine-process-handle", "scratch": "D:/mx/astra-cross-peers-build-20260926",
+      "sampler": "engine-process-handle", "scratch": "D:/mx/{lane}",
       "python": "python"
     },
     {
       "name": "EDITH", "kind": "windows-task", "ssh": "edith",
       "peers_per_box": 1,
-      "tree": "D:/mx/astra-cross-peers-build-20260926/engine", "executable": "D:/mx/astra-cross-peers-build-20260926/engine/Cortex Command.exe",
+      "tree": "D:/mx/{lane}/engine", "executable": "D:/mx/{lane}/engine/Cortex Command.exe",
       "runner": "cortex-session1", "task_script": "D:/mx/session1/run.ps1",
       "ports": [49900, 49919], "directory_port": 49985,
-      "sampler": "engine-process-handle", "scratch": "D:/mx/astra-cross-peers-build-20260926",
+      "sampler": "engine-process-handle", "scratch": "D:/mx/{lane}",
       "python": "python"
     },
     {
       "name": "Mac", "kind": "posix-ssh", "ssh": "Erol-Mac",
       "peers_per_box": 1,
-      "tree": "/Users/erol/cortex-workers/astra-cross-peers-build-20260926/repo",
-      "executable": "/Users/erol/cortex-workers/astra-cross-peers-build-20260926/repo/build-gcc/CortexCommand",
+      "tree": "/Users/erol/cortex-workers/{lane}/repo",
+      "executable": "/Users/erol/cortex-workers/{lane}/repo/build-gcc/CortexCommand",
       "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
       "ports": [49900, 49919], "directory_port": 49918,
-      "sampler": "engine-pid-ps", "scratch": "/Users/erol/cortex-workers/astra-cross-peers-build-20260926",
+      "sampler": "engine-pid-ps", "scratch": "/Users/erol/cortex-workers/{lane}",
       "python": "/opt/homebrew/bin/python3",
       "guard_file": "/Users/erol/cortex-workers/inventory-confirming-6-20260926/exit.txt"
     }

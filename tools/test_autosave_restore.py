@@ -51,7 +51,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from compare_sim_traces import compare_fullstate, load_fullstate
+from compare_sim_traces import FULLSTATE, compare_fullstate, load_fullstate
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, read_live_hashes, split_passes
 from run_sim_test import make_run, engine_executable, file_sha256
 from feel_measure import stage_baseline
@@ -91,6 +91,17 @@ SEAT_ADMITTED = re.compile(r"^\[net-match\] private catch-up complete frame=(\d+
 SEAT_BACK = re.compile(r"^\[net-match\] seat-reclaimed peer=\d+ frame=(\d+)", re.MULTILINE)
 # How long a kill waits on a held seat's return before it ends the phase anyway, so a seat that never returns still fails the oracle.
 WORLD_KILL_RETURN_WAIT_POLLS = 300
+
+
+def _arrival_unsampled(host_log: str, client_log: str) -> bool:
+    """A seat held or admitted after the peers' last shared full-state sample: ending the phase now fails the round's oracle
+    (unsampled_admissions), so the kill waits for the next sample both peers take."""
+    arrivals = [int(frame) for frame in SEAT_HELD.findall(host_log)] + [int(frame) for frame in SEAT_ADMITTED.findall(client_log)]
+    if not arrivals:
+        return False
+    host = {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(host_log)}
+    shared = [tick for _, tick in host & {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(client_log)}]
+    return not shared or max(shared) < max(arrivals)
 
 
 def _seat_mid_return(host_log: str) -> bool:
@@ -756,7 +767,7 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
         threads[1].start()
         if kill_past:
             waiter = threading.Event()
-            waited_on_return = 0
+            waited_on_return = waited_on_sample = 0
             for _ in range(4200):
                 waiter.wait(0.1)
                 host_log, client_log = peer_log(root, "host"), peer_log(root, "client")
@@ -773,8 +784,14 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
                 if ready and _seat_mid_return(host_log) and waited_on_return < WORLD_KILL_RETURN_WAIT_POLLS:
                     waited_on_return += 1
                     ready = False
+                # And for the first sample both peers share after it, bounded the same way.
+                if (ready and FULLSTATE_EVERY and _arrival_unsampled(host_log, client_log)
+                        and waited_on_sample < WORLD_KILL_RETURN_WAIT_POLLS):
+                    waited_on_sample += 1
+                    ready = False
                 if ready:
                     records["_kill_waited_on_return_s"] = waited_on_return / 10
+                    records["_kill_waited_on_sample_s"] = waited_on_sample / 10
                     runs["host"].terminate(code=137, reason="world host process killed")
                     killed = True
                     records["_kill_capture_tick"] = max(captures)
@@ -1073,6 +1090,23 @@ class WorldRestartOracleTests(unittest.TestCase):
         self.assertFalse(_seat_mid_return(self.HOST_START))
         self.assertTrue(_seat_mid_return(self.HOST_START + held))
         self.assertFalse(_seat_mid_return(self.HOST_START + held + "[net-match] seat-reclaimed peer=2 frame=300 live_actors=2\n"))
+
+    def test_a_returned_seat_waits_for_the_next_shared_sample(self):
+        def sample(tick: int) -> str:
+            return f"[fullstate] tick={tick} hash=ef9b7943247e96ec sections=header:258ea10e07185ecb round=17914344590415242276\n"
+        held = "[net-match] hold peer=2 frame=44 AI in control\n"
+        back = "[net-match] seat-reclaimed peer=2 frame=385 live_actors=1\n"
+        host = self.HOST_START + sample(9) + held + "".join(sample(t) for t in range(60, 361, 60)) + back
+        client = self.CLIENT_START + sample(9) + back
+        self.assertFalse(_arrival_unsampled(self.HOST_START + sample(9), self.CLIENT_START + sample(9)))
+        # Mac stream 7, restore-all-3 boot1: back at 385, killed before the next shared sample.
+        self.assertFalse(_seat_mid_return(host))
+        self.assertTrue(_arrival_unsampled(host, client))
+        self.assertTrue(_arrival_unsampled(host + sample(420), client))
+        self.assertFalse(_arrival_unsampled(host + sample(420), client + sample(420)))
+        admitted = "[net-match] private catch-up complete frame=430\n"
+        self.assertTrue(_arrival_unsampled(host + sample(420), client + sample(420) + admitted))
+        self.assertFalse(_arrival_unsampled(host + sample(480), client + sample(420) + admitted + sample(480)))
 
     def test_lobby_join_with_published_offers_can_be_killed(self):
         host = self.HOST_START + self.HOST_LOBBY + self.CAPTURES
