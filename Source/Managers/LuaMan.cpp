@@ -11,6 +11,7 @@
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
+#include "AtomGroup.h"
 #include "ContentFile.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
@@ -8944,6 +8945,24 @@ end
 		g_UInputMan.LoadCommittedSeats(before);
 		std::cout << "[script-graph-selftest] " << (carried ? "PASS" : "FAIL") << " committed_seats_travel_in_the_runtime_globals restored=" << restored << " carried=" << carried << std::endl;
 		checkpointValues = carried && checkpointValues;
+	}
+	checkpointValues = ScenarioRunner::RunCommittedSeatHandoffSelfTest() && checkpointValues;
+	{
+		// A group's atoms are its own copies; removing a subgroup or every atom frees them, as each clone of a walking actor does.
+		const int64_t before = Atom::LiveCount();
+		{
+			AtomGroup group;
+			std::vector<Atom*> feet{new Atom(), new Atom()};
+			group.AddAtoms(feet, 7);
+			group.RemoveAtoms(7);
+			group.AddAtoms(feet, 8);
+			group.RemoveAllAtoms();
+			group.AddAtoms(feet, 9);
+			for (Atom* atom: feet) delete atom;
+		}
+		const int64_t after = Atom::LiveCount();
+		std::cout << "[script-graph-selftest] " << (after == before ? "PASS" : "FAIL") << " removed_atoms_are_freed live_before=" << before << " live_after=" << after << std::endl;
+		checkpointValues = after == before && checkpointValues;
 	}
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
 	checkpointValues = System::RunPrintDisciplineSelfTest() && checkpointValues;

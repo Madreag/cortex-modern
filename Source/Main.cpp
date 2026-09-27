@@ -73,6 +73,7 @@
 #include "ThreadMan.h"
 #include "LuaMan.h"
 #include "MusicMan.h"
+#include "Atom.h"
 #include "AudioMan.h"
 #include "SoundContainer.h"
 #include "SoundSimulation.h"
@@ -197,6 +198,8 @@ using namespace RTE;
 static bool s_recordTickHashes = false;
 static std::string s_netLiveTickHashPath;
 static uint64_t s_memoryCensusTicks = 0; //!< Every this many ticks one line names what each record holds; 0 = never.
+static bool s_memoryCensusHistogram = false; //!< The census also walks the process heap and names the block sizes holding the most.
+static size_t s_memoryCensusProbeSize = 0; //!< Blocks of this size have their first bytes printed, so a leaked object can be named.
 
 // Private bytes, and what the process heaps hold allocated and committed, for the memory census.
 static std::string ProcessHeapCensus() {
@@ -225,7 +228,45 @@ static std::string ProcessHeapCensus() {
 		}
 		CloseHandle(snapshot);
 	}
-	return std::format(" private_mb={} heaps={} heap_allocated_mb={} heap_committed_mb={} threads={} handles={}", counters.PrivateUsage >> 20, count, allocated >> 20, committed >> 20, threads, handles);
+	std::string histogram;
+	if (s_memoryCensusHistogram) {
+		// Busy blocks by exact size below 64 KB, larger ones by power of two; the walk allocates nothing while the heap is locked.
+		static std::vector<uint64_t> small(65536), large(64);
+		std::fill(small.begin(), small.end(), 0);
+		std::fill(large.begin(), large.end(), 0);
+		HANDLE heap = GetProcessHeap();
+		PROCESS_HEAP_ENTRY walk{};
+		std::array<std::array<uint8_t, 64>, 4> probes{};
+		size_t probed = 0;
+		HeapLock(heap);
+		while (HeapWalk(heap, &walk)) {
+			if (!(walk.wFlags & PROCESS_HEAP_ENTRY_BUSY)) continue;
+			if (walk.cbData < small.size()) ++small[walk.cbData]; else ++large[std::bit_width(static_cast<uint64_t>(walk.cbData))];
+			if (s_memoryCensusProbeSize != 0 && walk.cbData == s_memoryCensusProbeSize && walk.cbData >= 64 && small[walk.cbData] % 997 == 1) {
+				std::memcpy(probes[probed % probes.size()].data(), walk.lpData, 64);
+				++probed;
+			}
+		}
+		HeapUnlock(heap);
+		const uintptr_t imageBase = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+		for (size_t index = 0; index < std::min(probed, probes.size()); ++index) {
+			std::string text = " probe" + std::to_string(index) + "=";
+			for (size_t word = 0; word < 64; word += 8) {
+				uint64_t value = 0;
+				std::memcpy(&value, probes[index].data() + word, 8);
+				text += value >= imageBase && value < imageBase + 0x3000000 ? std::format("exe+0x{:X}|", value - imageBase) : std::format("{:X}|", value);
+			}
+			for (uint8_t byte: probes[index]) text += byte >= 0x21 && byte < 0x7F ? static_cast<char>(byte) : '.';
+			histogram += text;
+		}
+		std::vector<std::pair<uint64_t, std::string>> top;
+		for (size_t size = 0; size < small.size(); ++size) if (small[size]) top.emplace_back(small[size] * size, std::to_string(size) + ":" + std::to_string(small[size]));
+		for (size_t bit = 0; bit < large.size(); ++bit) if (large[bit]) top.emplace_back(large[bit] << bit, "2^" + std::to_string(bit) + ":" + std::to_string(large[bit]));
+		std::partial_sort(top.begin(), top.begin() + std::min<size_t>(top.size(), 12), top.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+		histogram += " heap_top=";
+		for (size_t index = 0; index < std::min<size_t>(top.size(), 12); ++index) histogram += (index ? "," : "") + top[index].second;
+	}
+	return std::format(" private_mb={} heaps={} heap_allocated_mb={} heap_committed_mb={} threads={} handles={}{}", counters.PrivateUsage >> 20, count, allocated >> 20, committed >> 20, threads, handles, histogram);
 #else
 	return {};
 #endif
@@ -918,6 +959,23 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_recordTickHashes = true;
 			// Deterministic runs drain async path solves each frame so they can't race the node-cost rewrite.
 			g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
+		}
+		if (currentArg == "-memory-census-probe-size") {
+			if (lastArg) return false;
+			s_memoryCensusProbeSize = std::strtoull(argValue[i + 1], nullptr, 10);
+			s_memoryCensusHistogram = true;
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-memory-census-atom-stacks") {
+			Atom::SampleConstructionStacks(2000);
+			++i;
+			continue;
+		}
+		if (currentArg == "-memory-census-histogram") {
+			s_memoryCensusHistogram = true;
+			++i;
+			continue;
 		}
 		if (currentArg == "-memory-census-ticks") {
 			if (lastArg) return false;
@@ -6126,7 +6184,7 @@ void RunGameLoop() {
 				std::ostringstream line;
 				line << "[mem-census] tick=" << simTick << ProcessHeapCensus() << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << g_LuaMan.GetTotalHeapBytes()
 				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << CheckpointCow::Get().Cache().Census()
-				     << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus();
+				     << " movable: " << g_MovableMan.Census() << ' ' << Atom::SampledConstructionStacks() << " audio: " << g_AudioMan.Census() << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus();
 				System::PrintDiagnosticLine(line.str());
 			}
 			if (s_scriptedLeaveDue) {

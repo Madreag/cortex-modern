@@ -95,6 +95,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fullstate-every", type=int, default=0)
     parser.add_argument("--sample-seconds", type=float, default=60)
     parser.add_argument("--mute-input", default="", help="FRAME:COUNT - the client sends none of its own input for those frames while it keeps simulating them")
+    parser.add_argument("--census-histogram", action="store_true", help="the census also walks the heap by block size (seconds per line)")
+    parser.add_argument("--census-probe-size", type=int, default=0, help="print the first bytes of heap blocks of this size")
+    parser.add_argument("--census-atom-stacks", action="store_true", help="the census samples where Atoms are constructed")
     parser.add_argument("--census-ticks", type=int, default=3600, help="ticks between the engine's memory census lines; 0 = none")
     options = parser.parse_args(argv)
     low, _, high = options.port_block.partition("-")
@@ -146,6 +149,12 @@ def main(argv: list[str] | None = None) -> int:
                 flags += ["-net-fullstate-hash-every", str(options.fullstate_every)]
             if options.census_ticks:
                 flags += ["-memory-census-ticks", str(options.census_ticks)]
+            if options.census_histogram:
+                flags += ["-memory-census-histogram"]
+            if options.census_atom_stacks:
+                flags += ["-memory-census-atom-stacks"]
+            if options.census_probe_size:
+                flags += ["-memory-census-probe-size", str(options.census_probe_size)]
             if peer == "host":
                 flags += ["-net-host", "-net-autosave-seconds", str(options.autosave_seconds)]
             else:

@@ -82,6 +82,9 @@ namespace RTE {
 		/// A voice a preview started and nothing has adopted; it is on this machine only.
 		bool IsPredictedVoice(int identity) const;
 		bool RunLogicalPlaybackSelfTest();
+
+		/// The voices and audibility records the manager keeps and their counts, for the memory census.
+		std::string Census() const;
 		/// This peer's actual audibility of every live shared sound it answers for, sampled at the input boundary; only changed readings ride.
 		std::vector<NetSoundObservation> SampleSoundObservations();
 		/// Forgets that these readings were sent, so the next sample offers them again. The wire drops a

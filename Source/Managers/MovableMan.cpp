@@ -2195,6 +2195,13 @@ void MovableMan::WorldSnapshotRing::Reset(uint16_t windowTicks) {
 	m_LastCaptureUs = 0;
 }
 
+std::string MovableMan::Census() const {
+	return "known=" + std::to_string(m_KnownObjects.size()) + " known_addresses=" + std::to_string(m_KnownAddresses.size()) + " items=" + std::to_string(m_Items.size()) +
+	       " valid=" + std::to_string(m_ValidActors.size() + m_ValidItems.size() + m_ValidParticles.size()) + " render_hidden=" + std::to_string(m_RenderHidden.size()) +
+	       " render_substitutes=" + std::to_string(m_RenderSubstitutes.size()) + " preview_ghosts=" + std::to_string(m_PreviewGhosts.size()) +
+	       " quarantine=" + std::to_string(m_LockstepJoinQuarantine.size()) + " alarms=" + std::to_string(m_AlarmEvents.size()) + " moid_index=" + std::to_string(m_MOIDIndex.size());
+}
+
 bool MovableMan::WorldSnapshotRing::CaptureCommitted(uint64_t tick) {
 	if (m_Capacity == 0 || (!m_Entries.empty() &&
 	    (m_Entries.back().tick == UINT64_MAX || tick != m_Entries.back().tick + 1)) ||
