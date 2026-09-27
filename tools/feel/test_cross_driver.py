@@ -12,6 +12,12 @@ import cross_report
 
 
 class CrossDriverTests(unittest.TestCase):
+    def test_failed_payload_cannot_leave_a_two_peer_run_going(self):
+        cross_peers.require_payload_success(dict(name='EDITH'),dict(exit_code=0))
+        for outcome in ({},{'exit_code':1},{'exit_code':137}):
+            with self.assertRaisesRegex(RuntimeError,'stop the other peers'):
+                cross_peers.require_payload_success(dict(name='EDITH'),outcome)
+
     def test_rerun_keeps_deadlines_faults_barriers_and_instance_counts(self):
         plan=self.plan(); plan['deadlines'].update(launch_s=1234,recovery_ms=5678,capture_ms=912)
         plan['faults']=[dict(id='custom',tick=99,peer='mac',action='loss',percent=5)]
