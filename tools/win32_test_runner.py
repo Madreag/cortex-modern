@@ -13,6 +13,8 @@ What a launch gets:
     file written and deleted), the out dir is private (not under the game's Data) and writable;
   - a private desktop that is never switched to, CCCP_HEADLESS=1, stdin from NUL, stdout+stderr to
     <out>/stdout.log, a job object with kill-on-close so descendants die with the run or the runner;
+  - the job's limits from box_runner_limits: a commit limit per engine and, where the box names one, a CPU mask
+    (CC_RUNNER_JOB_MEMORY_GB / CC_RUNNER_AFFINITY_MASK, else the box manifest's runner entry, else the defaults);
   - a deadline: on timeout the whole job is terminated and the exit code reads 124;
   - <out>/launch.json with argv verbatim, env keys set, desktop names before/after, pid, exit code,
     elapsed, timed_out, stdout size, engine verdict lines, and the expected-vs-present evidence list.
