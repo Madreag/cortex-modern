@@ -133,6 +133,10 @@ namespace RTE {
 		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands = false);
 		/// The period of the captures every peer takes at a tick's end, handed to the round so its host is busy there, not gone.
 		static void SetLockstepAnnouncedCaptureEvery(uint32_t every);
+		/// Whether installing coordinators with other round ids keeps the seats' committed input; for the script-graph self-test.
+		static bool RunCommittedSeatHandoffSelfTest();
+		/// The runner's and the round's records and their entry counts, one line for the memory census.
+		static std::string MemoryCensus();
 		static void ObserveLockstepPlayerBindings(uint8_t peer, uint64_t frame, const NetGamePlayerBindings& bindings);
 		static bool ConsumeLockstepGameCommand(const NetGameCommand& command);
 		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();
@@ -387,7 +391,7 @@ namespace RTE {
 		/// Erases a dropped claim whose claimant is gone and whose seat is no longer held.
 		static bool TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame);
 		/// Whether this peer may issue team commands for the team (any of a shared team's human peers may).
-		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId);
+		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId, uint64_t atFrame = 0);
 		/// Team authority, or the sender owns the target, or writerUID names a same-team actor the sender owns.
 		static bool IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order);
 		/// Whether a peer may make an AI pass's write: it commands the team, drives the written actor, or

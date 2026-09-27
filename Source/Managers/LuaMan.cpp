@@ -11,6 +11,9 @@
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
 #include "ScenarioRunner.h"
+#include "AtomGroup.h"
+#include "PieMenu.h"
+#include "PieSlice.h"
 #include "ContentFile.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
@@ -8979,6 +8982,43 @@ end
 		std::cout << "[script-graph-selftest] " << (carried ? "PASS" : "FAIL") << " committed_seats_travel_in_the_runtime_globals restored=" << restored << " carried=" << carried << std::endl;
 		checkpointValues = carried && checkpointValues;
 	}
+	checkpointValues = ScenarioRunner::RunCommittedSeatHandoffSelfTest() && checkpointValues;
+	{
+		// A group's atoms are its own copies; removing a subgroup or every atom frees them, as each clone of a walking actor does.
+		const int64_t before = Atom::LiveCount();
+		{
+			AtomGroup group;
+			std::vector<Atom*> feet{new Atom(), new Atom()};
+			group.AddAtoms(feet, 7);
+			group.RemoveAtoms(7);
+			group.AddAtoms(feet, 8);
+			group.RemoveAllAtoms();
+			group.AddAtoms(feet, 9);
+			for (Atom* atom: feet) delete atom;
+		}
+		const int64_t after = Atom::LiveCount();
+		std::cout << "[script-graph-selftest] " << (after == before ? "PASS" : "FAIL") << " removed_atoms_are_freed live_before=" << before << " live_after=" << after << std::endl;
+		checkpointValues = after == before && checkpointValues;
+	}
+	{
+		// A slice's copied sub-PieMenu is the slice's own: destroying the copy frees it, as each clone of an actor does.
+		// The pool hands back the count of instances still out when one is returned.
+		auto* pieMenus = const_cast<Entity::ClassInfo*>(Entity::ClassInfo::GetClass("PieMenu"));
+		const auto inUse = [pieMenus] { return pieMenus ? pieMenus->ReturnPoolMemory(pieMenus->GetPoolMemory()) : 0; };
+		const auto* slicePreset = dynamic_cast<const PieSlice*>(g_PresetMan.GetEntityPreset("PieSlice", "Empty Slice"));
+		const auto* menuPreset = dynamic_cast<const PieMenu*>(g_PresetMan.GetEntityPreset("PieMenu", "Empty Pie Menu"));
+		int before = 0, after = -1;
+		if (slicePreset && menuPreset) {
+			std::unique_ptr<PieSlice> source(dynamic_cast<PieSlice*>(slicePreset->Clone()));
+			source->SetSubPieMenu(dynamic_cast<PieMenu*>(menuPreset->Clone()));
+			before = inUse();
+			for (int copy = 0; copy < 3; ++copy) delete dynamic_cast<PieSlice*>(source->Clone());
+			after = inUse();
+		}
+		const bool freed = pieMenus && after == before;
+		std::cout << "[script-graph-selftest] " << (freed ? "PASS" : "FAIL") << " a_copied_slices_sub_pie_menu_is_freed in_use_before=" << before << " in_use_after=" << after << std::endl;
+		checkpointValues = freed && checkpointValues;
+	}
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
 	checkpointValues = System::RunPrintDisciplineSelfTest() && checkpointValues;
 	checkpointValues = ContentFile::RunImageLoadSelfTest() && checkpointValues;
@@ -11909,6 +11949,19 @@ void LuaMan::WaitForAsyncGarbageCollection() {
 	m_GarbageCollectionTask.wait();
 	// The collecting threads only unlink; the destructors are ours to run, in state order.
 	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+}
+
+long long LuaMan::GetTotalHeapBytes() {
+	const auto bytes = [](LuaStateWrapper& luaState) {
+		std::lock_guard<std::recursive_mutex> lock(luaState.GetMutex());
+		lua_State* state = luaState.GetLuaState();
+		return static_cast<long long>(lua_gc(state, LUA_GCCOUNT, 0)) * 1024 + lua_gc(state, LUA_GCCOUNTB, 0);
+	};
+	long long total = bytes(m_MasterScriptState);
+	for (LuaStateWrapper& luaState: m_ScriptStates) {
+		total += bytes(luaState);
+	}
+	return total;
 }
 
 void LuaMan::CollectGarbageForCheckpoint() {

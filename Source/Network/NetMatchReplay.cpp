@@ -243,10 +243,11 @@ namespace RTE {
 		const size_t bindingCount = static_cast<size_t>(std::count_if(commands.begin(), commands.end(), [](const NetGameCommand& command) {
 			return std::holds_alternative<NetGamePlayerBindings>(command.payload);
 		}));
-		// A packet names each actor once: a second input for one actor, from another sender, rides a later packet in the order it applies.
+		// A packet names each actor once and holds one sender's bound: a second input for one actor, from another sender, or the inputs
+		// past that bound ride later packets in the order they apply.
 		std::vector<std::vector<ControllerFrame>> frameRuns(1);
 		for (const ControllerFrame& input: frames) {
-			if (!frameRuns.back().empty() && frameRuns.back().back().actorUniqueID == input.actorUniqueID) frameRuns.emplace_back();
+			if (!frameRuns.back().empty() && (frameRuns.back().back().actorUniqueID == input.actorUniqueID || frameRuns.back().size() == NetLockstepCodec::c_MaxFramesPerPacket)) frameRuns.emplace_back();
 			frameRuns.back().push_back(input);
 		}
 		if (bindingCount <= 1 && frameRuns.size() == 1) {
@@ -254,57 +255,38 @@ namespace RTE {
 				return false;
 			}
 		} else {
-			std::vector<uint8_t> senders;
-			auto note = [&senders](uint8_t sender) {
-				if (std::find(senders.begin(), senders.end(), sender) == senders.end()) {
-					senders.push_back(sender);
+			// Each packet carries a run of one sender's items, in the record's own order, so every list reads back in the order
+			// it was applied and the sender trailers below name each item where it lands.
+			std::vector<NetLockstepFrame> parts;
+			const auto partFor = [&parts, frame](uint8_t sender) -> NetLockstepFrame& {
+				if (parts.empty() || parts.back().senderPeerId != sender) {
+					parts.emplace_back();
+					parts.back().senderPeerId = sender;
+					parts.back().targetFrame = frame;
 				}
+				return parts.back();
 			};
 			for (const NetGameCommand& command : commands) {
-				note(command.senderPeerId);
+				partFor(command.senderPeerId).commands.push_back(command);
 			}
 			for (const NetSoundObservation& observation : observations) {
-				note(observation.senderPeerId);
+				partFor(observation.senderPeerId).observations.push_back(observation);
 			}
 			for (const NetValueObservation& observation : valueObservations) {
-				note(observation.senderPeerId);
+				partFor(observation.senderPeerId).valueObservations.push_back(observation);
 			}
-			if (senders.empty()) {
-				senders.push_back(1);
+			if (parts.empty()) {
+				partFor(1);
 			}
-			for (uint8_t sender : senders) {
-				NetLockstepFrame part;
-				part.senderPeerId = sender;
-				part.targetFrame = frame;
-				if (sender == senders.front()) {
-					part.frames = frameRuns.front();
-				}
-				for (const NetGameCommand& command : commands) {
-					if (command.senderPeerId == sender) {
-						part.commands.push_back(command);
-					}
-				}
-				for (const NetSoundObservation& observation : observations) {
-					if (observation.senderPeerId == sender) {
-						part.observations.push_back(observation);
-					}
-				}
-				for (const NetValueObservation& observation : valueObservations) {
-					if (observation.senderPeerId == sender) {
-						part.valueObservations.push_back(observation);
-					}
-				}
-				std::vector<uint8_t> packet;
-				if (!EncodeSenderPacket(part, packet, error)) {
-					return false;
-				}
-				wireBytes.insert(wireBytes.end(), packet.begin(), packet.end());
-			}
+			parts.front().frames = frameRuns.front();
+			const uint8_t inputSender = parts.front().senderPeerId;
 			for (size_t run = 1; run < frameRuns.size(); ++run) {
-				NetLockstepFrame part;
-				part.senderPeerId = senders.front();
+				NetLockstepFrame& part = parts.emplace_back();
+				part.senderPeerId = inputSender;
 				part.targetFrame = frame;
 				part.frames = frameRuns[run];
+			}
+			for (const NetLockstepFrame& part : parts) {
 				std::vector<uint8_t> packet;
 				if (!EncodeSenderPacket(part, packet, error)) {
 					return false;

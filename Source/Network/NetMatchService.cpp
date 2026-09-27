@@ -2290,6 +2290,11 @@ static std::string ResyncSaveName() {
 			if (!m_IsHost && m_Coordinator && m_Coordinator->GetPeerLeaveFrames().contains(m_Coordinator->GetHostPeerId())) NoteHostEndedTheMatchLocked();
 			if (heldSeatNeedsAnswer) m_KeepEndedDirectoryLease = true;
 			DrainPendingSessionEventsLocked(false);
+			// The survivors hear the end before anything here waits on a disk: the last checkpoint's archive may still be writing.
+			if (m_Coordinator) {
+				m_Coordinator->Complete(result.empty() ? "match over" : result);
+				SayGoodbyeToRejoinersLocked();
+			}
 		}
 		SealPendingWorldSegmentAtEnd();
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -2301,10 +2306,6 @@ static std::string ResyncSaveName() {
 			RetractDirectoryListing();
 		}
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (m_Coordinator) {
-			m_Coordinator->Complete(result.empty() ? "match over" : result);
-			SayGoodbyeToRejoinersLocked();
-		}
 		if (m_State == NetMatchServiceState::Running) {
 			m_State = NetMatchServiceState::Completed;
 			// The rematch lobby this end opens starts waiting for the other peers here.
@@ -5007,7 +5008,13 @@ static std::string ResyncSaveName() {
 			if (error && error->empty()) *error = "the handover names no authority this round has";
 			return false;
 		}
-		ScenarioRunner::SetLockstepCoordinator(replay.get());
+		// The replay goes on under the new authority from the state it reached: what the switch clears, it takes back.
+		NetResyncState committed;
+		if (!ScenarioRunner::CaptureNetResyncState(handover.frame - 1, committed, error, false)) return false;
+		committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+		const auto pause = ScenarioRunner::CaptureLockstepPauseState();
+		ScenarioRunner::SetLockstepCoordinator(replay.get(), true);
+		if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) return false;
 		m_CatchUpCoordinator = std::move(replay);
 		m_CatchUpTransport = std::move(transport);
 		m_WorldCatchUp.authorityPeerId = handover.authorityPeerId;
@@ -5299,6 +5306,16 @@ static std::string ResyncSaveName() {
 		// The connection handshakes ahead of E; the simulation changes producer only after E-1.
 		if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 < m_WorldCatchUp.activationTick) return;
 		if (m_Coordinator && m_Coordinator->IsRunning() && m_WorldCatchUp.privateMatch) {
+			// The switch is exact: the replay stopped on the frame before the return, and the live round starts on it.
+			if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 != m_WorldCatchUp.activationTick) {
+				ScenarioRunner::SetControllerReplayError("private catch-up replayed through " + std::to_string(m_WorldCatchUp.appliedThrough) + " past its return at " + std::to_string(m_WorldCatchUp.activationTick));
+				return;
+			}
+			if (const uint64_t liveStart = m_Coordinator->GetConfig().startFrame; m_WorldCatchUp.activationTick != 0 && liveStart != m_WorldCatchUp.activationTick) {
+				System::PrintDiagnosticLine("[net-match] held client: the live round starts at " + std::to_string(liveStart) + ", not at the return at " + std::to_string(m_WorldCatchUp.activationTick) + "; starting it again");
+				DropReturnStartLocked("the live round was configured for another return");
+				return;
+			}
 			const auto activationBegan = std::chrono::steady_clock::now();
 			NetResyncState committed;
 			std::string error;

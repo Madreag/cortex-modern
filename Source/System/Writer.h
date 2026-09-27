@@ -158,6 +158,8 @@ namespace RTE {
 		uint64_t Generation() const { return m_Generation; }
 		size_t Touched() const { return m_Touched; }
 		size_t Reused() const { return m_Reused; }
+		/// Entries, their owned bytes, pixel snapshots and retired texts not yet handed back, for the memory census.
+		std::string Census() const;
 	private:
 		struct Entry { CheckpointText text; uint64_t generation = 0; uint64_t stamp = 0; uint64_t identity = 0; MovableObjectReference object; };
 		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;

@@ -59,7 +59,6 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
-		uint64_t s_CommittedSeatsRound = 0; //!< The round whose frames the seats' committed input comes from.
 		bool s_LocalStartParkPublished = false;
 		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
@@ -817,6 +816,45 @@ namespace RTE {
 		s_GoodbyeToPendingReturners = std::move(goodbyeToPendingReturners);
 	}
 
+	std::string ScenarioRunner::MemoryCensus() {
+		NetLockstepPlaneGuard plane;
+		std::ostringstream line;
+		line << "runner: local_input_history=" << s_LocalInputHistory.size() << " requeued_inputs=" << s_RequeuedInputs.size()
+		     << " command_outbox=" << s_LocalCommandOutbox.size() << " applied_checkpoints=" << s_AppliedCheckpoints.size()
+		     << " catch_up_tail=" << s_WorldCatchUpTail.size() << " toast_log=" << s_NetUiToastLog.size()
+		     << " control_overrides=" << s_LockstepControlOverrides.size() << " dropped_overrides=" << s_LockstepDroppedControlOverrides.size()
+		     << " rewind_keep=" << s_ReplayRewindKeep.size() << " lookahead=" << s_ReplayLookahead.size();
+		if (s_LockstepCoordinator) line << " round:" << s_LockstepCoordinator->MemoryCensus();
+		return line.str();
+	}
+
+	bool ScenarioRunner::RunCommittedSeatHandoffSelfTest() {
+		if (!UInputMan::IsConstructed() || s_LockstepCoordinator) return false;
+		// A coordinator installed over a restored image, or taking the round over, keeps the seats' committed input
+		// whatever round id it carries: a world image names the world's round, a successor the wire round.
+		const std::string before = g_UInputMan.SaveCommittedSeats();
+		const bool collection = LuaMan::IsDeterministicCollection();
+		const bool sinking = LuaMan::IsCheckpointAllocationSinking();
+		g_UInputMan.NoteCommittedSeatMouse(Players::PlayerTwo, Vector(5.0F, -3.0F), 2, 0x24, 61);
+		const std::string noted = g_UInputMan.SaveCommittedSeats();
+		bool kept = false;
+		{
+			NetLockstepCoordinator image, live;
+			image.m_RoundId = 360;
+			live.m_RoundId = 4242;
+			SetLockstepCoordinator(&image);
+			const bool afterImage = g_UInputMan.SaveCommittedSeats() == noted;
+			SetLockstepCoordinator(&live);
+			kept = afterImage && g_UInputMan.SaveCommittedSeats() == noted;
+			SetLockstepCoordinator(nullptr);
+		}
+		LuaMan::SetDeterministicCollection(collection);
+		LuaMan::SetCheckpointAllocationSinking(sinking);
+		g_UInputMan.LoadCommittedSeats(before);
+		std::cout << "[script-graph-selftest] " << (kept ? "PASS" : "FAIL") << " a_coordinator_handoff_keeps_committed_seats" << std::endl;
+		return kept;
+	}
+
 	void ScenarioRunner::SetLockstepAnnouncedCaptureEvery(uint32_t every) {
 		NetLockstepPlaneGuard plane;
 		if (s_LockstepCoordinator) s_LockstepCoordinator->SetAnnouncedCaptureEvery(every);
@@ -985,11 +1023,6 @@ namespace RTE {
 			s_RetiredChecksumCounters.compares += retiring.checksumCompares;
 			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
 		}
-		// A new round's seats start from its own frames; a coordinator taking over the same round keeps what it committed, which a restored image supplies.
-		if (coordinator && coordinator != s_LockstepCoordinator && coordinator->GetRoundId() != s_CommittedSeatsRound && UInputMan::IsConstructed()) {
-			g_UInputMan.ResetCommittedSeats();
-		}
-		if (coordinator) s_CommittedSeatsRound = coordinator->GetRoundId();
 		s_LockstepCoordinator = coordinator;
 		NetLockstepPlane::Target(coordinator);
 		s_PreSimWait.reset();
@@ -1646,7 +1679,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId) {
+	bool ScenarioRunner::IsLockstepTeamCommandSender(int team, uint8_t senderPeerId, uint64_t atFrame) {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || team < 0) {
 			return true;
@@ -1655,7 +1688,8 @@ namespace RTE {
 			return NetActorOwnership::IsTeamCommandAuthority(s_LockstepCoordinator->GetConfig().matchConfig, static_cast<uint8_t>(team), senderPeerId);
 		bool human = false;
 		for (const auto& player: s_LockstepCoordinator->GetConfig().matchConfig.players) {
-			if (!player.cpu && player.team == team && !s_LockstepCoordinator->IsPeerGoneAtFrame(player.peerId, s_LockstepCoordinator->GetResumeFrame())) {
+			// A seat held now but back by the frame asked about is its player's there, not the host's.
+			if (!player.cpu && player.team == team && !s_LockstepCoordinator->IsPeerGoneAtFrame(player.peerId, atFrame != 0 ? atFrame : s_LockstepCoordinator->GetResumeFrame())) {
 				human = true;
 				if (player.peerId == senderPeerId)
 					return true;
@@ -2022,7 +2056,7 @@ namespace RTE {
 			return GetLockstepActorOwner(uid, team, !actor || !actor->IsPlayerControlled());
 		};
 		const auto writesAtTarget = [&](int32_t team, int64_t actorUID, int64_t writerUID) {
-			if (IsLockstepTeamCommandSender(team, config.localPeerId) || ownerAtTarget(actorUID, team) == config.localPeerId) return true;
+			if (IsLockstepTeamCommandSender(team, config.localPeerId, targetFrame) || ownerAtTarget(actorUID, team) == config.localPeerId) return true;
 			const Actor* writer = writerUID != 0 ? dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(writerUID))) : nullptr;
 			return writerUID != 0 && (writer ? writer->GetTeam() : team) == team && ownerAtTarget(writerUID, writer ? writer->GetTeam() : team) == config.localPeerId;
 		};
