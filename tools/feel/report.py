@@ -149,6 +149,72 @@ def reduce_memory(samples, *, warmup_s, slope_bytes_per_minute, retained_bytes, 
                 warmup_s=warmup_s, slope_bound=slope_bytes_per_minute, retention_bound=retained_bytes,
                 expected_samples=expected, observed_samples=len(samples), missing_samples=max(0, expected-len(slots)),
                 sizes=sizes, instrumentation_growth='N/A without measured allocation records; no subtraction')
+
+
+def parse_fullstate(paths):
+    samples, scopes, contexts, refusals = [], defaultdict(list), defaultdict(list), []
+    sample_pattern = re.compile(r'^\[fullstate(?:-(canonical|restored))?\] tick=(\d+) hash=([0-9a-f]{16}) sections=(\S+) round=(\d+)')
+    scope_pattern = re.compile(r'^\[fullstate-scope\] tick=(\d+) round=(\d+) label=(\S+) per_peer=(.*)$')
+    context_pattern = re.compile(r'^\[fullstate-context\] tick=(\d+) round=(\d+) label=(\S+) path=(.*)$')
+    for path in paths:
+        path=Path(path)
+        if not path.is_file(): continue
+        with path.open(encoding='utf-8-sig',errors='replace') as stream:
+            for number,line in enumerate(stream,1):
+                if match:=context_pattern.match(line.strip()):
+                    key=(int(match[2]),int(match[1]),match[3])
+                    contexts[key].append(dict(path=match[4],log=str(path),line=number))
+                elif match:=scope_pattern.match(line.strip()):
+                    key=(int(match[2]),int(match[1]),match[3])
+                    scopes[key].append(dict(per_peer=match[4].split(',') if match[4] else [],log=str(path),line=number))
+                elif match:=sample_pattern.match(line.strip()):
+                    label=match[1] or 'sample'; key=(int(match[5]),int(match[2]),label)
+                    sections=dict(item.rsplit(':',1) for item in match[4].split(','))
+                    samples.append(dict(key=key,hash=match[3],sections=sections,log=str(path),line=number))
+                elif re.match(r'^\[fullstate(?:-[^]]+)?\] tick=\d+ (?:not taken|refused:|failed:)',line):
+                    refusals.append(dict(log=str(path),line=number,text=line.strip()))
+    ordinal=Counter()
+    for sample in samples:
+        key=sample['key']; index=ordinal[key]; ordinal[key]+=1
+        sample['scope']=scopes[key][index] if index<len(scopes[key]) else None
+        sample['context']=contexts[key][index] if index<len(contexts[key]) else None
+        sample['scope_valid']=sample['scope'] is not None and 'header' in sample['sections'] and not (set(sample['sections']) & set(sample['scope']['per_peer']))
+    return dict(samples=samples,refusals=refusals)
+
+
+def compare_fullstate_histories(peers, expected):
+    missing, differences, bad_scope, restored = [], [], [], []
+    indexed={}
+    for peer,document in peers.items():
+        indexed[peer]=defaultdict(list)
+        for sample in document['samples']:
+            indexed[peer][tuple(sample['key'])].append(sample)
+            if not sample['scope_valid'] or sample['context'] is None: bad_scope.append(dict(peer=peer,log=sample['log'],line=sample['line']))
+    for peer,document in peers.items():
+        for sample in document['samples']:
+            if sample['key'][2]!='restored': continue
+            canonical_key=(*sample['key'][:2],'canonical')
+            canonical=[c for other in indexed.values() for c in other.get(canonical_key,[])]
+            restored.append(dict(peer=peer,key=sample['key'],canonical_found=bool(canonical),
+                equal=bool(canonical) and all(c['sections']==sample['sections'] and c['hash']==sample['hash'] for c in canonical)))
+    for key in expected:
+        values=[]
+        for peer in peers:
+            found=indexed[peer].get(tuple(key),[])
+            if not found: missing.append(dict(peer=peer,key=key))
+            values.extend((peer,sample) for sample in found)
+        if values:
+            first_peer,first=values[0]
+            for peer,sample in values[1:]:
+                if sample['sections']!=first['sections'] or sample['hash']!=first['hash']:
+                    names=first['sections'].keys() | sample['sections'].keys()
+                    differing=[n for n in sorted(names) if first['sections'].get(n)!=sample['sections'].get(n)]
+                    differences.append(dict(key=key,first_peer=first_peer,peer=peer,sections=differing or ['combined_hash'],
+                                            first_log=first['log'],first_line=first['line'],log=sample['log'],line=sample['line']))
+    refused=[dict(peer=peer,**row) for peer,document in peers.items() for row in document['refusals']]
+    return dict(passed=bool(expected) and not (missing or differences or bad_scope or refused) and all(r['equal'] for r in restored),
+                expected_samples_per_peer=len(expected),missing=missing,differences=differences,scope_failures=bad_scope,
+                refusals=refused,restores=restored,scope='Shared sections only; PerPeer exclusions remain explicit and need behavioral oracles')
 KILLALL = re.compile(r'killall sparing team \d+ at tick (\d+)')
 SCENARIO_EARLY = re.compile(r'\[scenario\] \S+ passed=no ticks=(\d+)')
 

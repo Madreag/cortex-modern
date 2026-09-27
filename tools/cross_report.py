@@ -10,9 +10,10 @@ import re
 
 from feel import report
 from feel.records import open_record, record_path
+from compare_sim_traces import CORE
 
 HERE = Path(__file__).resolve().parent
-REQUIRED_SUBSYSTEMS = {'controller', 'sim_rng', 'lua_state', 'scene', 'actors'}
+REQUIRED_SUBSYSTEMS = CORE | {'controller'}
 
 
 def load(path, default=None):
@@ -108,7 +109,7 @@ def requirements(manifest, comparison, metrics):
         item['reason'] = reasons.get(item['number'], item['reason'])
         item['evidence'] = []
     # Only complete requirements are credited; partial event totals remain visible in the matrix.
-    if manifest.get('preflights') and len(manifest['preflights']) == len(manifest['boxes']) and metrics and all(p['record'].get('started') and p['samples'] for p in metrics.values()):
+    if manifest.get('preflights') and len(manifest['preflights']) == len(manifest['boxes']) and metrics and all(p['record'].get('started') and any(s.get('engine_pid') and (s.get('resident') or s.get('working_set')) for s in p['samples']) for p in metrics.values()):
         for item in items:
             if item['number'] == 66:
                 item.update(status='PASS', reason='Each box has one owning runner payload, local scripts and far-side engine PID samples.', evidence=['manifest.json'])
@@ -197,6 +198,19 @@ def build_report(root):
         if all(first.get(field) is not None for field in report.HISTORY_FIELDS[:-1]):
             ranges = [dict(**{field:first[field] for field in report.HISTORY_FIELDS[:-1]}, first=1, last=manifest['ticks'], peers=list(peers))]
     comparison = report.compare_histories(live, ranges, REQUIRED_SUBSYSTEMS)
+    fullstate_documents={name:report.parse_fullstate([root/fragment/'engine/stdout.log' for fragment in peer['fragments']]) for name,peer in peers.items()}
+    fullstate_expected=set()
+    cadence=manifest.get('fullstate_every',0)
+    if cadence:
+        first_eligible={}
+        for observed in host_rows:
+            if observed.get('phase')!='live' or observed.get('paused') or not observed.get('gameplay_tick') or not observed.get('effective_start_frame'):
+                continue
+            if observed['tick'] < observed['effective_start_frame']: continue
+            round_id=observed['round']; first_eligible.setdefault(round_id,observed['tick'])
+            if observed['tick'] % cadence == 0: fullstate_expected.add((round_id,observed['tick'],'sample'))
+        fullstate_expected.update((r,t,'sample') for r,t in first_eligible.items())
+    fullstate=report.compare_fullstate_histories(fullstate_documents,sorted(fullstate_expected)) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
     matrix = coverage(events, peers, manifest)
     fault_receipts = [r for values in events.values() for r in values if r.get('type') == 'fault']
     faults_applied = all(any(r.get('id') == f['id'] and r.get('applied') for r in fault_receipts) for f in manifest['faults'])
@@ -211,6 +225,7 @@ def build_report(root):
                   faults_applied=faults_applied, bounded_recovery=all(r['passed'] for r in recoveries),
                   quiet_feel=all(not p['feel_gated'] or p['feel_pass'] for p in peers.values()),
                   no_engine_findings=not findings)
+    if cadence: checks['shared_fullstate']=fullstate['passed']
     if manifest['scenario'] != 'match':
         checks['coverage_minima'] = all(r['status'] in ('PASS', 'NOT COVERED', 'NOT APPLICABLE') for r in matrix)
         checks['required_soak_evidence'] = False
@@ -218,7 +233,8 @@ def build_report(root):
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
     result = dict(version=1, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,
-                  peers=peers, comparison=comparison, coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts,
+                  peers=peers, comparison=comparison, fullstate=fullstate, fullstate_records=fullstate_documents,
+                  coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts,
                   findings=findings, requirements=requirements(manifest, comparison, peers))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
@@ -242,7 +258,7 @@ def chart(result, events):
     colors = ['#61cbbf', '#eba873', '#a7a5ff', '#db89b4', '#b9d782']
     parts = [f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Compute milliseconds by committed tick">']
     maxima = [r['compute_us']/1000 for rows_ in events.values() for r in rows_ if r.get('type') == 'tick_timing']
-    ceiling = max(maxima, default=1)
+    ceiling = max(1,max(maxima, default=1))
     for index, (peer, rows_) in enumerate(events.items()):
         timed = [r for r in rows_ if r.get('type') == 'tick_timing']
         stride = max(1, len(timed)//400)
@@ -275,6 +291,7 @@ def write_page(root, result, events):
         parts.append(f'<details><summary>{escape(row["item"])} — {row["status"]}</summary><p>{escape(row["unit"])}; minimum {row["minimum"]}. {escape(row["reason"])}</p><pre>{escape(json.dumps(row["peers"],indent=2))}</pre></details>')
     parts.append('<h2>Faults and recovery</h2><p>Queued admission and cancelled reclaim are phase evidence, never completed recovery. The chaos seed fixes choices only.</p><pre>' + escape(json.dumps(dict(seed=manifest['chaos_seed'], schedule=manifest['faults'], applied=result['fault_receipts'], recoveries=result['recoveries']),indent=2)) + '</pre>')
     parts.append('<h2>Wire egress</h2><p>NOT COVERED. Transport wire counters are not exposed at an owned seam. Application bytes and host relayed bytes are not wire egress; no upstream curve is fabricated.</p>')
+    parts.append('<h2>Full-state scope and cadence</h2><p>Every listed Shared section is compared. Native PerPeer exclusions are retained below; their behavioral restoration remains a separate requirement.</p><pre>'+escape(json.dumps(dict(verdict=result['fullstate'],records=result['fullstate_records']),indent=2))+'</pre>')
     parts.append('<h2>Engine and driver findings</h2>')
     for finding in result['findings']:
         parts.append('<p class="fail">' + (f'<a href="{escape(finding["path"])}">{escape(finding["path"])}:{finding["line"]}</a> ' if 'path' in finding else '') + escape(finding.get('text',finding.get('reason',''))) + '</p>')

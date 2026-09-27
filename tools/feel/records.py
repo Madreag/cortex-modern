@@ -110,7 +110,7 @@ def compress_closed_record(path, root):
         raise RuntimeError('sealed record changed or compression did not preserve it')
     if destination.exists(): raise FileExistsError(destination)
     temporary.replace(destination)
-    receipt = dict(original=path.name, retained=destination.name, original_bytes=size,
+    receipt = dict(original=str(path.relative_to(root)), retained=str(destination.relative_to(root)), original_bytes=size,
                    original_sha256=digest.hexdigest(), compressed_bytes=destination.stat().st_size)
     with (root / 'compressed-records.jsonl').open('a', encoding='utf-8') as index:
         index.write(json.dumps(receipt)+'\n')

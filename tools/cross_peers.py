@@ -170,6 +170,7 @@ def make_plan(options):
                              event_expanded_bytes_per_instance=64*1024**3,
                              live_bytes_per_instance=512*1024*1024, failure_window_ticks=600),
                 quiet_window=options.quiet_window, pathfinding='production asynchronous; no -tick-hashes override',
+                fullstate_every=options.fullstate_every,
                 required_gates=['three_real_boxes', 'matching_content', 'same_commit', 'full_history', 'zero_desync',
                                 'zero_unscheduled_holds', 'native_completion', 'bounded_recovery'],
                 limitations={'migration': 'NOT COVERED: NetMatchService endpoint publication and NetLockstep direct dialing need the endpoint fix',
@@ -345,7 +346,7 @@ def prepare_instance(spec, pin, box, runtime=None):
         dict(op='assert_buy', input_player=0), dict(op='assert_pie', input_player=0), dict(op='finish')]))
     if box['kind'] == 'posix-ssh':
         os.environ['CCCP_TEST_BINARY'] = spec['executable']
-        os.environ['CCCP_POSIX_HOP'] = 'ssh'
+        os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform=='darwin' else 'off'
     settings = {'SessionDirectoryUrl': f'127.0.0.1:{box["directory_port"]}', 'SessionDirectoryCertSha256': pin,
                 'SessionDirectoryInstallKey': f'cross-{spec["peer"]}-install', 'NetworkIceEnable': '1',
                 'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
@@ -400,6 +401,20 @@ def restart_spec(spec, progress):
     return next_spec
 
 
+def seal_evidence(own):
+    """Compress only closed instance records; retain verified original-byte digests."""
+    from feel.records import compress_closed_record
+    own = Path(own).resolve()
+    candidates = [own / 'live.jsonl', own / 'engine/feel/raw.jsonl']
+    candidates += list(own.glob('events.jsonl*'))
+    if (own / 'fullstate').is_dir():
+        candidates += [p for p in (own / 'fullstate').rglob('*') if p.is_file()]
+    for path in candidates:
+        if path.is_file() and not path.is_symlink() and path.suffix not in ('.gz', '.partial', '.json'):
+            if not path.resolve().is_relative_to(own): raise RuntimeError('record leaves its instance root')
+            compress_closed_record(path, own)
+
+
 def run_payload(path):
     from run_sim_test import make_run
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
@@ -435,14 +450,17 @@ def run_payload(path):
                 if now >= next_sample:
                     own_pids = [engine_pid(r) for r in runs.values()]
                     load = box_load(own_pids)
+                    all_sampled = True
                     for spec in specifications.values():
                         peer = spec['peer']; run = runs[peer]
                         if peer in completed: continue
+                        measured = sample_memory(run)
+                        all_sampled &= bool(measured and engine_pid(run))
                         row = dict(peer=peer, incarnation=spec['incarnation'], execution=f'process-{spec["incarnation"]}', engine_pid=engine_pid(run),
                                    elapsed_s=now-started[peer], load=load, same_box_instances=len(runs),
-                                   **(sample_memory(run) or {}))
+                                   **(measured or {}))
                         samples.write(json.dumps(row) + '\n'); samples.flush()
-                    next_sample = now + 60
+                    next_sample = now + (60 if all_sampled else 1)
                     assert_box_guard({**box, 'kind': 'windows-task'} if box['kind'] == 'windows-local' else box)
                 for spec in list(specifications.values()):
                     peer = spec['peer']; run = runs[peer]
@@ -466,6 +484,7 @@ def run_payload(path):
                         if due and run.poll() is None: run.terminate(reason=f'scheduled crash {fault["id"]}')
                         record = run.finish(); run.close()
                         write_json(Path(spec['own']) / 'record.json', record)
+                        seal_evidence(spec['own'])
                         new_spec = restart_spec(spec, current)
                         render = new_spec['flags'].index('-feel-render-settings') + 1
                         new_spec['flags'][render] = str(retained / 'Userdata/FeelRender.ini')
@@ -490,6 +509,10 @@ def run_payload(path):
         for peer, run in runs.items():
             run.close()
             write_json(Path(specifications[peer]['own']) / 'record.json', run.record)
+            try: seal_evidence(specifications[peer]['own'])
+            except Exception as error:
+                verdict = 1
+                write_json(root / 'seal-error.json', dict(peer=peer, error=str(error)))
         write_json(root / 'done.json', dict(exit_code=verdict, completed=sorted(completed)))
     return verdict
 
@@ -548,7 +571,7 @@ def run_plan(plan, root):
     if len(locals_) != 1: raise ValueError('one coordinator box must be windows-local')
     local = locals_[0]
     service, processes, tunnels, handles, preflights, payloads = None, {}, [], [], {}, {}
-    findings = []
+    findings, launched = [], set()
     try:
         for box in boxes.values():
             box_root = str(PurePosixPath(box['scratch']) / plan['run'])
@@ -604,6 +627,7 @@ def run_plan(plan, root):
                 handle = (root / 'payload.log').open('w', encoding='utf-8'); handles.append(handle)
                 processes[box['name']] = subprocess.Popen([sys.executable, str(Path(__file__)), '--payload', str(root / 'payload.json')],
                     stdout=handle, stderr=subprocess.STDOUT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                launched.add(box['name'])
             else:
                 stage_remote(box, local_payload, box_root + '/payload.json')
                 if box['kind'] == 'windows-task':
@@ -615,11 +639,13 @@ def run_plan(plan, root):
                     local_script = root / 'cross-session.ps1'; local_script.write_text(script, encoding='utf-8')
                     stage_remote(box, local_script, box['task_script'])
                     command(['ssh', box['ssh'], f'Start-ScheduledTask -TaskName {box["runner"]}'])
+                    launched.add(box['name'])
                 else:
                     handle = (root / f'payload-{box["name"]}.log').open('w', encoding='utf-8'); handles.append(handle)
                     processes[box['name']] = subprocess.Popen(remote_command(box, [box['python'], box['tree'] + '/tools/cross_peers.py', '--payload', box_root + '/payload.json']),
                         stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
                         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                    launched.add(box['name'])
             if box['name'] == host_box:
                 deadline, session = time.monotonic()+180, None
                 while time.monotonic() < deadline:
@@ -655,7 +681,21 @@ def run_plan(plan, root):
                 if box['kind'] != 'windows-local' and not remote_exists(box, payloads[box['name']][2] + '/done.json'):
                     stage_remote(box, stop, payloads[box['name']][2] + '/stop.json')
             except Exception as error: findings.append(dict(kind='cleanup', box=box['name'], reason=str(error)))
-        time.sleep(.25)
+        # Let each owning payload close its engine job/hop and seal its records.
+        # Killing an SSH parent first can leave the actual far-side engine alive.
+        teardown_deadline = time.monotonic() + 45
+        pending = set(launched)
+        while pending and time.monotonic() < teardown_deadline:
+            for name in list(pending):
+                box = boxes[name]
+                done = root / 'done.json' if box['kind'] == 'windows-local' else payloads[name][2] + '/done.json'
+                if (Path(done).is_file() if box['kind'] == 'windows-local' else remote_exists(box, done)):
+                    pending.remove(name)
+                elif name in processes and processes[name].poll() is not None:
+                    pending.remove(name)
+            if pending: time.sleep(.25)
+        for name in pending:
+            findings.append(dict(kind='cleanup', box=name, reason='owning payload did not acknowledge teardown within 45 seconds'))
         for proc in processes.values():
             if proc.poll() is None:
                 proc.terminate()
