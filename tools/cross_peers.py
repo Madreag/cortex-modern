@@ -21,7 +21,12 @@ import platform
 import secrets
 
 HERE = Path(__file__).resolve().parent
-SCRATCH = Path('D:/mx/astra-cross-peers-build-20260926')
+# The lane that owns this run's scratch on every box: --lane or CC_CROSS_PEERS_LANE, never a default. The manifest
+# writes it as {lane}, so a merged-away lane's root is never where a run lands.
+LANE_ENV = 'CC_CROSS_PEERS_LANE'
+SCRATCH_ROOT = Path('D:/mx')
+SCRATCH = None
+LANE = None
 LIMIT = 4_000_000_000
 MST = dt.timezone(dt.timedelta(hours=-7))
 
@@ -45,8 +50,26 @@ def quote_ps(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def set_lane(lane):
+    global LANE, SCRATCH
+    if not lane or not re.fullmatch(r'[A-Za-z0-9_-]+', lane):
+        raise ValueError(f'a lane name ([A-Za-z0-9_-]+) is required: --lane or {LANE_ENV}')
+    LANE, SCRATCH = lane, SCRATCH_ROOT / lane
+
+
+def with_lane(value):
+    """A manifest value with {lane} replaced by this run's lane."""
+    if isinstance(value, str):
+        if '{lane}' not in value: return value
+        if LANE is None: raise ValueError(f'the manifest names {{lane}} but no lane was given: --lane or {LANE_ENV}')
+        return value.replace('{lane}', LANE)
+    if isinstance(value, list): return [with_lane(item) for item in value]
+    if isinstance(value, dict): return {key: with_lane(item) for key, item in value.items()}
+    return value
+
+
 def load_boxes(path):
-    manifest = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    manifest = with_lane(json.loads(Path(path).read_text(encoding='utf-8-sig')))
     boxes, peers = manifest['boxes'], manifest['instances']
     by_name = {box['name']: box for box in boxes}
     if len({box['name'].casefold() for box in boxes}) != len(boxes) or len({p['name'].casefold() for p in peers}) != len(peers):
@@ -187,7 +210,7 @@ def make_plan(options):
         specs[-1]['forced_ends']=[f for f in faults if f['action']=='brain-eliminate']
         if specs[-1]['barriers']:
             specs[-1]['env']['CC_TEST_CROSS_CAPTURE_BARRIER'] = own+'/barriers.json'
-    return dict(version=1, run=stem, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
+    return dict(version=1, run=stem, lane=LANE, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
                 driver_commit=command(['git','-C',HERE.parent,'rev-parse','HEAD']).strip(),
                 driver_tracked_changes=command(['git','-C',HERE.parent,'status','--porcelain','--untracked-files=no']).splitlines(),
                 driver_sources={str(path.relative_to(HERE)):digest_file(path) for path in
@@ -1022,7 +1045,8 @@ def run_plan(plan, root):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--boxes', type=Path, default=HERE / 'cross_peers/boxes.json')
-    parser.add_argument('--out', type=Path, default=SCRATCH / 'dry-run')
+    parser.add_argument('--lane', default=os.environ.get(LANE_ENV), help=f'the lane whose scratch holds the run on every box (or {LANE_ENV}); no default')
+    parser.add_argument('--out', type=Path, help='default: <lane scratch>/dry-run')
     parser.add_argument('--host', default='erol')
     parser.add_argument('--scenario', choices=['match', 'soak', 'chaos', 'endurance'], default='match')
     parser.add_argument('--roster', choices=['three-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
@@ -1043,6 +1067,10 @@ def parse_args(argv=None):
     parser.add_argument('--payload', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--preflight', type=Path, help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
+    if not (options.payload or options.preflight):
+        try: set_lane(options.lane)
+        except ValueError as error: parser.error(str(error))
+        options.out = options.out or SCRATCH / 'dry-run'
     options.ticks = options.ticks or (1201 if options.scenario == 'match' else 36000)
     if options.ticks < 2 or min(options.timeout, options.recovery_deadline_ms, options.capture_budget_ms) <= 0:
         parser.error('tick budget and deadlines must be positive')
