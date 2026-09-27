@@ -15307,6 +15307,79 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		bool TestReplayTrailersFollowTheirPackets(std::string* error) {
+			// A client's record: its own binding, the others', then the host's hold. Each command reads back from its own sender, in order.
+			NetGamePlayerBindings binding;
+			binding.players[0].active = true;
+			std::vector<NetGameCommand> commands{{2, binding}, {1, binding}, {3, binding}, {1, NetGameSeatHold{3, 0, 9, 1, 40}}};
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-trailer-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			std::error_code created;
+			std::filesystem::create_directories(directory, created);
+			const auto path = directory / "match.ccreplay";
+			struct Cleanup {
+				std::filesystem::path path;
+				~Cleanup() {
+					std::error_code ignored;
+					std::filesystem::remove(path, ignored);
+					std::filesystem::remove(path.parent_path(), ignored);
+				}
+			} cleanup{path};
+			NetMatchReplayWriter writer;
+			if (created || !writer.Open(path.string(), NetMatchConfigUtil::MakeDefault(0x5452414CULL), error) || !writer.WriteFrame(40, {MakeFrame(100, 1)}, commands, {}, {}, error)) {
+				if (error->empty()) *error = "replay-trailers-follow-their-packets: the record could not be written";
+				return false;
+			}
+			writer.Close();
+			NetMatchReplayReader reader;
+			NetLockstepFrame recorded;
+			bool eof = false;
+			if (!reader.Open(path.string(), error) || !reader.ReadFrame(recorded, eof, error)) {
+				*error = "replay-trailers-follow-their-packets: the record did not read back: " + *error;
+				return false;
+			}
+			std::string written, read;
+			for (const NetGameCommand& command: commands) written += std::to_string(command.senderPeerId) + (std::holds_alternative<NetGameSeatHold>(command.payload) ? "h" : "b");
+			for (const NetGameCommand& command: recorded.commands) read += std::to_string(command.senderPeerId) + (std::holds_alternative<NetGameSeatHold>(command.payload) ? "h" : "b");
+			if (read != written) {
+				*error = "replay-trailers-follow-their-packets: commands written as " + written + " read back as " + read;
+				return false;
+			}
+			return true;
+		}
+
+		bool TestAMergedTickOfManyControllersReplays(std::string* error) {
+			// Two senders of 300 controllers each make one legal tick of 600: the record keeps all of them and reads them back.
+			std::vector<ControllerFrame> frames;
+			for (int64_t actor = 1; actor <= 600; ++actor) frames.push_back(MakeFrame(actor, 1));
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-merged-replay-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			std::error_code created;
+			std::filesystem::create_directories(directory, created);
+			const auto path = directory / "match.ccreplay";
+			struct Cleanup {
+				std::filesystem::path path;
+				~Cleanup() {
+					std::error_code ignored;
+					std::filesystem::remove(path, ignored);
+					std::filesystem::remove(path.parent_path(), ignored);
+				}
+			} cleanup{path};
+			NetMatchReplayWriter writer;
+			std::string writeError;
+			const bool written = !created && writer.Open(path.string(), NetMatchConfigUtil::MakeDefault(0x4D455247ULL), &writeError) && writer.WriteFrame(41, frames, {}, {}, {}, &writeError);
+			writer.Close();
+			NetMatchReplayReader reader;
+			NetLockstepFrame recorded;
+			bool eof = false;
+			std::string readError;
+			const bool read = written && reader.Open(path.string(), &readError) && reader.ReadFrame(recorded, eof, &readError);
+			if (!read || recorded.frames.size() != frames.size()) {
+				*error = "a-merged-tick-of-many-controllers-replays: a tick of 600 controllers wrote " + std::to_string(written) + " (" + writeError + ") and read back " +
+				         std::to_string(recorded.frames.size()) + " (" + readError + ")";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestValueObservationNonOwnerDropped(std::string* error) {
 			LoopbackTransport hostTransport, clientTransport;
 			NetLockstepCoordinator host, client;
@@ -21043,6 +21116,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestValueObservationRelay(&error) ||
 		    !TestValueObservationReplay(&error) ||
 		    !TestReplayPlayerBindings(&error) ||
+		    !TestReplayTrailersFollowTheirPackets(&error) ||
+		    !TestAMergedTickOfManyControllersReplays(&error) ||
 		    !TestValueObservationNonOwnerDropped(&error) ||
 		    !TestValueObservationOverflowCarry(&error) ||
 		    !TestStaleRoundFrameStillCountsAsTraffic(&error) ||

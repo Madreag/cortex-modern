@@ -450,7 +450,8 @@ namespace RTE {
 
 		/// One sender's frames name each actor once; a committed tick merges every sender's, so two for one actor stand in sender order there.
 		bool ValidateSortedFrames(const std::vector<ControllerFrame>& frames, NetLockstepError* error, bool mergedSenders = false) {
-			if (frames.size() > NetLockstepCodec::c_MaxFramesPerPacket) {
+			// A merged tick carries every sender's packet, each within its own bound.
+			if (frames.size() > NetLockstepCodec::c_MaxFramesPerPacket * (mergedSenders ? NetLockstepCodec::c_MaxPeerCount : 1)) {
 				SetError(error, NetLockstepErrorCode::PayloadTooLarge, 0, "frame packet has too many ControllerFrames");
 				return false;
 			}
