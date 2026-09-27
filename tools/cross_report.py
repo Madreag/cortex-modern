@@ -67,6 +67,20 @@ def judge_exit(record,peer,incarnation,faults,receipts):
                 actual=record.get('injected_termination','normal exit'),injection_proved=injected)
 
 
+def scheduled_hold(hold,receipts,recoveries):
+    for recovery in recoveries:
+        if not recovery['passed']: continue
+        starts=[r.get('actual',r) for r in receipts if r.get('id')==recovery['id'] and r.get('source_peer')==recovery['peer'] and
+                r.get('applied') and r.get('action')!='brain-eliminate']
+        terminals=[r.get('native',{}) for r in recovery['phases'] if r.get('phase') in ('first_controllable_input','match_over_goodbye')]
+        for start in starts:
+            for end in terminals:
+                if start.get('peer')==hold['peer'] and start.get('source_round')==end.get('source_round')==hold.get('source_round') and \
+                        start.get('source_round') is not None and start.get('tick',float('inf'))<=hold['tick']<=end.get('tick',-1):
+                    return recovery['id']
+    return None
+
+
 def attempt_label(result):
     if result.get('passed'): return 'PASS'
     return 'CORE PASS; FULL GATE RED' if result.get('core_passed') else 'CORE FAIL; FULL GATE RED'
@@ -183,7 +197,7 @@ def requirements(manifest, comparison, metrics):
         45: 'Checkpoint boot/handover anchors and survivor segment indexing need ScenarioRunner.cpp:2653 and NetMatchService.cpp:3455 outside this lane.',
         50: 'Movement/aim submitted-render measurements are reported; other action/input-sequence stamps require FrameMan.cpp:277,344 outside this lane.',
         51: 'Remote-unit render discontinuities require FrameMan/LocalPrediction records outside this lane; local corrections retain their own labels.',
-        53: 'Loss-to-first-controllable-input phase identity needs NetMatchService.cpp:939,5319 and NetWorldJoin.cpp:1139; aggregate catch-up is not a completed recovery oracle.',
+        53: 'Fresh produced/applied controller input and authenticated goodbye now have native terminal records, bound to a continuous payload clock. Full phase-specific queued/cancelled admission and survivor end-to-end runs remain incomplete at NetMatchService.cpp:939,5319 and NetWorldJoin.cpp:1139.',
         54: 'FrameMan.cpp:277,344 lacks round/execution ids; multi-round raw presentation reduction cannot safely reuse single-round identities.',
         69: 'The real Void Wanderers mission/economy/scene-transition and unchanged-reference arm has not run.',
         71: 'Fog-on reveal/capture/rejoin is not yet demonstrated; a fog-off fight does not cover it.'}
@@ -221,12 +235,14 @@ def build_report(root):
         log = [(fragment/'engine'/leaf,number,line) for fragment in fragments for leaf in ('stdout.log','stderr.log')
                for number,line in read_log(fragment/'engine'/leaf)]
         record, native = load(own / 'record.json', {}), load(own / 'match-report.json', {})
-        waits = []; holds = []
+        waits = []; holds = []; observed_round=None; observed_log=None
         for log_path, number, line in log:
+            if log_path!=observed_log: observed_log=log_path; observed_round=None
+            if match := re.search(r'\[cross-context\] round=\d+ source_round=(\d+)',line): observed_round=int(match[1])
             if match := re.search(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', line):
                 waits.append(dict(tick=int(match[1]), wait_ms=int(match[2]), line=number))
             if match := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
-                holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number))
+                holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number,source_round=observed_round,path=str(log_path.relative_to(root))))
             if re.search(r'RTE Assert|FATAL:|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|\[net-plane\].*ASSERT|\[fullstate(?:-refusal)?\].*(?:failed:|refused:|problem=)|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
                 findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
@@ -333,10 +349,13 @@ def build_report(root):
         last_clock=peers[fault['peer']]['payload_clock_last_ms']
         recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
+    for p in peers.values():
+        for hold in p['holds']: hold['scheduled_recovery_id']=scheduled_hold(hold,fault_receipts,recoveries)
+    unscheduled_holds=sum(not h['scheduled_recovery_id'] for p in peers.values() for h in p['holds'])
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
                   preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings'),
                   full_history=comparison['passed'] and not missing_boundaries, zero_desync=comparison['unequal_keys'] == 0 and bool(ranges),
-                  zero_unscheduled_holds=holds == 0, native_completion=all(p['record'].get('exit_code') == 0 and
+                  zero_unscheduled_holds=unscheduled_holds == 0, native_completion=all(p['record'].get('exit_code') == 0 and
                       not p['record'].get('timed_out') and p['native'].get('exit_code') == 0 and p['native_completion'].get('completion') == 'completed' for p in peers.values()),
                   adopted_peer_count=all(p['configs'] and all(c['peer_count']==len(manifest['instances']) for c in p['configs']) for p in peers.values()),
                   adopted_roster=all(roster_matches(manifest,p['configs']) for p in peers.values()),
@@ -381,12 +400,12 @@ def build_report(root):
                   peers=peers, comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
-                  native_recovery_records=native_recovery_records,native_fault_effects=effects,
+                  native_recovery_records=native_recovery_records,native_fault_effects=effects,unscheduled_holds=unscheduled_holds,
                   findings=findings, requirements=requirements(manifest, comparison, peers))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
     write_index(root.parent)
-    verdict = f'{attempt_label(result)} {result["run"]}: ' + ', '.join(f'{n}={p["frames"]} frames' for n,p in peers.items()) + f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds}; ' + '; '.join(name+'='+oracle['status'] for name,oracle in result['oracles'].items())
+    verdict = f'{attempt_label(result)} {result["run"]}: ' + ', '.join(f'{n}={p["frames"]} frames' for n,p in peers.items()) + f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds} unscheduled={unscheduled_holds}; ' + '; '.join(name+'='+oracle['status'] for name,oracle in result['oracles'].items())
     if result['assigned_capture_rows']: verdict+='; full-state NOT COVERED by capture-rows lane rows '+','.join(result['assigned_capture_rows'])
     (root / 'verdict.txt').write_text(verdict + '\n', encoding='utf-8'); print(verdict)
     return result

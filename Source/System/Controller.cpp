@@ -551,7 +551,7 @@ void Controller::EndLocalProduction() {
 	if (!m_ProducingLocalInput) {
 		return;
 	}
-	if (g_MetricsCollector.EventsEnabled() && m_ControlledActor && m_InputMode == InputMode::CIM_PLAYER && GetInputPlayer() >= 0) {
+	if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled() && m_ControlledActor && m_InputMode == InputMode::CIM_PLAYER && GetInputPlayer() >= 0) {
 		const uint64_t tick = g_TimerMan.GetSimUpdateCount();
 		g_MetricsCollector.RecordProducedController(ScenarioRunner::GetLockstepRoundId(), tick,
 		    tick + ScenarioRunner::GetLockstepInputDelayFrames(), m_ControlledActor->GetUniqueID(), m_SeatPlayer);
