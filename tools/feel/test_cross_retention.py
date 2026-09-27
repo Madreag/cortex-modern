@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import zlib
 from feel.records import presentation_records
+import cross_report
 
 
 class PresentationRetention(unittest.TestCase):
@@ -33,6 +34,15 @@ class PresentationRetention(unittest.TestCase):
             path,document=self.fixture(Path(temporary)); document['retained_chunks']=0
             path.write_text(json.dumps(document))
             with self.assertRaises(ValueError): list(presentation_records(path))
+
+    def test_native_policy_must_match_declared_window_and_normal_exit_closes_it(self):
+        manifest=dict(storage=dict(presentation_chunk_bytes=1024,presentation_retained_chunks=2))
+        document=dict(chunk_bytes=1024,retained_chunks=2,parts=[{},{}],complete=True)
+        self.assertTrue(cross_report.presentation_contract(manifest,document,True))
+        self.assertFalse(cross_report.presentation_contract(manifest,dict(document,chunk_bytes=2048),True))
+        self.assertFalse(cross_report.presentation_contract(manifest,dict(document,complete=False),True))
+        self.assertTrue(cross_report.presentation_contract(manifest,dict(document,complete=False),False))
+        self.assertFalse(cross_report.presentation_contract(manifest,{},False))
 
 
 if __name__=='__main__': unittest.main()

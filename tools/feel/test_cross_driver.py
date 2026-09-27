@@ -1,5 +1,7 @@
 import copy
+import gzip
 import json
+import zlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +12,21 @@ import cross_report
 
 
 class CrossDriverTests(unittest.TestCase):
+    def test_rerun_keeps_deadlines_faults_barriers_and_instance_counts(self):
+        plan=self.plan(); plan['deadlines'].update(launch_s=1234,recovery_ms=5678,capture_ms=912)
+        plan['faults']=[dict(id='custom',tick=99,peer='mac',action='loss',percent=5)]
+        plan['capture_barriers']=[dict(id='writer',peer='edith',tick=600,phase='writer_pending',timeout_ms=1000)]
+        plan['instances'].append(dict(name='mac2',box='Mac',port_block=[49905,49909],seat='spectator'))
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); command=cross_report.write_rerun_command(root,plan)
+            self.assertIn('--timeout 1234',command); self.assertIn('--recovery-deadline-ms 5678',command)
+            self.assertIn('--capture-budget-ms 912',command)
+            self.assertEqual(json.loads((root/'rerun-schedule.json').read_text()),plan['faults'])
+            self.assertEqual(json.loads((root/'rerun-barriers.json').read_text()),plan['capture_barriers'])
+            rerun=cross_peers.load_boxes(root/'rerun-boxes.json')
+            self.assertEqual(next(b for b in rerun['boxes'] if b['name']=='Mac')['peers_per_box'],2)
+            self.assertEqual(next(b for b in rerun['boxes'] if b['kind']=='windows-local')['guard_file'],'D:/mx/BOX-FREE-FOR-CROSS')
+
     def plan(self):
         return cross_peers.make_plan(cross_peers.parse_args(['--dry-run']))
 
@@ -317,6 +334,13 @@ class CrossDriverTests(unittest.TestCase):
                 (own/'record.json').write_text(json.dumps(dict(started=True,exit_code=0,elapsed_seconds=1,timed_out=False)))
                 (own/'trace.json').write_text(json.dumps(dict(runs=[dict(strings=dict(completion='completed'))])))
                 (own/'match-report.json').write_text(json.dumps(dict(exit_code=0,desync_check=dict(mismatches=0,compares=1,compare_margin=0))))
+                feel=own/'engine/feel'; feel.mkdir()
+                raw=''.join(json.dumps(dict(type='frame',frame=i,active=True,draw_ms=1,present_ms=1,interval_ms=16,
+                    present_end_ms=i*16))+'\n' for i in (1,2)).encode()
+                (feel/'raw.0.jsonl.gz').write_bytes(gzip.compress(raw))
+                (feel/'raw.index.json').write_text(json.dumps(dict(chunk_bytes=plan['storage']['presentation_chunk_bytes'],
+                    retained_chunks=plan['storage']['presentation_retained_chunks'],complete=True,total_lines=2,dropped_lines=0,
+                    parts=[dict(path='raw.0.jsonl.gz',bytes=len(raw),lines=2,crc32=zlib.crc32(raw),first_sequence=0,last_sequence=1)])))
                 live=[dict(session='s',match='m',history_branch='initial',source_round=1,round=1,tick=t,
                     instance=spec['peer'],execution='one',incarnation=0,phase='live',wall_ms=t*20,gameplay_tick=True,
                     effective_start_frame=1,sim_gated='a'*64,subsystems={key:'b'*64 for key in cross_report.REQUIRED_SUBSYSTEMS}) for t in range(1,5)]

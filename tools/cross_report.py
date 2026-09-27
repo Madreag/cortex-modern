@@ -9,6 +9,7 @@ import json
 import math
 from pathlib import Path
 import re
+import subprocess
 
 from feel import report
 from feel.records import open_record, record_path, presentation_records
@@ -196,6 +197,36 @@ def changed_settings(configs):
         tuple(t.get('ai_skill') for t in c.get('config',{}).get('rules',{}).get('teams',[]))) for c in configs})>1
 
 
+def presentation_contract(manifest,document,normal_exit):
+    storage=manifest.get('storage',{})
+    if 'presentation_chunk_bytes' not in storage: return True
+    return bool(document and document.get('chunk_bytes')==storage['presentation_chunk_bytes'] and
+        document.get('retained_chunks')==storage['presentation_retained_chunks'] and
+        len(document.get('parts',[]))<=storage['presentation_retained_chunks'] and
+        (not normal_exit or document.get('complete') is True))
+
+
+def write_rerun_command(root,manifest):
+    root=Path(root)
+    current=load(HERE/'cross_peers/boxes.json',{})
+    routes={b['name']:b for b in current.get('boxes',[])}
+    boxes=[dict(routes.get(b['name'],b) if routes.get(b['name'],{}).get('kind')==b['kind'] else b,
+                peers_per_box=sum(p['box']==b['name'] for p in manifest['instances'])) for b in manifest['boxes']]
+    inputs={'boxes':dict(version=1,boxes=boxes,instances=manifest['instances']),
+            'schedule':manifest.get('faults',[]),'barriers':manifest.get('capture_barriers',[])}
+    for name,document in inputs.items():
+        (root/f'rerun-{name}.json').write_text(json.dumps(document,indent=2)+'\n',encoding='utf-8')
+    args=['python','tools/cross_peers.py','--host',manifest['host'],'--scenario',manifest['scenario'],
+          '--ticks',str(manifest['ticks']),'--roster',manifest['roster'],'--scene',manifest['scene'],
+          '--seed',str(manifest['seed']),'--fullstate-every',str(manifest.get('fullstate_every',0)),
+          '--timeout',str(manifest['deadlines']['launch_s']),'--recovery-deadline-ms',str(manifest['deadlines']['recovery_ms']),
+          '--capture-budget-ms',str(manifest['deadlines']['capture_ms'])]
+    for name in inputs: args += ['--'+name,str(root/f'rerun-{name}.json')]
+    if manifest.get('chaos_seed') is not None: args += ['--chaos-seed',str(manifest['chaos_seed'])]
+    args += ['--out',root.as_posix()+'-rerun']
+    return subprocess.list2cmdline(args)
+
+
 def coverage(events, peers, manifest):
     definitions = [
         ('movement', 'Movement, jetpack, climb and impact', [], 5, 'each kind per originating seat per ten minutes', 'Movement, climb and impact success hooks and obstacle fixtures are incomplete.'),
@@ -305,8 +336,23 @@ def build_report(root):
                 findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
         presentation_window=load(raw_path.with_name('raw.index.json'),{})
+        presentation_by_incarnation={}
+        presentation_valid=True
+        for fragment in fragments:
+            document=load(fragment/'engine/feel/raw.index.json',{})
+            normal_exit=load(fragment/'record.json',{}).get('exit_code')==0
+            valid=presentation_contract(manifest,document,normal_exit)
+            if fragment!=own:
+                for row in rows(fragment/'engine/feel/raw.jsonl'):
+                    if row.get('type')=='malformed_record':
+                        valid=False
+                        findings.append(dict(peer=name,path=str((fragment/'engine/feel/raw.index.json').relative_to(root)),line=row['_line'],text=row['error']))
+            presentation_by_incarnation[fragment.name]=dict(index=document,declared_bound_valid=valid)
+            presentation_valid &= valid
         for row in raw:
-            if row.get('type')=='malformed_record': findings.append(dict(peer=name,path=str(raw_path.relative_to(root)),line=row['_line'],text=row['error']))
+            if row.get('type')=='malformed_record':
+                presentation_valid=False
+                findings.append(dict(peer=name,path=str(raw_path.relative_to(root)),line=row['_line'],text=row['error']))
         frames = [r for r in raw if r.get('type') == 'frame' and r.get('active')]
         inputs = [r for r in raw if r.get('type') == 'input']
         latency = report.input_latencies(inputs, frames) if inputs and frames else []
@@ -359,7 +405,9 @@ def build_report(root):
         final_tick=trace.get('runs',[{}])[-1].get('numeric',{}).get('final_tick') if trace.get('runs') else None
         peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=int(own.name.split('-')[-1]), frames=len(live[name]),
             observed_waits_over_50=sum(r['wait_ms']>50 for r in waits) if log else None, observed_wait_records=len(waits),
-            native=native, record=record, timing=timing, presentation_window=presentation_window, tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
+            native=native, record=record, timing=timing, presentation_window=presentation_window,
+            presentation_by_incarnation=presentation_by_incarnation,presentation_valid=presentation_valid,
+            tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
             tick_timing_valid=bool(tick_cost) and all(r.get('partition_valid') for r in tick_cost),
             capture_ms=report.distribution([r['capture_us']/1000 for r in tick_cost]),
             latency_ms=report.distribution([r['ms'] for r in latency if r['ms'] is not None]),
@@ -435,6 +483,7 @@ def build_report(root):
                       for values in events.values()),
                   no_engine_findings=not findings)
     checks['all_incarnation_exits']=all(p['exits'] and all(e['passed'] for e in p['exits']) for p in peers.values())
+    checks['record_integrity'] &= all(p['presentation_valid'] for p in peers.values())
     checks['only_capture_induced_holds']=all(h['classification']=='capture-induced' for p in peers.values() for h in p['holds'] if not h['scheduled_recovery_id'])
     checks['shared_fullstate']=bool(cadence) and fullstate['passed']
     checks['capture_rows_resolved']=not manifest.get('capture_rows_pending',[1,2])
@@ -459,7 +508,7 @@ def build_report(root):
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
     judgment=judge_attempt(manifest,checks,peers,matrix,recoveries)
-    rerun=f'python tools/cross_peers.py --host {manifest["host"]} --scenario {manifest["scenario"]} --ticks {manifest["ticks"]} --roster {manifest["roster"]} --scene "{manifest["scene"]}" --seed {manifest["seed"]} --fullstate-every {cadence} --out "{root.as_posix()}-capture-fixed"'
+    rerun=write_rerun_command(root,manifest)
     result = dict(version=2, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
                   assigned_capture_rows={str(row):CAPTURE_ROWS[row] for row in manifest.get('capture_rows_pending',[1,2])},rerun_after_capture_fix=rerun,
                   peers=peers, comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
@@ -526,7 +575,7 @@ def write_page(root, result, events):
     parts.append('<h2>Independent oracle verdicts</h2><p>CORE PASS requires complete comparable live frames, zero live mismatches, zero unscheduled holds and native completion, with the box/configuration/integrity prerequisites. It does not turn any other oracle green.</p>'+
         ''.join(f'<details><summary>{escape(name)} — {escape(row["status"])}</summary><p>{escape(row["reason"])}</p></details>' for name,row in result['oracles'].items()))
     parts.append('<h2>Every hold, classified</h2><p>CORE-ENGINE-RED means every unscheduled hold is capture-induced, with zero live mismatches and native completion. Missing live frames and full-state failures remain red in their own oracles. Repeated log observations of the same boundary are all retained. Unknown causes are other.</p><pre>'+escape(json.dumps({name:peer['holds'] for name,peer in result['peers'].items()},indent=2))+'</pre>')
-    parts.append('<h2>Presentation retention</h2><p>'+escape(manifest.get('storage',{}).get('presentation_window','Legacy unbounded live presentation stream; compressed after exit.'))+'</p><p>Feel statistics describe the retained window, not discarded rows. CRC, decoded byte counts and sequence continuity are checked for every retained chunk.</p><pre>'+escape(json.dumps({name:peer.get('presentation_window',{}) for name,peer in result['peers'].items()},indent=2))+'</pre>')
+    parts.append('<h2>Presentation retention</h2><p>'+escape(manifest.get('storage',{}).get('presentation_window','Legacy unbounded live presentation stream; compressed after exit.'))+'</p><p>Feel statistics describe the last incarnation’s retained window, not discarded rows. CRC, decoded byte counts and sequence continuity are checked for every retained chunk and incarnation. Native bounds must match the declared bounds; a normal exit must close its index.</p><pre>'+escape(json.dumps({name:peer.get('presentation_by_incarnation',{}) for name,peer in result['peers'].items()},indent=2))+'</pre>')
     parts.append('<h2>Coverage</h2>')
     parts.append('<div style="overflow-x:auto"><table><thead><tr><th>Coverage / minimum</th>' +
         ''.join(f'<th>{escape(b["name"])}</th>' for b in manifest['boxes']) + '</tr></thead><tbody>')
@@ -552,7 +601,7 @@ def write_page(root, result, events):
     parts.append('<h2>Full-state scope and cadence</h2><p>Every listed Shared section is compared. Native PerPeer exclusions are retained below; their behavioral restoration remains a separate requirement.</p><pre>'+escape(json.dumps(dict(verdict=result['fullstate'],records=result['fullstate_records']),indent=2))+'</pre>')
     if result['assigned_capture_rows']:
         parts.append('<p class="fail">Mandatory full-state evidence remains RED / NOT COVERED by these assigned engine rows. No sample, refusal or difference is masked.</p><ul>'+''.join('<li>'+escape(reason)+'</li>' for reason in result['assigned_capture_rows'].values())+'</ul>')
-    parts.append('<p>After the capture lane fixes are included in this build, rerun:</p><pre>'+escape(result['rerun_after_capture_fix'])+'</pre>')
+    parts.append('<p>Rerun command preserves the declared deadlines, roster, expanded fault schedule and barriers. Known box routes use the current manifest and its guards; original routes remain in this run’s manifest. Add --quiet-window only for a new window scheduled by the lead.</p><pre>'+escape(result['rerun_after_capture_fix'])+'</pre>')
     parts.append('<h2>Engine and driver findings</h2>')
     for finding in result['findings']:
         parts.append('<p class="fail">' + (f'<a href="{escape(finding["path"])}">{escape(finding["path"])}:{finding["line"]}</a> ' if 'path' in finding else '') + escape(finding.get('text',finding.get('reason',''))) + '</p>')
