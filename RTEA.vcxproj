@@ -960,6 +960,7 @@
     <ClInclude Include="Source\Network\NetMatchSelfTest.h" />
     <ClInclude Include="Source\Network\NetPortMap.h" />
     <ClInclude Include="Source\Network\NetProtocol.h" />
+    <ClInclude Include="Source\System\AsyncLineWriter.h" />
     <ClInclude Include="Source\System\FrameRecorder.h" />
     <ClInclude Include="Source\System\RotatePrimitiveSelfTest.h" />
     <ClInclude Include="Source\System\FloatText.h" />
