@@ -218,6 +218,7 @@ RED_SEGMENT_DIGEST = "world-segment-digest-differs-from-its-archive"
 RED_SEGMENT_BOOTED_THE_PRESET = "world-segment-playback-booted-the-preset"
 RED_SEGMENT_CHAIN_BROKE = "world-segment-chain-broke"
 RED_SEGMENT_HASHES_DIVERGED = "world-segment-playback-hashes-diverged"
+RED_WORLD_TRACE_VERDICT = "world-host-trace-reads-failed-or-no-ticks"
 RED_SEGMENT_TAIL_UNRECORDED = "world-segment-chain-left-the-host-tail-unrecorded"
 RED_RESUMED_NO_SEGMENT = "resumed-world-wrote-no-segment"
 RED_RESUMED_ORDINARY_FILE = "resumed-world-recorded-an-ordinary-file"
@@ -912,6 +913,10 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
         windowed[name] = data
     host_last = max(entry["tick"] for entry in windowed["host"]["runs"][0]["tick_hashes"])
     replay_last = max(entry["tick"] for entry in windowed["replay"]["runs"][0]["tick_hashes"])
+    # The world round is judged by no scenario; its own trace carries how it ended and the ticks it played.
+    host_run = windowed["host"]["runs"][0]
+    assert host_run.get("passed") is True and int(host_run.get("ticks") or 0) > 0, \
+        f"{RED_WORLD_TRACE_VERDICT}: passed={host_run.get('passed')} ticks={host_run.get('ticks')}"
     last = min(host_last, replay_last)
     for name, data in windowed.items():
         data["runs"][0]["tick_hashes"] = [entry for entry in data["runs"][0]["tick_hashes"] if first_tick < entry["tick"] <= last]

@@ -8154,6 +8154,12 @@ int RunNetMatchServiceE2E() {
 			s_netMatchServiceE2EExitCode = s_netReplayExitCode;
 		}
 		if (traceRun) {
+			// A round no scenario judges (a dedicated world) carries its own verdict: how it ended and the ticks it played.
+			if (!g_MetricsCollector.HasResult()) {
+				g_MetricsCollector.SetResult(s_netMatchServiceE2EExitCode == 0);
+				g_MetricsCollector.RecordString("verdict_source", "round");
+			}
+			if (!g_MetricsCollector.HasNumeric("final_tick")) g_MetricsCollector.Record("final_tick", static_cast<double>(g_TimerMan.GetSimUpdateCount()));
 			g_MetricsCollector.EndRun();
 			const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 			if (!g_MetricsCollector.WriteReport(tracePath)) {
