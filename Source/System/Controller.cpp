@@ -24,6 +24,7 @@
 
 namespace {
 	bool CrossBotSelected(const nlohmann::json& ranges, uint64_t round, uint64_t tick) {
+		return false; // Deliberate RED control.
 		return std::any_of(ranges.begin(), ranges.end(), [=](const auto& row) {
 			return (row.value("round", uint64_t{0}) == 0 || row.value("round", uint64_t{0}) == round) &&
 			       tick >= row.at("from").template get<uint64_t>() && tick <= row.at("to").template get<uint64_t>();
