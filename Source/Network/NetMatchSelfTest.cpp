@@ -144,7 +144,7 @@ namespace RTE {
 		}
 
 		bool TestCrossFreshRecoveryProof(std::string* error) {
-			const nlohmann::json sample{{"input_serial", 4}, {"input_round", 9}, {"target_tick", 43}, {"actor", 42}, {"produced_wall_ms", 101.0}};
+			const nlohmann::json sample{{"input_serial", 4}, {"input_round", 9}, {"target_tick", 43}, {"actor", 42}, {"produced_wall_ms", 101.0}, {"queue_confirmed", true}};
 			const auto accepts = [&](uint64_t round, uint64_t tick, int64_t wire, bool control, bool held, bool catchup, double after) {
 				return MetricsCollector::IsFreshControllerRecovery(sample, round, tick, 42, wire, control, held, catchup, after);
 			};
@@ -155,6 +155,28 @@ namespace RTE {
 				*error = "recovery accepted stale, wrong-history, held, replayed or unapplied controller input"; return false;
 			}
 			std::cout << "[net-match-selftest] PASS recovery_requires_fresh_produced_and_applied_controllable_input" << std::endl;
+			return true;
+		}
+
+		bool TestCrossQueuedControllerEvidence(std::string* error) {
+			if (!g_MetricsCollector.OpenEvents("Userdata/cross-queued-input.jsonl", 65536)) { *error = "input stream did not open"; return false; }
+			g_MetricsCollector.BeginEventTick({{"round", 9}, {"tick", 40}, {"phase", "live"}});
+			bool passed = true;
+			const auto sample = [&](uint64_t produced, uint64_t predicted, uint64_t queued, const std::vector<long>& actors, uint64_t prior, bool wanted) {
+				g_MetricsCollector.RecordProducedController(9, produced, predicted, 42, 1, 100 + produced);
+				g_MetricsCollector.ConfirmProducedControllers(9, produced, queued, actors, prior);
+				passed &= g_MetricsCollector.ProducedControllerFor(9, predicted, 42).value("queue_confirmed", false) == wanted;
+			};
+			sample(40, 43, 44, {42}, 0, false);
+			sample(41, 44, 44, {42}, 0, false);
+			sample(42, 45, 45, {41}, 0, false);
+			sample(43, 46, 46, {42}, 46, false);
+			sample(44, 47, 47, {42}, 46, true);
+			auto unconfirmed = g_MetricsCollector.ProducedControllerFor(9, 47, 42); unconfirmed["queue_confirmed"] = false;
+			passed &= !MetricsCollector::IsFreshControllerRecovery(unconfirmed, 9, 47, 42, 47, true, false, false, 100);
+			g_MetricsCollector.CloseEvents();
+			if (!passed) { *error = "input confirmation accepted deferred, retimed, restored or unqueued input"; return false; }
+			std::cout << "[net-match-selftest] PASS controller_recovery_requires_new_queue_readback_beyond_restored_input" << std::endl;
 			return true;
 		}
 
@@ -13892,6 +13914,7 @@ namespace RTE {
 		row(&TestCrossRecordKinds, "action_record_fields");
 		row(&TestCrossProducedControllerEvidence, "produced_controller_evidence");
 		row(&TestCrossFreshRecoveryProof, "fresh_controller_recovery_proof");
+		row(&TestCrossQueuedControllerEvidence, "controller_recovery_requires_new_queue_readback_beyond_restored_input");
 		row(&TestCrossTickTiming, "exclusive_tick_timing");
 		row(&TestCrossTimedTransport, "timed_transport_reset");
 		row(&NetModerationGUIProbe::RunCrossScopeSelfTest, "gameplay_probe_scopes");

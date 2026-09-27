@@ -207,6 +207,9 @@ namespace RTE {
 			    std::isfinite(afterWallMs) && sample.at("produced_wall_ms").get<double>() >= afterWallMs;
 		} catch (const json::exception&) { return false; }
 	}
+	void MetricsCollector::ConfirmProducedControllers(uint64_t round, uint64_t producedTick, uint64_t targetTick, const std::vector<long>& queuedActors, uint64_t priorInputThrough) {
+		// RED control: a produced sample has no confirmed queue readback yet.
+	}
 
 	void MetricsCollector::CloseEvents() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
