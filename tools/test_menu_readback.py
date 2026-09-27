@@ -18,7 +18,7 @@ from test_lobby_lifecycle import wait_for_log
 from test_telemetry_bundle import set_visual_resolution
 
 
-CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "live", "input", "input-parity", "disabled",
+CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "save-hotkey", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
          "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
@@ -141,6 +141,7 @@ SIZE_GATES = (
       for size in ("640x360", "960x540", "1280x720")),
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
+    ("save-hotkey", "960x540"),
     ("lobby-name", "640x360"),
     ("lobby-name", "960x540"),
     ("lobby-name", "1280x720"),
@@ -457,6 +458,20 @@ def pause_save_probe(who, root):
     return {"schema": 1, "timeout_ms": 90000, "steps": steps}
 
 
+def save_hotkey_probe(who, root):
+    """F5 in a running match: the host's press saves the match for every peer and says so on its toast line."""
+    steps = [{"op": "wait", "sim_at_least": 150}]
+    if who == "host":
+        steps += [{"op": "key_down", "key": "F5"}, {"op": "key_up", "key": "F5"}, {"op": "wait", "renders": 120},
+                  {"op": "signal", "name": "done"},
+                  {"op": "wait_file", "path": str(probe_root(root, "client") / "done.json")}]
+    else:
+        steps += [{"op": "wait_file", "path": str(probe_root(root, "host") / "done.json")},
+                  {"op": "signal", "name": "done"}]
+    steps += [{"op": "finish"}]
+    return {"schema": 1, "timeout_ms": 90000, "steps": steps}
+
+
 def host_activity_label(row):
     module = row.get("module") or ""
     return row["preset"] + (f" - {module}" if module else "")
@@ -692,6 +707,9 @@ def scripts(case, port, root, size="960x540"):
     if case == "repair":
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
                 {who: repair_probe(who, root, size != "640x360") for who in ("host", "client")})
+    if case == "save-hotkey":
+        return ({who: f"wait_file {probe_root(root, 'client') / 'done.json'} 90\nexit\n" for who in ("host", "client")},
+                {who: save_hotkey_probe(who, root) for who in ("host", "client")})
     if case == "pause-save":
         # Both peers stay until the client has read the save the host made.
         return ({who: f"wait_file {probe_root(root, 'client') / 'done.json'} 90\nexit\n" for who in ("host", "client")},
@@ -1759,7 +1777,7 @@ def run_case(options, case, root, failing=None):
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in ("pause", "pause-save", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
+    paired = case in ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
     menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early")
     seeded = {} if failing else seeds(case)
@@ -1783,7 +1801,7 @@ def run_case(options, case, root, failing=None):
                 args += ["-net-player-name", "F" * (DISPLAY_NAME_MAX_BYTES + 1)]
             if paired and not menu_driven:
                 # A repair round is long enough for a seat held at its start to finish its rejoin before the repair runs.
-                round_ticks = "2400" if case == "repair" else "1200" if case == "pause-save" else "400"
+                round_ticks = "2400" if case == "repair" else "1200" if case in ("pause-save", "save-hotkey") else "400"
                 args += ["-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
                          "-net-match-ticks", round_ticks, "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
                          "-input-script", str(inputs), "-net-match-report", str(root / f"{who}-match.json")]
@@ -2003,6 +2021,17 @@ def run_case(options, case, root, failing=None):
             assert focused[0] == focused[1], f"the focused control changed across the run: {focused}"
             assert first["screen"] == last["screen"] == "MultiplayerScreen"
             assert first["service"] == last["service"], (first["service"], last["service"])
+        if case == "save-hotkey":
+            # F5 is the host's save for every peer: the press names one save, both writers take it, the toast says so.
+            report = json.loads((root / "host-match.json").read_text(encoding="utf-8"))
+            texts = [toast["text"] for toast in report["ui"]["toasts"] if toast["kind"] == "match_save"]
+            assert texts[:1] == ["Saving..."], texts
+            named = re.findall(r"^\[autosave\] manual save named tick=(\d+)", logs["host"], re.MULTILINE)
+            assert len(named) == 1, named
+            for who in ("host", "client"):
+                taken = re.findall(r"^\[autosave\] manual save taken tick=(\d+)", logs[who], re.MULTILINE)
+                assert taken == named, (who, taken, named)
+            result["save_hotkey"] = {"tick": int(named[0]), "toasts": texts}
         if case == "pause-save":
             # The row is the host's to press and a client's to read; both peers write the one capture it names, marked as
             # the host's save, and the host hears back from both writers.

@@ -288,6 +288,42 @@ def _probe_writable(directory):
 
 FIREWALL_RULES_KEY = r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules"
 FIREWALL_ALLOW_SCRIPT = r"D:\Projects\reviews\takeover-20260909\grok-workers\firewall_allow_all_exes.ps1"
+# While the feel matrix's stream holds this box (inventory/run_stream.py writes the marker for S3's run), only an
+# engine whose environment carries the marker's token launches.
+FEEL_MARKER = Path(r"D:\mx\FEEL-MATRIX-RUNNING")
+FEEL_TOKEN_ENV = "CCCP_FEEL_MATRIX_RUN"
+open_process = api(K, "OpenProcess", [W.DWORD, W.BOOL, W.DWORD], W.HANDLE)
+
+
+def _pid_alive(pid):
+    handle = open_process(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    code = W.DWORD()
+    try:
+        get_exit(handle, C.byref(code))
+    finally:
+        close_handle(handle)
+    return code.value == 259  # STILL_ACTIVE
+
+
+def feel_matrix_hold(env, marker=None):
+    """The marker's text while the feel matrix's stream holds this box and the launch is not one of its own, else None."""
+    marker = FEEL_MARKER if marker is None else Path(marker)
+    try:
+        text = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return text[:300] or "an unreadable marker"
+    if not isinstance(doc, dict):
+        return text[:300]
+    if doc.get("token") and env.get(FEEL_TOKEN_ENV) == doc.get("token"):
+        return None
+    pid = doc.get("pid")
+    return text[:300] if isinstance(pid, int) and _pid_alive(pid) else None
 
 
 def firewall_allows_inbound(exe):
@@ -460,6 +496,12 @@ class IsolatedRun:
     def start(self):
         handles = []
         try:
+            if Path(self.argv[0]).name.lower().startswith("cortex command"):
+                held = feel_matrix_hold(self.env)
+                self._check("feel_matrix_not_holding_box", held is None, held or "no live marker")
+                if held:
+                    self._save()
+                    raise StartupCheckError(f"feel_matrix_not_holding_box: the feel matrix holds this box: {held}")
             if self.do_startup_checks:
                 self._startup_checks()
             wait_while_user_fullscreen(self.record, self._save)
