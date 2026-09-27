@@ -5823,8 +5823,8 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (!m_IsHost || !m_AdmissionAttached || m_AutosaveMatchId.empty() || !AutosaveStore::ValidMatchId(m_AutosaveMatchId)) return;
-			// A match that writes no checkpoint has nothing to resume, so it leaves no admission file.
-			if (m_MatchAutosaveSeconds == 0) return;
+			// A match that writes no checkpoint has nothing to resume, so it leaves no admission file; a save the host made is one.
+			if (m_MatchAutosaveSeconds == 0 && m_LastMatchSaveTime.load() == 0) return;
 			matchId = m_AutosaveMatchId;
 			directorySession = m_DirectorySessionId;
 			directoryToken = m_DirectoryToken;
@@ -5912,7 +5912,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_PublishedAdmissionMatchId.empty()) return;
 			// Still checkpointing that very match: the file belongs to a match that can still be resumed.
-			if (m_IsHost && m_MatchAutosaveSeconds > 0 && m_AutosaveMatchId == m_PublishedAdmissionMatchId) return;
+			if (m_IsHost && (m_MatchAutosaveSeconds > 0 || m_LastMatchSaveTime.load() != 0) && m_AutosaveMatchId == m_PublishedAdmissionMatchId) return;
 			matchId = m_PublishedAdmissionMatchId;
 			// One sweep per ended round: the check reads every archive of the match, so it may not ride
 			// the pump more than once.
