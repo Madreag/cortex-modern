@@ -22,6 +22,39 @@ class CrossDriverTests(unittest.TestCase):
             with patch.object(cross_peers.os,'walk',return_value=[(str(root),[],['gone.txt','retained.gz'])]):
                 self.assertEqual(cross_peers.scratch_bytes(root),6)
 
+    def test_live_capture_compression_waits_for_the_matching_writer_scope(self):
+        from feel.records import CaptureSealer, open_record
+        with tempfile.TemporaryDirectory() as temporary:
+            own=Path(temporary); dump=own/'fullstate/process-1/round-2/capture-1/sample'
+            (dump/'600').mkdir(parents=True); (own/'engine').mkdir()
+            source=dump/'600/scene.txt'; source.write_bytes(b'complete scene\n')
+            log=own/'engine/stdout.log'
+            log.write_text(f'[fullstate-context] tick=600 round=2 label=sample path={dump}\n')
+            sealer=CaptureSealer(own); sealer.poll()
+            self.assertTrue(source.is_file())
+            with log.open('a') as stream:
+                stream.write('[fullstate-scope] tick=601 round=2 label=sample per_peer=camera\n')
+                stream.write('[fullstate-scope] tick=600 round=2 label=sample per_peer=')
+            sealer.poll(); self.assertTrue(source.is_file())
+            with log.open('a') as stream: stream.write('camera\n')
+            sealer.poll(); self.assertFalse(source.exists())
+            with open_record(source,'rb') as stream: self.assertEqual(stream.read(),b'complete scene\n')
+            sealer.poll()
+            self.assertEqual(len((own/'compressed-records.jsonl').read_text().splitlines()),1)
+
+    def test_live_capture_compression_defers_ambiguous_reexecutions(self):
+        from feel.records import CaptureSealer
+        with tempfile.TemporaryDirectory() as temporary:
+            own=Path(temporary); (own/'engine').mkdir()
+            contexts=[]
+            for ordinal in (1,2):
+                dump=own/f'fullstate/process-1/round-2/capture-{ordinal}/sample'
+                (dump/'600').mkdir(parents=True); (dump/'600/scene.txt').write_text('retain until exit')
+                contexts.append(f'[fullstate-context] tick=600 round=2 label=sample path={dump}\n')
+            (own/'engine/stdout.log').write_text(''.join(contexts)+'[fullstate-scope] tick=600 round=2 label=sample per_peer=camera\n')
+            CaptureSealer(own).poll()
+            self.assertEqual(len(list((own/'fullstate').rglob('scene.txt'))),2)
+
     def test_closed_instance_sealing_preserves_nested_record_paths(self):
         from feel.records import open_record
         with tempfile.TemporaryDirectory() as temporary:

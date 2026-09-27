@@ -1,4 +1,4 @@
-"""Retain large text records losslessly after their engine processes have exited."""
+"""Retain large text records losslessly once their writers have closed them."""
 from __future__ import annotations
 
 import gzip
@@ -164,6 +164,41 @@ def compress_closed_record(path, root):
         index.write(json.dumps(receipt)+'\n')
     path.unlink()
     return receipt
+
+
+class CaptureSealer:
+    """Pack completed captures while an engine runs, without touching active dumps.
+
+    ActivityMan emits fullstate-scope after FullStateHashLine returns and closes
+    every section file. Repeated keys with several queued paths are ambiguous;
+    those captures remain raw until the owning process exits.
+    """
+    def __init__(self, own):
+        self.own=Path(own).resolve()
+        self.log=self.own/'engine/stdout.log'
+        self.offset=0; self.pending=b''; self.contexts={}; self.sealed=set()
+
+    def poll(self):
+        if not self.log.is_file(): return
+        with self.log.open('rb') as stream:
+            stream.seek(self.offset); block=stream.read(4*1024*1024); self.offset+=len(block)
+        lines=(self.pending+block).split(b'\n'); self.pending=lines.pop()
+        for raw in lines:
+            line=raw.decode('utf-8',errors='replace').strip()
+            if match:=re.match(r'^\[fullstate-context\] tick=(\d+) round=(\d+) label=(\S+) path=(.+)$',line):
+                key=match.group(1,2,3)
+                path=Path(match[4]).resolve()/match[1]
+                if not path.is_relative_to(self.own/'fullstate'):
+                    raise ValueError('capture context leaves its owning instance')
+                self.contexts.setdefault(key,[]).append(path)
+            elif match:=re.match(r'^\[fullstate-scope\] tick=(\d+) round=(\d+) label=(\S+) per_peer=',line):
+                paths=self.contexts.get(match.group(1,2,3),[])
+                if len(paths)!=1 or paths[0] in self.sealed: continue
+                path=paths[0]
+                if not path.is_dir(): continue
+                for section in sorted(path.glob('*.txt')):
+                    compress_closed_record(section,self.own)
+                self.sealed.add(path)
 
 
 def compress_case_records(root):
