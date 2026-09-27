@@ -23,6 +23,7 @@
 #include "NetModerationGUI.h"
 #include "NetHostOptionsText.h"
 #include "Activity.h"
+#include "Actor.h"
 #include "AEmitter.h"
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
