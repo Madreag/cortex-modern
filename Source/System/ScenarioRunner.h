@@ -391,7 +391,7 @@ namespace RTE {
 		/// Erases a dropped claim whose claimant is gone and whose seat is no longer held.
 		static bool TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame);
 		/// Whether this peer may issue team commands for the team (any of a shared team's human peers may).
-		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId);
+		static bool IsLockstepTeamCommandSender(int team, uint8_t senderPeerId, uint64_t atFrame = 0);
 		/// Team authority, or the sender owns the target, or writerUID names a same-team actor the sender owns.
 		static bool IsLockstepAIOrderAuthorized(uint8_t senderPeerId, const NetGameAIOrder& order);
 		/// Whether a peer may make an AI pass's write: it commands the team, drives the written actor, or
