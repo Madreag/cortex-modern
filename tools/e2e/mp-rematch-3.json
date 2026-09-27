@@ -1,0 +1,212 @@
+{
+  "schema": 1,
+  "name": "mp-rematch-3",
+  "title": "Three rematches in a row through End Match and the rematch lobby, the last round hash-equal",
+  "port_base": 49462,
+  "size": "960x540",
+  "timeout_s": 320,
+  "checklist": [
+    {
+      "id": "round1-host",
+      "what": "Round 1 runs on host, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe observes Running gameplay in this round",
+      "peer": "host",
+      "mark": "round1-play",
+      "sim_progress": 120,
+      "run": "rematch-3"
+    },
+    {
+      "id": "round2-host",
+      "what": "Round 2 runs on host, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe observes Running gameplay in this round",
+      "peer": "host",
+      "mark": "round2-play",
+      "sim_progress": 120,
+      "run": "rematch-3"
+    },
+    {
+      "id": "round3-host",
+      "what": "Round 3 runs on host, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe observes Running gameplay in this round",
+      "peer": "host",
+      "mark": "round3-play",
+      "sim_progress": 120,
+      "run": "rematch-3"
+    },
+    {
+      "id": "round4-host",
+      "what": "Round 4 runs on host, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe observes Running gameplay in this round",
+      "peer": "host",
+      "mark": "round4-play",
+      "sim_progress": 120,
+      "run": "rematch-3"
+    },
+    {
+      "id": "lobby-1-host",
+      "what": "Match 1 ends through End Match and returns to the live rematch lobby.",
+      "screen": "MultiplayerScreen",
+      "assert": "menu assert_substate Lobby; dump_lobby",
+      "peer": "host",
+      "mark": "rematch-lobby-1",
+      "run": "rematch-3"
+    },
+    {
+      "id": "lobby-2-host",
+      "what": "Match 2 ends through End Match and returns to the live rematch lobby.",
+      "screen": "MultiplayerScreen",
+      "assert": "menu assert_substate Lobby; dump_lobby",
+      "peer": "host",
+      "mark": "rematch-lobby-2",
+      "run": "rematch-3"
+    },
+    {
+      "id": "lobby-3-host",
+      "what": "Match 3 ends through End Match and returns to the live rematch lobby.",
+      "screen": "MultiplayerScreen",
+      "assert": "menu assert_substate Lobby; dump_lobby",
+      "peer": "host",
+      "mark": "rematch-lobby-3",
+      "run": "rematch-3"
+    },
+    {
+      "id": "last-round-hashes-host",
+      "peer": "host",
+      "mark": "round4-play",
+      "screen": "game",
+      "gate": "last-round-hashes",
+      "what": "Round 4 runs on both peers with every hash record equal through tick 600, including total and controller.",
+      "run": "rematch-3"
+    },
+    {
+      "id": "round1-client",
+      "what": "Round 1 runs on client, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe observes Running gameplay in this round",
+      "peer": "client",
+      "mark": "round1-play",
+      "sim_progress": 120,
+      "run": "rematch-3"
+    },
+    {
+      "id": "round2-client",
+      "what": "Round 2 runs on client, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe observes Running gameplay in this round",
+      "peer": "client",
+      "mark": "round2-play",
+      "sim_progress": 120,
+      "run": "rematch-3"
+    },
+    {
+      "id": "round3-client",
+      "what": "Round 3 runs on client, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe observes Running gameplay in this round",
+      "peer": "client",
+      "mark": "round3-play",
+      "sim_progress": 120,
+      "run": "rematch-3"
+    },
+    {
+      "id": "round4-client",
+      "what": "Round 4 runs on client, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe observes Running gameplay in this round",
+      "peer": "client",
+      "mark": "round4-play",
+      "sim_progress": 120,
+      "run": "rematch-3"
+    },
+    {
+      "id": "lobby-1-client",
+      "what": "Match 1 ends through End Match and returns to the live rematch lobby.",
+      "screen": "MultiplayerScreen",
+      "assert": "menu assert_substate Lobby; dump_lobby",
+      "peer": "client",
+      "mark": "rematch-lobby-1",
+      "run": "rematch-3"
+    },
+    {
+      "id": "lobby-2-client",
+      "what": "Match 2 ends through End Match and returns to the live rematch lobby.",
+      "screen": "MultiplayerScreen",
+      "assert": "menu assert_substate Lobby; dump_lobby",
+      "peer": "client",
+      "mark": "rematch-lobby-2",
+      "run": "rematch-3"
+    },
+    {
+      "id": "lobby-3-client",
+      "what": "Match 3 ends through End Match and returns to the live rematch lobby.",
+      "screen": "MultiplayerScreen",
+      "assert": "menu assert_substate Lobby; dump_lobby",
+      "peer": "client",
+      "mark": "rematch-lobby-3",
+      "run": "rematch-3"
+    },
+    {
+      "id": "last-round-hashes-client",
+      "peer": "client",
+      "mark": "round4-play",
+      "screen": "game",
+      "gate": "last-round-hashes",
+      "what": "Round 4 runs on both peers with every hash record equal through tick 600, including total and controller.",
+      "run": "rematch-3"
+    }
+  ],
+  "runs": [
+    {
+      "name": "rematch-3",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-max-ticks",
+            "600"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "mp-rematch-3.host.menu.txt",
+          "probe": "mp-rematch-3.host.probe.json",
+          "gameplay_epochs": 4
+        },
+        {
+          "name": "client",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-max-ticks",
+            "600"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "mp-rematch-3.client.menu.txt",
+          "probe": "mp-rematch-3.client.probe.json",
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark host-listening"
+          },
+          "gameplay_epochs": 4
+        }
+      ],
+      "hash_gate": {
+        "name": "last-round-hashes",
+        "peers": [
+          "host",
+          "client"
+        ],
+        "first_tick": 1,
+        "cap": 600
+      }
+    }
+  ]
+}
