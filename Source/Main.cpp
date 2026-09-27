@@ -2955,7 +2955,8 @@ static std::string NetMatchEndReason(const Activity* activity) {
 static void DumpSimStateIfArmed(uint64_t simTick) {
 	static uint64_t s_from = 1;
 	static uint64_t s_to = 0;
-	static std::ofstream s_out;
+	// Every tick's dump goes to the disk from a writer thread; the simulation only formats it.
+	static AsyncLineWriter s_out;
 	static bool s_checked = false;
 	if (!s_checked) {
 		s_checked = true;
@@ -2964,17 +2965,18 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 		unsigned long long to = 0;
 		if (env && std::sscanf(env, "%llu:%llu", &from, &to) == 2 && to >= from) {
 			const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
-			s_out.open(base + ".simdump.txt", std::ios::trunc);
-			if (s_out.is_open()) {
+			if (s_out.Open(base + ".simdump.txt")) {
 				s_from = from;
 				s_to = to;
 			}
 		}
 	}
-	if (!s_out.is_open() || simTick < s_from || simTick > s_to) {
+	if (!s_out.IsOpen() || simTick < s_from || simTick > s_to) {
 		return;
 	}
-	g_MovableMan.DumpSimState(simTick, s_out);
+	std::ostringstream text;
+	g_MovableMan.DumpSimState(simTick, text);
+	s_out.WriteBlock(std::move(text).str());
 }
 
 // CC_TERRAIN_DUMP=<tick> saves the material and FG color bitmaps beside the -out trace at that tick
