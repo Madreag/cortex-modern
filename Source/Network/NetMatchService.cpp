@@ -4771,7 +4771,13 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal, std::optional<uint64_t>* outRoundEnded) {
 		if (outRefusal) *outRefusal = 0;
-		std::vector<uint8_t> incoming = lobby.TakePendingTailBytes();
+		std::vector<std::pair<uint64_t, size_t>> foreign;
+		// A private catch-up replays one round: a chunk of any other round is dropped, never replayed.
+		std::vector<uint8_t> incoming = lobby.TakePendingTailBytes(catchUp.privateMatch ? std::optional<uint64_t>(catchUp.roundId) : std::nullopt, &foreign);
+		for (const auto& [round, bytes]: foreign) {
+			if (!catchUp.droppedForeignRounds.insert(round).second) continue;
+			System::PrintDiagnosticLine("[net-match] dropped a tail chunk of round " + std::to_string(round) + " (" + std::to_string(bytes) + " bytes): this catch-up replays round " + std::to_string(catchUp.roundId));
+		}
 		if (incoming.size() + catchUp.partialTail.size() > 32ULL * 1024 * 1024) {
 			ScenarioRunner::SetControllerReplayError("private tail exceeds its bounded receive buffer"); return;
 		}
