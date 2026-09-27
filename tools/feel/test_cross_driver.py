@@ -54,6 +54,15 @@ class CrossDriverTests(unittest.TestCase):
             (root/'stop.json').write_text('{}')
             with self.assertRaises(RuntimeError): cross_peers.wait_for_payload_release(root,0)
 
+    def test_exited_payload_cannot_release_its_stale_ready_file(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); (root/'launch-ready.json').write_text('{}')
+            box=dict(name='local',kind='windows-local')
+            with self.assertRaisesRegex(RuntimeError,'exited'):
+                cross_peers.release_ready_payloads({'local':box},{'local':(None,None,str(root))},root,{'local':Mock(poll=lambda:1)},1)
+            self.assertFalse((root/'launch-go.json').exists())
+
     def test_index_orders_launches_not_report_regeneration_times(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
