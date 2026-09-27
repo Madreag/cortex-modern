@@ -3163,6 +3163,14 @@ namespace RTE {
 				*error = "own count 65 with match tick 65 was not a setup failure";
 				return false;
 			}
+			if (lateJoin.EarlyOverIsSetupFailure(65, true)) {
+				*error = "a round won at match tick 65 was a setup failure";
+				return false;
+			}
+			if (!lateJoin.EarlyOverIsSetupFailure(65, false)) {
+				*error = "a round over with no winner at match tick 65 was not a setup failure";
+				return false;
+			}
 			NetMatchE2ETickClock longRun;
 			for (uint64_t tick = 1; tick <= 3000; ++tick) {
 				longRun.NoteSimTick(tick);

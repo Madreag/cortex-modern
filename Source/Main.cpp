@@ -492,6 +492,8 @@ static std::string s_netJoinSessionId; //!< -net-join-session: the directory ses
 static constexpr uint32_t c_CappedStopDrainMs = 8000;
 static constexpr uint32_t c_CappedStopLingerMs = 1500;
 static constexpr uint64_t c_NetMatchE2EEditorTickCap = 120; //!< A synchronized setup editor that has not finished by here is stuck, not slow.
+static constexpr uint64_t c_NetMatchE2EAdmissionWaitTicks = 1800; //!< How long past its cap a host waits for a seat still coming into the round.
+static uint64_t s_netMatchE2EOwedSampleFrame = 0; //!< The full-state sample frame a round owes a seat admitted late; 0 when none.
 static uint64_t s_netLockstepTicks = 0;
 static std::unordered_set<uint64_t> s_netMatchScreenshotTicks;
 static uint16_t s_netLockstepInputDelay = 0;
@@ -5000,10 +5002,18 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 }
 
 /// </summary>
-static bool IsFirstE2ERematchReady() {
+/// Whether the activity ended with a winning team: a won round, however short.
+static bool NetMatchActivityHasWinner(const Activity* activity) {
+	const GameActivity* game = dynamic_cast<const GameActivity*>(activity);
+	return game && game->GetWinnerTeam() != Activity::NoTeam;
+}
+
+static bool IsE2ERematchReady() {
 	const Activity* activity = g_ActivityMan.GetActivity();
-	return s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestRematch && s_netMatchServiceE2ERematches == 0 &&
-	       activity && activity->IsOver() && s_netMatchE2ETicks.Total() >= 100;
+	const auto& args = ScenarioRunner::GetArgs();
+	const int rematches = static_cast<int>(std::max<uint32_t>(args.selftestRematch ? 1 : 0, args.selftestRematches));
+	return s_netMatchServiceE2E && s_netMatchServiceE2ERematches < rematches && activity && activity->IsOver() &&
+	       !s_netMatchE2ETicks.EarlyOverIsSetupFailure(s_netMatchE2ETicks.Total(), NetMatchActivityHasWinner(activity));
 }
 
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
@@ -6152,8 +6162,18 @@ void RunGameLoop() {
 				g_MovableMan.FeedTickEndChecksum();
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
+				// Ticks a held seat ran off the round leave both hash records before this tick is written.
+				static uint64_t liveAbandonedFrom = 0;
+				if (const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(); abandoned != 0) {
+					g_MetricsCollector.RetractTickHashesFrom(abandoned);
+					liveAbandonedFrom = liveAbandonedFrom == 0 ? abandoned : std::min(liveAbandonedFrom, abandoned);
+				}
 				if (liveHashTick) {
 					static std::ofstream trace(s_netLiveTickHashPath, std::ios::trunc);
+					if (liveAbandonedFrom != 0) {
+						trace << nlohmann::json{{"abandon_from", liveAbandonedFrom}}.dump() << '\n';
+						liveAbandonedFrom = 0;
+					}
 					nlohmann::json subsystems = nlohmann::json::object();
 					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
 					trace << nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
@@ -6453,7 +6473,7 @@ void RunGameLoop() {
 			if (ScenarioRunner::FinishLockstepSimulationTick(simTick)) {
 				const std::string reason = ScenarioRunner::GetLockstepStopReason();
 				// A completed first round still takes the shared rematch transition below.
-				if (!reason.starts_with("Complete:") || !IsFirstE2ERematchReady()) {
+				if (!reason.starts_with("Complete:") || !IsE2ERematchReady()) {
 					ScenarioRunner::SetControllerReplayError(reason);
 					HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
 					break;
@@ -6852,12 +6872,12 @@ void RunGameLoop() {
 				}
 				// E2E rematch ride-through: match 1 ended, so finish it, reconvene the live session in the
 				// lobby, and relaunch — round 2 is policed by the live desync exchange like any match.
-				if (IsFirstE2ERematchReady()) {
-					s_netMatchServiceE2ERematches = 1;
+				if (IsE2ERematchReady()) {
+					++s_netMatchServiceE2ERematches;
 					const std::string result = BuildNetMatchResultText();
 					{
 						std::ostringstream line;
-						line << "[net-match-service-e2e] rematch: match 1 over (" << result << "), returning to lobby";
+						line << "[net-match-service-e2e] rematch: match " << s_netMatchServiceE2ERematches << " over (" << result << "), returning to lobby";
 						System::PrintDiagnosticLine(line.str());
 					}
 					g_NetMatchService.FinishMatch(result);
@@ -6912,19 +6932,20 @@ void RunGameLoop() {
 					}
 					{
 						std::ostringstream line;
-						line << "[net-match-service-e2e] rematch: round 2 launching";
+						line << "[net-match-service-e2e] rematch: round " << (s_netMatchServiceE2ERematches + 1) << " launching";
 						System::PrintDiagnosticLine(line.str());
 					}
 					// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
 					s_netMatchE2ETicks.OnNewMatch();
+					s_netMatchE2EOwedSampleFrame = 0;
 					break;
 				}
 				// A legitimate game-over may end the activity mid-run; the sim keeps ticking to the cap so
-				// the trace stays bounded. An end in the first 100 ticks still means a broken setup.
+				// the trace stays bounded. An end in the first 100 ticks with no winner still means a broken setup.
 				const uint64_t earlyOverTick = ScenarioRunner::HasLockstepCoordinator()
 					                               ? ScenarioRunner::GetLockstepAppliedFrame()
 					                               : s_netMatchE2ETicks.Total();
-				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure(earlyOverTick))) {
+				if (activityState == Activity::HasError || (activityState == Activity::Over && s_netMatchE2ETicks.EarlyOverIsSetupFailure(earlyOverTick, NetMatchActivityHasWinner(activity)))) {
 					s_netMatchServiceE2EError = std::string("activity ended in state ") + ActivityStateName(activityState);
 					s_netMatchServiceE2EExitCode = 1;
 					g_NetMatchService.ReportRuntimeError(s_netMatchServiceE2EError);
@@ -6936,9 +6957,27 @@ void RunGameLoop() {
 					s_netMatchE2EActorCensus = g_MovableMan.GetActorCount();
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const bool unlimitedWorld = (s_netWorldDaemon || s_netPersistentWorld) && !s_netMatchTicksExplicit;
-					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
+					const uint64_t roundTicks = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					// A peer counts its cap from its own first tick, a world joiner too.
 					const uint64_t completedTicks = s_netMatchE2ETicks.Total();
+					// The round never ends with a seat mid-admission and unsampled: the host waits for a seat still coming in,
+					// then for the first full-state sample after it, so the returner shares one with the round (bounded).
+					uint64_t tickCap = roundTicks;
+					if (s_netFullStateEvery > 0 && ScenarioRunner::HasLockstepCoordinator()) {
+						const uint64_t applied = ScenarioRunner::GetLockstepAppliedFrame();
+						// The host sees the seat coming in; the seat sees its own catch-up. Both end on the same frame before its activation.
+						const bool comingIn = g_NetMatchService.IsHost() ? g_NetMatchService.SeatMidAdmission(applied) : ScenarioRunner::WorldCatchUpActive();
+						if (completedTicks + s_netFullStateEvery >= roundTicks && comingIn)
+							s_netMatchE2EOwedSampleFrame = (applied / s_netFullStateEvery + 1) * s_netFullStateEvery;
+						if (s_netMatchE2EOwedSampleFrame >= applied)
+							tickCap = std::min(roundTicks + c_NetMatchE2EAdmissionWaitTicks, std::max(roundTicks, completedTicks + (s_netMatchE2EOwedSampleFrame - applied) + 1));
+						static uint64_t s_admissionWaitLogged = 0;
+						if (tickCap > roundTicks && completedTicks >= roundTicks && s_admissionWaitLogged != s_netMatchE2EOwedSampleFrame) {
+							s_admissionWaitLogged = s_netMatchE2EOwedSampleFrame;
+							System::PrintDiagnosticLine("[net-match-service-e2e] cap waits for a seat coming in: sample owed at " + std::to_string(s_netMatchE2EOwedSampleFrame) +
+							                            " (applied " + std::to_string(applied) + ")");
+						}
+					}
 					// Every peer stops at the cap, so the round knows the last frame anyone will feed.
 					if (!unlimitedWorld && completedTicks <= tickCap && ScenarioRunner::HasLockstepCoordinator())
 						ScenarioRunner::SetLockstepFinalFrame(ScenarioRunner::GetLockstepAppliedFrame() + (tickCap + 1 - completedTicks));

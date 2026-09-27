@@ -4999,6 +4999,9 @@ namespace RTE {
 		m_RemotePeerIds.clear();
 		m_RemoteTransports.clear();
 		m_RelayHost = false;
+		// A replay reads its seats under the recording's own slow-player policy, so a recorded hold keeps its seat's claims as it did live.
+		if (config.matchConfig.version >= NetMatchConfigUtil::c_TimingOptionsVersion && config.matchConfig.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute)
+			m_Config.substituteSlowPeers = true;
 		m_DeferStops = false;
 		m_State = NetLockstepState::Running;
 		ResetRoundState();
@@ -8555,27 +8558,27 @@ namespace RTE {
 		return static_cast<uint8_t>((normalized % m_Config.peerCount) + 1U);
 	}
 
-	uint8_t NetLockstepCoordinator::ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
+	uint8_t NetLockstepCoordinator::ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, std::optional<uint64_t> atFrame) const {
 		NET_PLANE_CHECK();
 		uint8_t ownerPeerId = ResolveActorOwnerBeforeLeaves(actorUniqueID, actorTeam, cpuControlled);
 		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0 || m_Config.matchConfig.players.empty()) {
 			return ownerPeerId;
 		}
 		const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
-		if (m_LastDeliveredFrame && IsSeatUnderAI(ownerPeerId, *m_LastDeliveredFrame)) return AiAuthorityAt(*m_LastDeliveredFrame);
+		const std::optional<uint64_t> frame = atFrame ? atFrame : m_LastDeliveredFrame;
+		if (frame && IsSeatUnderAI(ownerPeerId, *frame)) return AiAuthorityAt(*frame);
 		// A leaver's team falls to its next surviving human peer, so the units play on. The lockstep gate synchronizes leave
 		// knowledge, so every peer re-resolves identically - except for a leave heard before its frame: the leaver's own
 		// inputs drive its units until that frame is committed, so the round re-resolves them there.
 		const auto leave = m_PeerLeaveFrames.find(ownerPeerId);
-		const bool heardAhead = leave != m_PeerLeaveFrames.end() && m_LeavesHeardAhead.contains(ownerPeerId) &&
-		                        (!m_LastDeliveredFrame || *m_LastDeliveredFrame < leave->second);
-		if (UsesBoundedWait() || m_Playback ? m_LastDeliveredFrame && IsPeerGoneAtFrame(ownerPeerId, *m_LastDeliveredFrame)
+		const bool heardAhead = leave != m_PeerLeaveFrames.end() && m_LeavesHeardAhead.contains(ownerPeerId) && (!frame || *frame < leave->second);
+		if (UsesBoundedWait() || m_Playback ? frame && IsPeerGoneAtFrame(ownerPeerId, *frame)
 		                                 : leave != m_PeerLeaveFrames.end() && !heardAhead) {
 			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
 			// The host produces AI controllers for a departed team while the round continues.
 			ownerPeerId = survivor != 0 ? survivor : (IsRunning() || IsHoldingSeatForReclaim() ? GetHostPeerId() : survivor);
 		}
-		return AiProducerOf(ownerPeerId);
+		return AiProducerOf(ownerPeerId, frame);
 	}
 
 	uint8_t NetLockstepCoordinator::AiAuthorityAt(uint64_t frame) const {
@@ -8588,9 +8591,10 @@ namespace RTE {
 		return host;
 	}
 
-	uint8_t NetLockstepCoordinator::AiProducerOf(uint8_t ownerPeerId) const {
+	uint8_t NetLockstepCoordinator::AiProducerOf(uint8_t ownerPeerId, std::optional<uint64_t> atFrame) const {
 		NET_PLANE_CHECK();
-		return ownerPeerId == GetHostPeerId() && m_LastDeliveredFrame ? AiAuthorityAt(*m_LastDeliveredFrame) : ownerPeerId;
+		const std::optional<uint64_t> frame = atFrame ? atFrame : m_LastDeliveredFrame;
+		return ownerPeerId == GetHostPeerId() && frame ? AiAuthorityAt(*frame) : ownerPeerId;
 	}
 
 	bool NetLockstepCoordinator::IsOwnHostSeatHeld() const {
@@ -8659,6 +8663,12 @@ namespace RTE {
 		timing.revision = m_NextTimingRevision++;
 		uint64_t applyFrame = std::max(m_Stats.nextFrame, SentInputThrough() + 1) + 1;
 		for (uint8_t peer: m_RemotePeerIds) if (!IsPeerGoneAtFrame(peer, applyFrame)) applyFrame = std::max(applyFrame, m_Stats.peers[peer].reportedNextFrame + 1);
+		// Every AI order the seat's producer sent, and those it sends before it hears of this return, lands before it: the round takes them all.
+		if (const uint8_t producer = AiProducerOf(local); producer != 0 && producer != local) {
+			const auto& stats = m_Stats.peers[producer];
+			const uint64_t transit = m_Config.simTickMs > 0 ? static_cast<uint64_t>(std::ceil(stats.pingMs / m_Config.simTickMs)) : 0;
+			applyFrame = std::max(applyFrame, stats.highestTargetFrame + transit + 1);
+		}
 		timing.applyFrame = timing.cutoffFrame = applyFrame;
 		timing.delayFrames = delay;
 		timing.neutralThroughFrame = applyFrame + delay;

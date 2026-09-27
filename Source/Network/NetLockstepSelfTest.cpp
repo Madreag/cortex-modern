@@ -76,6 +76,7 @@ namespace RTE {
 	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
 	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
 	bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
+	bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error);
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
@@ -19968,6 +19969,23 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error) {
+		// Every production replay (image, in-place, handover, file) is built without the live flag; the recording's policy decides.
+		LoopbackTransport transport;
+		NetLockstepCoordinator replay;
+		NetLockstepConfig config;
+		config.localPeerId = 2; config.authorityPeerId = 1; config.peerCount = 3; config.startFrame = 100;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1F);
+		config.initialSeatHolds[3] = {3, 0, 3, 1, 90};
+		if (!replay.StartReplay(transport, config, error)) return false;
+		if (!replay.UsesBoundedWait() || !replay.IsSeatHeldForReclaim(3)) {
+			*error = "a-replay-takes-the-recorded-seat-policy: a replay of a bounded recording ran unbounded (" + std::to_string(replay.UsesBoundedWait()) +
+			         ") and read seat 3's recorded hold as held-for-reclaim " + std::to_string(replay.IsSeatHeldForReclaim(3));
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAHeldClientsHashIsNotTheRounds(std::string* error) {
 		// A client held at 3000 had already run 3000 on its own input: its hash there is its private simulation's, never the round's desync.
 		NetLockstepCoordinator host;
@@ -20135,11 +20153,25 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_LastCompletedSimulationTick = 199;
 		host.m_Stats.nextFrame = 205;
 		host.m_LastQueuedTargetFrame = 204;
+		// Peer 3 drives the held host's actors and has sent its AI orders through 240; a round trip of 50 ms is three more frames of them.
+		host.m_Stats.peers[3].highestTargetFrame = 240;
+		host.m_Stats.peers[3].pingMs = 50;
 		host.ReclaimOwnSeat(1200);
 		const auto back = host.m_ReclaimTransactions.find(1);
 		if (back == host.m_ReclaimTransactions.end() || back->second.activationFrame <= 205 || host.IsSeatUnderAI(1, back->second.activationFrame) ||
 		    !host.IsSeatUnderAI(1, back->second.activationFrame - 1)) {
 			*error = "the caught-up host did not take its seat back at a frame past the committed ones";
+			return false;
+		}
+		if (back->second.activationFrame < 244) {
+			*error = "the host took its seat back at " + std::to_string(back->second.activationFrame) + ", inside the AI orders its producer had already sent through 243";
+			return false;
+		}
+		// A producer writing now for a frame past the agreed return reads the seat table there: the host drives its own actors again.
+		host.m_LastDeliveredFrame = 205;
+		if (host.AiProducerOf(1) != 3 || host.AiProducerOf(1, back->second.activationFrame - 1) != 3 || host.AiProducerOf(1, back->second.activationFrame) != 1) {
+			*error = "the held host's producer is not read at the frame its orders land on: now=" + std::to_string(host.AiProducerOf(1)) +
+			         " at_return=" + std::to_string(host.AiProducerOf(1, back->second.activationFrame));
 			return false;
 		}
 		NetLockstepTiming reclaim;
@@ -20956,6 +20988,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestACaptureNotYetBegunExcusesNoStall(&error) ||
 		    !TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(&error) ||
 		    !TestAHeldClientsHashIsNotTheRounds(&error) ||
+		    !TestAReplayTakesTheRecordedSeatPolicy(&error) ||
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
 		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
 		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||
