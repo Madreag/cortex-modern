@@ -5555,7 +5555,7 @@ namespace RTE {
 				if (const auto back = m_ReclaimTransactions.find(peer); back != m_ReclaimTransactions.end()) {
 					const uint64_t gapEnd = std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames);
 					if (timing.applyFrame > back->second.activationFrame)
-						m_RetiredReclaimGaps[peer] = {back->second.activationFrame, std::min(gapEnd, timing.applyFrame - 1)};
+						m_RetiredReclaimGaps[peer][back->second.activationFrame] = std::min(gapEnd, timing.applyFrame - 1);
 					m_ReclaimTransactions.erase(back);
 					// The return ended the older hold whether or not this peer has simulated to it yet: this hold is the seat's own.
 					m_AiHeldSeats.erase(peer);
@@ -5771,17 +5771,26 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::IsSeatHoldGap(uint8_t peerId, uint64_t frame) const {
 		NET_PLANE_CHECK();
-		const auto held = m_AiHeldSeats.find(peerId);
-		if (held == m_AiHeldSeats.end() || frame < held->second) return false;
-		uint16_t delay = InputDelayAt(GetHostPeerId(), held->second);
-		if (m_Playback) {
-			delay = NetMatchConfigUtil::PeerInputDelay(m_OpeningMatchConfig, GetHostPeerId());
-			if (const auto changes = m_DelayChanges.find(GetHostPeerId()); changes != m_DelayChanges.end()) {
-				const auto at = changes->second.upper_bound(held->second);
-				if (at != changes->second.begin()) delay = std::prev(at)->second;
+		const auto delayAt = [&](uint64_t holdFrame) {
+			uint16_t delay = InputDelayAt(GetHostPeerId(), holdFrame);
+			if (m_Playback) {
+				delay = NetMatchConfigUtil::PeerInputDelay(m_OpeningMatchConfig, GetHostPeerId());
+				if (const auto changes = m_DelayChanges.find(GetHostPeerId()); changes != m_DelayChanges.end()) {
+					const auto at = changes->second.upper_bound(holdFrame);
+					if (at != changes->second.begin()) delay = std::prev(at)->second;
+				}
 			}
+			return delay;
+		};
+		if (const auto held = m_AiHeldSeats.find(peerId); held != m_AiHeldSeats.end() && frame >= held->second && frame - held->second <= delayAt(held->second)) return true;
+		// A hold a later return or hold replaced still fences the frames of its own gap for a simulation that has yet to apply them.
+		const auto seat = m_SeatTransitions.find(peerId);
+		if (seat == m_SeatTransitions.end()) return false;
+		for (auto at = seat->second.upper_bound(frame); at != seat->second.begin();) {
+			--at;
+			if (at->second == SeatTransition::Held) return frame - at->first <= delayAt(at->first);
 		}
-		return frame - held->second <= delay;
+		return false;
 	}
 
 	void NetLockstepCoordinator::AdoptReturnsBefore(NetLockstepConfig& config, const std::vector<NetLockstepTiming>& reclaims, uint64_t firstFrame) {
@@ -5806,8 +5815,9 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const {
 		NET_PLANE_CHECK();
-		if (const auto retired = m_RetiredReclaimGaps.find(peerId); retired != m_RetiredReclaimGaps.end() && frame >= retired->second.first && frame <= retired->second.second)
-			return true;
+		if (const auto retired = m_RetiredReclaimGaps.find(peerId); retired != m_RetiredReclaimGaps.end()) {
+			if (const auto gap = retired->second.upper_bound(frame); gap != retired->second.begin() && frame <= std::prev(gap)->second) return true;
+		}
 		const auto found = m_ReclaimTransactions.find(peerId);
 		if (found == m_ReclaimTransactions.end()) return false;
 		const auto& reclaim = found->second;
@@ -8373,6 +8383,11 @@ namespace RTE {
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
 		m_LastDeliveredFrame = outFrame.frame;
+		// A retired gap the simulation has passed covers nothing it will apply again.
+		for (auto seat = m_RetiredReclaimGaps.begin(); seat != m_RetiredReclaimGaps.end();) {
+			std::erase_if(seat->second, [&](const auto& gap) { return gap.second < outFrame.frame; });
+			seat = seat->second.empty() ? m_RetiredReclaimGaps.erase(seat) : std::next(seat);
+		}
 		// Who drives the seats the AI holds must read the same on every peer at every frame; a change is named with its frame.
 		if (const uint8_t authority = AiAuthorityAt(outFrame.frame); authority != m_NamedAiAuthority) {
 			std::cout << "[net-lockstep] AI authority frame=" << outFrame.frame << " peer=" << static_cast<int>(authority) << " was=" << static_cast<int>(m_NamedAiAuthority) << std::endl;
