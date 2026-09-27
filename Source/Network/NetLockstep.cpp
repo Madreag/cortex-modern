@@ -6219,9 +6219,11 @@ namespace RTE {
 		    timing.sessionId == m_Config.sessionId && (m_RoundId == 0 || timing.roundId == m_RoundId) && SenderOwnsTransport(timing.senderPeerId, fromTransport)) {
 			if (m_PreStartTiming.size() >= 256) { Fail(NetLockstepStopReason::ProtocolError, m_Config.startFrame, "pre-start timing backlog overflow"); return; }
 			m_PreStartTiming.emplace_back(timing, fromTransport);
-			// A joiner's own admission names the frame and delay its start must carry, or the host reads that start as a straggler.
-			if (m_Config.joinsRunningRound && timing.action == NetTimingAction::WorldAdmission && timing.peerId == m_Config.localPeerId &&
-			    (timing.phase == NetTimingPhase::Propose || timing.phase == NetTimingPhase::Commit)) {
+			// A joiner's own admission names the frame and delay its start must carry, or the host reads that start as a straggler;
+			// a held seat's return is that admission for a returner, at the delay in force for it then.
+			const bool ownAdmission = timing.action == NetTimingAction::WorldAdmission && (timing.phase == NetTimingPhase::Propose || timing.phase == NetTimingPhase::Commit);
+			const bool ownReturn = timing.action == NetTimingAction::Reclaim && timing.phase == NetTimingPhase::ReclaimAtFrame;
+			if (m_Config.joinsRunningRound && (ownAdmission || ownReturn) && timing.peerId == m_Config.localPeerId) {
 				const PeerAdmission terms{timing.applyFrame, timing.delayFrames};
 				const auto adopted = m_PeerAdmissions.find(m_Config.localPeerId);
 				if (adopted == m_PeerAdmissions.end() || adopted->second.frame != terms.frame || adopted->second.delay != terms.delay) {
