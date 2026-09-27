@@ -56,6 +56,8 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::Start(INetTransport& transport, const NetLobbySessionConfig& config, std::string* error) {
+		m_RoundEndedRecord.reset();
+		m_EventsAfterRoundEnded.clear();
 		m_InputDelaySamples.clear();
 		m_TimingClockMs = 0;
 		if (config.localPeerId == 0) {
@@ -1169,6 +1171,11 @@ namespace RTE {
 	}
 
 	void NetLobbySession::HandleEvent(const NetTransportEvent& event, uint64_t nowMs) {
+		// A seat told its round ended stops here: what follows is the next lobby's, and that lobby reads it.
+		if (m_RoundEndedRecord && event.type == NetTransportEventType::PacketReceived) {
+			m_EventsAfterRoundEnded.push_back(event);
+			return;
+		}
 		switch (event.type) {
 			case NetTransportEventType::PeerConnected:
 				break;
@@ -1312,6 +1319,7 @@ namespace RTE {
 					WorldJoinReport report;
 					if (ParseWorldJoinReport(*chunk, kind, value, &report.workTicks, &report.workUs, &report.sentThrough)) {
 						report.kind = kind; report.value = value; report.fromPeer = sender->first; report.pending = true;
+						if (kind == c_NetWorldReportRoundEnded && !m_Config.host) m_RoundEndedRecord = value;
 						std::erase_if(m_WorldJoinReports, [&](const auto& pending) { return pending.kind == kind && pending.fromPeer == sender->first; });
 						m_WorldJoinReports.push_back(report);
 						break;
