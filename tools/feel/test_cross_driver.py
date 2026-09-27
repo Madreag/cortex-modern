@@ -12,6 +12,18 @@ class CrossDriverTests(unittest.TestCase):
     def plan(self):
         return cross_peers.make_plan(cross_peers.parse_args(['--dry-run']))
 
+    def test_closed_instance_sealing_preserves_nested_record_paths(self):
+        from feel.records import open_record
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); (root/'engine/feel').mkdir(parents=True)
+            (root/'engine/feel/raw.jsonl').write_bytes(b'{"type":"frame"}\n')
+            (root/'live.jsonl').write_bytes(b'{"tick":1}\n')
+            cross_peers.seal_evidence(root)
+            with open_record(root/'engine/feel/raw.jsonl','rb') as stream:
+                self.assertEqual(stream.read(),b'{"type":"frame"}\n')
+            index=[json.loads(line) for line in (root/'compressed-records.jsonl').read_text().splitlines()]
+            self.assertIn('engine/feel/raw.jsonl',[r['original'].replace('\\','/') for r in index])
+
     def test_three_box_plan_has_private_instances_and_no_host_kill(self):
         plan = self.plan()
         self.assertEqual(len(plan['instances']), 3)
