@@ -1,0 +1,12 @@
+# UBSan runtime suppressions (UBSAN_OPTIONS=suppressions=<this file>) for the Mac sanitizer runs.
+# Only third-party sources under external/sources/LuaJIT-2.1, each under the one check it trips, each with its report.
+# Our own code is fixed, never listed here; tools/sanitizers/check_ubsan_supp.py refuses any other path.
+
+# lua_setmetatable(t, nil): setgcref takes &obj2gco(NULL)->gch: "lj_api.c:1030:5: member access within null pointer of type 'GCobj'"
+null:external/sources/LuaJIT-2.1/src/lj_api.c
+# lj_func_newL_empty hashes the int32_t upvalue descriptor with v << 24: "lj_func.c:153:46: left shift of 49156 by 24 places cannot be represented in type 'int32_t'"
+shift-base:external/sources/LuaJIT-2.1/src/lj_func.c
+# setmetatable(t, nil) in the base library: setgcref takes &obj2gco(NULL)->gch: "lib_base.c:139:3: member access within null pointer of type 'GCobj'"
+null:external/sources/LuaJIT-2.1/src/lib_base.c
+# jit.attach: VMEVENT_HASHIDX shifts the event-name hash cast to int: "lib_jit.c:164:24: left shift of negative value -1294396313"
+shift-base:external/sources/LuaJIT-2.1/src/lib_jit.c
