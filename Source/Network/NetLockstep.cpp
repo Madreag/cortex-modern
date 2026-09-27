@@ -87,6 +87,16 @@ namespace RTE {
 			return tail.ec == std::errc{} && tail.ptr == end && count > 0 ? std::optional(std::pair(first, count)) : std::nullopt;
 		}
 
+		// Test lever, headless only: a survivor dials no LAN entry of its successor, as one on another network cannot reach it.
+		bool MigrationDialsIceOnlyForTest() {
+			static const bool iceOnly = [] {
+				const char* lever = std::getenv("CC_TEST_MIGRATION_ICE_ONLY");
+				const char* headless = std::getenv("CCCP_HEADLESS");
+				return lever && std::strcmp(lever, "1") == 0 && headless && std::strcmp(headless, "1") == 0;
+			}();
+			return iceOnly;
+		}
+
 		template <class... T>
 		struct Overloaded : T... {
 			using T::operator()...;
@@ -3333,6 +3343,12 @@ namespace RTE {
 					connectedAddress = address;
 					return true;
 				}
+				continue;
+			}
+			if (iceDial && MigrationDialsIceOnlyForTest()) {
+				static std::atomic<bool> s_Said{false};
+				if (!s_Said.exchange(true)) std::cout << "[net-test] the handover dial skips the successor's LAN entry " << address << " (CC_TEST_MIGRATION_ICE_ONLY)" << std::endl;
+				if (error) *error = "the LAN entry " + address + " is skipped by CC_TEST_MIGRATION_ICE_ONLY";
 				continue;
 			}
 			if (transport.Connect(address, peer.listenPort, error)) {
