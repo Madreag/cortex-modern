@@ -16,6 +16,7 @@
 
 #include "ActivityMan.h"
 
+#include <functional>
 #include <map>
 #include <unordered_map>
 #include <array>
@@ -39,6 +40,22 @@ namespace RTE {
 	class Material;
 	class SoundContainer;
 	struct PostEffect;
+
+	/// A see ray fixed where it was launched: the team whose fog it reveals, where it starts and points, how much terrain stops it and its step.
+	struct SeeRay {
+		int team;
+		Vector start;
+		Vector ray;
+		int strengthLimit;
+		int skip;
+	};
+
+	/// Where a traced see ray reveals fog, in its own order, and the box size its team's fog asked for.
+	struct SeeRayTrace {
+		int size = 0;
+		std::vector<std::pair<int, int>> reveals;
+		std::vector<std::pair<int, int>> visualized;
+	};
 
 	// Different modes to draw the SceneLayers in
 	enum LayerDrawMode {
@@ -564,6 +581,22 @@ namespace RTE {
 		/// @param reveal Whether the ray should reveal or restore unseen layer
 		/// @return Whether any unseen pixels were revealed as a result of this seeing.
 		bool CastUnseenRay(int team, const Vector& start, const Vector& ray, Vector& endPos, int strengthLimit, int skip, bool reveal);
+
+		/// Walks a see ray over the terrain and records where it would reveal, judged against a copy of its team's fog; touches no fog, so a worker may run it.
+		/// @param seeRay The ray, fixed at its launch.
+		/// @param fog The ray's team's fog as the pass began.
+		/// @param fogScale That fog's scale factor.
+		/// @param visualize Whether to record the checked points for the ray-cast visualization.
+		/// @param trace Receives the reveal points and the box size.
+		void TraceSeeRay(const SeeRay& seeRay, BITMAP* fog, const Vector& fogScale, bool visualize, SeeRayTrace& trace);
+
+		/// Reveals the fog boxes a traced see ray recorded, on the sim thread.
+		/// @param team The ray's team.
+		/// @param trace What TraceSeeRay recorded.
+		void RevealSeeRay(int team, const SeeRayTrace& trace);
+
+		/// Whether casts draw their rays to the debug layer.
+		bool DrawsRayCastVisualizations() const { return m_pDebugLayer && m_DrawRayCastVisualizations; }
 
 		/// Traces a box along a vector and reveals pixels on the unseen layer of a team
 		/// as long as the accumulated material strengths traced through the terrain
@@ -1152,6 +1185,9 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+
+		/// The Bresenham walk of an unseen ray: `visit(x, y)` at every checked point, `passed(x, y)` where the terrain let it through.
+		void WalkUnseenRay(const Vector& start, const Vector& ray, int strengthLimit, int skip, Vector& endPos, const std::function<void(int, int)>& visit, const std::function<void(int, int)>& passed);
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_LayerDrawMode, self.m_DrawRayCastVisualizations, self.m_DrawPixelCheckVisualizations, self.m_LastUpdatedScreen,

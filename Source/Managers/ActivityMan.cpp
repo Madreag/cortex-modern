@@ -542,6 +542,8 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression c
 	WaitForSaveGameTask();
 	const std::string path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName + ".ccsave";
 	const bool saved = QueueSaveSnapshot(fileName, path, compression, m_SaveGameTask);
+	// Under the full-state oracle a save logs the state it holds, the canonical one a restore of it must reproduce.
+	if (saved && m_FullStateLever) CaptureFullStateHash(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_FullStateRound, {}, "canonical");
 	System::PrintDiagnosticLine(std::format("[checkpoint-capture] name={} tick={} sim_block_ms={:.3f} queued={}\n", fileName,
 	    g_TimerMan.GetSimUpdateCount(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count(), saved));
 	return saved;
@@ -876,7 +878,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	bytes = image->imageBytes;
 	auto previousImage = cow.FinishImage(image);
 	if (fullStateOnly) {
-		task = FullStateWriter().Submit([image, dump = m_FullStateDumpDirectory, round = m_FullStateRound, sceneCache, previousImage, retired = std::move(retired),
+		task = FullStateWriter().Submit([image, dump = m_FullStateDumpDirectory, round = m_FullStateRound, label = m_FullStateLabel, sceneCache, previousImage, retired = std::move(retired),
 		                                retiredLayers = std::move(retiredLayers)]() mutable {
 			retired.clear();
 			retiredLayers.clear();
@@ -884,7 +886,15 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			sceneCache.reset();
 			const auto start = std::chrono::steady_clock::now();
 			try {
-				System::PrintDiagnosticLine(FullStateHashLine(*image, dump) + " round=" + std::to_string(round));
+				std::string line = FullStateHashLine(*image, dump) + " round=" + std::to_string(round);
+				if (!label.empty()) line.replace(0, std::string_view("[fullstate]").size(), "[fullstate-" + label + "]");
+				System::PrintDiagnosticLine(line);
+				// The sections this machine keeps for itself, so one that leaves the compared set has its reason on record.
+				std::string perPeer;
+				VisitCheckpointSections(*image, [&perPeer](const std::string& name, CheckpointScope scope, std::string_view) {
+					if (scope != CheckpointScope::Shared) perPeer += (perPeer.empty() ? "" : ",") + name;
+				});
+				System::PrintDiagnosticLine(std::format("[fullstate-scope] tick={} round={} label={} per_peer={}", image->tick, round, label.empty() ? "sample" : label, perPeer));
 				System::PrintDiagnosticLine(std::format("[fullstate-cost] tick={} freeze_us={} hash_us={} image_bytes={}", image->tick, image->freezeUs,
 				    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), image->imageBytes));
 				return true;
@@ -1009,16 +1019,21 @@ void ActivityMan::WaitForAutosaveTasks() const {
 	for (const auto& task: m_FullStateTasks) task.wait();
 }
 
-bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory) {
+bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label) {
 	std::erase_if(m_FullStateTasks, [](const auto& task) { return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
-	m_FullStateDumpDirectory = dumpDirectory;
+	m_FullStateLever = true;
+	// A labelled capture shares the tick of a scheduled one, so it dumps into a folder of its own under the run's.
+	if (label.empty()) m_FullStateDumpRoot = dumpDirectory;
+	m_FullStateDumpDirectory = label.empty() || m_FullStateDumpRoot.empty() ? m_FullStateDumpRoot : m_FullStateDumpRoot + "/" + label;
 	m_FullStateRound = round;
+	m_FullStateLabel = label;
 	std::shared_future<bool> task;
 	size_t bytes = 0;
 	const auto captureStart = std::chrono::steady_clock::now();
 	try {
+		// Every capture of one tick takes one name: the capture writes it into the scene it holds.
 		if (!QueueIncrementalAutosave("fullstate-" + std::to_string(tick), "", "", tick, task, bytes, SaveCompression::Fast, nullptr, true)) {
-			System::PrintDiagnosticLine(std::format("[fullstate] tick={} not taken", tick));
+			System::PrintDiagnosticLine(std::format("[fullstate{}] tick={} not taken", label.empty() ? "" : "-" + label, tick));
 			return false;
 		}
 	} catch (const std::exception& error) {
@@ -2532,6 +2547,8 @@ bool ActivityMan::RestartActivity() {
 			g_MusicMan.ResetMusicState();
 			g_AudioMan.PauseIngameSounds(m_Activity && m_Activity->IsPaused());
 		}
+		// Under the full-state oracle the restored world logs its state before it runs a tick, against the save it came from.
+		if (m_FullStateLever) CaptureFullStateHash(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_FullStateRound, {}, "restored");
 		return true;
 	}
 	auto rejectedActivity = std::move(m_Activity);

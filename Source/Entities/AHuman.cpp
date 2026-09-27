@@ -2139,7 +2139,7 @@ bool AHuman::IsWithinRange(Vector& point) const {
 	return sqrDistance <= (range * range);
 }
 
-bool AHuman::Look(float FOVSpread, float range) {
+bool AHuman::LookRay(float FOVSpread, float range, SeeRay& seeRay) {
 	if (!g_SceneMan.AnythingUnseen(m_Team) || m_CanRevealUnseen == false) {
 		return false;
 	}
@@ -2172,8 +2172,8 @@ bool AHuman::Look(float FOVSpread, float range) {
 
 	// TODO: generate an alarm event if we spot an enemy actor?
 
-	Vector ignored(0, 0);
-	return g_SceneMan.CastSeeRay(m_Team, aimPos, lookVector, ignored, 25, step);
+	seeRay = {m_Team, aimPos, lookVector, 25, step};
+	return true;
 }
 
 bool AHuman::LookForGold(float FOVSpread, float range, Vector& foundLocation) const {

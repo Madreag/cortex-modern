@@ -462,7 +462,7 @@ namespace RTE {
 		void SetFaithfulLinkRoot(MovableObject* root) { m_LinkRoot = root; }
 		/// One line per team listing its roster in order plus the pending sort flag; the invariance tests compare it.
 		std::string DescribeTeamRosters() const;
-		/// Blocks until the async seeing pass that reads the actor list has finished.
+		/// Blocks until the async seeing pass has finished and reveals what it traced; a pass that already landed is a no-op.
 		void WaitForActorsSeeTask();
 		/// One line per Lua state listing its registered MOs (UID and whether their scripts are live); the invariance tests compare it.
 		std::string DescribeScriptBindings() const;

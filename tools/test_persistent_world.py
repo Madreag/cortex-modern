@@ -219,6 +219,7 @@ RED_SEGMENT_BOOTED_THE_PRESET = "world-segment-playback-booted-the-preset"
 RED_SEGMENT_CHAIN_BROKE = "world-segment-chain-broke"
 RED_SEGMENT_HASHES_DIVERGED = "world-segment-playback-hashes-diverged"
 RED_SEGMENT_TAIL_UNRECORDED = "world-segment-chain-left-the-host-tail-unrecorded"
+RED_HOST_TRACE_NO_COMPLETION = "world-host-trace-records-no-completion"
 RED_RESUMED_NO_SEGMENT = "resumed-world-wrote-no-segment"
 RED_RESUMED_ORDINARY_FILE = "resumed-world-recorded-an-ordinary-file"
 RED_RESUMED_HEADER_WRONG = "resumed-world-segment-header-wrong"
@@ -918,17 +919,36 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
         (out / f"{name}_from_checkpoint.json").write_text(json.dumps(data), encoding="utf-8")
     passed, compared = strict_compare(str(out / "host_from_checkpoint.json"), str(out / "replay_from_checkpoint.json"),
                                       expected_ticks=last - first_tick, first_tick=first_tick + 1)
-    # A window's verdict is the comparison's; the live world's own run flag says only that no scenario check ran in it.
+    # The window's verdict is the comparison's alone; the replay's overall verdict adds the tail the window cut off. The copies
+    # carry both, their own aggregates, and the source run's aggregates and completion kept apart.
+    tail_reason = "" if replay_last >= host_last else f"the host ran to {host_last}, the segments end at {replay_last}"
+    # The recording host's own trace says how its run ended and how far it simulated, apart from any comparison.
+    host_source = windowed["host"]["runs"][0]
+    host_completion = {"completion": host_source.get("strings", {}).get("completion"), "reason": host_source.get("strings", {}).get("completion_reason"),
+                       "passed": host_source.get("passed"), "ticks": host_source.get("ticks")}
+    window_reason = "every canonical tick hash equal" if passed else "; ".join(compared.get("reasons", [])) or "the hashes differ"
+    overall = {"passed": passed and not tail_reason, "window_passed": passed, "tail_passed": not tail_reason,
+               "first_tick": first_tick + 1, "last_compared_tick": last, "host_last_tick": host_last, "replay_last_tick": replay_last,
+               "host_completion": host_completion,
+               "reasons": [reason for reason in (None if passed else window_reason, tail_reason or None) if reason]}
+    (out / "segment_replay_verdict.json").write_text(json.dumps(overall, indent=2), encoding="utf-8")
     for name, data in windowed.items():
         run = data["runs"][0]
-        run["run_passed"] = run.get("passed")
+        run["source"] = {"passed": run.get("passed"), "ticks": run.get("ticks"), "strings": run.get("strings", {}), "scenarios": data.get("scenarios")}
         run["passed"] = passed
-        run["reason"] = (f"ticks {first_tick + 1}..{last} compared against the {'replay' if name == 'host' else 'recording host'}: "
-                         + ("every canonical tick hash equal" if passed else "; ".join(compared.get("reasons", [])) or "the hashes differ"))
+        run["ticks"] = len(run["tick_hashes"])
+        run["reason"] = f"ticks {first_tick + 1}..{last} compared against the {'replay' if name == 'host' else 'recording host'}: {window_reason}"
+        run["replay_verdict"] = overall
+        data["scenarios"] = {run["scenario"]: {"passed": int(passed), "total": 1, "pass_rate": 1.0 if passed else 0.0}}
         (out / f"{name}_from_checkpoint.json").write_text(json.dumps(data), encoding="utf-8")
+    print(f"[world-segment-replay] window={'PASS' if passed else 'FAIL'} tail={'PASS' if not tail_reason else 'FAIL'} "
+          f"overall={'PASS' if overall['passed'] else 'FAIL'} ticks={first_tick + 1}..{last} host_last={host_last} replay_last={replay_last} "
+          f"host_completion={host_completion['completion']} host_ticks={host_completion['ticks']}", flush=True)
     assert passed, f"{RED_SEGMENT_HASHES_DIVERGED}: {compared}"
     # The chain plays every tick the host ran: a tail the segments never recorded is its own failure.
-    assert replay_last >= host_last, f"{RED_SEGMENT_TAIL_UNRECORDED}: the host ran to {host_last}, the segments end at {replay_last}"
+    assert not tail_reason, f"{RED_SEGMENT_TAIL_UNRECORDED}: {tail_reason}"
+    host_completed = host_completion["completion"] == "completed" and host_completion["passed"] and (host_completion["ticks"] or 0) >= host_last
+    assert host_completed, f"{RED_HOST_TRACE_NO_COMPLETION}: {host_completion} against a host that ran to {host_last}"
 
     # The restarted world: its round opens ON a checkpoint, so its FIRST recording is a segment named
     # for the tick it resumed from - not an ordinary file that names no world.
