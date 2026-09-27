@@ -189,6 +189,7 @@ FILE __iob_func[3] = {*stdin, *stdout, *stderr};
 namespace RTE {
 	bool RunModApiShimsSelfTest();
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
+	bool RunCrossRosterSelfTest(std::string* error);
 }
 
 using namespace RTE;
@@ -318,15 +319,35 @@ static void ApplyCrossSchedule() {
 	}
 }
 
-static bool CrossHostOptions(unsigned match, std::string* error) {
-	if (s_crossHostOptions.empty() || !g_NetMatchService.IsHost()) return true;
-	auto draft = g_NetMatchService.GetLobbyMatchConfig();
-	const auto& options = s_crossHostOptions[(match / 2) % s_crossHostOptions.size()];
+static void CrossHostOptionFields(NetMatchConfig& draft, const nlohmann::json& options) {
 	if (options.contains("difficulty")) draft.difficulty = options["difficulty"].get<uint8_t>();
 	if (options.contains("ai_skill")) for (auto& team: draft.teamRules) team.aiSkill = options["ai_skill"].get<uint8_t>();
 	if (options.contains("fog")) draft.fogOfWar = options["fog"].get<bool>();
 	if (options.contains("scene")) draft.sceneName = options["scene"].get<std::string>();
 	if (options.contains("scene_module")) draft.sceneModule = options["scene_module"].get<std::string>();
+}
+
+bool RTE::RunCrossRosterSelfTest(std::string* error) {
+	auto config = NetMatchConfigUtil::MakeDefault(0x43524f5353ULL);
+	config.peerCount = 3; config.mode = NetMatchMode::PvPvE; config.modePreset = "pvpve";
+	config.players = {{1, 0, false, "one"}, {2, 1, false, "two"}, {3, 2, false, "three"}, {0, 3, true, "CPU"}};
+	CrossHostOptionFields(config, {{"human_teams", {0, 0, 1}}, {"cpu_teams", {2}}, {"difficulty", 100}, {"ai_skill", 100}});
+	if (config.players[1].team != 0 || config.players[2].team != 1 || config.players[3].team != 2 || config.players[3].peerId != 0 ||
+	    config.difficulty != 100 || config.teamRules[2].aiSkill != 100 || !NetMatchConfigUtil::ValidateLocalAlpha(config, error)) {
+		if (error->empty()) *error = "mixed roster does not preserve three humans plus a peerless CPU on distinct team";
+		return false;
+	}
+	config.players[3].team = 0;
+	if (NetMatchConfigUtil::ValidateLocalAlpha(config, nullptr)) { *error = "CPU slot sharing a human team was accepted"; return false; }
+	std::cout << "[net-match-selftest] PASS cross_mixed_roster_preserves_seats_and_cpu_rules" << std::endl;
+	return true;
+}
+
+static bool CrossHostOptions(unsigned match, std::string* error) {
+	if (s_crossHostOptions.empty() || !g_NetMatchService.IsHost()) return true;
+	auto draft = g_NetMatchService.GetLobbyMatchConfig();
+	const auto& options = s_crossHostOptions[(match / 2) % s_crossHostOptions.size()];
+	CrossHostOptionFields(draft, options);
 	const bool accepted = g_NetMatchService.SubmitHostOptions(draft.configRevision, draft, error);
 	if (accepted) System::PrintDiagnosticLine("[cross-host-options] match=" + std::to_string(match) + " accepted=1 revision=" +
 	    std::to_string(draft.configRevision) + " intended_config=" + NetMatchConfigUtil::StoredConfigHash(draft));
