@@ -5,6 +5,54 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
+import re
+import zipfile
+
+
+def inspect_checkpoint(path):
+    """Check archive CRCs and named identity; do not claim restoration or admission validity."""
+    path = Path(path)
+    result = dict(path=str(path), passed=False, scope='CRC, required entries, world/descriptor/manifest identity; not a restore or admission-seal check')
+    def properties(text):
+        values = {}
+        for line in text.splitlines():
+            if match := re.match(r'^\s*([A-Za-z]+)\s*=\s*(.*?)\s*$', line):
+                if match[1] in values and match[1] in {'SavedTick','MatchId','SessionId','RoundId','ManifestSchema','ConfigHash','ConfigPayload','RestoreSchema'}:
+                    raise ValueError('duplicate checkpoint property '+match[1])
+                values[match[1]] = match[2]
+        return values
+    try:
+        with path.open('rb') as source:
+            digest = hashlib.sha256()
+            for block in iter(lambda:source.read(1024*1024),b''): digest.update(block)
+            result['sha256'] = digest.hexdigest()
+        result['bytes'] = path.stat().st_size
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            required = {'Save.ini','Index.ini','Save Mat.png','Save FG.png','Save BG.png','Restore.ini'}
+            if len(names) != len(set(names)) or not required <= set(names): raise ValueError('missing or duplicate archive entries')
+            if bad := archive.testzip(): raise ValueError('CRC mismatch: '+bad)
+            descriptor = properties(archive.read('Restore.ini').decode('utf-8-sig'))
+            save = archive.read('Save.ini').decode('utf-8-sig')
+            world_tick = re.search(r'(?m)^\s*SimUpdateCount\s*=\s*(\d+)\s*$', save)
+            tick = int(descriptor['SavedTick']); match_id = descriptor['MatchId']
+            if tick < 1 or descriptor.get('RestoreSchema') != '1': raise ValueError('unsupported descriptor schema or tick')
+            if path.name != f'{match_id}-{tick}.ccsave' or not world_tick or int(world_tick[1]) != tick:
+                raise ValueError('archive/world/descriptor tick identity differs')
+            if 'RuntimeGlobals = ' not in save or 'LuaStateGraph = ' not in save: raise ValueError('missing runtime or script graph')
+            result.update(match_id=match_id,tick=tick,session=descriptor['SessionId'],source_round=int(descriptor['RoundId']),
+                          module_hash=descriptor.get('ModuleManifestHash'),world_structure_hash=descriptor.get('WorldStructureHash'))
+        manifest_path = path.with_suffix('.ccmanifest')
+        manifest = properties(manifest_path.read_text(encoding='utf-8-sig'))
+        if any(manifest.get(key) != descriptor.get(key) for key in ('MatchId','SessionId','RoundId','SavedTick')):
+            raise ValueError('manifest and descriptor identity differ')
+        if manifest.get('ManifestSchema') not in ('2','3') or not manifest.get('ConfigHash') or not manifest.get('ConfigPayload'):
+            raise ValueError('manifest lacks config payload/hash or has unsupported schema')
+        result.update(passed=True,manifest_path=str(manifest_path),config_hash=manifest['ConfigHash'],
+                      manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest())
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, RuntimeError) as error:
+        result['reason'] = str(error)
+    return result
 
 
 class RecordWriter:

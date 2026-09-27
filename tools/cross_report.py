@@ -96,6 +96,7 @@ def requirements(manifest, comparison, metrics):
         20: 'SoundContainer.cpp:405 authority and music-transition emissions are outside this lane; muted output proves no audible result.',
         22: 'A fourth real box and its persistent-world arrival arm are absent.',
         35: 'Pre-auth/proof/image/tail/activation overlaps await the WAN endpoint fix; queued/cancelled phases never complete recovery.',
+        36: 'Capture-announced and writer-pending barriers have RED/GREEN bounded-release tests; migration overlap, archive validity and restarted writer cadence still await a real endpoint-capable arm.',
         40: 'Initial histories are compared. Restore branch/checkpoint lineage and authority generation are not exposed by the owned record seams.',
         45: 'Checkpoint boot/handover anchors and survivor segment indexing need ScenarioRunner.cpp:2653 and NetMatchService.cpp:3455 outside this lane.',
         50: 'Movement/aim submitted-render measurements are reported; other action/input-sequence stamps require FrameMan.cpp:277,344 outside this lane.',
@@ -182,6 +183,7 @@ def build_report(root):
             memory_by_incarnation[str(incarnation)]=report.reduce_memory([r for r in samples if r.get('incarnation',0)==incarnation],
                 **manifest['memory'],elapsed_s=fragment_record.get('elapsed_seconds',0))
         memory=memory_by_incarnation[str(int(own.name.split('-')[-1]))]
+        archives=[r for fragment in fragments for r in source_rows(fragment/'archives.jsonl',root)]
         payload_sizes = [r['trace_vector_payload_bytes'] for r in events[name]
                          if r.get('type') == 'tick_timing' and 'trace_vector_payload_bytes' in r]
         instrumentation = dict(first_bytes=payload_sizes[0] if payload_sizes else None,
@@ -201,7 +203,8 @@ def build_report(root):
             frame_interval_ms=report.distribution([r['interval_ms'] for r in frames if r.get('interval_ms') is not None]),
             frame_count=len(frames), frames_over_50_ms=[r['frame'] for r in frames if max(r['draw_ms'], r['present_ms'], r.get('interval_ms') or 0) > 50],
             effective_hz=(len(frames)-1)*1000/(frames[-1]['present_end_ms']-frames[0]['present_end_ms']) if len(frames)>1 and frames[-1]['present_end_ms']>frames[0]['present_end_ms'] else None,
-            memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, native_completion=completion, native_final_tick=final_tick,
+            memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, archives=archives,
+            native_completion=completion, native_final_tick=final_tick,
             fragments=[str(fragment.relative_to(root)) for fragment in fragments], samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:894 detailed status is not a byte counter.',
@@ -255,6 +258,10 @@ def build_report(root):
                       for values in events.values()),
                   no_engine_findings=not findings)
     if cadence: checks['shared_fullstate']=fullstate['passed']
+    barrier_receipts=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='capture_barrier']
+    checks['capture_barrier_outcomes']=all(any(r.get('source_peer')==b['peer'] and r.get('id')==b['id'] and
+        r.get('capture_phase')==b['phase'] and r.get('capture_tick')==b['tick'] and r.get('outcome')=='released' and
+        r.get('wait_ms',float('inf'))<=b['timeout_ms'] for r in barrier_receipts) for b in manifest.get('capture_barriers',[]))
     if manifest['scenario'] != 'match':
         checks['coverage_minima'] = all(r['status'] in ('PASS', 'NOT COVERED', 'NOT APPLICABLE') for r in matrix)
         checks['unique_gameplay_budget'] = all(max((r.get('budget_tick',0) for r in values if r.get('type')=='progress'),default=0)>=manifest['ticks'] for values in events.values())
@@ -270,7 +277,7 @@ def build_report(root):
     result = dict(version=1, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,
                   peers=peers, comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
-                  coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities,
+                  coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
                   findings=findings, requirements=requirements(manifest, comparison, peers))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
@@ -339,6 +346,8 @@ def write_page(root, result, events):
         parts.append(f'<details><summary>{escape(row["item"])} — {row["status"]}</summary><p>{escape(row["unit"])}; minimum {row["minimum"]}. {escape(row["reason"])}</p><pre>{escape(json.dumps(row["peers"],indent=2))}</pre></details>')
     parts.append('<h2>Faults and recovery</h2><p>Queued admission and cancelled reclaim are phase evidence, never completed recovery. The chaos seed fixes choices only.</p><pre>' + escape(json.dumps(dict(seed=manifest['chaos_seed'], schedule=manifest['faults'], applied=result['fault_receipts'], recoveries=result['recoveries']),indent=2)) + '</pre>')
     parts.append('<h2>Wire egress</h2><p>NOT COVERED. Transport wire counters are not exposed at an owned seam. Application bytes and host relayed bytes are not wire egress; no upstream curve is fabricated.</p>')
+    parts.append('<h2>Capture and writer barriers</h2><p>Each arm has its own declared timeout; timeout is a failed outcome.</p><pre>' + escape(json.dumps(dict(schedule=manifest.get('capture_barriers',[]),receipts=result['barrier_receipts']),indent=2)) + '</pre>')
+    parts.append('<h2>Retained autosaves</h2><p>CRCs, required entries and descriptor/world/manifest identities are checked. Archive restoration and sealed admission remain separate assertions; file integrity alone does not satisfy them.</p><pre>' + escape(json.dumps({name:p['archives'] for name,p in result['peers'].items()},indent=2)) + '</pre>')
     parts.append('<h2>Admission limits reported by each binary</h2><pre>' + escape(json.dumps(result['capabilities'],indent=2)) + '</pre>')
     parts.append('<h2>Memory and measured instrumentation</h2><p>Finite samples judge the declared bounds; they do not prove the absence of leaks. Resident/working-set and virtual/private bytes remain separate.</p>')
     for name,peer in result['peers'].items():
