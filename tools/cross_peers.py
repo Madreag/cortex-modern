@@ -300,7 +300,7 @@ def content_manifest(repo):
 
 def assert_box_guard(box):
     if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists():
-        raise RuntimeError(f'{box["name"]} exclusive measurement reservation active: {box["exclusive_marker"]}')
+        raise RuntimeError(f'{box["name"]} launch guard active: exclusive measurement reservation {box["exclusive_marker"]}')
     if box.get('guard_file') and not Path(box['guard_file']).is_file():
         raise RuntimeError(f'{box["name"]} launch guard active: {box["guard_file"]} absent')
     if box['kind'] == 'windows-local':
@@ -637,6 +637,8 @@ def run_payload(path):
             while len(completed) < len(runs):
                 now = time.monotonic()
                 if (root / 'stop.json').is_file(): raise RuntimeError('coordinator cancelled this box payload')
+                if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists():
+                    raise RuntimeError(f'{box["name"]}: exclusive measurement reservation appeared during this payload')
                 if box['kind'] == 'windows-local' and (reason := inventory_guard()): raise RuntimeError(reason)
                 if now >= next_sample:
                     own_pids = [engine_pid(r) for r in runs.values()]
