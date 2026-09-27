@@ -10837,13 +10837,17 @@ namespace RTE {
 			if (localIt == m_LocalFrames.end() && (m_Playback || (m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) &&
 			    !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame) && !IsSeatUnderAI(m_Config.localPeerId, m_Stats.nextFrame)))) {
 				if (!m_Playback && JudgeOwnSeat(m_Stats.nextFrame, nowMs)) continue;
-				// The host judges its own seat only once every other seat's input is in, so a seat missing beside it is judged first, on its own clock.
+				// The host judges its own seat only once every other seat's input is in, so a seat missing beside it is judged first, on its
+				// own clock - once a survivor's input is in and it is the one waiting.
 				if (!m_Playback && UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
 					const auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);
 					std::vector<uint8_t> missing;
-					for (uint8_t peer: m_RemotePeerIds) if (IsRemoteRequiredForFrame(peer, m_Stats.nextFrame) &&
-					    (remoteIt == m_RemoteFrames.end() || !remoteIt->second.contains(peer))) missing.push_back(peer);
-					if (!missing.empty()) {
+					bool survivorWaits = false;
+					for (uint8_t peer: m_RemotePeerIds) {
+						if (!IsRemoteRequiredForFrame(peer, m_Stats.nextFrame)) continue;
+						if (remoteIt == m_RemoteFrames.end() || !remoteIt->second.contains(peer)) missing.push_back(peer); else survivorWaits = true;
+					}
+					if (!missing.empty() && survivorWaits) {
 						if (m_FirstMissingFrame != m_Stats.nextFrame) { m_FirstMissingFrame = m_Stats.nextFrame; m_FirstMissingMs = nowMs; }
 						if (DeclareOverdueInputs(m_Stats.nextFrame, nowMs, m_FirstMissingMs, missing)) continue;
 					}
