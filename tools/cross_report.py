@@ -191,6 +191,7 @@ def requirements(manifest, comparison, metrics):
         3: 'MIXED uses human teams 0,0,1 plus peerless CPU team 2 through real host options; ordinary AI actors supply allied units. Adopted configurations and all roster arms still need run evidence.',
         20: 'SoundContainer.cpp:405 authority and music-transition emissions are outside this lane; muted output proves no audible result.',
         22: 'A fourth real box and its persistent-world arrival arm are absent.',
+        34: 'Hold and catch-up ends are wired into the default schedule with peer/round/incarnation-bound phase signals and native end witnesses. Both executed overlaps and the post-migration end are not yet demonstrated; migration awaits the endpoint seam.',
         35: 'Pre-auth/proof/image/tail/activation overlaps await the WAN endpoint fix; queued/cancelled phases never complete recovery.',
         36: 'Capture-announced and writer-pending barriers have RED/GREEN bounded-release tests; migration overlap, archive validity and restarted writer cadence still await a real endpoint-capable arm.',
         40: 'Initial history uses the configured start frame; settled live authority is read from the public runner report. Private catch-up branch/checkpoint lineage remains unexposed at NetMatchService.h:1305,1599 and NetMatchService.cpp:4534, so restored keys stay UNKNOWN.',
@@ -210,6 +211,13 @@ def requirements(manifest, comparison, metrics):
         for item in items:
             if item['number'] == 66:
                 item.update(status='PASS', reason='Each box has one owning runner payload, local scripts and far-side engine PID samples.', evidence=['manifest.json'])
+    for item in items:
+        if item['number'] in (41,'reread-4') and comparison.get('passed'):
+            item.update(status='PASS',reason='Every declared key contains the required hashed subsystems and applied-controller hash; only documented controller_route is excluded. This proves hashed tick-end equality, not all state, input order or AI provenance.',evidence=['result.json#comparison'])
+        if item['number']==52 and comparison.get('passed') and metrics and all(p.get('tick_timing_valid') and p.get('frames',0)>0 and p['tick_compute_ms']['count']==p['frames'] for p in metrics.values()):
+            item.update(status='PASS',reason='Every compared live tick has a valid exclusive compute/wait/capture partition. Distributions use native per-tick samples; configured sim_tick_ms is not substituted for compute time.',evidence=['result.json#peers'])
+        if item['number']=='reread-5' and metrics and all(p['timing'].get('complete') and all(p['timing'].get(k) is not None for k in ('steady_waits_over_50','steady_missing_frame_stalls','net_wait_ms','waiting_percent','longest_stall_ms')) for p in metrics.values()):
+            item.update(status='PASS',reason='Matched declared windows report the eligible >50 ms wait count, separate native missing-frame stalls, wait sum, maximum and 100*wait/wall percentage.',evidence=['result.json#peers'])
     return items
 
 
@@ -299,6 +307,7 @@ def build_report(root):
         peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=int(own.name.split('-')[-1]), frames=len(live[name]),
             observed_waits_over_50=sum(r['wait_ms']>50 for r in waits) if log else None, observed_wait_records=len(waits),
             native=native, record=record, timing=timing, tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
+            tick_timing_valid=bool(tick_cost) and all(r.get('partition_valid') for r in tick_cost),
             capture_ms=report.distribution([r['capture_us']/1000 for r in tick_cost]),
             latency_ms=report.distribution([r['ms'] for r in latency if r['ms'] is not None]),
             latency_lower_bounds_ms=report.distribution([r['latency_lower_bound_ms'] for r in latency]),
