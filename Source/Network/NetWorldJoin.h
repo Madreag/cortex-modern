@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -202,8 +203,11 @@ namespace RTE {
 		void EnableJournal(const std::string& path);
 		bool HasJournal() const { return static_cast<bool>(m_Journal); }
 		bool JournalFailed() const;
-		/// Encodes and retains one committed frame. Frames must arrive in order and without gaps.
+		/// Encodes and retains one committed frame. Frames must arrive in order and without gaps, and of the log's round once it has one.
 		bool Append(const NetLockstepFrame& frame, std::string* error = nullptr);
+		/// Keys the log to one round: a frame of any other round is refused. 0 leaves it unkeyed; Clear unkeys it.
+		void SetRound(uint64_t round) { m_Round = round; }
+		uint64_t Round() const { return m_Round; }
 		/// The oldest frame the log can still serve, from its journal or its memory; 0 when it holds none.
 		uint64_t FirstServableFrame() const;
 		/// Whether the log still covers the frame, so a join opened at B-1 can still converge.
@@ -218,13 +222,15 @@ namespace RTE {
 		size_t CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* lastCopied = nullptr) const;
 		/// Forgets everything at or before the frame every live bootstrap has applied.
 		void DropThrough(uint64_t frame);
-		/// Takes another log's records as this empty log's own, bounded as this log is. False when this log already holds a record.
+		/// Takes another log's records as this empty log's own, bounded as this log is. False when this log already holds a record
+		/// or one of them belongs to another round than this log's.
 		bool AdoptRecords(const NetWorldFrameLog& other);
 		void Clear();
 
 	private:
 		struct Record {
 			uint64_t frame = 0;
+			uint64_t round = 0;
 			std::vector<uint8_t> bytes;
 		};
 
@@ -238,6 +244,7 @@ namespace RTE {
 		uint64_t m_MaxBytes = c_DefaultMaxBytes;
 		uint64_t m_Bytes = 0;
 		uint64_t m_Evicted = 0;
+		uint64_t m_Round = 0;
 	};
 
 	/// Baselines recorded as the world runs and reported at its end. A missed bound is reported, never rounded away.
@@ -416,6 +423,7 @@ namespace RTE {
 		std::string digest;
 		std::vector<NetLockstepFrame> tail;
 		std::vector<uint8_t> partialTail;
+		std::set<uint64_t> droppedForeignRounds; //!< Rounds whose stray tail chunks this catch-up dropped, each named once.
 		std::optional<NetWorldHandover> handover; //!< Where the round it replays changed hands, once its successor said so.
 		bool handoverCrossed = false;             //!< The replay runs under the successor's authority from the handover on.
 	};
@@ -428,6 +436,11 @@ namespace RTE {
 	/// A valid 9-byte StateChunk the joiner and host exchange for progress, catch-up and E.
 	inline constexpr uint64_t c_NetWorldReportTransferId = 0x574A5250ULL;
 	inline constexpr uint64_t c_NetWorldTailTransferId = 0x5441494CULL;
+	/// A tail chunk leads with the round its frames belong to, so a chunk of an earlier round is never replayed into a later one.
+	inline constexpr size_t c_NetWorldTailRoundBytes = 8;
+	NetLobbyStateChunk MakeWorldTailChunk(uint64_t round, const std::vector<uint8_t>& slice);
+	/// The round a tail chunk names; false for a chunk too short to carry one.
+	bool ParseWorldTailChunkRound(const NetLobbyStateChunk& chunk, uint64_t& round);
 	inline constexpr uint8_t c_NetWorldReportProgress = 1;
 	inline constexpr uint8_t c_NetWorldReportCatchUp = 2;
 	inline constexpr uint8_t c_NetWorldReportActivate = 3;
@@ -621,6 +634,8 @@ namespace RTE {
 		const NetWorldMembership& Membership() const { return m_Membership; }
 		NetWorldFrameLog& Tail() { return m_Tail; }
 		const NetWorldFrameLog& Tail() const { return m_Tail; }
+		/// The round a joiner's catch-up names for this tail: the match round of a rejoin plane, the boot round of a world.
+		uint64_t TailRound() const { return m_PrivateRound != 0 ? m_PrivateRound : m_Identity.round; }
 		NetWorldMetrics& Metrics() { return m_Metrics; }
 		const NetWorldMetrics& Metrics() const { return m_Metrics; }
 		/// The oldest tail frame any live bootstrap still needs; 0 when none does.

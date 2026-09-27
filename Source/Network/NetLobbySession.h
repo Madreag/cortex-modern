@@ -183,7 +183,9 @@ namespace RTE {
 		/// The end record of a round that ended while this seat was held or rejoining; the events after it belong to the next lobby.
 		const std::optional<uint64_t>& GetRoundEndedRecord() const { return m_RoundEndedRecord; }
 		std::vector<NetTransportEvent> TakeEventsAfterRoundEnded() { return std::exchange(m_EventsAfterRoundEnded, {}); }
-		std::vector<uint8_t> TakePendingTailBytes();
+		/// The committed tail bytes received so far. With a round, only that round's are taken: the others are dropped and each
+		/// dropped round is listed with its byte count.
+		std::vector<uint8_t> TakePendingTailBytes(std::optional<uint64_t> round = std::nullopt, std::vector<std::pair<uint64_t, size_t>>* dropped = nullptr);
 		void SetStartFrame(uint64_t startFrame) { m_StartFrame = startFrame; }
 		bool HasCompleteStateTransfer() const { return m_IncomingStateComplete; }
 		/// Gets whether any remote still lacks a chunk of the queued state file.
@@ -319,7 +321,7 @@ namespace RTE {
 		std::deque<WorldJoinReport> m_WorldJoinReports;
 		std::optional<uint64_t> m_RoundEndedRecord;
 		std::vector<NetTransportEvent> m_EventsAfterRoundEnded;
-		std::vector<uint8_t> m_PendingTailBytes;
+		std::deque<std::pair<uint64_t, std::vector<uint8_t>>> m_PendingTail; //!< Received tail bytes, one run per round in arrival order.
 		NetLobbyStats m_Stats;
 	};
 
