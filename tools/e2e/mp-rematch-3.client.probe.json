@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "timeout_ms": 290000,
+  "timeout_ms": 175000,
   "steps": [
     {
       "op": "wait_file",
