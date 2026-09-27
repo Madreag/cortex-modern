@@ -54,7 +54,7 @@ namespace RTE {
 		std::string VersionTuple(const NetIdentityDeterministicConfig& config) {
 			return std::to_string(config.supportedLockstepCodecVersion) + "." + std::to_string(config.supportedWorldLockstepCodecVersion) + "." +
 			       std::to_string(config.supportedMatchConfigVersion) + "." + std::to_string(config.supportedWorldMatchConfigVersion) + "." +
-			       std::to_string(config.lobbyProtocolVersion);
+			       std::to_string(config.lobbyProtocolVersion) + "." + std::to_string(config.committedRecordVersion);
 		}
 
 		/// Compares two dotted version texts field by field; a range compares by its highest version.
