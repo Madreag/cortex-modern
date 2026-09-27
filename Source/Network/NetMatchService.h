@@ -22,7 +22,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <future>
@@ -1551,8 +1550,10 @@ namespace RTE {
 		bool m_ManualSaveWaitShown = false; //!< Host: the HUD already said the ask waits for a safe tick.
 		uint64_t m_ManualSaveTakenTick = 0; //!< Host: the tick its own writer took that capture at.
 		std::string m_ManualSaveFailure; //!< Host: why its own writer did not save it.
-		bool m_ManualSaveBusy = false; //!< Host: an ask is open until its writers report.
-		std::time_t m_LastMatchSaveTime = 0; //!< When this peer's writer last archived a checkpoint of this match.
+		// The pause menu reads these from the game loop while the tick boundary writes them.
+		std::atomic<bool> m_ManualSaveBusy = false; //!< Host: an ask is open until its writers report.
+		std::atomic<bool> m_ManualSaveFailed = false; //!< Host: its last ask was not saved.
+		std::atomic<int64_t> m_LastMatchSaveTime = 0; //!< When this peer's writer last archived a checkpoint of this match.
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
 		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
