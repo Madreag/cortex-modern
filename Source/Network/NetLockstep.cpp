@@ -7520,6 +7520,9 @@ namespace RTE {
 		// A desync on ANY peer aborts, naming it; only verify (and prune) once every REQUIRED remote
 		// agrees. A cleanly-left peer's last hashes still compare, but nobody waits on it.
 		for (const auto& [peerId, hash]: remoteIt->second) {
+			// A client held at this frame may have run it on its own input, off the round: its hash is its private simulation's until it
+			// returns. A held host still simulates the round.
+			if (peerId != GetHostPeerId() && IsSeatUnderAI(peerId, frame)) continue;
 			++m_Stats.checksumCompares;
 			if (localIt->second != hash) {
 				++m_Stats.checksumMismatches;
