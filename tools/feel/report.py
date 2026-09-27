@@ -182,8 +182,10 @@ def reduce_memory(samples, *, warmup_s, slope_bytes_per_minute, retained_bytes, 
 
 
 def parse_fullstate(paths):
-    samples, scopes, contexts, refusals = [], defaultdict(list), defaultdict(list), []
+    samples, scopes, contexts, refusals, coalesced = [], defaultdict(list), defaultdict(list), [], []
     sample_pattern = re.compile(r'^\[fullstate(?:-(canonical|restored))?\] tick=(\d+) hash=([0-9a-f]{16}) sections=(\S+) round=(\d+)')
+    # The engine's own record of a periodic sample its writer replaced before writing it (ActivityMan's per-series bound).
+    coalesced_pattern = re.compile(r'^\[fullstate-coalesced\] tick=(\d+) replaced=(\d+) ')
     scope_pattern = re.compile(r'^\[fullstate-scope\] tick=(\d+) round=(\d+) label=(\S+) per_peer=(.*)$')
     context_pattern = re.compile(r'^\[fullstate-context\] tick=(\d+) round=(\d+) label=(\S+) path=(.*)$')
     for path in paths:
@@ -197,6 +199,8 @@ def parse_fullstate(paths):
                 elif match:=scope_pattern.match(line.strip()):
                     key=(int(match[2]),int(match[1]),match[3])
                     scopes[key].append(dict(per_peer=match[4].split(',') if match[4] else [],log=str(path),line=number))
+                elif match:=coalesced_pattern.match(line.strip()):
+                    coalesced.append(dict(tick=int(match[1]),replaced=int(match[2]),log=str(path),line=number))
                 elif match:=sample_pattern.match(line.strip()):
                     label=match[1] or 'sample'; key=(int(match[5]),int(match[2]),label)
                     sections=dict(item.rsplit(':',1) for item in match[4].split(','))
@@ -211,12 +215,16 @@ def parse_fullstate(paths):
         sample['scope']=scopes[key][index] if index<len(scopes[key]) else None
         sample['context']=contexts[key][index] if index<len(contexts[key]) else None
         sample['scope_valid']=sample['scope'] is not None and 'header' in sample['sections'] and not (set(sample['sections']) & set(sample['scope']['per_peer']))
-    return dict(samples=samples,refusals=refusals)
+    return dict(samples=samples,refusals=refusals,coalesced=coalesced)
 
 
 def compare_fullstate_histories(peers, expected):
-    missing, differences, bad_scope, restored = [], [], [], []
+    """Every expected key is sampled by every peer, or named by that peer's own [fullstate-coalesced] line (one line
+    excuses one absence of its tick's periodic sample, never a labelled capture); the hashes are compared across the
+    peers that wrote the key, and at least one key must be written by every peer."""
+    missing, differences, bad_scope, restored, excused = [], [], [], [], []
     indexed={}
+    replaced={peer:Counter(row['replaced'] for row in document.get('coalesced',[])) for peer,document in peers.items()}
     for peer,document in peers.items():
         indexed[peer]=defaultdict(list)
         for sample in document['samples']:
@@ -229,12 +237,17 @@ def compare_fullstate_histories(peers, expected):
             canonical=[c for other in indexed.values() for c in other.get(canonical_key,[])]
             restored.append(dict(peer=peer,key=sample['key'],canonical_found=bool(canonical),
                 equal=bool(canonical) and all(c['sections']==sample['sections'] and c['hash']==sample['hash'] for c in canonical)))
+    compared=0
     for key in expected:
         values=[]
         for peer in peers:
             found=indexed[peer].get(tuple(key),[])
-            if not found: missing.append(dict(peer=peer,key=key))
+            if not found and key[2]=='sample' and replaced[peer][key[1]]>0:
+                replaced[peer][key[1]]-=1
+                excused.append(dict(peer=peer,key=tuple(key)))
+            elif not found: missing.append(dict(peer=peer,key=key))
             values.extend((peer,sample) for sample in found)
+        if len({peer for peer,_ in values})==len(peers): compared+=1
         if values:
             first_peer,first=values[0]
             for peer,sample in values[1:]:
@@ -244,8 +257,10 @@ def compare_fullstate_histories(peers, expected):
                     differences.append(dict(key=key,first_peer=first_peer,peer=peer,sections=differing or ['combined_hash'],
                                             first_log=first['log'],first_line=first['line'],log=sample['log'],line=sample['line']))
     refused=[dict(peer=peer,**row) for peer,document in peers.items() for row in document['refusals']]
-    return dict(passed=bool(expected) and not (missing or differences or bad_scope or refused) and all(r['equal'] for r in restored),
-                expected_samples_per_peer=len(expected),missing=missing,differences=differences,scope_failures=bad_scope,
+    return dict(passed=bool(expected) and compared>0 and not (missing or differences or bad_scope or refused) and all(r['equal'] for r in restored),
+                expected_samples_per_peer=len(expected),compared_samples=compared,
+                coalesced={peer:sum(row['peer']==peer for row in excused) for peer in peers},coalesced_samples=excused,
+                missing=missing,differences=differences,scope_failures=bad_scope,
                 refusals=refused,restores=restored,scope='Shared sections only; PerPeer exclusions remain explicit and need behavioral oracles')
 KILLALL = re.compile(r'killall sparing team \d+ at tick (\d+)')
 SCENARIO_EARLY = re.compile(r'\[scenario\] \S+ passed=no ticks=(\d+)')

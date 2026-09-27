@@ -466,18 +466,8 @@ def build_report(root):
         final_tick=peers[manifest['host']]['native_final_tick'])
     comparison = report.compare_histories(live, ranges, REQUIRED_SUBSYSTEMS)
     fullstate_documents={name:report.parse_fullstate([root/fragment/'engine/stdout.log' for fragment in peer['fragments']]) for name,peer in peers.items()}
-    fullstate_expected=set()
     cadence=manifest.get('fullstate_every',0)
-    if cadence:
-        first_eligible={}
-        for observed in host_rows:
-            if observed.get('phase')!='live' or observed.get('paused') or not observed.get('gameplay_tick') or not observed.get('effective_start_frame'):
-                continue
-            if observed['tick'] < observed['effective_start_frame']: continue
-            round_id=observed['round']; first_eligible.setdefault(round_id,observed['tick'])
-            if observed['tick'] % cadence == 0: fullstate_expected.add((round_id,observed['tick'],'sample'))
-        fullstate_expected.update((r,t,'sample') for r,t in first_eligible.items())
-    fullstate=report.compare_fullstate_histories(fullstate_documents,sorted(fullstate_expected)) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
+    fullstate=report.compare_fullstate_histories(fullstate_documents,fullstate_expected(host_rows,cadence)) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
     matrix = coverage(events, peers, manifest)
     fault_receipts = [dict(r, source_peer=name) for name,values in events.items() for r in values if r.get('type') == 'fault']
     fault_receipts += [dict(r['native'],source_peer=name,id=r['id'],type='fault',applied=True,source='owning payload termination')
