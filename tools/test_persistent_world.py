@@ -986,7 +986,7 @@ def host_restart_same_world_id(repo: Path, out: Path) -> None:
         raise AssertionError("world-id-did-not-survive-restart: " + repr(printed))
 
 
-USAGE = """usage: test_persistent_world.py [directory-resume | world-segment REPO [OUT] | host-restart REPO [OUT]] [--fullstate-every N]
+USAGE = """usage: test_persistent_world.py [directory-resume | world-segment REPO [OUT] | host-restart REPO [OUT]] [--fullstate-every N] [--port P]
 
   --fullstate-every N  world-segment only: every N committed ticks both peers of each world round hash their whole
                        capture (-net-fullstate-hash-every) and every round's pair must match; 0 is off"""
@@ -997,6 +997,11 @@ if __name__ == "__main__":
         print(USAGE)
         sys.exit(0)
     FULLSTATE_EVERY = 0
+    SEGMENT_RUN_PORT = SEGMENT_PORT
+    if "--port" in sys.argv:
+        at = sys.argv.index("--port")
+        SEGMENT_RUN_PORT = int(sys.argv[at + 1])
+        del sys.argv[at:at + 2]
     if "--fullstate-every" in sys.argv:
         at = sys.argv.index("--fullstate-every")
         FULLSTATE_EVERY = int(sys.argv[at + 1])
@@ -1005,7 +1010,7 @@ if __name__ == "__main__":
         directory_resume_same_world_id()
         print("[directory-resume] PASS")
     elif len(sys.argv) > 1 and sys.argv[1] == "world-segment":
-        world_segment_replay(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()), fullstate_every=FULLSTATE_EVERY)
+        world_segment_replay(Path(sys.argv[2]), Path(sys.argv[3] if len(sys.argv) > 3 else os.getcwd()), port=SEGMENT_RUN_PORT, fullstate_every=FULLSTATE_EVERY)
         print("[world-segment-replay] PASS")
         # Every launch went through run_sim_test.make_run: nothing here starts the executable itself.
     elif len(sys.argv) > 1 and sys.argv[1] == "host-restart":
