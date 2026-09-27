@@ -6853,7 +6853,8 @@ void RunGameLoop() {
 						break;
 					}
 					g_NetMatchService.SetReady();
-					if (s_netHost || s_netDedicated) {
+					// The peer that hosts the match now asks for the next one: after a migration that is the successor.
+					if (g_NetMatchService.IsHost() || s_netDedicated) {
 						g_NetMatchService.RequestStart();
 					}
 					std::string rematchPreset;
