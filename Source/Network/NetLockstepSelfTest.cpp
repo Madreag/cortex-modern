@@ -80,6 +80,8 @@ namespace RTE {
 	bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 	bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
 	bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
+	bool TestEveryGapStaysForASimulationBehind(std::string* error);
+	bool TestADeferredStopDoesNotExcuseASeatPastTheBound(std::string* error);
 	bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 	bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 	bool TestAQueuedReturnLeavesALaterHold(std::string* error);
@@ -19665,6 +19667,40 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 	/// A seat produces its input for a frame when it simulates the frame one delay earlier, which it cannot do before
 	/// this host has committed that frame and it has crossed the seat's link: until then it waits on us, not late.
+	bool TestADeferredStopDoesNotExcuseASeatPastTheBound(std::string* error) {
+		// The host's simulation is busy; the plane set aside a stop seat 2 sent, and with it every later packet of that connection.
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A1F, 14, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 44;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 14}, {2, 14}};
+		config.remoteTransportPeerIds = {{2, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1F);
+		if (!wire.StartHost(48898, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_PeersPlayedThisRound = {2};
+		host.m_PeerEffectiveStart[2] = 15;
+		host.m_Stats.nextFrame = 148;
+		for (uint64_t frame = 120; frame < 148; ++frame) host.m_CommittedAtMs[frame] = 700;
+		const NetPeerId link = host.m_RemoteTransports.at(2);
+		host.m_PlaneHeldTransports.insert(link);
+		host.m_PlaneHeldSinceMs[link] = 1250;
+		// Set aside a moment ago, the seat's packets may still hold its input: it is not judged yet.
+		const bool excused = !host.DeclareOverdueInputs(148, 1260, 1000, {2});
+		// Set aside past the bound, the seat is judged like any silent one.
+		host.m_PlaneHeldSinceMs[link] = 1000;
+		const bool judged = host.DeclareOverdueInputs(148, 1260, 1000, {2});
+		if (!excused || !judged) {
+			*error = "a-deferred-stop-does-not-excuse-a-seat-past-the-bound: a seat whose connection the plane set aside 10 ms ago read excused=" + std::to_string(excused) +
+			         ", set aside 260 ms ago read judged=" + std::to_string(judged) + "; expected 1 and 1";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestAStarvedSeatIsNotLate(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -19820,6 +19856,43 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (seenA != "1630" || seenB != "1101/207") {
 			*error = "an-older-delivery-leaves-the-newer-seat-state: A (live hold 630, replayed return 500) read under_ai(640)/hold as " + seenA +
 			         " (expected 1630); B (hold 207 known, then hold 100 and return 200 delivered) read popped/under_ai(150,203,210)/hold as " + seenB + " (expected 1101/207)";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestEveryGapStaysForASimulationBehind(std::string* error) {
+		// A survivor's simulation is paused at 99 while its plane commits seat 2's hold at 100, return at 160 (gap through 165), hold at 167,
+		// return at 200 (gap through 205) and hold at 203: the frames it has yet to apply keep every gap they fell in.
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(3, 1, 0x9A1E, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 43; config.authorityPeerId = 1;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A1E);
+		host.m_Config = config; host.m_State = NetLockstepState::Running; host.m_RoundId = 43;
+		host.m_RemotePeerIds = {1, 2};
+		host.m_RemoteTransports[1] = 7;
+		for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 5;
+		host.m_Stats.nextFrame = 99;
+		uint64_t revision = 0;
+		const auto decide = [&](NetTimingAction action, NetTimingPhase phase, uint64_t frame, uint64_t neutral) {
+			NetLockstepTiming timing;
+			timing.senderPeerId = 1; timing.peerId = 2; timing.action = action; timing.phase = phase;
+			timing.sessionId = config.sessionId; timing.roundId = 43; timing.revision = ++revision;
+			timing.applyFrame = timing.cutoffFrame = frame; timing.heldPeers = 1U << 1; timing.seatIncarnations[1] = static_cast<uint32_t>(revision);
+			timing.delayFrames = 4; timing.neutralThroughFrame = neutral;
+			host.ApplyTiming(timing);
+		};
+		decide(NetTimingAction::Hold, NetTimingPhase::HoldAtFrame, 100, 0);
+		decide(NetTimingAction::Reclaim, NetTimingPhase::ReclaimAtFrame, 160, 165);
+		decide(NetTimingAction::Hold, NetTimingPhase::HoldAtFrame, 167, 0);
+		decide(NetTimingAction::Reclaim, NetTimingPhase::ReclaimAtFrame, 200, 205);
+		decide(NetTimingAction::Hold, NetTimingPhase::HoldAtFrame, 203, 0);
+		const std::string seen = std::to_string(host.IsSeatHoldGap(2, 100)) + std::to_string(host.IsSeatHoldGap(2, 167)) + std::to_string(host.IsSeatHoldGap(2, 203)) + "/" +
+		    std::to_string(host.IsSeatReclaimGap(2, 162)) + std::to_string(host.IsSeatReclaimGap(2, 201)) + std::to_string(host.IsSeatReclaimGap(2, 180)) + std::to_string(host.IsSeatHoldGap(2, 150));
+		if (seen != "111/1100") {
+			*error = "every-gap-stays-for-a-simulation-behind: holds at 100/167/203, returns at 160 (gap to 165) and 200 (gap to 205) read hold_gap(100,167,203)/reclaim_gap(162,201,180) hold_gap(150) as " +
+			         seen + "; expected 111/1100";
 			return false;
 		}
 		return true;
@@ -20940,6 +21013,20 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return passed ? 0 : 1;
 	}
 
+	int NetLockstepSelfTest::RunSeatLog() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		bool passed = true;
+		for (bool (*test)(std::string*): {TestEveryHoldProducerWritesTheSeatLog, TestAnOlderDeliveryLeavesTheNewerSeatState, TestEveryGapStaysForASimulationBehind,
+		                                   TestADeferredStopDoesNotExcuseASeatPastTheBound}) {
+			std::string error;
+			if (test(&error)) continue;
+			passed = false;
+			std::cout << "[net-lockstep-seat-log-selftest] FAIL: " << error << std::endl;
+		}
+		if (passed) std::cout << "[net-lockstep-seat-log-selftest] PASS" << std::endl;
+		return passed ? 0 : 1;
+	}
+
 	int NetLockstepSelfTest::Run() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		if (!LuaMan::IsConstructed()) LuaMan::Construct();
@@ -21075,6 +21162,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALaggingPeerReadsASeatAtItsFrame(&error) ||
 		    !TestEveryHoldProducerWritesTheSeatLog(&error) ||
 		    !TestAnOlderDeliveryLeavesTheNewerSeatState(&error) ||
+		    !TestEveryGapStaysForASimulationBehind(&error) ||
+		    !TestADeferredStopDoesNotExcuseASeatPastTheBound(&error) ||
 		    !TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(&error) ||
 		    !TestARecordedHoldKeepsItsSeatsClaims(&error) ||
 		    !TestAQueuedReturnLeavesALaterHold(&error) ||

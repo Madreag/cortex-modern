@@ -1244,6 +1244,8 @@ namespace RTE {
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
 		friend bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
 		friend bool TestAnOlderDeliveryLeavesTheNewerSeatState(std::string* error);
+		friend bool TestEveryGapStaysForASimulationBehind(std::string* error);
+		friend bool TestADeferredStopDoesNotExcuseASeatPastTheBound(std::string* error);
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 		friend bool TestAQueuedReturnLeavesALaterHold(std::string* error);
@@ -1552,6 +1554,7 @@ namespace RTE {
 		bool m_PlaneTicking = false; //!< Inside PlaneTick: events that call out of the coordinator are deferred.
 		std::vector<NetTransportEvent> m_PlaneDeferredEvents; //!< What the plane left for the simulation thread's next tick, in arrival order.
 		std::set<NetPeerId> m_PlaneHeldTransports; //!< Connections whose later packets wait behind a deferred start, stop or lifecycle event.
+		std::map<NetPeerId, uint64_t> m_PlaneHeldSinceMs; //!< When the plane first set each held connection aside.
 		void HandleTransportEvents(uint64_t nowMs);
 		uint32_t m_LocalStartParkMs = 0; //!< Our own activity restart, as it goes out in our start.
 		uint8_t m_LocalDeviceClass = 0; //!< Our own seat device, as it goes out in our start.
