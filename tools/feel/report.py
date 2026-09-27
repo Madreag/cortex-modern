@@ -11,6 +11,141 @@ from .records import open_record, record_path
 
 TICKS = 1200
 SIM_MS = 1000 / 60
+HISTORY_FIELDS = ('session', 'match', 'history_branch', 'source_round', 'tick')
+
+
+def compare_histories(peers, ranges, required_subsystems):
+    """Compare every observation, preserving disagreement in earlier executions."""
+    indexed, invalid, duplicates, first_difference = {}, [], 0, None
+    for peer, rows in peers.items():
+        observations, seen = defaultdict(list), set()
+        for number, row in enumerate(rows, 1):
+            missing = [field for field in (*HISTORY_FIELDS, 'instance', 'execution', 'incarnation')
+                       if field not in row or row[field] is None]
+            missing += sorted(set(required_subsystems) - row.get('subsystems', {}).keys())
+            if missing:
+                invalid.append(dict(peer=peer, line=row.get('_line', number), missing=missing))
+                continue
+            key = tuple(row[field] for field in HISTORY_FIELDS)
+            identity = (row['instance'], row['execution'], row['incarnation'], *key)
+            if identity in seen:
+                duplicates += 1
+            seen.add(identity)
+            signature = {'sim_gated': row.get('sim_gated'), **{name: value for name, value in row['subsystems'].items()
+                                                              if name != 'controller_route'}}
+            if not row.get('sim_gated'):
+                invalid.append(dict(peer=peer, line=number, missing=['sim_gated']))
+            observations[key].append((signature, row.get('_line', number)))
+        indexed[peer] = observations
+    counts = {peer: dict(expected=0, present=0, missing=0) for peer in peers}
+    equal, unknown, unequal, expected_keys = 0, 0, 0, set()
+    strips = []
+    for interval in ranges:
+        if interval['first'] > interval['last'] or len(set(interval['peers'])) < 3:
+            raise ValueError('a comparable interval needs at least three distinct peers and a nonempty range')
+        prefix = tuple(interval[field] for field in HISTORY_FIELDS[:-1])
+        for tick in range(interval['first'], interval['last'] + 1):
+            key = (*prefix, tick)
+            if key in expected_keys:
+                raise ValueError(f'overlapping declared history range: {key}')
+            expected_keys.add(key)
+            values, absent = [], []
+            for peer in interval['peers']:
+                counts.setdefault(peer, dict(expected=0, present=0, missing=0))['expected'] += 1
+                found = indexed.get(peer, {}).get(key, [])
+                counts[peer]['present' if found else 'missing'] += 1
+                values.extend((peer, signature, line) for signature, line in found)
+                if not found:
+                    absent.append(peer)
+            differs = False
+            if values:
+                reference_peer, reference, reference_line = values[0]
+                for peer, signature, line in values[1:]:
+                    if signature != reference:
+                        differs = True
+                        if first_difference is None:
+                            section = next(name for name in sorted(reference.keys() | signature.keys())
+                                           if signature.get(name) != reference.get(name))
+                            first_difference = dict(key=dict(zip(HISTORY_FIELDS, key)), section=section,
+                                first_peer=reference_peer, first_line=reference_line, peer=peer, line=line,
+                                first_value=reference.get(section), value=signature.get(section))
+            unequal += differs
+            unknown += bool(absent)
+            equal += not differs and not absent
+            status = 'UNEQUAL' if differs else 'UNKNOWN' if absent else 'EQUAL'
+            if strips and strips[-1]['status'] == status and strips[-1]['prefix'] == list(prefix) and strips[-1]['last'] + 1 == tick:
+                strips[-1]['last'] = tick
+            else:
+                strips.append(dict(prefix=list(prefix), first=tick, last=tick, status=status))
+    unexpected = sum(key not in expected_keys for observations in indexed.values() for key in observations)
+    return dict(passed=bool(expected_keys) and not (unknown or unequal or invalid or duplicates),
+                equal_keys=equal, unknown_keys=unknown, unequal_keys=unequal, duplicates=duplicates,
+                unexpected_keys=unexpected, invalid=invalid[:100], invalid_count=len(invalid),
+                peers=counts, first_difference=first_difference, strips=strips,
+                scope='sim_gated and hashed tick-end subsystems; controller_route is per-peer')
+
+
+def reduce_recoveries(schedule, events, now_ms):
+    results = []
+    for case in schedule:
+        if case['deadline_ms'] <= 0 or not case['outcomes']:
+            raise ValueError('recovery deadlines and terminal outcomes must be declared')
+        rows = [row for row in events if all(row.get(field) == case[field] for field in ('id', 'peer', 'incarnation'))]
+        starts = [row for row in rows if row['phase'] in ('loss', 'hold', 'fault_applied')]
+        start = min((row['wall_ms'] for row in starts), default=None)
+        terminal = next((row for row in rows if row['phase'] in case['outcomes']
+                         and row['phase'] not in ('queued_admission', 'cancelled_reclaim')
+                         and start is not None and row['wall_ms'] >= start), None)
+        duration = (terminal['wall_ms'] if terminal else now_ms) - start if start is not None else None
+        results.append(dict(**case, phases=rows, duration_ms=duration, censored=terminal is None,
+                            outcome=terminal['phase'] if terminal else None,
+                            passed=terminal is not None and 0 <= duration <= case['deadline_ms']))
+    return results
+
+
+def reduce_net_window(committed, waits, first, last, sim_tick_ms, missing_frame_stalls=None):
+    by_tick = defaultdict(list)
+    for row in committed:
+        if first <= row['tick'] <= last:
+            by_tick[row['tick']].append(row['wall_ms'])
+    complete = last > first and set(by_tick) == set(range(first, last + 1)) and all(len(v) == 1 for v in by_tick.values())
+    wall = by_tick[last][0] - by_tick[first][0] if complete else None
+    if wall is not None and wall <= 0:
+        complete, wall = False, None
+    eligible = [row for row in (waits or []) if first < row['tick'] <= last]
+    wait = sum(row['wait_ms'] for row in eligible) if waits is not None else None
+    horizon = max(0, max(by_tick[t][0] - by_tick[first][0] - (t - first) * sim_tick_ms for t in by_tick)) if complete and sim_tick_ms else None
+    return dict(complete=complete, first_tick=first, last_tick=last, eligible_ticks=last-first,
+                missing_ticks=last-first+1-len(by_tick), steady_wall_ms=wall,
+                steady_wall_tps=(last-first)*1000/wall if wall else None,
+                net_wait_ms=wait, waiting_percent=100*wait/wall if wall and wait is not None else None,
+                longest_stall_ms=max((row['wait_ms'] for row in eligible), default=0) if complete else None,
+                steady_waits_over_50=sum(row['wait_ms'] > 50 for row in eligible) if complete else None,
+                steady_missing_frame_stalls=missing_frame_stalls, confirmed_horizon_lag_ms=horizon,
+                sim_tick_ms=sim_tick_ms)
+
+
+def reduce_memory(samples, *, warmup_s, slope_bytes_per_minute, retained_bytes, sample_seconds, elapsed_s):
+    if min(warmup_s, slope_bytes_per_minute, retained_bytes) < 0 or sample_seconds <= 0:
+        raise ValueError('invalid memory bounds')
+    expected = math.floor(elapsed_s / sample_seconds) + 1
+    slots = {math.floor(row['elapsed_s'] / sample_seconds) for row in samples}
+    sizes = {}
+    for field in ('working_set', 'resident', 'private', 'virtual'):
+        values = [(r['elapsed_s'], r[field]) for r in samples if r['elapsed_s'] >= warmup_s and r.get(field) is not None]
+        if len(values) < 2:
+            continue
+        x = sum(t for t, _ in values) / len(values); y = sum(v for _, v in values) / len(values)
+        divisor = sum((t-x)**2 for t, _ in values)
+        slope = sum((t-x)*(v-y) for t, v in values) / divisor * 60 if divisor else None
+        growth = values[-1][1] - values[0][1]
+        sizes[field] = dict(first=values[0][1], last=values[-1][1], peak=max(v for _, v in values),
+                            slope_bytes_per_minute=slope, retained_bytes=growth,
+                            passed=slope is not None and slope <= slope_bytes_per_minute and growth <= retained_bytes)
+    return dict(passed=bool(sizes) and len(slots) >= expected and all(v['passed'] for v in sizes.values()),
+                warmup_s=warmup_s, slope_bound=slope_bytes_per_minute, retention_bound=retained_bytes,
+                expected_samples=expected, observed_samples=len(samples), missing_samples=max(0, expected-len(slots)),
+                sizes=sizes, instrumentation_growth='N/A without measured allocation records; no subtraction')
 KILLALL = re.compile(r'killall sparing team \d+ at tick (\d+)')
 SCENARIO_EARLY = re.compile(r'\[scenario\] \S+ passed=no ticks=(\d+)')
 
@@ -32,7 +167,7 @@ def dump_ticks(path):
     return ticks
 
 
-def early_decision_tick(run, peer):
+def early_decision_tick(run, peer, ticks=TICKS):
     run = Path(run)
     log = run / peer / 'stdout.log'
     if log.is_file():
@@ -40,13 +175,13 @@ def early_decision_tick(run, peer):
         match = KILLALL.search(text) or SCENARIO_EARLY.search(text)
         if match:
             tick = int(match[1])
-            if 0 < tick < TICKS:
+            if 0 < tick < ticks:
                 return tick
     dump = run / f'{peer}_trace.json.simdump.txt'
     if record_path(dump).is_file():
-        ticks = dump_ticks(dump)
-        if ticks and ticks != set(range(1, TICKS + 1)):
-            return max(ticks)
+        observed = dump_ticks(dump)
+        if observed and observed != set(range(1, ticks + 1)):
+            return max(observed)
     return None
 
 
