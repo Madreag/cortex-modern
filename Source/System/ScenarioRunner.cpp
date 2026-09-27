@@ -43,6 +43,7 @@
 #include <optional>
 #include <set>
 #include <memory>
+#include <atomic>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -814,6 +815,19 @@ namespace RTE {
 		s_PendingSessionTail = std::move(pendingTail);
 		s_SessionProgress = std::move(sessionProgress);
 		s_GoodbyeToPendingReturners = std::move(goodbyeToPendingReturners);
+	}
+
+	namespace {
+		std::atomic<uint64_t> s_AbandonedTicksFrom{0};
+	}
+
+	void ScenarioRunner::AbandonTicksFrom(uint64_t frame) {
+		uint64_t current = s_AbandonedTicksFrom.load();
+		while ((current == 0 || frame < current) && !s_AbandonedTicksFrom.compare_exchange_weak(current, frame)) {}
+	}
+
+	uint64_t ScenarioRunner::TakeAbandonedTicksFrom() {
+		return s_AbandonedTicksFrom.exchange(0);
 	}
 
 	std::string ScenarioRunner::MemoryCensus() {

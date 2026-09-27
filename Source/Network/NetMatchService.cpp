@@ -4690,6 +4690,8 @@ static std::string ResyncSaveName() {
 		// A sim that ran the hold frame played input the round never committed; only one short of it holds the round's state.
 		if (holdFrame == 0 || tick == 0 || tick >= holdFrame) {
 			System::PrintDiagnosticLine("[net-match] held client: no in-place catch-up (sim at " + std::to_string(tick) + ", held from " + std::to_string(holdFrame) + ")");
+			// The frames from the hold on that this simulation already ran were off the round; the image it rejoins through replaces them.
+			if (holdFrame != 0 && tick >= holdFrame) ScenarioRunner::AbandonTicksFrom(holdFrame);
 			return false;
 		}
 		NetResyncState committed;

@@ -6150,8 +6150,18 @@ void RunGameLoop() {
 				g_MovableMan.FeedTickEndChecksum();
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
+				// Ticks a held seat ran off the round leave both hash records before this tick is written.
+				static uint64_t liveAbandonedFrom = 0;
+				if (const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(); abandoned != 0) {
+					g_MetricsCollector.RetractTickHashesFrom(abandoned);
+					liveAbandonedFrom = liveAbandonedFrom == 0 ? abandoned : std::min(liveAbandonedFrom, abandoned);
+				}
 				if (liveHashTick) {
 					static std::ofstream trace(s_netLiveTickHashPath, std::ios::trunc);
+					if (liveAbandonedFrom != 0) {
+						trace << nlohmann::json{{"abandon_from", liveAbandonedFrom}}.dump() << '\n';
+						liveAbandonedFrom = 0;
+					}
 					nlohmann::json subsystems = nlohmann::json::object();
 					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
 					trace << nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
