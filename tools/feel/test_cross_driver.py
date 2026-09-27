@@ -37,6 +37,14 @@ class CrossDriverTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'guard'): cross_peers.read_capabilities(box,root)
                 launch.assert_not_called()
 
+    def test_case_alias_cannot_share_an_instance_directory_on_windows(self):
+        manifest=json.loads((cross_peers.HERE/'cross_peers/boxes.json').read_text())
+        manifest['instances'].append(dict(name='MAC',box='Mac',port_block=[49905,49909],seat='spectator'))
+        next(b for b in manifest['boxes'] if b['name']=='Mac')['peers_per_box']=2
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'boxes.json'; path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError,'unique'): cross_peers.load_boxes(path)
+
     def test_quns_release_selftest_starts_no_engine(self):
         with tempfile.TemporaryDirectory() as temporary:
             result=cross_peers.launch_guard_selftest(Path(temporary))
