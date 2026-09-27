@@ -134,12 +134,12 @@ def make_plan(options):
                  '-net-match-ticks', str(options.ticks - 1), '-net-match-peers', str(len(peers)),
                  '-net-match-humans', str(sum(p.get('seat', 'player') == 'player' for p in peers)),
                  '-net-match-mode', 'coop-pve' if options.roster == 'ai-heavy' else 'pvpve',
-                 '-net-match-cpu-slots', '2' if options.roster in ('ai-heavy', 'mixed') else '1',
+                 '-net-match-cpu-slots', '2' if options.roster == 'ai-heavy' else '1',
                  '-net-match-service-preset', 'Multi Box Combat', '-net-match-service-module', 'UserScenes.rte',
                  '-net-match-service-scene', options.scene, '-net-match-service-scene-module', 'Base.rte',
                  '-net-match-auto-delay', '-net-local-prediction', 'on', '-net-ice', 'on', '-net-player-name', peer['name'],
                  '-net-reconnect-ticket', str(PurePosixPath(root) / peer['name'] / 'participant.ticket'), '-net-match-report', own + '/match-report.json',
-                 '-net-cross-schedule', own + '/faults.json']
+                 '-net-cross-schedule', own + '/faults.json', '-net-cross-host-options', own + '/host-options.json']
         if options.fullstate_every:
             flags += ['-net-fullstate-hash-every', str(options.fullstate_every), '-net-fullstate-dump', own + '/fullstate']
         if peer['name'] == host:
@@ -148,14 +148,16 @@ def make_plan(options):
         else:
             flags += ['-net-join-session', '<published-session-id>']
         if options.scenario != 'match':
-            flags += ['-net-cross-rematches', '4096', '-net-cross-host-options', own + '/host-options.json']
+            flags += ['-net-cross-rematches', '4096']
         specs.append(dict(peer=peer['name'], box=peer['box'], role='host' if peer['name'] == host else peer.get('seat', 'player'),
             incarnation=0, root=root, own=own, repo=box['tree'], executable=box['executable'], flags=flags,
             env={'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
                  'CC_TEST_CROSS_RUN': stem, 'CC_TEST_CROSS_INSTANCE': peer['name'], 'CC_TEST_CROSS_EXECUTION': 'process-0',
                  'CC_TEST_CROSS_INCARNATION': '0', 'CC_TEST_NET_UI_SCRIPT': own + '/probe.json',
                  'CC_TEST_CROSS_BOT': own + '/bot.json', 'CC_TEST_CROSS_EVENT_RAW_LIMIT': str(64*1024**3)}, timeout=options.timeout, ticks=options.ticks,
-            settings={}, faults=[f for f in faults if f['peer'] == peer['name']]))
+            settings={}, roster=options.roster, scene=options.scene,
+            initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
+            faults=[f for f in faults if f['peer'] == peer['name']]))
     return dict(version=1, run=stem, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
                 boxes=manifest['boxes'], instances=peers, specs=specs, host=host, ticks=options.ticks,
                 scenario=options.scenario, roster=options.roster, scene=options.scene, seed=options.seed,
@@ -338,10 +340,13 @@ def prepare_instance(spec, pin, box, runtime=None):
                  f'player=0 {start+180} {min(start+210, spec["ticks"])} WEAPON_RELOAD'] if start+210 <= spec['ticks'] else [f'player=0 {start} {end} FIRE AIM=-0.9,-0.1']
     (own / 'input.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8')
     write_json(own / 'faults.json', [f for f in spec['faults'] if f['incarnation'] == spec['incarnation']])
-    write_json(own / 'host-options.json', [dict(difficulty=50, ai_skill=50, fog=False, scene='Grasslands', scene_module='Base.rte'),
-                                          dict(difficulty=100, ai_skill=100, fog=True, scene='Ketanot Hills', scene_module='Base.rte')])
+    teams = dict(human_teams=[0,0,1], cpu_teams=[2]) if spec['roster'] in ('mixed','allies') else \
+            dict(human_teams=[0,0,0], cpu_teams=[1,2]) if spec['roster'] == 'ai-heavy' else {}
+    write_json(own / 'host-options.json', [dict(difficulty=spec['initial_skill'], ai_skill=spec['initial_skill'], fog=False,
+                                              scene=spec['scene'], scene_module='Base.rte', **teams),
+                                          dict(difficulty=100, ai_skill=100, fog=True, scene='Ketanot Hills', scene_module='Base.rte', **teams)])
     write_json(own / 'bot.json', [dict(round=0, **{'from': 3601, 'to': spec['ticks']})] if spec['ticks'] >= 3601 else [])
-    write_json(own / 'probe.json', dict(schema=1, timeout_ms=120000, activate_at_tick=30, steps=[
+    write_json(own / 'probe.json', dict(schema=1, timeout_ms=120000, activate_at_tick=30, repeat_rounds=True, steps=[
         dict(op='assert_window', equals=dict(width=960, height=540)),
         dict(op='assert_buy', input_player=0), dict(op='assert_pie', input_player=0), dict(op='finish')]))
     if box['kind'] == 'posix-ssh':
