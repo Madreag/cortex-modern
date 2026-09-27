@@ -112,7 +112,7 @@ class CrossDriverTests(unittest.TestCase):
                 (own/'match-report.json').write_text(json.dumps(dict(exit_code=0,desync_check=dict(mismatches=0,compares=1,compare_margin=0))))
                 live=[dict(session='s',match='m',history_branch='initial',source_round=1,round=1,tick=t,
                     instance=spec['peer'],execution='one',incarnation=0,phase='live',wall_ms=t*20,gameplay_tick=True,
-                    effective_start_frame=1,sim_gated='aa',subsystems={key:'bb' for key in cross_report.REQUIRED_SUBSYSTEMS}) for t in range(1,5)]
+                    effective_start_frame=1,sim_gated='a'*64,subsystems={key:'b'*64 for key in cross_report.REQUIRED_SUBSYSTEMS}) for t in range(1,5)]
                 (own/'live.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in live))
                 (own/'events.jsonl').write_text(json.dumps(dict(type='adopted_config',peer_count=3,sim_tick_ms=1000/60))+'\n'+
                     ''.join(json.dumps(dict(**row,type='tick_timing',compute_us=10,capture_us=0,partition_valid=True))+'\n' for row in live))

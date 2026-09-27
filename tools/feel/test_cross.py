@@ -2,6 +2,7 @@
 import copy
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from feel import report, records
@@ -10,7 +11,7 @@ from feel import report, records
 def sample(tick, peer='a', execution='one', **changes):
     return dict(session='s', match='m', history_branch='initial', source_round=1,
                 tick=tick, peer=peer, instance=peer, execution=execution, incarnation=0,
-                phase='live', sim_gated='aa', subsystems={'controller': 'bb', 'sim_rng': 'cc'}, **changes)
+                phase='live', sim_gated='a'*64, subsystems={'controller': 'b'*64, 'sim_rng': 'c'*64}, **changes)
 
 
 class CrossReducers(unittest.TestCase):
@@ -41,7 +42,7 @@ class CrossReducers(unittest.TestCase):
 
     def test_later_reexecution_never_erases_divergence(self):
         peers = self.histories()
-        peers['c'][1]['subsystems']['controller'] = 'wrong'
+        peers['c'][1]['subsystems']['controller'] = 'd'*64
         peers['c'].append(sample(2, 'c', execution='two'))
         result = self.compare(peers)
         self.assertFalse(result['passed'])
@@ -50,6 +51,12 @@ class CrossReducers(unittest.TestCase):
     def test_missing_subsystem_fails(self):
         peers = self.histories(); del peers['b'][1]['subsystems']['sim_rng']
         self.assertFalse(self.compare(peers)['passed'])
+
+    def test_equal_missing_hash_values_cannot_pass(self):
+        peers=self.histories()
+        for values in peers.values(): values[0]['subsystems']['controller']=None
+        result=self.compare(peers)
+        self.assertFalse(result['passed']); self.assertEqual(result['invalid_count'],3)
 
     def test_new_round_never_fills_old_round(self):
         peers = self.histories(); peers['b'][-1]['source_round'] = 2
@@ -115,6 +122,22 @@ class CrossReducers(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertEqual(receipt['original_bytes'],len(original))
             with records.open_record(path,'rb') as source: self.assertEqual(source.read(),original)
+
+    def test_checkpoint_file_identity_and_manifest_are_both_required(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'match-77.ccsave'
+            descriptor='RestoreSchema = 1\nMatchId = match\nSavedTick = 77\nSessionId = 1\nRoundId = 9\n'
+            with zipfile.ZipFile(path,'w') as archive:
+                archive.writestr('Restore.ini',descriptor)
+                archive.writestr('Save.ini','SimUpdateCount = 77\nRuntimeGlobals = blob\nLuaStateGraph = graph\n')
+                for name in ('Index.ini','Save Mat.png','Save FG.png','Save BG.png'): archive.writestr(name,b'fixture')
+            self.assertFalse(records.inspect_checkpoint(path)['passed'])
+            manifest=path.with_suffix('.ccmanifest')
+            manifest.write_text(descriptor+'ManifestSchema = 3\nConfigHash = hash\nConfigPayload = 00\n')
+            result=records.inspect_checkpoint(path)
+            self.assertTrue(result['passed']); self.assertIn('not a restore',result['scope'])
+            manifest.write_text(manifest.read_text().replace('SavedTick = 77','SavedTick = 78'))
+            self.assertFalse(records.inspect_checkpoint(path)['passed'])
 
 
 if __name__ == '__main__':

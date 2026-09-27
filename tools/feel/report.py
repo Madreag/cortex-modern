@@ -39,7 +39,16 @@ def compare_histories(peers, ranges, required_subsystems):
         for number, row in enumerate(rows, 1):
             missing = [field for field in (*HISTORY_FIELDS, 'instance', 'execution', 'incarnation')
                        if field not in row or row[field] is None]
-            missing += sorted(set(required_subsystems) - row.get('subsystems', {}).keys())
+            subsystems=row.get('subsystems')
+            if not isinstance(subsystems,dict): missing.append('subsystems(object)')
+            else:
+                missing += sorted(set(required_subsystems) - subsystems.keys())
+                missing += ['valid_hash:'+key for key,value in subsystems.items()
+                            if not isinstance(value,str) or not re.fullmatch('[0-9a-f]{64}',value)]
+            if not isinstance(row.get('sim_gated'),str) or not re.fullmatch('[0-9a-f]{64}',row.get('sim_gated','')):
+                missing.append('valid_sim_gated_hash')
+            missing += ['scalar:'+field for field in (*HISTORY_FIELDS,'instance','execution','incarnation')
+                        if field in row and not isinstance(row[field],(int,str))]
             if missing:
                 invalid.append(dict(peer=peer, line=row.get('_line', number), missing=missing))
                 continue
@@ -50,8 +59,6 @@ def compare_histories(peers, ranges, required_subsystems):
             seen.add(identity)
             signature = {'sim_gated': row.get('sim_gated'), **{name: value for name, value in row['subsystems'].items()
                                                               if name != 'controller_route'}}
-            if not row.get('sim_gated'):
-                invalid.append(dict(peer=peer, line=number, missing=['sim_gated']))
             observations[key].append((signature, row.get('_line', number), row.get('_path')))
         indexed[peer] = observations
     counts = {peer: dict(expected=0, present=0, missing=0) for peer in peers}

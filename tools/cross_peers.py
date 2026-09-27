@@ -121,6 +121,11 @@ def make_plan(options):
     stem = options.out.name
     if not re.fullmatch(r'[A-Za-z0-9_-]+', stem): raise ValueError('run name must be a simple directory leaf')
     faults = schedule_for(options, peers, boxes)
+    barriers = json.loads(options.barriers.read_text(encoding='utf-8')) if options.barriers else []
+    for barrier in barriers:
+        if barrier['peer'] not in {p['name'] for p in peers} or barrier['phase'] not in ('capture_announced','writer_pending') or \
+                not 1 <= barrier['timeout_ms'] <= 120000 or barrier['tick'] < 1:
+            raise ValueError('invalid capture barrier target, phase, tick or deadline')
     specs = []
     for peer in peers:
         box = boxes[peer['box']]
@@ -157,7 +162,9 @@ def make_plan(options):
                  'CC_TEST_CROSS_BOT': own + '/bot.json', 'CC_TEST_CROSS_EVENT_RAW_LIMIT': str(64*1024**3)}, timeout=options.timeout, ticks=options.ticks,
             settings={}, roster=options.roster, scene=options.scene,
             initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
-            faults=[f for f in faults if f['peer'] == peer['name']]))
+            faults=[f for f in faults if f['peer'] == peer['name']], barriers=[b for b in barriers if b['peer']==peer['name']]))
+        if specs[-1]['barriers']:
+            specs[-1]['env']['CC_TEST_CROSS_CAPTURE_BARRIER'] = own+'/barriers.json'
     return dict(version=1, run=stem, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
                 driver_commit=command(['git','-C',HERE.parent,'rev-parse','HEAD']).strip(),
                 driver_tracked_changes=command(['git','-C',HERE.parent,'status','--porcelain','--untracked-files=no']).splitlines(),
@@ -167,6 +174,7 @@ def make_plan(options):
                 scenario=options.scenario, roster=options.roster, scene=options.scene, seed=options.seed,
                 chaos_seed=options.chaos_seed if options.scenario == 'chaos' else None,
                 seed_scope='choices only; transport and OS timing are not reproduced', faults=faults,
+                capture_barriers=barriers,
                 overlap_policy='ordered by committed unique gameplay budget; early ends carry outstanding triggers',
                 deadlines=dict(recovery_ms=options.recovery_deadline_ms, capture_ms=options.capture_budget_ms,
                                launch_s=options.timeout),
@@ -333,6 +341,28 @@ def sample_memory(run):
     return dict(resident=int(fields[0])*1024, virtual=int(fields[1])*1024) if len(fields) == 2 else None
 
 
+def retain_checkpoints(run, spec, *, final=False):
+    from feel.records import inspect_checkpoint
+    import shutil
+    own = Path(spec['own']); retained = own / 'archives'
+    retained.mkdir(exist_ok=True)
+    for path in sorted((Path(run.cwd)/'Autosaves').glob('*.ccsave')):
+        if (retained/path.name).is_file(): continue
+        checked = inspect_checkpoint(path)
+        if not checked['passed'] and not final: continue
+        checked.update(peer=spec['peer'],incarnation=spec['incarnation'],observed_wall_ms=time.monotonic()*1000)
+        if checked['passed']:
+            if scratch_bytes(Path(spec['root']).parent) + 2*path.stat().st_size >= LIMIT:
+                raise RuntimeError('checkpoint retention would reach the 4 GB scratch cap')
+            for source in (path,path.with_suffix('.ccmanifest')):
+                if source.is_symlink(): raise RuntimeError('checkpoint is a symlink')
+                target=retained/source.name; shutil.copyfile(source,target)
+                if digest_file(source)!=digest_file(target): raise RuntimeError('retained checkpoint differs from its source')
+            checked['retained']=str((retained/path.name).relative_to(own))
+        with (own/'archives.jsonl').open('a',encoding='utf-8') as index:
+            index.write(json.dumps(checked)+'\n')
+
+
 def prepare_instance(spec, pin, box, runtime=None):
     from run_sim_test import make_run, seed_settings
     own = Path(spec['own']); own.mkdir(parents=True, exist_ok=False)
@@ -344,6 +374,7 @@ def prepare_instance(spec, pin, box, runtime=None):
                  f'player=0 {start+180} {min(start+210, spec["ticks"])} WEAPON_RELOAD'] if start+210 <= spec['ticks'] else [f'player=0 {start} {end} FIRE AIM=-0.9,-0.1']
     (own / 'input.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8')
     write_json(own / 'faults.json', [f for f in spec['faults'] if f['incarnation'] == spec['incarnation']])
+    write_json(own / 'barriers.json',spec.get('barriers',[]))
     teams = dict(human_teams=[0,0,1], cpu_teams=[2]) if spec['roster'] in ('mixed','allies') else \
             dict(human_teams=[0,0,0], cpu_teams=[1,2]) if spec['roster'] == 'ai-heavy' else {}
     write_json(own / 'host-options.json', [dict(difficulty=spec['initial_skill'], ai_skill=spec['initial_skill'], fog=False,
@@ -496,6 +527,7 @@ def run_payload(path):
                                    elapsed_s=now-started[peer], load=load, same_box_instances=len(runs),
                                    **(measured or {}))
                         samples.write(json.dumps(row) + '\n'); samples.flush()
+                        retain_checkpoints(run, spec)
                     next_sample = now + (60 if all_sampled else 1)
                     assert_box_guard({**box, 'kind': 'windows-task'} if box['kind'] == 'windows-local' else box)
                 for spec in list(specifications.values()):
@@ -520,6 +552,7 @@ def run_payload(path):
                         if due and run.poll() is None: run.terminate(reason=f'scheduled crash {fault["id"]}')
                         record = run.finish(); run.close()
                         write_json(Path(spec['own']) / 'record.json', record)
+                        retain_checkpoints(run, spec, final=True)
                         seal_evidence(spec['own'])
                         new_spec = restart_spec(spec, current)
                         render = new_spec['flags'].index('-feel-render-settings') + 1
@@ -545,7 +578,9 @@ def run_payload(path):
         for peer, run in runs.items():
             run.close()
             write_json(Path(specifications[peer]['own']) / 'record.json', run.record)
-            try: seal_evidence(specifications[peer]['own'])
+            try:
+                retain_checkpoints(run, specifications[peer], final=True)
+                seal_evidence(specifications[peer]['own'])
             except Exception as error:
                 verdict = 1
                 write_json(root / 'seal-error.json', dict(peer=peer, error=str(error)))
@@ -773,6 +808,7 @@ def parse_args(argv=None):
     parser.add_argument('--chaos-seed', type=int, default=260926)
     parser.add_argument('--chaos-faults', type=int, default=8)
     parser.add_argument('--schedule', type=Path)
+    parser.add_argument('--barriers', type=Path, help='capture/writer phase schedule with peer, id, phase, tick, round and timeout_ms; each receipt names its release file')
     parser.add_argument('--recovery-deadline-ms', type=int, default=120000)
     parser.add_argument('--capture-budget-ms', type=float, default=1000)
     parser.add_argument('--fullstate-every', type=int, default=600)
