@@ -1670,6 +1670,59 @@ namespace RTE {
 			return 0;
 		}
 
+		// A repair restarts the host's lobby while a returner's catch-up reports are still on the wire: the new round drops them and
+		// keeps the member; a state chunk that is no report is still refused.
+		int TestARepairLobbyKeepsAReturnersLateReport(bool imageChunk) {
+			std::string error;
+			LoopbackTransport hostWire, clientWire;
+			NetSession hostSession, clientSession;
+			const uint16_t port = imageChunk ? 48921 : 48920;
+			if (!hostSession.StartHost(hostWire, MakeWorldSessionConfig(port, 11, "Host"), &error) ||
+			    !clientSession.StartClient(clientWire, "loopback", MakeWorldSessionConfig(port, 22, "Client"), &error)) return Fail(error);
+			uint64_t now = 0;
+			while (hostSession.GetReadyPeers().size() < 1 && now < 1000) {
+				hostSession.Tick(now); clientSession.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			}
+			if (hostSession.GetReadyPeers().size() != 1) return Fail("repair lobby fixture: the client session did not become ready");
+			NetLobbySession host, client;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.session = &hostSession; hostConfig.autoStart = false;
+			hostConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x5245504149ULL);
+			hostConfig.matchConfig.peerCount = 2;
+			hostConfig.matchConfig.hostPeerId = 1;
+			hostConfig.matchConfig.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Client"}};
+			hostConfig.remoteTransportPeerIds = {{2, hostSession.GetReadyPeers().front().transportPeerId}};
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+			clientConfig.matchConfig = hostConfig.matchConfig;
+			if (!host.Start(hostWire, hostConfig, &error) || !client.Start(clientWire, clientConfig, &error)) return Fail(error);
+			auto pump = [&] {
+				for (const auto& event: hostWire.PollEvents()) host.HandleTransportEvent(event, now);
+				client.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			};
+			for (int i = 0; i < 10; ++i) pump();
+			if (client.IsFailed() || client.IsRejected() || !host.IsRemoteLobbyUp(2)) return Fail("repair lobby fixture: the client lobby did not come up");
+			NetLobbyStateChunk chunk = MakeWorldJoinReport(c_NetWorldReportCatchUp, 175);
+			if (imageChunk) {
+				chunk.transferId = 7;
+				chunk.bytes.assign(64, 0x5A);
+				chunk.totalBytes = static_cast<uint32_t>(chunk.bytes.size());
+			}
+			if (!client.SendPayload(chunk, &error)) return Fail(error);
+			for (int i = 0; i < 10; ++i) pump();
+			if (imageChunk) {
+				if (!client.IsFailed() && !client.IsRejected()) return Fail("a client's state chunk that is no report was accepted by the host lobby");
+				return 0;
+			}
+			if (client.IsFailed() || client.IsRejected() || !host.IsRemoteLobbyUp(2))
+				return Fail("a returner's late catch-up report ejected it from the repair lobby: " + client.GetFailureReason());
+			std::cout << "[net-world-join-selftest] PASS a_repair_lobby_keeps_a_returners_late_report" << std::endl;
+			return 0;
+		}
+
 		// A restored world's config carries its roster's seats and no delay list; a connection the session seated past that roster
 		// is the join plane's to admit. The host lobby must not seat it, and must never throw on it: that aborted the restarted host.
 		int TestALobbySeatsNoPeerPastItsRoster() {
@@ -7313,6 +7366,11 @@ namespace RTE {
 			s_FailTag = "net-world-spectator-seat-selftest";
 			return TestSpectatorNeverTakesASeat();
 		}
+		if (std::strcmp(name, "-net-world-repair-lobby-selftest") == 0) {
+			s_FailTag = "net-world-repair-lobby-selftest";
+			if (const int result = TestARepairLobbyKeepsAReturnersLateReport(false); result != 0) return result;
+			return TestARepairLobbyKeepsAReturnersLateReport(true);
+		}
 		if (std::strcmp(name, "spectator-ids") == 0 || std::strcmp(name, "-net-world-spectator-ids-selftest") == 0) {
 			s_FailTag = "net-world-spectator-ids-selftest";
 			return TestSpectatorLobbyIdsRecycle();
@@ -7632,6 +7690,8 @@ namespace RTE {
 		if (const int result = TestLateWorldStartBoundary(); result != 0) return result;
 		if (const int result = TestWorldBootstrapSenderIdentity(); result != 0) return result;
 		if (const int result = TestWorldBootstrapSenderIdentity(true); result != 0) return result;
+		if (const int result = TestARepairLobbyKeepsAReturnersLateReport(false); result != 0) return result;
+		if (const int result = TestARepairLobbyKeepsAReturnersLateReport(true); result != 0) return result;
 		if (const int result = TestDueActivationAdmits(); result != 0) {
 			return result;
 		}
