@@ -21,7 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Callable, Iterable
 
 LOG = logging.getLogger('remote_box')
@@ -163,11 +163,15 @@ class RemoteBox:
 
 
 def render_payload(cwd: Path | str, argv: list[str], log: Path | str, done: Path | str,
-                   env: dict[str, str] | None = None, template: Path = PAYLOAD_TEMPLATE) -> str:
-    """tools/edith/session_command.ps1 with one command line (python and its arguments) filled in."""
+                   env: dict[str, str] | None = None, path_prepend: list[str] | None = None,
+                   template: Path = PAYLOAD_TEMPLATE) -> str:
+    """tools/edith/session_command.ps1 with one command line (python and its arguments) filled in; path_prepend puts
+    directories ahead of the session's PATH (the tools the drivers call by name: date, ffmpeg)."""
     env = dict({'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1'}, **(env or {}))
     fields = {
         'ENV': '\n'.join(f'$env:{name} = {ps_quote(value)}' for name, value in env.items()),
+        'PATH': (f"$env:PATH = {ps_quote(';'.join(str(PureWindowsPath(d)) for d in path_prepend) + ';')} + $env:PATH"
+                 if path_prepend else ''),
         'CWD': ps_quote(cwd), 'LOG': ps_quote(Path(log).as_posix()), 'DONE': ps_quote(Path(done).as_posix()),
         'ARGV': '@(' + ', '.join(ps_quote(arg) for arg in argv) + ')',
     }
@@ -239,12 +243,14 @@ def self_test() -> int:
 
     expect('ps_quote doubles a single quote', ps_quote("a'b") == "'a''b'")
     script = render_payload('D:\\Projects\\t', ['tools/x.py', "--out", "D:/mx/l a/o'k"], 'D:/mx/l/log.txt',
-                            'D:/mx/l/done.txt', {'INVENTORY_NO_FULLSTATE': '1'})
+                            'D:/mx/l/done.txt', {'INVENTORY_NO_FULLSTATE': '1'}, ['C:/Program Files/Git/usr/bin'])
     expect('payload fields all filled', '{{' not in script)
     expect('payload argv quoted', "@('tools/x.py', '--out', 'D:/mx/l a/o''k')" in script)
     expect('payload sets the headless and inventory environment',
            "$env:CCCP_HEADLESS = '1'" in script and "$env:INVENTORY_NO_FULLSTATE = '1'" in script)
     expect('payload never starts the engine itself', 'Cortex Command' not in script)
+    expect('payload puts the listed directories ahead of PATH',
+           "$env:PATH = 'C:\\Program Files\\Git\\usr\\bin;' + $env:PATH" in script)
     expect('ssh noise filtered', bool(SSH_NOISE.search('** WARNING: connection is not using a post-quantum key exchange')))
     said: list[str] = []
     box = RemoteBox('edith', dry_run=True, say=said.append)

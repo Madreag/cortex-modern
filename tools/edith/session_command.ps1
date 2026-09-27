@@ -3,6 +3,7 @@
 # through the runner (tools/win32_test_runner.py via make_run) on a private hidden desktop.
 $ErrorActionPreference = 'Continue'
 {{ENV}}
+{{PATH}}
 Set-Location -LiteralPath {{CWD}}
 $argv = {{ARGV}}
 "session=$((Get-Process -Id $PID).SessionId) user=$env:USERNAME start=$(Get-Date -Format s)" | Out-File -LiteralPath {{LOG}} -Encoding utf8
