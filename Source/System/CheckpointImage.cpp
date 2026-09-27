@@ -748,6 +748,46 @@ assert(before ~= after, "the wrapped value kept its old archive")
 			pass(row, "generation " + std::to_string(before) + " -> " + std::to_string(after));
 		}
 	}
+	// Saved text names custom values in key order: two peers holding the same values write the same text,
+	// whatever order each map received them in (a reload from text inserts in the text's order).
+	{
+		const std::array<std::string, 2> keys{"ValueOrderProbeAlpha", "ValueOrderProbeOmega"};
+		const auto customValueLines = [&keys](const std::string& text) {
+			std::string lines;
+			std::istringstream stream(text);
+			for (std::string line; std::getline(stream, line);) {
+				if (line.find(keys[0]) != std::string::npos || line.find(keys[1]) != std::string::npos) lines += line + "\n";
+			}
+			return lines;
+		};
+		const auto written = [&](bool reversed) {
+			for (const std::string& key: keys) {
+				live->RemoveNumberValue(key);
+				live->RemoveStringValue(key);
+			}
+			for (size_t index = 0; index < keys.size(); ++index) {
+				const std::string& key = keys[reversed ? keys.size() - 1 - index : index];
+				live->SetNumberValue(key, 7.0 + static_cast<double>(key.size()));
+				live->SetStringValue(key, key + "-text");
+			}
+			const std::string scene = Writer::Capture([&](Writer& writer) { Scene::SaveSceneObject(writer, live, false, true); }).Text();
+			const std::string own = Writer::Capture([&](Writer& writer) { live->Save(writer); }).Text();
+			return std::pair(customValueLines(scene), customValueLines(own));
+		};
+		const auto [sceneForward, ownForward] = written(false);
+		const auto [sceneReversed, ownReversed] = written(true);
+		for (const std::string& key: keys) {
+			live->RemoveNumberValue(key);
+			live->RemoveStringValue(key);
+		}
+		const char* row = "custom_values_saved_in_key_order";
+		const bool carried = !sceneForward.empty() && !ownForward.empty();
+		if (carried && sceneForward == sceneReversed && ownForward == ownReversed) {
+			pass(row, "scene_lines=" + std::to_string(std::count(sceneForward.begin(), sceneForward.end(), '\n')) + " save_lines=" + std::to_string(std::count(ownForward.begin(), ownForward.end(), '\n')));
+		} else {
+			fail(row, "carried=" + std::to_string(carried) + " scene_same=" + std::to_string(sceneForward == sceneReversed) + " save_same=" + std::to_string(ownForward == ownReversed));
+		}
+	}
 	// An Atom is archived through its owner and is not an Entity, so a write to one has to reach the
 	// owner's stamp or the owner's whole shadow is served again with the old trail.
 	{
