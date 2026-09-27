@@ -47,6 +47,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -93,14 +94,31 @@ SEAT_BACK = re.compile(r"^\[net-match\] seat-reclaimed peer=\d+ frame=(\d+)", re
 WORLD_KILL_RETURN_WAIT_POLLS = 300
 
 
+# The kill's wait for that sample: each peer's writer coalesces periodic samples on its own timing, so the samples both
+# peers write come unevenly; the wait is twice the longest gap seen between them, never under the floor or over the cap.
+WORLD_KILL_SAMPLE_WAIT_MIN_S = 30
+WORLD_KILL_SAMPLE_WAIT_CAP_S = 240
+
+
+def _shared_samples(host_log: str, client_log: str) -> list:
+    """The (round, tick) full-state samples both peers have written."""
+    host = {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(host_log)}
+    return sorted(host & {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(client_log)})
+
+
+def sample_wait_bound_s(shared_seen_at: list) -> float:
+    """shared_seen_at: the wall seconds at which each new shared sample was seen."""
+    gaps = [later - earlier for earlier, later in zip(shared_seen_at, shared_seen_at[1:])]
+    return min(WORLD_KILL_SAMPLE_WAIT_CAP_S, max(WORLD_KILL_SAMPLE_WAIT_MIN_S, 2 * max(gaps, default=0)))
+
+
 def _arrival_unsampled(host_log: str, client_log: str) -> bool:
     """A seat held or admitted after the peers' last shared full-state sample: ending the phase now fails the round's oracle
     (unsampled_admissions), so the kill waits for the next sample both peers take."""
     arrivals = [int(frame) for frame in SEAT_HELD.findall(host_log)] + [int(frame) for frame in SEAT_ADMITTED.findall(client_log)]
     if not arrivals:
         return False
-    host = {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(host_log)}
-    shared = [tick for _, tick in host & {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(client_log)}]
+    shared = [tick for _, tick in _shared_samples(host_log, client_log)]
     return not shared or max(shared) < max(arrivals)
 
 
@@ -767,10 +785,14 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
         threads[1].start()
         if kill_past:
             waiter = threading.Event()
-            waited_on_return = waited_on_sample = 0
+            waited_on_return = 0
+            sample_wait_began, shared_seen_at, shared_count = None, [], 0
             for _ in range(4200):
                 waiter.wait(0.1)
                 host_log, client_log = peer_log(root, "host"), peer_log(root, "client")
+                if FULLSTATE_EVERY and len(shared := _shared_samples(host_log, client_log)) > shared_count:
+                    shared_count = len(shared)
+                    shared_seen_at.append(time.monotonic())
                 captures = [int(row[0]) for row in CAPTURE.findall(host_log)]
                 identity = WORLD_IDENTITY.search(host_log)
                 ticket = root / "client/runtime/Userdata/reconnect.ticket"
@@ -784,14 +806,15 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
                 if ready and _seat_mid_return(host_log) and waited_on_return < WORLD_KILL_RETURN_WAIT_POLLS:
                     waited_on_return += 1
                     ready = False
-                # And for the first sample both peers share after it, bounded the same way.
-                if (ready and FULLSTATE_EVERY and _arrival_unsampled(host_log, client_log)
-                        and waited_on_sample < WORLD_KILL_RETURN_WAIT_POLLS):
-                    waited_on_sample += 1
-                    ready = False
+                # And for the first sample both peers share after it, bounded by the cadence the shared samples keep.
+                if ready and FULLSTATE_EVERY and _arrival_unsampled(host_log, client_log):
+                    sample_wait_began = time.monotonic() if sample_wait_began is None else sample_wait_began
+                    if time.monotonic() - sample_wait_began < sample_wait_bound_s(shared_seen_at):
+                        ready = False
                 if ready:
                     records["_kill_waited_on_return_s"] = waited_on_return / 10
-                    records["_kill_waited_on_sample_s"] = waited_on_sample / 10
+                    records["_kill_waited_on_sample_s"] = 0.0 if sample_wait_began is None else round(time.monotonic() - sample_wait_began, 1)
+                    records["_kill_sample_wait_bound_s"] = sample_wait_bound_s(shared_seen_at) if FULLSTATE_EVERY else None
                     runs["host"].terminate(code=137, reason="world host process killed")
                     killed = True
                     records["_kill_capture_tick"] = max(captures)
@@ -1003,6 +1026,8 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             "retention kept the previous boot ahead of the fresh world's completed checkpoints"
     return {"world_id": world_id, "boot": boot_one, "resume_tick": resume_tick,
             "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end,
+            "kill_waited_on_return_s": records["_kill_waited_on_return_s"], "kill_waited_on_sample_s": records["_kill_waited_on_sample_s"],
+            "kill_sample_wait_bound_s": records["_kill_sample_wait_bound_s"],
             "manifest_control_owners": side_state["control_owners"], "manifest_applied_sequences": side_state["applied_sequences"],
             "manifest_binding_peers": side_state["binding_peers"],
             "seats": sorted(seats_two), "fresh_first_capture": min(fresh_captures),
@@ -1107,6 +1132,16 @@ class WorldRestartOracleTests(unittest.TestCase):
         admitted = "[net-match] private catch-up complete frame=430\n"
         self.assertTrue(_arrival_unsampled(host + sample(420), client + sample(420) + admitted))
         self.assertFalse(_arrival_unsampled(host + sample(480), client + sample(420) + admitted + sample(480)))
+
+    def test_the_sample_wait_follows_the_shared_cadence(self):
+        # green-soak-2 at --saver-delay-ms 2000: each peer coalesces on its own writer, so shared samples came 45 s apart.
+        self.assertGreaterEqual(sample_wait_bound_s([0.0, 1.0, 46.0]), 90.0)
+        self.assertEqual(sample_wait_bound_s([0.0, 1.0, 2.0]), WORLD_KILL_SAMPLE_WAIT_MIN_S)
+        self.assertEqual(sample_wait_bound_s([]), WORLD_KILL_SAMPLE_WAIT_MIN_S)
+        self.assertEqual(sample_wait_bound_s([0.0, 400.0]), WORLD_KILL_SAMPLE_WAIT_CAP_S)
+        def sample(tick: int) -> str:
+            return f"[fullstate] tick={tick} hash=ef9b7943247e96ec sections=header:258ea10e07185ecb round=7\n"
+        self.assertEqual(_shared_samples(sample(60) + sample(120), sample(120) + sample(180)), [(7, 120)])
 
     def test_lobby_join_with_published_offers_can_be_killed(self):
         host = self.HOST_START + self.HOST_LOBBY + self.CAPTURES
