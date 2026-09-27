@@ -56,6 +56,11 @@ class CrossDriverTests(unittest.TestCase):
         self.assertEqual(first['faults'], second['faults'])
         self.assertIn('choices only',first['seed_scope'])
 
+    def test_first_soak_cannot_accidentally_remove_its_host(self):
+        for host in ('edith','mac'):
+            with self.assertRaisesRegex(ValueError,'host removal'):
+                cross_peers.make_plan(cross_peers.parse_args(['--scenario','soak','--host',host]))
+
     def test_faults_follow_the_declared_restart_incarnation(self):
         plan=cross_peers.make_plan(cross_peers.parse_args(['--scenario','soak']))
         mac=[row for row in plan['faults'] if row['peer']=='mac']

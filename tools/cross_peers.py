@@ -121,6 +121,8 @@ def make_plan(options):
     stem = options.out.name
     if not re.fullmatch(r'[A-Za-z0-9_-]+', stem): raise ValueError('run name must be a simple directory leaf')
     faults = schedule_for(options, peers, boxes)
+    if any(f['peer']==host and f['action'] in ('crash-restart','announced-leave-rejoin') for f in faults):
+        raise ValueError('host removal requires the WAN migration endpoint fix; the first soak keeps its host alive')
     barriers = json.loads(options.barriers.read_text(encoding='utf-8')) if options.barriers else []
     for barrier in barriers:
         if barrier['peer'] not in {p['name'] for p in peers} or barrier['phase'] not in ('capture_announced','writer_pending') or \

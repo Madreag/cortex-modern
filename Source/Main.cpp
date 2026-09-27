@@ -217,8 +217,8 @@ static std::string CrossEnvironment(const char* name, const char* fallback = "")
 	return value ? value : fallback;
 }
 
-static const char* CrossTickPhase(bool catchup, uint64_t tick, uint64_t previousCommitted, unsigned execution) {
-	return catchup ? "catchup" : execution > 0 ? "reexecution" : "live";
+static const char* CrossTickPhase(bool catchup, uint64_t tick, uint64_t previousCommitted, [[maybe_unused]] uint64_t execution) {
+	return catchup ? "catchup" : tick <= previousCommitted ? "reexecution" : "live";
 }
 
 bool RTE::RunCrossExecutionPhaseSelfTest(std::string* error) {
