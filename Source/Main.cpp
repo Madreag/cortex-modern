@@ -493,7 +493,10 @@ static void BeginCrossTick(uint64_t tick) {
 	static uint64_t authorityObservedTick = 0;
 	static uint64_t configuredStart = 0;
 	static std::set<std::string> unmappedHistories;
-	if (!catchup && (newRound || host != priorHost || priorCatchup || configuredStart == 0 || authority.is_null())) {
+	// An unresolved authority is asked again twice a second, not every tick: the report is built under the service's lock.
+	const bool transition = newRound || host != priorHost || priorCatchup;
+	const bool unresolved = configuredStart == 0 || authority.is_null();
+	if (!catchup && (transition || (unresolved && (authorityObservedTick == 0 || tick < authorityObservedTick || tick >= authorityObservedTick + 30)))) {
 		const auto diagnostic = nlohmann::json::parse(g_NetMatchService.BuildReportJson(), nullptr, false);
 		authority = CrossAuthorityFromReport(diagnostic, config->sessionId, host);
 		const auto* lockstep = CrossMatchingLockstep(diagnostic, config->sessionId, host);
@@ -600,14 +603,50 @@ static void ApplyCrossSchedule() {
 	}
 }
 
+// The harness writes h4-effects.json beside the records; a watcher thread re-reads it when it changes, so no committed
+// tick stats or parses it.
+static bool CrossEffectsChanged(uint64_t& seenGeneration, nlohmann::json& effects) {
+	static std::mutex mutex;
+	static nlohmann::json latest = nlohmann::json::array();
+	static std::atomic<uint64_t> generation{0};
+	static std::jthread watcher([](std::stop_token stop) {
+		const auto path = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() / "h4-effects.json";
+		std::filesystem::file_time_type seenTime{};
+		uintmax_t seenSize = UINTMAX_MAX;
+		while (!stop.stop_requested()) {
+			std::error_code error;
+			const auto time = std::filesystem::last_write_time(path, error);
+			const uintmax_t size = error ? 0 : std::filesystem::file_size(path, error);
+			if (!error && (time != seenTime || size != seenSize)) {
+				std::ifstream input(path);
+				auto parsed = nlohmann::json::parse(input, nullptr, false);
+				if (parsed.is_array()) {
+					seenTime = time;
+					seenSize = size;
+					std::lock_guard<std::mutex> lock(mutex);
+					latest = std::move(parsed);
+					generation.fetch_add(1);
+				}
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+	});
+	if (generation.load() == seenGeneration) return false;
+	std::lock_guard<std::mutex> lock(mutex);
+	effects = latest;
+	seenGeneration = generation.load();
+	return true;
+}
+
 static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
 	CrossRememberRestoredInput();
 	if (!g_MetricsCollector.EventsEnabled() || s_crossRecoveryStarts.empty()) return;
 	const unsigned incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
-	const auto effectPath = std::filesystem::path(CrossEnvironment("CC_TEST_CROSS_RECORDS")).parent_path() / "h4-effects.json";
-	if (std::filesystem::is_regular_file(effectPath)) {
-		std::ifstream input(effectPath); const auto effects = nlohmann::json::parse(input, nullptr, false);
-		if (effects.is_array()) for (const auto& effect: effects) {
+	static nlohmann::json effects = nlohmann::json::array();
+	static uint64_t effectsGeneration = 0;
+	CrossEffectsChanged(effectsGeneration, effects);
+	if (effects.is_array()) {
+		for (const auto& effect: effects) {
 			const std::string id = effect.value("id", "");
 			if (effect.value("incarnation", ~0u) != incarnation || !s_crossRecoveryStarts.contains(id)) continue;
 			auto& start = s_crossRecoveryStarts[id];
