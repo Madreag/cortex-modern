@@ -1268,6 +1268,17 @@ namespace RTE {
 					return true;
 				}, decoded.message.payload);
 				if (!allowed) {
+					// A returner's catch-up and transfer reports can still be in flight when a repair restarts this lobby: they belong to the
+					// round the repair replaced, and the member who sent them is owed the repair, not an ejection.
+					if (const NetLobbyStateChunk* chunk = std::get_if<NetLobbyStateChunk>(&decoded.message.payload); m_Config.host && chunk && !worldSender) {
+						uint8_t kind = 0;
+						uint64_t value = 0;
+						if (ParseWorldJoinReport(*chunk, kind, value) && (kind == c_NetWorldReportProgress || kind == c_NetWorldReportCatchUp || kind == c_NetWorldReportDecline ||
+						                                                  kind == c_NetWorldReportActivationAck)) {
+							++m_Stats.ignoredSessionPackets;
+							return;
+						}
+					}
 					const std::string type = NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload));
 					const std::optional<uint32_t> claimedPeer = std::visit([](const auto& payload) -> std::optional<uint32_t> {
 						if constexpr (requires { payload.peerId; }) return payload.peerId;
