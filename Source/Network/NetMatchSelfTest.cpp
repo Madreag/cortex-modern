@@ -13849,7 +13849,7 @@ namespace RTE {
 		row(&RunCrossExecutionPhaseSelfTest, "cross_phase_returns_to_live_after_reexecution_or_new_round");
 		row(&RunCrossAuthorityRecordSelfTest, "cross_authority_record_is_bound_to_its_session_and_host");
 		row(&RunCrossHistoryRecordSelfTest, "initial_history_uses_configured_start_not_the_next_frame_cursor");
-		row(&RunCrossReadyRevisionSelfTest, "cross_ready_start_follows_adopted_config_revisions");
+		row(&RunCrossReadyRevisionSelfTest, "cross_ready_start_retries_across_configuration_changes");
 		row(&TestCrossCaptureBarrier, "capture_and_writer_barriers_are_selected_releasable_and_bounded");
 		row(&TestCrossRecordKinds, "action_record_fields");
 		row(&TestCrossTickTiming, "exclusive_tick_timing");
