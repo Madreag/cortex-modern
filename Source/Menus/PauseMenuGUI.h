@@ -108,6 +108,7 @@ namespace RTE {
 			LeaveMatchButton,
 			MatchOptionsButton,
 			EndMatchButton,
+			SaveMatchButton,
 			ResumeButton,
 			// The confirmation's buttons follow the rows, in their own box: the row layout stops at the resume row.
 			LeaveConfirmButton,
@@ -167,6 +168,7 @@ namespace RTE {
 		GUILabel* m_MatchOptionsLabel;
 		bool m_MatchOptionsShown;
 		GUILabel* m_MatchRepairHint;
+		GUILabel* m_SaveMatchHint; //!< Under the save row: who saves the match and when it last was.
 		bool m_MatchRepairArmed;
 		std::string m_MatchRepairRefusal;
 
