@@ -25,7 +25,7 @@ if [[ ! -f "$REPO/build-gcc/build.ninja" ]]; then
     -Dwith_gns=enabled -Dgns_root=$D/gns --wrap-mode=nodownload > "$EVIDENCE/setup.log" 2>&1
 fi
 test -f "$GUARD" || exit 3
-ninja -C "$REPO/build-gcc" -j8 > "$EVIDENCE/build.log" 2>&1 &
+ninja -C "$REPO/build-gcc" -j8 -k0 > "$EVIDENCE/build.log" 2>&1 &
 crossBuildPid=$!
 while kill -0 "$crossBuildPid" 2>/dev/null; do
   crossBuildKB=$(du -sk "$LANE" | awk '{print $1}')
