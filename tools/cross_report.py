@@ -24,6 +24,17 @@ def rows(path):
         yield from report.read_jsonl(path)
 
 
+def event_paths(own):
+    bases={str(p)[:-3] if str(p).endswith('.gz') else str(p) for p in own.glob('events.jsonl.part*') if not str(p).endswith('.partial')}
+    return [own/'events.jsonl', *[Path(p) for p in sorted(bases,key=lambda p:int(p.rsplit('.part',1)[1]))]]
+
+
+def source_rows(path, root):
+    for row in rows(path):
+        row['_path']=str(record_path(path).relative_to(root))
+        yield row
+
+
 def peer_root(root, manifest, spec):
     box = next(b for b in manifest['boxes'] if b['name'] == spec['box'])
     relative = Path(spec['own'].replace('\\', '/')).relative_to(Path(spec['root'].replace('\\', '/')))
@@ -100,19 +111,21 @@ def build_report(root):
     root = Path(root).resolve(); manifest = load(root / 'manifest.json', {})
     live, events, peers, findings, paths = {}, {}, {}, list(manifest.get('driver_findings', [])), {}
     for spec in manifest['specs']:
-        name = spec['peer']; own = peer_root(root, manifest, spec); paths[name] = own
-        live[name] = list(rows(own / 'live.jsonl'))
-        events[name] = [row for path in [own / 'events.jsonl', *sorted(own.glob('events.jsonl.part*'))] for row in rows(path)]
-        log = list(read_log(own / 'engine/stdout.log'))
+        name = spec['peer']; first_own = peer_root(root, manifest, spec)
+        fragments=sorted(first_own.parent.glob('incarnation-*'),key=lambda p:int(p.name.split('-')[-1])) or [first_own]
+        own=fragments[-1]; paths[name] = own
+        live[name] = [row for fragment in fragments for row in source_rows(fragment/'live.jsonl',root)]
+        events[name] = [row for fragment in fragments for path in event_paths(fragment) for row in source_rows(path,root)]
+        log = [(fragment/'engine/stdout.log',number,line) for fragment in fragments for number,line in read_log(fragment/'engine/stdout.log')]
         record, native = load(own / 'record.json', {}), load(own / 'match-report.json', {})
         waits = []; holds = []
-        for number, line in log:
+        for log_path, number, line in log:
             if match := re.search(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', line):
                 waits.append(dict(tick=int(match[1]), wait_ms=int(match[2]), line=number))
             if match := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
                 holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number))
             if re.search(r'RTE Assert|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
-                findings.append(dict(peer=name, path=str((own / 'engine/stdout.log').relative_to(root)), line=number, text=line.strip()))
+                findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
         frames = [r for r in raw if r.get('type') == 'frame' and r.get('active')]
         inputs = [r for r in raw if r.get('type') == 'input']
@@ -142,7 +155,15 @@ def build_report(root):
                      timing.get('waiting_percent') is not None and timing['waiting_percent'] < 1,
                      timing.get('longest_stall_ms') is not None and timing['longest_stall_ms'] <= 50,
                      timing.get('confirmed_horizon_lag_ms') is not None and timing['confirmed_horizon_lag_ms'] <= 50]
-        memory = report.reduce_memory(samples, **manifest['memory'], elapsed_s=record.get('elapsed_seconds', 0))
+        memory_by_incarnation={}
+        for fragment in fragments:
+            incarnation=int(fragment.name.split('-')[-1])
+            fragment_record=load(fragment/'record.json',{})
+            memory_by_incarnation[str(incarnation)]=report.reduce_memory([r for r in samples if r.get('incarnation',0)==incarnation],
+                **manifest['memory'],elapsed_s=fragment_record.get('elapsed_seconds',0))
+        memory=memory_by_incarnation[str(int(own.name.split('-')[-1]))]
+        trace=load(own/'trace.json',{})
+        completion=trace.get('runs',[{}])[-1].get('strings',{}) if trace.get('runs') else {}
         peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=spec['incarnation'], frames=len(live[name]),
             native=native, record=record, timing=timing, tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
             capture_ms=report.distribution([r['capture_us']/1000 for r in tick_cost]),
@@ -153,10 +174,11 @@ def build_report(root):
             frame_interval_ms=report.distribution([r['interval_ms'] for r in frames if r.get('interval_ms') is not None]),
             frame_count=len(frames), frames_over_50_ms=[r['frame'] for r in frames if max(r['draw_ms'], r['present_ms'], r.get('interval_ms') or 0) > 50],
             effective_hz=(len(frames)-1)*1000/(frames[-1]['present_end_ms']-frames[0]['present_end_ms']) if len(frames)>1 and frames[-1]['present_end_ms']>frames[0]['present_end_ms'] else None,
-            memory=memory, samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
+            memory=memory, memory_by_incarnation=memory_by_incarnation, native_completion=completion,
+            fragments=[str(fragment.relative_to(root)) for fragment in fragments], samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:894 detailed status is not a byte counter.',
-            configs=configs, paths={kind: str((own / leaf).relative_to(root)) for kind,leaf in [('live','live.jsonl'),('events','events.jsonl'),('log','engine/stdout.log'),('feel','engine/feel/raw.jsonl'),('native','match-report.json')]})
+            configs=configs, paths={kind: str(record_path(own / leaf).relative_to(root)) for kind,leaf in [('live','live.jsonl'),('events','events.jsonl'),('log','engine/stdout.log'),('feel','engine/feel/raw.jsonl'),('native','match-report.json')]})
     host_rows = live.get(manifest['host'], [])
     ranges = []
     if host_rows:
@@ -169,11 +191,12 @@ def build_report(root):
     faults_applied = all(any(r.get('id') == f['id'] and r.get('applied') for r in fault_receipts) for f in manifest['faults'])
     recoveries = report.reduce_recoveries(manifest['faults'], [], now_ms=0)
     holds = sum(len(p['holds']) for p in peers.values())
-    checks = dict(three_real_boxes=len({p['box'] for p in peers.values() if p['record'].get('started')}) >= 3,
+    checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
                   preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings'),
                   full_history=comparison['passed'], zero_desync=comparison['unequal_keys'] == 0 and bool(ranges),
                   zero_unscheduled_holds=holds == 0, native_completion=all(p['record'].get('exit_code') == 0 and
-                      not p['record'].get('timed_out') and p['native'].get('exit_code') == 0 for p in peers.values()),
+                      not p['record'].get('timed_out') and p['native'].get('exit_code') == 0 and p['native_completion'].get('completion') == 'completed' for p in peers.values()),
+                  adopted_peer_count=all(p['configs'] and all(c['peer_count']==len(manifest['instances']) for c in p['configs']) for p in peers.values()),
                   faults_applied=faults_applied, bounded_recovery=all(r['passed'] for r in recoveries),
                   quiet_feel=all(not p['feel_gated'] or p['feel_pass'] for p in peers.values()),
                   no_engine_findings=not findings)

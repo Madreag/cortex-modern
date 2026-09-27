@@ -35,7 +35,7 @@ def compare_histories(peers, ranges, required_subsystems):
                                                               if name != 'controller_route'}}
             if not row.get('sim_gated'):
                 invalid.append(dict(peer=peer, line=number, missing=['sim_gated']))
-            observations[key].append((signature, row.get('_line', number)))
+            observations[key].append((signature, row.get('_line', number), row.get('_path')))
         indexed[peer] = observations
     counts = {peer: dict(expected=0, present=0, missing=0) for peer in peers}
     equal, unknown, unequal, expected_keys = 0, 0, 0, set()
@@ -54,13 +54,13 @@ def compare_histories(peers, ranges, required_subsystems):
                 counts.setdefault(peer, dict(expected=0, present=0, missing=0))['expected'] += 1
                 found = indexed.get(peer, {}).get(key, [])
                 counts[peer]['present' if found else 'missing'] += 1
-                values.extend((peer, signature, line) for signature, line in found)
+                values.extend((peer, signature, line, path) for signature, line, path in found)
                 if not found:
                     absent.append(peer)
             differs = False
             if values:
-                reference_peer, reference, reference_line = values[0]
-                for peer, signature, line in values[1:]:
+                reference_peer, reference, reference_line, reference_path = values[0]
+                for peer, signature, line, path in values[1:]:
                     if signature != reference:
                         differs = True
                         if first_difference is None:
@@ -68,6 +68,7 @@ def compare_histories(peers, ranges, required_subsystems):
                                            if signature.get(name) != reference.get(name))
                             first_difference = dict(key=dict(zip(HISTORY_FIELDS, key)), section=section,
                                 first_peer=reference_peer, first_line=reference_line, peer=peer, line=line,
+                                first_path=reference_path, path=path,
                                 first_value=reference.get(section), value=signature.get(section))
             unequal += differs
             unknown += bool(absent)
@@ -90,10 +91,12 @@ def reduce_recoveries(schedule, events, now_ms):
     for case in schedule:
         if case['deadline_ms'] <= 0 or not case['outcomes']:
             raise ValueError('recovery deadlines and terminal outcomes must be declared')
-        rows = [row for row in events if all(row.get(field) == case[field] for field in ('id', 'peer', 'incarnation'))]
-        starts = [row for row in rows if row['phase'] in ('loss', 'hold', 'fault_applied')]
+        rows = [row for row in events if all(row.get(field) == case[field] for field in ('id', 'peer'))
+                and row.get('incarnation') in (case['incarnation'], case.get('return_incarnation', case['incarnation']))]
+        starts = [row for row in rows if row.get('incarnation') == case['incarnation'] and row['phase'] in ('loss', 'hold', 'fault_applied')]
         start = min((row['wall_ms'] for row in starts), default=None)
         terminal = next((row for row in rows if row['phase'] in case['outcomes']
+                         and row.get('incarnation') == case.get('return_incarnation', case['incarnation'])
                          and row['phase'] not in ('queued_admission', 'cancelled_reclaim')
                          and start is not None and row['wall_ms'] >= start), None)
         duration = (terminal['wall_ms'] if terminal else now_ms) - start if start is not None else None

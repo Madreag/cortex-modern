@@ -89,6 +89,35 @@ def open_record(path, mode='rt', **kwargs):
     return gzip.open(path, mode, **kwargs) if path.suffix == '.gz' else path.open(mode, **kwargs)
 
 
+def compress_closed_record(path, root):
+    """Pack a writer-sealed file, verify it, then retire only that owned plain file."""
+    path, root = Path(path), Path(root).resolve()
+    if path.is_symlink() or not path.resolve().is_relative_to(root):
+        raise ValueError('record leaves its owning instance')
+    size_before = path.stat().st_size
+    destination = path.with_name(path.name + '.gz')
+    temporary = path.with_name(path.name + '.gz.partial')
+    digest, size = hashlib.sha256(), 0
+    with path.open('rb') as source, temporary.open('xb') as sink:
+        with gzip.GzipFile(filename='', fileobj=sink, mode='wb', compresslevel=3, mtime=0) as packed:
+            for block in iter(lambda: source.read(1024*1024), b''):
+                digest.update(block); size += len(block); packed.write(block)
+    restored, restored_size = hashlib.sha256(), 0
+    with gzip.open(temporary, 'rb') as source:
+        for block in iter(lambda: source.read(1024*1024), b''):
+            restored.update(block); restored_size += len(block)
+    if size != size_before or path.stat().st_size != size_before or size != restored_size or digest.digest() != restored.digest():
+        raise RuntimeError('sealed record changed or compression did not preserve it')
+    if destination.exists(): raise FileExistsError(destination)
+    temporary.replace(destination)
+    receipt = dict(original=path.name, retained=destination.name, original_bytes=size,
+                   original_sha256=digest.hexdigest(), compressed_bytes=destination.stat().st_size)
+    with (root / 'compressed-records.jsonl').open('a', encoding='utf-8') as index:
+        index.write(json.dumps(receipt)+'\n')
+    path.unlink()
+    return receipt
+
+
 def compress_case_records(root):
     root = Path(root).resolve()
     paths = [*root.glob('*_controller.jsonl'), *root.glob('*.simdump.txt'), *root.glob('*/feel/raw.jsonl')]
