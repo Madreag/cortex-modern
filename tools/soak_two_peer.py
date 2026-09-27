@@ -2,7 +2,7 @@
 sampled on both peers every minute.
 
     python tools/soak_two_peer.py --out <dir> [--minutes 45] [--autosave-seconds 60] [--holds 3] [--stall-ms 1500]
-                                  [--port 49880] [--fullstate-every N] [--sample-seconds 60]
+                                  [--port 49880] [--fullstate-every N] [--sample-seconds 60] [--saver-delay-ms N]
 
 Both engines run through run_sim_test.make_run and the private-desktop runner with CCCP_HEADLESS=1. The client carries
 the forced-hold lever (-net-test-live-stall TICK:MS) once per hold, spread evenly through the match, so its seat is held
@@ -82,6 +82,18 @@ def census_growth(log: Path, settled_tick: int) -> dict | None:
             "grew": {key: [first[key], last[key]] for key in last if key != "tick" and key in first and last[key] > first[key]}}
 
 
+def census_private(log: Path) -> dict:
+    """Each [mem-census] line's private_mb by its tick."""
+    rows = {}
+    if log.is_file():
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("[mem-census] "):
+                fields = dict(token.partition("=")[::2] for token in line.split()[1:])
+                if fields.get("tick", "").isdigit() and fields.get("private_mb", "").isdigit():
+                    rows[int(fields["tick"])] = int(fields["private_mb"])
+    return rows
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -104,12 +116,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--census-probe-size", type=int, default=0, help="print the first bytes of heap blocks of this size")
     parser.add_argument("--census-atom-stacks", action="store_true", help="the census samples where Atoms are constructed")
     parser.add_argument("--census-ticks", type=int, default=3600, help="ticks between the engine's memory census lines; 0 = none")
+    parser.add_argument("--saver-delay-ms", type=int, default=0, help="both peers' archive writers pause this long before each task (CC_TEST_SAVER_DELAY_MS), a slow disk on a fast one")
     options = parser.parse_args(argv)
     low, _, high = options.port_block.partition("-")
     if not (low.isdigit() and high.isdigit() and int(low) <= options.port <= int(high) - 4):
         parser.error(f"--port leaves room for the peers' ports inside the block {options.port_block}")
     if options.minutes <= 0 or options.holds < 0 or not 0 < options.stall_ms <= 20000 or options.fullstate_every < 0:
         parser.error("--minutes > 0, --holds >= 0, --stall-ms in 1..20000, --fullstate-every >= 0")
+    if not 0 <= options.saver_delay_ms <= 60000:
+        parser.error("--saver-delay-ms in 0..60000")
     if not 60 <= options.autosave_seconds <= 3600:
         parser.error("--autosave-seconds stays in the product's 60..3600 range")
     if os.environ.get("CCCP_HEADLESS", "1") != "1":
@@ -123,7 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     input_pattern(script)
     plan = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "repo": str(repo), "ticks": ticks, "minutes": options.minutes,
             "autosave_seconds": options.autosave_seconds, "stalls": [f"{tick}:{options.stall_ms}" for tick in stalls],
-            "port": options.port, "fullstate_every": options.fullstate_every, "sample_seconds": options.sample_seconds}
+            "port": options.port, "fullstate_every": options.fullstate_every, "sample_seconds": options.sample_seconds,
+            "saver_delay_ms": options.saver_delay_ms}
     (root / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     runs, records = {}, {}
     samples: list[dict] = []
@@ -173,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
             if options.end_round_tick:
                 flags += ["-net-match-e2e-end-round-tick", str(options.end_round_tick)]
             env = {"CCCP_HEADLESS": "1"}
+            if options.saver_delay_ms:
+                env["CC_TEST_SAVER_DELAY_MS"] = str(options.saver_delay_ms)
             if peer == "client" and options.mute_input:
                 env["CC_TEST_LOCKSTEP_MUTE_INPUT"] = options.mute_input
             run = make_run(repo, flags, root / peer, timeout=options.minutes * 60 + 600, env=env)
@@ -225,11 +243,15 @@ def main(argv: list[str] | None = None) -> int:
                              "percent": round(100.0 * (last[peer]["working_set"] - settled[peer]["working_set"]) / settled[peer]["working_set"], 1)}
                       for peer in ("host", "client")} if settled and last and settled is not last else None
     census = {peer: census_growth(root / peer / "stdout.log", TICKS_PER_SECOND * 600) for peer in ("host", "client")}
+    # A capture the writer could not take yet replaces the one still waiting; each replacement is one line.
+    coalesced = {peer: count(root / peer / "stdout.log", "[fullstate-coalesced] ") + count(root / peer / "stdout.log", "[autosave-coalesced] ")
+                 for peer in ("host", "client")}
+    private_mb = {peer: census_private(root / peer / "stdout.log") for peer in ("host", "client")}
     result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
               "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
               "autosaves_published": autosaves, "autosaves_owed": owed,
               "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
-              "memory_from_minute_10": from_minute_10, "census": census,
+              "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
               "plan": plan}
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "

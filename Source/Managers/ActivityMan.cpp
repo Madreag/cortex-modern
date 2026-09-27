@@ -80,6 +80,7 @@
 #include <deque>
 #include <map>
 #include <cstdlib>
+#include <cstring>
 #include <execution>
 #include <format>
 #include <future>
@@ -215,6 +216,21 @@ namespace {
 #endif
 	}
 
+	/// A headless test lever: the archive writers pause this long before each task, so a soak on a fast disk stands in for a slow one.
+	int SaverDelayMs() {
+		static const int delay = [] {
+			const char* headless = std::getenv("CCCP_HEADLESS");
+			const char* text = std::getenv("CC_TEST_SAVER_DELAY_MS");
+			if (!headless || std::string_view(headless) != "1" || !text) return 0;
+			int value = 0;
+			const auto parsed = std::from_chars(text, text + std::strlen(text), value);
+			if (parsed.ec != std::errc{} || *parsed.ptr != '\0' || value < 1 || value > 60000) return 0;
+			System::PrintDiagnosticLine(std::format("[checkpoint-writer] test lever CC_TEST_SAVER_DELAY_MS={}", value));
+			return value;
+		}();
+		return delay;
+	}
+
 	class AutosaveArchiveWriter {
 	public:
 		AutosaveArchiveWriter() : m_Worker([this] {
@@ -228,6 +244,7 @@ namespace {
 					task = std::move(m_Tasks.front());
 					m_Tasks.pop_front();
 				}
+				if (const int delay = SaverDelayMs(); delay > 0) std::this_thread::sleep_for(std::chrono::milliseconds(delay));
 				task();
 			}
 		}) {}
