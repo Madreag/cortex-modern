@@ -8971,11 +8971,16 @@ end
 		// The pool hands back the count of instances still out when one is returned.
 		auto* pieMenus = const_cast<Entity::ClassInfo*>(Entity::ClassInfo::GetClass("PieMenu"));
 		const auto inUse = [pieMenus] { return pieMenus ? pieMenus->ReturnPoolMemory(pieMenus->GetPoolMemory()) : 0; };
-		PieSlice source;
-		source.SetSubPieMenu(new PieMenu());
-		const int before = inUse();
-		for (int copy = 0; copy < 3; ++copy) delete dynamic_cast<PieSlice*>(source.Clone());
-		const int after = inUse();
+		const auto* slicePreset = dynamic_cast<const PieSlice*>(g_PresetMan.GetEntityPreset("PieSlice", "Empty Slice"));
+		const auto* menuPreset = dynamic_cast<const PieMenu*>(g_PresetMan.GetEntityPreset("PieMenu", "Empty Pie Menu"));
+		int before = 0, after = -1;
+		if (slicePreset && menuPreset) {
+			std::unique_ptr<PieSlice> source(dynamic_cast<PieSlice*>(slicePreset->Clone()));
+			source->SetSubPieMenu(dynamic_cast<PieMenu*>(menuPreset->Clone()));
+			before = inUse();
+			for (int copy = 0; copy < 3; ++copy) delete dynamic_cast<PieSlice*>(source->Clone());
+			after = inUse();
+		}
 		const bool freed = pieMenus && after == before;
 		std::cout << "[script-graph-selftest] " << (freed ? "PASS" : "FAIL") << " a_copied_slices_sub_pie_menu_is_freed in_use_before=" << before << " in_use_after=" << after << std::endl;
 		checkpointValues = freed && checkpointValues;
