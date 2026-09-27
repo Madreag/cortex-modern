@@ -8392,7 +8392,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			end
 			local array, last, keys = rest(walks.array), rest(walks.last), rest(walks.hash)
 			-- The hash loop resumes at the key it recorded and goes on in the restored table's own order.
-			_F_TraversalContinued = array == "12,13,14,done" and last == "done" and keys == table.concat(expected, ",") and expected[1] == tostring(_F_Traversal.next)
+			_F_TraversalContinued = array == "2,3,4,done" and last == "done" and keys == table.concat(expected, ",") and expected[1] == tostring(_F_Traversal.next)
 			_F_TraversalResult = string.format("array=%s last=%s hash=%s restored_order=%s host_order=%s host_order_kept=%s", array, last, keys, table.concat(expected, ","),
 				_F_Traversal.hostOrder, tostring(keys == _F_Traversal.hostOrder))
 		)lua") == 0;
