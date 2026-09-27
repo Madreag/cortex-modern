@@ -73,6 +73,7 @@ namespace RTE {
 		void FlushEventTick();
 		void WriteObservation(const nlohmann::json& observation);
 		void RecordProducedController(uint64_t round, uint64_t producedTick, uint64_t targetTick, long actor, int seat, double producedWallMs = -1);
+		void ConfirmProducedControllers(uint64_t round, uint64_t producedTick, uint64_t targetTick, const std::vector<long>& queuedActors, uint64_t priorInputThrough);
 		nlohmann::json ProducedControllerFor(uint64_t round, uint64_t targetTick, long actor) const;
 		static bool IsFreshControllerRecovery(const nlohmann::json& sample, uint64_t round, uint64_t tick, long actor,
 		    int64_t wireTick, bool controllable, bool held, bool catchup, double afterWallMs);
