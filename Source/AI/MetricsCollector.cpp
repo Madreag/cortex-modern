@@ -2,6 +2,9 @@
 
 #include "ScenarioRunner.h"
 #include "SimChecksum.h"
+#include "MovableObject.h"
+#include "MovableMan.h"
+#include "System.h"
 
 #include "nlohmann/json.hpp"
 
@@ -11,10 +14,251 @@
 #include <iostream>
 #include <new>
 #include <sstream>
+#include <filesystem>
+#include <cstdlib>
+#include <set>
+#include <thread>
+#include <deque>
+#include <cmath>
+#include <algorithm>
 
 namespace RTE {
 
 	using json = nlohmann::json;
+	bool CrossCaptureBarrier(const json& spec, const std::string& directory, const std::string& phase, uint64_t tick, uint64_t round) {
+		if (spec.at("phase") != phase || spec.at("tick").get<uint64_t>() != tick ||
+		    (spec.value("round", uint64_t{0}) != 0 && spec.at("round").get<uint64_t>() != round)) return false;
+		const std::string id = spec.at("id");
+		const auto timeout = spec.at("timeout_ms").get<uint64_t>();
+		if (id.empty() || id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != std::string::npos ||
+		    (phase != "capture_announced" && phase != "writer_pending") || timeout == 0 || timeout > 120000)
+			throw std::runtime_error("invalid capture barrier identity, phase or timeout");
+		const auto root = std::filesystem::path(directory);
+		std::filesystem::create_directories(root);
+		const auto began = std::chrono::steady_clock::now();
+		json receipt{{"type", "capture_barrier"}, {"id", id}, {"capture_phase", phase}, {"capture_tick", tick},
+		    {"capture_round", round}, {"timeout_ms", timeout}, {"outcome", "entered"},
+		    {"barrier_wall_ms", std::chrono::duration<double, std::milli>(began.time_since_epoch()).count()}};
+		const auto prefix = root / (id + "." + std::to_string(round) + "." + phase + "." + std::to_string(tick));
+		receipt["release_file"] = prefix.string() + ".release";
+		const auto publish = [&](const std::string& suffix) {
+			const auto target = prefix.string() + suffix;
+			std::ofstream output(target + ".pending", std::ios::out | std::ios::trunc);
+			output << receipt.dump() << '\n'; output.flush();
+			if (!output) throw std::runtime_error("capture barrier receipt write failed");
+			output.close(); std::filesystem::rename(target + ".pending", target);
+			if (MetricsCollector::IsConstructed()) g_MetricsCollector.WriteObservation(receipt);
+		};
+		publish(".enter.json");
+		const auto released = [&] { return std::filesystem::is_regular_file(prefix.string() + ".release"); };
+		while (!released() && std::chrono::steady_clock::now() - began < std::chrono::milliseconds(timeout))
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		const bool passed = released();
+		receipt["outcome"] = passed ? "released" : "timeout";
+		receipt["wait_ms"] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
+		publish(".exit.json");
+		return passed;
+	}
+
+	void CrossCaptureBarrierFromEnvironment(const char* phase, uint64_t tick, uint64_t round) {
+		const char* path = std::getenv("CC_TEST_CROSS_CAPTURE_BARRIER");
+		if (!path || !*path) return;
+		try {
+			const char* headless = std::getenv("CCCP_HEADLESS");
+			if (!headless || std::string(headless) != "1") throw std::runtime_error("capture barrier requires headless");
+			std::ifstream input(path); const auto specs = json::parse(input);
+			if (!specs.is_array() || specs.size() > 64) throw std::runtime_error("invalid capture barrier schedule");
+			static std::mutex mutex;
+			static std::set<std::string> fired;
+			for (const auto& spec: specs) {
+				if (spec.at("phase") != phase || spec.at("tick").get<uint64_t>() != tick ||
+				    (spec.value("round", uint64_t{0}) != 0 && spec.at("round").get<uint64_t>() != round)) continue;
+				const std::string key = spec.at("id").get<std::string>() + "/" + phase + "/" + std::to_string(round) + "/" + std::to_string(tick);
+				{ std::lock_guard<std::mutex> lock(mutex); if (!fired.insert(key).second) continue; }
+				CrossCaptureBarrier(spec, std::filesystem::path(path).parent_path().string(), phase, tick, round);
+			}
+		} catch (const std::exception& error) {
+			System::PrintDiagnosticLine("[cross-record] FAIL capture barrier: " + std::string(error.what()));
+		}
+	}
+	struct MetricsCollector::EventStream {
+		std::ofstream output;
+		std::string path;
+		json context;
+		std::vector<json> pending;
+		std::deque<json> producedInputs;
+		std::map<uint64_t, uint64_t> lastObservedInputTarget;
+		uint64_t inputSerial = 0;
+		size_t bytes = 0, partBytes = 0, limit = 0, part = 0, sequence = 0, overflow = 0;
+		bool active = false;
+		void Write(json record) {
+			for (const auto& [key, value]: context.items()) record[key] = value;
+			record["sequence"] = ++sequence;
+			const std::string line = record.dump() + '\n';
+			if (bytes + line.size() > limit) throw std::runtime_error("event byte budget exhausted");
+			if (partBytes >= 8 * 1024 * 1024) {
+				output.close();
+				output.open(path + ".part" + std::to_string(++part), std::ios::out | std::ios::trunc);
+				partBytes = 0;
+			}
+			output << line;
+			if (!output) throw std::runtime_error("event record write failed");
+			bytes += line.size(); partBytes += line.size();
+		}
+	};
+
+	bool MetricsCollector::OpenEvents(const std::string& path, size_t byteLimit) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_EventStream = std::make_unique<EventStream>();
+		m_EventStream->output.open(path, std::ios::out | std::ios::trunc);
+		m_EventStream->path = path;
+		m_EventStream->limit = byteLimit;
+		m_EventsEnabled.store(m_EventStream->output.good());
+		return m_EventsEnabled.load();
+	}
+
+	void MetricsCollector::BeginEventTick(const json& context, bool prediction) {
+		if (!EventsEnabled()) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_EventStream->pending.empty()) ++m_EventStream->overflow;
+		m_EventStream->pending.clear();
+		m_EventStream->context = context;
+		m_EventStream->active = !prediction;
+	}
+
+	void MetricsCollector::RecordEvent(const std::string& event, const MovableObject* object, const std::string& result, double amount, long other, int seat) {
+		if (!EventsEnabled()) return;
+		AppendEvent({{"event", event}, {"result", result}, {"amount", amount}, {"seat", seat}, {"other", other},
+		    {"actor", object ? object->GetRootParent()->GetUniqueID() : 0}, {"object", object ? object->GetUniqueID() : 0},
+		    {"team", object ? object->GetTeam() : -1}, {"preset", object ? object->GetPresetName() : ""},
+		    {"class", object ? object->GetClassName() : ""}});
+	}
+
+	void MetricsCollector::UpdateEventContext(const json& context) {
+		if (!EventsEnabled()) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_EventStream->context.update(context);
+	}
+
+	void MetricsCollector::AppendEvent(const json& event) {
+		if (!EventsEnabled() || (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative())) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_EventStream->active) return;
+		if (m_EventStream->pending.size() >= 4096) { ++m_EventStream->overflow; return; }
+		m_EventStream->pending.push_back(event);
+	}
+
+	void MetricsCollector::FlushEventTick() {
+		if (!EventsEnabled()) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		try {
+			for (auto& event: m_EventStream->pending) {
+				event["type"] = "coverage";
+				m_EventStream->Write(std::move(event));
+			}
+			if (m_EventStream->overflow) {
+				m_EventStream->Write({{"type", "record_loss"}, {"count", m_EventStream->overflow}});
+				m_EventStream->overflow = 0;
+			}
+			m_EventStream->output.flush();
+		} catch (const std::exception& error) {
+			System::PrintDiagnosticLine("[cross-record] FAIL " + std::string(error.what()));
+			m_EventsEnabled.store(false);
+		}
+		m_EventStream->pending.clear();
+		m_EventStream->active = false;
+	}
+
+	void MetricsCollector::WriteObservation(const json& observation) {
+		if (!EventsEnabled()) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		try { m_EventStream->Write(observation); m_EventStream->output.flush(); }
+		catch (const std::exception& error) {
+			System::PrintDiagnosticLine("[cross-record] FAIL " + std::string(error.what()));
+			m_EventsEnabled.store(false);
+		}
+	}
+
+	void MetricsCollector::RecordProducedController(uint64_t round, uint64_t producedTick, uint64_t targetTick, long actor, int seat, double producedWallMs) {
+		if (!EventsEnabled() || (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative())) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_EventStream->active) return;
+		if (producedWallMs < 0) producedWallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		json sample{{"type", "controller_input_produced"}, {"input_serial", ++m_EventStream->inputSerial},
+		    {"input_round", round}, {"produced_tick", producedTick}, {"target_tick", targetTick},
+		    {"actor", actor}, {"seat", seat}, {"produced_wall_ms", producedWallMs}};
+		try {
+			m_EventStream->producedInputs.push_back(sample);
+			if (m_EventStream->producedInputs.size() > 512) m_EventStream->producedInputs.pop_front();
+			m_EventStream->Write(sample);
+		} catch (const std::exception& error) {
+			System::PrintDiagnosticLine("[cross-record] FAIL produced input: " + std::string(error.what()));
+			m_EventsEnabled.store(false);
+		}
+	}
+	json MetricsCollector::ProducedControllerFor(uint64_t round, uint64_t targetTick, long actor) const {
+		if (!EventsEnabled()) return json::object();
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		for (auto found = m_EventStream->producedInputs.rbegin(); found != m_EventStream->producedInputs.rend(); ++found)
+			if (found->at("input_round") == round && found->at("target_tick") == targetTick && found->at("actor") == actor) return *found;
+		return json::object();
+	}
+	bool MetricsCollector::IsFreshControllerRecovery(const json& sample, uint64_t round, uint64_t tick, long actor,
+	    int64_t wireTick, bool controllable, bool held, bool catchup, double afterWallMs) {
+		try {
+			return controllable && !held && !catchup && sample.value("queue_confirmed", false) && wireTick >= 0 && static_cast<uint64_t>(wireTick) == tick &&
+			    sample.value("input_serial", uint64_t{0}) > 0 && sample.at("input_round") == round && sample.at("target_tick") == tick &&
+			    sample.at("actor") == actor && std::isfinite(sample.at("produced_wall_ms").get<double>()) &&
+			    std::isfinite(afterWallMs) && sample.at("produced_wall_ms").get<double>() >= afterWallMs;
+		} catch (const json::exception&) { return false; }
+	}
+	void MetricsCollector::ConfirmProducedControllers(uint64_t round, uint64_t producedTick, uint64_t targetTick, const std::vector<long>& queuedActors, uint64_t priorInputThrough) {
+		if (!EventsEnabled() || (MovableMan::IsConstructed() && g_MovableMan.IsSpeculative())) return;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		auto& last = m_EventStream->lastObservedInputTarget[round];
+		const bool freshTarget = targetTick > last && targetTick > priorInputThrough;
+		last = std::max(last, targetTick);
+		if (!freshTarget) return;
+		for (auto& sample: m_EventStream->producedInputs) {
+			if (sample.at("input_round") != round || sample.at("produced_tick") != producedTick || sample.at("target_tick") != targetTick ||
+			    std::find(queuedActors.begin(), queuedActors.end(), sample.at("actor").get<long>()) == queuedActors.end()) continue;
+			sample["queue_confirmed"] = true;
+			sample["queue_readback"] = "ScenarioRunner::PeekLockstepLocalControllerFrames";
+			sample["restored_input_through"] = priorInputThrough;
+			try {
+				auto receipt = sample; receipt["type"] = "controller_input_queued";
+				m_EventStream->Write(receipt);
+			} catch (const std::exception& error) {
+				System::PrintDiagnosticLine("[cross-record] FAIL queued input: " + std::string(error.what()));
+				m_EventsEnabled.store(false);
+			}
+		}
+	}
+
+	void MetricsCollector::CloseEvents() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_EventsEnabled.store(false);
+		if (m_EventStream) m_EventStream->output.close();
+	}
+
+	size_t MetricsCollector::EventBytes() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_EventStream ? m_EventStream->bytes : 0;
+	}
+
+	size_t MetricsCollector::InstrumentationBytes() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		size_t bytes = m_TickHashes.capacity() * sizeof(TickHashRecord);
+		for (const auto& record: m_TickHashes) bytes += record.subsystems.capacity() * sizeof(decltype(record.subsystems)::value_type);
+		return bytes;
+	}
+
+	json MetricsCollector::TickTiming(long long totalUs, long long waitUs, long long captureUs, long long captureWaitUs) {
+		const long long captureOnly = captureUs - captureWaitUs;
+		const long long compute = totalUs - waitUs - captureOnly;
+		return {{"type", "tick_timing"}, {"total_us", totalUs}, {"wait_us", waitUs}, {"capture_us", captureOnly}, {"compute_us", compute},
+		    {"partition_valid", totalUs >= 0 && waitUs >= 0 && captureWaitUs >= 0 && captureWaitUs <= waitUs && captureOnly >= 0 && compute >= 0}};
+	}
 
 	MetricsCollector::MetricsCollector() = default;
 	MetricsCollector::~MetricsCollector() = default;

@@ -11,6 +11,242 @@ from .records import open_record, record_path
 
 TICKS = 1200
 SIM_MS = 1000 / 60
+HISTORY_FIELDS = ('session', 'match', 'history_branch', 'source_round', 'tick')
+
+
+def declared_history_ranges(host_rows, boundaries, peers, *, smoke_ticks=None, final_tick=None):
+    """Use native round boundaries and final outcome, never the largest observed tail as an oracle."""
+    prefixes = []
+    for row in host_rows:
+        prefix = tuple(row.get(field) for field in HISTORY_FIELDS[:-1])
+        if None not in prefix and prefix not in prefixes: prefixes.append(prefix)
+    ranges, missing = [], []
+    for index,prefix in enumerate(prefixes):
+        endings = [r['final_tick'] for r in boundaries if tuple(r.get(field) for field in HISTORY_FIELDS[:-1]) == prefix and r.get('final_tick')]
+        end = smoke_ticks if smoke_ticks is not None and len(prefixes) == 1 else \
+              max(endings) if endings else final_tick if index == len(prefixes)-1 else None
+        if end is None or int(end) != end or end < 1:
+            missing.append(dict(zip(HISTORY_FIELDS[:-1],prefix))); continue
+        ranges.append(dict(**dict(zip(HISTORY_FIELDS[:-1],prefix)),first=1,last=int(end),peers=list(peers)))
+    return ranges, missing
+
+
+def compare_histories(peers, ranges, required_subsystems):
+    """Compare every observation, preserving disagreement in earlier executions."""
+    indexed, invalid, duplicates, first_difference = {}, [], 0, None
+    for peer, rows in peers.items():
+        observations, seen = defaultdict(list), set()
+        for number, row in enumerate(rows, 1):
+            missing = [field for field in (*HISTORY_FIELDS, 'instance', 'execution', 'incarnation')
+                       if field not in row or row[field] is None]
+            subsystems=row.get('subsystems')
+            if not isinstance(subsystems,dict): missing.append('subsystems(object)')
+            else:
+                missing += sorted(set(required_subsystems) - subsystems.keys())
+                missing += ['valid_hash:'+key for key,value in subsystems.items()
+                            if not isinstance(value,str) or not re.fullmatch('[0-9a-f]{64}',value)]
+            if not isinstance(row.get('sim_gated'),str) or not re.fullmatch('[0-9a-f]{64}',row.get('sim_gated','')):
+                missing.append('valid_sim_gated_hash')
+            missing += ['scalar:'+field for field in (*HISTORY_FIELDS,'instance','execution','incarnation')
+                        if field in row and not isinstance(row[field],(int,str))]
+            if missing:
+                invalid.append(dict(peer=peer, line=row.get('_line', number), missing=missing))
+                continue
+            key = tuple(row[field] for field in HISTORY_FIELDS)
+            identity = (row['instance'], row['execution'], row['incarnation'], *key)
+            if identity in seen:
+                duplicates += 1
+            seen.add(identity)
+            signature = {'sim_gated': row.get('sim_gated'), **{name: value for name, value in row['subsystems'].items()
+                                                              if name != 'controller_route'}}
+            observations[key].append((signature, row.get('_line', number), row.get('_path')))
+        indexed[peer] = observations
+    counts = {peer: dict(expected=0, present=0, missing=0) for peer in peers}
+    equal, unknown, unequal, expected_keys = 0, 0, 0, set()
+    strips = []
+    for interval in ranges:
+        if interval['first'] > interval['last'] or len(set(interval['peers'])) < 3:
+            raise ValueError('a comparable interval needs at least three distinct peers and a nonempty range')
+        prefix = tuple(interval[field] for field in HISTORY_FIELDS[:-1])
+        for tick in range(interval['first'], interval['last'] + 1):
+            key = (*prefix, tick)
+            if key in expected_keys:
+                raise ValueError(f'overlapping declared history range: {key}')
+            expected_keys.add(key)
+            values, absent = [], []
+            for peer in interval['peers']:
+                counts.setdefault(peer, dict(expected=0, present=0, missing=0))['expected'] += 1
+                found = indexed.get(peer, {}).get(key, [])
+                counts[peer]['present' if found else 'missing'] += 1
+                values.extend((peer, signature, line, path) for signature, line, path in found)
+                if not found:
+                    absent.append(peer)
+            differs = False
+            if values:
+                reference_peer, reference, reference_line, reference_path = values[0]
+                for peer, signature, line, path in values[1:]:
+                    if signature != reference:
+                        differs = True
+                        if first_difference is None:
+                            section = next(name for name in sorted(reference.keys() | signature.keys())
+                                           if signature.get(name) != reference.get(name))
+                            first_difference = dict(key=dict(zip(HISTORY_FIELDS, key)), section=section,
+                                first_peer=reference_peer, first_line=reference_line, peer=peer, line=line,
+                                first_path=reference_path, path=path,
+                                first_value=reference.get(section), value=signature.get(section))
+            unequal += differs
+            unknown += bool(absent)
+            equal += not differs and not absent
+            status = 'UNEQUAL' if differs else 'UNKNOWN' if absent else 'EQUAL'
+            if strips and strips[-1]['status'] == status and strips[-1]['prefix'] == list(prefix) and strips[-1]['last'] + 1 == tick:
+                strips[-1]['last'] = tick
+            else:
+                strips.append(dict(prefix=list(prefix), first=tick, last=tick, status=status))
+    unexpected = sum(key not in expected_keys for observations in indexed.values() for key in observations)
+    return dict(passed=bool(expected_keys) and not (unknown or unequal or invalid or duplicates),
+                equal_keys=equal, unknown_keys=unknown, unequal_keys=unequal, duplicates=duplicates,
+                unexpected_keys=unexpected, invalid=invalid[:100], invalid_count=len(invalid),
+                peers=counts, first_difference=first_difference, strips=strips,
+                scope='sim_gated and hashed tick-end subsystems; controller_route is per-peer')
+
+
+def reduce_recoveries(schedule, events, now_ms):
+    results = []
+    for case in schedule:
+        if case['deadline_ms'] <= 0 or not case['outcomes']:
+            raise ValueError('recovery deadlines and terminal outcomes must be declared')
+        rows = [row for row in events if all(row.get(field) == case[field] for field in ('id', 'peer'))
+                and row.get('incarnation') in (case['incarnation'], case.get('return_incarnation', case['incarnation']))]
+        starts = [row for row in rows if row.get('incarnation') == case['incarnation'] and row['phase'] in ('loss', 'hold', 'fault_applied')]
+        start = min((row['wall_ms'] for row in starts), default=None)
+        terminal = next((row for row in rows if row['phase'] in case['outcomes']
+                         and row.get('incarnation') == case.get('return_incarnation', case['incarnation'])
+                         and row['phase'] not in ('queued_admission', 'cancelled_reclaim')
+                         and start is not None and row['wall_ms'] >= start), None)
+        duration = (terminal['wall_ms'] if terminal else now_ms) - start if start is not None else None
+        start_upper=min((row.get('upper_wall_ms',row['wall_ms']) for row in starts),default=None)
+        lower=max(0,terminal.get('lower_wall_ms',terminal['wall_ms'])-start_upper) if terminal and start_upper is not None else None
+        domains={row.get('clock_domain','legacy_native') for row in [*starts,*([terminal] if terminal else [])]}
+        result=dict(case)
+        result.update(phases=rows, scheduled_duration_ms=case.get('duration_ms'), duration_ms=duration,
+                      duration_lower_ms=lower,duration_upper_ms=duration,clock_domains=sorted(domains),
+                      censored=terminal is None, outcome=terminal['phase'] if terminal else None,
+                      passed=terminal is not None and len(domains)==1 and 0 <= duration <= case['deadline_ms'])
+        results.append(result)
+    return results
+
+
+def reduce_net_window(committed, waits, first, last, sim_tick_ms, missing_frame_stalls=None):
+    by_tick = defaultdict(list)
+    for row in committed:
+        if first <= row['tick'] <= last:
+            by_tick[row['tick']].append(row['wall_ms'])
+    complete = last > first and set(by_tick) == set(range(first, last + 1)) and all(len(v) == 1 for v in by_tick.values())
+    wall = by_tick[last][0] - by_tick[first][0] if complete else None
+    if wall is not None and wall <= 0:
+        complete, wall = False, None
+    eligible = [row for row in (waits or []) if first < row['tick'] <= last]
+    wait = sum(row['wait_ms'] for row in eligible) if waits is not None else None
+    horizon = max(0, max(by_tick[t][0] - by_tick[first][0] - (t - first) * sim_tick_ms for t in by_tick)) if complete and sim_tick_ms else None
+    return dict(complete=complete, first_tick=first, last_tick=last, eligible_ticks=last-first,
+                missing_ticks=last-first+1-len(by_tick), steady_wall_ms=wall,
+                steady_wall_tps=(last-first)*1000/wall if wall else None,
+                net_wait_ms=wait, waiting_percent=100*wait/wall if wall and wait is not None else None,
+                longest_stall_ms=max((row['wait_ms'] for row in eligible), default=0) if complete else None,
+                steady_waits_over_50=sum(row['wait_ms'] > 50 for row in eligible) if complete else None,
+                steady_missing_frame_stalls=missing_frame_stalls, confirmed_horizon_lag_ms=horizon,
+                sim_tick_ms=sim_tick_ms)
+
+
+def reduce_memory(samples, *, warmup_s, slope_bytes_per_minute, retained_bytes, sample_seconds, elapsed_s):
+    if min(warmup_s, slope_bytes_per_minute, retained_bytes) < 0 or sample_seconds <= 0:
+        raise ValueError('invalid memory bounds')
+    expected = math.floor(elapsed_s / sample_seconds) + 1
+    slots = {math.floor(row['elapsed_s'] / sample_seconds) for row in samples}
+    sizes = {}
+    for field in ('working_set', 'resident', 'private', 'virtual'):
+        values = [(r['elapsed_s'], r[field]) for r in samples if r['elapsed_s'] >= warmup_s and r.get(field) is not None]
+        if len(values) < 2:
+            continue
+        x = sum(t for t, _ in values) / len(values); y = sum(v for _, v in values) / len(values)
+        divisor = sum((t-x)**2 for t, _ in values)
+        slope = sum((t-x)*(v-y) for t, v in values) / divisor * 60 if divisor else None
+        growth = values[-1][1] - values[0][1]
+        sizes[field] = dict(first=values[0][1], last=values[-1][1], peak=max(v for _, v in values),
+                            slope_bytes_per_minute=slope, retained_bytes=growth,
+                            passed=slope is not None and slope <= slope_bytes_per_minute and growth <= retained_bytes)
+    return dict(passed=bool(sizes) and len(slots) >= expected and all(v['passed'] for v in sizes.values()),
+                warmup_s=warmup_s, slope_bound=slope_bytes_per_minute, retention_bound=retained_bytes,
+                expected_samples=expected, observed_samples=len(samples), missing_samples=max(0, expected-len(slots)),
+                sizes=sizes, instrumentation_growth='N/A without measured allocation records; no subtraction')
+
+
+def parse_fullstate(paths):
+    samples, scopes, contexts, refusals = [], defaultdict(list), defaultdict(list), []
+    sample_pattern = re.compile(r'^\[fullstate(?:-(canonical|restored))?\] tick=(\d+) hash=([0-9a-f]{16}) sections=(\S+) round=(\d+)')
+    scope_pattern = re.compile(r'^\[fullstate-scope\] tick=(\d+) round=(\d+) label=(\S+) per_peer=(.*)$')
+    context_pattern = re.compile(r'^\[fullstate-context\] tick=(\d+) round=(\d+) label=(\S+) path=(.*)$')
+    for path in paths:
+        path=Path(path)
+        if not path.is_file(): continue
+        with path.open(encoding='utf-8-sig',errors='replace') as stream:
+            for number,line in enumerate(stream,1):
+                if match:=context_pattern.match(line.strip()):
+                    key=(int(match[2]),int(match[1]),match[3])
+                    contexts[key].append(dict(path=match[4],log=str(path),line=number))
+                elif match:=scope_pattern.match(line.strip()):
+                    key=(int(match[2]),int(match[1]),match[3])
+                    scopes[key].append(dict(per_peer=match[4].split(',') if match[4] else [],log=str(path),line=number))
+                elif match:=sample_pattern.match(line.strip()):
+                    label=match[1] or 'sample'; key=(int(match[5]),int(match[2]),label)
+                    sections=dict(item.rsplit(':',1) for item in match[4].split(','))
+                    samples.append(dict(key=key,hash=match[3],sections=sections,log=str(path),line=number))
+                elif re.match(r'^\[fullstate(?:-[^]]+)?\] tick=\d+ (?:not taken|refused:|failed:)',line):
+                    refusals.append(dict(log=str(path),line=number,text=line.strip()))
+                elif line.startswith('[fullstate-refusal] '):
+                    refusals.append(dict(log=str(path),line=number,text=line.strip()))
+    ordinal=Counter()
+    for sample in samples:
+        key=sample['key']; index=ordinal[key]; ordinal[key]+=1
+        sample['scope']=scopes[key][index] if index<len(scopes[key]) else None
+        sample['context']=contexts[key][index] if index<len(contexts[key]) else None
+        sample['scope_valid']=sample['scope'] is not None and 'header' in sample['sections'] and not (set(sample['sections']) & set(sample['scope']['per_peer']))
+    return dict(samples=samples,refusals=refusals)
+
+
+def compare_fullstate_histories(peers, expected):
+    missing, differences, bad_scope, restored = [], [], [], []
+    indexed={}
+    for peer,document in peers.items():
+        indexed[peer]=defaultdict(list)
+        for sample in document['samples']:
+            indexed[peer][tuple(sample['key'])].append(sample)
+            if not sample['scope_valid'] or sample['context'] is None: bad_scope.append(dict(peer=peer,log=sample['log'],line=sample['line']))
+    for peer,document in peers.items():
+        for sample in document['samples']:
+            if sample['key'][2]!='restored': continue
+            canonical_key=(*sample['key'][:2],'canonical')
+            canonical=[c for other in indexed.values() for c in other.get(canonical_key,[])]
+            restored.append(dict(peer=peer,key=sample['key'],canonical_found=bool(canonical),
+                equal=bool(canonical) and all(c['sections']==sample['sections'] and c['hash']==sample['hash'] for c in canonical)))
+    for key in expected:
+        values=[]
+        for peer in peers:
+            found=indexed[peer].get(tuple(key),[])
+            if not found: missing.append(dict(peer=peer,key=key))
+            values.extend((peer,sample) for sample in found)
+        if values:
+            first_peer,first=values[0]
+            for peer,sample in values[1:]:
+                if sample['sections']!=first['sections'] or sample['hash']!=first['hash']:
+                    names=first['sections'].keys() | sample['sections'].keys()
+                    differing=[n for n in sorted(names) if first['sections'].get(n)!=sample['sections'].get(n)]
+                    differences.append(dict(key=key,first_peer=first_peer,peer=peer,sections=differing or ['combined_hash'],
+                                            first_log=first['log'],first_line=first['line'],log=sample['log'],line=sample['line']))
+    refused=[dict(peer=peer,**row) for peer,document in peers.items() for row in document['refusals']]
+    return dict(passed=bool(expected) and not (missing or differences or bad_scope or refused) and all(r['equal'] for r in restored),
+                expected_samples_per_peer=len(expected),missing=missing,differences=differences,scope_failures=bad_scope,
+                refusals=refused,restores=restored,scope='Shared sections only; PerPeer exclusions remain explicit and need behavioral oracles')
 KILLALL = re.compile(r'killall sparing team \d+ at tick (\d+)')
 SCENARIO_EARLY = re.compile(r'\[scenario\] \S+ passed=no ticks=(\d+)')
 
@@ -32,7 +268,7 @@ def dump_ticks(path):
     return ticks
 
 
-def early_decision_tick(run, peer):
+def early_decision_tick(run, peer, ticks=TICKS):
     run = Path(run)
     log = run / peer / 'stdout.log'
     if log.is_file():
@@ -40,13 +276,13 @@ def early_decision_tick(run, peer):
         match = KILLALL.search(text) or SCENARIO_EARLY.search(text)
         if match:
             tick = int(match[1])
-            if 0 < tick < TICKS:
+            if 0 < tick < ticks:
                 return tick
     dump = run / f'{peer}_trace.json.simdump.txt'
     if record_path(dump).is_file():
-        ticks = dump_ticks(dump)
-        if ticks and ticks != set(range(1, TICKS + 1)):
-            return max(ticks)
+        observed = dump_ticks(dump)
+        if observed and observed != set(range(1, ticks + 1)):
+            return max(observed)
     return None
 
 
@@ -328,7 +564,7 @@ POSITION = re.compile(r'^(\d+) actor uid=(\d+) .*? pos=(\S+),(\S+) prev=')
 AUTO_DELAY = re.compile(r'^\[net-match\] auto input delay: peer (\d+) rtt (\d+)ms -> (\d+) frames \(manual floor (\d+)\)$')
 
 
-def remote_commands(path, local_peer):
+def remote_commands(path, local_peer, first_tick=1, last_tick=TICKS):
     commands = defaultdict(list)
     if not path.is_file():
         return commands, False
@@ -343,11 +579,11 @@ def remote_commands(path, local_peer):
     launch = json.loads(launch_path.read_text(encoding='utf-8-sig'))
     verify = json.loads(verify_path.read_text(encoding='utf-8-sig'))
     complete = (launch.get('exit_code') == 0 and launch.get('evidence_complete') is True and not launch.get('timed_out')
-                and verify.get('ok') is True and verify.get('first_frame') == 1 and verify.get('last_frame', 0) >= TICKS)
+                and verify.get('ok') is True and verify.get('first_frame') <= first_tick and verify.get('last_frame', 0) >= last_tick)
     return commands, complete
 
 
-def canonical_positions(path, wanted):
+def canonical_positions(path, wanted, first_tick=1, last_tick=TICKS):
     actors, ticks, records = {}, set(), {}
     duplicate = None
     duplicate_count = 0
@@ -374,26 +610,26 @@ def canonical_positions(path, wanted):
                         continue
                     actors[key] = (dict(pos=[float.fromhex(match[3]), float.fromhex(match[4])]), number)
                     records[key] = line
-    if ticks != set(range(1, TICKS + 1)):
+    if (ticks if first_tick == 1 and last_tick == TICKS else {tick for tick in ticks if first_tick <= tick <= last_tick}) != set(range(first_tick, last_tick + 1)):
         raise EarlyDecision(max(ticks) if ticks else 0, path)
     canonical_positions.last_duplicate = dict(first=duplicate, count=duplicate_count) if duplicate else None
     canonical_positions.last_repeats = repeat_count
     return actors
 
 
-def corrections(previews, committed, canonical_path, command_path, local_peer):
+def corrections(previews, committed, canonical_path, command_path, local_peer, first_tick=1, last_tick=TICKS):
     forecasts = {}
     for row in previews:
         key = (row['target_tick'], row['actor']['uid'])
         if key not in forecasts or row['committed_tick'] > forecasts[key]['committed_tick']:
             forecasts[key] = row
-    canonical = canonical_positions(canonical_path, forecasts)
+    canonical = canonical_positions(canonical_path, forecasts, first_tick, last_tick)
     candidate_duplicate = getattr(canonical_positions, 'last_duplicate', None)
     corrections.last_duplicate = candidate_duplicate if isinstance(candidate_duplicate, dict) else None
-    commands, commands_complete = remote_commands(command_path, local_peer)
+    commands, commands_complete = remote_commands(command_path, local_peer, first_tick, last_tick)
     result, missing = [], []
     for (tick, uid), forecast in sorted(forecasts.items()):
-        if tick > TICKS:
+        if not first_tick <= tick <= last_tick:
             continue
         if (tick, uid) not in canonical:
             missing.append(dict(tick=tick, uid=uid, preview_line=forecast['_line']))
@@ -465,24 +701,36 @@ def firing_records(inputs, previews, frames, stdout_path):
     return result
 
 
-def reduce_peer(run, peer, baseline=None):
+def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_natural_end=False,
+                host_peer="host", trace_run=0, expected_input_schedule=None, expected_capture_ticks=None,
+                is_single_player=None, round_id=None):
     run = Path(run)
-    decided = early_decision_tick(run, peer)
-    if decided is not None:
+    if ticks < first_tick or first_tick < 1:
+        raise ValueError("invalid measurement window")
+    single_player = peer == "sp" if is_single_player is None else is_single_player
+    decided = early_decision_tick(run, peer, ticks)
+    if decided is not None and not allow_natural_end:
         raise EarlyDecision(decided, run / f'{peer}_trace.json.simdump.txt')
+    if decided is not None and allow_natural_end:
+        ticks = min(ticks, decided)
     raw = record_path(run / peer / 'feel/raw.jsonl')
     rows = list(read_jsonl(raw))
     if len([row for row in rows if row['type'] == 'schema' and row['version'] == 1]) != 1:
         raise ValueError(f'{raw}: missing or invalid schema')
+    if round_id is not None:
+        typed = [row for row in rows if row['type'] not in ('schema', 'end')]
+        if any('round' not in row for row in typed):
+            raise ValueError('round reduction requires round-labelled raw records')
+        rows = [row for row in rows if row['type'] in ('schema', 'end') or row.get('round') == round_id]
     all_frames = [row for row in rows if row['type'] == 'frame']
     if [row['frame'] for row in all_frames] != list(range(1, len(all_frames) + 1)):
         raise ValueError(f'{raw}: missing or reordered frame')
-    frames = [row for row in all_frames if row['active'] and 0 < row['tick'] <= TICKS]
-    inputs = [row for row in rows if row['type'] == 'input' and 0 < row['tick'] <= TICKS]
-    previews = [row for row in rows if row['type'] == 'preview' and 0 < row['committed_tick'] <= TICKS]
+    frames = [row for row in all_frames if row['active'] and first_tick <= row['tick'] <= ticks]
+    inputs = [row for row in rows if row['type'] == 'input' and first_tick <= row['tick'] <= ticks]
+    previews = [row for row in rows if row['type'] == 'preview' and first_tick <= row['committed_tick'] <= ticks]
     committed = [row for row in rows if row['type'] == 'committed']
     all_iterations = [row for row in rows if row['type'] == 'iteration']
-    iterations = [row for row in all_iterations if row['active'] and 0 < row['tick'] <= TICKS]
+    iterations = [row for row in all_iterations if row['active'] and first_tick <= row['tick'] <= ticks]
     if not frames or not iterations:
         raise ValueError(f'{raw}: no measured match frames or iterations')
     destination = run / peer / 'analysis'
@@ -492,7 +740,7 @@ def reduce_peer(run, peer, baseline=None):
     controller = run / f'{peer}_controller.jsonl'
     canonical_dump = run / f'{peer}_trace.json.simdump.txt'
     command_log = run / 'replay-inspect/stdout.log'
-    correction_rows, correction_missing, commands_complete = corrections(previews, committed, canonical_dump, command_log, frames[-1]['peer'])
+    correction_rows, correction_missing, commands_complete = corrections(previews, committed, canonical_dump, command_log, frames[-1]['peer'], first_tick, ticks)
     duplicate_actor = getattr(corrections, 'last_duplicate', None)
     firing = firing_records(inputs, previews, frames, run / peer / 'stdout.log')
     paths = {name: destination / (name + '.jsonl') for name in ('latencies', 'warps', 'corrections', 'correction-missing', 'firing')}
@@ -501,8 +749,9 @@ def reduce_peer(run, peer, baseline=None):
         write_jsonl(paths[name], values)
     trace = run / f'{peer}_trace.json'
     trace_document = json.loads(trace.read_text(encoding='utf-8-sig'))
-    trace_ticks = trace_document['runs'][0]['tick_hashes']
-    coverage = [row['tick'] for row in trace_ticks] == list(range(1, TICKS + 1))
+    segments = trace_document['runs'] if trace_run is None else [trace_document['runs'][trace_run]]
+    trace_ticks = [row for segment in segments for row in segment['tick_hashes'] if first_tick <= row['tick'] <= ticks]
+    coverage = [row['tick'] for row in trace_ticks] == list(range(first_tick, ticks + 1))
     ended = any(row['type'] == 'end' for row in rows)
     draw = distribution([frame['draw_ms'] for frame in frames])
     present = distribution([frame['present_ms'] for frame in frames])
@@ -529,27 +778,27 @@ def reduce_peer(run, peer, baseline=None):
     cpu_overhead = (cpu_ms / baseline['cpu_ms'] - 1) * 100 if cpu_ms and baseline and baseline['cpu_ms'] else None
     draw_ratio = draw['p99'] / baseline['draw_ms']['p99'] if baseline and baseline['draw_ms']['p99'] else None
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
-    for source in ('input_script', 'input_schedule'):
+    for source in (() if expected_input_schedule is not None else ('input_script', 'input_schedule')):
         if file_record(manifest[source]['path'])['sha256'] != manifest[source]['sha256']:
             raise ValueError(f'{run}: {source} changed after launch')
-    lag = manifest['lag_ms']
-    schedule = json.loads(Path(manifest['input_schedule']['path']).read_text(encoding='utf-8'))
+    lag = manifest.get('lag_ms', 0)
+    schedule = expected_input_schedule if expected_input_schedule is not None else json.loads(Path(manifest['input_schedule']['path']).read_text(encoding='utf-8'))
     expected_inputs = {(row['tick'], row['action'], row['held']) for row in schedule['probes']}
     actual_inputs = {(row['tick'], change['action'], change['held']) for row in inputs for change in row['changes']}
     missing_inputs = sorted(expected_inputs - actual_inputs)
     over_50 = [frame['frame'] for frame in frames if max(frame['draw_ms'], frame['present_ms'], frame['interval_ms'] or 0) > 50]
     captures = [row for row in rows if row['type'] == 'capture']
-    capture_missing = sorted(set(range(60, TICKS + 1, 60)) - {row['requested_tick'] for row in captures if row['saved'] and Path(row['path']).is_file()})
+    capture_missing = sorted(set(range(60, ticks + 1, 60) if expected_capture_ticks is None else expected_capture_ticks) - {row['requested_tick'] for row in captures if row['saved'] and Path(row['path']).is_file()})
     rtts = [row for frame in frames for row in frame['rtt']]
     auto_picks = []
-    host_log = run / 'host/stdout.log'
+    host_log = run / host_peer / 'stdout.log'
     if host_log.is_file():
         for line_no, text in enumerate(host_log.read_text(encoding='utf-8-sig', errors='replace').splitlines(), 1):
             match = AUTO_DELAY.match(text)
             if match:
                 auto_picks.append(dict(peer=int(match[1]), rtt_ms=int(match[2]), delay=int(match[3]), floor=int(match[4]), raw_line=line_no))
     local_picks = [pick for pick in auto_picks if pick['peer'] == frames[-1]['peer']]
-    network = item9a_gates(run, peer, rows) if peer != 'sp' else None
+    network = item9a_gates(run, peer, rows) if not single_player else None
     measured_tick = network['metrics']['sim_tick_ms'] if network else SIM_MS
     delay_math = measured_tick is not None and measured_tick > 0 and all(
         pick['delay'] >= max(pick['floor'], math.ceil(pick['rtt_ms'] / measured_tick) + 1) for pick in local_picks)
@@ -573,15 +822,15 @@ def reduce_peer(run, peer, baseline=None):
                    capture_missing=capture_missing, frame_count=len(frames), cap_hz=cap,
                    effective_hz=(len(frames) - 1) * 1000 / (frames[-1]['present_end_ms'] - frames[0]['present_end_ms']) if len(frames) > 1 else None)
     measured = bool(ended and coverage and latency and not missing_inputs and not duplicate_actor and len(firing) == schedule['fire_presses'] and cpu_ms is not None
-                    and (auto_picks or peer == 'sp')
-                    and not correction_missing and not capture_missing and (commands_complete or peer == 'sp'))
+                    and (auto_picks or single_player)
+                    and not correction_missing and not capture_missing and (commands_complete or single_player))
     pins = {}
     pins['canonical_duplicate_actor'] = pin(duplicate_actor, 'no duplicate committed actor in the simdump', duplicate_actor is None,
                                             [canonical_dump])
     pins['wall_tps'] = pin(pace_tps, '>= 59.5', pace_tps is not None and pace_tps >= 59.5, [raw])
     pins['sim_ms_per_tick'] = pin(sim_cost, '<= 8 ms', sim_cost is not None and sim_cost <= 8, [raw])
     pins['auto_delay'] = pin(delays, 'initial picks cover ceil(measured RTT / measured sim tick) + 1; final draw names the committed live delay',
-                             delay_math and frames[-1]['delay'] == live_delay and (peer == 'sp' or '(auto' in frames[-1]['input_delay_text']),
+                             delay_math and frames[-1]['delay'] == live_delay and (single_player or '(auto' in frames[-1]['input_delay_text']),
                              [raw, host_log, run / f'{peer}_report.json'] if network else [raw])
     latency_value = dict(observed_ms=latency_ms, observed_frames=latency_frames,
                          lower_bounds_ms=metrics['latency_lower_bounds_ms'], unreflected=metrics['latency_unreflected'])
@@ -615,7 +864,7 @@ def reduce_peer(run, peer, baseline=None):
                             'no frame > 50 ms', not over_50, [raw])
     pins['cpu'] = pin(cpu_overhead, '<= 15 percent process CPU time over the same-cap D=0 SP match',
                       cpu_overhead is not None and cpu_overhead <= 15, [raw, baseline['raw_path']] if baseline else [raw])
-    if peer == 'sp':
+    if single_player:
         measured = bool(ended and coverage and cpu_ms is not None and not capture_missing)
         pins = {name: pins[name] for name in ('auto_delay', 'violations', 'frame_max')}
     elif network:

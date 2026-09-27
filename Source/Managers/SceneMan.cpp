@@ -1,6 +1,7 @@
 #include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "SceneMan.h"
+#include "MetricsCollector.h"
 #include "PostProcessMan.h"
 #include "PresetMan.h"
 #include "ThreadMan.h"
@@ -797,6 +798,7 @@ int SceneMan::RemoveOrphans(int posX, int posY,
 			pixelMO = 0;
 		}
 		TraceTerrainEvent("orph", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
+		if (materialID != g_MaterialAir) if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("terrain_removed", nullptr, "orphan", 1, s_TerrainEventContextUID);
 		m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, g_MaskColor);
 		m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, g_MaterialAir);
 		NoteCarvedTerrainPixel(posX, posY);
@@ -896,6 +898,7 @@ bool SceneMan::TryPenetrate(int posX,
 				pixelMO = 0;
 			}
 			TraceTerrainEvent("dis", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
+			if (materialID != g_MaterialAir) if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("terrain_removed", nullptr, "penetrate", 1, s_TerrainEventContextUID);
 			m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, g_MaskColor);
 			m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, g_MaterialAir);
 			NoteCarvedTerrainPixel(posX, posY);
@@ -903,6 +906,7 @@ bool SceneMan::TryPenetrate(int posX,
 		// TODO: Improve / tweak randomized pushing away of terrain")
 		else if (RandomNum() <= airRatio) {
 			TraceTerrainEvent("disa", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
+			if (materialID != g_MaterialAir) if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("terrain_removed", nullptr, "penetrate_air", 1, s_TerrainEventContextUID);
 			m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, g_MaskColor);
 			m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, g_MaterialAir);
 			NoteCarvedTerrainPixel(posX, posY);
@@ -1004,6 +1008,7 @@ MOPixel* SceneMan::DislodgePixel(int posX, int posY) {
 	MOPixel* pixelMO = new MOPixel(spawnColor, spawnMat->GetPixelDensity(), Vector(static_cast<float>(posX), static_cast<float>(posY)), Vector(), pixelAtom, 0);
 	pixelMO->SetToHitMOs(spawnMat->GetIndex() == c_GoldMaterialID);
 	TraceTerrainEvent("disp", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
+	if (materialID != MaterialColorKeys::g_MaterialAir) if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("terrain_removed", nullptr, "dislodge", 1, s_TerrainEventContextUID);
 	g_MovableMan.AddParticle(pixelMO);
 
 	m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, ColorKeys::g_MaskColor);

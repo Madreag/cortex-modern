@@ -1,4 +1,5 @@
 #include "MOSRotating.h"
+#include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "BitmapCheckpoint.h"
@@ -657,6 +658,7 @@ void MOSRotating::AddWoundExt(AEmitter* woundToAdd, const Vector& parentOffsetTo
 		}
 		m_AttachableAndWoundMass += woundToAdd->GetMass();
 		m_Wounds.push_back(woundToAdd);
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("wound_added", this, "success", 1, woundToAdd->GetUniqueID());
 	}
 }
 
@@ -1078,6 +1080,7 @@ void MOSRotating::GibThis(const Vector& impactImpulse, MovableObject* movableObj
 	}
 
 	CreateGibsWhenGibbing(impactImpulse, movableObjectToIgnore);
+	if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("gibbed", this, "unattributed", 1, movableObjectToIgnore ? movableObjectToIgnore->GetUniqueID() : 0);
 
 	RemoveAttachablesWhenGibbing(impactImpulse, movableObjectToIgnore);
 

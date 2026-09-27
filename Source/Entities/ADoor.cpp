@@ -1,4 +1,5 @@
 #include "ADoor.h"
+#include "MetricsCollector.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "AtomGroup.h"
@@ -625,12 +626,14 @@ void ADoor::UpdateDoorAttachableActions() {
 				}
 
 				m_DoorState = OPEN;
+				if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("door_open_completed", this);
 			} else if (m_DoorState == CLOSING) {
 				if (m_DrawMaterialLayerWhenClosed) {
 					DrawDoorMaterial();
 				}
 
 				m_DoorState = CLOSED;
+				if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("door_close_completed", this);
 			}
 		} else {
 			Vector updatedOffset(Lerp(0, m_DoorMoveTime, startOffset.m_X, endOffset.m_X, m_DoorMoveTimer.GetElapsedSimTimeMS()), Lerp(0, m_DoorMoveTime, startOffset.m_Y, endOffset.m_Y, m_DoorMoveTimer.GetElapsedSimTimeMS()));

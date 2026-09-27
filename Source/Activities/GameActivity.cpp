@@ -1,6 +1,7 @@
 #include "CheckpointArchive.h"
 #include "CaptureSentinel.h"
 #include "GameActivity.h"
+#include "MetricsCollector.h"
 
 #include "CameraMan.h"
 #include "PresetMan.h"
@@ -746,6 +747,9 @@ bool GameActivity::CreateDelivery(int player, int mode, Vector& waypoint, Actor*
 		buyOrder.orderedByPlayer = static_cast<int8_t>(player);
 		buyOrder.multiOrderYOffset = multiOrderYOffset;
 		ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buyOrder});
+		if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.AppendEvent({{"event", "purchase_requested"},
+		    {"result", "attempt"}, {"team", team}, {"seat", player}, {"cost", totalCost}, {"items", buyOrder.cargo.size()},
+		    {"craft_class", buyOrder.craftClassName}, {"craft_preset", buyOrder.craftPreset}});
 		{
 			std::ostringstream line;
 			line << "[net-match] buy order issued: team " << team << " cost " << totalCost << " items " << buyOrder.cargo.size();
@@ -853,6 +857,9 @@ bool GameActivity::QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseO
 	m_Deliveries[order.team].push_back(newDelivery);
 
 	m_TeamFunds[order.team] -= order.totalCost;
+	if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.AppendEvent({{"event", "purchase_queued"},
+	    {"result", "success"}, {"actor", pDeliveryCraft->GetUniqueID()}, {"craft", pDeliveryCraft->GetUniqueID()}, {"team", order.team},
+	    {"seat", order.orderedByPlayer}, {"cost", order.totalCost}, {"funds_after", m_TeamFunds[order.team]}, {"amount", 1}});
 	AdoptPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
 
 	// Go 'ding!', but only if player is human, or it may be confusing
@@ -2726,6 +2733,7 @@ void GameActivity::Update() {
 
 				// Add the delivery craft to the world, TRANSFERRING OWNERSHIP
 				g_MovableMan.AddActor(pDeliveryCraft);
+				if (MetricsCollector::IsConstructed() && g_MetricsCollector.EventsEnabled()) g_MetricsCollector.RecordEvent("delivery_arrived", pDeliveryCraft, g_MovableMan.IsActor(pDeliveryCraft) ? "world_added" : "refused", 1, 0, player);
 				/*
 				                // If the player who ordered this seems stuck int he manu waiting for the delivery, give him direct control
 				                if (m_ControlledActor[player] == m_Brain[player] && m_ViewState[player] != ViewState::LandingZoneSelect)
