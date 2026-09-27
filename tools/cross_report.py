@@ -406,7 +406,7 @@ def write_index(root):
         try:
             result = load(path)
             if 'requirements' not in result: continue
-            items.append((path.stat().st_mtime, path.parent.name, result))
+            items.append((result.get('manifest',{}).get('started',''), path.parent.name, result))
         except (ValueError,OSError): continue
     text = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Multi-box runs</title><style>body{font:16px system-ui;background:#101924;color:#e1e9f0;padding:16px;max-width:900px;margin:auto}a{color:#83d4ff}li{margin:24px 0;overflow-wrap:anywhere}</style><h1>Multi-box runs</h1><ul>'
     for _, name, result in sorted(items, reverse=True):
