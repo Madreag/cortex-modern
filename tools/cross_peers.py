@@ -63,6 +63,12 @@ def load_boxes(path):
             raise ValueError('Windows task directory listener is inside the excluded TCP ranges')
         if not re.fullmatch(r'[A-Za-z0-9_-]+', box['name']): raise ValueError('unsafe box name')
     used = {}
+    counts={box['name']:sum(peer['box']==box['name'] for peer in peers) for box in boxes}
+    for box in boxes:
+        declared=box.get('peers_per_box',counts[box['name']])
+        if type(declared) is not int or declared<1 or declared!=counts[box['name']]:
+            raise ValueError(f'{box["name"]}: peers_per_box must equal its explicit instance count ({counts[box["name"]]})')
+        box['peers_per_box']=declared
     for peer in peers:
         if peer['box'] not in by_name or not re.fullmatch(r'[A-Za-z0-9_-]+', peer['name']):
             raise ValueError('invalid instance name or box')
@@ -161,6 +167,8 @@ def make_plan(options):
             flags += ['-net-cross-rematches', '4096']
         specs.append(dict(peer=peer['name'], box=peer['box'], role='host' if peer['name'] == host else peer.get('seat', 'player'),
             incarnation=0, root=root, own=own, repo=box['tree'], executable=box['executable'], flags=flags,
+            userdata=own+'/engine/runtime/Userdata', participant_key_root=own+'/engine/runtime/Userdata',
+            port_block=peer['port_block'], under_load_by_design=box['peers_per_box']>1,
             env={'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
                  'CC_TEST_CROSS_RUN': stem, 'CC_TEST_CROSS_INSTANCE': peer['name'], 'CC_TEST_CROSS_EXECUTION': 'process-0',
                  'CC_TEST_CROSS_INCARNATION': '0', 'CC_TEST_NET_UI_SCRIPT': own + '/probe.json',
@@ -281,7 +289,7 @@ def content_manifest(repo):
 
 def assert_box_guard(box):
     if box.get('guard_file') and not Path(box['guard_file']).is_file():
-        raise RuntimeError(f'Mac inventory guard active: {box["guard_file"]} absent')
+        raise RuntimeError(f'{box["name"]} launch guard active: {box["guard_file"]} absent')
     if box['kind'] == 'windows-local':
         if reason := inventory_guard(): raise RuntimeError(reason)
         engines = [r for r in box_load() if 'Cortex Command' in r['Name'] and
@@ -493,6 +501,72 @@ def wait_for_payload_release(root, seconds):
         if (root/'launch-go.json').is_file(): return
         if time.monotonic()>=deadline: raise TimeoutError('all-box launch release deadline')
         time.sleep(.2)
+
+
+def release_ready_payloads(boxes,payloads,root,processes,seconds):
+    deadline=time.monotonic()+seconds
+    ready=set()
+    while len(ready)<len(boxes) and time.monotonic()<deadline:
+        for box in boxes.values():
+            if box['name'] in ready: continue
+            box_root=payloads[box['name']][2]
+            if ((root/'launch-ready.json').is_file() if box['kind']=='windows-local' else remote_exists(box,box_root+'/launch-ready.json')):
+                ready.add(box['name'])
+            elif box['name'] in processes and processes[box['name']].poll() is not None:
+                raise RuntimeError(f'{box["name"]}: owning payload exited before launch readiness')
+        if (root/'stop.json').is_file(): raise RuntimeError('coordinator cancelled before all-box readiness')
+        if len(ready)<len(boxes): time.sleep(.2)
+    if len(ready)!=len(boxes): raise RuntimeError('not every box reached guarded launch readiness before the declared deadline')
+    release=root/'launch-go.json'
+    write_json(release,dict(boxes=sorted(ready),released_wall_ms=time.time()*1000))
+    for box in boxes.values():
+        if box['kind']!='windows-local': stage_remote(box,release,payloads[box['name']][2]+'/launch-go.json')
+    return ready
+
+
+def launch_guard_selftest(root):
+    """Exercise the actual QUNS wait and all-box barrier without constructing an engine."""
+    from unittest.mock import patch
+    import run_sim_test
+    import win32_test_runner as runner
+    root=Path(root); root.mkdir(parents=True,exist_ok=True)
+    if (root/'launch-go.json').exists(): raise FileExistsError('self-test needs fresh release evidence')
+    boxes={name:dict(name=name,kind=kind) for name,kind in
+           [('local','windows-local'),('task','windows-task'),('posix','posix-ssh')]}
+    payloads={name:(None,None,str(root if name=='local' else root/name)) for name in boxes}
+    for name in ('task','posix'):
+        (root/name).mkdir(); write_json(root/name/'launch-ready.json',dict(simulated_capability=True))
+    states=[]; observations=[]; pending=iter(['QUNS_BUSY','QUNS_BUSY',None]); advanced=False
+    def query():
+        state=next(pending); states.append(state)
+        if (root/'launch-go.json').exists(): raise AssertionError('release preceded guard clearance')
+        observations.append(dict(kind='guard',state=state))
+        return state
+    def advance(_seconds):
+        nonlocal advanced
+        if advanced: return
+        advanced=True
+        runner.wait_while_user_fullscreen({},lambda:None,limit_seconds=3,poll_seconds=1)
+        write_json(root/'launch-ready.json',dict(simulated_capability=True))
+        observations.append(dict(kind='local_capability_ready'))
+    def publish(_box,source,destination):
+        Path(destination).write_bytes(Path(source).read_bytes())
+        observations.append(dict(kind='release',path=destination))
+    with patch.dict(os.environ,{'CC_RUNNER_IGNORE_FULLSCREEN':'0'}), \
+         patch.object(runner,'user_fullscreen_state',side_effect=query), \
+         patch.object(runner,'create_process',side_effect=AssertionError('engine creation forbidden')) as native, \
+         patch.object(run_sim_test,'make_run',side_effect=AssertionError('engine construction forbidden')) as make, \
+         patch.object(time,'sleep',side_effect=advance), \
+         patch(__name__+'.remote_exists',side_effect=lambda _box,path:Path(path).is_file()), \
+         patch(__name__+'.stage_remote',side_effect=publish):
+        ready=release_ready_payloads(boxes,payloads,root,{},2)
+        wait_for_payload_release(root,0)
+    result=dict(passed=states==['QUNS_BUSY','QUNS_BUSY',None] and len(ready)==3,
+        engine_launches=native.call_count+make.call_count,states=states,
+        release_after_last_guard_clear=all(row['kind']!='release' for row in observations[:3]),observations=observations,
+        scope='Simulated QUNS transitions through the production runner wait and coordinator barrier; no engine, SSH or task launch.')
+    write_json(root/'guard-selftest.json',result)
+    return result
 
 
 def run_payload(path):
@@ -758,23 +832,7 @@ def run_plan(plan, root):
         # Every owning payload must finish its guarded capability launch before
         # any match engine starts. Otherwise a remote host can consume its setup
         # deadline while another box's runner waits for the user's fullscreen app.
-        deadline=time.monotonic()+plan['deadlines']['payload_ready_s']
-        ready=set()
-        while len(ready)<len(boxes) and time.monotonic()<deadline:
-            for box in boxes.values():
-                if box['name'] in ready: continue
-                box_root=payloads[box['name']][2]
-                if ((root/'launch-ready.json').is_file() if box['kind']=='windows-local' else remote_exists(box,box_root+'/launch-ready.json')):
-                    ready.add(box['name'])
-                elif box['name'] in processes and processes[box['name']].poll() is not None:
-                    raise RuntimeError(f'{box["name"]}: owning payload exited before launch readiness')
-            if (root/'stop.json').is_file(): raise RuntimeError('coordinator cancelled before all-box readiness')
-            if len(ready)<len(boxes): time.sleep(.2)
-        if len(ready)!=len(boxes): raise RuntimeError('not every box reached guarded launch readiness before the declared deadline')
-        release=root/'launch-go.json'
-        write_json(release,dict(boxes=sorted(ready),released_wall_ms=time.time()*1000))
-        for box in boxes.values():
-            if box['kind']!='windows-local': stage_remote(box,release,payloads[box['name']][2]+'/launch-go.json')
+        release_ready_payloads(boxes,payloads,root,processes,plan['deadlines']['payload_ready_s'])
         deadline,session=time.monotonic()+plan['deadlines']['session_publication_s'],None
         while time.monotonic()<deadline:
             rows=directory.list_sessions(local['directory_port'])
@@ -862,6 +920,7 @@ def parse_args(argv=None):
     parser.add_argument('--fullstate-every', type=int, default=600)
     parser.add_argument('--quiet-window', action='store_true', help='lead-scheduled quiet window; load still suppresses feel gating')
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--selftest-launch-guard',action='store_true',help='exercise simulated QUNS clearance and all-box release without starting an engine')
     parser.add_argument('--payload', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--preflight', type=Path, help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
@@ -874,6 +933,10 @@ def parse_args(argv=None):
 
 def main(argv=None):
     options = parse_args(argv)
+    if options.selftest_launch_guard:
+        if not options.out.resolve().is_relative_to(SCRATCH.resolve()): raise ValueError('self-test output must stay inside lane scratch')
+        result=launch_guard_selftest(options.out)
+        print(json.dumps(result,indent=2)); return 0 if result['passed'] else 1
     if options.payload: return run_payload(options.payload)
     if options.preflight: return preflight_payload(options.preflight)
     plan = make_plan(options)

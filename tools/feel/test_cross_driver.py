@@ -13,6 +13,38 @@ class CrossDriverTests(unittest.TestCase):
     def plan(self):
         return cross_peers.make_plan(cross_peers.parse_args(['--dry-run']))
 
+    def test_declared_peer_count_matches_private_instances_on_a_box(self):
+        manifest=json.loads((cross_peers.HERE/'cross_peers/boxes.json').read_text())
+        manifest['instances'].append(dict(name='mac2',box='Mac',port_block=[49905,49909],seat='spectator'))
+        next(b for b in manifest['boxes'] if b['name']=='Mac')['peers_per_box']=2
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'boxes.json'; path.write_text(json.dumps(manifest))
+            plan=cross_peers.make_plan(cross_peers.parse_args(['--boxes',str(path),'--dry-run']))
+            peers=[s for s in plan['specs'] if s['box']=='Mac']
+            self.assertEqual(len({s['own'] for s in peers}),2)
+            self.assertEqual(len({s['participant_key_root'] for s in peers}),2)
+            self.assertTrue(all(s['under_load_by_design'] for s in peers))
+            next(b for b in manifest['boxes'] if b['name']=='Mac')['peers_per_box']=1
+            path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError,'peers_per_box'): cross_peers.load_boxes(path)
+
+    def test_capability_read_never_constructs_an_engine_before_s3_done(self):
+        import run_sim_test
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary); box=copy.deepcopy(self.plan()['boxes'][0])
+            box.update(guard_file=str(root/'S3-DONE'),scratch=str(root))
+            with patch.object(run_sim_test,'make_run') as launch:
+                with self.assertRaisesRegex(RuntimeError,'guard'): cross_peers.read_capabilities(box,root)
+                launch.assert_not_called()
+
+    def test_quns_release_selftest_starts_no_engine(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result=cross_peers.launch_guard_selftest(Path(temporary))
+            self.assertTrue(result['passed'])
+            self.assertEqual(result['engine_launches'],0)
+            self.assertEqual(result['states'],['QUNS_BUSY','QUNS_BUSY',None])
+            self.assertTrue(result['release_after_last_guard_clear'])
+
     def test_payload_release_requires_publication_and_respects_cancellation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)
@@ -136,6 +168,7 @@ class CrossDriverTests(unittest.TestCase):
     def test_same_box_ports_cannot_overlap(self):
         original = json.loads((cross_peers.HERE / 'cross_peers/boxes.json').read_text())
         original['instances'].append(dict(name='extra', box='Mac', port_block=[49902,49906], seat='member'))
+        next(b for b in original['boxes'] if b['name']=='Mac')['peers_per_box']=2
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)/'boxes.json'; path.write_text(json.dumps(original))
             with self.assertRaisesRegex(ValueError, 'share a port'): cross_peers.load_boxes(path)
