@@ -8558,27 +8558,27 @@ namespace RTE {
 		return static_cast<uint8_t>((normalized % m_Config.peerCount) + 1U);
 	}
 
-	uint8_t NetLockstepCoordinator::ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
+	uint8_t NetLockstepCoordinator::ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, std::optional<uint64_t> atFrame) const {
 		NET_PLANE_CHECK();
 		uint8_t ownerPeerId = ResolveActorOwnerBeforeLeaves(actorUniqueID, actorTeam, cpuControlled);
 		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0 || m_Config.matchConfig.players.empty()) {
 			return ownerPeerId;
 		}
 		const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
-		if (m_LastDeliveredFrame && IsSeatUnderAI(ownerPeerId, *m_LastDeliveredFrame)) return AiAuthorityAt(*m_LastDeliveredFrame);
+		const std::optional<uint64_t> frame = atFrame ? atFrame : m_LastDeliveredFrame;
+		if (frame && IsSeatUnderAI(ownerPeerId, *frame)) return AiAuthorityAt(*frame);
 		// A leaver's team falls to its next surviving human peer, so the units play on. The lockstep gate synchronizes leave
 		// knowledge, so every peer re-resolves identically - except for a leave heard before its frame: the leaver's own
 		// inputs drive its units until that frame is committed, so the round re-resolves them there.
 		const auto leave = m_PeerLeaveFrames.find(ownerPeerId);
-		const bool heardAhead = leave != m_PeerLeaveFrames.end() && m_LeavesHeardAhead.contains(ownerPeerId) &&
-		                        (!m_LastDeliveredFrame || *m_LastDeliveredFrame < leave->second);
-		if (UsesBoundedWait() || m_Playback ? m_LastDeliveredFrame && IsPeerGoneAtFrame(ownerPeerId, *m_LastDeliveredFrame)
+		const bool heardAhead = leave != m_PeerLeaveFrames.end() && m_LeavesHeardAhead.contains(ownerPeerId) && (!frame || *frame < leave->second);
+		if (UsesBoundedWait() || m_Playback ? frame && IsPeerGoneAtFrame(ownerPeerId, *frame)
 		                                 : leave != m_PeerLeaveFrames.end() && !heardAhead) {
 			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
 			// The host produces AI controllers for a departed team while the round continues.
 			ownerPeerId = survivor != 0 ? survivor : (IsRunning() || IsHoldingSeatForReclaim() ? GetHostPeerId() : survivor);
 		}
-		return AiProducerOf(ownerPeerId);
+		return AiProducerOf(ownerPeerId, frame);
 	}
 
 	uint8_t NetLockstepCoordinator::AiAuthorityAt(uint64_t frame) const {
@@ -8591,9 +8591,10 @@ namespace RTE {
 		return host;
 	}
 
-	uint8_t NetLockstepCoordinator::AiProducerOf(uint8_t ownerPeerId) const {
+	uint8_t NetLockstepCoordinator::AiProducerOf(uint8_t ownerPeerId, std::optional<uint64_t> atFrame) const {
 		NET_PLANE_CHECK();
-		return ownerPeerId == GetHostPeerId() && m_LastDeliveredFrame ? AiAuthorityAt(*m_LastDeliveredFrame) : ownerPeerId;
+		const std::optional<uint64_t> frame = atFrame ? atFrame : m_LastDeliveredFrame;
+		return ownerPeerId == GetHostPeerId() && frame ? AiAuthorityAt(*frame) : ownerPeerId;
 	}
 
 	bool NetLockstepCoordinator::IsOwnHostSeatHeld() const {

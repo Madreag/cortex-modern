@@ -1061,7 +1061,8 @@ namespace RTE {
 		/// The peer whose AI drives the seats the AI holds at a frame: the host, or while the host's own seat is held, the first playing peer of its succession.
 		uint8_t AiAuthorityAt(uint64_t frame) const;
 		/// Who produces an actor's frames that its owner would: the owner, unless the owner is a host whose own seat the AI holds.
-		uint8_t AiProducerOf(uint8_t ownerPeerId) const;
+		/// Read at the last delivered frame, or at atFrame for a write that lands there.
+		uint8_t AiProducerOf(uint8_t ownerPeerId, std::optional<uint64_t> atFrame = std::nullopt) const;
 		/// Whether the host's own seat is held by the AI and not yet taken back.
 		bool IsOwnHostSeatHeld() const;
 		/// The frame the host held this peer's seat from; 0 when the hold was not taken on the wire (a closed link).
@@ -1114,7 +1115,8 @@ namespace RTE {
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		/// The peer that produces the actor's frames under the match's ownership policy, leaves applied; every peer resolves it identically.
-		uint8_t ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
+		/// Read at the last delivered frame, or at atFrame for a write that lands there.
+		uint8_t ResolveActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, std::optional<uint64_t> atFrame = std::nullopt) const;
 		/// The same, with leaves NOT applied: who HELD the actor, which is what the drop ledger records.
 		uint8_t ResolveActorOwnerBeforeLeaves(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		uint8_t ResolveTeamCommandAuthority(int team) const;

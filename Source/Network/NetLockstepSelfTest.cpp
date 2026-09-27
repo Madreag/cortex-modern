@@ -20167,6 +20167,13 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "the host took its seat back at " + std::to_string(back->second.activationFrame) + ", inside the AI orders its producer had already sent through 243";
 			return false;
 		}
+		// A producer writing now for a frame past the agreed return reads the seat table there: the host drives its own actors again.
+		host.m_LastDeliveredFrame = 205;
+		if (host.AiProducerOf(1) != 3 || host.AiProducerOf(1, back->second.activationFrame - 1) != 3 || host.AiProducerOf(1, back->second.activationFrame) != 1) {
+			*error = "the held host's producer is not read at the frame its orders land on: now=" + std::to_string(host.AiProducerOf(1)) +
+			         " at_return=" + std::to_string(host.AiProducerOf(1, back->second.activationFrame));
+			return false;
+		}
 		NetLockstepTiming reclaim;
 		for (const auto& [revision, decision]: host.m_TimingDecisions) if (decision.proposal.action == NetTimingAction::Reclaim) reclaim = decision.proposal;
 		bytes.clear();

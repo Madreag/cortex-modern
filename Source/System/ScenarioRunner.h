@@ -195,8 +195,8 @@ namespace RTE {
 		static bool IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		/// Whether the peer produces the actor's frames (control handoffs included); every peer answers identically.
 		static bool IsLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint8_t peerId);
-		/// The peer that produces the actor's frames now (control handoffs included); 0 without a coordinator.
-		static uint8_t GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
+		/// The peer that produces the actor's frames now, or at atFrame (control handoffs included); 0 without a coordinator.
+		static uint8_t GetLockstepActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled, std::optional<uint64_t> atFrame = std::nullopt);
 		/// The peer the ownership policy gives the actor, with a live control handoff ignored; 0 without
 		/// a coordinator. The owner map is seeded from this, so a claim cannot become the owner to return to.
 		static uint8_t GetLockstepPolicyActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
