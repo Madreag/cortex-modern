@@ -110,15 +110,20 @@ namespace {
 			if (status != Z_OK) return false;
 			m_Parts.push_back({{"path", m_Name}, {"bytes", m_Bytes}, {"lines", m_Lines}, {"crc32", m_CRC},
 			    {"first_sequence", m_TotalLines - m_Lines}, {"last_sequence", m_TotalLines - 1}});
+			std::vector<std::filesystem::path> retired;
 			while (m_Trim && m_Parts.size() > m_Chunks) {
-				std::filesystem::remove(m_Directory / m_Parts.front()["path"].get<std::string>());
+				retired.push_back(m_Directory / m_Parts.front()["path"].get<std::string>());
 				m_DroppedLines += m_Parts.front()["lines"].get<size_t>(); m_Parts.pop_front();
 			}
-			std::ofstream index(m_Directory / "raw.index.json", std::ios::trunc);
+			std::ofstream index(m_Directory / "raw.index.pending", std::ios::trunc);
 			index << FeelJson({{"version", 1}, {"complete", complete}, {"parts", m_Parts}, {"total_lines", m_TotalLines},
 			    {"dropped_lines", m_DroppedLines}, {"chunk_bytes", m_ChunkBytes}, {"retained_chunks", m_Chunks},
 			    {"window", "last sealed chunks plus one active chunk; byte bound, no tick-duration guarantee"}}).dump();
-			return static_cast<bool>(index);
+			index.close();
+			if (!index) return false;
+			std::filesystem::rename(m_Directory / "raw.index.pending", m_Directory / "raw.index.json");
+			for (const auto& path: retired) std::filesystem::remove(path);
+			return true;
 		}
 		gzFile m_Output = nullptr;
 		std::filesystem::path m_Directory;
@@ -433,6 +438,9 @@ bool RTE::RunCrossPresentationRetentionSelfTest(std::string* error) {
 	if (!stream.Close()) { *error = "retention close"; return false; }
 	std::ifstream input(directory / "raw.index.json"); FeelJson index; input >> index;
 	if (!boundedWhileLive || !index["complete"].get<bool>() || index["parts"].size() != 2 || index["dropped_lines"].get<int>() <= 0) { *error = "presentation retention is not bounded in flight"; return false; }
+	size_t files = 0;
+	for (const auto& file: std::filesystem::directory_iterator(directory)) if (file.path().extension() == ".gz") ++files;
+	if (files != 2 || std::filesystem::exists(directory / "raw.index.pending")) { *error = "presentation index did not retire its closed chunks"; return false; }
 	size_t count = 0;
 	for (const auto& part: index["parts"]) {
 		gzFile packed = gzopen((directory / part["path"].get<std::string>()).string().c_str(), "rb");
