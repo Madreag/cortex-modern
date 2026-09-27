@@ -6,10 +6,13 @@ Source/Managers/LuaMan.cpp for the registered surface (class members,
 properties, enum constants, and the To/Is/Create/Random/Clone globals generated
 per concrete type), reads the manager singleton globals from LuaMan.cpp, then
 scans a data module's *.lua for `Object:Member(` calls and `Object.Member`
-accesses and reports every member name the current bindings do not expose.
+accesses and reports every member name the current bindings do not expose. A call
+directly under `if recv.member [~= nil] then` is the mod's own optional hook and is
+listed as a note, not a row.
 
 Usage:
     python tools/mod_api_census.py --repo <repo> --module Data/VoidWanderers.rte --out <json>
+    python tools/mod_api_census.py --self-test
 """
 import argparse
 import glob
@@ -187,6 +190,18 @@ def lua_line(src, pos):
     return src.count('\n', 0, pos) + 1
 
 
+def guarded_call(lines, line, recv, member):
+    """True when `recv:member(` on `line` directly follows `if recv.member [~= nil] then`, on the same line or the block's opening line above."""
+    guard = rf'\bif\s+{re.escape(recv)}\s*\.\s*{re.escape(member)}\s*(?:~=\s*nil\s*)?then\b'
+    call = rf'{re.escape(recv)}\s*:\s*{re.escape(member)}\s*\('
+    text = lines[line - 1]
+    if re.search(guard + r'\s*' + call, text):
+        return True
+    before_call = re.split(call, text, maxsplit=1)[0]
+    above = next((prev for prev in reversed(lines[:line - 1]) if prev.strip()), '')
+    return re.fullmatch(r'\s*' + guard + r'\s*', above) is not None and not re.search(r'\bend\b', before_call)
+
+
 def scan_module(mod_root, repo, classes, globals_, global_functions):
     union_members = set()
     cpp_to_lua = {v['cpp']: k for k, v in classes.items()}
@@ -199,9 +214,11 @@ def scan_module(mod_root, repo, classes, globals_, global_functions):
     bare_calls = {}
     lua_defined = set()      # names the module defines as functions (cross-file)
     file_locals = {}         # rel path -> local names (file-scoped shadows)
+    file_lines = {}          # rel path -> comment- and string-stripped lines
     for fp in files:
         rel = os.path.relpath(fp, repo).replace(os.sep, '/')
         src = strip_lua(open(fp, encoding='utf-8', errors='replace').read())
+        file_lines[rel] = src.split('\n')
         for m in re.finditer(r'function\s+[\w\.]+:(\w+)|function\s+([\w\.]+)\s*\(|([\w\.]+)\s*=\s*function', src):
             for g in m.groups():
                 if g:
@@ -266,6 +283,10 @@ def scan_module(mod_root, repo, classes, globals_, global_functions):
         for rel, line, recv in sites:
             if recv == recv_root(recv) and recv in globals_:
                 continue
+            # The mod's own optional hook: nil unless a script defines it, so the guard skips the call.
+            if guarded_call(file_lines[rel], line, recv, member):
+                notes.append({'kind': 'guarded_optional_hook', 'object': recv, 'member': member, 'file': rel, 'line': line})
+                continue
             misses.append({'kind': 'unresolved_method', 'object': recv, 'class': None,
                            'member': member, 'file': rel, 'line': line,
                            'call': f'{recv}:{member}('})
@@ -282,7 +303,71 @@ def scan_module(mod_root, repo, classes, globals_, global_functions):
     return misses, notes, len(files)
 
 
+SELF_TEST_LUA = """function Fixture:Update()
+\tif self.OptionalA ~= nil then
+\t\tself:OptionalA()
+\tend
+\tif self.OptionalB then
+
+\t\tlocal value = self:OptionalB(1)
+\tend
+\tif sock.optionalC then sock:optionalC(1) end
+\tif self.OptionalH ~= nil then -- a trailing comment
+\t\tself:OptionalH()
+\tend
+\tif self.OptionalA ~= nil then
+\t\tself:NotTheGuardedName()
+\tend
+\tif self.OptionalD then other() end
+\tself:OptionalD()
+\tif self.OptionalE == nil then
+\t\tself:OptionalE()
+\tend
+\tif not self.OptionalF then
+\t\tself:OptionalF()
+\tend
+\tif self.WasPaused then
+\t\tself:RestoreHook()
+\tend
+\tif self.OptionalG ~= nil then
+\t\tlocal unused = 1
+\t\tself:OptionalG()
+\tend
+\tself:Unguarded()
+end
+"""
+SELF_TEST_ROWS = {'NotTheGuardedName', 'OptionalD', 'OptionalE', 'OptionalF', 'RestoreHook', 'OptionalG', 'Unguarded'}
+SELF_TEST_GUARDED = {'OptionalA', 'OptionalB', 'optionalC', 'OptionalH'}
+
+
+def self_test():
+    """A call directly under `if recv.member [~= nil] then` is a note; every other unbound call stays a row."""
+    import tempfile
+    failures = []
+    with tempfile.TemporaryDirectory() as repo:
+        for rel, text in (('Source/Lua/LuaBindingsFixture.cpp', 'ConcreteTypeLuaClassDefinition(Fixture, Entity)\n\t.def("Bound", &Fixture::Bound);\n'),
+                          ('Source/Managers/LuaMan.cpp', ''), ('Data/Fixture.rte/Hooks.lua', SELF_TEST_LUA)):
+            os.makedirs(os.path.dirname(os.path.join(repo, rel)), exist_ok=True)
+            with open(os.path.join(repo, rel), 'w', encoding='utf-8', newline='\n') as f:
+                f.write(text)
+        classes, global_functions = parse_bindings(repo)
+        globals_, macro_functions = parse_luaman(repo, classes)
+        misses, notes, _ = scan_module('Data/Fixture.rte', repo, classes, globals_, global_functions | macro_functions)
+        rows = {m['member'] for m in misses}
+        guarded = {n['member'] for n in notes if n['kind'] == 'guarded_optional_hook'}
+        if rows != SELF_TEST_ROWS:
+            failures.append(f'rows {sorted(rows)}; hidden {sorted(SELF_TEST_ROWS - rows)}, extra {sorted(rows - SELF_TEST_ROWS)}')
+        if guarded != SELF_TEST_GUARDED:
+            failures.append(f'guarded notes {sorted(guarded)}; expected {sorted(SELF_TEST_GUARDED)}')
+    for failure in failures:
+        print(f'[mod_api_census self-test] FAIL {failure}')
+    print(f'[mod_api_census self-test] {"PASS" if not failures else "FAIL"} {len(failures)} failure(s)')
+    return 0 if not failures else 1
+
+
 def main():
+    if '--self-test' in sys.argv[1:]:
+        return self_test()
     ap = argparse.ArgumentParser()
     ap.add_argument('--repo', default='.')
     ap.add_argument('--module', required=True, help='module dir relative to repo, e.g. Data/VoidWanderers.rte')
@@ -305,7 +390,8 @@ def main():
         'module': args.module,
         'files_scanned': nfiles,
         'missing': sorted(unique, key=lambda m: (str(m['object']), m['member'], m['file'], m['line'])),
-        'unresolved_global_calls': notes,
+        'unresolved_global_calls': [n for n in notes if n['kind'] == 'unresolved_global_call'],
+        'guarded_optional_hooks': [n for n in notes if n['kind'] == 'guarded_optional_hook'],
     }
     text = json.dumps(report, indent=2)
     if args.out:

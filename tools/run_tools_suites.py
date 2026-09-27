@@ -26,6 +26,7 @@ SUITES = (
     ("edith-remote-box", ["edith/remote_box.py", "--self-test"]),
     ("ubsan-suppressions", ["sanitizers/check_ubsan_supp.py", "--self-test"]),
     ("vw-battery", ["vw_battery.py", "--self-test"]),
+    ("mod-api-census-guard", ["mod_api_census.py", "--self-test"]),
     ("runner-feel-marker", ["test_win32_runner_feel_marker.py"]),
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
     ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),
