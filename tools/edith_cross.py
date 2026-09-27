@@ -30,6 +30,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'edith'))
+from remote_box import SSH_NOISE, WINDOWS_TAR, RemoteBox  # noqa: E402  (shipped beside this file on EDITH)
+
 HERE = Path(__file__).resolve().parent
 LANE = 'opus-edith-cross-20260926'
 SCRATCH = Path('D:/mx') / LANE  # the same absolute path on both boxes
@@ -51,9 +54,7 @@ SECRET_KEYS = ('NetworkTurnPass', 'NetworkPlayerTurnPass')
 MATCH_TICKS = 1200
 TICK_MS = 1000 / 60
 SCRATCH_LIMIT = 4_000_000_000
-WINDOWS_TAR = 'C:/Windows/System32/tar.exe'
 MST = dt.timezone(dt.timedelta(hours=-7))
-SSH_NOISE = re.compile(r'post-quantum|store now, decrypt later|may need to be upgraded|openssh\.com/pq', re.I)
 SCENARIOS = {'mp-host-join': 'two-peer service match (host and join), the feel driver measuring both peers',
              'sp-soak': 'single-player FeelBaseline duel on EDITH alone: the sim tick budget'}
 DRY_RUN = False
@@ -227,55 +228,43 @@ def tick_budget(raw, open_record):
 
 # --- EDITH over ssh --------------------------------------------------------------------------------------------------
 
+def box():
+    return RemoteBox('edith', TASK, SESSION1_SCRIPT, dry_run=DRY_RUN, say=say)
+
+
 def run_local(argv, timeout=120, check=True, what=None):
-    if DRY_RUN:
-        say('dry-run: ' + ' '.join(str(part) for part in argv))
-        return ''
-    done = subprocess.run([str(part) for part in argv], capture_output=True, text=True, timeout=timeout,
-                          stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
-    errors = '\n'.join(line for line in done.stderr.splitlines() if not SSH_NOISE.search(line))
-    if check and done.returncode:
-        raise RuntimeError(f'{what or argv[0]} failed ({done.returncode}): {errors[-600:]}')
-    return done.stdout
+    return box().run_local(argv, timeout, check, what)
 
 
 def ssh(command, timeout=120, check=True):
-    return run_local(['ssh', 'edith', command], timeout, check, what=f'ssh edith {command[:80]!r}')
+    return box().ssh(command, timeout, check)
 
 
 def scp_to(local, remote):
-    run_local(['scp', '-q', str(local), f'edith:{Path(remote).as_posix()}'], 300, what=f'scp {Path(local).name}')
+    box().scp_to(local, remote)
 
 
 def scp_from(remote, local):
-    run_local(['scp', '-q', f'edith:{Path(remote).as_posix()}', str(local)], 900, what=f'scp {Path(remote).name}')
+    box().scp_from(remote, local)
 
 
 def remote_mkdir(path):
-    ssh(f"New-Item -ItemType Directory -Force -Path '{Path(path).as_posix()}' | Out-Null")
+    box().mkdir(path)
 
 
 def exe_hashes(repo):
     local = hashlib.sha256((Path(repo) / 'Cortex Command.exe').read_bytes()).hexdigest()
-    remote = ssh(f"(Get-FileHash -Algorithm SHA256 -LiteralPath '{(Path(repo) / 'Cortex Command.exe').as_posix()}').Hash").strip().lower()
-    return local, remote
+    return local, box().sha256(Path(repo) / 'Cortex Command.exe')
 
 
 def ship_driver():
-    remote_mkdir(PAYLOAD)
+    remote_mkdir(PAYLOAD / 'edith')
     scp_to(Path(__file__), PAYLOAD / 'edith_cross.py')
+    scp_to(HERE / 'edith/remote_box.py', PAYLOAD / 'edith/remote_box.py')
 
 
 def wait_task_idle(budget_s=900):
-    deadline = time.monotonic() + budget_s
-    while True:
-        state = ssh(f"(Get-ScheduledTask -TaskName {TASK}).State").strip() if not DRY_RUN else 'Ready'
-        if state != 'Running':
-            return state
-        if time.monotonic() > deadline:
-            raise RuntimeError(f'{TASK} is still running another payload after {budget_s} s')
-        say(f'{TASK} runs another payload; waiting')
-        time.sleep(15)
+    return box().wait_task_idle(budget_s)
 
 
 def start_session1(root, spec, label):
@@ -298,40 +287,18 @@ def start_session1(root, spec, label):
     scp_to(local_spec, spec_path)
     redacted = dict(spec, settings={key: ('redacted' if key in SECRET_KEYS else value) for key, value in spec['settings'].items()})
     write_json(local_spec, redacted)
-    wait_task_idle()
-    scp_to(local_script, SESSION1_SCRIPT)
-    ssh(f'Start-ScheduledTask -TaskName {TASK}')
+    box().start_task(local_script)
     say(f'{label}: {spec["peer"]} started on EDITH through {TASK}')
 
 
 def wait_done(root, budget_s):
     """Waits on the payload's done file; each ssh call stays under ten minutes."""
-    if DRY_RUN:
-        return 'done rc=0 (dry-run)'
-    done = (Path(root) / 'session1.done').as_posix()
-    deadline = time.monotonic() + budget_s
-    while time.monotonic() < deadline:
-        slice_s = int(max(10, min(540, deadline - time.monotonic())))
-        text = ssh(f"$d='{done}'; $t=0; while (-not (Test-Path -LiteralPath $d) -and $t -lt {slice_s}) {{ Start-Sleep 2; $t += 2 }}; "
-                   f"if (Test-Path -LiteralPath $d) {{ Get-Content -LiteralPath $d }} else {{ 'WAITING' }}", timeout=slice_s + 60).strip()
-        if text != 'WAITING':
-            return text
-    return 'TIMEOUT'
+    return box().wait_done(Path(root) / 'session1.done', budget_s)
 
 
 def fetch(root, names_like, excludes):
     """Packs the EDITH peer's files (never its runtime, whose Data is a junction) and unpacks them here."""
-    root = Path(root)
-    tar = (root / 'fetch-edith.tar').as_posix()
-    likes = ' -or '.join(f"$_ -like '{pattern}'" for pattern in names_like)
-    exclude = ' '.join(f"--exclude '{pattern}'" for pattern in excludes)
-    ssh(f"Set-Location -LiteralPath '{root.as_posix()}'; $n = @(Get-ChildItem -Name | Where-Object {{ {likes} }}); "
-        f"tar.exe -cf '{tar}' {exclude} @n", timeout=600)
-    scp_from(tar, root / 'fetch-edith.tar')
-    ssh(f"Remove-Item -LiteralPath '{tar}'")
-    if not DRY_RUN:
-        run_local([WINDOWS_TAR, '-xf', root / 'fetch-edith.tar', '-C', root], 600, what='tar -x')
-        (root / 'fetch-edith.tar').unlink()
+    box().fetch_tar(root, names_like, excludes)
 
 
 # --- the rendezvous on this box ---------------------------------------------------------------------------------------
