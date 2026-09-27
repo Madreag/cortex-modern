@@ -864,9 +864,11 @@ uint64_t RendezvousCount() { return rendezvousCount.load(); }
 bool Running() { return probe.loaded && probe.enabled && !probe.done; }
 
 bool RunCrossScopeSelfTest(std::string* error) {
+	bool passed = true;
 	for (const char* name: {"assert_buy", "assert_pie", "assert_window"}) {
-		if (StepPhase({{"op", name}}) != Phase::Draw) { *error = std::string(name) + " is not checked after drawing"; return false; }
-		System::PrintDiagnosticLine("[net-match-selftest] PASS " + std::string(name) + "_is_scheduled_after_draw");
+		const bool good = StepPhase({{"op", name}}) == Phase::Draw;
+		passed &= good;
+		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(good ? "PASS " : "FAIL ") + name + "_is_scheduled_after_draw");
 	}
 	Json observed;
 	const bool alreadyConstructed = NetMatchService::IsConstructed();
@@ -877,8 +879,10 @@ bool RunCrossScopeSelfTest(std::string* error) {
 	if (!alreadyConstructed) NetMatchService::Destruct();
 	if (rejection == "participant selection is absent") {
 		System::PrintDiagnosticLine("[net-match-selftest] PASS participant_probe_refuses_an_absent_selection");
-		return true;
+		if (!passed) *error = "one or more gameplay scopes were not scheduled after drawing";
+		return passed;
 	}
+	System::PrintDiagnosticLine("[net-match-selftest] FAIL participant_probe_refuses_an_absent_selection");
 	*error = rejection.empty() ? "the participant probe accepted an absent selection" : rejection; return false;
 }
 

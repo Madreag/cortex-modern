@@ -44,9 +44,21 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries):
         memory=dict(status=memory_status,reason='Declared per-incarnation warm-up, slope and retention; raw sizes and measured instrumentation remain separate.'),
         record_integrity=oracle(checks.get('record_integrity',False)),
         engine_findings=oracle(checks.get('no_engine_findings',False),'All findings remain visible, including the named capture rows.'),
-        exits=oracle(checks.get('native_completion',False)))
+        exits=oracle(checks.get('all_incarnation_exits',False),'Each incarnation must exit normally or have its own scheduled, actually injected crash receipt.'))
     if not manifest.get('faults'): oracles['recovery']['status']='NOT APPLICABLE'
-    return dict(core_passed=core,gate_b_eligible=core and manifest['scenario']=='match' and manifest['ticks']==1201 and not manifest.get('faults'),oracles=oracles)
+    return dict(core_passed=core,gate_b_eligible=core and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
+
+
+def judge_exit(record,peer,incarnation,faults,receipts):
+    expected=next((f for f in faults if f['peer']==peer and f.get('incarnation',0)==incarnation and f['action']=='crash-restart'),None)
+    injected=bool(expected and record.get('injected_termination')=='scheduled crash '+expected['id'] and
+        any(r.get('id')==expected['id'] and r.get('peer')==peer and r.get('incarnation')==incarnation and
+            r.get('phase')=='fault_applied' and r.get('native',{}).get('action')=='crash-restart' for r in receipts))
+    normal=record.get('exit_code')==0 and not record.get('injected_termination')
+    return dict(passed=bool(record.get('started') and not record.get('timed_out') and (injected or normal)),
+                exit_code=record.get('exit_code'),timed_out=record.get('timed_out'),incarnation=incarnation,
+                expected='scheduled crash '+expected['id'] if expected else 'normal exit',
+                actual=record.get('injected_termination','normal exit'),injection_proved=injected)
 
 
 def attempt_label(result):
@@ -235,6 +247,8 @@ def build_report(root):
         samples = [r for r in rows(sample_root / 'samples.jsonl') if r['peer'] == name]
         recovery_observations=[r for r in source_rows(sample_root/'recovery-observed.jsonl',root) if r.get('peer')==name]
         payload_done=load(sample_root/'done.json',{})
+        exits=[judge_exit(load(fragment/'record.json',{}),name,int(fragment.name.split('-')[-1]),manifest['faults'],recovery_observations)
+               for fragment in fragments]
         under_load = any(r.get('load') or r.get('same_box_instances', 1) > 1 for r in samples)
         preflight = manifest.get('preflights', {}).get(spec['box'], {})
         under_load |= bool(preflight.get('load'))
@@ -273,7 +287,7 @@ def build_report(root):
             effective_hz=(len(frames)-1)*1000/(frames[-1]['present_end_ms']-frames[0]['present_end_ms']) if len(frames)>1 and frames[-1]['present_end_ms']>frames[0]['present_end_ms'] else None,
             memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, archives=archives,
             recovery_observations=recovery_observations,payload_clock_last_ms=max([payload_done.get('payload_monotonic_ms',0),*[r.get('payload_monotonic_ms',0) for r in samples],*[r.get('upper_wall_ms',0) for r in recovery_observations]]),
-            native_completion=completion, native_final_tick=final_tick,
+            native_completion=completion, native_final_tick=final_tick, exits=exits,
             fragments=[str(fragment.relative_to(root)) for fragment in fragments], samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:904 detailed-status text is not a per-tick counter API.',
@@ -306,6 +320,7 @@ def build_report(root):
     native_recovery_records=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='recovery']
     recoveries = []
     for fault in manifest['faults']:
+        if fault['action']=='brain-eliminate': continue
         last_clock=peers[fault['peer']]['payload_clock_last_ms']
         recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
@@ -326,6 +341,7 @@ def build_report(root):
                       not any(r.get('type') == 'record_loss' or (r.get('type') == 'tick_timing' and not r.get('partition_valid')) for r in values)
                       for values in events.values()),
                   no_engine_findings=not findings)
+    checks['all_incarnation_exits']=all(p['exits'] and all(e['passed'] for e in p['exits']) for p in peers.values())
     checks['shared_fullstate']=bool(cadence) and fullstate['passed']
     checks['capture_rows_resolved']=not manifest.get('capture_rows_pending',[1,2])
     barrier_receipts=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='capture_barrier']
