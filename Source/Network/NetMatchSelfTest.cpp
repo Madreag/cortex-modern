@@ -77,7 +77,7 @@ namespace RTE {
 			const auto entered = root / "capture.9.capture_announced.77.enter.json";
 			while (!std::filesystem::exists(entered) && std::chrono::steady_clock::now() < deadline)
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			std::ofstream(root / "capture.release").put('1');
+			std::ofstream(root / "capture.9.capture_announced.77.release").put('1');
 			worker.join();
 			if (!released || !std::filesystem::exists(entered)) { *error = "the announced capture barrier neither signalled nor waited for its release"; return false; }
 			auto timeout = spec; timeout["id"] = "writer"; timeout["phase"] = "writer_pending"; timeout["timeout_ms"] = 3;
