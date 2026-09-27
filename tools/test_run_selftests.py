@@ -86,6 +86,17 @@ class ScoreStdoutSanitizer(unittest.TestCase):
         code, scored = self.run_cli(log(TIMING, LOADED, f"{TAG} PASS"))
         self.assertEqual((code, scored["pass"]), (1, False), scored)
 
+    def test_the_launch_record_decides_the_exit_and_the_timeout(self):
+        import json
+        with tempfile.TemporaryDirectory() as scratch:
+            launch = Path(scratch) / "launch.json"
+            launch.write_text(json.dumps({"exit_code": 1, "timed_out": True}), encoding="utf-8")
+            code, scored = self.run_cli(log(TIMING, LOADED, f"{TAG} PASS"), "--sanitizer", "asan", "--launch-json", str(launch))
+            self.assertEqual((code, scored["pass"]), (1, False), scored)
+            launch.write_text(json.dumps({"exit_code": 1, "timed_out": False}), encoding="utf-8")
+            code, scored = self.run_cli(log(TIMING, LOADED, f"{TAG} PASS"), "--sanitizer", "asan", "--launch-json", str(launch))
+            self.assertEqual((code, scored["pass"]), (0, True), scored)
+
 
 class RenderCapSanitizer(unittest.TestCase):
     CASE = {"exit_code": 0, "timed_out": False, "cap": "60hz", "frames": 11, "interval_s": 3.06, "presentations_per_second": 3.27}

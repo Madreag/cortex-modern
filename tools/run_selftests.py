@@ -416,6 +416,8 @@ def main():
     parser.add_argument("--sanitizer", choices=("asan", "tsan"),
                         help="with --score-stdout: the log is a sanitizer build's, so its wall-clock budget lines are measured")
     parser.add_argument("--result-json", type=Path, help="with --score-stdout: also write the score here")
+    parser.add_argument("--launch-json", type=Path,
+                        help="with --score-stdout: read the exit code and the timeout from the runner's launch.json")
     parser.add_argument("--quiet-rows", nargs="?", const="last", choices=("last", "only"),
                         help="also run every load-sensitive row in the quiet tail (only: the tail alone)")
     parser.add_argument("--only", action="append", default=[], metavar="ROW",
@@ -427,6 +429,9 @@ def main():
         return self_test()
     if options.score_stdout:
         stdout = options.score_stdout.read_text(encoding="utf-8", errors="replace")
+        if options.launch_json:
+            launched = json.loads(options.launch_json.read_text(encoding="utf-8"))
+            options.exit_code, options.timed_out = launched.get("exit_code"), bool(launched.get("timed_out"))
         scored = score_selftest(stdout, options.exit_code, options.timed_out, options.name)
         row = options.name.removesuffix("-selftest")
         if options.sanitizer and not scored["pass"] and row in WALL_CLOCK_CHECKS:
