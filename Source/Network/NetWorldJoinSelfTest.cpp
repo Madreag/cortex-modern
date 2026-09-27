@@ -714,7 +714,9 @@ namespace RTE {
 				host.Tick(now); client.Tick(now);
 				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
 			}
-			if (!client.IsFailed()) return Fail("an ordinary peer sent bootstrap progress without a bound transfer");
+			// A restarted lobby with no transfer bound drops the last round's progress report: it is neither taken nor a reason to eject the peer.
+			if (host.TakeWorldJoinReport().pending || client.IsFailed() || client.IsRejected())
+				return Fail("a restarted lobby took or refused the last round's progress report: client=" + client.GetFailureReason());
 			return 0;
 		}
 
