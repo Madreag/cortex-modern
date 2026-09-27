@@ -5007,7 +5007,13 @@ static std::string ResyncSaveName() {
 			if (error && error->empty()) *error = "the handover names no authority this round has";
 			return false;
 		}
-		ScenarioRunner::SetLockstepCoordinator(replay.get());
+		// The replay goes on under the new authority from the state it reached: what the switch clears, it takes back.
+		NetResyncState committed;
+		if (!ScenarioRunner::CaptureNetResyncState(handover.frame - 1, committed, error, false)) return false;
+		committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+		const auto pause = ScenarioRunner::CaptureLockstepPauseState();
+		ScenarioRunner::SetLockstepCoordinator(replay.get(), true);
+		if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) return false;
 		m_CatchUpCoordinator = std::move(replay);
 		m_CatchUpTransport = std::move(transport);
 		m_WorldCatchUp.authorityPeerId = handover.authorityPeerId;
