@@ -18,7 +18,7 @@ from compare_sim_traces import CORE
 HERE = Path(__file__).resolve().parent
 REQUIRED_SUBSYSTEMS = CORE | {'controller'}
 CORE_CHECKS=('three_real_boxes','preflight_complete','full_history','zero_desync','zero_unscheduled_holds',
-             'native_completion','adopted_peer_count','adopted_roster','native_desync_checks','record_integrity','binary_admission_limit')
+             'hold_evidence_complete','native_completion','adopted_peer_count','adopted_roster','native_desync_checks','record_integrity','binary_admission_limit')
 CAPTURE_ROWS={
     1:'capture-rows lane row 1: unsupported userdata in object[...][AI][Behavior].slot[12] at Source/Managers/LuaMan.cpp:1613',
     2:'capture-rows lane row 2: Windows/Mac hex-float text at Source/System/FloatText.h:324-326,608-610; PieMenu.cpp:259; Arm.cpp:506; Scene.cpp:2056,2059,2142'}
@@ -36,7 +36,8 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries):
         'NOT COVERED' if any(row['status']=='NOT COVERED' for row in matrix) else 'PASS'
     oracles=dict(
         live_hashes=oracle(checks.get('full_history',False) and checks.get('zero_desync',False),'Every declared comparable key; UNKNOWN never equals.'),
-        unscheduled_holds=oracle(checks.get('zero_unscheduled_holds',False)),
+        unscheduled_holds=oracle(checks.get('zero_unscheduled_holds',False) and checks.get('hold_evidence_complete',False),
+            'Every incarnation must retain its stdout hold log; missing evidence cannot establish zero holds.'),
         native_completion=oracle(checks.get('native_completion',False)),
         full_state=oracle(checks.get('shared_fullstate',False) and not pending,
             'NOT COVERED by '+ '; '.join(CAPTURE_ROWS[row] for row in pending) if pending else 'All promised Shared/canonical/restored observations must compare.'),
@@ -92,7 +93,9 @@ def attempt_label(result):
 
 
 def classify_hold(hold,events,peers):
-    result=dict(classification='other',reason='Held peer timing or adopted hold bound is missing or ambiguous.')
+    result=dict(classification='other',reason='Held peer timing or adopted hold bound is missing or ambiguous.',
+                held_instance=None,incarnation=None,execution=None,capture_tick=None,capture_us=None,compute_us=None,wait_us=None,
+                hold_bound_us=None,evidence_path=None,evidence_line=None,own_hold_notifications=[],timing_valid=False,association=None)
     matches=[]
     for name,records in events.items():
         configs=[r for r in records if r.get('type')=='adopted_config' and r.get('peer')==hold['peer'] and r.get('source_round')==hold.get('source_round') and
@@ -433,6 +436,7 @@ def build_report(root):
             memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, archives=archives,
             recovery_observations=recovery_observations,payload_clock_last_ms=max([payload_done.get('payload_monotonic_ms',0),*[r.get('payload_monotonic_ms',0) for r in samples],*[r.get('upper_wall_ms',0) for r in recovery_observations]]),
             native_completion=completion, native_final_tick=final_tick, exits=exits,own_hold_notifications=own_hold_notifications,
+            hold_evidence_complete=all((f/'engine/stdout.log').is_file() and (f/'engine/stdout.log').stat().st_size>0 for f in fragments),
             fragments=[str(fragment.relative_to(root)) for fragment in fragments], samples=samples, holds=holds, feel_status='PASS' if quiet and all(feel_pins) else 'FAIL' if quiet else 'UNDER LOAD' if under_load else 'REPORTED; quiet window not scheduled',
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:904 detailed-status text is not a per-tick counter API.',
@@ -480,6 +484,7 @@ def build_report(root):
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
                   preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings'),
                   full_history=comparison['passed'] and not missing_boundaries, zero_desync=comparison['unequal_keys'] == 0 and bool(ranges),
+                  hold_evidence_complete=all(p['hold_evidence_complete'] for p in peers.values()),
                   zero_unscheduled_holds=unscheduled_holds == 0, native_completion=all(p['record'].get('exit_code') == 0 and
                       not p['record'].get('timed_out') and p['native'].get('exit_code') == 0 and p['native_completion'].get('completion') == 'completed' for p in peers.values()),
                   adopted_peer_count=all(p['configs'] and all(c['peer_count']==len(manifest['instances']) for c in p['configs']) for p in peers.values()),
