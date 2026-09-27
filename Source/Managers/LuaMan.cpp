@@ -11877,6 +11877,19 @@ void LuaMan::WaitForAsyncGarbageCollection() {
 	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
 }
 
+long long LuaMan::GetTotalHeapBytes() {
+	const auto bytes = [](LuaStateWrapper& luaState) {
+		std::lock_guard<std::recursive_mutex> lock(luaState.GetMutex());
+		lua_State* state = luaState.GetLuaState();
+		return static_cast<long long>(lua_gc(state, LUA_GCCOUNT, 0)) * 1024 + lua_gc(state, LUA_GCCOUNTB, 0);
+	};
+	long long total = bytes(m_MasterScriptState);
+	for (LuaStateWrapper& luaState: m_ScriptStates) {
+		total += bytes(luaState);
+	}
+	return total;
+}
+
 void LuaMan::CollectGarbageForCheckpoint() {
 	WaitForAsyncGarbageCollection();
 	// A finalizer keeps its own object, and anything only it reaches, alive for the cycle that runs

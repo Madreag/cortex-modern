@@ -11060,4 +11060,46 @@ namespace RTE {
 		}
 	}
 
+	namespace {
+		template <typename T> size_t CensusCount(const T& records) { return records.size(); }
+		template <typename K, typename V> size_t CensusCount(const std::map<K, std::map<uint64_t, V>>& records) {
+			size_t count = 0;
+			for (const auto& [key, inner]: records) count += inner.size();
+			return count;
+		}
+		template <typename K, typename V> size_t CensusCount(const std::map<K, std::deque<V>>& records) {
+			size_t count = 0;
+			for (const auto& [key, inner]: records) count += inner.size();
+			return count;
+		}
+		template <typename K, typename V> size_t CensusCount(const std::map<uint64_t, std::map<K, V>>& records) {
+			size_t count = 0;
+			for (const auto& [frame, inner]: records) count += inner.size();
+			return count;
+		}
+		size_t CensusCount(const std::map<uint8_t, std::set<uint64_t>>& records) {
+			size_t count = 0;
+			for (const auto& [key, inner]: records) count += inner.size();
+			return count;
+		}
+	} // namespace
+
+	std::string NetLockstepCoordinator::MemoryCensus() const {
+		NET_PLANE_CHECK();
+		std::ostringstream line;
+#define CENSUS(member) line << ' ' << (#member + 2) << '=' << CensusCount(member)
+		CENSUS(m_TimingDecisions); CENSUS(m_DelayChanges); CENSUS(m_DeferredControllerFrames); CENSUS(m_SeatTransitions);
+		CENSUS(m_CommittedAtMs); CENSUS(m_DecisionCommittedAtMs); CENSUS(m_ParkCarriedCommands); CENSUS(m_AnnouncedCaptureTicks);
+		CENSUS(m_LocalFrames); CENSUS(m_RemoteFrames); CENSUS(m_LocalCommands); CENSUS(m_RemoteCommands);
+		CENSUS(m_LocalObservations); CENSUS(m_RemoteObservations); CENSUS(m_LocalValueObservations); CENSUS(m_RemoteValueObservations);
+		CENSUS(m_ResendFrames); CENSUS(m_RecoveryOutgoing); CENSUS(m_LocalInputHistory); CENSUS(m_LocalChecksums); CENSUS(m_RemoteChecksums);
+		CENSUS(m_ReadyFrames); CENSUS(m_ReadyHistory); CENSUS(m_RelayedTicks); CENSUS(m_RelayedTickFrames); CENSUS(m_RelayBacklog);
+		CENSUS(m_ObservationEpochs); CENSUS(m_HostAcceptedLocalFrames); CENSUS(m_MigrationHistory); CENSUS(m_MigrationIncoming);
+		CENSUS(m_PreStartFrames); CENSUS(m_ArrivalLeads); CENSUS(m_ArrivalLateness); CENSUS(m_TimingOutgoing); CENSUS(m_AuthorityGaps);
+		CENSUS(m_ParkCaptureHistoryMs); CENSUS(m_DropReasonsNamed); CENSUS(m_PlaneDeferredEvents); CENSUS(m_InstalledResyncTargets);
+		CENSUS(m_ResyncPrimeInputs); CENSUS(m_RetiredReclaimGaps); CENSUS(m_PreStartTiming);
+#undef CENSUS
+		return line.str();
+	}
+
 } // namespace RTE
