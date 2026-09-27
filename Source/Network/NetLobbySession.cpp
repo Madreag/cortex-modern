@@ -1286,8 +1286,10 @@ namespace RTE {
 					}, decoded.message.payload);
 					// A payload that names no peer claims nothing: it is refused by its own rule, and the line says which.
 					if (claimedPeer) {
+						// A world route's sender is the session identity it was admitted as; the route is named beside it.
 						System::PrintDiagnosticLine("[net-lobby] sender mismatch type=" + type + " connection=" + std::to_string(event.peerId) +
-						                            " expected=" + std::to_string(sender->first) + " claimed=" + std::to_string(*claimedPeer));
+						                            " expected=" + std::to_string(worldSender ? sessionSender : sender->first) + " claimed=" + std::to_string(*claimedPeer) +
+						                            (worldSender ? " route=" + std::to_string(sender->first) : std::string()));
 					} else {
 						System::PrintDiagnosticLine("[net-lobby] refused " + type + " connection=" + std::to_string(event.peerId) + " peer=" + std::to_string(sender->first) + ": " +
 						                            (event.lane != NetTransportLane::ControlReliable ? "not on the reliable control lane" : "no transfer is bound to that peer"));
