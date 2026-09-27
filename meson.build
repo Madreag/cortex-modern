@@ -218,6 +218,7 @@ if host_machine.system() in ['linux','darwin']
     #dependency('SDL3_image'),
     dependency('flac'),
     dependency('minizip'),
+    dependency('zlib'),
     dependency('threads'),
     dependency('liblz4'),
     dependency('libpng'),
