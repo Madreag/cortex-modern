@@ -807,6 +807,17 @@ def remote_exists(box, path):
     return command(['ssh', box['ssh'], script], check=False).strip() == 'yes'
 
 
+def require_payload_success(box, outcome):
+    if outcome.get('exit_code') != 0:
+        raise RuntimeError(f'{box["name"]}: owning payload exited {outcome.get("exit_code")}; stop the other peers instead of continuing a reduced match')
+
+
+def read_payload_outcome(box,path):
+    if box['kind']=='windows-local':return json.loads(Path(path).read_text(encoding='utf-8'))
+    script=f'Get-Content -LiteralPath {quote_ps(path)} -Raw' if box['kind']=='windows-task' else f'cat {shlex.quote(path)}'
+    return json.loads(command(['ssh',box['ssh'],script]))
+
+
 def fetch_box(box, root, local):
     import tarfile
     remote_tar = root + '/evidence.tar'
@@ -952,6 +963,7 @@ def run_plan(plan, root):
                 if box['name'] in finished: continue
                 done = root / 'done.json' if box['kind'] == 'windows-local' else payloads[box['name']][2] + '/done.json'
                 if (Path(done).is_file() if box['kind'] == 'windows-local' else remote_exists(box, done)):
+                    require_payload_success(box,read_payload_outcome(box,done))
                     finished.add(box['name'])
             if scratch_bytes(SCRATCH) >= LIMIT: raise RuntimeError('local scratch reached 4 GB; stopped without deletion')
             time.sleep(2)
