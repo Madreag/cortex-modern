@@ -619,6 +619,13 @@ namespace RTE {
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
 		std::mutex m_EndedVoicesMutex;
 		std::vector<int> m_EndedVoices;
+		/// The effects a voice's own channel was given; each is released once that channel has stopped, or it outlives its voice.
+		std::mutex m_VoiceEffectsMutex;
+		std::vector<std::pair<FMOD::Channel*, FMOD::DSP*>> m_VoiceEffects;
+		/// Tracks the managed effects on a voice's channel.
+		void TrackVoiceEffects(FMOD::Channel* channel);
+		/// Releases the effects of channels that have stopped; runs on the game thread.
+		void ReleaseStoppedVoiceEffects();
 		std::vector<std::shared_ptr<PlayingVoice::ChannelUserData>> m_RetiredHandles;
 		int m_NextVoiceIdentity = 0;
 		// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and several states collect at once, so the registry group down to m_NextSoundContainerIdentity is locked.

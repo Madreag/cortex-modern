@@ -44,6 +44,7 @@
 #include "ControllerFrame.h"
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
+#include "AsyncLineWriter.h"
 #include "NetActorOwnership.h"
 #include "NetLockstep.h"
 #include "NetWorldJoin.h"
@@ -84,6 +85,7 @@ extern "C" {
 #include <string>
 #include <sstream>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -251,12 +253,16 @@ namespace {
 			root["error"] = *error;
 		}
 
+		// One writer per dump file, kept open: a record every tick never waits on the disk or reopens the file.
 		const std::string& path = ScenarioRunner::GetControllerDebugDumpPath();
-		static std::unordered_set<std::string> truncatedPaths;
-		const bool firstWrite = truncatedPaths.insert(path).second;
-		std::ofstream out(path, firstWrite ? std::ios::trunc : std::ios::app);
-		if (out.is_open()) {
-			out << root.dump() << '\n';
+		static std::unordered_map<std::string, std::unique_ptr<AsyncLineWriter>> writers;
+		std::unique_ptr<AsyncLineWriter>& writer = writers[path];
+		if (!writer) {
+			writer = std::make_unique<AsyncLineWriter>();
+			(void)writer->Open(path);
+		}
+		if (writer->IsOpen()) {
+			writer->Write(root.dump());
 		}
 	}
 }

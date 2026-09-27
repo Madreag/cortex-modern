@@ -1,5 +1,6 @@
 #include "NetMatchRunner.h"
 
+#include "GnsTransport.h"
 #include "NetIdentity.h"
 #include "NetWorldJoin.h"
 #include "NetRoundStartScripts.h"
@@ -561,6 +562,9 @@ namespace RTE {
 		lobbyConfig.enableMigration = m_Config.enableMigration && !m_MatchConfig.dedicated && !m_MatchConfig.persistentWorld;
 		lobbyConfig.migrationListenPort = m_Config.sessionConfig.port;
 		lobbyConfig.migrationListenAddrs = m_Config.migrationListenAddrs;
+		// The ICE route names the identity the successor's rendezvous answers as; GNS has one per process.
+		for (std::string& address: lobbyConfig.migrationListenAddrs)
+			if (address == NetLockstepCoordinator::c_MigrationIcePrefix) address += GnsTransport::ProcessIdentity();
 		lobbyConfig.sealMigration = m_Config.sealMigration;
 		lobbyConfig.openMigration = m_Config.openMigration;
 		lobbyConfig.snapshotProviderPeerId = m_SnapshotProviderPeerId;
@@ -751,6 +755,8 @@ namespace RTE {
 			lockstepConfig.migrationKey = previous.migrationKey;
 			lockstepConfig.migrationGeneration = previous.migrationGeneration;
 			lockstepConfig.migrationTransportFactory = previous.migrationTransportFactory;
+			lockstepConfig.migrationIceDial = previous.migrationIceDial;
+			lockstepConfig.migrationIceHost = previous.migrationIceHost;
 		} else if (m_Config.configureMigration) {
 			m_Config.configureMigration(lockstepConfig);
 		}

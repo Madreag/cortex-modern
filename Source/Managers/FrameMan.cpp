@@ -25,6 +25,7 @@
 #include "NetMatchService.h"
 #include "PreviewEventLedger.h"
 #include "ScenarioRunner.h"
+#include "AsyncLineWriter.h"
 
 #include "SLTerrain.h"
 #include "SLBackground.h"
@@ -76,7 +77,7 @@ using namespace RTE;
 namespace {
 	using FeelJson = nlohmann::json;
 	struct FeelState {
-		std::ofstream out;
+		AsyncLineWriter out; //!< Written every loop pass, so the disk never holds the loop.
 		std::string directory;
 		std::vector<FeelJson> pending;
 		std::map<std::pair<int64_t, int>, uint64_t> sampled;
@@ -157,7 +158,7 @@ namespace {
 	}
 
 	void FeelWrite(const FeelJson& value) {
-		s_Feel.out << value.dump() << '\n';
+		s_Feel.out.Write(value.dump());
 	}
 
 	void FeelWriteSavedCaptures(bool wait) {
@@ -201,11 +202,10 @@ void FrameMan::ApplyHeadlessPresentationDefault() {
 
 bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
 	const char* headless = std::getenv("CCCP_HEADLESS");
-	if (!headless || std::string(headless) != "1" || !std::filesystem::is_directory(path) || s_Feel.out.is_open()) return false;
+	if (!headless || std::string(headless) != "1" || !std::filesystem::is_directory(path) || s_Feel.out.IsOpen()) return false;
 	const auto raw = std::filesystem::path(path) / "raw.jsonl";
 	if (std::filesystem::exists(raw)) return false;
-	s_Feel.out.open(raw, std::ios::out);
-	if (!s_Feel.out) return false;
+	if (!s_Feel.out.Open(raw.string())) return false;
 	s_Feel.directory = path;
 	FeelWrite({{"type", "schema"}, {"version", 1}, {"clock", "steady_clock milliseconds"}, {"cpu_clock", "GetProcessTimes kernel+user milliseconds"},
 	    {"presentation_boundary", "UploadFrame return (upload, swap, and frame housekeeping)"}, {"pixels_per_meter", c_PPM},
@@ -213,7 +213,7 @@ bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
 	return true;
 }
 
-bool FrameMan::FeelRecordingEnabled() { return s_Feel.out.is_open(); }
+bool FrameMan::FeelRecordingEnabled() { return s_Feel.out.IsOpen(); }
 double FrameMan::FeelClockMS() { return FeelRecordingEnabled() ? FeelNowMS() : 0.0; }
 
 void FrameMan::FeelInputSample(const Actor* actor, int player) {
@@ -346,7 +346,6 @@ void FrameMan::FeelEndIteration(uint64_t ticks, long long simUS, long long updat
 	FeelWrite({{"type", "iteration"}, {"tick", g_TimerMan.GetSimUpdateCount()}, {"active", s_Feel.iterationActive && g_ActivityMan.ActivityRunning()},
 	    {"begin_ms", s_Feel.iterationBeginMS}, {"end_ms", FeelNowMS()}, {"cpu_begin_ms", s_Feel.iterationCPUMS}, {"cpu_end_ms", FeelProcessCPUMS()},
 	    {"pace_sim_ticks", ticks}, {"pace_sim_us", simUS}, {"pace_update_us", updateUS}, {"pace_draw_us", drawUS}});
-	s_Feel.out.flush();
 }
 
 void FrameMan::FeelFinish() {
@@ -355,7 +354,7 @@ void FrameMan::FeelFinish() {
 	s_Feel.pending.clear();
 	FeelWriteSavedCaptures(true);
 	FeelWrite({{"type", "end"}, {"wall_ms", FeelNowMS()}, {"cpu_ms", FeelProcessCPUMS()}, {"frames", s_Feel.frameNumber}});
-	s_Feel.out.close();
+	s_Feel.out.Close();
 }
 
 void BitmapDeleter::operator()(BITMAP* bitmap) const { destroy_bitmap(bitmap); }

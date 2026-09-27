@@ -3317,15 +3317,39 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::ConnectMigrationEndpoint(INetTransport& transport, const NetMatchMigrationPeer& peer, size_t& nextAddress, std::string& connectedAddress, std::string* error) {
+	std::vector<std::string> NetLockstepCoordinator::MigrationListenAddrs(const std::string& lanAddress, bool iceRoute) {
+		std::vector<std::string> addresses{lanAddress.empty() ? std::string("127.0.0.1") : lanAddress};
+		if (iceRoute) addresses.emplace_back(c_MigrationIcePrefix);
+		return addresses;
+	}
+
+	bool NetLockstepCoordinator::ConnectMigrationEndpoint(INetTransport& transport, const NetMatchMigrationPeer& peer, size_t& nextAddress, std::string& connectedAddress, std::string* error,
+	                                                      const MigrationIceDial* iceDial) {
 		while (nextAddress < peer.listenAddrs.size()) {
 			const std::string& address = peer.listenAddrs[nextAddress++];
+			// An ICE route is reached through the session's rendezvous, never dialed as an address.
+			if (IsMigrationIceEndpoint(address)) {
+				if (iceDial && *iceDial && (*iceDial)(transport, address.substr(c_MigrationIcePrefix.size()), error)) {
+					connectedAddress = address;
+					return true;
+				}
+				continue;
+			}
 			if (transport.Connect(address, peer.listenPort, error)) {
 				connectedAddress = address;
 				return true;
 			}
 		}
 		return false;
+	}
+
+	uint64_t NetLockstepCoordinator::MigrationStepBudgetMs() const {
+		const uint64_t budget = std::clamp<uint32_t>(m_Config.timeoutMs, 1, 1000);
+		// A roster that answers through ICE needs the rendezvous's time before the successor closes it.
+		const bool ice = std::any_of(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [](const NetMatchMigrationPeer& peer) {
+			return std::any_of(peer.listenAddrs.begin(), peer.listenAddrs.end(), [](const std::string& address) { return IsMigrationIceEndpoint(address); });
+		});
+		return ice ? std::max<uint64_t>(budget, c_MigrationIceDialMs) : budget;
 	}
 
 	bool NetLockstepCoordinator::ContactMigrationSuccessor(uint64_t nowMs) {
@@ -3372,11 +3396,12 @@ namespace RTE {
 		if (m_MigrationNextAddress == endpoint->listenAddrs.size()) {
 			m_MigrationNextAddress = 0;
 		}
-		const bool opened = m_MigrationTransport && (hosting || ConnectMigrationEndpoint(*m_MigrationTransport, *endpoint, m_MigrationNextAddress, m_MigrationAddress, &error));
+		const bool opened = m_MigrationTransport && (hosting || ConnectMigrationEndpoint(*m_MigrationTransport, *endpoint, m_MigrationNextAddress, m_MigrationAddress, &error, &m_Config.migrationIceDial));
 		if (!opened && hosting) {
 			FailHostMigration("successor listen failed: " + error);
 			return false;
 		}
+		if (hosting && m_Config.migrationIceHost) m_Config.migrationIceHost(*m_MigrationTransport);
 		m_MigrationProbes.clear();
 		m_MigrationExpected.clear();
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
@@ -3870,7 +3895,7 @@ namespace RTE {
 			} else if (!hosting && nowMs >= m_MigrationLastSendMs + 250 && m_MigrationHostTransport != c_InvalidNetPeerId) {
 				(void)SendMigration(m_MigrationHostTransport, MigrationMessage(NetHostMigrationMessageType::Hello));
 				m_MigrationLastSendMs = nowMs;
-			} else if (!hosting && m_MigrationHostTransport == c_InvalidNetPeerId && nowMs >= m_MigrationLastSendMs + 250) {
+			} else if (!hosting && m_MigrationHostTransport == c_InvalidNetPeerId && nowMs >= m_MigrationLastSendMs + MigrationDialPatienceMs()) {
 				const uint64_t started = m_MigrationSinceMs;
 				(void)ContactMigrationSuccessor(nowMs);
 				m_MigrationSinceMs = started;
@@ -6219,9 +6244,11 @@ namespace RTE {
 		    timing.sessionId == m_Config.sessionId && (m_RoundId == 0 || timing.roundId == m_RoundId) && SenderOwnsTransport(timing.senderPeerId, fromTransport)) {
 			if (m_PreStartTiming.size() >= 256) { Fail(NetLockstepStopReason::ProtocolError, m_Config.startFrame, "pre-start timing backlog overflow"); return; }
 			m_PreStartTiming.emplace_back(timing, fromTransport);
-			// A joiner's own admission names the frame and delay its start must carry, or the host reads that start as a straggler.
-			if (m_Config.joinsRunningRound && timing.action == NetTimingAction::WorldAdmission && timing.peerId == m_Config.localPeerId &&
-			    (timing.phase == NetTimingPhase::Propose || timing.phase == NetTimingPhase::Commit)) {
+			// A joiner's own admission names the frame and delay its start must carry, or the host reads that start as a straggler;
+			// a held seat's return is that admission for a returner, at the delay in force for it then.
+			const bool ownAdmission = timing.action == NetTimingAction::WorldAdmission && (timing.phase == NetTimingPhase::Propose || timing.phase == NetTimingPhase::Commit);
+			const bool ownReturn = timing.action == NetTimingAction::Reclaim && timing.phase == NetTimingPhase::ReclaimAtFrame;
+			if (m_Config.joinsRunningRound && (ownAdmission || ownReturn) && timing.peerId == m_Config.localPeerId) {
 				const PeerAdmission terms{timing.applyFrame, timing.delayFrames};
 				const auto adopted = m_PeerAdmissions.find(m_Config.localPeerId);
 				if (adopted == m_PeerAdmissions.end() || adopted->second.frame != terms.frame || adopted->second.delay != terms.delay) {

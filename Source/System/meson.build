@@ -22,6 +22,7 @@ sources += files(
 'InputScheme.cpp',
 'RTETools.cpp',
 'FrameRecorder.cpp',
+'StallStackSampler.cpp',
 'RotatePrimitiveSelfTest.cpp',
 'FloatTextSelfTest.cpp',
 'ScenarioRunner.cpp',

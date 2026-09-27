@@ -45,7 +45,9 @@ def read_live_hashes(path: Path) -> list[dict]:
             continue
         row = json.loads(line)
         if "abandon_from" in row:
-            rows = [kept for kept in rows if kept["tick"] < row["abandon_from"]]
+            # A round-tagged abandon drops only that round's ticks: a rematch's earlier round keeps its own.
+            rows = [kept for kept in rows if kept["tick"] < row["abandon_from"]
+                    or ("round" in row and kept.get("round") != row["round"])]
         else:
             rows.append(row)
     return rows
@@ -78,19 +80,24 @@ def compare_live_hashes(host_path: Path, client_path: Path, first_tick: int) -> 
     def shared_subsystems(entry):
         return {name: value for name, value in entry["subsystems"].items() if name not in PER_PEER_SUBSYSTEMS}
 
+    def references(entry):
+        # A rematch plays the same ticks again: a tick is compared with the host's tick of the same round.
+        same_round = [reference for reference in host[entry["tick"]] if "round" in entry and reference.get("round") == entry["round"]]
+        return same_round or host[entry["tick"]]
+
     results = []
     for index, run in enumerate(split_passes(read_live_hashes(client_path))):
         shared = [entry for entry in run if entry["tick"] >= first_tick and entry["tick"] in host]
         mismatched = [entry["tick"] for entry in shared
                       if any(entry["sim_gated"] != reference["sim_gated"]
                              or shared_subsystems(entry) != shared_subsystems(reference)
-                             for reference in host[entry["tick"]])]
+                             for reference in references(entry))]
         # The applied input per actor is its own assertion: the exclusion above must never be able to hide one.
         applied = [entry["tick"] for entry in shared
                    if any(entry["subsystems"].get("controller") != reference["subsystems"].get("controller")
-                          for reference in host[entry["tick"]])]
+                          for reference in references(entry))]
         subsystems = sorted({name for entry in shared for name, value in shared_subsystems(entry).items()
-                             if any(value != reference["subsystems"].get(name) for reference in host[entry["tick"]])})
+                             if any(value != reference["subsystems"].get(name) for reference in references(entry))})
         results.append({"pass": index, "first_tick": run[0]["tick"], "last_tick": run[-1]["tick"], "compared_ticks": len(shared),
                         "mismatched_ticks": len(mismatched), "first_mismatches": mismatched[:8], "subsystems": subsystems,
                         "mismatched_applied_input_ticks": len(applied), "first_applied_input_mismatches": applied[:8]})

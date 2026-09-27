@@ -3898,6 +3898,110 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat held in a world round comes back through its image: the round it joins is set up at the lobby's delay, but the host's
+		// return names the delay the round re-sized its seat to. A start at the lobby's delay was a straggler to the host, which waited
+		// for the next start at the returned delay; none came, so the seat never played again.
+		bool TestAReturnerStartsAtItsReturnsDelay(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(49551, error) || !clientWire.Connect("loopback", 49551, error)) return false;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A55; config.roundId = 55; config.localPeerId = 2; config.peerCount = 2; config.authorityPeerId = 1;
+			config.startFrame = 898; config.joinsRunningRound = true; config.inputDelayFrames = 3;
+			config.timeoutMs = 60000; config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.remoteTransportPeerIds = {{1, 1}};
+			config.scenario = "LockstepSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 2;
+			config.activePeerIds = {1, 2};
+			NetLockstepCoordinator client;
+			if (!client.Start(clientWire, config, error)) return false;
+			NetLockstepTiming reclaim;
+			reclaim.senderPeerId = 1; reclaim.peerId = 2; reclaim.action = NetTimingAction::Reclaim; reclaim.phase = NetTimingPhase::ReclaimAtFrame;
+			reclaim.sessionId = config.sessionId; reclaim.roundId = 55; reclaim.revision = 17; reclaim.applyFrame = 898; reclaim.cutoffFrame = 898;
+			reclaim.delayFrames = 4; reclaim.neutralThroughFrame = 902; reclaim.heldPeers = 2; reclaim.requiredPeers = 1; reclaim.seatIncarnations[1] = 2;
+			NetTransportEvent event;
+			event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+			(void)NetLockstepCodec::Encode({reclaim}, event.bytes);
+			std::vector<std::pair<uint64_t, uint16_t>> starts;
+			uint64_t now = 0;
+			const auto run = [&](uint64_t until) {
+				for (; now < until; ++now) {
+					hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); client.Tick(now);
+					for (const NetTransportEvent& sent: hostWire.PollEvents()) {
+						if (sent.type != NetTransportEventType::PacketReceived) continue;
+						const auto decoded = NetLockstepCodec::Decode(sent.bytes);
+						if (const auto* start = decoded.ok ? std::get_if<NetLockstepStart>(&decoded.packet.payload) : nullptr; start && start->localPeerId == 2)
+							starts.emplace_back(start->startFrame, start->inputDelayFrames);
+					}
+				}
+			};
+			run(20);
+			client.InjectEvent(event, now);
+			run(now + 40);
+			if (starts.empty() || starts.back() != std::pair<uint64_t, uint16_t>{898, 4}) {
+				*error = "a returner told its return at 898 with delay 4 sent " + (starts.empty() ? std::string("no start") :
+				         "its start at " + std::to_string(starts.back().first) + " with delay " + std::to_string(starts.back().second));
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_returner_starts_at_its_returns_delay starts=" << starts.size() << std::endl;
+			return true;
+		}
+
+		// A handover between machines on different networks: the successor's LAN address is unreachable from outside its network, so
+		// its published endpoint carries its ICE route after it, and a survivor dials that route through the session's rendezvous,
+		// never as an address. A successor's probes of the survivors have no rendezvous to use and pass it by.
+		bool TestAHandoverEndpointCarriesItsIceRoute(std::string* error) {
+			struct DialRecord final : INetTransport {
+				std::vector<std::string> dialed;
+				bool StartHost(uint16_t, std::string*) override { return true; }
+				bool Connect(const std::string& address, uint16_t, std::string* dialError) override {
+					dialed.push_back(address);
+					if (dialError) *dialError = "unreachable from this network";
+					return false;
+				}
+				bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string*, bool*) override { return false; }
+				void Disconnect(NetPeerId, const std::string&) override {}
+				void Stop() override {}
+				std::vector<NetTransportEvent> PollEvents() override { return {}; }
+			};
+			const std::vector<std::string> lanOnly = NetLockstepCoordinator::MigrationListenAddrs("192.168.7.20", false);
+			const std::vector<std::string> published = NetLockstepCoordinator::MigrationListenAddrs("192.168.7.20", true);
+			if (lanOnly != std::vector<std::string>{"192.168.7.20"} || published.size() != 2 || published.front() != "192.168.7.20" ||
+			    !NetLockstepCoordinator::IsMigrationIceEndpoint(published.back())) {
+				*error = "a directory match's handover endpoint lists [" + (published.empty() ? std::string() : published.front()) + (published.size() > 1 ? ", " + published.back() : std::string()) +
+				         "], where it must be its LAN address, then its ICE route";
+				return false;
+			}
+			NetMatchMigrationPeer successor;
+			successor.peerId = 2; successor.listenPort = 34002; successor.listenAddrs = {"192.168.7.20", std::string(NetLockstepCoordinator::c_MigrationIcePrefix) + "str:c-successor"};
+			std::vector<std::string> iceDials;
+			const NetLockstepCoordinator::MigrationIceDial dial = [&iceDials](INetTransport&, const std::string& identity, std::string*) {
+				iceDials.push_back(identity);
+				return true;
+			};
+			DialRecord survivor;
+			size_t next = 0;
+			std::string connected, dialError;
+			const bool reached = NetLockstepCoordinator::ConnectMigrationEndpoint(survivor, successor, next, connected, &dialError, &dial);
+			if (!reached || survivor.dialed != std::vector<std::string>{"192.168.7.20"} || iceDials != std::vector<std::string>{"str:c-successor"} || connected != successor.listenAddrs.back()) {
+				std::string addresses;
+				for (const std::string& address: survivor.dialed) addresses += (addresses.empty() ? "" : ", ") + address;
+				*error = "a survivor dialed the successor's endpoint as addresses [" + addresses + "] with " + std::to_string(iceDials.size()) +
+				         " ICE dial(s), reached=" + std::to_string(reached) + " connected=" + connected;
+				return false;
+			}
+			DialRecord probe;
+			next = 0;
+			connected.clear();
+			const bool probed = NetLockstepCoordinator::ConnectMigrationEndpoint(probe, successor, next, connected, &dialError);
+			if (probed || probe.dialed != std::vector<std::string>{"192.168.7.20"}) {
+				*error = "a dial without a rendezvous took the ICE route as an address: dialed " + std::to_string(probe.dialed.size()) + " entries, reached=" + std::to_string(probed);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_handover_endpoint_carries_its_ice_route published=" << published.back() << " ice_dials=" << iceDials.size() << std::endl;
+			return true;
+		}
+
 		// The same two returns the other way round: the first seat's return was decided after the second had set up its round
 		// and its start was answered, for a frame still before that round's first. The round dropped the decision as behind
 		// it, kept the seat under the AI, and stopped on the seat's own start as an unknown peer's.
@@ -21260,6 +21364,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestOwnStartReturnedDoesNotFailTheRound(&error) ||
 		    !TestAJoinerTakesADelayDecidedForItsTail(&error) ||
 		    !TestAJoinerTakesASeatReturnedBeforeIt(&error) ||
+		    !TestAReturnerStartsAtItsReturnsDelay(&error) ||
+		    !TestAHandoverEndpointCarriesItsIceRoute(&error) ||
 		    !TestAJoinerTakesAReturnDecidedAfterItsStart(&error) ||
 		    !TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame(&error) ||
 		    !TestAReturnerHearsAHoldTheHostAlreadyApplied(&error) ||

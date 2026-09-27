@@ -316,6 +316,7 @@ void AudioMan::Update() {
 	std::vector<std::shared_ptr<PlayingVoice::ChannelUserData>> releasing;
 	releasing.swap(m_RetiredHandles);
 	DrainEndedVoices();
+	ReleaseStoppedVoiceEffects();
 	RetireFinishedPlayingVoices();
 	StartAwaitingSampleVoices();
 	for (auto& [identity, voice]: m_PlayingVoices) RefreshStoredVoiceControl(voice);
@@ -726,6 +727,7 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 			result = (result == FMOD_OK) ? m_AudioSystem->createDSPByType(FMOD_DSP_TYPE_MULTIBAND_EQ, &dsp_multibandeq) : result;
 			result = (result == FMOD_OK) ? dsp_multibandeq->setParameterFloat(1, 22000.0f) : result; // Functionally inactive lowpass filter
 			result = (result == FMOD_OK) ? channel->addDSP(0, dsp_multibandeq) : result;
+			if (result == FMOD_OK) TrackVoiceEffects(channel);
 
 			{
 				std::scoped_lock<std::mutex> lock(m_SoundChannelMinimumAudibleDistancesMutex);
@@ -1835,6 +1837,29 @@ void AudioMan::ReleaseEndedChannel(FMOD::Channel* channel) {
 	m_EndedVoices.push_back(identity);
 }
 
+void AudioMan::TrackVoiceEffects(FMOD::Channel* channel) {
+	int count = 0;
+	if (!channel || channel->getNumDSPs(&count) != FMOD_OK) return;
+	std::lock_guard<std::mutex> lock(m_VoiceEffectsMutex);
+	for (int index = 0; index < count; ++index) {
+		FMOD::DSP* dsp = nullptr;
+		FMOD_DSP_TYPE type = FMOD_DSP_TYPE_UNKNOWN;
+		if (channel->getDSP(index, &dsp) != FMOD_OK || !dsp || dsp->getType(&type) != FMOD_OK || !AudioCheckpoint::Effect::Managed(type)) continue;
+		if (std::none_of(m_VoiceEffects.begin(), m_VoiceEffects.end(), [dsp](const auto& tracked) { return tracked.second == dsp; })) m_VoiceEffects.emplace_back(channel, dsp);
+	}
+}
+
+void AudioMan::ReleaseStoppedVoiceEffects() {
+	std::lock_guard<std::mutex> lock(m_VoiceEffectsMutex);
+	// A stopped or stolen channel's handle no longer reports playing; its effect has no other owner.
+	std::erase_if(m_VoiceEffects, [](const auto& tracked) {
+		bool playing = false;
+		if (tracked.first->isPlaying(&playing) == FMOD_OK && playing) return false;
+		tracked.second->disconnectAll(true, true);
+		return tracked.second->release() == FMOD_OK;
+	});
+}
+
 void AudioMan::DrainEndedVoices() {
 	std::vector<int> ended;
 	{
@@ -1975,6 +2000,7 @@ void AudioMan::StartAwaitingSampleVoices() {
 		FMOD::Channel* channel = nullptr;
 		if (m_AudioSystem->playSound(sound, buses[description.bus], true, &channel) != FMOD_OK || !channel) continue;
 		description.Apply(m_AudioSystem, channel);
+		TrackVoiceEffects(channel);
 		found->second.SetChannel(channel);
 		found->second.awaitingSample = false;
 		int backend;
@@ -2448,6 +2474,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			AudioCheckpoint::Require(m_AudioSystem->playSound(sounds.at(voice.path), buses[voice.bus], true, &channel));
 			backendCandidates.emplace(voice.identity, channel);
 			voice.Apply(m_AudioSystem, channel);
+			TrackVoiceEffects(channel);
 			candidates.at(voice.identity).SetChannel(channel);
 			int backend; AudioCheckpoint::Require(channel->getIndex(&backend)); backendIdentities.emplace(backend, voice.identity);
 		}

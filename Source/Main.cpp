@@ -133,6 +133,8 @@
 #include "TerrainLayerSnapshot.h"
 #include "DeterminismCheck.h"
 #include "MetricsCollector.h"
+#include "AsyncLineWriter.h"
+#include "StallStackSampler.h"
 #include "ContractAudit.h"
 
 #include "RenderTarget.h"
@@ -197,6 +199,32 @@ using namespace RTE;
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
 static std::string s_netLiveTickHashPath;
+
+// Written every tick, so the disk never holds the simulation.
+static AsyncLineWriter s_netLiveTickHashes;
+
+static AsyncLineWriter& LiveTickHashStream() {
+	static bool attempted = false;
+	if (!attempted) {
+		attempted = true;
+		(void)s_netLiveTickHashes.Open(s_netLiveTickHashPath);
+	}
+	return s_netLiveTickHashes;
+}
+
+// Ticks a held seat ran off the round leave both hash records; the live stream names the round they belong to.
+static void RetractAbandonedTickHashes() {
+	uint64_t round = 0;
+	const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(round);
+	if (abandoned == 0) {
+		return;
+	}
+	g_MetricsCollector.RetractTickHashesFrom(abandoned);
+	if (!s_netLiveTickHashPath.empty()) {
+		LiveTickHashStream().Write(nlohmann::json{{"abandon_from", abandoned}, {"round", round}}.dump());
+	}
+}
+
 static uint64_t s_memoryCensusTicks = 0; //!< Every this many ticks one line names what each record holds; 0 = never.
 static bool s_memoryCensusHistogram = false; //!< The census also walks the process heap and names the block sizes holding the most.
 static size_t s_memoryCensusProbeSize = 0; //!< Blocks of this size have their first bytes printed, so a leaked object can be named.
@@ -2929,7 +2957,8 @@ static std::string NetMatchEndReason(const Activity* activity) {
 static void DumpSimStateIfArmed(uint64_t simTick) {
 	static uint64_t s_from = 1;
 	static uint64_t s_to = 0;
-	static std::ofstream s_out;
+	// Every tick's dump goes to the disk from a writer thread; the simulation only formats it.
+	static AsyncLineWriter s_out;
 	static bool s_checked = false;
 	if (!s_checked) {
 		s_checked = true;
@@ -2938,17 +2967,18 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 		unsigned long long to = 0;
 		if (env && std::sscanf(env, "%llu:%llu", &from, &to) == 2 && to >= from) {
 			const std::string base = !ScenarioRunner::GetArgs().outPath.empty() ? ScenarioRunner::GetArgs().outPath : std::string("sim");
-			s_out.open(base + ".simdump.txt", std::ios::trunc);
-			if (s_out.is_open()) {
+			if (s_out.Open(base + ".simdump.txt")) {
 				s_from = from;
 				s_to = to;
 			}
 		}
 	}
-	if (!s_out.is_open() || simTick < s_from || simTick > s_to) {
+	if (!s_out.IsOpen() || simTick < s_from || simTick > s_to) {
 		return;
 	}
-	g_MovableMan.DumpSimState(simTick, s_out);
+	std::ostringstream text;
+	g_MovableMan.DumpSimState(simTick, text);
+	s_out.WriteBlock(std::move(text).str());
 }
 
 // CC_TERRAIN_DUMP=<tick> saves the material and FG color bitmaps beside the -out trace at that tick
@@ -5191,6 +5221,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			// A seat the host sent its end record reads the round's result from it and stays for the rematch.
 			uint64_t endRecord = 0;
 			const bool endedByRecord = g_NetMatchService.TakeRoundEndRecord(endRecord);
+			// The round ends before another tick would write what the hold abandoned.
+			RetractAbandonedTickHashes();
 			{
 				std::ostringstream line;
 				line << (endedByRecord ? "[net-match] completed_by_end_record=1 held_from=" : "[net-match] completed_by_host_goodbye=1 held_from=") << s_netMatchHeldFromTick
@@ -5367,6 +5399,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				const std::string result = NetMatchService::RoundEndResultText(RoundEndedWinnerTeam(endRecord), g_NetMatchService.GetLocalTeam());
 				s_netMatchCompletedByHostGoodbye = heldRejoin;
 				s_netMatchGoodbyeFinalFrame = RoundEndedFinalFrame(endRecord);
+				RetractAbandonedTickHashes();
 				{
 					std::ostringstream line;
 					line << "[net-match] completed_by_end_record=1 held_from=" << s_netMatchHeldFromTick << " final=" << s_netMatchGoodbyeFinalFrame << " result=" << result;
@@ -5562,6 +5595,7 @@ void RunGameLoop() {
 	if (System::IsSetToQuit()) {
 		return;
 	}
+	StallStackSampler::ArmForCurrentThread();
 	g_TimerMan.PauseSim(false);
 
 	if (g_ActivityMan.ActivitySetToRestart()) {
@@ -5717,6 +5751,7 @@ void RunGameLoop() {
 			NetModerationGUIProbe::OnSimTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
+			StallStackSampler::TickBegin(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
@@ -6275,26 +6310,15 @@ void RunGameLoop() {
 				g_MovableMan.FeedTickEndChecksum();
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
-				// Ticks a held seat ran off the round leave both hash records before this tick is written.
-				static uint64_t liveAbandonedFrom = 0;
-				if (const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(); abandoned != 0) {
-					g_MetricsCollector.RetractTickHashesFrom(abandoned);
-					liveAbandonedFrom = liveAbandonedFrom == 0 ? abandoned : std::min(liveAbandonedFrom, abandoned);
-				}
+				RetractAbandonedTickHashes();
 				if (liveHashTick) {
-					static std::ofstream trace(s_netLiveTickHashPath, std::ios::trunc);
-					if (liveAbandonedFrom != 0) {
-						trace << nlohmann::json{{"abandon_from", liveAbandonedFrom}}.dump() << '\n';
-						liveAbandonedFrom = 0;
-					}
 					nlohmann::json subsystems = nlohmann::json::object();
 					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
-					trace << nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
+					LiveTickHashStream().Write(nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
 					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
 					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
 					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
-					    {"subsystems", std::move(subsystems)}}.dump() << '\n';
-					trace.flush();
+					    {"subsystems", std::move(subsystems)}}.dump());
 				}
 				if (a7HashTick && ScenarioRunner::GetLockstepAppliedFrame() == simTick) {
 					const uint64_t round = ScenarioRunner::GetLockstepRoundId();
@@ -6551,6 +6575,7 @@ void RunGameLoop() {
 			TelemetryBundle::CaptureAtTickBoundary();
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
+			StallStackSampler::TickEnd();
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
 
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
@@ -8273,6 +8298,8 @@ int RunNetMatchServiceE2E() {
 				g_MetricsCollector.RecordString("verdict_source", "round");
 			}
 			if (!g_MetricsCollector.HasNumeric("final_tick")) g_MetricsCollector.Record("final_tick", static_cast<double>(g_TimerMan.GetSimUpdateCount()));
+			RetractAbandonedTickHashes();
+			if (s_netLiveTickHashes.IsOpen()) s_netLiveTickHashes.Flush();
 			g_MetricsCollector.EndRun();
 			const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 			if (!g_MetricsCollector.WriteReport(tracePath)) {

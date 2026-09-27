@@ -99,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--rematches", type=int, default=0, help="with --rematch: ride that many rematches in a row")
     parser.add_argument("--mute-input", default="", help="FRAME:COUNT - the client sends none of its own input for those frames while it keeps simulating them")
     parser.add_argument("--census-histogram", action="store_true", help="the census also walks the heap by block size (seconds per line)")
+    parser.add_argument("--no-tick-trace", action="store_true",
+                        help="keep no per-tick trace in memory: the checks read the live stream, and over an endurance soak the trace is its own grower")
     parser.add_argument("--census-probe-size", type=int, default=0, help="print the first bytes of heap blocks of this size")
     parser.add_argument("--census-atom-stacks", action="store_true", help="the census samples where Atoms are constructed")
     parser.add_argument("--census-ticks", type=int, default=3600, help="ticks between the engine's memory census lines; 0 = none")
@@ -141,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         for peer in ("host", "client"):
-            flags = ["-seed", "42", "-max-ticks", str(ticks), "-tick-hashes", "-out", str(root / f"{peer}_trace.json"),
+            flags = ["-seed", "42", "-max-ticks", str(ticks), *([] if options.no_tick_trace else ["-tick-hashes"]), "-out", str(root / f"{peer}_trace.json"),
                      "-net-live-tick-hashes", str(root / f"{peer}-live.jsonl"), "-input-script", str(script),
                      "-net-match-service-e2e", "-net-port", str(options.port), "-net-match-ticks", str(ticks),
                      "-net-match-humans", "2", "-net-match-peers", "2", "-net-match-cpu-slots", "0",
