@@ -5320,6 +5320,7 @@ namespace RTE {
 					m_ReclaimTransactions.erase(later);
 				m_HoldTransactions[peer] = held->second;
 				m_AiHeldSeats[peer] = held->second.cutoffFrame;
+				NoteSeatTransition(peer, held->second.cutoffFrame, SeatTransition::Held);
 				if (peer != GetHostPeerId()) m_PeerLeaveFrames[peer] = held->second.cutoffFrame;
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 				DropRecordedHeldSeat(peer);
@@ -7334,6 +7335,7 @@ namespace RTE {
 				if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload)) m_DelayChanges[delay->peerId][input.targetFrame] = delay->frames;
 				if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload)) {
 					m_AiHeldSeats[hold->peerId] = input.targetFrame;
+					NoteSeatTransition(hold->peerId, input.targetFrame, SeatTransition::Held);
 					m_HoldTransactions[hold->peerId] = *hold;
 					if (hold->peerId != GetHostPeerId()) {
 						m_PeerLeaveFrames[hold->peerId] = input.targetFrame;
@@ -8003,6 +8005,7 @@ namespace RTE {
 			if (boundaryPassed || (start.heldPeerMask & (uint32_t{1} << (peer - 1))) == 0) continue;
 			m_AiHeldSeats[peer] = start.agreedFirstFrame;
 			m_PeerLeaveFrames[peer] = start.agreedFirstFrame;
+			NoteSeatTransition(peer, start.agreedFirstFrame, SeatTransition::Held);
 			m_DroppedSeats.insert(peer);
 			m_DroppedAtMs[peer] = nowMs;
 			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
@@ -8458,6 +8461,7 @@ namespace RTE {
 				return false;
 			}
 			m_PeerLeaveFrames = outFrame.committedPeerLeaves;
+			for (const auto& [peer, frame]: m_PeerLeaveFrames) NoteSeatTransition(peer, frame, SeatTransition::Left);
 			m_PeerFrameWaivers = outFrame.committedFrameWaivers;
 			m_DroppedSeats.clear();
 			m_LeftSeatsHeld.clear();
@@ -9772,6 +9776,13 @@ namespace RTE {
 		return it != m_RemoteTransports.end() && it->second == fromTransport;
 	}
 
+	void NetLockstepCoordinator::NameStaleStart(const NetLockstepStart& start, const std::string& why) {
+		// Once per seat and start frame: a straggler repeats on the reliable lane until it is answered.
+		if (const auto named = m_StaleStartNamed.find(start.localPeerId); named != m_StaleStartNamed.end() && named->second == start.startFrame) return;
+		m_StaleStartNamed[start.localPeerId] = start.startFrame;
+		std::cout << "[lockstep] ignored peer " << static_cast<int>(start.localPeerId) << "'s start at " << start.startFrame << ": " << why << " next=" << m_Stats.nextFrame << std::endl;
+	}
+
 	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport) {
 		++m_Stats.startPacketsReceived;
 		// Our own start, forwarded back to us: a relay that still holds a stale transport for this seat sends
@@ -9815,6 +9826,7 @@ namespace RTE {
 		// peer knows its round, a start for a different frame is that straggler too.
 		if (!followTheAuthority && start.roundId != 0 && ((m_RoundId != 0 && start.roundId != m_RoundId) || (m_RoundId == 0 && start.startFrame != m_Config.startFrame && !worldRosterMessage))) {
 			++m_Stats.staleRoundPackets;
+			NameStaleStart(start, "another round's start: round " + std::to_string(start.roundId) + " for " + std::to_string(m_RoundId));
 			return;
 		}
 		// A seat joining the running round starts at its own admission; the start the host began the round with names
@@ -9826,6 +9838,7 @@ namespace RTE {
 		}
 		if (const auto admission = m_PeerAdmissions.find(start.localPeerId); admission != m_PeerAdmissions.end() && start.startFrame < admission->second.frame) {
 			++m_Stats.staleRoundPackets;
+			NameStaleStart(start, "a start before its admission at " + std::to_string(admission->second.frame));
 			return;
 		}
 		const bool introducedByHost = worldRosterMessage && (!IsKnownRemotePeer(start.localPeerId) || IsPeerGoneAtFrame(start.localPeerId, start.startFrame) ||

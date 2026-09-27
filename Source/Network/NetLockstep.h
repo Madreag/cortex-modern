@@ -1242,6 +1242,7 @@ namespace RTE {
 		friend bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
 		friend bool TestAReplayTakesTheRecordedSeatPolicy(std::string* error);
 		friend bool TestALaggingPeerReadsASeatAtItsFrame(std::string* error);
+		friend bool TestEveryHoldProducerWritesTheSeatLog(std::string* error);
 		friend bool TestAReturnerSeesItsSeatHeldAgainBeforeItsStart(std::string* error);
 		friend bool TestARecordedHoldKeepsItsSeatsClaims(std::string* error);
 		friend bool TestAQueuedReturnLeavesALaterHold(std::string* error);
@@ -1333,6 +1334,7 @@ namespace RTE {
 		void HandleEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport);
+		void NameStaleStart(const NetLockstepStart& start, const std::string& why);
 		void HandleFrame(const NetLockstepFrame& frame, uint64_t nowMs, NetPeerId fromTransport, bool relay = true, bool recovered = false);
 		void HandleRecoveryChunk(const NetLockstepRecoveryChunk& chunk, uint64_t nowMs, NetPeerId fromTransport);
 		bool RetainRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t> bytes, bool commitLocal, std::string* error);
@@ -1603,6 +1605,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		struct PeerAdmission { uint64_t frame; uint16_t delay; };
 		std::map<uint8_t, PeerAdmission> m_PeerAdmissions;
+		std::map<uint8_t, uint64_t> m_StaleStartNamed; //!< The start frame each seat's straggler was last named at.
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::set<uint64_t> m_ObservationEpochs;        //!< Every announced frame senders spell their keys out from again.
 		std::set<uint64_t> m_HostAcceptedLocalFrames;
