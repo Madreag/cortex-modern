@@ -5412,6 +5412,9 @@ static bool CrossWinSurfaceReady() {
 }
 
 static bool PrepareCrossLobbyResources(std::string* error) {
+	// Service-E2E returns before normal menu startup loads these preset icons.
+	// EDITH can have virtual gamepads even when the test supplies scripted input.
+	g_UInputMan.LoadDeviceIcons();
 	for (int device = InputDevice::DEVICE_KEYB_ONLY; device < InputDevice::DEVICE_COUNT; ++device) {
 		const Icon* icon = g_UInputMan.GetDeviceIcon(device);
 		if (!icon || icon->GetBitmaps32().empty() || !icon->GetBitmaps32().front()) {
