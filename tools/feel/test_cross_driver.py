@@ -149,6 +149,30 @@ class CrossDriverTests(unittest.TestCase):
             sealer.poll()
             self.assertEqual(len((own/'compressed-records.jsonl').read_text().splitlines()),1)
 
+    def test_capture_announcement_does_not_resolve_a_directory_still_being_created(self):
+        from feel.records import CaptureSealer
+        with tempfile.TemporaryDirectory() as directory:
+            own=Path(directory); (own/'engine').mkdir()
+            dump=own/'fullstate/process-1/round-2/capture-3/sample'
+            log=own/'engine/stdout.log'
+            log.write_text(f'[fullstate-context] tick=1200 round=2 label=sample path={dump}\n')
+            sealer=CaptureSealer(own)
+            original=Path.resolve
+            def transient(path,*args,**kwargs):
+                if path==dump: raise OSError('announced directory is still being created')
+                return original(path,*args,**kwargs)
+            with patch.object(Path,'resolve',transient): sealer.poll()
+            (dump/'1200').mkdir(parents=True); source=dump/'1200/scene.txt'; source.write_text('writer completed')
+            with log.open('a') as stream: stream.write('[fullstate-scope] tick=1200 round=2 label=sample per_peer=camera\n')
+            sealer.poll(); self.assertTrue(source.with_name('scene.txt.gz').is_file())
+
+    def test_capture_announcement_rejects_a_lexical_escape(self):
+        from feel.records import CaptureSealer
+        with tempfile.TemporaryDirectory() as directory:
+            own=Path(directory)/'own'; (own/'engine').mkdir(parents=True)
+            (own/'engine/stdout.log').write_text(f'[fullstate-context] tick=1 round=2 label=sample path={own}/fullstate/../../outside\n')
+            with self.assertRaisesRegex(ValueError,'leaves'): CaptureSealer(own).poll()
+
     def test_live_capture_compression_defers_ambiguous_reexecutions(self):
         from feel.records import CaptureSealer
         with tempfile.TemporaryDirectory() as temporary:
