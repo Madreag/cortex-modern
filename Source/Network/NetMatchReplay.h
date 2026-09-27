@@ -55,9 +55,9 @@ namespace RTE {
 	class NetMatchReplayWriter {
 	public:
 		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
-		// Version 6 carries the world checkpoint a segment stands on; version 5 preserved each committed
-		// command's sender beside the checksummed wire frame.
-		static constexpr uint16_t c_Version = 6;
+		// Version 7 lets a committed tick name one actor once per sender, in sender order; version 6 carries the world checkpoint
+		// a segment stands on; version 5 preserved each committed command's sender beside the checksummed wire frame.
+		static constexpr uint16_t c_Version = 7;
 		/// The longest world id and digest a segment header may carry; both are bounded strings already.
 		static constexpr size_t c_MaxSegmentFieldBytes = 64;
 		// A length prefix above the record cap; the writer appends it as the last record so playback
