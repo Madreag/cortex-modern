@@ -216,7 +216,7 @@
             "-net-join",
             "127.0.0.1",
             "-selftest-frame-stall",
-            "1199:3000"
+            "1199:12000"
           ],
           "input_script": "play-input.txt",
           "settings": {
