@@ -292,6 +292,18 @@
     },
     {
       "name": "injected-desync",
+      "injected_desync": {
+        "peer": "host",
+        "tick": 240,
+        "repair_items": [
+          "injected-repair-overlay-host",
+          "injected-repair-complete-host",
+          "injected-play-resumed-host",
+          "injected-repair-overlay-client",
+          "injected-repair-complete-client",
+          "injected-play-resumed-client"
+        ]
+      },
       "peers": [
         {
           "name": "host",
