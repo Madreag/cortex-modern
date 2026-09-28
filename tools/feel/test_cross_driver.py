@@ -18,6 +18,32 @@ class CrossDriverTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'stop the other peers'):
                 cross_peers.require_payload_success(dict(name='EDITH'),outcome)
 
+    def test_payload_refuses_an_engine_started_on_another_build_than_its_preflight(self):
+        preflighted,started='a'*64,'b'*64
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)/'box'; root.mkdir()
+            spec=dict(peer='mac',role='host',incarnation=0,own=str(root/'mac/incarnation-0'),root=str(root),faults=[],
+                      flags=['-net-match-peers','3'],timeout=60)
+            (root/'payload.json').write_text(json.dumps(dict(box=dict(name='Mac',kind='posix-ssh'),specs=[spec],pin='pin')))
+            (root/'preflight.json').write_text(json.dumps(dict(box='Mac',executable_sha256=preflighted)))
+            class Run:
+                cwd=str(root)
+                def __init__(self): self.record={}
+                def start(self): self.record.update(started=True,pid=7,exe_sha256=started); return self
+                def poll(self): return 0
+                def finish(self): self.record.update(exit_code=0,timed_out=False); return self.record
+                def close(self): pass
+            def prepare(spec,_pin,_box,runtime=None):
+                Path(spec['own']).mkdir(parents=True); (Path(spec['own'])/'events.jsonl').touch(); return Run()
+            with patch.object(cross_peers,'assert_box_guard'),patch.object(cross_peers,'read_capabilities',return_value=dict(peer_limit=4)), \
+                 patch.object(cross_peers,'wait_for_payload_release'),patch.object(cross_peers,'prepare_instance',side_effect=prepare), \
+                 patch.object(cross_peers,'sample_memory',return_value=None),patch.object(cross_peers,'retain_checkpoints'), \
+                 patch.object(cross_peers,'box_load',return_value=[]),patch.object(cross_peers,'seal_evidence'):
+                verdict=cross_peers.run_payload(root/'payload.json')
+            error=json.loads((root/'payload-error.json').read_text())['error'] if (root/'payload-error.json').is_file() else 'accepted'
+            self.assertEqual(verdict,1,error)
+            self.assertIn('mixed build',error); self.assertIn(preflighted,error); self.assertIn(started,error)
+
     def test_rerun_keeps_deadlines_faults_barriers_and_instance_counts(self):
         plan=self.plan(); plan['deadlines'].update(launch_s=1234,recovery_ms=5678,capture_ms=912)
         plan['faults']=[dict(id='custom',tick=99,peer='mac',action='loss',percent=5)]
@@ -399,7 +425,7 @@ class CrossDriverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)/'run'; root.mkdir()
             plan=self.plan(); plan['ticks']=4; plan['fullstate_every']=2; plan['capture_rows_pending']=[]
-            plan['preflights']={b['name']:dict(machine_id=b['name']) for b in plan['boxes']}
+            plan['preflights']={b['name']:dict(machine_id=b['name'],executable_sha256='c'*64) for b in plan['boxes']}
             (root/'manifest.json').write_text(json.dumps(plan))
             for spec in plan['specs']:
                 own=cross_report.peer_root(root,plan,spec); (own/'engine').mkdir(parents=True)
@@ -408,7 +434,7 @@ class CrossDriverTests(unittest.TestCase):
                 (box_root/'capabilities.json').write_text(json.dumps(dict(peer_limit=4)))
                 (box_root/'samples.jsonl').write_text(json.dumps(dict(peer=spec['peer'],incarnation=0,engine_pid=99,
                     elapsed_s=0,working_set=1000,private=1000,load=[]))+'\n')
-                (own/'record.json').write_text(json.dumps(dict(started=True,exit_code=0,elapsed_seconds=1,timed_out=False)))
+                (own/'record.json').write_text(json.dumps(dict(started=True,exit_code=0,elapsed_seconds=1,timed_out=False,exe_sha256='c'*64)))
                 (own/'trace.json').write_text(json.dumps(dict(runs=[dict(strings=dict(completion='completed'))])))
                 (own/'match-report.json').write_text(json.dumps(dict(exit_code=0,desync_check=dict(mismatches=0,compares=1,compare_margin=0))))
                 feel=own/'engine/feel'; feel.mkdir()
@@ -432,7 +458,28 @@ class CrossDriverTests(unittest.TestCase):
                     f'[fullstate] tick={t} hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round=1\n'
                     f'[fullstate-scope] tick={t} round=1 label=sample per_peer=camera\n' for t in (1,2,4)))
             self.assertTrue(cross_report.build_report(root)['passed'])
-            own=cross_report.peer_root(root,plan,plan['specs'][-1])
+            own=cross_report.peer_root(root,plan,plan['specs'][-1]); name=plan['specs'][-1]['peer']
+            record=json.loads((own/'record.json').read_text())
+            (own/'record.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))
+            mixed=cross_report.build_report(root)
+            self.assertFalse(mixed['passed']); self.assertFalse(mixed['checks']['preflight_complete'])
+            self.assertEqual(mixed['oracles']['preflight']['status'],'FAIL')
+            self.assertTrue(any(f'{name} incarnation 0' in reason for reason in mixed['oracles']['preflight']['reasons']))
+            self.assertIn('c'*64,mixed['oracles']['preflight']['reason']); self.assertIn('d'*64,mixed['oracles']['preflight']['reason'])
+            self.assertEqual(mixed['oracles']['full_state']['status'],'VOID'); self.assertEqual(mixed['oracles']['live_hashes']['status'],'VOID')
+            self.assertTrue(cross_report.verdict_line(mixed).startswith('PREFLIGHT RED (mixed build)'))
+            (own/'record.json').write_text(json.dumps(record))
+            later=own.with_name('incarnation-1'); later.mkdir()
+            (later/'record.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))
+            restarted=cross_report.build_report(root)
+            self.assertFalse(restarted['checks']['preflight_complete'])
+            self.assertTrue(any(f'{name} incarnation 1' in reason for reason in restarted['oracles']['preflight']['reasons']))
+            (later/'record.json').unlink(); (later/'engine').mkdir(); (later/'engine/launch.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))
+            self.assertFalse(cross_report.build_report(root)['checks']['preflight_complete'])
+            (later/'engine/launch.json').write_text(json.dumps(record))
+            self.assertTrue(cross_report.build_report(root)['checks']['preflight_complete'])
+            (later/'engine/launch.json').unlink(); (later/'engine').rmdir(); later.rmdir()
+            self.assertTrue(cross_report.build_report(root)['passed'])
             log=own/'engine/stdout.log'; saved=log.read_bytes(); log.unlink()
             missing=cross_report.build_report(root)
             self.assertFalse(missing['checks']['hold_evidence_complete'])

@@ -36,6 +36,13 @@
       "control": "NetworkSeatsOptions"
     },
     {
+      "op": "wait",
+      "control": "NetworkSeatsOptions",
+      "equals": {
+        "pushed": true
+      }
+    },
+    {
       "op": "mouse_up",
       "control": "NetworkSeatsOptions"
     },
