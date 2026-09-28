@@ -1295,8 +1295,17 @@ static std::string ResyncSaveName() {
 			std::optional<AutosaveDescriptor> anchor;
 			if (isHost) {
 				// Every peer the heal relaunches must hold it: a seat that caught up across a capture never took that one.
-				anchor = ChooseRewindAnchor(AutosaveStore::ValidatedNewestFirst(m_AutosaveMatchId), m_CheckpointHolders, state.savedTick,
-				                            CheckpointWriters(state.savedTick), m_AutosaveIdentity.roundId);
+				const std::vector<AutosaveDescriptor> validated = AutosaveStore::ValidatedNewestFirst(m_AutosaveMatchId);
+				const std::set<uint8_t> relaunched = CheckpointWriters(state.savedTick);
+				anchor = ChooseRewindAnchor(validated, m_CheckpointHolders, state.savedTick, relaunched, m_AutosaveIdentity.roundId);
+				// The candidates and who reported each, so a heal that names none says why.
+				std::string candidates;
+				for (const AutosaveDescriptor& checkpoint: validated) {
+					candidates += " " + std::to_string(checkpoint.savedTick) + ":";
+					if (const auto held = m_CheckpointHolders.find(checkpoint.savedTick); held != m_CheckpointHolders.end())
+						for (const uint8_t peer: held->second) candidates += std::to_string(peer);
+				}
+				System::PrintDiagnosticLine("[autosave] rewind candidates peers=" + std::to_string(relaunched.size()) + candidates);
 				if (anchor) {
 					state.rewindMatchId = anchor->matchId;
 					state.rewindTick = anchor->savedTick;
