@@ -3676,6 +3676,13 @@ namespace RTE {
 				return Fail(std::string("held-seat-host-verdict-") + test.name + ": the held seat judged its host " + (test.gone ? "alive" : "gone"));
 			}
 		}
+		// Two held seats that last heard their host at the same moment judge it gone together: a seat whose own link sends nothing
+		// learns of the loss no later than the link's own timeout, as a busy one does.
+		const uint64_t bound = NetMatchService::HeldSeatSilenceBoundMs();
+		if (bound > c_NetLinkTimeoutMs || !NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, c_NetLinkTimeoutMs + 1, bound) ||
+		    NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, c_NetLinkTimeoutMs / 2, bound)) {
+			return Fail("held-seat-host-verdict-silent-past-the-link-timeout: bound=" + std::to_string(bound) + "ms against the link's " + std::to_string(c_NetLinkTimeoutMs) + "ms");
+		}
 		std::cout << "[net-world-join-selftest] PASS a_held_seat_judges_its_host_by_the_link_alone" << std::endl;
 		return 0;
 	}

@@ -5774,7 +5774,7 @@ static std::string ResyncSaveName() {
 		if (refusal != 0) {
 			m_State = NetMatchServiceState::Failed; m_ErrorText = NetWorldJoinRefusalText(refusal); return;
 		}
-		// The host's link is its liveness, never its tail: a host that closes the link or says nothing at all for the round's own timeout
+		// The host's link is its liveness, never its tail: a host that closes the link or says nothing at all for the link's own timeout
 		// is gone, and the seat rejoins the next host, or hosts the match itself when only held seats are left.
 		if (m_InPlaceCatchUp) {
 			const uint64_t steadyMs = SteadyNowMs();
@@ -5786,7 +5786,7 @@ static std::string ResyncSaveName() {
 				                            " kept=" + std::to_string(m_WorldCatchUp.tailFramesKept) + " repeated=" + std::to_string(m_WorldCatchUp.tailFramesRepeated) +
 				                            " buffered=" + std::to_string(ScenarioRunner::WorldCatchUpHasFrame(m_WorldCatchUp.appliedThrough + 1)));
 			}
-			if (steadyMs > m_InPlaceHeardMs && HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, steadyMs - m_InPlaceHeardMs, m_Coordinator->GetConfig().timeoutMs)) {
+			if (steadyMs > m_InPlaceHeardMs && HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, steadyMs - m_InPlaceHeardMs, HeldSeatSilenceBoundMs())) {
 				System::PrintDiagnosticLine("[net-match] held client: the host sent nothing for " + std::to_string(steadyMs - m_InPlaceHeardMs) + "ms at frame " +
 				                            std::to_string(m_WorldCatchUp.appliedThrough));
 				m_StatusText = "Host lost - arranging handover";

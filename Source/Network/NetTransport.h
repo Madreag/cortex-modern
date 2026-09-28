@@ -9,6 +9,8 @@ namespace RTE {
 	using NetPeerId = uint32_t;
 
 	constexpr NetPeerId c_InvalidNetPeerId = 0;
+	/// How long a connected link hears nothing from its peer before it is judged lost.
+	constexpr uint32_t c_NetLinkTimeoutMs = 4000;
 
 	enum class NetTransportLane : uint8_t {
 		ControlReliable = 0,

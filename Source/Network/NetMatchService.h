@@ -928,9 +928,12 @@ namespace RTE {
 		/// seat in the round is replaced by this peer so the held seats rejoin it, and a lost host with none is rejoined.
 		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool heldSeats);
 		/// Whether a held seat's host is gone: the host ended or timed out its link (the transport's verdict), or the seat heard nothing
-		/// at all from it for the round's own missing-frame timeout. Its own transport stopping is not the host's doing, and a seat told
-		/// to come back through the image has a host that answered.
+		/// at all from it for the silence bound. Its own transport stopping is not the host's doing, and a seat told to come back through
+		/// the image has a host that answered.
 		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t silenceBoundMs);
+		/// The silence bound of a seat catching up in place: its host acks or feeds it every tick, so the link's own timeout, counted from
+		/// the host's last word, lands on every held seat together however busy each seat's own link is.
+		static uint64_t HeldSeatSilenceBoundMs() { return c_NetLinkTimeoutMs; }
 		/// Where a held seat's catch-up goes when its host is gone, from the match's successor order, the peers it can dial in that
 		/// order and the seats it knows are held. Returns the peers to dial; empty when this seat hosts the match itself.
 		static std::vector<uint8_t> HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,

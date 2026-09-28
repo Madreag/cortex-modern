@@ -254,7 +254,7 @@ namespace RTE {
 			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
 			// A crashed peer should stall the match seconds, not the ~10s default, before the drop
 			// adjudication (and a rejoiner's freed slot) kick in.
-			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
+			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, c_NetLinkTimeoutMs);
 
 			m_Interface = SteamNetworkingSockets();
 			m_ListenSocket = m_Interface->CreateListenSocketIP(listenAddress, 5, connectionConfigs);
@@ -316,7 +316,7 @@ namespace RTE {
 			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
 			// A crashed peer should stall the match seconds, not the ~10s default, before the drop
 			// adjudication (and a rejoiner's freed slot) kick in.
-			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
+			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, c_NetLinkTimeoutMs);
 
 			m_Interface = SteamNetworkingSockets();
 			m_ServerConnection = m_Interface->ConnectByIPAddress(remoteAddress, 5, connectionConfigs);
@@ -993,7 +993,7 @@ namespace RTE {
 			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
 			connectionConfigs[2].SetInt32(k_ESteamNetworkingConfig_SendRateMin, 2 * 1024 * 1024);
 			connectionConfigs[3].SetInt32(k_ESteamNetworkingConfig_SendRateMax, 32 * 1024 * 1024);
-			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, 4000);
+			connectionConfigs[4].SetInt32(k_ESteamNetworkingConfig_TimeoutConnected, c_NetLinkTimeoutMs);
 			connectionConfigs[5].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, config.iceEnable);
 			connectionConfigs[6].SetString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, config.stunServerList.c_str());
 			connectionConfigs[7].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Implementation, config.iceImplementation);
