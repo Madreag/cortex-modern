@@ -126,6 +126,8 @@ namespace RTE {
 		bool Observe(uint64_t ticks, uint64_t workUs, double tickMs);
 		bool Ready() const { return m_Ready; }
 		double Ratio() const { return m_Ratio; }
+		/// Whether the ratio stands on a full window of replayed ticks.
+		bool Measured() const { return m_Samples.back().first - m_Samples.front().first >= 120; }
 	private:
 		std::deque<std::pair<uint64_t, uint64_t>> m_Samples{{0, 0}};
 		bool m_Ready = false;
