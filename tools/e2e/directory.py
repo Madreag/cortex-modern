@@ -20,9 +20,10 @@ from session_directory.session_directory import LOGGER, spawn_server
 
 
 @contextmanager
-def serve(root, port):
-    if not 49400 <= port <= 49479:
-        raise ValueError("the directory must stay in the video driver's port block")
+def serve(root, port, block=(49400, 49479)):
+    """The directory on the given port, which must lie in the video driver's block (its default or a lane's own)."""
+    if not block[0] <= port <= block[1]:
+        raise ValueError(f"the directory must stay in the video driver's port block {block[0]}-{block[1]}")
     root = Path(root)
     root.mkdir()
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
