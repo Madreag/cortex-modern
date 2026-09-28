@@ -7356,6 +7356,10 @@ namespace RTE {
 			service.Destroy();
 			return false;
 		}
+		if (!LuaMan::CaptureRoundStartScripts(service.m_PendingRoundStartScripts, &why)) {
+			*error = "the next round could not capture its host scripts: " + why;
+			return false;
+		}
 		{
 			std::lock_guard<std::mutex> lock(service.m_Mutex);
 			service.m_State = NetMatchServiceState::ReadyToLaunch;
