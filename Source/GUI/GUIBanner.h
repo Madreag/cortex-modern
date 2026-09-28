@@ -201,7 +201,7 @@ namespace RTE {
 		std::array<std::shared_ptr<BITMAP>, FONTMODECOUNT> m_CheckpointFontImages;
 
 		// The loaded font information for each filepath to a font bitmap
-		static std::map<std::string, FontChar*> m_sFontCache;
+		static std::map<std::string, std::unique_ptr<FontChar[]>> m_sFontCache;
 		// Cache of the highest indices of valid characters that was read in from the file
 		static std::map<std::string, int> m_sCharCapCache;
 
