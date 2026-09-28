@@ -46,6 +46,7 @@ namespace RTE {
 		friend class Atom;
 		friend class LuaStateWrapper;
 		friend class LuaMan;
+		friend class MovableMan;
 		friend class PreviewScriptSelfTest;
 		friend struct EntityLuaBindings;
 
