@@ -48,37 +48,36 @@ def shape(text: str) -> str:
     return re.sub(r"0x[0-9a-f]+|\b\d+\b", "N", text)
 
 
+def start_of(line: str):
+    for kind, pattern in START:
+        if pattern.match(line):
+            return kind
+    return None
+
+
 def reports(path: Path):
-    lines = path.read_text(errors="replace").splitlines()
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        for kind, pattern in START:
-            if pattern.match(line):
-                block = [line]
-                cursor = index + 1
-                if kind == "ubsan":
-                    while cursor < len(lines) and FRAME.match(lines[cursor]):
-                        block.append(lines[cursor])
-                        cursor += 1
-                else:
-                    seen_frame = False
-                    while cursor < len(lines):
-                        text = lines[cursor]
-                        if kind == "leak" and seen_frame and not FRAME.match(text):
-                            break
-                        if kind != "leak" and END.match(text):
-                            if text.startswith("SUMMARY: "):
-                                block.append(text)
-                                cursor += 1
-                            break
-                        seen_frame = seen_frame or bool(FRAME.match(text))
-                        block.append(text)
-                        cursor += 1
-                yield kind, index + 1, block
-                index = cursor - 1
-                break
-        index += 1
+    """Streams the log (a TSan suite writes logs of several hundred MB); a block ends where its kind says it does."""
+    kind, number, block, seen_frame = None, 0, [], False
+    with open(path, errors="replace") as handle:
+        for index, raw in enumerate(handle, 1):
+            line = raw.rstrip("\r\n")
+            if kind:
+                is_frame = bool(FRAME.match(line))
+                ended = ((kind == "ubsan" and not is_frame) or (kind == "leak" and seen_frame and not is_frame)
+                         or (kind in ("tsan", "asan") and END.match(line)))
+                if not ended:
+                    seen_frame = seen_frame or is_frame
+                    block.append(line)
+                    continue
+                if kind in ("tsan", "asan") and line.startswith("SUMMARY: "):
+                    block.append(line)
+                yield kind, number, block
+                kind = None
+            started = start_of(line)
+            if started:
+                kind, number, block, seen_frame = started, index, [line], False
+        if kind:
+            yield kind, number, block
 
 
 def main() -> int:
