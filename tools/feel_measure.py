@@ -572,9 +572,23 @@ def item9a_evidence_complete(report):
     for peer in peers.values():
         pins = peer.get('pins', {})
         names = [name for name in pins if name.startswith('item9a_')]
-        if not names or any(pin.get('value') is None for name, pin in pins.items() if name.startswith('item9a_')):
+        if not names or any(pin.get('status') == 'MISS' for name, pin in pins.items() if name.startswith('item9a_')):
             return False
     return True
+
+
+def failure_reasons(report):
+    reasons = [f'{peer}.{name}: {pin.get("status", "MISS")} value={pin.get("value")!r}; {pin.get("rule", "no rule recorded")}'
+               for peer, measured in report.get('peers', {}).items() for name, pin in measured.get('pins', {}).items()
+               if name.startswith('item9a_') and pin.get('status') != 'PASS']
+    for field in ('measurement_complete', 'launches_complete', 'off_wire_pass'):
+        if report.get(field) is False:
+            reasons.append(f'{field}=false; see {report.get("name", "case")}/feel-report.json')
+    if report.get('reason'):
+        reasons.append(report['reason'])
+    if report.get('item9a_pass') is False and not reasons:
+        reasons.append('item9a_pass=false without a passing set of per-peer measurements')
+    return reasons
 
 
 def analyze(root, stock=None):
@@ -658,6 +672,8 @@ def analyze(root, stock=None):
                           raw_files=[file_record(path) for path in raw_paths if record_path(path).is_file()],
                           missing_raw_files=[str(path) for path in raw_paths if not record_path(path).is_file()])
             report['measurement_complete'] &= not report['missing_raw_files']
+            report['item9a_pass'] = all(value['status'] == 'PASS' for measured in peers.values()
+                                       for name, value in measured['pins'].items() if name.startswith('item9a_'))
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
             results.append(report)
@@ -743,6 +759,8 @@ def gates(root, control, timeout):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--repo', type=Path, default=REPO)
+    parser.add_argument('--matrix', action='store_true', help='run the complete matrix (the default)')
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--port', type=int, default=48231)
     parser.add_argument('--port-block', default='48231-48240', help="the calling lane's own port block, LO-HI; --port stays inside it")
@@ -793,9 +811,13 @@ def dry_run_plan(launch_all):
 
 def main(argv=None):
     parser, args = parse_args(argv)
+    if args.repo.resolve() != REPO.resolve():
+        parser.error('--repo must name the tree containing this driver')
+    if args.matrix and (args.cases or args.lag_arms):
+        parser.error('--matrix cannot select a subset of arms')
     root = args.out.resolve()
     low, _, high = args.port_block.partition('-')
-    if not (low.isdigit() and high.isdigit() and int(low) <= args.port <= int(high)):
+    if not (low.isdigit() and high.isdigit() and int(low) <= args.port and args.port + 9 <= int(high)):
         parser.error(f'the ten match ports must stay within the port block {args.port_block}')
     if args.host_lua_states < 1 or args.client_lua_states < 1:
         parser.error('--host-lua-states and --client-lua-states must be positive')
@@ -921,11 +943,14 @@ def main(argv=None):
     item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
                   for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
+    reasons = {row['name']: failure_reasons(row) for row in results}
+    write_json(root / 'gates.json', dict(passed=complete and item9a_pass is True,
+        cases={row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False), reasons=reasons[row['name']]) for row in results}))
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
     completion = dict(finished=stamp(), measurement_complete=complete, presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
                       launches_complete=bool(case_launches) and all(case_launches.values()),
                       case_launches=case_launches, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
-                      scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates)
+                      scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates, failure_reasons=reasons)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')

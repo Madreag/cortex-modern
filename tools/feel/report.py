@@ -375,8 +375,9 @@ def wrapped_delta(delta, size, wraps):
     return (delta + size / 2) % size - size / 2 if wraps and size else delta
 
 
-def pin(value, rule, passed, evidence, detail=None):
-    return dict(value=value, rule=rule, status='PASS' if passed and value is not None else 'MISS',
+def pin(value, rule, passed, evidence, detail=None, available=None):
+    available = value is not None if available is None else available
+    return dict(value=value, rule=rule, status=('PASS' if passed else 'FAIL') if available else 'MISS',
                 evidence=[str(record_path(path)) for path in evidence], detail=detail)
 
 
@@ -458,17 +459,20 @@ def item9a_gates(run, peer='host', rows=None):
         # The seat the silent peer got is whatever the lobby gave it; read it instead of assuming 2.
         silent_seat = peer_id_of(run / 'client_report.json') or 2
         holds = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)]
-        held = next((tick for seat, tick in holds if seat == silent_seat and tick >= manifest['silent_tick']), None)
-        # A lagging seat can already be held when its silence comes: then the hold in force at the silent tick is the one it returns from.
-        if manifest.get('silent_hold') == 'in_force':
-            back = [int(tick) for seat, tick in re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', log) if int(seat) == silent_seat]
-            before = [tick for seat, tick in holds if seat == silent_seat and tick <= manifest['silent_tick']]
-            if before and not any(before[-1] < tick <= manifest['silent_tick'] for tick in back):
-                held = before[-1]
+        injection_path = run / 'client/stdout.log'
+        injection_log = injection_path.read_text(encoding='utf-8-sig', errors='replace') if injection_path.is_file() else ''
+        injections = [int(tick) for tick in re.findall(r'\[selftest\] frame stall tick=(\d+)', injection_log)]
+        injection = next((tick for tick in injections if tick >= manifest['silent_tick']), manifest['silent_tick'])
+        returns = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', log)]
+        before = [tick for seat, tick in holds if seat == silent_seat and tick <= injection]
+        held = next((tick for seat, tick in sorted(holds, key=lambda value: value[1]) if seat == silent_seat and tick >= injection), None)
+        if before and not any(seat == silent_seat and max(before) < tick <= injection for seat, tick in returns):
+            held = max(before)
         # The feel window stays fixed; a return may land past it, inside the round, and the peer that returns may be a relaunch.
         rejoin_end = manifest.get('rejoin_through_tick', final_tick)
         returners = manifest.get('returner_peers', ['client'])
-        pins['item9a_hold'] = pin(held, 'silent seat 2 is held from its agreed frame', held is not None, [log_path])
+        pins['item9a_hold'] = pin(held, f'silent seat {silent_seat} is held from its agreed frame', held is not None,
+            [log_path, injection_path], dict(requested_tick=manifest['silent_tick'], actual_tick=injection), available=log_path.is_file())
         def reclaims(name):
             path = run / name / 'stdout.log'
             text = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
@@ -502,8 +506,13 @@ def item9a_gates(run, peer='host', rows=None):
             return values, path
         host_hashes, host_path = hashes('host')
         survivor_hashes, survivor_path = hashes('survivor')
-        same = held is not None and all(tick in host_hashes and host_hashes.get(tick) == survivor_hashes.get(tick) for tick in range(held, final_tick + 1))
-        pins['item9a_ai_takeover_hash'] = pin(same, 'every committed hash from hold through rejoin equals on both survivors', same, [host_path, survivor_path])
+        compare_through = max([final_tick, *(tick for tick, _ in host_reclaims), *(tick for tick, _ in survivor_reclaims)])
+        same = held is not None and all(tick in host_hashes and host_hashes.get(tick) == survivor_hashes.get(tick) for tick in range(held, compare_through + 1))
+        pins['item9a_ai_takeover_hash'] = pin(same, 'every committed hash from hold through rejoin equals on both survivors', same,
+            [host_path, survivor_path], dict(first_tick=held, last_tick=compare_through), available=bool(host_hashes) and bool(survivor_hashes))
+        reholds = [(seat, tick, returned_seat, returned_tick) for seat, tick in holds for returned_seat, returned_tick in returns
+                   if 0 < tick - returned_tick <= 100]
+        pins['item9a_no_rehold'] = pin(reholds, 'no seat is held within 100 frames after any return', not reholds, [log_path])
     return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds),
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
