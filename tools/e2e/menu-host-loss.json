@@ -478,7 +478,7 @@
           "start_delay_s": 0,
           "kill_when": {
             "peer": "survivor",
-            "log": "^\\[net-match\\] held client: catching up in place"
+            "log": "^\\[net-match\\] held client: catching up in place from frame (5[5-9]\\d|6[0-4]\\d) "
           }
         },
         {
