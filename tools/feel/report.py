@@ -436,6 +436,8 @@ def item9a_gates(run, peer='host', rows=None):
     wait_ms = sum(ms for _, ms in waits)
     wait_fraction = wait_ms / wall_ms if wall_ms else None
     longest = max((ms for _, ms in waits), default=0) if wall_ms else None
+    steady_end = manifest.get('silent_tick') or final_tick + 1
+    steady_stalls = sum(ms > 0 for tick, ms in waits if tick < steady_end) if wall_ms else None
     report_path = run / f'{peer}_report.json'
     report = json.loads(report_path.read_text(encoding='utf-8-sig')) if report_path.is_file() else {}
     def locksteps(node):
@@ -461,6 +463,7 @@ def item9a_gates(run, peer='host', rows=None):
     pins = {
         'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
+        'item9a_steady_stalls': pin(steady_stalls, '0 blocking waits before the injected spike', steady_stalls == 0, evidence),
         'item9a_longest_wait': pin(longest, '<= 50 ms', longest is not None and longest <= 50, evidence),
         'item9a_confirmed_horizon_lag': pin(horizon_lag_ms, '<= 50 ms behind the steady confirmed-tick clock, including recovery',
             horizon_lag_ms is not None and horizon_lag_ms <= 50, evidence),
@@ -537,7 +540,7 @@ def item9a_gates(run, peer='host', rows=None):
 
 
 def apply_tps_call(result, reference):
-    """Apply the same-machine ruling while retaining the absolute measurements."""
+    """Keep the matched single-player rate as evidence without changing the gate."""
     measured = result['metrics'].get('steady_wall_tps')
     baseline = reference.get('steady_wall_tps') if reference else None
     if not isinstance(baseline, (int, float)) or not math.isfinite(baseline) or baseline <= 0:
@@ -545,17 +548,11 @@ def apply_tps_call(result, reference):
     pins = result['pins']
     if 'item9a_wall_tps' not in pins:
         return
-    limited = baseline < 59.5
-    minimum = baseline * .95 if limited else 59.5
     original = dict(pins['item9a_wall_tps'])
     evidence = original['evidence'] + [reference['evidence']]
     pins['item9a_wall_tps'] = pin(measured,
-        f'>= {minimum:.6f}; within 5 percent of the matched single-player baseline' if limited else '>= 59.5; single-player clears the absolute gate',
-        measured is not None and measured >= minimum, evidence)
-    result['tps_call'] = dict(reference=reference, absolute=original, minimum_tps=minimum, box_limited=limited)
-    if limited and 'item9a_confirmed_horizon_lag' in pins:
-        pins['item9a_confirmed_horizon_lag']['required'] = False
-        pins['item9a_confirmed_horizon_lag']['detail'] = 'The nominal 60 Hz drift remains diagnostic under the same-machine TPS ruling; blocked time and longest block remain required.'
+        '>= 59.5 after tick 300, including recovery time', measured is not None and measured >= 59.5, evidence)
+    result['tps_call'] = dict(reference=reference, absolute=original, minimum_tps=59.5, box_limited=baseline < 59.5)
     result['pass_check'] = all(value['status'] == 'PASS' for value in pins.values() if value.get('required', True))
 
 
