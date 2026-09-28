@@ -1294,8 +1294,10 @@ static std::string ResyncSaveName() {
 			// thread proved it restorable when it published it, so the game thread reads no archive here.
 			std::optional<AutosaveDescriptor> anchor;
 			if (isHost) {
-				anchor = AutosaveStore::NewestValidated(m_AutosaveMatchId);
-				if (anchor && anchor->savedTick <= state.savedTick) {
+				// Every peer the heal relaunches must hold it: a seat that caught up across a capture never took that one.
+				anchor = ChooseRewindAnchor(AutosaveStore::ValidatedNewestFirst(m_AutosaveMatchId), m_CheckpointHolders, state.savedTick,
+				                            CheckpointWriters(state.savedTick), m_AutosaveIdentity.roundId);
+				if (anchor) {
 					state.rewindMatchId = anchor->matchId;
 					state.rewindTick = anchor->savedTick;
 				}
@@ -3319,12 +3321,13 @@ static std::string ResyncSaveName() {
 		ApplyAutosaveVerdict(tick, joinCapture, archived);
 	}
 
-	std::vector<uint64_t> NetMatchService::TakeAutosaveVerdicts() {
+	std::vector<uint64_t> NetMatchService::TakeAutosaveVerdicts(std::vector<uint64_t>* refused) {
 		std::vector<uint64_t> finished;
 		while (const std::optional<ActivityMan::AutosaveVerdict> verdict = g_ActivityMan.TakeAutosaveVerdict()) {
 			const bool awaited = std::any_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [&](const AwaitedAutosave& entry) { return entry.tick == verdict->tick; });
 			ResolveAwaitedAutosave(verdict->tick, verdict->archived);
 			if (awaited) finished.push_back(verdict->tick);
+			if (awaited && !verdict->archived && refused) refused->push_back(verdict->tick);
 		}
 		return finished;
 	}
@@ -3333,6 +3336,7 @@ static std::string ResyncSaveName() {
 		m_ScheduledCaptures.clear();
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
+		m_CheckpointHolders.clear();
 		m_OpenCaptureForJoin = false;
 		m_ManualCaptures.clear();
 		m_OpenCaptureManual = false;
@@ -3354,6 +3358,23 @@ static std::string ResyncSaveName() {
 		// The host's ask the heal cut short is taken again after it.
 		if (m_OpenCaptureManual) m_ManualSaveAsked = true;
 		m_OpenCaptureManual = false;
+	}
+
+	void NetMatchService::NoteCheckpointHolder(uint64_t tick, uint8_t peer) {
+		m_CheckpointHolders[tick].insert(peer);
+		// Retention keeps a handful of archives, so only the newest captures' holders can matter.
+		while (m_CheckpointHolders.size() > 32) m_CheckpointHolders.erase(m_CheckpointHolders.begin());
+	}
+
+	std::optional<AutosaveDescriptor> NetMatchService::ChooseRewindAnchor(const std::vector<AutosaveDescriptor>& validatedNewestFirst,
+	                                                                     const std::map<uint64_t, std::set<uint8_t>>& holders, uint64_t savedTick,
+	                                                                     const std::set<uint8_t>& peers, uint64_t roundId) {
+		for (const AutosaveDescriptor& checkpoint: validatedNewestFirst) {
+			if (checkpoint.savedTick > savedTick || checkpoint.roundId != roundId) continue;
+			const auto held = holders.find(checkpoint.savedTick);
+			if (held != holders.end() && std::includes(held->second.begin(), held->second.end(), peers.begin(), peers.end())) return checkpoint;
+		}
+		return std::nullopt;
 	}
 
 	std::set<uint8_t> NetMatchService::CheckpointWriters(uint64_t tick) const {
@@ -3378,13 +3399,19 @@ static std::string ResyncSaveName() {
 				if (m_Coordinator) m_Coordinator->NoteAnnouncedCapture(takenAt);
 				// The writers report the tick they took, so that is the capture the host waits on.
 				if (m_IsHost && note.tick == m_OpenCaptureTick) { m_OpenCaptureTick = takenAt; m_OpenCaptureApplied = true; }
-			} else if (note.kind == NetGameCheckpoint::Written && m_IsHost && note.tick == m_OpenCaptureTick) {
+			} else if ((note.kind == NetGameCheckpoint::Written || note.kind == NetGameCheckpoint::Missed) && m_IsHost && note.tick == m_OpenCaptureTick) {
 				m_CaptureWriters.erase(note.sender);
-				if (m_OpenCaptureManual) m_ManualSaveReported.insert(note.sender);
+				if (m_OpenCaptureManual && note.kind == NetGameCheckpoint::Written) m_ManualSaveReported.insert(note.sender);
 			}
+			// Every peer keeps who holds what, so a host that takes the round over names the same rewind points.
+			if (note.kind == NetGameCheckpoint::Written) NoteCheckpointHolder(note.tick, note.sender);
 		}
-		// A finished capture frees this peer's writer, and the host schedules on nothing else.
-		for (const uint64_t finished: input.finished) output.send.push_back({0, NetGameCheckpoint::Written, finished});
+		// A finished capture frees this peer's writer, and the host schedules on nothing else; a refused one says it holds nothing.
+		for (const uint64_t finished: input.finished) {
+			const bool refused = std::find(input.refused.begin(), input.refused.end(), finished) != input.refused.end();
+			output.send.push_back({0, refused ? NetGameCheckpoint::Missed : NetGameCheckpoint::Written, finished});
+			if (!refused && input.localPeer != 0) NoteCheckpointHolder(finished, input.localPeer);
+		}
 		if (!m_ScheduledCaptures.empty() && *m_ScheduledCaptures.begin() <= input.tick) {
 			m_ScheduledCaptures.erase(m_ScheduledCaptures.begin(), m_ScheduledCaptures.upper_bound(input.tick));
 			output.capture = true;
@@ -3502,7 +3529,8 @@ static std::string ResyncSaveName() {
 		std::vector<CheckpointNote> applied;
 		for (const auto& [sender, checkpoint]: ScenarioRunner::TakeAppliedCheckpoints()) applied.push_back({sender, checkpoint.kind, checkpoint.tick});
 		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
-		const std::vector<uint64_t> finished = TakeAutosaveVerdicts();
+		std::vector<uint64_t> refused;
+		const std::vector<uint64_t> finished = TakeAutosaveVerdicts(&refused);
 		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		AppendCommittedJoinFrame(tick);
 		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) return;
@@ -3512,6 +3540,8 @@ static std::string ResyncSaveName() {
 		input.unwritten = g_ActivityMan.UnwrittenAutosaves();
 		input.applied = std::move(applied);
 		input.finished = finished;
+		input.refused = std::move(refused);
+		input.localPeer = GetLocalPeerId();
 		if (m_IsHost) {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
@@ -3582,7 +3612,7 @@ static std::string ResyncSaveName() {
 			} else {
 				// A capture this peer did not take holds nothing, and says so at once.
 				System::PrintDiagnosticLine(std::format("[autosave] named tick={} not taken: catch_up={} running={}", tick, ScenarioRunner::WorldCatchUpActive(), g_ActivityMan.ActivityRunning()));
-				output.send.push_back({0, NetGameCheckpoint::Written, tick});
+				output.send.push_back({0, NetGameCheckpoint::Missed, tick});
 			}
 		}
 		for (const CheckpointNote& note: output.send) {
