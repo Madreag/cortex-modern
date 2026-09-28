@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sanitizers"))
 import check_ubsan_supp as ubsan
 
 # ASan frames read "#0 0x... in f file:line (bin+0x...)", TSan frames "#0 f file:line (bin+0x...) (BuildId: ...)".
-FRAME = re.compile(r"^\s*#(\d+) (?:0x[0-9a-f]+ in )?(.+?)(?: \(\S+\+0x[0-9a-f]+\))?(?: \(BuildId: [0-9a-f]+\))?$")
+FRAME = re.compile(r"^\s*#(\d+) (?:0x[0-9a-f]+ in )?(.+?)(?: \((\S+\+0x[0-9a-f]+)\))?(?: \(BuildId: [0-9a-f]+\))?$")
 START = [
     ("leak", re.compile(r"^(Direct|Indirect) leak of \d+ byte\(s\) in \d+ object\(s\) allocated from:")),
     ("tsan", re.compile(r"^WARNING: ThreadSanitizer: (.+?)(?: \(pid=\d+\))?$")),
@@ -57,6 +57,13 @@ def start_of(line: str):
         if pattern.match(line):
             return kind
     return None
+
+
+def frame_text(match: re.Match) -> str:
+    frame = match.group(2).strip()
+    if re.fullmatch(r"0x[0-9a-f]+", frame) and match.group(3):
+        return match.group(3)
+    return frame
 
 
 def reports(path: Path):
@@ -105,7 +112,7 @@ def main() -> int:
             suppressed = report is not None and ubsan.suppressed(entries, ubsan.check_of(report["message"]), report["file"])
             counts = suppressed_counts if suppressed else per_kind
             counts[kind] += 1
-            frames = [m.group(2) for m in map(FRAME.match, block) if m]
+            frames = [frame_text(m) for m in map(FRAME.match, block) if m]
             key = (kind, shape(block[0]) if kind != "leak" else block[0].split()[0], tuple(frames[:TOP_FRAMES]))
             if report:
                 key += (report["file"], report["line"], report["col"])
