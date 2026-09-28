@@ -805,18 +805,21 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->movableUs = Scene::LastObjectCaptureUs();
 		image->sceneUs = since(sceneStart);
 	}, sceneCache.get());
+	// The start activity is written beside the match's own and joins it after the join, in the same place.
+	CheckpointText playedActivity, startActivity;
 	captureAside("activity", {}, [&] {
 		const auto activityStart = std::chrono::steady_clock::now();
-		image->activity = Writer::Capture([&](Writer& writer) {
+		playedActivity = Writer::Capture([&](Writer& writer) {
 			writer.NewPropertyWithValue("Activity", activity);
 			writer.NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
-			// The start activity is the restart this machine configured for its own seats, not the match being played.
-			writer.PerPeerBegin();
-			if (m_StartActivity) writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get());
-			writer.PerPeerEnd();
 		});
 		image->activityUs = since(activityStart);
 	});
+	if (m_StartActivity) {
+		captureAside("start_activity", {}, [&] {
+			startActivity = Writer::Capture([&](Writer& writer) { writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get()); });
+		});
+	}
 	captureAside("scene_runtime", {}, [&] {
 		const auto sceneRuntimeStart = std::chrono::steady_clock::now();
 		image->sceneRuntime = CheckpointWriter::CaptureNative([scene] { return scene->SaveRuntimeCheckpoint(); });
@@ -900,6 +903,13 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	asideWork.Finish();
 	parallel.reset();
 	simSpan.emplace("sim_after_join");
+	// The start activity is the restart this machine configured for its own seats, not the match being played.
+	image->activity = Writer::Capture([&](Writer& writer) {
+		writer.Append(playedActivity);
+		writer.PerPeerBegin();
+		if (m_StartActivity) writer.Append(startActivity);
+		writer.PerPeerEnd();
+	});
 	for (LayerCapture& captured: layers) {
 		image->layers.emplace_back(captured.name, std::move(captured.snapshot));
 		std::move(captured.retired.begin(), captured.retired.end(), std::back_inserter(retiredLayers));
