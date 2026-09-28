@@ -5221,6 +5221,8 @@ static std::string ResyncSaveName() {
 		config.requirePublishedStart = false;
 		config.resumeFromSnapshot = false;
 		config.joinsRunningRound = false;
+		// Every peer that replays this round reaches its first frames with the routes the lost host's committed frames left: this one keeps them too.
+		config.continuesMatch = true;
 		config.initialPeerLeaves.clear();
 		config.initialSeatHolds.clear();
 		config.initialSeatReclaims.clear();

@@ -434,6 +434,8 @@ namespace RTE {
 		uint8_t frameRedundancyTicks = 1;
 		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
 		bool joinsRunningRound = false;
+		/// A round a peer takes over from its own committed state: its first frames go on with the match, so no canonical start runs in them.
+		bool continuesMatch = false;
 		std::optional<NetHash32> originalRoundConfigHash;
 		bool adaptiveInputDelay = false;
 		double simTickMs = 0;
