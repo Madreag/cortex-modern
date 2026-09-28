@@ -8731,6 +8731,11 @@ namespace RTE {
 			m_OwnMissingFrame.reset();
 			return false;
 		}
+		// A hold hands the seat to another playing peer's AI: with every other seat held or gone there is none, and nobody waits on this one.
+		if (std::none_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return !IsPeerGoneAtFrame(peer, frame) && !IsSeatUnderAI(peer, frame); })) {
+			m_OwnMissingFrame.reset();
+			return false;
+		}
 		// Only a seat the others are waiting on is late: the clock runs from the moment every other seat's input for the frame is in.
 		const auto remote = m_RemoteFrames.find(frame);
 		for (uint8_t peer: m_RemotePeerIds) {
