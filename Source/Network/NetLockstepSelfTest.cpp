@@ -20655,6 +20655,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		NetLockstepCoordinator host;
 		auto config = MakeCoordinatorConfig(1, 2, 0x9A51, 6, NetTransportLane::InputUnreliable);
 		config.startFrame = 1; config.roundId = 0x9A51;
+		config.remoteTransportPeerId = 1;
 		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
 		config.relayToOtherPeers = true;
 		config.peerInputDelayFrames = {{1, 6}, {2, 6}};
@@ -20687,6 +20688,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetLockstepCoordinator host;
 			auto config = MakeCoordinatorConfig(1, 2, 0x9A52, delay, NetTransportLane::InputUnreliable);
 			config.startFrame = 1; config.roundId = 0x9A52;
+			config.remoteTransportPeerId = 1;
 			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0;
 			config.relayToOtherPeers = true;
 			config.peerInputDelayFrames = {{1, delay}, {2, delay}};
@@ -20716,6 +20718,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetLockstepCoordinator host;
 			auto config = MakeCoordinatorConfig(1, 2, 0x9A53, 6, NetTransportLane::InputUnreliable);
 			config.startFrame = 1; config.roundId = 0x9A53;
+			config.remoteTransportPeerId = 1;
 			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
 			config.relayToOtherPeers = true;
 			config.peerInputDelayFrames = {{1, 6}, {2, 6}};
@@ -20737,6 +20740,26 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 		}
 		std::cout << "[net-lockstep-selftest] PASS an_announced_capture_excuses_every_seat_for_its_cost" << std::endl;
+		return true;
+	}
+
+	bool TestANeutralGapLeavesNoCommandsToResend(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A54, 0, NetTransportLane::InputUnreliable);
+		config.startFrame = 1; config.roundId = 0x9A54; config.remoteTransportPeerId = 1;
+		if (!wire.StartHost(49743, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 300;
+		host.m_ReclaimTransactions[1] = NetGameSeatReclaim{1, 0, 1, 2, 300, 0, 305, std::nullopt};
+		ScenarioRunner::SetLockstepCoordinator(&host);
+		ScenarioRunner::EnqueueLocalGameCommand({1, NetGameCheckpoint{}});
+		const bool queued = ScenarioRunner::QueueLockstepLocalControllerFrames(300, {}, error);
+		const auto pending = ScenarioRunner::CaptureUnacknowledgedLocalCommands();
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (!queued) return false;
+		if (!pending.empty()) { *error = "a return gap left a discarded command in the resync outbox"; return false; }
+		std::cout << "[net-lockstep-selftest] PASS a_neutral_gap_leaves_no_commands_to_resend" << std::endl;
 		return true;
 	}
 
@@ -21754,6 +21777,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAHeldHostCanReachItsReclaimHorizon, "a_held_host_can_reach_its_reclaim_horizon");
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
+		row(&TestANeutralGapLeavesNoCommandsToResend, "a_neutral_gap_leaves_no_commands_to_resend");
 		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");
 		row(&TestReturnFramesBypassReliableLoss, "return_frames_bypass_reliable_loss");
 		row(&TestAResumedRoundPrimesPastItsAgreedFirstFrame, "a_resumed_round_primes_past_its_agreed_first_frame");
