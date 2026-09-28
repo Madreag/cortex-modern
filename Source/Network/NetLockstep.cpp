@@ -4732,6 +4732,7 @@ namespace RTE {
 		m_AiHeldSeats.clear();
 		m_ReleasedAiSeats.clear();
 		m_ReleaseWhenHeld.clear();
+		m_PendingMemberEnds.clear();
 		m_EvictAfterReclaim.clear();
 		m_HoldTransactions.clear();
 		m_ReclaimTransactions.clear();
@@ -8222,6 +8223,7 @@ namespace RTE {
 			TickHostMigration(nowMs);
 			return;
 		}
+		TakeMemberEndsPlayedPast(nowMs);
 		for (auto& [peer, pending]: m_MigrationOutbox)
 			while (!pending.empty() && m_Transport->Send(peer, NetTransportLane::ControlReliable, pending.front()))
 				pending.pop_front();
@@ -8263,8 +8265,29 @@ namespace RTE {
 		ReclaimOwnSeat(nowMs);
 	}
 
+	void NetLockstepCoordinator::TakeMemberEndsPlayedPast(uint64_t nowMs) {
+		for (auto pending = m_PendingMemberEnds.begin(); pending != m_PendingMemberEnds.end();) {
+			if (!IsRunning()) {
+				pending = m_PendingMemberEnds.erase(pending);
+				continue;
+			}
+			if (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick < pending->second.first.frame) {
+				++pending;
+				continue;
+			}
+			// This round played the frame the member ended on and goes on: the member left it.
+			NetLockstepStop leave = pending->second.first;
+			leave.reason = NetLockstepStopReason::PeerLeft;
+			const NetPeerId transport = pending->second.second;
+			pending = m_PendingMemberEnds.erase(pending);
+			HandleStop(leave, nowMs, transport);
+		}
+	}
+
 	void NetLockstepCoordinator::Complete(const std::string& message) {
 		NET_PLANE_CHECK();
+		// The round's own end: a member's end still held back was this end, not a leave.
+		m_PendingMemberEnds.clear();
 		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Idle) {
 			return;
 		}
@@ -10368,6 +10391,12 @@ namespace RTE {
 		// host hands that seat to the AI like any leave and plays on.
 		if (stop.reason == NetLockstepStopReason::Complete && stop.senderPeerId != GetHostPeerId() &&
 		    (IsPersistentWorldRound() || (UsesBoundedWait() && m_RelayHost))) {
+			// A round's own end lands on every peer at the same frame and can reach this host before it plays that frame: a member's end is a
+			// leave only once this round has played past it without ending.
+			if (!IsPersistentWorldRound() && (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick < stop.frame)) {
+				m_PendingMemberEnds[stop.senderPeerId] = {stop, fromTransport};
+				return;
+			}
 			NetLockstepStop leave = stop;
 			leave.reason = NetLockstepStopReason::PeerLeft;
 			HandleStop(leave, nowMs, fromTransport);
@@ -10792,6 +10821,12 @@ namespace RTE {
 			std::string holdError;
 			if (!ProposePeerHold(peerId, nowMs, &holdError) && holdError != "the capture park deferred this hold") m_ReleaseWhenHeld.erase(peerId);
 			return;
+		}
+		// A seat that came back from an earlier leave and now leaves again: the later of the two decides, so its return is retired and the
+		// seat's history keeps the frames before.
+		if (const auto back = m_ReclaimTransactions.find(peerId); back != m_ReclaimTransactions.end() && firstFrameWithout >= back->second.activationFrame) {
+			m_ReclaimTransactions.erase(back);
+			m_PeerLeaveFrames.erase(peerId);
 		}
 		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
 			return;
