@@ -830,15 +830,18 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
                     published = [int(path.stem.rsplit("-", 1)[1]) for path in store.glob(f"{identity[1]}-*.ccmanifest")
                                  if path.with_suffix(".ccsave").exists() and (store / f"{identity[1]}.admission").exists()]
                 ready = _world_kill_ready(host_log, client_log, kill_past, published, ticket.exists())
+                blocked = None if ready else "the kill conditions (seated client, ticket, a capture past the kill tick, a published autosave)"
                 # The kill waits for a held seat to come back, as a player's host would not die mid-rejoin on cue.
                 if ready and _seat_mid_return(host_log) and waited_on_return < WORLD_KILL_RETURN_WAIT_POLLS:
                     waited_on_return += 1
-                    ready = False
+                    ready, blocked = False, f"a held seat's return (held at {SEAT_HELD.findall(host_log)[-1]}, waited {waited_on_return / 10} s)"
                 # And for the first sample both peers share after it, bounded by the cadence the shared samples keep.
                 if ready and FULLSTATE_EVERY and _arrival_unsampled(host_log, client_log):
                     sample_wait_began = time.monotonic() if sample_wait_began is None else sample_wait_began
                     if time.monotonic() - sample_wait_began < sample_wait_bound_s(shared_seen_at):
                         ready = False
+                        blocked = f"a shared sample after a seat came in (waited {time.monotonic() - sample_wait_began:.1f} s of {sample_wait_bound_s(shared_seen_at)} s)"
+                records["_kill_blocked_by"] = blocked
                 if ready:
                     records["_kill_waited_on_return_s"] = waited_on_return / 10
                     records["_kill_waited_on_sample_s"] = 0.0 if sample_wait_began is None else round(time.monotonic() - sample_wait_began, 1)
@@ -958,7 +961,8 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             (window / f"{who}-live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in peer_rows if row["tick"] <= last_shared),
                                                       encoding="utf-8")
         compare_live_window(window, first_capture + 1, last_shared, {"client": held_away(peer_log(first, "client"))})
-    assert records["_killed"], f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}"
+    assert records["_killed"], (f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}; "
+                                f"the host exited while the kill waited on {records.get('_kill_blocked_by')}")
     identity = WORLD_IDENTITY.findall(peer_log(first, "host"))
     assert identity, "the world host never printed its identity"
     world_id, boot_one, round_one = identity[0][0], int(identity[0][1]), int(identity[0][2])
