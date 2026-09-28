@@ -527,6 +527,22 @@ def check_item_assertions(results, scratch):
     item['readback'][0]['step'] = 2
     _, evidence = driver.item_evidence(record, item)
     ok &= row(results, 'review/missing-control-is-not-negative-proof', evidence['probe'] == 'fail')
+    toasts = {"report_toasts": {"report": "{peer}-match.json",
+                                "require": [{"kind": "seat_held", "text": "^Held - AI in control - rejoining$", "ticks": [600, 800]}]}}
+    record.update(peer="leaver", root=str(root / "leaver"))
+    _, evidence = driver.item_evidence(record, toasts)
+    ok &= row(results, "review/missing-report-toast-fails", evidence["probe"] == "fail", str(evidence.get("reason")))
+    (root / "leaver-match.json").write_text(json.dumps({"ui": {"toasts": [
+        {"tick": 1, "kind": "player_joined", "text": "host joined"},
+        {"tick": 605, "kind": "seat_held", "text": "held - AI in control"}]}}), encoding="utf-8")
+    _, evidence = driver.item_evidence(record, toasts)
+    ok &= row(results, "review/other-toast-text-is-not-the-required-one", evidence["probe"] == "fail")
+    (root / "leaver-match.json").write_text(json.dumps({"ui": {"toasts": [
+        {"tick": 600, "kind": "seat_held", "text": "Held - AI in control - rejoining"}]}}), encoding="utf-8")
+    _, evidence = driver.item_evidence(record, toasts)
+    ok &= row(results, "review/report-toast-passes", evidence["probe"] == "pass")
+    _, evidence = driver.item_evidence(record, {**toasts, "log_regex": [r"private catch-up complete frame=\d+ in_place=1"]})
+    ok &= row(results, "review/report-toast-cannot-hide-a-missing-log-line", evidence["probe"] == "fail")
     return ok
 
 
