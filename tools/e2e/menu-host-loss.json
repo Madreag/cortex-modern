@@ -478,7 +478,7 @@
           "start_delay_s": 0,
           "kill_when": {
             "peer": "survivor",
-            "log": "^\\[net-match\\] held client catch-up applied="
+            "log": "^\\[net-match\\] held client: catching up in place"
           }
         },
         {
@@ -514,7 +514,7 @@
             "-net-join",
             "127.0.0.1",
             "-net-test-live-stall",
-            "560:1500"
+            "560:700"
           ],
           "input_script": "ui-surfaces.input.txt",
           "settings": {
@@ -559,7 +559,7 @@
             "-net-join",
             "127.0.0.1",
             "-net-test-live-stall",
-            "560:1500"
+            "560:700"
           ],
           "input_script": "ui-surfaces.input.txt",
           "settings": {
