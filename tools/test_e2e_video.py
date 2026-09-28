@@ -1388,6 +1388,15 @@ def check_activity_over_applicability(results, scratch):
     client.write_text(driver.LOCKSTEP_ROUND_START + "7 frame=1814 local_peer=2 peers=3 input_delay=16\n")
     unmarked = driver.fullstate_verdict(host, client)
     ok &= row(results, "fullstate/no-end-line-stays-red", unmarked["passed"] is False, str(unmarked))
+    # Green-4 on this lane: the host's busy writer replaced its periodic capture, so the reclaim frame is a labelled capture.
+    reclaim = fullstate_line(1628, shared).replace("[fullstate]", "[fullstate-reclaim]")
+    host.write_text(host.read_text() + reclaim + "\n")
+    client.write_text(driver.LOCKSTEP_ROUND_START + "7 frame=1628 local_peer=2 peers=3 input_delay=18\n" + reclaim + "\n")
+    labelled = driver.fullstate_verdict(host, client)
+    ok &= row(results, "fullstate/reclaim-frame-samples-are-compared", labelled["passed"] is True and labelled["sampled_ticks"] == [1628], str(labelled))
+    client.write_text(client.read_text().replace("globals.sim_rng:b", "globals.sim_rng:c"))
+    differing = driver.fullstate_verdict(host, client)
+    ok &= row(results, "fullstate/differing-reclaim-frame-is-red", differing["passed"] is False and "tick 1628" in differing["reasons"][0], str(differing))
     return ok
 
 

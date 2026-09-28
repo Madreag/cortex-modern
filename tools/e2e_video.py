@@ -364,7 +364,20 @@ def read_index(video_dir):
 
 LOCKSTEP_ROUND_START = "[net-lockstep] start round="
 ROUND_START_FRAME = re.compile(r"(?m)^\[net-lockstep\] start round=\d+ frame=(\d+) ")
+RECLAIM_SAMPLE = re.compile(r"(?m)^\[fullstate-reclaim\] (tick=\d+ hash=[0-9a-f]{16} sections=\S+ round=\d+)\s*$")
 ACTIVITY_OVER = re.compile(r"(?m)^\[net-match-service-e2e\] activity over at frame (\d+): no full-state sample follows$")
+
+
+def with_reclaim_samples(log):
+    """A peer's log plus its labelled reclaim-frame samples, written beside it as oracle lines the comparison reads."""
+    log = Path(log)
+    text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+    samples = ["[fullstate] " + body for body in RECLAIM_SAMPLE.findall(text)]
+    if not samples:
+        return [log]
+    derived = log.with_name(log.stem + ".reclaim-samples.log")
+    derived.write_text("\n".join(samples) + "\n", encoding="utf-8")
+    return [log, derived]
 
 
 def fullstate_verdict(host_log, client_log):
@@ -374,7 +387,7 @@ def fullstate_verdict(host_log, client_log):
                for log in (host_log, client_log)]
     if not any(started):
         return {"passed": None, "not_applicable": "neither peer started a lockstep round", "reasons": [], "compared_samples": 0}
-    verdict = compare_fullstate(host_log, client_log)
+    verdict = compare_fullstate(with_reclaim_samples(host_log), with_reclaim_samples(client_log))
     if verdict["reasons"] == ["the peers share no full-state sample"] and not verdict["client_samples"]:
         # A finished activity takes no capture: a peer whose rounds all began at or after the end has nothing to compare.
         host_text, client_text = (Path(log).read_text(encoding="utf-8", errors="replace") for log in (host_log, client_log))
