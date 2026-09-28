@@ -5582,7 +5582,12 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::HostHeldMatchLocked() {
 		// Another held seat may have replayed more of the lost host's frames than this one: they are the round's own, so this seat replays
 		// them before its round opens and that seat joins it in place. Every seat is held meanwhile, so nobody waits on a round.
+		const Activity* activity = g_ActivityMan.GetActivity();
 		if (m_HeldGatherSinceMs == 0) {
+			if (activity && activity->IsOver()) {
+				ScenarioRunner::SetControllerReplayError("MatchOver:the match ended while this seat was rejoining");
+				return true;
+			}
 			m_HeldGatherExpected = m_HeldListener ? HeldSurvivorsLocked().size() : 0;
 			if (m_HeldGatherExpected == 0) return HostAloneFromOwnStateLocked();
 			m_HeldGatherSinceMs = SteadyNowMs();
@@ -5598,6 +5603,11 @@ static std::string ResyncSaveName() {
 		                            std::to_string(m_HeldGatherExpected) + " taken=" + std::to_string(m_HeldRecordFramesTaken) + " applied=" + std::to_string(applied) +
 		                            " waited=" + std::to_string(waited) + "ms");
 		m_HeldGatherSinceMs = 0;
+		// Those frames may be the ones that ended the round by its own rules: then there is a result, not a match to host.
+		if (activity && activity->IsOver()) {
+			ScenarioRunner::SetControllerReplayError("MatchOver:the match ended while this seat was rejoining");
+			return true;
+		}
 		return HostAloneFromOwnStateLocked();
 	}
 
@@ -5893,6 +5903,11 @@ static std::string ResyncSaveName() {
 			if (steadyMs > m_InPlaceHeardMs && HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, steadyMs - m_InPlaceHeardMs, HeldSeatSilenceBoundMs())) {
 				System::PrintDiagnosticLine("[net-match] held client: the host sent nothing for " + std::to_string(steadyMs - m_InPlaceHeardMs) + "ms at frame " +
 				                            std::to_string(m_WorldCatchUp.appliedThrough));
+				// The committed frames it replayed already ended the round by its own rules: the seat has the result, not a match to carry on.
+				if (const Activity* activity = g_ActivityMan.GetActivity(); activity && activity->IsOver()) {
+					ScenarioRunner::SetControllerReplayError("MatchOver:the match ended while this seat was rejoining");
+					return;
+				}
 				m_StatusText = "Host lost - arranging handover";
 				if (HeldSeatHostsLocked() && HostHeldMatchLocked()) return;
 				if (BeginInPlaceMoveLocked(nowMs)) return;
