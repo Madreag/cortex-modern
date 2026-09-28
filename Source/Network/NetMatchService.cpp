@@ -4133,7 +4133,7 @@ static std::string ResyncSaveName() {
 		// Whole frames with their round on the round's unreliable lane: a lost datagram delays only its own frames, and goes again.
 		const NetPeerId connection = session.connection;
 		const uint64_t nowMs = SteadyNowMs();
-		for (int datagram = 0; datagram < 16; ++datagram) {
+		for (int datagram = 0; datagram < 32; ++datagram) {
 			std::vector<uint8_t> packed;
 			bool large = false;
 			if (!host.NextTailDatagram(connection, nowMs, packed, &large)) {

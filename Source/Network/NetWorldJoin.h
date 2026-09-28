@@ -188,9 +188,9 @@ namespace RTE {
 		bool closingMeasured = false;
 		uint64_t activationTrailFrames = 0; //!< How far it trailed the round when its activation was announced: its return leaves it that long.
 		uint32_t windowsWithoutProgress = 0; //!< Closing windows its replay stood still through, in a row.
-		struct TailDatagram { uint64_t first = 0, last = 0, sentMs = 0; bool resent = false; };
+		struct TailDatagram { uint64_t first = 0, last = 0, firstSentMs = 0, sentMs = 0; bool repeated = false; };
 		std::deque<TailDatagram> tailInFlight; //!< Tail datagrams sent and not yet passed by its replay, lowest frames first.
-		double tailAckRttMs = 0; //!< Measured time from a datagram's first send to the report that passes it; 0 until measured.
+		double tailAckRttMs = 0; //!< The shortest time from a datagram's first send to the report that passes it; 0 until measured.
 		const char* catchUpGate = nullptr; //!< What the last catch-up report met on its way to an activation.
 		const char* catchUpGateLogged = nullptr; //!< The gate last written to the log, and the horizon it was written at.
 		uint64_t catchUpGateLoggedFrame = 0;
@@ -374,6 +374,8 @@ namespace RTE {
 	inline constexpr uint64_t c_NetWorldTailDatagramBytes = 1000;
 	/// A frame larger than this is too many packets for a datagram: it goes on the ordered lane in pieces.
 	inline constexpr uint64_t c_NetWorldTailDatagramFrameLimit = 4000;
+	/// Every tail datagram goes a second time this long after its first, so one lost packet costs its frames nothing.
+	inline constexpr uint64_t c_NetWorldTailRepeatMs = 20;
 	/// How long a returning seat may replay without showing headroom before its rejoin is ended and retried.
 	inline constexpr uint64_t c_NetWorldHeadroomWaitMs = 30000;
 	/// World-join plane schema on the offer, the transition and the membership report.
