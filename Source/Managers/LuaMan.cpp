@@ -11099,6 +11099,11 @@ void LuaMan::Destroy() {
 	for (int i = 0; i < c_MaxOpenFiles; ++i) {
 		FileClose(i);
 	}
+	// The singleton is never deleted, so the states close here: their finalizers free what the bindings allocated.
+	for (LuaStateWrapper& state: m_ScriptStates) {
+		state.Destroy();
+	}
+	m_MasterScriptState.Destroy();
 	Clear();
 }
 
