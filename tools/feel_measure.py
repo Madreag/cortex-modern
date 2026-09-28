@@ -599,7 +599,10 @@ def write_case_gates(root, results):
     for case in cases.values():
         if not case['passed'] and not case['reasons']:
             case['reasons'] = ['the case has no complete passing set of item9a measurements']
-    result = dict(passed=bool(cases) and all(case['passed'] for case in cases.values()), cases=cases)
+    reasons = [f'{name}: {reason}' for name, case in cases.items() for reason in case['reasons']]
+    if not cases:
+        reasons.append('no cases were reported')
+    result = dict(passed=bool(cases) and all(case['passed'] for case in cases.values()), cases=cases, reasons=reasons)
     write_json(root / 'gates.json', result)
     return result
 
