@@ -606,12 +606,13 @@ def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False
 
     The perturbation is timed late on purpose: at the stock tick 50 the heal lands before the first
     checkpoint (one 2 s interval = 120 ticks after the match starts), so the host would have nothing to
-    name and the row would be red for a reason that is not the anchor mechanism. Tick 700 puts at least
+    name and the row would be red for a reason that is not the anchor mechanism. Tick 720 puts at least
     four checkpoints before the heal at the 2 s cadence, and the 1400-tick cap leaves room for more than the
     retention limit afterwards, so the named one can only survive by being pinned; a run that writes fewer
     waits with its schedule doubled."""
     def attempt(scale: int, ticks: int) -> dict:
-        run_root, perturb_at = wait_root(root, scale, ticks), 700 * scale
+        # The live perturbation fires on a multiple of 30 ticks; 720 keeps every scaled run's on a full-state sample tick.
+        run_root, perturb_at = wait_root(root, scale, ticks), 720 * scale
         # The perturbation waits for both seats to be live; a peer the host holds (a sanitizer build's slow client) keeps it
         # from landing, so such a build asks the host to pause for a slow peer instead.
         run_pair(repo, run_root, port, ticks, 2,
