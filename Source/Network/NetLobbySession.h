@@ -167,7 +167,7 @@ namespace RTE {
 		void PumpOutgoingChunks();
 		void HandleTransportEvent(const NetTransportEvent& event, uint64_t nowMs);
 		bool SendPayloadTo(uint8_t peerId, const NetLobbyPayload& payload, std::string* error = nullptr, NetTransportLane lane = NetTransportLane::ControlReliable);
-		bool SendPayload(const NetLobbyPayload& payload, std::string* error = nullptr);
+		bool SendPayload(const NetLobbyPayload& payload, std::string* error = nullptr, NetTransportLane lane = NetTransportLane::ControlReliable);
 		const std::vector<uint8_t>& PeekReceivedState() const { return m_ReceivedState; }
 		uint64_t GetOutgoingStateId() const { return m_OutgoingStateId; }
 		uint16_t GetOutgoingChunkCount() const { return m_OutgoingChunkCount; }

@@ -1812,9 +1812,23 @@ namespace RTE {
 		// Each datagram goes twice, a moment apart; one its replay has still not passed within one and a half round trips is lost, and
 		// it alone goes again. Frames from the activation on reach the returner as the round's own, never from here.
 		const uint64_t resendMs = session->tailAckRttMs > 0 ? static_cast<uint64_t>(session->tailAckRttMs * 1.5) + 40 : 1000;
-		for (auto sent = session->tailInFlight.begin(); sent != session->tailInFlight.end();) {
+		if (nowMs >= session->tailLoggedMs + 2000) {
+			if (session->tailLoggedMs != 0) {
+				std::ostringstream line;
+				line << "[net-world] tail peer=" << static_cast<int>(session->assignedPeerId) << " new=" << session->tailSentNew << " repeat=" << session->tailSentRepeat
+				     << " resend=" << session->tailSentResend << " bytes=" << session->tailSentBytes << " refused=" << session->tailRefused << " in_flight=" << session->tailInFlight.size()
+				     << " delivered=" << session->deliveredThrough << " acknowledged=" << session->acknowledgedThrough << " rtt_ms=" << session->tailAckRttMs << " resend_ms=" << resendMs;
+				System::PrintDiagnosticLine(line.str());
+			}
+			session->tailLoggedMs = nowMs;
+			session->tailSentNew = session->tailSentRepeat = session->tailSentResend = session->tailSentBytes = session->tailRefused = 0;
+		}
+		size_t position = 0;
+		for (auto sent = session->tailInFlight.begin(); sent != session->tailInFlight.end(); ++position) {
 			if (session->activationTick != 0 && sent->first >= session->activationTick) break;
-			if (sent->repeated ? nowMs < sent->sentMs + resendMs : nowMs < sent->firstSentMs + c_NetWorldTailRepeatMs) {
+			// Only the lowest datagrams hold the replay up: those above them are most likely held already and pass once they do.
+			const bool due = sent->repeated ? position < c_NetWorldTailResendDepth && nowMs >= sent->sentMs + resendMs : nowMs >= sent->firstSentMs + c_NetWorldTailRepeatMs;
+			if (!due) {
 				++sent;
 				continue;
 			}
@@ -1825,6 +1839,8 @@ namespace RTE {
 				continue;
 			}
 			pack(frames);
+			++(sent->repeated ? session->tailSentResend : session->tailSentRepeat);
+			session->tailSentBytes += packed.size();
 			sent->sentMs = nowMs;
 			sent->repeated = true;
 			return true;
@@ -1839,9 +1855,15 @@ namespace RTE {
 		}
 		if (m_Tail.CopyFrom(session->deliveredThrough + 1, c_NetWorldTailDatagramFrames, c_NetWorldTailDatagramBytes, frames, &last) == 0 || last <= session->deliveredThrough) return false;
 		pack(frames);
+		++session->tailSentNew;
+		session->tailSentBytes += packed.size();
 		session->tailInFlight.push_back({session->deliveredThrough + 1, last, nowMs, nowMs, false});
 		session->deliveredThrough = last;
 		return true;
+	}
+
+	void NetWorldJoinHost::NoteTailDatagramRefused(NetPeerId connection) {
+		if (NetWorldJoinSession* session = Find(connection)) ++session->tailRefused;
 	}
 
 	void NetWorldJoinHost::AcknowledgeTailDatagrams(NetPeerId connection, uint64_t nowMs) {

@@ -14,6 +14,9 @@ namespace RTE {
 		ControlReliable = 0,
 		InputUnreliable = 1,
 		DiagnosticsReliable = 2,
+		/// Unreliable and unordered like the input lane, but queued behind the connection's send rate rather than dropped when it
+		/// cannot leave at once: bulk a peer resends itself.
+		BulkUnreliable = 3,
 	};
 
 	enum class NetTransportEventType {
