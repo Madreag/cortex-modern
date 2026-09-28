@@ -234,9 +234,10 @@ namespace RTE {
 
 		ContentFile m_DefaultBGTextureFile; //!< The background texture file that will be used to texturize Materials that have no defined background texture.
 
-		std::vector<TerrainFrosting*> m_TerrainFrostings; //!< The TerrainFrostings that need to be placed on this SLTerrain.
-		std::vector<TerrainDebris*> m_TerrainDebris; //!< The TerrainDebris that need to be  placed on this SLTerrain.
-		std::vector<TerrainObject*> m_TerrainObjects; //!< The TerrainObjects that need to be placed on this SLTerrain.
+		// A preset and its clones share the placement entries; the last SLTerrain holding one deletes it.
+		std::vector<std::shared_ptr<TerrainFrosting>> m_TerrainFrostings; //!< The TerrainFrostings that need to be placed on this SLTerrain.
+		std::vector<std::shared_ptr<TerrainDebris>> m_TerrainDebris; //!< The TerrainDebris that need to be  placed on this SLTerrain.
+		std::vector<std::shared_ptr<TerrainObject>> m_TerrainObjects; //!< The TerrainObjects that need to be placed on this SLTerrain.
 
 		std::deque<Box> m_UpdatedMaterialAreas; //!< List of areas of the material layer (main bitmap) which have been affected by new objects copied to it. These boxes are NOT wrapped, and can be out of bounds!
 

@@ -124,18 +124,9 @@ int SLTerrain::Create(const SLTerrain& reference) {
 
 	m_DefaultBGTextureFile = reference.m_DefaultBGTextureFile;
 
-	m_TerrainFrostings.clear();
-	for (TerrainFrosting* terrainFrosting: reference.m_TerrainFrostings) {
-		m_TerrainFrostings.emplace_back(terrainFrosting);
-	}
-	m_TerrainDebris.clear();
-	for (TerrainDebris* terrainDebris: reference.m_TerrainDebris) {
-		m_TerrainDebris.emplace_back(terrainDebris);
-	}
-	m_TerrainObjects.clear();
-	for (TerrainObject* terrainObject: reference.m_TerrainObjects) {
-		m_TerrainObjects.emplace_back(terrainObject);
-	}
+	m_TerrainFrostings = reference.m_TerrainFrostings;
+	m_TerrainDebris = reference.m_TerrainDebris;
+	m_TerrainObjects = reference.m_TerrainObjects;
 
 	m_OrbitDirection = reference.m_OrbitDirection;
 
@@ -157,19 +148,19 @@ int SLTerrain::ReadProperty(const std::string_view& propName, Reader& reader) {
 		reader >> m_BGColorLayer.get();
 	});
 	MatchProperty("AddTerrainFrosting", {
-		std::unique_ptr<TerrainFrosting> terrainFrosting = std::make_unique<TerrainFrosting>();
+		std::shared_ptr<TerrainFrosting> terrainFrosting = std::make_shared<TerrainFrosting>();
 		reader >> terrainFrosting.get();
-		m_TerrainFrostings.emplace_back(terrainFrosting.release());
+		m_TerrainFrostings.emplace_back(std::move(terrainFrosting));
 	});
 	MatchProperty("AddTerrainDebris", {
-		std::unique_ptr<TerrainDebris> terrainDebris = std::make_unique<TerrainDebris>();
+		std::shared_ptr<TerrainDebris> terrainDebris(new TerrainDebris());
 		reader >> terrainDebris.get();
-		m_TerrainDebris.emplace_back(terrainDebris.release());
+		m_TerrainDebris.emplace_back(std::move(terrainDebris));
 	});
 	MatchProperty("PlaceTerrainObject", {
-		std::unique_ptr<TerrainObject> terrainObject = std::make_unique<TerrainObject>();
+		std::shared_ptr<TerrainObject> terrainObject(new TerrainObject());
 		reader >> terrainObject.get();
-		m_TerrainObjects.emplace_back(terrainObject.release());
+		m_TerrainObjects.emplace_back(std::move(terrainObject));
 	});
 	MatchProperty("OrbitDirection", {
 		std::string orbitDirection;
@@ -204,13 +195,13 @@ int SLTerrain::Save(Writer& writer) const {
 	if (m_FGColorLayer && (writer.ContentOverride(&m_FGColorLayer->GetContentFile()) || m_FGColorLayer->IsLoadedFromDisk())) {
 		writer.NewPropertyWithValue("FGColorLayer", m_FGColorLayer.get());
 	} else {
-		for (const TerrainFrosting* terrainFrosting: m_TerrainFrostings) {
-			writer.NewPropertyWithValue("AddTerrainFrosting", terrainFrosting);
+		for (const std::shared_ptr<TerrainFrosting>& terrainFrosting: m_TerrainFrostings) {
+			writer.NewPropertyWithValue("AddTerrainFrosting", terrainFrosting.get());
 		}
-		for (const TerrainDebris* terrainDebris: m_TerrainDebris) {
-			writer.NewPropertyWithValue("AddTerrainDebris", terrainDebris);
+		for (const std::shared_ptr<TerrainDebris>& terrainDebris: m_TerrainDebris) {
+			writer.NewPropertyWithValue("AddTerrainDebris", terrainDebris.get());
 		}
-		for (const TerrainObject* terrainObject: m_TerrainObjects) {
+		for (const std::shared_ptr<TerrainObject>& terrainObject: m_TerrainObjects) {
 			// Write out only what is needed to place a copy of this in the Terrain
 			writer.NewProperty("PlaceTerrainObject");
 			writer.ObjectStart(terrainObject->GetClassName());
@@ -335,13 +326,13 @@ int SLTerrain::LoadData() {
 
 		TexturizeTerrain();
 
-		for (const TerrainFrosting* terrainFrosting: m_TerrainFrostings) {
+		for (const std::shared_ptr<TerrainFrosting>& terrainFrosting: m_TerrainFrostings) {
 			terrainFrosting->FrostTerrain(this);
 		}
-		for (TerrainDebris* terrainDebris: m_TerrainDebris) {
+		for (const std::shared_ptr<TerrainDebris>& terrainDebris: m_TerrainDebris) {
 			terrainDebris->ScatterOnTerrain(this);
 		}
-		for (TerrainObject* terrainObject: m_TerrainObjects) {
+		for (const std::shared_ptr<TerrainObject>& terrainObject: m_TerrainObjects) {
 			terrainObject->PlaceOnTerrain(this);
 		}
 		CleanAir();
