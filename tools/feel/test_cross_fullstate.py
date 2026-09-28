@@ -82,6 +82,46 @@ class FullStateTests(unittest.TestCase):
         self.assertEqual(result['missing'],[])
         self.assertEqual(result['compared_samples'],0)
 
+    def held_peer(self,ticks,hold,reclaim,round_id=1,peer=2):
+        """A peer's log with its own hold of its seat at `hold` and its return at `reclaim`."""
+        document=self.peer(ticks)
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'stdout.log'
+            lines=[f'[net-lockstep] start round={round_id} frame=1 local_peer={peer} peers=2 input_delay=4',
+                   f'[net-lockstep] hold of this seat at {hold} revision=10 incarnation=1 state=Running',
+                   f'[net-match] private catch-up complete frame={reclaim} in_place=1 from={hold - 2}',
+                   f'[net-match] seat-reclaimed peer={peer} frame={reclaim} live_actors=2']
+            path.write_text('\n'.join(lines)+'\n')
+            document['holds']=report.parse_fullstate([path])['holds']
+        return document
+
+    def test_a_held_peers_samples_inside_its_own_hold_are_expected_absent(self):
+        expected=[(1,60,'sample'),(1,120,'sample'),(1,180,'sample'),(1,240,'sample')]
+        peers=dict(host=self.peer([(1,60),(1,120),(1,180),(1,240)]),client=self.held_peer([(1,60),(1,240)],hold=102,reclaim=230))
+        result=report.compare_fullstate_histories(peers,expected)
+        self.assertTrue(result['passed'],result)
+        self.assertEqual(result['held_samples'],[dict(peer='client',key=(1,120,'sample')),dict(peer='client',key=(1,180,'sample'))])
+        self.assertEqual(result['compared_samples'],2)
+
+    def test_a_hold_excuses_neither_another_peer_nor_a_tick_outside_it(self):
+        expected=[(1,60,'sample'),(1,120,'sample'),(1,240,'sample')]
+        peers=dict(host=self.peer([(1,60),(1,240)]),client=self.held_peer([(1,60)],hold=102,reclaim=230))
+        result=report.compare_fullstate_histories(peers,expected)
+        self.assertFalse(result['passed'])
+        self.assertEqual(result['missing'],[dict(peer='host',key=(1,120,'sample')),dict(peer='client',key=(1,240,'sample'))])
+        other=report.compare_fullstate_histories(dict(host=self.peer([(2,60),(2,240)]),client=self.held_peer([(2,60),(2,240)],hold=102,reclaim=230)),
+                                                 [(2,60,'sample'),(2,120,'sample'),(2,240,'sample')])
+        self.assertEqual(other['missing'],[dict(peer='host',key=(2,120,'sample')),dict(peer='client',key=(2,120,'sample'))],'the hold was in round 1')
+
+    def test_a_hold_that_never_returns_excuses_nothing(self):
+        document=self.held_peer([(1,60)],hold=102,reclaim=230)
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'stdout.log'
+            path.write_text('[net-lockstep] start round=1 frame=1 local_peer=2 peers=2 input_delay=4\n'
+                            '[net-lockstep] hold of this seat at 102 revision=10 incarnation=1 state=Running\n')
+            document['holds']=report.parse_fullstate([path])['holds']
+        self.assertEqual(document['holds'],[])
+
     def test_a_coalesced_sample_never_excuses_a_labelled_capture(self):
         expected=[(1,120,'canonical')]
         canonical='[fullstate-canonical] tick=120 hash=0123456789abcdef sections=header:0123456789abcdef round=1'
