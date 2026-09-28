@@ -1843,18 +1843,22 @@ static std::string ResyncSaveName() {
 			return !keepLocalPlayer || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity));
 		}, [this, local, state, keepLocalPlayer, dedicated, newestBinding, ownCheckpoint](Activity& activity) {
 			StopSnapshotLoadKeepalive();
-			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick ||
-			    !g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true)) return false;
+			// Each refusal names its step: the relaunch reports only that the restart failed.
+			const auto refuse = [](const char* step) { System::PrintDiagnosticLine(std::string("[net-match] resync restore refused: ") + step); return false; };
+			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick) return refuse("the restored tick is not the snapshot's");
+			if (!g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true))
+				return refuse("this machine's input, GUI or frame state does not load");
 			const NetGamePlayerBindings seatless{};
 			// A peer that loaded its own copy of the checkpoint and one that was streamed the host's copy
 			// apply the SAME bindings - the ones the checkpoint's manifest carried - or the two would
 			// resume onto different seats. Only a live heal keeps this machine's own captured state.
 			if (!(keepLocalPlayer && !ownCheckpoint ? activity.RestoreNetLocalPlayerState(local->activity)
 			                                        : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) {
-				return false;
+				return refuse(keepLocalPlayer && !ownCheckpoint ? "this machine's local player state does not restore" : "the snapshot's player bindings do not apply");
 			}
-			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame)) return false;
-			return ScenarioRunner::RestoreNetResyncState(*state);
+			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame))
+				return refuse("this machine's input, GUI or frame state does not apply");
+			return ScenarioRunner::RestoreNetResyncState(*state) || refuse("the lockstep resync state does not restore");
 		})) { StopSnapshotLoadKeepalive(); if (error) *error = "could not stage resync local state restoration"; return false; }
 		ScenarioRunner::ApplyDeterministicConfig();
 		if (resyncRejoin) SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
