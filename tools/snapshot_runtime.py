@@ -48,6 +48,7 @@ SCHEMAS["Controller3"] = [*SCHEMAS["Controller2"], ("production_states", array(5
 SCHEMAS["TimerMan1"] = fields("ticks_per_second real_time sim_time sim_update_count sim_accumulator delta_time delta_time_seconds delta_buffer "
     "sim_updates_since_drawn drawn_sim_update sim_speed time_scale sim_paused sim_time_frozen free_run_sim "
     "pace_accrued pace_trimmed pace_wall_seen pace_cap_lost pace_paused_lost pace_update_calls pace_reset_calls")
+SCHEMAS["TimerMan2"] = SCHEMAS["TimerMan1"]
 SCHEMAS["Screen1"] = [("team", "n"), *fields("offset prev_offset delta_offset scroll_target", VECTOR),
     ("scroll_timer", TIMER), *fields("scroll_speed target_x_wrapped target_y_wrapped"), ("seam_cross_count", array(2)),
     ("occlusion", VECTOR), ("shake_magnitude", "n")]
@@ -67,6 +68,7 @@ SCHEMAS["MovableMan2"] = [*SCHEMAS["MovableMan1"], ("borrowed_references", seque
 SCHEMAS["SceneMan1"] = [*fields("layer_draw_mode raycast_visualizations pixel_check_visualizations last_updated_screen second_structure_pass"),
     *fields("calc_timer clean_timer", TIMER), ("scrap_compacting_height", "n")]
 SCHEMAS["SceneMan2"] = [*SCHEMAS["SceneMan1"], ("materials", "o")]
+SCHEMAS["SceneMan3"] = SCHEMAS["SceneMan2"]
 SCHEMAS["MaterialCatalog1"] = [("count", "n"), ("names", NUMBER_MAP), ("palette", array(256, "o")), *fields("copies presets", sequence("o"))]
 SCHEMAS["MaterialReference1"] = fields("kind index")
 SCHEMAS["RuntimeGlobals1"] = [*fields("sim_rng render_rng", "s"), *fields("timer movable scene camera", "o")]
@@ -565,6 +567,11 @@ for _version in ("ActorRuntime1", "ActorRuntime2", "ActorRuntime3"):
     _LOCAL_FIELDS[_version] = _LOCAL_FIELDS[_version] | set("waypoint_cursor draw_waypoints move_target previous_path_target move_vector update_path".split())
 # RenderUpdate moves a menu to its actor's interpolated position and eases the visual cursor on each drawn frame (PieMenu.cpp).
 _LOCAL_FIELDS["PieMenuRuntime1"] = {"center", "cursor_visual_angle"}
+# TimerMan2 writes m_FreeRunSim per peer (TimerMan.h VisitCheckpoint): -free-run-sim sets it on one process only
+# (Main.cpp SetFreeRunSim), and it only paces this machine's loop (TimerMan::TimeForSimUpdate).
+_LOCAL_FIELDS["TimerMan2"] = _LOCAL_FIELDS["TimerMan1"] | {"free_run_sim"}
+# SceneMan3 writes m_LastUpdatedScreen per peer: FrameMan::Draw sets it per player screen (SceneMan::Update(screenId)) for this machine's view.
+_LOCAL_FIELDS["SceneMan3"] = {"last_updated_screen"}
 _LOCAL_FIELDS["Controller3"] = _LOCAL_FIELDS["Controller2"] | set(
     "production_states production_analog_move production_analog_aim production_analog_cursor production_mouse_movement "
     "production_seat_mode production_seat_player production_valid committed_states committed_analog_move committed_analog_aim "
