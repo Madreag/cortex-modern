@@ -1316,6 +1316,12 @@ namespace RTE {
 							return;
 						}
 					}
+					// A held seat's record of a lost host's round reaches its successor's listener before the successor opens its round; one
+					// that arrives after is what the successor already took or went without.
+					if (const NetLobbyStateChunk* chunk = std::get_if<NetLobbyStateChunk>(&decoded.message.payload); m_Config.host && chunk && chunk->transferId == c_NetWorldTailTransferId) {
+						++m_Stats.ignoredSessionPackets;
+						return;
+					}
 					const std::string type = NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload));
 					const std::optional<uint32_t> claimedPeer = std::visit([](const auto& payload) -> std::optional<uint32_t> {
 						if constexpr (requires { payload.peerId; }) return payload.peerId;
