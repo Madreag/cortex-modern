@@ -7152,7 +7152,8 @@ namespace RTE {
 				++peerStats.windowCopiesSkipped;
 				return;
 			}
-			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame targets the sender's delay window");
+			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame targets the sender's delay window: peer " + std::to_string(frame.senderPeerId) +
+			     " frame " + std::to_string(frame.targetFrame) + " before its start " + std::to_string(EffectiveStartOf(frame.senderPeerId)));
 			return;
 		}
 		if (frame.targetFrame < m_Stats.nextFrame) {
