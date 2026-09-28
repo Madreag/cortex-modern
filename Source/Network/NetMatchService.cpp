@@ -5397,10 +5397,6 @@ static std::string ResyncSaveName() {
 		for (uint8_t peer = 1; peer <= config.peerCount && peer <= 8; ++peer)
 			if ((handover.departedMask & (1U << (peer - 1))) != 0) config.initialPeerLeaves.emplace(peer, handover.frame);
 		config.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
-		// The authority plays its own seat from the handover: a held seat that took the round over ended its own hold there.
-		config.initialSeatHolds.erase(handover.authorityPeerId);
-		if (const auto left = config.initialPeerLeaves.find(handover.authorityPeerId); left != config.initialPeerLeaves.end() && left->second < handover.frame)
-			config.initialPeerLeaves.erase(left);
 		config.initialDelayChanges = m_CatchUpCoordinator->GetDelayChanges();
 		auto transport = std::make_unique<LoopbackTransport>();
 		auto replay = std::make_unique<NetLockstepCoordinator>();
