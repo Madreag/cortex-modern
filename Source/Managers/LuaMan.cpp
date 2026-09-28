@@ -7556,10 +7556,9 @@ static void PrintCollectorMode(bool deterministic) {
 	}
 }
 
-// The mode change flushes every trace, a write into the heap, so it goes in through the state's gate like any other entry.
+// The mode change flushes every trace, a write into the heap, so it waits at the gate for a frozen capture's page copy.
+// Freezes start only on the sim thread, the one that changes the mode, and the lock is not taken: callers hold the lockstep plane.
 static void ApplyAllocationSinking(LuaStateWrapper& state, bool sinking) {
-	std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
-	// A capture that froze the heap between the gate and the lock has its copy land first too.
 	state.WaitFrozenCopy();
 	if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, sinking ? 1 : 0);
 }
