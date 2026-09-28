@@ -11281,6 +11281,8 @@ namespace RTE {
 			CompleteAtHostClose();
 			return;
 		}
+		if (hostSilent) std::cout << "[net-lockstep] host silent " << (nowMs - lastAuthorityTraffic) << "ms against " << electionSilenceMs << "ms (bound " << silenceBoundMs
+		                          << " jitter " << jitterMs << " lone " << loneSurvivor << ") heard=" << m_AuthorityLastHeardMs << " wait_start=" << m_WaitStartMs << " next=" << m_Stats.nextFrame << std::endl;
 		if (hostSilent && BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();
