@@ -591,6 +591,17 @@ def failure_reasons(report):
     return reasons
 
 
+def write_case_gates(root, results):
+    cases = {row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False), reasons=failure_reasons(row))
+             for row in results}
+    for case in cases.values():
+        if not case['passed'] and not case['reasons']:
+            case['reasons'] = ['the case has no complete passing set of item9a measurements']
+    result = dict(passed=bool(cases) and all(case['passed'] for case in cases.values()), cases=cases)
+    write_json(root / 'gates.json', result)
+    return result
+
+
 def analyze(root, stock=None):
     root = Path(root)
     peer = single_case_peer(root)
@@ -857,12 +868,14 @@ def main(argv=None):
         for result in results:
             write_json(root / result['name'] / 'feel-report.json', result)
         write_json(root / 'matrix-report.json', results)
+        case_gates = write_case_gates(root, results)
         complete = all(result['launches_complete'] for result in results)
         proof_pass = all(result['off_wire_pass'] for result in results)
         write_json(root / 'completion.json', dict(finished=stamp(), launches_complete=complete,
             case_launches={result['name']: result['launches_complete'] for result in results},
-            off_wire_pass=proof_pass, gates_unverified=True, scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT)))
-        return 0 if complete and proof_pass else 1
+            off_wire_pass=proof_pass, item9a_pass=case_gates['passed'], failure_reasons={name: row['reasons'] for name, row in case_gates['cases'].items()},
+            gates_unverified=True, scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT)))
+        return 0 if complete and proof_pass and case_gates['passed'] else 1
     def launch_matrix(script, exe_hash):
         if args.lag_arms:
             for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
@@ -944,8 +957,7 @@ def main(argv=None):
                   for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
     reasons = {row['name']: failure_reasons(row) for row in results}
-    write_json(root / 'gates.json', dict(passed=complete and item9a_pass is True,
-        cases={row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False), reasons=reasons[row['name']]) for row in results}))
+    write_case_gates(root, results)
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
     completion = dict(finished=stamp(), measurement_complete=complete, presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
                       launches_complete=bool(case_launches) and all(case_launches.values()),

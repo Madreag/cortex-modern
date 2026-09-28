@@ -260,6 +260,10 @@ class ReportTests(unittest.TestCase):
         reasons = feel_measure.failure_reasons(result)
         self.assertTrue(any('host.item9a_wall_tps' in reason for reason in reasons))
         self.assertTrue(all(reason.strip() for reason in reasons))
+        with tempfile.TemporaryDirectory() as folder:
+            gates = feel_measure.write_case_gates(Path(folder), [result, dict(name='absent', item9a_pass=False)])
+            self.assertFalse(gates['passed'])
+            self.assertTrue(all(case['reasons'] for case in gates['cases'].values()))
 
     def test_correction_uses_matching_target_and_strict_four_pixel_boundary(self):
         forecast = dict(_line=3, committed_tick=9, target_tick=10, actor=dict(uid=7, x=100, y=100))
