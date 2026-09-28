@@ -3,7 +3,7 @@ sampled on both peers every minute.
 
     python tools/soak_two_peer.py --out <dir> [--minutes 45] [--autosave-seconds 60] [--holds 3] [--stall-ms 1500]
                                   [--port 49880] [--fullstate-every N] [--sample-seconds 60] [--saver-delay-ms N]
-                                  [--client-free-run] [--terrain-events FROM:TO]
+                                  [--client-free-run] [--terrain-events FROM:TO] [--fullstate-dump]
 
 Both engines run through run_sim_test.make_run and the private-desktop runner with CCCP_HEADLESS=1. The client carries
 the forced-hold lever (-net-test-live-stall TICK:MS) once per hold, spread evenly through the match, so its seat is held
@@ -138,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
                         "so a draw that writes the simulation shows as a difference between the peers")
     parser.add_argument("--terrain-events", default="", help="FROM:TO - both peers trace their terrain events in that tick window (CC_TERRAIN_EVENTS); "
                         "result.json names each peer's clean ticks")
+    parser.add_argument("--fullstate-dump", action="store_true", help="with --fullstate-every: each peer writes every captured text section "
+                        "under <out>/<peer>-fullstate/<tick>/ (-net-fullstate-dump), so a divergent section can be diffed")
     parser.add_argument("--cross-records", action="store_true", help="both peers write the cross harness's event records (CC_TEST_CROSS_RECORDS) beside their runs")
     parser.add_argument("--cross-event-limit", type=int, default=0, help="with --cross-records: the records' byte budget (CC_TEST_CROSS_EVENT_RAW_LIMIT); 0 = the engine's")
     options = parser.parse_args(argv)
@@ -195,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
                      "-net-match-report", str(root / f"{peer}_report.json")]
             if options.fullstate_every:
                 flags += ["-net-fullstate-hash-every", str(options.fullstate_every)]
+                if options.fullstate_dump:
+                    flags += ["-net-fullstate-dump", str(root / f"{peer}-fullstate")]
             if options.census_ticks:
                 flags += ["-memory-census-ticks", str(options.census_ticks)]
             if options.census_histogram:
