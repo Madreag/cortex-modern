@@ -17,6 +17,7 @@
 #include "NetReconnectTicketStore.h"
 #include "NetWorldJoin.h"
 #include "ActivityMan.h"
+#include "AudioMan.h"
 #include "LuaMan.h"
 #include "MovableMan.h"
 #include "PresetMan.h"
@@ -7423,6 +7424,10 @@ namespace RTE {
 	/// that debt must not refuse the next round's joiners, finish its failed rejoins as "match over" or turn its catch-up link drops
 	/// into a finished match; a torn-down service carries none of it either.
 	bool TestTheGoodbyeEndsWithItsRound(std::string* error) {
+		if (!AudioMan::IsConstructed()) AudioMan::Construct();
+		if (!MovableMan::IsConstructed()) MovableMan::Construct();
+		if (!LuaMan::IsConstructed()) LuaMan::Construct();
+		if (!PresetMan::IsConstructed()) PresetMan::Construct();
 		// A round's launch reads the network settings and its end the activity, as a menu-hosted round does.
 		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
 		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
