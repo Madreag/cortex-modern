@@ -188,6 +188,24 @@ def engine_placements(peers, basis=None):
                        priority='above_normal' if peer == 'host' else 'normal') for peer in peers}
 
 
+def narrow_job_affinity(job, mask):
+    """A job with an affinity limit holds every process in it at the job's mask, whatever the process asks for, so a
+    placement inside the runner's mask narrows the engine's own job; the job's other limits stay as the runner set them."""
+    import ctypes
+    from ctypes import wintypes
+    import win32_test_runner as runner
+    query = runner.api(runner.K, 'QueryInformationJobObject',
+                       [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)], wintypes.BOOL)
+    limits = runner.EXT()
+    if not query(job, 9, ctypes.byref(limits), ctypes.sizeof(limits), None):
+        raise OSError(f'QueryInformationJobObject failed: {ctypes.get_last_error()}')
+    if not limits.BasicLimitInformation.LimitFlags & 0x10:
+        raise OSError('the engine job carries no affinity limit to narrow')
+    limits.BasicLimitInformation.Affinity = mask
+    if not runner.set_job(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+        raise OSError(f'SetInformationJobObject failed: {ctypes.get_last_error()}')
+
+
 def place_engine(run, placement):
     """Applies a placement to a started engine and records what the process reports back in its launch.json."""
     import ctypes
@@ -203,8 +221,10 @@ def place_engine(run, placement):
     kernel.GetPriorityClass.restype = wintypes.DWORD
     handle = run.process
     job = run.record.get('affinity_mask')
-    if job and placement['mask'] & ~int(job, 16):
-        raise OSError(f'the placement {placement["mask"]:#x} leaves the runner job mask {job}')
+    if job:
+        if placement['mask'] & ~int(job, 16):
+            raise OSError(f'the placement {placement["mask"]:#x} leaves the runner job mask {job}')
+        narrow_job_affinity(run.job, placement['mask'])
     if not kernel.SetProcessAffinityMask(handle, placement['mask']):
         raise OSError(f'SetProcessAffinityMask failed: {ctypes.get_last_error()}')
     if not kernel.SetPriorityClass(handle, 0x8000 if placement['priority'] == 'above_normal' else 0x20):
@@ -213,7 +233,8 @@ def place_engine(run, placement):
     if not kernel.GetProcessAffinityMask(handle, ctypes.byref(process_mask), ctypes.byref(system_mask)):
         raise OSError(f'GetProcessAffinityMask failed: {ctypes.get_last_error()}')
     applied = dict(requested_mask=hex(placement['mask']), logical=placement['logical'], priority=placement['priority'],
-                   process_mask=hex(process_mask.value), system_mask=hex(system_mask.value), priority_class=hex(kernel.GetPriorityClass(handle)))
+                   process_mask=hex(process_mask.value), system_mask=hex(system_mask.value), priority_class=hex(kernel.GetPriorityClass(handle)),
+                   runner_job_mask=job)
     if process_mask.value != placement['mask']:
         raise OSError(f'the engine reports affinity {applied["process_mask"]}, not {applied["requested_mask"]}')
     run.record['cpu_placement'] = applied
