@@ -3676,6 +3676,13 @@ namespace RTE {
 				return Fail(std::string("held-seat-host-verdict-") + test.name + ": the held seat judged its host " + (test.gone ? "alive" : "gone"));
 			}
 		}
+		// Two held seats that last heard their host at the same moment judge it gone together: a seat whose own link sends nothing
+		// learns of the loss no later than the link's own timeout, as a busy one does.
+		const uint64_t bound = NetMatchService::HeldSeatSilenceBoundMs();
+		if (bound > c_NetLinkTimeoutMs || !NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, c_NetLinkTimeoutMs + 1, bound) ||
+		    NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, c_NetLinkTimeoutMs / 2, bound)) {
+			return Fail("held-seat-host-verdict-silent-past-the-link-timeout: bound=" + std::to_string(bound) + "ms against the link's " + std::to_string(c_NetLinkTimeoutMs) + "ms");
+		}
 		std::cout << "[net-world-join-selftest] PASS a_held_seat_judges_its_host_by_the_link_alone" << std::endl;
 		return 0;
 	}
@@ -3685,13 +3692,16 @@ namespace RTE {
 	/// never activated and is told why once.
 	int TestActivationFollowsTheMeasuredTrail() {
 		const auto config = NetMatchConfigUtil::MakeDefault(0x9A53);
-		struct Case { const char* name; uint64_t behind; uint64_t advance; bool activates; uint64_t minTrail; const char* reason; };
+		struct Case { const char* name; uint64_t behind; uint64_t advance; bool activates; uint64_t minTrail; const char* reason; uint64_t workUs = 1000000; };
 		const Case cases[] = {
 			{"round-pace-past-the-lead", 90, 30, true, 60, nullptr},
 			{"gaining-inside-the-lead", 40, 42, true, 0, nullptr},
 			{"at-the-head-inside-the-lead", 12, 30, true, 12, nullptr},
 			{"parked", 40, 0, false, 0, "no progress"},
 			{"losing-ground", 40, 24, false, 0, "falls behind"},
+			// 240 ticks in 7.2 s of work is a replay at 0.56 of the round's rate: 90 frames behind at the round's pace, activated, the survivors
+			// would wait on every frame it is required for.
+			{"too-slow-to-keep-the-round", 90, 30, false, 0, "slower than the round", 7200000},
 		};
 		for (const Case& test: cases) {
 			NetWorldJoinHost host;
@@ -3704,7 +3714,7 @@ namespace RTE {
 			}
 			if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 500, &error)) return Fail("measured-trail rejoin: " + error);
 			host.NoteRejoinLinkFit(42, true);
-			if (!host.NoteRejoinCapacity(42, 240, 1000000, 0)) return Fail("the compute headroom sample was refused");
+			if (!host.NoteRejoinCapacity(42, 240, test.workUs, 0)) return Fail("the compute headroom sample was refused");
 			uint64_t activation = 0, applied = 500, round = 500 + test.behind;
 			if (!host.NoteCatchUpProgress(42, applied, 0, 1, round, &activation, &error)) return Fail(error);
 			for (int report = 0; report < 6 && activation == 0; ++report) {

@@ -2008,6 +2008,10 @@ namespace RTE {
 		};
 		// A replay standing still is parked or starved, never caught up.
 		if (provesHeadroom && session->windowsWithoutProgress >= c_NetWorldNoProgressWindows) return wait("no-progress", "its replay made no progress for three windows");
+		// Short of the head of its tail, a replay slower than the round's own rate cannot play the round: activated, every frame it is required
+		// for would reach the survivors late. At the head the tail's arrival paces it, and standing there shows it keeps up.
+		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames && session->headroom.Ratio() > 0 && session->headroom.Ratio() < 1.0)
+			return wait("replay-slow", "its replay runs slower than the round");
 		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4 && session->closingMeasured && session->closingRate < -0.1)
 			return wait("closing-losing", "its replay falls behind the round");
 		// At the round's pace a returner trails by its link, which can be longer than the lead: its return leaves it that trail.

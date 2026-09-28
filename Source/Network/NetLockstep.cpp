@@ -4736,6 +4736,7 @@ namespace RTE {
 		m_AiHeldSeats.clear();
 		m_ReleasedAiSeats.clear();
 		m_ReleaseWhenHeld.clear();
+		m_PendingMemberEnds.clear();
 		m_EvictAfterReclaim.clear();
 		m_HoldTransactions.clear();
 		m_ReclaimTransactions.clear();
@@ -4788,6 +4789,7 @@ namespace RTE {
 		m_LastHoldHeartbeatMs = 0;
 		m_HeldPeerLinks.clear();
 		m_LastHeldLinkMs = 0;
+		m_LastReliableWindowAliveMs = 0;
 		m_RequirePublishedStart = m_Config.requirePublishedStart;
 		m_PeerStartupPublished.clear();
 		m_StartupLinksLost.clear();
@@ -6146,7 +6148,7 @@ namespace RTE {
 		if (m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs) {
 			m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, nowMs - m_ConsumerWaitStartMs);
 			if (nowMs > m_ConsumerWaitStartMs) {
-				std::cout << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs;
+				std::cout << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs << " on=" << m_Stats.lastMissingPeers;
 				if (nowMs - m_ConsumerWaitStartMs >= 100) std::cout << " blocked=" << m_AdvanceBlock << " duplicates=" << m_WaitDuplicates;
 				std::cout << std::endl;
 			}
@@ -7147,15 +7149,15 @@ namespace RTE {
 		NetLockstepPeerStats& peerStats = m_Stats.peers[frame.senderPeerId];
 		if (frame.targetFrame > peerStats.highestTargetFrame) { peerStats.highestTargetFrame = frame.targetFrame; peerStats.lastProgressMs = nowMs; }
 		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
-			// A member admitted mid-round reads the window copies of the ticks before its own start.
-			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
-			if (windowCopy || m_ReclaimTransactions.contains(frame.senderPeerId) ||
-			    (IsPersistentWorldRound() && m_Config.joinsRunningRound && frame.targetFrame < m_Config.startFrame)) {
+			// A member admitted mid-round reads the window copies of the ticks before its own start, and a round it joins running
+			// sends it that round's own ticks before its start, which its replay carried. Neither is a broken build.
+			if (windowCopy || m_ReclaimTransactions.contains(frame.senderPeerId) || (m_Config.joinsRunningRound && frame.targetFrame < m_Config.startFrame)) {
 				++m_Stats.windowCopiesSkipped;
 				++peerStats.windowCopiesSkipped;
 				return;
 			}
-			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame targets the sender's delay window");
+			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame targets the sender's delay window: peer " + std::to_string(frame.senderPeerId) +
+			     " frame " + std::to_string(frame.targetFrame) + " before its start " + std::to_string(EffectiveStartOf(frame.senderPeerId)));
 			return;
 		}
 		if (frame.targetFrame < m_Stats.nextFrame) {
@@ -8226,6 +8228,7 @@ namespace RTE {
 			TickHostMigration(nowMs);
 			return;
 		}
+		TakeMemberEndsPlayedPast(nowMs);
 		for (auto& [peer, pending]: m_MigrationOutbox)
 			while (!pending.empty() && m_Transport->Send(peer, NetTransportLane::ControlReliable, pending.front()))
 				pending.pop_front();
@@ -8267,8 +8270,29 @@ namespace RTE {
 		ReclaimOwnSeat(nowMs);
 	}
 
+	void NetLockstepCoordinator::TakeMemberEndsPlayedPast(uint64_t nowMs) {
+		for (auto pending = m_PendingMemberEnds.begin(); pending != m_PendingMemberEnds.end();) {
+			if (!IsRunning()) {
+				pending = m_PendingMemberEnds.erase(pending);
+				continue;
+			}
+			if (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick < pending->second.first.frame) {
+				++pending;
+				continue;
+			}
+			// This round played the frame the member ended on and goes on: the member left it.
+			NetLockstepStop leave = pending->second.first;
+			leave.reason = NetLockstepStopReason::PeerLeft;
+			const NetPeerId transport = pending->second.second;
+			pending = m_PendingMemberEnds.erase(pending);
+			HandleStop(leave, nowMs, transport);
+		}
+	}
+
 	void NetLockstepCoordinator::Complete(const std::string& message) {
 		NET_PLANE_CHECK();
+		// The round's own end: a member's end still held back was this end, not a leave.
+		m_PendingMemberEnds.clear();
 		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Idle) {
 			return;
 		}
@@ -10369,7 +10393,7 @@ namespace RTE {
 		}
 		if (leftIt != m_PeerLeaveFrames.end()) {
 			std::cout << "[lockstep] ignored a " << NetLockstepCodec::StopReasonName(stop.reason) << " from peer "
-			          << static_cast<int>(stop.senderPeerId) << ", which left at frame " << leftIt->second << std::endl;
+			          << static_cast<int>(stop.senderPeerId) << ", which left at frame " << leftIt->second << ": frame=" << stop.frame << " " << stop.message << std::endl;
 			++m_Stats.stopsFromLeftPeers;
 			return;
 		}
@@ -10377,6 +10401,12 @@ namespace RTE {
 		// host hands that seat to the AI like any leave and plays on.
 		if (stop.reason == NetLockstepStopReason::Complete && stop.senderPeerId != GetHostPeerId() &&
 		    (IsPersistentWorldRound() || (UsesBoundedWait() && m_RelayHost))) {
+			// A round's own end lands on every peer at the same frame and can reach this host before it plays that frame: a member's end is a
+			// leave only once this round has played past it without ending.
+			if (!IsPersistentWorldRound() && (!m_LastCompletedSimulationTick || *m_LastCompletedSimulationTick < stop.frame)) {
+				m_PendingMemberEnds[stop.senderPeerId] = {stop, fromTransport};
+				return;
+			}
 			NetLockstepStop leave = stop;
 			leave.reason = NetLockstepStopReason::PeerLeft;
 			HandleStop(leave, nowMs, fromTransport);
@@ -10802,6 +10832,12 @@ namespace RTE {
 			if (!ProposePeerHold(peerId, nowMs, &holdError) && holdError != "the capture park deferred this hold") m_ReleaseWhenHeld.erase(peerId);
 			return;
 		}
+		// A seat that came back from an earlier leave and now leaves again: the later of the two decides, so its return is retired and the
+		// seat's history keeps the frames before.
+		if (const auto back = m_ReclaimTransactions.find(peerId); back != m_ReclaimTransactions.end() && firstFrameWithout >= back->second.activationFrame) {
+			m_ReclaimTransactions.erase(back);
+			m_PeerLeaveFrames.erase(peerId);
+		}
 		if (!m_PeerLeaveFrames.emplace(peerId, firstFrameWithout).second) {
 			return;
 		}
@@ -11210,6 +11246,22 @@ namespace RTE {
 				++held;
 			}
 		}
+		// A returning seat reads every frame on the reliable lane until its tables hold what its replay spelled out, and one lost
+		// packet stalls that lane for a retransmit, a long link's round trip: it hears this host every tick on the frame lane meanwhile.
+		if (m_Config.localPeerId == GetHostPeerId() && m_RelayHost && m_Transport && m_Config.frameLane != NetTransportLane::ControlReliable &&
+		    !m_ReliableFramesThrough.empty() && m_LastQueuedTargetFrame != std::numeric_limits<uint64_t>::max() &&
+		    (nowMs < m_LastReliableWindowAliveMs || static_cast<double>(nowMs - m_LastReliableWindowAliveMs) >= m_Config.simTickMs)) {
+			m_LastReliableWindowAliveMs = nowMs;
+			NetLockstepAck alive;
+			alive.senderPeerId = m_Config.localPeerId;
+			alive.highestContiguousFrame = m_Stats.nextFrame;
+			std::vector<uint8_t> bytes;
+			const bool encoded = NetLockstepCodec::Encode({alive}, bytes);
+			for (const auto& [peer, through]: m_ReliableFramesThrough) {
+				const auto link = m_RemoteTransports.find(peer);
+				if (encoded && link != m_RemoteTransports.end() && m_LastQueuedTargetFrame <= through) (void)m_Transport->Send(link->second, m_Config.frameLane, bytes);
+			}
+		}
 		const bool pending = hasLocal || hasRemote || hasFutureLocal || hasFutureRemote || !m_RecoveryOutgoing.empty();
 		if (!pending) {
 			return;
@@ -11254,6 +11306,8 @@ namespace RTE {
 			CompleteAtHostClose();
 			return;
 		}
+		if (hostSilent) std::cout << "[net-lockstep] host silent " << (nowMs - lastAuthorityTraffic) << "ms against " << electionSilenceMs << "ms (bound " << silenceBoundMs
+		                          << " jitter " << jitterMs << " lone " << loneSurvivor << ") heard=" << m_AuthorityLastHeardMs << " wait_start=" << m_WaitStartMs << " next=" << m_Stats.nextFrame << std::endl;
 		if (hostSilent && BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();
