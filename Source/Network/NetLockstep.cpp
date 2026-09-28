@@ -4785,6 +4785,7 @@ namespace RTE {
 		m_LastHoldHeartbeatMs = 0;
 		m_HeldPeerLinks.clear();
 		m_LastHeldLinkMs = 0;
+		m_LastReliableWindowAliveMs = 0;
 		m_RequirePublishedStart = m_Config.requirePublishedStart;
 		m_PeerStartupPublished.clear();
 		m_StartupLinksLost.clear();
@@ -11235,6 +11236,22 @@ namespace RTE {
 				}
 				if (encoded) (void)m_Transport->Send(link, m_Config.frameLane, bytes);
 				++held;
+			}
+		}
+		// A returning seat reads every frame on the reliable lane until its tables hold what its replay spelled out, and one lost
+		// packet stalls that lane for a retransmit, a long link's round trip: it hears this host every tick on the frame lane meanwhile.
+		if (m_Config.localPeerId == GetHostPeerId() && m_RelayHost && m_Transport && m_Config.frameLane != NetTransportLane::ControlReliable &&
+		    !m_ReliableFramesThrough.empty() && m_LastQueuedTargetFrame != std::numeric_limits<uint64_t>::max() &&
+		    (nowMs < m_LastReliableWindowAliveMs || static_cast<double>(nowMs - m_LastReliableWindowAliveMs) >= m_Config.simTickMs)) {
+			m_LastReliableWindowAliveMs = nowMs;
+			NetLockstepAck alive;
+			alive.senderPeerId = m_Config.localPeerId;
+			alive.highestContiguousFrame = m_Stats.nextFrame;
+			std::vector<uint8_t> bytes;
+			const bool encoded = NetLockstepCodec::Encode({alive}, bytes);
+			for (const auto& [peer, through]: m_ReliableFramesThrough) {
+				const auto link = m_RemoteTransports.find(peer);
+				if (encoded && link != m_RemoteTransports.end() && m_LastQueuedTargetFrame <= through) (void)m_Transport->Send(link->second, m_Config.frameLane, bytes);
 			}
 		}
 		const bool pending = hasLocal || hasRemote || hasFutureLocal || hasFutureRemote || !m_RecoveryOutgoing.empty();

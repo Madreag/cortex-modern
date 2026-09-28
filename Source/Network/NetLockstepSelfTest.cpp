@@ -73,6 +73,7 @@ namespace RTE {
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
+	bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error);
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 	bool TestARoundsOwnEndIsNoHold(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
@@ -19975,6 +19976,60 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// A returning seat reads the host's frames on the reliable lane until its tables hold what its replay spelled out, and one lost packet
+	/// stalls that lane for a retransmit, a long link's round trip, past the seat's own silence bound: the host talks to it on the frame lane
+	/// every tick while its frames ride the reliable lane, and only that long.
+	bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error) {
+		LoopbackTransport wire, seat;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A22, 14, NetTransportLane::InputUnreliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 47; config.timeoutMs = 5000;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 14}, {2, 14}};
+		config.remoteTransportPeerIds = {{2, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A22);
+		if (!wire.StartHost(48903, error) || !seat.Connect("loopback", 48903, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_PeersPlayedThisRound = {2};
+		// Back at 800 and owing nothing before its neutral window ends: the round waits on nobody.
+		host.m_PeerEffectiveStart[2] = 900;
+		host.m_Stats.nextFrame = 800;
+		host.m_LastQueuedTargetFrame = 814;
+		host.m_ReliableFramesThrough[2] = 846;
+		const auto heard = [&](uint64_t fromMs, uint64_t toMs) {
+			std::vector<uint64_t> arrivals;
+			for (uint64_t now = fromMs; now <= toMs; now += 5) {
+				host.AdvanceReadyFrames(now);
+				wire.AdvanceTimeMs(5);
+				seat.AdvanceTimeMs(5);
+				for (const NetTransportEvent& event: seat.PollEvents())
+					if (event.type == NetTransportEventType::PacketReceived && event.lane == NetTransportLane::InputUnreliable && event.bytes.size() > 8 &&
+					    event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Ack))
+						arrivals.push_back(now);
+			}
+			return arrivals;
+		};
+		(void)seat.PollEvents();
+		const std::vector<uint64_t> during = heard(2000, 2500);
+		uint64_t longestGap = during.empty() ? 500 : during.front() - 2000;
+		for (size_t index = 1; index < during.size(); ++index) longestGap = std::max(longestGap, during[index] - during[index - 1]);
+		// The seat's own silence bound with no jitter at all: the slow-player bound and one tick.
+		const uint64_t silenceBoundMs = 50 + 17;
+		host.m_LastQueuedTargetFrame = 847;
+		const std::vector<uint64_t> after = heard(2505, 2750);
+		if (during.size() < 25 || longestGap >= silenceBoundMs || !after.empty()) {
+			*error = "returner-on-the-reliable-lane-hears-its-host: over 500 ms of reliable frames the seat heard the host on the frame lane " + std::to_string(during.size()) +
+			         " times, the longest gap " + std::to_string(longestGap) + " ms against its " + std::to_string(silenceBoundMs) + " ms silence bound, and " +
+			         std::to_string(after.size()) + " times once its frames left the reliable lane; expected at least 25, under the bound and none";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_returner_on_the_reliable_lane_hears_its_host heard=" << during.size() << " longest_gap_ms=" << longestGap
+		          << " after_window=" << after.size() << std::endl;
+		return true;
+	}
+
 	/// A seat that came back from a hold and later leaves - a host handover it was absent from takes it - is gone from that leave: the later
 	/// of its return and its leave decides, and the frames before stay what they were.
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error) {
@@ -21510,6 +21565,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(&error) ||
+		    !TestAReturnerOnTheReliableLaneHearsItsHost(&error) ||
 		    !TestAReturnedSeatThatLeavesAgainIsGone(&error) ||
 		    !TestARoundsOwnEndIsNoHold(&error) ||
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
