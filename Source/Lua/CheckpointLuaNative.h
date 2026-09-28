@@ -668,7 +668,18 @@ namespace RTE::CheckpointLua {
 					}
 				}
 			}
+			auto* classRep = luabind::detail::is_class_rep(State(), -1) ? static_cast<luabind::detail::class_rep*>(lua_touserdata(State(), -1)) : nullptr;
 			lua_pop(State(), 1);
+			if (immutable) {
+				if (!VerifySharedAnswers()) {
+					AnswerImmutable(entry, classRep, true);
+					return;
+				}
+				NativeImage::Entry quick;
+				quick.serial = entry.serial;
+				AnswerImmutable(quick, classRep, false);
+				shared.emplace(SharedHit{std::move(quick), 0});
+			}
 			entry.members = One(MemberSources, "Members", value);
 			entry.helpers.emplace("_ScriptGraphInstance", One(ScriptGraphInstance, "Instance", value));
 			entry.helpers.emplace("_ScriptGraphNativeAddress", One(ScriptGraphNativeAddress, "NativeAddress", value));
@@ -711,7 +722,48 @@ namespace RTE::CheckpointLua {
 				Retain(entry);
 			}
 			if (entity && SharesAnswer(object)) m_Shared.emplace(SharedKey::Of(object), SharedAnswer{&entry, static_cast<const MovableObject*>(object->ptr())->GetUniqueID()});
-			if (shared) CompareShared(shared->entry, entry, className);
+			if (shared) CompareShared(shared->entry, entry, classRep ? classRep->name() : className);
+		}
+
+		// A class descriptor or a plain userdata answers with its class table and its name alone: the helpers' answers, pushed
+		// and recorded here as Invoke records them, without calling them.
+		void AnswerImmutable(NativeImage::Entry& entry, luabind::detail::class_rep* crep, bool keep) {
+			const auto record = [this, keep](const std::function<void()>& push) {
+				const int top = lua_gettop(State());
+				const uint64_t before = luaJIT_state_serial(State());
+				push();
+				const uint64_t after = luaJIT_state_serial(State());
+				NativeImage::Result result;
+				std::unordered_set<const void*> seen;
+				for (int index = top + 1; index <= lua_gettop(State()); ++index) {
+					NativeImage::Value value;
+					value.token = At(index);
+					if (const auto* text = ScriptGraphCapturedText(State(), index)) value.text = *text;
+					if (keep) {
+						Keep(index);
+						NewResults(index, before, after, seen);
+					}
+					result.values.push_back(std::move(value));
+				}
+				lua_settop(State(), top);
+				return result;
+			};
+			entry.members = record([&] { if (crep) crep->get_table(State()); });
+			entry.helpers.emplace("_ScriptGraphInstance", record([&] { lua_pushnil(State()); }));
+			entry.helpers.emplace("_ScriptGraphNativeAddress", record([&] { lua_pushnil(State()); }));
+			const auto native = [&] {
+				if (!crep) {
+					lua_pushnil(State());
+				} else if (crep->get_class_type() == luabind::detail::class_rep::lua_class) {
+					lua_pushliteral(State(), "lua-class");
+					lua_pushstring(State(), crep->name());
+					lua_pushstring(State(), !crep->bases().empty() && crep->bases()[0].base ? crep->bases()[0].base->name() : "");
+				} else {
+					lua_pushnil(State());
+					lua_pushstring(State(), crep->name());
+				}
+			};
+			for (int named = 0; named < 2; ++named) entry.native[named] = record(native);
 		}
 
 		// What a reference to a live world object answers is its class's and its object's, unless the userdata carries a table of its
