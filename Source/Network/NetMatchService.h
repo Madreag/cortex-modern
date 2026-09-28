@@ -782,6 +782,8 @@ namespace RTE {
 		NetMatchServiceState GetState() const;
 		NetHostHandoverState GetHostHandoverState() const;
 		bool IsHost() const { std::lock_guard<std::mutex> lock(m_Mutex); return m_IsHost; }
+		/// Whether this held client's catch-up replays on its own state over its live connection.
+		bool CatchingUpInPlace() const { std::lock_guard<std::mutex> lock(m_Mutex); return m_InPlaceCatchUp; }
 		bool WasEverStarted() const { return m_EverStarted.load(); }
 		/// The host's router port-mapping state, for the lobby's status line. Game-thread only.
 		struct PortMapStatus {
