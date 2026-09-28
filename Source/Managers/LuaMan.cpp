@@ -8663,6 +8663,8 @@ assert(probeKind == "entity", "the probe is not a live entity reference, kind=" 
 		const bool anchored = CaptureScriptGraph(anchorImage, anchorProblems, true);
 		const void* anchor = nullptr;
 		if (m_NativeCache) {
+			// The capture's heap copy may still be running: into the VM only through its gate.
+			WaitFrozenCopy();
 			m_NativeCache->PushRetained(m_State);
 			anchor = lua_topointer(m_State, -1);
 			lua_pop(m_State, 1);
