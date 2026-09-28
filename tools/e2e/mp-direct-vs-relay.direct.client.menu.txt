@@ -30,6 +30,9 @@ activate GameRowPort{PORT}
 wait_ms 900
 assert_label TextJoinPort {PORT}
 wait_ms 495
+# A change to the listed rows after a pick refills the port from the first listed row, so this run's own row is
+# set again on the frame before Connect.
+activate GameRowPort{PORT}
 activate ButtonMultiplayerConnect
 video_mark direct-mp-lobby-client
 wait_connected 2
