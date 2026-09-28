@@ -3489,6 +3489,7 @@ bool Scene::PositionsAreTheSamePathNode(const Vector& pos1, const Vector& pos2) 
 void Scene::Update() {
 	ZoneScoped;
 
+	g_SceneMan.UpdateCleanAir();
 	FlushHorizonTerrainBoxes();
 	CommitSharedHorizon();
 
