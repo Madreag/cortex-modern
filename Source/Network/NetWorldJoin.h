@@ -186,6 +186,9 @@ namespace RTE {
 		uint64_t closingAnchorApplied = 0, closingAnchorHorizon = 0; //!< The report its closing rate on the round is measured from.
 		double closingRate = 0.0; //!< Frames its replay gains on the round per frame the round commits, once measured.
 		bool closingMeasured = false;
+		const char* catchUpGate = nullptr; //!< What the last catch-up report met on its way to an activation.
+		const char* catchUpGateLogged = nullptr; //!< The gate last written to the log, and the horizon it was written at.
+		uint64_t catchUpGateLoggedFrame = 0;
 		uint8_t spectatorLobbyPeer = 0;   //!< Non-member lobby id in [32, 47]; 0 if none remains.
 		std::string refusal;              //!< Why the bootstrap failed; empty while it is alive.
 	};
@@ -547,6 +550,8 @@ namespace RTE {
 		bool BeginInPlaceRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, uint64_t heldThrough, std::string* error = nullptr);
 		bool NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough);
 		void NoteRejoinLinkFit(NetPeerId connection, bool fits);
+		/// The session whose catch-up gate is due in the log (a change, or a second of the round since); gate, when set, is the one its report met first.
+		const NetWorldJoinSession* TakeCatchUpGateToLog(NetPeerId connection, const char* gate, uint64_t nowFrame);
 		bool IsConfigured() const { return m_Identity.IsValid() || m_PrivateRound != 0; }
 		bool IsPrivateMatch() const { return m_PrivateRound != 0; }
 		const NetWorldIdentity& Identity() const { return m_Identity; }

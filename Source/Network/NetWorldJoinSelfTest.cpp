@@ -3535,6 +3535,53 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A returner whose machine replays faster than the round and that no longer gains on it stands at the head of its tail: the
+	/// frames it still trails by are its link's round trip, which its input delay covers, so it is activated whether or not that
+	/// round trip fits the lead and whatever a loss stall did to its last window. A machine measured slower than the round waits and
+	/// is told why.
+	int TestAnArrivalPacedReturnerIsActivatedAtTheHead() {
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A52);
+		struct Case { const char* name; uint64_t behind; uint64_t firstAdvance; uint64_t advance; uint64_t workUs; bool activates; };
+		const Case cases[] = {
+			{"link-past-the-lead", 90, 30, 30, 1000000, true},
+			{"loss-stall-inside-the-lead", 40, 0, 30, 1000000, true},
+			{"slow-machine-waits", 40, 24, 24, 5000000, false},
+		};
+		for (const Case& test: cases) {
+			NetWorldJoinHost host;
+			std::string error;
+			if (!host.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &error)) return Fail("arrival-paced fixture: " + error);
+			for (uint64_t tick = 490; tick <= 560; ++tick) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1; frame.targetFrame = tick; frame.roundId = 9;
+				if (!host.Tail().Append(frame, &error)) return Fail("arrival-paced tail: " + error);
+			}
+			if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 500, &error)) return Fail("arrival-paced rejoin: " + error);
+			host.NoteRejoinLinkFit(42, true);
+			// 240 replayed ticks: in one second of work the machine replays four times the round's pace, in five it replays 0.8 of it.
+			if (!host.NoteRejoinCapacity(42, 240, test.workUs, 0)) return Fail("the compute headroom sample was refused");
+			uint64_t activation = 0, applied = 500, round = 500 + test.behind;
+			if (!host.NoteCatchUpProgress(42, applied, 0, 1, round, &activation, &error)) return Fail(error);
+			// It replays each frame as it arrives, 30 a report like the round; a loss stall holds its first window still.
+			for (int report = 0; report < 8 && activation == 0; ++report) {
+				const uint64_t advanced = report == 0 ? test.firstAdvance : test.advance;
+				applied += advanced; round += 30;
+				if (!host.NoteCatchUpProgress(42, applied, advanced, 500, round, &activation, &error)) return Fail(error);
+			}
+			const NetWorldJoinSession* session = host.FindSession(42);
+			if (test.activates && (activation == 0 || activation < round + c_NetWorldActivationLeadFrames)) {
+				return Fail(std::string("arrival-paced-") + test.name + ": a returner at the head of its tail was not activated: activation=" + std::to_string(activation) +
+				            " applied=" + std::to_string(applied) + " round=" + std::to_string(round) + " gate=" + (session && session->catchUpGate ? session->catchUpGate : "none"));
+			}
+			if (!test.activates && (activation != 0 || !session || !session->activationHeldReason || std::string(session->activationHeldReason).find("slower than the round") == std::string::npos)) {
+				return Fail(std::string("arrival-paced-") + test.name + ": a machine replaying slower than the round was activated, or not told why: activation=" +
+				            std::to_string(activation) + " reason=" + (session && session->activationHeldReason ? session->activationHeldReason : "none"));
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS an_arrival_paced_returner_is_activated_at_the_head" << std::endl;
+		return 0;
+	}
+
 	/// Capturing a private base stalls every peer's simulation for the capture, so a seat's return buys no refresh whose
 	/// steady capture cost cannot fit the bound: the next rejoin replays a longer tail in private instead.
 	int TestAReturnedSeatTakesNoBaseThatStallsTheRound() {
@@ -3600,6 +3647,32 @@ namespace RTE {
 			return Fail("lone-survivor-overruled-the-host: the host's announced leave did not end the match");
 		}
 		std::cout << "[net-world-join-selftest] PASS a_lone_survivor_with_a_held_seat_hosts_the_match" << std::endl;
+		return 0;
+	}
+
+	/// A held seat is never a successor: a held seat whose host is gone dials the live survivors, and with every survivor held the
+	/// first of them in the match's order hosts while the others dial it.
+	int TestEveryHeldSurvivorFindsOneHost() {
+		using Routes = std::vector<uint8_t>;
+		const Routes order{2, 3, 4};
+		struct Case { const char* name; uint8_t local; Routes reachable; std::set<uint8_t> held; Routes expected; };
+		const Case cases[] = {
+			{"first-held-hosts", 2, {3}, {3}, {}},
+			{"second-held-dials-the-first", 3, {2}, {2}, {2}},
+			{"three-held-third-dials-the-first", 4, {2, 3}, {2, 3}, {2}},
+			{"a-held-seat-is-never-dialed-past-a-live-one", 4, {2, 3}, {2}, {3}},
+			{"live-successors-in-order", 2, {3, 4}, {}, {3, 4}},
+			{"nobody-left-hosts-alone", 2, {}, {}, {}},
+		};
+		for (const Case& test: cases) {
+			const Routes routes = NetMatchService::HeldSuccessionRoutes(order, 1, test.local, test.reachable, test.held);
+			if (routes != test.expected) {
+				std::string got;
+				for (const uint8_t peer: routes) got += (got.empty() ? "" : ",") + std::to_string(peer);
+				return Fail(std::string("held-succession-") + test.name + ": peer " + std::to_string(test.local) + " would dial [" + got + "]");
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS every_held_survivor_finds_one_host" << std::endl;
 		return 0;
 	}
 
@@ -7913,6 +7986,8 @@ namespace RTE {
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAHeldWorldMembersLeaveReleasesItsSeat(); result != 0) return result;
 		if (const int result = TestALoneSurvivorWithAHeldSeatHostsTheMatch(); result != 0) return result;
+		if (const int result = TestEveryHeldSurvivorFindsOneHost(); result != 0) return result;
+		if (const int result = TestAnArrivalPacedReturnerIsActivatedAtTheHead(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;

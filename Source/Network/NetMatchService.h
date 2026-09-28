@@ -927,6 +927,10 @@ namespace RTE {
 		/// What a survivor that finds no other live member does: an announced leave ends its match, a lost host with a held
 		/// seat in the round is replaced by this peer so the held seats rejoin it, and a lost host with none is rejoined.
 		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool heldSeats);
+		/// Where a held seat's catch-up goes when its host is gone, from the match's successor order, the peers it can dial in that
+		/// order and the seats it knows are held. Returns the peers to dial; empty when this seat hosts the match itself.
+		static std::vector<uint8_t> HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
+		                                                const std::vector<uint8_t>& reachable, const std::set<uint8_t>& held);
 	private:
 		std::set<NetPeerId> m_SlowReturnersNoted; //!< Returners already told they keep catching up below the round's rate.
 		/// Host: ends one returner's rejoin and tells its client why, so it tries again instead of waiting.
@@ -1615,6 +1619,7 @@ namespace RTE {
 		uint64_t m_InPlaceSinceMs = 0;   //!< When it began; a host that never serves it sends it to the image path.
 		uint64_t m_InPlaceHeardMs = 0;   //!< When its tail last moved.
 		uint64_t m_InPlaceProgressApplied = 0;
+		uint64_t m_InPlaceProgressLogged = 0; //!< The applied frame its progress was last logged at.
 		static constexpr uint64_t c_InPlaceHostSilenceMs = 3000; //!< A host that feeds a held seat nothing this long is gone.
 		uint64_t m_HandoverFrame = 0; //!< The first frame the round committed under the authority that took it over here; 0 before a handover.
 		struct InPlaceRoute {

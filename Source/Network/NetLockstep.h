@@ -1137,6 +1137,10 @@ namespace RTE {
 		/// A transport fault starts agreement without choosing a simulation departure.
 		bool BeginHostMigration(uint64_t nowMs);
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);
+		/// Whether the host's end of the round is here: its Complete stop waits on this peer's ticks, or this peer ran its last frame.
+		bool HostEndOfRoundReached() const;
+		/// Ends the round on the host's close once its end is here, as its Complete stop would.
+		void CompleteAtHostClose();
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		/// The peer that produces the actor's frames under the match's ownership policy, leaves applied; every peer resolves it identically.
 		/// Read at the last delivered frame, or at atFrame for a write that lands there.

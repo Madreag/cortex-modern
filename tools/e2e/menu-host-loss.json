@@ -431,6 +431,155 @@
           }
         }
       ]
+    },
+    {
+      "name": "both-held",
+      "size": "960x540",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "survivor",
+            "log": "^\\[net-match\\] held client catch-up applied="
+          }
+        },
+        {
+          "name": "leaver",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/leaver-match.json",
+            "-out",
+            "{OUT}/leaver_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "leaver",
+            "-net-join",
+            "127.0.0.1",
+            "-net-test-live-stall",
+            "560:1500"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "probe": "menu-host-loss.probe.json",
+          "kill_when": {
+            "peer": "leaver",
+            "probe_complete": true
+          }
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1",
+            "-net-test-live-stall",
+            "560:1500"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5,
+          "probe": "menu-host-loss.probe.json",
+          "kill_when": {
+            "peer": "survivor",
+            "probe_complete": true
+          }
+        }
+      ]
     }
   ],
   "checklist": [
@@ -931,6 +1080,89 @@
       ],
       "what": "The status box names the host loss and blanks RTT the frame it shows; after the handover the lost host's seat reads left to the AI, RTT names the new link and the box is live again; the old top-left roster does not cover Funds.",
       "assert": "Native status text at the loss and after the handover, completed probe, first and later screenshots, and dump_network_layout."
+    },
+    {
+      "id": "both-held-leaver",
+      "run": "both-held",
+      "peer": "leaver",
+      "mark": "status-loss",
+      "probe_steps": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "readback": [
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms / host lost"
+        }
+      ],
+      "log_regex": [
+        "^\\[net-match\\] Host left - leaver is now hosting; boundary=\\d+ round=\\d+ alone=0"
+      ],
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed"
+      ],
+      "what": "Both survivors are held when the host dies: the first held survivor in the match's order hosts the round from its own state.",
+      "assert": "Native status text at the loss, the hosting line, no failed resync."
+    },
+    {
+      "id": "both-held-survivor",
+      "run": "both-held",
+      "peer": "survivor",
+      "mark": "status-loss",
+      "probe_steps": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "readback": [
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms / host lost"
+        }
+      ],
+      "log_regex": [
+        "\\[net-match\\] held client: the successor peer=\\d+ admitted the seat",
+        "\\[net-match\\] private catch-up complete frame=\\d+"
+      ],
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed"
+      ],
+      "what": "The other held survivor rejoins the held survivor that hosts and plays on.",
+      "assert": "Native status text at the loss, the admission by the held host, the completed catch-up, no failed resync."
     }
   ]
 }
