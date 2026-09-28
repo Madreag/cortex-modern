@@ -257,6 +257,16 @@ void SLTerrain::TexturizeTerrain() {
 	std::array<int, c_PaletteEntriesNumber> materialColors;
 	materialColors.fill(0);
 
+	// Resolve every material's textures and color up front: the rows below only read these tables, from many threads.
+	for (int matIndex = 0; matIndex < c_PaletteEntriesNumber; ++matIndex) {
+		const Material* material = materialPalette[matIndex] ? materialPalette[matIndex] : materialPalette[MaterialColorKeys::g_MaterialOutOfBounds];
+		if (material) {
+			materialFGTextures[matIndex] = material->GetFGTexture();
+			materialBGTextures[matIndex] = material->GetBGTexture();
+			materialColors[matIndex] = material->GetColor().GetIndex();
+		}
+	}
+
 	// We want to multithread this, however parallel fors only work on container types
 	// This is sorta ugly, but a necessary evil for now :)
 	std::vector<int> rows(m_MainBitmap->h); // we loop through h first, because we want each thread to have sequential memory that they're touching
@@ -278,28 +288,13 @@ void SLTerrain::TexturizeTerrain() {
 
 			              RTEAssert(matIndex >= 0 && matIndex < c_PaletteEntriesNumber, "Invalid material index!");
 
-			              // Validate the material, or fallback to default material.
-			              const Material* material = materialPalette[matIndex] ? materialPalette[matIndex] : materialPalette[MaterialColorKeys::g_MaterialOutOfBounds];
-
 			              BITMAP* fgTexture = materialFGTextures[matIndex];
 			              BITMAP* bgTexture = materialBGTextures[matIndex];
-
-			              // If haven't read a pixel of this material before, then get its texture so we can quickly access it.
-			              if (!fgTexture && material->GetFGTexture()) {
-				              fgTexture = materialFGTextures[matIndex] = material->GetFGTexture();
-			              }
-
-			              if (!bgTexture && material->GetBGTexture()) {
-				              bgTexture = materialBGTextures[matIndex] = material->GetBGTexture();
-			              }
 
 			              int fgPixelColor = 0;
 
 			              // If actually no texture for the material, then use the material's solid color instead.
 			              if (!fgTexture) {
-				              if (materialColors[matIndex] == 0) {
-					              materialColors[matIndex] = material->GetColor().GetIndex();
-				              }
 				              fgPixelColor = materialColors[matIndex];
 			              } else {
 				              fgPixelColor = _getpixel(fgTexture, xPos % fgTexture->w, yPos % fgTexture->h);
