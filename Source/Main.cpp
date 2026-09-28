@@ -362,13 +362,15 @@ static nlohmann::json CrossAuthorityFromReport(const nlohmann::json& report, uin
 	    (*value)["migration_generation"].is_number_unsigned() ? (*value)["migration_generation"] : nlohmann::json(nullptr);
 }
 
-// Whether this tick leaves the initial history: a catch-up, a round begun past frame 1, a ticket rejoin or a re-executed tick.
-static bool CrossHistoryRestored(bool catchup, [[maybe_unused]] bool inPlace, uint64_t configuredStart, [[maybe_unused]] const std::set<uint64_t>& inPlaceReturns, bool ticketRejoin, bool reexecuted) {
-	return catchup || configuredStart > 1 || ticketRejoin || reexecuted;
+// Whether this tick leaves the initial history: a catch-up onto another world, a round begun past frame 1 other than
+// the return of an in-place catch-up, a ticket rejoin or a re-executed tick.
+static bool CrossHistoryRestored(bool catchup, bool inPlace, uint64_t configuredStart, const std::set<uint64_t>& inPlaceReturns, bool ticketRejoin, bool reexecuted) {
+	return (catchup && !inPlace) || (configuredStart > 1 && !inPlaceReturns.contains(configuredStart)) || ticketRejoin || reexecuted;
 }
 
-static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, [[maybe_unused]] uint64_t nextFrameCursor, [[maybe_unused]] const std::set<uint64_t>& inPlaceReturns = {}) {
-	return configuredStart == 1 && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
+static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, [[maybe_unused]] uint64_t nextFrameCursor, const std::set<uint64_t>& inPlaceReturns = {}) {
+	const bool started = configuredStart == 1 || (configuredStart > 1 && inPlaceReturns.contains(configuredStart));
+	return started && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
 }
 
 static uint64_t CrossRecordRound(uint64_t nativeRound, [[maybe_unused]] uint64_t sourceRound) { return nativeRound; }
