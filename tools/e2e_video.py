@@ -1266,6 +1266,7 @@ def run_one(options, scenario, run, run_index, out):
             timer.join()
     for name, handle in runs.items():
         handle.close()
+    footprint_peak = note_footprint(options.scratch_root, footprint_peak)
 
     collected = []
     for peer in peers:
