@@ -20649,6 +20649,132 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAReturnGapDoesNotStartTheHostsClock(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A51, 6, NetTransportLane::InputUnreliable);
+		config.startFrame = 1; config.roundId = 0x9A51;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A51);
+		if (!wire.StartHost(49740, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 300;
+		host.m_LastCompletedSimulationTick = 293;
+		host.m_LastQueuedTargetFrame = 299;
+		host.m_PeersPlayedThisRound = {1, 2};
+		host.m_ReclaimTransactions[2] = NetGameSeatReclaim{2, 0, 1, 2, 300, 6, 320, std::nullopt};
+		if (host.IsRemoteRequiredForFrame(2, 300)) { *error = "the returning seat owes input inside its neutral gap"; return false; }
+		if (host.JudgeOwnSeat(300, 1000) || host.JudgeOwnSeat(300, 1100) || host.m_OwnMissingFrame) {
+			*error = "a returner's neutral gap started the host's missing-input clock or held its seat";
+			return false;
+		}
+		host.m_Stats.nextFrame = 321;
+		host.m_RemoteFrames[321][2] = {};
+		if (host.JudgeOwnSeat(321, 1200) || !host.JudgeOwnSeat(321, 1251)) {
+			*error = "a required remote input did not start the host's unchanged three-tick bound";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_return_gap_does_not_start_the_hosts_clock" << std::endl;
+		return true;
+	}
+
+	bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error) {
+		for (uint16_t delay: {0, 6}) {
+			LoopbackTransport wire;
+			NetLockstepCoordinator host;
+			auto config = MakeCoordinatorConfig(1, 2, 0x9A52, delay, NetTransportLane::InputUnreliable);
+			config.startFrame = 1; config.roundId = 0x9A52;
+			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0;
+			config.relayToOtherPeers = true;
+			config.peerInputDelayFrames = {{1, delay}, {2, delay}};
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A52);
+			if (!wire.StartHost(49741, error) || !host.Start(wire, config, error)) return false;
+			host.m_State = NetLockstepState::Running;
+			host.m_Stats.nextFrame = 301;
+			host.m_LastCompletedSimulationTick = 300;
+			host.m_LastQueuedTargetFrame = 300;
+			host.m_AiHeldSeats = {{1, 290}, {2, 290}};
+			host.AdvanceReadyFrames(1000);
+			const uint64_t limit = 300 + std::max<uint16_t>(1, delay) + 1;
+			if (host.m_Stats.nextFrame != limit) {
+				*error = "the held host's plane outran its own reclaim horizon: next=" + std::to_string(host.m_Stats.nextFrame) + " expected=" + std::to_string(limit);
+				return false;
+			}
+			host.ReclaimOwnSeat(1000);
+			if (!host.m_ReclaimTransactions.contains(1)) { *error = "the host at its paced horizon could not reclaim its own seat"; return false; }
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_held_host_can_reach_its_reclaim_horizon" << std::endl;
+		return true;
+	}
+
+	bool TestAnAnnouncedCaptureExcusesEverySeatForItsCost(std::string* error) {
+		for (bool own: {true, false}) {
+			LoopbackTransport wire;
+			NetLockstepCoordinator host;
+			auto config = MakeCoordinatorConfig(1, 2, 0x9A53, 6, NetTransportLane::InputUnreliable);
+			config.startFrame = 1; config.roundId = 0x9A53;
+			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+			config.relayToOtherPeers = true;
+			config.peerInputDelayFrames = {{1, 6}, {2, 6}};
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A53);
+			if (!wire.StartHost(49742, error) || !host.Start(wire, config, error)) return false;
+			host.m_State = NetLockstepState::Running;
+			host.m_Stats.nextFrame = 607;
+			host.m_LastCompletedSimulationTick = 600;
+			host.m_SimTickedMs.store(1000);
+			host.m_LastQueuedTargetFrame = 606;
+			host.m_PeersPlayedThisRound = {1, 2};
+			host.m_ParkCaptureHistoryMs = {100};
+			host.NoteAnnouncedCapture(600);
+			if (own) host.m_RemoteFrames[607][2] = {};
+			const auto judge = [&](uint64_t now) { return own ? host.JudgeOwnSeat(607, now) : host.DeclareOverdueInputs(607, now, 1000, {2}); };
+			if (judge(1000) || judge(1099) || judge(1101) || !judge(1152)) {
+				*error = std::string(own ? "host" : "remote") + " capture excuse did not cover exactly the measured capture followed by the three-tick bound";
+				return false;
+			}
+		}
+		std::cout << "[net-lockstep-selftest] PASS an_announced_capture_excuses_every_seat_for_its_cost" << std::endl;
+		return true;
+	}
+
+	bool TestDelayTracksASteadySendersArrivalPhase(std::string* error) {
+		NetLockstepCoordinator host;
+		host.m_Config.simTickMs = 1000.0 / 60.0;
+		host.m_Config.slowPlayerBoundTicks = 3;
+		for (uint64_t tick = 0; tick <= 60; ++tick) host.m_ArrivalLeads[2].push_back({1000 + tick * 1000 / 60, 300 + tick, 0});
+		const auto steady = host.MarginKeepingIncrease(2, 17, 14, 2000);
+		host.m_ArrivalLeads[2].clear();
+		for (uint64_t tick = 0; tick <= 40; ++tick) host.m_ArrivalLeads[2].push_back({1000 + tick * 25, 300 + tick, 0});
+		const auto slow = host.MarginKeepingIncrease(2, 17, 14, 2000);
+		if (!steady || *steady != 20 || slow) {
+			*error = "a steady sender's phase was treated as a slow machine: steady=" + std::to_string(steady.value_or(0)) + " expected=20 slow=" + std::to_string(slow.value_or(0));
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS delay_tracks_a_steady_senders_arrival_phase" << std::endl;
+		return true;
+	}
+
+	bool TestFreshRoundDropsRetainedCollisionResults(std::string* error) {
+		MOSRotating retained;
+		retained.Create();
+		retained.SetHitWhatMOID(7);
+		retained.SetHitWhatParticleUniqueID(123);
+		retained.SetHitWhatTerrMaterial(5);
+		if (retained.HitWhatMOID() != 7 || retained.HitWhatParticleUniqueID() != 123 || retained.HitWhatTerrMaterial() != 5) {
+			*error = "the retained object never recorded its old collision";
+			return false;
+		}
+		g_MovableMan.RestartSimUpdateFrameNumber();
+		if (retained.HitWhatMOID() != g_NoMOID || retained.HitWhatParticleUniqueID() != 0 || retained.HitWhatTerrMaterial() != 0) {
+			*error = "a fresh round revived a retained object's old collision";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS fresh_round_drops_retained_collision_results" << std::endl;
+		return true;
+	}
+
 	bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error) {
 		// Every other seat is held: a hold of the host's own could only hand it to the host's own AI, and nobody waits on it. The row
 		// before this one is the control: with its clients playing, the same stall is a hold.
@@ -21534,6 +21660,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			std::cerr << "[net-lockstep-selftest] FAIL " << name << ": " << rowError << std::endl;
 			rowsPassed = false;
 		};
+		row(&TestAReturnGapDoesNotStartTheHostsClock, "a_return_gap_does_not_start_the_hosts_clock");
+		row(&TestAHeldHostCanReachItsReclaimHorizon, "a_held_host_can_reach_its_reclaim_horizon");
+		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
+		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
+		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");
 		row(&TestAResumedRoundPrimesPastItsAgreedFirstFrame, "a_resumed_round_primes_past_its_agreed_first_frame");
 		row(&TestACommandAParkEmptiedCommitsAfterIt, "a_command_in_a_park_commits_at_its_frame");
 		row(&TestCaptureParkCommitsCanonicalEmptyFrames, "capture_park_commits_every_players_input");

@@ -240,6 +240,27 @@ class ReportTests(unittest.TestCase):
     def test_unknown_value_never_passes(self):
         self.assertEqual(report.pin(None, '<= 8', True, [])['status'], 'MISS')
 
+    def test_measured_failure_is_not_missing_evidence(self):
+        self.assertEqual(report.pin(.0856, '< .01', False, [])['status'], 'FAIL')
+        self.assertEqual(report.pin(False, 'completed return', False, [])['status'], 'FAIL')
+
+    def test_silent_seat_already_held_uses_its_open_interval(self):
+        hold = '[net-match] hold peer=2 frame=516 AI in control\n'
+        back = '[net-match] seat-reclaimed peer=2 frame=700 live_actors=2\n'
+        complete = '[net-match] private catch-up complete frame=700\n'
+        result = self.item9a(silent=True, waits=hold + back, survivor_log=hold + back, client_log=complete)
+        self.assertEqual(result['pins']['item9a_hold']['value'], 516)
+        self.assertEqual(result['pins']['item9a_rejoin']['status'], 'PASS')
+        failed = self.item9a(silent=True, waits=hold, survivor_log=hold)
+        self.assertEqual(failed['pins']['item9a_rejoin']['status'], 'FAIL')
+
+    def test_every_red_case_records_its_failed_pins(self):
+        import feel_measure
+        result = dict(name='measured', peers={'host': self.item9a(wall_ms=16000)})
+        reasons = feel_measure.failure_reasons(result)
+        self.assertTrue(any('host.item9a_wall_tps' in reason for reason in reasons))
+        self.assertTrue(all(reason.strip() for reason in reasons))
+
     def test_correction_uses_matching_target_and_strict_four_pixel_boundary(self):
         forecast = dict(_line=3, committed_tick=9, target_tick=10, actor=dict(uid=7, x=100, y=100))
         committed = [dict(tick=10, wall_ms=170, scene_width=1000, scene_height=1000, wraps_x=False, wraps_y=False)]
