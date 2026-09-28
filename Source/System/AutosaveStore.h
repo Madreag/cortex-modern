@@ -246,6 +246,9 @@ namespace RTE {
 		/// The newest checkpoint of this match that this process published and validated, if it is still on
 		/// disk. Costs one file status query, never an archive read.
 		static std::optional<AutosaveDescriptor> NewestValidated(const std::string& matchId);
+		/// This process's validated checkpoints of this match still on disk, newest first. One file status query
+		/// each, never an archive read.
+		static std::vector<AutosaveDescriptor> ValidatedNewestFirst(const std::string& matchId);
 
 		/// Exercises the policy on copies of this match's own checkpoints: the retained set, a torn
 		/// newest that must not be picked, and retention keeping the pinned rewind point.
