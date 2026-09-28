@@ -8755,6 +8755,41 @@ end
 		checkpointValues = gated && checkpointValues;
 	}
 
+	if (m_CheckpointHeap) {
+		// A JIT mode change flushes every trace and writes the prototypes that anchor them, so it enters the VM too:
+		// while a frozen heap's copy is still queued it waits at the gate, and the image keeps the trace it froze.
+		const bool jitOn = !g_SettingsMan.DisableLuaJIT();
+		RunScriptString("_ScriptGraphJitModeProbe = function() local n = 0 for i = 1, 400 do n = n + i end return n end _ScriptGraphJitModeProbe()");
+		lua_getglobal(m_State, "_ScriptGraphJitModeProbe");
+		const GCproto* proto = lua_isfunction(m_State, -1) && isluafunc(funcV(m_State->top - 1)) ? funcproto(funcV(m_State->top - 1)) : nullptr;
+		lua_pop(m_State, 1);
+		const uint16_t traced = proto ? proto->trace : 0;
+		constexpr auto c_Hold = std::chrono::milliseconds(150);
+		std::vector<std::future<void>> busy;
+		for (int thread = 0; thread < 8; ++thread) busy.push_back(CheckpointLua::CopyPool::Submit([c_Hold] { std::this_thread::sleep_for(c_Hold); }));
+		CheckpointLua::Snapshot frozen;
+		{
+			std::lock_guard<std::recursive_mutex> lock(GetMutex());
+			frozen = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
+		}
+		const bool sinkingWas = LuaMan::IsCheckpointAllocationSinking();
+		LuaMan::SetCheckpointAllocationSinking(!sinkingWas);
+		const uint16_t liveAfter = proto ? proto->trace : 0;
+		for (auto& task: busy) task.wait();
+		uint16_t imageTrace = 0;
+		try {
+			if (proto) imageTrace = frozen.Read(&proto->trace);
+		} catch (const std::exception& error) {
+			std::cout << "[script-graph-selftest] jit mode probe: " << error.what() << std::endl;
+		}
+		LuaMan::SetCheckpointAllocationSinking(sinkingWas);
+		RunScriptString("_ScriptGraphJitModeProbe = nil");
+		const bool gated = proto && (jitOn ? traced != 0 && liveAfter == 0 && imageTrace == traced : traced == 0);
+		std::cout << "[script-graph-selftest] " << (gated ? "PASS" : "FAIL") << " a_jit_mode_change_during_a_page_copy_waits_for_it traced="
+		          << traced << " live_after=" << liveAfter << " image=" << imageTrace << " jit=" << jitOn << std::endl;
+		checkpointValues = gated && checkpointValues;
+	}
+
 	{
 		// A capture answers every userdata in the heap, the unreachable ones too, so a member whose owner was
 		// destroyed may not be read through that owner. The owner's storage is written over once it is gone, as
