@@ -3744,6 +3744,15 @@ namespace RTE {
 			if (!test.activates && (activation != 0 || reason.find(test.reason) == std::string::npos)) {
 				return Fail(std::string("measured-trail-") + test.name + ": activation=" + std::to_string(activation) + " reason=" + reason + " gate=" + gate);
 			}
+			if (std::string(test.name) == "at-the-head-inside-the-lead") {
+				const uint64_t first = activation;
+				if (!host.NoteCatchUpProgress(42, applied + 1, 1, 500, round + 30, &activation, &error) || activation <= first)
+					return Fail("a returner falling behind kept its uncommitted activation at " + std::to_string(first));
+				host.MarkActivationProposed(42);
+				const uint64_t agreed = activation;
+				if (!host.NoteCatchUpProgress(42, applied + 2, 1, 500, round + 60, &activation, &error) || host.FindSession(42)->activationTick != agreed)
+					return Fail("a committed return moved after the round accepted it");
+			}
 		}
 		std::cout << "[net-world-join-selftest] PASS activation_follows_the_measured_trail" << std::endl;
 		return 0;
