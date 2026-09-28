@@ -7556,14 +7556,18 @@ static void PrintCollectorMode(bool deterministic) {
 	}
 }
 
+// The mode change flushes every trace, a write into the heap, so it waits at the gate for a frozen capture's page copy.
+// Freezes start only on the sim thread, the one that changes the mode, and the lock is not taken: callers hold the lockstep plane.
+static void ApplyAllocationSinking(LuaStateWrapper& state, bool sinking) {
+	state.WaitFrozenCopy();
+	if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, sinking ? 1 : 0);
+}
+
 void LuaMan::SetCheckpointAllocationSinking(bool sinking) {
 	if (s_AllocationSinking.exchange(sinking) == sinking) return;
 	if (!LuaMan::IsConstructed()) return;
-	const auto apply = [sinking](LuaStateWrapper& state) {
-		if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, sinking ? 1 : 0);
-	};
-	apply(g_LuaMan.m_MasterScriptState);
-	for (LuaStateWrapper& state: g_LuaMan.m_ScriptStates) apply(state);
+	ApplyAllocationSinking(g_LuaMan.m_MasterScriptState, sinking);
+	for (LuaStateWrapper& state: g_LuaMan.m_ScriptStates) ApplyAllocationSinking(state, sinking);
 	std::cout << "[lua] allocation sinking: " << (sinking ? "on" : "off (a captured state allocates every table)") << std::endl;
 }
 
@@ -7598,11 +7602,8 @@ void LuaMan::Initialize() {
 	}
 	// A state made while a match is up starts where the others stand.
 	if (!s_AllocationSinking) {
-		const auto clear = [](LuaStateWrapper& state) {
-			if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, 0);
-		};
-		clear(m_MasterScriptState);
-		for (LuaStateWrapper& luaState: m_ScriptStates) clear(luaState);
+		ApplyAllocationSinking(m_MasterScriptState, false);
+		for (LuaStateWrapper& luaState: m_ScriptStates) ApplyAllocationSinking(luaState, false);
 	}
 	if (!s_CollectorModeAnnounced.exchange(true)) {
 		PrintCollectorMode(s_DeterministicCollection);
@@ -7611,6 +7612,8 @@ void LuaMan::Initialize() {
 
 void LuaStateWrapper::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	// A saver runs beside the graph capture, which may freeze this state between the gate and the lock: the walk pushes onto the VM.
+	WaitFrozenCopy();
 	if (m_State) VisitScriptOwnedObjects(m_State, visit);
 }
 
@@ -8752,6 +8755,41 @@ end
 		const bool gated = imageHeld && liveWritten;
 		std::cout << "[script-graph-selftest] " << (gated ? "PASS" : "FAIL") << " a_state_entered_during_its_page_copy_waits_for_it image_held="
 		          << imageHeld << " live_written=" << liveWritten << " entry_waited_ms=" << waitedMs << std::endl;
+		checkpointValues = gated && checkpointValues;
+	}
+
+	if (m_CheckpointHeap) {
+		// A JIT mode change flushes every trace and writes the prototypes that anchor them, so it enters the VM too:
+		// while a frozen heap's copy is still queued it waits at the gate, and the image keeps the trace it froze.
+		const bool jitOn = !g_SettingsMan.DisableLuaJIT();
+		RunScriptString("_ScriptGraphJitModeProbe = function() local n = 0 for i = 1, 400 do n = n + i end return n end _ScriptGraphJitModeProbe()");
+		lua_getglobal(m_State, "_ScriptGraphJitModeProbe");
+		const GCproto* proto = lua_isfunction(m_State, -1) && isluafunc(funcV(m_State->top - 1)) ? funcproto(funcV(m_State->top - 1)) : nullptr;
+		lua_pop(m_State, 1);
+		const uint16_t traced = proto ? proto->trace : 0;
+		constexpr auto c_Hold = std::chrono::milliseconds(150);
+		std::vector<std::future<void>> busy;
+		for (int thread = 0; thread < 8; ++thread) busy.push_back(CheckpointLua::CopyPool::Submit([c_Hold] { std::this_thread::sleep_for(c_Hold); }));
+		CheckpointLua::Snapshot frozen;
+		{
+			std::lock_guard<std::recursive_mutex> lock(GetMutex());
+			frozen = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
+		}
+		const bool sinkingWas = LuaMan::IsCheckpointAllocationSinking();
+		LuaMan::SetCheckpointAllocationSinking(!sinkingWas);
+		const uint16_t liveAfter = proto ? proto->trace : 0;
+		for (auto& task: busy) task.wait();
+		uint16_t imageTrace = 0;
+		try {
+			if (proto) imageTrace = frozen.Read(&proto->trace);
+		} catch (const std::exception& error) {
+			std::cout << "[script-graph-selftest] jit mode probe: " << error.what() << std::endl;
+		}
+		LuaMan::SetCheckpointAllocationSinking(sinkingWas);
+		RunScriptString("_ScriptGraphJitModeProbe = nil");
+		const bool gated = proto && (jitOn ? traced != 0 && liveAfter == 0 && imageTrace == traced : traced == 0);
+		std::cout << "[script-graph-selftest] " << (gated ? "PASS" : "FAIL") << " a_jit_mode_change_during_a_page_copy_waits_for_it traced="
+		          << traced << " live_after=" << liveAfter << " image=" << imageTrace << " jit=" << jitOn << std::endl;
 		checkpointValues = gated && checkpointValues;
 	}
 
