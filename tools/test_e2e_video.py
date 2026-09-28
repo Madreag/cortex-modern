@@ -194,6 +194,27 @@ def check_levers_inside_rounds(results):
     return row(results, "scenarios/levers-land-inside-their-round", not found, "; ".join(found))
 
 
+def unconfirmed_clicks(steps):
+    """Each mouse_up sent before a wait saw its control read pushed after the mouse_down."""
+    found, pressed = [], {}
+    for index, step in enumerate(steps):
+        control = step.get("control")
+        if step.get("op") == "mouse_down":
+            pressed[control] = False
+        elif step.get("op") == "wait" and control in pressed and step.get("equals", {}).get("pushed") is True:
+            pressed[control] = True
+        elif step.get("op") == "mouse_up" and control in pressed and not pressed.pop(control):
+            found.append(f"step {index} {control}")
+    return found
+
+
+def check_probe_clicks_seen(results):
+    """A probe releases a click only once the control reads pushed: a catch-up frame can separate the down from the GUI."""
+    found = [f"{path.name} {where}" for path in sorted(driver.SCENARIO_DIR.glob("*.probe.json"))
+             for where in unconfirmed_clicks(json.loads(path.read_text(encoding="utf-8")).get("steps", []))]
+    return row(results, "probes/click-released-after-its-control-reads-pushed", not found, "; ".join(found))
+
+
 def check_rematch_contract(results):
     scenario = driver.load_scenario("mp-rematch")
     runs = {run["name"]: run for run in scenario.get("runs", [])}
@@ -1567,6 +1588,7 @@ def main():
         ok &= check_module_requirements(results, scratch)
         ok &= check_rematch_contract(results)
         ok &= check_levers_inside_rounds(results)
+        ok &= check_probe_clicks_seen(results)
         ok &= check_substitution(results)
         ok &= check_directory_port_block(results)
         ok &= check_launch_contract(results, scratch)
