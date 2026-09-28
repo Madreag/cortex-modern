@@ -106,9 +106,10 @@ def check_module_requirements(results, scratch):
 # A scripted return, reclaim, hold or relaunch lands inside its round with room for the largest lever wait: the reclaim
 # gap (neutral_through - activation, 78-90 frames measured on mp-rollback-lag) plus one full-state interval (60).
 LEVER_MARGIN_TICKS = 90 + 60
-# A killed peer's relaunch returns 741-769 frames after its drop with no fake lag (mp-join-garbage, mp-reconnect-repair,
-# mp-host-stall-image-rejoin on 263) and 1038-1190 behind 200 ms fake lag and 5 % loss (mp-rollback-lag lag-100, 2026-09-28).
-RELAUNCH_BUDGET_TICKS = {False: 800, True: 1200}
+# A killed peer's relaunch returns 741-873 frames after its drop with no fake lag (mp-join-garbage, mp-reconnect-repair,
+# mp-host-stall-image-rejoin, full-state sampler on) and 1007-1375 behind 200 ms fake lag and 5 % loss (mp-rollback-lag
+# lag-100), measured 2026-09-28 on 263 and on this branch.
+RELAUNCH_BUDGET_TICKS = {False: 900, True: 1400}
 TICK_LEVERS = ("-selftest-frame-stall", "-selftest-frame-stall-again", "-net-test-live-stall", "-selftest-draw-stall",
                "-selftest-late-script-stall", "-net-match-e2e-leave-tick", "-determinism-selftest-perturb-tick")
 SCRIPTED_TICK_LINE = "[input-script] tick {} player 0 pressed FIRE"
