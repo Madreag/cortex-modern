@@ -1629,6 +1629,7 @@ namespace RTE {
 		static constexpr uint64_t c_HeldHostArrangingMs = 1500; //!< How long a held seat that hosts reads the loss as a handover.
 		static constexpr uint64_t c_InPlaceHostSilenceMs = 3000; //!< A host that feeds a held seat nothing this long is gone.
 		uint64_t m_HandoverFrame = 0; //!< The first frame the round committed under the authority that took it over here; 0 before a handover.
+		bool m_HeldHostHandover = false; //!< The handover was a held seat taking the round over from its own state.
 		struct InPlaceRoute {
 			uint8_t peerId = 0;
 			NetMatchMigrationPeer endpoint;
