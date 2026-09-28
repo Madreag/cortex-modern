@@ -4166,6 +4166,11 @@ static std::string ResyncSaveName() {
 		System::PrintDiagnosticLine(line.str());
 	}
 
+	std::vector<uint8_t> NetMatchService::HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
+	                                                          const std::vector<uint8_t>& reachable, const std::set<uint8_t>& held) {
+		return reachable;
+	}
+
 	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool heldSeats) {
 		// An announced leave is the host's decision; a lost host is absent, and a match with a held seat is never ended by that.
 		if (hostAnnounced) return LoneElection::EndMatch;
