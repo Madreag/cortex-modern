@@ -201,6 +201,7 @@ namespace RTE {
 	bool RunCrossExecutionPhaseSelfTest(std::string* error);
 	bool RunCrossAuthorityRecordSelfTest(std::string* error);
 	bool RunCrossHistoryRecordSelfTest(std::string* error);
+	bool RunCrossInPlaceHistorySelfTest(std::string* error);
 	bool RunCrossReadyRevisionSelfTest(std::string* error);
 }
 
@@ -361,8 +362,15 @@ static nlohmann::json CrossAuthorityFromReport(const nlohmann::json& report, uin
 	    (*value)["migration_generation"].is_number_unsigned() ? (*value)["migration_generation"] : nlohmann::json(nullptr);
 }
 
-static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, [[maybe_unused]] uint64_t nextFrameCursor) {
-	return configuredStart == 1 && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
+// Whether this tick leaves the initial history: a catch-up onto another world, a round begun past frame 1 other than
+// the return of an in-place catch-up, a ticket rejoin or a re-executed tick.
+static bool CrossHistoryRestored(bool catchup, bool inPlace, uint64_t configuredStart, const std::set<uint64_t>& inPlaceReturns, bool ticketRejoin, bool reexecuted) {
+	return (catchup && !inPlace) || (configuredStart > 1 && !inPlaceReturns.contains(configuredStart)) || ticketRejoin || reexecuted;
+}
+
+static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, [[maybe_unused]] uint64_t nextFrameCursor, const std::set<uint64_t>& inPlaceReturns = {}) {
+	const bool started = configuredStart == 1 || (configuredStart > 1 && inPlaceReturns.contains(configuredStart));
+	return started && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
 }
 
 static uint64_t CrossRecordRound(uint64_t nativeRound, [[maybe_unused]] uint64_t sourceRound) { return nativeRound; }
@@ -405,6 +413,24 @@ bool RTE::RunCrossHistoryRecordSelfTest(std::string* error) {
 		*error = "a next-frame cursor is mistaken for a checkpoint, or unknown restoration is mapped as initial"; return false;
 	}
 	std::cout << "[net-match-selftest] PASS initial_history_uses_configured_start_not_the_next_frame_cursor" << std::endl;
+	return true;
+}
+
+bool RTE::RunCrossInPlaceHistorySelfTest(std::string* error) {
+	// A held seat that catches up in place replays its own world, so it and its return stay on the round's history.
+	const std::set<uint64_t> returns{671, 884};
+	if (CrossHistoryRestored(true, true, 1, returns, false, false) || CrossHistoryRestored(true, true, 671, returns, false, false) ||
+	    CrossHistoryRestored(false, false, 671, returns, false, false) || CrossHistoryBranch(671, false, 672, returns) != "initial" ||
+	    CrossHistoryBranch(1, false, 601, returns) != "initial") {
+		*error = "an in-place catch-up or its return is recorded as a restored history"; return false;
+	}
+	if (!CrossHistoryRestored(true, false, 1, returns, false, false) || !CrossHistoryRestored(false, false, 700, returns, false, false) ||
+	    !CrossHistoryRestored(false, false, 1, returns, true, false) || !CrossHistoryRestored(false, false, 1, returns, false, true) ||
+	    !CrossHistoryBranch(700, false, 701, returns).is_null() || !CrossHistoryBranch(671, true, 672, returns).is_null() ||
+	    !CrossHistoryBranch(671, false, 672, {}).is_null()) {
+		*error = "an image catch-up, a late start, a ticket rejoin or a re-executed tick keeps the initial history"; return false;
+	}
+	std::cout << "[net-match-selftest] PASS in_place_catch_up_keeps_the_initial_history" << std::endl;
 	return true;
 }
 
@@ -493,6 +519,7 @@ static void BeginCrossTick(uint64_t tick) {
 	static uint64_t authorityObservedTick = 0;
 	static uint64_t configuredStart = 0;
 	static std::set<std::string> unmappedHistories;
+	static std::map<std::string, std::set<uint64_t>> inPlaceReturns;
 	// An unresolved authority is asked again twice a second, not every tick: the report is built under the service's lock.
 	const bool transition = newRound || host != priorHost || priorCatchup;
 	const bool unresolved = configuredStart == 0 || authority.is_null();
@@ -504,7 +531,11 @@ static void BeginCrossTick(uint64_t tick) {
 		authorityObservedTick = tick;
 	}
 	const std::string historyKey = std::to_string(config->sessionId) + "/" + std::to_string(CrossRecordRound(round, config->roundId));
-	if (catchup || configuredStart > 1 || s_crossTicketRejoin || (round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
+	const bool inPlace = catchup && g_NetMatchService.CatchingUpInPlace();
+	auto& returns = inPlaceReturns[historyKey];
+	// The frame an in-place catch-up returns at is where this process starts its round again on its own world.
+	if (inPlace && ScenarioRunner::WorldCatchUpActivationTick() != 0) returns.insert(ScenarioRunner::WorldCatchUpActivationTick());
+	if (CrossHistoryRestored(catchup, inPlace, configuredStart, returns, s_crossTicketRejoin, round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
 	priorHost = host; priorCatchup = catchup;
 	// The process's own names and the config's hash change rarely; each tick reads them from here.
 	static const std::string run = CrossEnvironment("CC_TEST_CROSS_RUN"), instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
@@ -524,7 +555,7 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"authority_generation_source", "service.runner.lockstep; refreshed on round/host/catch-up transition"},
 	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(CrossRecordRound(round, config->roundId))},
 	    {"round", round}, {"source_round", config->roundId}, {"tick", tick}, {"peer", ScenarioRunner::GetLockstepLocalPeerId()},
-	    {"history_branch", CrossHistoryBranch(configuredStart, unmappedHistories.contains(historyKey), ScenarioRunner::GetLockstepResumeFrame())},
+	    {"history_branch", CrossHistoryBranch(configuredStart, unmappedHistories.contains(historyKey), ScenarioRunner::GetLockstepResumeFrame(), returns)},
 	    {"configured_start_frame", catchup ? nlohmann::json(nullptr) : nlohmann::json(configuredStart)},
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
 	    {"config_hash", configHash}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
