@@ -10383,7 +10383,7 @@ namespace RTE {
 		}
 		if (leftIt != m_PeerLeaveFrames.end()) {
 			std::cout << "[lockstep] ignored a " << NetLockstepCodec::StopReasonName(stop.reason) << " from peer "
-			          << static_cast<int>(stop.senderPeerId) << ", which left at frame " << leftIt->second << std::endl;
+			          << static_cast<int>(stop.senderPeerId) << ", which left at frame " << leftIt->second << ": frame=" << stop.frame << " " << stop.message << std::endl;
 			++m_Stats.stopsFromLeftPeers;
 			return;
 		}
