@@ -310,8 +310,14 @@ def check_e2e_host_end_completion(results, repo):
     declared = re.search(r"const bool e2eHostEndedRound = ([^;]*);", body)
     condition = " ".join(declared[1].split()) if declared else ""
     ok = row(results, "main/e2e-member-host-end-is-a-completion",
-             all(term in condition for term in ("s_netMatchServiceE2E", 'starts_with("Complete:")', "!g_NetMatchService.IsHost()",
+             all(term in condition for term in ("s_netMatchServiceE2E", "IsCompleteControllerStop(error)", "!g_NetMatchService.IsHost()",
                                                 "NetMatchServiceState::Running")), condition[:200])
+    # The poll and the controller path stop with "tick N lockstep stopped: Complete:..."; the finish path with the bare reason.
+    helper = re.search(r"static bool IsCompleteControllerStop\(const std::string& error\) \{(.*?)\n\}\n", text, re.S)
+    helper_body = helper[1] if helper else ""
+    ok &= row(results, "main/e2e-host-end-read-behind-the-stop-prefix",
+              'error.starts_with("Complete:")' in helper_body and '" lockstep stopped: Complete:"' in helper_body
+              and 'error.starts_with("tick ")' in helper_body, helper_body[:200])
     ok &= row(results, "main/e2e-failed-handover-is-not-a-host-end", 'error.find("host handover ended") == std::string::npos' in condition)
     branch = re.search(r'else if \(error\.find\("Complete:"\) != std::string::npos &&\s*error\.find\("e2e complete"\)[^{]*\{(.*?)\n\t\t\} else if', body, re.S)
     ok &= row(results, "main/e2e-completion-branch-takes-the-host-end",
