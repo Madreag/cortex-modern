@@ -644,7 +644,8 @@ namespace RTE {
 			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), sessionMs);
 			m_Lobby.Tick(clocks.lobbyMs);
 			// A seat told its round ended while it was held or rejoining takes the end record, not a round.
-			if (!m_Config.host && m_Lobby.GetRoundEndedRecord()) {
+			if (!m_Config.host && m_Lobby.GetRoundEndedRecord() &&
+			    !(m_Lobby.HasCompleteStateTransfer() && IsWorldJoinImageBlob(m_Lobby.PeekReceivedState()))) {
 				SetFailed("the round ended while this seat was held");
 				if (error) *error = m_SetupError;
 				return false;

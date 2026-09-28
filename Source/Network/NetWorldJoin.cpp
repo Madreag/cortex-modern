@@ -1781,12 +1781,28 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetWorldJoinHost::BeginFinalTail(NetPeerId connection, uint64_t finalFrame) {
+		auto* session = Find(connection);
+		if (!session || session->phase != NetWorldJoinPhase::CatchingUp || finalFrame < session->snapshotTick) return false;
+		if (session->finalTailFrame) return *session->finalTailFrame == finalFrame;
+		const uint64_t through = std::max(session->snapshotTick, session->acknowledgedThrough);
+		if (through < finalFrame && (!m_Tail.Covers(through + 1) || !m_Tail.Covers(finalFrame))) return false;
+		session->finalTailFrame = finalFrame;
+		session->deliveredThrough = through;
+		session->pendingTail.clear();
+		session->pendingTailOffset = 0;
+		session->tailInFlight.clear();
+		return true;
+	}
+
 	bool NetWorldJoinHost::NextTailChunk(NetPeerId connection, std::vector<uint8_t>& chunk) {
 		auto* session = Find(connection);
 		if (!session || session->phase != NetWorldJoinPhase::CatchingUp) return false;
+		if (session->finalTailFrame && session->deliveredThrough >= *session->finalTailFrame) return false;
 		if (session->pendingTail.empty()) {
 			std::vector<std::vector<uint8_t>> frames;
-			if (m_Tail.CopyFrom(session->deliveredThrough + 1, 32, 40ULL * 1024, frames, &session->pendingTailThrough) == 0) return false;
+			const size_t count = session->finalTailFrame ? static_cast<size_t>(std::min<uint64_t>(32, *session->finalTailFrame - session->deliveredThrough)) : 32;
+			if (m_Tail.CopyFrom(session->deliveredThrough + 1, count, 40ULL * 1024, frames, &session->pendingTailThrough) == 0) return false;
 			for (const auto& frame: frames) {
 				AppendU32LE(session->pendingTail, static_cast<uint32_t>(frame.size()));
 				session->pendingTail.insert(session->pendingTail.end(), frame.begin(), frame.end());
@@ -1950,6 +1966,7 @@ namespace RTE {
 			return false;
 		}
 		session->acknowledgedThrough = appliedThrough;
+		if (session->finalTailFrame) return true;
 		// The replay's own progress against the round's committed horizon, both in frames: a loaded machine slows the round too,
 		// so no wall clock enters it.
 		if (session->closingAnchorHorizon == 0 || nowFrame < session->closingAnchorHorizon) {
@@ -1990,6 +2007,17 @@ namespace RTE {
 			return true;
 		}
 		if (session->activationTick != 0) {
+			const uint64_t behind = nowFrame > appliedThrough ? nowFrame - appliedThrough : 0;
+			if (IsPrivateMatch() && !session->activationProposed && nowFrame + c_NetWorldClosingWindowFrames >= session->activationTick &&
+			    (nowFrame >= session->activationTick || behind > session->activationTrailFrames + m_Config.slowPlayerBoundTicks)) {
+				uint64_t later = 0;
+				if (ReannounceActivation(connection, nowFrame, &later, nullptr)) {
+					session->activationTrailFrames = std::min<uint64_t>(behind, 2 * c_NetWorldActivationLeadFrames);
+					if (outActivationTick) *outActivationTick = later;
+					session->catchUpGate = "reannounced-trailing";
+					return true;
+				}
+			}
 			session->catchUpGate = "announced";
 			return true;
 		}

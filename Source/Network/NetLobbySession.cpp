@@ -26,6 +26,13 @@ namespace RTE {
 	namespace {
 		using json = nlohmann::json;
 
+		bool IsCatchUpReport(const NetLobbyPayload& payload) {
+			const auto* chunk = std::get_if<NetLobbyStateChunk>(&payload);
+			uint8_t kind = 0;
+			uint64_t value = 0;
+			return chunk && ParseWorldJoinReport(*chunk, kind, value) && kind == c_NetWorldReportCatchUp;
+		}
+
 		std::string HashText(const NetHash32& hash) {
 			return NetIdentity::HashHex(hash);
 		}
@@ -372,6 +379,7 @@ namespace RTE {
 
 	bool NetLobbySession::SendPayloadTo(uint8_t peerId, const NetLobbyPayload& payload, std::string* error, NetTransportLane lane) {
 		if (!IsKnownRemote(peerId)) {
+			if (IsCatchUpReport(payload)) ++m_Stats.catchUpReportsRefused;
 			if (error) *error = "lobby has no remote for that peer";
 			return false;
 		}
@@ -379,11 +387,21 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::SendPayload(const NetLobbyPayload& payload, std::string* error, NetTransportLane lane) {
+		if (m_RemotePeerIds.empty() && IsCatchUpReport(payload)) {
+			++m_Stats.catchUpReportsRefused;
+			if (error) *error = "the catch-up report has no host route";
+			return false;
+		}
 		if (lane == NetTransportLane::ControlReliable) return Send(payload, error);
 		for (uint8_t peerId : m_RemotePeerIds) {
 			if (!SendTo(m_RemoteTransports[peerId], payload, error, nullptr, lane)) return false;
 		}
 		return true;
+	}
+
+	uint32_t NetLobbySession::GetPeerPingMs(uint8_t peerId) const {
+		const auto peer = m_RemoteTransports.find(peerId);
+		return m_Transport && peer != m_RemoteTransports.end() ? m_Transport->GetPeerPingMs(peer->second) : 0;
 	}
 
 	void NetLobbySession::RestartStateTransfer() {
@@ -628,6 +646,10 @@ namespace RTE {
 			{"stats", {
 				{"messages_sent", m_Stats.messagesSent},
 				{"messages_received", m_Stats.messagesReceived},
+				{"catch_up_reports_sent", m_Stats.catchUpReportsSent},
+				{"catch_up_reports_received", m_Stats.catchUpReportsReceived},
+				{"catch_up_reports_refused", m_Stats.catchUpReportsRefused},
+				{"catch_up_reports_dropped", m_Stats.catchUpReportsDropped},
 				{"malformed_messages", m_Stats.malformedMessages},
 				{"ignored_session_packets", m_Stats.ignoredSessionPackets},
 				{"unbound_sender_packets", m_Stats.unboundSenderPackets},
@@ -950,19 +972,24 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error, bool* congested, NetTransportLane lane) {
+		const bool catchUp = IsCatchUpReport(payload);
 		if (!m_Transport) {
+			if (catchUp) ++m_Stats.catchUpReportsRefused;
 			if (error) *error = "lobby has no transport";
 			return false;
 		}
 		std::vector<uint8_t> bytes;
 		NetLobbyError encodeError;
 		if (!NetLobbyProtocol::Encode({payload}, bytes, &encodeError)) {
+			if (catchUp) ++m_Stats.catchUpReportsRefused;
 			if (error) *error = encodeError.message;
 			return false;
 		}
 		if (!m_Transport->Send(transport, lane, bytes, error, congested)) {
+			if (catchUp) ++m_Stats.catchUpReportsRefused;
 			return false;
 		}
+		if (catchUp) ++m_Stats.catchUpReportsSent;
 		++m_Stats.messagesSent;
 		return true;
 	}
@@ -1243,6 +1270,8 @@ namespace RTE {
 					return entry.second == event.peerId;
 				});
 				if (sender == m_RemoteTransports.end()) {
+					const auto decoded = NetLobbyProtocol::Decode(event.bytes);
+					if (decoded.ok && IsCatchUpReport(decoded.message.payload)) ++m_Stats.catchUpReportsDropped;
 					// A packet from a connection no slot is bound to is dropped; the first one per connection is named.
 					++m_Stats.unboundSenderPackets;
 					if (m_DropsNamed.insert({0, event.peerId}).second)
@@ -1275,6 +1304,7 @@ namespace RTE {
 					const auto ready = m_Config.session->GetReadyPeers();
 					const auto admitted = std::find_if(ready.begin(), ready.end(), [&](const auto& peer) { return peer.transportPeerId == event.peerId; });
 					if (admitted == ready.end()) {
+						if (IsCatchUpReport(decoded.message.payload)) ++m_Stats.catchUpReportsDropped;
 						++m_Stats.unadmittedWorldPackets;
 						if (m_DropsNamed.insert({1, event.peerId}).second)
 							System::PrintDiagnosticLine("[net-lobby] dropped a world packet from unadmitted connection=" + std::to_string(event.peerId) + " slot=" +
@@ -1320,6 +1350,11 @@ namespace RTE {
 					return true;
 				}, decoded.message.payload);
 				if (!allowed) {
+					if (IsCatchUpReport(decoded.message.payload)) {
+						++m_Stats.catchUpReportsDropped;
+						if (m_DropsNamed.insert({2, event.peerId}).second)
+							System::PrintDiagnosticLine("[net-lobby] catch-up report dropped: no current transfer route for connection=" + std::to_string(event.peerId));
+					}
 					// A returner's catch-up and transfer reports can still be in flight when a repair restarts this lobby: they belong to the
 					// round the repair replaced, and the member who sent them is owed the repair, not an ejection.
 					if (const NetLobbyStateChunk* chunk = std::get_if<NetLobbyStateChunk>(&decoded.message.payload); m_Config.host && chunk && !worldSender) {
@@ -1369,6 +1404,7 @@ namespace RTE {
 					uint64_t value = 0;
 					WorldJoinReport report;
 					if (ParseWorldJoinReport(*chunk, kind, value, &report.workTicks, &report.workUs, &report.sentThrough)) {
+						if (kind == c_NetWorldReportCatchUp) ++m_Stats.catchUpReportsReceived;
 						report.kind = kind; report.value = value; report.fromPeer = sender->first; report.pending = true;
 						if (kind == c_NetWorldReportRoundEnded && !m_Config.host) m_RoundEndedRecord = value;
 						std::erase_if(m_WorldJoinReports, [&](const auto& pending) { return pending.kind == kind && pending.fromPeer == sender->first; });
