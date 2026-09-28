@@ -13,7 +13,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from run_sim_test import make_run
 from feel.launch_budget import install_memory_guard
-from feel_measure import private_settings, stage_baseline
+from feel_measure import input_pattern, private_settings, stage_baseline
 from feel.retained_resume import compare_live_hashes, read_live_hashes
 
 
@@ -27,13 +27,14 @@ def main():
     root = args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     script = root / 'input.txt'
-    script.write_text('1 1200 AIM=1,0\n', encoding='utf-8')
+    input_pattern(script)
     runs, records = {}, {}
     killed = False
     try:
         for index, peer in enumerate(('host', 'first', 'second')):
             flags = ['-net-match-service-e2e', '-net-port', str(args.port), '-net-match-peers', '3',
                      '-net-match-humans', '3', '-net-match-cpu-slots', '0', '-net-match-auto-delay',
+                     '-net-match-service-preset', 'Determinism FeelBaseline', '-net-match-service-module', 'UserScenes.rte',
                      '-net-match-ticks', '1200', '-max-ticks', '1200', '-net-match-e2e-rematch',
                      '-net-match-e2e-end-round-tick', '800', '-net-autosave-seconds', '0',
                      '-net-player-name', peer, '-seed', '42', '-tick-hashes', '-input-script', str(script),
