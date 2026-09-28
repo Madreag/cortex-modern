@@ -167,6 +167,7 @@ namespace RTE {
 		size_t pendingTailOffset = 0;
 		uint64_t pendingTailThrough = 0;
 		uint64_t deliveredThrough = 0;    //!< The last tail frame this connection has been sent.
+		std::optional<uint64_t> finalTailFrame;
 		uint64_t acknowledgedThrough = 0; //!< The last tail frame it says it applied.
 		uint64_t openedAtMs = 0;
 		uint64_t transferBytes = 0;
@@ -430,6 +431,8 @@ namespace RTE {
 		bool active = false;
 		uint64_t tailDatagrams = 0, tailFramesKept = 0, tailFramesRepeated = 0; //!< What its tail brought, for its progress line.
 		uint64_t reportsSent = 0, reportsRefused = 0, reportsLogged = 0; //!< The progress reports it sent, those its wire refused, and the applied frame last logged.
+		uint64_t reportAttemptMs = 0;
+		std::vector<uint8_t> lastReportBytes;
 		bool privateMatch = false;
 		NetMatchConfig checkpointConfig;
 		std::string sideState;
@@ -444,6 +447,7 @@ namespace RTE {
 		uint64_t activationTick = 0;      //!< E, once the host has announced it.
 		bool activationCommitted = false;
 		std::string digest;
+		std::optional<uint64_t> endRecord;
 		std::vector<NetLockstepFrame> tail;
 		std::vector<uint8_t> partialTail;
 		std::set<uint64_t> droppedForeignRounds; //!< Rounds whose stray tail chunks this catch-up dropped, each named once.
@@ -667,6 +671,7 @@ namespace RTE {
 		bool HasBootstrapInFlight() const;
 		bool HasImageTransferInFlight() const;
 		const NetWorldJoinSession* FindSession(NetPeerId connection) const;
+		bool BeginFinalTail(NetPeerId connection, uint64_t finalFrame);
 		NetWorldMembership& Membership() { return m_Membership; }
 		const NetWorldMembership& Membership() const { return m_Membership; }
 		NetWorldFrameLog& Tail() { return m_Tail; }

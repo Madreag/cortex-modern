@@ -6427,7 +6427,7 @@ void RunGameLoop() {
 			s_frameStallFired = true;
 			{
 				std::ostringstream line;
-				line << "[selftest] frame stall tick=" << s_frameStallTick << " ms=" << s_frameStallMs;
+				line << "[selftest] frame stall tick=" << g_TimerMan.GetSimUpdateCount() << " ms=" << s_frameStallMs << " requested_tick=" << s_frameStallTick;
 				System::PrintDiagnosticLine(line.str());
 			}
 			// The session plane keeps the round's frames moving while this machine's simulation is away.
@@ -6450,7 +6450,8 @@ void RunGameLoop() {
 					stall.firedRound = s_netMatchServiceE2ERematches;
 				} else {
 					const uint64_t activation = ScenarioRunner::WorldCatchUpActivationTick();
-					if (s_netLiveStallActivation && activation <= *s_netLiveStallActivation) break;
+					if (ScenarioRunner::GetLockstepLocalPeerId() != ScenarioRunner::GetLockstepHostPeerId() &&
+					    s_netLiveStallActivation && activation <= *s_netLiveStallActivation) break;
 					stall.fired = true;
 					s_netLiveStallActivation = activation;
 				}
@@ -7393,8 +7394,8 @@ void RunGameLoop() {
 				bool reclaimStart = false;
 				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !reclaimStart && simTick > 0; ++peer)
 					reclaimStart = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 1);
-				if (reclaimStart) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump, "reclaim");
-				if ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump);
+				if (reclaimStart) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "reclaim");
+				if ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			else g_NetMatchService.AppendCommittedJoinFrame(simTick);

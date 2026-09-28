@@ -442,6 +442,7 @@ namespace RTE {
 		/// A completed tick's committed frame joins the catch-up history a returner replays; a paused tick's too.
 		void AppendCommittedJoinFrame(uint64_t tick);
 		void AutosaveAtTickBoundary(uint64_t tick);
+		bool CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label = "");
 		/// One entry of the checkpoint schedule on the committed stream.
 		struct CheckpointNote { uint8_t sender = 0; uint8_t kind = 0; uint64_t tick = 0; };
 		/// What one completed tick hands the checkpoint schedule.
