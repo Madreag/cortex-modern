@@ -1268,6 +1268,7 @@ namespace RTE {
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 		friend bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error);
+		friend bool TestAReturnersRoundSkipsTheRoundsEarlierTicks(std::string* error);
 		friend bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 		friend bool TestARoundsOwnEndIsNoHold(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);

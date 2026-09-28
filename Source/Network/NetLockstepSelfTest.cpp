@@ -74,6 +74,7 @@ namespace RTE {
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 	bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error);
+	bool TestAReturnersRoundSkipsTheRoundsEarlierTicks(std::string* error);
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 	bool TestARoundsOwnEndIsNoHold(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
@@ -20030,6 +20031,31 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// A seat returning to a running round starts its own round at its activation. A member's new tick for a frame before that is the running
+	/// round's, which the seat took from its replay: it is skipped, never a broken build that ends the return.
+	bool TestAReturnersRoundSkipsTheRoundsEarlierTicks(std::string* error) {
+		LoopbackTransport server, wire;
+		NetLockstepCoordinator returner;
+		auto config = MakeCoordinatorConfig(2, 1, 0x9A23, 4, NetTransportLane::InputUnreliable);
+		config.peerCount = 2; config.startFrame = 716; config.roundId = 48; config.timeoutMs = 5000;
+		config.joinsRunningRound = true;
+		config.remoteTransportPeerIds = {{1, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A23);
+		if (!server.StartHost(48905, error) || !wire.Connect("loopback", 48905, error) || !returner.Start(wire, config, error)) return false;
+		returner.m_State = NetLockstepState::WaitingForStart;
+		NetLockstepFrame earlier;
+		earlier.roundId = config.roundId; earlier.senderPeerId = 1; earlier.targetFrame = 656;
+		returner.AcceptRemoteTick(earlier, 1000, false);
+		if (returner.m_State == NetLockstepState::Failed || returner.m_Stats.windowCopiesSkipped != 1) {
+			*error = "returners-round-skips-the-rounds-earlier-ticks: the host's tick for 656, before the return's start at 716, left the round " +
+			         std::string(returner.m_State == NetLockstepState::Failed ? "failed: " + returner.m_Stats.timeoutReason : "running") + " with " +
+			         std::to_string(returner.m_Stats.windowCopiesSkipped) + " skipped; expected running with 1 skipped";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_returners_round_skips_the_rounds_earlier_ticks" << std::endl;
+		return true;
+	}
+
 	/// A seat that came back from a hold and later leaves - a host handover it was absent from takes it - is gone from that leave: the later
 	/// of its return and its leave decides, and the frames before stay what they were.
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error) {
@@ -21566,6 +21592,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(&error) ||
 		    !TestAReturnerOnTheReliableLaneHearsItsHost(&error) ||
+		    !TestAReturnersRoundSkipsTheRoundsEarlierTicks(&error) ||
 		    !TestAReturnedSeatThatLeavesAgainIsGone(&error) ||
 		    !TestARoundsOwnEndIsNoHold(&error) ||
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
