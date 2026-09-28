@@ -1809,12 +1809,12 @@ namespace RTE {
 				packed.insert(packed.end(), frame.begin(), frame.end());
 			}
 		};
-		// A datagram its replay has not passed within one and a half measured round trips is lost: it alone goes again. Frames from the
-		// activation on reach the returner as the round's own, never from here.
+		// Each datagram goes twice, a moment apart; one its replay has still not passed within one and a half round trips is lost, and
+		// it alone goes again. Frames from the activation on reach the returner as the round's own, never from here.
 		const uint64_t resendMs = session->tailAckRttMs > 0 ? static_cast<uint64_t>(session->tailAckRttMs * 1.5) + 40 : 1000;
 		for (auto sent = session->tailInFlight.begin(); sent != session->tailInFlight.end();) {
 			if (session->activationTick != 0 && sent->first >= session->activationTick) break;
-			if (nowMs < sent->sentMs + resendMs) {
+			if (sent->repeated ? nowMs < sent->sentMs + resendMs : nowMs < sent->firstSentMs + c_NetWorldTailRepeatMs) {
 				++sent;
 				continue;
 			}
@@ -1826,7 +1826,7 @@ namespace RTE {
 			}
 			pack(frames);
 			sent->sentMs = nowMs;
-			sent->resent = true;
+			sent->repeated = true;
 			return true;
 		}
 		if (session->tailInFlight.size() >= 1024) return false;
@@ -1839,7 +1839,7 @@ namespace RTE {
 		}
 		if (m_Tail.CopyFrom(session->deliveredThrough + 1, c_NetWorldTailDatagramFrames, c_NetWorldTailDatagramBytes, frames, &last) == 0 || last <= session->deliveredThrough) return false;
 		pack(frames);
-		session->tailInFlight.push_back({session->deliveredThrough + 1, last, nowMs, false});
+		session->tailInFlight.push_back({session->deliveredThrough + 1, last, nowMs, nowMs, false});
 		session->deliveredThrough = last;
 		return true;
 	}
@@ -1849,10 +1849,10 @@ namespace RTE {
 		if (!session) return;
 		while (!session->tailInFlight.empty() && session->tailInFlight.front().last <= session->acknowledgedThrough) {
 			const NetWorldJoinSession::TailDatagram& passed = session->tailInFlight.front();
-			// Only a datagram sent once times its own round trip.
-			if (!passed.resent && nowMs >= passed.sentMs) {
-				const double sample = static_cast<double>(nowMs - passed.sentMs);
-				session->tailAckRttMs = session->tailAckRttMs > 0 ? session->tailAckRttMs * 0.75 + sample * 0.25 : sample;
+			// A datagram passed late waited behind a lost one: only the quickest pass is the link's round trip.
+			if (nowMs >= passed.firstSentMs) {
+				const double sample = static_cast<double>(nowMs - passed.firstSentMs);
+				session->tailAckRttMs = session->tailAckRttMs > 0 ? std::min(session->tailAckRttMs, sample) : sample;
 			}
 			session->tailInFlight.pop_front();
 		}
