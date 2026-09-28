@@ -5793,6 +5793,22 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 	return true;
 }
 
+/// Whether a controller stop carries a Complete stop, as the finish path passes it or as the poll and the controller path prefix it ("tick N lockstep stopped: Complete:...").
+static bool IsCompleteControllerStop(const std::string& error) {
+	if (error.starts_with("Complete:")) {
+		return true;
+	}
+	if (!error.starts_with("tick ")) {
+		return false;
+	}
+	constexpr std::string_view c_StopPrefix = " lockstep stopped: Complete:";
+	size_t digits = 5;
+	while (digits < error.size() && error[digits] >= '0' && error[digits] <= '9') {
+		++digits;
+	}
+	return digits > 5 && error.compare(digits, c_StopPrefix.size(), c_StopPrefix) == 0;
+}
+
 static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	const std::string error = ScenarioRunner::GetControllerReplayError();
 	if (error.find("Desync") != std::string::npos) {
@@ -5855,7 +5871,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		const bool e2ePeerStoppedAfterCap = s_netMatchServiceE2E &&
 			NetMatchE2ERoundReachedPlannedEnd(error, s_netMatchE2ETicks.Total(), matchTick, e2eTickCap);
 		// A member hears its host's End Match as the host's own Complete stop; the local stop of a failed handover is not one.
-		const bool e2eHostEndedRound = s_netMatchServiceE2E && error.starts_with("Complete:") && error.find("e2e complete") == std::string::npos &&
+		const bool e2eHostEndedRound = s_netMatchServiceE2E && IsCompleteControllerStop(error) && error.find("e2e complete") == std::string::npos &&
 			error.find("match over") == std::string::npos && error.find("host handover ended") == std::string::npos &&
 			!g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running;
 		// A held seat's rejoin is the product's own recovery too: the observed trace follows it instead of stopping.
