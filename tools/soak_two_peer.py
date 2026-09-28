@@ -132,11 +132,9 @@ def pace_across_own_seat_hold(root: Path) -> dict | None:
             elif previous >= back:
                 spans["after"].append(row)
             previous = row["tick"]
-        summary[peer] = {name: {"windows": len(span), "wall_tps": round(sum(r["wall_tps"] for r in span) / len(span), 2),
-                                "draw_ms_per_iter": round(sum(r["draw_ms_per_iter"] for r in span) / len(span), 3),
-                                "preview_ms_per_iter": round(sum(r["preview_ms_per_iter"] for r in span) / len(span), 3),
-                                "interface_ms_per_iter": round(sum(r["interface_ms_per_iter"] for r in span) / len(span), 3),
-                                "update_ms_per_iter": round(sum(r["update_ms_per_iter"] for r in span) / len(span), 3)} if span else None
+        keys = ("wall_tps", "sim_ms_per_tick", "update_ms_per_tick", "draw_ms_per_tick", "preview_ms_per_tick", "interface_ms_per_tick",
+                "ms_per_frame_drawn", "max_iteration_draw_ms")
+        summary[peer] = {name: {"windows": len(span), **{key: round(sum(r.get(key, 0.0) for r in span) / len(span), 3) for key in keys}} if span else None
                          for name, span in spans.items()}
     return summary
 
