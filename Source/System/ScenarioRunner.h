@@ -132,6 +132,8 @@ namespace RTE {
 		static const std::string& GetControllerReplayError();
 
 		static void SetLockstepCoordinator(NetLockstepCoordinator* coordinator, bool preserveCommands = false);
+		/// Retires the attached coordinator if it is this one; its destructor calls it so the sim never keeps a destroyed coordinator.
+		static void ForgetLockstepCoordinator(const NetLockstepCoordinator* coordinator);
 		/// The period of the captures every peer takes at a tick's end, handed to the round so its host is busy there, not gone.
 		static void SetLockstepAnnouncedCaptureEvery(uint32_t every);
 		/// Whether installing coordinators with other round ids keeps the seats' committed input; for the script-graph self-test.
