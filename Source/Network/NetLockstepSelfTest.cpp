@@ -72,6 +72,7 @@ namespace RTE {
 
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 	bool TestAStarvedSeatIsNotLate(std::string* error);
+	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
 	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
@@ -19915,6 +19916,63 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// A held seat's own election reads the host as gone after the slow-player bound plus its jitter and a tick of silence. The hold that
+	/// took the seat rides the reliable lane, where one lost packet costs a retransmit: the host keeps talking on the held seat's link
+	/// every tick until its catch-up opens, so the seat hears a live host for as long as the hold can take to land, and only that long.
+	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error) {
+		LoopbackTransport wire, seat;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A20, 14, NetTransportLane::InputUnreliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 45; config.timeoutMs = 5000;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 14}, {2, 14}};
+		config.remoteTransportPeerIds = {{2, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A20);
+		if (!wire.StartHost(48899, error) || !seat.Connect("loopback", 48899, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_PeersPlayedThisRound = {2};
+		host.m_PeerEffectiveStart[2] = 15;
+		host.m_Stats.nextFrame = 148;
+		for (uint64_t frame = 120; frame < 148; ++frame) host.m_CommittedAtMs[frame] = 700;
+		host.m_TimingNowMs = 1260;
+		if (!host.DeclareOverdueInputs(148, 1260, 1000, {2}) || !host.HasHeldAISeat(2)) {
+			*error = "held-seat-hears-its-host: the silent seat was not held past the bound";
+			return false;
+		}
+		// What the seat hears from the host, by the time it arrives, once the hold has gone out.
+		const auto heard = [&](uint64_t fromMs, uint64_t toMs) {
+			std::vector<uint64_t> arrivals;
+			for (uint64_t now = fromMs; now <= toMs; now += 5) {
+				host.AdvanceReadyFrames(now);
+				wire.AdvanceTimeMs(5);
+				seat.AdvanceTimeMs(5);
+				for (const NetTransportEvent& event: seat.PollEvents())
+					if (event.type == NetTransportEventType::PacketReceived && event.bytes.size() > 8 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Ack))
+						arrivals.push_back(now);
+			}
+			return arrivals;
+		};
+		(void)seat.PollEvents();
+		const std::vector<uint64_t> held = heard(1260, 1760);
+		uint64_t longestGap = held.empty() ? 500 : held.front() - 1260;
+		for (size_t index = 1; index < held.size(); ++index) longestGap = std::max(longestGap, held[index] - held[index - 1]);
+		// The seat's own silence bound with no jitter at all: the slow-player bound and one tick.
+		const uint64_t silenceBoundMs = 50 + 17;
+		host.NoteInPlaceReturn(2);
+		const std::vector<uint64_t> after = heard(1765, 2000);
+		if (held.size() < 25 || longestGap >= silenceBoundMs || !after.empty()) {
+			*error = "held-seat-hears-its-host: over the 500 ms after its hold the seat heard the host " + std::to_string(held.size()) + " times, the longest gap " +
+			         std::to_string(longestGap) + " ms against its " + std::to_string(silenceBoundMs) + " ms silence bound, and " + std::to_string(after.size()) +
+			         " times once its catch-up opened; expected at least 25, under the bound and none";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_held_seat_hears_its_host_until_its_catch_up_opens heard=" << held.size() << " longest_gap_ms=" << longestGap
+		          << " after_catch_up=" << after.size() << std::endl;
+		return true;
+	}
+
 	bool TestAStarvedSeatIsNotLate(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -21374,6 +21432,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestFirstStartWaitsForPublishedStartup(&error) ||
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestAStarvedSeatIsNotLate(&error) ||
+		    !TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(&error) ||
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
 		    !TestACaptureNotYetBegunExcusesNoStall(&error) ||
 		    !TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(&error) ||
