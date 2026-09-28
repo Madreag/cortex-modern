@@ -661,6 +661,14 @@ def launch_guard_selftest(root):
     return result
 
 
+def refuse_mixed_build(preflight, box, spec, run):
+    """An engine whose runner hashed another executable than this box's preflight is a mixed build, never a match."""
+    expected, actual = preflight.get('executable_sha256'), run.record.get('exe_sha256')
+    if not expected or actual != expected:
+        raise RuntimeError(f'{box["name"]}: mixed build refused: {spec["peer"]} incarnation {spec["incarnation"]} started '
+                           f'executable sha256 {actual} but the preflight hashed {expected}')
+
+
 def run_payload(path):
     from run_sim_test import make_run
     from feel.records import CaptureSealer, RecoveryLedger, NativeFaultEffects
@@ -675,6 +683,7 @@ def run_payload(path):
     try:
         assert_box_guard(box)
         write_json(root / 'payload-owned.json', dict(box=box['name'], runner_pid=os.getpid()))
+        preflight = json.loads((root / 'preflight.json').read_text(encoding='utf-8'))
         if box['kind'] == 'windows-local' and len(payload['specs']) != 1:
             raise RuntimeError('this lane permits only one local engine at a time; dry-run supports larger manifests')
         capabilities = read_capabilities(box, root)
@@ -697,6 +706,7 @@ def run_payload(path):
             runs[spec['peer']] = run
             before_launch=time.monotonic()*1000
             run.start(); started[spec['peer']] = time.monotonic()
+            refuse_mixed_build(preflight, box, spec, run)
             readers[spec['peer']] = Tail(Path(spec['own']) / 'events.jsonl')
             capture_sealers[spec['peer']] = CaptureSealer(spec['own'])
             effect_readers[spec['peer']]=NativeFaultEffects(Path(spec['own'])/'engine/stdout.log',spec['faults'],spec['incarnation'])
@@ -786,6 +796,7 @@ def run_payload(path):
                         effect_readers[peer]=NativeFaultEffects(Path(new_spec['own'])/'engine/stdout.log',new_spec['faults'],new_spec['incarnation'])
                         effect_rows[peer]=[]
                         fresh.start(); started[peer] = time.monotonic()
+                        refuse_mixed_build(preflight, box, new_spec, fresh)
                         write_json(Path(new_spec['own']) / 'instance.json', new_spec)
                         write_json(Path(new_spec['own']) / 'started.json', dict(peer=peer, incarnation=new_spec['incarnation'], engine_pid=engine_pid(fresh)))
                         continue
