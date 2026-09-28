@@ -2432,10 +2432,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 		record("camera", [&] { writer(g_CameraMan); });
 		record("frame", [&] { writer(g_FrameMan); });
 	}
-	const auto activityState = [this](CheckpointWriter& out) {
-		out(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
-			m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
-	};
+	const auto activityState = [this](CheckpointWriter& out) { VisitActivityState(out, *this); };
 	activityState(writer);
 	if (sections) {
 		sections->push_back({"activity_state", CheckpointScope::Shared, CheckpointWriter::Native([&activityState] {
@@ -2475,6 +2472,31 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	return writer.Text();
 }
 
+std::string ActivityMan::CheckpointPerPeerSelfTestMismatch() {
+	// The visitor alone over the fields it visits: the manager itself needs the rest of the engine.
+	struct VisitedFields {
+		std::string m_DefaultActivityType = "GATutorial";
+		std::string m_DefaultActivityName = "Tutorial Mission";
+		bool m_InActivity = true;
+		bool m_ActivityNeedsRestart = false;
+		bool m_ActivityNeedsResume = false;
+		bool m_ResumingActivityFromPauseMenu = false;
+		bool m_SkipPauseMenuWhenPausingActivity = false;
+		bool m_StartActivityResumed = false;
+	} fields;
+	const auto capture = [&fields] { return CheckpointWriter::CaptureNative([&fields] { CheckpointWriter writer("ActivityStateScopes"); VisitActivityState(writer, fields); return writer.Text(); }); };
+	const CheckpointText base = capture();
+	fields.m_SkipPauseMenuWhenPausingActivity = true;
+	const CheckpointText skipped = capture();
+	fields.m_SkipPauseMenuWhenPausingActivity = false;
+	fields.m_InActivity = false;
+	const CheckpointText paused = capture();
+	if (base.Text() == skipped.Text()) return "skip_pause_menu=unarchived";
+	if (base.SharedText() != skipped.SharedText()) return "skip_pause_menu=shared";
+	if (base.SharedText() == paused.SharedText()) return "in_activity=per_peer";
+	return {};
+}
+
 bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly) {
 	AudioMan::RestorePlayPhaseScope playPhase(validateOnly ? "" : "apply");
 	try {
@@ -2500,8 +2522,7 @@ bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly
 		component(g_TimerMan, "TimerMan"); component(g_MovableMan, "MovableMan");
 		component(g_SceneMan, "SceneMan"); component(g_CameraMan, "CameraMan");
 		if (!legacy) component(g_FrameMan, "FrameMan");
-		if (!legacy && !version2) reader(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
-			m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
+		if (!legacy && !version2) VisitActivityState(reader, *this);
 		if (!legacy && !version2 && !version3) {
 			std::string input; reader.Value(input);
 			if (!GUIInput::LoadSharedCheckpoint(input, true)) throw std::runtime_error("invalid shared GUI input checkpoint");
