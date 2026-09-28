@@ -3842,13 +3842,28 @@ static std::string ResyncSaveName() {
 			(void)host.NoteSpectatorPreference(connection, report.value != 0);
 		} else if (report.kind == c_NetWorldReportCatchUp) {
 			const NetWorldJoinSession* prior = host.FindSession(connection);
-			if ((host.IsPrivateMatch() || (prior && prior->returnsToHeldSeat)) && !host.NoteRejoinCapacity(connection, report.workTicks, report.workUs, report.sentThrough)) return 0;
+			// A returner's report and the gate it met, when the gate changes or once a second of the round.
+			const auto noteGate = [&](const char* gate, const std::string& detail) {
+				const NetWorldJoinSession* session = host.TakeCatchUpGateToLog(connection, gate, nowFrame);
+				if (!session) return;
+				std::ostringstream line;
+				line << "[net-world] catch-up gate peer=" << static_cast<int>(session->assignedPeerId) << " gate=" << (session->catchUpGate ? session->catchUpGate : "none") << " applied=" << report.value
+				     << " acknowledged=" << session->acknowledgedThrough << " horizon=" << nowFrame << " work_ticks=" << report.workTicks << " closing_measured=" << session->closingMeasured
+				     << " closing_rate=" << session->closingRate << detail;
+				System::PrintDiagnosticLine(line.str());
+			};
+			if ((host.IsPrivateMatch() || (prior && prior->returnsToHeldSeat)) && !host.NoteRejoinCapacity(connection, report.workTicks, report.workUs, report.sentThrough)) {
+				noteGate("capacity-dropped", " work_us=" + std::to_string(report.workUs));
+				return 0;
+			}
 			uint64_t activation = 0;
 			const uint64_t previous = prior ? prior->acknowledgedThrough : 0;
 			const uint64_t lastMs = prior ? prior->lastCatchUpReportMs : 0;
 			const uint64_t ticks = report.value > previous ? report.value - previous : 0;
 			const uint64_t elapsed = (lastMs != 0 && nowMs > lastMs) ? nowMs - lastMs : 1;
-			(void)host.NoteCatchUpProgress(connection, report.value, ticks, elapsed, nowFrame, &activation, nullptr);
+			std::string progressError;
+			if (!host.NoteCatchUpProgress(connection, report.value, ticks, elapsed, nowFrame, &activation, &progressError)) noteGate("refused", " error=" + progressError);
+			else noteGate(nullptr, "");
 			host.NoteCatchUpClock(connection, nowMs);
 			if (activation != 0) {
 				if (const NetWorldJoinSession* session = host.FindSession(connection); session) {
@@ -4965,7 +4980,7 @@ static std::string ResyncSaveName() {
 		m_ActivateCatchUpLocalSeat = {};
 		m_InPlaceCatchUp = true;
 		m_InPlaceAskedMs = m_InPlaceSinceMs = m_InPlaceHeardMs = SteadyNowMs();
-		m_InPlaceProgressApplied = tick;
+		m_InPlaceProgressApplied = m_InPlaceProgressLogged = tick;
 		// The successors this catch-up moves to, in the order the match published, if its host goes.
 		m_InPlaceRoutes.clear(); m_InPlaceMoveHost = 0;
 		for (const uint8_t peer: live.matchConfig.successorOrder) {
@@ -5403,6 +5418,12 @@ static std::string ResyncSaveName() {
 		// and the seat rejoins the next host, or hosts the match itself when nobody is left.
 		if (m_InPlaceCatchUp) {
 			const uint64_t steadyMs = SteadyNowMs();
+			if (m_WorldCatchUp.appliedThrough >= m_InPlaceProgressLogged + 60) {
+				m_InPlaceProgressLogged = m_WorldCatchUp.appliedThrough;
+				System::PrintDiagnosticLine("[net-match] held client catch-up applied=" + std::to_string(m_WorldCatchUp.appliedThrough) + " activation=" +
+				                            std::to_string(m_WorldCatchUp.activationTick) + " work_ticks=" + std::to_string(ScenarioRunner::WorldCatchUpWorkTicks()) +
+				                            " wire_packets=" + std::to_string(m_CatchUpWirePackets.size()));
+			}
 			if (m_WorldCatchUp.appliedThrough != m_InPlaceProgressApplied || ScenarioRunner::WorldCatchUpHasFrame(m_WorldCatchUp.appliedThrough + 1) ||
 			    ScenarioRunner::WorldCatchUpHolding()) {
 				m_InPlaceProgressApplied = m_WorldCatchUp.appliedThrough;

@@ -1506,6 +1506,16 @@ namespace RTE {
 		return session->headroom.Observe(workTicks, workUs, m_SimTickMs);
 	}
 
+	const NetWorldJoinSession* NetWorldJoinHost::TakeCatchUpGateToLog(NetPeerId connection, const char* gate, uint64_t nowFrame) {
+		NetWorldJoinSession* session = Find(connection);
+		if (!session) return nullptr;
+		if (gate) session->catchUpGate = gate;
+		if (session->catchUpGate == session->catchUpGateLogged && nowFrame < session->catchUpGateLoggedFrame + 60) return nullptr;
+		session->catchUpGateLogged = session->catchUpGate;
+		session->catchUpGateLoggedFrame = nowFrame;
+		return session;
+	}
+
 	void NetWorldJoinHost::NoteRejoinLinkFit(NetPeerId connection, bool fits) {
 		if (auto* session = Find(connection)) session->linkFits = fits;
 	}
@@ -1868,6 +1878,7 @@ namespace RTE {
 			session->atHeadSinceFrame = 0;
 		}
 		if (provesHeadroom && !session->linkFits) {
+			session->catchUpGate = "link-fit";
 			// A returner held back from its activation says why, once per reason.
 			const char* reason = "its link does not fit the round's delay";
 			if (reason != session->activationHeldReason) {
@@ -1879,11 +1890,13 @@ namespace RTE {
 			return true;
 		}
 		if (session->activationTick != 0) {
+			session->catchUpGate = "announced";
 			return true;
 		}
 		// The world keeps producing while the joiner replays, so activation waits until the joiner is
 		// inside the lead and can have its pipeline primed before its first required frame.
 		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame) {
+			session->catchUpGate = "outside-lead";
 			return true;
 		}
 		// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline. One still closing
@@ -1892,12 +1905,16 @@ namespace RTE {
 		uint64_t activation = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
 		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4) {
 			// Not yet measured over a window, or losing ground on the round: it keeps replaying.
-			if (!session->closingMeasured || session->closingRate < -0.1) return true;
+			if (!session->closingMeasured || session->closingRate < -0.1) {
+				session->catchUpGate = !session->closingMeasured ? "closing-unmeasured" : "closing-losing";
+				return true;
+			}
 			// One at the round's pace stands behind by its link, which its input delay already covers.
 			if (session->closingRate > 0.1)
 				activation = std::max(activation, nowFrame + static_cast<uint64_t>(std::ceil(behind / session->closingRate)) + c_NetWorldActivationLeadFrames);
 		}
 		session->activationTick = activation;
+		session->catchUpGate = "activated";
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
 	}
