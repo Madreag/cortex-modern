@@ -377,10 +377,13 @@ namespace RTE {
 
 	private:
 		struct PendingCheckpoint;
-		/// The activity flags the runtime globals carry.
+		/// The activity flags the runtime globals carry. Whether this machine's pause skips its menu is its own:
+		/// each pause sets it for this machine's menus alone, so peers that left a round differently differ in it.
 		template <class Archive, class Self> static void VisitActivityState(Archive& archive, Self& self) {
 			archive(self.m_DefaultActivityType, self.m_DefaultActivityName, self.m_InActivity, self.m_ActivityNeedsRestart, self.m_ActivityNeedsResume,
-				self.m_ResumingActivityFromPauseMenu, self.m_SkipPauseMenuWhenPausingActivity, self.m_StartActivityResumed);
+				self.m_ResumingActivityFromPauseMenu);
+			archive.PerPeer(self.m_SkipPauseMenuWhenPausingActivity);
+			archive(self.m_StartActivityResumed);
 		}
 		/// Reads a .ccsave into its Scene, Activity, and restart metadata; shared by the launch and
 		/// stage-for-restart load paths.

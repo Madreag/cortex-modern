@@ -82,6 +82,7 @@ SCHEMAS["RuntimeGlobals7"] = [*SCHEMAS["RuntimeGlobals4"], *fields("input postpr
 SCHEMAS["RuntimeGlobals8"] = [*SCHEMAS["RuntimeGlobals4"], *fields("input postprocess primitive music audio", "o")]
 SCHEMAS["RuntimeGlobals9"] = [*SCHEMAS["RuntimeGlobals4"], *fields("input postprocess primitive gui_sound music audio", "o")]
 SCHEMAS["RuntimeGlobals10"] = [*SCHEMAS["RuntimeGlobals4"], *fields("input postprocess primitive gui_sound music committed_seats audio", "o")]
+SCHEMAS["RuntimeGlobals11"] = SCHEMAS["RuntimeGlobals10"]
 SCHEMAS["UInputSeats1"] = [("seats", array(4, structure(("movement", VECTOR), *fields("device_class buttons tick"))))]
 SCHEMAS["PrimitiveMan1"] = [("images", sequence("o")), ("vertices", sequence(VECTOR)), ("primitives", sequence("o"))]
 SCHEMAS["PrimitiveValue1"] = SCHEMAS["PrimitiveMan1"]
@@ -572,6 +573,9 @@ _LOCAL_FIELDS["PieMenuRuntime1"] = {"center", "cursor_visual_angle"}
 _LOCAL_FIELDS["TimerMan2"] = _LOCAL_FIELDS["TimerMan1"] | {"free_run_sim"}
 # SceneMan3 writes m_LastUpdatedScreen per peer: FrameMan::Draw sets it per player screen (SceneMan::Update(screenId)) for this machine's view.
 _LOCAL_FIELDS["SceneMan3"] = {"last_updated_screen"}
+# RuntimeGlobals11 writes m_SkipPauseMenuWhenPausingActivity per peer (ActivityMan.h VisitActivityState): every PauseActivity
+# sets it for this machine's own menus (the host's End Match passes true, MenuMan.cpp), and only MenuMan reads it.
+_LOCAL_FIELDS["RuntimeGlobals11"] = {"skip_pause_menu"}
 _LOCAL_FIELDS["Controller3"] = _LOCAL_FIELDS["Controller2"] | set(
     "production_states production_analog_move production_analog_aim production_analog_cursor production_mouse_movement "
     "production_seat_mode production_seat_player production_valid committed_states committed_analog_move committed_analog_aim "
@@ -618,7 +622,7 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
     if shared:
         for key in _LOCAL_FIELDS.get(version, ()):
             mask(key)
-        if version in ("RuntimeGlobals1", "RuntimeGlobals2", "RuntimeGlobals3", "RuntimeGlobals4", "RuntimeGlobals5", "RuntimeGlobals6", "RuntimeGlobals7", "RuntimeGlobals8", "RuntimeGlobals9", "RuntimeGlobals10"):
+        if version in ("RuntimeGlobals1", "RuntimeGlobals2", "RuntimeGlobals3", "RuntimeGlobals4", "RuntimeGlobals5", "RuntimeGlobals6", "RuntimeGlobals7", "RuntimeGlobals8", "RuntimeGlobals9", "RuntimeGlobals10", "RuntimeGlobals11"):
             mask("render_rng")
             # The sim RNG's draw count also counts each process's menu and loading draws; its seed and state are shared.
             words = result.get("sim_rng").split(b" ") if isinstance(result.get("sim_rng"), bytes) else []
