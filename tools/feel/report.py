@@ -181,8 +181,36 @@ def reduce_memory(samples, *, warmup_s, slope_bytes_per_minute, retained_bytes, 
                 sizes=sizes, instrumentation_growth='N/A without measured allocation records; no subtraction')
 
 
+HOLD_OF_THIS_SEAT = re.compile(r'^\[net-lockstep\] hold of this seat at (\d+) ')
+ROUND_START = re.compile(r'^\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+) ')
+SEAT_RECLAIMED = re.compile(r'^\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+) ')
+
+
+def round_cadence_ticks(effective_start, end_tick, every):
+    """The periodic samples a round owes by the engine's capture point (Main.cpp, -net-fullstate-hash-every): its first
+    tick with committed input (the lockstep's effective start frame), then every tick on the cadence while the activity
+    runs; the tick the round's budget ends it at is not sampled."""
+    return sorted({effective_start} | set(range(-(-effective_start // every) * every, end_tick, every)))
+
+
+def own_hold_windows(lines):
+    """The ticks a peer did not play live because its own seat was held: from its 'hold of this seat at F' line to its own
+    'seat-reclaimed peer=<self> frame=G' line, as (round, F, G) with G excluded; the round is the one the peer was
+    playing when held. A hold with no return names no window."""
+    windows, round_id, local, held = [], None, None, None
+    for line in lines:
+        if match:=ROUND_START.match(line):
+            round_id, local = int(match[1]), int(match[2])
+        elif match:=HOLD_OF_THIS_SEAT.match(line):
+            held = (round_id, int(match[1]))
+        elif (match:=SEAT_RECLAIMED.match(line)) and held and local is not None and int(match[1]) == local:
+            windows.append((held[0], held[1], int(match[2])))
+            held = None
+    return windows
+
+
 def parse_fullstate(paths):
-    samples, scopes, contexts, refusals, coalesced = [], defaultdict(list), defaultdict(list), [], []
+    samples, scopes, contexts, refusals, coalesced, holds = [], defaultdict(list), defaultdict(list), [], [], []
     sample_pattern = re.compile(r'^\[fullstate(?:-(canonical|restored))?\] tick=(\d+) hash=([0-9a-f]{16}) sections=(\S+) round=(\d+)')
     # The engine's own record of a periodic sample its writer replaced before writing it (ActivityMan's per-series bound).
     coalesced_pattern = re.compile(r'^\[fullstate-coalesced\] tick=(\d+) replaced=(\d+) ')
@@ -191,8 +219,11 @@ def parse_fullstate(paths):
     for path in paths:
         path=Path(path)
         if not path.is_file(): continue
+        seat_lines=[]
         with path.open(encoding='utf-8-sig',errors='replace') as stream:
             for number,line in enumerate(stream,1):
+                if line.startswith(('[net-lockstep] start round=','[net-lockstep] hold of this seat at ','[net-match] seat-reclaimed ')):
+                    seat_lines.append(line.strip())
                 if match:=context_pattern.match(line.strip()):
                     key=(int(match[2]),int(match[1]),match[3])
                     contexts[key].append(dict(path=match[4],log=str(path),line=number))
@@ -209,20 +240,22 @@ def parse_fullstate(paths):
                     refusals.append(dict(log=str(path),line=number,text=line.strip()))
                 elif line.startswith('[fullstate-refusal] '):
                     refusals.append(dict(log=str(path),line=number,text=line.strip()))
+        holds.extend(own_hold_windows(seat_lines))
     ordinal=Counter()
     for sample in samples:
         key=sample['key']; index=ordinal[key]; ordinal[key]+=1
         sample['scope']=scopes[key][index] if index<len(scopes[key]) else None
         sample['context']=contexts[key][index] if index<len(contexts[key]) else None
         sample['scope_valid']=sample['scope'] is not None and 'header' in sample['sections'] and not (set(sample['sections']) & set(sample['scope']['per_peer']))
-    return dict(samples=samples,refusals=refusals,coalesced=coalesced)
+    return dict(samples=samples,refusals=refusals,coalesced=coalesced,holds=holds)
 
 
 def compare_fullstate_histories(peers, expected):
-    """Every expected key is sampled by every peer, or named by that peer's own [fullstate-coalesced] line (one line
-    excuses one absence of its tick's periodic sample, never a labelled capture); the hashes are compared across the
-    peers that wrote the key, and at least one key must be written by every peer."""
-    missing, differences, bad_scope, restored, excused = [], [], [], [], []
+    """Every expected key is sampled by every peer, or its absence is named by that peer's own lines: a [fullstate-coalesced]
+    line (one line excuses one absence of its tick's periodic sample) or the peer's own hold window of that round (a held
+    peer does not play the ticks, so it does not sample them); a labelled capture is never excused. The hashes are
+    compared across the peers that wrote the key, and at least one key must be written by every peer."""
+    missing, differences, bad_scope, restored, excused, held = [], [], [], [], [], []
     indexed={}
     replaced={peer:Counter(row['replaced'] for row in document.get('coalesced',[])) for peer,document in peers.items()}
     for peer,document in peers.items():
@@ -245,6 +278,8 @@ def compare_fullstate_histories(peers, expected):
             if not found and key[2]=='sample' and replaced[peer][key[1]]>0:
                 replaced[peer][key[1]]-=1
                 excused.append(dict(peer=peer,key=tuple(key)))
+            elif not found and key[2]=='sample' and any(round_id==key[0] and first<=key[1]<end for round_id,first,end in peers[peer].get('holds',[])):
+                held.append(dict(peer=peer,key=tuple(key)))
             elif not found: missing.append(dict(peer=peer,key=key))
             values.extend((peer,sample) for sample in found)
         if len({peer for peer,_ in values})==len(peers): compared+=1
@@ -260,6 +295,7 @@ def compare_fullstate_histories(peers, expected):
     return dict(passed=bool(expected) and compared>0 and not (missing or differences or bad_scope or refused) and all(r['equal'] for r in restored),
                 expected_samples_per_peer=len(expected),compared_samples=compared,
                 coalesced={peer:sum(row['peer']==peer for row in excused) for peer in peers},coalesced_samples=excused,
+                held={peer:sum(row['peer']==peer for row in held) for peer in peers},held_samples=held,
                 missing=missing,differences=differences,scope_failures=bad_scope,
                 refusals=refused,restores=restored,scope='Shared sections only; PerPeer exclusions remain explicit and need behavioral oracles')
 KILLALL = re.compile(r'killall sparing team \d+ at tick (\d+)')
