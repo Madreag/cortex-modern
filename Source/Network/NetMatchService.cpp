@@ -2871,6 +2871,8 @@ static std::string ResyncSaveName() {
 				return false;
 			}
 			System::PrintDiagnosticLine(std::format("[net-match] round start scripts restored bytes={}", scripts.size()));
+			// The count the collision stamps compare against would otherwise carry each peer's own end of the last round.
+			g_MovableMan.RestartSimUpdateFrameNumber();
 		}
 		const uint64_t launchRound = m_WorldCatchUp.active && m_WorldCatchUp.privateMatch ? m_WorldCatchUp.roundId : m_Coordinator->GetRoundId();
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), m_PendingResyncState.has_value());
