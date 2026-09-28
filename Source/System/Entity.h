@@ -123,6 +123,7 @@ namespace RTE {
 			/// @param newFunc Function pointer to the new instance factory. If the represented Entity subclass isn't concrete, pass in 0.
 			/// @param allocBlockCount The number of new instances to fill the pre-allocated pool with when it runs out.
 			ClassInfo(const std::string& name, ClassInfo* parentInfo = 0, MemoryAllocate allocFunc = 0, MemoryDeallocate deallocFunc = 0, Entity* (*newFunc)() = 0, int allocBlockCount = 10);
+			~ClassInfo();
 #pragma endregion
 
 #pragma region Getters
