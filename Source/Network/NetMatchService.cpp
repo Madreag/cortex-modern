@@ -2066,7 +2066,7 @@ static std::string ResyncSaveName() {
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
 		m_InPlaceCatchUp = false; m_InPlaceIncarnationBumps.clear(); m_RejoinFitReasons.clear(); m_CommittedRing.Clear(); m_CommittedRingRound = 0; m_CommittedRingGeneration = 0;
-		m_HandoverFrame = 0; m_HeldHostHandover = false; m_InPlaceRoutes.clear(); m_InPlaceMoveHost = 0; m_InPlaceMoveAddress.clear(); m_InPlaceTicketHost.clear();
+		m_HandoverFrame = 0; m_InPlaceRoutes.clear(); m_InPlaceMoveHost = 0; m_InPlaceMoveAddress.clear(); m_InPlaceTicketHost.clear();
 		m_PrivateBaseRequested = false; m_PrivateBaseTick = 0; m_PrivateBasePending.reset();
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateImageLastCaptureMs = 0.0; m_PrivateCaptureCosts.clear(); m_PrivateCaptureCold = false; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
@@ -5155,7 +5155,6 @@ static std::string ResyncSaveName() {
 		m_MigrationGeneration = m_Coordinator->GetConfig().migrationGeneration;
 		m_IsHost = true;
 		m_HandoverFrame = tick + 1;
-		m_HeldHostHandover = true;
 		m_PendingModeration.clear();
 		m_PendingHostOptions.reset();
 		m_HostOptionsRequest.Clear();
@@ -5398,6 +5397,10 @@ static std::string ResyncSaveName() {
 		for (uint8_t peer = 1; peer <= config.peerCount && peer <= 8; ++peer)
 			if ((handover.departedMask & (1U << (peer - 1))) != 0) config.initialPeerLeaves.emplace(peer, handover.frame);
 		config.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
+		// The authority plays its own seat from the handover: a held seat that took the round over ended its own hold there.
+		config.initialSeatHolds.erase(handover.authorityPeerId);
+		if (const auto left = config.initialPeerLeaves.find(handover.authorityPeerId); left != config.initialPeerLeaves.end() && left->second < handover.frame)
+			config.initialPeerLeaves.erase(left);
 		config.initialDelayChanges = m_CatchUpCoordinator->GetDelayChanges();
 		auto transport = std::make_unique<LoopbackTransport>();
 		auto replay = std::make_unique<NetLockstepCoordinator>();
@@ -5458,10 +5461,7 @@ static std::string ResyncSaveName() {
 		std::string error;
 		// A seat held before this host took the round over replayed the lost host's frames, which are the round's own up to the handover.
 		const bool heldBeforeHandover = m_HandoverFrame != 0 && hold != heldSeats.end() && hold->second.cutoffFrame < m_HandoverFrame;
-		// A held seat that took the round over began it from its own state with its own hold ended by no committed return: no replay
-		// reaches the state it plays, so a seat held before that handover comes back through its image.
-		if (heldBeforeHandover && m_HeldHostHandover) error = "the round changed hands at " + std::to_string(m_HandoverFrame) + " from a held seat's own state";
-		else if (heldBeforeHandover && heldThrough >= m_HandoverFrame) error = "its state ran past the handover at " + std::to_string(m_HandoverFrame);
+		if (heldBeforeHandover && heldThrough >= m_HandoverFrame) error = "its state ran past the handover at " + std::to_string(m_HandoverFrame);
 		else if (!heldBeforeHandover && heldThrough >= hold->second.cutoffFrame) error = "its state ran past the hold at " + std::to_string(hold->second.cutoffFrame);
 		// The connection's last return is done: its reclaim and its reasons belong to that return, not to this one.
 		if (m_WorldJoin.FindSession(connection)) m_WorldJoin.CancelJoin(connection, "the seat was held again");
