@@ -524,11 +524,7 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 1,
-          "probe": "menu-host-loss.probe.json",
-          "kill_when": {
-            "peer": "leaver",
-            "probe_complete": true
-          }
+          "probe": "menu-host-loss.probe.json"
         },
         {
           "name": "survivor",
@@ -573,11 +569,7 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 5,
-          "probe": "menu-host-loss.probe.json",
-          "kill_when": {
-            "peer": "survivor",
-            "probe_complete": true
-          }
+          "probe": "menu-host-loss.probe.json"
         }
       ]
     }
