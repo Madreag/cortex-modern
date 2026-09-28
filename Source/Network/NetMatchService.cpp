@@ -5110,7 +5110,7 @@ static std::string ResyncSaveName() {
 		const uint8_t lostHost = m_Coordinator->GetHostPeerId();
 		// Held seats that will rejoin this peer need it listening where the match published it, as an elected host does.
 		std::unique_ptr<INetTransport> listener;
-		uint64_t ownReturn = 0;
+		uint64_t ownReturn = 0, handoverFrame = 0;
 		if (!HeldSurvivorsLocked().empty()) {
 			const auto endpoint = std::find_if(config.matchConfig.migrationPeers.begin(), config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == local; });
 			listener = config.migrationTransportFactory ? config.migrationTransportFactory() : nullptr;
@@ -5138,23 +5138,25 @@ static std::string ResyncSaveName() {
 		for (const auto& [peer, hold]: m_CatchUpCoordinator->HeldTransactions()) if (peer != local && hold.cutoffFrame <= tick) config.initialSeatHolds[peer] = hold;
 		config.initialDelayChanges = m_CatchUpCoordinator->GetDelayChanges();
 		if (listener) {
-			// The round changes hands at the next frame: the lost host leaves there, and a returner replays each side under its authority.
-			config.initialPeerLeaves[lostHost] = tick + 1;
-			++config.migrationGeneration;
-			// Its own seat comes back on the committed stream at the handover, as any held seat's return does, so every seat that
-			// rejoins it takes its actors back from the AI at the same frame.
-			std::optional<NetGameSeatHold> ownHold;
-			for (const auto& holds: {m_CatchUpCoordinator->HeldTransactions(), m_Coordinator->HeldTransactions()})
-				if (!ownHold && holds.contains(local)) ownHold = holds.at(local);
-			// The round's first frame past its input-delay prefix is the first it builds, and so the first a return can ride.
+			// The round's first frame past its input-delay prefix is the first it builds and the first its authority names: the round
+			// changes hands there. The lost host leaves there, the prefix before it replays under the lost host on every peer, and a
+			// returner crosses there.
 			const auto delayOf = [&](uint8_t peer) {
 				const auto found = config.peerInputDelayFrames.find(peer);
 				return found != config.peerInputDelayFrames.end() ? found->second : config.inputDelayFrames;
 			};
 			uint64_t firstBuilt = config.startFrame + config.inputDelayFrames;
 			for (uint8_t peer = 1; peer <= config.peerCount; ++peer) firstBuilt = std::min<uint64_t>(firstBuilt, config.startFrame + delayOf(peer));
+			handoverFrame = firstBuilt;
+			config.initialPeerLeaves[lostHost] = handoverFrame;
+			++config.migrationGeneration;
+			// Its own seat comes back on the committed stream at the handover, as any held seat's return does, so every seat that
+			// rejoins it takes its actors back from the AI at the same frame.
+			std::optional<NetGameSeatHold> ownHold;
+			for (const auto& holds: {m_CatchUpCoordinator->HeldTransactions(), m_Coordinator->HeldTransactions()})
+				if (!ownHold && holds.contains(local)) ownHold = holds.at(local);
 			const uint16_t delay = delayOf(local);
-			ownReturn = ownHold ? firstBuilt : 0;
+			ownReturn = ownHold ? handoverFrame : 0;
 			if (ownHold) {
 				const uint32_t incarnation = std::max(ownHold->seatIncarnation, config.peerIncarnations.contains(local) ? config.peerIncarnations.at(local) : 0U) + 1;
 				config.initialSeatHolds[local] = *ownHold;
@@ -5184,7 +5186,7 @@ static std::string ResyncSaveName() {
 		ScenarioRunner::ReleaseWorldCatchUp();
 		ScenarioRunner::NoteLocalSeatReclaimed();
 		m_Coordinator->DeferStopsToTickBoundary();
-		const bool hostsHeldSeats = listening && OpenHeldHostPlaneLocked(tick, lostHost);
+		const bool hostsHeldSeats = listening && OpenHeldHostPlaneLocked(handoverFrame, lostHost);
 		if (hostsHeldSeats) m_CatchUpTransport.reset();
 		std::ostringstream line;
 		line << "[net-match] Host left - " << (m_LocalName.empty() ? std::string("this peer") : m_LocalName) << " is now hosting; boundary=" << tick
@@ -5198,7 +5200,7 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	bool NetMatchService::OpenHeldHostPlaneLocked(uint64_t tick, uint8_t lostHost) {
+	bool NetMatchService::OpenHeldHostPlaneLocked(uint64_t handoverFrame, uint8_t lostHost) {
 		// The admission, the lobby and the rejoin plane an elected host takes over, on the listener the round now runs on.
 		const NetMatchConfig& config = m_Coordinator->GetConfig().matchConfig;
 		const uint64_t nowMs = AdmissionNowMs();
@@ -5206,7 +5208,7 @@ static std::string ResyncSaveName() {
 		m_MigrationMembers = {m_LocalPeerId};
 		m_MigrationGeneration = m_Coordinator->GetConfig().migrationGeneration;
 		m_IsHost = true;
-		m_HandoverFrame = tick + 1;
+		m_HandoverFrame = handoverFrame;
 		m_PendingModeration.clear();
 		m_PendingHostOptions.reset();
 		m_HostOptionsRequest.Clear();
@@ -5236,11 +5238,11 @@ static std::string ResyncSaveName() {
 		m_ModerationSeats = m_ReconnectHost.GetModerationView();
 		{
 			const SimCensusScope census;
-			m_ReconnectHost.RecordMigrationDepartures(tick + 1);
+			m_ReconnectHost.RecordMigrationDepartures(handoverFrame);
 		}
 		NetHostMigrationResult result;
 		result.generation = m_MigrationGeneration;
-		result.boundary = tick;
+		result.boundary = handoverFrame - 1;
 		result.hostPeerId = m_LocalPeerId;
 		result.members = {m_LocalPeerId};
 		m_Runner->AdoptHostMigration(result, m_LocalPeerId);
@@ -5248,7 +5250,7 @@ static std::string ResyncSaveName() {
 		lobby.host = true;
 		lobby.localPeerId = m_LocalPeerId;
 		lobby.matchConfig = config;
-		lobby.startFrame = tick + 1;
+		lobby.startFrame = handoverFrame;
 		lobby.session = m_Session.get();
 		lobby.sessionNowMs = [this] { return AdmissionNowMs(); };
 		lobby.displayName = m_LocalName.empty() ? "Host" : m_LocalName;
