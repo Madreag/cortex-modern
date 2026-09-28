@@ -144,13 +144,13 @@ class ReportTests(unittest.TestCase):
         waits = '\n'.join(f'[net-frame-wait] frame={tick} wait_ms=50' for tick in (600, 700, 800))
         self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'FAIL')
 
-    def test_same_machine_tps_ruling_retains_block_limits(self):
+    def test_single_player_reference_never_relaxes_the_feel_gate(self):
         reference = dict(steady_wall_tps=55, evidence='single-player.jsonl')
         measured = self.item9a(wall_ms=900000 / 54)
         report.apply_tps_call(measured, reference)
-        self.assertTrue(measured['pass_check'])
+        self.assertFalse(measured['pass_check'])
         self.assertEqual(measured['tps_call']['absolute']['status'], 'FAIL')
-        self.assertFalse(measured['pins']['item9a_confirmed_horizon_lag']['required'])
+        self.assertTrue(measured['pins']['item9a_confirmed_horizon_lag'].get('required', True))
         blocked = self.item9a(wall_ms=900000 / 54, waits='[net-frame-wait] frame=600 wait_ms=51')
         report.apply_tps_call(blocked, reference)
         self.assertFalse(blocked['pass_check'])
@@ -161,6 +161,12 @@ class ReportTests(unittest.TestCase):
         report.apply_tps_call(fast_box, dict(steady_wall_tps=60, evidence='stock.jsonl'))
         self.assertEqual(fast_box['pins']['item9a_wall_tps']['status'], 'FAIL')
         self.assertNotIn('required', fast_box['pins']['item9a_confirmed_horizon_lag'])
+
+    def test_steady_window_has_no_blocking_waits(self):
+        measured = self.item9a(waits='[net-frame-wait] frame=450 wait_ms=1', silent=True)
+        self.assertEqual(measured['pins']['item9a_steady_stalls']['status'], 'FAIL')
+        measured = self.item9a(waits='[net-frame-wait] frame=450 wait_ms=0', silent=True)
+        self.assertEqual(measured['pins']['item9a_steady_stalls']['status'], 'PASS')
 
     def test_item9a_recovery_elapsed_time_cannot_be_reset_away(self):
         result = self.item9a(wall_ms=15700)
