@@ -5950,8 +5950,12 @@ static std::string ResyncSaveName() {
 				if (event.bytes.size() < NetLockstepCodec::c_HeaderBytes || event.bytes[8] != static_cast<uint8_t>(NetLockstepPacketType::Timing)) return false;
 				const auto decoded = NetLockstepCodec::Decode(event.bytes);
 				const auto* decision = decoded.ok ? std::get_if<NetLockstepTiming>(&decoded.packet.payload) : nullptr;
-				return decision && decision->phase == NetTimingPhase::HoldAtFrame && (decision->heldPeers & localBit) != 0 && decision->applyFrame >= m_WorldCatchUp.activationTick &&
+				const bool held = decision && decision->phase == NetTimingPhase::HoldAtFrame && (decision->heldPeers & localBit) != 0 && decision->applyFrame >= m_WorldCatchUp.activationTick &&
 				       decision->senderPeerId == m_CatchUpCoordinator->GetHostPeerId() && decision->roundId == m_WorldCatchUp.roundId;
+				if (held) System::PrintDiagnosticLine("[net-match] held client: the hold on the wire is revision=" + std::to_string(decision->revision) + " action=" +
+				                                      std::to_string(static_cast<int>(decision->action)) + " at=" + std::to_string(decision->applyFrame) + " cutoff=" +
+				                                      std::to_string(decision->cutoffFrame) + " incarnation=" + std::to_string(decision->seatIncarnations[m_LocalPeerId - 1]));
+				return held;
 			});
 			if (heldAgain) {
 				System::PrintDiagnosticLine("[net-match] held client: the host held this seat again before its return at " + std::to_string(m_WorldCatchUp.activationTick) +
