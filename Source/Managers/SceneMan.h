@@ -1196,8 +1196,10 @@ namespace RTE {
 		void WalkUnseenRay(const Vector& start, const Vector& ray, int strengthLimit, int skip, Vector& endPos, const std::function<void(int, int)>& visit, const std::function<void(int, int)>& passed);
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
-			archive(self.m_LayerDrawMode, self.m_DrawRayCastVisualizations, self.m_DrawPixelCheckVisualizations, self.m_LastUpdatedScreen,
-				self.m_SecondStructPass, self.m_CalcTimer, self.m_CleanTimer, self.m_ScrapCompactingHeight);
+			archive(self.m_LayerDrawMode, self.m_DrawRayCastVisualizations, self.m_DrawPixelCheckVisualizations);
+			// The screen the last draw pass set up is this machine's view.
+			archive.PerPeer(self.m_LastUpdatedScreen);
+			archive(self.m_SecondStructPass, self.m_CalcTimer, self.m_CleanTimer, self.m_ScrapCompactingHeight);
 		}
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 

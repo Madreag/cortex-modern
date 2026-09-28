@@ -3056,8 +3056,17 @@ BITMAP* SceneMan::GetIntermediateBitmapForSettlingIntoTerrain(int moDiameter) co
 	return m_IntermediateSettlingBitmaps.back().second;
 }
 
+namespace {
+	// SceneMan1 had no material catalog; SceneMan2 kept the last drawn screen in the shared state.
+	std::string_view SceneManCheckpointVersion(std::string_view text) {
+		if (text.starts_with("9 SceneMan1 ")) return "SceneMan1";
+		if (text.starts_with("9 SceneMan2 ")) return "SceneMan2";
+		return "SceneMan3";
+	}
+} // namespace
+
 std::string SceneMan::SaveCheckpoint() const {
-    CheckpointWriter writer("SceneMan2");
+    CheckpointWriter writer("SceneMan3");
     VisitCheckpoint(writer, *this);
     writer(CheckpointWriter::Native([&] { return SaveMaterialCatalog(); }));
     return writer.Text();
@@ -3066,7 +3075,7 @@ std::string SceneMan::SaveCheckpoint() const {
 bool SceneMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
     try {
         const bool legacy = text.starts_with("9 SceneMan1 ");
-        CheckpointReader reader(text, legacy ? "SceneMan1" : "SceneMan2", validateOnly);
+        CheckpointReader reader(text, SceneManCheckpointVersion(text), validateOnly);
         VisitCheckpoint(reader, *this);
         if (!legacy) {
             std::string materials; reader.Value(materials);
@@ -3081,7 +3090,7 @@ bool SceneMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
 bool SceneMan::PrepareCheckpointMaterials(std::string_view text, bool validateOnly) {
     try {
         const bool legacy = text.starts_with("9 SceneMan1 ");
-        CheckpointReader reader(text, legacy ? "SceneMan1" : "SceneMan2", true);
+        CheckpointReader reader(text, SceneManCheckpointVersion(text), true);
         VisitCheckpoint(reader, *this);
         std::string materials;
         if (!legacy) reader.Value(materials);

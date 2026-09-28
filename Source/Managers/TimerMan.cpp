@@ -141,14 +141,16 @@ void TimerMan::Update() {
 }
 
 std::string TimerMan::SaveCheckpoint() const {
-	CheckpointWriter writer("TimerMan1");
+	CheckpointWriter writer("TimerMan2");
 	VisitCheckpoint(writer, *this);
 	return writer.Text();
 }
 
 bool TimerMan::LoadCheckpoint(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader reader(text, "TimerMan1", validateOnly);
+		// TimerMan1 wrote the same fields with the free-run flag in the shared state.
+		const bool legacy = text.starts_with("9 TimerMan1 ");
+		CheckpointReader reader(text, legacy ? "TimerMan1" : "TimerMan2", validateOnly);
 		VisitCheckpoint(reader, *this);
 		reader.Finish();
 		if (!validateOnly) m_StartTime = std::chrono::steady_clock::now() - std::chrono::microseconds(m_RealTimeTicks);
