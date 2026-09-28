@@ -837,7 +837,7 @@
     },
     {
       "id": "lag-100-item9a_hold",
-      "what": "The peer silent at tick 600 is held to the AI.",
+      "what": "The stalled peer is held to the AI at an agreed frame.",
       "screen": "game",
       "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
@@ -955,7 +955,7 @@
     },
     {
       "id": "lag-200-item9a_hold",
-      "what": "The peer silent at tick 600 is held to the AI.",
+      "what": "The stalled peer is held to the AI at an agreed frame.",
       "screen": "game",
       "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
@@ -1235,7 +1235,7 @@
     },
     {
       "id": "lag-100-survivor-item9a_hold",
-      "what": "The peer silent at tick 600 is held to the AI.",
+      "what": "The stalled peer is held to the AI at an agreed frame.",
       "screen": "game",
       "assert": "tools/feel/report.py item9a_gates",
       "peer": "survivor",
@@ -1443,7 +1443,7 @@
     },
     {
       "id": "lag-200-survivor-item9a_hold",
-      "what": "The peer silent at tick 600 is held to the AI.",
+      "what": "The stalled peer is held to the AI at an agreed frame.",
       "screen": "game",
       "assert": "tools/feel/report.py item9a_gates",
       "peer": "survivor",
