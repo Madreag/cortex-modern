@@ -3689,6 +3689,7 @@ namespace RTE {
 		const Case cases[] = {
 			{"round-pace-past-the-lead", 90, 30, true, 60, nullptr},
 			{"gaining-inside-the-lead", 40, 42, true, 0, nullptr},
+			{"at-the-head-inside-the-lead", 12, 30, true, 12, nullptr},
 			{"parked", 40, 0, false, 0, "no progress"},
 			{"losing-ground", 40, 24, false, 0, "falls behind"},
 		};
