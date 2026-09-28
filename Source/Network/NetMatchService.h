@@ -927,9 +927,10 @@ namespace RTE {
 		/// What a survivor that finds no other live member does: an announced leave ends its match, a lost host with a held
 		/// seat in the round is replaced by this peer so the held seats rejoin it, and a lost host with none is rejoined.
 		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool heldSeats);
-		/// Whether a held seat's host is gone: its link to the host was lost (with the reject it carries, if any), or it heard nothing
-		/// from the host for hostSilentMs. A seat told to come back through the image has a host that answered.
-		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool imageRejoin, uint64_t hostSilentMs);
+		/// Whether a held seat's host is gone: the host ended or timed out its link (the transport's verdict), or the seat heard nothing
+		/// at all from it for the round's own missing-frame timeout. Its own transport stopping is not the host's doing, and a seat told
+		/// to come back through the image has a host that answered.
+		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool imageRejoin, uint64_t hostSilentMs, uint64_t silenceBoundMs);
 		/// Where a held seat's catch-up goes when its host is gone, from the match's successor order, the peers it can dial in that
 		/// order and the seats it knows are held. Returns the peers to dial; empty when this seat hosts the match itself.
 		static std::vector<uint8_t> HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
@@ -1625,7 +1626,7 @@ namespace RTE {
 		bool m_InPlaceCatchUp = false;   //!< Held client: the catch-up replays on its own state over its live connection.
 		uint64_t m_InPlaceAskedMs = 0;   //!< When it last asked the host for its tail.
 		uint64_t m_InPlaceSinceMs = 0;   //!< When it began; a host that never serves it sends it to the image path.
-		uint64_t m_InPlaceHeardMs = 0;   //!< When its tail last moved.
+		uint64_t m_InPlaceHeardMs = 0;   //!< When its host's link last carried anything to it.
 		uint64_t m_InPlaceProgressApplied = 0;
 		uint64_t m_InPlaceProgressLogged = 0; //!< The applied frame its progress was last logged at.
 		uint64_t m_HeldHostStatusAtMs = 0; //!< Held seat hosting: when its status turns from the handover to its hosting.

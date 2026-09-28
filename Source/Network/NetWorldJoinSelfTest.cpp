@@ -3592,11 +3592,11 @@ namespace RTE {
 			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, 0, true},
 			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, 0, true},
 			{"told-to-take-the-image", true, true, NetRejectReason::HostNotAccepting, true, 0, false},
-			{"host-silent-past-the-bound", false, false, NetRejectReason::InternalError, false, 3500, true},
-			{"host-heard-recently", false, false, NetRejectReason::InternalError, false, 400, false},
+			{"host-silent-past-the-round-timeout", false, false, NetRejectReason::InternalError, false, 21000, true},
+			{"tail-stalled-with-the-link-up", false, false, NetRejectReason::InternalError, false, 3500, false},
 		};
 		for (const Case& test: cases) {
-			if (NetMatchService::HeldSeatHostIsGone(test.linkLost, test.hasReject, test.reason, test.imageRejoin, test.silentMs) != test.gone) {
+			if (NetMatchService::HeldSeatHostIsGone(test.linkLost, test.hasReject, test.reason, test.imageRejoin, test.silentMs, 20000) != test.gone) {
 				return Fail(std::string("held-seat-host-verdict-") + test.name + ": the held seat judged its host " + (test.gone ? "alive" : "gone"));
 			}
 		}
