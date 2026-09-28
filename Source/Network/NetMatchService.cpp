@@ -3930,6 +3930,7 @@ static std::string ResyncSaveName() {
 
 	uint64_t NetMatchService::ApplyWorldJoinReport(NetLobbySession& lobby, NetWorldJoinHost& host, const NetLobbySession::WorldJoinReport& report, NetPeerId connection, uint64_t nowFrame, uint64_t nowMs) {
 		if (connection == c_InvalidNetPeerId) {
+			if (report.kind == c_NetWorldReportCatchUp) lobby.NoteCatchUpReportDrop(report.fromPeer, "lobby peer has no bootstrap connection");
 			return 0;
 		}
 		if (report.kind == c_NetWorldReportProgress) {
@@ -3953,7 +3954,10 @@ static std::string ResyncSaveName() {
 				std::ostringstream line;
 				line << "[net-world] catch-up gate peer=" << static_cast<int>(session->assignedPeerId) << " gate=" << (session->catchUpGate ? session->catchUpGate : "none") << " applied=" << report.value
 				     << " acknowledged=" << session->acknowledgedThrough << " horizon=" << nowFrame << " work_ticks=" << report.workTicks << " closing_measured=" << session->closingMeasured
-				     << " closing_rate=" << session->closingRate << " replay_ratio=" << session->headroom.Ratio() << " replay_ready=" << session->headroom.Ready() << detail;
+				     << " closing_rate=" << session->closingRate << " replay_ratio=" << session->headroom.Ratio() << " replay_ready=" << session->headroom.Ready()
+				     << " rtt_ms=" << session->tailAckRttMs << " link_rtt_ms=" << session->tailLinkRttMs
+				     << " reports_sent=" << lobby.GetStats().catchUpReportsSent << " reports_received=" << lobby.GetStats().catchUpReportsReceived
+				     << " reports_refused=" << lobby.GetStats().catchUpReportsRefused << " reports_dropped=" << lobby.GetStats().catchUpReportsDropped << detail;
 				System::PrintDiagnosticLine(line.str());
 			};
 			if ((host.IsPrivateMatch() || (prior && prior->returnsToHeldSeat)) && !host.NoteRejoinCapacity(connection, report.workTicks, report.workUs, report.sentThrough)) {
@@ -5090,7 +5094,9 @@ static std::string ResyncSaveName() {
 			if (catchUp.appliedThrough >= catchUp.reportsLogged + 60) {
 				catchUp.reportsLogged = catchUp.appliedThrough;
 				System::PrintDiagnosticLine("[net-match] catch-up reports applied=" + std::to_string(catchUp.appliedThrough) + " sent=" + std::to_string(catchUp.reportsSent) +
-				                            " refused=" + std::to_string(catchUp.reportsRefused) + " datagrams=" + std::to_string(catchUp.tailDatagrams));
+				                            " refused=" + std::to_string(catchUp.reportsRefused) + " datagrams=" + std::to_string(catchUp.tailDatagrams) +
+				                            " reports_sent=" + std::to_string(lobby.GetStats().catchUpReportsSent) + " reports_received=" + std::to_string(lobby.GetStats().catchUpReportsReceived) +
+				                            " reports_refused=" + std::to_string(lobby.GetStats().catchUpReportsRefused) + " reports_dropped=" + std::to_string(lobby.GetStats().catchUpReportsDropped));
 			}
 		}
 	}

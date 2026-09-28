@@ -123,6 +123,7 @@ namespace RTE {
 		void TimeoutWaitingForStart();
 		bool DidLoseHost() const { return m_HostLost; }
 		const NetLobbyStats& GetStats() const { return m_Stats; }
+		void NoteCatchUpReportDrop(NetPeerId route, const std::string& reason);
 
 		void SetLocalReady(bool ready);
 		void RequestStart();
