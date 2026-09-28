@@ -930,7 +930,7 @@ namespace RTE {
 		/// Whether a held seat's host is gone: the host ended or timed out its link (the transport's verdict), or the seat heard nothing
 		/// at all from it for the round's own missing-frame timeout. Its own transport stopping is not the host's doing, and a seat told
 		/// to come back through the image has a host that answered.
-		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool imageRejoin, uint64_t hostSilentMs, uint64_t silenceBoundMs);
+		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t silenceBoundMs);
 		/// Where a held seat's catch-up goes when its host is gone, from the match's successor order, the peers it can dial in that
 		/// order and the seats it knows are held. Returns the peers to dial; empty when this seat hosts the match itself.
 		static std::vector<uint8_t> HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,

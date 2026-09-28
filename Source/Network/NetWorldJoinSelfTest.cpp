@@ -3585,18 +3585,19 @@ namespace RTE {
 	/// Only the host's link decides a held seat's host is gone: the link lost by the host's end or its silence, or no word from the host
 	/// for the silence bound. The seat's own transport stopping is its own fault, and a host that told it to take the image answered.
 	int TestAHeldSeatJudgesItsHostByTheLinkAlone() {
-		struct Case { const char* name; bool linkLost; bool hasReject; NetRejectReason reason; bool imageRejoin; uint64_t silentMs; bool gone; };
+		struct Case { const char* name; bool linkLost; bool hasReject; NetRejectReason reason; bool ownStop; bool imageRejoin; uint64_t silentMs; bool gone; };
 		const Case cases[] = {
-			{"own-transport-stopped", true, true, NetRejectReason::InternalError, false, 0, false},
-			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, 0, true},
-			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, 0, true},
-			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, 0, true},
-			{"told-to-take-the-image", true, true, NetRejectReason::HostNotAccepting, true, 0, false},
-			{"host-silent-past-the-round-timeout", false, false, NetRejectReason::InternalError, false, 21000, true},
-			{"tail-stalled-with-the-link-up", false, false, NetRejectReason::InternalError, false, 3500, false},
+			{"own-transport-stopped", true, true, NetRejectReason::InternalError, true, false, 0, false},
+			{"host-connection-dropped", true, true, NetRejectReason::InternalError, false, false, 0, true},
+			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, false, 0, true},
+			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, false, 0, true},
+			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, false, 0, true},
+			{"told-to-take-the-image", true, true, NetRejectReason::HostNotAccepting, false, true, 0, false},
+			{"host-silent-past-the-round-timeout", false, false, NetRejectReason::InternalError, false, false, 21000, true},
+			{"tail-stalled-with-the-link-up", false, false, NetRejectReason::InternalError, false, false, 3500, false},
 		};
 		for (const Case& test: cases) {
-			if (NetMatchService::HeldSeatHostIsGone(test.linkLost, test.hasReject, test.reason, test.imageRejoin, test.silentMs, 20000) != test.gone) {
+			if (NetMatchService::HeldSeatHostIsGone(test.linkLost, test.hasReject, test.reason, test.ownStop, test.imageRejoin, test.silentMs, 20000) != test.gone) {
 				return Fail(std::string("held-seat-host-verdict-") + test.name + ": the held seat judged its host " + (test.gone ? "alive" : "gone"));
 			}
 		}
