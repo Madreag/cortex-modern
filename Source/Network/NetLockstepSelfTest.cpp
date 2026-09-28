@@ -20772,10 +20772,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_Config.slowPlayerBoundTicks = 3;
 		for (uint64_t tick = 0; tick <= 60; ++tick) host.m_ArrivalLeads[2].push_back({1000 + tick * 1000 / 60, 300 + tick, 0});
 		const auto steady = host.MarginKeepingIncrease(2, 17, 14, 2000);
+		const auto fast = host.MarginKeepingIncrease(2, 4, 1, 2000);
 		host.m_ArrivalLeads[2].clear();
 		for (uint64_t tick = 0; tick <= 40; ++tick) host.m_ArrivalLeads[2].push_back({1000 + tick * 25, 300 + tick, 0});
 		const auto slow = host.MarginKeepingIncrease(2, 17, 14, 2000);
-		if (!steady || *steady != 20 || slow) {
+		if (!steady || *steady != 20 || !fast || *fast != 7 || slow) {
 			*error = "a steady sender's phase was treated as a slow machine: steady=" + std::to_string(steady.value_or(0)) + " expected=20 slow=" + std::to_string(slow.value_or(0));
 			return false;
 		}
