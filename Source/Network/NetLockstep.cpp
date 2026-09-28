@@ -819,7 +819,8 @@ namespace RTE {
 					}
 					case NetGameCommandType::Checkpoint: {
 						const auto& checkpoint = std::get<NetGameCheckpoint>(command.payload);
-						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written && checkpoint.kind != NetGameCheckpoint::ManualCapture) {
+						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written && checkpoint.kind != NetGameCheckpoint::ManualCapture &&
+						    checkpoint.kind != NetGameCheckpoint::Missed) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, out.size(), "checkpoint kind is not a known kind");
 							return false;
 						}
@@ -1845,7 +1846,8 @@ namespace RTE {
 							return false;
 						}
 						if (!ReadOrTruncated(reader.ReadU8(checkpoint.kind) && reader.ReadU64LE(checkpoint.tick), reader, error, "checkpoint")) return false;
-						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written && checkpoint.kind != NetGameCheckpoint::ManualCapture) {
+						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written && checkpoint.kind != NetGameCheckpoint::ManualCapture &&
+						    checkpoint.kind != NetGameCheckpoint::Missed) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "checkpoint kind is not a known kind");
 							return false;
 						}
@@ -8762,11 +8764,19 @@ namespace RTE {
 		}
 		// Only a seat the others are waiting on is late: the clock runs from the moment every other seat's input for the frame is in.
 		const auto remote = m_RemoteFrames.find(frame);
+		bool waitedOn = false;
 		for (uint8_t peer: m_RemotePeerIds) {
-			if (IsRemoteRequiredForFrame(peer, frame) && (remote == m_RemoteFrames.end() || !remote->second.contains(peer))) {
+			if (!IsRemoteRequiredForFrame(peer, frame)) continue;
+			if (remote == m_RemoteFrames.end() || !remote->second.contains(peer)) {
 				m_OwnMissingFrame.reset();
 				return false;
 			}
+			waitedOn = true;
+		}
+		// With every other seat held or gone nobody waits on this one: the host's own simulation paces the round.
+		if (!waitedOn) {
+			m_OwnMissingFrame.reset();
+			return false;
 		}
 		if (m_OwnMissingFrame != frame) {
 			m_OwnMissingFrame = frame;
@@ -8789,10 +8799,25 @@ namespace RTE {
 	void NetLockstepCoordinator::ReclaimOwnSeat(uint64_t nowMs) {
 		const uint8_t local = m_Config.localPeerId;
 		if (m_PlaneTicking || !IsRunning() || !IsOwnHostSeatHeld() || m_ReclaimTransactions.contains(local) || !m_LastCompletedSimulationTick || m_NextTimingRevision == UINT64_MAX) return;
-		for (const auto& [revision, pending]: m_TimingDecisions) if (!pending.committed) return;
+		// Why the held seat waits, named once each time the reason changes.
+		const auto noteWait = [&](const std::string& reason) {
+			if (reason == m_OwnSeatWaitLogged) return;
+			m_OwnSeatWaitLogged = reason;
+			std::cout << "[net-lockstep] own seat waits to come back: " << reason << " next_frame=" << m_Stats.nextFrame << std::endl;
+		};
+		for (const auto& [revision, pending]: m_TimingDecisions) {
+			if (pending.committed) continue;
+			noteWait("decision revision=" + std::to_string(revision) + " action=" + std::to_string(static_cast<int>(pending.proposal.action)) + " peer=" +
+			         std::to_string(pending.proposal.peerId) + " required=" + std::to_string(pending.proposal.requiredPeers) + " acknowledged=" + std::to_string(pending.acknowledgedPeers));
+			return;
+		}
 		// Back once the simulation has replayed what the AI played and is producing for frames not yet committed.
 		const uint16_t delay = InputDelayAt(local, m_Stats.nextFrame);
-		if (*m_LastCompletedSimulationTick + delay + 1 < m_Stats.nextFrame) return;
+		if (*m_LastCompletedSimulationTick + std::max<uint16_t>(1, delay) + 1 < m_Stats.nextFrame) {
+			// Logged in steps of a second of lag, so a steady gap is one line.
+			noteWait("the simulation is " + std::to_string((m_Stats.nextFrame - *m_LastCompletedSimulationTick) / 60 * 60) + "+ frames behind the committed horizon");
+			return;
+		}
 		NetLockstepTiming timing;
 		timing.senderPeerId = local; timing.peerId = local;
 		timing.action = NetTimingAction::Reclaim;
@@ -11071,10 +11096,11 @@ namespace RTE {
 				m_AdvanceBlock = "remote-input";
 				break;
 			}
-			// With its own seat off and no other seat required, the host's own simulation paces the round, exactly as its input would.
+			// With its own seat off and no other seat required, the host's own simulation paces the round, exactly as its input would:
+			// a frame is committed once the tick that would have produced its input has run, so the seat's return finds it caught up.
 			if (!m_Playback && requiredRemotes == 0 && localIt == m_LocalFrames.end() && m_Config.localPeerId == GetHostPeerId() &&
 			    (IsSeatUnderAI(m_Config.localPeerId, m_Stats.nextFrame) || IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame)) &&
-			    (!m_LastCompletedSimulationTick || m_Stats.nextFrame > *m_LastCompletedSimulationTick + InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame) + 1)) {
+			    (!m_LastCompletedSimulationTick || m_Stats.nextFrame > *m_LastCompletedSimulationTick + std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame)))) {
 				m_AdvanceBlock = "host-paced";
 				break;
 			}

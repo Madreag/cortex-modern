@@ -75,6 +75,8 @@ namespace RTE {
 		uint32_t messagesReceived = 0;
 		uint32_t malformedMessages = 0;
 		uint32_t ignoredSessionPackets = 0;
+		uint32_t unboundSenderPackets = 0; //!< Packets from a connection no slot is bound to, dropped.
+		uint32_t unadmittedWorldPackets = 0; //!< Host: world packets from a connection the session has not admitted, dropped.
 		uint32_t configPacketsSent = 0;
 		uint32_t configAcksReceived = 0;
 		uint32_t configRepublishes = 0; //!< Host: accepted options drafts adopted as a new revision mid-round.
@@ -299,6 +301,7 @@ namespace RTE {
 		std::map<uint8_t, std::string> m_RemotePlatformsByPeer;
 		std::set<uint8_t> m_RemoteLobbyUp; //!< Remotes that have sent a lobby message of their own.
 		std::set<NetPeerId> m_LobbyUpConnections;
+		std::set<std::pair<int, NetPeerId>> m_DropsNamed; //!< The drop reasons already named once per connection.
 		std::set<NetPeerId> m_OutOfRosterPeers; //!< Connections already named as seated past the roster, so each is said once.
 		std::set<uint8_t> m_WorldTransferPeers; //!< World bootstraps the host bound; no lobby-up gate.
 		bool m_SeatAssigned = false;       //!< Client: the host has named the id it bound to this connection.
