@@ -3311,8 +3311,20 @@ namespace RTE {
 		m_PendingCompleteStop.reset();
 		m_Stats.nextFrame = GetResumeFrame();
 		m_Stats.timeoutReason.clear();
-		std::cout << "[net-match] host lost; collecting surviving peers at applied frame " << (GetResumeFrame() > 0 ? GetResumeFrame() - 1 : 0) << std::endl;
+		std::cout << "[net-match] host lost; collecting surviving peers at applied frame " << (GetResumeFrame() > 0 ? GetResumeFrame() - 1 : 0) << " final_frame=" << m_FinalFrame << std::endl;
 		return true;
+	}
+
+	bool NetLockstepCoordinator::HostEndOfRoundReached() const {
+		return m_PendingCompleteStop.has_value() || m_Stats.nextFrame > m_FinalFrame;
+	}
+
+	void NetLockstepCoordinator::CompleteAtHostClose() {
+		m_Stats.timeoutReason = "Complete:" + (m_PendingCompleteStop ? m_PendingCompleteStop->message : std::string("the round reached its last frame"));
+		std::cout << "[net-match] the host closed after ending the round at frame " << (m_PendingCompleteStop ? m_PendingCompleteStop->frame : m_FinalFrame + 1)
+		          << "; the round ends here at applied frame " << (m_Stats.nextFrame > 0 ? m_Stats.nextFrame - 1 : 0) << std::endl;
+		m_PendingCompleteStop.reset();
+		m_State = NetLockstepState::Stopped;
 	}
 
 	bool NetLockstepCoordinator::BeginHostMigrationAfterHeal(uint64_t nowMs) {
@@ -9639,6 +9651,11 @@ namespace RTE {
 					m_State = NetLockstepState::Stopped;
 					break;
 				}
+				// A host that ended the round, or closes after this peer's last frame, leaves no match to take over.
+				if (lockstepPeer == GetHostPeerId() && HostEndOfRoundReached()) {
+					CompleteAtHostClose();
+					break;
+				}
 				if (lockstepPeer == GetHostPeerId() && BeginHostMigration(nowMs))
 					break;
 				// The session tracks the same lifecycles for the eventual rematch/rejoin bookkeeping.
@@ -11192,8 +11209,13 @@ namespace RTE {
 		});
 		const uint64_t electionSilenceMs = loneSurvivor ? std::min<uint64_t>(m_Config.timeoutMs, std::max<uint64_t>(hostSilenceMs, c_LoneElectionConfirmMs)) : hostSilenceMs;
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
-		if (!hostBusy && electionSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= electionSilenceMs &&
-		    BeginHostMigration(nowMs)) return;
+		const bool hostSilent = !hostBusy && electionSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= electionSilenceMs;
+		// A host quiet after sending its end has closed the round, not died in it.
+		if (hostSilent && m_PendingCompleteStop) {
+			CompleteAtHostClose();
+			return;
+		}
+		if (hostSilent && BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();
 			Fail(NetLockstepStopReason::MissingFrameTimeout, m_Stats.nextFrame, missing.empty() ? "missing lockstep frame" : "missing lockstep frame from " + missing);
