@@ -8139,20 +8139,28 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	    luabind::object_cast<MovableObject*>(luabind::object(luabind::from_stack(state, -1)));
 	lua_pop(state, 1);
 	bool roundCollision = false;
+	bool collisionRestored = false;
 	if (collisionObjectMade && collisionObject) {
 		collisionObject->m_LastCollisionSimFrameNumber = 0;
 		collisionObject->m_MOIDHit = 7;
 		collisionObject->m_TerrainMatHit = 9;
 		collisionObject->m_ParticleUniqueIDHit = 11;
+		const std::string collisionCheckpoint = collisionObject->MovableObject::SaveCheckpoint();
 		g_MovableMan.PurgeAllMOs();
 		g_MovableMan.RestartSimUpdateFrameNumber();
 		roundCollision = collisionObject->HitWhatMOID() == g_NoMOID &&
 		    collisionObject->HitWhatTerrMaterial() == g_MaterialAir && collisionObject->HitWhatParticleUniqueID() == 0 &&
 		    collisionObject->m_MOIDHit == g_NoMOID && collisionObject->m_TerrainMatHit == g_MaterialAir &&
-		    collisionObject->m_ParticleUniqueIDHit == 0;
+		    collisionObject->m_ParticleUniqueIDHit == 0 &&
+		    collisionObject->m_LastCollisionSimFrameNumber != g_MovableMan.GetSimUpdateFrameNumber();
+		collisionRestored = collisionObject->MovableObject::LoadCheckpoint(collisionCheckpoint) &&
+		    collisionObject->HitWhatMOID() == 7 && collisionObject->HitWhatTerrMaterial() == 9 &&
+		    collisionObject->HitWhatParticleUniqueID() == 11 && collisionObject->m_LastCollisionSimFrameNumber == 0;
 	}
 	std::cout << "[script-graph-selftest] " << (roundCollision ? "PASS" : "FAIL")
 	          << " a_removed_lua_object_loses_collision_results_at_round_restart" << std::endl;
+	std::cout << "[script-graph-selftest] " << (collisionRestored ? "PASS" : "FAIL")
+	          << " a_collision_checkpoint_keeps_its_recorded_stamp_and_results" << std::endl;
 	m_MasterScriptState.RunScriptString("_RoundCollisionObject = nil; collectgarbage('collect')");
 	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
 	LuabindObjectWrapper::ApplyQueuedDeletions();
@@ -8272,7 +8280,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return roundCollision && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
