@@ -2915,12 +2915,16 @@ void SceneMan::Update(int screenId) {
 	if (SceneLayer* unseenLayer = (teamId != Activity::NoTeam) ? m_pCurrentScene->GetUnseenLayer(teamId) : nullptr) {
 		unseenLayer->SetOffset(offset);
 	}
+}
 
-	if (m_CleanTimer.GetElapsedSimTimeMS() > CLEANAIRINTERVAL) {
-		TraceTerrainEvent("clean", screenId, 0);
-		terrain->CleanAir();
-		m_CleanTimer.Reset();
+void SceneMan::UpdateCleanAir() {
+	SLTerrain* terrain = m_pCurrentScene ? m_pCurrentScene->GetTerrain() : nullptr;
+	if (!terrain || m_CleanTimer.GetElapsedSimTimeMS() <= CLEANAIRINTERVAL) {
+		return;
 	}
+	TraceTerrainEvent("clean", 0, 0);
+	terrain->CleanAir();
+	m_CleanTimer.Reset();
 }
 
 void SceneMan::Draw(BITMAP* targetBitmap, BITMAP* targetGUIBitmap, const Vector& targetPos, bool skipBackgroundLayers, bool skipTerrain) {
