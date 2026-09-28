@@ -1267,6 +1267,8 @@ namespace RTE {
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
+		friend bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
+		friend bool TestARoundsOwnEndIsNoHold(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
@@ -1574,6 +1576,9 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
 		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
 		std::set<uint8_t> m_ReleaseWhenHeld; //!< Host: clean leavers whose hold releases the seat as soon as it lands.
+		std::map<uint8_t, std::pair<NetLockstepStop, NetPeerId>> m_PendingMemberEnds; //!< Host: members' own ends this round has not played past yet.
+		/// Host: takes each member's end this round has played past, and goes on, as that member's leave.
+		void TakeMemberEndsPlayedPast(uint64_t nowMs);
 		std::map<uint8_t, std::string> m_EvictAfterReclaim; //!< Host: removals that meet a return too close to withdraw; applied once it lands.
 		std::optional<NetLockstepStop> m_OwnEndDuringMigration; //!< This peer's own end while its host was being replaced; the new host hears it.
 		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;

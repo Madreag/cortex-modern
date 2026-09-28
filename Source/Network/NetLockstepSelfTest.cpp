@@ -73,6 +73,8 @@ namespace RTE {
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
+	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
+	bool TestARoundsOwnEndIsNoHold(std::string* error);
 	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 	bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
 	bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
@@ -19973,6 +19975,81 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// A seat that came back from a hold and later leaves - a host handover it was absent from takes it - is gone from that leave: the later
+	/// of its return and its leave decides, and the frames before stay what they were.
+	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A21, 4, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 46;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A21);
+		if (!wire.StartHost(48901, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2, 3};
+		host.m_Stats.nextFrame = 400;
+		// Held at 100 and back at 150.
+		host.m_PeerLeaveFrames[2] = 100;
+		host.NoteSeatTransition(2, 100, NetLockstepCoordinator::SeatTransition::Held);
+		NetGameSeatReclaim back;
+		back.peerId = 2; back.activationFrame = 150; back.delayFrames = 4; back.neutralThroughFrame = 154; back.seatIncarnation = 2;
+		host.m_ReclaimTransactions[2] = back;
+		host.NoteSeatTransition(2, 150, NetLockstepCoordinator::SeatTransition::Back);
+		host.ApplyPeerLeave(2, 301, "absent from host handover", 1000, true, false, true);
+		const bool goneAfter = host.IsPeerGoneAtFrame(2, 320), backBetween = !host.IsPeerGoneAtFrame(2, 200), heldBefore = host.IsPeerGoneAtFrame(2, 120);
+		if (!goneAfter || !backBetween || !heldBefore) {
+			*error = "a-returned-seat-that-leaves-again-is-gone: after its return at 150 and its leave at 301 the seat reads gone at 320=" + std::to_string(goneAfter) +
+			         ", back at 200=" + std::to_string(backBetween) + ", held at 120=" + std::to_string(heldBefore) + "; expected 1, 1 and 1";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_returned_seat_that_leaves_again_is_gone" << std::endl;
+		return true;
+	}
+
+	/// A round won on a frame ends on every peer at that frame: a member's own end can reach the host before the host has played it, and it
+	/// is the round's end, never a slow seat's leave. A member's end the round plays past is a leave, as before.
+	bool TestARoundsOwnEndIsNoHold(std::string* error) {
+		const auto run = [&](bool roundEndsThere, bool& taken) {
+			LoopbackTransport wire;
+			NetLockstepCoordinator host;
+			auto config = MakeCoordinatorConfig(1, 2, 0x9A22, 4, NetTransportLane::ControlReliable);
+			config.peerCount = 2; config.startFrame = 1; config.roundId = 47;
+			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+			config.relayToOtherPeers = true;
+			config.remoteTransportPeerIds = {{2, 1}};
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A22);
+			if (!wire.StartHost(roundEndsThere ? 48902 : 48903, error) || !host.Start(wire, config, error)) return false;
+			host.m_State = NetLockstepState::Running;
+			host.m_RemotePeerIds = {2};
+			host.m_PeersPlayedThisRound = {2};
+			host.m_Stats.nextFrame = 750;
+			host.m_LastCompletedSimulationTick = 746;
+			host.m_TimingNowMs = 1000;
+			NetLockstepStop end;
+			end.senderPeerId = 2; end.reason = NetLockstepStopReason::Complete; end.frame = 748; end.message = "Victory!";
+			host.HandleStop(end, 1000, host.m_RemoteTransports.at(2));
+			if (roundEndsThere) {
+				host.Complete("Victory!");
+			} else {
+				host.m_LastCompletedSimulationTick = 748;
+				host.Tick(1100);
+			}
+			taken = host.HasHeldAISeat(2) || host.GetPeerLeaveFrames().contains(2);
+			return true;
+		};
+		bool endHeld = false, pastTaken = false;
+		if (!run(true, endHeld) || !run(false, pastTaken)) return false;
+		if (endHeld || !pastTaken) {
+			*error = "a-rounds-own-end-is-no-hold: a member's 'Victory!' end at 748, reaching the host at 746, took its seat when the round ended there=" +
+			         std::to_string(endHeld) + " and when the round played past it=" + std::to_string(pastTaken) + "; expected 0 and 1";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_rounds_own_end_is_no_hold" << std::endl;
+		return true;
+	}
+
 	bool TestAStarvedSeatIsNotLate(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -21433,6 +21510,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(&error) ||
+		    !TestAReturnedSeatThatLeavesAgainIsGone(&error) ||
+		    !TestARoundsOwnEndIsNoHold(&error) ||
 		    !TestAHostsOwnLateSeatIsHeldAndTakenBack(&error) ||
 		    !TestACaptureNotYetBegunExcusesNoStall(&error) ||
 		    !TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(&error) ||
