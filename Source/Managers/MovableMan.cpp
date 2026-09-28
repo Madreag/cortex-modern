@@ -2056,7 +2056,7 @@ void MovableMan::ForgetDestroyedObject(MovableObject* mo) {
 			std::erase_if(*held, [mo](const auto& entry) { return entry.second == mo; });
 		}
 	}
-	g_LuaMan.ForgetDestroyedRegisteredMO(mo);
+	if (LuaMan::IsConstructed()) g_LuaMan.ForgetDestroyedRegisteredMO(mo);
 }
 
 MovableObject* MovableMan::ViewIfSpeculating(MovableObject* found) const {
