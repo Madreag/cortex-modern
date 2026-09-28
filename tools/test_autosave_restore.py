@@ -1097,7 +1097,7 @@ def _world_checkpoint_state(manifest: str, host_log: str, world_id: str, tick: i
 
 
 def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "", round_ticks: int = 600,
-                      client_lacks_checkpoint: bool = False, rejoin_from_first_capture: bool = False) -> dict:
+                      client_lacks_checkpoint: bool = False, rejoin_from_first_capture: bool = False, host_stall: str = "") -> dict:
     """A persistent world host is KILLED and restarted on the same install with the same UUID,
     the seats the checkpoint held, and the client's stored ticket.
 
@@ -1121,6 +1121,9 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
         return {**extra, "client": [*extra.get("client", []), "-net-test-live-stall", f"{start + tick}:{milliseconds}"]}
 
     first_extra = stall(0, {})
+    if host_stall:
+        # The host's own lever: its simulation stalls once in the first boot, so the round judges the host's own seat.
+        first_extra = {**first_extra, "host": [*first_extra.get("host", []), "-net-test-live-stall", host_stall]}
     if rejoin_from_first_capture:
         # The rejoin lever: the world keeps serving its first capture (CC_TEST_WORLD_JOIN_FIRST_IMAGE) and the client is held
         # at tick 124, so it rejoins from the first capture and catches up across everything since it, the old-image rejoin
@@ -1669,6 +1672,8 @@ def main() -> int:
     parser.add_argument("--round-ticks", type=int, default=600, help="world-restart only: the resumed and fresh rounds' length")
     parser.add_argument("--client-stall", default="", help="world-restart only: TICK:MS, the client stalls once past each "
                         "round's start so the host holds its seat and the seat has to rejoin")
+    parser.add_argument("--world-host-stall", default="", help="world-restart only: TICK:MS, the host's simulation stalls once in the "
+                        "first boot, so the round judges the host's own seat")
     parser.add_argument("--anchor-client-stall", default="", help="anchor only: TICK:MS, the client stalls once so the host holds "
                         "its seat and it catches up across a capture it never takes")
     parser.add_argument("--fullstate-every", type=int, default=0,
@@ -1705,7 +1710,8 @@ def main() -> int:
     arms = {"restore": arm_restore, "retention": arm_retention, "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers, args.anchor_client_stall),
             "resume": arm_resume,
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks,
-                                                                        args.client_lacks_checkpoint, args.rejoin_from_first_capture),
+                                                                        args.client_lacks_checkpoint, args.rejoin_from_first_capture,
+                                                                        args.world_host_stall),
             "park": arm_park}
     if args.arm != "all":
         arms = {args.arm: arms[args.arm]}
