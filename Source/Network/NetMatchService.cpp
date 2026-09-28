@@ -5537,7 +5537,8 @@ static std::string ResyncSaveName() {
 				slice.insert(slice.end(), record.begin(), record.end());
 			}
 			if (!slice.empty()) pack();
-			// An empty chunk ends the record.
+			// A record of no bytes ends them.
+			slice.assign(4, 0);
 			pack();
 			System::PrintDiagnosticLine("[net-match] held client: its record of the lost host's round goes to the successor: frames=" + std::to_string(records.size()) +
 			                            " through=" + std::to_string(m_CommittedRing.Count() > 0 ? m_CommittedRing.LastFrame() : 0) + " chunks=" + std::to_string(m_HeldRecordPackets.size()));
@@ -5553,7 +5554,7 @@ static std::string ResyncSaveName() {
 		if (!chunk || chunk->transferId != c_NetWorldTailTransferId || !ParseWorldTailChunkRound(*chunk, round)) return false;
 		// A record of another round is no part of this one.
 		if (round != m_WorldCatchUp.roundId) return true;
-		if (chunk->bytes.size() == c_NetWorldTailRoundBytes) {
+		if (chunk->bytes.size() == c_NetWorldTailRoundBytes + 4 && std::all_of(chunk->bytes.begin() + c_NetWorldTailRoundBytes, chunk->bytes.end(), [](uint8_t byte) { return byte == 0; })) {
 			m_HeldRecordsEnded.insert(event.peerId);
 			System::PrintDiagnosticLine("[net-match] held client: a held seat's record of the lost host's round arrived connection=" + std::to_string(event.peerId) + " taken=" +
 			                            std::to_string(m_HeldRecordFramesTaken) + " through=" + std::to_string(m_HeldRecordThrough) + " applied=" + std::to_string(ScenarioRunner::WorldCatchUpAppliedThrough()));
@@ -5939,7 +5940,8 @@ static std::string ResyncSaveName() {
 			});
 			if (heldAgain) {
 				System::PrintDiagnosticLine("[net-match] held client: the host held this seat again before its return at " + std::to_string(m_WorldCatchUp.activationTick) +
-				                            "; catching up on from " + std::to_string(m_WorldCatchUp.appliedThrough));
+				                            "; catching up on from " + std::to_string(m_WorldCatchUp.appliedThrough) + " (round " +
+				                            (m_Coordinator->HeldLocalSeatSince(m_WorldCatchUp.activationTick) ? "held it: " + m_Coordinator->GetStats().timeoutReason : std::string("running; a hold on the wire")) + ")");
 				DropReturnStartLocked("the host held this seat again before its return");
 				m_WorldCatchUp.activationTick = 0;
 				m_WorldCatchUp.activationCommitted = false;

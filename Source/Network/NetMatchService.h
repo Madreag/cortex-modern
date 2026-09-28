@@ -979,7 +979,7 @@ namespace RTE {
 		bool HeldSeatHostsLocked();
 		/// Held client: opens the match's published listener for the held seats that may dial this one.
 		bool OpenHeldListenerLocked();
-		/// Held client moving to a successor: sends it the lost host's frames this seat replayed, then an empty chunk that ends them.
+		/// Held client moving to a successor: sends it the lost host's frames this seat replayed, then a record of no bytes that ends them.
 		void SendHeldRecordLocked();
 		/// First survivor: takes a held seat's record of the lost host's round off its listener into its own replay. False for any other traffic.
 		bool TakeHeldRecordLocked(const NetTransportEvent& event);
