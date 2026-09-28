@@ -341,7 +341,7 @@ void WindowMan::MapDisplays(bool updatePrimaryDisplayInfo) {
 		UpdatePrimaryDisplayInfo();
 	}
 
-	SDL_DisplayID* displays = SDL_GetDisplays(&m_NumDisplays);
+	const std::unique_ptr<SDL_DisplayID[], decltype(&SDL_free)> displays(SDL_GetDisplays(&m_NumDisplays), &SDL_free);
 
 	if (!m_UseMultiDisplays || m_NumDisplays == 1) {
 		setSingleDisplayMode();
