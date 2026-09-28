@@ -25,13 +25,14 @@ def main():
         digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     plan = dict(ticks=700, client_stall='650:1500', end_round_tick=700, port=args.port, exe_sha256=digest)
     (args.out / 'plan.json').write_text(json.dumps(plan, indent=2), encoding='utf-8')
+    run = args.out / 'run'
     try:
-        records = run_pair(args.repo, args.out, args.port, 700, 2,
+        records = run_pair(args.repo, run, args.port, 700, 2,
                            dict(host=['-net-match-e2e-end-round-tick', '700'],
                                 client=['-net-match-e2e-end-round-tick', '700', '-net-test-live-stall', '650:1500']))
-        assert '[net-test] live stall frame=650 ' in peer_log(args.out, 'client'), 'the final-window stall never fired'
-        assert '[net-match] hold peer=2 ' in peer_log(args.out, 'host'), 'the client was never held'
-        details = judge_retention(args.out, 700, records)
+        assert '[net-test] live stall frame=650 ' in peer_log(run, 'client'), 'the final-window stall never fired'
+        assert '[net-match] hold peer=2 ' in peer_log(run, 'host'), 'the client was never held'
+        details = judge_retention(run, 700, records)
         result = dict(passed=True, details=details, plan=plan)
     except Exception as error:
         result = dict(passed=False, reason=f'{type(error).__name__}: {error}', plan=plan)
