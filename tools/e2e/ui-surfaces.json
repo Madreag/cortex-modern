@@ -137,7 +137,7 @@
       "assert": "menu assertions in the marked interval",
       "events": [
         "assert_label TextHostNetSlowBound .*4.* PASS",
-        "assert_label ComboHostNetSlowPolicy .*Hand the seat.* PASS"
+        "assert_label ComboHostNetSlowPolicy .*text=\"Give the seat to the AI \\(host too\\) until they catch up\" PASS"
       ],
       "run": [
         "640x360",

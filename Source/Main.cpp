@@ -5849,6 +5849,10 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		const bool e2ePeerStoppedAfterCap = s_netMatchServiceE2E &&
 			NetMatchE2ERoundReachedPlannedEnd(error, s_netMatchE2ETicks.Total(), matchTick, e2eTickCap);
+		// A member hears its host's End Match as the host's own Complete stop; the local stop of a failed handover is not one.
+		const bool e2eHostEndedRound = s_netMatchServiceE2E && error.starts_with("Complete:") && error.find("e2e complete") == std::string::npos &&
+			error.find("match over") == std::string::npos && error.find("host handover ended") == std::string::npos &&
+			!g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running;
 		// A held seat's rejoin is the product's own recovery too: the observed trace follows it instead of stopping.
 		const bool observeTraceRecovery = !s_netMatchServiceE2E && s_recordTickHashes &&
 		    (error.find("ResyncRequested") != std::string::npos || (error.find("PeerHeld:") != std::string::npos && g_SettingsMan.GetNetworkAutoReconnect()));
@@ -5934,8 +5938,14 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		} else if (error.find("Complete:") != std::string::npos &&
 		           error.find("e2e complete") == std::string::npos &&
 		           (g_NetMatchService.GetState() == NetMatchServiceState::Completed ||
-		            error.find("match over") != std::string::npos)) {
-			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+		            error.find("match over") != std::string::npos || e2eHostEndedRound)) {
+			if (e2eHostEndedRound) {
+				// The round ends on the host's word, as the product's clean stop does.
+				const std::string result = NetMatchEndReason(g_ActivityMan.GetActivity());
+				System::PrintDiagnosticLine("[net-match] completed_by_host_end=1 result=" + result);
+				g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
+				g_NetMatchService.FinishMatch(result);
+			} else if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 				g_NetMatchService.FinishMatch(BuildNetMatchResultText());
 			}
 			g_ActivityMan.EndActivity();
