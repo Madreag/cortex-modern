@@ -28,6 +28,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <execution>
 #include <fstream>
 #include <iostream>
@@ -2740,6 +2741,33 @@ int PathFinder::RunHorizonGridSelfTest() {
 		return 1;
 	}
 	std::cout << Tag << " PASS report-off-sim-thread" << std::endl;
+	// A rewrite queued after its writer closed is refused with a line, never dropped in silence.
+	{
+		const std::string before = System::GetUserdataDirectory() + "horizon_rewrite_before_close.txt";
+		const std::string after = System::GetUserdataDirectory() + "horizon_rewrite_after_close.txt";
+		std::remove(before.c_str());
+		std::remove(after.c_str());
+		AsyncFileRewriter rewriter;
+		const bool queued = rewriter.Rewrite(before, "before");
+		rewriter.Close();
+		std::ostringstream said;
+		std::streambuf* const saved = std::cerr.rdbuf(said.rdbuf());
+		const bool accepted = rewriter.Rewrite(after, "after");
+		std::cerr.rdbuf(saved);
+		const std::string text = said.str();
+		std::cerr << text;
+		rewriter.Flush();
+		const bool wroteBefore = std::ifstream(before).good(), wroteAfter = std::ifstream(after).good();
+		const auto lines = std::count(text.begin(), text.end(), '\n');
+		std::remove(before.c_str());
+		std::remove(after.c_str());
+		const bool row = queued && wroteBefore && !accepted && !wroteAfter && lines == 1;
+		std::cout << Tag << (row ? " PASS" : " FAIL") << " rewrite-after-close queued=" << queued << " written_before=" << wroteBefore
+		          << " accepted_after=" << accepted << " written_after=" << wroteAfter << " lines=" << lines << std::endl;
+		if (!row) {
+			return 1;
+		}
+	}
 	std::cout << Tag << " PASS" << std::endl;
 	return 0;
 }

@@ -27,6 +27,10 @@ LANE_ENV = 'CC_CROSS_PEERS_LANE'
 SCRATCH_ROOT = Path('D:/mx')
 SCRATCH = None
 LANE = None
+# The Mac inventory's live marker a Mac launch requires: --mac-guard or CC_CROSS_PEERS_MAC_GUARD, never a default. The
+# manifest writes it as {mac_guard}, so a merged-away inventory lane's marker never guards a run.
+MAC_GUARD_ENV = 'CC_CROSS_PEERS_MAC_GUARD'
+MAC_GUARD = None
 LIMIT = 4_000_000_000
 MST = dt.timezone(dt.timedelta(hours=-7))
 
@@ -58,11 +62,15 @@ def set_lane(lane):
 
 
 def with_lane(value):
-    """A manifest value with {lane} replaced by this run's lane."""
+    """A manifest value with {lane} and {mac_guard} replaced by this run's lane and Mac guard."""
     if isinstance(value, str):
-        if '{lane}' not in value: return value
-        if LANE is None: raise ValueError(f'the manifest names {{lane}} but no lane was given: --lane or {LANE_ENV}')
-        return value.replace('{lane}', LANE)
+        if '{lane}' in value:
+            if LANE is None: raise ValueError(f'the manifest names {{lane}} but no lane was given: --lane or {LANE_ENV}')
+            value = value.replace('{lane}', LANE)
+        if '{mac_guard}' in value:
+            if MAC_GUARD is None: raise ValueError(f'the manifest names {{mac_guard}} but no guard was given: --mac-guard or {MAC_GUARD_ENV}')
+            value = value.replace('{mac_guard}', MAC_GUARD)
+        return value
     if isinstance(value, list): return [with_lane(item) for item in value]
     if isinstance(value, dict): return {key: with_lane(item) for key, item in value.items()}
     return value
@@ -210,7 +218,7 @@ def make_plan(options):
         specs[-1]['forced_ends']=[f for f in faults if f['action']=='brain-eliminate']
         if specs[-1]['barriers']:
             specs[-1]['env']['CC_TEST_CROSS_CAPTURE_BARRIER'] = own+'/barriers.json'
-    return dict(version=1, run=stem, lane=LANE, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
+    return dict(version=1, run=stem, lane=LANE, mac_guard=MAC_GUARD, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
                 driver_commit=command(['git','-C',HERE.parent,'rev-parse','HEAD']).strip(),
                 driver_tracked_changes=command(['git','-C',HERE.parent,'status','--porcelain','--untracked-files=no']).splitlines(),
                 driver_sources={str(path.relative_to(HERE)):digest_file(path) for path in
@@ -1046,6 +1054,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--boxes', type=Path, default=HERE / 'cross_peers/boxes.json')
     parser.add_argument('--lane', default=os.environ.get(LANE_ENV), help=f'the lane whose scratch holds the run on every box (or {LANE_ENV}); no default')
+    parser.add_argument('--mac-guard', default=os.environ.get(MAC_GUARD_ENV),
+                        help=f"the Mac inventory's live marker a Mac launch requires (or {MAC_GUARD_ENV}); no default")
     parser.add_argument('--out', type=Path, help='default: <lane scratch>/dry-run')
     parser.add_argument('--host', default='erol')
     parser.add_argument('--scenario', choices=['match', 'soak', 'chaos', 'endurance'], default='match')
@@ -1070,6 +1080,10 @@ def parse_args(argv=None):
     if not (options.payload or options.preflight):
         try: set_lane(options.lane)
         except ValueError as error: parser.error(str(error))
+        global MAC_GUARD
+        MAC_GUARD = options.mac_guard or None
+        if MAC_GUARD is None and '{mac_guard}' in options.boxes.read_text(encoding='utf-8-sig'):
+            parser.error(f"{options.boxes} guards the Mac with the live inventory marker: --mac-guard or {MAC_GUARD_ENV}")
         options.out = options.out or SCRATCH / 'dry-run'
     options.ticks = options.ticks or (1201 if options.scenario == 'match' else 36000)
     if options.ticks < 2 or min(options.timeout, options.recovery_deadline_ms, options.capture_budget_ms) <= 0:

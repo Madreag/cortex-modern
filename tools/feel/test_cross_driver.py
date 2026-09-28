@@ -50,6 +50,30 @@ class CrossDriverTests(unittest.TestCase):
             self.assertEqual(cross_peers.parse_args(['--dry-run']).lane,'env-lane')
         self.plan()
 
+    def test_the_mac_guard_is_an_argument_with_no_default(self):
+        manifest=(cross_peers.HERE/'cross_peers/boxes.json').read_text()
+        build=(cross_peers.HERE/'mac/cross_build.zsh').read_text()
+        for text in (manifest,build):
+            self.assertNotIn('inventory-confirming',text)
+            self.assertNotIn('cortex-workers/inventory',text)
+        self.assertIn('GUARD=${CROSS_MAC_GUARD:?',build)
+        with patch.dict(cross_peers.os.environ,{}):
+            cross_peers.os.environ.pop(cross_peers.MAC_GUARD_ENV,None)
+            with self.assertRaises(SystemExit): cross_peers.parse_args(['--lane','test-lane','--dry-run'])
+        live='/Users/erol/cortex-workers/some-inventory/exit.txt'
+        plan=cross_peers.make_plan(cross_peers.parse_args(['--lane','test-lane','--mac-guard',live,'--dry-run']))
+        self.assertEqual(next(b for b in plan['boxes'] if b['name']=='Mac')['guard_file'],live)
+        self.assertEqual(plan['mac_guard'],live)
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertIn(f'--mac-guard {live}',cross_report.write_rerun_command(Path(temporary),plan))
+            self.assertEqual(next(b for b in cross_peers.load_boxes(Path(temporary)/'rerun-boxes.json')['boxes'] if b['name']=='Mac')['guard_file'],live)
+        with patch.dict(cross_peers.os.environ,{cross_peers.MAC_GUARD_ENV:'/env/marker'}):
+            self.assertEqual(cross_peers.parse_args(['--lane','test-lane','--dry-run']).mac_guard,'/env/marker')
+
+    def setUp(self):
+        patcher=patch.dict(cross_peers.os.environ,{'CC_CROSS_PEERS_MAC_GUARD':'/Users/erol/cortex-workers/test-inventory/exit.txt'})
+        patcher.start(); self.addCleanup(patcher.stop)
+
     def plan(self):
         return cross_peers.make_plan(cross_peers.parse_args(['--lane','test-lane','--dry-run']))
 
