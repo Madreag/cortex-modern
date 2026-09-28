@@ -2646,9 +2646,13 @@ bool ActivityMan::RestartActivity() {
 				restored = m_StartActivity->ApplyPendingCheckpoint();
 				m_StartActivity->RefreshLockstepLocalPlayers();
 				restored = restored && m_StartActivity->PrepareCheckpointUI() && m_StartActivity->ResolveCheckpointReferences();
+				if (!restored) g_ConsoleMan.PrintString("ERROR: the saved start activity did not restore");
 			}
 		}
-		if (restored && !m_PendingCheckpoint.runtimeGlobals.empty()) restored = RestoreRuntimeGlobals(m_PendingCheckpoint.runtimeGlobals);
+		if (restored && !m_PendingCheckpoint.runtimeGlobals.empty()) {
+			restored = RestoreRuntimeGlobals(m_PendingCheckpoint.runtimeGlobals);
+			if (!restored) g_ConsoleMan.PrintString("ERROR: the saved runtime globals did not restore");
+		}
 		if (restored && m_PendingCheckpoint.uniqueIDCounter >= 0) MovableObject::PinUniqueIDCounter(m_PendingCheckpoint.uniqueIDCounter);
 		// Registrations continue where the image's writer stood, not where this process's earlier worlds left the count; only an
 		// object the restored world still holds may keep it higher.
@@ -2660,6 +2664,7 @@ bool ActivityMan::RestartActivity() {
 		if (restored && m_PendingCheckpoint.afterRestore) {
 			g_MovableMan.SetRestoringSnapshot(true);
 			restored = m_Activity && m_PendingCheckpoint.afterRestore(*m_Activity);
+			if (!restored) g_ConsoleMan.PrintString("ERROR: the restored game's own state did not apply");
 		}
 	} catch (const std::exception& exception) {
 		restored = false;
