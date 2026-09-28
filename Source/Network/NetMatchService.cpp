@@ -5085,6 +5085,16 @@ static std::string ResyncSaveName() {
 			const auto endpoint = std::find_if(live.matchConfig.migrationPeers.begin(), live.matchConfig.migrationPeers.end(), [&](const auto& candidate) { return candidate.peerId == peer; });
 			if (endpoint != live.matchConfig.migrationPeers.end() && endpoint->listenPort != 0 && !endpoint->listenAddrs.empty()) m_InPlaceRoutes.push_back({peer, *endpoint});
 		}
+		// The first survivor in the match's order listens from its hold on: a held seat that finds the host gone before it does dials it then,
+		// not after this seat's own link times out.
+		{
+			std::vector<uint8_t> reachable;
+			for (const InPlaceRoute& route: m_InPlaceRoutes) reachable.push_back(route.peerId);
+			std::set<uint8_t> departed;
+			for (const auto& [peer, frame]: config.initialPeerLeaves)
+				if (peer != config.authorityPeerId && peer != m_LocalPeerId && !config.initialSeatHolds.contains(peer)) departed.insert(peer);
+			if (!reachable.empty() && HeldSeatListens(live.matchConfig.successorOrder, config.authorityPeerId, m_LocalPeerId, reachable, {}, departed)) (void)OpenHeldListenerLocked();
+		}
 		NoteTailReplayBeganLocked();
 		(void)m_Runner->GetLobbySession().SendPayload(MakeJoinerCatchUpReport(), nullptr);
 		ScenarioRunner::PushNetUiToast("seat_held", "Held - AI in control - rejoining");
@@ -5143,6 +5153,7 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::OpenHeldListenerLocked() {
 		if (m_HeldListener) return true;
+		m_HeldDialSeen = m_HeldDialNoted = false;
 		const NetLockstepConfig& config = m_Coordinator->GetConfig();
 		const auto endpoint = std::find_if(config.matchConfig.migrationPeers.begin(), config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_LocalPeerId; });
 		std::unique_ptr<INetTransport> listener = config.migrationTransportFactory ? config.migrationTransportFactory() : nullptr;
@@ -5158,6 +5169,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::CloseHeldListenerLocked() {
+		m_HeldDialSeen = m_HeldDialNoted = false;
 		if (!m_HeldListener) return;
 		m_HeldListener->Stop();
 		m_HeldListener.reset();
@@ -5652,6 +5664,8 @@ static std::string ResyncSaveName() {
 		// session: that silence is its own, not the host's. The windows stay open for as long as the
 		// catch-up runs; a host that really goes away still arrives as a transport close below.
 		if (NetSession* live = LiveSessionLocked()) live->SetSilenceSuspended(!m_IsHost && m_WorldCatchUp.active);
+		// A seat back in the round, or no longer catching up in place, listens for nobody.
+		if (m_HeldListener && (m_IsHost || !m_WorldCatchUp.active || !m_InPlaceCatchUp)) CloseHeldListenerLocked();
 		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) return;
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		INetTransport* wire = ActiveWireLocked();
@@ -5680,13 +5694,22 @@ static std::string ResyncSaveName() {
 		}
 		// The first survivor listens while it dials: a held seat's own session at its listener proves that seat reads it as the host.
 		if (m_HeldListener && m_InPlaceCatchUp) {
-			bool proven = false;
 			for (NetTransportEvent& event: m_HeldListener->PollEvents()) {
-				proven = proven || (event.type == NetTransportEventType::PacketReceived && !NetLockstepCodec::LooksLikePacket(event.bytes) && !NetLobbyProtocol::Decode(event.bytes).ok);
+				m_HeldDialSeen = m_HeldDialSeen || (event.type == NetTransportEventType::PacketReceived && !NetLockstepCodec::LooksLikePacket(event.bytes) && !NetLobbyProtocol::Decode(event.bytes).ok);
 				m_HeldListenerEvents.push_back(std::move(event));
 			}
+			bool proven = m_HeldDialSeen;
+			// A live host acks each held seat every tick: one this seat has heard lately is alive whatever the dialer's own link said.
+			const uint64_t silentMs = SteadyNowMs() > m_InPlaceHeardMs ? SteadyNowMs() - m_InPlaceHeardMs : 0;
+			if (proven && silentMs <= c_HeldDialProofSilenceMs) {
+				if (!m_HeldDialNoted) System::PrintDiagnosticLine("[net-match] held client: a held seat dialed this one's listener while its host spoke " + std::to_string(silentMs) + "ms ago; it waits");
+				m_HeldDialNoted = true;
+				proven = false;
+			}
 			if (proven) {
-				System::PrintDiagnosticLine("[net-match] held client: a held seat dialed this one's listener; it hosts the match");
+				System::PrintDiagnosticLine("[net-match] held client: a held seat dialed this one's listener and its host has been silent " + std::to_string(silentMs) + "ms; it hosts the match");
+				m_StatusText = "Host lost - arranging handover";
+				m_HeldDialNoted = false;
 				m_InPlaceMoveHost = 0;
 				m_InPlaceRoutes.clear();
 				if (m_MigratedTransport) m_MigratedTransport->Stop();

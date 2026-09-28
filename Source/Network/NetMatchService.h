@@ -1648,6 +1648,9 @@ namespace RTE {
 		std::deque<InPlaceRoute> m_InPlaceRoutes; //!< Held client: the successors its catch-up has yet to try.
 		std::unique_ptr<INetTransport> m_HeldListener; //!< Held client, first survivor: the listener it opens at its verdict while it dials the others.
 		std::vector<NetTransportEvent> m_HeldListenerEvents; //!< What that listener heard before a plane took it over, in order.
+		bool m_HeldDialSeen = false; //!< A held seat's own session reached that listener.
+		bool m_HeldDialNoted = false; //!< The dial that came while this seat's host still spoke is said once.
+		static constexpr uint64_t c_HeldDialProofSilenceMs = 1000; //!< A live host acks each held seat every tick; this long without it is no live host.
 		std::unique_ptr<INetTransport> m_InPlaceMoveTransport; //!< Held client: the new connection while the successor admits it.
 		uint8_t m_InPlaceMoveHost = 0; //!< Held client: the successor being dialed; 0 when no move is under way.
 		std::string m_InPlaceMoveAddress;
