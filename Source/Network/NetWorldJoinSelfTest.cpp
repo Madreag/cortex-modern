@@ -7705,6 +7705,7 @@ namespace RTE {
 	}
 
 	int RunNamed(const char* name) {
+		if (std::strcmp(name, "-net-world-activation-trail-selftest") == 0) return TestActivationFollowsTheMeasuredTrail();
 		if (std::strcmp(name, "-net-world-second-round-selftest") == 0) {
 			s_FailTag = "net-world-second-round-selftest";
 			std::string error;
