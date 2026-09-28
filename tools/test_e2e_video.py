@@ -342,6 +342,31 @@ def check_substitution(results):
     return ok
 
 
+def check_directory_port_block(results):
+    """A scenario's session directory keeps its place below the top of the driver's block, so a lane's own --port-block
+    carries it with the runs instead of refusing the run."""
+    from e2e import directory
+    relay, ui = driver.load_scenario("mp-direct-vs-relay"), driver.load_scenario("ui-surfaces")
+    default = (driver.directory_port_for(relay, relay["runs"][1], relay["port_base"]), driver.directory_port_for(ui, ui["runs"][0], ui["port_base"]))
+    ok = row(results, "directory/default-block-keeps-the-scenario-port", default == (relay["directory_port"], ui["directory_port"]), str(default))
+    saved = driver.PORT_LO, driver.PORT_HI
+    try:
+        driver.PORT_LO, driver.PORT_HI = 49860, 49879
+        lane = (driver.directory_port_for(relay, relay["runs"][1], 49860), driver.directory_port_for(ui, ui["runs"][0], 49860))
+    finally:
+        driver.PORT_LO, driver.PORT_HI = saved
+    ok &= row(results, "directory/lane-block-carries-the-directory", lane == (49878, 49879), str(lane))
+    refused = None
+    try:
+        with directory.serve(Path("unused"), 49478, (49860, 49879)):
+            pass
+    except ValueError as error:
+        refused = str(error)
+    ok &= row(results, "directory/serve-refuses-a-port-outside-the-block", bool(refused) and "49860-49879" in refused, str(refused))
+    ok &= row(results, "directory/no-directory-without-a-port", driver.directory_port_for({"name": "x", "runs": [{}]}, {}, 49400) is None)
+    return ok
+
+
 def check_launch_contract(results, scratch):
     stage = scratch / "launch"
     stage.mkdir()
@@ -1303,6 +1328,7 @@ def main():
         ok &= check_module_requirements(results, scratch)
         ok &= check_rematch_contract(results)
         ok &= check_substitution(results)
+        ok &= check_directory_port_block(results)
         ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)
         ok &= check_encode(results, scratch)

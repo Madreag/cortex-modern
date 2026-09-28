@@ -37,6 +37,7 @@ from compare_sim_traces import compare_fullstate  # noqa: E402
 
 SCENARIO_DIR = TOOLS / "e2e"
 PORT_LO, PORT_HI = 49400, 49479
+DEFAULT_PORT_HI = PORT_HI
 DEFAULT_SIZE = "960x540"
 DEFAULT_FPS = 30
 SHEET_COLUMNS = 6
@@ -269,6 +270,19 @@ def bind_directory_session(staged_menu, session):
         path.write_text(path.read_text(encoding="utf-8").replace("{DIRECTORY_SESSION}", session), encoding="utf-8")
         return True
     return False
+
+
+def directory_port_for(scenario, run, base):
+    """The run's session directory port: the scenario's place below the top of the driver's block, so a lane's own block
+    carries it with the runs. None when the scenario serves no directory."""
+    named = run.get("directory_port", scenario.get("directory_port"))
+    if not named:
+        return None
+    port = PORT_HI - (DEFAULT_PORT_HI - int(named))
+    runs = {base + index for index in range(len(scenario.get("runs", [])))}
+    if not PORT_LO <= port <= PORT_HI or port in runs:
+        raise SystemExit(f"{scenario['name']}: directory port {port} is outside {PORT_LO}-{PORT_HI} or on a run's port")
+    return port
 
 
 def port_for(run_index, base):
@@ -1611,10 +1625,10 @@ def main():
                 complete = False
                 continue
             service = nullcontext({})
-            directory_port = run.get("directory_port", scenario.get("directory_port"))
+            directory_port = directory_port_for(scenario, run, options.port)
             if directory_port:
                 from e2e.directory import serve
-                service = serve(out / f"{name}-directory", directory_port)
+                service = serve(out / f"{name}-directory", directory_port, (PORT_LO, PORT_HI))
             with service as tokens:
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
