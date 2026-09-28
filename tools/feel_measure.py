@@ -19,10 +19,12 @@ from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, red
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes
 from feel.records import compress_case_records, record_path
 from run_sim_test import make_run, engine_executable
+from feel.launch_budget import install_memory_guard, exclusive_matrix
 from run_selftests import SELFTESTS
 from compare_sim_traces import compare_fullstate, strict_compare
 
 REPO = Path(__file__).resolve().parents[1]
+install_memory_guard()
 MST = timezone(timedelta(hours=-7))
 HELPERS = REPO / 'tools/feel'
 SP_CONTROL = Path('D:/mx/opus-f24-20260913/sp-control')
@@ -725,7 +727,7 @@ def gates(root, control, timeout):
     out = root / 'gates'
     out.mkdir(exist_ok=False)
     env = dict(os.environ, CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
-    command = [sys.executable, '-B', str(REPO / 'tools/run_selftests.py'), '--repo', str(REPO),
+    command = [sys.executable, '-B', str(HELPERS / 'launch_budget.py'), str(REPO / 'tools/run_selftests.py'), '--repo', str(REPO),
                '--out', str(out / 'selftests'), '--timeout', str(timeout)]
     with (out / 'selftests-driver.log').open('w', encoding='utf-8') as log:
         suite = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -972,4 +974,8 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    _, arguments = parse_args()
+    if arguments.analyze_only or arguments.dry_run:
+        raise SystemExit(main())
+    with exclusive_matrix():
+        raise SystemExit(main())

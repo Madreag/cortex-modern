@@ -12,11 +12,13 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from run_sim_test import make_run
+from feel.launch_budget import install_memory_guard
 from feel_measure import private_settings, stage_baseline
 from feel.retained_resume import compare_live_hashes, read_live_hashes
 
 
 def main():
+    install_memory_guard()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument('--out', type=Path, required=True)

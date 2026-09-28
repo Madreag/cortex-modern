@@ -27,12 +27,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_sim_test import make_run  # noqa: E402
+from feel.launch_budget import install_memory_guard  # noqa: E402
 from compare_sim_traces import compare_fullstate  # noqa: E402
 from feel.retained_resume import compare_live_hashes  # noqa: E402
 from feel_measure import input_pattern, private_settings, stage_baseline  # noqa: E402
 
 PORT_LO, PORT_HI = 49880, 49889
 TICKS_PER_SECOND = 60
+install_memory_guard()
 
 
 class MemoryCounters(ctypes.Structure):
