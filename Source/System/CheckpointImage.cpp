@@ -19,6 +19,7 @@
 #include "LuaMan.h"
 #include "RTETools.h"
 #include "TimerMan.h"
+#include "SceneMan.h"
 
 #include "lua.hpp"
 
@@ -1222,6 +1223,35 @@ bool RTE::RunCheckpointImageSelfTest() {
 			const std::string missed = g_AudioMan.RegistryScopeMissedChange();
 			if (missed.empty()) pass("a_registry_scope_puts_back_what_any_change_moved", "ways=5");
 			else fail("a_registry_scope_puts_back_what_any_change_moved", "missed_way=" + missed);
+		}
+		// This machine's pacing flag and view are archived, but a peer compares the shared state without them.
+		{
+			const auto capture = [] { return CheckpointWriter::CaptureNative([] { return g_TimerMan.SaveCheckpoint(); }); };
+			const bool freeRun = g_TimerMan.IsFreeRunSim();
+			const float timeScale = g_TimerMan.GetTimeScale();
+			const CheckpointText base = capture();
+			g_TimerMan.SetFreeRunSim(!freeRun);
+			const CheckpointText otherFreeRun = capture();
+			g_TimerMan.SetFreeRunSim(freeRun);
+			g_TimerMan.SetTimeScale(timeScale * 2.0F);
+			const CheckpointText otherScale = capture();
+			g_TimerMan.SetTimeScale(timeScale);
+			const bool archived = base.Text() != otherFreeRun.Text();
+			const bool perPeer = base.SharedText() == otherFreeRun.SharedText();
+			const bool sharedKept = base.SharedText() != otherScale.SharedText();
+			if (archived && perPeer && sharedKept) pass("the_free_run_flag_is_per_peer", "archived, left out of the shared state, time scale kept");
+			else fail("the_free_run_flag_is_per_peer", "archived=" + std::to_string(archived) + " per_peer=" + std::to_string(perPeer) + " time_scale_shared=" + std::to_string(sharedKept));
+
+			std::string legacy = base.Text();
+			const size_t tagEnd = legacy.find(' ', 2);
+			const bool current = g_TimerMan.LoadCheckpoint(base.Text(), true);
+			const bool older = tagEnd != std::string::npos && g_TimerMan.LoadCheckpoint(legacy.replace(0, tagEnd, "9 TimerMan1"), true);
+			if (current && older) pass("timer_archives_of_both_tags_load", legacy.substr(0, 12));
+			else fail("timer_archives_of_both_tags_load", "current=" + std::to_string(current) + " TimerMan1=" + std::to_string(older));
+
+			if (!SceneMan::IsConstructed()) SceneMan::Construct();
+			if (const std::string mismatch = g_SceneMan.CheckpointPerPeerSelfTestMismatch(); mismatch.empty()) pass("the_last_drawn_screen_is_per_peer", "archived, left out of the shared state, scrap height kept");
+			else fail("the_last_drawn_screen_is_per_peer", mismatch);
 		}
 		// A capture's bitmap index is kept while the loaded bitmaps' version holds, so every way that changes them moves it.
 		{

@@ -3306,6 +3306,24 @@ bool SceneMan::LoadMaterialCatalog(std::string_view text, bool validateOnly) {
     } catch (const std::exception&) { return false; }
 }
 
+std::string SceneMan::CheckpointPerPeerSelfTestMismatch() {
+	// The visitor alone: the material catalog is shared and has its own rows.
+	const auto capture = [this] { return CheckpointWriter::CaptureNative([this] { CheckpointWriter writer("SceneManScopes"); VisitCheckpoint(writer, *this); return writer.Text(); }); };
+	const int screen = m_LastUpdatedScreen;
+	const int scrapHeight = m_ScrapCompactingHeight;
+	const CheckpointText base = capture();
+	m_LastUpdatedScreen = screen + 1;
+	const CheckpointText otherScreen = capture();
+	m_LastUpdatedScreen = screen;
+	m_ScrapCompactingHeight = scrapHeight + 1;
+	const CheckpointText otherScrap = capture();
+	m_ScrapCompactingHeight = scrapHeight;
+	if (base.Text() == otherScreen.Text()) return "last_updated_screen=unarchived";
+	if (base.SharedText() != otherScreen.SharedText()) return "last_updated_screen=shared";
+	if (base.SharedText() == otherScrap.SharedText()) return "scrap_compacting_height=per_peer";
+	return {};
+}
+
 bool SceneMan::RunMaterialCheckpointSelfTest() {
     const std::string original = SaveMaterialCatalog();
     bool passed = true;

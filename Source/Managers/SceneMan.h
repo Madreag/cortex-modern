@@ -84,6 +84,9 @@ namespace RTE {
         static bool ValidateMaterialReference(std::string_view text);
         const Material* ResolveMaterialReference(std::string_view text, bool allowMissing = false) const;
         bool RunMaterialCheckpointSelfTest();
+		/// Self-test of the checkpoint visitor's scopes: this machine's last drawn screen stays out of the shared state and its neighbours stay in.
+		/// @return The failure seen, or empty when the scopes hold.
+		std::string CheckpointPerPeerSelfTestMismatch();
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
