@@ -6,7 +6,8 @@
 #   one GPU row (a menu readback case) on the :0 session;
 #   S4b  the clang TSan build and its suite; S4 the clang ASan+UBSan build and its suite without leak checks (the Mac's
 #   configuration); S4L the same binary's suite with LeakSanitizer on, where a leaking row exits 23 and is red for it;
-#   a red sanitizer row runs once more alone after both suites (both runs kept), as the inventory reruns a red suite.
+#   a red sanitizer row runs once more alone after both suites (both runs kept), as the inventory reruns a red suite,
+#   unless its only failure is the sanitizer's report exit (66 TSan, 23 LSan): those reports are the finding and repeat.
 # The load-sensitive legs (S5, S1) run alone; the TSan suite runs in three shards beside the ASan build and suite, whose
 # wall-clock budgets a sanitizer build reports instead of judging.
 # Usage, from a lane directory holding this script, run_official13.py, sanitizer_digest.py and inventory/ (a copy of
@@ -246,7 +247,8 @@ import json, pathlib, sys
 rows = []
 for path in sorted(pathlib.Path(sys.argv[1]).glob("suite*/result.json")):
     for name, row in json.loads(path.read_text()).get("results", {}).items():
-        if not row.get("pass") and not row.get("load_sensitive") and name not in rows:
+        report_exit = row.get("reason") in ("exit_code=66", "exit_code=23") and not row.get("fatal")
+        if not row.get("pass") and not row.get("load_sensitive") and not report_exit and name not in rows:
             rows.append(name)
 print(" ".join(rows))
 EOF
