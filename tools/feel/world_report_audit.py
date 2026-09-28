@@ -28,18 +28,21 @@ def audit(root):
         acknowledged = [int(value) for value in re.findall(r'\[net-world\] (?:tail|catch-up gate) [^\n]*\backnowledged=(\d+)', log)]
         rtt = [float(value) for value in re.findall(r'\[net-world\] (?:tail|catch-up gate) [^\n]*\brtt_ms=([\d.]+)', log)]
         peer_counters = {}
+        named_drops = {}
         for peer in ('host', 'client'):
             report = path / f'{peer}_report.json'
             peer_counters[peer] = list(counters(json.loads(report.read_text(encoding='utf-8-sig')))) if report.is_file() else []
             peer_log = path / peer / 'stdout.log'
             text = peer_log.read_text(encoding='utf-8-sig', errors='replace') if peer_log.is_file() else ''
+            named_drops[peer] = [line for line in text.splitlines() if '[net-lobby] catch-up report dropped' in line or
+                                 '[net-match] catch-up report refused by the wire:' in line]
             for sent, received, refused, dropped in re.findall(r' reports_sent=(\d+) reports_received=(\d+) reports_refused=(\d+) reports_dropped=(\d+)', text):
                 peer_counters[peer].append(dict(zip(('catch_up_reports_sent', 'catch_up_reports_received', 'catch_up_reports_refused', 'catch_up_reports_dropped'),
                                                     map(int, (sent, received, refused, dropped)))))
         drops = [row for peer in peer_counters.values() for row in peer if row.get('catch_up_reports_dropped', 0) or row.get('catch_up_reports_refused', 0)]
         rounds[name] = dict(acknowledged=acknowledged, rtt_ms=rtt, counters=peer_counters,
                             progress=bool(acknowledged and max(acknowledged) > min(acknowledged)),
-                            measured_rtt=any(value > 0 for value in rtt), drops=drops, evidence=str(log_path))
+                            measured_rtt=any(value > 0 for value in rtt), drops=drops, named_drops=named_drops, evidence=str(log_path))
     reasons = []
     if not all(row['progress'] for row in rounds.values()):
         reasons.append('a world round has no advancing host acknowledgement')
@@ -47,7 +50,7 @@ def audit(root):
         reasons.append('no host tail has a positive measured RTT')
     if not all(all(row['counters'].values()) for row in rounds.values()):
         reasons.append('a peer has no retained catch-up counters')
-    if any(row['drops'] for row in rounds.values()):
+    if any(row['drops'] or any(row['named_drops'].values()) for row in rounds.values()):
         reasons.append('a catch-up report was refused or dropped; inspect counters and the named route')
     return dict(passed=not reasons, reasons=reasons, rounds=rounds)
 
