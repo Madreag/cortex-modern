@@ -1221,6 +1221,8 @@ namespace RTE {
 		void DrainPendingSessionEventsLocked(bool atTickBoundary);
 		/// Keeps next-lobby packets until the rematch worker takes the link.
 		void QueueLobbyEvent(const NetTransportEvent& event);
+		/// Names the lobby events the full queue dropped since it last drained.
+		void NoteDroppedLobbyEvents(size_t kept);
 		/// Polls a finished session without touching the ended simulation; caller holds the lock.
 		void PumpCompletedSessionLocked();
 		/// Refuses Ready peers absent from the ended round; caller holds the lock.
@@ -1528,6 +1530,7 @@ namespace RTE {
 		std::vector<NetTransportEvent> m_PendingLobbyEvents;
 		size_t m_PendingLobbyBytes = 0;
 		bool m_PendingLobbyOverflow = false;
+		size_t m_PendingLobbyDropped = 0; //!< Lobby events dropped since the queue last drained.
 		bool m_LeftMatch = false;
 		//!< Steady ms of the match end that opened this rematch lobby; 0 when no lobby is waiting.
 		uint64_t m_CompletedLobbySinceMs = 0;

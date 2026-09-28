@@ -3923,6 +3923,7 @@ static std::string ResyncSaveName() {
 		events.swap(m_PendingLobbyEvents);
 		m_PendingLobbyBytes = 0;
 		m_PendingLobbyOverflow = false;
+		NoteDroppedLobbyEvents(events.size());
 		for (const NetTransportEvent& event: events) {
 			lobby.HandleTransportEvent(event, nowMs);
 		}
@@ -4977,7 +4978,14 @@ static std::string ResyncSaveName() {
 		catchUp.appliedThrough = std::max(catchUp.appliedThrough, ScenarioRunner::WorldCatchUpAppliedThrough());
 		// Each progress report carries the whole state of the replay: the newest one wins, so none waits behind a lost one.
 		if (catchUp.appliedThrough > catchUp.snapshotTick) {
-			(void)lobby.SendPayload(MakeJoinerCatchUpReport(), nullptr, NetTransportLane::BulkUnreliable);
+			std::string sendError;
+			if (lobby.SendPayload(MakeJoinerCatchUpReport(), &sendError, NetTransportLane::BulkUnreliable)) ++catchUp.reportsSent;
+			else if (catchUp.reportsRefused++ == 0) System::PrintDiagnosticLine("[net-match] catch-up report refused by the wire: " + sendError);
+			if (catchUp.appliedThrough >= catchUp.reportsLogged + 60) {
+				catchUp.reportsLogged = catchUp.appliedThrough;
+				System::PrintDiagnosticLine("[net-match] catch-up reports applied=" + std::to_string(catchUp.appliedThrough) + " sent=" + std::to_string(catchUp.reportsSent) +
+				                            " refused=" + std::to_string(catchUp.reportsRefused) + " datagrams=" + std::to_string(catchUp.tailDatagrams));
+			}
 		}
 	}
 
@@ -5707,6 +5715,7 @@ static std::string ResyncSaveName() {
 		polledLobby.swap(m_PendingLobbyEvents);
 		m_PendingLobbyBytes = 0;
 		m_PendingLobbyOverflow = false;
+		NoteDroppedLobbyEvents(polledLobby.size());
 		for (const NetTransportEvent& event: polledLobby) lobby.HandleTransportEvent(event, nowMs);
 		if (!polledLobby.empty()) m_InPlaceHeardMs = SteadyNowMs();
 		if (wire) {
@@ -6992,13 +7001,20 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::QueueLobbyEvent(const NetTransportEvent& event) {
-		if (m_PendingLobbyOverflow) return;
+		if (m_PendingLobbyOverflow) { ++m_PendingLobbyDropped; return; }
 		if (m_PendingLobbyEvents.size() >= 1024 || event.bytes.size() > 1024 * 1024 - m_PendingLobbyBytes) {
 			m_PendingLobbyOverflow = true;
+			++m_PendingLobbyDropped;
 			return;
 		}
 		m_PendingLobbyBytes += event.bytes.size();
 		m_PendingLobbyEvents.push_back(event);
+	}
+
+	void NetMatchService::NoteDroppedLobbyEvents(size_t kept) {
+		if (m_PendingLobbyDropped == 0) return;
+		System::PrintDiagnosticLine("[net-match] lobby event queue full: kept " + std::to_string(kept) + ", dropped " + std::to_string(m_PendingLobbyDropped) + " since the last pump");
+		m_PendingLobbyDropped = 0;
 	}
 
 	void NetMatchService::PumpCompletedSessionLocked() {

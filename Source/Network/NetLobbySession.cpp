@@ -630,6 +630,8 @@ namespace RTE {
 				{"messages_received", m_Stats.messagesReceived},
 				{"malformed_messages", m_Stats.malformedMessages},
 				{"ignored_session_packets", m_Stats.ignoredSessionPackets},
+				{"unbound_sender_packets", m_Stats.unboundSenderPackets},
+				{"unadmitted_world_packets", m_Stats.unadmittedWorldPackets},
 				{"config_packets_sent", m_Stats.configPacketsSent},
 				{"config_acks_received", m_Stats.configAcksReceived},
 				{"config_republishes", m_Stats.configRepublishes},
@@ -1240,7 +1242,14 @@ namespace RTE {
 				const auto sender = std::find_if(m_RemoteTransports.begin(), m_RemoteTransports.end(), [&event](const auto& entry) {
 					return entry.second == event.peerId;
 				});
-				if (sender == m_RemoteTransports.end()) return;
+				if (sender == m_RemoteTransports.end()) {
+					// A packet from a connection no slot is bound to is dropped; the first one per connection is named.
+					++m_Stats.unboundSenderPackets;
+					if (m_DropsNamed.insert({0, event.peerId}).second)
+						System::PrintDiagnosticLine("[net-lobby] dropped a packet from unbound connection=" + std::to_string(event.peerId) + " lane=" +
+						                            std::to_string(static_cast<int>(event.lane)) + " bytes=" + std::to_string(event.bytes.size()));
+					return;
+				}
 				m_LastReceiveMs = nowMs;
 				NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(event.bytes);
 				if (!decoded.ok) {
@@ -1265,7 +1274,13 @@ namespace RTE {
 				if (worldSender && m_Config.session) {
 					const auto ready = m_Config.session->GetReadyPeers();
 					const auto admitted = std::find_if(ready.begin(), ready.end(), [&](const auto& peer) { return peer.transportPeerId == event.peerId; });
-					if (admitted == ready.end()) return;
+					if (admitted == ready.end()) {
+						++m_Stats.unadmittedWorldPackets;
+						if (m_DropsNamed.insert({1, event.peerId}).second)
+							System::PrintDiagnosticLine("[net-lobby] dropped a world packet from unadmitted connection=" + std::to_string(event.peerId) + " slot=" +
+							                            std::to_string(sender->first) + " lane=" + std::to_string(static_cast<int>(event.lane)));
+						return;
+					}
 					sessionSender = static_cast<uint8_t>(admitted->assignedPeerId + 1);
 				} else if (worldSender) {
 					for (const auto& [peer, connection]: m_Config.remoteTransportPeerIds)
