@@ -4318,6 +4318,7 @@ static std::string ResyncSaveName() {
 				m_WorldJoin.NoteMatchConfigSent(session.connection);
 			}
 			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
+			if (INetTransport* wire = ActiveWireLocked()) m_WorldJoin.NoteTailLinkRtt(session.connection, wire->GetPeerPingMs(session.connection));
 			// A returning seat takes the base being captured for it, not the older one that capture replaces.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) {
 				std::string why = !m_WorldJoin.Image().IsValid() ? "no base yet" : m_PrivateImageTask.valid() ? "its base is being written" :
