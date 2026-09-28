@@ -5233,6 +5233,9 @@ static std::string ResyncSaveName() {
 		for (const auto& [peer, frame]: m_CatchUpCoordinator->GetPeerLeaveFrames()) if (peer != local && frame <= tick) config.initialPeerLeaves[peer] = frame;
 		for (const auto& [peer, hold]: m_CatchUpCoordinator->HeldTransactions()) if (peer != local && hold.cutoffFrame <= tick) config.initialSeatHolds[peer] = hold;
 		config.initialDelayChanges = m_CatchUpCoordinator->GetDelayChanges();
+		// The delays the lost host committed before this seat's hold are the round's too, its own seat's included: every seat that returns expects them.
+		for (const auto& [peer, changes]: m_Coordinator->GetDelayChanges())
+			for (const auto& [frame, delay]: changes) config.initialDelayChanges[peer].emplace(frame, delay);
 		if (listener) {
 			// The round's first frame past its input-delay prefix is the first it builds and the first its authority names: the round
 			// changes hands there. The lost host leaves there, the prefix before it replays under the lost host on every peer, and a
