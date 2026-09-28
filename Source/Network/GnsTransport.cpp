@@ -154,6 +154,8 @@ namespace RTE {
 					return k_nSteamNetworkingSend_Reliable;
 				case NetTransportLane::InputUnreliable:
 					return k_nSteamNetworkingSend_UnreliableNoDelay;
+				case NetTransportLane::BulkUnreliable:
+					return k_nSteamNetworkingSend_Unreliable;
 			}
 			return k_nSteamNetworkingSend_Reliable;
 		}

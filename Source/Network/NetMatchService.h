@@ -927,6 +927,18 @@ namespace RTE {
 		/// What a survivor that finds no other live member does: an announced leave ends its match, a lost host with a held
 		/// seat in the round is replaced by this peer so the held seats rejoin it, and a lost host with none is rejoined.
 		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool heldSeats);
+		/// Whether a held seat's host is gone: the host ended or timed out its link (the transport's verdict), or the seat heard nothing
+		/// at all from it for the round's own missing-frame timeout. Its own transport stopping is not the host's doing, and a seat told
+		/// to come back through the image has a host that answered.
+		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t silenceBoundMs);
+		/// Where a held seat's catch-up goes when its host is gone, from the match's successor order, the peers it can dial in that
+		/// order and the seats it knows are held. Returns the peers to dial; empty when this seat hosts the match itself.
+		static std::vector<uint8_t> HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
+		                                                const std::vector<uint8_t>& reachable, const std::set<uint8_t>& held);
+		/// Whether a held seat whose host is gone listens for the other held seats, from the same view plus the survivors known to have
+		/// left the match.
+		static bool HeldSeatListens(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer, const std::vector<uint8_t>& reachable,
+		                            const std::set<uint8_t>& held, const std::set<uint8_t>& departed);
 	private:
 		std::set<NetPeerId> m_SlowReturnersNoted; //!< Returners already told they keep catching up below the round's rate.
 		/// Host: ends one returner's rejoin and tells its client why, so it tries again instead of waiting.
@@ -958,8 +970,14 @@ namespace RTE {
 		void PumpWorldJoinLobby(uint64_t nowMs);
 		/// Host: a held seat's player reporting the tick its own state stands at gets the committed tail from there on its live connection.
 		void OpenInPlaceRejoinLocked(const NetLobbySession::WorldJoinReport& report, const std::vector<NetSessionPeerInfo>& readyPeers, uint64_t nowMs);
-		/// Held client: whether the match names a successor this seat could rejoin when its host is gone.
-		bool HeldSeatHasSuccessorLocked() const;
+		/// Held client: the other survivors it knows are held, at its replay or by the stopped round.
+		std::set<uint8_t> HeldSurvivorsLocked() const;
+		/// Held client, host gone: keeps only the routes its catch-up moves to; returns whether this seat hosts the match itself.
+		bool HeldSeatHostsLocked();
+		/// Held client: opens the match's published listener for the held seats that may dial this one.
+		bool OpenHeldListenerLocked();
+		/// Held client: closes that listener once another host took the seat.
+		void CloseHeldListenerLocked();
 		/// Held client: its host is gone, so its catch-up moves to the next successor on a new connection with the world it holds.
 		/// Returns whether a successor is being tried; otherwise the seat takes the image path.
 		bool BeginInPlaceMoveLocked(uint64_t nowMs);
@@ -977,6 +995,9 @@ namespace RTE {
 		/// Held client: its host is gone and nobody else is left, so it plays the round on from its own committed state with the
 		/// AI in every other seat and its own hold ended. Returns whether the round runs on it.
 		bool HostAloneFromOwnStateLocked();
+		/// Held client hosting from its own state: takes the host's admission, lobby and rejoin plane on the round's listener, so the
+		/// other held seats rejoin it. Returns whether they can.
+		bool OpenHeldHostPlaneLocked(uint64_t handoverFrame, uint8_t lostHost);
 		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error);
 		/// Restarts the silence windows of a session handed to a worker thread.
 		void NoteSessionHandedToWorker(NetSession& session);
@@ -1613,8 +1634,11 @@ namespace RTE {
 		bool m_InPlaceCatchUp = false;   //!< Held client: the catch-up replays on its own state over its live connection.
 		uint64_t m_InPlaceAskedMs = 0;   //!< When it last asked the host for its tail.
 		uint64_t m_InPlaceSinceMs = 0;   //!< When it began; a host that never serves it sends it to the image path.
-		uint64_t m_InPlaceHeardMs = 0;   //!< When its tail last moved.
+		uint64_t m_InPlaceHeardMs = 0;   //!< When its host's link last carried anything to it.
 		uint64_t m_InPlaceProgressApplied = 0;
+		uint64_t m_InPlaceProgressLogged = 0; //!< The applied frame its progress was last logged at.
+		uint64_t m_HeldHostStatusAtMs = 0; //!< Held seat hosting: when its status turns from the handover to its hosting.
+		static constexpr uint64_t c_HeldHostArrangingMs = 1500; //!< How long a held seat that hosts reads the loss as a handover.
 		static constexpr uint64_t c_InPlaceHostSilenceMs = 3000; //!< A host that feeds a held seat nothing this long is gone.
 		uint64_t m_HandoverFrame = 0; //!< The first frame the round committed under the authority that took it over here; 0 before a handover.
 		struct InPlaceRoute {
@@ -1622,6 +1646,11 @@ namespace RTE {
 			NetMatchMigrationPeer endpoint;
 		};
 		std::deque<InPlaceRoute> m_InPlaceRoutes; //!< Held client: the successors its catch-up has yet to try.
+		std::unique_ptr<INetTransport> m_HeldListener; //!< Held client, first survivor: the listener it opens at its verdict while it dials the others.
+		std::vector<NetTransportEvent> m_HeldListenerEvents; //!< What that listener heard before a plane took it over, in order.
+		bool m_HeldDialSeen = false; //!< A held seat's own session reached that listener.
+		bool m_HeldDialNoted = false; //!< The dial that came while this seat's host still spoke is said once.
+		static constexpr uint64_t c_HeldDialProofSilenceMs = 1000; //!< A live host acks each held seat every tick; this long without it is no live host.
 		std::unique_ptr<INetTransport> m_InPlaceMoveTransport; //!< Held client: the new connection while the successor admits it.
 		uint8_t m_InPlaceMoveHost = 0; //!< Held client: the successor being dialed; 0 when no move is under way.
 		std::string m_InPlaceMoveAddress;

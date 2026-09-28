@@ -186,6 +186,16 @@ namespace RTE {
 		uint64_t closingAnchorApplied = 0, closingAnchorHorizon = 0; //!< The report its closing rate on the round is measured from.
 		double closingRate = 0.0; //!< Frames its replay gains on the round per frame the round commits, once measured.
 		bool closingMeasured = false;
+		uint64_t activationTrailFrames = 0; //!< How far it trailed the round when its activation was announced: its return leaves it that long.
+		uint32_t windowsWithoutProgress = 0; //!< Closing windows its replay stood still through, in a row.
+		struct TailDatagram { uint64_t first = 0, last = 0, firstSentMs = 0, sentMs = 0; bool repeated = false; };
+		std::deque<TailDatagram> tailInFlight; //!< Tail datagrams sent and not yet passed by its replay, lowest frames first.
+		double tailAckRttMs = 0; //!< The shortest time from a datagram's first send to the report that passes it; 0 until measured.
+		uint32_t tailLinkRttMs = 0; //!< The link's own round trip to the returner, as its transport measures it; 0 until known.
+		uint64_t tailSentNew = 0, tailSentRepeat = 0, tailSentResend = 0, tailSentBytes = 0, tailRefused = 0, tailLoggedMs = 0; //!< The tail's traffic, logged every two seconds.
+		const char* catchUpGate = nullptr; //!< What the last catch-up report met on its way to an activation.
+		const char* catchUpGateLogged = nullptr; //!< The gate last written to the log, and the horizon it was written at.
+		uint64_t catchUpGateLoggedFrame = 0;
 		uint8_t spectatorLobbyPeer = 0;   //!< Non-member lobby id in [32, 47]; 0 if none remains.
 		std::string refusal;              //!< Why the bootstrap failed; empty while it is alive.
 	};
@@ -359,6 +369,17 @@ namespace RTE {
 	inline constexpr uint64_t c_NetWorldPaceProofTicks = 120;
 	/// The round frames a returner's closing rate is measured over.
 	inline constexpr uint64_t c_NetWorldClosingWindowFrames = 20;
+	/// Closing windows a returner's replay may stand still through before it is taken for parked and told so.
+	inline constexpr uint32_t c_NetWorldNoProgressWindows = 3;
+	/// A tail datagram's whole frames: few enough that one lost packet costs only them.
+	inline constexpr size_t c_NetWorldTailDatagramFrames = 4;
+	inline constexpr uint64_t c_NetWorldTailDatagramBytes = 1000;
+	/// Every tail datagram goes a second time this long after its first, so one lost packet costs its frames nothing.
+	inline constexpr uint64_t c_NetWorldTailRepeatMs = 20;
+	/// How many of the lowest unpassed tail datagrams go again when their resend time runs out.
+	inline constexpr size_t c_NetWorldTailResendDepth = 2;
+	/// The datagrams in flight to one returner: a replay far behind passes them late, and new frames must not wait on it.
+	inline constexpr size_t c_NetWorldTailInFlightLimit = 8192;
 	/// How long a returning seat may replay without showing headroom before its rejoin is ended and retried.
 	inline constexpr uint64_t c_NetWorldHeadroomWaitMs = 30000;
 	/// World-join plane schema on the offer, the transition and the membership report.
@@ -407,6 +428,7 @@ namespace RTE {
 	/// The joiner's own bootstrap state: the image it restored, the tail it holds and the E it was given.
 	struct NetWorldCatchUpClient {
 		bool active = false;
+		uint64_t tailDatagrams = 0, tailFramesKept = 0, tailFramesRepeated = 0; //!< What its tail brought, for its progress line.
 		bool privateMatch = false;
 		NetMatchConfig checkpointConfig;
 		std::string sideState;
@@ -438,6 +460,8 @@ namespace RTE {
 	inline constexpr uint64_t c_NetWorldTailTransferId = 0x5441494CULL;
 	/// A tail chunk leads with the round its frames belong to, so a chunk of an earlier round is never replayed into a later one.
 	inline constexpr size_t c_NetWorldTailRoundBytes = 8;
+	/// A frame that does not fit one lobby chunk cannot be a datagram: it goes on the ordered lane in pieces.
+	inline constexpr uint64_t c_NetWorldTailDatagramFrameLimit = NetLobbyProtocol::c_MaxStateChunkBytes - c_NetWorldTailRoundBytes - 4;
 	NetLobbyStateChunk MakeWorldTailChunk(uint64_t round, const std::vector<uint8_t>& slice);
 	/// The round a tail chunk names; false for a chunk too short to carry one.
 	bool ParseWorldTailChunkRound(const NetLobbyStateChunk& chunk, uint64_t& round);
@@ -547,6 +571,8 @@ namespace RTE {
 		bool BeginInPlaceRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, uint64_t heldThrough, std::string* error = nullptr);
 		bool NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough);
 		void NoteRejoinLinkFit(NetPeerId connection, bool fits);
+		/// The session whose catch-up gate is due in the log (a change, or a second of the round since); gate, when set, is the one its report met first.
+		const NetWorldJoinSession* TakeCatchUpGateToLog(NetPeerId connection, const char* gate, uint64_t nowFrame);
 		bool IsConfigured() const { return m_Identity.IsValid() || m_PrivateRound != 0; }
 		bool IsPrivateMatch() const { return m_PrivateRound != 0; }
 		const NetWorldIdentity& Identity() const { return m_Identity; }
@@ -584,6 +610,16 @@ namespace RTE {
 		bool NoteTransferProgress(NetPeerId connection, uint16_t ackedChunks, uint16_t totalChunks);
 		bool NoteDeliveredThrough(NetPeerId connection, uint64_t frame);
 		bool NextTailChunk(NetPeerId connection, std::vector<uint8_t>& chunk);
+		/// The next tail datagram due to a catching-up connection, packed as whole frames: the lowest one its replay has not passed
+		/// within its resend time, or the frames after the last one sent. Returns false when none is due.
+		/// large: the next frame is too large for a datagram, or a batch of them is on its way in pieces (NextTailChunk carries it).
+		bool NextTailDatagram(NetPeerId connection, uint64_t nowMs, std::vector<uint8_t>& packed, bool* large = nullptr);
+		/// Retires the datagrams a connection's replay has passed and measures their round trip.
+		void AcknowledgeTailDatagrams(NetPeerId connection, uint64_t nowMs);
+		/// Counts a tail datagram the transport would not take.
+		void NoteTailDatagramRefused(NetPeerId connection);
+		/// Notes the link's own round trip to a returner: the tail's resends are timed on it, not on a replay that may trail its arrivals.
+		void NoteTailLinkRtt(NetPeerId connection, uint32_t rttMs);
 		void NoteTailChunkSent(NetPeerId connection, size_t bytes);
 		bool NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough);
 		/// Records that this bootstrap has been sent the match config, so a retried transfer does not

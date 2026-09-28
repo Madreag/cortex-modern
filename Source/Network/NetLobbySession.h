@@ -166,8 +166,8 @@ namespace RTE {
 		/// Sends queued chunks after Started; Tick itself stops once the lobby is terminal.
 		void PumpOutgoingChunks();
 		void HandleTransportEvent(const NetTransportEvent& event, uint64_t nowMs);
-		bool SendPayloadTo(uint8_t peerId, const NetLobbyPayload& payload, std::string* error = nullptr);
-		bool SendPayload(const NetLobbyPayload& payload, std::string* error = nullptr);
+		bool SendPayloadTo(uint8_t peerId, const NetLobbyPayload& payload, std::string* error = nullptr, NetTransportLane lane = NetTransportLane::ControlReliable);
+		bool SendPayload(const NetLobbyPayload& payload, std::string* error = nullptr, NetTransportLane lane = NetTransportLane::ControlReliable);
 		const std::vector<uint8_t>& PeekReceivedState() const { return m_ReceivedState; }
 		uint64_t GetOutgoingStateId() const { return m_OutgoingStateId; }
 		uint16_t GetOutgoingChunkCount() const { return m_OutgoingChunkCount; }
@@ -186,6 +186,8 @@ namespace RTE {
 		/// The committed tail bytes received so far. With a round, only that round's are taken: the others are dropped and each
 		/// dropped round is listed with its byte count.
 		std::vector<uint8_t> TakePendingTailBytes(std::optional<uint64_t> round = std::nullopt, std::vector<std::pair<uint64_t, size_t>>* dropped = nullptr);
+		/// Tail datagrams from the unreliable lane, each whole frames, in arrival order; another round's are dropped and named.
+		std::vector<std::vector<uint8_t>> TakePendingTailDatagrams(std::optional<uint64_t> round = std::nullopt, std::vector<std::pair<uint64_t, size_t>>* dropped = nullptr);
 		void SetStartFrame(uint64_t startFrame) { m_StartFrame = startFrame; }
 		bool HasCompleteStateTransfer() const { return m_IncomingStateComplete; }
 		/// Gets whether any remote still lacks a chunk of the queued state file.
@@ -227,7 +229,7 @@ namespace RTE {
 		bool m_MigrationRequested = false;
 		bool m_HostLost = false;
 		uint64_t m_LastMigrationRequestMs = UINT64_MAX;
-		bool SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error = nullptr, bool* congested = nullptr);
+		bool SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error = nullptr, bool* congested = nullptr, NetTransportLane lane = NetTransportLane::ControlReliable);
 		bool Send(const NetLobbyPayload& payload, std::string* error = nullptr); // Broadcast to every remote transport.
 		void SendConfigIfDue(uint64_t nowMs);
 		void SendPeerState();
@@ -322,6 +324,7 @@ namespace RTE {
 		std::optional<uint64_t> m_RoundEndedRecord;
 		std::vector<NetTransportEvent> m_EventsAfterRoundEnded;
 		std::deque<std::pair<uint64_t, std::vector<uint8_t>>> m_PendingTail; //!< Received tail bytes, one run per round in arrival order.
+		std::deque<std::pair<uint64_t, std::vector<uint8_t>>> m_PendingTailDatagrams; //!< Received tail datagrams with their rounds.
 		NetLobbyStats m_Stats;
 	};
 

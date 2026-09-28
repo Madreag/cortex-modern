@@ -2238,6 +2238,13 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? s_LockstepCoordinator->GetStats().effectiveStartFrame : 0;
 	}
 
+	uint64_t ScenarioRunner::GetLockstepCanonicalStartFrame() {
+		NetLockstepPlaneGuard plane;
+		if (!s_LockstepCoordinator || !s_LockstepCoordinator->IsRunning()) return 0;
+		// A round that goes on with a running match keeps the routes that match committed: its input-delay prefix is no round start.
+		return s_LockstepCoordinator->GetConfig().continuesMatch ? s_LockstepCoordinator->GetConfig().startFrame : s_LockstepCoordinator->GetStats().effectiveStartFrame;
+	}
+
 	void ScenarioRunner::PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out, uint64_t canonicalTick) {
 		out.clear();
 		const uint64_t now = canonicalTick;

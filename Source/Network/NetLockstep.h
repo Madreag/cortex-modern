@@ -434,6 +434,8 @@ namespace RTE {
 		uint8_t frameRedundancyTicks = 1;
 		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
 		bool joinsRunningRound = false;
+		/// A round a peer takes over from its own committed state: its first frames go on with the match, so no canonical start runs in them.
+		bool continuesMatch = false;
 		std::optional<NetHash32> originalRoundConfigHash;
 		bool adaptiveInputDelay = false;
 		double simTickMs = 0;
@@ -989,7 +991,8 @@ namespace RTE {
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
-		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr);
+		/// trailFrames: how far the returner's replay trails the round at the round's pace; its first required frame comes that much later.
+		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { NET_PLANE_CHECK(); HandleEvent(event, nowMs); }
@@ -1137,6 +1140,10 @@ namespace RTE {
 		/// A transport fault starts agreement without choosing a simulation departure.
 		bool BeginHostMigration(uint64_t nowMs);
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);
+		/// Whether the host's end of the round is here: its Complete stop waits on this peer's ticks, or this peer ran its last frame.
+		bool HostEndOfRoundReached() const;
+		/// Ends the round on the host's close once its end is here, as its Complete stop would.
+		void CompleteAtHostClose();
 		bool IsLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const;
 		/// The peer that produces the actor's frames under the match's ownership policy, leaves applied; every peer resolves it identically.
 		/// Read at the last delivered frame, or at atFrame for a write that lands there.
@@ -1259,6 +1266,7 @@ namespace RTE {
 		friend bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
+		friend bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
@@ -1711,6 +1719,8 @@ namespace RTE {
 		static constexpr size_t c_AuthorityGapSamples = 256;
 		uint32_t m_AuthorityLongestGapMs = 0; //!< Client: the longest gap the host left while it played this round.
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
+		std::map<uint8_t, std::pair<NetPeerId, uint64_t>> m_HeldPeerLinks; //!< Host: each held seat's link it still talks on, and when the hold took it.
+		uint64_t m_LastHeldLinkMs = 0; //!< Host: when it last told its held seats it is alive.
 		uint64_t m_OwnFramesSent = 0; //!< Frames of its own this peer has sent.
 		uint64_t m_LivenessFramesSeen = 0; //!< Host: the count its liveness last saw move.
 		uint64_t m_LivenessQuietSinceMs = 0; //!< Host: since when it has sent no frame of its own.
