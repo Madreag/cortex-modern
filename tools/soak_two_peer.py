@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import sys
+from feel.report import return_hold_violations
 import threading
 import time
 from pathlib import Path
@@ -324,6 +325,12 @@ def main(argv: list[str] | None = None) -> int:
               "hashes_equal": hashes_equal, "fullstate": fullstate is None or bool(fullstate.get("passed")),
               "holds": holds >= options.holds, "rejoins": rejoins >= options.holds, "no_split_brain": split == 0,
               "autosaves": autosaves >= max(0, owed), "memory_sampled": minutes_sampled >= int(options.minutes)}
+    return_holds = {peer: return_hold_violations((root / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
+                    for peer in ('host', 'client')}
+    checks['no_hold_after_return'] = not any(return_holds.values())
+    if options.host_stall:
+        checks['host_stalls_fired'] = count(root / 'host/stdout.log', '[net-test] live stall frame=') == len(options.host_stall)
+        checks['host_returned'] = count(root / 'host/stdout.log', '[net-match] seat-reclaimed peer=1') >= len(options.host_stall)
     if options.stall_each_round:
         checks["each_round_caught_up"] = each_round >= rounds and in_place >= rounds
     first = next((row for row in samples if row.get("host") and row.get("client")), None)
@@ -343,6 +350,7 @@ def main(argv: list[str] | None = None) -> int:
     private_mb = {peer: census_private(root / peer / "stdout.log") for peer in ("host", "client")}
     clean_ticks = {peer: terrain_event_ticks(root, peer, "clean") for peer in ("host", "client")} if options.terrain_events else None
     result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
+              "holds_after_returns": return_holds,
               "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
               "autosaves_published": autosaves, "autosaves_owed": owed,
               "each_round_stalls": each_round, "in_place_catch_ups": in_place, "rounds": rounds,
