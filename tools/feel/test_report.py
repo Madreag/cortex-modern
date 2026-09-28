@@ -265,6 +265,15 @@ class ReportTests(unittest.TestCase):
             self.assertFalse(gates['passed'])
             self.assertTrue(all(case['reasons'] for case in gates['cases'].values()))
 
+    def test_return_hold_check_uses_the_committed_round_and_every_seat(self):
+        log = ('[net-lockstep] start round=1 frame=1\n'
+               '[net-match] seat-reclaimed peer=2 frame=300\n'
+               '[net-match] hold peer=1 frame=307 AI in control\n'
+               '[net-match] hold peer=2 frame=401 AI in control\n'
+               '[net-lockstep] start round=2 frame=1\n'
+               '[net-match] hold peer=2 frame=320 AI in control\n')
+        self.assertEqual(report.return_hold_violations(log), [dict(round=1, held_peer=1, hold_tick=307, returned_peer=2, return_tick=300)])
+
     def test_correction_uses_matching_target_and_strict_four_pixel_boundary(self):
         forecast = dict(_line=3, committed_tick=9, target_tick=10, actor=dict(uid=7, x=100, y=100))
         committed = [dict(tick=10, wall_ms=170, scene_width=1000, scene_height=1000, wraps_x=False, wraps_y=False)]

@@ -395,6 +395,21 @@ def peer_id_of(report_path):
     return int(value) if isinstance(value, int) and value > 0 else None
 
 
+def return_hold_violations(log):
+    rounds = defaultdict(lambda: dict(holds=[], returns=[]))
+    current = 0
+    for line in log.splitlines():
+        if found := re.search(r'\[net-lockstep\] start round=(\d+)', line):
+            current = int(found[1])
+        if found := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', line):
+            rounds[current]['holds'].append(tuple(map(int, found.groups())))
+        if found := re.search(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', line):
+            rounds[current]['returns'].append(tuple(map(int, found.groups())))
+    return [dict(round=round_id, held_peer=peer, hold_tick=tick, returned_peer=returned, return_tick=back)
+            for round_id, events in rounds.items() for peer, tick in events['holds'] for returned, back in events['returns']
+            if 0 < tick - back <= 100]
+
+
 def item9a_gates(run, peer='host', rows=None):
     run = Path(run)
     raw = record_path(run / peer / 'feel/raw.jsonl')
@@ -510,8 +525,7 @@ def item9a_gates(run, peer='host', rows=None):
         same = held is not None and all(tick in host_hashes and host_hashes.get(tick) == survivor_hashes.get(tick) for tick in range(held, compare_through + 1))
         pins['item9a_ai_takeover_hash'] = pin(same, 'every committed hash from hold through rejoin equals on both survivors', same,
             [host_path, survivor_path], dict(first_tick=held, last_tick=compare_through), available=bool(host_hashes) and bool(survivor_hashes))
-        reholds = [(seat, tick, returned_seat, returned_tick) for seat, tick in holds for returned_seat, returned_tick in returns
-                   if 0 < tick - returned_tick <= 100]
+        reholds = return_hold_violations(log)
         pins['item9a_no_rehold'] = pin(reholds, 'no seat is held within 100 frames after any return', not reholds, [log_path])
     return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds),
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
