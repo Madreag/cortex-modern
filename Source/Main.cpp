@@ -1127,6 +1127,39 @@ static uint64_t s_paceSimTicks = 0;
 static long long s_paceSimUs = 0;
 static long long s_paceUpdateUs = 0;
 static long long s_paceDrawUs = 0;
+static long long s_pacePreviewUs = 0; //!< The draw's share spent in the local prediction preview.
+static long long s_paceInterfaceUs = 0; //!< The draw's share spent on input, the menus and the activity's render update.
+static uint64_t s_paceFramesDrawn = 0; //!< Frames the presentation cap let through.
+static long long s_paceFrameDrawUs = 0; //!< Time spent drawing and presenting those frames.
+static long long s_paceMaxDrawUs = 0; //!< The longest single iteration's draw since the previous census line.
+
+// The loop pace since the previous memory census line, with the draw split where it spends its time.
+static std::string PaceCensusSinceLast() {
+	struct Mark { uint64_t iterations = 0, ticks = 0; long long simUs = 0, updateUs = 0, drawUs = 0, previewUs = 0, interfaceUs = 0, waitUs = 0, trimmedTicks = 0; uint64_t previews = 0, framesDrawn = 0; long long frameDrawUs = 0; };
+	static Mark last;
+	const Mark now{s_paceIterations, s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs, s_pacePreviewUs, s_paceInterfaceUs, ScenarioRunner::GetLockstepWaitUs(), g_TimerMan.GetPaceTrimmedTicks(), LocalPrediction::GetPreviewCount(), s_paceFramesDrawn, s_paceFrameDrawUs};
+	// A new round restarts the counters.
+	if (now.iterations < last.iterations || now.ticks < last.ticks) last = Mark{};
+	const double ticks = static_cast<double>(std::max<uint64_t>(1, now.ticks - last.ticks));
+	const long long wallUs = (now.updateUs - last.updateUs) + (now.drawUs - last.drawUs);
+	// Per simulation tick: an idle iteration that neither simulates nor draws would dilute a per-iteration average.
+	std::ostringstream out;
+	out << std::fixed << std::setprecision(3) << " pace: iterations=" << now.iterations - last.iterations << " sim_ticks=" << now.ticks - last.ticks
+	    << " wall_tps=" << (wallUs > 0 ? static_cast<double>(now.ticks - last.ticks) * 1000000.0 / static_cast<double>(wallUs) : 0.0)
+	    << " sim_ms_per_tick=" << static_cast<double>(now.simUs - last.simUs) / 1000.0 / ticks
+	    << " update_ms_per_tick=" << static_cast<double>(now.updateUs - last.updateUs) / 1000.0 / ticks
+	    << " draw_ms_per_tick=" << static_cast<double>(now.drawUs - last.drawUs) / 1000.0 / ticks
+	    << " preview_ms_per_tick=" << static_cast<double>(now.previewUs - last.previewUs) / 1000.0 / ticks
+	    << " interface_ms_per_tick=" << static_cast<double>(now.interfaceUs - last.interfaceUs) / 1000.0 / ticks
+	    << " net_wait_ms=" << (now.waitUs - last.waitUs) / 1000 << " previews=" << now.previews - last.previews
+	    << " trimmed_ms=" << static_cast<double>(now.trimmedTicks - last.trimmedTicks) * 1000.0 / static_cast<double>(g_TimerMan.GetTicksPerSecond())
+	    << " mspsu_average=" << g_PerformanceMan.GetMSPSUAverage() << " frames_drawn=" << now.framesDrawn - last.framesDrawn
+	    << " ms_per_frame_drawn=" << static_cast<double>(now.frameDrawUs - last.frameDrawUs) / 1000.0 / static_cast<double>(std::max<uint64_t>(1, now.framesDrawn - last.framesDrawn))
+	    << " max_iteration_draw_ms=" << static_cast<double>(s_paceMaxDrawUs) / 1000.0 << " preview_phase_ms=" << LocalPrediction::DescribePhasesSinceLastCall();
+	s_paceMaxDrawUs = 0;
+	last = now;
+	return out.str();
+}
 // Rollback fidelity probe: capture at tick T, record K hashed ticks, restore + rewind,
 // re-run the SAME ticks, compare. Green = the restore layer reproduces the sim byte-exactly.
 static long long s_rbProbeAtTick = 0;
@@ -4003,6 +4036,7 @@ static void PollStallEventsForCapture() {
 
 static void DrawFrameWithPreviews() {
 	if (!FrameMan::FeelBeginDraw()) return;
+	const long long drawBeganUs = g_TimerMan.GetAbsoluteTime();
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	g_SceneMan.SetRenderDrawContext(true);
@@ -4043,6 +4077,8 @@ static void DrawFrameWithPreviews() {
 		g_WindowMan.UploadFrame();
 	}
 	g_FrameMan.FeelAfterPresent();
+	++s_paceFramesDrawn;
+	s_paceFrameDrawUs += g_TimerMan.GetAbsoluteTime() - drawBeganUs;
 	if (FrameRecorder::Instance().Enabled()) {
 		std::string screen;
 		const std::string serviceState = [&screen] {
@@ -6445,6 +6481,10 @@ void RunGameLoop() {
 			s_paceSimUs = 0;
 			s_paceUpdateUs = 0;
 			s_paceDrawUs = 0;
+			s_pacePreviewUs = 0;
+			s_paceInterfaceUs = 0;
+			s_paceFramesDrawn = 0;
+			s_paceFrameDrawUs = 0;
 			ScenarioRunner::ResetLockstepWaitUs();
 			g_TimerMan.ResetPaceCounters();
 		}
@@ -7136,7 +7176,8 @@ void RunGameLoop() {
 				std::ostringstream line;
 				line << "[mem-census] tick=" << simTick << ProcessHeapCensus() << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << g_LuaMan.GetTotalHeapBytes()
 				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << CheckpointCow::Get().Cache().Census()
-				     << " movable: " << g_MovableMan.Census() << ' ' << Atom::SampledConstructionStacks() << " audio: " << g_AudioMan.Census() << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus();
+				     << " movable: " << g_MovableMan.Census() << ' ' << Atom::SampledConstructionStacks() << " audio: " << g_AudioMan.Census() << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus()
+				     << PaceCensusSinceLast();
 				System::PrintDiagnosticLine(line.str());
 			}
 			if (s_scriptedLeaveDue) {
@@ -8066,7 +8107,9 @@ void RunGameLoop() {
 		std::optional<NetLockstepPlane::Window> drawWindow;
 		drawWindow.emplace("frame draw");
 		FrameMan::FeelBeforePreview();
+		const long long previewStartTime = g_TimerMan.GetAbsoluteTime();
 		LocalPrediction::RunPreview();
+		const long long interfaceStartTime = g_TimerMan.GetAbsoluteTime();
 
 		{
 			RandomGenerator* prevSimRNG = t_simRNGOverride;
@@ -8083,6 +8126,7 @@ void RunGameLoop() {
 			g_SceneMan.SetRenderDrawContext(false);
 			t_simRNGOverride = prevSimRNG;
 		}
+		const long long frameDrawStartTime = g_TimerMan.GetAbsoluteTime();
 		if (!freeRunLockstep || NetMatchScreenshotDue()) {
 			DrawFrameWithPreviews();
 		}
@@ -8100,6 +8144,9 @@ void RunGameLoop() {
 			++s_paceIterations;
 			s_paceUpdateUs += updateTotalTime;
 			s_paceDrawUs += drawTotalTime;
+			s_pacePreviewUs += interfaceStartTime - previewStartTime;
+			s_paceInterfaceUs += frameDrawStartTime - interfaceStartTime;
+			s_paceMaxDrawUs = std::max(s_paceMaxDrawUs, drawTotalTime);
 		}
 		FrameMan::FeelEndIteration(s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs);
 	}

@@ -1269,6 +1269,7 @@ namespace RTE {
 		friend bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+		friend bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
 		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
 		friend bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
 		friend bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
