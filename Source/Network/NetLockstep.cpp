@@ -3312,8 +3312,20 @@ namespace RTE {
 		m_PendingCompleteStop.reset();
 		m_Stats.nextFrame = GetResumeFrame();
 		m_Stats.timeoutReason.clear();
-		std::cout << "[net-match] host lost; collecting surviving peers at applied frame " << (GetResumeFrame() > 0 ? GetResumeFrame() - 1 : 0) << std::endl;
+		std::cout << "[net-match] host lost; collecting surviving peers at applied frame " << (GetResumeFrame() > 0 ? GetResumeFrame() - 1 : 0) << " final_frame=" << m_FinalFrame << std::endl;
 		return true;
+	}
+
+	bool NetLockstepCoordinator::HostEndOfRoundReached() const {
+		return m_PendingCompleteStop.has_value() || m_Stats.nextFrame > m_FinalFrame;
+	}
+
+	void NetLockstepCoordinator::CompleteAtHostClose() {
+		m_Stats.timeoutReason = "Complete:" + (m_PendingCompleteStop ? m_PendingCompleteStop->message : std::string("the round reached its last frame"));
+		std::cout << "[net-match] the host closed after ending the round at frame " << (m_PendingCompleteStop ? m_PendingCompleteStop->frame : m_FinalFrame + 1)
+		          << "; the round ends here at applied frame " << (m_Stats.nextFrame > 0 ? m_Stats.nextFrame - 1 : 0) << std::endl;
+		m_PendingCompleteStop.reset();
+		m_State = NetLockstepState::Stopped;
 	}
 
 	bool NetLockstepCoordinator::BeginHostMigrationAfterHeal(uint64_t nowMs) {
@@ -4774,6 +4786,8 @@ namespace RTE {
 		m_DroppedSeatResolutions.clear();
 		m_DroppedAtMs.clear();
 		m_LastHoldHeartbeatMs = 0;
+		m_HeldPeerLinks.clear();
+		m_LastHeldLinkMs = 0;
 		m_RequirePublishedStart = m_Config.requirePublishedStart;
 		m_PeerStartupPublished.clear();
 		m_StartupLinksLost.clear();
@@ -5387,6 +5401,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::NoteInPlaceReturn(uint8_t peerId) {
 		NET_PLANE_CHECK();
+		// Its catch-up is open: it has the hold, and the return's own traffic carries it from here.
+		m_HeldPeerLinks.erase(peerId);
 		if (!m_AiHeldSeats.contains(peerId)) return;
 		m_Stats.peers[peerId].startParkMs = 0;
 		m_Stats.peers[peerId].returnsInPlace = true;
@@ -5646,6 +5662,7 @@ namespace RTE {
 						hold.phase = NetTimingPhase::HoldAtFrame;
 						std::vector<uint8_t> bytes;
 						if (NetLockstepCodec::Encode({hold}, bytes)) (void)m_Transport->Send(link->second, NetTransportLane::ControlReliable, bytes);
+						m_HeldPeerLinks[peer] = {link->second, m_TimingNowMs};
 					}
 				ApplyPeerLeave(peer, timing.applyFrame, "slow player: AI takeover", m_TimingNowMs, false, false, true);
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
@@ -5777,7 +5794,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLockstepCoordinator::SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error) {
+	bool NetLockstepCoordinator::SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error, uint64_t trailFrames) {
 		NET_PLANE_CHECK();
 		if (!IsRunning() || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || !HasHeldAISeat(peerId) ||
 		    peerId == 0 || peerId > 4 || transport == c_InvalidNetPeerId || incarnation <= m_Config.peerIncarnations[peerId] ||
@@ -5796,6 +5813,8 @@ namespace RTE {
 		// A seat that catches up in place activates from the committed tail, a trip behind the round's inputs: its first required frame is a link later.
 		if (const NetLockstepPeerStats& link = m_Stats.peers[peerId]; link.returnsInPlace && std::isfinite(m_Config.simTickMs) && m_Config.simTickMs > 0)
 			timing.neutralThroughFrame += static_cast<uint64_t>(std::ceil((static_cast<double>(link.pingMs) + link.jitterMs) / m_Config.simTickMs)) + 1;
+		// A returner at the round's pace reaches its reclaim frame as late as it trails the round.
+		timing.neutralThroughFrame += trailFrames;
 		timing.delayFrames = InputDelayAt(peerId, frame); timing.heldPeers = static_cast<uint8_t>(1U << (peerId - 1));
 		timing.requiredPeers = static_cast<uint8_t>(1U << (GetHostPeerId() - 1)); timing.seatIncarnations[peerId - 1] = incarnation;
 		m_RemoteTransports[peerId] = transport;
@@ -9628,6 +9647,7 @@ namespace RTE {
 				}
 				break;
 			case NetTransportEventType::PeerDisconnected: {
+				std::erase_if(m_HeldPeerLinks, [&](const auto& held) { return held.second.first == event.peerId; });
 				uint8_t lockstepPeer = 0;
 				for (const auto& [peerId, transportId]: m_RemoteTransports) {
 					if (transportId == event.peerId) {
@@ -9641,6 +9661,11 @@ namespace RTE {
 					m_PeerLeaveFrames[m_Config.localPeerId] = m_Stats.nextFrame;
 					m_Stats.timeoutReason = "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
 					m_State = NetLockstepState::Stopped;
+					break;
+				}
+				// A host that ended the round, or closes after this peer's last frame, leaves no match to take over.
+				if (lockstepPeer == GetHostPeerId() && HostEndOfRoundReached()) {
+					CompleteAtHostClose();
 					break;
 				}
 				if (lockstepPeer == GetHostPeerId() && BeginHostMigration(nowMs))
@@ -11122,6 +11147,7 @@ namespace RTE {
 			}
 			if (!m_Playback) for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (reclaim.activationFrame == ready.frame) {
 				auto& commands = m_Config.localPeerId == GetHostPeerId() ? ready.localCommands : ready.remoteCommands;
+				std::cout << "[net-lockstep] return of peer " << static_cast<int>(peer) << " rides frame " << ready.frame << std::endl;
 				commands.push_back(NetGameCommand{GetHostPeerId(), reclaim});
 				if (reclaim.worldTransition) commands.push_back(NetGameCommand{GetHostPeerId(), *reclaim.worldTransition});
 			}
@@ -11157,6 +11183,27 @@ namespace RTE {
 			if (ConfiguredWindowTicks() > 1 && FrameWindowAllRemotesAdvertised()) alive.receivedMask = NetLockstepCodec::c_FrameWindowCapabilityMask;
 			std::string ignored;
 			(void)SendPacket({alive}, m_Config.frameLane, &ignored);
+		}
+		// A held seat no longer gets the round's frames, and the hold that took it rides a reliable lane a lost packet delays by a
+		// retransmit: until its catch-up opens it hears this host every tick, so no silence reads as this host's death before the hold lands.
+		if (m_Config.localPeerId == GetHostPeerId() && m_RelayHost && m_Transport && !m_HeldPeerLinks.empty() &&
+		    (nowMs < m_LastHeldLinkMs || static_cast<double>(nowMs - m_LastHeldLinkMs) >= m_Config.simTickMs)) {
+			m_LastHeldLinkMs = nowMs;
+			NetLockstepAck alive;
+			alive.senderPeerId = m_Config.localPeerId;
+			alive.highestContiguousFrame = m_Stats.nextFrame;
+			std::vector<uint8_t> bytes;
+			const bool encoded = NetLockstepCodec::Encode({alive}, bytes);
+			for (auto held = m_HeldPeerLinks.begin(); held != m_HeldPeerLinks.end();) {
+				const auto& [link, sinceMs] = held->second;
+				if (!m_AiHeldSeats.contains(held->first) || m_ReleasedAiSeats.contains(held->first) || m_ReclaimTransactions.contains(held->first) ||
+				    m_RemoteTransports.contains(held->first) || (m_Config.timeoutMs != 0 && nowMs >= sinceMs && nowMs - sinceMs > m_Config.timeoutMs)) {
+					held = m_HeldPeerLinks.erase(held);
+					continue;
+				}
+				if (encoded) (void)m_Transport->Send(link, m_Config.frameLane, bytes);
+				++held;
+			}
 		}
 		const bool pending = hasLocal || hasRemote || hasFutureLocal || hasFutureRemote || !m_RecoveryOutgoing.empty();
 		if (!pending) {
@@ -11196,8 +11243,13 @@ namespace RTE {
 		});
 		const uint64_t electionSilenceMs = loneSurvivor ? std::min<uint64_t>(m_Config.timeoutMs, std::max<uint64_t>(hostSilenceMs, c_LoneElectionConfirmMs)) : hostSilenceMs;
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
-		if (!hostBusy && electionSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= electionSilenceMs &&
-		    BeginHostMigration(nowMs)) return;
+		const bool hostSilent = !hostBusy && electionSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= electionSilenceMs;
+		// A host quiet after sending its end has closed the round, not died in it.
+		if (hostSilent && m_PendingCompleteStop) {
+			CompleteAtHostClose();
+			return;
+		}
+		if (hostSilent && BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();
 			Fail(NetLockstepStopReason::MissingFrameTimeout, m_Stats.nextFrame, missing.empty() ? "missing lockstep frame" : "missing lockstep frame from " + missing);

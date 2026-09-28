@@ -372,6 +372,12 @@
         "lag_ms": 100,
         "loss_percent": 5,
         "silent_tick": 600,
+        "silent_hold": "in_force",
+        "rejoin_through_tick": 1800,
+        "returner_peers": [
+          "client",
+          "client-rejoined"
+        ],
         "per_peer_fake_lag_ms": {
           "host": 0,
           "client": 200,
@@ -747,6 +753,12 @@
         "lag_ms": 200,
         "loss_percent": 5,
         "silent_tick": 600,
+        "silent_hold": "in_force",
+        "rejoin_through_tick": 1800,
+        "returner_peers": [
+          "client",
+          "client-rejoined"
+        ],
         "per_peer_fake_lag_ms": {
           "host": 0,
           "client": 400,

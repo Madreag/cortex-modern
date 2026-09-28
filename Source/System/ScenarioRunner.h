@@ -496,6 +496,8 @@ namespace RTE {
 		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
 		static uint16_t GetLockstepLocalInputDelay();
 		static uint64_t GetLockstepEffectiveStartFrame();
+		/// The frame the round's canonical start ends at: before it, an actor without input takes the same route on every peer.
+		static uint64_t GetLockstepCanonicalStartFrame();
 		/// The device class the round's agreed start names for a seat; 0 outside a round or before its record.
 		static uint8_t GetLockstepAgreedSeatDeviceClass(int seat);
 		static bool UsesBoundedLockstepWait();

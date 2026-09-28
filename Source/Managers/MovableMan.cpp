@@ -7407,7 +7407,7 @@ void MovableMan::UpdateControllers() {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep apply: " + error);
 			return;
 		}
-		const bool canonicalStartup = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepEffectiveStartFrame();
+		const bool canonicalStartup = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepCanonicalStartFrame();
 		NeutralizeUnframedLockstepActors(m_Actors, applied, canonicalStartup);
 		// The round's opening actors join after this apply; before the first frame they take the same route on every peer.
 		if (canonicalStartup) NeutralizeUnframedLockstepActors(m_AddedActors, applied, true);

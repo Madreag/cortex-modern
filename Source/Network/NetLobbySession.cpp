@@ -140,6 +140,7 @@ namespace RTE {
 		m_StateTransferOnlyPeer = 0;
 		m_WorldJoinReports.clear();
 		m_PendingTail.clear();
+		m_PendingTailDatagrams.clear();
 		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = 0;
 		m_ChunkSendStall = 0;
@@ -369,16 +370,20 @@ namespace RTE {
 		HandleEvent(event, nowMs);
 	}
 
-	bool NetLobbySession::SendPayloadTo(uint8_t peerId, const NetLobbyPayload& payload, std::string* error) {
+	bool NetLobbySession::SendPayloadTo(uint8_t peerId, const NetLobbyPayload& payload, std::string* error, NetTransportLane lane) {
 		if (!IsKnownRemote(peerId)) {
 			if (error) *error = "lobby has no remote for that peer";
 			return false;
 		}
-		return SendTo(m_RemoteTransports.at(peerId), payload, error);
+		return SendTo(m_RemoteTransports.at(peerId), payload, error, nullptr, lane);
 	}
 
-	bool NetLobbySession::SendPayload(const NetLobbyPayload& payload, std::string* error) {
-		return Send(payload, error);
+	bool NetLobbySession::SendPayload(const NetLobbyPayload& payload, std::string* error, NetTransportLane lane) {
+		if (lane == NetTransportLane::ControlReliable) return Send(payload, error);
+		for (uint8_t peerId : m_RemotePeerIds) {
+			if (!SendTo(m_RemoteTransports[peerId], payload, error, nullptr, lane)) return false;
+		}
+		return true;
 	}
 
 	void NetLobbySession::RestartStateTransfer() {
@@ -480,6 +485,19 @@ namespace RTE {
 		WorldJoinReport report = m_WorldJoinReports.front();
 		m_WorldJoinReports.pop_front();
 		return report;
+	}
+
+	std::vector<std::vector<uint8_t>> NetLobbySession::TakePendingTailDatagrams(std::optional<uint64_t> round, std::vector<std::pair<uint64_t, size_t>>* dropped) {
+		std::vector<std::vector<uint8_t>> taken;
+		for (auto& [datagramRound, bytes]: m_PendingTailDatagrams) {
+			if (!round || datagramRound == *round) {
+				taken.push_back(std::move(bytes));
+			} else if (dropped) {
+				dropped->emplace_back(datagramRound, bytes.size());
+			}
+		}
+		m_PendingTailDatagrams.clear();
+		return taken;
 	}
 
 	std::vector<uint8_t> NetLobbySession::TakePendingTailBytes(std::optional<uint64_t> round, std::vector<std::pair<uint64_t, size_t>>* dropped) {
@@ -929,7 +947,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetLobbySession::SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error, bool* congested) {
+	bool NetLobbySession::SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error, bool* congested, NetTransportLane lane) {
 		if (!m_Transport) {
 			if (error) *error = "lobby has no transport";
 			return false;
@@ -940,7 +958,7 @@ namespace RTE {
 			if (error) *error = encodeError.message;
 			return false;
 		}
-		if (!m_Transport->Send(transport, NetTransportLane::ControlReliable, bytes, error, congested)) {
+		if (!m_Transport->Send(transport, lane, bytes, error, congested)) {
 			return false;
 		}
 		++m_Stats.messagesSent;
@@ -1259,8 +1277,11 @@ namespace RTE {
 					using Payload = std::decay_t<decltype(payload)>;
 					if constexpr (std::is_same_v<Payload, NetLobbyMigration>)
 						return event.lane == NetTransportLane::ControlReliable && (m_Config.host ? payload.kind == 1 && payload.peerId == sender->first : (payload.kind == 2 && payload.peerId == m_Config.localPeerId) || (payload.kind == 1 && payload.peerId == sender->first));
+					// A committed tail datagram names its round and carries whole frames, so it may ride the unreliable lane to a joiner, as a
+					// returner's progress report, which carries its whole state, may ride it to the host.
 					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>)
-						return event.lane == NetTransportLane::ControlReliable && (worldSender || m_Config.matchConfig.persistentWorld || !m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
+						return (event.lane == NetTransportLane::ControlReliable || (!m_Config.host && payload.transferId == c_NetWorldTailTransferId) ||
+						        (m_Config.host && payload.transferId == c_NetWorldReportTransferId && !payload.bytes.empty() && payload.bytes[0] == c_NetWorldReportCatchUp)) && (worldSender || m_Config.matchConfig.persistentWorld || !m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
 					// Only the hub binds seats; a client offering one is not a peer this round keeps.
 					if constexpr (std::is_same_v<Payload, NetLobbySeatAssign>) return !m_Config.host;
 					if (m_Config.host) {
@@ -1336,7 +1357,9 @@ namespace RTE {
 					if (chunk->transferId == c_NetWorldTailTransferId) {
 						// Only a joiner drains this; on the host it would grow for the world's life.
 						uint64_t round = 0;
-						if (!m_Config.host && ParseWorldTailChunkRound(*chunk, round)) {
+						if (!m_Config.host && ParseWorldTailChunkRound(*chunk, round) && event.lane != NetTransportLane::ControlReliable) {
+							m_PendingTailDatagrams.emplace_back(round, std::vector<uint8_t>(chunk->bytes.begin() + c_NetWorldTailRoundBytes, chunk->bytes.end()));
+						} else if (!m_Config.host && ParseWorldTailChunkRound(*chunk, round)) {
 							if (m_PendingTail.empty() || m_PendingTail.back().first != round) m_PendingTail.emplace_back(round, std::vector<uint8_t>());
 							m_PendingTail.back().second.insert(m_PendingTail.back().second.end(), chunk->bytes.begin() + c_NetWorldTailRoundBytes, chunk->bytes.end());
 						} else if (!m_Config.host) {

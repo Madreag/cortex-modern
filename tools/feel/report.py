@@ -459,26 +459,35 @@ def item9a_gates(run, peer='host', rows=None):
         silent_seat = peer_id_of(run / 'client_report.json') or 2
         holds = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)]
         held = next((tick for seat, tick in holds if seat == silent_seat and tick >= manifest['silent_tick']), None)
+        # A lagging seat can already be held when its silence comes: then the hold in force at the silent tick is the one it returns from.
+        if manifest.get('silent_hold') == 'in_force':
+            back = [int(tick) for seat, tick in re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', log) if int(seat) == silent_seat]
+            before = [tick for seat, tick in holds if seat == silent_seat and tick <= manifest['silent_tick']]
+            if before and not any(before[-1] < tick <= manifest['silent_tick'] for tick in back):
+                held = before[-1]
+        # The feel window stays fixed; a return may land past it, inside the round, and the peer that returns may be a relaunch.
+        rejoin_end = manifest.get('rejoin_through_tick', final_tick)
+        returners = manifest.get('returner_peers', ['client'])
         pins['item9a_hold'] = pin(held, 'silent seat 2 is held from its agreed frame', held is not None, [log_path])
         def reclaims(name):
             path = run / name / 'stdout.log'
             text = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
             found = re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+) live_actors=(\d+)', text)
             return [(int(tick), int(live)) for seat, tick, live in found
-                    if held is not None and int(seat) == silent_seat and held < int(tick) <= final_tick and int(live) > 0], path
+                    if held is not None and int(seat) == silent_seat and held < int(tick) <= rejoin_end and int(live) > 0], path
         host_reclaims, host_reclaim_path = reclaims('host')
         survivor_reclaims, survivor_reclaim_path = reclaims('survivor')
-        client_path = run / 'client/stdout.log'
-        client_log = client_path.read_text(encoding='utf-8-sig', errors='replace') if client_path.is_file() else ''
-        completed = [int(frame) for frame in re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', client_log)]
+        returner_paths = [run / name / 'stdout.log' for name in returners]
+        completed = [int(frame) for path in returner_paths if path.is_file()
+                     for frame in re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', path.read_text(encoding='utf-8-sig', errors='replace'))]
         rejoined = bool(host_reclaims) and host_reclaims == survivor_reclaims and all(tick in completed for tick, _ in host_reclaims)
         pins['item9a_rejoin'] = pin(rejoined, 'both survivors committed the same live reclaim and that client completed private catch-up at its activation frame',
-            rejoined, [host_reclaim_path, survivor_reclaim_path, client_path], dict(host=host_reclaims, survivor=survivor_reclaims, completed=completed))
+            rejoined, [host_reclaim_path, survivor_reclaim_path, *returner_paths], dict(host=host_reclaims, survivor=survivor_reclaims, completed=completed))
         survivor_logs = [(run / name / 'stdout.log') for name in ('host', 'survivor')]
         reloads = [str(path) for path in survivor_logs if path.is_file() and re.search(
             r'\[net-match\].*(?:resync:|resyncing the match)', path.read_text(encoding='utf-8-sig', errors='replace'), re.I)]
         pins['item9a_private_rejoin'] = pin(rejoined and not reloads, 'private catch-up completes without reloading either survivor',
-            rejoined and not reloads, [*survivor_logs, client_path], dict(survivor_reloads=reloads))
+            rejoined and not reloads, [*survivor_logs, *returner_paths], dict(survivor_reloads=reloads))
         def hashes(name):
             path = run / f'{name}_trace.json'
             if not path.is_file():
