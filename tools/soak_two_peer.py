@@ -102,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--autosave-seconds", type=int, default=60)
     parser.add_argument("--holds", type=int, default=3)
     parser.add_argument("--stall-ms", type=int, default=1500)
+    parser.add_argument("--lag", type=int, default=0, help="the client's added one-way delay in ms (its -net-fake-lag is the round trip, twice this)")
+    parser.add_argument("--loss", type=int, default=0, help="the client's GNS packet loss in percent (CC_TEST_GNS_LOSS_PERCENT)")
     parser.add_argument("--port", type=int, default=PORT_LO)
     parser.add_argument("--port-block", default=f"{PORT_LO}-{PORT_HI}", help="the calling lane's own port block, LO-HI; --port stays inside it")
     parser.add_argument("--fullstate-every", type=int, default=0)
@@ -184,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
                 flags += ["-net-host", "-net-autosave-seconds", str(options.autosave_seconds)]
             else:
                 flags += ["-net-join", "127.0.0.1"]
+                if options.lag:
+                    flags += ["-net-fake-lag", str(2 * options.lag)]
                 for tick in stalls:
                     flags += ["-net-test-live-stall", f"{tick}:{options.stall_ms}"]
                 if options.stall_each_round:
@@ -202,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
                 (root / f"{peer}-records").mkdir()
                 if options.cross_event_limit:
                     env["CC_TEST_CROSS_EVENT_RAW_LIMIT"] = str(options.cross_event_limit)
+            if peer == "client" and options.loss:
+                env["CC_TEST_GNS_LOSS_PERCENT"] = str(options.loss)
             if peer == "client" and options.mute_input:
                 env["CC_TEST_LOCKSTEP_MUTE_INPUT"] = options.mute_input
             run = make_run(repo, flags, root / peer, timeout=options.minutes * 60 + 600, env=env)
