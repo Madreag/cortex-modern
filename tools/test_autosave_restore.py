@@ -78,6 +78,9 @@ FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 FULLSTATE_EVERY = 0
 # Both peers' archive writers pause this long before each task (CC_TEST_SAVER_DELAY_MS); 0 is off. Set by --saver-delay-ms.
 SAVER_DELAY_MS = 0
+# The client's archive writer alone pauses this long before each task, so the host's newest checkpoint is one the client has
+# not published yet; overrides SAVER_DELAY_MS on the client. Set by --client-saver-delay-ms.
+CLIENT_SAVER_DELAY_MS = 0
 RETAINED_AUTOSAVES = 3  # The default of the NetworkAutosavesKept option (AutosaveStore::c_RetainedAutosaves), which
                         # these runs never set; the engine's own keep= value is held to it below.
 
@@ -291,6 +294,11 @@ def pin_settings(run, values: dict) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def saver_delay_ms(who: str) -> int:
+    """The writer lever each peer gets: the client's own delay, when set, instead of both peers' one."""
+    return CLIENT_SAVER_DELAY_MS if who == "client" and CLIENT_SAVER_DELAY_MS else SAVER_DELAY_MS
+
+
 def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict, settings: dict | None = None, load_objects: int = 0) -> dict:
     """Two peers of one match, each with the arm's own extra flags and Settings.ini values."""
     if FAMILY_LOCK.exists():
@@ -308,8 +316,8 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         args += extra.get(who, []) + fullstate_args()
         env = {"CCCP_HEADLESS": "1"}
-        if SAVER_DELAY_MS:
-            env["CC_TEST_SAVER_DELAY_MS"] = str(SAVER_DELAY_MS)
+        if delay := saver_delay_ms(who):
+            env["CC_TEST_SAVER_DELAY_MS"] = str(delay)
         runs[who] = make_run(repo, args, root / who, 420, env=env)
         stage_baseline(runs[who], ticks, load_objects=load_objects)
         if settings and settings.get(who):
@@ -625,7 +633,7 @@ def judge_retention(root: Path, ticks: int, records: dict) -> dict:
     return details
 
 
-def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False) -> dict:
+def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False, client_stall: str = "") -> dict:
     """A heal names one rewind point for the whole match, and it survives later rotation.
 
     The perturbation is timed late on purpose: at the stock tick 50 the heal lands before the first
@@ -633,7 +641,8 @@ def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False
     name and the row would be red for a reason that is not the anchor mechanism. Tick 720 puts at least
     four checkpoints before the heal at the 2 s cadence, and the 1400-tick cap leaves room for more than the
     retention limit afterwards, so the named one can only survive by being pinned; a run that writes fewer
-    waits with its schedule doubled."""
+    waits with its schedule doubled. `client_stall` (TICK:MS) holds the client once, so it catches up across a capture it
+    never takes; the anchor must still be one the client holds."""
     def attempt(scale: int, ticks: int) -> dict:
         # The live perturbation fires on a multiple of 30 ticks; 720 keeps every scaled run's on a full-state sample tick.
         run_root, perturb_at = wait_root(root, scale, ticks), 720 * scale
@@ -642,10 +651,18 @@ def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False
         run_pair(repo, run_root, port, ticks, 2,
                  {"host": ["-net-test-perturb-when-live", "-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
                            "-net-match-e2e-resync"],
-                  "client": ["-net-match-e2e-resync"]},
+                  "client": ["-net-match-e2e-resync", *stall_args(client_stall, scale)]},
                  {"host": {"NetworkSlowPlayerPolicy": "Pause"}} if pause_slow_peers else None)
         return judge_anchor(run_root, ticks, perturb_at)
     return wait_for_checkpoints(attempt, ANCHOR_TICKS)
+
+
+def stall_args(client_stall: str, scale: int = 1) -> list[str]:
+    """The client's one live stall, TICK:MS, its tick scaled with the run's schedule."""
+    if not client_stall:
+        return []
+    tick, milliseconds = (int(part) for part in client_stall.split(":"))
+    return ["-net-test-live-stall", f"{tick * scale}:{milliseconds}"]
 
 
 def judge_anchor(root: Path, ticks: int, perturb_at: int) -> dict:
@@ -1298,6 +1315,26 @@ class CheckpointWaitTests(unittest.TestCase):
         details = self.judge(judge_anchor, self.anchor_texts(ticks, 486), {"host": [486, 900, 1020, 1140], "client": [486, 900, 1020, 1140]}, 1400, 700)
         self.assertEqual(details["tick"], 486)
 
+    def test_the_anchor_levers_reach_the_client_alone(self):
+        import sys
+        from unittest import mock
+        module = sys.modules[__name__]
+        self.assertEqual(stall_args(""), [])
+        self.assertEqual(stall_args("690:1500", 2), ["-net-test-live-stall", "1380:1500"])
+        with mock.patch.object(module, "SAVER_DELAY_MS", 0), mock.patch.object(module, "CLIENT_SAVER_DELAY_MS", 2500):
+            self.assertEqual((saver_delay_ms("host"), saver_delay_ms("client")), (0, 2500))
+        with mock.patch.object(module, "SAVER_DELAY_MS", 400), mock.patch.object(module, "CLIENT_SAVER_DELAY_MS", 0):
+            self.assertEqual((saver_delay_ms("host"), saver_delay_ms("client")), (400, 400))
+
+    def test_a_client_that_lacks_the_named_checkpoint_fails_at_once(self):
+        # Ladder 12 rung 2 on 266 (S1.restore-all-1): the host named 668, a capture the held client never took.
+        texts = self.anchor_texts([131, 432, 668, 823, 987, 1091], 668)
+        texts["client"] = texts["client"].replace("tick=668 local=ok", "tick=668 local=not a regular file")
+        with self.assertRaises(AssertionError) as raised:
+            self.judge(judge_anchor, texts, {"host": [668, 987, 1091], "client": [987, 1091]}, 1400, 720)
+        self.assertNotIsInstance(raised.exception, CheckpointsShort)
+        self.assertIn("the client does not hold the named checkpoint: not a regular file", str(raised.exception))
+
     def test_a_short_anchor_run_still_fails_a_lost_rewind_point(self):
         with self.assertRaises(AssertionError) as raised:
             self.judge(judge_anchor, self.anchor_texts([130, 751, 1186, 1346], 130), {"host": [751, 1186, 1346], "client": [130, 751, 1186, 1346]}, 1400, 700)
@@ -1591,6 +1628,8 @@ def main() -> int:
     parser.add_argument("--round-ticks", type=int, default=600, help="world-restart only: the resumed and fresh rounds' length")
     parser.add_argument("--client-stall", default="", help="world-restart only: TICK:MS, the client stalls once past each "
                         "round's start so the host holds its seat and the seat has to rejoin")
+    parser.add_argument("--anchor-client-stall", default="", help="anchor only: TICK:MS, the client stalls once so the host holds "
+                        "its seat and it catches up across a capture it never takes")
     parser.add_argument("--fullstate-every", type=int, default=0,
                         help="every N committed ticks both peers hash their whole capture (-net-fullstate-hash-every); 0 is off")
     parser.add_argument("--client-lacks-checkpoint", action="store_true",
@@ -1600,16 +1639,20 @@ def main() -> int:
                         "tick 124, so its rejoin takes the first capture and catches up across everything since it")
     parser.add_argument("--saver-delay-ms", type=int, default=0,
                         help="both peers' archive writers pause this long before each task (CC_TEST_SAVER_DELAY_MS), a slow disk")
+    parser.add_argument("--client-saver-delay-ms", type=int, default=0,
+                        help="the client's archive writer alone pauses this long before each task, so a heal can come while the host's "
+                        "newest checkpoint is still unpublished on the client")
     parser.add_argument("--pause-slow-peers", action="store_true",
                         help="anchor only: the host pauses for a slow peer instead of holding it, so a sanitizer build's heal lands")
     args = parser.parse_args()
     if args.fullstate_every < 0:
         parser.error("--fullstate-every must be 0 or positive")
-    if not 0 <= args.saver_delay_ms <= 60000:
-        parser.error("--saver-delay-ms in 0..60000")
-    global FULLSTATE_EVERY, SAVER_DELAY_MS
+    if not 0 <= args.saver_delay_ms <= 60000 or not 0 <= args.client_saver_delay_ms <= 60000:
+        parser.error("--saver-delay-ms and --client-saver-delay-ms in 0..60000")
+    global FULLSTATE_EVERY, SAVER_DELAY_MS, CLIENT_SAVER_DELAY_MS
     FULLSTATE_EVERY = args.fullstate_every
     SAVER_DELAY_MS = args.saver_delay_ms
+    CLIENT_SAVER_DELAY_MS = args.client_saver_delay_ms
     if not 1024 <= args.port <= 65516:
         parser.error("the base port must leave room for twenty unprivileged ports")
     os.environ["CCCP_HEADLESS"] = "1"
@@ -1618,7 +1661,8 @@ def main() -> int:
     with engine_executable(repo).open("rb") as exe:
         exe_sha = file_sha256(exe)
     result = {"exe_sha256": exe_sha, "arms": {}}
-    arms = {"restore": arm_restore, "retention": arm_retention, "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers), "resume": arm_resume,
+    arms = {"restore": arm_restore, "retention": arm_retention, "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers, args.anchor_client_stall),
+            "resume": arm_resume,
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks,
                                                                         args.client_lacks_checkpoint, args.rejoin_from_first_capture),
             "park": arm_park}
