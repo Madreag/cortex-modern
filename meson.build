@@ -39,6 +39,12 @@ if compiler.get_id() == 'clang' and '@0@'.format(get_option('b_sanitize')).conta
   add_global_arguments(ubsan_ignorelist_arg, language: ['c', 'cpp'])
 endif
 
+# LuaJIT's errors unwind through its C frames; TSan pops its shadow call stack only in unwind cleanups, which C gets
+# with -fexceptions. Without them every unwound frame stays on that fixed-size stack until it overflows.
+if '@0@'.format(get_option('b_sanitize')).contains('thread')
+  add_global_arguments('-fexceptions', language: 'c')
+endif
+
 if compiler.get_argument_syntax()== 'gcc' # used for gcc compatible compilers
   # Build against system libraries on linux
   message('gcc detected')

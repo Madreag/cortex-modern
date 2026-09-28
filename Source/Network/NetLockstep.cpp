@@ -6,6 +6,7 @@
 #include "NetProtocol.h"
 #include "NetResyncState.h"
 #include "NetWorldJoin.h"
+#include "ScenarioRunner.h"
 
 #include <algorithm>
 #include <charconv>
@@ -4327,7 +4328,10 @@ namespace RTE {
 		}
 	}
 
-	NetLockstepCoordinator::~NetLockstepCoordinator() { NetLockstepPlane::Forget(this); }
+	NetLockstepCoordinator::~NetLockstepCoordinator() {
+		ScenarioRunner::ForgetLockstepCoordinator(this);
+		NetLockstepPlane::Forget(this);
+	}
 
 	bool NetLockstepCoordinator::PlaneShouldTick(uint64_t nowMs) const {
 		NET_PLANE_CHECK();
