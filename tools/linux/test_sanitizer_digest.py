@@ -11,6 +11,12 @@ import sanitizer_digest as digest
 
 
 class SanitizerDigestTest(unittest.TestCase):
+    def test_stripped_frame_keeps_its_module_and_offset(self):
+        first = digest.FRAME.match("    #1 0x7c0a7b18aed9  (/vendor/libfmod.so.13+0xfced9) (BuildId: e2427658b42a9348)")
+        second = digest.FRAME.match("    #1 0x7c1a7b18aed9  (/vendor/libfmod.so.13+0xfced9) (BuildId: e2427658b42a9348)")
+        self.assertEqual(digest.frame_text(first), "/vendor/libfmod.so.13+0xfced9")
+        self.assertEqual(digest.frame_text(first), digest.frame_text(second))
+
     def test_paths_with_spaces_and_engine_callers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
