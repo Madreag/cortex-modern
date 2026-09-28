@@ -103,6 +103,96 @@ def check_module_requirements(results, scratch):
     return ok
 
 
+# A scripted return, reclaim, hold or relaunch lands inside its round with room for the largest lever wait: the reclaim
+# gap (neutral_through - activation, 78-90 frames measured on mp-rollback-lag) plus one full-state interval (60).
+LEVER_MARGIN_TICKS = 90 + 60
+# A killed peer's relaunch returns 741-769 frames after its drop with no fake lag (mp-join-garbage, mp-reconnect-repair,
+# mp-host-stall-image-rejoin on 263) and 1038-1190 behind 200 ms fake lag and 5 % loss (mp-rollback-lag lag-100, 2026-09-28).
+RELAUNCH_BUDGET_TICKS = {False: 800, True: 1200}
+TICK_LEVERS = ("-selftest-frame-stall", "-selftest-frame-stall-again", "-net-test-live-stall", "-selftest-draw-stall",
+               "-selftest-late-script-stall", "-net-match-e2e-leave-tick", "-determinism-selftest-perturb-tick")
+SCRIPTED_TICK_LINE = "[input-script] tick {} player 0 pressed FIRE"
+
+
+def scheduled_gate_tick(gate, horizon):
+    """The tick a kill gate fires at when the round's own clock schedules it; None for an event gate."""
+    if "sim_tick" in gate:
+        return int(gate["sim_tick"])
+    pattern = gate.get("log")
+    if not pattern or re.search(pattern, SCRIPTED_TICK_LINE.format(0)):
+        return None
+    return next((tick for tick in range(horizon) if re.search(pattern, SCRIPTED_TICK_LINE.format(tick))), None)
+
+
+def lever_violations(scenario):
+    """Every scripted lever whose landing leaves less than the margin before its round's final frame."""
+    found = []
+    for run in scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]:
+        peers = run.get("peers", [])
+        rounds = {peer["name"]: int(peer["args"][peer["args"].index("-net-match-ticks") + 1])
+                  for peer in peers if "-net-match-ticks" in peer.get("args", [])}
+        if not rounds:
+            continue
+        last = max(rounds.values())
+        kills = {}
+
+        def late(label, landing, final):
+            if landing + LEVER_MARGIN_TICKS > final:
+                found.append(f"{scenario['name']}/{run.get('name', 'run0')}: {label} lands at {landing}, "
+                             f"inside {LEVER_MARGIN_TICKS} of the round's final frame {final}")
+
+        # A scenario whose subject is a peer frozen through the round's end declares it; that freeze must still start inside.
+        frozen_through_end = set(run.get("frozen_through_end", []))
+        for peer in peers:
+            final, args = rounds.get(peer["name"], last), peer.get("args", [])
+            for flag in TICK_LEVERS:
+                for index in (i for i, arg in enumerate(args) if arg == flag and i + 1 < len(args)):
+                    tick, _, ms = args[index + 1].partition(":")
+                    if peer["name"] in frozen_through_end and flag == "-selftest-frame-stall":
+                        if int(tick) > final:
+                            found.append(f"{scenario['name']}/{run.get('name', 'run0')}: {peer['name']} freezes at {tick}, after the round's final frame {final}")
+                        continue
+                    late(f"{peer['name']} {flag} {args[index + 1]}", int(tick) + -(-int(ms or 0) * 60 // 1000), final)
+            bounds = []
+            if peer.get("kill_at_tick"):
+                bounds.append(int(peer["kill_at_tick"]))
+            if peer.get("kill_after_s"):
+                bounds.append(int(float(peer["kill_after_s"]) * 60))
+            gates = peer.get("kill_when") or []
+            for gate in gates if isinstance(gates, list) else [gates]:
+                tick = scheduled_gate_tick(gate, 4 * final)
+                if tick is not None:
+                    bounds.append(tick)
+            if bounds:
+                late(f"{peer['name']} scripted drop", min(bounds), final)
+            kills[peer["name"]] = min(bounds) if bounds else None
+        for peer in peers:
+            gate = peer.get("start_when") or {}
+            # A peer started after another run's peer ended begins a new round (a resume from disk), not a return into this one.
+            if gate.get("ended") and gate.get("peer") in kills and gate.get("run", run.get("name")) == run.get("name"):
+                args = peer.get("args", [])
+                budget = RELAUNCH_BUDGET_TICKS[bool(int(args[args.index("-net-fake-lag") + 1]) if "-net-fake-lag" in args else 0)]
+                final = rounds.get(peer["name"], last)
+                if kills[gate["peer"]] is None:
+                    found.append(f"{scenario['name']}/{run.get('name', 'run0')}: {peer['name']} relaunches after {gate['peer']}, "
+                                 "whose drop no tick lever bounds")
+                else:
+                    late(f"{peer['name']} relaunch return (drop {kills[gate['peer']]} + {budget})", kills[gate["peer"]] + budget, final)
+        feel = run.get("feel_gate") or {}
+        if feel.get("silent_tick"):
+            late("feel_gate silent_tick", int(feel["silent_tick"]), last)
+        if feel.get("rejoin_through_tick"):
+            late("feel_gate rejoin_through_tick", int(feel["rejoin_through_tick"]), last)
+    return found
+
+
+def check_levers_inside_rounds(results):
+    """No scenario schedules a return, reclaim, hold or relaunch that the round ends before (row 496)."""
+    found = [row for path in sorted(driver.SCENARIO_DIR.glob("*.json")) if "checklist" in (scenario := json.loads(path.read_text(encoding="utf-8")))
+             for row in lever_violations(scenario)]
+    return row(results, "scenarios/levers-land-inside-their-round", not found, "; ".join(found))
+
+
 def check_rematch_contract(results):
     scenario = driver.load_scenario("mp-rematch")
     runs = {run["name"]: run for run in scenario.get("runs", [])}
@@ -1250,7 +1340,12 @@ def check_log_gates(results, scratch):
     scenario = driver.load_scenario("mp-rollback-lag")
     peers = {peer["name"]: peer for peer in scenario["runs"][0]["peers"]}
     drops = peers["client"].get("kill_when") or []
-    ok &= row(results, "log-gate/rollback-lag-drops-the-client-after-catch-up", any(gate.get("log") == pattern for gate in drops))
+    # The drop follows the catch-up from the silent seat's hold, never an earlier return from a slow-player hold.
+    silent = scenario["runs"][0]["feel_gate"]["silent_tick"]
+    line = "[net-match] private catch-up complete frame={} in_place=1"
+    ok &= row(results, "log-gate/rollback-lag-drops-the-client-after-catch-up",
+              any(gate.get("log") and re.search(gate["log"], line.format(silent)) and not re.search(gate["log"], line.format(silent - 1))
+                  for gate in drops))
     args = peers["host"]["args"]
     round_ticks = int(args[args.index("-net-match-ticks") + 1])
     window_end = scenario["runs"][0]["feel_gate"].get("ticks")
@@ -1470,6 +1565,7 @@ def main():
         ok &= check_scratch_limit(results, scratch)
         ok &= check_module_requirements(results, scratch)
         ok &= check_rematch_contract(results)
+        ok &= check_levers_inside_rounds(results)
         ok &= check_substitution(results)
         ok &= check_directory_port_block(results)
         ok &= check_launch_contract(results, scratch)
