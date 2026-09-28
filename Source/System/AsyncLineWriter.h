@@ -4,10 +4,12 @@
 #include <condition_variable>
 #include <deque>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace RTE {
 
@@ -115,12 +117,16 @@ namespace RTE {
 		AsyncFileRewriter(const AsyncFileRewriter&) = delete;
 		AsyncFileRewriter& operator=(const AsyncFileRewriter&) = delete;
 
-		/// Queues the file's whole new text. The writer stores its own thread in opener, when given, just before it opens the file.
-		void Rewrite(std::string path, std::string text, std::atomic<std::thread::id>* opener = nullptr) {
+		/// Queues the file's whole new text; false after Close, with one line the first time. The writer stores its own thread in
+		/// opener, when given, just before it opens the file.
+		bool Rewrite(std::string path, std::string text, std::atomic<std::thread::id>* opener = nullptr) {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				if (m_Stopping) {
-					return;
+					if (!std::exchange(m_ClosedRewriteReported, true)) {
+						std::cerr << "[async-rewriter] a rewrite of " << path << " came after its writer closed: dropped" << std::endl;
+					}
+					return false;
 				}
 				if (!m_Thread.joinable()) {
 					m_Thread = std::thread([this] { Run(); });
@@ -129,13 +135,14 @@ namespace RTE {
 				++m_Queued;
 			}
 			m_Wake.notify_one();
+			return true;
 		}
 
 		/// Returns once every rewrite queued before the call is on disk.
 		void Flush() {
 			std::unique_lock<std::mutex> lock(m_Mutex);
 			const unsigned long long target = m_Queued;
-			m_Drained.wait(lock, [&] { return m_Written >= target || !m_Thread.joinable(); });
+			m_Drained.wait(lock, [&] { return m_Written >= target || m_Exited; });
 		}
 
 		void Close() {
@@ -144,6 +151,7 @@ namespace RTE {
 				m_Stopping = true;
 			}
 			m_Wake.notify_one();
+			// Rewrite never starts the thread once m_Stopping is set.
 			if (m_Thread.joinable()) {
 				m_Thread.join();
 			}
@@ -174,10 +182,12 @@ namespace RTE {
 				}
 				lock.lock();
 				m_Written = covered;
-				m_Drained.notify_all();
 				if (m_Stopping && m_Waiting.empty()) {
+					m_Exited = true;
+					m_Drained.notify_all();
 					return;
 				}
+				m_Drained.notify_all();
 			}
 		}
 
@@ -189,5 +199,7 @@ namespace RTE {
 		unsigned long long m_Queued = 0; //!< Rewrites queued so far.
 		unsigned long long m_Written = 0; //!< Rewrites queued before the last batch the writer finished.
 		bool m_Stopping = false;
+		bool m_Exited = false; //!< The writer has returned; Flush reads this under the mutex instead of the thread object Close joins.
+		bool m_ClosedRewriteReported = false;
 	};
 } // namespace RTE
