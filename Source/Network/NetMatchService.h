@@ -451,6 +451,8 @@ namespace RTE {
 			size_t unwritten = 0; //!< Captures this peer's writer has not finished.
 			std::vector<CheckpointNote> applied; //!< The schedule entries the tick's committed frame carried.
 			std::vector<uint64_t> finished; //!< Captures this peer's writer finished since the last boundary.
+			std::vector<uint64_t> refused; //!< Of those, the captures whose archive the writer refused.
+			uint8_t localPeer = 0; //!< This peer's id, a holder of every capture its writer archived.
 			std::set<uint8_t> writers; //!< Host: every peer that captures on the schedule.
 			uint16_t lead = 0; //!< Host: ticks between naming a capture and taking it.
 			bool activationPending = false; //!< Host: a seat's agreed activation is still ahead.
@@ -488,6 +490,8 @@ namespace RTE {
 		bool IsNamedCaptureTick(uint64_t tick) const { return m_ScheduledCaptures.contains(tick); }
 		/// Host: the peers that capture on the schedule at the tick, itself included.
 		std::set<uint8_t> CheckpointWriters(uint64_t tick) const;
+		/// Records that peer reported an archive of the capture at tick.
+		void NoteCheckpointHolder(uint64_t tick, uint8_t peer);
 		/// Forgets the schedule a previous round named.
 		void ResetCheckpointSchedule();
 		/// Forgets the capture the host waits on across a heal, keeping the match's chain and the captures already named.
@@ -497,7 +501,12 @@ namespace RTE {
 		/// Settles the awaited capture a writer verdict names; a verdict nobody awaits changes nothing.
 		void ResolveAwaitedAutosave(uint64_t tick, bool archived);
 		/// Takes every verdict the writer thread has finished since the last tick boundary; returns the captures they finished.
-		std::vector<uint64_t> TakeAutosaveVerdicts();
+		/// @param refused Receives the finished captures whose archive was refused.
+		std::vector<uint64_t> TakeAutosaveVerdicts(std::vector<uint64_t>* refused = nullptr);
+		/// The newest validated checkpoint at or before savedTick that every one of peers reported holding.
+		static std::optional<AutosaveDescriptor> ChooseRewindAnchor(const std::vector<AutosaveDescriptor>& validatedNewestFirst,
+		                                                            const std::map<uint64_t, std::set<uint8_t>>& holders, uint64_t savedTick,
+		                                                            const std::set<uint8_t>& peers, uint64_t roundId);
 		/// The one capture of this match: the tick's agreed lockstep state is stamped onto the identity
 		/// here, so an interval checkpoint and a world's on-demand bootstrap capture carry the same
 		/// owners and applied sequences and a restart resumes on them.
@@ -1198,6 +1207,7 @@ namespace RTE {
 		friend bool TestAManualSaveKeepsTheIntervalAndWaitsForASafeTick(std::string* error);
 		friend bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error);
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
+		friend bool TestAHealNamesACheckpointEveryPeerHolds(std::string* error);
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
@@ -1594,6 +1604,7 @@ namespace RTE {
 		uint64_t m_OpenCaptureTick = 0; //!< Host: the capture it named last, until every writer reported it.
 		bool m_OpenCaptureApplied = false; //!< Host: the capture it named reached the committed stream.
 		std::set<uint8_t> m_CaptureWriters; //!< Host: the peers still writing the open capture.
+		std::map<uint64_t, std::set<uint8_t>> m_CheckpointHolders; //!< The peers that reported an archive of each of this round's captures.
 		bool m_OpenCaptureForJoin = false;
 		std::set<uint64_t> m_ManualCaptures; //!< The named ticks the host asked for by hand.
 		bool m_OpenCaptureManual = false; //!< Host: the open capture is one it asked for by hand.
