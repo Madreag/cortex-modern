@@ -4196,9 +4196,42 @@ static std::string ResyncSaveName() {
 		return {};
 	}
 
+	namespace {
+		/// A listener opened before the plane that owns it: what it heard first reaches that plane first, in order.
+		class EarlyListener final : public INetTransport {
+		public:
+			EarlyListener(std::unique_ptr<INetTransport> inner, std::vector<NetTransportEvent> early) : m_Inner(std::move(inner)), m_Early(std::move(early)) {}
+			bool StartHost(uint16_t port, std::string* error) override { return m_Inner->StartHost(port, error); }
+			bool Connect(const std::string& address, uint16_t port, std::string* error) override { return m_Inner->Connect(address, port, error); }
+			bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error, bool* congested) override {
+				return m_Inner->Send(peerId, lane, bytes, error, congested);
+			}
+			void Disconnect(NetPeerId peerId, const std::string& reason) override { m_Inner->Disconnect(peerId, reason); }
+			void Stop() override { m_Inner->Stop(); }
+			std::vector<NetTransportEvent> PollEvents() override {
+				std::vector<NetTransportEvent> events = std::move(m_Early);
+				m_Early.clear();
+				for (NetTransportEvent& event: m_Inner->PollEvents()) events.push_back(std::move(event));
+				return events;
+			}
+			uint32_t GetPeerPingMs(NetPeerId peerId) const override { return m_Inner->GetPeerPingMs(peerId); }
+			std::string GetConnectedRoute(NetPeerId peerId) const override { return m_Inner->GetConnectedRoute(peerId); }
+
+		private:
+			std::unique_ptr<INetTransport> m_Inner;
+			std::vector<NetTransportEvent> m_Early;
+		};
+	} // namespace
+
 	bool NetMatchService::HeldSeatListens(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer, const std::vector<uint8_t>& reachable,
 	                                      const std::set<uint8_t>& held, const std::set<uint8_t>& departed) {
-		(void)departed;
+		// The first survivor in the match's order listens whatever it reads of the others: a held seat holding a later revision of the
+		// lost host's holds may know it held and dial it.
+		for (const uint8_t peer: successorOrder) {
+			if (peer == lostHost || departed.contains(peer)) continue;
+			if (peer == localPeer) return true;
+			break;
+		}
 		return HeldSuccessionRoutes(successorOrder, lostHost, localPeer, reachable, held).empty();
 	}
 
@@ -5081,19 +5114,54 @@ static std::string ResyncSaveName() {
 		std::vector<uint8_t> reachable;
 		for (const InPlaceRoute& route: m_InPlaceRoutes) reachable.push_back(route.peerId);
 		const std::set<uint8_t> held = HeldSurvivorsLocked();
-		const std::vector<uint8_t> routes = HeldSuccessionRoutes(m_Coordinator->GetConfig().matchConfig.successorOrder, m_Coordinator->GetHostPeerId(), m_LocalPeerId, reachable, held);
+		const uint8_t lostHost = m_Coordinator->GetHostPeerId();
+		const std::vector<uint8_t>& order = m_Coordinator->GetConfig().matchConfig.successorOrder;
+		const std::vector<uint8_t> routes = HeldSuccessionRoutes(order, lostHost, m_LocalPeerId, reachable, held);
+		// The seats the lost host held, as this seat heard them: its last revision of them is what it knows.
+		uint64_t lastRevision = 0;
+		std::set<uint8_t> departed;
+		for (const auto& holds: {m_CatchUpCoordinator->HeldTransactions(), m_Coordinator->HeldTransactions()})
+			for (const auto& [peer, hold]: holds) lastRevision = std::max(lastRevision, hold.eventSequence);
+		for (const auto& [peer, frame]: m_CatchUpCoordinator->GetPeerLeaveFrames())
+			if (peer != lostHost && peer != m_LocalPeerId && !held.contains(peer) && !m_CatchUpCoordinator->HeldTransactions().contains(peer)) departed.insert(peer);
+		const bool listens = HeldSeatListens(order, lostHost, m_LocalPeerId, reachable, held, departed);
 		std::deque<InPlaceRoute> kept;
 		for (const uint8_t peer: routes)
 			kept.push_back(*std::find_if(m_InPlaceRoutes.begin(), m_InPlaceRoutes.end(), [&](const InPlaceRoute& route) { return route.peerId == peer; }));
 		m_InPlaceRoutes = std::move(kept);
 		std::ostringstream line;
-		line << "[net-match] held client: its host is gone; held=";
+		line << "[net-match] held client: its host is gone; last_revision=" << lastRevision << " held=";
 		for (const uint8_t peer: held) line << static_cast<int>(peer) << ' ';
 		line << "routes=";
 		for (const uint8_t peer: routes) line << static_cast<int>(peer) << ' ';
+		line << "listens=" << listens << ' ';
 		line << (routes.empty() ? "- this seat hosts the match" : routes.size() == 1 && held.contains(routes.front()) ? "- every survivor is held; the first of them hosts" : "");
 		System::PrintDiagnosticLine(line.str());
+		if (!routes.empty() && listens) (void)OpenHeldListenerLocked();
 		return routes.empty();
+	}
+
+	bool NetMatchService::OpenHeldListenerLocked() {
+		if (m_HeldListener) return true;
+		const NetLockstepConfig& config = m_Coordinator->GetConfig();
+		const auto endpoint = std::find_if(config.matchConfig.migrationPeers.begin(), config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_LocalPeerId; });
+		std::unique_ptr<INetTransport> listener = config.migrationTransportFactory ? config.migrationTransportFactory() : nullptr;
+		if (endpoint == config.matchConfig.migrationPeers.end() || !listener || !listener->StartHost(endpoint->listenPort)) {
+			System::PrintDiagnosticLine("[net-match] held client: its listener could not open; it only dials");
+			return false;
+		}
+		if (config.migrationIceHost) config.migrationIceHost(*listener);
+		m_HeldListener = std::move(listener);
+		m_HeldListenerEvents.clear();
+		System::PrintDiagnosticLine("[net-match] held client: the first survivor listens on " + std::to_string(endpoint->listenPort) + " while it dials");
+		return true;
+	}
+
+	void NetMatchService::CloseHeldListenerLocked() {
+		if (!m_HeldListener) return;
+		m_HeldListener->Stop();
+		m_HeldListener.reset();
+		m_HeldListenerEvents.clear();
 	}
 
 	bool NetMatchService::HostAloneFromOwnStateLocked() {
@@ -5117,7 +5185,10 @@ static std::string ResyncSaveName() {
 		// Held seats that will rejoin this peer need it listening where the match published it, as an elected host does.
 		std::unique_ptr<INetTransport> listener;
 		uint64_t ownReturn = 0, handoverFrame = 0;
-		if (!HeldSurvivorsLocked().empty()) {
+		if (m_HeldListener) {
+			listener = std::make_unique<EarlyListener>(std::move(m_HeldListener), std::move(m_HeldListenerEvents));
+			m_HeldListenerEvents.clear();
+		} else if (!HeldSurvivorsLocked().empty()) {
 			const auto endpoint = std::find_if(config.matchConfig.migrationPeers.begin(), config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == local; });
 			listener = config.migrationTransportFactory ? config.migrationTransportFactory() : nullptr;
 			if (endpoint == config.matchConfig.migrationPeers.end() || !listener || !listener->StartHost(endpoint->listenPort)) {
@@ -5168,6 +5239,20 @@ static std::string ResyncSaveName() {
 				config.initialSeatHolds[local] = *ownHold;
 				config.peerIncarnations[local] = incarnation;
 				config.initialSeatReclaims[local] = {local, config.migrationGeneration, ownHold->eventSequence + 1, incarnation, ownReturn, delay, ownReturn + delay, std::nullopt};
+			}
+			// A survivor whose hold this seat never heard is held all the same (only a held seat dials it): the round holds it from the
+			// handover on every peer, as its own hold, and its return is this round's to agree.
+			for (uint8_t peer = 1; peer <= config.peerCount; ++peer) {
+				if (peer == local || peer == lostHost || config.initialSeatHolds.contains(peer) || config.initialPeerLeaves.contains(peer)) continue;
+				NetGameSeatHold hold;
+				hold.peerId = peer;
+				hold.authorityGeneration = config.migrationGeneration;
+				hold.eventSequence = 1;
+				hold.seatIncarnation = config.peerIncarnations.contains(peer) ? config.peerIncarnations.at(peer) : 1;
+				hold.cutoffFrame = handoverFrame;
+				config.initialSeatHolds[peer] = hold;
+				config.initialPeerLeaves[peer] = handoverFrame;
+				System::PrintDiagnosticLine("[net-match] held client: peer=" + std::to_string(peer) + " is held from the handover at " + std::to_string(handoverFrame) + " (its hold never reached this seat)");
 			}
 		}
 		if (!m_Coordinator->Start(listener ? *listener : *m_CatchUpTransport, config, &error) || !m_Coordinator->IsRunning()) {
@@ -5426,6 +5511,7 @@ static std::string ResyncSaveName() {
 				                            std::to_string(m_WorldCatchUp.appliedThrough));
 				m_InPlaceMoveHost = 0;
 				m_InPlaceTicketHost.clear();
+				CloseHeldListenerLocked();
 				return true;
 			}
 		}
@@ -5590,6 +5676,21 @@ static std::string ResyncSaveName() {
 					}
 					m_CatchUpWireBytes += event.bytes.size(); m_CatchUpWirePackets.push_back(event);
 				} else if (m_Session) m_Session->InjectEvent(event, nowMs);
+			}
+		}
+		// The first survivor listens while it dials: a held seat's own session at its listener proves that seat reads it as the host.
+		if (m_HeldListener && m_InPlaceCatchUp) {
+			bool proven = false;
+			for (NetTransportEvent& event: m_HeldListener->PollEvents()) {
+				proven = proven || (event.type == NetTransportEventType::PacketReceived && !NetLockstepCodec::LooksLikePacket(event.bytes) && !NetLobbyProtocol::Decode(event.bytes).ok);
+				m_HeldListenerEvents.push_back(std::move(event));
+			}
+			if (proven) {
+				System::PrintDiagnosticLine("[net-match] held client: a held seat dialed this one's listener; it hosts the match");
+				m_InPlaceMoveHost = 0;
+				m_InPlaceRoutes.clear();
+				if (m_MigratedTransport) m_MigratedTransport->Stop();
+				if (HostAloneFromOwnStateLocked()) return;
 			}
 		}
 		if (m_InPlaceMoveHost != 0) {
