@@ -187,6 +187,10 @@ namespace RTE {
 		double closingRate = 0.0; //!< Frames its replay gains on the round per frame the round commits, once measured.
 		bool closingMeasured = false;
 		uint64_t activationTrailFrames = 0; //!< How far it trailed the round when its activation was announced: its return leaves it that long.
+		uint32_t windowsWithoutProgress = 0; //!< Closing windows its replay stood still through, in a row.
+		struct TailDatagram { uint64_t first = 0, last = 0, sentMs = 0; bool resent = false; };
+		std::deque<TailDatagram> tailInFlight; //!< Tail datagrams sent and not yet passed by its replay, lowest frames first.
+		double tailAckRttMs = 0; //!< Measured time from a datagram's first send to the report that passes it; 0 until measured.
 		const char* catchUpGate = nullptr; //!< What the last catch-up report met on its way to an activation.
 		const char* catchUpGateLogged = nullptr; //!< The gate last written to the log, and the horizon it was written at.
 		uint64_t catchUpGateLoggedFrame = 0;
@@ -363,6 +367,13 @@ namespace RTE {
 	inline constexpr uint64_t c_NetWorldPaceProofTicks = 120;
 	/// The round frames a returner's closing rate is measured over.
 	inline constexpr uint64_t c_NetWorldClosingWindowFrames = 20;
+	/// Closing windows a returner's replay may stand still through before it is taken for parked and told so.
+	inline constexpr uint32_t c_NetWorldNoProgressWindows = 3;
+	/// A tail datagram's whole frames: few enough that one lost packet costs only them.
+	inline constexpr size_t c_NetWorldTailDatagramFrames = 4;
+	inline constexpr uint64_t c_NetWorldTailDatagramBytes = 1000;
+	/// A frame larger than this is too many packets for a datagram: it goes on the ordered lane in pieces.
+	inline constexpr uint64_t c_NetWorldTailDatagramFrameLimit = 4000;
 	/// How long a returning seat may replay without showing headroom before its rejoin is ended and retried.
 	inline constexpr uint64_t c_NetWorldHeadroomWaitMs = 30000;
 	/// World-join plane schema on the offer, the transition and the membership report.
@@ -590,6 +601,12 @@ namespace RTE {
 		bool NoteTransferProgress(NetPeerId connection, uint16_t ackedChunks, uint16_t totalChunks);
 		bool NoteDeliveredThrough(NetPeerId connection, uint64_t frame);
 		bool NextTailChunk(NetPeerId connection, std::vector<uint8_t>& chunk);
+		/// The next tail datagram due to a catching-up connection, packed as whole frames: the lowest one its replay has not passed
+		/// within its resend time, or the frames after the last one sent. Returns false when none is due.
+		/// large: the next frame is too large for a datagram, or a batch of them is on its way in pieces (NextTailChunk carries it).
+		bool NextTailDatagram(NetPeerId connection, uint64_t nowMs, std::vector<uint8_t>& packed, bool* large = nullptr);
+		/// Retires the datagrams a connection's replay has passed and measures their round trip.
+		void AcknowledgeTailDatagrams(NetPeerId connection, uint64_t nowMs);
 		void NoteTailChunkSent(NetPeerId connection, size_t bytes);
 		bool NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough);
 		/// Records that this bootstrap has been sent the match config, so a retried transfer does not

@@ -989,7 +989,8 @@ namespace RTE {
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
-		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr);
+		/// trailFrames: how far the returner's replay trails the round at the round's pace; its first required frame comes that much later.
+		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { NET_PLANE_CHECK(); HandleEvent(event, nowMs); }
