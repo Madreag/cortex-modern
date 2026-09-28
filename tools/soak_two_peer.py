@@ -109,6 +109,37 @@ def census_private(log: Path) -> dict:
     return rows
 
 
+def pace_across_own_seat_hold(root: Path) -> dict | None:
+    """Each peer's census pace in the windows wholly before the host's first own-seat hold and wholly after its reclaim."""
+    text = (root / "host" / "stdout.log").read_text(encoding="utf-8", errors="replace") if (root / "host" / "stdout.log").is_file() else ""
+    hold = next((int(line.split("frame=")[1].split()[0]) for line in text.splitlines()
+                 if line.startswith("[net-match] hold peer=") and "the host's own seat" in line), None)
+    back = next((int(line.split("frame=")[1].split()[0]) for line in text.splitlines()
+                 if line.startswith("[net-match] seat-reclaimed peer=") and hold is not None and int(line.split("frame=")[1].split()[0]) >= hold), None)
+    if hold is None or back is None:
+        return None
+    summary: dict = {"hold_frame": hold, "reclaim_frame": back}
+    for peer in ("host", "client"):
+        rows = []
+        for line in (root / peer / "stdout.log").read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("[mem-census] ") and " pace: " in line:
+                fields = dict(part.split("=", 1) for part in line.split(" pace: ", 1)[1].split() if "=" in part)
+                numbers = {key: float(value) for key, value in fields.items() if value.replace(".", "", 1).replace("-", "", 1).isdigit()}
+                rows.append({"tick": int(line.split("tick=")[1].split()[0]), **numbers})
+        spans, previous = {"before": [], "after": []}, 0
+        for row in rows:
+            if row["tick"] <= hold:
+                spans["before"].append(row)
+            elif previous >= back:
+                spans["after"].append(row)
+            previous = row["tick"]
+        keys = ("wall_tps", "sim_ms_per_tick", "update_ms_per_tick", "draw_ms_per_tick", "preview_ms_per_tick", "interface_ms_per_tick",
+                "ms_per_frame_drawn", "max_iteration_draw_ms")
+        summary[peer] = {name: {"windows": len(span), **{key: round(sum(r.get(key, 0.0) for r in span) / len(span), 3) for key in keys}} if span else None
+                         for name, span in spans.items()}
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -117,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--autosave-seconds", type=int, default=60)
     parser.add_argument("--holds", type=int, default=3)
     parser.add_argument("--stall-ms", type=int, default=1500)
+    parser.add_argument("--host-stall", action="append", default=[], metavar="TICK:MS",
+                        help="the host stalls MS at TICK (-net-test-live-stall), so its session plane holds the host's own seat; repeatable")
     parser.add_argument("--lag", type=int, default=0, help="the client's added one-way delay in ms (its -net-fake-lag is the round trip, twice this)")
     parser.add_argument("--loss", type=int, default=0, help="the client's GNS packet loss in percent (CC_TEST_GNS_LOSS_PERCENT)")
     parser.add_argument("--port", type=int, default=PORT_LO)
@@ -152,6 +185,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--minutes > 0, --holds >= 0, --stall-ms in 1..20000, --fullstate-every >= 0, --stall-each-round >= 0")
     if not 0 <= options.saver_delay_ms <= 60000:
         parser.error("--saver-delay-ms in 0..60000")
+    for spec in options.host_stall:
+        tick, _, milliseconds = spec.partition(":")
+        if not (tick.isdigit() and milliseconds.isdigit() and int(tick) > 0 and 0 < int(milliseconds) <= 20000):
+            parser.error("--host-stall TICK:MS with TICK > 0 and MS in 1..20000")
     window = options.terrain_events.split(":")
     if options.terrain_events and not (len(window) == 2 and all(part.isdigit() for part in window) and int(window[0]) <= int(window[1])):
         parser.error("--terrain-events FROM:TO with FROM <= TO")
@@ -168,6 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     input_pattern(script)
     plan = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "repo": str(repo), "ticks": ticks, "minutes": options.minutes,
             "autosave_seconds": options.autosave_seconds, "stalls": [f"{tick}:{options.stall_ms}" for tick in stalls],
+            "host_stalls": options.host_stall,
             "port": options.port, "fullstate_every": options.fullstate_every, "sample_seconds": options.sample_seconds,
             "saver_delay_ms": options.saver_delay_ms, "stall_each_round": options.stall_each_round,
             "client_free_run": options.client_free_run, "terrain_events": options.terrain_events}
@@ -211,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
                 flags += ["-memory-census-probe-size", str(options.census_probe_size)]
             if peer == "host":
                 flags += ["-net-host", "-net-autosave-seconds", str(options.autosave_seconds)]
+                for spec in options.host_stall:
+                    flags += ["-net-test-live-stall", spec]
             else:
                 flags += ["-net-join", "127.0.0.1"]
                 if options.lag:
@@ -308,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
               "each_round_stalls": each_round, "in_place_catch_ups": in_place, "rounds": rounds,
               "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
               "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
-              "clean_ticks": clean_ticks,
+              "clean_ticks": clean_ticks, "pace_across_own_seat_hold": pace_across_own_seat_hold(root),
               "plan": plan}
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "

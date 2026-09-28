@@ -31,7 +31,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <unordered_set>
 
 namespace RTE {
@@ -504,6 +506,24 @@ namespace RTE {
 		const Outcome& o = s_LastOutcome;
 		return "equipped=" + (o.equipped.empty() ? std::string("-") : o.equipped) + " rounds=" + std::to_string(o.roundsInMag) + " taken_rounds=" + std::to_string(o.takenRounds) + " fired_once=" + std::to_string(o.firedOnce ? 1 : 0) +
 		       " spawned=" + std::to_string(o.spawned) + (o.spawnedNames.empty() ? std::string() : " [" + o.spawnedNames + "]") + " taken=" + std::to_string(o.taken) + " shadows=" + std::to_string(o.shadows) + " violations=" + std::to_string(o.violations);
+	}
+
+	std::string LocalPrediction::DescribePhasesSinceLastCall() {
+		static std::array<double, PhaseCount> lastMs{};
+		static uint64_t lastCount = 0;
+		if (s_PreviewCount < lastCount) {
+			lastMs = {};
+			lastCount = 0;
+		}
+		const double count = static_cast<double>(std::max<uint64_t>(1, s_PreviewCount - lastCount));
+		std::ostringstream out;
+		out << std::fixed << std::setprecision(3);
+		for (int phase = 0; phase < PhaseCount; ++phase) {
+			out << (phase ? "," : "") << s_PhaseNames[phase] << ':' << (s_PhaseMs[phase] - lastMs[phase]) / count;
+		}
+		lastMs = s_PhaseMs;
+		lastCount = s_PreviewCount;
+		return out.str();
 	}
 
 	std::string LocalPrediction::DescribeStats() {
