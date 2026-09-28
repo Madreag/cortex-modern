@@ -5,7 +5,7 @@
   "size": "960x540",
   "timeout_s": 190,
   "title": "Direct and relay connections proved by the transport and visible diagnostics",
-  "capture_policy": "Every route item requires visible connected-route diagnostics and the native selected-candidate and RouteAllowed lines. Preferences alone are not route proof.",
+  "capture_policy": "Every route item requires visible connected-route diagnostics and the native selected-candidate and RouteAllowed lines. Preferences alone are not route proof. Both routes play the same inputs at the same fixed input delay, so the scripted round lands on the same frames whatever the route's round trip.",
   "requires_tokens": [
     "TURN_SERVER",
     "TURN_USER",
@@ -29,6 +29,8 @@
             "NetworkIceEnable": "1",
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always",
+            "NetworkHostDelayPolicy": "Fixed",
+            "NetworkInputDelayFrames": "4",
             "SessionDirectoryUrl": "{DIRECTORY_URL}",
             "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
           }
@@ -68,13 +70,15 @@
             "{INPUT_SCRIPT}"
           ],
           "menu_script": "mp-direct-vs-relay.relay.host.menu.txt",
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "probe": "mp-direct-vs-relay.relay.host.probe.json",
           "settings": {
             "NetworkDisplayName": "Host",
             "NetworkIceEnable": "1",
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always",
+            "NetworkHostDelayPolicy": "Fixed",
+            "NetworkInputDelayFrames": "4",
             "NetworkTurnServers": "{TURN_SERVER}",
             "NetworkTurnUser": "{TURN_USER}",
             "NetworkTurnPass": "{TURN_PASS}",
@@ -90,7 +94,7 @@
             "{INPUT_SCRIPT}"
           ],
           "menu_script": "mp-direct-vs-relay.relay.client.menu.txt",
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "probe": "mp-direct-vs-relay.relay.client.probe.json",
           "settings": {
             "NetworkDisplayName": "Joiner",

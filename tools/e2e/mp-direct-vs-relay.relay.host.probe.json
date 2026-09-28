@@ -55,6 +55,10 @@
       "command": "video_mark relay-mp-pause-host"
     },
     {
+      "op": "wait",
+      "elapsed_ms": 500
+    },
+    {
       "op": "assert",
       "equals": {
         "service": "Running",
@@ -121,7 +125,7 @@
     },
     {
       "op": "menu",
-      "command": "video_mark relay-mp-end-match"
+      "command": "video_mark relay-mp-resume-host"
     },
     {
       "op": "menu",
