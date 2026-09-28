@@ -378,12 +378,29 @@
       "id": "held-client-rejoining",
       "peer": "leaver",
       "run": "held",
-      "screen": "RejoinOverlay",
-      "what": "The held client sees Held - AI in control - rejoining, then returns to play.",
-      "assert": "Private catch-up completes in the held client log; its rejoin overlay is recorded.",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        800
+      ],
+      "what": "The held client catches up in place on the game screen under the 'Held - AI in control - rejoining' toast, then returns to play.",
+      "assert": "Private catch-up completes in place in the held client log; its match report carries the held toast; its game frames through the catch-up are recorded.",
       "log_regex": [
-        "\\[net-match\\] private catch-up complete frame=\\d+"
-      ]
+        "\\[net-match\\] private catch-up complete frame=\\d+ in_place=1"
+      ],
+      "report_toasts": {
+        "report": "{peer}-match.json",
+        "require": [
+          {
+            "kind": "seat_held",
+            "text": "^Held - AI in control - rejoining$",
+            "ticks": [
+              600,
+              800
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "announced-ai-toast-host",

@@ -37,6 +37,7 @@
 
 #include <iostream>
 #include <format>
+#include <string_view>
 
 #include <algorithm>
 #include <array>
@@ -56,6 +57,11 @@ using namespace RTE;
 
 namespace {
 	void ClearPendingAudioArchives();
+
+	// A headless run plays to nobody, so its FMOD threads need not outrank the desktop.
+	bool HeadlessAudioThreadsAtNormalPriority(const char* headless) {
+		return headless != nullptr && std::string_view(headless) == "1";
+	}
 }
 
 namespace {
@@ -197,9 +203,14 @@ FMOD_RESULT AudioMan::InitializeAudioSystem(bool silentOutput) {
 	}
 #ifdef _WIN32
 	// A headless run plays to nobody, so no FMOD thread outranks the desktop (the mixer defaults to time-critical); 0 is THREAD_PRIORITY_NORMAL.
-	if (std::getenv("CCCP_HEADLESS") != nullptr) {
+	if (HeadlessAudioThreadsAtNormalPriority(std::getenv("CCCP_HEADLESS"))) {
+		static bool reported = false;
 		for (int type = FMOD_THREAD_TYPE_MIXER; type < FMOD_THREAD_TYPE_MAX; ++type) {
-			FMOD::Thread_SetAttributes(static_cast<FMOD_THREAD_TYPE>(type), FMOD_THREAD_AFFINITY_GROUP_DEFAULT, 0);
+			const FMOD_RESULT result = FMOD::Thread_SetAttributes(static_cast<FMOD_THREAD_TYPE>(type), FMOD_THREAD_AFFINITY_GROUP_DEFAULT, 0);
+			if (result != FMOD_OK && !reported) {
+				reported = true;
+				System::PrintDiagnosticLine(std::format("[audio] headless FMOD thread type {} kept its priority: FMOD_RESULT {}", type, static_cast<int>(result)));
+			}
 		}
 	}
 #endif
@@ -2789,6 +2800,15 @@ bool AudioMan::RunCheckpointWorldEffectsSelfTest() {
 }
 
 bool AudioMan::RunCheckpointEffectsSelfTest() {
+	{
+		// Only CCCP_HEADLESS=1 lowers the mixer, as every other headless lever reads it.
+		const bool one = HeadlessAudioThreadsAtNormalPriority("1"), zero = HeadlessAudioThreadsAtNormalPriority("0"),
+		           empty = HeadlessAudioThreadsAtNormalPriority(""), unset = HeadlessAudioThreadsAtNormalPriority(nullptr);
+		const bool row = one && !zero && !empty && !unset;
+		System::PrintDiagnosticLine(std::format("[checkpoint-audio-effects-selftest] {} headless_lever_reads_one_only one={} zero={} empty={} unset={}",
+		    row ? "PASS" : "FAIL", one, zero, empty, unset));
+		if (!row) return false;
+	}
 	if (!m_AudioEnabled) return false;
 	StopAll();
 	bool passed = true;

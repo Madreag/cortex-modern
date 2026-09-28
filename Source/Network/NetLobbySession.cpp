@@ -1362,6 +1362,8 @@ namespace RTE {
 						} else if (!m_Config.host && ParseWorldTailChunkRound(*chunk, round)) {
 							if (m_PendingTail.empty() || m_PendingTail.back().first != round) m_PendingTail.emplace_back(round, std::vector<uint8_t>());
 							m_PendingTail.back().second.insert(m_PendingTail.back().second.end(), chunk->bytes.begin() + c_NetWorldTailRoundBytes, chunk->bytes.end());
+						} else if (!m_Config.host) {
+							System::PrintDiagnosticLine("[net-match] dropped a tail chunk with no round (" + std::to_string(chunk->bytes.size()) + " bytes)");
 						}
 						break;
 					}

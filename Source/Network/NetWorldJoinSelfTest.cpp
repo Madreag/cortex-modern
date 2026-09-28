@@ -1307,19 +1307,66 @@ namespace RTE {
 				return Fail("bootstrap-resent-the-match-config: the second attempt for connection 7 sent it again");
 			}
 
-			// The host never drains a tail, so a tail chunk aimed at it must not be kept.
-			NetLobbyStateChunk tailChunk;
-			tailChunk.transferId = c_NetWorldTailTransferId;
-			tailChunk.totalBytes = 4;
-			tailChunk.chunkIndex = 0;
-			tailChunk.chunkCount = 1;
-			tailChunk.bytes = {1, 2, 3, 4};
+			// The host never drains a tail, so a tail chunk aimed at it must not be kept, even one a joiner would read.
+			const NetLobbyStateChunk tailChunk = MakeWorldTailChunk(7, {1, 2, 3, 4});
 			if (!pair.client.SendPayload(tailChunk, &error)) {
 				return Fail("bootstrap tail chunk did not send: " + error);
 			}
 			pair.Pump(8);
 			if (!pair.host.TakePendingTailBytes().empty()) {
 				return Fail("host-kept-a-joiner-tail-chunk: the host buffered a tail chunk from a bound remote");
+			}
+			return 0;
+		}
+
+		// A joiner names a tail chunk it cannot read the round of instead of dropping it unseen.
+		int TestJoinerNamesAnUnroundedTailChunk() {
+			std::string error;
+			WorldLobbyPair pair;
+			if (!pair.Open(47151, &error)) {
+				return Fail("unrounded tail pair: " + error);
+			}
+			NetLobbyStateChunk unrounded;
+			unrounded.transferId = c_NetWorldTailTransferId;
+			unrounded.totalBytes = 4;
+			unrounded.chunkIndex = 0;
+			unrounded.chunkCount = 1;
+			unrounded.bytes = {1, 2, 3, 4};
+			if (!pair.host.SendPayload(unrounded, &error)) {
+				return Fail("unrounded tail chunk did not send: " + error);
+			}
+			std::ostringstream said;
+			std::streambuf* const saved = std::cout.rdbuf(said.rdbuf());
+			pair.Pump(8);
+			std::cout.rdbuf(saved);
+			const std::string text = said.str();
+			std::cout << text;
+			if (!pair.client.TakePendingTailBytes().empty()) {
+				return Fail("joiner-kept-an-unrounded-tail-chunk: a 4-byte tail chunk with no round reached the pending tail");
+			}
+			if (text.find("dropped a tail chunk with no round (4 bytes)") == std::string::npos) {
+				return Fail("joiner-dropped-an-unrounded-tail-chunk-silently: no line named the 4-byte chunk it dropped");
+			}
+			return 0;
+		}
+
+		// A successor keyed to its round refuses another round's committed record, whatever its frames.
+		int TestSuccessorRefusesAnotherRoundsRecords() {
+			std::string error;
+			NetWorldFrameLog log;
+			if (!log.Append(MakeCommittedFrame(10), &error) || !log.Append(MakeCommittedFrame(11), &error)) {
+				return Fail("keyed adoption source refused an in-order frame: " + error);
+			}
+			NetWorldFrameLog other;
+			other.SetRound(2);
+			if (other.AdoptRecords(log) || other.Count() != 0 || other.Covers(10)) {
+				return Fail("a-successor-adopted-another-rounds-records: a tail keyed to round 2 holds " + std::to_string(other.Count()) +
+				            " frames of round 1");
+			}
+			NetWorldFrameLog same;
+			same.SetRound(1);
+			if (!same.AdoptRecords(log) || same.Count() != 2 || !same.Covers(10) || !same.Covers(11)) {
+				return Fail("a-successor-refused-its-own-rounds-records: a tail keyed to round 1 holds " + std::to_string(same.Count()) + " of 2 frames");
 			}
 			return 0;
 		}
@@ -7640,6 +7687,14 @@ namespace RTE {
 			s_FailTag = "net-world-bootstrap-selftest";
 			return TestHostBootstrapRefusals();
 		}
+		if (std::strcmp(name, "unrounded-tail") == 0 || std::strcmp(name, "-net-world-unrounded-tail-selftest") == 0) {
+			s_FailTag = "net-world-unrounded-tail-selftest";
+			return TestJoinerNamesAnUnroundedTailChunk();
+		}
+		if (std::strcmp(name, "keyed-adoption") == 0 || std::strcmp(name, "-net-world-keyed-adoption-selftest") == 0) {
+			s_FailTag = "net-world-keyed-adoption-selftest";
+			return TestSuccessorRefusesAnotherRoundsRecords();
+		}
 		if (std::strcmp(name, "respawn") == 0 || std::strcmp(name, "-net-world-respawn-selftest") == 0) {
 			s_FailTag = "net-world-respawn-selftest";
 			return TestSeatRespawnKeepsTheWorldRunning();
@@ -7782,6 +7837,7 @@ namespace RTE {
 		if (const int result = TestFrameLogAndOffer(); result != 0) {
 			return result;
 		}
+		if (const int result = TestSuccessorRefusesAnotherRoundsRecords(); result != 0) return result;
 		if (const int result = TestImageBlobRoundTrip(); result != 0) {
 			return result;
 		}
@@ -7814,6 +7870,7 @@ namespace RTE {
 		if (const int result = TestHostBootstrapRefusals(); result != 0) {
 			return result;
 		}
+		if (const int result = TestJoinerNamesAnUnroundedTailChunk(); result != 0) return result;
 		if (const int result = TestWorldImagePublishedFromTheWriter(); result != 0) {
 			return result;
 		}

@@ -100,6 +100,9 @@ namespace {
 		}
 		bool Enabled() const { return m_Output != nullptr; }
 		bool Close() { return Seal(true); }
+		/// Lines the writer's queue dropped at its bound; the index carries them beside the retention's own drops.
+		void NoteQueueDropped(size_t lines) { m_QueueDroppedLines += lines; }
+		size_t QueueDroppedLines() const { return m_QueueDroppedLines; }
 		~FeelStream() { if (m_Output) gzclose(m_Output); }
 	private:
 		bool Next() {
@@ -122,7 +125,7 @@ namespace {
 			}
 			std::ofstream index(m_Directory / "raw.index.pending", std::ios::trunc);
 			index << FeelJson({{"version", 1}, {"complete", complete}, {"parts", m_Parts}, {"total_lines", m_TotalLines},
-			    {"dropped_lines", m_DroppedLines}, {"chunk_bytes", m_ChunkBytes}, {"retained_chunks", m_Chunks},
+			    {"dropped_lines", m_DroppedLines}, {"queue_dropped_lines", m_QueueDroppedLines}, {"chunk_bytes", m_ChunkBytes}, {"retained_chunks", m_Chunks},
 			    {"window", "last sealed chunks plus one active chunk; byte bound, no tick-duration guarantee"}}).dump();
 			index.close();
 			if (!index) return false;
@@ -134,44 +137,61 @@ namespace {
 		std::filesystem::path m_Directory;
 		std::string m_Name;
 		std::deque<FeelJson> m_Parts;
-		size_t m_ChunkBytes = 0, m_Chunks = 0, m_Number = 0, m_Bytes = 0, m_Lines = 0, m_TotalLines = 0, m_DroppedLines = 0;
+		size_t m_ChunkBytes = 0, m_Chunks = 0, m_Number = 0, m_Bytes = 0, m_Lines = 0, m_TotalLines = 0, m_DroppedLines = 0, m_QueueDroppedLines = 0;
 		uLong m_CRC = 0;
 		bool m_Trim = true;
 	};
 	// Compresses, seals and retires the chunks on its own thread, so the frame only queues finished lines.
 	class AsyncFeelStream {
 	public:
+		/// A stalled disk holds at most this many lines in memory.
+		static constexpr size_t c_QueueBound = 65536;
+
+		explicit AsyncFeelStream(size_t queueBound = c_QueueBound) : m_QueueBound(queueBound) {}
 		~AsyncFeelStream() { Stop(); }
-		bool Open(const std::filesystem::path& directory) {
-			if (!m_Stream.Open(directory)) return false;
+		bool Open(const std::filesystem::path& directory) { return OpenStream(directory) && Start(); }
+		bool OpenStream(const std::filesystem::path& directory) { return m_Stream.Open(directory); }
+		bool Start() {
 			m_Thread = std::thread([this] { Run(); });
 			return true;
 		}
-		/// False once a queued line failed to reach its chunk; the failure shows on the next write.
+		/// False after Close, or once a queued line failed to reach its chunk (the failure shows on the next write). A line past
+		/// the queue's bound is dropped and counted: the index names the count and Close returns false.
 		bool Write(std::string text) {
 			if (m_Failed.load()) return false;
+			std::string line;
+			bool accepted = true;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
-				m_Queue.push_back(std::move(text));
+				if (m_Stopping) {
+					accepted = false;
+					if (!std::exchange(m_ClosedWriteReported, true)) line = "[cross-record] a presentation line came after its stream closed: dropped";
+				} else if (m_Queue.size() >= m_QueueBound) {
+					// One line per stall; the writer adds the count to the index.
+					if (m_DroppedSinceTaken++ == 0) line = "[cross-record] the presentation queue reached its bound of " + std::to_string(m_QueueBound) + " lines: the lines past it are dropped and counted in raw.index.json";
+				} else {
+					m_Queue.push_back(std::move(text));
+				}
 			}
-			m_Wake.notify_one();
-			return true;
+			if (!line.empty()) System::PrintDiagnosticLine(line);
+			if (accepted) m_Wake.notify_one();
+			return accepted;
 		}
 		bool Enabled() const { return m_Thread.joinable() && !m_Failed.load(); }
 		bool Close() {
 			if (!m_Thread.joinable()) return false;
 			Stop();
-			return !m_Failed.load() && m_Stream.Close();
+			const bool sealed = m_Stream.Close();
+			return !m_Failed.load() && sealed && m_Stream.QueueDroppedLines() == 0;
 		}
 	private:
 		void Stop() {
-			if (!m_Thread.joinable()) return;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_Stopping = true;
 			}
 			m_Wake.notify_one();
-			m_Thread.join();
+			if (m_Thread.joinable()) m_Thread.join();
 		}
 		void Run() {
 			std::unique_lock<std::mutex> lock(m_Mutex);
@@ -179,11 +199,13 @@ namespace {
 				m_Wake.wait(lock, [this] { return m_Stopping || !m_Queue.empty(); });
 				std::deque<std::string> batch;
 				batch.swap(m_Queue);
+				const size_t lost = std::exchange(m_DroppedSinceTaken, 0);
 				const bool stopping = m_Stopping;
 				lock.unlock();
 				for (const std::string& text: batch) {
 					if (!m_Failed.load() && !m_Stream.Write(text)) m_Failed.store(true);
 				}
+				m_Stream.NoteQueueDropped(lost);
 				lock.lock();
 				if (stopping && m_Queue.empty()) return;
 			}
@@ -193,7 +215,9 @@ namespace {
 		std::mutex m_Mutex;
 		std::condition_variable m_Wake;
 		std::deque<std::string> m_Queue;
-		bool m_Stopping = false;
+		size_t m_QueueBound = c_QueueBound;
+		size_t m_DroppedSinceTaken = 0; //!< Lines dropped at the bound since the writer last took the queue.
+		bool m_Stopping = false, m_ClosedWriteReported = false;
 		std::atomic<bool> m_Failed{false};
 	};
 	struct FeelState {
@@ -512,6 +536,34 @@ bool RTE::RunCrossPresentationRetentionSelfTest(std::string* error) {
 		if (size < 0 || closed != Z_OK || static_cast<size_t>(size) != part["bytes"].get<size_t>() || crc32(0, reinterpret_cast<const Bytef*>(buffer.data()), size) != part["crc32"].get<uLong>()) { *error = "retained chunk integrity"; return false; }
 		++count;
 	}
+	// A stalled writer holds at most its bound: lines past it are dropped and counted in the index, its close reports the loss,
+	// and a write after the close is refused.
+	const auto queued = directory.parent_path() / "cross-queue-bound-selftest";
+	std::filesystem::remove_all(queued);
+	std::filesystem::create_directories(queued);
+	size_t accepted = 0;
+	bool closed = true, acceptedAfterClose = true;
+	{
+		AsyncFeelStream bounded(8);
+		if (!bounded.OpenStream(queued)) { *error = "bounded presentation writer open"; return false; }
+		for (int i = 0; i < 10; ++i) accepted += bounded.Write(FeelJson({{"sequence", i}}).dump() + "\n") ? 1 : 0;
+		bounded.Start();
+		closed = bounded.Close();
+		acceptedAfterClose = bounded.Write(FeelJson({{"sequence", 10}}).dump() + "\n");
+	}
+	FeelJson queuedIndex;
+	{
+		std::ifstream queuedInput(queued / "raw.index.json");
+		queuedIndex = FeelJson::parse(queuedInput, nullptr, false);
+	}
+	std::filesystem::remove_all(queued);
+	const size_t kept = queuedIndex.is_object() ? queuedIndex.value("total_lines", size_t{0}) : 0;
+	const size_t queueDropped = queuedIndex.is_object() ? queuedIndex.value("queue_dropped_lines", size_t{0}) : 0;
+	const bool boundedQueue = kept == 8 && queueDropped == 2 && !closed && !acceptedAfterClose;
+	System::PrintDiagnosticLine(std::string("[net-match-selftest] ") + (boundedQueue ? "PASS" : "FAIL") + " presentation_queue_bound_counts_its_losses accepted=" +
+	    std::to_string(accepted) + " kept=" + std::to_string(kept) + " queue_dropped=" + std::to_string(queueDropped) + " close_ok=" + std::to_string(closed) +
+	    " accepted_after_close=" + std::to_string(acceptedAfterClose));
+	if (!boundedQueue) { *error = "the presentation queue dropped lines past its bound without counting them, or took a write after Close"; return false; }
 	System::PrintDiagnosticLine("[net-match-selftest] PASS presentation_retention_bounded_verified_chunks=" + std::to_string(count));
 	return true;
 }
