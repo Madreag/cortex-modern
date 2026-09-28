@@ -1,0 +1,7 @@
+# ThreadSanitizer suppressions for the Linux and Mac sanitizer runs: third-party frames only, each with its reason.
+# A frame under Source/ is never suppressed here; a report there is a finding.
+
+# GameNetworkingSockets: a new connection takes the handle-table lock while holding its own lock, the reverse of every
+# API lookup. Its lock rules (steamnetworkingsockets_lowlevel.h) allow it: the global lock is held and the connection
+# is not in the table yet, so no thread can be waiting for it.
+deadlock:SteamNetworkingSocketsLib::CSteamNetworkConnectionBase::BInitConnection
