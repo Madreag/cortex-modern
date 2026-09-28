@@ -3866,6 +3866,7 @@ static std::string ResyncSaveName() {
 			if (!host.NoteCatchUpProgress(connection, report.value, ticks, elapsed, nowFrame, &activation, &progressError)) noteGate("refused", " error=" + progressError);
 			else noteGate(nullptr, "");
 			host.NoteCatchUpClock(connection, nowMs);
+			host.AcknowledgeTailDatagrams(connection, nowMs);
 			if (activation != 0) {
 				if (const NetWorldJoinSession* session = host.FindSession(connection); session) {
 					(void)lobby.SendPayloadTo(WorldJoinLobbyPeer(*session), MakeWorldJoinReport(c_NetWorldReportActivate, activation), nullptr);
@@ -4125,15 +4126,23 @@ static std::string ResyncSaveName() {
 		if (session.phase != NetWorldJoinPhase::CatchingUp) {
 			return;
 		}
-		std::vector<uint8_t> packed;
-		if (!host.NextTailChunk(session.connection, packed)) return;
-		const NetLobbyStateChunk chunk = MakeWorldTailChunk(host.TailRound(), packed);
 		const uint8_t lobbyPeer = WorldJoinLobbyPeer(session);
 		if (lobbyPeer == 0) {
 			return;
 		}
-		if (lobby.SendPayloadTo(lobbyPeer, chunk, nullptr)) {
-			host.NoteTailChunkSent(session.connection, packed.size());
+		// Whole frames with their round on the round's unreliable lane: a lost datagram delays only its own frames, and goes again.
+		const NetPeerId connection = session.connection;
+		const uint64_t nowMs = SteadyNowMs();
+		for (int datagram = 0; datagram < 16; ++datagram) {
+			std::vector<uint8_t> packed;
+			bool large = false;
+			if (!host.NextTailDatagram(connection, nowMs, packed, &large)) {
+				// A frame too large for a datagram goes on the ordered lane in pieces, one a pump; the datagrams go on after it.
+				if (large && host.NextTailChunk(connection, packed) && lobby.SendPayloadTo(lobbyPeer, MakeWorldTailChunk(host.TailRound(), packed), nullptr))
+					host.NoteTailChunkSent(connection, packed.size());
+				return;
+			}
+			if (!lobby.SendPayloadTo(lobbyPeer, MakeWorldTailChunk(host.TailRound(), packed), nullptr, NetTransportLane::InputUnreliable)) return;
 		}
 	}
 
@@ -4291,7 +4300,7 @@ static std::string ResyncSaveName() {
 					continue;
 				}
 				std::string error;
-				if (!m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error)) {
+				if (!m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error, session.activationTrailFrames)) {
 					if (m_PrivateTransferHeldReasons[session.connection] != error) {
 						m_PrivateTransferHeldReasons[session.connection] = error;
 						System::PrintDiagnosticLine("[net-match] reclaim not scheduled peer=" + std::to_string(session.assignedPeerId) + " e=" + std::to_string(session.activationTick) +
@@ -4809,7 +4818,9 @@ static std::string ResyncSaveName() {
 		if (outRefusal) *outRefusal = 0;
 		std::vector<std::pair<uint64_t, size_t>> foreign;
 		// A private catch-up replays one round: a chunk of any other round is dropped, never replayed.
-		std::vector<uint8_t> incoming = lobby.TakePendingTailBytes(catchUp.privateMatch ? std::optional<uint64_t>(catchUp.roundId) : std::nullopt, &foreign);
+		const std::optional<uint64_t> ownRound = catchUp.privateMatch ? std::optional<uint64_t>(catchUp.roundId) : std::nullopt;
+		const std::vector<std::vector<uint8_t>> datagrams = lobby.TakePendingTailDatagrams(ownRound, &foreign);
+		std::vector<uint8_t> incoming = lobby.TakePendingTailBytes(ownRound, &foreign);
 		for (const auto& [round, bytes]: foreign) {
 			if (!catchUp.droppedForeignRounds.insert(round).second) continue;
 			System::PrintDiagnosticLine("[net-match] dropped a tail chunk of round " + std::to_string(round) + " (" + std::to_string(bytes) + " bytes): this catch-up replays round " + std::to_string(catchUp.roundId));
@@ -4818,28 +4829,44 @@ static std::string ResyncSaveName() {
 			ScenarioRunner::SetControllerReplayError("private tail exceeds its bounded receive buffer"); return;
 		}
 		catchUp.partialTail.insert(catchUp.partialTail.end(), incoming.begin(), incoming.end());
-		const auto& packed = catchUp.partialTail;
 		std::vector<NetLockstepFrame> later;
-		size_t offset = 0;
-		while (offset + 4 <= packed.size()) {
-			const uint32_t size = static_cast<uint32_t>(packed[offset]) | (static_cast<uint32_t>(packed[offset + 1]) << 8) |
-			                      (static_cast<uint32_t>(packed[offset + 2]) << 16) | (static_cast<uint32_t>(packed[offset + 3]) << 24);
-			if (size == 0 || size > 2 * NetLockstepCodec::c_MaxPeerCount * NetLockstepCodec::c_MaxRecoveryInputBytes) {
-				ScenarioRunner::SetControllerReplayError("invalid committed tail record length"); return;
+		// Reads whole records from packed at offset; a stream may end inside one, a datagram never does.
+		const auto readRecords = [&](const std::vector<uint8_t>& packed, size_t& offset) {
+			while (offset + 4 <= packed.size()) {
+				const uint32_t size = static_cast<uint32_t>(packed[offset]) | (static_cast<uint32_t>(packed[offset + 1]) << 8) |
+				                      (static_cast<uint32_t>(packed[offset + 2]) << 16) | (static_cast<uint32_t>(packed[offset + 3]) << 24);
+				if (size == 0 || size > 2 * NetLockstepCodec::c_MaxPeerCount * NetLockstepCodec::c_MaxRecoveryInputBytes) {
+					ScenarioRunner::SetControllerReplayError("invalid committed tail record length"); return false;
+				}
+				if (packed.size() - offset - 4 < size) break;
+				offset += 4;
+				NetLockstepFrame frame;
+				std::string error;
+				if (!DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + offset, packed.begin() + offset + size), frame, &error)) {
+					ScenarioRunner::SetControllerReplayError("invalid committed tail: " + error); return false;
+				}
+				if (catchUp.privateMatch && frame.roundId != catchUp.roundId) {
+					ScenarioRunner::SetControllerReplayError("private tail belongs to another round: frame " + std::to_string(frame.targetFrame) + " is of round " + std::to_string(frame.roundId) + ", the catch-up's is " + std::to_string(catchUp.roundId));
+					return false;
+				}
+				// A datagram sent again repeats frames this catch-up already holds.
+				const uint64_t target = frame.targetFrame;
+				if (target > ScenarioRunner::WorldCatchUpAppliedThrough() && !ScenarioRunner::WorldCatchUpHasFrame(target) &&
+				    std::none_of(later.begin(), later.end(), [target](const NetLockstepFrame& held) { return held.targetFrame == target; }))
+					later.push_back(std::move(frame));
+				offset += size;
 			}
-			if (packed.size() - offset - 4 < size) break;
-			offset += 4;
-			NetLockstepFrame frame;
-			std::string error;
-			if (!DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + offset, packed.begin() + offset + size), frame, &error)) {
-				ScenarioRunner::SetControllerReplayError("invalid committed tail: " + error); return;
+			return true;
+		};
+		for (const std::vector<uint8_t>& datagram: datagrams) {
+			size_t offset = 0;
+			if (!readRecords(datagram, offset)) return;
+			if (offset != datagram.size()) {
+				ScenarioRunner::SetControllerReplayError("a committed tail datagram ends inside a record"); return;
 			}
-			if (catchUp.privateMatch && frame.roundId != catchUp.roundId) {
-				ScenarioRunner::SetControllerReplayError("private tail belongs to another round: frame " + std::to_string(frame.targetFrame) + " is of round " + std::to_string(frame.roundId) + ", the catch-up's is " + std::to_string(catchUp.roundId));
-				return;
-			}
-			later.push_back(std::move(frame)); offset += size;
 		}
+		size_t offset = 0;
+		if (!readRecords(catchUp.partialTail, offset)) return;
 		catchUp.partialTail.erase(catchUp.partialTail.begin(), catchUp.partialTail.begin() + offset);
 		if (!later.empty()) {
 			ScenarioRunner::AppendWorldCatchUp(std::move(later));
