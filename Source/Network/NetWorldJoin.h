@@ -429,6 +429,7 @@ namespace RTE {
 	struct NetWorldCatchUpClient {
 		bool active = false;
 		uint64_t tailDatagrams = 0, tailFramesKept = 0, tailFramesRepeated = 0; //!< What its tail brought, for its progress line.
+		uint64_t reportsSent = 0, reportsRefused = 0, reportsLogged = 0; //!< The progress reports it sent, those its wire refused, and the applied frame last logged.
 		bool privateMatch = false;
 		NetMatchConfig checkpointConfig;
 		std::string sideState;

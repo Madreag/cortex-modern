@@ -2524,19 +2524,24 @@ namespace RTE {
 
 	bool ScenarioRunner::RestoreNetResyncState(const NetResyncState& state, std::string* error) {
 		NetLockstepPlaneGuard plane;
-		const auto fail = [&] { if (error) *error = "resync command or ownership state is inconsistent"; return false; };
+		// Each refusal names the check it failed by its line, so a relaunch that stops here says where.
+		const auto fail = [&](int line) {
+			if (error) *error = "resync command or ownership state is inconsistent";
+			std::cout << "[net-match] resync state refused at ScenarioRunner.cpp:" << line << std::endl;
+			return false;
+		};
 		if (!s_LockstepCoordinator || state.sessionId != s_LockstepCoordinator->GetConfig().sessionId || state.savedTick == UINT64_MAX ||
-			state.savedTick + 1 != s_LockstepCoordinator->GetConfig().startFrame) return fail();
+			state.savedTick + 1 != s_LockstepCoordinator->GetConfig().startFrame) return fail(__LINE__);
 		std::vector<uint8_t> validation;
 		if (!NetResyncCodec::Encode(state, {0}, validation, error)) return false;
 		const auto member = [&](uint8_t peer) { return peer > 0 && peer <= s_LockstepCoordinator->GetConfig().peerCount; };
-		for (const auto& [uid, peer]: state.controlOwners) if (!member(peer)) return fail();
-		for (const auto& [uid, peer]: state.droppedControlOwners) if (!member(peer)) return fail();
-		for (const auto& [peer, binding]: state.playerBindings) if (!member(peer)) return fail();
-		for (const auto& [peer, sequence]: state.appliedCommands) if (!member(peer)) return fail();
-		for (const auto& command: state.pendingCommands) if (!member(command.command.senderPeerId)) return fail();
-		for (const auto& binding: state.pendingPlayerBindings) if (!member(binding.command.senderPeerId)) return fail();
-		for (const auto& input: state.pendingInputs) if (!member(input.senderPeerId)) return fail();
+		for (const auto& [uid, peer]: state.controlOwners) if (!member(peer)) return fail(__LINE__);
+		for (const auto& [uid, peer]: state.droppedControlOwners) if (!member(peer)) return fail(__LINE__);
+		for (const auto& [peer, binding]: state.playerBindings) if (!member(peer)) return fail(__LINE__);
+		for (const auto& [peer, sequence]: state.appliedCommands) if (!member(peer)) return fail(__LINE__);
+		for (const auto& command: state.pendingCommands) if (!member(command.command.senderPeerId)) return fail(__LINE__);
+		for (const auto& binding: state.pendingPlayerBindings) if (!member(binding.command.senderPeerId)) return fail(__LINE__);
+		for (const auto& input: state.pendingInputs) if (!member(input.senderPeerId)) return fail(__LINE__);
 		const uint8_t local = GetLockstepLocalPeerId();
 		const auto applied = state.appliedCommands.find(local);
 		const uint64_t watermark = applied == state.appliedCommands.end() ? 0 : applied->second;
@@ -2555,9 +2560,9 @@ namespace RTE {
 		for (auto& [frame, input]: history) {
 			if (frame <= state.savedTick) continue;
 			input.roundId = round;
-			if (!future(frame) || input.senderPeerId != local || frame != input.targetFrame || !NetLockstepCodec::EncodeRecoveryInput(input, validation)) return fail();
+			if (!future(frame) || input.senderPeerId != local || frame != input.targetFrame || !NetLockstepCodec::EncodeRecoveryInput(input, validation)) return fail(__LINE__);
 			const auto [found, inserted] = inputs.emplace(std::make_pair(local, frame), input);
-			if (!inserted && !SameInputBits(found->second, input)) return fail();
+			if (!inserted && !SameInputBits(found->second, input)) return fail(__LINE__);
 		}
 		std::map<std::pair<uint8_t, uint64_t>, NetResyncPendingCommand> commands, bindings;
 		const auto addCommand = [&](const NetResyncPendingCommand& pending) {
@@ -2571,13 +2576,13 @@ namespace RTE {
 			const auto [found, inserted] = bindings.emplace(std::make_pair(pending.command.senderPeerId, pending.frame), pending);
 			return inserted || SameCommandBits(found->second.command, pending.command);
 		};
-		for (const auto& pending: state.pendingCommands) if (!addCommand(pending)) return fail();
-		for (const auto& pending: state.pendingPlayerBindings) if (!addBinding(pending)) return fail();
+		for (const auto& pending: state.pendingCommands) if (!addCommand(pending)) return fail(__LINE__);
+		for (const auto& pending: state.pendingPlayerBindings) if (!addBinding(pending)) return fail(__LINE__);
 		for (const auto& [key, input]: inputs) {
 			for (const auto& command: input.commands) {
 				if (std::holds_alternative<NetGamePlayerBindings>(command.payload)) {
-					if (!addBinding({input.targetFrame, command})) return fail();
-				} else if (!addCommand({input.targetFrame, command})) return fail();
+					if (!addBinding({input.targetFrame, command})) return fail(__LINE__);
+				} else if (!addCommand({input.targetFrame, command})) return fail(__LINE__);
 			}
 			if (input.senderPeerId == local) {
 				requeuedInputs.emplace(input.targetFrame, input);
@@ -2590,21 +2595,21 @@ namespace RTE {
 		};
 		std::pair<uint8_t, uint64_t> previous{};
 		for (const auto& [key, pending]: commands) {
-			if (!agreesWithInput(pending) || (previous.first == key.first && pending.frame < previous.second)) return fail();
+			if (!agreesWithInput(pending) || (previous.first == key.first && pending.frame < previous.second)) return fail(__LINE__);
 			previous = {key.first, pending.frame};
 		}
-		for (const auto& [key, pending]: bindings) if (!agreesWithInput(pending)) return fail();
+		for (const auto& [key, pending]: bindings) if (!agreesWithInput(pending)) return fail(__LINE__);
 		auto outbox = s_LocalCommandOutbox;
 		for (const auto& [key, pending]: commands) if (pending.command.senderPeerId == local) {
 			const auto [found, inserted] = outbox.emplace(pending.command.sequence, pending);
-			if (!inserted && (!SameCommandBits(found->second.command, pending.command) || found->second.frame != pending.frame)) return fail();
+			if (!inserted && (!SameCommandBits(found->second.command, pending.command) || found->second.frame != pending.frame)) return fail(__LINE__);
 		}
 		outbox.erase(outbox.begin(), outbox.upper_bound(watermark));
 		auto owners = state.controlOwners;
 		auto dropped = state.droppedControlOwners;
 		for (const auto& command: state.admittedReseats) {
 			const auto* reseat = std::get_if<NetGameReseat>(&command.payload);
-			if (!reseat || command.senderPeerId != GetLockstepHostPeerId() || command.sequence != 0 || !member(reseat->newOwnerPeerId)) return fail();
+			if (!reseat || command.senderPeerId != GetLockstepHostPeerId() || command.sequence != 0 || !member(reseat->newOwnerPeerId)) return fail(__LINE__);
 			for (const auto uid: reseat->actorUIDs) {
 				const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long>(uid)));
 				if (!actor || actor->GetTeam() == reseat->team) { owners[uid] = reseat->newOwnerPeerId; dropped.erase(uid); }
@@ -2614,7 +2619,7 @@ namespace RTE {
 		for (const auto& command: pending) {
 			if (command.sequence == 0) continue;
 			const auto found = outbox.find(command.sequence);
-			if (command.senderPeerId != local || (command.sequence > watermark && (found == outbox.end() || !SameCommandBits(command, found->second.command)))) return fail();
+			if (command.senderPeerId != local || (command.sequence > watermark && (found == outbox.end() || !SameCommandBits(command, found->second.command)))) return fail(__LINE__);
 		}
 		std::erase_if(pending, [](const auto& command) { return command.sequence != 0; });
 		std::erase_if(pending, [&](const auto& command) { return std::any_of(state.admittedReseats.begin(), state.admittedReseats.end(), [&](const auto& admitted) { return SameCommandBits(command, admitted); }); });
@@ -2624,14 +2629,14 @@ namespace RTE {
 		for (const auto& [key, command]: commands) if (command.command.senderPeerId == local) acceptedSequences.insert(command.command.sequence);
 		for (const auto& [key, binding]: bindings) if (binding.command.senderPeerId == local && !requeuedInputs.contains(binding.frame)) {
 			const auto* value = std::get_if<NetGamePlayerBindings>(&binding.command.payload);
-			if (!value || !future(binding.frame) || !requeuedBindings.emplace(binding.frame, *value).second) return fail();
+			if (!value || !future(binding.frame) || !requeuedBindings.emplace(binding.frame, *value).second) return fail(__LINE__);
 		}
 		uint64_t previousFrame = state.savedTick + 1;
 		uint64_t nextSequence = std::max(s_NextLocalCommandSequence, watermark + 1);
 		for (auto& [sequence, command]: outbox) {
 			if (sequence == 0 || sequence == UINT64_MAX || command.command.sequence != sequence || command.command.senderPeerId != local ||
-				std::holds_alternative<NetGamePlayerBindings>(command.command.payload)) return fail();
-			if (acceptedSequences.contains(sequence) && command.frame < previousFrame) return fail();
+				std::holds_alternative<NetGamePlayerBindings>(command.command.payload)) return fail(__LINE__);
+			if (acceptedSequences.contains(sequence) && command.frame < previousFrame) return fail(__LINE__);
 			previousFrame = std::max(previousFrame, command.frame);
 			if (const auto full = requeuedInputs.find(previousFrame); full != requeuedInputs.end() &&
 				std::any_of(full->second.commands.begin(), full->second.commands.end(), [&](const auto& value) { return SameCommandBits(value, command.command); })) {
@@ -2639,10 +2644,10 @@ namespace RTE {
 				continue;
 			}
 			while (requeuedInputs.contains(previousFrame) || requeued[previousFrame].size() >= NetLockstepCodec::c_MaxCommandsPerPacket) {
-				if (acceptedSequences.contains(sequence) || previousFrame == UINT64_MAX) return fail();
+				if (acceptedSequences.contains(sequence) || previousFrame == UINT64_MAX) return fail(__LINE__);
 				++previousFrame;
 			}
-			if (!future(previousFrame)) return fail();
+			if (!future(previousFrame)) return fail(__LINE__);
 			command.frame = previousFrame;
 			requeued[previousFrame].push_back(command.command);
 			nextSequence = std::max(nextSequence, sequence + 1);

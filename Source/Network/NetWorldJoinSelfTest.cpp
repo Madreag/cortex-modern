@@ -6600,6 +6600,46 @@ namespace RTE {
 		return true;
 	}
 
+	// The host's seat is held while its writer finishes a capture: its own report rides no frame the round plays, and the schedule
+	// still names the next capture once the other writer has reported, instead of waiting on the host for the rest of the round.
+	bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-0000000000000009";
+		service.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::vector<std::pair<uint64_t, uint64_t>> writer;
+		std::vector<uint64_t> named;
+		for (uint64_t tick = 1; tick <= 400; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+			if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+			input.writers = {1, 2}; input.lead = 5; input.localPeer = 1;
+			while (!writer.empty() && writer.front().second <= tick) { input.finished.push_back(writer.front().first); writer.erase(writer.begin()); }
+			const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+			if (output.capture) {
+				writer.emplace_back(tick, tick + 30);
+				// The other writer reports each capture one stream trip after its own writer.
+				stream[tick + 34].push_back({2, NetGameCheckpoint::Written, tick});
+			}
+			for (NetMatchService::CheckpointNote note: output.send) {
+				note.sender = 1;
+				if (note.kind == NetGameCheckpoint::Capture) named.push_back(note.tick);
+				// The host's own reports of the first capture go out while its seat is held and never commit.
+				if ((note.kind == NetGameCheckpoint::Written || note.kind == NetGameCheckpoint::Missed) && !named.empty() && note.tick == named.front()) continue;
+				stream[tick + 4].push_back(note);
+			}
+		}
+		if (named.size() < 3) {
+			*error = "a-hosts-lost-own-report-does-not-stop-the-schedule: the host named " + std::to_string(named.size()) +
+			         " capture(s) in 400 ticks after its own report of the first never committed; expected 3 or more";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_hosts_lost_own_report_does_not_stop_the_schedule named=" << named.size() << std::endl;
+		return true;
+	}
+
 	bool TestWorldCaptureKeepsOneImageInFlight(std::string* error) {
 		NetMatchService service;
 		service.m_IsHost = true;
@@ -6955,6 +6995,101 @@ namespace RTE {
 			return false;
 		}
 		std::cout << "[net-world-join-selftest] PASS a_heal_names_the_next_capture_afresh after_heal=" << afterHeal << std::endl;
+		return true;
+	}
+
+	// A heal names a rewind point every peer it relaunches holds. The second peer catches up across one capture and says so at
+	// once, its writer refuses another, the host's own writer refuses a third, and each report rides the stream: at every tick
+	// the host names the newest capture both peers reported writing, never one a peer lacks or has not reported yet.
+	bool TestAHealNamesACheckpointEveryPeerHolds(std::string* error) {
+		NetMatchService host;
+		host.m_IsHost = true;
+		host.m_AutosaveMatchId = "00000000deadbeef-0000000000000008";
+		host.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		constexpr uint64_t lastTick = 900, streamDelay = 4, writeTicks = 30, round = 5;
+		constexpr uint16_t lead = 5;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::vector<uint64_t> captures, hostArchived;
+		std::set<uint64_t> clientReported;
+		std::vector<std::pair<uint64_t, uint64_t>> hostWriter, clientWriter;
+		// Another round's checkpoint at a tick this round also captures, with both peers' reports: never this round's anchor.
+		AutosaveDescriptor otherRound;
+		otherRound.matchId = host.m_AutosaveMatchId;
+		otherRound.roundId = round + 1;
+		size_t unreportedChoices = 0;
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick;
+			input.now = static_cast<int64_t>(tick) * tickLength;
+			if (const auto due = stream.find(tick); due != stream.end()) {
+				input.applied = due->second;
+				for (const NetMatchService::CheckpointNote& note: due->second) if (note.sender == 2 && note.kind == NetGameCheckpoint::Written) clientReported.insert(note.tick);
+			}
+			input.lead = lead;
+			input.writers = {1, 2};
+			input.localPeer = 1;
+			while (!hostWriter.empty() && hostWriter.front().second <= tick) {
+				const uint64_t taken = hostWriter.front().first;
+				input.finished.push_back(taken);
+				if (captures.size() >= 6 && taken == captures[5]) input.refused.push_back(taken);
+				else hostArchived.push_back(taken);
+				hostWriter.erase(hostWriter.begin());
+			}
+			while (!clientWriter.empty() && clientWriter.front().second <= tick) {
+				const uint64_t taken = clientWriter.front().first;
+				const bool refused = captures.size() >= 4 && taken == captures[3];
+				stream[tick + streamDelay].push_back({2, refused ? NetGameCheckpoint::Missed : NetGameCheckpoint::Written, taken});
+				clientWriter.erase(clientWriter.begin());
+			}
+			const NetMatchService::AutosaveTickOutput output = host.StepAutosaveSchedule(input);
+			for (const uint64_t refused: input.refused) {
+				if (std::none_of(output.send.begin(), output.send.end(), [&](const NetMatchService::CheckpointNote& note) { return note.kind == NetGameCheckpoint::Missed && note.tick == refused; })) {
+					*error = "a-heal-names-a-checkpoint-every-peer-holds: the host's refused capture " + std::to_string(refused) + " was not reported missed";
+					return false;
+				}
+			}
+			if (output.capture) {
+				captures.push_back(tick);
+				hostWriter.emplace_back(tick, tick + writeTicks);
+				// The second peer is catching up across its third capture: it takes none and says so at once.
+				if (captures.size() == 3) stream[tick + streamDelay].push_back({2, NetGameCheckpoint::Missed, tick});
+				else clientWriter.emplace_back(tick, tick + writeTicks);
+				if (captures.size() == 1) otherRound.savedTick = tick;
+			}
+			for (NetMatchService::CheckpointNote note: output.send) {
+				note.sender = 1;
+				stream[tick + streamDelay].push_back(note);
+			}
+			// A heal at this tick: the validated checkpoints newest first, the other round's one ahead of them.
+			std::vector<AutosaveDescriptor> validated;
+			if (otherRound.savedTick != 0) validated.push_back(otherRound);
+			for (auto archived = hostArchived.rbegin(); archived != hostArchived.rend(); ++archived) {
+				AutosaveDescriptor checkpoint;
+				checkpoint.matchId = host.m_AutosaveMatchId;
+				checkpoint.roundId = round;
+				checkpoint.savedTick = *archived;
+				validated.push_back(checkpoint);
+			}
+			uint64_t expected = 0;
+			for (auto archived = hostArchived.rbegin(); archived != hostArchived.rend() && expected == 0; ++archived) {
+				if (clientReported.contains(*archived)) expected = *archived;
+			}
+			const std::optional<AutosaveDescriptor> named = NetMatchService::ChooseRewindAnchor(validated, host.m_CheckpointHolders, tick, {1, 2}, round);
+			if ((named ? named->savedTick : 0) != expected || (named && named->roundId != round)) {
+				*error = "a-heal-names-a-checkpoint-every-peer-holds: at tick " + std::to_string(tick) + " the host named " + std::to_string(named ? named->savedTick : 0) +
+				         " round " + std::to_string(named ? named->roundId : 0) + "; the newest checkpoint both peers reported is " + std::to_string(expected);
+				return false;
+			}
+			if (!hostArchived.empty() && named && named->savedTick != hostArchived.back()) ++unreportedChoices;
+		}
+		if (captures.size() < 8 || unreportedChoices == 0 || clientReported.contains(captures[2]) || clientReported.contains(captures[3]) ||
+		    host.m_CheckpointHolders[captures[5]].contains(1)) {
+			*error = "a-heal-names-a-checkpoint-every-peer-holds: the row did not exercise its cases: captures=" + std::to_string(captures.size()) +
+			         " older_choices=" + std::to_string(unreportedChoices);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_heal_names_a_checkpoint_every_peer_holds captures=" << captures.size() << " older_choices=" << unreportedChoices << std::endl;
 		return true;
 	}
 
@@ -8098,11 +8233,13 @@ namespace RTE {
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestALostCaptureIsNamedAgain(&error)) return Fail(error);
+			if (!TestAHostsLostOwnReportDoesNotStopTheSchedule(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
 			if (!TestACaptureNamedIntoAParkOpensTheNext(&error)) return Fail(error);
 			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);
+			if (!TestAHealNamesACheckpointEveryPeerHolds(&error)) return Fail(error);
 			if (!TestAStuckPrivateImageIsRetakenOnceThenRefused(&error)) return Fail(error);
 			if (!TestCheckpointCommandCrossesTheWire(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
