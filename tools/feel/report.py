@@ -434,10 +434,10 @@ def item9a_gates(run, peer='host', rows=None):
     log = log_path.read_text(encoding='utf-8-sig', errors='replace') if log_path.is_file() else ''
     waits = [(int(tick), int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log) if 300 < int(tick) <= final_tick]
     wait_ms = sum(ms for _, ms in waits)
-    wait_fraction = wait_ms / wall_ms if wall_ms else None
-    longest = max((ms for _, ms in waits), default=0) if wall_ms else None
+    wait_fraction = wait_ms / wall_ms if wall_ms and log_path.is_file() else None
+    longest = max((ms for _, ms in waits), default=0) if wall_ms and log_path.is_file() else None
     steady_end = manifest.get('silent_tick') or final_tick + 1
-    steady_stalls = sum(ms > 0 for tick, ms in waits if tick < steady_end) if wall_ms else None
+    steady_stalls = sum(ms > 0 for tick, ms in waits if tick < steady_end) if wait_fraction is not None else None
     report_path = run / f'{peer}_report.json'
     report = json.loads(report_path.read_text(encoding='utf-8-sig')) if report_path.is_file() else {}
     def locksteps(node):
@@ -481,6 +481,11 @@ def item9a_gates(run, peer='host', rows=None):
         injection_log = injection_path.read_text(encoding='utf-8-sig', errors='replace') if injection_path.is_file() else ''
         injections = [int(tick) for tick in re.findall(r'\[selftest\] frame stall tick=(\d+)', injection_log)]
         injection = next((tick for tick in injections if tick >= manifest['silent_tick']), manifest['silent_tick'])
+        steady_stalls = sum(ms > 0 for tick, ms in waits if tick < injection) if wait_fraction is not None else None
+        pins['item9a_steady_stalls'] = pin(steady_stalls, '0 blocking waits before the actual injected spike', steady_stalls == 0, evidence)
+        spike_waits = sum(ms > 0 for tick, ms in waits if tick >= injection) if wait_fraction is not None else None
+        pins['item9a_spike_waits'] = pin(spike_waits, '<= 1 blocking wait from the single injected spike through return',
+                                       spike_waits is not None and spike_waits <= 1, evidence)
         returns = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', log)]
         before = [tick for seat, tick in holds if seat == silent_seat and tick <= injection]
         held = next((tick for seat, tick in sorted(holds, key=lambda value: value[1]) if seat == silent_seat and tick >= injection), None)
