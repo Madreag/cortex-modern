@@ -391,6 +391,8 @@ def checkpoints(root: Path, who: str) -> dict:
 
 
 AUTOSAVE_COALESCED = re.compile(r"^\[autosave-coalesced\] tick=\d+ replaced=(\d+) ", re.MULTILINE)
+# A capture the match named that this peer did not take (it was catching up on a held seat).
+AUTOSAVE_NOT_TAKEN = re.compile(r"^\[autosave\] named tick=(\d+) not taken: ", re.MULTILINE)
 # An arm that needs N checkpoints written waits for them: a run that writes fewer (the saver is slower than the 2 s cadence,
 # and the host names no capture while the last one is still being written) runs again with its whole schedule doubled,
 # up to this many ticks. N is never lowered.
@@ -425,14 +427,26 @@ def checkpoint_record(root: Path, ticks: int) -> dict:
     for who in ("host", "client"):
         log = peer_log(root, who)
         landed, coalesced = landed_checkpoints(log)
-        record[who] = {"landed": landed, "autosave_coalesced": coalesced, "fullstate_coalesced": len(FULLSTATE_COALESCED.findall(log))}
+        record[who] = {"landed": landed, "autosave_coalesced": coalesced, "fullstate_coalesced": len(FULLSTATE_COALESCED.findall(log)),
+                       "not_taken": [int(tick) for tick in AUTOSAVE_NOT_TAKEN.findall(log)]}
     return record
 
 
 def describe_checkpoints(record: dict) -> str:
     return f"ticks={record['ticks']} " + ", ".join(
         f"{who} wrote {len(record[who]['landed'])} (autosave coalesced {record[who]['autosave_coalesced']}, "
-        f"full-state coalesced {record[who]['fullstate_coalesced']})" for who in ("host", "client"))
+        f"full-state coalesced {record[who]['fullstate_coalesced']}, not taken {len(record[who].get('not_taken', []))})"
+        for who in ("host", "client"))
+
+
+def unexplained_missing(root: Path, record: dict) -> list:
+    """Each checkpoint one peer wrote and the other did not, unless the other's own line names that capture as not written."""
+    missing = []
+    for who, other in (("host", "client"), ("client", "host")):
+        log = peer_log(root, who)
+        named = {int(tick) for tick in AUTOSAVE_NOT_TAKEN.findall(log)} | {int(tick) for tick in AUTOSAVE_COALESCED.findall(log)}
+        missing += [f"{who} lacks {tick}" for tick in sorted(set(record[other]["landed"]) - set(record[who]["landed"])) if tick not in named]
+    return missing
 
 
 def wait_for_checkpoints(attempt, base_ticks: int, cap_ticks: int = CHECKPOINT_WAIT_CAP_TICKS) -> dict:
@@ -585,19 +599,25 @@ def judge_retention(root: Path, ticks: int, records: dict) -> dict:
         assert "[autosave] failed" not in log, f"{who} refused a capture or a publish"
         details[who] = {"captures": captures, "held": sorted(held), "retained_lines": len(retained),
                         "descriptors": {name: fields["_descriptor_sha256"] for name, fields in held.items()}}
+    comparison = compare_live_window(root, 1, ticks)
+    details["peer_comparison"] = comparison
+    shared = details["host"]["descriptors"].keys() & details["client"]["descriptors"].keys()
+    differ = sorted(name for name in shared if details["host"]["descriptors"][name] != details["client"]["descriptors"][name])
+    assert not differ, f"the peers' restore descriptors differ: {differ}"
+    details["checkpoints"] = record = checkpoint_record(root, ticks)
+    for who in ("host", "client"):
+        if len(details[who]["captures"]) <= RETAINED_AUTOSAVES:
+            # A short run's peers may differ only by the captures a peer's own lines name as not written.
+            unexplained = unexplained_missing(root, record)
+            assert not unexplained, f"the peers wrote different checkpoints with no line naming the missing ones: {unexplained}"
+            raise CheckpointsShort(f"{who} never exceeded the retention limit: {details[who]['captures']}", record)
     assert details["host"]["held"] == details["client"]["held"], (
         "the peers do not hold the same checkpoint names: "
-        f"{details['host']['held']} vs {details['client']['held']}")
+        f"{details['host']['held']} vs {details['client']['held']} (not taken: host {record['host']['not_taken']}, client {record['client']['not_taken']})")
     # Every field of the descriptor is agreed by the match, so the two peers' copies are the same bytes.
     assert details["host"]["descriptors"] == details["client"]["descriptors"], (
         "the peers' restore descriptors differ: "
         f"{details['host']['descriptors']} vs {details['client']['descriptors']}")
-    comparison = compare_live_window(root, 1, ticks)
-    details["peer_comparison"] = comparison
-    details["checkpoints"] = checkpoint_record(root, ticks)
-    for who in ("host", "client"):
-        if len(details[who]["captures"]) <= RETAINED_AUTOSAVES:
-            raise CheckpointsShort(f"{who} never exceeded the retention limit: {details[who]['captures']}", details["checkpoints"])
     return details
 
 
@@ -1251,7 +1271,7 @@ class CheckpointWaitTests(unittest.TestCase):
         self.assertNotIsInstance(raised.exception, CheckpointsShort)
         self.assertEqual(calls, [700, 1400, 2800, 5600])
         self.assertIn(f"still short at the {CHECKPOINT_WAIT_CAP_TICKS}-tick cap", str(raised.exception))
-        self.assertIn("ticks=5600 host wrote 2 (autosave coalesced 0, full-state coalesced 10)", str(raised.exception))
+        self.assertIn("ticks=5600 host wrote 2 (autosave coalesced 0, full-state coalesced 10, not taken 0)", str(raised.exception))
 
     def test_any_other_statement_fails_at_once(self):
         calls = []
@@ -1293,6 +1313,26 @@ class CheckpointWaitTests(unittest.TestCase):
         texts = {who: self.capture_lines([133, 253, 373, 493]) for who in ("host", "client")}
         details = self.judge(judge_retention, texts, {"host": [253, 373, 493], "client": [253, 373, 493]}, 700, records)
         self.assertEqual(details["host"]["captures"], [133, 253, 373, 493])
+
+    def test_a_held_peers_missed_capture_waits_only_when_its_own_line_names_it(self):
+        # live-retention-2 on this lane: the client, held and catching up, did not take the capture the host wrote at 480.
+        records = {"host": {"exit_code": 0}, "client": {"exit_code": 0}}
+        held = {"host": [131, 480], "client": [131]}
+        named = {"host": self.capture_lines([131, 480]),
+                 "client": self.capture_lines([131]) + "[autosave] named tick=480 not taken: catch_up=true running=true\n"}
+        with self.assertRaises(CheckpointsShort) as raised:
+            self.judge(judge_retention, named, held, 700, records)
+        self.assertEqual(raised.exception.record["client"]["not_taken"], [480])
+        silent = dict(named, client=self.capture_lines([131]))
+        with self.assertRaises(AssertionError) as raised:
+            self.judge(judge_retention, silent, held, 700, records)
+        self.assertNotIsInstance(raised.exception, CheckpointsShort)
+        self.assertIn("client lacks 480", str(raised.exception))
+        # Enough written on both: the names are compared in full, whatever a line says.
+        counted = {"host": self.capture_lines([131, 251, 371, 480]),
+                   "client": self.capture_lines([131, 251, 371]) + "[autosave] named tick=480 not taken: catch_up=true running=true\n"}
+        with self.assertRaises(AssertionError):
+            self.judge(judge_retention, counted, {"host": [251, 371, 480], "client": [131, 251, 371]}, 700, records)
 
 
 class WorldRestartOracleTests(unittest.TestCase):
