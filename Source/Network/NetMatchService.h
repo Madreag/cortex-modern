@@ -1200,6 +1200,7 @@ namespace RTE {
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
 		friend bool TestALostCaptureIsNamedAgain(std::string* error);
+		friend bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error);
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
