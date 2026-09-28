@@ -491,12 +491,6 @@ namespace RTE::FloatTextSelfTest {
 			return static_cast<std::ostringstream*>(writer.GetStream())->str();
 		}
 
-		/// These objects are deliberately never destroyed. Destroying a MovableObject before the engine is up
-		/// walks MovableMan::ForgetDestroyedObject into g_LuaMan, which does not exist yet; the probes are here
-		/// for the text codec, not for entity lifetime, so they keep their four objects for the process rather
-		/// than building a manager graph to satisfy a destructor.
-		template <class EntityType> EntityType& KeptAlive() { return *(new EntityType()); }
-
 		/// Both sites write the canonical hexadecimal spelling, so their packed text is the same on every platform.
 		constexpr const char* ArmHandTargetText = "0x1.8p+0|-0x1p-2|0x1.8p-1|1|reach";
 
@@ -504,20 +498,20 @@ namespace RTE::FloatTextSelfTest {
 
 		std::string ProbeArmHandTarget() {
 			const std::string packed = ArmHandTargetText;
-			Arm& arm = KeptAlive<Arm>();
+			Arm arm;
 			arm.AddHandTargetFromSave(packed);
 			const std::vector<std::string> saved = arm.GetHandTargetsForSave();
 			return saved.size() == 1 ? saved[0] : "targets=" + std::to_string(saved.size());
 		}
 
 		std::string ProbePieMenuState() {
-			PieMenu& menu = KeptAlive<PieMenu>();
+			PieMenu menu;
 			menu.UnpackInteractionState(PieMenuStateText);
 			return menu.PackInteractionState();
 		}
 
 		std::string ProbeInheritedRotAngleDegOffset() {
-			Arm& arm = KeptAlive<Arm>();
+			Arm arm;
 			Reader fractional(std::make_unique<std::istringstream>("1.5\n"), "float-text-selftest.ini");
 			arm.ReadProperty("InheritedRotAngleDegOffset", fractional);
 			const float fractionalOffset = arm.GetInheritedRotAngleOffset();
@@ -527,7 +521,7 @@ namespace RTE::FloatTextSelfTest {
 		}
 
 		std::string ProbeCustomNumberValue() {
-			Arm& arm = KeptAlive<Arm>();
+			Arm arm;
 			Reader reader(std::make_unique<std::istringstream>("NumberValue\n\tFloatTextKey = 1.5\n"), "float-text-selftest.ini");
 			arm.ReadProperty("AddCustomValue", reader);
 			return Hex(arm.GetNumberValue("FloatTextKey"));
