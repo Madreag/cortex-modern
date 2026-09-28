@@ -403,6 +403,17 @@ void* Atom::GetPoolMemory() {
 }
 
 void Atom::FillPool(int fillAmount) {
+	// Made after the pool and so destroyed before it: at exit the free blocks go back to the allocator.
+	static struct PoolRelease {
+		~PoolRelease() {
+			std::lock_guard<std::mutex> guard(s_MemoryPoolMutex);
+			for (void* memory: s_AllocatedPool) {
+				free(memory);
+			}
+			s_AllocatedPool.clear();
+		}
+	} s_PoolRelease;
+
 	// Default to the set block allocation size if fillAmount is 0
 	if (fillAmount <= 0) {
 		fillAmount = s_PoolAllocBlockCount;
