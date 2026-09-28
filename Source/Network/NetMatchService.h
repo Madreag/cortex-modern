@@ -935,6 +935,10 @@ namespace RTE {
 		/// order and the seats it knows are held. Returns the peers to dial; empty when this seat hosts the match itself.
 		static std::vector<uint8_t> HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
 		                                                const std::vector<uint8_t>& reachable, const std::set<uint8_t>& held);
+		/// Whether a held seat whose host is gone listens for the other held seats, from the same view plus the survivors known to have
+		/// left the match.
+		static bool HeldSeatListens(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer, const std::vector<uint8_t>& reachable,
+		                            const std::set<uint8_t>& held, const std::set<uint8_t>& departed);
 	private:
 		std::set<NetPeerId> m_SlowReturnersNoted; //!< Returners already told they keep catching up below the round's rate.
 		/// Host: ends one returner's rejoin and tells its client why, so it tries again instead of waiting.
