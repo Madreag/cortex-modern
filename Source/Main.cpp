@@ -1155,7 +1155,7 @@ static std::string PaceCensusSinceLast() {
 	    << " trimmed_ms=" << static_cast<double>(now.trimmedTicks - last.trimmedTicks) * 1000.0 / static_cast<double>(g_TimerMan.GetTicksPerSecond())
 	    << " mspsu_average=" << g_PerformanceMan.GetMSPSUAverage() << " frames_drawn=" << now.framesDrawn - last.framesDrawn
 	    << " ms_per_frame_drawn=" << static_cast<double>(now.frameDrawUs - last.frameDrawUs) / 1000.0 / static_cast<double>(std::max<uint64_t>(1, now.framesDrawn - last.framesDrawn))
-	    << " max_iteration_draw_ms=" << static_cast<double>(s_paceMaxDrawUs) / 1000.0;
+	    << " max_iteration_draw_ms=" << static_cast<double>(s_paceMaxDrawUs) / 1000.0 << " preview_phase_ms=" << LocalPrediction::DescribePhasesSinceLastCall();
 	s_paceMaxDrawUs = 0;
 	last = now;
 	return out.str();
