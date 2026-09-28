@@ -3,7 +3,7 @@
     python tools/sanitizers/check_ubsan_supp.py --self-test
     python tools/sanitizers/check_ubsan_supp.py <log> [<log> ...] [--supp <file>]
 
-The file may name only third-party sources under external/sources/LuaJIT-2.1, one known check per entry, each entry
+The file may name only the reviewed third-party source files, one known check per entry, each entry
 preceded by a comment with its reason; anything else is refused (exit 2). Given logs, it prints every UBSan report the
 file would NOT suppress (a report's check comes from its message, its match is UBSan's substring/glob rule on the
 report's source file), then the kept and suppressed counts. A report whose message maps to no known check is kept.
@@ -16,9 +16,16 @@ import re
 from pathlib import Path
 
 DEFAULT_SUPP = Path(__file__).resolve().parent / "ubsan.supp"
-ALLOWED_PREFIX = "external/sources/LuaJIT-2.1/"
-REPORT = re.compile(r"(?P<file>[^\s:]+):(?P<line>\d+):(?P<col>\d+): runtime error: (?P<message>.*)")
-SUMMARY = re.compile(r"SUMMARY: UndefinedBehaviorSanitizer: [\w-]+ (?P<file>[^\s:]+):(?P<line>\d+):(?P<col>\d+)")
+ALLOWED_FILES = {
+    "external/sources/LuaJIT-2.1/src/" + name
+    for name in ("lj_api.c", "lj_func.c", "lib_base.c", "lib_jit.c", "lj_gc.c", "lj_asm_x86.h", "lj_emit_x86.h", "lj_asm.c")
+} | {
+    "external/sources/allegro 4.4.3.1-custom/src/file.c",
+    "external/sources/allegro 4.4.3.1-custom/src/unicode.c",
+    "src/steamnetworkingsockets/clientlib/steamnetworkingsockets_lowlevel.h",
+}
+REPORT = re.compile(r"^(?P<file>.+?):(?P<line>\d+):(?P<col>\d+): runtime error: (?P<message>.*)")
+SUMMARY = re.compile(r"SUMMARY: UndefinedBehaviorSanitizer: [\w-]+ (?P<file>.+?):(?P<line>\d+):(?P<col>\d+)")
 
 # The suppression name UBSan files each report under (compiler-rt ubsan_checks.inc), keyed by its message.
 CHECKS = [
@@ -77,7 +84,7 @@ def check_of(message: str) -> str | None:
 
 
 def parse(text: str) -> tuple[list[tuple[str, str]], list[str]]:
-    """The (check, file pattern) entries and the refusals: a non-LuaJIT path, an unknown check, an entry with no reason."""
+    """Refuse unreviewed paths, unknown checks, and entries without a reason."""
     entries, errors, reason = [], [], False
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
@@ -91,8 +98,8 @@ def parse(text: str) -> tuple[list[tuple[str, str]], list[str]]:
         if check not in KNOWN or not pattern:
             errors.append(f"line {number}: '{line}' is not <check>:<path> with a known check")
             continue
-        if not pattern.lstrip("^").startswith(ALLOWED_PREFIX) or "*" in pattern or ".." in pattern:
-            errors.append(f"line {number}: '{pattern}' is not a plain path under {ALLOWED_PREFIX}")
+        if pattern not in ALLOWED_FILES:
+            errors.append(f"line {number}: '{pattern}' is not a reviewed third-party file")
             continue
         if not reason:
             errors.append(f"line {number}: '{line}' has no reason comment above it")

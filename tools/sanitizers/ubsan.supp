@@ -1,5 +1,5 @@
-# UBSan runtime suppressions (UBSAN_OPTIONS=suppressions=<this file>) for the Mac sanitizer runs.
-# Only third-party sources under external/sources/LuaJIT-2.1, each under the one check it trips, each with its report.
+# UBSan runtime suppressions (UBSAN_OPTIONS=suppressions=<this file>) for the Linux and Mac sanitizer runs.
+# Each third-party file is listed under the check it trips, with its report location.
 # Our own code is fixed, never listed here; tools/sanitizers/check_ubsan_supp.py refuses any other path.
 
 # lua_setmetatable(t, nil): setgcref takes &obj2gco(NULL)->gch: "lj_api.c:1030:5: member access within null pointer of type 'GCobj'"
@@ -10,3 +10,18 @@ shift-base:external/sources/LuaJIT-2.1/src/lj_func.c
 null:external/sources/LuaJIT-2.1/src/lib_base.c
 # jit.attach: VMEVENT_HASHIDX shifts the event-name hash cast to int: "lib_jit.c:164:24: left shift of negative value -1294396313"
 shift-base:external/sources/LuaJIT-2.1/src/lib_jit.c
+
+# lj_gc.c:458:7: lj_func_free is dispatched through void (*)(global_State *, GCobj *).
+function:external/sources/LuaJIT-2.1/src/lj_gc.c
+# lj_asm_x86.h:38:5,1709:2,3151:9,3156:10,3156:52: x86 instructions carry unaligned integer operands.
+alignment:external/sources/LuaJIT-2.1/src/lj_asm_x86.h
+# lj_emit_x86.h:55:5,338:5,505:3: x86 instruction emission stores unaligned integer operands.
+alignment:external/sources/LuaJIT-2.1/src/lj_emit_x86.h
+# lj_asm.c:1925:3: emit stores an unaligned x86 instruction displacement.
+alignment:external/sources/LuaJIT-2.1/src/lj_asm.c
+# file.c:613: utf8_getx is called through int (*)(const char **) instead of int (*)(char **).
+function:external/sources/allegro 4.4.3.1-custom/src/file.c
+# unicode.c:2198: utf8_getx is called through the same const-qualified function pointer.
+function:external/sources/allegro 4.4.3.1-custom/src/unicode.c
+# steamnetworkingsockets_lowlevel.h:100:4: CSharedSocket callback casts its context pointer to void *.
+function:src/steamnetworkingsockets/clientlib/steamnetworkingsockets_lowlevel.h
