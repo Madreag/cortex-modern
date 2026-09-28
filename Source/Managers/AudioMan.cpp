@@ -196,11 +196,25 @@ void AudioMan::Clear() {
 	}
 }
 
-FMOD_RESULT AudioMan::InitializeAudioSystem(bool silentOutput) {
-	if (m_AudioSystem) {
-		m_AudioSystem->release();
-		m_AudioSystem = nullptr;
+void AudioMan::ReleaseAudioSystem() {
+	if (!m_AudioSystem) return;
+	if (m_MasterChannelGroup) m_MasterChannelGroup->stop();
+	ReleaseStoppedVoiceEffects();
+	for (const auto& [group, effect]: m_GroupEffects) {
+		group->removeDSP(effect);
+		effect->release();
 	}
+	m_GroupEffects.clear();
+	m_AudioSystem->release();
+	m_AudioSystem = nullptr;
+	m_MasterChannelGroup = nullptr;
+	m_SFXChannelGroup = nullptr;
+	m_UIChannelGroup = nullptr;
+	m_MusicChannelGroup = nullptr;
+}
+
+FMOD_RESULT AudioMan::InitializeAudioSystem(bool silentOutput) {
+	ReleaseAudioSystem();
 #ifdef _WIN32
 	// A headless run plays to nobody, so no FMOD thread outranks the desktop (the mixer defaults to time-critical); 0 is THREAD_PRIORITY_NORMAL.
 	if (HeadlessAudioThreadsAtNormalPriority(std::getenv("CCCP_HEADLESS"))) {
@@ -243,20 +257,23 @@ FMOD_RESULT AudioMan::InitializeAudioSystem(bool silentOutput) {
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->createChannelGroup("Music", &m_MusicChannelGroup) : audioSystemSetupResult;
 
 	// Add a lowpass filter to the music channel group for pause menu usage
-	FMOD::DSP* dsp_multibandeq;
+	FMOD::DSP* dsp_multibandeq = nullptr;
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->createDSPByType(FMOD_DSP_TYPE_MULTIBAND_EQ, &dsp_multibandeq) : audioSystemSetupResult;
+	if (audioSystemSetupResult == FMOD_OK) m_GroupEffects.emplace_back(m_MusicChannelGroup, dsp_multibandeq);
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? dsp_multibandeq->setParameterFloat(1, 22000.0f) : audioSystemSetupResult; // Functionally inactive lowpass filter
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_MusicChannelGroup->addDSP(0, dsp_multibandeq) : audioSystemSetupResult;
 
 	// Add a safety limiter to the master channel group, after fader
-	FMOD::DSP* dsp_limiter;
+	FMOD::DSP* dsp_limiter = nullptr;
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->createDSPByType(FMOD_DSP_TYPE_LIMITER, &dsp_limiter) : audioSystemSetupResult;
+	if (audioSystemSetupResult == FMOD_OK) m_GroupEffects.emplace_back(m_MasterChannelGroup, dsp_limiter);
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_MasterChannelGroup->addDSP(0, dsp_limiter) : audioSystemSetupResult;
 
 	// Add a compressor to the SFX channel group, pre fader
 	// This is pretty heavy-handed, but it sounds great. Might need to be changed once we have sidechaining and fancier things going on.
-	FMOD::DSP* dsp_compressor;
+	FMOD::DSP* dsp_compressor = nullptr;
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? m_AudioSystem->createDSPByType(FMOD_DSP_TYPE_COMPRESSOR, &dsp_compressor) : audioSystemSetupResult;
+	if (audioSystemSetupResult == FMOD_OK) m_GroupEffects.emplace_back(m_SFXChannelGroup, dsp_compressor);
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? dsp_compressor->setParameterFloat(0, -10.0f) : audioSystemSetupResult; // Threshold
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? dsp_compressor->setParameterFloat(1, 3.0f) : audioSystemSetupResult; // Ratio
 	audioSystemSetupResult = (audioSystemSetupResult == FMOD_OK) ? dsp_compressor->setParameterFloat(2, 180.0f) : audioSystemSetupResult; // Attack time
@@ -326,9 +343,9 @@ void AudioMan::Destroy() {
 	if (m_AudioEnabled) {
 		StopAll();
 		ContentFile::FreeAllLoadedSounds();
-		m_AudioSystem->release();
-		Clear();
 	}
+	ReleaseAudioSystem();
+	Clear();
 }
 
 void AudioMan::Update() {
