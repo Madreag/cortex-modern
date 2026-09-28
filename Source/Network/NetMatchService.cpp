@@ -3411,6 +3411,11 @@ static std::string ResyncSaveName() {
 			const bool refused = std::find(input.refused.begin(), input.refused.end(), finished) != input.refused.end();
 			output.send.push_back({0, refused ? NetGameCheckpoint::Missed : NetGameCheckpoint::Written, finished});
 			if (!refused && input.localPeer != 0) NoteCheckpointHolder(finished, input.localPeer);
+			// The host's own report rides no frame while its seat is held, so it never waits on the stream for what it knows itself.
+			if (m_IsHost && input.localPeer != 0 && finished == m_OpenCaptureTick) {
+				m_CaptureWriters.erase(input.localPeer);
+				if (m_OpenCaptureManual && !refused) m_ManualSaveReported.insert(input.localPeer);
+			}
 		}
 		if (!m_ScheduledCaptures.empty() && *m_ScheduledCaptures.begin() <= input.tick) {
 			m_ScheduledCaptures.erase(m_ScheduledCaptures.begin(), m_ScheduledCaptures.upper_bound(input.tick));

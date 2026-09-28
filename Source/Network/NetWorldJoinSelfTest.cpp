@@ -6568,6 +6568,46 @@ namespace RTE {
 		return true;
 	}
 
+	// The host's seat is held while its writer finishes a capture: its own report rides no frame the round plays, and the schedule
+	// still names the next capture once the other writer has reported, instead of waiting on the host for the rest of the round.
+	bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-0000000000000009";
+		service.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::vector<std::pair<uint64_t, uint64_t>> writer;
+		std::vector<uint64_t> named;
+		for (uint64_t tick = 1; tick <= 400; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+			if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+			input.writers = {1, 2}; input.lead = 5; input.localPeer = 1;
+			while (!writer.empty() && writer.front().second <= tick) { input.finished.push_back(writer.front().first); writer.erase(writer.begin()); }
+			const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+			if (output.capture) {
+				writer.emplace_back(tick, tick + 30);
+				// The other writer reports each capture one stream trip after its own writer.
+				stream[tick + 34].push_back({2, NetGameCheckpoint::Written, tick});
+			}
+			for (NetMatchService::CheckpointNote note: output.send) {
+				note.sender = 1;
+				if (note.kind == NetGameCheckpoint::Capture) named.push_back(note.tick);
+				// The host's own reports of the first capture go out while its seat is held and never commit.
+				if ((note.kind == NetGameCheckpoint::Written || note.kind == NetGameCheckpoint::Missed) && !named.empty() && note.tick == named.front()) continue;
+				stream[tick + 4].push_back(note);
+			}
+		}
+		if (named.size() < 3) {
+			*error = "a-hosts-lost-own-report-does-not-stop-the-schedule: the host named " + std::to_string(named.size()) +
+			         " capture(s) in 400 ticks after its own report of the first never committed; expected 3 or more";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_hosts_lost_own_report_does_not_stop_the_schedule named=" << named.size() << std::endl;
+		return true;
+	}
+
 	bool TestWorldCaptureKeepsOneImageInFlight(std::string* error) {
 		NetMatchService service;
 		service.m_IsHost = true;
@@ -8157,6 +8197,7 @@ namespace RTE {
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestALostCaptureIsNamedAgain(&error)) return Fail(error);
+			if (!TestAHostsLostOwnReportDoesNotStopTheSchedule(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
