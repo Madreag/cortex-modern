@@ -95,7 +95,7 @@
             "NetworkOfferStoredRejoin": "1"
           },
           "start_delay_s": 3.0,
-          "kill_at_tick": 700,
+          "kill_at_tick": 450,
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
