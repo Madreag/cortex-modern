@@ -1212,7 +1212,8 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 			} else {
 				m_MultiplayerJoinAddressTextBox->SetText(NetIceMenuJoinAddress(row));
 				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port == 0 ? 41010 : row.port));
-				m_JoinPortAutoValue = m_MultiplayerJoinPortTextBox->GetText();
+				// The picked address and port stay a pair; the list no longer refills the port.
+				m_JoinPortAutoValue.clear();
 				m_JoinTargetPersistentWorld = row.persistentWorld || row.activity == "Persistent World";
 				m_JoinTargetActivity = row.activity;
 				if (m_JoinTargetPersistentWorld) {
@@ -4412,6 +4413,11 @@ void MainMenuGUI::RefreshGamesList() {
 	if (!m_MultiplayerLanGamesList) {
 		return;
 	}
+	// A port the screen did not write is the player's, so the list stops refilling it. Read every frame:
+	// the control manager drops a change event raised outside its own update.
+	if (m_MultiplayerJoinPortTextBox && m_MultiplayerJoinPortTextBox->GetText() != m_JoinPortAutoValue) {
+		m_JoinPortAutoValue.clear();
+	}
 	// The browser and the directory lister only run while the join screen is up.
 	if (m_MultiplayerSubScreen != MultiplayerSubScreen::JoinSetup) {
 		if (m_LanBrowser.IsBrowsing()) {
@@ -4530,7 +4536,7 @@ void MainMenuGUI::RefreshGamesList() {
 }
 
 void MainMenuGUI::SetJoinPortAuto(uint16_t port) {
-	if (!m_MultiplayerJoinPortTextBox || port == 0 || m_MultiplayerJoinPortTextBox->GetText() != m_JoinPortAutoValue) {
+	if (!m_MultiplayerJoinPortTextBox || port == 0 || m_JoinPortAutoValue.empty() || m_MultiplayerJoinPortTextBox->GetText() != m_JoinPortAutoValue) {
 		return;
 	}
 	m_JoinPortAutoValue = std::to_string(port);

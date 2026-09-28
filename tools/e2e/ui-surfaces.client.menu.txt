@@ -8,18 +8,26 @@ settext TextMultiplayerName Joiner
 activate ButtonMultiplayerJoinGame
 wait_ms 660
 assert_substate JoinSetup
-video_mark ui-directory-listing
+video_mark ui-join-port-typed
 wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 4000
 assert_visible ListLanGames 1
-# A change to the listed rows after a pick refills the port from the first listed row, so the port is read back on the
-# frame after the pick and this run's own row is picked again on the frame before Connect.
+# A port typed by hand stays through changes to the listed games, even one equal to the listed port.
+settext TextJoinPort 4
+wait_ms 99
+settext TextJoinPort {PORT}
+wait_ms 3960
+assert_label TextJoinPort {PORT}
+video_mark ui-directory-listing
 activate GameRowPort{PORT}
 assert_label TextJoinPort {PORT}
 wait_ms 800
 dump_player_options
 wait_ms 660
-activate GameRowPort{PORT}
+video_mark ui-join-port-picked
+# A picked row keeps its own port while other games open and close.
+wait_ms 2640
+assert_label TextJoinPort {PORT}
 activate ButtonMultiplayerConnect
 wait_connected 2
 wait_ms 990
