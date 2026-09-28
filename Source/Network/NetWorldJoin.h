@@ -186,6 +186,7 @@ namespace RTE {
 		uint64_t closingAnchorApplied = 0, closingAnchorHorizon = 0; //!< The report its closing rate on the round is measured from.
 		double closingRate = 0.0; //!< Frames its replay gains on the round per frame the round commits, once measured.
 		bool closingMeasured = false;
+		uint64_t activationTrailFrames = 0; //!< How far it trailed the round when its activation was announced: its return leaves it that long.
 		const char* catchUpGate = nullptr; //!< What the last catch-up report met on its way to an activation.
 		const char* catchUpGateLogged = nullptr; //!< The gate last written to the log, and the horizon it was written at.
 		uint64_t catchUpGateLoggedFrame = 0;
