@@ -20638,39 +20638,43 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	// A host whose only other seat is held has nobody waiting on it: its own late input is no hold, and a host already held commits
 	// the round only as far as its own input would have reached, so it finds itself caught up and takes its seat back.
 	bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error) {
-		const auto makeHost = [&](NetLockstepCoordinator& host, LoopbackTransport& wire, int port) {
+		const auto makeHost = [&](NetLockstepCoordinator& host, LoopbackTransport& wire, LoopbackTransport& second, LoopbackTransport& third, uint16_t port) {
 			auto config = MakeCoordinatorConfig(1, 2, 0x9A21, 4, NetTransportLane::ControlReliable);
-			config.startFrame = 1; config.roundId = 41;
+			config.peerCount = 3; config.startFrame = 1; config.roundId = 41;
 			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+			config.relayToOtherPeers = true;
+			config.peerInputDelayFrames = {{1, 4}, {2, 4}, {3, 4}};
+			config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
 			config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A21);
-			if (!wire.StartHost(port, error) || !host.Start(wire, config, error)) return false;
+			config.matchConfig.successorOrder = {2, 3};
+			if (!wire.StartHost(port, error) || !second.Connect("loopback", port, error) || !third.Connect("loopback", port, error) ||
+			    !host.Start(wire, config, error)) return false;
 			host.m_State = NetLockstepState::Running;
 			host.m_RoundId = 41;
-			host.m_RemotePeerIds = {2};
-			host.m_PeersPlayedThisRound = {1, 2};
-			for (uint8_t peer: {1, 2}) host.m_PeerEffectiveStart[peer] = 5;
-			// The client's seat was held at 50: the AI plays it and nobody waits on its input.
-			host.m_AiHeldSeats[2] = 50;
-			host.m_PeerLeaveFrames[2] = 50;
+			host.m_RemotePeerIds = {2, 3};
+			host.m_PeersPlayedThisRound = {1, 2, 3};
+			for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 5;
+			// Both other seats were held at 50: the AI plays them and nobody waits on their input.
+			for (uint8_t peer: {2, 3}) { host.m_AiHeldSeats[peer] = 50; host.m_PeerLeaveFrames[peer] = 50; }
 			return true;
 		};
 		{
-			LoopbackTransport wire;
+			LoopbackTransport wire, second, third;
 			NetLockstepCoordinator host;
-			if (!makeHost(host, wire, 48897)) return false;
+			if (!makeHost(host, wire, second, third, 48911)) return false;
 			host.m_Stats.nextFrame = 200;
 			host.m_LastQueuedTargetFrame = 199;
 			host.m_LastCompletedSimulationTick = 193;
 			(void)host.JudgeOwnSeat(200, 1000);
 			if (host.JudgeOwnSeat(200, 1051) || host.IsSeatUnderAI(1, 200)) {
-				*error = "a-host-nobody-waits-on-keeps-its-seat: a host whose only other seat is held was held for its own late input";
+				*error = "a-host-nobody-waits-on-keeps-its-seat: a host whose other seats are all held was held for its own late input";
 				return false;
 			}
 		}
-		LoopbackTransport wire;
+		LoopbackTransport wire, second, third;
 		NetLockstepCoordinator host;
-		if (!makeHost(host, wire, 48898)) return false;
-		// The host was held at 150, before the client's seat; its simulation has completed 200.
+		if (!makeHost(host, wire, second, third, 48912)) return false;
+		// The host was held at 150, before the other seats; its simulation has completed 200.
 		host.m_AiHeldSeats[1] = 150;
 		host.m_Stats.nextFrame = 201;
 		host.m_LastQueuedTargetFrame = 200;
