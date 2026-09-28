@@ -3,7 +3,7 @@ set -eu
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 export CCCP_HEADLESS=1
 LANE=${CROSS_LANE_ROOT:?set CROSS_LANE_ROOT to the lane directory, e.g. /Users/erol/cortex-workers/<lane>}
-GUARD=/Users/erol/cortex-workers/inventory-confirming-6-20260926/exit.txt
+GUARD=${CROSS_MAC_GUARD:?set CROSS_MAC_GUARD to the live marker of the Mac inventory that must be finished}
 D=/Users/erol/projects/cccp/deps-audit-20260907
 REPO=$LANE/repo
 SHA=$1

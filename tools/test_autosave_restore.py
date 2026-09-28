@@ -47,11 +47,14 @@ import os
 import re
 import shutil
 import threading
+import time
 import unittest
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 from compare_sim_traces import FULLSTATE, compare_fullstate, load_fullstate
+from feel.report import own_hold_windows
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, read_live_hashes, split_passes
 from run_sim_test import make_run, engine_executable, file_sha256
 from feel_measure import stage_baseline
@@ -93,14 +96,31 @@ SEAT_BACK = re.compile(r"^\[net-match\] seat-reclaimed peer=\d+ frame=(\d+)", re
 WORLD_KILL_RETURN_WAIT_POLLS = 300
 
 
+# The kill's wait for that sample: each peer's writer coalesces periodic samples on its own timing, so the samples both
+# peers write come unevenly; the wait is twice the longest gap seen between them, never under the floor or over the cap.
+WORLD_KILL_SAMPLE_WAIT_MIN_S = 30
+WORLD_KILL_SAMPLE_WAIT_CAP_S = 240
+
+
+def _shared_samples(host_log: str, client_log: str) -> list:
+    """The (round, tick) full-state samples both peers have written."""
+    host = {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(host_log)}
+    return sorted(host & {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(client_log)})
+
+
+def sample_wait_bound_s(shared_seen_at: list) -> float:
+    """shared_seen_at: the wall seconds at which each new shared sample was seen."""
+    gaps = [later - earlier for earlier, later in zip(shared_seen_at, shared_seen_at[1:])]
+    return min(WORLD_KILL_SAMPLE_WAIT_CAP_S, max(WORLD_KILL_SAMPLE_WAIT_MIN_S, 2 * max(gaps, default=0)))
+
+
 def _arrival_unsampled(host_log: str, client_log: str) -> bool:
     """A seat held or admitted after the peers' last shared full-state sample: ending the phase now fails the round's oracle
     (unsampled_admissions), so the kill waits for the next sample both peers take."""
     arrivals = [int(frame) for frame in SEAT_HELD.findall(host_log)] + [int(frame) for frame in SEAT_ADMITTED.findall(client_log)]
     if not arrivals:
         return False
-    host = {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(host_log)}
-    shared = [tick for _, tick in host & {(int(round_id), int(tick)) for tick, _, _, round_id in FULLSTATE.findall(client_log)}]
+    shared = [tick for _, tick in _shared_samples(host_log, client_log)]
     return not shared or max(shared) < max(arrivals)
 
 
@@ -139,6 +159,7 @@ def fullstate_pairs(root: Path, admissions: bool = False) -> dict:
 
 
 PERTURB = re.compile(r"^\[net-test\] live perturb frame=(\d+)$", re.MULTILINE)
+FULLSTATE_COALESCED = re.compile(r"^\[fullstate-coalesced\] tick=\d+ replaced=(\d+) ", re.MULTILINE)
 
 
 FULLSTATE_LABELLED = re.compile(r"^\[fullstate-(canonical|restored)\] tick=(\d+) hash=[0-9a-f]{16} sections=(\S+) round=\d+\s*$", re.MULTILINE)
@@ -147,7 +168,7 @@ FULLSTATE_LABELLED_SCOPE = re.compile(r"^\[fullstate-scope\] tick=(\d+) round=\d
 ANCHOR_TICKS = 1400
 
 
-def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: list, every: int, last_tick: int) -> list:
+def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: list, every: int, last_tick: int, excused: list | None = None) -> list:
     """What keeps the anchor arm's heal from being proven, from the two peers' logs; empty when it is.
 
     The arm advances the host's sim RNG at the start of one tick (Main.cpp's live perturbation) and the oracle samples that
@@ -155,7 +176,10 @@ def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: l
     heal is proven only by (1) every scheduled sample after it, to the run's end, taken by both peers in the same round,
     (2) no shared section leaving either peer's samples unless the capture named it this machine's own, and (3) each
     peer's first restored world equal to the canonical capture of the snapshot the heal sent: two peers restoring the same
-    wrong state agree with each other, not with it."""
+    wrong state agree with each other, not with it. A sample a peer's own lines name as not taken (its saver coalesced it,
+    or its seat was held) is expected-absent for that peer and listed in excused; at least one sample after the heal must
+    be taken by both."""
+    excused = [] if excused is None else excused
     texts = {who: path.read_text(encoding="utf-8", errors="replace") if path.is_file() else "" for who, path in (("host", host_log), ("client", client_log))}
     injected = PERTURB.search(texts["host"])
     if not injected:
@@ -165,13 +189,33 @@ def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: l
     if len(seen) != 1 or seen[0][0] != tick or "globals.sim_rng" not in seen[0][1]:
         reasons.append(f"the injected divergence at tick {tick} was expected as the one divergent sample, naming globals.sim_rng; the oracle saw {seen}")
     samples = {"host": load_fullstate(host_log), "client": load_fullstate(client_log)}
+    # A peer's absent sample is expected only where its own lines name it: its saver coalesced it, or its seat was held.
+    replaced = {who: Counter(int(sampled) for sampled in FULLSTATE_COALESCED.findall(text)) for who, text in texts.items()}
+    holds = {who: own_hold_windows(text.splitlines()) for who, text in texts.items()}
+    shared = 0
     for sampled in range(tick - tick % every + every, last_tick + 1, every):
         rounds = {who: {key[0] for key in samples[who] if key[1] == sampled} for who in samples}
         missing = [who for who in samples if not rounds[who]]
-        if missing:
-            reasons.append(f"no {' or '.join(missing)} sample at tick {sampled} after the heal")
+        unnamed = []
+        for who in missing:
+            others = {round_id for other in samples if other != who for round_id in rounds[other]}
+            if replaced[who][sampled] > 0:
+                replaced[who][sampled] -= 1
+                excused.append({"peer": who, "tick": sampled, "reason": "coalesced"})
+            elif any(first <= sampled < end and (not others or round_id in others) for round_id, first, end in holds[who]):
+                excused.append({"peer": who, "tick": sampled, "reason": "held"})
+            else:
+                unnamed.append(who)
+        if unnamed:
+            reasons.append(f"no {' or '.join(unnamed)} sample at tick {sampled} after the heal")
+        elif missing:
+            continue
         elif rounds["host"] != rounds["client"]:
             reasons.append(f"the peers sampled tick {sampled} in different rounds: {sorted(rounds['host'])} vs {sorted(rounds['client'])}")
+        else:
+            shared += 1
+    if not shared:
+        reasons.append(f"no sample both peers took after the heal at tick {tick}")
     for who, text in texts.items():
         named = {(int(round_id), int(sampled)): set(filter(None, sections.split(","))) for sampled, round_id, sections in FULLSTATE_SCOPE.findall(text)}
         previous = None
@@ -211,9 +255,11 @@ def expect_injected_divergence(root: Path, verdicts: dict) -> None:
     """Holds the anchor arm's full-state verdict to injected_divergence_reasons, run to ANCHOR_TICKS."""
     for name, verdict in verdicts.items():
         pair = Path(root) / name
+        excused = []
         reasons = injected_divergence_reasons(pair / "host" / "stdout.log", pair / "client" / "stdout.log",
-                                              verdict.get("divergences") or [], FULLSTATE_EVERY, ANCHOR_TICKS)
-        verdict["injected_divergence"] = {"requires": "globals.sim_rng", "every": FULLSTATE_EVERY, "last_tick": ANCHOR_TICKS}
+                                              verdict.get("divergences") or [], FULLSTATE_EVERY, ANCHOR_TICKS, excused)
+        verdict["injected_divergence"] = {"requires": "globals.sim_rng", "every": FULLSTATE_EVERY, "last_tick": ANCHOR_TICKS,
+                                          "excused_after_heal": excused}
         verdict["passed"] = not reasons and verdict.get("compared_samples", 0) > 0
         verdict["reasons"] = reasons
 
@@ -767,10 +813,14 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
         threads[1].start()
         if kill_past:
             waiter = threading.Event()
-            waited_on_return = waited_on_sample = 0
+            waited_on_return = 0
+            sample_wait_began, shared_seen_at, shared_count = None, [], 0
             for _ in range(4200):
                 waiter.wait(0.1)
                 host_log, client_log = peer_log(root, "host"), peer_log(root, "client")
+                if FULLSTATE_EVERY and len(shared := _shared_samples(host_log, client_log)) > shared_count:
+                    shared_count = len(shared)
+                    shared_seen_at.append(time.monotonic())
                 captures = [int(row[0]) for row in CAPTURE.findall(host_log)]
                 identity = WORLD_IDENTITY.search(host_log)
                 ticket = root / "client/runtime/Userdata/reconnect.ticket"
@@ -780,18 +830,22 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
                     published = [int(path.stem.rsplit("-", 1)[1]) for path in store.glob(f"{identity[1]}-*.ccmanifest")
                                  if path.with_suffix(".ccsave").exists() and (store / f"{identity[1]}.admission").exists()]
                 ready = _world_kill_ready(host_log, client_log, kill_past, published, ticket.exists())
+                blocked = None if ready else "the kill conditions (seated client, ticket, a capture past the kill tick, a published autosave)"
                 # The kill waits for a held seat to come back, as a player's host would not die mid-rejoin on cue.
                 if ready and _seat_mid_return(host_log) and waited_on_return < WORLD_KILL_RETURN_WAIT_POLLS:
                     waited_on_return += 1
-                    ready = False
-                # And for the first sample both peers share after it, bounded the same way.
-                if (ready and FULLSTATE_EVERY and _arrival_unsampled(host_log, client_log)
-                        and waited_on_sample < WORLD_KILL_RETURN_WAIT_POLLS):
-                    waited_on_sample += 1
-                    ready = False
+                    ready, blocked = False, f"a held seat's return (held at {SEAT_HELD.findall(host_log)[-1]}, waited {waited_on_return / 10} s)"
+                # And for the first sample both peers share after it, bounded by the cadence the shared samples keep.
+                if ready and FULLSTATE_EVERY and _arrival_unsampled(host_log, client_log):
+                    sample_wait_began = time.monotonic() if sample_wait_began is None else sample_wait_began
+                    if time.monotonic() - sample_wait_began < sample_wait_bound_s(shared_seen_at):
+                        ready = False
+                        blocked = f"a shared sample after a seat came in (waited {time.monotonic() - sample_wait_began:.1f} s of {sample_wait_bound_s(shared_seen_at)} s)"
+                records["_kill_blocked_by"] = blocked
                 if ready:
                     records["_kill_waited_on_return_s"] = waited_on_return / 10
-                    records["_kill_waited_on_sample_s"] = waited_on_sample / 10
+                    records["_kill_waited_on_sample_s"] = 0.0 if sample_wait_began is None else round(time.monotonic() - sample_wait_began, 1)
+                    records["_kill_sample_wait_bound_s"] = sample_wait_bound_s(shared_seen_at) if FULLSTATE_EVERY else None
                     runs["host"].terminate(code=137, reason="world host process killed")
                     killed = True
                     records["_kill_capture_tick"] = max(captures)
@@ -907,7 +961,8 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             (window / f"{who}-live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in peer_rows if row["tick"] <= last_shared),
                                                       encoding="utf-8")
         compare_live_window(window, first_capture + 1, last_shared, {"client": held_away(peer_log(first, "client"))})
-    assert records["_killed"], f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}"
+    assert records["_killed"], (f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}; "
+                                f"the host exited while the kill waited on {records.get('_kill_blocked_by')}")
     identity = WORLD_IDENTITY.findall(peer_log(first, "host"))
     assert identity, "the world host never printed its identity"
     world_id, boot_one, round_one = identity[0][0], int(identity[0][1]), int(identity[0][2])
@@ -1003,6 +1058,8 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             "retention kept the previous boot ahead of the fresh world's completed checkpoints"
     return {"world_id": world_id, "boot": boot_one, "resume_tick": resume_tick,
             "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end,
+            "kill_waited_on_return_s": records["_kill_waited_on_return_s"], "kill_waited_on_sample_s": records["_kill_waited_on_sample_s"],
+            "kill_sample_wait_bound_s": records["_kill_sample_wait_bound_s"],
             "manifest_control_owners": side_state["control_owners"], "manifest_applied_sequences": side_state["applied_sequences"],
             "manifest_binding_peers": side_state["binding_peers"],
             "seats": sorted(seats_two), "fresh_first_capture": min(fresh_captures),
@@ -1108,6 +1165,16 @@ class WorldRestartOracleTests(unittest.TestCase):
         self.assertTrue(_arrival_unsampled(host + sample(420), client + sample(420) + admitted))
         self.assertFalse(_arrival_unsampled(host + sample(480), client + sample(420) + admitted + sample(480)))
 
+    def test_the_sample_wait_follows_the_shared_cadence(self):
+        # green-soak-2 at --saver-delay-ms 2000: each peer coalesces on its own writer, so shared samples came 45 s apart.
+        self.assertGreaterEqual(sample_wait_bound_s([0.0, 1.0, 46.0]), 90.0)
+        self.assertEqual(sample_wait_bound_s([0.0, 1.0, 2.0]), WORLD_KILL_SAMPLE_WAIT_MIN_S)
+        self.assertEqual(sample_wait_bound_s([]), WORLD_KILL_SAMPLE_WAIT_MIN_S)
+        self.assertEqual(sample_wait_bound_s([0.0, 400.0]), WORLD_KILL_SAMPLE_WAIT_CAP_S)
+        def sample(tick: int) -> str:
+            return f"[fullstate] tick={tick} hash=ef9b7943247e96ec sections=header:258ea10e07185ecb round=7\n"
+        self.assertEqual(_shared_samples(sample(60) + sample(120), sample(120) + sample(180)), [(7, 120)])
+
     def test_lobby_join_with_published_offers_can_be_killed(self):
         host = self.HOST_START + self.HOST_LOBBY + self.CAPTURES
         client = self.CLIENT_START + self.CLIENT_LOBBY
@@ -1174,12 +1241,21 @@ class WorldRestartOracleTests(unittest.TestCase):
         def line(tag, tick, sections, round_id):
             return f"[{tag}] tick={tick} hash={'e' * 16} sections={','.join(f'{name}:{value}' for name, value in sections.items())} round={round_id}\n"
 
-        def logs(client_last=1380, dropped_from=0, named=False, restored=None, canonical=True, canonical_own=None):
+        def logs(client_last=1380, dropped_from=0, named=False, restored=None, canonical=True, canonical_own=None, absent=None, coalesced=None,
+                 client_hold=None):
             texts = {"host": "[net-test] live perturb frame=720\n", "client": ""}
+            for who, replaced in (coalesced or {}).items():
+                texts[who] += "".join(f"[fullstate-coalesced] tick={tick + 60} replaced={tick} writing={tick - 60} waiting_bound=1\n" for tick in replaced)
+            if client_hold:
+                texts["client"] += (f"[net-lockstep] start round=8 frame=721 local_peer=2 peers=2 input_delay=4\n"
+                                    f"[net-lockstep] hold of this seat at {client_hold[0]} revision=9 incarnation=1 state=Running\n"
+                                    f"[net-match] seat-reclaimed peer=2 frame={client_hold[1]} live_actors=2\n")
             for who in texts:
                 for tick in range(60, 1381, 60):
                     if who == "client" and tick > client_last:
                         break
+                    if tick in (absent or {}).get(who, ()):
+                        continue
                     round_id = 7 if tick <= 720 else 8
                     sections = dict(base)
                     if who == "host" and tick == 720:
@@ -1206,6 +1282,16 @@ class WorldRestartOracleTests(unittest.TestCase):
             "no canonical snapshot": (logs(canonical=False), False),
             "a section the canonical capture keeps for itself": (logs(canonical_own="graph.3"), True),
             "a section the canonical capture drops unnamed": (logs(canonical_own=""), False),
+            # EDITH S1 restore-all on merge 254: the slow saver coalesced samples after the heal on each peer.
+            "samples each peer's own saver coalesced after the heal": (
+                logs(absent={"host": {840, 1020}, "client": {840, 960}}, coalesced={"host": [840, 1020], "client": [840, 960]}), True),
+            "an absence no line of the peer names": (logs(absent={"client": {1200}}), False),
+            "a coalesced line of the other peer excuses nothing": (logs(absent={"client": {1200}}, coalesced={"host": [1200]}), False),
+            "a held peer's samples inside its own hold": (logs(absent={"client": {1200}}, client_hold=(1147, 1213)), True),
+            "a sample after the hold's return": (logs(absent={"client": {1260}}, client_hold=(1147, 1213)), False),
+            "no sample both peers took after the heal": (
+                logs(absent={"host": set(range(780, 1381, 120)), "client": set(range(840, 1381, 120))},
+                     coalesced={"host": list(range(780, 1381, 120)), "client": list(range(840, 1381, 120))}), False),
         }
         global FULLSTATE_EVERY
         every = FULLSTATE_EVERY
