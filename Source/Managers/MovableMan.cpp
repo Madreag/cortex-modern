@@ -6054,6 +6054,8 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	std::array<std::string, 2> globalHashes;
 	long long perStateUs = 0;
 	long long globalUs = 0;
+	long long calibrationStateOrderUs = 0;
+	long long calibrationIdOrderUs = 0;
 	std::array<std::string, 2> duplicateHashes;
 	std::array<std::string, 2> freedAcrossStatesHashes{};
 	std::array<std::string, 2> freedAcrossStatesExpected{};
@@ -6307,6 +6309,51 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 			}
 
 			if (shift == c_PlacementShift) {
+				// The calibration, measured first: the same registered scripts called by a plain loop, once
+				// grouped by state and once in unique-ID order, with none of the pass's snapshot, sort or
+				// liveness work. What the second costs over the first is what this box's caches charge for
+				// the order itself, and the budget scales with it.
+				{
+					const std::string syncedUpdate = "SyncedUpdate";
+					std::vector<std::pair<LuaStateWrapper*, MovableObject*>> stateOrder;
+					for (LuaStateWrapper& state: states) {
+						for (MovableObject* mo: SortedRegisteredMOs(state)) stateOrder.emplace_back(&state, mo);
+					}
+					std::vector<std::pair<LuaStateWrapper*, MovableObject*>> idOrder = stateOrder;
+					std::stable_sort(idOrder.begin(), idOrder.end(), [](const auto& lhs, const auto& rhs) { return lhs.second->GetUniqueID() < rhs.second->GetUniqueID(); });
+					const auto plain = [&](const std::vector<std::pair<LuaStateWrapper*, MovableObject*>>& sequence) {
+						context.order.clear();
+						for (const auto& object: objects) object->RequestSyncedUpdate();
+						const auto started = std::chrono::steady_clock::now();
+						LuaStateWrapper* current = nullptr;
+						for (const auto& [state, mo]: sequence) {
+							if (state != current) {
+								g_LuaMan.SetThreadLuaStateOverride(state);
+								current = state;
+							}
+							if (mo->HasRequestedSyncedUpdate()) {
+								mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+								mo->ResetRequestedSyncedUpdateFlag();
+							}
+						}
+						g_LuaMan.SetThreadLuaStateOverride(nullptr);
+						const long long elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+						hashFixture(context, objects);
+						return elapsed;
+					};
+					plain(stateOrder);
+					plain(idOrder);
+					std::vector<long long> stateOrderSamples;
+					std::vector<long long> idOrderSamples;
+					for (int round = 0; round < c_MeasureRounds; ++round) {
+						stateOrderSamples.push_back(plain(stateOrder));
+						idOrderSamples.push_back(plain(idOrder));
+					}
+					std::sort(stateOrderSamples.begin(), stateOrderSamples.end());
+					std::sort(idOrderSamples.begin(), idOrderSamples.end());
+					calibrationStateOrderUs = stateOrderSamples[stateOrderSamples.size() / 2];
+					calibrationIdOrderUs = idOrderSamples[idOrderSamples.size() / 2];
+				}
 				run(false);
 				run(true);
 				std::vector<long long> perStateSamples;
@@ -6453,9 +6500,16 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	// whatever the per-state walk happened to take: 0.15 ms of a 16.7 ms tick, at 1,024 registered MOs
 	// across 32 states, median of 32 interleaved passes.
 	constexpr long long c_AddedBudgetUs = 150;
+	// Most of that cost is the unique-ID order itself, and what it costs is the box's: the plain loop paid
+	// this much for the order on the box that accepted 150 us (median of seven quiet runs), so a box whose
+	// caches charge more gets the budget in proportion, and never less than the accepted 150 us.
+	constexpr long long c_ReferenceOrderCostUs = 74;
+	const long long orderCostUs = calibrationIdOrderUs - calibrationStateOrderUs;
+	const double orderRatio = static_cast<double>(orderCostUs) / static_cast<double>(c_ReferenceOrderCostUs);
+	const long long addedBudgetUs = std::llround(static_cast<double>(c_AddedBudgetUs) * std::max(1.0, orderRatio));
 	const long long addedUs = globalUs - perStateUs;
-	const bool timingMeasured = perStateUs > 0;
-	const bool timingGreen = timingMeasured && addedUs <= c_AddedBudgetUs;
+	const bool timingMeasured = perStateUs > 0 && calibrationStateOrderUs > 0;
+	const bool timingGreen = timingMeasured && addedUs <= addedBudgetUs;
 	const bool retiredGreen = !retiredExpectedHash.empty() && retiredExpectedHash == retiredActualHash;
 	const bool duplicateGreen = !duplicateHashes[0].empty() && duplicateHashes[0] == duplicateHashes[1];
 	const bool freedAcrossStatesGreen = freedAcrossStatesReady && !freedAcrossStatesHashes[0].empty() &&
@@ -6532,8 +6586,11 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	          << (freedAcrossStatesGreen ? "" : " (the pass reached an object a script in the same pass had freed)") << std::endl;
 	std::cout << "[script-graph-selftest] " << budgetVerdict(timingMeasured, timingGreen)
 	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=" << c_LuaStateCount << " before_us=" << perStateUs
-	          << " after_us=" << globalUs << " added_us=" << addedUs << " budget_us=" << c_AddedBudgetUs
-	          << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent << std::endl;
+	          << " after_us=" << globalUs << " added_us=" << addedUs << " budget_us=" << addedBudgetUs
+	          << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent
+	          << " calibration_state_order_us=" << calibrationStateOrderUs << " calibration_id_order_us=" << calibrationIdOrderUs
+	          << " order_cost_us=" << orderCostUs << " reference_order_cost_us=" << c_ReferenceOrderCostUs
+	          << " ratio=" << std::setprecision(2) << orderRatio << " accepted_budget_us=" << c_AddedBudgetUs << std::endl;
 	std::cout << "[script-graph-selftest] " << budgetVerdict(loadTimingMeasured, loadTimingGreen)
 	          << " threaded_synced_update_pass_timing_under_load registered=" << loadObjectsRegistered
 	          << " states=" << c_LuaStateCount << " before_us=" << loadPerStateUs << " after_us=" << loadGlobalUs

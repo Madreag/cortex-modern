@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -337,7 +338,9 @@ def probe_root(root, who):
     return root / f"{who}_probe"
 
 
-_NTDLL = ctypes.WinDLL("ntdll")
+def ntdll():
+    """ntdll's process suspension, loaded on first use: it is the one piece of this driver only Windows has."""
+    return ctypes.WinDLL("ntdll")
 
 
 def suspend_run(run):
@@ -345,13 +348,32 @@ def suspend_run(run):
     failure path carries no fixture error of its own the way an in-engine hold would."""
     if run.process is None:
         raise RuntimeError("suspend asked for a process that has not started")
-    if _NTDLL.NtSuspendProcess(ctypes.c_void_p(run.process)) != 0:
+    if ntdll().NtSuspendProcess(ctypes.c_void_p(run.process)) != 0:
         raise RuntimeError("NtSuspendProcess failed")
 
 
 def resume_run(run):
-    if _NTDLL.NtResumeProcess(ctypes.c_void_p(run.process)) != 0:
+    if ntdll().NtResumeProcess(ctypes.c_void_p(run.process)) != 0:
         raise RuntimeError("NtResumeProcess failed")
+
+
+def unavailable_reason(case, platform=None):
+    """Why this platform cannot drive a case, or None. The case is refused with that reason as its verdict."""
+    if (platform or os.name) != "nt" and case == "net-host-left-early":
+        return "suspends the client mid-launch through ntdll's NtSuspendProcess on the win32 runner's process handle (Windows only)"
+    return None
+
+
+def unavailable_row(case, size, reason):
+    return {"pass": None, "verdict": "unavailable", "case": case, "size": size, "reason": reason, "captures": []}
+
+
+def summarize(rows):
+    """The driver's verdict: the rows that ran decide it; a refused row is named beside it, never counted as run."""
+    refused = [f"{row['case']}/{row['size']}: {row['reason']}" for row in rows if row.get("verdict") == "unavailable"]
+    ran = [row for row in rows if row.get("verdict") != "unavailable"]
+    passed = bool(ran) and all(row["pass"] for row in ran)
+    return passed, ("PASS" if passed else "FAIL" if ran else "UNAVAILABLE"), refused
 
 
 def row_checks(control, parent):
@@ -2609,7 +2631,41 @@ def run_case(options, case, root, failing=None):
     return result
 
 
+def self_test():
+    """The platform rows, without an engine: nothing Windows-only runs at import, and a case the platform cannot
+    drive is refused by name while the rows that ran decide the verdict."""
+    import ast
+    results = []
+
+    def row(name, ok, detail=""):
+        results.append(ok)
+        print(f"[menu-readback-self-test] {'PASS' if ok else 'FAIL'} {name}" + (f": {detail}" if detail and not ok else ""))
+
+    def import_time_nodes(node):
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                yield child
+                yield from import_time_nodes(child)
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    windows_only = [f"line {node.lineno}: {node.attr}" for node in import_time_nodes(tree)
+                    if isinstance(node, ast.Attribute) and node.attr in ("WinDLL", "windll", "OleDLL", "oledll", "WinError")]
+    row("nothing-windows-only-at-import", not windows_only, "; ".join(windows_only))
+    reason = unavailable_reason("net-host-left-early", "posix")
+    row("posix-refuses-the-suspend-case-by-name", bool(reason) and "NtSuspendProcess" in reason, str(reason))
+    row("posix-drives-the-other-cases", not any(unavailable_reason(case, "posix") for case in CASES if case != "net-host-left-early"))
+    row("windows-drives-every-case", not any(unavailable_reason(case, "nt") for case in CASES))
+    ran, refused = {"pass": True, "case": "repair", "size": "960x540"}, unavailable_row("net-host-left-early", "960x540", reason)
+    row("ran-rows-decide-with-the-refusal-named", summarize([ran, refused]) == (True, "PASS", [f"net-host-left-early/960x540: {reason}"]))
+    row("a-red-row-stays-red", summarize([{**ran, "pass": False}, refused])[:2] == (False, "FAIL"))
+    row("nothing-ran-is-unavailable-not-green", summarize([refused])[:2] == (False, "UNAVAILABLE"))
+    print(f"[menu-readback-self-test] {'PASS' if all(results) else 'FAIL'} {sum(results)}/{len(results)}")
+    return 0 if all(results) else 1
+
+
 def main():
+    if "--self-test" in sys.argv[1:]:
+        return self_test()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
@@ -2650,13 +2706,15 @@ def main():
             continue
         for size in sizes_for(case):
             options.size = size
-            rows.append(run_case(options, case, options.out / case / size))
-    result = {"pass": all(row["pass"] for row in rows), "driver_sha256": sha(__file__),
+            reason = unavailable_reason(case)
+            rows.append(unavailable_row(case, size, reason) if reason else run_case(options, case, options.out / case / size))
+    passed, verdict, refused = summarize(rows)
+    result = {"pass": passed, "verdict": verdict, "unavailable": refused, "driver_sha256": sha(__file__),
               "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port, "cases": rows}
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     (options.out / "captures.json").write_text(json.dumps([image for row in rows for image in row["captures"]], indent=2) + "\n", encoding="utf-8")
-    print(f"[menu-readback] {'PASS' if result['pass'] else 'FAIL'} {options.out / 'result.json'}")
-    return 0 if result["pass"] else 1
+    print(f"[menu-readback] {verdict} {options.out / 'result.json'}" + (f" (unavailable here: {'; '.join(refused)})" if refused else ""))
+    return 0 if passed else 3 if verdict == "UNAVAILABLE" else 1
 
 
 if __name__ == "__main__":
