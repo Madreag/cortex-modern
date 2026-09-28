@@ -894,6 +894,12 @@ namespace RTE {
 			if (!sent.pending || sent.kind != c_NetWorldReportCatchUp) {
 				return Fail("appliedThrough-did-not-reach-E-minus-1: the joiner sent no catch-up report");
 			}
+			const uint64_t reportsBefore = catchUp.reportsSent;
+			const uint64_t repeatBegan = NetLockstepNowMs();
+			for (int pump = 0; pump < 100; ++pump) NetMatchService::StepWorldJoinCatchUpClient(pair.client, catchUp);
+			const uint64_t heartbeatLimit = (NetLockstepNowMs() - repeatBegan) / 250 + 1;
+			if (catchUp.reportsSent - reportsBefore > heartbeatLimit)
+				return Fail("unchanged catch-up progress flooded the wire: reports=" + std::to_string(catchUp.reportsSent - reportsBefore));
 			const uint64_t nowFrame = 80;
 			const NetPeerId connection = NetMatchService::ResolveWorldReportConnection(host, {}, sent.fromPeer);
 			if (connection != 7) {
