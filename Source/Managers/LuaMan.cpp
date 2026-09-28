@@ -7485,6 +7485,11 @@ void LuaStateWrapper::Destroy() {
 	if (!m_State) {
 		return;
 	}
+	ClearLuaScriptCache();
+	for (const auto& [path, functions]: m_PreviewScriptCacheHeld) {
+		for (const auto& [name, function]: functions) delete function;
+	}
+	m_PreviewScriptCacheHeld.clear();
 	// A wrapper destructed anywhere queues its luabind object, and deleting that object unrefs a
 	// registry slot of the state it lives in. Anything still queued for this state has to go now.
 	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
