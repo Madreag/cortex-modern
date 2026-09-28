@@ -2008,7 +2008,7 @@ namespace RTE {
 		}
 		if (session->activationTick != 0) {
 			const uint64_t behind = nowFrame > appliedThrough ? nowFrame - appliedThrough : 0;
-			if (IsPrivateMatch() && !session->activationProposed && nowFrame + c_NetWorldClosingWindowFrames >= session->activationTick &&
+			if (IsPrivateMatch() && !session->activationProposed &&
 			    (nowFrame >= session->activationTick || behind > session->activationTrailFrames + m_Config.slowPlayerBoundTicks)) {
 				uint64_t later = 0;
 				if (ReannounceActivation(connection, nowFrame, &later, nullptr)) {
