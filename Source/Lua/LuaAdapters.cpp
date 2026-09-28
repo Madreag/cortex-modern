@@ -156,7 +156,10 @@ LuaEntityCloneFunctionDefinitionForType(PieMenu);
 		return targetType; \
 	} \
 	bool LuaAdaptersEntityCast::Is##TYPE(Entity* entity) { \
-		return dynamic_cast<TYPE*>(entity) ? true : false; \
+		return IsConst##TYPE(entity); \
+	} \
+	bool LuaAdaptersEntityCast::IsConst##TYPE(const Entity* entity) { \
+		return dynamic_cast<const TYPE*>(entity) != nullptr; \
 	} \
 	LuabindObjectWrapper* LuaAdaptersEntityCast::ToLuabindObject##TYPE(Entity* entity, lua_State* luaState) { \
 		return new LuabindObjectWrapper(new luabind::object(luaState, dynamic_cast<TYPE*>(entity)), ""); \

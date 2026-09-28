@@ -159,7 +159,7 @@ namespace RTE {
 #define RegisterLuaBindingsOfAbstractType(OWNINGSCOPE, TYPE) \
 	luabind::def((std::string("To") + std::string(#TYPE)).c_str(), (TYPE * (*)(Entity*)) & LuaAdaptersEntityCast::To##TYPE), \
 	    luabind::def((std::string("To") + std::string(#TYPE)).c_str(), (const TYPE* (*)(const Entity*)) & LuaAdaptersEntityCast::ToConst##TYPE), \
-	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), (bool (*)(const Entity*)) & LuaAdaptersEntityCast::Is##TYPE), \
+	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), &LuaAdaptersEntityCast::IsConst##TYPE), \
 	    OWNINGSCOPE::Register##TYPE##LuaBindings()
 
 /// Convenience macro for calling a register function of a concrete type, along with registering global bindings for adapters relevant to the type.
@@ -171,7 +171,7 @@ namespace RTE {
 	    luabind::def((std::string("Random") + std::string(#TYPE)).c_str(), (TYPE * (*)(std::string)) & LuaAdaptersEntityCreate::Random##TYPE, luabind::adopt(luabind::result)), \
 	    luabind::def((std::string("To") + std::string(#TYPE)).c_str(), (TYPE * (*)(Entity*)) & LuaAdaptersEntityCast::To##TYPE), \
 	    luabind::def((std::string("To") + std::string(#TYPE)).c_str(), (const TYPE* (*)(const Entity*)) & LuaAdaptersEntityCast::ToConst##TYPE), \
-	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), (bool (*)(const Entity*)) & LuaAdaptersEntityCast::Is##TYPE), \
+	    luabind::def((std::string("Is") + std::string(#TYPE)).c_str(), &LuaAdaptersEntityCast::IsConst##TYPE), \
 	    OWNINGSCOPE::Register##TYPE##LuaBindings()
 #pragma endregion
 
