@@ -2581,7 +2581,7 @@ bool ActivityMan::PrepareCheckpointMaterials(std::string_view runtimeGlobals) {
 	if (runtimeGlobals.empty()) return true;
 	try {
 		std::string version;
-		for (int number = 1; number <= 10; ++number) {
+		for (int number = 1; number <= 11; ++number) {
 			const std::string candidate = "RuntimeGlobals" + std::to_string(number);
 			if (runtimeGlobals.starts_with(std::to_string(candidate.size()) + " " + candidate + " ")) { version = candidate; break; }
 		}
