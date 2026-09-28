@@ -1274,6 +1274,7 @@ namespace RTE {
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 		friend bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
+		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
 		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
 		friend bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
 		friend bool TestAHeldClientsHashIsNotTheRounds(std::string* error);
@@ -1538,6 +1539,7 @@ namespace RTE {
 		void ReclaimOwnSeat(uint64_t nowMs);
 		std::optional<uint64_t> m_OwnMissingFrame; //!< Host: the frame its own input was first missing for with every other seat's in hand.
 		uint64_t m_OwnMissingSinceMs = 0;
+		std::string m_OwnSeatWaitLogged; //!< Host: why its held seat last waited to come back, as last logged.
 		uint64_t FutureTimingFrame() const;
 		struct TimingDecision {
 			NetLockstepTiming proposal;

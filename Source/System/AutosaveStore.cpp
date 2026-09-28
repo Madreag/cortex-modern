@@ -64,8 +64,10 @@ namespace RTE {
 		/// without reading the disk on the game thread. The archive thread writes it, the game thread reads it.
 		std::mutex s_ValidatedMutex;
 		/// Keyed by match: one process can hold checkpoints of more than one match, and the newest of
-		/// each stays findable instead of the last publish evicting every other match's record.
-		std::map<std::string, AutosaveDescriptor> s_Validated;
+		/// each stays findable instead of the last publish evicting every other match's record. Each match keeps
+		/// its latest validated checkpoints, newest first, so a heal can name an older one every peer holds.
+		std::map<std::string, std::vector<AutosaveDescriptor>> s_Validated;
+		constexpr size_t c_ValidatedKept = 16;
 
 		/// This peer's "Autosaves kept" option, applied from its settings; the store never reads them itself.
 		std::atomic<size_t> s_RetainedAutosaves{AutosaveStore::c_RetainedAutosaves};
@@ -779,17 +781,32 @@ namespace RTE {
 		std::lock_guard<std::mutex> lock(s_ValidatedMutex);
 		// A fresh boot supersedes the previous round even when its tick is lower.
 		auto& held = s_Validated[descriptor.matchId];
-		if (held.matchId == descriptor.matchId && CheckpointOrder(descriptor) < CheckpointOrder(held)) return;
-		held = descriptor;
+		const auto order = CheckpointOrder(descriptor);
+		const auto at = std::find_if(held.begin(), held.end(), [&](const AutosaveDescriptor& kept) { return CheckpointOrder(kept) <= order; });
+		if (at != held.end() && CheckpointOrder(*at) == order) *at = descriptor;
+		else held.insert(at, descriptor);
+		if (held.size() > c_ValidatedKept) held.resize(c_ValidatedKept);
 	}
 
 	std::optional<AutosaveDescriptor> AutosaveStore::NewestValidated(const std::string& matchId) {
 		std::lock_guard<std::mutex> lock(s_ValidatedMutex);
 		const auto held = s_Validated.find(matchId);
-		if (matchId.empty() || held == s_Validated.end()) return std::nullopt;
+		if (matchId.empty() || held == s_Validated.end() || held->second.empty()) return std::nullopt;
 		std::error_code status;
-		if (!std::filesystem::is_regular_file(held->second.path, status)) return std::nullopt;
-		return held->second;
+		if (!std::filesystem::is_regular_file(held->second.front().path, status)) return std::nullopt;
+		return held->second.front();
+	}
+
+	std::vector<AutosaveDescriptor> AutosaveStore::ValidatedNewestFirst(const std::string& matchId) {
+		std::vector<AutosaveDescriptor> onDisk;
+		std::lock_guard<std::mutex> lock(s_ValidatedMutex);
+		const auto held = s_Validated.find(matchId);
+		if (matchId.empty() || held == s_Validated.end()) return onDisk;
+		for (const AutosaveDescriptor& descriptor: held->second) {
+			std::error_code status;
+			if (std::filesystem::is_regular_file(descriptor.path, status)) onDisk.push_back(descriptor);
+		}
+		return onDisk;
 	}
 
 	bool AutosaveStore::RunSelfTest(const std::string& matchId) {

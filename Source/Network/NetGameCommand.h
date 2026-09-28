@@ -387,9 +387,10 @@ namespace RTE {
 	/// captures at, and each peer says when its writer has finished one.
 	struct NetGameCheckpoint {
 		/// ManualCapture is a Capture the host asked for by hand; every peer marks that checkpoint as saved by the host.
-		enum Kind : uint8_t { Capture = 1, Written = 2, ManualCapture = 3 };
+		/// Missed frees the writer like Written, but says this peer holds no archive of that capture.
+		enum Kind : uint8_t { Capture = 1, Written = 2, ManualCapture = 3, Missed = 4 };
 		uint8_t kind = Capture;
-		uint64_t tick = 0; //!< Capture: the tick every peer captures at. Written: the capture this peer's writer finished.
+		uint64_t tick = 0; //!< Capture: the tick every peer captures at. Written or Missed: the capture this peer's writer finished or did not keep.
 		bool operator==(const NetGameCheckpoint&) const = default;
 	};
 

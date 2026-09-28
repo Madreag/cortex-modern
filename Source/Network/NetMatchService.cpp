@@ -1299,8 +1299,19 @@ static std::string ResyncSaveName() {
 			// thread proved it restorable when it published it, so the game thread reads no archive here.
 			std::optional<AutosaveDescriptor> anchor;
 			if (isHost) {
-				anchor = AutosaveStore::NewestValidated(m_AutosaveMatchId);
-				if (anchor && anchor->savedTick <= state.savedTick) {
+				// Every peer the heal relaunches must hold it: a seat that caught up across a capture never took that one.
+				const std::vector<AutosaveDescriptor> validated = AutosaveStore::ValidatedNewestFirst(m_AutosaveMatchId);
+				const std::set<uint8_t> relaunched = CheckpointWriters(state.savedTick);
+				anchor = ChooseRewindAnchor(validated, m_CheckpointHolders, state.savedTick, relaunched, m_AutosaveIdentity.roundId);
+				// The candidates and who reported each, so a heal that names none says why.
+				std::string candidates;
+				for (const AutosaveDescriptor& checkpoint: validated) {
+					candidates += " " + std::to_string(checkpoint.savedTick) + ":";
+					if (const auto held = m_CheckpointHolders.find(checkpoint.savedTick); held != m_CheckpointHolders.end())
+						for (const uint8_t peer: held->second) candidates += std::to_string(peer);
+				}
+				System::PrintDiagnosticLine("[autosave] rewind candidates peers=" + std::to_string(relaunched.size()) + candidates);
+				if (anchor) {
 					state.rewindMatchId = anchor->matchId;
 					state.rewindTick = anchor->savedTick;
 				}
@@ -1846,18 +1857,22 @@ static std::string ResyncSaveName() {
 			return !keepLocalPlayer || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity));
 		}, [this, local, state, keepLocalPlayer, dedicated, newestBinding, ownCheckpoint](Activity& activity) {
 			StopSnapshotLoadKeepalive();
-			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick ||
-			    !g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true)) return false;
+			// Each refusal names its step: the relaunch reports only that the restart failed.
+			const auto refuse = [](const char* step) { System::PrintDiagnosticLine(std::string("[net-match] resync restore refused: ") + step); return false; };
+			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick) return refuse("the restored tick is not the snapshot's");
+			if (!g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true))
+				return refuse("this machine's input, GUI or frame state does not load");
 			const NetGamePlayerBindings seatless{};
 			// A peer that loaded its own copy of the checkpoint and one that was streamed the host's copy
 			// apply the SAME bindings - the ones the checkpoint's manifest carried - or the two would
 			// resume onto different seats. Only a live heal keeps this machine's own captured state.
 			if (!(keepLocalPlayer && !ownCheckpoint ? activity.RestoreNetLocalPlayerState(local->activity)
 			                                        : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) {
-				return false;
+				return refuse(keepLocalPlayer && !ownCheckpoint ? "this machine's local player state does not restore" : "the snapshot's player bindings do not apply");
 			}
-			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame)) return false;
-			return ScenarioRunner::RestoreNetResyncState(*state);
+			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame))
+				return refuse("this machine's input, GUI or frame state does not apply");
+			return ScenarioRunner::RestoreNetResyncState(*state) || refuse("the lockstep resync state does not restore");
 		})) { StopSnapshotLoadKeepalive(); if (error) *error = "could not stage resync local state restoration"; return false; }
 		ScenarioRunner::ApplyDeterministicConfig();
 		if (resyncRejoin) SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
@@ -3331,12 +3346,13 @@ static std::string ResyncSaveName() {
 		ApplyAutosaveVerdict(tick, joinCapture, archived);
 	}
 
-	std::vector<uint64_t> NetMatchService::TakeAutosaveVerdicts() {
+	std::vector<uint64_t> NetMatchService::TakeAutosaveVerdicts(std::vector<uint64_t>* refused) {
 		std::vector<uint64_t> finished;
 		while (const std::optional<ActivityMan::AutosaveVerdict> verdict = g_ActivityMan.TakeAutosaveVerdict()) {
 			const bool awaited = std::any_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [&](const AwaitedAutosave& entry) { return entry.tick == verdict->tick; });
 			ResolveAwaitedAutosave(verdict->tick, verdict->archived);
 			if (awaited) finished.push_back(verdict->tick);
+			if (awaited && !verdict->archived && refused) refused->push_back(verdict->tick);
 		}
 		return finished;
 	}
@@ -3345,6 +3361,7 @@ static std::string ResyncSaveName() {
 		m_ScheduledCaptures.clear();
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
+		m_CheckpointHolders.clear();
 		m_OpenCaptureForJoin = false;
 		m_ManualCaptures.clear();
 		m_OpenCaptureManual = false;
@@ -3366,6 +3383,23 @@ static std::string ResyncSaveName() {
 		// The host's ask the heal cut short is taken again after it.
 		if (m_OpenCaptureManual) m_ManualSaveAsked = true;
 		m_OpenCaptureManual = false;
+	}
+
+	void NetMatchService::NoteCheckpointHolder(uint64_t tick, uint8_t peer) {
+		m_CheckpointHolders[tick].insert(peer);
+		// Retention keeps a handful of archives, so only the newest captures' holders can matter.
+		while (m_CheckpointHolders.size() > 32) m_CheckpointHolders.erase(m_CheckpointHolders.begin());
+	}
+
+	std::optional<AutosaveDescriptor> NetMatchService::ChooseRewindAnchor(const std::vector<AutosaveDescriptor>& validatedNewestFirst,
+	                                                                     const std::map<uint64_t, std::set<uint8_t>>& holders, uint64_t savedTick,
+	                                                                     const std::set<uint8_t>& peers, uint64_t roundId) {
+		for (const AutosaveDescriptor& checkpoint: validatedNewestFirst) {
+			if (checkpoint.savedTick > savedTick || checkpoint.roundId != roundId) continue;
+			const auto held = holders.find(checkpoint.savedTick);
+			if (held != holders.end() && std::includes(held->second.begin(), held->second.end(), peers.begin(), peers.end())) return checkpoint;
+		}
+		return std::nullopt;
 	}
 
 	std::set<uint8_t> NetMatchService::CheckpointWriters(uint64_t tick) const {
@@ -3390,13 +3424,24 @@ static std::string ResyncSaveName() {
 				if (m_Coordinator) m_Coordinator->NoteAnnouncedCapture(takenAt);
 				// The writers report the tick they took, so that is the capture the host waits on.
 				if (m_IsHost && note.tick == m_OpenCaptureTick) { m_OpenCaptureTick = takenAt; m_OpenCaptureApplied = true; }
-			} else if (note.kind == NetGameCheckpoint::Written && m_IsHost && note.tick == m_OpenCaptureTick) {
+			} else if ((note.kind == NetGameCheckpoint::Written || note.kind == NetGameCheckpoint::Missed) && m_IsHost && note.tick == m_OpenCaptureTick) {
 				m_CaptureWriters.erase(note.sender);
-				if (m_OpenCaptureManual) m_ManualSaveReported.insert(note.sender);
+				if (m_OpenCaptureManual && note.kind == NetGameCheckpoint::Written) m_ManualSaveReported.insert(note.sender);
+			}
+			// Every peer keeps who holds what, so a host that takes the round over names the same rewind points.
+			if (note.kind == NetGameCheckpoint::Written) NoteCheckpointHolder(note.tick, note.sender);
+		}
+		// A finished capture frees this peer's writer, and the host schedules on nothing else; a refused one says it holds nothing.
+		for (const uint64_t finished: input.finished) {
+			const bool refused = std::find(input.refused.begin(), input.refused.end(), finished) != input.refused.end();
+			output.send.push_back({0, refused ? NetGameCheckpoint::Missed : NetGameCheckpoint::Written, finished});
+			if (!refused && input.localPeer != 0) NoteCheckpointHolder(finished, input.localPeer);
+			// The host's own report rides no frame while its seat is held, so it never waits on the stream for what it knows itself.
+			if (m_IsHost && input.localPeer != 0 && finished == m_OpenCaptureTick) {
+				m_CaptureWriters.erase(input.localPeer);
+				if (m_OpenCaptureManual && !refused) m_ManualSaveReported.insert(input.localPeer);
 			}
 		}
-		// A finished capture frees this peer's writer, and the host schedules on nothing else.
-		for (const uint64_t finished: input.finished) output.send.push_back({0, NetGameCheckpoint::Written, finished});
 		if (!m_ScheduledCaptures.empty() && *m_ScheduledCaptures.begin() <= input.tick) {
 			m_ScheduledCaptures.erase(m_ScheduledCaptures.begin(), m_ScheduledCaptures.upper_bound(input.tick));
 			output.capture = true;
@@ -3514,7 +3559,8 @@ static std::string ResyncSaveName() {
 		std::vector<CheckpointNote> applied;
 		for (const auto& [sender, checkpoint]: ScenarioRunner::TakeAppliedCheckpoints()) applied.push_back({sender, checkpoint.kind, checkpoint.tick});
 		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
-		const std::vector<uint64_t> finished = TakeAutosaveVerdicts();
+		std::vector<uint64_t> refused;
+		const std::vector<uint64_t> finished = TakeAutosaveVerdicts(&refused);
 		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		AppendCommittedJoinFrame(tick);
 		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) return;
@@ -3524,6 +3570,8 @@ static std::string ResyncSaveName() {
 		input.unwritten = g_ActivityMan.UnwrittenAutosaves();
 		input.applied = std::move(applied);
 		input.finished = finished;
+		input.refused = std::move(refused);
+		input.localPeer = GetLocalPeerId();
 		if (m_IsHost) {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
@@ -3594,7 +3642,7 @@ static std::string ResyncSaveName() {
 			} else {
 				// A capture this peer did not take holds nothing, and says so at once.
 				System::PrintDiagnosticLine(std::format("[autosave] named tick={} not taken: catch_up={} running={}", tick, ScenarioRunner::WorldCatchUpActive(), g_ActivityMan.ActivityRunning()));
-				output.send.push_back({0, NetGameCheckpoint::Written, tick});
+				output.send.push_back({0, NetGameCheckpoint::Missed, tick});
 			}
 		}
 		for (const CheckpointNote& note: output.send) {
@@ -3905,6 +3953,7 @@ static std::string ResyncSaveName() {
 		events.swap(m_PendingLobbyEvents);
 		m_PendingLobbyBytes = 0;
 		m_PendingLobbyOverflow = false;
+		NoteDroppedLobbyEvents(events.size());
 		for (const NetTransportEvent& event: events) {
 			lobby.HandleTransportEvent(event, nowMs);
 		}
@@ -4959,7 +5008,14 @@ static std::string ResyncSaveName() {
 		catchUp.appliedThrough = std::max(catchUp.appliedThrough, ScenarioRunner::WorldCatchUpAppliedThrough());
 		// Each progress report carries the whole state of the replay: the newest one wins, so none waits behind a lost one.
 		if (catchUp.appliedThrough > catchUp.snapshotTick) {
-			(void)lobby.SendPayload(MakeJoinerCatchUpReport(), nullptr, NetTransportLane::BulkUnreliable);
+			std::string sendError;
+			if (lobby.SendPayload(MakeJoinerCatchUpReport(), &sendError, NetTransportLane::BulkUnreliable)) ++catchUp.reportsSent;
+			else if (catchUp.reportsRefused++ == 0) System::PrintDiagnosticLine("[net-match] catch-up report refused by the wire: " + sendError);
+			if (catchUp.appliedThrough >= catchUp.reportsLogged + 60) {
+				catchUp.reportsLogged = catchUp.appliedThrough;
+				System::PrintDiagnosticLine("[net-match] catch-up reports applied=" + std::to_string(catchUp.appliedThrough) + " sent=" + std::to_string(catchUp.reportsSent) +
+				                            " refused=" + std::to_string(catchUp.reportsRefused) + " datagrams=" + std::to_string(catchUp.tailDatagrams));
+			}
 		}
 	}
 
@@ -5797,6 +5853,7 @@ static std::string ResyncSaveName() {
 		polledLobby.swap(m_PendingLobbyEvents);
 		m_PendingLobbyBytes = 0;
 		m_PendingLobbyOverflow = false;
+		NoteDroppedLobbyEvents(polledLobby.size());
 		for (const NetTransportEvent& event: polledLobby) lobby.HandleTransportEvent(event, nowMs);
 		if (!polledLobby.empty()) m_InPlaceHeardMs = SteadyNowMs();
 		if (wire) {
@@ -7101,13 +7158,20 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::QueueLobbyEvent(const NetTransportEvent& event) {
-		if (m_PendingLobbyOverflow) return;
+		if (m_PendingLobbyOverflow) { ++m_PendingLobbyDropped; return; }
 		if (m_PendingLobbyEvents.size() >= 1024 || event.bytes.size() > 1024 * 1024 - m_PendingLobbyBytes) {
 			m_PendingLobbyOverflow = true;
+			++m_PendingLobbyDropped;
 			return;
 		}
 		m_PendingLobbyBytes += event.bytes.size();
 		m_PendingLobbyEvents.push_back(event);
+	}
+
+	void NetMatchService::NoteDroppedLobbyEvents(size_t kept) {
+		if (m_PendingLobbyDropped == 0) return;
+		System::PrintDiagnosticLine("[net-match] lobby event queue full: kept " + std::to_string(kept) + ", dropped " + std::to_string(m_PendingLobbyDropped) + " since the last pump");
+		m_PendingLobbyDropped = 0;
 	}
 
 	void NetMatchService::PumpCompletedSessionLocked() {
