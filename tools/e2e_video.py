@@ -112,6 +112,58 @@ def scratch_bytes(root):
     return total
 
 
+def note_footprint(root, peak):
+    """A live run's footprint is measured, never enforced: its transients are retired once its verdict is written."""
+    return max(peak, scratch_bytes(root))
+
+
+def is_link(path):
+    info = os.lstat(path)
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+
+
+def retire_transients(capture_run):
+    """After the run's verdict: PNG frames give way to the encoded MP4 and sheet, and closed feel records are packed losslessly."""
+    from feel.records import compress_closed_record
+    receipts = []
+    for peer in capture_run["peers"]:
+        root, frames = Path(peer["root"]), Path(peer["video_dir"]) / "frames"
+        encoded = peer.get("video") and Path(peer["video"]).is_file() and peer.get("contact_sheet") and Path(peer["contact_sheet"]).is_file()
+        if encoded and frames.is_dir() and not is_link(frames):
+            count, size = 0, 0
+            for path in frames.glob("frame-*.png"):
+                if is_link(path):
+                    continue
+                size += path.stat().st_size
+                path.unlink()
+                count += 1
+            receipts.append({"peer": peer["peer"], "kind": "frames", "files": count, "bytes": size,
+                             "kept": [peer["video"], peer["contact_sheet"]]})
+        raw = root / "feel" / "raw.jsonl"
+        if raw.is_file() and not is_link(raw) and not is_link(raw.parent):
+            try:
+                receipts.append({"peer": peer["peer"], "kind": "feel-record", **compress_closed_record(raw, root)})
+            except (OSError, ValueError, RuntimeError) as error:
+                receipts.append({"peer": peer["peer"], "kind": "feel-record", "original": str(raw), "error": f"{type(error).__name__}: {error}"})
+    capture_run["retired"] = receipts
+    return receipts
+
+
+def retained_footprint(capture_run, root, limit):
+    """The cap judges what a run leaves behind: the retained set after its transients were retired."""
+    capture_run["retained"] = {"root": str(root), "bytes": scratch_bytes(root), "limit": limit}
+    return capture_run["retained"]
+
+
+def finish_run(scenario, run, captured, source, options):
+    """A run's verdict first, whatever its footprint; then its transients are retired and the retained set is measured."""
+    feel_probes({**scenario, **run}, captured, source)
+    render(captured, options.fps, options.sheet_every)
+    retire_transients(captured)
+    retained_footprint(captured, options.scratch_root, options.scratch_limit_bytes)
+    return review(scenario, captured, Path(captured["root"]))
+
+
 def source_evidence(repo):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
@@ -311,6 +363,8 @@ def read_index(video_dir):
 
 
 LOCKSTEP_ROUND_START = "[net-lockstep] start round="
+ROUND_START_FRAME = re.compile(r"(?m)^\[net-lockstep\] start round=\d+ frame=(\d+) ")
+ACTIVITY_OVER = re.compile(r"(?m)^\[net-match-service-e2e\] activity over at frame (\d+): no full-state sample follows$")
 
 
 def fullstate_verdict(host_log, client_log):
@@ -320,7 +374,39 @@ def fullstate_verdict(host_log, client_log):
                for log in (host_log, client_log)]
     if not any(started):
         return {"passed": None, "not_applicable": "neither peer started a lockstep round", "reasons": [], "compared_samples": 0}
-    return compare_fullstate(host_log, client_log)
+    verdict = compare_fullstate(host_log, client_log)
+    if verdict["reasons"] == ["the peers share no full-state sample"] and not verdict["client_samples"]:
+        # A finished activity takes no capture: a peer whose rounds all began at or after the end has nothing to compare.
+        host_text, client_text = (Path(log).read_text(encoding="utf-8", errors="replace") for log in (host_log, client_log))
+        ended = [int(frame) for frame in ACTIVITY_OVER.findall(host_text)]
+        starts = [int(frame) for frame in ROUND_START_FRAME.findall(client_text)]
+        if ended and all(frame >= min(ended) for frame in starts):
+            verdict.update(passed=None, reasons=[], not_applicable=f"the peer's round began at {starts or 'no frame'}, at or after the activity ended at frame "
+                                                                   f"{min(ended)}: a finished activity takes no full-state capture")
+    return verdict
+
+
+def exempt_injected(verdict, pair, injected, items):
+    """A divergence the scenario injects on purpose is the script at its declared tick, and only once every declared repair
+    item passed; any other divergent tick stays a finding."""
+    if verdict.get("passed") is not False or not verdict.get("divergences") or injected.get("peer") not in pair.split("/"):
+        return verdict
+    repairs = [item for item in items if item.get("id") in injected["repair_items"]]
+    if {item["id"] for item in repairs} != set(injected["repair_items"]) or any(item.get("finding") for item in repairs):
+        return verdict
+    kept = [row for row in verdict["divergences"] if row["tick"] != injected["tick"]]
+    if len(kept) == len(verdict["divergences"]):
+        return verdict
+    result = {**verdict, "divergences": kept, "divergent_ticks": len(kept), "first_divergence": None, "reasons": [],
+              "exempted": [{**row, "declared": f"injected_desync peer={injected['peer']} tick={injected['tick']}",
+                            "repair_items": injected["repair_items"]} for row in verdict["divergences"] if row not in kept]}
+    if kept:
+        first = kept[0]
+        result["first_divergence"] = {"round": first["round"], "tick": first["tick"], "section": first["sections"][0], "sections": first["sections"]}
+        result["reasons"].append(f"full state differs at round {first['round']} tick {first['tick']}: first section {first['sections'][0]} "
+                                 f"of {len(first['sections'])} {first['sections']}")
+    result["passed"] = not result["reasons"]
+    return result
 
 
 def staged_copy(source, replacements):
@@ -876,6 +962,14 @@ def review(scenario, capture, out):
             run_findings.append({"class": (capture.get("stop_finding") or {}).get("class", "unclassified"), "run": capture["name"], "peer": peer["peer"],
                                  "reason": (capture.get("stop_finding") or {}).get("reason") or peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
                                  "launch": peer.get("launch")})
+    declared_run = next((run for run in scenario.get("runs", []) if run.get("name") == capture["name"]), {})
+    if declared_run.get("injected_desync") and capture.get("fullstate"):
+        capture["fullstate"] = {pair: exempt_injected(verdict, pair, declared_run["injected_desync"], items)
+                                for pair, verdict in capture["fullstate"].items()}
+    retained = capture.get("retained")
+    if retained and retained["bytes"] >= retained["limit"]:
+        run_findings.append({"class": "harness", "run": capture["name"], "peer": "all", "launch": None,
+                             "reason": f"retained set {retained['bytes']} bytes reaches {retained['limit']} after the run's transients were retired"})
     for pair, verdict in (capture.get("fullstate") or {}).items():
         if not verdict.get("not_applicable") and not verdict["passed"]:
             run_findings.append({"class": "engine", "run": capture["name"], "peer": pair,
@@ -890,6 +984,9 @@ def review(scenario, capture, out):
                 "verdict": "agent-review-required"}
     if capture.get("feel_window"):
         document["feel_window"] = capture["feel_window"]
+    for key in ("footprint_peak_bytes", "retained", "retired"):
+        if capture.get(key) is not None:
+            document[key] = capture[key]
     (Path(out) / "review.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     return document
 
@@ -1085,7 +1182,7 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
 
-    interrupted, stop_finding = None, None
+    interrupted, stop_finding, footprint_peak = None, None, 0
     try:
         for peer in peers:
             name = peer["name"]
@@ -1129,7 +1226,7 @@ def run_one(options, scenario, run, run_index, out):
                 watcher = threading.Thread(target=kill_when, args=(name, peer["kill_when"]), daemon=True)
                 watcher.start()
                 killers.append(watcher)
-        next_size_check = time.monotonic()
+        next_size_check, footprint_peak = time.monotonic(), 0
         while any(thread.is_alive() for thread in threads):
             request = Path(out) / "stop-request.json"
             if request.is_file():
@@ -1152,7 +1249,7 @@ def run_one(options, scenario, run, run_index, out):
             for thread in threads:
                 thread.join(.1)
             if time.monotonic() >= next_size_check:
-                check_scratch_budget(options.scratch_root, scratch_limit(options))
+                footprint_peak = note_footprint(options.scratch_root, footprint_peak)
                 next_size_check = time.monotonic() + 10
     except (KeyboardInterrupt, Exception) as error:
         interrupted = f"{type(error).__name__}: {error}"
@@ -1193,23 +1290,19 @@ def run_one(options, scenario, run, run_index, out):
         fullstate = {f"{first}/{peer['name']}": fullstate_verdict(root / first / "stdout.log", root / peer["name"] / "stdout.log")
                      for peer in peers[1:]}
     return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted, "stop_finding": stop_finding,
-            "fullstate": fullstate}
+            "fullstate": fullstate, "footprint_peak_bytes": footprint_peak}
 
 
-def render(capture_run, fps, every, scratch_root=None, scratch_limit_bytes=SCRATCH_LIMIT):
+def render(capture_run, fps, every):
     """Encodes missing media while preserving a completed peer's retained output."""
     ffmpeg = find_ffmpeg()
     for peer in capture_run["peers"]:
         if peer.get("video") and Path(peer["video"]).is_file() and peer.get("contact_sheet") and Path(peer["contact_sheet"]).is_file():
             continue
-        if scratch_root is not None:
-            check_scratch_budget(scratch_root, scratch_limit_bytes)
         root = Path(peer["root"])
         video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
         peer["video"] = video.get("path") if video.get("encoded") else None
         peer["encode"] = video
-        if scratch_root is not None:
-            check_scratch_budget(scratch_root, scratch_limit_bytes)
         sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg)
         peer["contact_sheet"] = sheet.get("path") if sheet.get("written") else None
         peer["sheet"] = sheet
@@ -1286,14 +1379,11 @@ def finalize_only(options):
     budget = options.scratch_root or capture.get("scratch_root") or next((parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
     limit = scratch_limit(options, capture)
     capture.update(scratch_root=str(budget), scratch_limit_bytes=limit)
-    metadata_only = options.metadata_only or scratch_bytes(budget) >= limit
     for run in recovered:
-        if not metadata_only:
-            try:
-                render(run, capture["fps"], options.sheet_every, budget, limit)
-            except RuntimeError as error:
-                metadata_only = True
-                capture["interrupted"] = str(error)
+        if not options.metadata_only:
+            render(run, capture["fps"], options.sheet_every)
+            retire_transients(run)
+            retained_footprint(run, budget, limit)
         review(scenario, run, Path(run["root"]))
     start = datetime.strptime(capture["started"], "%Y-%m-%d %H:%M:%S MST")
     end = datetime.strptime(capture["finalized"], "%Y-%m-%d %H:%M:%S MST")
@@ -1303,7 +1393,7 @@ def finalize_only(options):
         for peer in run["peers"]:
             peer.pop("index", None)
     write_json(out / "capture.json", capture)
-    print(f"Finalized retained evidence: {out}; metadata_only={metadata_only}")
+    print(f"Finalized retained evidence: {out}; metadata_only={options.metadata_only}")
     return 1
 
 
@@ -1637,10 +1727,7 @@ def main():
             write_json(out / "capture.json", capture)
             if captured.get("interrupted"):
                 capture["interrupted"] = captured["interrupted"]
-            if scratch_bytes(options.scratch_root) < options.scratch_limit_bytes:
-                feel_probes({**scenario, **run}, captured, source)
-                render(captured, options.fps, options.sheet_every, options.scratch_root, options.scratch_limit_bytes)
-            review(scenario, captured, Path(captured["root"]))
+            finish_run(scenario, run, captured, source, options)
             for peer in captured["peers"]:
                 complete &= peer_completed(peer)
             write_json(out / "capture.json", capture)

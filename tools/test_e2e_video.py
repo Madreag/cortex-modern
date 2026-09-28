@@ -838,10 +838,12 @@ def check_finalizer(results, scratch):
         driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=False, scratch_root=None,
                                             scratch_limit_bytes=None, sheet_every=3))
         ok &= row(results, "finalize/encodes-below-retained-budget", rendered.call_count == 1)
-    with patch.object(driver, "scratch_bytes", return_value=8_000_000_000), patch.object(driver, "render") as rendered:
+    # The cap judges the retained set: a finalizer over it still encodes, then retires the frames it encoded.
+    with patch.object(driver, "scratch_bytes", return_value=8_000_000_000), patch.object(driver, "render") as rendered, \
+            patch.object(driver, "retire_transients") as retired:
         driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=False, scratch_root=None,
                                             scratch_limit_bytes=None, sheet_every=3))
-        ok &= row(results, "finalize/stops-encoding-at-budget", rendered.call_count == 0)
+        ok &= row(results, "finalize/encodes-and-retires-at-any-footprint", rendered.call_count == 1 and retired.call_count == 1)
     saved["scenario_definition"]["runs"] = [{"name": "first"}]
     saved.pop("interrupted", None)
     saved["runs"][0].pop("interrupted", None)
@@ -1308,6 +1310,138 @@ def check_fullstate_applicability(results, scratch):
     return ok
 
 
+def fullstate_line(tick, sections, round_id=7):
+    parts = ",".join(f"{name}:{value}" for name, value in sections.items())
+    return f"[fullstate] tick={tick} hash={tick:016x} sections={parts} round={round_id}"
+
+
+def check_footprint_retirement(results, scratch):
+    """A run is never stopped for footprint before its verdict; its transients go once the verdict is written."""
+    import gzip  # noqa: PLC0415
+    root = scratch / "retire"
+    with patch.object(driver, "scratch_bytes", return_value=9_000_000_000):
+        try:
+            peak = driver.note_footprint(root, 0)
+        except RuntimeError:
+            peak = None
+    ok = row(results, "footprint/measured-not-enforced-mid-run", peak == 9_000_000_000, str(peak))
+    peers = []
+    for name, encoded in (("host", True), ("client", False)):
+        peer = root / "run0" / name
+        (peer / "video/frames").mkdir(parents=True)
+        (peer / "feel").mkdir()
+        for frame in range(3):
+            (peer / f"video/frames/frame-{frame:06d}.png").write_bytes(b"png" * 100)
+        (peer / "feel/raw.jsonl").write_text('{"type":"committed","tick":300,"wall_ms":5}\n' * 50, encoding="utf-8")
+        video, sheet = root / "run0" / f"{name}.mp4", root / "run0" / f"{name}-sheet.png"
+        if encoded:
+            video.write_bytes(b"mp4")
+            sheet.write_bytes(b"sheet")
+        peers.append({"peer": name, "root": str(peer), "video_dir": str(peer / "video"),
+                      "video": str(video) if encoded else None, "contact_sheet": str(sheet) if encoded else None})
+    original = (root / "run0/host/feel/raw.jsonl").read_bytes()
+    capture = {"name": "run0", "root": str(root / "run0"), "peers": peers}
+    driver.retire_transients(capture)
+    host, client = root / "run0/host", root / "run0/client"
+    ok &= row(results, "footprint/encoded-frames-retired", not any((host / "video/frames").glob("*.png"))
+              and (root / "run0/host.mp4").is_file() and (root / "run0/host-sheet.png").is_file())
+    ok &= row(results, "footprint/unencoded-frames-kept", len(list((client / "video/frames").glob("*.png"))) == 3)
+    ok &= row(results, "footprint/feel-record-packed-losslessly", not (host / "feel/raw.jsonl").exists()
+              and gzip.decompress((host / "feel/raw.jsonl.gz").read_bytes()) == original
+              and not (client / "feel/raw.jsonl").exists() and (client / "feel/raw.jsonl.gz").is_file(), str(capture.get("retired")))
+    over = {"name": "run0", "peers": [], "retained": {"root": str(root), "bytes": 6_000_000_000, "limit": 5_000_000_000}}
+    document = driver.review({"name": "retained", "checklist": []}, over, root)
+    ok &= row(results, "footprint/retained-set-over-cap-is-a-finding",
+              any(f["class"] == "harness" and "retained set 6000000000" in f["reason"] for f in document["run_findings"]))
+    under = {**over, "retained": {**over["retained"], "bytes": 1_000}}
+    document = driver.review({"name": "retained", "checklist": []}, under, root)
+    ok &= row(results, "footprint/retained-set-under-cap-is-no-finding", not document["run_findings"])
+    calls = []
+    options = SimpleNamespace(fps=3, sheet_every=3, scratch_root=root, scratch_limit_bytes=1)
+    with patch.object(driver, "feel_probes", side_effect=lambda *a: calls.append("verdict")), \
+            patch.object(driver, "render", side_effect=lambda *a: calls.append("render")), \
+            patch.object(driver, "retire_transients", side_effect=lambda *a: calls.append("retire")), \
+            patch.object(driver, "scratch_bytes", return_value=9_000_000_000):
+        driver.finish_run({"name": "s", "checklist": []}, {"name": "run0"}, {"name": "run0", "root": str(root / "run0"), "peers": []}, {}, options)
+    ok &= row(results, "footprint/verdict-first-at-any-footprint", calls == ["verdict", "render", "retire"], str(calls))
+    return ok
+
+
+def check_activity_over_applicability(results, scratch):
+    """A returner whose rounds began only after the activity ended has nothing to compare; one that ran before the end is red."""
+    root = scratch / "activity-over"
+    root.mkdir()
+    host, client = root / "host.log", root / "client.log"
+    shared = {"header": "a", "globals.sim_rng": "b"}
+    ended = "[net-match-service-e2e] activity over at frame 1800: no full-state sample follows"
+    host.write_text("\n".join([driver.LOCKSTEP_ROUND_START + "7 frame=1 local_peer=1 peers=3 input_delay=16",
+                               fullstate_line(1740, shared), ended]) + "\n")
+    client.write_text(driver.LOCKSTEP_ROUND_START + "7 frame=1814 local_peer=2 peers=3 input_delay=16\n")
+    late = driver.fullstate_verdict(host, client)
+    ok = row(results, "fullstate/returner-after-activity-end-is-not-applicable",
+             late["passed"] is None and "1800" in late.get("not_applicable", ""), str(late))
+    client.write_text(driver.LOCKSTEP_ROUND_START + "7 frame=1772 local_peer=2 peers=3 input_delay=16\n")
+    early = driver.fullstate_verdict(host, client)
+    ok &= row(results, "fullstate/returner-before-activity-end-without-sample-is-red", early["passed"] is False
+              and early["reasons"] == ["the peers share no full-state sample"], str(early))
+    host.write_text(host.read_text().replace(ended + "\n", ""))
+    client.write_text(driver.LOCKSTEP_ROUND_START + "7 frame=1814 local_peer=2 peers=3 input_delay=16\n")
+    unmarked = driver.fullstate_verdict(host, client)
+    ok &= row(results, "fullstate/no-end-line-stays-red", unmarked["passed"] is False, str(unmarked))
+    return ok
+
+
+def check_injected_exemption(results, scratch):
+    """A scenario-declared injection's tick is the script once its repair items pass; nothing else is exempt."""
+    root = scratch / "injected"
+    root.mkdir()
+    host, client = root / "host.log", root / "client.log"
+    same, perturbed = {"header": "1", "globals.sim_rng": "2", "scene": "3"}, {"header": "9", "globals.sim_rng": "8", "scene": "3"}
+    host.write_text("\n".join([driver.LOCKSTEP_ROUND_START + "7 frame=1 local_peer=1 peers=2 input_delay=3",
+                               "[lockstep] desync at frame 240 against Client (submitted 8, sent 8, compared 8)",
+                               *(fullstate_line(tick, perturbed if tick == 240 else same) for tick in (180, 240, 300))]) + "\n")
+    client.write_text("\n".join([driver.LOCKSTEP_ROUND_START + "7 frame=1 local_peer=2 peers=2 input_delay=3",
+                                 *(fullstate_line(tick, same) for tick in (180, 240, 300))]) + "\n")
+    raw = driver.fullstate_verdict(host, client)
+    repairs = ["injected-repair-overlay-host", "injected-repair-complete-client"]
+    scenario = {"name": "mp-rematch",
+                "runs": [{"name": "injected-desync", "injected_desync": {"peer": "host", "tick": 240, "repair_items": repairs}},
+                         {"name": "plain"}],
+                "checklist": [{"id": name, "run": "injected-desync", "peer": name.rsplit("-", 1)[1], "screen": "game", "what": name}
+                              for name in repairs]}
+
+    def findings(name, verdict, probe="pass"):
+        def evidence(record, item, port=None):
+            return [1], {"probe": probe, **({"reason": "repair absent"} if probe == "fail" else {})}
+        records = [{"peer": peer, "root": str(root / peer), "video_dir": str(root / peer / "video"), "video": "x.mp4", "index": [], "encode": {}, "menu_script_failures": []}
+                   for peer in ("host", "client")]
+        run = {"name": name, "peers": records, "fullstate": {"host/client": json.loads(json.dumps(verdict))}}
+        with patch.object(driver, "item_evidence", side_effect=evidence):
+            document = driver.review(scenario, run, root)
+        return [f for f in document["run_findings"] if "full-state" in f["reason"]], run
+
+    declared, run = findings("injected-desync", raw)
+    ok = row(results, "fullstate/declared-injection-exempt-when-repaired", raw["passed"] is False and not declared
+             and run["fullstate"]["host/client"].get("exempted", [{}])[0].get("tick") == 240, str(run["fullstate"]))
+    unrepaired, _ = findings("injected-desync", raw, probe="fail")
+    ok &= row(results, "fullstate/declared-injection-red-when-repair-fails", bool(unrepaired))
+    undeclared, _ = findings("plain", raw)
+    ok &= row(results, "fullstate/undeclared-divergence-stays-red", bool(undeclared))
+    host.write_text(host.read_text().replace(fullstate_line(300, same), fullstate_line(300, perturbed)))
+    second, _ = findings("injected-desync", driver.fullstate_verdict(host, client))
+    ok &= row(results, "fullstate/other-divergent-tick-stays-red", len(second) == 1 and "tick 300" in second[0]["reason"], str(second))
+    rematch = driver.load_scenario("mp-rematch")
+    run = next(run for run in rematch["runs"] if run["name"] == "injected-desync")
+    declaration = run.get("injected_desync") or {}
+    args = next((peer for peer in run["peers"] if peer["name"] == declaration.get("peer")), {}).get("args", [])
+    ids = {item["id"] for item in rematch["checklist"]}
+    ok &= row(results, "rematch/injection-declared-at-the-perturbed-tick",
+              "-determinism-selftest-perturb-tick" in args
+              and args[args.index("-determinism-selftest-perturb-tick") + 1] == str(declaration.get("tick"))
+              and set(declaration.get("repair_items", [None])) <= ids)
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -1351,6 +1485,9 @@ def main():
         ok &= check_migration_timing(results, scratch)
         ok &= check_recorder_flush(results, scratch)
         ok &= check_fullstate_applicability(results, scratch)
+        ok &= check_footprint_retirement(results, scratch)
+        ok &= check_activity_over_applicability(results, scratch)
+        ok &= check_injected_exemption(results, scratch)
         ok &= check_log_gates(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
