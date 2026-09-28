@@ -1028,6 +1028,8 @@ static std::string ResyncSaveName() {
 			uint8_t seat = 0;
 			for (const auto& [peerId, transport]: m_Coordinator->RemoteTransports()) if (transport == peer.transportPeerId) seat = peerId;
 			if (!EndedRoundOwesGoodbye(m_Coordinator->UsesTransportPeer(peer.transportPeerId), seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame))) continue;
+			if (!m_WorldJoin.FindSession(peer.transportPeerId) && seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame) &&
+			    m_WorldJoin.IsPrivateMatch() && m_WorldJoin.Tail().LastFrame() != 0) continue;
 			// The final tail reaches a held seat before the record that closes its lobby.
 			if (const auto* returning = m_WorldJoin.FindSession(peer.transportPeerId); returning && m_Runner) {
 				if (returning->phase == NetWorldJoinPhase::SnapshotTransfer && returning->transferStarted) continue;
@@ -4014,6 +4016,8 @@ static std::string ResyncSaveName() {
 			// observation keys out again, so a member admitted there decodes them with an empty table.
 			if (m_WorldJoin.IsPrivateMatch() && report.kind == c_NetWorldReportCatchUp) OpenInPlaceRejoinLocked(report, readyPeers, nowMs);
 			const NetPeerId connection = ResolveWorldReportConnection(m_WorldJoin, readyPeers, report.fromPeer);
+			if (m_HostGoodbyeSeen && m_CompletedRoundFinalFrame != 0)
+				(void)m_WorldJoin.BeginFinalTail(connection, m_CompletedRoundFinalFrame);
 			const auto* prior = m_WorldJoin.FindSession(connection);
 			const uint64_t previous = prior ? prior->activationTick : 0;
 			if (const uint64_t announced = ApplyWorldJoinReport(lobby, m_WorldJoin, report, connection, nowFrame, nowMs); announced != 0) {
