@@ -302,7 +302,7 @@ namespace RTE {
 		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
 		GUITextBox* m_MultiplayerJoinPortTextBox;
-		std::string m_JoinPortAutoValue; //!< The last port this screen filled in by itself; a typed one is never overwritten.
+		std::string m_JoinPortAutoValue; //!< The last port this screen filled in by itself; empty once the player picks a row or types a port.
 		GUIListBox* m_MultiplayerLanGamesList;
 		GUILabel* m_MultiplayerLanGamesLabel; //!< The line above the list; doubles as the join refusal status.
 		std::string m_LanGamesLabelText;      //!< Its ini text, restored when a refusal clears.
@@ -469,7 +469,7 @@ namespace RTE {
 		/// Runs the LAN browser and the directory lister while the join screen is up and mirrors the
 		/// merged rows into the list; a non-joinable row stays visible with its refusal reason.
 		void RefreshGamesList();
-		/// Fills the join Port field with a port the screen knows, unless the player typed one.
+		/// Fills the join Port field with a port the screen knows, until the player picks a row or types a port.
 		void SetJoinPortAuto(uint16_t port);
 		/// Keeps a closed picker's line inside its box: the module suffix goes first, then the tail elides.
 		void FitClosedComboText(GUIComboBox* combo);
