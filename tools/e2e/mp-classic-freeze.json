@@ -141,6 +141,7 @@
     },
     {
       "name": "end-freeze",
+      "frozen_through_end": ["frozen"],
       "peers": [
         {
           "name": "host",
