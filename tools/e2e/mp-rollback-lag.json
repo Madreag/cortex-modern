@@ -403,7 +403,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1800",
+            "2700",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -454,7 +454,7 @@
               "replace": [
                 [
                   "^local WINDOW_TICKS = \\d+;$",
-                  "local WINDOW_TICKS = 1800;"
+                  "local WINDOW_TICKS = 2700;"
                 ]
               ]
             },
@@ -485,7 +485,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1800",
+            "2700",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -539,7 +539,7 @@
               "replace": [
                 [
                   "^local WINDOW_TICKS = \\d+;$",
-                  "local WINDOW_TICKS = 1800;"
+                  "local WINDOW_TICKS = 2700;"
                 ]
               ]
             },
@@ -582,7 +582,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1800",
+            "2700",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -634,7 +634,7 @@
               "replace": [
                 [
                   "^local WINDOW_TICKS = \\d+;$",
-                  "local WINDOW_TICKS = 1800;"
+                  "local WINDOW_TICKS = 2700;"
                 ]
               ]
             },
@@ -671,7 +671,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1800",
+            "2700",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -722,7 +722,7 @@
               "replace": [
                 [
                   "^local WINDOW_TICKS = \\d+;$",
-                  "local WINDOW_TICKS = 1800;"
+                  "local WINDOW_TICKS = 2700;"
                 ]
               ]
             },
@@ -754,7 +754,7 @@
         "loss_percent": 5,
         "silent_tick": 600,
         "silent_hold": "in_force",
-        "rejoin_through_tick": 1800,
+        "rejoin_through_tick": 2700,
         "returner_peers": [
           "client",
           "client-rejoined"
