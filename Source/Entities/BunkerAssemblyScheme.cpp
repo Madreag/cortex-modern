@@ -10,6 +10,17 @@ using namespace RTE;
 
 ConcreteClassInfo(BunkerAssemblyScheme, SceneObject, 0);
 
+namespace {
+	BITMAP* CopyBitmap(BITMAP* source) {
+		if (!source) {
+			return nullptr;
+		}
+		BITMAP* copy = create_bitmap_ex(bitmap_color_depth(source), source->w, source->h);
+		blit(source, copy, 0, 0, 0, 0, source->w, source->h);
+		return copy;
+	}
+} // namespace
+
 BunkerAssemblyScheme::BunkerAssemblyScheme() {
 	Clear();
 }
@@ -21,7 +32,9 @@ BunkerAssemblyScheme::~BunkerAssemblyScheme() {
 void BunkerAssemblyScheme::Clear() {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_ChildObjects.empty(), m_BitmapOffset, m_IsOneTypePerScene, m_Limit, m_MaxDeployments, m_SymmetricScheme, m_AssemblyGroup); }, m_CheckpointInitialized);
 	m_CheckpointInitialized = true;
-	m_pPresentationBitmap = 0;
+	m_pBitmap = nullptr;
+	m_pPresentationBitmap = nullptr;
+	m_pIconBitmap = nullptr;
 	m_ChildObjects.clear();
 	m_BitmapOffset = Vector(0, 0);
 	m_IsOneTypePerScene = false;
@@ -42,8 +55,9 @@ int BunkerAssemblyScheme::Create(const BunkerAssemblyScheme& reference) {
 	SceneObject::Create(reference);
 
 	m_pBitmap = reference.m_pBitmap;
-	m_pPresentationBitmap = reference.m_pPresentationBitmap;
-	m_pIconBitmap = reference.m_pIconBitmap;
+	// The drawn outlines and the icon are this scheme's own; the loaded scheme bitmap belongs to the content cache.
+	m_pPresentationBitmap = CopyBitmap(reference.m_pPresentationBitmap);
+	m_pIconBitmap = CopyBitmap(reference.m_pIconBitmap);
 
 	for (std::list<SOPlacer>::const_iterator itr = reference.m_ChildObjects.begin(); itr != reference.m_ChildObjects.end(); ++itr)
 		m_ChildObjects.push_back(*itr);
@@ -66,6 +80,7 @@ int BunkerAssemblyScheme::ReadProperty(const std::string_view& propName, Reader&
 	              {
 		              reader >> m_BitmapFile;
 		              m_pBitmap = m_BitmapFile.GetAsBitmap();
+		              DestroyBitmaps();
 
 		              m_pPresentationBitmap = create_bitmap_ex(8, m_pBitmap->w * ScaleX, m_pBitmap->h * ScaleY);
 		              clear_to_color(m_pPresentationBitmap, g_MaskColor);
@@ -212,14 +227,20 @@ int BunkerAssemblyScheme::Save(Writer& writer) const {
 }
 
 void BunkerAssemblyScheme::Destroy(bool notInherited) {
-	// Probably no need to delete those, as bitmaps are only created when preset is read from file
-	// and then they just copy pointers in via Clone()
-	// delete m_pPresentationBitmap;
-	// m_pPresentationBitmap = 0;
+	DestroyBitmaps();
 
 	if (!notInherited)
 		SceneObject::Destroy();
 	Clear();
+}
+
+void BunkerAssemblyScheme::DestroyBitmaps() {
+	for (BITMAP** bitmap: {&m_pPresentationBitmap, &m_pIconBitmap}) {
+		if (*bitmap) {
+			destroy_bitmap(*bitmap);
+			*bitmap = nullptr;
+		}
+	}
 }
 
 BITMAP* BunkerAssemblyScheme::GetGraphicalIcon() const {

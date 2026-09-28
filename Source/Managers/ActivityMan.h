@@ -264,6 +264,10 @@ namespace RTE {
 		/// Plants a dead script upvalue, requests a save capture, and checks the player line.
 		bool RunSaveRefusalDiagnosisSelfTest();
 
+		/// Self-test of the activity flags' checkpoint scopes: this machine's pause-menu skip stays out of the shared state and its neighbours stay in.
+		/// @return The failure seen, or empty when the scopes hold.
+		static std::string CheckpointPerPeerSelfTestMismatch();
+
 		/// The last refusals a diagnostics bundle copies into DesyncHeal.json.
 		const std::deque<SaveRefusalRecord>& GetSaveRefusalRecords() const { return m_SaveRefusalRecords; }
 
@@ -373,6 +377,14 @@ namespace RTE {
 
 	private:
 		struct PendingCheckpoint;
+		/// The activity flags the runtime globals carry. Whether this machine's pause skips its menu is its own:
+		/// each pause sets it for this machine's menus alone, so peers that left a round differently differ in it.
+		template <class Archive, class Self> static void VisitActivityState(Archive& archive, Self& self) {
+			archive(self.m_DefaultActivityType, self.m_DefaultActivityName, self.m_InActivity, self.m_ActivityNeedsRestart, self.m_ActivityNeedsResume,
+				self.m_ResumingActivityFromPauseMenu);
+			archive.PerPeer(self.m_SkipPauseMenuWhenPausingActivity);
+			archive(self.m_StartActivityResumed);
+		}
 		/// Reads a .ccsave into its Scene, Activity, and restart metadata; shared by the launch and
 		/// stage-for-restart load paths.
 		bool ReadSavedGame(const std::string& fileName, PendingCheckpoint& out);

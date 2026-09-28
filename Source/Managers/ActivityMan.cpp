@@ -2410,7 +2410,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
 	if (collectGarbage) g_LuaMan.CollectGarbageForCheckpoint();
 	if (sections && !managerParts) throw std::logic_error("the runtime globals' sections need the manager parts");
-	CheckpointWriter writer("RuntimeGlobals10");
+	CheckpointWriter writer("RuntimeGlobals11");
 	const auto record = [&](const char* name, const std::function<void()>& capture) {
 		const auto start = std::chrono::steady_clock::now();
 		capture();
@@ -2442,14 +2442,11 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 		record("camera", [&] { writer(g_CameraMan); });
 		record("frame", [&] { writer(g_FrameMan); });
 	}
-	const auto activityState = [this](CheckpointWriter& out) {
-		out(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
-			m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
-	};
+	const auto activityState = [this](CheckpointWriter& out) { VisitActivityState(out, *this); };
 	activityState(writer);
 	if (sections) {
 		sections->push_back({"activity_state", CheckpointScope::Shared, CheckpointWriter::Native([&activityState] {
-			CheckpointWriter state("ActivityState");
+			CheckpointWriter state("ActivityState2");
 			activityState(state);
 			return state.Text();
 		})});
@@ -2485,6 +2482,31 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	return writer.Text();
 }
 
+std::string ActivityMan::CheckpointPerPeerSelfTestMismatch() {
+	// The visitor alone over the fields it visits: the manager itself needs the rest of the engine.
+	struct VisitedFields {
+		std::string m_DefaultActivityType = "GATutorial";
+		std::string m_DefaultActivityName = "Tutorial Mission";
+		bool m_InActivity = true;
+		bool m_ActivityNeedsRestart = false;
+		bool m_ActivityNeedsResume = false;
+		bool m_ResumingActivityFromPauseMenu = false;
+		bool m_SkipPauseMenuWhenPausingActivity = false;
+		bool m_StartActivityResumed = false;
+	} fields;
+	const auto capture = [&fields] { return CheckpointWriter::CaptureNative([&fields] { CheckpointWriter writer("ActivityStateScopes"); VisitActivityState(writer, fields); return writer.Text(); }); };
+	const CheckpointText base = capture();
+	fields.m_SkipPauseMenuWhenPausingActivity = true;
+	const CheckpointText skipped = capture();
+	fields.m_SkipPauseMenuWhenPausingActivity = false;
+	fields.m_InActivity = false;
+	const CheckpointText paused = capture();
+	if (base.Text() == skipped.Text()) return "skip_pause_menu=unarchived";
+	if (base.SharedText() != skipped.SharedText()) return "skip_pause_menu=shared";
+	if (base.SharedText() == paused.SharedText()) return "in_activity=per_peer";
+	return {};
+}
+
 bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly) {
 	AudioMan::RestorePlayPhaseScope playPhase(validateOnly ? "" : "apply");
 	try {
@@ -2497,7 +2519,9 @@ bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly
 		const bool version7 = text.starts_with("15 RuntimeGlobals7 ");
 		const bool version8 = text.starts_with("15 RuntimeGlobals8 ");
 		const bool version9 = text.starts_with("15 RuntimeGlobals9 ");
-		CheckpointReader reader(text, legacy ? "RuntimeGlobals1" : version2 ? "RuntimeGlobals2" : version3 ? "RuntimeGlobals3" : version4 ? "RuntimeGlobals4" : version5 ? "RuntimeGlobals5" : version6 ? "RuntimeGlobals6" : version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : "RuntimeGlobals10", validateOnly);
+		// RuntimeGlobals10 wrote the same fields with the pause-menu skip in the shared state.
+		const bool version10 = text.starts_with("16 RuntimeGlobals10 ");
+		CheckpointReader reader(text, legacy ? "RuntimeGlobals1" : version2 ? "RuntimeGlobals2" : version3 ? "RuntimeGlobals3" : version4 ? "RuntimeGlobals4" : version5 ? "RuntimeGlobals5" : version6 ? "RuntimeGlobals6" : version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : version10 ? "RuntimeGlobals10" : "RuntimeGlobals11", validateOnly);
 		std::string simState, renderState;
 		reader.Value(simState); reader.Value(renderState);
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
@@ -2510,8 +2534,7 @@ bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly
 		component(g_TimerMan, "TimerMan"); component(g_MovableMan, "MovableMan");
 		component(g_SceneMan, "SceneMan"); component(g_CameraMan, "CameraMan");
 		if (!legacy) component(g_FrameMan, "FrameMan");
-		if (!legacy && !version2) reader(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
-			m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
+		if (!legacy && !version2) VisitActivityState(reader, *this);
 		if (!legacy && !version2 && !version3) {
 			std::string input; reader.Value(input);
 			if (!GUIInput::LoadSharedCheckpoint(input, true)) throw std::runtime_error("invalid shared GUI input checkpoint");
@@ -2568,7 +2591,7 @@ bool ActivityMan::PrepareCheckpointMaterials(std::string_view runtimeGlobals) {
 	if (runtimeGlobals.empty()) return true;
 	try {
 		std::string version;
-		for (int number = 1; number <= 10; ++number) {
+		for (int number = 1; number <= 11; ++number) {
 			const std::string candidate = "RuntimeGlobals" + std::to_string(number);
 			if (runtimeGlobals.starts_with(std::to_string(candidate.size()) + " " + candidate + " ")) { version = candidate; break; }
 		}
@@ -2586,9 +2609,10 @@ bool ActivityMan::PrepareCheckpointPrimitives(std::string_view runtimeGlobals) {
 	const bool version8 = runtimeGlobals.starts_with("15 RuntimeGlobals8 ");
 	const bool version9 = runtimeGlobals.starts_with("15 RuntimeGlobals9 ");
 	const bool version10 = runtimeGlobals.starts_with("16 RuntimeGlobals10 ");
-	if (!version7 && !version8 && !version9 && !version10) return true;
+	const bool version11 = runtimeGlobals.starts_with("16 RuntimeGlobals11 ");
+	if (!version7 && !version8 && !version9 && !version10 && !version11) return true;
 	try {
-		CheckpointReader reader(runtimeGlobals, version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : "RuntimeGlobals10", true);
+		CheckpointReader reader(runtimeGlobals, version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : version10 ? "RuntimeGlobals10" : "RuntimeGlobals11", true);
 		std::string state;
 		for (int field = 0; field < 9; ++field) reader.Value(state); // RNGs, five managers and two default-activity names.
 		bool flag;
@@ -2673,7 +2697,7 @@ bool ActivityMan::RestartActivity() {
 		if (committedImages) committedImages->Commit();
 		PendingCheckpoint completed = std::move(m_PendingCheckpoint);
 		m_PendingCheckpoint = PendingCheckpoint{};
-		if (!completed.runtimeGlobals.starts_with("15 RuntimeGlobals5 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals6 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals7 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals8 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals9 ") && !completed.runtimeGlobals.starts_with("16 RuntimeGlobals10 ")) {
+		if (!completed.runtimeGlobals.starts_with("15 RuntimeGlobals5 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals6 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals7 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals8 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals9 ") && !completed.runtimeGlobals.starts_with("16 RuntimeGlobals10 ") && !completed.runtimeGlobals.starts_with("16 RuntimeGlobals11 ")) {
 			g_AudioMan.StopAll();
 			g_MusicMan.ResetMusicState();
 			g_AudioMan.PauseIngameSounds(m_Activity && m_Activity->IsPaused());

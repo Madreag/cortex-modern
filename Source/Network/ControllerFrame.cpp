@@ -932,12 +932,12 @@ namespace RTE {
 		g_TimerMan.ResetTime();
 		Controller releaseDelay(Controller::CIM_PLAYER, Players::PlayerOne);
 		std::string clock = g_TimerMan.SaveCheckpoint();
-		const std::string from = "9 TimerMan1 1000000 0 ";
+		const std::string from = "9 TimerMan2 1000000 0 ";
 		const auto at = clock.find(from);
 		if (at == std::string::npos) {
 			return fail("TimerMan checkpoint prefix missing");
 		}
-		clock.replace(at, from.size(), "9 TimerMan1 1000000 500000 ");
+		clock.replace(at, from.size(), "9 TimerMan2 1000000 500000 ");
 		if (!g_TimerMan.LoadCheckpoint(clock) || g_TimerMan.GetRealTickCount() != 500000 || g_TimerMan.GetSimTickCount() != 0) {
 			return fail("TimerMan real time did not advance without a sim tick");
 		}

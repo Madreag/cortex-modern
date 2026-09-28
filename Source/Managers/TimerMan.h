@@ -284,7 +284,8 @@ namespace RTE {
 			archive.PerPeer(self.m_SimAccumulator);
 			archive(self.m_DeltaTime, self.m_DeltaTimeS);
 			archive.PerPeer(self.m_DeltaBuffer, self.m_SimUpdatesSinceDrawn, self.m_DrawnSimUpdate, self.m_SimSpeed);
-			archive(self.m_TimeScale, self.m_SimPaused, self.m_SimTimeFrozen, self.m_FreeRunSim);
+			archive(self.m_TimeScale, self.m_SimPaused, self.m_SimTimeFrozen);
+			archive.PerPeer(self.m_FreeRunSim);
 			archive.PerPeer(self.m_PaceAccruedTicks, self.m_PaceTrimmedTicks, self.m_PaceWallSeenTicks, self.m_PaceCapLostTicks, self.m_PacePausedLostTicks,
 				self.m_PaceUpdateCalls, self.m_PaceResetCalls);
 		}
