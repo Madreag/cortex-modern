@@ -165,10 +165,10 @@ namespace {
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				if (m_Stopping) {
 					accepted = false;
-					if (!std::exchange(m_ClosedWriteReported, true)) line = "[cross-record] FAIL a presentation line was written after its stream closed: dropped";
+					if (!std::exchange(m_ClosedWriteReported, true)) line = "[cross-record] a presentation line came after its stream closed: dropped";
 				} else if (m_Queue.size() >= m_QueueBound) {
 					// One line per stall; the writer adds the count to the index.
-					if (m_DroppedSinceTaken++ == 0) line = "[cross-record] FAIL the presentation queue reached its bound of " + std::to_string(m_QueueBound) + " lines: the lines past it are dropped and counted in raw.index.json";
+					if (m_DroppedSinceTaken++ == 0) line = "[cross-record] the presentation queue reached its bound of " + std::to_string(m_QueueBound) + " lines: the lines past it are dropped and counted in raw.index.json";
 				} else {
 					m_Queue.push_back(std::move(text));
 				}
