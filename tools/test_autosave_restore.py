@@ -40,6 +40,7 @@ digest against the digest the checkpoint recorded, and the retained set is compa
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import math
@@ -75,6 +76,8 @@ RECEIVED_LAUNCH = re.compile(r"^\[net-match\] launching from the received snapsh
 FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 # Every N committed ticks each peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
 FULLSTATE_EVERY = 0
+# Both peers' archive writers pause this long before each task (CC_TEST_SAVER_DELAY_MS); 0 is off. Set by --saver-delay-ms.
+SAVER_DELAY_MS = 0
 RETAINED_AUTOSAVES = 3  # The default of the NetworkAutosavesKept option (AutosaveStore::c_RetainedAutosaves), which
                         # these runs never set; the engine's own keep= value is held to it below.
 
@@ -252,13 +255,14 @@ def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: l
 
 
 def expect_injected_divergence(root: Path, verdicts: dict) -> None:
-    """Holds the anchor arm's full-state verdict to injected_divergence_reasons, run to ANCHOR_TICKS."""
+    """Holds the anchor arm's full-state verdict to injected_divergence_reasons, run to each pair's own tick count."""
     for name, verdict in verdicts.items():
         pair = Path(root) / name
         excused = []
+        last_tick = run_ticks(pair, ANCHOR_TICKS)
         reasons = injected_divergence_reasons(pair / "host" / "stdout.log", pair / "client" / "stdout.log",
-                                              verdict.get("divergences") or [], FULLSTATE_EVERY, ANCHOR_TICKS, excused)
-        verdict["injected_divergence"] = {"requires": "globals.sim_rng", "every": FULLSTATE_EVERY, "last_tick": ANCHOR_TICKS,
+                                              verdict.get("divergences") or [], FULLSTATE_EVERY, last_tick, excused)
+        verdict["injected_divergence"] = {"requires": "globals.sim_rng", "every": FULLSTATE_EVERY, "last_tick": last_tick,
                                           "excused_after_heal": excused}
         verdict["passed"] = not reasons and verdict.get("compared_samples", 0) > 0
         verdict["reasons"] = reasons
@@ -303,7 +307,10 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
                 "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         args += extra.get(who, []) + fullstate_args()
-        runs[who] = make_run(repo, args, root / who, 420, env={"CCCP_HEADLESS": "1"})
+        env = {"CCCP_HEADLESS": "1"}
+        if SAVER_DELAY_MS:
+            env["CC_TEST_SAVER_DELAY_MS"] = str(SAVER_DELAY_MS)
+        runs[who] = make_run(repo, args, root / who, 420, env=env)
         stage_baseline(runs[who], ticks, load_objects=load_objects)
         if settings and settings.get(who):
             pin_settings(runs[who], settings[who])
@@ -383,6 +390,98 @@ def checkpoints(root: Path, who: str) -> dict:
     return held
 
 
+AUTOSAVE_COALESCED = re.compile(r"^\[autosave-coalesced\] tick=\d+ replaced=(\d+) ", re.MULTILINE)
+# A capture the match named that this peer did not take (it was catching up on a held seat).
+AUTOSAVE_NOT_TAKEN = re.compile(r"^\[autosave\] named tick=(\d+) not taken: ", re.MULTILINE)
+# An arm that needs N checkpoints written waits for them: a run that writes fewer (the saver is slower than the 2 s cadence,
+# and the host names no capture while the last one is still being written) runs again with its whole schedule doubled,
+# up to this many ticks. N is never lowered.
+CHECKPOINT_WAIT_CAP_TICKS = 5600
+
+
+class CheckpointsShort(AssertionError):
+    """A run wrote fewer checkpoints than its arm needs while every other statement of the arm held."""
+
+    def __init__(self, message: str, record: dict):
+        super().__init__(message)
+        self.record = record
+
+
+def landed_checkpoints(log: str) -> tuple[list, int]:
+    """The ticks of the autosaves a peer's log shows written, and how many captures its saver coalesced: a capture the
+    engine's own [autosave-coalesced] line names as replaced was asked for and never written."""
+    replaced = Counter(int(tick) for tick in AUTOSAVE_COALESCED.findall(log))
+    coalesced = sum(replaced.values())
+    landed = []
+    for tick, _, _ in CAPTURE.findall(log):
+        if replaced[int(tick)]:
+            replaced[int(tick)] -= 1
+        else:
+            landed.append(int(tick))
+    return landed, coalesced
+
+
+def checkpoint_record(root: Path, ticks: int) -> dict:
+    """What one run wrote per peer and how many captures each peer's writers coalesced."""
+    record = {"ticks": ticks, "run": str(root)}
+    for who in ("host", "client"):
+        log = peer_log(root, who)
+        landed, coalesced = landed_checkpoints(log)
+        record[who] = {"landed": landed, "autosave_coalesced": coalesced, "fullstate_coalesced": len(FULLSTATE_COALESCED.findall(log)),
+                       "not_taken": [int(tick) for tick in AUTOSAVE_NOT_TAKEN.findall(log)]}
+    return record
+
+
+def describe_checkpoints(record: dict) -> str:
+    return f"ticks={record['ticks']} " + ", ".join(
+        f"{who} wrote {len(record[who]['landed'])} (autosave coalesced {record[who]['autosave_coalesced']}, "
+        f"full-state coalesced {record[who]['fullstate_coalesced']}, not taken {len(record[who].get('not_taken', []))})"
+        for who in ("host", "client"))
+
+
+def unexplained_missing(root: Path, record: dict) -> list:
+    """Each checkpoint one peer wrote and the other did not, unless the other's own line names that capture as not written."""
+    missing = []
+    for who, other in (("host", "client"), ("client", "host")):
+        log = peer_log(root, who)
+        named = {int(tick) for tick in AUTOSAVE_NOT_TAKEN.findall(log)} | {int(tick) for tick in AUTOSAVE_COALESCED.findall(log)}
+        missing += [f"{who} lacks {tick}" for tick in sorted(set(record[other]["landed"]) - set(record[who]["landed"])) if tick not in named]
+    return missing
+
+
+def wait_for_checkpoints(attempt, base_ticks: int, cap_ticks: int = CHECKPOINT_WAIT_CAP_TICKS) -> dict:
+    """Runs attempt(scale, ticks) with the arm's schedule scaled 1, 2, 4... until a run writes the checkpoints the arm needs.
+    A run that would pass cap_ticks is never started; every statement but the count fails the arm at once."""
+    short_runs, scale = [], 1
+    while True:
+        try:
+            details = attempt(scale, base_ticks * scale)
+        except CheckpointsShort as short:
+            short_runs.append(dict(short.record, short_of=str(short)))
+            if base_ticks * scale * 2 > cap_ticks:
+                raise AssertionError(f"{short}; still short at the {cap_ticks}-tick cap: "
+                                     + "; ".join(describe_checkpoints(run) for run in short_runs)) from None
+            scale *= 2
+            continue
+        details["checkpoint_wait"] = {"cap_ticks": cap_ticks, "scale": scale, "short_runs": short_runs,
+                                      "written": describe_checkpoints(details["checkpoints"])}
+        return details
+
+
+def wait_root(root: Path, scale: int, ticks: int) -> Path:
+    return root if scale == 1 else root / f"wait-{ticks}"
+
+
+def run_ticks(pair: Path, default: int) -> int:
+    """The -net-match-ticks a pair's host was launched with, read from its runner record."""
+    try:
+        argv = json.loads((Path(pair) / "host" / "launch.json").read_text(encoding="utf-8"))["argv"]
+        argv = ast.literal_eval(argv) if isinstance(argv, str) else argv
+        return int(argv[argv.index("-net-match-ticks") + 1])
+    except (OSError, ValueError, KeyError, IndexError, SyntaxError, TypeError):
+        return default
+
+
 def arm_restore(repo: Path, root: Path, port: int) -> dict:
     """A restore of the checkpoint the caller names reproduces the world that checkpoint recorded, and
     both peers restore the same one. The named checkpoint is the OLDEST of the retained set, so a restore
@@ -390,13 +489,18 @@ def arm_restore(repo: Path, root: Path, port: int) -> dict:
     are NOT compared against each other: a checkpoint carries per-peer locals, so each peer is only held
     to the world its own checkpoint recorded."""
     # With two checkpoints the policy self-test cannot tell its own sub-results apart, so the restore fires
-    # well past the retention limit: at a 2 s cadence (120 ticks) at least four stand behind tick 700, and
-    # the row asserts the count it actually observed.
-    ticks, restore_at = 800, 700
-    extra = {who: ["-net-autosave-restore", "oldest", "-net-autosave-restore-at", str(restore_at)]
-             for who in ("host", "client")}
-    records = run_pair(repo, root, port, ticks, 2, extra)
-    details = {}
+    # well past the retention limit: at a 2 s cadence (120 ticks) at least four stand behind tick 700; a run
+    # that writes fewer waits with its schedule doubled, and the row asserts the count it actually observed.
+    def attempt(scale: int, ticks: int) -> dict:
+        run_root, restore_at = wait_root(root, scale, ticks), 700 * scale
+        extra = {who: ["-net-autosave-restore", "oldest", "-net-autosave-restore-at", str(restore_at)]
+                 for who in ("host", "client")}
+        return judge_restore(run_root, ticks, run_pair(repo, run_root, port, ticks, 2, extra))
+    return wait_for_checkpoints(attempt, 800)
+
+
+def judge_restore(root: Path, ticks: int, records: dict) -> dict:
+    details, ticks_held = {}, {}
     for who in ("host", "client"):
         assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
         log = peer_log(root, who)
@@ -405,17 +509,13 @@ def arm_restore(repo: Path, root: Path, port: int) -> dict:
         policy = POLICY.search(log)
         assert policy and policy[1] == "PASS", f"{who} failed the checkpoint policy self-test: {policy[2] if policy else 'missing'}"
         verdict, match_id, tick, restored_tick, world_hash, expected, policy_flag = line.groups()
-        captures = [int(captured) for captured, _, _ in CAPTURE.findall(log)]
+        captures, _ = landed_checkpoints(log)
         before = [captured for captured in captures if captured <= int(tick)]
-        assert len(captures) > RETAINED_AUTOSAVES, f"{who} restored before the retention limit was exceeded: {captures}"
         assert len(before) >= 1, f"{who} restored a checkpoint it never captured: {tick} of {captures}"
         held = checkpoints(root, who)
         name = f"{match_id}-{tick}.ccsave"
         assert name in held, (name, sorted(held))
-        ticks_held = sorted(int(fields["SavedTick"]) for fields in held.values())
-        assert len(ticks_held) == RETAINED_AUTOSAVES, (ticks_held, captures)
-        assert int(tick) == ticks_held[0], f"{who} did not restore the checkpoint it was told to: {tick} of {ticks_held}"
-        assert int(tick) != ticks_held[-1], f"{who} restored the newest checkpoint, so the name decided nothing: {ticks_held}"
+        ticks_held[who] = sorted(int(fields["SavedTick"]) for fields in held.values())
         assert held[name]["WorldStructureHash"] == expected, (held[name], expected)
         assert restored_tick == tick, f"{who} restored a world standing on tick {restored_tick}, not {tick}"
         assert world_hash == expected, f"{who} did not restore the checkpoint's world: {world_hash} vs {expected}"
@@ -424,8 +524,22 @@ def arm_restore(repo: Path, root: Path, port: int) -> dict:
                         "line": line.group(0), "policy": policy.group(0), "held": sorted(held)}
     assert details["host"]["match_id"] == details["client"]["match_id"], (
         f"the peers name different matches: {details['host']['match_id']} vs {details['client']['match_id']}")
+    details["checkpoints"] = record = checkpoint_record(root, ticks)
+    for who in ("host", "client"):
+        captures = details[who]["captures"]
+        if len(captures) <= RETAINED_AUTOSAVES:
+            # A short run's peers may differ only by the captures a peer's own lines name as not written.
+            unexplained = unexplained_missing(root, record)
+            assert not unexplained, f"the peers wrote different checkpoints with no line naming the missing ones: {unexplained}"
+            raise CheckpointsShort(f"{who} restored before the retention limit was exceeded: {captures}", record)
     assert details["host"]["tick"] == details["client"]["tick"], (
-        f"the peers restored different checkpoints: {details['host']['tick']} vs {details['client']['tick']}")
+        f"the peers restored different checkpoints: {details['host']['tick']} vs {details['client']['tick']} "
+        f"(not taken: host {record['host']['not_taken']}, client {record['client']['not_taken']})")
+    for who in ("host", "client"):
+        tick, captures = details[who]["tick"], details[who]["captures"]
+        assert len(ticks_held[who]) == RETAINED_AUTOSAVES, (ticks_held[who], captures)
+        assert tick == ticks_held[who][0], f"{who} did not restore the checkpoint it was told to: {tick} of {ticks_held[who]}"
+        assert tick != ticks_held[who][-1], f"{who} restored the newest checkpoint, so the name decided nothing: {ticks_held[who]}"
     return details
 
 
@@ -467,15 +581,19 @@ def compare_live_window(root: Path, first_tick: int, last_tick: int, away: dict 
 
 def arm_retention(repo: Path, root: Path, port: int) -> dict:
     """More checkpoints than the policy keeps leaves exactly the newest restorable ones, per peer."""
-    ticks = 700
-    records = run_pair(repo, root, port, ticks, 2, {})
+    def attempt(scale: int, ticks: int) -> dict:
+        run_root = wait_root(root, scale, ticks)
+        return judge_retention(run_root, ticks, run_pair(repo, run_root, port, ticks, 2, {}))
+    return wait_for_checkpoints(attempt, 700)
+
+
+def judge_retention(root: Path, ticks: int, records: dict) -> dict:
     details = {}
     for who in ("host", "client"):
         assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
         log = peer_log(root, who)
-        captures = [int(tick) for tick, _, _ in CAPTURE.findall(log)]
+        captures, _ = landed_checkpoints(log)
         retained = RETAINED.findall(log)
-        assert len(captures) > RETAINED_AUTOSAVES, f"{who} never exceeded the retention limit: {captures}"
         assert retained, f"{who} never reported a retention pass"
         keep = {int(row[1]) for row in retained}
         assert keep == {RETAINED_AUTOSAVES}, f"{who} used a retention count of {keep}"
@@ -485,15 +603,25 @@ def arm_retention(repo: Path, root: Path, port: int) -> dict:
         assert "[autosave] failed" not in log, f"{who} refused a capture or a publish"
         details[who] = {"captures": captures, "held": sorted(held), "retained_lines": len(retained),
                         "descriptors": {name: fields["_descriptor_sha256"] for name, fields in held.items()}}
+    comparison = compare_live_window(root, 1, ticks)
+    details["peer_comparison"] = comparison
+    shared = details["host"]["descriptors"].keys() & details["client"]["descriptors"].keys()
+    differ = sorted(name for name in shared if details["host"]["descriptors"][name] != details["client"]["descriptors"][name])
+    assert not differ, f"the peers' restore descriptors differ: {differ}"
+    details["checkpoints"] = record = checkpoint_record(root, ticks)
+    for who in ("host", "client"):
+        if len(details[who]["captures"]) <= RETAINED_AUTOSAVES:
+            # A short run's peers may differ only by the captures a peer's own lines name as not written.
+            unexplained = unexplained_missing(root, record)
+            assert not unexplained, f"the peers wrote different checkpoints with no line naming the missing ones: {unexplained}"
+            raise CheckpointsShort(f"{who} never exceeded the retention limit: {details[who]['captures']}", record)
     assert details["host"]["held"] == details["client"]["held"], (
         "the peers do not hold the same checkpoint names: "
-        f"{details['host']['held']} vs {details['client']['held']}")
+        f"{details['host']['held']} vs {details['client']['held']} (not taken: host {record['host']['not_taken']}, client {record['client']['not_taken']})")
     # Every field of the descriptor is agreed by the match, so the two peers' copies are the same bytes.
     assert details["host"]["descriptors"] == details["client"]["descriptors"], (
         "the peers' restore descriptors differ: "
         f"{details['host']['descriptors']} vs {details['client']['descriptors']}")
-    comparison = compare_live_window(root, 1, ticks)
-    details["peer_comparison"] = comparison
     return details
 
 
@@ -502,23 +630,31 @@ def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False
 
     The perturbation is timed late on purpose: at the stock tick 50 the heal lands before the first
     checkpoint (one 2 s interval = 120 ticks after the match starts), so the host would have nothing to
-    name and the row would be red for a reason that is not the anchor mechanism. Tick 700 puts at least
-    four checkpoints before the heal, and the 1400-tick cap leaves room for more than the retention limit
-    afterwards, so the named one can only survive by being pinned."""
-    ticks, perturb_at = ANCHOR_TICKS, 700
-    # The perturbation waits for both seats to be live; a peer the host holds (a sanitizer build's slow client) keeps it
-    # from landing, so such a build asks the host to pause for a slow peer instead.
-    records = run_pair(repo, root, port, ticks, 2,
-                       {"host": ["-net-test-perturb-when-live", "-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
-                                 "-net-match-e2e-resync"],
-                        "client": ["-net-match-e2e-resync"]},
-                       {"host": {"NetworkSlowPlayerPolicy": "Pause"}} if pause_slow_peers else None)
+    name and the row would be red for a reason that is not the anchor mechanism. Tick 720 puts at least
+    four checkpoints before the heal at the 2 s cadence, and the 1400-tick cap leaves room for more than the
+    retention limit afterwards, so the named one can only survive by being pinned; a run that writes fewer
+    waits with its schedule doubled."""
+    def attempt(scale: int, ticks: int) -> dict:
+        # The live perturbation fires on a multiple of 30 ticks; 720 keeps every scaled run's on a full-state sample tick.
+        run_root, perturb_at = wait_root(root, scale, ticks), 720 * scale
+        # The perturbation waits for both seats to be live; a peer the host holds (a sanitizer build's slow client) keeps it
+        # from landing, so such a build asks the host to pause for a slow peer instead.
+        run_pair(repo, run_root, port, ticks, 2,
+                 {"host": ["-net-test-perturb-when-live", "-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
+                           "-net-match-e2e-resync"],
+                  "client": ["-net-match-e2e-resync"]},
+                 {"host": {"NetworkSlowPlayerPolicy": "Pause"}} if pause_slow_peers else None)
+        return judge_anchor(run_root, ticks, perturb_at)
+    return wait_for_checkpoints(attempt, ANCHOR_TICKS)
+
+
+def judge_anchor(root: Path, ticks: int, perturb_at: int) -> dict:
     injection = re.search(r"\[net-test\] live perturb frame=(\d+)", peer_log(root, "host"))
     assert injection and int(injection[1]) >= perturb_at, "the live-peer perturbation was never injected"
     anchors, captures = {}, {}
     for who in ("host", "client"):
         log = peer_log(root, who)
-        captures[who] = [int(captured) for captured, _, _ in CAPTURE.findall(log)]
+        captures[who], _ = landed_checkpoints(log)
         found = ANCHOR.findall(log)
         assert found, f"{who} recorded no rewind anchor: {root / who / 'stdout.log'}"
         anchors[who] = found
@@ -533,19 +669,25 @@ def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False
     assert received[-1][3] == "ok", f"the client does not hold the named checkpoint: {received[-1][3]}"
     held = {}
     for who in ("host", "client"):
-        before = [captured for captured in captures[who] if captured <= tick]
-        after = [captured for captured in captures[who] if captured > tick]
-        assert len(before) >= 4, f"{who} healed with only {len(before)} checkpoints behind it: {captures[who]}"
-        assert len(after) >= RETAINED_AUTOSAVES, (
-            f"{who} wrote only {len(after)} checkpoints after the anchor, so nothing would have rotated it away: {captures[who]}")
         held[who] = checkpoints(root, who)
         assert f"{match_id}-{tick}.ccsave" in held[who], (
             f"{who} rotated away the agreed rewind point {match_id}-{tick}: {sorted(held[who])}")
-        log = peer_log(root, who)
-        pinned = {int(row[2]) for row in RETAINED.findall(log)}
-        assert tick in pinned, f"{who} never pinned the agreed rewind point: {sorted(pinned)}"
+        # The pin is read by the retention pass of the next checkpoint written, so it shows only once one follows the anchor.
+        if any(captured > tick for captured in captures[who]):
+            pinned = {int(row[2]) for row in RETAINED.findall(peer_log(root, who))}
+            assert tick in pinned, f"{who} never pinned the agreed rewind point: {sorted(pinned)}"
+    record = checkpoint_record(root, ticks)
+    for who in ("host", "client"):
+        before = [captured for captured in captures[who] if captured <= tick]
+        after = [captured for captured in captures[who] if captured > tick]
+        if len(before) < 4:
+            raise CheckpointsShort(f"{who} healed with only {len(before)} checkpoints behind it: {captures[who]}", record)
+        if len(after) < RETAINED_AUTOSAVES:
+            raise CheckpointsShort(
+                f"{who} wrote only {len(after)} checkpoints after the anchor, so nothing would have rotated it away: {captures[who]}", record)
     return {"match_id": match_id, "tick": tick, "host": sorted(held["host"]), "client": sorted(held["client"]),
-            "captures": captures, "perturbed_tick": int(injection[1]), "anchor_lines": {who: [" ".join(row) for row in anchors[who]] for who in anchors}}
+            "captures": captures, "perturbed_tick": int(injection[1]), "anchor_lines": {who: [" ".join(row) for row in anchors[who]] for who in anchors},
+            "checkpoints": record}
 
 
 def arm_park(repo: Path, root: Path, port: int) -> dict:
@@ -1067,6 +1209,136 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             "holds": {half.name: len(HOLD.findall(peer_log(half, "host"))) for half in (first, second, fresh)}}
 
 
+class CheckpointWaitTests(unittest.TestCase):
+    """Ladder 7 rung 2 on 260 (S1.restore-all-3): under load the host wrote [130, 751, 1186, 1346] in the anchor run and
+    [133, 686] in the retention run; the arms read that as a red engine instead of waiting for the checkpoints."""
+    MATCH = "5354414745325034-7bc3c901ab20d0ca"
+
+    @staticmethod
+    def capture_lines(ticks, anchor=None) -> str:
+        return "".join(f"[autosave] tick={tick} capture_ms=12.5 bytes=100\n[autosave] retained tick={tick} keep=3 "
+                       f"pinned={anchor if anchor is not None and tick > anchor else 0} removed=0\n" for tick in ticks)
+
+    def judge(self, judge, texts: dict, held: dict, *args):
+        import sys
+        import tempfile
+        from unittest import mock
+        module = sys.modules[__name__]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for who, text in texts.items():
+                (root / who).mkdir()
+                (root / who / "stdout.log").write_text(text, encoding="utf-8")
+            fields = lambda tick: {"SavedTick": str(tick), "_descriptor_sha256": f"d{tick}"}
+            with mock.patch.object(module, "checkpoints", lambda _, who: {f"{self.MATCH}-{tick}.ccsave": fields(tick) for tick in held[who]}), \
+                    mock.patch.object(module, "compare_live_window", lambda *_: {"passed": True}):
+                return judge(root, *args)
+
+    def anchor_texts(self, ticks: list, anchor: int, fullstate_coalesced: int = 0) -> dict:
+        coalesced = "".join(f"[fullstate-coalesced] tick={60 * (n + 2)} replaced={60 * (n + 1)} writing=13 waiting_bound=1\n"
+                            for n in range(fullstate_coalesced))
+        return {"host": "[net-test] live perturb frame=720\n" + coalesced + self.capture_lines(ticks, anchor)
+                        + f"[autosave] anchor named match={self.MATCH} tick={anchor} local=ok\n",
+                "client": coalesced + self.capture_lines(ticks, anchor) + f"[autosave] anchor received match={self.MATCH} tick={anchor} local=ok\n"}
+
+    def test_landed_checkpoints_drop_only_the_captures_the_engine_names_replaced(self):
+        log = (self.capture_lines([130, 250, 370]) + "[autosave-coalesced] tick=370 replaced=250 writing=130 waiting_bound=1\n"
+               "[fullstate-coalesced] tick=360 replaced=300 writing=240 waiting_bound=1\n")
+        self.assertEqual(landed_checkpoints(log), ([130, 370], 1))
+        self.assertEqual(landed_checkpoints(self.capture_lines([130, 751, 1186, 1346])), ([130, 751, 1186, 1346], 0))
+
+    def test_a_short_run_waits_with_its_schedule_doubled(self):
+        calls = []
+
+        def attempt(scale, ticks):
+            calls.append((scale, ticks))
+            record = {"ticks": ticks, "run": "r", **{who: {"landed": [130], "autosave_coalesced": 0, "fullstate_coalesced": 17} for who in ("host", "client")}}
+            if scale == 1:
+                raise CheckpointsShort("host healed with only 1 checkpoints behind it: [130]", record)
+            return {"checkpoints": record}
+        details = wait_for_checkpoints(attempt, 1400)
+        self.assertEqual(calls, [(1, 1400), (2, 2800)])
+        self.assertEqual(details["checkpoint_wait"]["scale"], 2)
+        self.assertEqual([run["ticks"] for run in details["checkpoint_wait"]["short_runs"]], [1400])
+        self.assertIn("full-state coalesced 17", details["checkpoint_wait"]["written"])
+
+    def test_still_short_at_the_cap_fails_naming_every_run(self):
+        calls = []
+
+        def attempt(scale, ticks):
+            calls.append(ticks)
+            raise CheckpointsShort("host never exceeded the retention limit: [133, 686]",
+                                   {"ticks": ticks, "run": "r", **{who: {"landed": [133, 686], "autosave_coalesced": 0, "fullstate_coalesced": 10}
+                                                                   for who in ("host", "client")}})
+        with self.assertRaises(AssertionError) as raised:
+            wait_for_checkpoints(attempt, 700)
+        self.assertNotIsInstance(raised.exception, CheckpointsShort)
+        self.assertEqual(calls, [700, 1400, 2800, 5600])
+        self.assertIn(f"still short at the {CHECKPOINT_WAIT_CAP_TICKS}-tick cap", str(raised.exception))
+        self.assertIn("ticks=5600 host wrote 2 (autosave coalesced 0, full-state coalesced 10, not taken 0)", str(raised.exception))
+
+    def test_any_other_statement_fails_at_once(self):
+        calls = []
+
+        def attempt(scale, ticks):
+            calls.append(ticks)
+            raise AssertionError("the peers do not agree on the rewind point")
+        with self.assertRaisesRegex(AssertionError, "do not agree"):
+            wait_for_checkpoints(attempt, 1400)
+        self.assertEqual(calls, [1400])
+
+    def test_the_rungs_anchor_runs_wait_instead_of_failing(self):
+        # restore-all-3: one checkpoint behind the heal; restore-all-2: [126, 246, 366, 756] with the anchor at 366.
+        for ticks, anchor, behind in (([130, 751, 1186, 1346], 130, 1), ([126, 246, 366, 756], 366, 3)):
+            with self.subTest(anchor=anchor), self.assertRaises(CheckpointsShort) as raised:
+                self.judge(judge_anchor, self.anchor_texts(ticks, anchor, 17), {"host": [anchor] + ticks[-3:], "client": [anchor] + ticks[-3:]}, 1400, 700)
+            self.assertIn(f"host healed with only {behind} checkpoints behind it", str(raised.exception))
+            self.assertEqual(raised.exception.record["host"]["fullstate_coalesced"], 17)
+        ticks = [126, 246, 366, 486, 900, 1020, 1140]
+        details = self.judge(judge_anchor, self.anchor_texts(ticks, 486), {"host": [486, 900, 1020, 1140], "client": [486, 900, 1020, 1140]}, 1400, 700)
+        self.assertEqual(details["tick"], 486)
+
+    def test_a_short_anchor_run_still_fails_a_lost_rewind_point(self):
+        with self.assertRaises(AssertionError) as raised:
+            self.judge(judge_anchor, self.anchor_texts([130, 751, 1186, 1346], 130), {"host": [751, 1186, 1346], "client": [130, 751, 1186, 1346]}, 1400, 700)
+        self.assertNotIsInstance(raised.exception, CheckpointsShort)
+        self.assertIn("rotated away the agreed rewind point", str(raised.exception))
+
+    def test_the_rungs_retention_run_waits_and_a_refused_capture_still_fails(self):
+        records = {"host": {"exit_code": 0}, "client": {"exit_code": 0}}
+        texts = {who: self.capture_lines([133, 686]) for who in ("host", "client")}
+        with self.assertRaises(CheckpointsShort) as raised:
+            self.judge(judge_retention, texts, {"host": [133, 686], "client": [133, 686]}, 700, records)
+        self.assertIn("host never exceeded the retention limit: [133, 686]", str(raised.exception))
+        refused = {who: text + "[autosave] failed tick=253 reason=capture refused\n" for who, text in texts.items()}
+        with self.assertRaises(AssertionError) as raised:
+            self.judge(judge_retention, refused, {"host": [133, 686], "client": [133, 686]}, 700, records)
+        self.assertNotIsInstance(raised.exception, CheckpointsShort)
+        texts = {who: self.capture_lines([133, 253, 373, 493]) for who in ("host", "client")}
+        details = self.judge(judge_retention, texts, {"host": [253, 373, 493], "client": [253, 373, 493]}, 700, records)
+        self.assertEqual(details["host"]["captures"], [133, 253, 373, 493])
+
+    def test_a_held_peers_missed_capture_waits_only_when_its_own_line_names_it(self):
+        # live-retention-2 on this lane: the client, held and catching up, did not take the capture the host wrote at 480.
+        records = {"host": {"exit_code": 0}, "client": {"exit_code": 0}}
+        held = {"host": [131, 480], "client": [131]}
+        named = {"host": self.capture_lines([131, 480]),
+                 "client": self.capture_lines([131]) + "[autosave] named tick=480 not taken: catch_up=true running=true\n"}
+        with self.assertRaises(CheckpointsShort) as raised:
+            self.judge(judge_retention, named, held, 700, records)
+        self.assertEqual(raised.exception.record["client"]["not_taken"], [480])
+        silent = dict(named, client=self.capture_lines([131]))
+        with self.assertRaises(AssertionError) as raised:
+            self.judge(judge_retention, silent, held, 700, records)
+        self.assertNotIsInstance(raised.exception, CheckpointsShort)
+        self.assertIn("client lacks 480", str(raised.exception))
+        # Enough written on both: the names are compared in full, whatever a line says.
+        counted = {"host": self.capture_lines([131, 251, 371, 480]),
+                   "client": self.capture_lines([131, 251, 371]) + "[autosave] named tick=480 not taken: catch_up=true running=true\n"}
+        with self.assertRaises(AssertionError):
+            self.judge(judge_retention, counted, {"host": [251, 371, 480], "client": [131, 251, 371]}, 700, records)
+
+
 class WorldRestartOracleTests(unittest.TestCase):
     def test_world_offer_has_its_own_record_boundary(self):
         expected = {"world_id": "retained", "tick": 367}
@@ -1326,13 +1598,18 @@ def main() -> int:
     parser.add_argument("--rejoin-from-first-capture", action="store_true",
                         help="world-restart only: the first boot's world keeps serving its first capture and the client is held at "
                         "tick 124, so its rejoin takes the first capture and catches up across everything since it")
+    parser.add_argument("--saver-delay-ms", type=int, default=0,
+                        help="both peers' archive writers pause this long before each task (CC_TEST_SAVER_DELAY_MS), a slow disk")
     parser.add_argument("--pause-slow-peers", action="store_true",
                         help="anchor only: the host pauses for a slow peer instead of holding it, so a sanitizer build's heal lands")
     args = parser.parse_args()
     if args.fullstate_every < 0:
         parser.error("--fullstate-every must be 0 or positive")
-    global FULLSTATE_EVERY
+    if not 0 <= args.saver_delay_ms <= 60000:
+        parser.error("--saver-delay-ms in 0..60000")
+    global FULLSTATE_EVERY, SAVER_DELAY_MS
     FULLSTATE_EVERY = args.fullstate_every
+    SAVER_DELAY_MS = args.saver_delay_ms
     if not 1024 <= args.port <= 65516:
         parser.error("the base port must leave room for twenty unprivileged ports")
     os.environ["CCCP_HEADLESS"] = "1"
