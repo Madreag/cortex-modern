@@ -245,14 +245,46 @@
       ]
     },
     {
+      "id": "ui-join-port-typed",
+      "peer": "client",
+      "mark": "ui-join-port-typed",
+      "screen": "MultiplayerScreen",
+      "what": "A published session appears in discovery; a port typed by hand stays in the Port field through changes to the listed games, even one equal to the listed port.",
+      "assert": "directory/listed.json; settext TextJoinPort 4 then {PORT}; assert_label TextJoinPort {PORT} after 3.96 s of list changes",
+      "events": [
+        "assert_label TextJoinPort \"\\d+\" text=\"\\d+\" PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
       "id": "ui-directory-listing",
       "peer": "client",
       "mark": "ui-directory-listing",
       "screen": "MultiplayerScreen",
-      "what": "A published session appears in discovery; selecting the row fills its join target.",
-      "assert": "directory/listed.json; activate GameRowPort{PORT} (this session's own row)",
+      "what": "Selecting a listed row fills its join target.",
+      "assert": "activate GameRowPort{PORT} (this session's own row)",
       "events": [
         "activate GameRowPort\\d+ ok=1"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-join-port-picked",
+      "peer": "client",
+      "mark": "ui-join-port-picked",
+      "screen": "MultiplayerScreen",
+      "what": "A picked row's port stays in the Port field, paired with its address, while other games open and close.",
+      "assert": "assert_label TextJoinPort {PORT} 4.1 s after activate GameRowPort{PORT}",
+      "events": [
+        "assert_label TextJoinPort \"\\d+\" text=\"\\d+\" PASS"
       ],
       "run": [
         "640x360",
