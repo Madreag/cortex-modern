@@ -1249,8 +1249,7 @@ bool RTE::RunCheckpointImageSelfTest() {
 			if (current && older) pass("timer_archives_of_both_tags_load", legacy.substr(0, 12));
 			else fail("timer_archives_of_both_tags_load", "current=" + std::to_string(current) + " TimerMan1=" + std::to_string(older));
 
-			if (!SceneMan::IsConstructed()) SceneMan::Construct();
-			if (const std::string mismatch = g_SceneMan.CheckpointPerPeerSelfTestMismatch(); mismatch.empty()) pass("the_last_drawn_screen_is_per_peer", "archived, left out of the shared state, scrap height kept");
+			if (const std::string mismatch = SceneMan::CheckpointPerPeerSelfTestMismatch(); mismatch.empty()) pass("the_last_drawn_screen_is_per_peer", "archived, left out of the shared state, scrap height kept");
 			else fail("the_last_drawn_screen_is_per_peer", mismatch);
 		}
 		// A capture's bitmap index is kept while the loaded bitmaps' version holds, so every way that changes them moves it.
