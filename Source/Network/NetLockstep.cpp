@@ -8762,10 +8762,25 @@ namespace RTE {
 	void NetLockstepCoordinator::ReclaimOwnSeat(uint64_t nowMs) {
 		const uint8_t local = m_Config.localPeerId;
 		if (m_PlaneTicking || !IsRunning() || !IsOwnHostSeatHeld() || m_ReclaimTransactions.contains(local) || !m_LastCompletedSimulationTick || m_NextTimingRevision == UINT64_MAX) return;
-		for (const auto& [revision, pending]: m_TimingDecisions) if (!pending.committed) return;
+		// Why the held seat waits, named once each time the reason changes.
+		const auto noteWait = [&](const std::string& reason) {
+			if (reason == m_OwnSeatWaitLogged) return;
+			m_OwnSeatWaitLogged = reason;
+			std::cout << "[net-lockstep] own seat waits to come back: " << reason << " next_frame=" << m_Stats.nextFrame << std::endl;
+		};
+		for (const auto& [revision, pending]: m_TimingDecisions) {
+			if (pending.committed) continue;
+			noteWait("decision revision=" + std::to_string(revision) + " action=" + std::to_string(static_cast<int>(pending.proposal.action)) + " peer=" +
+			         std::to_string(pending.proposal.peerId) + " required=" + std::to_string(pending.proposal.requiredPeers) + " acknowledged=" + std::to_string(pending.acknowledgedPeers));
+			return;
+		}
 		// Back once the simulation has replayed what the AI played and is producing for frames not yet committed.
 		const uint16_t delay = InputDelayAt(local, m_Stats.nextFrame);
-		if (*m_LastCompletedSimulationTick + delay + 1 < m_Stats.nextFrame) return;
+		if (*m_LastCompletedSimulationTick + delay + 1 < m_Stats.nextFrame) {
+			// Logged in steps of a second of lag, so a steady gap is one line.
+			noteWait("the simulation is " + std::to_string((m_Stats.nextFrame - *m_LastCompletedSimulationTick) / 60 * 60) + "+ frames behind the committed horizon");
+			return;
+		}
 		NetLockstepTiming timing;
 		timing.senderPeerId = local; timing.peerId = local;
 		timing.action = NetTimingAction::Reclaim;
