@@ -4,7 +4,8 @@
 #   the clang+libc++ build (built when the box's libc++ and deps allow it, else its compiler line is the verdict);
 #   S1   the rejoin/capture rows through the inventory's run_stream.py on the gcc binary, alone on the box;
 #   one GPU row (a menu readback case) on the :0 session;
-#   S4b  the clang TSan build and its suite; S4 the clang ASan+UBSan build and its suite with LeakSanitizer on;
+#   S4b  the clang TSan build and its suite; S4 the clang ASan+UBSan build and its suite without leak checks (the Mac's
+#   configuration); S4L the same binary's suite with LeakSanitizer on, where a leaking row exits 23 and is red for it;
 #   a red sanitizer row runs once more alone after both suites (both runs kept), as the inventory reruns a red suite.
 # The load-sensitive legs (S5, S1) run alone; the TSan suite runs in three shards beside the ASan build and suite, whose
 # wall-clock budgets a sanitizer build reports instead of judging.
@@ -45,11 +46,12 @@ SAN_OPTS=(--buildtype=debugoptimized -Db_lto=false -Db_pch=false -Db_lundef=fals
 TSAN_SHARD_A="script-graph"
 TSAN_SHARD_B="preview-binding-exhaustive preview-invariance save-refusal-diagnosis net-match"
 TSAN_ENV=(CCCP_TEST_BINARY=$TSAN_BIN TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:external_symbolizer_path=$SYMBOLIZER)
-# A leak is reported, digested and extracted as a finding; LSan's exit code does not overwrite the row's own verdict.
-ASAN_ENV=(CCCP_TEST_BINARY=$ASAN_BIN
-  ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0:symbolize=1:external_symbolizer_path=$SYMBOLIZER
-  LSAN_OPTIONS=exitcode=0
-  UBSAN_OPTIONS=suppressions=$REPO/tools/sanitizers/ubsan.supp:print_stacktrace=1:halt_on_error=0:external_symbolizer_path=$SYMBOLIZER)
+UBSAN_ENV=UBSAN_OPTIONS=suppressions=$REPO/tools/sanitizers/ubsan.supp:print_stacktrace=1:halt_on_error=0:external_symbolizer_path=$SYMBOLIZER
+ASAN_ENV=(CCCP_TEST_BINARY=$ASAN_BIN $UBSAN_ENV
+  ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=0:symbolize=1:external_symbolizer_path=$SYMBOLIZER)
+# exitcode is a flag common to ASan and LSan, so it is left at its defaults: 1 for an ASan error, 23 for a leak.
+LSAN_ENV=(CCCP_TEST_BINARY=$ASAN_BIN $UBSAN_ENV
+  ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0:symbolize=1:external_symbolizer_path=$SYMBOLIZER)
 
 mkdir -p $EV
 stamp() { TZ=America/Phoenix date '+%Y-%m-%d %H:%M:%S MST'; }
@@ -216,10 +218,15 @@ if want asan; then
   say "asan build exit=$RC gns-turnfix-ubsan includes=$(grep -c 'gns-turnfix-ubsan/include' $REPO/build-asan/compile_commands.json 2>/dev/null)"
   if [ $RC -eq 0 ] && [ -f $ASAN_BIN ]; then
     fresh $EV/S4
-    say "asan suite start (detect_leaks=1)"
+    say "asan suite start (detect_leaks=0)"
     env "${ASAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4/suite --timeout 2400 --quiet-rows last > $EV/S4/suite-stdout.log 2>&1; RC=$?
     echo $RC > $EV/S4/suite-exit.txt
     say "asan suite exit=$RC $(suite_line $EV/S4/suite/result.json)"
+    fresh $EV/S4L
+    say "lsan suite start (detect_leaks=1)"
+    env "${LSAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4L/suite --timeout 2400 --quiet-rows last > $EV/S4L/suite-stdout.log 2>&1; RC=$?
+    echo $RC > $EV/S4L/suite-exit.txt
+    say "lsan suite exit=$RC $(suite_line $EV/S4L/suite/result.json)"
   fi
 fi
 
@@ -255,12 +262,12 @@ EOF
 fi
 
 if want defects; then
-  for s in S5 S4 S4b readback; do
+  for s in S5 S4 S4L S4b readback; do
     [ -d $EV/$s ] || continue
     $PY $INV/extract_defects.py $EV/$s --out $EV/$s/DEFECTS.json --driver-hint tools/run_selftests.py > $EV/$s-extract.log 2>&1
     say "$s DEFECTS: $($PY -c "import json; d=json.load(open('$EV/$s/DEFECTS.json')); print('defects', d['defect_count'], 'hard', d['hard_count'])" 2>&1 | tail -1)"
   done
-  for s in S4 S4b; do
+  for s in S4 S4L S4b; do
     [ -d $EV/$s ] || continue
     $PY $HERE/sanitizer_digest.py $EV/$s --out $EV/$s/sanitizer-digest > $EV/$s-digest.log 2>&1
     say "$s sanitizer digest: $(tail -1 $EV/$s-digest.log)"
