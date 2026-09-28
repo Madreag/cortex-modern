@@ -58,6 +58,8 @@ namespace RTE {
 		static uint64_t GetPreviewCount() { return s_PreviewCount; }
 		static uint64_t GetPreviewTicks() { return s_PreviewTicks; }
 		static double GetPreviewMs() { return s_PreviewMs; }
+		/// Each preview stage's mean wall time over the previews since the previous call, for the memory census.
+		static std::string DescribePhasesSinceLastCall();
 		static uint64_t GetShadows();
 		static uint64_t GetTaken();
 		static uint64_t GetViolations();
