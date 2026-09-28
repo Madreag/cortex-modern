@@ -12356,7 +12356,9 @@ namespace RTE {
 		for (auto& peer : peers) peer.FinishMatch("round over");
 		std::string rtl;
 		const uint32_t lobbyBefore = ice[0]->lobbySends.load() + ice[1]->lobbySends.load();
+		peers[0].m_RoundStartScriptsWanted = false;
 		if (!peers[0].ReturnToLobby(&rtl)) return fail("host ReturnToLobby: " + rtl);
+		if (!peers[0].m_RoundStartScriptsWanted) return fail("a successor host's rematch did not rearm its start scripts");
 		const auto rematchAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
 		while (std::chrono::steady_clock::now() < rematchAt) {
 			peers[1].PumpSessionEvents();
@@ -12429,6 +12431,10 @@ namespace RTE {
 			return false;
 		}
 		service.FinishMatch("match over");
+		if (service.SeatMidAdmission(1)) {
+			*error = "an ended round still extends its tick cap for an AI-held seat";
+			return false;
+		}
 		if (!service.m_KeepEndedDirectoryLease || !service.ShouldKeepIceDirectoryLease() || !service.m_DirectoryHidden || service.m_DirectoryRetracted) {
 			*error = "a match that ended with a held seat did not keep its listing: keep_ended=" + std::to_string(service.m_KeepEndedDirectoryLease) +
 			         " hidden=" + std::to_string(service.m_DirectoryHidden) + " retracted=" + std::to_string(service.m_DirectoryRetracted);
