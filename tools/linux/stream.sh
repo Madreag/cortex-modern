@@ -275,7 +275,8 @@ fi
 if want defects; then
   for s in S5 S4 S4L S4b readback; do
     [ -d $EV/$s ] || continue
-    $PY $INV/extract_defects.py $EV/$s --out $EV/$s/DEFECTS.json --driver-hint tools/run_selftests.py > $EV/$s-extract.log 2>&1
+    $PY $INV/extract_defects.py $EV/$s --out $EV/$s/DEFECTS.raw.json --driver-hint tools/run_selftests.py > $EV/$s-extract.log 2>&1
+    $PY $REPO/tools/linux/normalize_suite_defects.py $EV/$s --input $EV/$s/DEFECTS.raw.json --out $EV/$s/DEFECTS.json >> $EV/$s-extract.log 2>&1
     say "$s DEFECTS: $($PY -c "import json; d=json.load(open('$EV/$s/DEFECTS.json')); print('defects', d['defect_count'], 'hard', d['hard_count'])" 2>&1 | tail -1)"
   done
   for s in S4 S4L S4b; do
