@@ -974,6 +974,10 @@ namespace RTE {
 		std::set<uint8_t> HeldSurvivorsLocked() const;
 		/// Held client, host gone: keeps only the routes its catch-up moves to; returns whether this seat hosts the match itself.
 		bool HeldSeatHostsLocked();
+		/// Held client: opens the match's published listener for the held seats that may dial this one.
+		bool OpenHeldListenerLocked();
+		/// Held client: closes that listener once another host took the seat.
+		void CloseHeldListenerLocked();
 		/// Held client: its host is gone, so its catch-up moves to the next successor on a new connection with the world it holds.
 		/// Returns whether a successor is being tried; otherwise the seat takes the image path.
 		bool BeginInPlaceMoveLocked(uint64_t nowMs);
@@ -1642,6 +1646,8 @@ namespace RTE {
 			NetMatchMigrationPeer endpoint;
 		};
 		std::deque<InPlaceRoute> m_InPlaceRoutes; //!< Held client: the successors its catch-up has yet to try.
+		std::unique_ptr<INetTransport> m_HeldListener; //!< Held client, first survivor: the listener it opens at its verdict while it dials the others.
+		std::vector<NetTransportEvent> m_HeldListenerEvents; //!< What that listener heard before a plane took it over, in order.
 		std::unique_ptr<INetTransport> m_InPlaceMoveTransport; //!< Held client: the new connection while the successor admits it.
 		uint8_t m_InPlaceMoveHost = 0; //!< Held client: the successor being dialed; 0 when no move is under way.
 		std::string m_InPlaceMoveAddress;
