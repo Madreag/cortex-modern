@@ -7613,6 +7613,8 @@ void LuaMan::Initialize() {
 
 void LuaStateWrapper::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	// A saver runs beside the graph capture, which may freeze this state between the gate and the lock: the walk pushes onto the VM.
+	WaitFrozenCopy();
 	if (m_State) VisitScriptOwnedObjects(m_State, visit);
 }
 
