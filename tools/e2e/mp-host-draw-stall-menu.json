@@ -149,12 +149,17 @@
       "id": "menu-draw-500-host-plays-on",
       "run": "menu-draw-500",
       "peer": "host",
-      "screen": "game",
+      "screen": [
+        "PauseMatchOptions",
+        "Pause",
+        "PauseSettings",
+        "PauseLeaveConfirm"
+      ],
       "sim_ticks": [
         600,
         1200
       ],
-      "what": "The host's draw is held 500 ms at tick 600 with Match Options open; the host plays on with no unguarded access to the round.",
+      "what": "The host's draw is held 500 ms at tick 600 with Match Options open; the host's round plays on behind the pause menus its probe keeps open, with no unguarded access to the round.",
       "forbidden_log_regex": [
         "\\[net-plane\\] ASSERT",
         "unguarded coordinator access",

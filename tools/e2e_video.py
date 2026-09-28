@@ -456,14 +456,15 @@ def contact_sheet_ffmpeg(frames, destination, every, ffmpeg):
 
 
 def frame_range(rows, item):
-    """Where the capture puts a checklist item: the frames whose screen and sim tick match what it names."""
+    """Where the capture puts a checklist item: the frames whose screen (or any of its screens) and sim tick match."""
     screen = item.get("screen")
+    screens = [screen] if isinstance(screen, str) else screen
     low, high = (item.get("sim_ticks") or [None, None])[:2]
     hits = []
     for row in rows:
         if not row.get("saved", True):
             continue
-        if screen and row.get("screen") != screen:
+        if screens and row.get("screen") not in screens:
             continue
         if item.get("service_state") and row.get("service_state") != item["service_state"]:
             continue
