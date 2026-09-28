@@ -3556,6 +3556,32 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A held seat is never a successor: a held seat whose host is gone dials the live survivors, and with every survivor held the
+	/// first of them in the match's order hosts while the others dial it.
+	int TestEveryHeldSurvivorFindsOneHost() {
+		using Routes = std::vector<uint8_t>;
+		const Routes order{2, 3, 4};
+		struct Case { const char* name; uint8_t local; Routes reachable; std::set<uint8_t> held; Routes expected; };
+		const Case cases[] = {
+			{"first-held-hosts", 2, {3}, {3}, {}},
+			{"second-held-dials-the-first", 3, {2}, {2}, {2}},
+			{"three-held-third-dials-the-first", 4, {2, 3}, {2, 3}, {2}},
+			{"a-held-seat-is-never-dialed-past-a-live-one", 4, {2, 3}, {2}, {3}},
+			{"live-successors-in-order", 2, {3, 4}, {}, {3, 4}},
+			{"nobody-left-hosts-alone", 2, {}, {}, {}},
+		};
+		for (const Case& test: cases) {
+			const Routes routes = NetMatchService::HeldSuccessionRoutes(order, 1, test.local, test.reachable, test.held);
+			if (routes != test.expected) {
+				std::string got;
+				for (const uint8_t peer: routes) got += (got.empty() ? "" : ",") + std::to_string(peer);
+				return Fail(std::string("held-succession-") + test.name + ": peer " + std::to_string(test.local) + " would dial [" + got + "]");
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS every_held_survivor_finds_one_host" << std::endl;
+		return 0;
+	}
+
 	/// A member whose seat the AI holds and who then leaves has gone for good: the world releases that seat for a new join,
 	/// while a seat still committed, dropped or mid-reclaim stays its member's.
 	int TestAHeldWorldMembersLeaveReleasesItsSeat() {
@@ -7856,6 +7882,7 @@ namespace RTE {
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAHeldWorldMembersLeaveReleasesItsSeat(); result != 0) return result;
 		if (const int result = TestALoneSurvivorWithAHeldSeatHostsTheMatch(); result != 0) return result;
+		if (const int result = TestEveryHeldSurvivorFindsOneHost(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;
