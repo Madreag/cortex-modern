@@ -139,33 +139,33 @@ class ReportTests(unittest.TestCase):
 
     def test_item9a_steady_rate_and_wait_boundaries(self):
         self.assertTrue(self.item9a()['pass_check'])
-        self.assertEqual(self.item9a(wall_ms=16000)['pins']['item9a_wall_tps']['status'], 'MISS')
-        self.assertEqual(self.item9a(waits='[net-frame-wait] frame=600 wait_ms=51')['pins']['item9a_longest_wait']['status'], 'MISS')
+        self.assertEqual(self.item9a(wall_ms=16000)['pins']['item9a_wall_tps']['status'], 'FAIL')
+        self.assertEqual(self.item9a(waits='[net-frame-wait] frame=600 wait_ms=51')['pins']['item9a_longest_wait']['status'], 'FAIL')
         waits = '\n'.join(f'[net-frame-wait] frame={tick} wait_ms=50' for tick in (600, 700, 800))
-        self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'MISS')
+        self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'FAIL')
 
     def test_same_machine_tps_ruling_retains_block_limits(self):
         reference = dict(steady_wall_tps=55, evidence='single-player.jsonl')
         measured = self.item9a(wall_ms=900000 / 54)
         report.apply_tps_call(measured, reference)
         self.assertTrue(measured['pass_check'])
-        self.assertEqual(measured['tps_call']['absolute']['status'], 'MISS')
+        self.assertEqual(measured['tps_call']['absolute']['status'], 'FAIL')
         self.assertFalse(measured['pins']['item9a_confirmed_horizon_lag']['required'])
         blocked = self.item9a(wall_ms=900000 / 54, waits='[net-frame-wait] frame=600 wait_ms=51')
         report.apply_tps_call(blocked, reference)
         self.assertFalse(blocked['pass_check'])
         too_slow = self.item9a(wall_ms=900000 / 52)
         report.apply_tps_call(too_slow, reference)
-        self.assertEqual(too_slow['pins']['item9a_wall_tps']['status'], 'MISS')
+        self.assertEqual(too_slow['pins']['item9a_wall_tps']['status'], 'FAIL')
         fast_box = self.item9a(wall_ms=900000 / 59)
         report.apply_tps_call(fast_box, dict(steady_wall_tps=60, evidence='stock.jsonl'))
-        self.assertEqual(fast_box['pins']['item9a_wall_tps']['status'], 'MISS')
+        self.assertEqual(fast_box['pins']['item9a_wall_tps']['status'], 'FAIL')
         self.assertNotIn('required', fast_box['pins']['item9a_confirmed_horizon_lag'])
 
     def test_item9a_recovery_elapsed_time_cannot_be_reset_away(self):
         result = self.item9a(wall_ms=15700)
         self.assertEqual(result['metrics']['steady_wall_ms'], 15700)
-        self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'MISS')
+        self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'FAIL')
 
     def test_item9a_prefetch_misses_are_diagnostic_and_end_evidence_is_required(self):
         self.assertTrue(self.item9a(missing=1)['pass_check'])
@@ -177,7 +177,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(self.item9a(wall_ms=15050)['pins']['item9a_confirmed_horizon_lag']['status'], 'PASS')
         result = self.item9a(wall_ms=15051)
         self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'PASS')
-        self.assertEqual(result['pins']['item9a_confirmed_horizon_lag']['status'], 'MISS')
+        self.assertEqual(result['pins']['item9a_confirmed_horizon_lag']['status'], 'FAIL')
 
     def test_item9a_extended_rejoin_window_requires_its_actual_end(self):
         result = self.item9a(final_tick=2400, wall_ms=35000)
@@ -190,13 +190,13 @@ class ReportTests(unittest.TestCase):
         applied = '[net-match] seat-reclaimed peer=2 frame=700 live_actors=2\n'
         def status(host, survivor, completed=""):
             return self.item9a(silent=True, waits=request + host, survivor_log=survivor, client_log=completed)['pins']['item9a_rejoin']['status']
-        self.assertEqual(status('', request), 'MISS')
-        self.assertEqual(status(applied, ''), 'MISS')
-        self.assertEqual(status(applied, applied.replace('700', '701')), 'MISS')
-        self.assertEqual(status(applied, applied), 'MISS')
+        self.assertEqual(status('', request), 'FAIL')
+        self.assertEqual(status(applied, ''), 'FAIL')
+        self.assertEqual(status(applied, applied.replace('700', '701')), 'FAIL')
+        self.assertEqual(status(applied, applied), 'FAIL')
         self.assertEqual(status(applied, applied, '[net-match] private catch-up complete frame=700\n'), 'PASS')
         for refused in (applied.replace('700', '500'), applied.replace('700', '1201'), applied.replace('actors=2', 'actors=0'), applied.replace('peer=2', 'peer=3')):
-            self.assertEqual(status(refused, refused), 'MISS')
+            self.assertEqual(status(refused, refused), 'FAIL')
 
     def test_item9a_private_rejoin_rejects_survivor_reload(self):
         hold = '[net-match] hold peer=2 frame=603 AI in control\n'
@@ -205,7 +205,7 @@ class ReportTests(unittest.TestCase):
         def result(extra):
             return self.item9a(silent=True, waits=hold + applied + extra, survivor_log=applied, client_log=client)['pins']['item9a_private_rejoin']['status']
         self.assertEqual(result(''), 'PASS')
-        self.assertEqual(result('[net-match] rejoin: player reconnected - resyncing the match\n'), 'MISS')
+        self.assertEqual(result('[net-match] rejoin: player reconnected - resyncing the match\n'), 'FAIL')
 
     def test_latency_uses_present_return_and_counts_frames(self):
         edge = dict(_line=1, tick=10, wall_ms=100, actor=actor(), last_presented_frame=1,
@@ -235,7 +235,7 @@ class ReportTests(unittest.TestCase):
     def test_draw_percentile_is_nearest_rank_and_boundary_is_not_relaxed(self):
         values = report.distribution([1] * 99 + [51])
         self.assertEqual((values['p99'], values['max']), (1, 51))
-        self.assertEqual(report.pin(51, '<= 50', 51 <= 50, [])['status'], 'MISS')
+        self.assertEqual(report.pin(51, '<= 50', 51 <= 50, [])['status'], 'FAIL')
 
     def test_unknown_value_never_passes(self):
         self.assertEqual(report.pin(None, '<= 8', True, [])['status'], 'MISS')
@@ -310,7 +310,7 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(duplicate['first']['tick'], 1)
             self.assertEqual(duplicate['first']['actor'], 7)
             self.assertEqual(duplicate['first']['first_line'], 2)
-            self.assertEqual(report.pin(duplicate, 'no duplicate', duplicate is None, [dump])['status'], 'MISS')
+            self.assertEqual(report.pin(duplicate, 'no duplicate', duplicate is None, [dump])['status'], 'FAIL')
 
     def test_repeated_identical_canonical_record_is_not_a_duplicate(self):
         from tempfile import TemporaryDirectory
@@ -369,7 +369,7 @@ class EarlyDecidedArmTest(unittest.TestCase):
             run = self.arm(folder, 1147)
             result = feel_measure.reduce_or_fail(run, 'client')
             pinned = result['pins']['item9a_measurement_window']
-            self.assertEqual(pinned['status'], 'MISS')
+            self.assertEqual(pinned['status'], 'FAIL')
             self.assertEqual(pinned['value'], 1147)
             self.assertEqual(pinned['detail'], 'FAIL: decided at tick 1147; measurement window is 1200 ticks')
             self.assertEqual(result['early_decision']['tick'], 1147)
