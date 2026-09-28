@@ -715,9 +715,9 @@ def analyze(root, stock=None):
         failures = sum(row['status'] == 'FAIL' for peer in report['peers'].values() for row in peer['pins'].values())
         link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {failures} FAIL, {misses} MISS; [{report["name"]}]({link}) |')
-    lines += ['', 'Item 9a retains the 50 ms and one-percent wait gates. TPS uses the same-machine',
-              'single-player reference with a five-percent maximum gap when that reference is below 59.5.',
-              'Nominal 60 Hz horizon drift is retained as a diagnostic in that case. Missing records and failed',
+    lines += ['', 'Item 9a requires 59.5 TPS, zero steady blocking waits, less than one percent waiting,',
+              'and a 50 ms maximum wait and confirmed-horizon lag. The single-player rate is diagnostic.',
+              'Missing records and failed',
               'determinism proofs remain incomplete work. The full per-peer table and raw-file manifest are in each run.']
     (root / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return results
