@@ -50,9 +50,11 @@ import threading
 import time
 import unittest
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 from compare_sim_traces import FULLSTATE, compare_fullstate, load_fullstate
+from feel.report import own_hold_windows
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, read_live_hashes, split_passes
 from run_sim_test import make_run, engine_executable, file_sha256
 from feel_measure import stage_baseline
@@ -157,6 +159,7 @@ def fullstate_pairs(root: Path, admissions: bool = False) -> dict:
 
 
 PERTURB = re.compile(r"^\[net-test\] live perturb frame=(\d+)$", re.MULTILINE)
+FULLSTATE_COALESCED = re.compile(r"^\[fullstate-coalesced\] tick=\d+ replaced=(\d+) ", re.MULTILINE)
 
 
 FULLSTATE_LABELLED = re.compile(r"^\[fullstate-(canonical|restored)\] tick=(\d+) hash=[0-9a-f]{16} sections=(\S+) round=\d+\s*$", re.MULTILINE)
@@ -165,7 +168,7 @@ FULLSTATE_LABELLED_SCOPE = re.compile(r"^\[fullstate-scope\] tick=(\d+) round=\d
 ANCHOR_TICKS = 1400
 
 
-def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: list, every: int, last_tick: int) -> list:
+def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: list, every: int, last_tick: int, excused: list | None = None) -> list:
     """What keeps the anchor arm's heal from being proven, from the two peers' logs; empty when it is.
 
     The arm advances the host's sim RNG at the start of one tick (Main.cpp's live perturbation) and the oracle samples that
@@ -173,7 +176,10 @@ def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: l
     heal is proven only by (1) every scheduled sample after it, to the run's end, taken by both peers in the same round,
     (2) no shared section leaving either peer's samples unless the capture named it this machine's own, and (3) each
     peer's first restored world equal to the canonical capture of the snapshot the heal sent: two peers restoring the same
-    wrong state agree with each other, not with it."""
+    wrong state agree with each other, not with it. A sample a peer's own lines name as not taken (its saver coalesced it,
+    or its seat was held) is expected-absent for that peer and listed in excused; at least one sample after the heal must
+    be taken by both."""
+    excused = [] if excused is None else excused
     texts = {who: path.read_text(encoding="utf-8", errors="replace") if path.is_file() else "" for who, path in (("host", host_log), ("client", client_log))}
     injected = PERTURB.search(texts["host"])
     if not injected:
@@ -183,13 +189,33 @@ def injected_divergence_reasons(host_log: Path, client_log: Path, divergences: l
     if len(seen) != 1 or seen[0][0] != tick or "globals.sim_rng" not in seen[0][1]:
         reasons.append(f"the injected divergence at tick {tick} was expected as the one divergent sample, naming globals.sim_rng; the oracle saw {seen}")
     samples = {"host": load_fullstate(host_log), "client": load_fullstate(client_log)}
+    # A peer's absent sample is expected only where its own lines name it: its saver coalesced it, or its seat was held.
+    replaced = {who: Counter(int(sampled) for sampled in FULLSTATE_COALESCED.findall(text)) for who, text in texts.items()}
+    holds = {who: own_hold_windows(text.splitlines()) for who, text in texts.items()}
+    shared = 0
     for sampled in range(tick - tick % every + every, last_tick + 1, every):
         rounds = {who: {key[0] for key in samples[who] if key[1] == sampled} for who in samples}
         missing = [who for who in samples if not rounds[who]]
-        if missing:
-            reasons.append(f"no {' or '.join(missing)} sample at tick {sampled} after the heal")
+        unnamed = []
+        for who in missing:
+            others = {round_id for other in samples if other != who for round_id in rounds[other]}
+            if replaced[who][sampled] > 0:
+                replaced[who][sampled] -= 1
+                excused.append({"peer": who, "tick": sampled, "reason": "coalesced"})
+            elif any(first <= sampled < end and (not others or round_id in others) for round_id, first, end in holds[who]):
+                excused.append({"peer": who, "tick": sampled, "reason": "held"})
+            else:
+                unnamed.append(who)
+        if unnamed:
+            reasons.append(f"no {' or '.join(unnamed)} sample at tick {sampled} after the heal")
+        elif missing:
+            continue
         elif rounds["host"] != rounds["client"]:
             reasons.append(f"the peers sampled tick {sampled} in different rounds: {sorted(rounds['host'])} vs {sorted(rounds['client'])}")
+        else:
+            shared += 1
+    if not shared:
+        reasons.append(f"no sample both peers took after the heal at tick {tick}")
     for who, text in texts.items():
         named = {(int(round_id), int(sampled)): set(filter(None, sections.split(","))) for sampled, round_id, sections in FULLSTATE_SCOPE.findall(text)}
         previous = None
@@ -229,9 +255,11 @@ def expect_injected_divergence(root: Path, verdicts: dict) -> None:
     """Holds the anchor arm's full-state verdict to injected_divergence_reasons, run to ANCHOR_TICKS."""
     for name, verdict in verdicts.items():
         pair = Path(root) / name
+        excused = []
         reasons = injected_divergence_reasons(pair / "host" / "stdout.log", pair / "client" / "stdout.log",
-                                              verdict.get("divergences") or [], FULLSTATE_EVERY, ANCHOR_TICKS)
-        verdict["injected_divergence"] = {"requires": "globals.sim_rng", "every": FULLSTATE_EVERY, "last_tick": ANCHOR_TICKS}
+                                              verdict.get("divergences") or [], FULLSTATE_EVERY, ANCHOR_TICKS, excused)
+        verdict["injected_divergence"] = {"requires": "globals.sim_rng", "every": FULLSTATE_EVERY, "last_tick": ANCHOR_TICKS,
+                                          "excused_after_heal": excused}
         verdict["passed"] = not reasons and verdict.get("compared_samples", 0) > 0
         verdict["reasons"] = reasons
 
@@ -1209,12 +1237,21 @@ class WorldRestartOracleTests(unittest.TestCase):
         def line(tag, tick, sections, round_id):
             return f"[{tag}] tick={tick} hash={'e' * 16} sections={','.join(f'{name}:{value}' for name, value in sections.items())} round={round_id}\n"
 
-        def logs(client_last=1380, dropped_from=0, named=False, restored=None, canonical=True, canonical_own=None):
+        def logs(client_last=1380, dropped_from=0, named=False, restored=None, canonical=True, canonical_own=None, absent=None, coalesced=None,
+                 client_hold=None):
             texts = {"host": "[net-test] live perturb frame=720\n", "client": ""}
+            for who, replaced in (coalesced or {}).items():
+                texts[who] += "".join(f"[fullstate-coalesced] tick={tick + 60} replaced={tick} writing={tick - 60} waiting_bound=1\n" for tick in replaced)
+            if client_hold:
+                texts["client"] += (f"[net-lockstep] start round=8 frame=721 local_peer=2 peers=2 input_delay=4\n"
+                                    f"[net-lockstep] hold of this seat at {client_hold[0]} revision=9 incarnation=1 state=Running\n"
+                                    f"[net-match] seat-reclaimed peer=2 frame={client_hold[1]} live_actors=2\n")
             for who in texts:
                 for tick in range(60, 1381, 60):
                     if who == "client" and tick > client_last:
                         break
+                    if tick in (absent or {}).get(who, ()):
+                        continue
                     round_id = 7 if tick <= 720 else 8
                     sections = dict(base)
                     if who == "host" and tick == 720:
@@ -1241,6 +1278,16 @@ class WorldRestartOracleTests(unittest.TestCase):
             "no canonical snapshot": (logs(canonical=False), False),
             "a section the canonical capture keeps for itself": (logs(canonical_own="graph.3"), True),
             "a section the canonical capture drops unnamed": (logs(canonical_own=""), False),
+            # EDITH S1 restore-all on merge 254: the slow saver coalesced samples after the heal on each peer.
+            "samples each peer's own saver coalesced after the heal": (
+                logs(absent={"host": {840, 1020}, "client": {840, 960}}, coalesced={"host": [840, 1020], "client": [840, 960]}), True),
+            "an absence no line of the peer names": (logs(absent={"client": {1200}}), False),
+            "a coalesced line of the other peer excuses nothing": (logs(absent={"client": {1200}}, coalesced={"host": [1200]}), False),
+            "a held peer's samples inside its own hold": (logs(absent={"client": {1200}}, client_hold=(1147, 1213)), True),
+            "a sample after the hold's return": (logs(absent={"client": {1260}}, client_hold=(1147, 1213)), False),
+            "no sample both peers took after the heal": (
+                logs(absent={"host": set(range(780, 1381, 120)), "client": set(range(840, 1381, 120))},
+                     coalesced={"host": list(range(780, 1381, 120)), "client": list(range(840, 1381, 120))}), False),
         }
         global FULLSTATE_EVERY
         every = FULLSTATE_EVERY
