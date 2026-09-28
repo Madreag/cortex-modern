@@ -1127,6 +1127,29 @@ static uint64_t s_paceSimTicks = 0;
 static long long s_paceSimUs = 0;
 static long long s_paceUpdateUs = 0;
 static long long s_paceDrawUs = 0;
+static long long s_pacePreviewUs = 0; //!< The draw's share spent in the local prediction preview.
+static long long s_paceInterfaceUs = 0; //!< The draw's share spent on input, the menus and the activity's render update.
+
+// The loop pace since the previous memory census line, with the draw split where it spends its time.
+static std::string PaceCensusSinceLast() {
+	struct Mark { uint64_t iterations = 0, ticks = 0; long long updateUs = 0, drawUs = 0, previewUs = 0, interfaceUs = 0, waitUs = 0; uint64_t previews = 0; };
+	static Mark last;
+	const Mark now{s_paceIterations, s_paceSimTicks, s_paceUpdateUs, s_paceDrawUs, s_pacePreviewUs, s_paceInterfaceUs, ScenarioRunner::GetLockstepWaitUs(), LocalPrediction::GetPreviewCount()};
+	// A new round restarts the counters.
+	if (now.iterations < last.iterations || now.ticks < last.ticks) last = Mark{};
+	const double iterations = static_cast<double>(std::max<uint64_t>(1, now.iterations - last.iterations));
+	const long long wallUs = (now.updateUs - last.updateUs) + (now.drawUs - last.drawUs);
+	std::ostringstream out;
+	out << std::fixed << std::setprecision(2) << " pace: iterations=" << now.iterations - last.iterations << " sim_ticks=" << now.ticks - last.ticks
+	    << " wall_tps=" << (wallUs > 0 ? static_cast<double>(now.ticks - last.ticks) * 1000000.0 / static_cast<double>(wallUs) : 0.0)
+	    << " update_ms_per_iter=" << static_cast<double>(now.updateUs - last.updateUs) / 1000.0 / iterations
+	    << " draw_ms_per_iter=" << static_cast<double>(now.drawUs - last.drawUs) / 1000.0 / iterations
+	    << " preview_ms_per_iter=" << static_cast<double>(now.previewUs - last.previewUs) / 1000.0 / iterations
+	    << " interface_ms_per_iter=" << static_cast<double>(now.interfaceUs - last.interfaceUs) / 1000.0 / iterations
+	    << " net_wait_ms=" << (now.waitUs - last.waitUs) / 1000 << " previews=" << now.previews - last.previews;
+	last = now;
+	return out.str();
+}
 // Rollback fidelity probe: capture at tick T, record K hashed ticks, restore + rewind,
 // re-run the SAME ticks, compare. Green = the restore layer reproduces the sim byte-exactly.
 static long long s_rbProbeAtTick = 0;
@@ -6429,6 +6452,8 @@ void RunGameLoop() {
 			s_paceSimUs = 0;
 			s_paceUpdateUs = 0;
 			s_paceDrawUs = 0;
+			s_pacePreviewUs = 0;
+			s_paceInterfaceUs = 0;
 			ScenarioRunner::ResetLockstepWaitUs();
 			g_TimerMan.ResetPaceCounters();
 		}
@@ -7120,7 +7145,8 @@ void RunGameLoop() {
 				std::ostringstream line;
 				line << "[mem-census] tick=" << simTick << ProcessHeapCensus() << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << g_LuaMan.GetTotalHeapBytes()
 				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << CheckpointCow::Get().Cache().Census()
-				     << " movable: " << g_MovableMan.Census() << ' ' << Atom::SampledConstructionStacks() << " audio: " << g_AudioMan.Census() << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus();
+				     << " movable: " << g_MovableMan.Census() << ' ' << Atom::SampledConstructionStacks() << " audio: " << g_AudioMan.Census() << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus()
+				     << PaceCensusSinceLast();
 				System::PrintDiagnosticLine(line.str());
 			}
 			if (s_scriptedLeaveDue) {
@@ -8035,7 +8061,9 @@ void RunGameLoop() {
 		std::optional<NetLockstepPlane::Window> drawWindow;
 		drawWindow.emplace("frame draw");
 		FrameMan::FeelBeforePreview();
+		const long long previewStartTime = g_TimerMan.GetAbsoluteTime();
 		LocalPrediction::RunPreview();
+		const long long interfaceStartTime = g_TimerMan.GetAbsoluteTime();
 
 		{
 			RandomGenerator* prevSimRNG = t_simRNGOverride;
@@ -8052,6 +8080,7 @@ void RunGameLoop() {
 			g_SceneMan.SetRenderDrawContext(false);
 			t_simRNGOverride = prevSimRNG;
 		}
+		const long long frameDrawStartTime = g_TimerMan.GetAbsoluteTime();
 		if (!freeRunLockstep || NetMatchScreenshotDue()) {
 			DrawFrameWithPreviews();
 		}
@@ -8069,6 +8098,8 @@ void RunGameLoop() {
 			++s_paceIterations;
 			s_paceUpdateUs += updateTotalTime;
 			s_paceDrawUs += drawTotalTime;
+			s_pacePreviewUs += interfaceStartTime - previewStartTime;
+			s_paceInterfaceUs += frameDrawStartTime - interfaceStartTime;
 		}
 		FrameMan::FeelEndIteration(s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs);
 	}
