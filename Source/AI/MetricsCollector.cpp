@@ -114,20 +114,31 @@ namespace RTE {
 		std::mutex queueMutex;
 		std::condition_variable wake, drained;
 		std::deque<Item> queue;
+		size_t queueBound = c_QueueBound; //!< Records waiting for the writer; one past it is dropped and counted.
 		uint64_t queued = 0, written = 0;
-		bool stopping = false;
+		uint64_t dropped = 0; //!< Records dropped at the bound since the writer last took the queue.
+		size_t lastDroppedSequence = 0;
+		bool stopping = false, closedWriteReported = false;
 		std::atomic<bool> failed{false};
+
+		/// A stalled disk holds at most this many records in memory.
+		static constexpr size_t c_QueueBound = 65536;
 
 		~EventStream() { Close(); }
 
 		std::string PartPath(size_t number) const { return number == 0 ? path : path + ".part" + std::to_string(number); }
 
-		bool Open(const std::string& file, size_t byteLimit) {
+		bool Open(const std::string& file, size_t byteLimit) { return OpenFile(file, byteLimit) && Start(); }
+
+		bool OpenFile(const std::string& file, size_t byteLimit) {
 			path = file;
 			limit = byteLimit;
 			partLimit = std::clamp<size_t>(byteLimit / 4, 1, 8 * 1024 * 1024);
 			output.open(path, std::ios::out | std::ios::trunc);
-			if (!output) return false;
+			return static_cast<bool>(output);
+		}
+
+		bool Start() {
 			thread = std::thread([this] { Run(); });
 			return true;
 		}
@@ -137,26 +148,39 @@ namespace RTE {
 			contextSnapshot.reset();
 		}
 
-		void Write(json record) {
+		/// False when the record was not queued: after Close, or past the queue's bound (counted as a record_loss).
+		bool Write(json record) {
 			if (failed.load()) throw std::runtime_error("event record write failed");
 			if (!contextSnapshot) contextSnapshot = std::make_shared<const json>(context);
 			Item item{std::move(record), contextSnapshot, ++sequence};
+			std::string refusal;
+			bool taken = false;
 			{
 				std::lock_guard<std::mutex> lock(queueMutex);
-				queue.push_back(std::move(item));
+				if (stopping) {
+					if (!std::exchange(closedWriteReported, true)) refusal = "[cross-record] FAIL an event record was written after its stream closed: dropped";
+				} else if (queue.size() >= queueBound) {
+					// One line per stall; the writer records the count as a record_loss after the records it had queued.
+					if (dropped++ == 0) refusal = "[cross-record] FAIL the event queue reached its bound of " + std::to_string(queueBound) + " records: the records past it are dropped and counted as a record_loss";
+					lastDroppedSequence = item.sequence;
+				} else {
+					queue.push_back(std::move(item));
+					taken = true;
+				}
 			}
-			wake.notify_one();
+			if (!refusal.empty()) System::PrintDiagnosticLine(refusal);
+			if (taken) wake.notify_one();
+			return taken;
 		}
 
 		void Close() {
-			if (!thread.joinable()) return;
 			{
 				std::lock_guard<std::mutex> lock(queueMutex);
 				stopping = true;
 			}
 			wake.notify_one();
-			thread.join();
-			output.close();
+			if (thread.joinable()) thread.join();
+			if (output.is_open()) output.close();
 		}
 
 	private:
@@ -210,10 +234,16 @@ namespace RTE {
 				std::deque<Item> batch;
 				batch.swap(queue);
 				queued += batch.size();
+				const uint64_t lost = std::exchange(dropped, 0);
+				const size_t lostSequence = lastDroppedSequence;
 				const bool stop = stopping;
 				lock.unlock();
 				for (Item& item: batch) {
 					if (!failed.load()) Place(item.record, *item.context, item.sequence);
+				}
+				if (lost && !failed.load()) {
+					json loss{{"type", "record_loss"}, {"count", lost}, {"reason", "queue_bound"}, {"queue_bound", queueBound}};
+					Place(loss, batch.empty() ? json::object() : *batch.back().context, lostSequence);
 				}
 				output.flush();
 				if (!output) Fail("event record write failed");
@@ -432,8 +462,41 @@ namespace RTE {
 		    " last_retained=" + std::to_string(last) + " retained_bytes=" + std::to_string(retained) + " budget=" + std::to_string(budget) +
 		    " rotations=" + std::to_string(rotations) + " oldest_retired=" + std::to_string(oldestRetired));
 		if (!pass) *error = "the event budget did not rotate its parts";
+		// A stalled writer holds at most its bound: the records past it are dropped, counted and written as one loss; a write
+		// after Close is refused.
+		const auto boundPath = (std::filesystem::path(directory) / "bounded.jsonl").string();
+		size_t accepted = 0;
+		bool acceptedAfterClose = true;
+		{
+			EventStream stream;
+			stream.queueBound = 8;
+			if (!stream.OpenFile(boundPath, budget)) { *error = "bounded event stream open"; return false; }
+			stream.SetContext({{"tick", 1}});
+			for (int i = 0; i < 10; ++i) accepted += stream.Write({{"type", "coverage"}, {"index", i}}) ? 1 : 0;
+			stream.Start();
+			stream.Close();
+			acceptedAfterClose = stream.Write({{"type", "coverage"}, {"index", 10}});
+		}
+		size_t coverage = 0, lossRecords = 0;
+		uint64_t lost = 0;
+		{
+			std::ifstream input(boundPath);
+			for (std::string line; std::getline(input, line);) {
+				const auto row = json::parse(line, nullptr, false);
+				if (row.is_discarded()) continue;
+				if (row.value("type", "") == "record_loss") {
+					++lossRecords;
+					lost += row.value("count", uint64_t{0});
+				} else if (row.value("type", "") == "coverage") ++coverage;
+			}
+		}
+		const bool bounded = accepted == 8 && coverage == 8 && lossRecords == 1 && lost == 2 && !acceptedAfterClose;
+		System::PrintDiagnosticLine(std::string("[net-match-selftest] ") + (bounded ? "PASS" : "FAIL") + " event_queue_bound_counts_its_losses accepted=" +
+		    std::to_string(accepted) + " written=" + std::to_string(coverage) + " loss_records=" + std::to_string(lossRecords) + " lost=" +
+		    std::to_string(lost) + " accepted_after_close=" + std::to_string(acceptedAfterClose));
+		if (!bounded) *error = pass ? "the event queue dropped records past its bound without counting them, or took a write after Close" : *error;
 		std::filesystem::remove_all(directory);
-		return pass;
+		return pass && bounded;
 	}
 
 	MetricsCollector::MetricsCollector() = default;
