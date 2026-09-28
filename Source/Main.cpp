@@ -7347,11 +7347,13 @@ void RunGameLoop() {
 				const uint64_t effectiveStart = ScenarioRunner::GetLockstepEffectiveStartFrame();
 				const bool roundStart = round != s_fullStateSampledRound && effectiveStart > 0 && simTick >= effectiveStart;
 				if (roundStart) s_fullStateSampledRound = round;
-				// A seat's reclaim frame is sampled on every peer alike, so its returner shares a sample even when the round ends first.
+				// A seat's reclaim frame is sampled on every peer alike, so its returner shares a sample even when the round ends first;
+				// the labelled capture is never coalesced behind a busy writer.
 				bool reclaimStart = false;
 				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !reclaimStart && simTick > 0; ++peer)
 					reclaimStart = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 1);
-				if (roundStart || reclaimStart || simTick % s_netFullStateEvery == 0) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump);
+				if (reclaimStart) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump, "reclaim");
+				if ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
