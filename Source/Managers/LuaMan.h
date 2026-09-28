@@ -34,6 +34,8 @@ namespace RTE {
 		size_t bytes = 0;
 		size_t userdata = 0;
 		size_t cached = 0;
+		size_t shared = 0; // Fresh references answered by another reference to the same object.
+		size_t sharedMismatches = 0;
 		size_t iterators = 0;
 		size_t owned = 0;
 		int64_t callbacksUs = 0;

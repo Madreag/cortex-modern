@@ -6455,6 +6455,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			stats->bytes += bytes;
 			stats->userdata += image->native->EntryCount();
 			stats->cached += image->native->CachedCount();
+			stats->shared += image->native->SharedCount();
+			stats->sharedMismatches += image->native->SharedMismatchCount();
 			stats->iterators += image->native->IteratorCount();
 			stats->owned += image->native->OwnedCount();
 			stats->callbacksUs += std::chrono::duration_cast<std::chrono::microseconds>(rootsStarted - callbacksStarted).count();
@@ -6557,6 +6559,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 		const FrozenCaptureStats& part = parts[index];
 		stats.states += part.states; stats.nativeUs += part.nativeUs; stats.heapUs += part.heapUs; stats.copyUs += part.copyUs;
 		stats.pages += part.pages; stats.bytes += part.bytes; stats.userdata += part.userdata; stats.cached += part.cached;
+		stats.shared += part.shared; stats.sharedMismatches += part.sharedMismatches;
 		stats.iterators += part.iterators; stats.owned += part.owned; stats.callbacksUs += part.callbacksUs; stats.faults += part.faults;
 		stats.faultUs += part.faultUs; stats.receiversUs += part.receiversUs; stats.activityUs += part.activityUs; stats.asyncUs += part.asyncUs;
 		stats.cacheUs += part.cacheUs; stats.objectsUs += part.objectsUs; stats.cachedScripts += part.cachedScripts; stats.rootsUs += part.rootsUs;

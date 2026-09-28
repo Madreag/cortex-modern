@@ -4,6 +4,8 @@
 #include "CaptureSentinel.h"
 
 #include <array>
+#include <cstdlib>
+#include <iostream>
 #include <exception>
 #include <map>
 #include <optional>
@@ -146,6 +148,9 @@ namespace RTE::CheckpointLua {
 		// The class descriptors and plain userdata a state holds never change; every capture shares one map of them.
 		struct ClassEntries { std::unordered_map<const void*, Entry> entries; };
 		size_t CachedCount() const { return m_CachedClasses; }
+		/// Fresh references another reference's answer fits, and of those checked against a fresh answer, how many differed.
+		size_t SharedCount() const { return m_SharedAnswers; }
+		size_t SharedMismatchCount() const { return m_SharedMismatches; }
 		int64_t EnumUs() const { return m_EnumUs; }
 		int64_t WorldUs() const { return m_WorldUs; }
 		int64_t AnswerUs() const { return m_AnswerUs; }
@@ -167,6 +172,7 @@ namespace RTE::CheckpointLua {
 		std::unordered_map<const void*, Entry> m_Entries;
 		std::shared_ptr<const ClassEntries> m_Classes;
 		size_t m_CachedClasses = 0;
+		size_t m_SharedAnswers = 0, m_SharedMismatches = 0;
 		int64_t m_EnumUs = 0, m_WorldUs = 0, m_AnswerUs = 0;
 		std::unordered_map<const void*, Result> m_Iterators;
 		const Entry* FindEntry(const void* address) const {
@@ -340,7 +346,8 @@ namespace RTE::CheckpointLua {
 						same = g_MovableMan.ValidMO(mo) && mo->GetUniqueID() == reference.uid;
 					}
 					if (same) {
-						m_Image->m_Entries.emplace(object, reference.entry);
+						const NativeImage::Entry& kept = m_Image->m_Entries.emplace(object, reference.entry).first->second;
+						if (reference.entity && SharesAnswer(rep)) m_Shared.emplace(SharedKey::Of(rep), SharedAnswer{&kept, reference.uid});
 						m_Kept.insert(object);
 						++m_Image->m_CachedClasses;
 						return;
@@ -437,6 +444,19 @@ namespace RTE::CheckpointLua {
 		std::unordered_map<const void*, NativeImage::Entry> m_NewClasses;
 		std::unordered_map<const void*, NativeCache::Reference> m_NewReferences;
 		std::unordered_set<const void*> m_Kept;
+		struct SharedKey {
+			const void* crep = nullptr;
+			const void* pointer = nullptr;
+			bool constant = false;
+			static SharedKey Of(const luabind::detail::object_rep* rep) { return {rep->crep(), rep->ptr(), (rep->flags() & luabind::detail::object_rep::constant) != 0}; }
+			bool operator==(const SharedKey&) const = default;
+		};
+		struct SharedKeyHash {
+			size_t operator()(const SharedKey& key) const noexcept { return std::hash<const void*>{}(key.pointer) ^ (std::hash<const void*>{}(key.crep) << 1) ^ static_cast<size_t>(key.constant); }
+		};
+		struct SharedAnswer { const NativeImage::Entry* entry = nullptr; long uid = 0; };
+		struct SharedHit { NativeImage::Entry entry; long uid = 0; };
+		std::unordered_map<SharedKey, SharedAnswer, SharedKeyHash> m_Shared;
 		std::unordered_set<const void*> m_SeenClasses;
 		TValue m_Subject{};
 		bool m_Persist = false;
@@ -604,6 +624,16 @@ namespace RTE::CheckpointLua {
 			// Only a luabind instance can change its answers; a class descriptor or a plain userdata is answered once.
 			const auto* object = luabind::detail::is_class_object(State(), -1);
 			const bool immutable = luabind::detail::is_class_rep(State(), -1) || !object;
+			// A fresh reference to a live object that another reference of its class already answered for answers the same.
+			std::optional<SharedHit> shared;
+			if (!immutable) shared = SharedAnswerFor(object);
+			if (shared) ++m_Image->m_SharedAnswers;
+			CaptureTrace::Span span(shared ? "answer_shared" : "answer", CaptureTrace::Active() && object && object->crep() ? std::string(object->crep()->name()) : std::string());
+			if (shared && !VerifySharedAnswers()) {
+				CommitShared(value, object, std::move(*shared));
+				lua_pop(State(), 1);
+				return;
+			}
 			struct Persist {
 				bool& flag;
 				Persist(bool& value, bool on) : flag(value) { flag = on; }
@@ -644,6 +674,7 @@ namespace RTE::CheckpointLua {
 			entry.helpers.emplace("_ScriptGraphNativeAddress", One(ScriptGraphNativeAddress, "NativeAddress", value));
 			if (detached) {
 				for (auto& descriptor: entry.native) descriptor.error = "frozen native capture found detached " + className + " userdata";
+				if (shared) CompareShared(shared->entry, entry, className);
 				return;
 			}
 			std::unordered_set<std::string> kinds;
@@ -679,6 +710,72 @@ namespace RTE::CheckpointLua {
 				m_Kept.insert(gcval(&value));
 				Retain(entry);
 			}
+			if (entity && SharesAnswer(object)) m_Shared.emplace(SharedKey::Of(object), SharedAnswer{&entry, static_cast<const MovableObject*>(object->ptr())->GetUniqueID()});
+			if (shared) CompareShared(shared->entry, entry, className);
+		}
+
+		// What a reference to a live world object answers is its class's and its object's, unless the userdata carries a table of its
+		// own: its dependencies name an owner only for activity and editor members, which are never world objects.
+		static bool SharesAnswer(const luabind::detail::object_rep* rep) {
+			return rep && rep->crep() && rep->ptr() && !(rep->flags() & luabind::detail::object_rep::owner) && !rep->get_lua_table().is_valid();
+		}
+		static bool VerifySharedAnswers() {
+			static const bool verify = [] {
+				const char* value = std::getenv("CCCP_CHECKPOINT_VERIFY_SHARED");
+				return value && *value && std::strcmp(value, "0") != 0;
+			}();
+			return verify;
+		}
+		// The top of the stack is the subject.
+		std::optional<SharedHit> SharedAnswerFor(const luabind::detail::object_rep* object) {
+			if (m_Shared.empty() || !SharesAnswer(object)) return std::nullopt;
+			const auto hit = m_Shared.find(SharedKey::Of(object));
+			if (hit == m_Shared.end() || !ScriptGraphNativeAlive(State(), object)) return std::nullopt;
+			const auto* mo = static_cast<const MovableObject*>(object->ptr());
+			if (mo->GetUniqueID() != hit->second.uid) return std::nullopt;
+			SharedHit shared{*hit->second.entry, hit->second.uid};
+			shared.entry.serial = luaJIT_value_serial(State(), -1);
+			return shared;
+		}
+		void CommitShared(const TValue& value, const luabind::detail::object_rep* object, SharedHit shared) {
+			CaptureObject(static_cast<const MovableObject*>(object->ptr()));
+			NativeImage::Entry& entry = m_Image->m_Entries[gcval(&value)] = std::move(shared.entry);
+			m_NewReferences[gcval(&value)] = NativeCache::Reference{entry, object->ptr(), shared.uid, true};
+			m_Kept.insert(gcval(&value));
+			Retain(entry);
+		}
+		static bool SameResult(const NativeImage::Result& a, const NativeImage::Result& b) {
+			if (a.error != b.error || a.carriedSounds != b.carriedSounds || a.values.size() != b.values.size()) return false;
+			for (size_t index = 0; index < a.values.size(); ++index) {
+				const NativeImage::Value& left = a.values[index];
+				const NativeImage::Value& right = b.values[index];
+				if (left.token.u64 != right.token.u64 || left.text.has_value() != right.text.has_value()) return false;
+				if (left.text && left.text->Text() != right.text->Text()) return false;
+			}
+			return true;
+		}
+		// The check CCCP_CHECKPOINT_VERIFY_SHARED asks for: the answer a shared reference took against the one it would have made.
+		void CompareShared(const NativeImage::Entry& shared, const NativeImage::Entry& fresh, const std::string& className) {
+			const char* field = nullptr;
+			if (!SameResult(shared.native[0], fresh.native[0]) || !SameResult(shared.native[1], fresh.native[1])) field = "native";
+			else if (!SameResult(shared.members, fresh.members)) field = "members";
+			else if (shared.helpers.size() != fresh.helpers.size() || shared.properties.size() != fresh.properties.size()) field = "helper-set";
+			else if (shared.movable != fresh.movable || shared.carriesCopy != fresh.carriesCopy || shared.ownedRegistered != fresh.ownedRegistered ||
+			         shared.borrows != fresh.borrows || shared.className != fresh.className || shared.presetName != fresh.presetName || shared.serial != fresh.serial) field = "fields";
+			for (const auto& [name, result]: shared.helpers) {
+				if (field) break;
+				const auto other = fresh.helpers.find(name);
+				if (other == fresh.helpers.end() || !SameResult(result, other->second)) field = "helpers";
+			}
+			for (const auto& [name, result]: shared.properties) {
+				if (field) break;
+				const auto other = fresh.properties.find(name);
+				if (other == fresh.properties.end() || !SameResult(result, other->second)) field = "properties";
+			}
+			if (!field) return;
+			++m_Image->m_SharedMismatches;
+			static std::atomic<int> printed{0};
+			if (printed.fetch_add(1, std::memory_order_relaxed) < 16) std::cout << "[native-share] mismatch class=" << className << " field=" << field << std::endl;
 		}
 
 		// The only native functions the walk asks about are the value iterators and the hooks with a userdata upvalue.
