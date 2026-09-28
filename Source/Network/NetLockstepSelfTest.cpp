@@ -20757,6 +20757,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 	bool TestFreshRoundDropsRetainedCollisionResults(std::string* error) {
+		g_MovableMan.RestartSimUpdateFrameNumber();
 		MOSRotating retained;
 		retained.Create();
 		retained.SetHitWhatMOID(7);
@@ -20772,6 +20773,38 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return false;
 		}
 		std::cout << "[net-lockstep-selftest] PASS fresh_round_drops_retained_collision_results" << std::endl;
+		return true;
+	}
+
+	bool TestReturnFramesBypassReliableLoss(std::string* error) {
+		LoopbackTransport wire, seat;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A54, 6, NetTransportLane::InputUnreliable);
+		config.startFrame = 1; config.roundId = 0x9A54;
+		config.relayToOtherPeers = true;
+		config.remoteTransportPeerIds = {{2, 1}};
+		if (!wire.StartHost(49743, error) || !seat.Connect("loopback", 49743, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_ReliableFramesThrough[2] = 400;
+		(void)seat.PollEvents();
+		NetLockstepFrame sent;
+		sent.senderPeerId = 1; sent.roundId = config.roundId; sent.targetFrame = 350;
+		sent.frames = {MakeFrame(100, 350)};
+		if (!host.SendPacket({sent}, config.frameLane, error)) return false;
+		wire.AdvanceTimeMs(10); seat.AdvanceTimeMs(10);
+		bool independent = false;
+		for (const auto& event: seat.PollEvents()) {
+			if (event.type != NetTransportEventType::PacketReceived || event.lane != NetTransportLane::InputUnreliable) continue;
+			const auto decoded = NetLockstepCodec::Decode(event.bytes);
+			if (!decoded.ok) continue;
+			if (const auto* chunk = std::get_if<NetLockstepRecoveryChunk>(&decoded.packet.payload)) {
+				NetLockstepFrame received;
+				independent |= chunk->offset == 0 && chunk->totalBytes == chunk->bytes.size() &&
+				    NetLockstepCodec::DecodeRecoveryInput(chunk->bytes, received) && received.targetFrame == sent.targetFrame && received.frames == sent.frames;
+			}
+		}
+		if (!independent) { *error = "a returning seat's first input stream waits behind the reliable lane's lost segment"; return false; }
+		std::cout << "[net-lockstep-selftest] PASS return_frames_bypass_reliable_loss" << std::endl;
 		return true;
 	}
 
@@ -21665,6 +21698,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
 		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");
+		row(&TestReturnFramesBypassReliableLoss, "return_frames_bypass_reliable_loss");
 		row(&TestAResumedRoundPrimesPastItsAgreedFirstFrame, "a_resumed_round_primes_past_its_agreed_first_frame");
 		row(&TestACommandAParkEmptiedCommitsAfterIt, "a_command_in_a_park_commits_at_its_frame");
 		row(&TestCaptureParkCommitsCanonicalEmptyFrames, "capture_park_commits_every_players_input");
