@@ -88,9 +88,13 @@ The host checks these gates in order. The first one that applies decides:
    frames, closing rate C)` once.
 4. **`closing-losing`:** behind > 15 frames (a quarter of the lead) and the closing rate is below -0.1. The returner stays
    held; the host prints `activation waits peer=N: its replay falls behind the round (behind B frames, closing rate C)` once.
-5. **`outside-lead`:** behind more than the lead, unless the returner is at the round's pace (measured closing rate
+5. **`replay-slow`:** more than a lead behind, the returner's measured replay rate (ticks replayed x tick length / work time) is
+   below 1.0: it cannot play the round at its rate, so every frame it is required for after its return would reach the survivors
+   late. At the head of its tail the tail's arrival paces it and this gate does not apply. The returner stays held;
+   the host prints `activation waits peer=N: its replay runs slower than the round (...)` once.
+6. **`outside-lead`:** behind more than the lead, unless the returner is at the round's pace (measured closing rate
    <= 0.1) and at most two leads (120 frames) behind.
-6. **Activated.** The activation frame is the larger of horizon + 60, the round's sent-input frame + 1, and the returner's
+7. **Activated.** The activation frame is the larger of horizon + 60, the round's sent-input frame + 1, and the returner's
    own last input + 1. Then, when behind > 15:
    - Rate unmeasured: wait (`closing-unmeasured`).
    - Rate > 0.1: the activation also covers the frames the measured rate needs to reach the horizon, plus the lead:
