@@ -7347,7 +7347,13 @@ void RunGameLoop() {
 				const uint64_t effectiveStart = ScenarioRunner::GetLockstepEffectiveStartFrame();
 				const bool roundStart = round != s_fullStateSampledRound && effectiveStart > 0 && simTick >= effectiveStart;
 				if (roundStart) s_fullStateSampledRound = round;
-				if (roundStart || simTick % s_netFullStateEvery == 0) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump);
+				// A seat's reclaim frame is sampled on every peer alike, so its returner shares a sample even when the round ends first;
+				// the labelled capture is never coalesced behind a busy writer.
+				bool reclaimStart = false;
+				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !reclaimStart && simTick > 0; ++peer)
+					reclaimStart = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 1);
+				if (reclaimStart) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump, "reclaim");
+				if ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
@@ -7827,7 +7833,16 @@ void RunGameLoop() {
 					// The round never ends with a seat mid-admission and unsampled: the host waits for a seat still coming in,
 					// then for the first full-state sample after it, so the returner shares one with the round (bounded).
 					uint64_t tickCap = roundTicks;
-					if (s_netFullStateEvery > 0 && ScenarioRunner::HasLockstepCoordinator()) {
+					if (s_netFullStateEvery > 0 && ScenarioRunner::HasLockstepCoordinator() && activityState == Activity::Over) {
+						// A finished activity takes no capture, so it owes no sample and the round ends at its own cap.
+						static uint64_t s_activityOverLoggedRound = 0;
+						if (s_activityOverLoggedRound != ScenarioRunner::GetLockstepRoundId()) {
+							s_activityOverLoggedRound = ScenarioRunner::GetLockstepRoundId();
+							System::PrintDiagnosticLine("[net-match-service-e2e] activity over at frame " + std::to_string(ScenarioRunner::GetLockstepAppliedFrame()) +
+							                            ": no full-state sample follows");
+						}
+						s_netMatchE2EOwedSampleFrame = 0;
+					} else if (s_netFullStateEvery > 0 && ScenarioRunner::HasLockstepCoordinator()) {
 						const uint64_t applied = ScenarioRunner::GetLockstepAppliedFrame();
 						// The host sees the seat coming in; the seat sees its own catch-up. Both end on the same frame before its activation.
 						const bool comingIn = g_NetMatchService.IsHost() ? g_NetMatchService.SeatMidAdmission(applied) : ScenarioRunner::WorldCatchUpActive();
