@@ -8125,6 +8125,32 @@ static bool RunHookStackBalanceSelfTest() {
 
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
+	const bool collisionObjectMade = m_MasterScriptState.RunScriptString(
+	    "_RoundCollisionObject = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
+	    "MovableMan:AddParticle(_RoundCollisionObject);"
+	    "_RoundCollisionObject = MovableMan:RemoveParticle(_RoundCollisionObject);") == 0;
+	lua_getglobal(state, "_RoundCollisionObject");
+	MovableObject* collisionObject = lua_isnil(state, -1) ? nullptr :
+	    luabind::object_cast<MovableObject*>(luabind::object(luabind::from_stack(state, -1)));
+	lua_pop(state, 1);
+	bool roundCollision = false;
+	if (collisionObjectMade && collisionObject) {
+		collisionObject->m_LastCollisionSimFrameNumber = 0;
+		collisionObject->m_MOIDHit = 7;
+		collisionObject->m_TerrainMatHit = 9;
+		collisionObject->m_ParticleUniqueIDHit = 11;
+		g_MovableMan.PurgeAllMOs();
+		g_MovableMan.RestartSimUpdateFrameNumber();
+		roundCollision = collisionObject->HitWhatMOID() == g_NoMOID &&
+		    collisionObject->HitWhatTerrMaterial() == g_MaterialAir && collisionObject->HitWhatParticleUniqueID() == 0 &&
+		    collisionObject->m_MOIDHit == g_NoMOID && collisionObject->m_TerrainMatHit == g_MaterialAir &&
+		    collisionObject->m_ParticleUniqueIDHit == 0;
+	}
+	std::cout << "[script-graph-selftest] " << (roundCollision ? "PASS" : "FAIL")
+	          << " a_removed_lua_object_loses_collision_results_at_round_restart" << std::endl;
+	m_MasterScriptState.RunScriptString("_RoundCollisionObject = nil; collectgarbage('collect')");
+	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+	LuabindObjectWrapper::ApplyQueuedDeletions();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
 	m_MasterScriptState.RunScriptString("_PathCallbackPurgeTest = 0; _AddAsyncPathCallback(" + std::to_string(id) + ", function(result) _PathCallbackPurgeTest = _PathCallbackPurgeTest + result.PathLength end)");
 	PathRequest result;
@@ -8241,7 +8267,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return roundCollision && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
