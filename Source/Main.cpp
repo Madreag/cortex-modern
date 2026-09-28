@@ -1128,8 +1128,13 @@ static bool s_rbProbeRestoreMismatch = false;
 /// The longest a completed e2e round waits for a menu probe to read its still-drawn pause menu.
 static constexpr int64_t c_CompletedProbeHoldMs = 12000;
 static int64_t s_netMatchE2ECompletedMs = 0;
+static int64_t s_netMatchE2ELeftMs = 0;
 static int64_t SteadyMilliseconds() {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+/// Whether an e2e run that ended at endedMs still draws frames for a probe that is mid-script.
+static bool ProbeHoldsE2eEnd(int64_t endedMs) {
+	return NetModerationGUIProbe::Running() && SteadyMilliseconds() - endedMs < c_CompletedProbeHoldMs;
 }
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
@@ -6292,11 +6297,15 @@ void RunGameLoop() {
 	while (!System::IsSetToQuit()) {
 		bool returnToMenuAfterNetworkEnd = false;
 		// The completed round's held pause menu ends the moment its probe does, or when the window runs out.
-		if (s_netMatchE2ECompletedMs && (!NetModerationGUIProbe::Running() ||
-		                                 SteadyMilliseconds() - s_netMatchE2ECompletedMs >= c_CompletedProbeHoldMs)) {
+		if (s_netMatchE2ECompletedMs && !ProbeHoldsE2eEnd(s_netMatchE2ECompletedMs)) {
 			s_netMatchE2ECompletedMs = 0;
 			g_ActivityMan.EndActivity();
 			ScenarioRunner::ClearControllerReplayError();
+			System::SetQuit(true);
+			break;
+		}
+		// A run that left its match ends as a leaver's run does, once its probe is done or the window runs out.
+		if (s_netMatchE2ELeftMs && !ProbeHoldsE2eEnd(s_netMatchE2ELeftMs)) {
 			System::SetQuit(true);
 			break;
 		}
@@ -7800,8 +7809,7 @@ void RunGameLoop() {
 						}
 						// A player reading the pause menu when the round ends keeps seeing it; a probe that is
 						// still mid-script gets that same window before the harness ends the activity.
-						const int64_t heldMs = SteadyMilliseconds() - s_netMatchE2ECompletedMs;
-						if (NetModerationGUIProbe::Running() && heldMs < c_CompletedProbeHoldMs) {
+						if (ProbeHoldsE2eEnd(s_netMatchE2ECompletedMs)) {
 							// Leave the update loop for this frame: the drawn pause menu is what the probe reads.
 							break;
 						}
@@ -7831,8 +7839,12 @@ void RunGameLoop() {
 						s_menuScriptHoldE2ePause = false;
 						if (!s_menuScriptComplete && !System::IsSetToQuit()) continue;
 					}
-					// The e2e has no menu to return to; a leaver's run ends here.
+					// The e2e has no menu to return to; a leaver's run ends here, once a probe still mid-script has drawn its last steps.
 					if (s_netMatchServiceE2E) {
+						if (NetModerationGUIProbe::Running()) {
+							if (!s_netMatchE2ELeftMs) s_netMatchE2ELeftMs = SteadyMilliseconds();
+							break;
+						}
 						System::SetQuit(true);
 						break;
 					}
