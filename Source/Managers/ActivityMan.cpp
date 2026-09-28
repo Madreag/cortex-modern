@@ -2400,7 +2400,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
 	if (collectGarbage) g_LuaMan.CollectGarbageForCheckpoint();
 	if (sections && !managerParts) throw std::logic_error("the runtime globals' sections need the manager parts");
-	CheckpointWriter writer("RuntimeGlobals10");
+	CheckpointWriter writer("RuntimeGlobals11");
 	const auto record = [&](const char* name, const std::function<void()>& capture) {
 		const auto start = std::chrono::steady_clock::now();
 		capture();
@@ -2436,7 +2436,7 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	activityState(writer);
 	if (sections) {
 		sections->push_back({"activity_state", CheckpointScope::Shared, CheckpointWriter::Native([&activityState] {
-			CheckpointWriter state("ActivityState");
+			CheckpointWriter state("ActivityState2");
 			activityState(state);
 			return state.Text();
 		})});
@@ -2509,7 +2509,9 @@ bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly
 		const bool version7 = text.starts_with("15 RuntimeGlobals7 ");
 		const bool version8 = text.starts_with("15 RuntimeGlobals8 ");
 		const bool version9 = text.starts_with("15 RuntimeGlobals9 ");
-		CheckpointReader reader(text, legacy ? "RuntimeGlobals1" : version2 ? "RuntimeGlobals2" : version3 ? "RuntimeGlobals3" : version4 ? "RuntimeGlobals4" : version5 ? "RuntimeGlobals5" : version6 ? "RuntimeGlobals6" : version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : "RuntimeGlobals10", validateOnly);
+		// RuntimeGlobals10 wrote the same fields with the pause-menu skip in the shared state.
+		const bool version10 = text.starts_with("16 RuntimeGlobals10 ");
+		CheckpointReader reader(text, legacy ? "RuntimeGlobals1" : version2 ? "RuntimeGlobals2" : version3 ? "RuntimeGlobals3" : version4 ? "RuntimeGlobals4" : version5 ? "RuntimeGlobals5" : version6 ? "RuntimeGlobals6" : version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : version10 ? "RuntimeGlobals10" : "RuntimeGlobals11", validateOnly);
 		std::string simState, renderState;
 		reader.Value(simState); reader.Value(renderState);
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
@@ -2597,9 +2599,10 @@ bool ActivityMan::PrepareCheckpointPrimitives(std::string_view runtimeGlobals) {
 	const bool version8 = runtimeGlobals.starts_with("15 RuntimeGlobals8 ");
 	const bool version9 = runtimeGlobals.starts_with("15 RuntimeGlobals9 ");
 	const bool version10 = runtimeGlobals.starts_with("16 RuntimeGlobals10 ");
-	if (!version7 && !version8 && !version9 && !version10) return true;
+	const bool version11 = runtimeGlobals.starts_with("16 RuntimeGlobals11 ");
+	if (!version7 && !version8 && !version9 && !version10 && !version11) return true;
 	try {
-		CheckpointReader reader(runtimeGlobals, version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : "RuntimeGlobals10", true);
+		CheckpointReader reader(runtimeGlobals, version7 ? "RuntimeGlobals7" : version8 ? "RuntimeGlobals8" : version9 ? "RuntimeGlobals9" : version10 ? "RuntimeGlobals10" : "RuntimeGlobals11", true);
 		std::string state;
 		for (int field = 0; field < 9; ++field) reader.Value(state); // RNGs, five managers and two default-activity names.
 		bool flag;
@@ -2684,7 +2687,7 @@ bool ActivityMan::RestartActivity() {
 		if (committedImages) committedImages->Commit();
 		PendingCheckpoint completed = std::move(m_PendingCheckpoint);
 		m_PendingCheckpoint = PendingCheckpoint{};
-		if (!completed.runtimeGlobals.starts_with("15 RuntimeGlobals5 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals6 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals7 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals8 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals9 ") && !completed.runtimeGlobals.starts_with("16 RuntimeGlobals10 ")) {
+		if (!completed.runtimeGlobals.starts_with("15 RuntimeGlobals5 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals6 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals7 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals8 ") && !completed.runtimeGlobals.starts_with("15 RuntimeGlobals9 ") && !completed.runtimeGlobals.starts_with("16 RuntimeGlobals10 ") && !completed.runtimeGlobals.starts_with("16 RuntimeGlobals11 ")) {
 			g_AudioMan.StopAll();
 			g_MusicMan.ResetMusicState();
 			g_AudioMan.PauseIngameSounds(m_Activity && m_Activity->IsPaused());
