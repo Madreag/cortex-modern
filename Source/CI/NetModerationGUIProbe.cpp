@@ -62,6 +62,8 @@ namespace {
 		bool holdsPad = false;
 		uint64_t round = 0;
 		bool phaseArmed = false;
+		bool roundEndArmed = false;
+		std::vector<std::string> roundEndSignals;
 	};
 	Probe probe;
 	std::atomic<uint64_t> rendezvousCount{0};
@@ -261,6 +263,45 @@ namespace {
 		}
 		observed["bound_seat"] = boundSeat;
 		return observed;
+	}
+
+	void WriteSignal(const std::string& name, const Json& observed) {
+		auto path = Leaf(name);
+		path += ".json";
+		Require(!std::filesystem::exists(path), "signal already exists");
+		std::ofstream output(path);
+		output << observed.dump() << '\n';
+		Require(static_cast<bool>(output), "cannot write signal");
+		NoteRendezvous(name);
+	}
+
+	/// Whether the round is over by its own rules or its service's end rather than by a step still ahead.
+	bool RoundEnded() {
+		const Activity* activity = g_ActivityMan.GetActivity();
+		return !activity || activity->IsOver() || g_NetMatchService.GetState() != NetMatchServiceState::Running;
+	}
+
+	void WriteResult();
+
+	/// Completes a script whose round ended while finish_on_round_end was armed: the steps it had left are recorded as
+	/// skipped and the signals it named are written, so a peer waiting on them goes on.
+	void FinishOnRoundEnd(const Json& observed) {
+		GUIInputWrapper::SetAutomationDriving(false);
+		ReleaseProbePad();
+		for (const std::string& name: probe.roundEndSignals) {
+			if (!std::filesystem::exists(Leaf(name).string() + ".json")) WriteSignal(name, observed);
+		}
+		const auto& steps = probe.script["steps"];
+		const size_t skipped = steps.size() - std::min(probe.index, steps.size());
+		probe.result["finished_on_round_end"] = {{"at_step", probe.index}, {"op", probe.index < steps.size() ? steps[probe.index].value("op", "") : ""},
+		    {"skipped", skipped}, {"signals", probe.roundEndSignals}, {"observed", observed}};
+		probe.roundEndArmed = false;
+		probe.done = true;
+		probe.result["complete"] = true;
+		probe.result["pass"] = true;
+		WriteResult();
+		System::PrintDiagnosticLine("[net-ui-probe] PASS: completed on the round's end at step " + std::to_string(probe.index) + " (" +
+		                            std::to_string(skipped) + " steps skipped)");
 	}
 
 	void WriteResult() {
@@ -789,14 +830,15 @@ namespace {
 				observed["screenshot"] = path.string();
 			}
 		} else if (op == "signal") {
-			const std::string name = step.at("name").get<std::string>();
-			auto path = Leaf(name);
-			path += ".json";
-			Require(!std::filesystem::exists(path), "signal already exists");
-			std::ofstream output(path);
-			output << observed.dump() << '\n';
-			Require(static_cast<bool>(output), "cannot write signal");
-			NoteRendezvous(name);
+			WriteSignal(step.at("name").get<std::string>(), observed);
+		} else if (op == "finish_on_round_end") {
+			// From here a round that ends before the script does completes it; "armed": false hands the end back to the script.
+			probe.roundEndArmed = step.value("armed", true);
+			probe.roundEndSignals.clear();
+			for (const auto& name: step.value("signals", Json::array())) {
+				(void)Leaf(name.get<std::string>());
+				probe.roundEndSignals.push_back(name.get<std::string>());
+			}
 		} else if (op == "wait_file") {
 			const std::string path = step.at("path").get<std::string>();
 			if (!std::filesystem::is_regular_file(path)) return false;
@@ -832,6 +874,7 @@ namespace {
 				probe.result["steps"] = Json::array(); probe.result["complete"] = false; probe.result["pass"] = false;
 				probe.result["round"] = round; probe.started = Clock::now();
 				probe.stepMs = probe.resultWrittenMs = 0; probe.gestureIndex = SIZE_MAX;
+				probe.roundEndArmed = false; probe.roundEndSignals.clear();
 			}
 			if (probe.done) return;
 			if (!probe.phaseArmed) {
@@ -839,6 +882,10 @@ namespace {
 				const bool phasePending = !tickPending && probe.script.contains("activate_phase") && g_NetMatchService.GetLobbySnapshot().serviceState != probe.script["activate_phase"].get<std::string>();
 				if (ActivationPending(probe.script, tickPending || phasePending, NowMs())) return;
 				probe.phaseArmed = true; probe.started = Clock::now();
+			}
+			if (phase != Phase::Sim && probe.roundEndArmed && RoundEnded()) {
+				FinishOnRoundEnd(Observe());
+				return;
 			}
 			if (phase == Phase::Draw) ++probe.renders;
 			Require(NowMs() <= probe.script.at("timeout_ms").get<uint64_t>(), "script deadline at step " + std::to_string(probe.index));
@@ -897,6 +944,55 @@ bool RunCrossScopeSelfTest(std::string* error) {
 	    !ActivationPending({{"activation_timeout_ms", 1}}, false, UINT64_MAX);
 	passed &= bounded;
 	System::PrintDiagnosticLine("[net-match-selftest] " + std::string(bounded ? "PASS" : "FAIL") + " probe_activation_wait_has_a_deadline");
+	// finish_on_round_end: armed, a round end completes the script with its signals; disarmed or never armed, it is the script's.
+	{
+		Probe saved = std::move(probe);
+		const auto root = std::filesystem::temp_directory_path() / ("net-ui-probe-round-end-" + std::to_string(System::GetProcessID()));
+		std::error_code ignored;
+		std::filesystem::remove_all(root, ignored);
+		const Json arm = {{"op", "finish_on_round_end"}, {"signals", {"done"}}};
+		const Json wait = {{"op", "wait"}, {"elapsed_ms", 100000}};
+		const Json finish = {{"op", "finish"}};
+		const auto script = [&](const std::string& name, const Json& steps, size_t ran) {
+			probe = Probe{};
+			probe.loaded = probe.enabled = true;
+			probe.directory = root / name;
+			std::filesystem::create_directories(probe.directory);
+			probe.script = {{"schema", 1}, {"timeout_ms", 180000}, {"steps", steps}};
+			probe.result = {{"schema", 1}, {"pass", false}, {"complete", false}, {"steps", Json::array()}};
+			Json stepObserved;
+			for (; probe.index < ran; ++probe.index) Step(steps[probe.index], stepObserved);
+		};
+		bool roundEnd = false;
+		std::string detail;
+		try {
+			script("armed", {arm, wait, wait, finish}, 1);
+			const bool armed = probe.roundEndArmed;
+			FinishOnRoundEnd({{"service", "Completed"}});
+			const Json& ended = probe.result["finished_on_round_end"];
+			roundEnd = armed && probe.done && probe.result["complete"] == true && probe.result["pass"] == true && !Running() &&
+			    ended.value("at_step", 0) == 1 && ended.value("skipped", 0) == 3 && std::filesystem::is_regular_file(root / "armed" / "done.json") &&
+			    std::filesystem::is_regular_file(root / "armed" / "net-ui-result.json");
+			if (!roundEnd) detail = "an armed script was not completed with its signal: " + probe.result.dump();
+			script("disarmed", {arm, Json{{"op", "finish_on_round_end"}, {"armed", false}}, wait, finish}, 2);
+			if (roundEnd && (probe.roundEndArmed || !probe.roundEndSignals.empty())) { roundEnd = false; detail = "armed: false left the watch armed"; }
+			script("unarmed", {wait, finish}, 0);
+			if (roundEnd && probe.roundEndArmed) { roundEnd = false; detail = "a script without the op was armed"; }
+			script("bad-name", {Json{{"op", "finish_on_round_end"}, {"signals", {"../done"}}}, finish}, 0);
+			bool refused = false;
+			try { Json unused; Step(probe.script["steps"][0], unused); } catch (const std::exception&) { refused = true; }
+			if (roundEnd && !refused) { roundEnd = false; detail = "a signal name outside the probe directory was accepted"; }
+		} catch (const std::exception& failure) {
+			roundEnd = false;
+			detail = failure.what();
+		}
+		probe = std::move(saved);
+		std::filesystem::remove_all(root, ignored);
+		passed &= roundEnd;
+		if (!roundEnd) *error = "the probe's round-end finish: " + detail;
+		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(roundEnd ? "PASS" : "FAIL") + " probe_finishes_on_round_end_when_armed" +
+		                            (roundEnd ? "" : " (" + detail + ")"));
+	}
 	Json observed;
 	const bool alreadyConstructed = NetMatchService::IsConstructed();
 	if (!alreadyConstructed) NetMatchService::Construct();
@@ -906,7 +1002,7 @@ bool RunCrossScopeSelfTest(std::string* error) {
 	if (!alreadyConstructed) NetMatchService::Destruct();
 	if (rejection == "participant selection is absent") {
 		System::PrintDiagnosticLine("[net-match-selftest] PASS participant_probe_refuses_an_absent_selection");
-		if (!passed) *error = bounded ? "one or more gameplay scopes were not scheduled after drawing" : "the probe's activation wait has no deadline";
+		if (!passed && error->empty()) *error = bounded ? "one or more gameplay scopes were not scheduled after drawing" : "the probe's activation wait has no deadline";
 		return passed;
 	}
 	System::PrintDiagnosticLine("[net-match-selftest] FAIL participant_probe_refuses_an_absent_selection");
