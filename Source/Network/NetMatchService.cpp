@@ -3868,7 +3868,7 @@ static std::string ResyncSaveName() {
 			if (!host.NoteCatchUpProgress(connection, report.value, ticks, elapsed, nowFrame, &activation, &progressError)) noteGate("refused", " error=" + progressError);
 			else noteGate(nullptr, "");
 			host.NoteCatchUpClock(connection, nowMs);
-			host.AcknowledgeTailDatagrams(connection, nowMs);
+			host.AcknowledgeTailDatagrams(connection, SteadyNowMs());
 			if (activation != 0) {
 				if (const NetWorldJoinSession* session = host.FindSession(connection); session) {
 					(void)lobby.SendPayloadTo(WorldJoinLobbyPeer(*session), MakeWorldJoinReport(c_NetWorldReportActivate, activation), nullptr);
@@ -4144,7 +4144,10 @@ static std::string ResyncSaveName() {
 					host.NoteTailChunkSent(connection, packed.size());
 				return;
 			}
-			if (!lobby.SendPayloadTo(lobbyPeer, MakeWorldTailChunk(host.TailRound(), packed), nullptr, NetTransportLane::InputUnreliable)) return;
+			if (!lobby.SendPayloadTo(lobbyPeer, MakeWorldTailChunk(host.TailRound(), packed), nullptr, NetTransportLane::BulkUnreliable)) {
+				host.NoteTailDatagramRefused(connection);
+				return;
+			}
 		}
 	}
 
@@ -4855,12 +4858,15 @@ static std::string ResyncSaveName() {
 				// A datagram sent again repeats frames this catch-up already holds.
 				const uint64_t target = frame.targetFrame;
 				if (target > ScenarioRunner::WorldCatchUpAppliedThrough() && !ScenarioRunner::WorldCatchUpHasFrame(target) &&
-				    std::none_of(later.begin(), later.end(), [target](const NetLockstepFrame& held) { return held.targetFrame == target; }))
+				    std::none_of(later.begin(), later.end(), [target](const NetLockstepFrame& held) { return held.targetFrame == target; })) {
 					later.push_back(std::move(frame));
+					++catchUp.tailFramesKept;
+				} else ++catchUp.tailFramesRepeated;
 				offset += size;
 			}
 			return true;
 		};
+		catchUp.tailDatagrams += datagrams.size();
 		for (const std::vector<uint8_t>& datagram: datagrams) {
 			size_t offset = 0;
 			if (!readRecords(datagram, offset)) return;
@@ -4899,8 +4905,9 @@ static std::string ResyncSaveName() {
 			}
 		}
 		catchUp.appliedThrough = std::max(catchUp.appliedThrough, ScenarioRunner::WorldCatchUpAppliedThrough());
+		// Each progress report carries the whole state of the replay: the newest one wins, so none waits behind a lost one.
 		if (catchUp.appliedThrough > catchUp.snapshotTick) {
-			(void)lobby.SendPayload(MakeJoinerCatchUpReport(), nullptr);
+			(void)lobby.SendPayload(MakeJoinerCatchUpReport(), nullptr, NetTransportLane::BulkUnreliable);
 		}
 	}
 
@@ -5638,7 +5645,9 @@ static std::string ResyncSaveName() {
 				m_InPlaceProgressLogged = m_WorldCatchUp.appliedThrough;
 				System::PrintDiagnosticLine("[net-match] held client catch-up applied=" + std::to_string(m_WorldCatchUp.appliedThrough) + " activation=" +
 				                            std::to_string(m_WorldCatchUp.activationTick) + " work_ticks=" + std::to_string(ScenarioRunner::WorldCatchUpWorkTicks()) +
-				                            " wire_packets=" + std::to_string(m_CatchUpWirePackets.size()));
+				                            " wire_packets=" + std::to_string(m_CatchUpWirePackets.size()) + " datagrams=" + std::to_string(m_WorldCatchUp.tailDatagrams) +
+				                            " kept=" + std::to_string(m_WorldCatchUp.tailFramesKept) + " repeated=" + std::to_string(m_WorldCatchUp.tailFramesRepeated) +
+				                            " buffered=" + std::to_string(ScenarioRunner::WorldCatchUpHasFrame(m_WorldCatchUp.appliedThrough + 1)));
 			}
 			if (steadyMs > m_InPlaceHeardMs && HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, steadyMs - m_InPlaceHeardMs, m_Coordinator->GetConfig().timeoutMs)) {
 				System::PrintDiagnosticLine("[net-match] held client: the host sent nothing for " + std::to_string(steadyMs - m_InPlaceHeardMs) + "ms at frame " +

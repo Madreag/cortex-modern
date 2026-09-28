@@ -378,8 +378,12 @@ namespace RTE {
 		return SendTo(m_RemoteTransports.at(peerId), payload, error, nullptr, lane);
 	}
 
-	bool NetLobbySession::SendPayload(const NetLobbyPayload& payload, std::string* error) {
-		return Send(payload, error);
+	bool NetLobbySession::SendPayload(const NetLobbyPayload& payload, std::string* error, NetTransportLane lane) {
+		if (lane == NetTransportLane::ControlReliable) return Send(payload, error);
+		for (uint8_t peerId : m_RemotePeerIds) {
+			if (!SendTo(m_RemoteTransports[peerId], payload, error, nullptr, lane)) return false;
+		}
+		return true;
 	}
 
 	void NetLobbySession::RestartStateTransfer() {
@@ -1273,9 +1277,11 @@ namespace RTE {
 					using Payload = std::decay_t<decltype(payload)>;
 					if constexpr (std::is_same_v<Payload, NetLobbyMigration>)
 						return event.lane == NetTransportLane::ControlReliable && (m_Config.host ? payload.kind == 1 && payload.peerId == sender->first : (payload.kind == 2 && payload.peerId == m_Config.localPeerId) || (payload.kind == 1 && payload.peerId == sender->first));
-					// A committed tail datagram names its round and carries whole frames, so it alone may ride the unreliable lane to a joiner.
+					// A committed tail datagram names its round and carries whole frames, so it may ride the unreliable lane to a joiner, as a
+					// returner's progress report, which carries its whole state, may ride it to the host.
 					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>)
-						return (event.lane == NetTransportLane::ControlReliable || (!m_Config.host && payload.transferId == c_NetWorldTailTransferId)) && (worldSender || m_Config.matchConfig.persistentWorld || !m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
+						return (event.lane == NetTransportLane::ControlReliable || (!m_Config.host && payload.transferId == c_NetWorldTailTransferId) ||
+						        (m_Config.host && payload.transferId == c_NetWorldReportTransferId && !payload.bytes.empty() && payload.bytes[0] == c_NetWorldReportCatchUp)) && (worldSender || m_Config.matchConfig.persistentWorld || !m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
 					// Only the hub binds seats; a client offering one is not a peer this round keeps.
 					if constexpr (std::is_same_v<Payload, NetLobbySeatAssign>) return !m_Config.host;
 					if (m_Config.host) {
