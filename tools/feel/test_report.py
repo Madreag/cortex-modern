@@ -168,6 +168,12 @@ class ReportTests(unittest.TestCase):
         measured = self.item9a(waits='[net-frame-wait] frame=450 wait_ms=0', silent=True)
         self.assertEqual(measured['pins']['item9a_steady_stalls']['status'], 'PASS')
 
+    def test_one_spike_allows_only_one_bounded_wait(self):
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=40', silent=True)
+        self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'PASS')
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=20\n[net-frame-wait] frame=621 wait_ms=20', silent=True)
+        self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'FAIL')
+
     def test_item9a_recovery_elapsed_time_cannot_be_reset_away(self):
         result = self.item9a(wall_ms=15700)
         self.assertEqual(result['metrics']['steady_wall_ms'], 15700)
