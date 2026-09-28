@@ -179,6 +179,9 @@ namespace RTE {
 		/// resetting the members of this abstraction level only.
 		void Clear();
 
+		/// Frees the presentation and icon bitmaps this BunkerAssemblyScheme draws and owns.
+		void DestroyBitmaps();
+
 		// Disallow the use of some implicit methods.
 		BunkerAssemblyScheme(const BunkerAssemblyScheme& reference) = delete;
 		void operator=(const BunkerAssemblyScheme& rhs) = delete;

@@ -11,6 +11,17 @@ using namespace RTE;
 
 ConcreteClassInfo(BunkerAssembly, SceneObject, 0);
 
+namespace {
+	BITMAP* CopyBitmap(BITMAP* source) {
+		if (!source) {
+			return nullptr;
+		}
+		BITMAP* copy = create_bitmap_ex(bitmap_color_depth(source), source->w, source->h);
+		blit(source, copy, 0, 0, 0, 0, source->w, source->h);
+		return copy;
+	}
+} // namespace
+
 BunkerAssembly::BunkerAssembly() {
 	Clear();
 }
@@ -123,8 +134,13 @@ int BunkerAssembly::Create(const BunkerAssembly& reference) {
 	for (std::list<SceneObject*>::const_iterator oItr = reference.m_PlacedObjects.begin(); oItr != reference.m_PlacedObjects.end(); ++oItr)
 		m_PlacedObjects.push_back(dynamic_cast<SceneObject*>((*oItr)->Clone()));
 
+	// Every bitmap an assembly holds is its own; the preset's copies stay with the preset.
+	m_FGColorBitmap = CopyBitmap(reference.m_FGColorBitmap);
+	m_MaterialBitmap = CopyBitmap(reference.m_MaterialBitmap);
+	m_BGColorBitmap = CopyBitmap(reference.m_BGColorBitmap);
+	m_pPresentationBitmap = CopyBitmap(reference.m_pPresentationBitmap);
+
 	m_ParentAssemblyScheme = reference.m_ParentAssemblyScheme;
-	m_pPresentationBitmap = reference.m_pPresentationBitmap;
 	m_SymmetricAssembly = reference.m_SymmetricAssembly;
 	m_ParentSchemeGroup = reference.m_ParentSchemeGroup;
 
@@ -169,19 +185,16 @@ int BunkerAssembly::ReadProperty(const std::string_view& propName, Reader& reade
 				pScheme->GetGoldValue();
 
 			// Delete existing bitmaps to avoid leaks if someone adds assembly to multiple groups by mistake
-			delete m_pPresentationBitmap;
+			DestroyBitmaps();
 			m_pPresentationBitmap = create_bitmap_ex(8, pScheme->GetBitmapWidth(), pScheme->GetBitmapHeight());
 			clear_to_color(m_pPresentationBitmap, g_MaskColor);
 
-			delete m_FGColorBitmap;
 			m_FGColorBitmap = create_bitmap_ex(8, pScheme->GetBitmapWidth(), pScheme->GetBitmapHeight());
 			clear_to_color(m_FGColorBitmap, g_MaskColor);
 
-			delete m_MaterialBitmap;
 			m_MaterialBitmap = create_bitmap_ex(8, pScheme->GetBitmapWidth(), pScheme->GetBitmapHeight());
 			clear_to_color(m_MaterialBitmap, g_MaskColor);
 
-			delete m_BGColorBitmap;
 			m_BGColorBitmap = create_bitmap_ex(8, pScheme->GetBitmapWidth(), pScheme->GetBitmapHeight());
 			clear_to_color(m_BGColorBitmap, g_MaskColor);
 
@@ -275,23 +288,20 @@ void BunkerAssembly::Destroy(bool notInherited) {
 		*oItr = 0;
 	}
 
-	// Probably no need to delete those, as bitmaps are only created when preset is read from file
-	// and then they just copy pointers in via Clone()
-	// delete m_pPresentationBitmap;
-	// m_pPresentationBitmap = 0;
-
-	// delete m_FGColorBitmap;
-	// m_FGColorBitmap = 0;
-
-	// delete m_MaterialBitmap;
-	// m_MaterialBitmap = 0;
-
-	// delete m_BGColorBitmap;
-	// m_BGColorBitmap = 0;
+	DestroyBitmaps();
 
 	if (!notInherited)
 		SceneObject::Destroy();
 	Clear();
+}
+
+void BunkerAssembly::DestroyBitmaps() {
+	for (BITMAP** bitmap: {&m_pPresentationBitmap, &m_FGColorBitmap, &m_MaterialBitmap, &m_BGColorBitmap}) {
+		if (*bitmap) {
+			destroy_bitmap(*bitmap);
+			*bitmap = nullptr;
+		}
+	}
 }
 
 std::vector<Deployment*> BunkerAssembly::GetDeployments() {

@@ -135,6 +135,9 @@ namespace RTE {
 		/// resetting the members of this abstraction level only.
 		void Clear();
 
+		/// Frees the presentation and terrain layer bitmaps this BunkerAssembly owns.
+		void DestroyBitmaps();
+
 		// Disallow the use of some implicit methods.
 		BunkerAssembly(const BunkerAssembly& reference) = delete;
 		void operator=(const BunkerAssembly& rhs) = delete;
