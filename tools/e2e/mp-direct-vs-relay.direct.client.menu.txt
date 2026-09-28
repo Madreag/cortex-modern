@@ -26,12 +26,11 @@ assert_substate JoinSetup
 wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 4000
 assert_visible ListLanGames 1
+# A change to the listed rows after a pick refills the port from the first listed row, so the port is read back on the
+# frame after the pick and this run's own row is picked again on the frame before Connect.
 activate GameRowPort{PORT}
-wait_ms 900
 assert_label TextJoinPort {PORT}
-wait_ms 495
-# A change to the listed rows after a pick refills the port from the first listed row, so this run's own row is
-# set again on the frame before Connect.
+wait_ms 1395
 activate GameRowPort{PORT}
 activate ButtonMultiplayerConnect
 video_mark direct-mp-lobby-client
