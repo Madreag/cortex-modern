@@ -1717,6 +1717,8 @@ namespace RTE {
 		static constexpr size_t c_AuthorityGapSamples = 256;
 		uint32_t m_AuthorityLongestGapMs = 0; //!< Client: the longest gap the host left while it played this round.
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
+		std::map<uint8_t, std::pair<NetPeerId, uint64_t>> m_HeldPeerLinks; //!< Host: each held seat's link it still talks on, and when the hold took it.
+		uint64_t m_LastHeldLinkMs = 0; //!< Host: when it last told its held seats it is alive.
 		uint64_t m_OwnFramesSent = 0; //!< Frames of its own this peer has sent.
 		uint64_t m_LivenessFramesSeen = 0; //!< Host: the count its liveness last saw move.
 		uint64_t m_LivenessQuietSinceMs = 0; //!< Host: since when it has sent no frame of its own.

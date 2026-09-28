@@ -4782,6 +4782,8 @@ namespace RTE {
 		m_DroppedSeatResolutions.clear();
 		m_DroppedAtMs.clear();
 		m_LastHoldHeartbeatMs = 0;
+		m_HeldPeerLinks.clear();
+		m_LastHeldLinkMs = 0;
 		m_RequirePublishedStart = m_Config.requirePublishedStart;
 		m_PeerStartupPublished.clear();
 		m_StartupLinksLost.clear();
@@ -5395,6 +5397,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::NoteInPlaceReturn(uint8_t peerId) {
 		NET_PLANE_CHECK();
+		// Its catch-up is open: it has the hold, and the return's own traffic carries it from here.
+		m_HeldPeerLinks.erase(peerId);
 		if (!m_AiHeldSeats.contains(peerId)) return;
 		m_Stats.peers[peerId].startParkMs = 0;
 		m_Stats.peers[peerId].returnsInPlace = true;
@@ -5654,6 +5658,7 @@ namespace RTE {
 						hold.phase = NetTimingPhase::HoldAtFrame;
 						std::vector<uint8_t> bytes;
 						if (NetLockstepCodec::Encode({hold}, bytes)) (void)m_Transport->Send(link->second, NetTransportLane::ControlReliable, bytes);
+						m_HeldPeerLinks[peer] = {link->second, m_TimingNowMs};
 					}
 				ApplyPeerLeave(peer, timing.applyFrame, "slow player: AI takeover", m_TimingNowMs, false, false, true);
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
@@ -9638,6 +9643,7 @@ namespace RTE {
 				}
 				break;
 			case NetTransportEventType::PeerDisconnected: {
+				std::erase_if(m_HeldPeerLinks, [&](const auto& held) { return held.second.first == event.peerId; });
 				uint8_t lockstepPeer = 0;
 				for (const auto& [peerId, transportId]: m_RemoteTransports) {
 					if (transportId == event.peerId) {
@@ -11173,6 +11179,27 @@ namespace RTE {
 			if (ConfiguredWindowTicks() > 1 && FrameWindowAllRemotesAdvertised()) alive.receivedMask = NetLockstepCodec::c_FrameWindowCapabilityMask;
 			std::string ignored;
 			(void)SendPacket({alive}, m_Config.frameLane, &ignored);
+		}
+		// A held seat no longer gets the round's frames, and the hold that took it rides a reliable lane a lost packet delays by a
+		// retransmit: until its catch-up opens it hears this host every tick, so no silence reads as this host's death before the hold lands.
+		if (m_Config.localPeerId == GetHostPeerId() && m_RelayHost && m_Transport && !m_HeldPeerLinks.empty() &&
+		    (nowMs < m_LastHeldLinkMs || static_cast<double>(nowMs - m_LastHeldLinkMs) >= m_Config.simTickMs)) {
+			m_LastHeldLinkMs = nowMs;
+			NetLockstepAck alive;
+			alive.senderPeerId = m_Config.localPeerId;
+			alive.highestContiguousFrame = m_Stats.nextFrame;
+			std::vector<uint8_t> bytes;
+			const bool encoded = NetLockstepCodec::Encode({alive}, bytes);
+			for (auto held = m_HeldPeerLinks.begin(); held != m_HeldPeerLinks.end();) {
+				const auto& [link, sinceMs] = held->second;
+				if (!m_AiHeldSeats.contains(held->first) || m_ReleasedAiSeats.contains(held->first) || m_ReclaimTransactions.contains(held->first) ||
+				    m_RemoteTransports.contains(held->first) || (m_Config.timeoutMs != 0 && nowMs >= sinceMs && nowMs - sinceMs > m_Config.timeoutMs)) {
+					held = m_HeldPeerLinks.erase(held);
+					continue;
+				}
+				if (encoded) (void)m_Transport->Send(link, m_Config.frameLane, bytes);
+				++held;
+			}
 		}
 		const bool pending = hasLocal || hasRemote || hasFutureLocal || hasFutureRemote || !m_RecoveryOutgoing.empty();
 		if (!pending) {

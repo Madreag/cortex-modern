@@ -5576,6 +5576,8 @@ static std::string ResyncSaveName() {
 				if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 					lobby.HandleTransportEvent(event, nowMs);
 				} else if (event.type == NetTransportEventType::PacketReceived && NetLockstepCodec::LooksLikePacket(event.bytes)) {
+					// The host's acks only say it is alive, which the stamp above has taken; they name the frames of the round this seat left.
+					if (event.bytes.size() > 8 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Ack)) continue;
 					if (m_CatchUpWireBytes + event.bytes.size() > 16ULL * 1024 * 1024) {
 						m_PrivateJoinError = "private catch-up wire backlog exceeded its bound";
 						m_State = NetMatchServiceState::Failed; m_ErrorText = m_PrivateJoinError; return;
