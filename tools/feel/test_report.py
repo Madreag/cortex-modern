@@ -286,6 +286,13 @@ class ReportTests(unittest.TestCase):
                '[net-match] hold peer=2 frame=320 AI in control\n')
         self.assertEqual(report.return_hold_violations(log), [dict(round=1, held_peer=1, hold_tick=307, returned_peer=2, return_tick=300)])
 
+    def test_an_empty_gate_run_records_why_it_failed(self):
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            gates = feel_measure.write_case_gates(Path(folder), [])
+        self.assertFalse(gates['passed'])
+        self.assertTrue(gates['reasons'])
+
     def test_correction_uses_matching_target_and_strict_four_pixel_boundary(self):
         forecast = dict(_line=3, committed_tick=9, target_tick=10, actor=dict(uid=7, x=100, y=100))
         committed = [dict(tick=10, wall_ms=170, scene_width=1000, scene_height=1000, wraps_x=False, wraps_y=False)]
