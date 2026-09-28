@@ -2081,6 +2081,11 @@ namespace RTE {
 		}
 		std::vector<NetGameCommand> commands;
 		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
+		if (producing->IsSeatReclaimGap(config.localPeerId, targetFrame) ||
+		    (config.localPeerId == producing->GetHostPeerId() && producing->IsSeatUnderAI(config.localPeerId, targetFrame))) {
+			s_PendingLocalGameCommands.clear();
+			return producing->QueueLocalInput(tick, frames, {}, error);
+		}
 		// The AI of a held seat writes nothing that lands once the seat is its player's again: every peer would refuse it there.
 		const auto ownerAtTarget = [&](int64_t uid, int team) {
 			if (const auto claim = s_LockstepDroppedControlOverrides.find(uid); claim != s_LockstepDroppedControlOverrides.end() && producing->HeldSeatReturnsBy(claim->second, targetFrame))
