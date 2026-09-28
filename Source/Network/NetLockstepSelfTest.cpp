@@ -20699,6 +20699,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			host.m_LastCompletedSimulationTick = 300;
 			host.m_LastQueuedTargetFrame = 300;
 			host.m_AiHeldSeats = {{1, 290}, {2, 290}};
+			host.m_PeerLeaveFrames = {{1, 290}, {2, 290}};
 			host.AdvanceReadyFrames(1000);
 			const uint64_t limit = 300 + std::max<uint16_t>(1, delay) + 1;
 			if (host.m_Stats.nextFrame != limit) {
@@ -20748,6 +20749,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		NetLockstepCoordinator host;
 		auto config = MakeCoordinatorConfig(1, 2, 0x9A54, 0, NetTransportLane::InputUnreliable);
 		config.startFrame = 1; config.roundId = 0x9A54; config.remoteTransportPeerId = 1;
+		config.relayToOtherPeers = true;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A54);
 		if (!wire.StartHost(49743, error) || !host.Start(wire, config, error)) return false;
 		host.m_State = NetLockstepState::Running;
 		host.m_Stats.nextFrame = 300;
