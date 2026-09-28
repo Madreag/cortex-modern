@@ -979,6 +979,12 @@ namespace RTE {
 		bool HeldSeatHostsLocked();
 		/// Held client: opens the match's published listener for the held seats that may dial this one.
 		bool OpenHeldListenerLocked();
+		/// Held client moving to a successor: sends it the lost host's frames this seat replayed, then an empty chunk that ends them.
+		void SendHeldRecordLocked();
+		/// First survivor: takes a held seat's record of the lost host's round off its listener into its own replay. False for any other traffic.
+		bool TakeHeldRecordLocked(const NetTransportEvent& event);
+		/// First survivor: hosts the match once the other held seats' records are in and replayed, or their time is up. False when it cannot host.
+		bool HostHeldMatchLocked();
 		/// Held client: closes that listener once another host took the seat.
 		void CloseHeldListenerLocked();
 		/// Held client: its host is gone, so its catch-up moves to the next successor on a new connection with the world it holds.
@@ -1653,6 +1659,16 @@ namespace RTE {
 		std::vector<NetTransportEvent> m_HeldListenerEvents; //!< What that listener heard before a plane took it over, in order.
 		bool m_HeldDialSeen = false; //!< A held seat's own session reached that listener.
 		bool m_HeldDialNoted = false; //!< The dial that came while this seat's host still spoke is said once.
+		uint64_t m_HeldGatherSinceMs = 0; //!< First survivor: when it began waiting for the other held seats' records before it hosts.
+		size_t m_HeldGatherExpected = 0; //!< The held seats it waits for.
+		std::set<NetPeerId> m_HeldRecordsEnded; //!< Listener connections whose whole record of the lost host's round has arrived.
+		uint64_t m_HeldRecordFramesTaken = 0; //!< Frames of those records this seat's replay did not hold yet.
+		uint64_t m_HeldRecordThrough = 0; //!< The newest frame those records carried.
+		static constexpr uint64_t c_HeldGatherMs = 1500; //!< How long the first survivor waits for the other held seats' records; every seat is held meanwhile.
+		std::deque<std::vector<uint8_t>> m_HeldRecordPackets; //!< Held client moving to a successor: its record of the lost host's round, still to send.
+		bool m_HeldRecordQueued = false; //!< That record was packed for the successor being dialed.
+		static constexpr size_t c_HeldRecordFrames = 3600; //!< The newest frames of the lost host's round a moving seat hands its successor.
+		static constexpr size_t c_HeldRecordChunkBytes = 32 * 1024; //!< Payload of one record chunk, inside the lobby's state chunk limit.
 		static constexpr uint64_t c_HeldDialProofSilenceMs = 1000; //!< A live host acks each held seat every tick; this long without it is no live host.
 		std::unique_ptr<INetTransport> m_InPlaceMoveTransport; //!< Held client: the new connection while the successor admits it.
 		uint8_t m_InPlaceMoveHost = 0; //!< Held client: the successor being dialed; 0 when no move is under way.
