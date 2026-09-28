@@ -50,20 +50,23 @@ Each pump sends up to 32 datagrams per returner. Resends come first, then new fr
 - **Resend:** after that, a datagram the returner has not yet passed goes again once
   `1.5 x RTT + 40 ms` has passed since its last send. The resend applies only to the lowest `c_NetWorldTailResendDepth` = 2
   datagrams in flight: only those hold the replay up, and the ones above them most likely arrived already.
-  - RTT is the shortest time from a datagram's first send to the progress report that passes it. A datagram passed late
-    waited behind a lost one, so only the quickest pass counts.
-  - Until an RTT is measured, the resend interval is 1000 ms.
+  - RTT is the link's own round trip to the returner as its transport measures it (`NoteTailLinkRtt`, from
+    `GetPeerPingMs`). A report passes a datagram only once the replay has applied it, which a returner far behind does long
+    after it arrived, so the report's timing is used only while the transport has no reading: then RTT is the shortest time
+    from a datagram's first send to the progress report that passes it.
+  - Until an RTT is known, the resend interval is 1000 ms.
 - **Acknowledgement:** a progress report pops every in-flight datagram whose last frame is at or below the report's applied
   frame.
-- **Limits:** at most 1024 datagrams are in flight. A datagram whose frames the host's record no longer keeps is dropped,
-  and the returner's reports say what it still lacks.
+- **Limits:** at most `c_NetWorldTailInFlightLimit` = 8192 datagrams are in flight, so a replay far behind does not hold new
+  frames back. Each pump looks only at the lowest two and at the newest not yet sent twice. A datagram whose frames the
+  host's record no longer keeps is dropped, and the returner's reports say what it still lacks.
 - **Handover to the round:** frames from the activation frame on reach the returner through the round itself, never through
   the tail.
 
 The host logs the tail's traffic every 2 s:
 
 ```
-[net-world] tail peer= new= repeat= resend= bytes= refused= in_flight= delivered= acknowledged= rtt_ms= resend_ms=
+[net-world] tail peer= new= repeat= resend= bytes= refused= in_flight= delivered= acknowledged= rtt_ms= link_rtt_ms= resend_ms=
 ```
 
 ## Activation

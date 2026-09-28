@@ -1811,13 +1811,17 @@ namespace RTE {
 		};
 		// Each datagram goes twice, a moment apart; one its replay has still not passed within one and a half round trips is lost, and
 		// it alone goes again. Frames from the activation on reach the returner as the round's own, never from here.
-		const uint64_t resendMs = session->tailAckRttMs > 0 ? static_cast<uint64_t>(session->tailAckRttMs * 1.5) + 40 : 1000;
+		// A report passes a datagram only once the replay has applied it, which a returner far behind does long after it arrived: the link's
+		// own round trip times the resends when the transport knows it.
+		const double rttMs = session->tailLinkRttMs > 0 ? static_cast<double>(session->tailLinkRttMs) : session->tailAckRttMs;
+		const uint64_t resendMs = rttMs > 0 ? static_cast<uint64_t>(rttMs * 1.5) + 40 : 1000;
 		if (nowMs >= session->tailLoggedMs + 2000) {
 			if (session->tailLoggedMs != 0) {
 				std::ostringstream line;
 				line << "[net-world] tail peer=" << static_cast<int>(session->assignedPeerId) << " new=" << session->tailSentNew << " repeat=" << session->tailSentRepeat
 				     << " resend=" << session->tailSentResend << " bytes=" << session->tailSentBytes << " refused=" << session->tailRefused << " in_flight=" << session->tailInFlight.size()
-				     << " delivered=" << session->deliveredThrough << " acknowledged=" << session->acknowledgedThrough << " rtt_ms=" << session->tailAckRttMs << " resend_ms=" << resendMs;
+				     << " delivered=" << session->deliveredThrough << " acknowledged=" << session->acknowledgedThrough << " rtt_ms=" << session->tailAckRttMs
+				     << " link_rtt_ms=" << session->tailLinkRttMs << " resend_ms=" << resendMs;
 				System::PrintDiagnosticLine(line.str());
 			}
 			session->tailLoggedMs = nowMs;
@@ -1826,6 +1830,15 @@ namespace RTE {
 		size_t position = 0;
 		for (auto sent = session->tailInFlight.begin(); sent != session->tailInFlight.end(); ++position) {
 			if (session->activationTick != 0 && sent->first >= session->activationTick) break;
+			// Past the lowest ones only the newest, not yet sent twice, can be due, and they are the back of the queue.
+			if (sent->repeated && position >= c_NetWorldTailResendDepth) {
+				auto newest = session->tailInFlight.end();
+				while (newest != session->tailInFlight.begin() && !std::prev(newest)->repeated) --newest;
+				if (newest == session->tailInFlight.end() || newest <= sent) break;
+				position += static_cast<size_t>(newest - sent);
+				sent = newest;
+				continue;
+			}
 			// Only the lowest datagrams hold the replay up: those above them are most likely held already and pass once they do.
 			const bool due = sent->repeated ? position < c_NetWorldTailResendDepth && nowMs >= sent->sentMs + resendMs : nowMs >= sent->firstSentMs + c_NetWorldTailRepeatMs;
 			if (!due) {
@@ -1845,7 +1858,7 @@ namespace RTE {
 			sent->repeated = true;
 			return true;
 		}
-		if (session->tailInFlight.size() >= 1024) return false;
+		if (session->tailInFlight.size() >= c_NetWorldTailInFlightLimit) return false;
 		std::vector<std::vector<uint8_t>> frames;
 		uint64_t last = 0;
 		if (!session->pendingTail.empty() ||
@@ -1860,6 +1873,10 @@ namespace RTE {
 		session->tailInFlight.push_back({session->deliveredThrough + 1, last, nowMs, nowMs, false});
 		session->deliveredThrough = last;
 		return true;
+	}
+
+	void NetWorldJoinHost::NoteTailLinkRtt(NetPeerId connection, uint32_t rttMs) {
+		if (NetWorldJoinSession* session = Find(connection); session && rttMs > 0) session->tailLinkRttMs = rttMs;
 	}
 
 	void NetWorldJoinHost::NoteTailDatagramRefused(NetPeerId connection) {
