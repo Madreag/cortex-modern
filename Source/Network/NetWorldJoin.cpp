@@ -2014,6 +2014,9 @@ namespace RTE {
 				activation = std::max(activation, nowFrame + static_cast<uint64_t>(std::ceil(behind / session->closingRate)) + c_NetWorldActivationLeadFrames);
 			else trail = behind;
 		}
+		// Even at the head of its tail a returner trails the round by its link and the tail's own delivery: its return leaves it the trail it last
+		// showed, up to a lead, so its first required input is one it can produce in time.
+		if (provesHeadroom && trail == 0) trail = std::min<uint64_t>(behind, c_NetWorldActivationLeadFrames);
 		session->activationTrailFrames = trail;
 		session->activationTick = activation;
 		session->catchUpGate = trail != 0 ? "activated-trailing" : "activated";
