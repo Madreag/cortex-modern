@@ -524,13 +524,17 @@ def judge_restore(root: Path, ticks: int, records: dict) -> dict:
                         "line": line.group(0), "policy": policy.group(0), "held": sorted(held)}
     assert details["host"]["match_id"] == details["client"]["match_id"], (
         f"the peers name different matches: {details['host']['match_id']} vs {details['client']['match_id']}")
-    assert details["host"]["tick"] == details["client"]["tick"], (
-        f"the peers restored different checkpoints: {details['host']['tick']} vs {details['client']['tick']}")
-    details["checkpoints"] = checkpoint_record(root, ticks)
+    details["checkpoints"] = record = checkpoint_record(root, ticks)
     for who in ("host", "client"):
         captures = details[who]["captures"]
         if len(captures) <= RETAINED_AUTOSAVES:
-            raise CheckpointsShort(f"{who} restored before the retention limit was exceeded: {captures}", details["checkpoints"])
+            # A short run's peers may differ only by the captures a peer's own lines name as not written.
+            unexplained = unexplained_missing(root, record)
+            assert not unexplained, f"the peers wrote different checkpoints with no line naming the missing ones: {unexplained}"
+            raise CheckpointsShort(f"{who} restored before the retention limit was exceeded: {captures}", record)
+    assert details["host"]["tick"] == details["client"]["tick"], (
+        f"the peers restored different checkpoints: {details['host']['tick']} vs {details['client']['tick']} "
+        f"(not taken: host {record['host']['not_taken']}, client {record['client']['not_taken']})")
     for who in ("host", "client"):
         tick, captures = details[who]["tick"], details[who]["captures"]
         assert len(ticks_held[who]) == RETAINED_AUTOSAVES, (ticks_held[who], captures)
