@@ -31,12 +31,14 @@ wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 4000
 assert_visible ListLanGames 1
 # Relay only joins an Internet session, and other engines on the box list as rows too: join this host's by id.
+# A change to the listed rows refills a port equal to the one it last filled in, so the port is read back on the frame
+# after it is typed and typed again on the frame before Connect.
 settext TextJoinAddress session:{DIRECTORY_SESSION}
 settext TextJoinPort {PORT}
-wait_ms 900
-assert_label TextJoinAddress session:{DIRECTORY_SESSION}
 assert_label TextJoinPort {PORT}
-wait_ms 495
+assert_label TextJoinAddress session:{DIRECTORY_SESSION}
+wait_ms 1395
+settext TextJoinPort {PORT}
 activate ButtonMultiplayerConnect
 video_mark relay-mp-lobby-client
 wait_connected 2

@@ -29,6 +29,12 @@
       "command": "assert_net_label LabelNetMatchStatus via direct"
     },
     {
+      "op": "finish_on_round_end",
+      "signals": [
+        "done"
+      ]
+    },
+    {
       "op": "wait",
       "elapsed_ms": 450
     },
@@ -122,6 +128,10 @@
     {
       "op": "wait",
       "screen": "Gameplay"
+    },
+    {
+      "op": "finish_on_round_end",
+      "armed": false
     },
     {
       "op": "wait_file",
