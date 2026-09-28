@@ -130,6 +130,33 @@ def _arrival_unsampled(host_log: str, client_log: str) -> bool:
     return not shared or max(shared) < max(arrivals)
 
 
+def captures_text(log: str, limit: int = 6) -> str:
+    """The first captures as 'tick N: M ms, B bytes', so a capture's cost is never read in the wrong unit."""
+    return ", ".join(f"tick {tick}: {ms} ms, {size} bytes" for tick, ms, size in CAPTURE.findall(log)[:limit]) or "none"
+
+
+TAIL_LINE = re.compile(r"^\[net-world\] tail peer=(\d+) .*?delivered=(\d+) acknowledged=(\d+) rtt_ms=(\S+)", re.MULTILINE)
+GATE_LINE = re.compile(r"^\[net-world\] catch-up gate peer=(\d+) gate=(\S+) applied=(\d+) acknowledged=\d+ horizon=(\d+)", re.MULTILINE)
+OWN_SEAT_HELD = re.compile(r"^\[net-match\] hold peer=\d+ frame=(\d+) AI in control \(the host's own seat", re.MULTILINE)
+
+
+def return_progress(host_log: str) -> str:
+    """What the host last saw of a returning seat's catch-up, and whether its own seat was held: why a return never came."""
+    parts = []
+    if tails := TAIL_LINE.findall(host_log):
+        peer, delivered, acknowledged, rtt = tails[-1]
+        parts.append(f"tail to peer {peer} delivered {delivered}, acknowledged {acknowledged}, rtt {rtt} ms")
+    gates = GATE_LINE.findall(host_log)
+    if gates:
+        peer, gate, applied, horizon = gates[-1]
+        parts.append(f"last catch-up report from peer {peer}: gate {gate}, applied {applied} at horizon {horizon}")
+    elif tails:
+        parts.append("no catch-up report reached the host")
+    if own := OWN_SEAT_HELD.findall(host_log):
+        parts.append(f"the host's own seat was held at {own[0]}, so it named no capture while held")
+    return "; ".join(parts) or "no tail was sent"
+
+
 def _seat_mid_return(host_log: str) -> bool:
     """The host has held a seat it has not reclaimed yet: ending the phase now leaves that seat unsampled after its hold."""
     return len(SEAT_HELD.findall(host_log)) > len(SEAT_BACK.findall(host_log))
@@ -1120,8 +1147,9 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             (window / f"{who}-live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in peer_rows if row["tick"] <= last_shared),
                                                       encoding="utf-8")
         compare_live_window(window, first_capture + 1, last_shared, {"client": held_away(peer_log(first, "client"))})
-    assert records["_killed"], (f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}; "
-                                f"the host exited while the kill waited on {records.get('_kill_blocked_by')}")
+    assert records["_killed"], (f"the world host was never killed: captures {captures_text(peer_log(first, 'host'))}; "
+                                f"the host exited while the kill waited on {records.get('_kill_blocked_by')}; "
+                                f"the returner: {return_progress(peer_log(first, 'host'))}")
     identity = WORLD_IDENTITY.findall(peer_log(first, "host"))
     assert identity, "the world host never printed its identity"
     world_id, boot_one, round_one = identity[0][0], int(identity[0][1]), int(identity[0][2])
@@ -1377,6 +1405,19 @@ class CheckpointWaitTests(unittest.TestCase):
 
 
 class WorldRestartOracleTests(unittest.TestCase):
+    def test_a_never_killed_world_names_the_capture_unit_and_the_returners_progress(self):
+        # Ladder 12 rung 2 on 266 (S1.restore-all-1): the captures were read as seconds, and the reports that never came were not named.
+        log = ("[autosave] tick=49 capture_ms=10.827 bytes=201235134\n[autosave] tick=93 capture_ms=5.451 bytes=201235124\n"
+               "[net-world] tail peer=2 new=127 repeat=125 resend=2 bytes=74864 refused=0 in_flight=127 delivered=296 acknowledged=93 rtt_ms=0 "
+               "link_rtt_ms=0 resend_ms=1000\n")
+        self.assertEqual(captures_text(log), "tick 49: 10.827 ms, 201235134 bytes, tick 93: 5.451 ms, 201235124 bytes")
+        self.assertEqual(return_progress(log), "tail to peer 2 delivered 296, acknowledged 93, rtt 0 ms; no catch-up report reached the host")
+        held = log + ("[net-world] catch-up gate peer=2 gate=outside-lead applied=58 acknowledged=58 horizon=277 work_ticks=1\n"
+                      "[net-match] hold peer=1 frame=163 AI in control (the host's own seat, AI of peer 1)\n")
+        self.assertEqual(return_progress(held), "tail to peer 2 delivered 296, acknowledged 93, rtt 0 ms; last catch-up report from peer 2: gate "
+                                                "outside-lead, applied 58 at horizon 277; the host's own seat was held at 163, so it named no capture while held")
+        self.assertEqual(return_progress(""), "no tail was sent")
+
     def test_world_offer_has_its_own_record_boundary(self):
         expected = {"world_id": "retained", "tick": 367}
         text = '[autosave] tick=367 graph_[net-world] offer ' + json.dumps(expected) + '\npart=callbacks\n'
