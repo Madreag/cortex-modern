@@ -4182,6 +4182,11 @@ static std::string ResyncSaveName() {
 		return {};
 	}
 
+	bool NetMatchService::HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool imageRejoin, uint64_t hostSilentMs) {
+		if (linkLost) return !imageRejoin && (!hasReject || reason == NetRejectReason::SessionEnded || reason == NetRejectReason::Timeout || reason == NetRejectReason::InternalError);
+		return hostSilentMs > c_InPlaceHostSilenceMs;
+	}
+
 	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool heldSeats) {
 		// An announced leave is the host's decision; a lost host is absent, and a match with a held seat is never ended by that.
 		if (hostAnnounced) return LoneElection::EndMatch;

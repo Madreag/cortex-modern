@@ -3582,6 +3582,73 @@ namespace RTE {
 		return 0;
 	}
 
+	/// Only the host's link decides a held seat's host is gone: the link lost by the host's end or its silence, or no word from the host
+	/// for the silence bound. The seat's own transport stopping is its own fault, and a host that told it to take the image answered.
+	int TestAHeldSeatJudgesItsHostByTheLinkAlone() {
+		struct Case { const char* name; bool linkLost; bool hasReject; NetRejectReason reason; bool imageRejoin; uint64_t silentMs; bool gone; };
+		const Case cases[] = {
+			{"own-transport-stopped", true, true, NetRejectReason::InternalError, false, 0, false},
+			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, 0, true},
+			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, 0, true},
+			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, 0, true},
+			{"told-to-take-the-image", true, true, NetRejectReason::HostNotAccepting, true, 0, false},
+			{"host-silent-past-the-bound", false, false, NetRejectReason::InternalError, false, 3500, true},
+			{"host-heard-recently", false, false, NetRejectReason::InternalError, false, 400, false},
+		};
+		for (const Case& test: cases) {
+			if (NetMatchService::HeldSeatHostIsGone(test.linkLost, test.hasReject, test.reason, test.imageRejoin, test.silentMs) != test.gone) {
+				return Fail(std::string("held-seat-host-verdict-") + test.name + ": the held seat judged its host " + (test.gone ? "alive" : "gone"));
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS a_held_seat_judges_its_host_by_the_link_alone" << std::endl;
+		return 0;
+	}
+
+	/// A returner is activated at a frame it can reach from what it measurably does: one at the round's pace trails by its link, however
+	/// long, and its return leaves it that trail; one gaining is given the frames its rate needs; one losing ground or standing still is
+	/// never activated and is told why once.
+	int TestActivationFollowsTheMeasuredTrail() {
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A53);
+		struct Case { const char* name; uint64_t behind; uint64_t advance; bool activates; uint64_t minTrail; const char* reason; };
+		const Case cases[] = {
+			{"round-pace-past-the-lead", 90, 30, true, 60, nullptr},
+			{"gaining-inside-the-lead", 40, 42, true, 0, nullptr},
+			{"parked", 40, 0, false, 0, "no progress"},
+			{"losing-ground", 40, 24, false, 0, "falls behind"},
+		};
+		for (const Case& test: cases) {
+			NetWorldJoinHost host;
+			std::string error;
+			if (!host.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &error)) return Fail("measured-trail fixture: " + error);
+			for (uint64_t tick = 490; tick <= 560; ++tick) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1; frame.targetFrame = tick; frame.roundId = 9;
+				if (!host.Tail().Append(frame, &error)) return Fail("measured-trail tail: " + error);
+			}
+			if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 500, &error)) return Fail("measured-trail rejoin: " + error);
+			host.NoteRejoinLinkFit(42, true);
+			if (!host.NoteRejoinCapacity(42, 240, 1000000, 0)) return Fail("the compute headroom sample was refused");
+			uint64_t activation = 0, applied = 500, round = 500 + test.behind;
+			if (!host.NoteCatchUpProgress(42, applied, 0, 1, round, &activation, &error)) return Fail(error);
+			for (int report = 0; report < 6 && activation == 0; ++report) {
+				applied += test.advance; round += 30;
+				if (!host.NoteCatchUpProgress(42, applied, test.advance, 500, round, &activation, &error)) return Fail(error);
+			}
+			const NetWorldJoinSession* session = host.FindSession(42);
+			const std::string gate = session && session->catchUpGate ? session->catchUpGate : "none";
+			const std::string reason = session && session->activationHeldReason ? session->activationHeldReason : "none";
+			if (test.activates && (activation < round + c_NetWorldActivationLeadFrames || !session || session->activationTrailFrames < test.minTrail)) {
+				return Fail(std::string("measured-trail-") + test.name + ": activation=" + std::to_string(activation) + " round=" + std::to_string(round) + " applied=" +
+				            std::to_string(applied) + " trail=" + std::to_string(session ? session->activationTrailFrames : 0) + " gate=" + gate);
+			}
+			if (!test.activates && (activation != 0 || reason.find(test.reason) == std::string::npos)) {
+				return Fail(std::string("measured-trail-") + test.name + ": activation=" + std::to_string(activation) + " reason=" + reason + " gate=" + gate);
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS activation_follows_the_measured_trail" << std::endl;
+		return 0;
+	}
+
 	/// A member whose seat the AI holds and who then leaves has gone for good: the world releases that seat for a new join,
 	/// while a seat still committed, dropped or mid-reclaim stays its member's.
 	int TestAHeldWorldMembersLeaveReleasesItsSeat() {
@@ -7883,6 +7950,8 @@ namespace RTE {
 		if (const int result = TestAHeldWorldMembersLeaveReleasesItsSeat(); result != 0) return result;
 		if (const int result = TestALoneSurvivorWithAHeldSeatHostsTheMatch(); result != 0) return result;
 		if (const int result = TestEveryHeldSurvivorFindsOneHost(); result != 0) return result;
+		if (const int result = TestAHeldSeatJudgesItsHostByTheLinkAlone(); result != 0) return result;
+		if (const int result = TestActivationFollowsTheMeasuredTrail(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;
