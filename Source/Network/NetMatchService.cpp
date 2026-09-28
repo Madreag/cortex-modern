@@ -4196,6 +4196,12 @@ static std::string ResyncSaveName() {
 		return {};
 	}
 
+	bool NetMatchService::HeldSeatListens(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer, const std::vector<uint8_t>& reachable,
+	                                      const std::set<uint8_t>& held, const std::set<uint8_t>& departed) {
+		(void)departed;
+		return HeldSuccessionRoutes(successorOrder, lostHost, localPeer, reachable, held).empty();
+	}
+
 	bool NetMatchService::HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t silenceBoundMs) {
 		// A dropped connection is carried as a plain disconnect; only this seat's own stop and the host's refusal say nothing of the host.
 		if (linkLost) return !ownStop && !imageRejoin && (!hasReject || reason == NetRejectReason::SessionEnded || reason == NetRejectReason::Timeout || reason == NetRejectReason::InternalError);

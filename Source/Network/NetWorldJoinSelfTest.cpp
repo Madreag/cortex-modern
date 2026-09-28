@@ -3629,6 +3629,34 @@ namespace RTE {
 		return 0;
 	}
 
+	/// Two held seats whose host went before its tail reached them hold different last revisions of its holds, so each may read the
+	/// other as live or held. Whatever each reads, exactly one of them listens - the first survivor in the match's order - and the
+	/// other's first dial is that one: they meet, and neither takes the match on a dial nobody answered.
+	int TestDisagreeingHeldViewsMeetAtOneListener() {
+		using Routes = std::vector<uint8_t>;
+		const Routes order{2, 3};
+		struct Case { const char* name; std::set<uint8_t> heldBySecond; std::set<uint8_t> heldByThird; };
+		const Case cases[] = {
+			{"the-first-reads-the-other-live", {}, {2}},
+			{"both-read-the-other-live", {}, {}},
+			{"both-read-the-other-held", {3}, {2}},
+			{"the-other-reads-the-first-live", {3}, {}},
+		};
+		for (const Case& test: cases) {
+			const bool secondListens = NetMatchService::HeldSeatListens(order, 1, 2, {3}, test.heldBySecond, {});
+			const bool thirdListens = NetMatchService::HeldSeatListens(order, 1, 3, {2}, test.heldByThird, {});
+			const Routes thirdDials = NetMatchService::HeldSuccessionRoutes(order, 1, 3, {2}, test.heldByThird);
+			if (!secondListens || thirdListens || thirdDials.empty() || thirdDials.front() != 2) {
+				return Fail(std::string("held-views-") + test.name + ": peer 2 listens=" + std::to_string(secondListens) + " peer 3 listens=" + std::to_string(thirdListens) +
+				            " peer 3 dials first=" + (thirdDials.empty() ? std::string("nobody") : std::to_string(thirdDials.front())) + "; expected 1, 0 and 2");
+			}
+		}
+		// A survivor that left the match is no one's listener: the next in the order is.
+		if (!NetMatchService::HeldSeatListens({2, 3, 4}, 1, 3, {4}, {}, {2})) return Fail("held-views-a-departed-first-survivor: peer 3 would not listen after peer 2 left");
+		std::cout << "[net-world-join-selftest] PASS disagreeing_held_views_meet_at_one_listener" << std::endl;
+		return 0;
+	}
+
 	/// Only the host's link decides a held seat's host is gone: the link lost by the host's end or its silence, or no word from the host
 	/// for the silence bound. The seat's own transport stopping is its own fault, and a host that told it to take the image answered.
 	int TestAHeldSeatJudgesItsHostByTheLinkAlone() {
@@ -8008,6 +8036,7 @@ namespace RTE {
 		if (const int result = TestAHeldWorldMembersLeaveReleasesItsSeat(); result != 0) return result;
 		if (const int result = TestALoneSurvivorWithAHeldSeatHostsTheMatch(); result != 0) return result;
 		if (const int result = TestEveryHeldSurvivorFindsOneHost(); result != 0) return result;
+		if (const int result = TestDisagreeingHeldViewsMeetAtOneListener(); result != 0) return result;
 		if (const int result = TestAHeldSeatJudgesItsHostByTheLinkAlone(); result != 0) return result;
 		if (const int result = TestActivationFollowsTheMeasuredTrail(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
