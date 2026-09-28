@@ -124,7 +124,8 @@ def pace_across_own_seat_hold(root: Path) -> dict | None:
         for line in (root / peer / "stdout.log").read_text(encoding="utf-8", errors="replace").splitlines():
             if line.startswith("[mem-census] ") and " pace: " in line:
                 fields = dict(part.split("=", 1) for part in line.split(" pace: ", 1)[1].split() if "=" in part)
-                rows.append({"tick": int(line.split("tick=")[1].split()[0]), **{key: float(value) for key, value in fields.items()}})
+                numbers = {key: float(value) for key, value in fields.items() if value.replace(".", "", 1).replace("-", "", 1).isdigit()}
+                rows.append({"tick": int(line.split("tick=")[1].split()[0]), **numbers})
         spans, previous = {"before": [], "after": []}, 0
         for row in rows:
             if row["tick"] <= hold:
