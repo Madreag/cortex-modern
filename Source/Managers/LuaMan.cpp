@@ -7556,14 +7556,19 @@ static void PrintCollectorMode(bool deterministic) {
 	}
 }
 
+// The mode change flushes every trace, a write into the heap, so it goes in through the state's gate like any other entry.
+static void ApplyAllocationSinking(LuaStateWrapper& state, bool sinking) {
+	std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+	// A capture that froze the heap between the gate and the lock has its copy land first too.
+	state.WaitFrozenCopy();
+	if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, sinking ? 1 : 0);
+}
+
 void LuaMan::SetCheckpointAllocationSinking(bool sinking) {
 	if (s_AllocationSinking.exchange(sinking) == sinking) return;
 	if (!LuaMan::IsConstructed()) return;
-	const auto apply = [sinking](LuaStateWrapper& state) {
-		if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, sinking ? 1 : 0);
-	};
-	apply(g_LuaMan.m_MasterScriptState);
-	for (LuaStateWrapper& state: g_LuaMan.m_ScriptStates) apply(state);
+	ApplyAllocationSinking(g_LuaMan.m_MasterScriptState, sinking);
+	for (LuaStateWrapper& state: g_LuaMan.m_ScriptStates) ApplyAllocationSinking(state, sinking);
 	std::cout << "[lua] allocation sinking: " << (sinking ? "on" : "off (a captured state allocates every table)") << std::endl;
 }
 
@@ -7598,11 +7603,8 @@ void LuaMan::Initialize() {
 	}
 	// A state made while a match is up starts where the others stand.
 	if (!s_AllocationSinking) {
-		const auto clear = [](LuaStateWrapper& state) {
-			if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, 0);
-		};
-		clear(m_MasterScriptState);
-		for (LuaStateWrapper& luaState: m_ScriptStates) clear(luaState);
+		ApplyAllocationSinking(m_MasterScriptState, false);
+		for (LuaStateWrapper& luaState: m_ScriptStates) ApplyAllocationSinking(luaState, false);
 	}
 	if (!s_CollectorModeAnnounced.exchange(true)) {
 		PrintCollectorMode(s_DeterministicCollection);
