@@ -6,7 +6,7 @@
 
 using namespace RTE;
 
-std::map<std::string, GUIBanner::FontChar*> GUIBanner::m_sFontCache;
+std::map<std::string, std::unique_ptr<GUIBanner::FontChar[]>> GUIBanner::m_sFontCache;
 std::map<std::string, int> GUIBanner::m_sCharCapCache;
 
 GUIBanner::GUIBanner() {
@@ -38,7 +38,7 @@ bool GUIBanner::Create(const std::string fontFilePath, const std::string fontBlu
 
 	// Now process them and extract the character data from each
 	ContentFile fontFile;
-	std::map<std::string, FontChar*>::iterator fontItr;
+	decltype(m_sFontCache)::iterator fontItr;
 	std::map<std::string, int>::iterator indexItr;
 	int y, dotColor;
 	for (int mode = REGULAR; mode < FONTMODECOUNT; ++mode) {
@@ -58,7 +58,7 @@ bool GUIBanner::Create(const std::string fontFilePath, const std::string fontBlu
 
 		if (fontItr != m_sFontCache.end()) {
 			// Yes, has been loaded previously, then use that data from memory.
-			memcpy(m_aaFontChars[mode], (*fontItr).second, sizeof(FontChar) * MAXBANNERFONTCHARS);
+			memcpy(m_aaFontChars[mode], (*fontItr).second.get(), sizeof(FontChar) * MAXBANNERFONTCHARS);
 			// Also retrieve the font max number of characters if we can
 			indexItr = m_sCharCapCache.find(filePaths[mode]);
 			if (indexItr != m_sCharCapCache.end())
@@ -144,13 +144,12 @@ bool GUIBanner::Create(const std::string fontFilePath, const std::string fontBlu
 		// Add the calculated charIndexcap to the cache so we can use it in other banner instances
 		// that use the same font bitmap files.
 		m_sCharCapCache.insert(std::pair<std::string, int>(filePaths[mode], m_CharIndexCap));
-		// Also add the now calculated font char data to the cache
-		// Allocate a dynamic array to throw into the map.. probably until app close
-		FontChar* aNewCache = new FontChar[MAXBANNERFONTCHARS];
+		// Also add the now calculated font char data to the cache, which owns it
+		std::unique_ptr<FontChar[]> aNewCache = std::make_unique<FontChar[]>(MAXBANNERFONTCHARS);
 		// Copy the font data into the cache
-		memcpy(aNewCache, m_aaFontChars[mode], sizeof(FontChar) * MAXBANNERFONTCHARS);
+		memcpy(aNewCache.get(), m_aaFontChars[mode], sizeof(FontChar) * MAXBANNERFONTCHARS);
 		// Now put it into the cache map
-		m_sFontCache.insert(std::pair<std::string, FontChar*>(filePaths[mode], aNewCache));
+		m_sFontCache.emplace(filePaths[mode], std::move(aNewCache));
 	}
 
 	return true;
