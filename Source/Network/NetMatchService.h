@@ -1615,6 +1615,7 @@ namespace RTE {
 		uint64_t m_InPlaceSinceMs = 0;   //!< When it began; a host that never serves it sends it to the image path.
 		uint64_t m_InPlaceHeardMs = 0;   //!< When its tail last moved.
 		uint64_t m_InPlaceProgressApplied = 0;
+		uint64_t m_InPlaceProgressLogged = 0; //!< The applied frame its progress was last logged at.
 		static constexpr uint64_t c_InPlaceHostSilenceMs = 3000; //!< A host that feeds a held seat nothing this long is gone.
 		uint64_t m_HandoverFrame = 0; //!< The first frame the round committed under the authority that took it over here; 0 before a handover.
 		struct InPlaceRoute {
