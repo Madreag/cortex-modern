@@ -3850,7 +3850,7 @@ static std::string ResyncSaveName() {
 				std::ostringstream line;
 				line << "[net-world] catch-up gate peer=" << static_cast<int>(session->assignedPeerId) << " gate=" << (session->catchUpGate ? session->catchUpGate : "none") << " applied=" << report.value
 				     << " acknowledged=" << session->acknowledgedThrough << " horizon=" << nowFrame << " work_ticks=" << report.workTicks << " closing_measured=" << session->closingMeasured
-				     << " closing_rate=" << session->closingRate << detail;
+				     << " closing_rate=" << session->closingRate << " replay_ratio=" << session->headroom.Ratio() << " replay_ready=" << session->headroom.Ready() << detail;
 				System::PrintDiagnosticLine(line.str());
 			};
 			if ((host.IsPrivateMatch() || (prior && prior->returnsToHeldSeat)) && !host.NoteRejoinCapacity(connection, report.workTicks, report.workUs, report.sentThrough)) {
@@ -5026,7 +5026,10 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::HeldSeatHostsLocked() {
-		if (!m_Coordinator || !m_CatchUpCoordinator) return false;
+		if (!m_Coordinator || !m_CatchUpCoordinator) {
+			System::PrintDiagnosticLine("[net-match] held client: its host is gone and its catch-up is gone too");
+			return false;
+		}
 		std::vector<uint8_t> reachable;
 		for (const InPlaceRoute& route: m_InPlaceRoutes) reachable.push_back(route.peerId);
 		const std::set<uint8_t> held = HeldSurvivorsLocked();
@@ -5035,13 +5038,21 @@ static std::string ResyncSaveName() {
 		for (const uint8_t peer: routes)
 			kept.push_back(*std::find_if(m_InPlaceRoutes.begin(), m_InPlaceRoutes.end(), [&](const InPlaceRoute& route) { return route.peerId == peer; }));
 		m_InPlaceRoutes = std::move(kept);
-		if (routes.size() == 1 && held.contains(routes.front()))
-			System::PrintDiagnosticLine("[net-match] held client: every survivor is held; the first of them, peer=" + std::to_string(routes.front()) + ", hosts the match");
+		std::ostringstream line;
+		line << "[net-match] held client: its host is gone; held=";
+		for (const uint8_t peer: held) line << static_cast<int>(peer) << ' ';
+		line << "routes=";
+		for (const uint8_t peer: routes) line << static_cast<int>(peer) << ' ';
+		line << (routes.empty() ? "- this seat hosts the match" : routes.size() == 1 && held.contains(routes.front()) ? "- every survivor is held; the first of them hosts" : "");
+		System::PrintDiagnosticLine(line.str());
 		return routes.empty();
 	}
 
 	bool NetMatchService::HostAloneFromOwnStateLocked() {
-		if (!m_Coordinator || !m_CatchUpCoordinator || !m_CatchUpTransport || !g_ActivityMan.ActivityRunning()) return false;
+		if (!m_Coordinator || !m_CatchUpCoordinator || !m_CatchUpTransport || !g_ActivityMan.ActivityRunning()) {
+			System::PrintDiagnosticLine(std::string("[net-match] held client cannot host alone: ") + (!m_CatchUpCoordinator || !m_CatchUpTransport ? "its catch-up is gone" : "no round runs"));
+			return false;
+		}
 		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		NetResyncState committed;
 		std::string error;
