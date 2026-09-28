@@ -20801,7 +20801,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (const auto* chunk = std::get_if<NetLockstepRecoveryChunk>(&decoded.packet.payload)) {
 				NetLockstepFrame received;
 				independent |= chunk->offset == 0 && chunk->totalBytes == chunk->bytes.size() &&
-				    NetLockstepCodec::DecodeRecoveryInput(chunk->bytes, received) && received.targetFrame == sent.targetFrame && received.frames == sent.frames;
+				    NetLockstepCodec::DecodeRecoveryInput(chunk->bytes, received) && received == sent;
 			}
 		}
 		if (!independent) { *error = "a returning seat's first input stream waits behind the reliable lane's lost segment"; return false; }
