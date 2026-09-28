@@ -476,7 +476,10 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 0,
-          "kill_at_tick": 601
+          "kill_when": {
+            "peer": "survivor",
+            "log": "^\\[net-match\\] held client catch-up applied="
+          }
         },
         {
           "name": "leaver",
@@ -511,7 +514,7 @@
             "-net-join",
             "127.0.0.1",
             "-net-test-live-stall",
-            "560:400"
+            "560:1500"
           ],
           "input_script": "ui-surfaces.input.txt",
           "settings": {
@@ -560,7 +563,7 @@
             "-net-join",
             "127.0.0.1",
             "-net-test-live-stall",
-            "560:400"
+            "560:1500"
           ],
           "input_script": "ui-surfaces.input.txt",
           "settings": {
