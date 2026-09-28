@@ -8735,11 +8735,19 @@ namespace RTE {
 		}
 		// Only a seat the others are waiting on is late: the clock runs from the moment every other seat's input for the frame is in.
 		const auto remote = m_RemoteFrames.find(frame);
+		bool waitedOn = false;
 		for (uint8_t peer: m_RemotePeerIds) {
-			if (IsRemoteRequiredForFrame(peer, frame) && (remote == m_RemoteFrames.end() || !remote->second.contains(peer))) {
+			if (!IsRemoteRequiredForFrame(peer, frame)) continue;
+			if (remote == m_RemoteFrames.end() || !remote->second.contains(peer)) {
 				m_OwnMissingFrame.reset();
 				return false;
 			}
+			waitedOn = true;
+		}
+		// With every other seat held or gone nobody waits on this one: the host's own simulation paces the round.
+		if (!waitedOn) {
+			m_OwnMissingFrame.reset();
+			return false;
 		}
 		if (m_OwnMissingFrame != frame) {
 			m_OwnMissingFrame = frame;
@@ -8776,7 +8784,7 @@ namespace RTE {
 		}
 		// Back once the simulation has replayed what the AI played and is producing for frames not yet committed.
 		const uint16_t delay = InputDelayAt(local, m_Stats.nextFrame);
-		if (*m_LastCompletedSimulationTick + delay + 1 < m_Stats.nextFrame) {
+		if (*m_LastCompletedSimulationTick + std::max<uint16_t>(1, delay) + 1 < m_Stats.nextFrame) {
 			// Logged in steps of a second of lag, so a steady gap is one line.
 			noteWait("the simulation is " + std::to_string((m_Stats.nextFrame - *m_LastCompletedSimulationTick) / 60 * 60) + "+ frames behind the committed horizon");
 			return;
@@ -11047,10 +11055,11 @@ namespace RTE {
 				m_AdvanceBlock = "remote-input";
 				break;
 			}
-			// With its own seat off and no other seat required, the host's own simulation paces the round, exactly as its input would.
+			// With its own seat off and no other seat required, the host's own simulation paces the round, exactly as its input would:
+			// a frame is committed once the tick that would have produced its input has run, so the seat's return finds it caught up.
 			if (!m_Playback && requiredRemotes == 0 && localIt == m_LocalFrames.end() && m_Config.localPeerId == GetHostPeerId() &&
 			    (IsSeatUnderAI(m_Config.localPeerId, m_Stats.nextFrame) || IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame)) &&
-			    (!m_LastCompletedSimulationTick || m_Stats.nextFrame > *m_LastCompletedSimulationTick + InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame) + 1)) {
+			    (!m_LastCompletedSimulationTick || m_Stats.nextFrame > *m_LastCompletedSimulationTick + std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame)))) {
 				m_AdvanceBlock = "host-paced";
 				break;
 			}
