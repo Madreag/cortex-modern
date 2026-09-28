@@ -372,8 +372,6 @@ namespace RTE {
 	/// A tail datagram's whole frames: few enough that one lost packet costs only them.
 	inline constexpr size_t c_NetWorldTailDatagramFrames = 4;
 	inline constexpr uint64_t c_NetWorldTailDatagramBytes = 1000;
-	/// A frame larger than this is too many packets for a datagram: it goes on the ordered lane in pieces.
-	inline constexpr uint64_t c_NetWorldTailDatagramFrameLimit = 4000;
 	/// Every tail datagram goes a second time this long after its first, so one lost packet costs its frames nothing.
 	inline constexpr uint64_t c_NetWorldTailRepeatMs = 20;
 	/// How long a returning seat may replay without showing headroom before its rejoin is ended and retried.
@@ -455,6 +453,8 @@ namespace RTE {
 	inline constexpr uint64_t c_NetWorldTailTransferId = 0x5441494CULL;
 	/// A tail chunk leads with the round its frames belong to, so a chunk of an earlier round is never replayed into a later one.
 	inline constexpr size_t c_NetWorldTailRoundBytes = 8;
+	/// A frame that does not fit one lobby chunk cannot be a datagram: it goes on the ordered lane in pieces.
+	inline constexpr uint64_t c_NetWorldTailDatagramFrameLimit = NetLobbyProtocol::c_MaxStateChunkBytes - c_NetWorldTailRoundBytes - 4;
 	NetLobbyStateChunk MakeWorldTailChunk(uint64_t round, const std::vector<uint8_t>& slice);
 	/// The round a tail chunk names; false for a chunk too short to carry one.
 	bool ParseWorldTailChunkRound(const NetLobbyStateChunk& chunk, uint64_t& round);
