@@ -1821,6 +1821,19 @@ namespace RTE {
 			if (client.IsFailed() || client.IsRejected()) return Fail("the end record failed the held seat's lobby: " + client.GetFailureReason());
 			if (!client.GetRoundEndedRecord() || *client.GetRoundEndedRecord() != packed) return Fail("the held seat's lobby did not keep the end record");
 			if (client.TakeEventsAfterRoundEnded().empty()) return Fail("the lobby read what followed the end record instead of leaving it to the next lobby");
+			if (!ScenarioRunner::InstallWorldCatchUp(4899, {MakeCommittedFrame(4900)}, &error)) return Fail(error);
+			NetWorldCatchUpClient catchUp;
+			catchUp.active = catchUp.privateMatch = true;
+			catchUp.snapshotTick = catchUp.appliedThrough = 4899;
+			std::optional<uint64_t> ended;
+			NetMatchService::StepWorldJoinCatchUpClient(client, catchUp, nullptr, &ended);
+			if (ended) { ScenarioRunner::ReleaseWorldCatchUp(); return Fail("the held seat completed before replaying the round's final tick"); }
+			NetLockstepReadyFrame final;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(4900, final, &error)) return Fail(error);
+			NetMatchService::StepWorldJoinCatchUpClient(client, catchUp, nullptr, &ended);
+			const bool complete = ended == packed && ScenarioRunner::WorldCatchUpAppliedThrough() == 4900 && !ScenarioRunner::WorldCatchUpMayGrant(4901, 1);
+			ScenarioRunner::ReleaseWorldCatchUp();
+			if (!complete) return Fail("the held seat did not finish on exactly the host's final tick");
 			std::cout << "[net-world-join-selftest] PASS a_round_ended_record_reaches_a_held_seat final=4900 winner=0" << std::endl;
 			return 0;
 		}
