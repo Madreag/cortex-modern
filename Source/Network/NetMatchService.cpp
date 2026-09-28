@@ -630,6 +630,7 @@ static std::string ResyncSaveName() {
 			m_MigrationDirectoryToken.clear();
 			m_MigrationDirectoryResumePending = false;
 			m_MigrationStatusUntilMs = 0;
+			m_HeldHostStatusAtMs = 0;
 			m_MigrationFallbackReady = false;
 			m_MigrationFallbackCoordinator.reset();
 			m_MigrationGeneration = 0;
@@ -4168,7 +4169,17 @@ static std::string ResyncSaveName() {
 
 	std::vector<uint8_t> NetMatchService::HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
 	                                                          const std::vector<uint8_t>& reachable, const std::set<uint8_t>& held) {
-		return reachable;
+		// A held seat is never a successor: the catch-up moves to a live one.
+		std::vector<uint8_t> live;
+		for (const uint8_t peer: reachable) if (!held.contains(peer)) live.push_back(peer);
+		if (!live.empty()) return live;
+		// Every survivor is held: the first of them in the match's order hosts, and the others dial it.
+		for (const uint8_t peer: successorOrder) {
+			if (peer == lostHost) continue;
+			if (peer == localPeer) return {};
+			if (std::find(reachable.begin(), reachable.end(), peer) != reachable.end()) return {peer};
+		}
+		return {};
 	}
 
 	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool heldSeats) {
@@ -5001,15 +5012,32 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	bool NetMatchService::HeldSeatHasSuccessorLocked() const {
-		if (!m_Coordinator) return false;
-		const NetMatchConfig& config = m_Coordinator->GetConfig().matchConfig;
-		const uint8_t host = m_Coordinator->GetHostPeerId();
-		return std::any_of(config.successorOrder.begin(), config.successorOrder.end(), [&](uint8_t peer) {
-			if (peer == host || peer == m_LocalPeerId) return false;
-			const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& candidate) { return candidate.peerId == peer; });
-			return endpoint != config.migrationPeers.end() && endpoint->listenPort != 0;
-		});
+	std::set<uint8_t> NetMatchService::HeldSurvivorsLocked() const {
+		std::set<uint8_t> held;
+		if (!m_Coordinator || !m_CatchUpCoordinator) return held;
+		// The seats this replay holds, and those the stopped round held from a frame the replay has not reached.
+		for (const auto& [peer, hold]: m_CatchUpCoordinator->HeldTransactions())
+			if (m_CatchUpCoordinator->HasHeldAISeat(peer)) held.insert(peer);
+		for (const auto& [peer, hold]: m_Coordinator->HeldTransactions())
+			if (hold.cutoffFrame > m_WorldCatchUp.appliedThrough) held.insert(peer);
+		held.erase(m_LocalPeerId);
+		held.erase(m_Coordinator->GetHostPeerId());
+		return held;
+	}
+
+	bool NetMatchService::HeldSeatHostsLocked() {
+		if (!m_Coordinator || !m_CatchUpCoordinator) return false;
+		std::vector<uint8_t> reachable;
+		for (const InPlaceRoute& route: m_InPlaceRoutes) reachable.push_back(route.peerId);
+		const std::set<uint8_t> held = HeldSurvivorsLocked();
+		const std::vector<uint8_t> routes = HeldSuccessionRoutes(m_Coordinator->GetConfig().matchConfig.successorOrder, m_Coordinator->GetHostPeerId(), m_LocalPeerId, reachable, held);
+		std::deque<InPlaceRoute> kept;
+		for (const uint8_t peer: routes)
+			kept.push_back(*std::find_if(m_InPlaceRoutes.begin(), m_InPlaceRoutes.end(), [&](const InPlaceRoute& route) { return route.peerId == peer; }));
+		m_InPlaceRoutes = std::move(kept);
+		if (routes.size() == 1 && held.contains(routes.front()))
+			System::PrintDiagnosticLine("[net-match] held client: every survivor is held; the first of them, peer=" + std::to_string(routes.front()) + ", hosts the match");
+		return routes.empty();
 	}
 
 	bool NetMatchService::HostAloneFromOwnStateLocked() {
@@ -5026,6 +5054,17 @@ static std::string ResyncSaveName() {
 		// The round goes on from the tick this peer stands on, with every other seat the AI's: its own hold ends, as nobody is left to wait for.
 		NetLockstepConfig config = m_Coordinator->GetConfig();
 		const uint8_t local = config.localPeerId;
+		const uint8_t lostHost = m_Coordinator->GetHostPeerId();
+		// Held seats that will rejoin this peer need it listening where the match published it, as an elected host does.
+		std::unique_ptr<INetTransport> listener;
+		if (!HeldSurvivorsLocked().empty()) {
+			const auto endpoint = std::find_if(config.matchConfig.migrationPeers.begin(), config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == local; });
+			listener = config.migrationTransportFactory ? config.migrationTransportFactory() : nullptr;
+			if (endpoint == config.matchConfig.migrationPeers.end() || !listener || !listener->StartHost(endpoint->listenPort)) {
+				System::PrintDiagnosticLine("[net-match] held client: its handover listener could not open; it hosts alone");
+				listener.reset();
+			} else if (config.migrationIceHost) config.migrationIceHost(*listener);
+		}
 		config.roundId = m_Coordinator->GetRoundId();
 		config.originalRoundConfigHash = m_Coordinator->GetRoundConfigHash();
 		config.startFrame = tick + 1;
@@ -5044,12 +5083,21 @@ static std::string ResyncSaveName() {
 		for (const auto& [peer, frame]: m_CatchUpCoordinator->GetPeerLeaveFrames()) if (peer != local && frame <= tick) config.initialPeerLeaves[peer] = frame;
 		for (const auto& [peer, hold]: m_CatchUpCoordinator->HeldTransactions()) if (peer != local && hold.cutoffFrame <= tick) config.initialSeatHolds[peer] = hold;
 		config.initialDelayChanges = m_CatchUpCoordinator->GetDelayChanges();
-		const uint8_t lostHost = m_Coordinator->GetHostPeerId();
-		if (!m_Coordinator->Start(*m_CatchUpTransport, config, &error) || !m_Coordinator->IsRunning()) {
+		if (listener) {
+			// The round changes hands at the next frame: the lost host leaves there, and a returner replays each side under its authority.
+			config.initialPeerLeaves[lostHost] = tick + 1;
+			++config.migrationGeneration;
+		}
+		if (!m_Coordinator->Start(listener ? *listener : *m_CatchUpTransport, config, &error) || !m_Coordinator->IsRunning()) {
 			System::PrintDiagnosticLine("[net-match] held client cannot host alone: " + (error.empty() ? std::string("its round did not start") : error));
 			return false;
 		}
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
+		const bool listening = listener != nullptr;
+		if (listening) {
+			if (INetTransport* wire = ActiveWireLocked()) wire->Stop();
+			m_MigratedTransport = std::move(listener);
+		}
 		if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, tick)) {
 			ScenarioRunner::SetControllerReplayError("PeerLeft:the held seat could not host the match alone: " + error);
 			return true;
@@ -5062,12 +5110,99 @@ static std::string ResyncSaveName() {
 		ScenarioRunner::ReleaseWorldCatchUp();
 		ScenarioRunner::NoteLocalSeatReclaimed();
 		m_Coordinator->DeferStopsToTickBoundary();
-		m_StatusText = "Hosting alone - AI in control of the other seats";
+		const bool hostsHeldSeats = listening && OpenHeldHostPlaneLocked(tick, lostHost);
+		if (hostsHeldSeats) m_CatchUpTransport.reset();
 		std::ostringstream line;
 		line << "[net-match] Host left - " << (m_LocalName.empty() ? std::string("this peer") : m_LocalName) << " is now hosting; boundary=" << tick
-		     << " round=" << config.roundId << " alone=1 lost_host=" << static_cast<int>(lostHost);
+		     << " round=" << config.roundId << " alone=" << !hostsHeldSeats << " lost_host=" << static_cast<int>(lostHost);
 		System::PrintDiagnosticLine(line.str());
-		ScenarioRunner::PushNetUiToast("host_handover_live", "Host left - hosting the match alone");
+		if (!hostsHeldSeats) {
+			m_StatusText = "Hosting alone - AI in control of the other seats";
+			ScenarioRunner::PushNetUiToast("host_handover_live", "Host left - hosting the match alone");
+		}
+		return true;
+	}
+
+	bool NetMatchService::OpenHeldHostPlaneLocked(uint64_t tick, uint8_t lostHost) {
+		// The admission, the lobby and the rejoin plane an elected host takes over, on the listener the round now runs on.
+		const NetMatchConfig& config = m_Coordinator->GetConfig().matchConfig;
+		const uint64_t nowMs = AdmissionNowMs();
+		m_MigrationAuthority = m_LocalPeerId;
+		m_MigrationMembers = {m_LocalPeerId};
+		m_MigrationGeneration = m_Coordinator->GetConfig().migrationGeneration;
+		m_IsHost = true;
+		m_HandoverFrame = tick + 1;
+		m_PendingModeration.clear();
+		m_PendingHostOptions.reset();
+		m_HostOptionsRequest.Clear();
+		m_LastRemovalIssue = {};
+		m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+		m_BanStore.SetPath(NetHostBanStore::DefaultPath());
+		(void)m_BanStore.Load(nullptr);
+		m_ReconnectHost.SetBanStore(&m_BanStore);
+		m_ReconnectHost.SetParticipantProofRequired(true);
+		m_ReconnectHost.SetPersistentWorld(config.persistentWorld);
+		m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
+		m_ReconnectHost.SetSeatSimIdentitySource(&NetMatchService::SeatSimIdentitySource, this);
+		m_PendingSessionEvents.clear();
+		if (!m_ReconnectHost.ImportMigrationState(m_MigrationAdmissionState, m_SeatAuth, config, m_LocalPeerId, {}, nowMs) ||
+		    !m_Session->AdoptHostMigration(*m_MigratedTransport, m_LocalPeerId, m_LocalPeerId, config, {}, nowMs)) {
+			System::PrintDiagnosticLine("[net-match] held client: the match's admission state did not carry over; it hosts alone");
+			m_IsHost = false;
+			return false;
+		}
+		m_ChatSession = m_Session.get();
+		m_Session->SetReconnectClient(nullptr);
+		m_Session->SetReconnectHost(&m_ReconnectHost);
+		m_Session->SetHostBanStore(&m_BanStore);
+		m_Session->EnableParticipantProof(nullptr);
+		m_ReconnectHost.SetLiveMatch(true);
+		m_ReconnectHost.SetMigrationHold(false, nowMs);
+		m_ModerationSeats = m_ReconnectHost.GetModerationView();
+		{
+			const SimCensusScope census;
+			m_ReconnectHost.RecordMigrationDepartures(tick + 1);
+		}
+		NetHostMigrationResult result;
+		result.generation = m_MigrationGeneration;
+		result.boundary = tick;
+		result.hostPeerId = m_LocalPeerId;
+		result.members = {m_LocalPeerId};
+		m_Runner->AdoptHostMigration(result, m_LocalPeerId);
+		NetLobbySessionConfig lobby;
+		lobby.host = true;
+		lobby.localPeerId = m_LocalPeerId;
+		lobby.matchConfig = config;
+		lobby.startFrame = tick + 1;
+		lobby.session = m_Session.get();
+		lobby.sessionNowMs = [this] { return AdmissionNowMs(); };
+		lobby.displayName = m_LocalName.empty() ? "Host" : m_LocalName;
+		lobby.autoStart = false;
+		std::string lobbyError;
+		if (!m_Runner->GetLobbySession().Start(*m_MigratedTransport, lobby, &lobbyError))
+			System::PrintDiagnosticLine("[net-match] the new host's rejoin lobby did not open: " + lobbyError);
+		m_ResyncOnDesync = true;
+		const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_LocalPeerId; });
+		if (endpoint != config.migrationPeers.end()) {
+			m_DirectoryRow.listenAddrs = endpoint->listenAddrs;
+			std::erase_if(m_DirectoryRow.listenAddrs, [](const std::string& address) { return NetLockstepCoordinator::IsMigrationIceEndpoint(address); });
+			m_DirectoryRow.listenPort = endpoint->listenPort;
+			m_DirectoryRow.joinMode = "ip";
+			m_DirectoryRow.resumeSessionId = m_MigrationDirectorySession;
+			m_DirectoryRow.resumeToken = m_MigrationDirectoryToken;
+			m_DirectoryRow.name = m_LocalName;
+			m_DirectoryRow.peerCount = 1;
+			m_DirectoryRetracted = false;
+			m_MigrationDirectoryResumePending = !m_MigrationDirectorySession.empty();
+			m_BeaconGamePort = endpoint->listenPort;
+		}
+		m_IceRoute = "ip";
+		for (auto& member: m_LobbySnapshot.members) member.connected = member.cpu || member.peerId == m_LocalPeerId;
+		// The seats it hosts are still reconnecting: the loss reads as a handover until they have had the time to.
+		m_StatusText = "Host lost - arranging handover";
+		m_HeldHostStatusAtMs = SteadyNowMs() + c_HeldHostArrangingMs;
+		System::PrintDiagnosticLine("[net-match] held client hosts the held seats: lost_host=" + std::to_string(lostHost) + " handover=" + std::to_string(m_HandoverFrame) +
+		                            " generation=" + std::to_string(m_MigrationGeneration));
 		return true;
 	}
 
@@ -5239,6 +5374,10 @@ static std::string ResyncSaveName() {
 		for (uint8_t peer = 1; peer <= config.peerCount && peer <= 8; ++peer)
 			if ((handover.departedMask & (1U << (peer - 1))) != 0) config.initialPeerLeaves.emplace(peer, handover.frame);
 		config.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
+		// The authority plays its own seat from the handover: a held seat that took the round over ended its own hold there.
+		config.initialSeatHolds.erase(handover.authorityPeerId);
+		if (const auto left = config.initialPeerLeaves.find(handover.authorityPeerId); left != config.initialPeerLeaves.end() && left->second < handover.frame)
+			config.initialPeerLeaves.erase(left);
 		config.initialDelayChanges = m_CatchUpCoordinator->GetDelayChanges();
 		auto transport = std::make_unique<LoopbackTransport>();
 		auto replay = std::make_unique<NetLockstepCoordinator>();
@@ -5383,11 +5522,12 @@ static std::string ResyncSaveName() {
 				ScenarioRunner::SetControllerReplayError("MatchOver:the match ended while this seat was rejoining");
 				return;
 			}
-			// A held seat with nobody left to rejoin is the match now: it hosts it from its own committed state.
-			if (m_InPlaceCatchUp && !HeldSeatHasSuccessorLocked() && HostAloneFromOwnStateLocked()) return;
-			// A host that is gone hands the catch-up to its successor, and the seat keeps the world it holds.
-			if (m_InPlaceCatchUp && ClientSessionLossIsHostDeparture(*m_Session) && m_Session->BuildRejectText().find(c_ImageRejoinDetail) == std::string::npos &&
-			    BeginInPlaceMoveLocked(nowMs)) return;
+			// A host that is gone hands the catch-up to its successor, and the seat keeps the world it holds; with only held seats left,
+			// the first of them hosts the match from its own committed state.
+			const bool hostGone = ClientSessionLossIsHostDeparture(*m_Session) && m_Session->BuildRejectText().find(c_ImageRejoinDetail) == std::string::npos;
+			if (m_InPlaceCatchUp && hostGone) m_StatusText = "Host lost - arranging handover";
+			if (m_InPlaceCatchUp && hostGone && HeldSeatHostsLocked() && HostAloneFromOwnStateLocked()) return;
+			if (m_InPlaceCatchUp && hostGone && BeginInPlaceMoveLocked(nowMs)) return;
 			ScenarioRunner::SetControllerReplayError(m_WorldCatchUp.privateMatch
 			    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
 			    : "PeerLeft:The host connection was lost while joining the world");
@@ -5436,7 +5576,8 @@ static std::string ResyncSaveName() {
 			} else if (steadyMs - m_InPlaceHeardMs > c_InPlaceHostSilenceMs) {
 				System::PrintDiagnosticLine("[net-match] held client: the host sent nothing for " + std::to_string(steadyMs - m_InPlaceHeardMs) + "ms at frame " +
 				                            std::to_string(m_WorldCatchUp.appliedThrough));
-				if (!HeldSeatHasSuccessorLocked() && HostAloneFromOwnStateLocked()) return;
+				m_StatusText = "Host lost - arranging handover";
+				if (HeldSeatHostsLocked() && HostAloneFromOwnStateLocked()) return;
 				if (BeginInPlaceMoveLocked(nowMs)) return;
 				m_InPlaceCatchUp = false;
 				ScenarioRunner::SetControllerReplayError("PeerHeld:Held - AI in control - the host sent no catch-up; rejoining");
@@ -6387,6 +6528,12 @@ static std::string ResyncSaveName() {
 					m_Coordinator->FinishMigrationAdmission();
 				else if (m_Session->IsFailed() || m_Session->IsRejected())
 					m_Coordinator->Complete("handover snapshot admission failed");
+			}
+			if (m_HeldHostStatusAtMs != 0 && SteadyNowMs() >= m_HeldHostStatusAtMs) {
+				m_HeldHostStatusAtMs = 0;
+				m_StatusText = "Host left - " + m_Coordinator->DescribePeer(m_LocalPeerId) + " is now hosting";
+				m_MigrationStatusUntilMs = SteadyNowMs() + 3000;
+				ScenarioRunner::PushNetUiToast("host_handover", m_StatusText);
 			}
 			if (m_MigrationStatusUntilMs != 0 && SteadyNowMs() >= m_MigrationStatusUntilMs) {
 				m_StatusText = "LIVE";

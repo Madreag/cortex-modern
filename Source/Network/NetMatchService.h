@@ -962,8 +962,10 @@ namespace RTE {
 		void PumpWorldJoinLobby(uint64_t nowMs);
 		/// Host: a held seat's player reporting the tick its own state stands at gets the committed tail from there on its live connection.
 		void OpenInPlaceRejoinLocked(const NetLobbySession::WorldJoinReport& report, const std::vector<NetSessionPeerInfo>& readyPeers, uint64_t nowMs);
-		/// Held client: whether the match names a successor this seat could rejoin when its host is gone.
-		bool HeldSeatHasSuccessorLocked() const;
+		/// Held client: the other survivors it knows are held, at its replay or by the stopped round.
+		std::set<uint8_t> HeldSurvivorsLocked() const;
+		/// Held client, host gone: keeps only the routes its catch-up moves to; returns whether this seat hosts the match itself.
+		bool HeldSeatHostsLocked();
 		/// Held client: its host is gone, so its catch-up moves to the next successor on a new connection with the world it holds.
 		/// Returns whether a successor is being tried; otherwise the seat takes the image path.
 		bool BeginInPlaceMoveLocked(uint64_t nowMs);
@@ -981,6 +983,9 @@ namespace RTE {
 		/// Held client: its host is gone and nobody else is left, so it plays the round on from its own committed state with the
 		/// AI in every other seat and its own hold ended. Returns whether the round runs on it.
 		bool HostAloneFromOwnStateLocked();
+		/// Held client hosting from its own state: takes the host's admission, lobby and rejoin plane on the round's listener, so the
+		/// other held seats rejoin it. Returns whether they can.
+		bool OpenHeldHostPlaneLocked(uint64_t tick, uint8_t lostHost);
 		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error);
 		/// Restarts the silence windows of a session handed to a worker thread.
 		void NoteSessionHandedToWorker(NetSession& session);
@@ -1620,6 +1625,8 @@ namespace RTE {
 		uint64_t m_InPlaceHeardMs = 0;   //!< When its tail last moved.
 		uint64_t m_InPlaceProgressApplied = 0;
 		uint64_t m_InPlaceProgressLogged = 0; //!< The applied frame its progress was last logged at.
+		uint64_t m_HeldHostStatusAtMs = 0; //!< Held seat hosting: when its status turns from the handover to its hosting.
+		static constexpr uint64_t c_HeldHostArrangingMs = 1500; //!< How long a held seat that hosts reads the loss as a handover.
 		static constexpr uint64_t c_InPlaceHostSilenceMs = 3000; //!< A host that feeds a held seat nothing this long is gone.
 		uint64_t m_HandoverFrame = 0; //!< The first frame the round committed under the authority that took it over here; 0 before a handover.
 		struct InPlaceRoute {
