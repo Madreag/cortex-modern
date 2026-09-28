@@ -6,6 +6,8 @@ from pathlib import Path
 
 
 def expected_assert(row: dict) -> bool:
+    if not isinstance(row, dict):
+        return False
     return (
         row.get("selftest") == "headless-assert-continues"
         and row.get("pass") is True
