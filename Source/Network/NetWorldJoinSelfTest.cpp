@@ -7431,6 +7431,7 @@ namespace RTE {
 		// A round's launch reads the network settings and its end the activity, as a menu-hosted round does.
 		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
 		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
+		if (!g_LuaMan.GetMasterScriptState().GetLuaState()) g_LuaMan.Initialize();
 		const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay, uint64_t round) {
 			NetLockstepConfig lockstep;
 			lockstep.sessionId = 0x474F4F4442594531ULL;
