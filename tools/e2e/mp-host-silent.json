@@ -4,7 +4,7 @@
   "port_base": 49436,
   "size": "960x540",
   "timeout_s": 220,
-  "title": "Two peers; the host goes silent for 4 s at tick 300 while it holds the client: the client rejoins the host and never takes the match over",
+  "title": "Two peers; the host goes silent for 4 s at tick 300: its session plane holds the host's own seat to the AI, the client plays on and sees the host reclaim the seat, and never takes the match over",
   "peers": [
     {
       "name": "host",
@@ -113,19 +113,40 @@
         300,
         2400
       ],
-      "what": "The host wakes and keeps hosting."
+      "what": "The host wakes, reclaims its own seat from the AI that held it through the stall, and keeps hosting.",
+      "log_regex": [
+        "\\[net-match\\] hold peer=1 frame=3\\d\\d AI in control \\(the host's own seat",
+        "\\[net-match\\] seat-reclaimed peer=1 frame=\\d+"
+      ],
+      "forbidden_log_regex": [
+        "now hosting",
+        "host lost",
+        "Host left",
+        "PeerHeld:",
+        "Your seat is held",
+        "desync at frame"
+      ]
     },
     {
-      "id": "silent-client-rejoins",
+      "id": "silent-client-plays-on-host-held",
       "peer": "client",
       "screen": "game",
       "sim_ticks": [
         300,
         2400
       ],
-      "what": "The client rejoins the host through the private rejoin.",
+      "what": "The client plays on while the host's own seat is held to the AI through the host's stall, sees the host reclaim it, and is never held or made host itself.",
       "log_regex": [
-        "\\[net-match\\] private catch-up complete frame=\\d+"
+        "\\[net-match\\] hold peer=1 frame=3\\d\\d AI in control \\(the host's own seat",
+        "\\[net-match\\] seat-reclaimed peer=1 frame=\\d+"
+      ],
+      "forbidden_log_regex": [
+        "now hosting",
+        "host lost",
+        "Host left",
+        "PeerHeld:",
+        "Your seat is held",
+        "desync at frame"
       ]
     }
   ]

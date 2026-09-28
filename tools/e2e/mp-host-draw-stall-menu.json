@@ -149,12 +149,17 @@
       "id": "menu-draw-500-host-plays-on",
       "run": "menu-draw-500",
       "peer": "host",
-      "screen": "game",
+      "screen": [
+        "PauseMatchOptions",
+        "Pause",
+        "PauseSettings",
+        "PauseLeaveConfirm"
+      ],
       "sim_ticks": [
         600,
         1200
       ],
-      "what": "The host's draw is held 500 ms at tick 600 with Match Options open; the host plays on with no unguarded access to the round.",
+      "what": "The host's draw is held 500 ms at tick 600 with Match Options open; the host's round plays on behind the pause menus its probe keeps open, with no unguarded access to the round.",
       "forbidden_log_regex": [
         "\\[net-plane\\] ASSERT",
         "unguarded coordinator access",
@@ -203,6 +208,40 @@
         "Host left",
         "lockstep stopped",
         "desync at frame"
+      ]
+    },
+    {
+      "id": "menu-draw-500-client-completes-on-host-end",
+      "run": "menu-draw-500",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        1200,
+        2400
+      ],
+      "what": "The host ends the match from its pause menu; the client completes the round on the host's word instead of reading the end as a broken match.",
+      "log_regex": [
+        "\\[net-match\\] completed_by_host_end=1 result=Match ended by host"
+      ],
+      "forbidden_log_regex": [
+        "controller sync failed"
+      ]
+    },
+    {
+      "id": "menu-draw-500-survivor-completes-on-host-end",
+      "run": "menu-draw-500",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        1200,
+        2400
+      ],
+      "what": "The host ends the match from its pause menu; the survivor completes the round on the host's word instead of reading the end as a broken match.",
+      "log_regex": [
+        "\\[net-match\\] completed_by_host_end=1 result=Match ended by host"
+      ],
+      "forbidden_log_regex": [
+        "controller sync failed"
       ]
     }
   ]

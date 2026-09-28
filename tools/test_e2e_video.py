@@ -177,6 +177,152 @@ def check_scenarios(results):
     return ok
 
 
+# The engine's screen-name functions; the frame recorder writes only what these return (Gameplay reads as game).
+SCREEN_NAME_SOURCES = (("Source/Main.cpp", "static std::string RecordedScreenName()"),
+                       ("Source/Menus/MainMenuGUI.cpp", "std::string MainMenuGUI::AutomationActiveScreenName() const"),
+                       ("Source/Menus/PauseMenuGUI.cpp", "std::string PauseMenuGUI::AutomationActiveScreenName() const"),
+                       ("Source/Menus/ScenarioGUI.h", "std::string AutomationScreen() const"))
+NOMINAL_TICKS_PER_S = 60
+# How far a probe's nominal clock may run off the engine's before a screen counts as outside an item's window.
+SCREEN_WINDOW_SLACK_TICKS = 60
+
+
+def recorder_screens(repo):
+    """Every screen name the frame recorder can write, read from the engine's own screen-name functions."""
+    names = set()
+    for relative, head in SCREEN_NAME_SOURCES:
+        text = (repo / relative).read_text(encoding="utf-8", errors="replace")
+        start = text.index(head)
+        depth = 0
+        for end in range(text.index("{", start), len(text)):
+            depth += {"{": 1, "}": -1}.get(text[end], 0)
+            if depth == 0:
+                break
+        names |= set(re.findall(r'"([A-Za-z]+)"', text[start:end]))
+    main = (repo / "Source/Main.cpp").read_text(encoding="utf-8", errors="replace")
+    for call in re.findall(r"RecordVideoFrame\(([^;]*)\);", main):
+        names |= set(re.findall(r'"([A-Za-z]+)"', call))
+    return names
+
+
+def item_screens(item):
+    screen = item.get("screen")
+    return set(screen) if isinstance(screen, list) else {screen} if screen else set()
+
+
+def probe_screen_timeline(steps):
+    """The screens an in-match probe holds, on a nominal sim clock: a tick wait anchors the clock, elapsed and render
+    waits advance it at the nominal rate while the match runs, a wait on the service or a file leaves it unknown until
+    the next anchor. The screen is the last one the probe waited on; once the probe ends any menu it left may close.
+    Each segment is (screens, first tick, last tick, first step, last step); a tick is None where the clock is unknown."""
+    segments, marks = [], {}
+    screens, opened, opened_step, tick, paused = {"game"}, 0.0, 0, 0.0, False
+    for index, step in enumerate(steps):
+        op = step.get("op")
+        command = step.get("command", "") if op == "menu" else ""
+        if command.startswith("video_mark "):
+            marks.setdefault(command.split(" ", 1)[1], index)
+        if command == "activate ButtonPauseMatch":
+            paused = not paused
+        if op == "wait_file" or op == "wait" and "service" in step and not {"sim_at_least", "lockstep_frame_at_least"} & set(step):
+            tick = None
+        elif op == "wait":
+            if tick is not None and not paused:
+                tick += max(step.get("elapsed_ms", 0) * NOMINAL_TICKS_PER_S / 1000, step.get("renders", 0))
+            anchor = max(step.get("sim_at_least", 0), step.get("lockstep_frame_at_least", 0))
+            if anchor:
+                tick = max(tick or 0.0, anchor)
+        if op == "wait" and step.get("screen"):
+            segments.append((frozenset(screens), opened, tick, opened_step, index))
+            screens, opened, opened_step = {"game" if step["screen"] == "Gameplay" else step["screen"]}, tick, index
+    segments.append((frozenset(screens), opened, tick, opened_step, len(steps)))
+    segments.append((frozenset(screens | {"game"}), tick, float("inf"), len(steps), len(steps)))
+    return segments, marks
+
+
+def unreachable_item_screen(item, steps):
+    """Why no frame of this item can match on a peer this probe drives, or None when one can (or it cannot be told)."""
+    wanted = item_screens(item)
+    segments, marks = probe_screen_timeline(steps)
+    if item.get("mark"):
+        start = marks.get(item["mark"])
+        if start is None:
+            return None
+        following = min([index for index in marks.values() if index > start], default=len(steps) + 1)
+        held = set().union(*(screens for screens, _, _, first, last in segments if first < following and last >= start))
+        return None if wanted & held else f"mark {item['mark']} holds {sorted(held)}"
+    low, high = (item.get("sim_ticks") or [None, None])[:2]
+    if low is None or high is None:
+        return None
+    low, high = low - SCREEN_WINDOW_SLACK_TICKS, high + SCREEN_WINDOW_SLACK_TICKS
+    inside = [(screens, first, last) for screens, first, last, _, _ in segments
+              if (first is None or first <= high) and (last is None or last >= low)]
+    if any(first is None or last is None for _, first, last in inside):
+        return None
+    held = set().union(*(screens for screens, _, _ in inside))
+    return None if wanted & held else f"ticks {item['sim_ticks']} hold {sorted(held)}"
+
+
+def check_item_screens_reachable(results, repo):
+    """Every checklist item's screen filter names a screen the recorder writes and, on a peer an in-match probe drives,
+    one that probe holds over the item's ticks or marked steps: an item no frame can match reads as missing evidence."""
+    known = recorder_screens(repo)
+    ok = row(results, "checklist-screens/recorder-names-read", {"game", "Pause", "PauseMatchOptions", "MultiplayerScreen"} <= known,
+             str(sorted(known)))
+    unknown, unreachable, judged = [], [], 0
+    for path in sorted(driver.SCENARIO_DIR.glob("*.json")):
+        scenario = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(scenario, dict) or scenario.get("schema") != 1 or scenario.get("driver", "tools/e2e_video.py") != "tools/e2e_video.py":
+            continue
+        scenario["path"] = str(path)
+        runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
+        for item in scenario.get("checklist", []):
+            names = item_screens(item)
+            if names - known:
+                unknown.append(f"{scenario['name']}/{item['id']} {sorted(names - known)}")
+            if not names:
+                continue
+            scope = item.get("run")
+            for run in runs:
+                if scope and run.get("name") not in ([scope] if isinstance(scope, str) else scope):
+                    continue
+                for peer in run.get("peers") or scenario.get("peers") or []:
+                    # A probe on a menu-script peer starts wherever the script leaves it; only in-match probes start on game.
+                    if item.get("peer", peer["name"]) != peer["name"] or not peer.get("probe") or peer.get("menu_script"):
+                        continue
+                    steps = json.loads(driver.scenario_text(scenario, peer["probe"])).get("steps", [])
+                    judged += 1
+                    why = unreachable_item_screen(item, steps)
+                    if why:
+                        unreachable.append(f"{scenario['name']}/{run.get('name')}/{peer['name']}/{item['id']}: {why}")
+    ok &= row(results, "checklist-screens/recorder-writes-every-named-screen", not unknown, "; ".join(unknown[:5]))
+    ok &= row(results, "checklist-screens/probe-holds-every-named-screen", not unreachable,
+              f"{judged} item-peer pairs on in-match probes; " + "; ".join(unreachable[:5]))
+    return ok
+
+
+def check_e2e_host_end_completion(results, repo):
+    """In -net-match-service-e2e mode a member completes on its host's End Match, as the product path does, and the
+    local stop of a failed handover still fails the run. Read from the controller-stop chain in Main.cpp."""
+    text = (repo / "Source/Main.cpp").read_text(encoding="utf-8", errors="replace")
+    start = text.index("static void HandleControllerReplayFailure(")
+    body = text[start:text.index("\n}\n", start)]
+    declared = re.search(r"const bool e2eHostEndedRound = ([^;]*);", body)
+    condition = " ".join(declared[1].split()) if declared else ""
+    ok = row(results, "main/e2e-member-host-end-is-a-completion",
+             all(term in condition for term in ("s_netMatchServiceE2E", 'starts_with("Complete:")', "!g_NetMatchService.IsHost()",
+                                                "NetMatchServiceState::Running")), condition[:200])
+    ok &= row(results, "main/e2e-failed-handover-is-not-a-host-end", 'error.find("host handover ended") == std::string::npos' in condition)
+    branch = re.search(r'else if \(error\.find\("Complete:"\) != std::string::npos &&\s*error\.find\("e2e complete"\)[^{]*\{(.*?)\n\t\t\} else if', body, re.S)
+    ok &= row(results, "main/e2e-completion-branch-takes-the-host-end",
+              bool(branch) and "e2eHostEndedRound" in branch[0] and "completed_by_host_end=1" in branch[1] and "FinishMatch" in branch[1])
+    scenario = driver.load_scenario("mp-host-draw-stall-menu")
+    required = [item for item in scenario["checklist"] if any("completed_by_host_end=1" in pattern for pattern in item.get("log_regex", []))]
+    ok &= row(results, "mp-host-draw-stall-menu/members-complete-on-host-end", sorted(item["peer"] for item in required) == ["client", "survivor"]
+              and all("controller sync failed" in item.get("forbidden_log_regex", []) for item in required))
+    return ok
+
+
 def check_substitution(results):
     tokens = {"PORT": 49411, "PROBE_DIR": Path("D:/x/host-stage/probe"), "PEER": "host"}
     text = driver.substitute("settext TextHostPort {PORT}\nwait_file {PROBE_DIR}/done.json 240\n", tokens)
@@ -233,6 +379,8 @@ def check_index_and_checklist(results, scratch):
     ok &= row(results, "checklist/by-screen-and-ticks",
               driver.frame_range(read, {"screen": "game", "sim_ticks": [250, 350]}) == [5, 7])
     ok &= row(results, "checklist/never-seen", driver.frame_range(read, {"screen": "PauseMatchOptions"}) is None)
+    ok &= row(results, "checklist/any-of-screens-and-ticks",
+              driver.frame_range(read, {"screen": ["PauseMatchOptions", "Pause"], "sim_ticks": [300, 550]}) == [9, 11])
     ok &= row(results, "checklist/ticks-only", driver.frame_range(read, {"sim_ticks": [0, 100]}) == [0, 2])
 
     # A truncated index is what a killed peer leaves: it still reads, and the checklist still resolves.
@@ -401,6 +549,22 @@ def check_item_assertions(results, scratch):
     item['readback'][0]['step'] = 2
     _, evidence = driver.item_evidence(record, item)
     ok &= row(results, 'review/missing-control-is-not-negative-proof', evidence['probe'] == 'fail')
+    toasts = {"report_toasts": {"report": "{peer}-match.json",
+                                "require": [{"kind": "seat_held", "text": "^Held - AI in control - rejoining$", "ticks": [600, 800]}]}}
+    record.update(peer="leaver", root=str(root / "leaver"))
+    _, evidence = driver.item_evidence(record, toasts)
+    ok &= row(results, "review/missing-report-toast-fails", evidence["probe"] == "fail", str(evidence.get("reason")))
+    (root / "leaver-match.json").write_text(json.dumps({"ui": {"toasts": [
+        {"tick": 1, "kind": "player_joined", "text": "host joined"},
+        {"tick": 605, "kind": "seat_held", "text": "held - AI in control"}]}}), encoding="utf-8")
+    _, evidence = driver.item_evidence(record, toasts)
+    ok &= row(results, "review/other-toast-text-is-not-the-required-one", evidence["probe"] == "fail")
+    (root / "leaver-match.json").write_text(json.dumps({"ui": {"toasts": [
+        {"tick": 600, "kind": "seat_held", "text": "Held - AI in control - rejoining"}]}}), encoding="utf-8")
+    _, evidence = driver.item_evidence(record, toasts)
+    ok &= row(results, "review/report-toast-passes", evidence["probe"] == "pass")
+    _, evidence = driver.item_evidence(record, {**toasts, "log_regex": [r"private catch-up complete frame=\d+ in_place=1"]})
+    ok &= row(results, "review/report-toast-cannot-hide-a-missing-log-line", evidence["probe"] == "fail")
     return ok
 
 
@@ -1126,6 +1290,8 @@ def main():
     with contextlib.nullcontext(retained) if options.out else tempfile.TemporaryDirectory() as temporary:
         scratch = Path(temporary)
         ok = check_scenarios(results)
+        ok &= check_item_screens_reachable(results, options.repo)
+        ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_module_requirements(results, scratch)
