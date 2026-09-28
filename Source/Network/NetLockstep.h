@@ -1046,7 +1046,7 @@ namespace RTE {
 		/// Whether the frame waited on is one the host produces only after a capture every peer announced.
 		bool HostBusyWithAnnouncedCapture(uint64_t frame) const;
 		/// The announced capture tick whose aftermath covers a frame, if any.
-		std::optional<uint64_t> AnnouncedCaptureCovering(uint64_t frame) const;
+		std::optional<uint64_t> AnnouncedCaptureCovering(uint64_t frame, uint8_t peerId = 0) const;
 		std::map<uint8_t, NetPeerId> RemoteTransports() const { NET_PLANE_CHECK(); return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
@@ -1541,6 +1541,7 @@ namespace RTE {
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		/// Host: holds its own seat when every other seat's input for the frame is in hand and its own simulation has not produced its input within the bound.
 		bool JudgeOwnSeat(uint64_t frame, uint64_t nowMs);
+		uint64_t CaptureExcuseUntil(uint8_t peerId, uint64_t frame, uint64_t firstMissingMs);
 		/// Host: takes its own held seat back once its simulation has caught up to the committed frames.
 		void ReclaimOwnSeat(uint64_t nowMs);
 		std::optional<uint64_t> m_OwnMissingFrame; //!< Host: the frame its own input was first missing for with every other seat's in hand.
@@ -1746,6 +1747,10 @@ namespace RTE {
 		/// Each return's neutral gap that still covers frames before the hold that ended it, by its first frame; kept until the simulation passes it.
 		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_RetiredReclaimGaps;
 		std::set<uint64_t> m_AnnouncedCaptureTicks; //!< Named captures every peer takes at the end of these ticks.
+		std::optional<uint64_t> m_LocalCaptureTick;
+		uint64_t m_LocalCaptureStartedMs = 0;
+		double m_LocalCaptureCostMs = 0;
+		std::map<std::pair<uint8_t, uint64_t>, uint64_t> m_CaptureExcuseUntilMs;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
@@ -1804,6 +1809,7 @@ namespace RTE {
 		void RelayArrivedTicks(const NetLockstepFrame& frame);
 		/// The lane a packet takes to one peer: frames ride the frame lane unless that peer is still catching up.
 		NetTransportLane LaneTo(uint8_t peerId, const NetLockstepPacket& packet, NetTransportLane lane) const;
+		void SendReturnFrameCopies(uint8_t peerId, const NetLockstepFrame& frame);
 	};
 
 } // namespace RTE

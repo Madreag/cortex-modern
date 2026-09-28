@@ -20811,6 +20811,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		config.relayToOtherPeers = true;
 		config.remoteTransportPeerIds = {{2, 1}};
 		if (!wire.StartHost(49743, error) || !seat.Connect("loopback", 49743, error) || !host.Start(wire, config, error)) return false;
+		NetLockstepCoordinator returner;
+		auto clientConfig = config;
+		clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1;
+		clientConfig.remoteTransportPeerIds = {{1, 1}}; clientConfig.relayToOtherPeers = false;
+		if (!returner.Start(seat, clientConfig, error)) return false;
+		returner.m_State = NetLockstepState::Running;
+		returner.m_Stats.nextFrame = 350;
+		returner.m_RemoteStartsReceived.insert(1);
 		host.m_State = NetLockstepState::Running;
 		host.m_ReliableFramesThrough[2] = 400;
 		(void)seat.PollEvents();
@@ -20828,9 +20836,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				NetLockstepFrame received;
 				independent |= chunk->offset == 0 && chunk->totalBytes == chunk->bytes.size() &&
 				    NetLockstepCodec::DecodeRecoveryInput(chunk->bytes, received) && received == sent;
+				returner.HandleEvent(event, 1000);
 			}
 		}
 		if (!independent) { *error = "a returning seat's first input stream waits behind the reliable lane's lost segment"; return false; }
+		if (!returner.IsRunning() || !returner.m_RemoteFrames.contains(350) || !returner.m_RemoteFrames.at(350).contains(1)) {
+			*error = "the returner refused its independent first frame: " + returner.GetStats().timeoutReason;
+			return false;
+		}
 		std::cout << "[net-lockstep-selftest] PASS return_frames_bypass_reliable_loss" << std::endl;
 		return true;
 	}
