@@ -1022,6 +1022,9 @@ namespace RTE {
 		/// @param screenId Which screen to update for. (default: 0)
 		void Update(int screenId = 0);
 
+		/// Turns the terrain's cavities into air once the clean interval has passed. Runs on the sim tick, so every peer cleans on the same one.
+		void UpdateCleanAir();
+
 		/// Records one terrain-mutation event into the env-gated in-memory trace
 		/// (CC_TERRAIN_EVENTS=<from>:<to>), for host-vs-client divergence forensics.
 		static void TraceTerrainEvent(const char* tag, int x, int y, int a = 0, int b = 0, int c = 0);
