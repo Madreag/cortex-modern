@@ -5098,6 +5098,18 @@ static std::string ResyncSaveName() {
 			// The round changes hands at the next frame: the lost host leaves there, and a returner replays each side under its authority.
 			config.initialPeerLeaves[lostHost] = tick + 1;
 			++config.migrationGeneration;
+			// Its own seat comes back on the committed stream at the handover, as any held seat's return does, so every seat that
+			// rejoins it takes its actors back from the AI at the same frame.
+			std::optional<NetGameSeatHold> ownHold;
+			for (const auto& holds: {m_CatchUpCoordinator->HeldTransactions(), m_Coordinator->HeldTransactions()})
+				if (!ownHold && holds.contains(local)) ownHold = holds.at(local);
+			if (ownHold) {
+				const uint16_t delay = m_CatchUpCoordinator->InputDelayAt(local, tick + 1);
+				const uint32_t incarnation = std::max(ownHold->seatIncarnation, config.peerIncarnations.contains(local) ? config.peerIncarnations.at(local) : 0U) + 1;
+				config.initialSeatHolds[local] = *ownHold;
+				config.peerIncarnations[local] = incarnation;
+				config.initialSeatReclaims[local] = {local, config.migrationGeneration, ownHold->eventSequence + 1, incarnation, tick + 1, delay, tick + 1 + delay, std::nullopt};
+			}
 		}
 		if (!m_Coordinator->Start(listener ? *listener : *m_CatchUpTransport, config, &error) || !m_Coordinator->IsRunning()) {
 			System::PrintDiagnosticLine("[net-match] held client cannot host alone: " + (error.empty() ? std::string("its round did not start") : error));
