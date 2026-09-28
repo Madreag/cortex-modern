@@ -209,6 +209,40 @@
         "lockstep stopped",
         "desync at frame"
       ]
+    },
+    {
+      "id": "menu-draw-500-client-completes-on-host-end",
+      "run": "menu-draw-500",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        1200,
+        2400
+      ],
+      "what": "The host ends the match from its pause menu; the client completes the round on the host's word instead of reading the end as a broken match.",
+      "log_regex": [
+        "\\[net-match\\] completed_by_host_end=1 result=Match ended by host"
+      ],
+      "forbidden_log_regex": [
+        "controller sync failed"
+      ]
+    },
+    {
+      "id": "menu-draw-500-survivor-completes-on-host-end",
+      "run": "menu-draw-500",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        1200,
+        2400
+      ],
+      "what": "The host ends the match from its pause menu; the survivor completes the round on the host's word instead of reading the end as a broken match.",
+      "log_regex": [
+        "\\[net-match\\] completed_by_host_end=1 result=Match ended by host"
+      ],
+      "forbidden_log_regex": [
+        "controller sync failed"
+      ]
     }
   ]
 }

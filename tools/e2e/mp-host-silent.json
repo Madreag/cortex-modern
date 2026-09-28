@@ -115,7 +115,7 @@
       ],
       "what": "The host wakes, reclaims its own seat from the AI that held it through the stall, and keeps hosting.",
       "log_regex": [
-        "\\[net-match\\] hold peer=1 frame=\\d+ AI in control \\(the host's own seat",
+        "\\[net-match\\] hold peer=1 frame=3\\d\\d AI in control \\(the host's own seat",
         "\\[net-match\\] seat-reclaimed peer=1 frame=\\d+"
       ],
       "forbidden_log_regex": [
@@ -137,7 +137,7 @@
       ],
       "what": "The client plays on while the host's own seat is held to the AI through the host's stall, sees the host reclaim it, and is never held or made host itself.",
       "log_regex": [
-        "\\[net-match\\] hold peer=1 frame=\\d+ AI in control \\(the host's own seat",
+        "\\[net-match\\] hold peer=1 frame=3\\d\\d AI in control \\(the host's own seat",
         "\\[net-match\\] seat-reclaimed peer=1 frame=\\d+"
       ],
       "forbidden_log_regex": [

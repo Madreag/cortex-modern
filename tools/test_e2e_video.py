@@ -301,6 +301,28 @@ def check_item_screens_reachable(results, repo):
     return ok
 
 
+def check_e2e_host_end_completion(results, repo):
+    """In -net-match-service-e2e mode a member completes on its host's End Match, as the product path does, and the
+    local stop of a failed handover still fails the run. Read from the controller-stop chain in Main.cpp."""
+    text = (repo / "Source/Main.cpp").read_text(encoding="utf-8", errors="replace")
+    start = text.index("static void HandleControllerReplayFailure(")
+    body = text[start:text.index("\n}\n", start)]
+    declared = re.search(r"const bool e2eHostEndedRound = ([^;]*);", body)
+    condition = " ".join(declared[1].split()) if declared else ""
+    ok = row(results, "main/e2e-member-host-end-is-a-completion",
+             all(term in condition for term in ("s_netMatchServiceE2E", 'starts_with("Complete:")', "!g_NetMatchService.IsHost()",
+                                                "NetMatchServiceState::Running")), condition[:200])
+    ok &= row(results, "main/e2e-failed-handover-is-not-a-host-end", 'error.find("host handover ended") == std::string::npos' in condition)
+    branch = re.search(r'else if \(error\.find\("Complete:"\) != std::string::npos &&\s*error\.find\("e2e complete"\)[^{]*\{(.*?)\n\t\t\} else if', body, re.S)
+    ok &= row(results, "main/e2e-completion-branch-takes-the-host-end",
+              bool(branch) and "e2eHostEndedRound" in branch[0] and "completed_by_host_end=1" in branch[1] and "FinishMatch" in branch[1])
+    scenario = driver.load_scenario("mp-host-draw-stall-menu")
+    required = [item for item in scenario["checklist"] if any("completed_by_host_end=1" in pattern for pattern in item.get("log_regex", []))]
+    ok &= row(results, "mp-host-draw-stall-menu/members-complete-on-host-end", sorted(item["peer"] for item in required) == ["client", "survivor"]
+              and all("controller sync failed" in item.get("forbidden_log_regex", []) for item in required))
+    return ok
+
+
 def check_substitution(results):
     tokens = {"PORT": 49411, "PROBE_DIR": Path("D:/x/host-stage/probe"), "PEER": "host"}
     text = driver.substitute("settext TextHostPort {PORT}\nwait_file {PROBE_DIR}/done.json 240\n", tokens)
@@ -1269,6 +1291,7 @@ def main():
         scratch = Path(temporary)
         ok = check_scenarios(results)
         ok &= check_item_screens_reachable(results, options.repo)
+        ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_module_requirements(results, scratch)
