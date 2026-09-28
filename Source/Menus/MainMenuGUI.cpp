@@ -966,6 +966,11 @@ bool MainMenuGUI::HandleInputEvents() {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Enter && guiEvent.GetControl() == m_MultiplayerLobbyChatInput) {
 			SendLobbyChat();
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Changed && guiEvent.GetControl() == m_MultiplayerJoinPortTextBox) {
+			// A value the screen did not write is the player's, so the list stops refilling the port.
+			if (m_MultiplayerJoinPortTextBox->GetText() != m_JoinPortAutoValue) {
+				m_JoinPortAutoValue.clear();
+			}
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Changed && guiEvent.GetControl() == m_MultiplayerHostInputDelayTextBox) {
 			// The label names the frames the box would send, so it follows the edit.
 			if (m_MultiplayerHostInputDelayTextBox->GetEnabled()) {
@@ -1212,7 +1217,8 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 			} else {
 				m_MultiplayerJoinAddressTextBox->SetText(NetIceMenuJoinAddress(row));
 				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port == 0 ? 41010 : row.port));
-				m_JoinPortAutoValue = m_MultiplayerJoinPortTextBox->GetText();
+				// The picked address and port stay a pair; the list no longer refills the port.
+				m_JoinPortAutoValue.clear();
 				m_JoinTargetPersistentWorld = row.persistentWorld || row.activity == "Persistent World";
 				m_JoinTargetActivity = row.activity;
 				if (m_JoinTargetPersistentWorld) {
@@ -4530,7 +4536,7 @@ void MainMenuGUI::RefreshGamesList() {
 }
 
 void MainMenuGUI::SetJoinPortAuto(uint16_t port) {
-	if (!m_MultiplayerJoinPortTextBox || port == 0 || m_MultiplayerJoinPortTextBox->GetText() != m_JoinPortAutoValue) {
+	if (!m_MultiplayerJoinPortTextBox || port == 0 || m_JoinPortAutoValue.empty() || m_MultiplayerJoinPortTextBox->GetText() != m_JoinPortAutoValue) {
 		return;
 	}
 	m_JoinPortAutoValue = std::to_string(port);
