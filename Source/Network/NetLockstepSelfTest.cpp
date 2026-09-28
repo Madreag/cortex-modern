@@ -18977,6 +18977,68 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		bool TestAHostClosingAfterItsEndIsNotLost(std::string* error) {
+			// endCase 0: the host's Complete stop waits on the survivors' ticks when its link closes; 1: the survivors ran their last frame.
+			for (int endCase = 0; endCase < 2; ++endCase) {
+				const uint16_t port = static_cast<uint16_t>(49584 + endCase);
+				LoopbackTransport hostWire, aWire, bWire;
+				if (!hostWire.StartHost(port, error) || !aWire.Connect("loopback", port, error) || !bWire.Connect("loopback", port, error)) return false;
+				auto match = NetMatchConfigUtil::MakeDefault(0x453);
+				match.peerCount = 3; match.players.push_back({3, 2, false, "Third"}); match.successorOrder = {2, 3};
+				for (uint8_t peer = 1; peer <= 3; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(49586 + peer), {"loopback"}});
+				auto config = [&](uint8_t peer) {
+					NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match; value.peerCount = 3; value.localPeerId = peer;
+					value.startFrame = 1; value.timeoutMs = 20000; value.roundId = peer == 1 ? 0x45301 : 0; value.relayToOtherPeers = peer == 1;
+					value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+					value.migrationKey.fill(0x45); value.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); }; return value;
+				};
+				NetLockstepCoordinator host, a, b;
+				if (!host.Start(hostWire, config(1), error) || !a.Start(aWire, config(2), error) || !b.Start(bWire, config(3), error)) return false;
+				for (auto* peer: {&host, &a, &b}) peer->DeferStopsToTickBoundary();
+				uint64_t now = 0;
+				bool survivorsTick = true;
+				auto step = [&](bool hostAlive) {
+					if (hostAlive) { host.Tick(now); hostWire.AdvanceTimeMs(5); }
+					a.Tick(now); b.Tick(now); aWire.AdvanceTimeMs(5); bWire.AdvanceTimeMs(5);
+					for (auto* peer: {&host, &a, &b}) {
+						if (peer != &host && !survivorsTick) continue;
+						NetLockstepReadyFrame ready; while (peer->PopReadyFrame(ready)) peer->FinishSimulationTick(ready.frame);
+					}
+					now += 5;
+				};
+				for (int turn = 0; turn < 20; ++turn) step(true);
+				for (uint64_t frame = 1; frame <= 6; ++frame) {
+					// The survivors' sims fall one tick behind the host's at its last frame.
+					if (endCase == 0 && frame == 6) survivorsTick = false;
+					for (auto* peer: {&host, &a, &b}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
+					for (int turn = 0; turn < 10; ++turn) step(true);
+				}
+				if (endCase == 1) for (auto* peer: {&host, &a, &b}) peer->SetFinalFrame(6);
+				if (host.GetStats().nextFrame != 7 || a.GetStats().nextFrame != 7) {
+					*error = "the closing-host fixture did not share frame 6: host_next=" + std::to_string(host.GetStats().nextFrame) + " a_next=" + std::to_string(a.GetStats().nextFrame);
+					return false;
+				}
+				if (endCase == 0) {
+					host.Complete("e2e complete");
+					for (int turn = 0; turn < 10; ++turn) step(true);
+				}
+				hostWire.Stop();
+				for (int turn = 0; turn < 40; ++turn) step(false);
+				for (auto* peer: {&a, &b}) {
+					const std::string& reason = peer->GetStats().timeoutReason;
+					if (peer->IsMigrating() || peer->GetHostPeerId() != 1 || peer->IsRunning() || reason.rfind("Complete:", 0) != 0) {
+						*error = std::string("a host closing after ") + (endCase == 0 ? "its Complete stop" : "the round's last frame") + " started an election on peer " +
+						         std::to_string(peer->GetConfig().localPeerId) + ": migrating=" + std::to_string(peer->IsMigrating()) + " host=" + std::to_string(peer->GetHostPeerId()) +
+						         " running=" + std::to_string(peer->IsRunning()) + " reason=" + reason;
+						return false;
+					}
+				}
+				std::cout << "[net-lockstep-selftest] PASS a_host_closing_after_its_end_is_not_lost case=" << (endCase == 0 ? "pending_complete" : "past_final_frame")
+				          << " reason=" << a.GetStats().timeoutReason << std::endl;
+			}
+			return true;
+		}
+
 		bool TestLoadingHostKeepsItsAuthority(std::string* error) {
 			LoopbackTransport hostWire, aWire, bWire;
 			if (!hostWire.StartHost(49458, error) || !aWire.Connect("loopback", 49458, error) || !bWire.Connect("loopback", 49458, error)) return false;
@@ -21283,6 +21345,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALongLinkedHostIsJudgedByItsSilenceAlone(&error) ||
 		    !TestALoneSurvivorConfirmsTheHostIsGone(&error) ||
 		    !TestAHostQuietPastTheLastTickIsNotLost(&error) ||
+		    !TestAHostClosingAfterItsEndIsNotLost(&error) ||
 		    !TestLoadingHostKeepsItsAuthority(&error) ||
 		    !TestHoldArrivesBeforeFailedSend(&error) ||
 		    !TestSlowMachineWarningCadence(&error) ||
