@@ -48,6 +48,32 @@ class Placement(unittest.TestCase):
     def test_a_mask_too_small_for_three_places_nothing(self):
         self.assertEqual(placements('0x0000000F'), {})
 
+    def test_a_placement_narrows_the_engines_own_job(self):
+        import ctypes
+        import subprocess
+        import win32_test_runner as runner
+        job = runner.check(runner.create_job(None, None))
+        try:
+            limits = runner.EXT()
+            limits.BasicLimitInformation.LimitFlags = 0x2000 | 0x10
+            limits.BasicLimitInformation.Affinity = 0xF
+            runner.check(runner.set_job(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+            child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], creationflags=subprocess.CREATE_NO_WINDOW)
+            try:
+                handle = int(child._handle)
+                runner.check(runner.assign_job(job, handle))
+                self.assertEqual(runner.affinity_of(handle)[0], 0xF)
+                # The process alone cannot leave its job's mask: the runner's affinity limit holds it there.
+                ctypes.WinDLL('kernel32').SetProcessAffinityMask(ctypes.c_void_p(handle), ctypes.c_size_t(0x3))
+                self.assertEqual(runner.affinity_of(handle)[0], 0xF)
+                feel_measure.narrow_job_affinity(job, 0x3)
+                self.assertEqual(runner.affinity_of(handle)[0], 0x3)
+            finally:
+                child.kill()
+                child.wait()
+        finally:
+            runner.close_handle(job)
+
     def test_two_engines_are_not_placed(self):
         with patch.dict(os.environ, {'CC_RUNNER_AFFINITY_MASK': '0x0000FFFF'}):
             self.assertEqual(feel_measure.engine_placements(['host', 'client']), {})
