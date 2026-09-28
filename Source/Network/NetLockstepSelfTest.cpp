@@ -20492,55 +20492,41 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 	bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error) {
-		// The only other seat is held: a hold of the host's own could only hand it to the host's own AI, and nobody waits on it.
+		// Every other seat is held: a hold of the host's own could only hand it to the host's own AI, and nobody waits on it. The row
+		// before this one is the control: with its clients playing, the same stall is a hold.
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
-		auto config = MakeCoordinatorConfig(1, 2, 0x9A12, 4, NetTransportLane::ControlReliable);
-		config.peerCount = 2; config.startFrame = 1; config.roundId = 37;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A12, 6, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 37;
 		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
-		config.peerInputDelayFrames = {{1, 4}, {2, 4}};
-		config.remoteTransportPeerIds = {{2, 1}};
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
 		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A12);
+		config.matchConfig.successorOrder = {3, 2};
 		if (!wire.StartHost(48893, error) || !host.Start(wire, config, error)) return false;
 		host.m_State = NetLockstepState::Running;
 		host.m_RoundId = 37;
-		host.m_RemotePeerIds = {2};
-		host.m_PeersPlayedThisRound = {1, 2};
-		for (uint8_t peer: {1, 2}) host.m_PeerEffectiveStart[peer] = 5;
+		host.m_RemotePeerIds = {2, 3};
+		host.m_PeersPlayedThisRound = {1, 2, 3};
+		for (uint8_t peer: {1, 2, 3}) host.m_PeerEffectiveStart[peer] = 7;
 		host.m_Stats.nextFrame = 200;
 		host.m_LastQueuedTargetFrame = 199;
-		host.m_LastCompletedSimulationTick = 195;
-		// The client's input for 200 is in, so a missing host input past the bound is late: the control.
-		host.m_RemoteFrames[200][2] = {};
-		if (!host.JudgeOwnSeat(200, 1000) && !host.JudgeOwnSeat(200, 1051)) {
-			*error = "a-host-with-no-other-playing-seat-is-not-held: the control failed, a host late past the bound with its client playing was not held";
-			return false;
-		}
-		// The client is held from 200 on, and its hold committed: from then on no other peer plays.
-		NetLockstepCoordinator alone;
-		LoopbackTransport aloneWire;
-		if (!aloneWire.StartHost(48892, error) || !alone.Start(aloneWire, config, error)) return false;
-		alone.m_State = NetLockstepState::Running;
-		alone.m_RoundId = 37;
-		alone.m_RemotePeerIds = {2};
-		alone.m_PeersPlayedThisRound = {1, 2};
-		for (uint8_t peer: {1, 2}) alone.m_PeerEffectiveStart[peer] = 5;
-		alone.m_Stats.nextFrame = 200;
-		alone.m_LastQueuedTargetFrame = 199;
-		alone.m_LastCompletedSimulationTick = 195;
-		// The hold's send finds no connected client on this wire; only the hold itself is under test.
+		host.m_LastCompletedSimulationTick = 193;
+		// The holds' sends find no connected client on this wire; only the holds themselves are under test.
 		std::string holdError;
-		(void)alone.ProposePeerHold(2, 990, &holdError);
-		if (!alone.IsSeatUnderAI(2, 200)) {
-			*error = "a-host-with-no-other-playing-seat-is-not-held: the client's hold did not take: " + holdError;
+		for (uint8_t peer: {2, 3}) (void)host.ProposePeerHold(peer, 990, &holdError);
+		for (auto& [revision, decision]: host.m_TimingDecisions) decision.committed = true;
+		if (!host.IsSeatUnderAI(2, 200) || !host.IsSeatUnderAI(3, 200)) {
+			*error = "a-host-with-no-other-playing-seat-is-not-held: the clients' holds did not take: " + holdError;
 			return false;
 		}
-		for (auto& [revision, decision]: alone.m_TimingDecisions) decision.committed = true;
-		if (alone.JudgeOwnSeat(200, 1000) || alone.JudgeOwnSeat(200, 1100) || alone.IsSeatUnderAI(1, 200)) {
-			*error = "a-host-with-no-other-playing-seat-is-not-held: with its only client held, the host's seat was held to the AI of peer " +
-			         std::to_string(alone.AiProducerOf(1, 200));
+		if (host.JudgeOwnSeat(200, 1000) || host.JudgeOwnSeat(200, 1100) || host.IsSeatUnderAI(1, 200)) {
+			*error = "a-host-with-no-other-playing-seat-is-not-held: with every client held, the host's seat was held to the AI of peer " +
+			         std::to_string(host.AiProducerOf(1, 200));
 			return false;
 		}
+		std::cout << "[net-lockstep-selftest] PASS a_host_with_no_other_playing_seat_is_not_held" << std::endl;
 		return true;
 	}
 
