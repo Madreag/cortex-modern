@@ -1893,34 +1893,20 @@ namespace RTE {
 			session->catchUpGate = "announced";
 			return true;
 		}
-		// A machine measured replaying slower than the round never closes on it: its returner is told so, once.
-		const auto noteSlowReplay = [&] {
-			const char* reason = "its replay runs slower than the round plays";
-			if (!provesHeadroom || !session->headroom.Measured() || session->headroom.Ready() || reason == session->activationHeldReason) return;
-			std::ostringstream line;
-			line << "[net-world] activation waits peer=" << static_cast<int>(session->assignedPeerId) << ": " << reason << " (replay ratio " << session->headroom.Ratio() << ")";
-			System::PrintDiagnosticLine(line.str());
-			session->activationHeldReason = reason;
-		};
-		// A machine that replays faster than the round and no longer gains on it has replayed all its link delivered: what it still
-		// trails by is its link's round trip, which its input delay covers, so it stands at the head of its tail by construction.
-		const bool atHead = provesHeadroom && session->headroom.Ready() && session->closingMeasured && session->closingRate <= 0.1;
 		// The world keeps producing while the joiner replays, so activation waits until the joiner is
-		// inside the lead, or at the head of its tail, and can have its pipeline primed before its first required frame.
-		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame && !atHead) {
+		// inside the lead and can have its pipeline primed before its first required frame.
+		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame) {
 			session->catchUpGate = "outside-lead";
-			noteSlowReplay();
 			return true;
 		}
 		// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline. One still closing
 		// is given the frames its measured rate needs to reach the horizon too, so it is at its activation before the round is.
 		const uint64_t behind = nowFrame > appliedThrough ? nowFrame - appliedThrough : 0;
 		uint64_t activation = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
-		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4 && !atHead) {
+		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4) {
 			// Not yet measured over a window, or losing ground on the round: it keeps replaying.
 			if (!session->closingMeasured || session->closingRate < -0.1) {
 				session->catchUpGate = !session->closingMeasured ? "closing-unmeasured" : "closing-losing";
-				noteSlowReplay();
 				return true;
 			}
 			// One at the round's pace stands behind by its link, which its input delay already covers.
@@ -1928,7 +1914,7 @@ namespace RTE {
 				activation = std::max(activation, nowFrame + static_cast<uint64_t>(std::ceil(behind / session->closingRate)) + c_NetWorldActivationLeadFrames);
 		}
 		session->activationTick = activation;
-		session->catchUpGate = atHead ? "activated-at-head" : "activated";
+		session->catchUpGate = "activated";
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
 	}
