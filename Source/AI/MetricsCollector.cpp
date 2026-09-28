@@ -158,10 +158,10 @@ namespace RTE {
 			{
 				std::lock_guard<std::mutex> lock(queueMutex);
 				if (stopping) {
-					if (!std::exchange(closedWriteReported, true)) refusal = "[cross-record] FAIL an event record was written after its stream closed: dropped";
+					if (!std::exchange(closedWriteReported, true)) refusal = "[cross-record] an event record came after its stream closed: dropped";
 				} else if (queue.size() >= queueBound) {
 					// One line per stall; the writer records the count as a record_loss after the records it had queued.
-					if (dropped++ == 0) refusal = "[cross-record] FAIL the event queue reached its bound of " + std::to_string(queueBound) + " records: the records past it are dropped and counted as a record_loss";
+					if (dropped++ == 0) refusal = "[cross-record] the event queue reached its bound of " + std::to_string(queueBound) + " records: the records past it are dropped and counted as a record_loss";
 					lastDroppedSequence = item.sequence;
 				} else {
 					queue.push_back(std::move(item));
