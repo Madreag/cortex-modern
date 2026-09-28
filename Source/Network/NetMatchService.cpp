@@ -846,6 +846,11 @@ static std::string ResyncSaveName() {
 				// A rematch restarts from a zeroed sim count.
 				runner->SetStartFrame(1);
 			}
+			// A rematch round starts every peer on the host's script state as the first round did, so the
+			// host takes it again at the next start and each peer's own history of the last round is dropped.
+			m_RoundStartScripts.clear();
+			m_RoundStartScriptsToStream.clear();
+			m_PendingRoundStartScripts.clear();
 			m_Coordinator.reset();
 			coordinator = std::make_unique<NetLockstepCoordinator>();
 			m_WorkerDone = false;
@@ -1885,6 +1890,11 @@ static std::string ResyncSaveName() {
 					// The beacon and the directory row take their counts from these at the next pump.
 					m_BeaconMaxPlayers = static_cast<uint8_t>(std::max(1, m_HumanSeats));
 					m_DirectoryRow.matchConfigHash = NetIdentity::HashHex(runner->GetMatchConfigHash());
+				}
+				if (m_IsHost) {
+					m_PendingRoundStartScripts = m_RoundStartScripts;
+				} else if (std::vector<uint8_t> received = runner->TakeReceivedState(); IsRoundStartScriptBlob(received)) {
+					m_PendingRoundStartScripts = std::move(received);
 				}
 			}
 			RestoreTransportLinkLocked(std::move(link));
