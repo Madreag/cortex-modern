@@ -971,6 +971,12 @@ namespace RTE {
 		return true;
 	}
 
+	void NetLobbySession::NoteCatchUpReportDrop(NetPeerId route, const std::string& reason) {
+		++m_Stats.catchUpReportsDropped;
+		if (m_DropsNamed.insert({3, route}).second)
+			System::PrintDiagnosticLine("[net-lobby] catch-up report dropped route=" + std::to_string(route) + " reason=" + reason);
+	}
+
 	bool NetLobbySession::SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error, bool* congested, NetTransportLane lane) {
 		const bool catchUp = IsCatchUpReport(payload);
 		if (!m_Transport) {
@@ -1271,7 +1277,7 @@ namespace RTE {
 				});
 				if (sender == m_RemoteTransports.end()) {
 					const auto decoded = NetLobbyProtocol::Decode(event.bytes);
-					if (decoded.ok && IsCatchUpReport(decoded.message.payload)) ++m_Stats.catchUpReportsDropped;
+					if (decoded.ok && IsCatchUpReport(decoded.message.payload)) NoteCatchUpReportDrop(event.peerId, "unbound transport");
 					// A packet from a connection no slot is bound to is dropped; the first one per connection is named.
 					++m_Stats.unboundSenderPackets;
 					if (m_DropsNamed.insert({0, event.peerId}).second)
@@ -1304,7 +1310,7 @@ namespace RTE {
 					const auto ready = m_Config.session->GetReadyPeers();
 					const auto admitted = std::find_if(ready.begin(), ready.end(), [&](const auto& peer) { return peer.transportPeerId == event.peerId; });
 					if (admitted == ready.end()) {
-						if (IsCatchUpReport(decoded.message.payload)) ++m_Stats.catchUpReportsDropped;
+						if (IsCatchUpReport(decoded.message.payload)) NoteCatchUpReportDrop(event.peerId, "world sender not admitted");
 						++m_Stats.unadmittedWorldPackets;
 						if (m_DropsNamed.insert({1, event.peerId}).second)
 							System::PrintDiagnosticLine("[net-lobby] dropped a world packet from unadmitted connection=" + std::to_string(event.peerId) + " slot=" +
@@ -1351,9 +1357,7 @@ namespace RTE {
 				}, decoded.message.payload);
 				if (!allowed) {
 					if (IsCatchUpReport(decoded.message.payload)) {
-						++m_Stats.catchUpReportsDropped;
-						if (m_DropsNamed.insert({2, event.peerId}).second)
-							System::PrintDiagnosticLine("[net-lobby] catch-up report dropped: no current transfer route for connection=" + std::to_string(event.peerId));
+						NoteCatchUpReportDrop(event.peerId, "no current transfer route");
 					}
 					// A returner's catch-up and transfer reports can still be in flight when a repair restarts this lobby: they belong to the
 					// round the repair replaced, and the member who sent them is owed the repair, not an ejection.

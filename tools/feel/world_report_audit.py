@@ -26,11 +26,16 @@ def audit(root):
         log_path = path / 'host/stdout.log'
         log = log_path.read_text(encoding='utf-8-sig', errors='replace') if log_path.is_file() else ''
         acknowledged = [int(value) for value in re.findall(r'\[net-world\] (?:tail|catch-up gate) [^\n]*\backnowledged=(\d+)', log)]
-        rtt = [float(value) for value in re.findall(r'\[net-world\] tail [^\n]*\brtt_ms=([\d.]+)', log)]
+        rtt = [float(value) for value in re.findall(r'\[net-world\] (?:tail|catch-up gate) [^\n]*\brtt_ms=([\d.]+)', log)]
         peer_counters = {}
         for peer in ('host', 'client'):
             report = path / f'{peer}_report.json'
             peer_counters[peer] = list(counters(json.loads(report.read_text(encoding='utf-8-sig')))) if report.is_file() else []
+            peer_log = path / peer / 'stdout.log'
+            text = peer_log.read_text(encoding='utf-8-sig', errors='replace') if peer_log.is_file() else ''
+            for sent, received, refused, dropped in re.findall(r' reports_sent=(\d+) reports_received=(\d+) reports_refused=(\d+) reports_dropped=(\d+)', text):
+                peer_counters[peer].append(dict(zip(('catch_up_reports_sent', 'catch_up_reports_received', 'catch_up_reports_refused', 'catch_up_reports_dropped'),
+                                                    map(int, (sent, received, refused, dropped)))))
         drops = [row for peer in peer_counters.values() for row in peer if row.get('catch_up_reports_dropped', 0) or row.get('catch_up_reports_refused', 0)]
         rounds[name] = dict(acknowledged=acknowledged, rtt_ms=rtt, counters=peer_counters,
                             progress=bool(acknowledged and max(acknowledged) > min(acknowledged)),
