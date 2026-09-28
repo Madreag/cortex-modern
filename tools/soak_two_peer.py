@@ -3,6 +3,7 @@ sampled on both peers every minute.
 
     python tools/soak_two_peer.py --out <dir> [--minutes 45] [--autosave-seconds 60] [--holds 3] [--stall-ms 1500]
                                   [--port 49880] [--fullstate-every N] [--sample-seconds 60] [--saver-delay-ms N]
+                                  [--client-free-run] [--terrain-events FROM:TO] [--fullstate-dump]
 
 Both engines run through run_sim_test.make_run and the private-desktop runner with CCCP_HEADLESS=1. The client carries
 the forced-hold lever (-net-test-live-stall TICK:MS) once per hold, spread evenly through the match, so its seat is held
@@ -82,6 +83,20 @@ def census_growth(log: Path, settled_tick: int) -> dict | None:
             "grew": {key: [first[key], last[key]] for key in last if key != "tick" and key in first and last[key] > first[key]}}
 
 
+def terrain_event_ticks(root: Path, peer: str, tag: str) -> list[int]:
+    """The ticks of one peer's traced terrain events with this tag, from the window-end or the desync flush."""
+    ticks: set[int] = set()
+    for suffix in (".wend.terrainevents.txt", ".desync.terrainevents.txt"):
+        path = root / f"{peer}_trace.json{suffix}"
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[1] == tag and fields[0].isdigit():
+                ticks.add(int(fields[0]))
+    return sorted(ticks)
+
+
 def census_private(log: Path) -> dict:
     """Each [mem-census] line's private_mb by its tick."""
     rows = {}
@@ -121,6 +136,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--census-atom-stacks", action="store_true", help="the census samples where Atoms are constructed")
     parser.add_argument("--census-ticks", type=int, default=3600, help="ticks between the engine's memory census lines; 0 = none")
     parser.add_argument("--saver-delay-ms", type=int, default=0, help="both peers' archive writers pause this long before each task (CC_TEST_SAVER_DELAY_MS), a slow disk on a fast one")
+    parser.add_argument("--client-free-run", action="store_true", help="the client runs -free-run-sim (one tick per loop iteration, no frame drawn), "
+                        "so a draw that writes the simulation shows as a difference between the peers")
+    parser.add_argument("--terrain-events", default="", help="FROM:TO - both peers trace their terrain events in that tick window (CC_TERRAIN_EVENTS); "
+                        "result.json names each peer's clean ticks")
+    parser.add_argument("--fullstate-dump", action="store_true", help="with --fullstate-every: each peer writes every captured text section "
+                        "under <out>/<peer>-fullstate/<tick>/ (-net-fullstate-dump), so a divergent section can be diffed")
     parser.add_argument("--cross-records", action="store_true", help="both peers write the cross harness's event records (CC_TEST_CROSS_RECORDS) beside their runs")
     parser.add_argument("--cross-event-limit", type=int, default=0, help="with --cross-records: the records' byte budget (CC_TEST_CROSS_EVENT_RAW_LIMIT); 0 = the engine's")
     options = parser.parse_args(argv)
@@ -131,6 +152,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--minutes > 0, --holds >= 0, --stall-ms in 1..20000, --fullstate-every >= 0, --stall-each-round >= 0")
     if not 0 <= options.saver_delay_ms <= 60000:
         parser.error("--saver-delay-ms in 0..60000")
+    window = options.terrain_events.split(":")
+    if options.terrain_events and not (len(window) == 2 and all(part.isdigit() for part in window) and int(window[0]) <= int(window[1])):
+        parser.error("--terrain-events FROM:TO with FROM <= TO")
     if not 60 <= options.autosave_seconds <= 3600:
         parser.error("--autosave-seconds stays in the product's 60..3600 range")
     if os.environ.get("CCCP_HEADLESS", "1") != "1":
@@ -145,7 +169,8 @@ def main(argv: list[str] | None = None) -> int:
     plan = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "repo": str(repo), "ticks": ticks, "minutes": options.minutes,
             "autosave_seconds": options.autosave_seconds, "stalls": [f"{tick}:{options.stall_ms}" for tick in stalls],
             "port": options.port, "fullstate_every": options.fullstate_every, "sample_seconds": options.sample_seconds,
-            "saver_delay_ms": options.saver_delay_ms, "stall_each_round": options.stall_each_round}
+            "saver_delay_ms": options.saver_delay_ms, "stall_each_round": options.stall_each_round,
+            "client_free_run": options.client_free_run, "terrain_events": options.terrain_events}
     (root / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     runs, records = {}, {}
     samples: list[dict] = []
@@ -174,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
                      "-net-match-report", str(root / f"{peer}_report.json")]
             if options.fullstate_every:
                 flags += ["-net-fullstate-hash-every", str(options.fullstate_every)]
+                if options.fullstate_dump:
+                    flags += ["-net-fullstate-dump", str(root / f"{peer}-fullstate")]
             if options.census_ticks:
                 flags += ["-memory-census-ticks", str(options.census_ticks)]
             if options.census_histogram:
@@ -188,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
                 flags += ["-net-join", "127.0.0.1"]
                 if options.lag:
                     flags += ["-net-fake-lag", str(2 * options.lag)]
+                if options.client_free_run:
+                    flags += ["-free-run-sim"]
                 for tick in stalls:
                     flags += ["-net-test-live-stall", f"{tick}:{options.stall_ms}"]
                 if options.stall_each_round:
@@ -201,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
             env = {"CCCP_HEADLESS": "1"}
             if options.saver_delay_ms:
                 env["CC_TEST_SAVER_DELAY_MS"] = str(options.saver_delay_ms)
+            if options.terrain_events:
+                env["CC_TERRAIN_EVENTS"] = options.terrain_events
             if options.cross_records:
                 env["CC_TEST_CROSS_RECORDS"] = str(root / f"{peer}-records" / "events.jsonl")
                 (root / f"{peer}-records").mkdir()
@@ -270,12 +301,14 @@ def main(argv: list[str] | None = None) -> int:
     coalesced = {peer: count(root / peer / "stdout.log", "[fullstate-coalesced] ") + count(root / peer / "stdout.log", "[autosave-coalesced] ")
                  for peer in ("host", "client")}
     private_mb = {peer: census_private(root / peer / "stdout.log") for peer in ("host", "client")}
+    clean_ticks = {peer: terrain_event_ticks(root, peer, "clean") for peer in ("host", "client")} if options.terrain_events else None
     result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
               "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
               "autosaves_published": autosaves, "autosaves_owed": owed,
               "each_round_stalls": each_round, "in_place_catch_ups": in_place, "rounds": rounds,
               "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
               "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
+              "clean_ticks": clean_ticks,
               "plan": plan}
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "

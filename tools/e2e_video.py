@@ -456,14 +456,15 @@ def contact_sheet_ffmpeg(frames, destination, every, ffmpeg):
 
 
 def frame_range(rows, item):
-    """Where the capture puts a checklist item: the frames whose screen and sim tick match what it names."""
+    """Where the capture puts a checklist item: the frames whose screen (or any of its screens) and sim tick match."""
     screen = item.get("screen")
+    screens = [screen] if isinstance(screen, str) else screen
     low, high = (item.get("sim_ticks") or [None, None])[:2]
     hits = []
     for row in rows:
         if not row.get("saved", True):
             continue
-        if screen and row.get("screen") != screen:
+        if screens and row.get("screen") not in screens:
             continue
         if item.get("service_state") and row.get("service_state") != item["service_state"]:
             continue
@@ -656,6 +657,24 @@ def resumed_play_evidence(record, spec):
     return evidence
 
 
+def report_toast_evidence(record, spec):
+    """The toasts a peer showed, read from its match report: each required toast by kind, text and tick."""
+    report = Path(record["root"]).parent / spec.get("report", "{peer}-match.json").format(peer=record["peer"])
+    try:
+        toasts = json.loads(report.read_text(encoding="utf-8")).get("ui", {}).get("toasts", [])
+    except (OSError, ValueError, AttributeError):
+        toasts = []
+    checks = []
+    for required in spec["require"]:
+        low, high = (required.get("ticks") or [None, None])[:2]
+        found = [toast for toast in toasts if toast.get("kind") == required["kind"] and re.search(required["text"], toast.get("text", ""))
+                 and (low is None or toast.get("tick", -1) >= low) and (high is None or toast.get("tick", -1) <= high)]
+        checks.append({**required, "observed": found[:3], "pass": bool(found)})
+    missing = [check["kind"] + " " + check["text"] for check in checks if not check["pass"]]
+    return {"report": str(report), "toasts": len(toasts), "checks": checks, "pass": not missing,
+            "reason": "no toast " + "; ".join(missing) + " in " + str(report) if missing else None}
+
+
 def item_evidence(record, item, port=None):
     rows = record["index"]
     events_path = Path(record["video_dir"]) / "events.jsonl"
@@ -721,6 +740,13 @@ def item_evidence(record, item, port=None):
         evidence["log_assertions"] = assertions
         if not passed or evidence.get("probe") == "none":
             evidence["probe"] = "pass" if passed else "fail"
+    if item.get("report_toasts"):
+        evidence["report_toasts"] = report_toast_evidence(record, item["report_toasts"])
+        passed = evidence["report_toasts"]["pass"]
+        if not passed or evidence.get("probe") == "none":
+            evidence["probe"] = "pass" if passed else "fail"
+        if not passed:
+            evidence["reason"] = evidence["report_toasts"]["reason"]
     for key, measure in (("own_session_rows", lambda spec: own_session_evidence(record["root"], spec, port)),
                          ("join_port_follows_list", lambda spec: join_port_evidence(record["root"], spec))):
         if item.get(key):
