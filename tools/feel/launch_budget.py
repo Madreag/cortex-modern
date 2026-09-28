@@ -34,14 +34,18 @@ def install_memory_guard():
     if getattr(original, '_memory_guard', False):
         return
     def start(run):
+        def refuse(reason, **budget):
+            run.record['launch_budget'] = dict(refused=reason, **budget)
+            run._save()
+            raise RuntimeError(reason)
         marker = Path('D:/mx/FEEL-MATRIX-RUNNING')
         if marker.is_file() and json.loads(marker.read_text(encoding='utf-8')).get('token') != os.environ.get('CCCP_FEEL_MATRIX_RUN'):
-            raise RuntimeError('engine launch refused: another lane owns the feel matrix marker')
+            refuse('engine launch refused: another lane owns the feel matrix marker', marker=str(marker))
         if Path('D:/mx/BOX-FREE-FOR-CROSS').exists():
-            raise RuntimeError('engine launch refused: the box is reserved for the cross match')
+            refuse('engine launch refused: the box is reserved for the cross match')
         free = free_memory_bytes()
         if free < MIN_FREE_BYTES:
-            raise RuntimeError(f'engine launch refused: {free} free bytes, requires {MIN_FREE_BYTES}')
+            refuse(f'engine launch refused: {free} free bytes, requires {MIN_FREE_BYTES}', free_bytes=free, required_bytes=MIN_FREE_BYTES)
         result = original(run)
         run.record['launch_budget'] = dict(free_bytes=free, required_bytes=MIN_FREE_BYTES)
         run._save()
