@@ -7145,10 +7145,9 @@ namespace RTE {
 		NetLockstepPeerStats& peerStats = m_Stats.peers[frame.senderPeerId];
 		if (frame.targetFrame > peerStats.highestTargetFrame) { peerStats.highestTargetFrame = frame.targetFrame; peerStats.lastProgressMs = nowMs; }
 		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
-			// A member admitted mid-round reads the window copies of the ticks before its own start.
-			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
-			if (windowCopy || m_ReclaimTransactions.contains(frame.senderPeerId) ||
-			    (IsPersistentWorldRound() && m_Config.joinsRunningRound && frame.targetFrame < m_Config.startFrame)) {
+			// A member admitted mid-round reads the window copies of the ticks before its own start, and a round it joins running
+			// sends it that round's own ticks before its start, which its replay carried. Neither is a broken build.
+			if (windowCopy || m_ReclaimTransactions.contains(frame.senderPeerId) || (m_Config.joinsRunningRound && frame.targetFrame < m_Config.startFrame)) {
 				++m_Stats.windowCopiesSkipped;
 				++peerStats.windowCopiesSkipped;
 				return;
