@@ -438,6 +438,12 @@ class CrossDriverTests(unittest.TestCase):
             self.assertFalse(missing['checks']['hold_evidence_complete'])
             self.assertEqual(missing['oracles']['unscheduled_holds']['status'],'FAIL')
             log.write_bytes(saved)
+            rows=(own/'live.jsonl').read_bytes(); unmapped=[dict(row) for row in live]; unmapped[2]['history_branch']=None
+            (own/'live.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in unmapped))
+            unkeyed=cross_report.build_report(root); name=plan['specs'][-1]['peer']
+            self.assertFalse(unkeyed['passed']); self.assertEqual(unkeyed['peers'][name]['unkeyed'],1)
+            self.assertIn(f'{name}=3 frames (1 unkeyed: history_branch from tick 3)',cross_report.verdict_line(unkeyed))
+            (own/'live.jsonl').write_bytes(rows)
             with (own/'live.jsonl').open('a') as stream: stream.write(json.dumps(live[-1])+'\n')
             failed=cross_report.build_report(root)
             self.assertFalse(failed['passed']); self.assertEqual(failed['comparison']['duplicates'],1)

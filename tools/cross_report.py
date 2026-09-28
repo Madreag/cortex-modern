@@ -96,7 +96,8 @@ def verdict_line(result):
     peers=result['peers']; comparison=result['comparison']
     holds=sum(len(p['holds']) for p in peers.values())
     classifications=dict(Counter(h.get('classification','other') for p in peers.values() for h in p['holds']))
-    text=f'{attempt_label(result)} {result["run"]}: '+', '.join(f'{n}={p["frames"]} frames' for n,p in peers.items())
+    unkeyed=lambda p: f' ({p["unkeyed"]} unkeyed: {",".join(p["first_unkeyed"]["missing"])} from tick {p["first_unkeyed"]["tick"]})' if p.get('unkeyed') else ''
+    text=f'{attempt_label(result)} {result["run"]}: '+', '.join(f'{n}={p["frames"]} frames{unkeyed(p)}' for n,p in peers.items())
     text+=f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds} unscheduled={result["unscheduled_holds"]} classifications={classifications}; '
     text+='; '.join(name+'='+oracle['status'] for name,oracle in result['oracles'].items())
     if result.get('assigned_capture_rows'): text+='; full-state NOT COVERED by capture-rows lane rows '+','.join(result['assigned_capture_rows'])
@@ -547,6 +548,11 @@ def build_report(root):
     for name,peer in peers.items():
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
+        # Rows the writer left without a history key are retained and counted, never compared.
+        unkeyed=[r for r in live[name] if any(r.get(field) is None for field in report.HISTORY_FIELDS)]
+        peer['unkeyed']=len(unkeyed)
+        peer['first_unkeyed']=dict(tick=unkeyed[0].get('tick'),path=unkeyed[0].get('_path'),line=unkeyed[0].get('_line'),
+            missing=[field for field in report.HISTORY_FIELDS if unkeyed[0].get(field) is None]) if unkeyed else None
     judgment=judge_attempt(manifest,checks,peers,matrix,recoveries)
     rerun=write_rerun_command(root,manifest)
     result = dict(version=2, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
