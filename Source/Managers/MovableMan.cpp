@@ -3714,6 +3714,12 @@ bool MovableMan::RunPurgeSelfTest() {
 	return passed;
 }
 
+void MovableMan::RestartSimUpdateFrameNumber() {
+	std::lock_guard<std::mutex> lock(m_ObjectRegisteredMutex);
+	for (const auto& [id, object]: m_KnownObjects) object->ResetCollisionResults();
+	m_SimUpdateFrameNumber = 0;
+}
+
 void MovableMan::PurgeAllMOs() {
 	if (m_Speculation.active) {
 		ReportSpeculationViolation("purging", nullptr);

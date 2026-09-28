@@ -1370,6 +1370,9 @@ namespace RTE {
 		/// @param matID The ID of the material, if any, that this MO hit during the last Travel.
 		void SetHitWhatTerrMaterial(unsigned char matID);
 
+		/// Invalidates collision results retained from an earlier round.
+		void ResetCollisionResults();
+
 		/// Gets whether this MO's RootParent can GetHitByMOs and is currently traveling.
 		/// @return Whether this MO's RootParent can GetHitByMOs and is currently traveling.
 		bool GetTraveling() const { return GetRootParent()->m_IsTraveling; }
