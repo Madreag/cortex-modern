@@ -581,7 +581,7 @@ def failure_reasons(report):
     reasons = [f'{peer}.{name}: {pin.get("status", "MISS")} value={pin.get("value")!r}; {pin.get("rule", "no rule recorded")}'
                for peer, measured in report.get('peers', {}).items() for name, pin in measured.get('pins', {}).items()
                if name.startswith('item9a_') and pin.get('status') != 'PASS']
-    for field in ('measurement_complete', 'launches_complete', 'off_wire_pass'):
+    for field in ('launches_complete', 'off_wire_pass'):
         if report.get(field) is False:
             reasons.append(f'{field}=false; see {report.get("name", "case")}/feel-report.json')
     if report.get('reason'):
@@ -592,7 +592,7 @@ def failure_reasons(report):
 
 
 def write_case_gates(root, results):
-    cases = {row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False), reasons=failure_reasons(row))
+    cases = {row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False) and row.get('off_wire_pass', True), reasons=failure_reasons(row))
              for row in results}
     for case in cases.values():
         if not case['passed'] and not case['reasons']:
@@ -710,8 +710,9 @@ def analyze(root, stock=None):
     lines = [f'Measured {stamp()}', '', '| Configuration | Raw measurements complete | Off-wire proof | Findings |', '|---|---|---|---|']
     for report in results:
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
+        failures = sum(row['status'] == 'FAIL' for peer in report['peers'].values() for row in peer['pins'].values())
         link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
-        lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({link}) |')
+        lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {failures} FAIL, {misses} MISS; [{report["name"]}]({link}) |')
     lines += ['', 'Item 9a retains the 50 ms and one-percent wait gates. TPS uses the same-machine',
               'single-player reference with a five-percent maximum gap when that reference is below 59.5.',
               'Nominal 60 Hz horizon drift is retained as a diagnostic in that case. Missing records and failed',
