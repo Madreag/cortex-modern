@@ -989,7 +989,7 @@ namespace RTE {
 		bool HostAloneFromOwnStateLocked();
 		/// Held client hosting from its own state: takes the host's admission, lobby and rejoin plane on the round's listener, so the
 		/// other held seats rejoin it. Returns whether they can.
-		bool OpenHeldHostPlaneLocked(uint64_t tick, uint8_t lostHost);
+		bool OpenHeldHostPlaneLocked(uint64_t handoverFrame, uint8_t lostHost);
 		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error);
 		/// Restarts the silence windows of a session handed to a worker thread.
 		void NoteSessionHandedToWorker(NetSession& session);
