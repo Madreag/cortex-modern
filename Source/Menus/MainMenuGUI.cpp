@@ -966,11 +966,6 @@ bool MainMenuGUI::HandleInputEvents() {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Enter && guiEvent.GetControl() == m_MultiplayerLobbyChatInput) {
 			SendLobbyChat();
-		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Changed && guiEvent.GetControl() == m_MultiplayerJoinPortTextBox) {
-			// A value the screen did not write is the player's, so the list stops refilling the port.
-			if (m_MultiplayerJoinPortTextBox->GetText() != m_JoinPortAutoValue) {
-				m_JoinPortAutoValue.clear();
-			}
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Changed && guiEvent.GetControl() == m_MultiplayerHostInputDelayTextBox) {
 			// The label names the frames the box would send, so it follows the edit.
 			if (m_MultiplayerHostInputDelayTextBox->GetEnabled()) {
@@ -4417,6 +4412,11 @@ void MainMenuGUI::UpdateMainScreenHoveredButton(const GUIButton* hoveredButton) 
 void MainMenuGUI::RefreshGamesList() {
 	if (!m_MultiplayerLanGamesList) {
 		return;
+	}
+	// A port the screen did not write is the player's, so the list stops refilling it. Read every frame:
+	// the control manager drops a change event raised outside its own update.
+	if (m_MultiplayerJoinPortTextBox && m_MultiplayerJoinPortTextBox->GetText() != m_JoinPortAutoValue) {
+		m_JoinPortAutoValue.clear();
 	}
 	// The browser and the directory lister only run while the join screen is up.
 	if (m_MultiplayerSubScreen != MultiplayerSubScreen::JoinSetup) {
