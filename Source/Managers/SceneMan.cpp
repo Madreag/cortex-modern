@@ -3316,17 +3316,24 @@ bool SceneMan::LoadMaterialCatalog(std::string_view text, bool validateOnly) {
 }
 
 std::string SceneMan::CheckpointPerPeerSelfTestMismatch() {
-	// The visitor alone: the material catalog is shared and has its own rows.
-	const auto capture = [this] { return CheckpointWriter::CaptureNative([this] { CheckpointWriter writer("SceneManScopes"); VisitCheckpoint(writer, *this); return writer.Text(); }); };
-	const int screen = m_LastUpdatedScreen;
-	const int scrapHeight = m_ScrapCompactingHeight;
+	// The visitor alone over the fields it visits: the manager itself needs the display, and the material catalog has its own rows.
+	struct VisitedFields {
+		int m_LayerDrawMode = g_LayerNormal;
+		bool m_DrawRayCastVisualizations = false;
+		bool m_DrawPixelCheckVisualizations = false;
+		int m_LastUpdatedScreen = 0;
+		bool m_SecondStructPass = false;
+		Timer m_CalcTimer;
+		Timer m_CleanTimer;
+		int m_ScrapCompactingHeight = 25;
+	} fields;
+	const auto capture = [&fields] { return CheckpointWriter::CaptureNative([&fields] { CheckpointWriter writer("SceneManScopes"); VisitCheckpoint(writer, fields); return writer.Text(); }); };
 	const CheckpointText base = capture();
-	m_LastUpdatedScreen = screen + 1;
+	fields.m_LastUpdatedScreen = 1;
 	const CheckpointText otherScreen = capture();
-	m_LastUpdatedScreen = screen;
-	m_ScrapCompactingHeight = scrapHeight + 1;
+	fields.m_LastUpdatedScreen = 0;
+	fields.m_ScrapCompactingHeight = 26;
 	const CheckpointText otherScrap = capture();
-	m_ScrapCompactingHeight = scrapHeight;
 	if (base.Text() == otherScreen.Text()) return "last_updated_screen=unarchived";
 	if (base.SharedText() != otherScreen.SharedText()) return "last_updated_screen=shared";
 	if (base.SharedText() == otherScrap.SharedText()) return "scrap_compacting_height=per_peer";
