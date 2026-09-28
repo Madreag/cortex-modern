@@ -12,6 +12,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -670,9 +671,23 @@ namespace RTE {
 			             error, "conflicting pending command targets were accepted or changed the capture destination");
 		}
 
+		bool TestDestroyedCoordinatorRetires(std::string* error) {
+			std::optional<NetLockstepCoordinator> dying(std::in_place);
+			ScenarioRunner::SetLockstepCoordinator(&*dying);
+			dying.reset();
+			const bool retired = !ScenarioRunner::HasLockstepCoordinator();
+			// A coordinator left attached is rebuilt in place so the cleanup never reads a destroyed object.
+			if (!retired) {
+				dying.emplace();
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+			}
+			return Check(retired, error, "a destroyed coordinator stayed attached to the sim");
+		}
+
 		bool TestDeferredStopCapture(std::string* error) {
 			Pair pair(44215, 0, 0);
 			if (!pair.Start(error) || !pair.Running(error)) return false;
+			ResetScenario reset;
 			ScenarioRunner::SetLockstepCoordinator(&pair.host);
 			pair.host.DeferStopsToTickBoundary();
 			pair.client.DeferStopsToTickBoundary();
@@ -1284,6 +1299,7 @@ namespace RTE {
 		run("checksum ACK authority", TestChecksumAckAuthority);
 		run("snapshot capture", TestSnapshotCapture);
 		run("deferred stop capture", TestDeferredStopCapture);
+		run("destroyed coordinator retires", TestDestroyedCoordinatorRetires);
 		run("full asymmetric input 0/3", [](auto* error) { return TestFullAsymmetric(0, 3, 44196, error); });
 		run("full asymmetric input 3/0", [](auto* error) { return TestFullAsymmetric(3, 0, 44197, error); });
 		run("full asymmetric input 1/3", [](auto* error) { return TestFullAsymmetric(1, 3, 44198, error); });

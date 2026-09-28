@@ -1109,6 +1109,13 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->FinishSimulationTick(completedTick);
 	}
 
+	void ScenarioRunner::ForgetLockstepCoordinator(const NetLockstepCoordinator* coordinator) {
+		NetLockstepPlaneGuard plane;
+		if (!coordinator || s_LockstepCoordinator != coordinator) return;
+		std::cout << "[net-lockstep] coordinator destroyed while the sim still held it; retired" << std::endl;
+		SetLockstepCoordinator(nullptr);
+	}
+
 	bool ScenarioRunner::HasLockstepCoordinator() {
 		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator != nullptr;
