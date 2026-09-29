@@ -1027,12 +1027,23 @@ static std::string ResyncSaveName() {
 			if (m_EndRecordSent.contains(peer.transportPeerId)) continue;
 			uint8_t seat = 0;
 			for (const auto& [peerId, transport]: m_Coordinator->RemoteTransports()) if (transport == peer.transportPeerId) seat = peerId;
+			if (seat == 0) {
+				const uint16_t stable = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+				for (const auto& held: m_ReconnectHost.GetSeatStatuses()) if (stable != 0 && held.stableSeat == stable) seat = held.lockstepPeerId;
+			}
 			if (!EndedRoundOwesGoodbye(m_Coordinator->UsesTransportPeer(peer.transportPeerId), seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame))) continue;
 			if (!m_WorldJoin.FindSession(peer.transportPeerId) && seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame) &&
-			    m_WorldJoin.IsPrivateMatch() && m_WorldJoin.Tail().LastFrame() != 0) continue;
+			    m_WorldJoin.IsPrivateMatch() && m_WorldJoin.Tail().LastFrame() != 0) {
+				const std::string reason = "the ended round awaits its held seat's final-tail request";
+				if (m_PrivateTransferHeldReasons[peer.transportPeerId] != reason) {
+					m_PrivateTransferHeldReasons[peer.transportPeerId] = reason;
+					System::PrintDiagnosticLine("[net-match] end waits peer=" + std::to_string(seat) + " final=" + std::to_string(finalFrame) + " tail=" + std::to_string(m_WorldJoin.Tail().LastFrame()));
+				}
+				continue;
+			}
 			// The final tail reaches a held seat before the record that closes its lobby.
 			if (const auto* returning = m_WorldJoin.FindSession(peer.transportPeerId); returning && m_Runner) {
-				if (returning->phase == NetWorldJoinPhase::SnapshotTransfer && returning->transferStarted) continue;
+				if (returning->phase == NetWorldJoinPhase::SnapshotTransfer) continue;
 				if (returning->phase == NetWorldJoinPhase::CatchingUp && returning->acknowledgedThrough < finalFrame) {
 					if (!m_WorldJoin.BeginFinalTail(peer.transportPeerId, finalFrame)) continue;
 					for (int part = 0; part < 32 && returning->deliveredThrough < finalFrame; ++part) {
