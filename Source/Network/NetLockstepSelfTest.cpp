@@ -2747,9 +2747,8 @@ namespace RTE {
 				return false;
 			}
 			(void)host.FinishSimulationTick(0);
-			// Re-derived from the fixture's own numbers: the trip and the frame it lands in, plus the
-			// restart the returning machine published.
-			const uint32_t link = static_cast<uint32_t>(std::ceil(400.0 / a.simTickMs)) + 1;
+			// The 200 ms trip clears one 400 ms retransmission before the restart.
+			const uint32_t link = static_cast<uint32_t>(std::ceil(600.0 / a.simTickMs)) + 1;
 			const uint32_t restart = static_cast<uint32_t>(std::ceil(285.0 / a.simTickMs));
 			NetInputDelayEstimator measured;
 			for (uint64_t at = 0; at <= 400; at += 200) measured.Observe(at, 400);
@@ -2913,7 +2912,7 @@ namespace RTE {
 			LoopbackTransport hostWire, oldWire, returnWire;
 			hostWire.SetFaultConfig(lagged); oldWire.SetFaultConfig(lagged); returnWire.SetFaultConfig(lagged);
 			NetLockstepCoordinator host, oldClient;
-			const uint16_t delay = 25; // ceil(400ms / 16.67ms) + 1: the window a 400 ms link is admitted on.
+			const uint16_t delay = 25; // Begin below the returning link's required delay.
 			const uint32_t restartMs = 285; // The restart the 200 ms arms' machines published.
 			auto a = MakeCoordinatorConfig(1, 2, 0x9A36, delay, NetTransportLane::ControlReliable);
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A36, delay, NetTransportLane::ControlReliable);
