@@ -205,8 +205,8 @@ def roster_matches(manifest, configs):
     humans=sum(p.get('seat','player')=='player' for p in manifest['instances'])
     roster=manifest['roster']
     human_teams=[0]*humans if roster=='ai-heavy' else [0,0,1] if roster in ('mixed','allies') else list(range(humans))
-    cpu_teams=[1,2] if roster=='ai-heavy' else [2] if roster in ('mixed','allies') else [humans]
-    mode='coop-pve' if roster=='ai-heavy' else 'pvpve'
+    cpu_teams=[] if roster=='four-way' else [1,2] if roster=='ai-heavy' else [2] if roster in ('mixed','allies') else [humans]
+    mode='pvp-skirmish' if roster=='four-way' else 'coop-pve' if roster=='ai-heavy' else 'pvpve'
     for config in configs:
         players=config.get('players',[]); native=config.get('config',{})
         if sorted(p.get('team',-1) for p in players if p.get('human'))!=human_teams or \
