@@ -81,6 +81,7 @@ namespace RTE {
 		bool SetAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool HasAgreedStart() const { return m_AgreedStart.has_value(); }
 		void Close();
+		bool IsCloseComplete() const;
 		bool IsOpen() const { return m_Open && GetWriteError().empty(); }
 		std::string GetWriteError() const;
 		uint64_t GetFramesWritten() const { return m_FramesWritten; }
@@ -90,9 +91,11 @@ namespace RTE {
 	private:
 		friend bool TestReplayStorageDoesNotBlockTicks(std::string* error);
 		bool WriteRecordPayload(const std::vector<uint8_t>& payload, std::string* error);
-		void WriteQueuedRecords();
 		struct WriteState;
-		std::unique_ptr<WriteState> m_Writes;
+		struct StorageState;
+		static void WriteQueuedRecords(std::shared_ptr<StorageState> storage);
+		std::shared_ptr<WriteState> m_Writes;
+		std::shared_ptr<StorageState> m_Storage;
 		bool m_Open = false;
 		std::function<void()> m_BeforeWriteForTest;
 		uint64_t m_FramesWritten = 0;

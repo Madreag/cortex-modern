@@ -2776,7 +2776,7 @@ namespace RTE {
 		if (wasOpen || !writeError.empty()) {
 			s_ReplayRecordFrames = writeError.empty() ? frames : 0;
 			s_ReplayRecordClosed = true;
-			if (writeError.empty()) std::cout << "[net-match] replay recorded: " << s_ReplayRecordFrames << " frames" << std::endl;
+			if (writeError.empty()) std::cout << "[net-match] replay close queued: " << s_ReplayRecordFrames << " frames" << std::endl;
 			else std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
 		}
 		s_WorldSegment = {};
@@ -2880,7 +2880,7 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::WasLockstepReplayRecordClosed() {
-		return s_ReplayRecordClosed && !s_ReplayWriter.IsOpen();
+		return s_ReplayRecordClosed && s_ReplayWriter.IsCloseComplete();
 	}
 
 	ScenarioRunner::LockstepReplayOutcome ScenarioRunner::GetLockstepReplayOutcome() {

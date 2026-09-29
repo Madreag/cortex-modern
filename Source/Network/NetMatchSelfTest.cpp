@@ -1,3 +1,4 @@
+#include "NetReplayTestUtils.h"
 #include "NetMatchSelfTest.h"
 
 #include "NetActorOwnership.h"
@@ -462,7 +463,7 @@ namespace RTE {
 			}
 			if (!writer.WriteFrame(first.targetFrame, first.frames, first.commands, error) ||
 			    !writer.WriteFrame(second.targetFrame, second.frames, second.commands, error)) return false;
-			writer.Close();
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 			NetMatchReplayReader reader;
 			if (!reader.Open(path.string(), error)) return false;
 			NetLockstepFrame decoded;
@@ -603,7 +604,7 @@ namespace RTE {
 			NetMatchReplayWriter writer;
 			if (!writer.Open(path.string(), match, error) || !writer.SetAgreedStart(agreed, error) ||
 			    !writer.WriteFrame(7, {firstFrame}, {}, error) || !writer.WriteFrame(8, {secondFrame}, {}, error)) return false;
-			writer.Close();
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 			NetMatchReplayReader reader;
 			if (!reader.Open(path.string(), error) || !reader.GetAgreedStart() || *reader.GetAgreedStart() != agreed || reader.GetStartFrame() != 7) {
 				*error = "the replay reader lost the shifted agreed-start record"; return false;
@@ -14086,7 +14087,7 @@ namespace RTE {
 		struct Cleanup {
 			std::filesystem::path path;
 			~Cleanup() { std::error_code ignored; std::filesystem::remove(path, ignored); }
-		} cleanup{path};
+		} cleanup{path}, rotatedCleanup{path.string() + ".rotated"};
 		std::promise<void> entered, release;
 		auto enteredFuture = entered.get_future();
 		auto released = release.get_future().share();
@@ -14103,17 +14104,31 @@ namespace RTE {
 		if (!storageEntered || !tickReturned) release.set_value();
 		const bool accepted = written.get();
 		if (!storageEntered || !tickReturned || !accepted) {
-			writer.Close();
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 			*error = "the simulation waited on blocked replay storage: entered=" + std::to_string(storageEntered) + " returned=" + std::to_string(tickReturned) + " error=" + writeError;
 			return false;
 		}
 		if (!writer.WriteFrame(44, {}, {}, error)) { release.set_value(); return false; }
 		auto closing = std::async(std::launch::async, [&] { writer.Close(); });
 		const bool closeReturned = closing.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
-		release.set_value();
+		if (!closeReturned) {
+			release.set_value(); closing.get();
+			*error = "closing a replay blocked the simulation on its storage worker"; return false;
+		}
 		closing.get();
-		if (!closeReturned) { *error = "closing a replay blocked the simulation on its storage worker"; return false; }
+		auto rotated = std::async(std::launch::async, [&] {
+			const bool ok = writer.Open(rotatedCleanup.path.string(), MakeConfig(), &writeError) && writer.WriteFrame(45, {}, {}, &writeError);
+			writer.Close(); return ok;
+		});
+		const bool rotationReturned = rotated.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
+		release.set_value();
+		const bool rotationAccepted = rotated.get();
+		if (!WaitForReplayCloseForTest(writer, error)) return false;
+		if (!rotationReturned || !rotationAccepted) { *error = "segment rotation waited on the previous file: " + writeError; return false; }
 		NetReplayVerifyReport report;
+		if (!NetMatchReplayReader::Verify(rotatedCleanup.path.string(), report) || report.frames != 1 || report.firstFrame != 45) {
+			*error = "the retired worker did not drain the next replay segment"; return false;
+		}
 		if (!NetMatchReplayReader::Verify(path.string(), report) || report.frames != 2 || report.firstFrame != 43 || report.lastFrame != 44) {
 			*error = "closing the replay did not drain its ticks in order"; return false;
 		}
@@ -14124,6 +14139,7 @@ namespace RTE {
 			failed.m_BeforeWriteForTest = [] { throw std::runtime_error("injected replay write failure"); };
 			(void)failed.WriteFrame(50, {}, {}, error);
 			failed.Close();
+			if (!WaitForReplayCloseForTest(failed, error)) return false;
 			failedWrite = failed.GetWriteError();
 		}
 		if (failedWrite.find("injected replay write failure") == std::string::npos || NetMatchReplayReader::Verify(path.string(), report) || report.endMarker) {
@@ -14134,7 +14150,7 @@ namespace RTE {
 		if (writer.WriteRecordPayload(std::vector<uint8_t>(NetMatchReplayWriter::c_MaxRecordBytes + 1), &limitError) || limitError.find("limit") == std::string::npos) {
 			*error = "the replay queue accepted a record beyond its existing size limit"; return false;
 		}
-		writer.Close();
+		writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 		std::cout << "[net-match-selftest] PASS replay_storage_does_not_block_ticks" << std::endl;
 		return true;
 	}

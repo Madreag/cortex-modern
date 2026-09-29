@@ -1,3 +1,4 @@
+#include "NetReplayTestUtils.h"
 #include "NetWorldJoinSelfTest.h"
 
 #include "ControllerFrame.h"
@@ -6330,7 +6331,7 @@ namespace RTE {
 		ControllerFrame controller;
 		controller.actorUniqueID = 101;
 		if (!writer.WriteFrame(901, {controller}, {}, error) || !writer.WriteFrame(902, {}, {}, error)) return false;
-		writer.Close();
+		writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 
 		NetMatchReplayReader reader;
 		if (!reader.Open(segmentPath.string(), error)) return false;
