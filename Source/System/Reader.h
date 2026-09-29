@@ -97,6 +97,10 @@ namespace RTE {
 		/// @return The std::string that will hold the line's contents.
 		std::string ReadLine();
 
+		/// Reads one property's literal text, preserving slashes such as the ones in a URL.
+		/// Ordinary preset strings continue to use ReadLine and its comment syntax.
+		std::string ReadLineLiteral();
+
 		/// Reads the next property name from the context object Reader's stream after eating all whitespace including newlines up till the first newline char.
 		/// Basically gets anything between the last newline before text to the next "=" after that.
 		/// @return The whitespace-trimmed std::string that will hold the next property's name.

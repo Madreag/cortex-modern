@@ -239,6 +239,15 @@ std::string Reader::ReadLine() {
 	return TrimString(retString);
 }
 
+std::string Reader::ReadLineLiteral() {
+	while (m_Stream->peek() == ' ') m_Stream->get();
+	std::string value;
+	for (int next = m_Stream->peek(); next != std::char_traits<char>::eof() && next != '\n' && next != '\r' && next != '\t'; next = m_Stream->peek()) {
+		value.push_back(static_cast<char>(m_Stream->get()));
+	}
+	return TrimString(value);
+}
+
 std::string Reader::ReadPropName() {
 	DiscardEmptySpace();
 
