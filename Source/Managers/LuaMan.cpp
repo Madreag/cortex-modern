@@ -8050,34 +8050,38 @@ static bool RunScriptSelfFetchSelfTest() {
 	    {"false_entry", "_SelfFetchTable = { ['7'] = false }"},
 	};
 	std::string failed;
-	struct LiteralCase { const char* name; std::string_view argument; const char* expected; };
+	struct LiteralCase {
+		const char* name;
+		std::string_view argument;
+		const char* expected;
+	};
 	const LiteralCase literals[] = {{"integer", "11", "11"}, {"decimal", "11.5", "11.5"},
 	    {"bounded_decimal", std::string_view("11.5suffix", 4), "11.5"}, {"empty", "", "0"}};
 	for (const auto& [name, setup]: cases) {
 		for (const bool conditional: {false, true}) {
-		for (const LiteralCase& literal: literals) {
-			wrapper.RunScriptString(setup + "; _SelfFetchCount = -1; _SelfFetchArgs = nil");
-			const bool selfDefined = wrapper.TableEntryIsDefined("_SelfFetchTable", "7");
-			const int top = lua_gettop(L);
-			bool returned = false;
-			if (conditional) {
-				wrapper.RunScriptConditionalTestFunctionObject(&test, "_SelfFetchTable", "7", returned, {}, {literal.argument});
-			} else {
-				wrapper.RunScriptFunctionObject(&probe, "_SelfFetchTable", "7", {}, {literal.argument});
+			for (const LiteralCase& literal: literals) {
+				wrapper.RunScriptString(setup + "; _SelfFetchCount = -1; _SelfFetchArgs = nil");
+				const bool selfDefined = wrapper.TableEntryIsDefined("_SelfFetchTable", "7");
+				const int top = lua_gettop(L);
+				bool returned = false;
+				if (conditional) {
+					wrapper.RunScriptConditionalTestFunctionObject(&test, "_SelfFetchTable", "7", returned, {}, {literal.argument});
+				} else {
+					wrapper.RunScriptFunctionObject(&probe, "_SelfFetchTable", "7", {}, {literal.argument});
+				}
+				const bool balanced = lua_gettop(L) == top;
+				// The old path passed the entry itself first, then the literal.
+				const std::string check = (selfDefined ? "_SelfFetchOk = _SelfFetchCount == 2 and rawequal(_SelfFetchArgs[1], _SelfFetchTable['7']) and _SelfFetchArgs[2] == "
+				                                      : "_SelfFetchOk = _SelfFetchCount == 1 and _SelfFetchArgs[1] == ") + std::string(literal.expected);
+				wrapper.RunScriptString(check);
+				lua_getglobal(L, "_SelfFetchOk");
+				const bool same = lua_toboolean(L, -1) != 0;
+				lua_pop(L, 1);
+				if (!same || !balanced || (conditional && !returned)) {
+					failed += std::string(failed.empty() ? "" : ",") + name + "/" + literal.name + (conditional ? "/conditional" : "/plain") + (same ? "" : ":arguments") +
+					          (balanced ? "" : ":stack") + (conditional && !returned ? ":result" : "");
+				}
 			}
-			const bool balanced = lua_gettop(L) == top;
-			// The old path passed the entry itself first, then the literal.
-			const std::string check = (selfDefined ? "_SelfFetchOk = _SelfFetchCount == 2 and rawequal(_SelfFetchArgs[1], _SelfFetchTable['7']) and _SelfFetchArgs[2] == "
-			                                      : "_SelfFetchOk = _SelfFetchCount == 1 and _SelfFetchArgs[1] == ") + std::string(literal.expected);
-			wrapper.RunScriptString(check);
-			lua_getglobal(L, "_SelfFetchOk");
-			const bool same = lua_toboolean(L, -1) != 0;
-			lua_pop(L, 1);
-			if (!same || !balanced || (conditional && !returned)) {
-				failed += std::string(failed.empty() ? "" : ",") + name + "/" + literal.name + (conditional ? "/conditional" : "/plain") + (same ? "" : ":arguments") +
-				          (balanced ? "" : ":stack") + (conditional && !returned ? ":result" : "");
-			}
-		}
 		}
 	}
 	wrapper.RunScriptString("_SelfFetchProbe = nil; _SelfFetchTest = nil; _SelfFetchTable = nil; _SelfFetchArgs = nil; _SelfFetchOk = nil");
