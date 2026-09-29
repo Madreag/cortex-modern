@@ -1009,7 +1009,7 @@ namespace RTE {
 		unsigned int GetSimUpdateFrameNumber() const { return m_SimUpdateFrameNumber; }
 
 		/// Starts the sim update count over, as every peer does when a fresh round starts.
-		void RestartSimUpdateFrameNumber() { m_SimUpdateFrameNumber = 0; }
+		void RestartSimUpdateFrameNumber();
 
 		/// Gets pointers to the MOs that are within the given Box, and whose team is not ignored.
 		/// @param box The Box to get MOs within.

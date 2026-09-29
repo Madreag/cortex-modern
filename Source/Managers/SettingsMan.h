@@ -620,7 +620,7 @@ namespace RTE {
 		int m_AIUpdateInterval; //!< How often actor's AI should be updated, i.e. every n simulation updates.
 		int m_NetworkInputDelayFrames; //!< Lockstep input-delay buffer (frames) a hosted match uses; the client adopts the host's.
 		uint32_t m_AutosaveSeconds; //!< Saved checkpoint cadence in simulation seconds; zero disables autosaves.
-		std::string m_SessionDirectoryUrl; //!< Base URL of the session-directory service; empty disables it.
+		std::string m_SessionDirectoryUrl = "directory.broserver.com"; //!< Base URL of the session-directory service (https:// implied); empty disables it.
 		std::string m_SessionDirectoryInstallKey; //!< Per-install rate-limit identity sent as X-Install-Key; generated on the first directory use.
 		std::string m_SessionDirectoryCertSha256; //!< Pinned SHA-256 hex of the directory server's certificate; empty = system chain.
 		bool m_NetworkPortMapEnable; //!< Whether a hosted match requests a router UDP port mapping and advertises the public endpoint.

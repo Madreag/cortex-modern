@@ -1,6 +1,7 @@
 #include "InputScript.h"
 
 #include "Constants.h"
+#include "FloatText.h"
 #include "Vector.h"
 
 #include <array>
@@ -47,8 +48,8 @@ namespace RTE {
 			}
 			char* endX = nullptr;
 			char* endY = nullptr;
-			const float x = std::strtof(text.c_str(), &endX);
-			const float y = std::strtof(text.c_str() + comma + 1, &endY);
+			const float x = FloatText::StrToFloating(text.c_str(), &endX, float());
+			const float y = FloatText::StrToFloating(text.c_str() + comma + 1, &endY, float());
 			if (endX != text.c_str() + comma || *endY != '\0') {
 				return false;
 			}

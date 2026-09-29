@@ -33,8 +33,7 @@ namespace RTE {
 		LuabindObjectWrapper() = default;
 
 		/// Constructor method used to instantiate a LuabindObjectWrapper object in system memory.
-		explicit LuabindObjectWrapper(luabind::adl::object* luabindObject, const std::string_view& filePath, bool ownsObject = true) :
-		    m_OwnsObject(ownsObject), m_LuabindObject(luabindObject), m_FilePath(filePath) {}
+		explicit LuabindObjectWrapper(luabind::adl::object* luabindObject, const std::string_view& filePath, bool ownsObject = true);
 #pragma endregion
 
 #pragma region Destruction
@@ -43,6 +42,7 @@ namespace RTE {
 		/// Deletes every queued luabind object while the state that is about to close is still open: a
 		/// queued object holds a registry reference into its own state and unrefs it when it is deleted.
 		/// @param luaState The state about to be closed.
+		/// Stored script wrappers release their references to this state as well.
 		/// @return How many queued objects belonged to that state, i.e. how many the drain rescued.
 		static uint64_t DrainQueuedDeletionsBeforeStateClose(lua_State* luaState);
 
@@ -112,9 +112,14 @@ namespace RTE {
 #pragma endregion
 
 	private:
-		bool m_OwnsObject; //!< Whether or not we own the luabind object this is wrapping.
-		luabind::adl::object* m_LuabindObject; //!< The luabind object this is wrapping.
+		bool m_OwnsObject = false; //!< Whether or not we own the luabind object this is wrapping.
+		luabind::adl::object* m_LuabindObject = nullptr; //!< The luabind object this is wrapping.
 		std::string m_FilePath; //!< The filepath the wrapped luabind object represents, if it's a function.
+		LuabindObjectWrapper* m_PreviousStored = nullptr;
+		LuabindObjectWrapper* m_NextStored = nullptr;
+		bool m_Stored = false;
+		void LinkStoredObject();
+		void UnlinkStoredObject();
 
 		// Disallow the use of some implicit methods.
 		LuabindObjectWrapper(const LuabindObjectWrapper& reference) = delete;

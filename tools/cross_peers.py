@@ -76,8 +76,12 @@ def with_lane(value):
     return value
 
 
-def load_boxes(path):
+def load_boxes(path, roster='three-way'):
     manifest = with_lane(json.loads(Path(path).read_text(encoding='utf-8-sig')))
+    if roster is not None:
+        manifest['instances'] = [peer for peer in manifest['instances'] if not peer.get('rosters') or roster in peer['rosters']]
+        active = {peer['box'] for peer in manifest['instances']}
+        manifest['boxes'] = [box for box in manifest['boxes'] if box['name'] in active]
     boxes, peers = manifest['boxes'], manifest['instances']
     by_name = {box['name']: box for box in boxes}
     if len({box['name'].casefold() for box in boxes}) != len(boxes) or len({p['name'].casefold() for p in peers}) != len(peers):
@@ -157,8 +161,13 @@ def schedule_for(options, peers, boxes):
     return faults
 
 
+def require_distinct_machines(preflights):
+    if len({value['machine_id'] for value in preflights.values()}) != len(preflights):
+        raise RuntimeError('each declared box must resolve to a distinct real machine')
+
+
 def make_plan(options):
-    manifest = load_boxes(options.boxes)
+    manifest = load_boxes(options.boxes, options.roster)
     boxes = {b['name']: b for b in manifest['boxes']}
     peers = manifest['instances']
     hosts = [p for p in peers if p['name'] == options.host or p['box'] == options.host]
@@ -186,8 +195,8 @@ def make_plan(options):
                  '-net-match-service-e2e', '-net-port', str(peer['port_block'][0]),
                  '-net-match-ticks', str(options.ticks - 1), '-net-match-peers', str(len(peers)),
                  '-net-match-humans', str(sum(p.get('seat', 'player') == 'player' for p in peers)),
-                 '-net-match-mode', 'coop-pve' if options.roster == 'ai-heavy' else 'pvpve',
-                 '-net-match-cpu-slots', '2' if options.roster == 'ai-heavy' else '1',
+                 '-net-match-mode', 'pvp-skirmish' if options.roster == 'four-way' else 'coop-pve' if options.roster == 'ai-heavy' else 'pvpve',
+                 '-net-match-cpu-slots', '0' if options.roster == 'four-way' else '2' if options.roster == 'ai-heavy' else '1',
                  '-net-match-service-preset', 'Multi Box Combat', '-net-match-service-module', 'UserScenes.rte',
                  '-net-match-service-scene', options.scene, '-net-match-service-scene-module', 'Base.rte',
                  '-net-match-auto-delay', '-net-local-prediction', 'on', '-net-ice', 'on', '-net-player-name', peer['name'],
@@ -206,7 +215,7 @@ def make_plan(options):
             incarnation=0, root=root, own=own, repo=box['tree'], executable=box['executable'], flags=flags,
             userdata=own+'/engine/runtime/Userdata', participant_key_root=own+'/engine/runtime/Userdata',
             port_block=peer['port_block'], under_load_by_design=box['peers_per_box']>1,
-            env={'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
+            env={**box.get('environment', {}), 'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
                  'CC_TEST_CROSS_RUN': stem, 'CC_TEST_CROSS_INSTANCE': peer['name'], 'CC_TEST_CROSS_EXECUTION': 'process-0',
                  'CC_TEST_CROSS_INCARNATION': '0', 'CC_TEST_NET_UI_SCRIPT': own + '/probe.json',
                  'CC_TEST_CROSS_RECOVERIES': own + '/recoveries.json',
@@ -490,6 +499,7 @@ def prepare_instance(spec, pin, box, runtime=None):
         dict(op='assert_window', equals=dict(width=960, height=540)),
         dict(op='assert_buy', input_player=0), dict(op='assert_pie', input_player=0), dict(op='finish')]))
     if box['kind'] == 'posix-ssh':
+        configure_posix_box(box)
         os.environ['CCCP_TEST_BINARY'] = spec['executable']
         os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform=='darwin' else 'off'
     settings = {'SessionDirectoryUrl': f'127.0.0.1:{box["directory_port"]}', 'SessionDirectoryCertSha256': pin,
@@ -563,10 +573,21 @@ def seal_evidence(own):
             compress_closed_record(path, own)
 
 
+def configure_posix_box(box):
+    if sys.platform.startswith('linux'):
+        session = command(['systemctl', '--user', 'show-environment'], timeout=10, check=False)
+        for line in session.splitlines():
+            key, _, value = line.partition('=')
+            if key in ('DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR'):
+                os.environ[key] = value
+    os.environ.update(box.get('environment', {}))
+
+
 def read_capabilities(box, root):
     from run_sim_test import make_run
     assert_box_guard(box)
     if box['kind'] == 'posix-ssh':
+        configure_posix_box(box)
         os.environ['CCCP_TEST_BINARY'] = box['executable']
         os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform == 'darwin' else 'off'
     run = make_run(Path(box['tree']), ['-net-cross-capabilities'], root / 'capabilities', timeout=30,
@@ -917,7 +938,8 @@ def run_plan(plan, root):
             else:
                 if box.get('guard_file') and not remote_exists(box, box['guard_file']):
                     raise RuntimeError(f'{box["name"]}: inventory guard active: {box["guard_file"]} absent')
-                mkdir = f'New-Item -ItemType Directory -Path {quote_ps(box_root)} | Out-Null' if box['kind'] == 'windows-task' else f'mkdir {shlex.quote(box_root)}'
+                mkdir = (f'New-Item -ItemType Directory -Path {quote_ps(box_root)} | Out-Null' if box['kind'] == 'windows-task'
+                         else f'mkdir -p {shlex.quote(str(PurePosixPath(box_root).parent))} && mkdir {shlex.quote(box_root)}')
                 command(['ssh', box['ssh'], mkdir])
                 stage_remote(box, local_payload, box_root + '/payload.json')
                 command(remote_command(box, [box['python'], box['tree'] + '/tools/cross_peers.py', '--preflight', box_root + '/payload.json']), timeout=180)
@@ -925,8 +947,7 @@ def run_plan(plan, root):
                 preflights[box['name']] = json.loads((local_box / 'preflight.json').read_text())
             payloads[box['name']] = (payload, local_payload, box_root)
         reference = preflights[local['name']]
-        if len({p['machine_id'] for p in preflights.values()}) < 3:
-            raise RuntimeError('the manifest resolves to fewer than three real machines')
+        require_distinct_machines(preflights)
         for box in boxes.values():
             value = preflights[box['name']]
             if any(value[k] != reference[k] for k in ('content', 'modules', 'fixture')):
@@ -1070,7 +1091,7 @@ def parse_args(argv=None):
     parser.add_argument('--out', type=Path, help='default: <lane scratch>/dry-run')
     parser.add_argument('--host', default='erol')
     parser.add_argument('--scenario', choices=['match', 'soak', 'chaos', 'endurance'], default='match')
-    parser.add_argument('--roster', choices=['three-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
+    parser.add_argument('--roster', choices=['three-way', 'four-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
     parser.add_argument('--scene', default='Grasslands')
     parser.add_argument('--ticks', type=int)
     parser.add_argument('--timeout', type=int, default=900)

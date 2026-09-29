@@ -259,6 +259,10 @@ int GUILabel::GetTextHeight() {
 	return m_Font->CalculateHeight(m_Text, m_HorizontalOverflowScroll ? 0 : m_Width, m_GlyphFallbackFont);
 }
 
+int GUILabel::GetTextWidth() const {
+	return m_Font->CalculateWidth(m_Text, m_GlyphFallbackFont);
+}
+
 int GUILabel::GetMaxWordWidth() {
 	// The wrapper breaks text only on spaces and newlines, so those are the tokens to measure.
 	int maxWidth = 0;
