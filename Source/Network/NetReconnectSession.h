@@ -313,6 +313,7 @@ namespace RTE {
 		uint32_t reseatsWithoutSurvivors = 0; //!< Reclaims whose ledgered units are all gone from the world; nothing to hand back.
 		uint32_t reseatLiveOnTeamNotNamed = 0; //!< The most a reclaim found alive on the returner's team that its drop record does not name. Recorded, never judged.
 		uint32_t reclaimRetransmitsDropped = 0;
+		uint32_t answeredTransactionsDropped = 0; //!< A proof or Reclaim of a transaction its denial already answered.
 		uint32_t seatHoldsExpired = 0;
 		uint32_t seatsReleasedInLobby = 0;
 		uint32_t applicantsRegistered = 0;

@@ -824,6 +824,11 @@ namespace RTE {
 			++m_Stats.reclaimRetransmitsDropped;
 			return;
 		}
+		// A transaction its denial already answered is over: a late copy of it is not a new attempt to refuse again.
+		if (m_Admission.WasAnswered(connection, message.txId, nowMs)) {
+			++m_Stats.answeredTransactionsDropped;
+			return;
+		}
 		if (!m_Admission.BeginAttempt(connection, nowMs)) {
 			DenyUniformly(connection, message.txId, NetH4DenialReason::RateLimited, nowMs);
 			return;
@@ -885,6 +890,12 @@ namespace RTE {
 				Send(connection, *cached);
 				return;
 			}
+		}
+		// A proof of a transaction its denial already answered: the claimant has been refused once, and a second refusal would reach a
+		// connection that may since have joined as a new player.
+		if (pending == m_PendingReclaims.end() && m_Admission.WasAnswered(connection, message.txId, nowMs)) {
+			++m_Stats.answeredTransactionsDropped;
+			return;
 		}
 		if (pending != m_PendingReclaims.end()) pending->proofFinished = true;
 		NetH4ChallengeRecord issued;

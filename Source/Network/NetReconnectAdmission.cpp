@@ -155,7 +155,15 @@ namespace RTE {
 		});
 		due.assign(released, m_Denials.end());
 		m_Denials.erase(released, m_Denials.end());
+		std::erase_if(m_Answered, [nowMs](const NetH4Denial& denial) { return nowMs >= denial.releaseAtMs && nowMs - denial.releaseAtMs > c_ChallengeLifetimeMs; });
+		m_Answered.insert(m_Answered.end(), due.begin(), due.end());
 		return due;
+	}
+
+	bool NetReconnectAdmission::WasAnswered(NetPeerId connection, const NetAuthBytes16& txId, uint64_t nowMs) const {
+		return std::any_of(m_Answered.begin(), m_Answered.end(), [&](const NetH4Denial& denial) {
+			return denial.connection == connection && denial.txId == txId && !(nowMs >= denial.releaseAtMs && nowMs - denial.releaseAtMs > c_ChallengeLifetimeMs);
+		});
 	}
 
 	void NetReconnectAdmission::DropConnection(NetPeerId connection) {
@@ -165,6 +173,7 @@ namespace RTE {
 		m_Denials.erase(std::remove_if(m_Denials.begin(), m_Denials.end(), [connection](const NetH4Denial& denial) {
 			return denial.connection == connection;
 		}), m_Denials.end());
+		std::erase_if(m_Answered, [connection](const NetH4Denial& denial) { return denial.connection == connection; });
 		m_Connections.erase(std::remove_if(m_Connections.begin(), m_Connections.end(), [connection](const ConnectionState& state) {
 			return state.connection == connection;
 		}), m_Connections.end());
@@ -173,6 +182,7 @@ namespace RTE {
 	void NetReconnectAdmission::Reset() {
 		m_Challenges.clear();
 		m_Denials.clear();
+		m_Answered.clear();
 		m_Connections.clear();
 		m_IntervalStartMs = 0;
 		m_IntervalAttempts = 0;

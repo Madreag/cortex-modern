@@ -279,6 +279,7 @@ static std::string ResyncSaveName() {
 				{"reseats_without_survivors", stats.reseatsWithoutSurvivors},
 				{"reseat_live_on_team_not_named", stats.reseatLiveOnTeamNotNamed},
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
+				{"answered_transactions_dropped", stats.answeredTransactionsDropped},
 				{"seat_holds_expired", stats.seatHoldsExpired},
 				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
 				{"applicants_registered", stats.applicantsRegistered},
