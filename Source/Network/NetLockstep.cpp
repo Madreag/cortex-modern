@@ -8451,9 +8451,10 @@ namespace RTE {
 	bool NetLockstepCoordinator::CompleteAtAgreedEnd(const std::string& message) {
 		NET_PLANE_CHECK();
 		// A peer holding the host's input a delay ahead may already have played it: the round ends past the last frame the host
-		// sent, and the host plays to that frame too, so every peer's last tick is the same.
+		// sent, and the host plays to that frame too, so every peer's last tick is the same. While the AI holds the host's own seat
+		// the others play without its input, so what it sent bounds nothing.
 		if (!IsRunning() || m_Playback || IsMigrating() || !m_Transport || !m_DeferStops || !m_LastCompletedSimulationTick ||
-		    m_Config.localPeerId != GetHostPeerId() || m_PendingCompleteStop || SentInputThrough() <= *m_LastCompletedSimulationTick) {
+		    m_Config.localPeerId != GetHostPeerId() || m_PendingCompleteStop || IsOwnHostSeatHeld() || SentInputThrough() <= *m_LastCompletedSimulationTick) {
 			return false;
 		}
 		m_PendingMemberEnds.clear();
