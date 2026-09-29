@@ -938,7 +938,8 @@ def run_plan(plan, root):
             else:
                 if box.get('guard_file') and not remote_exists(box, box['guard_file']):
                     raise RuntimeError(f'{box["name"]}: inventory guard active: {box["guard_file"]} absent')
-                mkdir = f'New-Item -ItemType Directory -Path {quote_ps(box_root)} | Out-Null' if box['kind'] == 'windows-task' else f'mkdir {shlex.quote(box_root)}'
+                mkdir = (f'New-Item -ItemType Directory -Path {quote_ps(box_root)} | Out-Null' if box['kind'] == 'windows-task'
+                         else f'mkdir -p {shlex.quote(str(PurePosixPath(box_root).parent))} && mkdir {shlex.quote(box_root)}')
                 command(['ssh', box['ssh'], mkdir])
                 stage_remote(box, local_payload, box_root + '/payload.json')
                 command(remote_command(box, [box['python'], box['tree'] + '/tools/cross_peers.py', '--preflight', box_root + '/payload.json']), timeout=180)
