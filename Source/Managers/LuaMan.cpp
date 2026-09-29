@@ -8140,17 +8140,24 @@ static bool RunHookStackBalanceSelfTest() {
 
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
+	std::unique_ptr<Activity> collisionActivity = std::make_unique<Activity>();
+	g_ActivityMan.SwapCheckpointActivity(collisionActivity);
 	const bool collisionObjectMade = m_MasterScriptState.RunScriptString(
 	    "_RoundCollisionObject = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
+	    "assert(_RoundCollisionObject, 'collision fixture was not created');"
+	    "local uid = _RoundCollisionObject.UniqueID;"
 	    "MovableMan:AddParticle(_RoundCollisionObject);"
-	    "_RoundCollisionObject = MovableMan:RemoveParticle(_RoundCollisionObject);") == 0;
+	    "_RoundCollisionObject = MovableMan:RemoveParticle(_RoundCollisionObject);"
+	    "assert(_RoundCollisionObject and _RoundCollisionObject.UniqueID == uid, 'collision fixture was not removed');") == 0;
 	lua_getglobal(state, "_RoundCollisionObject");
+	const auto* collisionUserdata = luabind::detail::is_class_object(state, -1);
+	const bool collisionLuaOwned = collisionUserdata && (collisionUserdata->flags() & luabind::detail::object_rep::owner);
 	MovableObject* collisionObject = lua_isnil(state, -1) ? nullptr :
 	    luabind::object_cast<MovableObject*>(luabind::object(luabind::from_stack(state, -1)));
 	lua_pop(state, 1);
 	bool roundCollision = false;
 	bool collisionRestored = false;
-	if (collisionObjectMade && collisionObject) {
+	if (collisionObjectMade && collisionLuaOwned && collisionObject) {
 		collisionObject->m_LastCollisionSimFrameNumber = 0;
 		collisionObject->m_MOIDHit = 7;
 		collisionObject->m_TerrainMatHit = 9;
@@ -8168,12 +8175,15 @@ bool LuaMan::RunScriptGraphSelfTest() {
 		    collisionObject->HitWhatParticleUniqueID() == 11 && collisionObject->m_LastCollisionSimFrameNumber == 0;
 	}
 	std::cout << "[script-graph-selftest] " << (roundCollision ? "PASS" : "FAIL")
-	          << " a_removed_lua_object_loses_collision_results_at_round_restart" << std::endl;
+	          << " a_removed_lua_object_loses_collision_results_at_round_restart created=" << collisionObjectMade
+	          << " lua_owned=" << collisionLuaOwned << std::endl;
 	std::cout << "[script-graph-selftest] " << (collisionRestored ? "PASS" : "FAIL")
 	          << " a_collision_checkpoint_keeps_its_recorded_stamp_and_results" << std::endl;
 	m_MasterScriptState.RunScriptString("_RoundCollisionObject = nil; collectgarbage('collect')");
 	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
 	LuabindObjectWrapper::ApplyQueuedDeletions();
+	g_ActivityMan.SwapCheckpointActivity(collisionActivity);
+	collisionActivity.reset();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
 	m_MasterScriptState.RunScriptString("_PathCallbackPurgeTest = 0; _AddAsyncPathCallback(" + std::to_string(id) + ", function(result) _PathCallbackPurgeTest = _PathCallbackPurgeTest + result.PathLength end)");
 	PathRequest result;
