@@ -18,7 +18,11 @@ from feel.retained_resume import compare_live_hashes, read_live_hashes
 
 
 def successor_host(reports, logs):
-    return sum('is now hosting' in logs[peer] for peer in ('first', 'second')) == 1
+    peers = ('first', 'second')
+    if any(not isinstance(reports.get(peer, {}).get('service', {}).get('is_host'), bool) for peer in peers):
+        return False
+    hosts = [peer for peer in peers if reports[peer]['service']['is_host']]
+    return len(hosts) == 1 and all(set(re.findall(r'Host left - (.+?) is now hosting', logs[peer])) == set(hosts) for peer in peers)
 
 
 def main():
