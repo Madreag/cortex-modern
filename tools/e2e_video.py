@@ -1554,9 +1554,11 @@ def compare_round_histories(root, config):
                 histories[peer][key] = row
             if len(ordered[peer]) != config['rounds'] or None in ordered[peer]:
                 errors.append(f'{peer}: expected {config["rounds"]} rounds, found {ordered[peer]}')
-            for round_id in ordered[peer]:
+            for index, round_id in enumerate(ordered[peer]):
                 ticks = {tick for rid, tick in histories[peer] if rid == round_id}
-                if ticks != set(range(1, config['ticks'] + 1)):
+                # A round the host ends early for the rematch runs to its end frame; the last plays the full count.
+                last = config['ticks'] if index + 1 == len(ordered[peer]) else max(ticks, default=0)
+                if not ticks or ticks != set(range(1, last + 1)):
                     errors.append(f'{peer} round {round_id}: incomplete tick coverage')
                 write_json(root / 'round-traces' / f'{round_id}-{peer}.json',
                            dict(round=round_id, peer=peer, tick_hashes=[r for r in rows if r.get('round') == round_id]))

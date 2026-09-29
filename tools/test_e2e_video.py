@@ -1680,6 +1680,18 @@ def check_acceptance_rows(results, scratch):
     rows = rows[3:]
     (root / 'client-live.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
     ok &= row(results, 'audit-08/missing-earlier-round-fails', driver.compare_round_histories(root, config)['status'] == 'FAIL')
+    # Run 1's rematch: the host ended the first round at 292 of 600, so only the last round plays the full count.
+    early = [dict(round=round_id, tick=t, sim_gated=str(t), subsystems={key: str(t) for key in driver.CORE | {'controller'}})
+             for round_id, last in ((7, 2), (8, 3)) for t in range(1, last + 1)]
+    for peer in ('host', 'client'):
+        (root / (peer + '-live.jsonl')).write_text(''.join(json.dumps(r) + '\n' for r in early))
+    ok &= row(results, 'audit-08/host-ended-round-runs-to-its-end', driver.compare_round_histories(root, config)['status'] == 'PASS',
+              str(driver.compare_round_histories(root, config)))
+    extra = early[:2] + [dict(early[1], tick=3)] + early[2:]
+    (root / 'client-live.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in extra))
+    ok &= row(results, 'audit-08/a-tick-past-the-hosts-end-fails', driver.compare_round_histories(root, config)['status'] == 'FAIL')
+    (root / 'client-live.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in early[:-1]))
+    ok &= row(results, 'audit-08/a-short-last-round-fails', driver.compare_round_histories(root, config)['status'] == 'FAIL')
     for name in ('mp-held-seat', 'mp-inplace-rehold', 'world-late-join'):
         scenario = driver.load_scenario(name)
         runs = scenario.get('runs') or [scenario]
