@@ -202,6 +202,15 @@ def find_ffmpeg():
     return None
 
 
+def find_ffprobe(ffmpeg):
+    """The ffprobe installed beside the ffmpeg in use, which a shell without that directory on PATH still finds; else PATH."""
+    if ffmpeg and Path(ffmpeg).parent != Path("."):
+        sibling = Path(ffmpeg).with_name("ffprobe" + Path(ffmpeg).suffix)
+        if sibling.is_file():
+            return str(sibling)
+    return shutil.which("ffprobe")
+
+
 def load_scenario(name):
     path = SCENARIO_DIR / f"{name}.json"
     if not path.is_file():
@@ -519,7 +528,7 @@ def encode(ffmpeg, video_dir, fps, destination):
                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", str(destination)]
     result = subprocess.run(command, capture_output=True, text=True)
     metadata = {}
-    ffprobe = shutil.which("ffprobe")
+    ffprobe = find_ffprobe(ffmpeg)
     if result.returncode == 0 and ffprobe:
         check = subprocess.run([ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
                                 "stream=width,height,nb_read_frames,r_frame_rate:format=duration", "-of", "json", str(destination)],

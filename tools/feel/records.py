@@ -282,6 +282,8 @@ def compress_closed_record(path, root):
     path, root = Path(path), Path(root).resolve()
     if path.is_symlink() or not path.resolve().is_relative_to(root):
         raise ValueError('record leaves its owning instance')
+    # Both sides resolved: a root reached through a linked directory (macOS /tmp is /private/tmp) names the same files.
+    path = path.resolve()
     size_before = path.stat().st_size
     destination = path.with_name(path.name + '.gz')
     temporary = path.with_name(path.name + '.gz.partial')
