@@ -1611,7 +1611,7 @@ namespace RTE {
 					// A window copy of a tick that stands behind the table's place in this sender's stream is
 					// one this peer already read: it is read past, the table stays where it is, and the copy
 					// is not offered again.
-					if (late || (windowCopy && bindingsBefore < dictionary->BindingCount())) {
+					if (late || (windowCopy && bindingsBefore < dictionary->BindingCount() && dictionary->HasReadTickAtOrAfter(payload.targetFrame, payload.roundId))) {
 						dictionary = nullptr;
 						discard = true;
 						if (outReadPast) {
@@ -2781,6 +2781,7 @@ namespace RTE {
 		}
 
 		uint16_t encodeVersion = c_Version;
+		if (std::holds_alternative<NetLockstepRecoveryChunk>(packet.payload)) encodeVersion = c_RecoveryDatagramVersion;
 		if (const auto* start = std::get_if<NetLockstepStart>(&packet.payload); start && start->agreedStartRecord) {
 			encodeVersion = c_SeatDeviceVersion;
 		}
@@ -2881,7 +2882,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version < c_MinVersion || version > c_CheckpointVersion) {
+		if (version < c_MinVersion || version > c_RecoveryDatagramVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -2995,7 +2996,7 @@ namespace RTE {
 			default:
 				return false;
 		}
-		return magic == c_Magic && version >= c_MinVersion && version <= c_CheckpointVersion && headerBytes == c_HeaderBytes &&
+		return magic == c_Magic && version >= c_MinVersion && version <= c_RecoveryDatagramVersion && headerBytes == c_HeaderBytes &&
 		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
 	}
 
@@ -4758,6 +4759,11 @@ namespace RTE {
 		m_PreStartTiming.clear();
 		m_DelayChanges = m_Config.initialDelayChanges;
 		m_DelayEstimators.clear();
+		m_AnnouncedCaptureTicks.clear();
+		m_LocalCaptureTick.reset();
+		m_LocalCaptureStartedMs = 0;
+		m_LocalCaptureCostMs = 0;
+		m_CaptureExcuseUntilMs.clear();
 		m_ArrivalLeads.clear();
 		m_ArrivalLateness.clear();
 		m_TimingOutgoing.clear();
@@ -5343,12 +5349,12 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::HostBusyWithAnnouncedCapture(uint64_t frame) const {
 		NET_PLANE_CHECK();
-		return AnnouncedCaptureCovering(frame).has_value();
+		return AnnouncedCaptureCovering(frame).has_value() && m_TimingNowMs <= m_AuthorityLastHeardMs + static_cast<uint64_t>(std::ceil(SteadyCaptureCostMs()));
 	}
 
-	std::optional<uint64_t> NetLockstepCoordinator::AnnouncedCaptureCovering(uint64_t frame) const {
+	std::optional<uint64_t> NetLockstepCoordinator::AnnouncedCaptureCovering(uint64_t frame, uint8_t peerId) const {
 		// The host's first input after a capture at the end of tick T is the one it produces simulating T + 1, which targets a delay later.
-		const uint64_t delay = InputDelayAt(GetHostPeerId(), frame);
+		const uint64_t delay = InputDelayAt(peerId == 0 ? GetHostPeerId() : peerId, frame);
 		const auto covers = [&](uint64_t tick) { return tick < frame && frame <= tick + delay + 2; };
 		if (m_AnnouncedCaptureEvery > 0 && frame > 1) {
 			const uint64_t tick = (frame - 1) / m_AnnouncedCaptureEvery * m_AnnouncedCaptureEvery;
@@ -5357,6 +5363,30 @@ namespace RTE {
 		const auto after = m_AnnouncedCaptureTicks.lower_bound(frame > delay + 2 ? frame - delay - 2 : 0);
 		if (after != m_AnnouncedCaptureTicks.end() && covers(*after)) return *after;
 		return std::nullopt;
+	}
+
+	uint64_t NetLockstepCoordinator::CaptureExcuseUntil(uint8_t peerId, uint64_t frame, uint64_t firstMissingMs) {
+		auto capture = AnnouncedCaptureCovering(frame, peerId);
+		const bool park = IsSynchronizedCapturePark(frame);
+		if (!capture && !park) return 0;
+		const uint64_t parkCapture = m_LocalCaptureTick && *m_LocalCaptureTick < m_SynchronizedCaptureStartFrame ? *m_LocalCaptureTick : m_SynchronizedCaptureStartFrame;
+		const uint64_t key = capture.value_or(parkCapture);
+		const auto seat = std::pair{peerId, key};
+		if (const auto found = m_CaptureExcuseUntilMs.find(seat); found != m_CaptureExcuseUntilMs.end()) return found->second;
+		uint64_t began = firstMissingMs;
+		double cost = SteadyCaptureCostMs();
+		if (peerId == m_Config.localPeerId && capture) {
+			if (m_LocalCaptureTick == capture) {
+				began = m_LocalCaptureStartedMs;
+				cost = m_LocalCaptureCostMs;
+			} else if (m_LastCompletedSimulationTick == capture) {
+				began = m_SimTickedMs.load(std::memory_order_acquire);
+			} else return 0;
+		} else if (capture && frame <= *capture + InputDelayAt(peerId, frame)) return 0;
+		const uint64_t until = began + static_cast<uint64_t>(std::ceil(cost));
+		m_CaptureExcuseUntilMs[seat] = until;
+		while (m_CaptureExcuseUntilMs.size() > 64 * NetLockstepCodec::c_MaxPeerCount) m_CaptureExcuseUntilMs.erase(m_CaptureExcuseUntilMs.begin());
+		return until;
 	}
 
 	void NetLockstepCoordinator::AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
@@ -5582,7 +5612,7 @@ namespace RTE {
 	void NetLockstepCoordinator::ApplyTiming(const NetLockstepTiming& timing) {
 		// Only a decision that lands INSIDE the park window waits for the window's final end; one outside it is
 		// applied at once, on every peer, exactly as it is sent.
-		if (!m_ApplyingDeferredParkTiming && timing.action != NetTimingAction::CapturePark &&
+		if (!m_ApplyingDeferredParkTiming && timing.action != NetTimingAction::CapturePark && timing.action != NetTimingAction::Hold &&
 		    m_SynchronizedCaptureStartFrame != UINT64_MAX && timing.applyFrame >= m_SynchronizedCaptureStartFrame &&
 		    timing.applyFrame <= m_SynchronizedCaptureEndFrame) {
 			if (std::none_of(m_DeferredParkTimings.begin(), m_DeferredParkTimings.end(), [&](const auto& pending) { return pending.revision == timing.revision; }))
@@ -5606,6 +5636,8 @@ namespace RTE {
 			          << " neutral_through=" << timing.neutralThroughFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[timing.peerId - 1]
 			          << " next=" << m_Stats.nextFrame << " clock=" << NetLockstepSharedClockMs() << std::endl;
 			m_ReturnerFirstFrameNamed.erase(timing.peerId);
+			// A new receiver invalidates arrival slack measured without it.
+			m_ArrivalLeads.clear();
 			m_Config.peerIncarnations[timing.peerId] = timing.seatIncarnations[timing.peerId - 1];
 			m_PeerEffectiveStart[timing.peerId] = timing.applyFrame + timing.delayFrames;
 			m_PeerAdmissions[timing.peerId] = {timing.applyFrame, timing.delayFrames};
@@ -5967,7 +5999,6 @@ namespace RTE {
 		if (m_GoodbyeDrain || frame > m_FinalFrame) return false;
 		// Autosave is an agreed event: all peers are in the same capture park, so its silence is
 		// not evidence that one seat stopped producing input.
-		if (IsSynchronizedCapturePark(frame)) return false;
 		const uint64_t boundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
 		uint64_t noticeMs = 2;
 		for (uint8_t survivor: m_RemotePeerIds) {
@@ -5981,19 +6012,18 @@ namespace RTE {
 		// A park handshake is in flight: every boundary authored now is deferred to its final end, so declaring
 		// one would propose a seat hold that cannot take effect and the caller would ask again next tick.
 		if (m_CaptureParkAwaitingReports) return false;
-		// The commit horizon runs a delay window ahead of the simulation, so an idle horizon is what a full
-		// pipeline looks like: committed frames nobody has consumed yet are the round's runway. Judge a seat
-		// only once that runway can no longer carry the decision's notice - until then nothing is waiting.
-		// The runway is the shortest any survivor has: one ahead of this host runs dry first, and it is the one waiting.
-		uint64_t runwayFrames = m_ReadyFrames.size();
+		// Each receiver spends its own runway on its own link.
+		bool noticeDue = std::llround(m_ReadyFrames.size() * m_Config.simTickMs) <= 2;
 		for (uint8_t survivor: m_RemotePeerIds) {
 			if (std::find(missing.begin(), missing.end(), survivor) != missing.end() || IsPeerGoneAtFrame(survivor, frame) || IsSeatUnderAI(survivor, frame)) continue;
-			// The input for a frame is produced while simulating the frame a delay earlier, so the next frame it simulates follows that.
 			const uint64_t produced = m_Stats.peers[survivor].highestTargetFrame, delay = InputDelayAt(survivor, frame);
-			if (produced >= delay) runwayFrames = std::min<uint64_t>(runwayFrames, frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0);
+			const uint64_t runway = produced >= delay && frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0;
+			const auto estimate = m_DelayEstimators.find(survivor);
+			const auto& link = m_Stats.peers[survivor];
+			const uint64_t notice = uint64_t(2) + std::max(link.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + link.jitterMs;
+			noticeDue |= static_cast<uint64_t>(std::llround(runway * m_Config.simTickMs)) <= notice;
 		}
-		const uint64_t runwayMs = static_cast<uint64_t>(std::llround(runwayFrames * m_Config.simTickMs));
-		if (runwayMs > noticeMs) return false;
+		if (!noticeDue) return false;
 		// Declaring early lets the decision land by the bound. When the notice alone costs more than the
 		// bound - a survivor on a long link - it cannot, and the survivors wait for the decision instead;
 		// the seat is still only declared after the bound of missing input, never the instant one is late.
@@ -6003,6 +6033,8 @@ namespace RTE {
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
+				const uint64_t captureUntil = CaptureExcuseUntil(peer, frame, firstMissingMs);
+				if (captureUntil > firstMissingMs && (nowMs < captureUntil || nowMs - captureUntil < declarationDeadline)) continue;
 				// A seat whose packets this machine set aside for its simulation thread may have sent the input it is missing; a simulation
 				// thread that has not taken them within the bound leaves the seat judged like any silent one.
 				if (const auto link = m_RemoteTransports.find(peer); link != m_RemoteTransports.end() && m_PlaneHeldTransports.contains(link->second)) {
@@ -6112,7 +6144,7 @@ namespace RTE {
 		}
 		const uint64_t elapsed = nowMs >= m_ConsumerWaitStartMs ? nowMs - m_ConsumerWaitStartMs : 0;
 		const bool first = !m_ConsumerWaitCounted && elapsed > 0;
-		if (first) { ++m_Stats.blockingFrameWaits; m_ConsumerWaitCounted = true; }
+		if (first) { ++m_Stats.blockingFrameWaits; ++m_Stats.missingFrameStalls; m_ConsumerWaitCounted = true; }
 		m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, elapsed);
 		const auto remote = m_RemoteFrames.find(frame);
 		std::vector<uint8_t> missing;
@@ -6150,6 +6182,7 @@ namespace RTE {
 		if (m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs) {
 			m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, nowMs - m_ConsumerWaitStartMs);
 			if (nowMs > m_ConsumerWaitStartMs) {
+				if (!m_ConsumerWaitCounted) { ++m_Stats.blockingFrameWaits; ++m_Stats.missingFrameStalls; }
 				std::cout << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs << " on=" << m_Stats.lastMissingPeers;
 				if (nowMs - m_ConsumerWaitStartMs >= 100) std::cout << " blocked=" << m_AdvanceBlock << " duplicates=" << m_WaitDuplicates;
 				std::cout << std::endl;
@@ -6218,6 +6251,7 @@ namespace RTE {
 		if (!IsKnownRemotePeer(peer)) { m_RemotePeerIds.push_back(peer); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
 		m_ReclaimTransactions[peer] = {peer, reclaim.authorityGeneration, reclaim.revision, reclaim.seatIncarnations[peer - 1], reclaim.applyFrame,
 		    reclaim.delayFrames, reclaim.neutralThroughFrame, reclaim.worldTransition};
+		m_ArrivalLeads.clear();
 		NoteSeatTransition(peer, reclaim.applyFrame, SeatTransition::Back);
 		m_Config.peerIncarnations[peer] = reclaim.seatIncarnations[peer - 1];
 		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
@@ -6383,7 +6417,11 @@ namespace RTE {
 			auto& stats = m_Stats.peers[timing.peerId];
 			if (timing.nextFrame > m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew) return;
 			stats.reportedNextFrame = std::max(stats.reportedNextFrame, timing.nextFrame);
-			if (authority) { stats.pingMs = timing.pingMs; stats.jitterMs = timing.jitterMs; stats.delayFrames = timing.delayFrames; }
+			if (authority) {
+				// A direct connection is measured here. The host's distance to itself is not this receiver's link.
+				if (!m_RemoteTransports.contains(timing.peerId)) { stats.pingMs = timing.pingMs; stats.jitterMs = timing.jitterMs; }
+				stats.delayFrames = timing.delayFrames;
+			}
 			return;
 		}
 		if (timing.phase == NetTimingPhase::Acknowledge) {
@@ -6489,14 +6527,21 @@ namespace RTE {
 		if (found == m_ArrivalLeads.end()) return std::nullopt;
 		const auto& leads = found->second;
 		const auto first = std::find_if(leads.begin(), leads.end(), [&](const ArrivalLead& arrival) { return arrival.frame >= firstFrameUnderCurrent; });
-		if (first == leads.end() || first->ms > nowMs || nowMs - first->ms < c_MarginWindowMs) return std::nullopt;
+		const uint64_t windowMs = firstFrameUnderCurrent == 0 ? NetInputDelayEstimator::c_SampleMs : c_MarginWindowMs;
+		if (first == leads.end() || first->ms > nowMs || nowMs - first->ms < windowMs) return std::nullopt;
 		uint64_t least = UINT64_MAX;
 		for (auto arrival = first; arrival != leads.end(); ++arrival)
-			if (nowMs - arrival->ms <= c_MarginWindowMs) least = std::min(least, arrival->lead);
+			if (nowMs - arrival->ms <= windowMs) least = std::min(least, arrival->lead);
 		const uint64_t keep = std::max<uint64_t>(1, m_Config.slowPlayerBoundTicks);
 		if (least == UINT64_MAX || least >= keep) return std::nullopt;
-		// The rise stays within the bound above what the link's round trip needs: a machine that cannot keep pace gains
-		// nothing from a longer delay, and the bound is what answers it.
+		// A sender keeping the tick rate can carry a fixed phase offset beyond its link's round trip.
+		// Missing packets at the sample boundary must not discard the cadence measured under this delay.
+		if (leads.back().ms > first->ms) {
+			const uint64_t elapsed = leads.back().ms - first->ms;
+			const uint64_t produced = leads.back().frame >= first->frame ? leads.back().frame - first->frame : 0;
+			if (elapsed + m_Config.simTickMs >= windowMs && produced >= static_cast<uint64_t>(std::floor(elapsed / m_Config.simTickMs)))
+				required = std::max<uint32_t>(required, current > least ? static_cast<uint32_t>(current - least) : 0);
+		}
 		const uint64_t ceiling = std::min<uint64_t>(static_cast<uint64_t>(required) + keep, NetLockstepCodec::c_MaxInputDelayFrames);
 		const uint64_t delay = std::min<uint64_t>(static_cast<uint64_t>(current) + keep - least, ceiling);
 		return delay > current ? std::optional<uint16_t>{static_cast<uint16_t>(delay)} : std::nullopt;
@@ -7206,12 +7251,28 @@ namespace RTE {
 		peerFrames[frame.senderPeerId] = frame.frames;
 		peerStats.acceptedThroughFrame = std::max(peerStats.acceptedThroughFrame, frame.targetFrame);
 		// A returning seat's first frame after its reclaim is when its stream is back; named once per return, on the shared clock.
-		if (const auto back = m_ReclaimTransactions.find(frame.senderPeerId); back != m_ReclaimTransactions.end() && frame.targetFrame >= back->second.activationFrame &&
-		    m_ReturnerFirstFrameNamed.insert(frame.senderPeerId).second)
+		if (const auto back = m_ReclaimTransactions.find(frame.senderPeerId); back != m_ReclaimTransactions.end() &&
+		    frame.targetFrame > std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames) &&
+		    m_ReturnerFirstFrameNamed.insert(frame.senderPeerId).second) {
+			m_ArrivalLeads.clear();
 			std::cout << "[lockstep] first frame of returning peer " << static_cast<int>(frame.senderPeerId) << " accepted: target=" << frame.targetFrame << " next=" << m_Stats.nextFrame
 			          << " reclaim=" << back->second.activationFrame << " window=" << windowCopy << " clock=" << NetLockstepSharedClockMs() << std::endl;
+		}
 		if (!windowCopy && m_Config.adaptiveInputDelay && m_Config.localPeerId == GetHostPeerId()) {
-			const uint64_t simNext = m_LastDeliveredFrame ? *m_LastDeliveredFrame + 1 : m_Config.startFrame;
+			uint64_t simNext = m_LastDeliveredFrame ? *m_LastDeliveredFrame + 1 : m_Config.startFrame;
+			// A faster survivor may need this input before this host does. Its latest produced input names
+			// the simulation tick it has reached; held seats and neutral return gaps cannot set that clock.
+			for (uint8_t receiver: m_RemotePeerIds) {
+				if (receiver == frame.senderPeerId || !IsRemoteRequiredForFrame(receiver, frame.targetFrame)) continue;
+				const uint64_t produced = m_Stats.peers[receiver].highestTargetFrame;
+				const uint64_t delay = InputDelayAt(receiver, produced);
+				const auto& link = m_Stats.peers[receiver];
+				const auto estimate = m_DelayEstimators.find(receiver);
+				const uint32_t ping = std::max(link.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms());
+				// Its production crossed the link to reach us; this input crosses the link back to it.
+				const uint64_t trip = m_Config.simTickMs > 0 ? static_cast<uint64_t>(std::ceil((static_cast<double>(ping) + link.jitterMs) / m_Config.simTickMs)) : 0;
+				if (produced >= delay) simNext = std::max(simNext, produced - delay + 1 + trip);
+			}
 			auto& leads = m_ArrivalLeads[frame.senderPeerId];
 			leads.push_back({nowMs, frame.targetFrame, frame.targetFrame > simNext ? frame.targetFrame - simNext : 0});
 			while (!leads.empty() && nowMs - leads.front().ms > 2 * NetInputDelayEstimator::c_WindowMs) leads.pop_front();
@@ -7706,6 +7767,10 @@ namespace RTE {
 	void NetLockstepCoordinator::BeginSynchronizedCapture(uint64_t completedFrame) {
 		NET_PLANE_CHECK();
 		if (m_Playback || completedFrame == UINT64_MAX || m_Config.simTickMs <= 0) return;
+		NoteAnnouncedCapture(completedFrame);
+		m_LocalCaptureTick = completedFrame;
+		m_LocalCaptureStartedMs = NetLockstepNowMs();
+		m_LocalCaptureCostMs = SteadyCaptureCostMs();
 		// Every peer measures its own capture, but the window is one host fact.  A client that opened a window
 		// from its own budget would empty frames the host commits with real input, so it only measures here and
 		// takes the window from the host's publication.
@@ -7792,6 +7857,10 @@ namespace RTE {
 	void NetLockstepCoordinator::CompleteSynchronizedCapture(uint64_t completedFrame, double captureMs) {
 		NET_PLANE_CHECK();
 		if (m_Playback || completedFrame == UINT64_MAX || !std::isfinite(captureMs) || captureMs < 0 || m_Config.simTickMs <= 0) return;
+		if (m_LocalCaptureTick == completedFrame) {
+			m_LocalCaptureCostMs = captureMs;
+			m_CaptureExcuseUntilMs[{m_Config.localPeerId, completedFrame}] = m_LocalCaptureStartedMs + static_cast<uint64_t>(std::ceil(captureMs));
+		}
 		m_SynchronizedCaptureBudgetMs = std::max(m_SynchronizedCaptureBudgetMs, captureMs);
 		m_CaptureParkReportsMs[m_Config.localPeerId] = static_cast<uint32_t>(std::min<double>(UINT32_MAX, std::ceil(captureMs)));
 		if (m_Playback || !IsRunning()) return;
@@ -8568,6 +8637,7 @@ namespace RTE {
 						std::cout << "[net-lockstep] return of peer " << static_cast<int>(reclaim->peerId) << " committed at " << outFrame.frame << " delay=" << reclaim->delayFrames
 						          << " neutral_through=" << reclaim->neutralThroughFrame << " revision=" << reclaim->eventSequence << " differs from the one this peer held" << std::endl;
 					m_ReclaimTransactions[reclaim->peerId] = *reclaim;
+					m_ArrivalLeads.clear();
 					NoteSeatTransition(reclaim->peerId, outFrame.frame, SeatTransition::Back);
 					m_Config.peerIncarnations[reclaim->peerId] = reclaim->seatIncarnation;
 					m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
@@ -8749,11 +8819,8 @@ namespace RTE {
 		const uint64_t excusedThrough = back != m_ReclaimTransactions.end()
 			? std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames)
 			: EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks);
-		// An announced capture excuses the ticks after it only while its tick is the last this simulation completed: one not yet begun excuses nothing.
-		const auto capture = AnnouncedCaptureCovering(frame);
-		const bool capturing = capture && m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick == *capture;
-		// A park every peer is in and a pending timing decision excuse its ticks exactly as they excuse a client's.
-		if (frame <= excusedThrough || IsSynchronizedCapturePark(frame) || m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || capturing) {
+		const bool capturing = nowMs < CaptureExcuseUntil(local, frame, m_OwnMissingFrame == frame ? m_OwnMissingSinceMs : nowMs);
+		if (frame <= excusedThrough || m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || capturing) {
 			m_OwnMissingFrame.reset();
 			return false;
 		}
@@ -8781,6 +8848,20 @@ namespace RTE {
 		if (m_OwnMissingFrame != frame) {
 			m_OwnMissingFrame = frame;
 			m_OwnMissingSinceMs = nowMs;
+		}
+		// Every receiver has its own runway and delivery time for this decision.
+		bool noticeDue = std::llround(m_ReadyFrames.size() * m_Config.simTickMs) <= 2;
+		for (uint8_t peer: m_RemotePeerIds) {
+			if (!IsRemoteRequiredForFrame(peer, frame)) continue;
+			const auto& stats = m_Stats.peers[peer];
+			const auto estimate = m_DelayEstimators.find(peer);
+			const uint64_t notice = uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs;
+			const uint64_t delay = InputDelayAt(peer, frame), produced = stats.highestTargetFrame;
+			const uint64_t runway = produced >= delay && frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0;
+			noticeDue |= static_cast<uint64_t>(std::llround(runway * m_Config.simTickMs)) <= notice;
+		}
+		if (!noticeDue) {
+			return false;
 		}
 		const uint64_t boundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
 		if (nowMs < m_OwnMissingSinceMs || nowMs - m_OwnMissingSinceMs < boundMs) return false;
@@ -9030,6 +9111,10 @@ namespace RTE {
 		out << "\"frame_binding_gap_drops\":" << m_Stats.frameBindingGapDrops << ",";
 		out << "\"future_frame_drops\":" << m_Stats.futureFrameDrops << ",";
 		out << "\"missing_frame_stalls\":" << m_Stats.missingFrameStalls << ",";
+		out << "\"ahead_input_misses\":" << m_Stats.aheadInputMisses << ",";
+		out << "\"input_window_ticks\":" << static_cast<unsigned>(ConfiguredWindowTicks()) << ",";
+		out << "\"window_copies_applied\":" << m_Stats.windowCopiesApplied << ",";
+		out << "\"window_copies_skipped\":" << m_Stats.windowCopiesSkipped << ",";
 		out << "\"blocking_frame_waits\":" << m_Stats.blockingFrameWaits << ",";
 		out << "\"hold_notice_budget_ms\":" << m_Stats.holdNoticeBudgetMs << ",";
 		out << "\"last_hold_declaration_ms\":" << m_Stats.lastHoldDeclarationMs << ",";
@@ -9101,6 +9186,8 @@ namespace RTE {
 			    << "\"frame_packets_received\":" << peer.framePacketsReceived
 			    << ",\"controller_frames_received\":" << peer.controllerFramesReceived
 			    << ",\"frames_contributed\":" << peer.framesContributed
+			    << ",\"last_input_window_ticks\":" << static_cast<unsigned>(peer.lastFrameReserved)
+			    << ",\"window_copies_applied\":" << peer.windowCopiesApplied
 			    << ",\"duplicate_frames\":" << peer.duplicateFrames
 			    << ",\"out_of_order_frames\":" << peer.outOfOrderFrames
 			    << ",\"future_frame_drops\":" << peer.futureFrameDrops
@@ -9176,6 +9263,19 @@ namespace RTE {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];
 			}
 			const NetTransportLane destinationLane = frame && lane == m_Config.frameLane ? LaneTo(peerId, packet, lane) : lane;
+			const auto* start = std::get_if<NetLockstepStart>(&packet.payload);
+			if (start && !start->agreedStartRecord && start->roundId == m_RoundId && lane == NetTransportLane::ControlReliable) {
+				const auto admission = m_PeerAdmissions.find(peerId);
+				const bool returning = (m_Config.joinsRunningRound && start->localPeerId == m_Config.localPeerId && start->startFrame == m_Config.startFrame) ||
+				    (admission != m_PeerAdmissions.end() && start->startFrame == admission->second.frame);
+				if (returning) (void)m_Transport->Send(transportId, NetTransportLane::InputUnreliable, bytes, nullptr);
+			}
+			if (frame && destinationLane == NetTransportLane::ControlReliable && m_ReliableFramesThrough.contains(peerId)) {
+				NetLockstepFrame independent = *frame;
+				if (outObservationsEncoded) independent.observations.resize(std::min(independent.observations.size(), *outObservationsEncoded));
+				if (outValueObservationsEncoded) independent.valueObservations.resize(std::min(independent.valueObservations.size(), *outValueObservationsEncoded));
+				SendReturnFrameCopies(peerId, independent);
+			}
 			// Behind an undrained backlog, or this peer's stream would arrive out of order. An unreliable frame has no order to keep.
 			const bool backlogged = lane == m_Config.frameLane && destinationLane == NetTransportLane::ControlReliable && [&] {
 				const auto backlogIt = m_RelayBacklog.find(peerId);
@@ -9391,13 +9491,14 @@ namespace RTE {
 		return true;
 	}
 
-	size_t NetLockstepCoordinator::ReplaySentFramesTo(uint8_t peerId, uint64_t fromFrame) {
+		size_t NetLockstepCoordinator::ReplaySentFramesTo(uint8_t peerId, uint64_t fromFrame) {
 		const auto transportIt = m_RemoteTransports.find(peerId);
 		if (transportIt == m_RemoteTransports.end() || m_LastQueuedTargetFrame == std::numeric_limits<uint64_t>::max() ||
 		    fromFrame > m_LastQueuedTargetFrame) {
 			return 0;
 		}
 		size_t replayed = 0;
+		if (m_Config.frameLane != NetTransportLane::ControlReliable) m_ReliableFramesThrough[peerId] = m_LastQueuedTargetFrame + NetLockstepCodec::c_MaxWindowTicks;
 		// The live tables belong to the members already here: they read the restart the announced
 		// epoch put in the live stream and nothing else may move under them. The replay spells its
 		// own stream out against a table that starts empty, exactly as the admitted member's does,
@@ -9424,7 +9525,6 @@ namespace RTE {
 				if (SendPacket({held}, NetTransportLane::ControlReliable, &error, &scratch[sender], nullptr, peerId)) ++replayed;
 			}
 		}
-		if (m_Config.frameLane != NetTransportLane::ControlReliable) m_ReliableFramesThrough[peerId] = m_LastQueuedTargetFrame + NetLockstepCodec::c_MaxWindowTicks;
 		std::cout << "[lockstep] replayed " << replayed << " frames for targets " << fromFrame << ".."
 		          << m_LastQueuedTargetFrame << " to the member admitted as peer " << static_cast<int>(peerId) << std::endl;
 		return replayed;
@@ -9501,6 +9601,7 @@ namespace RTE {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];
 			}
 			const NetTransportLane lane = relayed ? LaneTo(peerId, packet, m_Config.frameLane) : NetTransportLane::ControlReliable;
+			if (relayed && lane == NetTransportLane::ControlReliable) SendReturnFrameCopies(peerId, *relayed);
 			// Behind an undrained backlog, or this peer's stream would arrive out of order. An unreliable frame has no order to keep.
 			const auto backlogIt = m_RelayBacklog.find(peerId);
 			if (lane == NetTransportLane::ControlReliable && ((backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty()) || m_TimingOutgoing.contains(peerId))) {
@@ -9871,7 +9972,14 @@ namespace RTE {
 					}
 					return;
 				}
-				if ((std::holds_alternative<NetLockstepRecoveryChunk>(decoded.packet.payload) || std::holds_alternative<NetLockstepTiming>(decoded.packet.payload)) && event.lane != NetTransportLane::ControlReliable) {
+				// An unordered start only confirms terms this round already knows.
+				if (const auto* start = std::get_if<NetLockstepStart>(&decoded.packet.payload); start && event.lane != NetTransportLane::ControlReliable) {
+					if (event.lane != NetTransportLane::InputUnreliable || start->agreedStartRecord || m_RoundId == 0 ||
+					    start->roundId != m_RoundId || !StartMatchesConfig(*start)) return;
+				}
+				const auto* recovery = std::get_if<NetLockstepRecoveryChunk>(&decoded.packet.payload);
+				const bool independent = recovery && recovery->offset == 0 && recovery->bytes.size() == recovery->totalBytes && event.lane == NetTransportLane::InputUnreliable;
+				if ((recovery || std::holds_alternative<NetLockstepTiming>(decoded.packet.payload)) && event.lane != NetTransportLane::ControlReliable && !independent) {
 					if (UsesTransportPeer(event.peerId)) Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "recovery input requires the reliable control lane");
 					return;
 				}
@@ -10167,6 +10275,17 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "recovery input targets the sender's delay window");
 			return;
 		}
+		if (chunk.offset == 0 && chunk.bytes.size() == chunk.totalBytes) {
+			NetLockstepFrame frame;
+			NetLockstepError validation;
+			if (!NetLockstepCodec::DecodeRecoveryInput(chunk.bytes, frame, &validation) || frame.senderPeerId != chunk.senderPeerId ||
+			    frame.roundId != chunk.roundId || frame.targetFrame != chunk.targetFrame) {
+				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "invalid complete recovery input: " + validation.message);
+				return;
+			}
+			HandleFrame(frame, nowMs, fromTransport, true, true);
+			return;
+		}
 		auto found = m_RecoveryIncoming.find(chunk.senderPeerId);
 		if (found == m_RecoveryIncoming.end()) {
 			if (chunk.offset != 0) {
@@ -10355,6 +10474,33 @@ namespace RTE {
 		relayed.erase(relayed.begin(), relayed.lower_bound(keepFrom));
 		auto& keptTicks = m_RelayedTickFrames[frame.senderPeerId];
 		keptTicks.erase(keptTicks.begin(), keptTicks.lower_bound(keepFrom));
+	}
+
+	void NetLockstepCoordinator::SendReturnFrameCopies(uint8_t peerId, const NetLockstepFrame& frame) {
+		const auto through = m_ReliableFramesThrough.find(peerId);
+		const auto link = m_RemoteTransports.find(peerId);
+		if (!m_Transport || m_Config.frameLane == NetTransportLane::ControlReliable || link == m_RemoteTransports.end() ||
+		    through == m_ReliableFramesThrough.end() || frame.targetFrame > through->second) return;
+		const auto send = [&](const NetLockstepFrame& input) {
+			NetLockstepFrame independent = input;
+			independent.senderPeerId = frame.senderPeerId;
+			independent.roundId = frame.roundId;
+			independent.priorWindow.clear();
+			NetLockstepRecoveryChunk chunk;
+			chunk.senderPeerId = frame.senderPeerId;
+			chunk.sessionId = m_Config.sessionId;
+			chunk.roundId = frame.roundId;
+			chunk.targetFrame = input.targetFrame;
+			if (!NetLockstepCodec::EncodeRecoveryInput(independent, chunk.bytes) || chunk.bytes.size() > NetLockstepCodec::c_MaxRecoveryChunkBytes) return;
+			chunk.totalBytes = static_cast<uint32_t>(chunk.bytes.size());
+			std::vector<uint8_t> bytes;
+			if (NetLockstepCodec::Encode({chunk}, bytes)) (void)m_Transport->Send(link->second, NetTransportLane::InputUnreliable, bytes);
+		};
+		// These copies carry their own observations while the ordered stream fills the member's dictionaries.
+		const size_t keep = std::max<uint8_t>(1, m_Config.frameRedundancyTicks) - 1;
+		const size_t first = frame.priorWindow.size() > keep ? frame.priorWindow.size() - keep : 0;
+		for (size_t index = first; index < frame.priorWindow.size(); ++index) send(frame.priorWindow[index]);
+		send(frame);
 	}
 
 	NetTransportLane NetLockstepCoordinator::LaneTo(uint8_t peerId, const NetLockstepPacket& packet, NetTransportLane lane) const {
@@ -11297,7 +11443,8 @@ namespace RTE {
 			m_WaitStartMs = nowMs;
 		}
 		if (m_LastStallFrame != m_Stats.nextFrame) {
-			++m_Stats.missingFrameStalls;
+			++m_Stats.aheadInputMisses;
+			if (!UsesBoundedWait()) ++m_Stats.missingFrameStalls;
 			m_LastStallFrame = m_Stats.nextFrame;
 		}
 		if (!UsesBoundedWait() && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs > m_Stats.longestStallMs) {
@@ -11317,8 +11464,10 @@ namespace RTE {
 		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, silenceBoundMs + jitterMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs)));
 		// A host still in its start work (no frame from it yet this round) or in a capture park it announced is busy, not gone:
 		// only its link's close or the round's timeout ends that wait.
-		const bool hostBusy = !m_PeersPlayedThisRound.contains(GetHostPeerId()) || HostBusyWithAnnouncedCapture(m_Stats.nextFrame) ||
+		const bool captureWindow = AnnouncedCaptureCovering(m_Stats.nextFrame).has_value() ||
 		    (m_SynchronizedCaptureStartFrame != UINT64_MAX && m_Stats.nextFrame >= m_SynchronizedCaptureStartFrame && m_Stats.nextFrame <= m_SynchronizedCaptureEndFrame + 1);
+		const bool hostBusy = !m_PeersPlayedThisRound.contains(GetHostPeerId()) ||
+		    (captureWindow && nowMs < lastAuthorityTraffic + static_cast<uint64_t>(std::ceil(SteadyCaptureCostMs())));
 		// A survivor with no other playing peer beside it has nobody to confirm the host's death: a loss burst on its own link must not
 		// make it host a second match beside a live one, so it hears nothing for a confirmation window first.
 		const bool loneSurvivor = std::none_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {

@@ -73,6 +73,7 @@ namespace RTE {
 	struct NetLobbyStats {
 		uint32_t messagesSent = 0;
 		uint32_t messagesReceived = 0;
+		uint64_t catchUpReportsSent = 0, catchUpReportsReceived = 0, catchUpReportsRefused = 0, catchUpReportsDropped = 0;
 		uint32_t malformedMessages = 0;
 		uint32_t ignoredSessionPackets = 0;
 		uint32_t unboundSenderPackets = 0; //!< Packets from a connection no slot is bound to, dropped.
@@ -107,6 +108,7 @@ namespace RTE {
 		bool IsConfigAcked(uint8_t peerId) const;
 		const std::string& GetRemoteName() const;
 		const std::string& GetRemoteName(uint8_t peerId) const;
+		uint32_t GetPeerPingMs(uint8_t peerId) const;
 		/// Whether this peer's periodic state has been heard at all (directly or host-relayed).
 		bool HasHeardFrom(uint8_t peerId) const;
 		/// The peer's last reported ping in ms (the host stamps relayed states with its measurement).
@@ -121,6 +123,7 @@ namespace RTE {
 		void TimeoutWaitingForStart();
 		bool DidLoseHost() const { return m_HostLost; }
 		const NetLobbyStats& GetStats() const { return m_Stats; }
+		void NoteCatchUpReportDrop(NetPeerId route, const std::string& reason);
 
 		void SetLocalReady(bool ready);
 		void RequestStart();

@@ -19,10 +19,12 @@ from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, red
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes
 from feel.records import compress_case_records, record_path
 from run_sim_test import make_run, engine_executable
+from feel.launch_budget import install_memory_guard, exclusive_matrix
 from run_selftests import SELFTESTS
 from compare_sim_traces import compare_fullstate, strict_compare
 
 REPO = Path(__file__).resolve().parents[1]
+install_memory_guard()
 MST = timezone(timedelta(hours=-7))
 HELPERS = REPO / 'tools/feel'
 SP_CONTROL = Path('D:/mx/opus-f24-20260913/sp-control')
@@ -136,7 +138,7 @@ AUTOSAVE_CASES = (
     ('autosave-200ms', 200, 1),
 )
 
-# The same arms with a third peer that stays in the match; only --cases runs them.
+# The same arms with a third peer that stays in the match.
 AUTOSAVE_THREE_CASES = (
     ('autosave3-100ms', 100, 1),
     ('autosave3-200ms', 200, 1),
@@ -536,11 +538,13 @@ def timing_peer(run, peer):
 def reduce_timing_case(run, reference=None):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
-    peers = {peer: timing_peer(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
+    members = tuple(manifest.get('per_peer_lag_ms') or (('host', 'client', 'survivor') if silent else ('host', 'client')))
+    peers = {peer: timing_peer(run, peer) for peer in members if peer != 'client'}
+    comparison_peer = next((peer for peer in peers if peer != 'host'), 'client')
     if reference is not None:
         for value in peers.values():
             apply_tps_call(value, reference)
-    proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'), manifest.get('ticks', TICKS), cross_peer=True)
+    proof = compare_pair(run / 'host_trace.json', run / f'{comparison_peer}_trace.json', manifest.get('ticks', TICKS), cross_peer=True)
     if silent:
         # The held client's own ticks are compared too: before its hold and from the image it rejoined on.
         client_log = (run / 'client/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / 'client/stdout.log').is_file() else ''
@@ -548,10 +552,10 @@ def reduce_timing_case(run, reference=None):
         proof['held_client'] = compare_pair(run / 'host_trace.json', run / 'client_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
                                             client_away=held_client_away(client_log), window_only=True,
                                             client_rewinds=held_client_rewinds(client_log))
-    pairs = [('host', 'survivor'), ('host', 'client'), ('survivor', 'client')] if silent else [('host', 'client')]
+    pairs = [(left, right) for index, left in enumerate(members) for right in members[index + 1:]]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
             for left, right in pairs}
-    live_pass = all(passes and all(row['compared_ticks'] >= 30 and row['mismatched_ticks'] == 0 for row in passes)
+    live_pass = bool(pairs) and all(passes and all(row['compared_ticks'] >= 30 and row['mismatched_ticks'] == 0 and row.get('mismatched_applied_input_ticks', 0) == 0 for row in passes)
                     for passes in live.values())
     proof.update(live_passes=live, live_pass=live_pass)
     proof['pass'] &= live_pass
@@ -572,9 +576,42 @@ def item9a_evidence_complete(report):
     for peer in peers.values():
         pins = peer.get('pins', {})
         names = [name for name in pins if name.startswith('item9a_')]
-        if not names or any(pin.get('value') is None for name, pin in pins.items() if name.startswith('item9a_')):
+        if pins.get('item9a_missing_frame_stalls', {}).get('value') is None:
+            return False
+        if not names or any(pin.get('status') == 'MISS' for name, pin in pins.items() if name.startswith('item9a_')):
             return False
     return True
+
+
+def failure_reasons(report):
+    reasons = [f'{peer}.{name}: {pin.get("status", "MISS")} value={pin.get("value")!r}; {pin.get("rule", "no rule recorded")}'
+               for peer, measured in report.get('peers', {}).items() for name, pin in measured.get('pins', {}).items()
+               if name.startswith('item9a_') and pin.get('status') != 'PASS']
+    for field in ('launches_complete', 'off_wire_pass'):
+        if report.get(field) is False:
+            reasons.append(f'{field}=false; see {report.get("name", "case")}/feel-report.json')
+    if report.get('reason'):
+        reasons.append(report['reason'])
+    if report.get('item9a_pass') is False and not reasons:
+        reasons.append('item9a_pass=false without a passing set of per-peer measurements')
+    return reasons
+
+
+def write_case_gates(root, results):
+    cases = {row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False) and row.get('off_wire_pass', True)
+                                    and row.get('launches_complete', False)
+                                    and all(pin['status'] == 'PASS' for peer in row.get('peers', {}).values() for name, pin in peer['pins'].items()
+                                            if name.startswith('item9a_') and pin.get('required', True)), reasons=failure_reasons(row))
+             for row in results}
+    for case in cases.values():
+        if not case['passed'] and not case['reasons']:
+            case['reasons'] = ['the case has no complete passing set of item9a measurements']
+    reasons = [f'{name}: {reason}' for name, case in cases.items() for reason in case['reasons']]
+    if not cases:
+        reasons.append('no cases were reported')
+    result = dict(passed=bool(cases) and all(case['passed'] for case in cases.values()), cases=cases, reasons=reasons)
+    write_json(root / 'gates.json', result)
+    return result
 
 
 def analyze(root, stock=None):
@@ -615,6 +652,7 @@ def analyze(root, stock=None):
                 continue
             on, off = root / (name + '-on'), root / (name + '-off')
             manifest = json.loads((on / 'manifest.json').read_text(encoding='utf-8'))
+            off_manifest = json.loads((off / 'manifest.json').read_text(encoding='utf-8'))
             peers = {peer: reduce_or_fail(on, peer, baselines[cap_name]) for peer in ('host', 'client')}
             for value in peers.values():
                 apply_tps_call(value, dict(steady_wall_tps=baselines[cap_name]['steady_wall_tps'],
@@ -654,10 +692,13 @@ def analyze(root, stock=None):
             report = dict(name=name, mode=manifest['mode'], measured=stamp(), executable=manifest['exe'],
                           reducer=file_record(HELPERS / 'report.py'), driver=file_record(Path(__file__)),
                           peers=peers, proof=proof, off_wire_pass=all(row['pass'] for row in proof.values() if row.get('required', True)),
+                          launches_complete=manifest['launches_complete'] and off_manifest['launches_complete'],
                           measurement_complete=manifest['launches_complete'] and all(row['measurement_complete'] for row in peers.values()),
                           raw_files=[file_record(path) for path in raw_paths if record_path(path).is_file()],
                           missing_raw_files=[str(path) for path in raw_paths if not record_path(path).is_file()])
             report['measurement_complete'] &= not report['missing_raw_files']
+            report['item9a_pass'] = all(value['status'] == 'PASS' for measured in peers.values()
+                                       for name, value in measured['pins'].items() if name.startswith('item9a_'))
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
             results.append(report)
@@ -671,7 +712,7 @@ def analyze(root, stock=None):
         report = reduce_timing_case(run, reference)
         write_json(run / 'feel-report.json', report)
         results.append(report)
-    for name, _, _ in () if subset else AUTOSAVE_CASES:
+    for name, _, _ in () if subset else AUTOSAVE_CASES + AUTOSAVE_THREE_CASES:
         run = root / name
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
@@ -683,11 +724,12 @@ def analyze(root, stock=None):
     lines = [f'Measured {stamp()}', '', '| Configuration | Raw measurements complete | Off-wire proof | Findings |', '|---|---|---|---|']
     for report in results:
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
+        failures = sum(row['status'] == 'FAIL' for peer in report['peers'].values() for row in peer['pins'].values())
         link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
-        lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({link}) |')
-    lines += ['', 'Item 9a retains the 50 ms and one-percent wait gates. TPS uses the same-machine',
-              'single-player reference with a five-percent maximum gap when that reference is below 59.5.',
-              'Nominal 60 Hz horizon drift is retained as a diagnostic in that case. Missing records and failed',
+        lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {failures} FAIL, {misses} MISS; [{report["name"]}]({link}) |')
+    lines += ['', 'Item 9a requires 59.5 TPS, zero steady blocking waits, less than one percent waiting,',
+              'and a 50 ms maximum wait and confirmed-horizon lag. The single-player rate is diagnostic.',
+              'Missing records and failed',
               'determinism proofs remain incomplete work. The full per-peer table and raw-file manifest are in each run.']
     (root / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return results
@@ -697,7 +739,7 @@ def gates(root, control, timeout):
     out = root / 'gates'
     out.mkdir(exist_ok=False)
     env = dict(os.environ, CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
-    command = [sys.executable, '-B', str(REPO / 'tools/run_selftests.py'), '--repo', str(REPO),
+    command = [sys.executable, '-B', str(HELPERS / 'launch_budget.py'), str(REPO / 'tools/run_selftests.py'), '--repo', str(REPO),
                '--out', str(out / 'selftests'), '--timeout', str(timeout)]
     with (out / 'selftests-driver.log').open('w', encoding='utf-8') as log:
         suite = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env)
@@ -743,6 +785,8 @@ def gates(root, control, timeout):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--repo', type=Path, default=REPO)
+    parser.add_argument('--matrix', action='store_true', help='run the complete matrix (the default)')
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--port', type=int, default=48231)
     parser.add_argument('--port-block', default='48231-48240', help="the calling lane's own port block, LO-HI; --port stays inside it")
@@ -793,9 +837,13 @@ def dry_run_plan(launch_all):
 
 def main(argv=None):
     parser, args = parse_args(argv)
+    if args.repo.resolve() != REPO.resolve():
+        parser.error('--repo must name the tree containing this driver')
+    if args.matrix and (args.cases or args.lag_arms):
+        parser.error('--matrix cannot select a subset of arms')
     root = args.out.resolve()
     low, _, high = args.port_block.partition('-')
-    if not (low.isdigit() and high.isdigit() and int(low) <= args.port <= int(high)):
+    if not (low.isdigit() and high.isdigit() and int(low) <= args.port and args.port + 9 <= int(high)):
         parser.error(f'the ten match ports must stay within the port block {args.port_block}')
     if args.host_lua_states < 1 or args.client_lua_states < 1:
         parser.error('--host-lua-states and --client-lua-states must be positive')
@@ -833,14 +881,20 @@ def main(argv=None):
             launch_selected(script, exe['sha256'])
         results = [reduce_timing_case(root / case[0]) for _, case in selected]
         for result in results:
+            if not result.get('measurement_complete'):
+                result['item9a_pass'] = False
+                result['reason'] = 'measurement_complete=false'
             write_json(root / result['name'] / 'feel-report.json', result)
         write_json(root / 'matrix-report.json', results)
-        complete = all(result['launches_complete'] for result in results)
+        case_gates = write_case_gates(root, results)
+        complete = bool(results) and all(result['launches_complete'] for result in results)
+        measured = bool(results) and all(result['measurement_complete'] for result in results)
         proof_pass = all(result['off_wire_pass'] for result in results)
-        write_json(root / 'completion.json', dict(finished=stamp(), launches_complete=complete,
+        write_json(root / 'completion.json', dict(finished=stamp(), launches_complete=complete, measurement_complete=measured,
             case_launches={result['name']: result['launches_complete'] for result in results},
-            off_wire_pass=proof_pass, gates_unverified=True, scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT)))
-        return 0 if complete and proof_pass else 1
+            off_wire_pass=proof_pass, item9a_pass=case_gates['passed'], failure_reasons={name: row['reasons'] for name, row in case_gates['cases'].items()},
+            gates_unverified=True, scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT)))
+        return 0 if complete and measured and proof_pass and case_gates['passed'] and all(result['item9a_pass'] for result in results) else 1
     def launch_matrix(script, exe_hash):
         if args.lag_arms:
             for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
@@ -869,7 +923,7 @@ def main(argv=None):
                     port += 1
         for index, case in enumerate(TIMING_CASES):
             launch_timing_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
-        for index, case in enumerate(AUTOSAVE_CASES):
+        for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES):
             launch_autosave_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
     if args.dry_run:
         print(json.dumps(dict(path='full matrix', arms=dry_run_plan(lambda: launch_matrix(root / 'input.txt', None))), indent=2), flush=True)
@@ -889,7 +943,7 @@ def main(argv=None):
                     lag_arms=args.lag_arms,
                     arms=[f'baseline-{cap}-on' for cap in ('60hz', 'uncapped')] +
                          [f'{lag}ms-{cap}-{state}' for lag in (100, 200) for cap in ('60hz', 'uncapped') for state in ('on', 'off')] +
-                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES],
+                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES],
                     lua_states={'host': args.host_lua_states, 'client': args.client_lua_states},
                     pre_match_history={'host': args.host_pre_match_history, 'client': args.client_pre_match_history})
         write_json(root / 'matrix-plan.json', plan)
@@ -921,11 +975,13 @@ def main(argv=None):
     item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
                   for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
+    reasons = {row['name']: failure_reasons(row) for row in results}
+    write_case_gates(root, results)
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
     completion = dict(finished=stamp(), measurement_complete=complete, presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
                       launches_complete=bool(case_launches) and all(case_launches.values()),
                       case_launches=case_launches, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
-                      scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates)
+                      scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates, failure_reasons=reasons)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')
@@ -934,4 +990,8 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    _, arguments = parse_args()
+    if arguments.analyze_only or arguments.dry_run:
+        raise SystemExit(main())
+    with exclusive_matrix():
+        raise SystemExit(main())

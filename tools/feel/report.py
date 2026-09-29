@@ -375,8 +375,9 @@ def wrapped_delta(delta, size, wraps):
     return (delta + size / 2) % size - size / 2 if wraps and size else delta
 
 
-def pin(value, rule, passed, evidence, detail=None):
-    return dict(value=value, rule=rule, status='PASS' if passed and value is not None else 'MISS',
+def pin(value, rule, passed, evidence, detail=None, available=None):
+    available = value is not None if available is None else available
+    return dict(value=value, rule=rule, status=('PASS' if passed else 'FAIL') if available else 'MISS',
                 evidence=[str(record_path(path)) for path in evidence], detail=detail)
 
 
@@ -394,19 +395,36 @@ def peer_id_of(report_path):
     return int(value) if isinstance(value, int) and value > 0 else None
 
 
+def return_hold_violations(log):
+    rounds = defaultdict(lambda: dict(holds=[], returns=[]))
+    current = 0
+    for line in log.splitlines():
+        if found := re.search(r'\[net-lockstep\] start round=(\d+)', line):
+            current = int(found[1])
+        if found := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', line):
+            rounds[current]['holds'].append(tuple(map(int, found.groups())))
+        if found := re.search(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', line):
+            rounds[current]['returns'].append(tuple(map(int, found.groups())))
+    return [dict(round=round_id, held_peer=peer, hold_tick=tick, returned_peer=returned, return_tick=back)
+            for round_id, events in rounds.items() for peer, tick in events['holds'] for returned, back in events['returns']
+            if 0 < tick - back <= 100]
+
+
 def item9a_gates(run, peer='host', rows=None):
     run = Path(run)
     raw = record_path(run / peer / 'feel/raw.jsonl')
     manifest_path = run / 'manifest.json'
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     final_tick = manifest.get('ticks', TICKS)
-    rows = list(read_jsonl(raw)) if rows is None and raw.is_file() else rows or []
     clock_path = raw
-    if not rows:
-        live = run / f'{peer}-live.jsonl'
+    live = record_path(run / f'{peer}-live.jsonl')
+    # Render iterations may skip a simulation tick during catch-up. The tick-end clock records each one.
+    if live.is_file():
         clock_path = live
         rows = [dict(type='committed', tick=row['tick'], wall_ms=row['wall_ms'])
-                for row in read_jsonl(live) if 'wall_ms' in row] if live.is_file() else []
+                for row in read_jsonl(live) if 'wall_ms' in row]
+    else:
+        rows = read_jsonl(raw) if rows is None and raw.is_file() else rows or []
     committed = [row for row in rows if row.get('type') == 'committed' and 300 <= row.get('tick', 0) <= final_tick]
     by_tick = defaultdict(list)
     for row in committed:
@@ -418,8 +436,10 @@ def item9a_gates(run, peer='host', rows=None):
     log = log_path.read_text(encoding='utf-8-sig', errors='replace') if log_path.is_file() else ''
     waits = [(int(tick), int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log) if 300 < int(tick) <= final_tick]
     wait_ms = sum(ms for _, ms in waits)
-    wait_fraction = wait_ms / wall_ms if wall_ms else None
-    longest = max((ms for _, ms in waits), default=0) if wall_ms else None
+    wait_fraction = wait_ms / wall_ms if wall_ms and log_path.is_file() else None
+    longest = max((ms for _, ms in waits), default=0) if wall_ms and log_path.is_file() else None
+    steady_end = manifest.get('silent_tick') or final_tick + 1
+    steady_stalls = sum(ms > 0 for tick, ms in waits if tick < steady_end) if wait_fraction is not None else None
     report_path = run / f'{peer}_report.json'
     report = json.loads(report_path.read_text(encoding='utf-8-sig')) if report_path.is_file() else {}
     def locksteps(node):
@@ -437,6 +457,7 @@ def item9a_gates(run, peer='host', rows=None):
     latest = max(rounds, key=lambda value: value.get('next_frame', 0), default={})
     measured = [value['steady_missing_frame_stalls'] for value in rounds if value.get('steady_missing_frame_stalls') is not None]
     missing = sum(measured) if measured else None
+    round_missing = missing
     tick_ms = latest.get('sim_tick_ms')
     valid_tick = isinstance(tick_ms, (int, float)) and math.isfinite(tick_ms) and tick_ms > 0
     horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * tick_ms
@@ -445,6 +466,8 @@ def item9a_gates(run, peer='host', rows=None):
     pins = {
         'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
+        'item9a_steady_stalls': pin(steady_stalls, '0 blocking waits before the injected spike', steady_stalls == 0, evidence),
+        'item9a_missing_frame_stalls': pin(missing, '0 steady missing-frame stalls', missing == 0, evidence, available=True),
         'item9a_longest_wait': pin(longest, '<= 50 ms', longest is not None and longest <= 50, evidence),
         'item9a_confirmed_horizon_lag': pin(horizon_lag_ms, '<= 50 ms behind the steady confirmed-tick clock, including recovery',
             horizon_lag_ms is not None and horizon_lag_ms <= 50, evidence),
@@ -458,17 +481,35 @@ def item9a_gates(run, peer='host', rows=None):
         # The seat the silent peer got is whatever the lobby gave it; read it instead of assuming 2.
         silent_seat = peer_id_of(run / 'client_report.json') or 2
         holds = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)]
-        held = next((tick for seat, tick in holds if seat == silent_seat and tick >= manifest['silent_tick']), None)
-        # A lagging seat can already be held when its silence comes: then the hold in force at the silent tick is the one it returns from.
-        if manifest.get('silent_hold') == 'in_force':
-            back = [int(tick) for seat, tick in re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', log) if int(seat) == silent_seat]
-            before = [tick for seat, tick in holds if seat == silent_seat and tick <= manifest['silent_tick']]
-            if before and not any(before[-1] < tick <= manifest['silent_tick'] for tick in back):
-                held = before[-1]
+        injection_path = run / 'client/stdout.log'
+        injection_log = injection_path.read_text(encoding='utf-8-sig', errors='replace') if injection_path.is_file() else ''
+        injections = [int(tick) for tick in re.findall(r'\[selftest\] frame stall tick=(\d+)', injection_log)]
+        injection = next((tick for tick in injections if tick >= manifest['silent_tick']), manifest['silent_tick'])
+        # A later failed reconnect can replace the final report's seat id.
+        for line in injection_log.splitlines():
+            if found := re.search(r'\[net-lockstep\] start .*local_peer=(\d+)', line):
+                silent_seat = int(found[1])
+            if found := re.search(r'\[selftest\] frame stall tick=(\d+)', line):
+                if int(found[1]) == injection:
+                    break
+        steady_stalls = sum(ms > 0 for tick, ms in waits if tick < injection) if wait_fraction is not None else None
+        pins['item9a_steady_stalls'] = pin(steady_stalls, '0 blocking waits before the actual injected spike', steady_stalls == 0, evidence)
+        # The round counter includes the deliberately injected spike. Its steady interval ends at the actual injection.
+        missing = steady_stalls if round_missing is not None else None
+        pins['item9a_missing_frame_stalls'] = pin(missing, '0 missing-frame stalls before the actual injected spike', missing == 0, evidence, available=True)
+        spike_waits = sum(ms > 0 for tick, ms in waits if tick >= injection) if wait_fraction is not None else None
+        pins['item9a_spike_waits'] = pin(spike_waits, '<= 1 blocking wait from the single injected spike through return',
+                                       spike_waits is not None and spike_waits <= 1, evidence)
+        returns = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', log)]
+        before = [tick for seat, tick in holds if seat == silent_seat and tick <= injection]
+        held = next((tick for seat, tick in sorted(holds, key=lambda value: value[1]) if seat == silent_seat and tick >= injection), None)
+        if before and not any(seat == silent_seat and max(before) < tick <= injection for seat, tick in returns):
+            held = max(before)
         # The feel window stays fixed; a return may land past it, inside the round, and the peer that returns may be a relaunch.
         rejoin_end = manifest.get('rejoin_through_tick', final_tick)
         returners = manifest.get('returner_peers', ['client'])
-        pins['item9a_hold'] = pin(held, 'silent seat 2 is held from its agreed frame', held is not None, [log_path])
+        pins['item9a_hold'] = pin(held, f'silent seat {silent_seat} is held from its agreed frame', held is not None,
+            [log_path, injection_path], dict(requested_tick=manifest['silent_tick'], actual_tick=injection), available=log_path.is_file())
         def reclaims(name):
             path = run / name / 'stdout.log'
             text = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
@@ -502,19 +543,24 @@ def item9a_gates(run, peer='host', rows=None):
             return values, path
         host_hashes, host_path = hashes('host')
         survivor_hashes, survivor_path = hashes('survivor')
-        same = held is not None and all(tick in host_hashes and host_hashes.get(tick) == survivor_hashes.get(tick) for tick in range(held, final_tick + 1))
-        pins['item9a_ai_takeover_hash'] = pin(same, 'every committed hash from hold through rejoin equals on both survivors', same, [host_path, survivor_path])
-    return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds),
+        compare_through = max([final_tick, *(tick for tick, _ in host_reclaims), *(tick for tick, _ in survivor_reclaims)])
+        same = held is not None and all(tick in host_hashes and host_hashes.get(tick) == survivor_hashes.get(tick) for tick in range(held, compare_through + 1))
+        pins['item9a_ai_takeover_hash'] = pin(same, 'every committed hash from hold through rejoin equals on both survivors', same,
+            [host_path, survivor_path], dict(first_tick=held, last_tick=compare_through), available=bool(host_hashes) and bool(survivor_hashes))
+        reholds = return_hold_violations(log)
+        pins['item9a_no_rehold'] = pin(reholds, 'no seat is held within 100 frames after any return', not reholds, [log_path])
+    return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds) and missing is not None,
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
                              confirmed_horizon_lag_ms=horizon_lag_ms,
                              confirmed_horizon_lag_ticks=horizon_lag_ms / tick_ms if horizon_lag_ms is not None else None,
-                             steady_missing_frame_stalls=missing, first_tick=first_tick, last_tick=final_tick if final_tick in by_tick else None,
+                             steady_missing_frame_stalls=missing, round_missing_frame_stalls=round_missing,
+                             first_tick=first_tick, last_tick=final_tick if final_tick in by_tick else None,
                              clock_path=str(clock_path), sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
 
 
 def apply_tps_call(result, reference):
-    """Apply the same-machine ruling while retaining the absolute measurements."""
+    """Keep the matched single-player rate as evidence without changing the gate."""
     measured = result['metrics'].get('steady_wall_tps')
     baseline = reference.get('steady_wall_tps') if reference else None
     if not isinstance(baseline, (int, float)) or not math.isfinite(baseline) or baseline <= 0:
@@ -522,17 +568,16 @@ def apply_tps_call(result, reference):
     pins = result['pins']
     if 'item9a_wall_tps' not in pins:
         return
-    limited = baseline < 59.5
-    minimum = baseline * .95 if limited else 59.5
     original = dict(pins['item9a_wall_tps'])
     evidence = original['evidence'] + [reference['evidence']]
     pins['item9a_wall_tps'] = pin(measured,
-        f'>= {minimum:.6f}; within 5 percent of the matched single-player baseline' if limited else '>= 59.5; single-player clears the absolute gate',
-        measured is not None and measured >= minimum, evidence)
-    result['tps_call'] = dict(reference=reference, absolute=original, minimum_tps=minimum, box_limited=limited)
-    if limited and 'item9a_confirmed_horizon_lag' in pins:
-        pins['item9a_confirmed_horizon_lag']['required'] = False
-        pins['item9a_confirmed_horizon_lag']['detail'] = 'The nominal 60 Hz drift remains diagnostic under the same-machine TPS ruling; blocked time and longest block remain required.'
+        '>= 59.5 after tick 300, including recovery time', measured is not None and measured >= 59.5, evidence)
+    relative_minimum = baseline * .95 if baseline < 59.5 else 59.5
+    result['tps_call'] = dict(reference=reference, absolute=original, minimum_tps=59.5, box_limited=baseline < 59.5,
+                              relative_minimum_tps=relative_minimum, relative_pass=measured is not None and measured >= relative_minimum)
+    horizon = pins.get('item9a_confirmed_horizon_lag')
+    if horizon and horizon.get('value') is not None and horizon.get('required') is False:
+        horizon['required'] = True
     result['pass_check'] = all(value['status'] == 'PASS' for value in pins.values() if value.get('required', True))
 
 

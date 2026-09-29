@@ -1125,6 +1125,7 @@ static std::vector<E2eOwnerLogEntry> s_netMatchE2eOwnerLog;
 static uint64_t s_paceIterations = 0;
 static uint64_t s_paceSimTicks = 0;
 static long long s_paceSimUs = 0;
+static std::atomic<float> s_paceExecutionAverageMs{0.0F};
 static long long s_paceUpdateUs = 0;
 static long long s_paceDrawUs = 0;
 static long long s_pacePreviewUs = 0; //!< The draw's share spent in the local prediction preview.
@@ -6377,7 +6378,10 @@ void RunGameLoop() {
 	long long drawStartTime = 0;
 	long long drawTotalTime = 0;
 
+	struct FrameStallSample { ~FrameStallSample() { StallStackSampler::TickEnd(); } };
 	while (!System::IsSetToQuit()) {
+		StallStackSampler::TickBegin(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		const FrameStallSample frameStallSample;
 		bool returnToMenuAfterNetworkEnd = false;
 		// The completed round's held pause menu ends the moment its probe does, or when the window runs out.
 		if (s_netMatchE2ECompletedMs && !ProbeHoldsE2eEnd(s_netMatchE2ECompletedMs)) {
@@ -6427,7 +6431,7 @@ void RunGameLoop() {
 			s_frameStallFired = true;
 			{
 				std::ostringstream line;
-				line << "[selftest] frame stall tick=" << s_frameStallTick << " ms=" << s_frameStallMs;
+				line << "[selftest] frame stall tick=" << g_TimerMan.GetSimUpdateCount() << " ms=" << s_frameStallMs << " requested_tick=" << s_frameStallTick;
 				System::PrintDiagnosticLine(line.str());
 			}
 			// The session plane keeps the round's frames moving while this machine's simulation is away.
@@ -6450,7 +6454,8 @@ void RunGameLoop() {
 					stall.firedRound = s_netMatchServiceE2ERematches;
 				} else {
 					const uint64_t activation = ScenarioRunner::WorldCatchUpActivationTick();
-					if (s_netLiveStallActivation && activation <= *s_netLiveStallActivation) break;
+					if (ScenarioRunner::GetLockstepLocalPeerId() != ScenarioRunner::GetLockstepHostPeerId() &&
+					    s_netLiveStallActivation && activation <= *s_netLiveStallActivation) break;
 					stall.fired = true;
 					s_netLiveStallActivation = activation;
 				}
@@ -6479,6 +6484,7 @@ void RunGameLoop() {
 			s_paceIterations = 0;
 			s_paceSimTicks = 0;
 			s_paceSimUs = 0;
+			s_paceExecutionAverageMs.store(0.0F, std::memory_order_relaxed);
 			s_paceUpdateUs = 0;
 			s_paceDrawUs = 0;
 			s_pacePreviewUs = 0;
@@ -6529,10 +6535,10 @@ void RunGameLoop() {
 			NetModerationGUIProbe::OnSimTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
-			StallStackSampler::TickBegin(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
+			const bool measureLockstepCost = ScenarioRunner::IsLockstepControllerSyncActive();
 			g_PerformanceMan.NewPerformanceSample();
-			g_PerformanceMan.UpdateMSPSU();
+			if (!measureLockstepCost) g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
 			g_AudioMan.RetireFinishedSimulationSounds();
 			const bool watchLedgerExpiry = s_eventLedgerPressTick > 0;
@@ -7393,8 +7399,8 @@ void RunGameLoop() {
 				bool reclaimStart = false;
 				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !reclaimStart && simTick > 0; ++peer)
 					reclaimStart = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 1);
-				if (reclaimStart) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump, "reclaim");
-				if ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump);
+				if (reclaimStart) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "reclaim");
+				if ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
@@ -7402,8 +7408,12 @@ void RunGameLoop() {
 			const long long crossCaptureUs = g_TimerMan.GetAbsoluteTime() - crossCaptureStartUs;
 			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;
 
+			// The paced round estimates execution cost without counting its idle interval.
+			if (measureLockstepCost) {
+				g_PerformanceMan.UpdateMSPSU(static_cast<float>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)) / 1000.0F);
+				s_paceExecutionAverageMs.store(g_PerformanceMan.GetMSPSUAverage(), std::memory_order_relaxed);
+			}
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
-			StallStackSampler::TickEnd();
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
 
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
@@ -8545,6 +8555,7 @@ std::string BuildLoopPaceJson() {
 	out << "\"draw_ms\":" << s_paceDrawUs / 1000 << ",";
 	out << "\"wall_tps\":" << (wallUs > 0 ? static_cast<double>(s_paceSimTicks) * 1000000.0 / static_cast<double>(wallUs) : 0.0) << ",";
 	out << "\"sim_ms_per_tick\":" << (s_paceSimTicks > 0 ? static_cast<double>(s_paceSimUs) / 1000.0 / static_cast<double>(s_paceSimTicks) : 0.0) << ",";
+	out << "\"sim_execution_average_ms\":" << s_paceExecutionAverageMs.load(std::memory_order_relaxed) << ",";
 	out << "\"draw_ms_per_iter\":" << (s_paceIterations > 0 ? static_cast<double>(s_paceDrawUs) / 1000.0 / static_cast<double>(s_paceIterations) : 0.0) << ",";
 	out << "\"net_wait_ms\":" << ScenarioRunner::GetLockstepWaitUs() / 1000 << ",";
 	const double ticksPerMs = static_cast<double>(g_TimerMan.GetTicksPerSecond()) / 1000.0;

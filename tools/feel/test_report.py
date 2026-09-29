@@ -117,7 +117,7 @@ class ReportTests(unittest.TestCase):
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
 
-    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200):
+    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
             run = Path(folder)
@@ -135,49 +135,91 @@ class ReportTests(unittest.TestCase):
             rows = [dict(type='committed', tick=300, wall_ms=5000)]
             if complete:
                 rows.append(dict(type='committed', tick=final_tick, wall_ms=5000 + wall_ms))
+            if live_clock:
+                (run / 'host-live.jsonl').write_text('\n'.join(json.dumps(dict(tick=tick, wall_ms=5000 + (tick-300)*wall_ms/(final_tick-300)))
+                    for tick in range(300, final_tick+1)), encoding='utf-8')
             return report.item9a_gates(run, rows=rows)
 
     def test_item9a_steady_rate_and_wait_boundaries(self):
         self.assertTrue(self.item9a()['pass_check'])
-        self.assertEqual(self.item9a(wall_ms=16000)['pins']['item9a_wall_tps']['status'], 'MISS')
-        self.assertEqual(self.item9a(waits='[net-frame-wait] frame=600 wait_ms=51')['pins']['item9a_longest_wait']['status'], 'MISS')
+        self.assertEqual(self.item9a(wall_ms=16000)['pins']['item9a_wall_tps']['status'], 'FAIL')
+        self.assertEqual(self.item9a(waits='[net-frame-wait] frame=600 wait_ms=51')['pins']['item9a_longest_wait']['status'], 'FAIL')
         waits = '\n'.join(f'[net-frame-wait] frame={tick} wait_ms=50' for tick in (600, 700, 800))
-        self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'MISS')
+        self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'FAIL')
 
-    def test_same_machine_tps_ruling_retains_block_limits(self):
+    def test_single_player_reference_never_relaxes_the_feel_gate(self):
         reference = dict(steady_wall_tps=55, evidence='single-player.jsonl')
         measured = self.item9a(wall_ms=900000 / 54)
         report.apply_tps_call(measured, reference)
-        self.assertTrue(measured['pass_check'])
-        self.assertEqual(measured['tps_call']['absolute']['status'], 'MISS')
-        self.assertFalse(measured['pins']['item9a_confirmed_horizon_lag']['required'])
+        self.assertFalse(measured['pass_check'])
+        self.assertEqual(measured['tps_call']['absolute']['status'], 'FAIL')
+        self.assertTrue(measured['pins']['item9a_confirmed_horizon_lag'].get('required', True))
         blocked = self.item9a(wall_ms=900000 / 54, waits='[net-frame-wait] frame=600 wait_ms=51')
         report.apply_tps_call(blocked, reference)
         self.assertFalse(blocked['pass_check'])
         too_slow = self.item9a(wall_ms=900000 / 52)
         report.apply_tps_call(too_slow, reference)
-        self.assertEqual(too_slow['pins']['item9a_wall_tps']['status'], 'MISS')
+        self.assertEqual(too_slow['pins']['item9a_wall_tps']['status'], 'FAIL')
         fast_box = self.item9a(wall_ms=900000 / 59)
         report.apply_tps_call(fast_box, dict(steady_wall_tps=60, evidence='stock.jsonl'))
-        self.assertEqual(fast_box['pins']['item9a_wall_tps']['status'], 'MISS')
+        self.assertEqual(fast_box['pins']['item9a_wall_tps']['status'], 'FAIL')
         self.assertNotIn('required', fast_box['pins']['item9a_confirmed_horizon_lag'])
+
+    def test_steady_window_has_no_blocking_waits(self):
+        measured = self.item9a(waits='[net-frame-wait] frame=450 wait_ms=1', silent=True)
+        self.assertEqual(measured['pins']['item9a_steady_stalls']['status'], 'FAIL')
+        measured = self.item9a(waits='[net-frame-wait] frame=450 wait_ms=0', silent=True)
+        self.assertEqual(measured['pins']['item9a_steady_stalls']['status'], 'PASS')
+
+    def test_one_spike_allows_only_one_bounded_wait(self):
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=40', silent=True)
+        self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'PASS')
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=20\n[net-frame-wait] frame=621 wait_ms=20', silent=True)
+        self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'FAIL')
+
+    def test_missing_frame_steady_counter_excludes_only_the_actual_spike(self):
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=40', missing=1, silent=True)
+        self.assertEqual(measured['metrics']['round_missing_frame_stalls'], 1)
+        self.assertEqual(measured['pins']['item9a_missing_frame_stalls']['status'], 'PASS')
+        measured = self.item9a(waits='[net-frame-wait] frame=450 wait_ms=1', missing=1, silent=True)
+        self.assertEqual(measured['pins']['item9a_missing_frame_stalls']['status'], 'FAIL')
 
     def test_item9a_recovery_elapsed_time_cannot_be_reset_away(self):
         result = self.item9a(wall_ms=15700)
         self.assertEqual(result['metrics']['steady_wall_ms'], 15700)
-        self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'MISS')
+        self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'FAIL')
 
-    def test_item9a_prefetch_misses_are_diagnostic_and_end_evidence_is_required(self):
-        self.assertTrue(self.item9a(missing=1)['pass_check'])
+    def test_item9a_missing_frame_stalls_are_a_required_gate(self):
+        self.assertFalse(self.item9a(missing=1)['pass_check'])
         self.assertEqual(self.item9a(missing=1)['metrics']['steady_missing_frame_stalls'], 1)
-        self.assertTrue(self.item9a(missing=None)['pass_check'])
+        self.assertFalse(self.item9a(missing=None)['pass_check'])
         self.assertFalse(self.item9a(complete=False)['pass_check'])
+
+    def test_three_peer_autosave_checks_the_survivor(self):
+        import feel_measure
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            (run / 'manifest.json').write_text(json.dumps(dict(ticks=2400, launches_complete=True,
+                per_peer_lag_ms=dict(host=200, client=200, survivor=200))), encoding='utf-8')
+            with patch.object(feel_measure, 'timing_peer', return_value=dict(measurement_complete=True, pass_check=True)), \
+                 patch.object(feel_measure, 'compare_pair', return_value=dict(pass_check=True, **{'pass': True})), \
+                 patch.object(feel_measure, 'compare_live_hashes', return_value=[dict(compared_ticks=2400, mismatched_ticks=0)]), \
+                 patch.object(feel_measure, 'write_json'):
+                measured = feel_measure.reduce_timing_case(run)
+            self.assertEqual(set(measured['peers']), {'host', 'survivor'})
+            self.assertEqual(set(measured['proof']['live_passes']), {'host/survivor', 'host/client', 'client/survivor'})
+
+    def test_item9a_uses_the_tick_clock_when_a_render_skips_the_final_tick(self):
+        measured = self.item9a(complete=False, live_clock=True, wall_ms=17000)
+        self.assertEqual(measured['metrics']['last_tick'], 1200)
+        self.assertAlmostEqual(measured['metrics']['steady_wall_tps'], 900000/17000)
+        self.assertEqual(measured['pins']['item9a_wall_tps']['status'], 'FAIL')
 
     def test_item9a_confirmed_horizon_lag_cannot_hide_behind_average_rate(self):
         self.assertEqual(self.item9a(wall_ms=15050)['pins']['item9a_confirmed_horizon_lag']['status'], 'PASS')
         result = self.item9a(wall_ms=15051)
         self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'PASS')
-        self.assertEqual(result['pins']['item9a_confirmed_horizon_lag']['status'], 'MISS')
+        self.assertEqual(result['pins']['item9a_confirmed_horizon_lag']['status'], 'FAIL')
 
     def test_item9a_extended_rejoin_window_requires_its_actual_end(self):
         result = self.item9a(final_tick=2400, wall_ms=35000)
@@ -190,13 +232,25 @@ class ReportTests(unittest.TestCase):
         applied = '[net-match] seat-reclaimed peer=2 frame=700 live_actors=2\n'
         def status(host, survivor, completed=""):
             return self.item9a(silent=True, waits=request + host, survivor_log=survivor, client_log=completed)['pins']['item9a_rejoin']['status']
-        self.assertEqual(status('', request), 'MISS')
-        self.assertEqual(status(applied, ''), 'MISS')
-        self.assertEqual(status(applied, applied.replace('700', '701')), 'MISS')
-        self.assertEqual(status(applied, applied), 'MISS')
+        self.assertEqual(status('', request), 'FAIL')
+        self.assertEqual(status(applied, ''), 'FAIL')
+        self.assertEqual(status(applied, applied.replace('700', '701')), 'FAIL')
+        self.assertEqual(status(applied, applied), 'FAIL')
         self.assertEqual(status(applied, applied, '[net-match] private catch-up complete frame=700\n'), 'PASS')
         for refused in (applied.replace('700', '500'), applied.replace('700', '1201'), applied.replace('actors=2', 'actors=0'), applied.replace('peer=2', 'peer=3')):
-            self.assertEqual(status(refused, refused), 'MISS')
+            self.assertEqual(status(refused, refused), 'FAIL')
+
+    def test_silence_keeps_the_seat_at_injection_after_a_later_reconnect(self):
+        hold = '[net-match] hold peer=3 frame=603 AI in control\n'
+        returned = '[net-match] seat-reclaimed peer=3 frame=700 live_actors=2\n'
+        client = '[net-lockstep] start round=7 frame=1 local_peer=3 peers=3\n[selftest] frame stall tick=600 ms=1500\n'
+        client += '[net-match] private catch-up complete frame=700\n[net-lockstep] start round=9 frame=1 local_peer=2 peers=2\n'
+        result = self.item9a(silent=True, waits=hold + returned, survivor_log=hold + returned, client_log=client)
+        self.assertEqual(result['pins']['item9a_hold']['status'], 'PASS')
+        self.assertEqual(result['pins']['item9a_rejoin']['status'], 'PASS')
+        absent = self.item9a(silent=True, waits=hold + returned, survivor_log=hold + returned,
+                            client_log=client.replace('[net-match] private catch-up complete frame=700\n', ''))
+        self.assertEqual(absent['pins']['item9a_rejoin']['status'], 'FAIL')
 
     def test_item9a_private_rejoin_rejects_survivor_reload(self):
         hold = '[net-match] hold peer=2 frame=603 AI in control\n'
@@ -205,7 +259,7 @@ class ReportTests(unittest.TestCase):
         def result(extra):
             return self.item9a(silent=True, waits=hold + applied + extra, survivor_log=applied, client_log=client)['pins']['item9a_private_rejoin']['status']
         self.assertEqual(result(''), 'PASS')
-        self.assertEqual(result('[net-match] rejoin: player reconnected - resyncing the match\n'), 'MISS')
+        self.assertEqual(result('[net-match] rejoin: player reconnected - resyncing the match\n'), 'FAIL')
 
     def test_latency_uses_present_return_and_counts_frames(self):
         edge = dict(_line=1, tick=10, wall_ms=100, actor=actor(), last_presented_frame=1,
@@ -235,10 +289,117 @@ class ReportTests(unittest.TestCase):
     def test_draw_percentile_is_nearest_rank_and_boundary_is_not_relaxed(self):
         values = report.distribution([1] * 99 + [51])
         self.assertEqual((values['p99'], values['max']), (1, 51))
-        self.assertEqual(report.pin(51, '<= 50', 51 <= 50, [])['status'], 'MISS')
+        self.assertEqual(report.pin(51, '<= 50', 51 <= 50, [])['status'], 'FAIL')
 
     def test_unknown_value_never_passes(self):
         self.assertEqual(report.pin(None, '<= 8', True, [])['status'], 'MISS')
+
+    def test_measured_failure_is_not_missing_evidence(self):
+        self.assertEqual(report.pin(.0856, '< .01', False, [])['status'], 'FAIL')
+        self.assertEqual(report.pin(False, 'completed return', False, [])['status'], 'FAIL')
+
+    def test_silent_seat_already_held_uses_its_open_interval(self):
+        hold = '[net-match] hold peer=2 frame=516 AI in control\n'
+        back = '[net-match] seat-reclaimed peer=2 frame=700 live_actors=2\n'
+        complete = '[net-match] private catch-up complete frame=700\n'
+        result = self.item9a(silent=True, waits=hold + back, survivor_log=hold + back, client_log=complete)
+        self.assertEqual(result['pins']['item9a_hold']['value'], 516)
+        self.assertEqual(result['pins']['item9a_rejoin']['status'], 'PASS')
+        failed = self.item9a(silent=True, waits=hold, survivor_log=hold)
+        self.assertEqual(failed['pins']['item9a_rejoin']['status'], 'FAIL')
+
+    def test_every_red_case_records_its_failed_pins(self):
+        import feel_measure
+        result = dict(name='measured', peers={'host': self.item9a(wall_ms=16000)})
+        reasons = feel_measure.failure_reasons(result)
+        self.assertTrue(any('host.item9a_wall_tps' in reason for reason in reasons))
+        self.assertTrue(all(reason.strip() for reason in reasons))
+        with tempfile.TemporaryDirectory() as folder:
+            gates = feel_measure.write_case_gates(Path(folder), [result, dict(name='absent', item9a_pass=False)])
+            self.assertFalse(gates['passed'])
+            self.assertTrue(all(case['reasons'] for case in gates['cases'].values()))
+
+    def test_return_hold_check_uses_the_committed_round_and_every_seat(self):
+        log = ('[net-lockstep] start round=1 frame=1\n'
+               '[net-match] seat-reclaimed peer=2 frame=300\n'
+               '[net-match] hold peer=1 frame=307 AI in control\n'
+               '[net-match] hold peer=2 frame=401 AI in control\n'
+               '[net-lockstep] start round=2 frame=1\n'
+               '[net-match] hold peer=2 frame=320 AI in control\n')
+        self.assertEqual(report.return_hold_violations(log), [dict(round=1, held_peer=1, hold_tick=307, returned_peer=2, return_tick=300)])
+
+    def test_failed_engine_exit_cannot_pass_its_case_gate(self):
+        import feel_measure
+        result = dict(name='unfinished', peers={'host': self.item9a()}, item9a_pass=True,
+                      off_wire_pass=True, launches_complete=False)
+        with tempfile.TemporaryDirectory() as folder:
+            gates = feel_measure.write_case_gates(Path(folder), [result])
+        self.assertFalse(gates['passed'])
+        self.assertFalse(gates['cases']['unfinished']['passed'])
+        self.assertTrue(any('launches_complete=false' in reason for reason in gates['cases']['unfinished']['reasons']))
+
+    def test_an_empty_gate_run_records_why_it_failed(self):
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            gates = feel_measure.write_case_gates(Path(folder), [])
+        self.assertFalse(gates['passed'])
+        self.assertTrue(gates['reasons'])
+
+    def test_selected_cases_refuse_incomplete_measurements(self):
+        import feel_measure
+        result = dict(name='200ms-loss5', peers={'host': self.item9a()}, item9a_pass=True,
+                      measurement_complete=False, launches_complete=True, off_wire_pass=True)
+        with tempfile.TemporaryDirectory() as folder, patch.object(feel_measure, 'reduce_timing_case', return_value=result):
+            (Path(folder) / result['name']).mkdir()
+            code = feel_measure.main(['--repo', str(feel_measure.REPO), '--out', folder, '--cases', '200ms-loss5',
+                                      '--analyze-only', '--port', '49700', '--port-block', '49700-49709'])
+            completed = json.loads((Path(folder) / 'completion.json').read_text())
+        self.assertEqual(code, 1)
+        self.assertFalse(completed['measurement_complete'])
+        self.assertTrue(completed['failure_reasons']['200ms-loss5'])
+
+    def test_missing_stall_counter_is_failed_not_missing(self):
+        for silent in (False, True):
+            result = self.item9a(missing=None, silent=silent)
+            self.assertEqual(result['pins']['item9a_missing_frame_stalls']['status'], 'FAIL')
+            self.assertFalse(result['measurement_complete'])
+
+    def test_absent_required_stall_pin_cannot_pass(self):
+        import feel_measure
+        measured = self.item9a()
+        measured['pins'].pop('item9a_missing_frame_stalls')
+        result = dict(name='absent-counter', peers={'host': measured}, item9a_pass=True,
+                      measurement_complete=True, launches_complete=True, off_wire_pass=True)
+        with tempfile.TemporaryDirectory() as folder:
+            verdict = feel_measure.write_case_gates(Path(folder), [result])
+        self.assertFalse(verdict['passed'])
+        self.assertTrue(verdict['reasons'])
+
+    def test_measured_horizon_remains_required_with_a_slow_baseline(self):
+        measured = self.item9a()
+        measured['pins']['item9a_confirmed_horizon_lag'].update(value=80, status='FAIL', required=False)
+        report.apply_tps_call(measured, dict(steady_wall_tps=50, evidence='baseline.json'))
+        self.assertFalse(measured['pass_check'])
+        self.assertTrue(measured['pins']['item9a_confirmed_horizon_lag']['required'])
+        self.assertEqual(measured['tps_call']['relative_minimum_tps'], 47.5)
+
+    def test_every_manifest_survivor_is_judged(self):
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'manifest.json').write_text(json.dumps(dict(ticks=2400, launches_complete=True,
+                per_peer_lag_ms=dict(host=0, client=200, observer=0))))
+            def measured(run, peer):
+                return dict(measurement_complete=True, pass_check=peer != 'observer')
+            with patch.object(feel_measure, 'timing_peer', side_effect=measured), \
+                 patch.object(feel_measure, 'compare_pair', return_value={'pass': True}), \
+                 patch.object(feel_measure, 'compare_live_hashes', return_value=[dict(compared_ticks=2400, mismatched_ticks=0)]) as compared:
+                result = feel_measure.reduce_timing_case(root)
+            pairs = {(Path(call.args[0]).name, Path(call.args[1]).name) for call in compared.call_args_list}
+        self.assertFalse(result['item9a_pass'])
+        self.assertEqual(set(result['peers']), {'host', 'observer'})
+        self.assertEqual(pairs, {('host-live.jsonl', 'client-live.jsonl'), ('host-live.jsonl', 'observer-live.jsonl'),
+                                 ('client-live.jsonl', 'observer-live.jsonl')})
 
     def test_correction_uses_matching_target_and_strict_four_pixel_boundary(self):
         forecast = dict(_line=3, committed_tick=9, target_tick=10, actor=dict(uid=7, x=100, y=100))
@@ -289,7 +450,7 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(duplicate['first']['tick'], 1)
             self.assertEqual(duplicate['first']['actor'], 7)
             self.assertEqual(duplicate['first']['first_line'], 2)
-            self.assertEqual(report.pin(duplicate, 'no duplicate', duplicate is None, [dump])['status'], 'MISS')
+            self.assertEqual(report.pin(duplicate, 'no duplicate', duplicate is None, [dump])['status'], 'FAIL')
 
     def test_repeated_identical_canonical_record_is_not_a_duplicate(self):
         from tempfile import TemporaryDirectory
@@ -348,7 +509,7 @@ class EarlyDecidedArmTest(unittest.TestCase):
             run = self.arm(folder, 1147)
             result = feel_measure.reduce_or_fail(run, 'client')
             pinned = result['pins']['item9a_measurement_window']
-            self.assertEqual(pinned['status'], 'MISS')
+            self.assertEqual(pinned['status'], 'FAIL')
             self.assertEqual(pinned['value'], 1147)
             self.assertEqual(pinned['detail'], 'FAIL: decided at tick 1147; measurement window is 1200 ticks')
             self.assertEqual(result['early_decision']['tick'], 1147)

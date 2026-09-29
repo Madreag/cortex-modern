@@ -633,6 +633,7 @@ namespace RTE {
 		uint32_t frameBindingGapDrops = 0; //!< Unreliable frames whose bindings this peer missed past every window.
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
+		uint32_t aheadInputMisses = 0; //!< A future frame the network worker cannot commit yet; no simulation wait is implied.
 		uint32_t blockingFrameWaits = 0;
 		uint64_t holdNoticeBudgetMs = 0;
 		bool holdDeadlineFeasible = true;
@@ -701,7 +702,8 @@ namespace RTE {
 		/// Version 36 names the proposal a re-stamped timing decision withdraws, so no peer keeps the old one.
 		static constexpr uint16_t c_TimingWithdrawVersion = 36;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
-		static constexpr uint16_t c_CheckpointVersion = 40; //!< The newest wire: frames that carry the checkpoint schedule.
+		static constexpr uint16_t c_CheckpointVersion = 40; //!< Frames carrying the checkpoint schedule.
+		static constexpr uint16_t c_RecoveryDatagramVersion = 41; //!< Complete recovery inputs may use the unreliable lane.
 		/// A committed tick and a replay record may name one actor once per sender, in sender order; a build that reads them as unique
 		/// per actor is refused at admission through the deterministic config hash.
 		static constexpr uint16_t c_CommittedRecordVersion = 2;
@@ -1046,7 +1048,7 @@ namespace RTE {
 		/// Whether the frame waited on is one the host produces only after a capture every peer announced.
 		bool HostBusyWithAnnouncedCapture(uint64_t frame) const;
 		/// The announced capture tick whose aftermath covers a frame, if any.
-		std::optional<uint64_t> AnnouncedCaptureCovering(uint64_t frame) const;
+		std::optional<uint64_t> AnnouncedCaptureCovering(uint64_t frame, uint8_t peerId = 0) const;
 		std::map<uint8_t, NetPeerId> RemoteTransports() const { NET_PLANE_CHECK(); return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
@@ -1274,6 +1276,18 @@ namespace RTE {
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 		friend bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
+		friend bool TestAReturnGapDoesNotStartTheHostsClock(std::string* error);
+		friend bool TestANeutralGapLeavesNoCommandsToResend(std::string* error);
+		friend bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error);
+		friend bool TestAnAnnouncedCaptureExcusesEverySeatForItsCost(std::string* error);
+		friend bool TestDelayTracksASteadySendersArrivalPhase(std::string* error);
+		friend bool TestAheadInputIsNotASimulationStall(std::string* error);
+		friend bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error);
+		friend bool TestArrivalLeadIncludesTheFastestSurvivor(std::string* error);
+		friend bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error);
+		friend bool TestEachSurvivorsRunwayUsesItsOwnLink(std::string* error);
+		friend bool TestAReturnRebuildsArrivalSlack(std::string* error);
+		friend bool TestReturnFramesBypassReliableLoss(std::string* error);
 		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
 		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);
 		friend bool TestAnEarlyReturnIsAdmittedOnTheRoundsDelay(std::string* error);
@@ -1535,6 +1549,7 @@ namespace RTE {
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		/// Host: holds its own seat when every other seat's input for the frame is in hand and its own simulation has not produced its input within the bound.
 		bool JudgeOwnSeat(uint64_t frame, uint64_t nowMs);
+		uint64_t CaptureExcuseUntil(uint8_t peerId, uint64_t frame, uint64_t firstMissingMs);
 		/// Host: takes its own held seat back once its simulation has caught up to the committed frames.
 		void ReclaimOwnSeat(uint64_t nowMs);
 		std::optional<uint64_t> m_OwnMissingFrame; //!< Host: the frame its own input was first missing for with every other seat's in hand.
@@ -1740,6 +1755,10 @@ namespace RTE {
 		/// Each return's neutral gap that still covers frames before the hold that ended it, by its first frame; kept until the simulation passes it.
 		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_RetiredReclaimGaps;
 		std::set<uint64_t> m_AnnouncedCaptureTicks; //!< Named captures every peer takes at the end of these ticks.
+		std::optional<uint64_t> m_LocalCaptureTick;
+		uint64_t m_LocalCaptureStartedMs = 0;
+		double m_LocalCaptureCostMs = 0;
+		std::map<std::pair<uint8_t, uint64_t>, uint64_t> m_CaptureExcuseUntilMs;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
@@ -1798,6 +1817,7 @@ namespace RTE {
 		void RelayArrivedTicks(const NetLockstepFrame& frame);
 		/// The lane a packet takes to one peer: frames ride the frame lane unless that peer is still catching up.
 		NetTransportLane LaneTo(uint8_t peerId, const NetLockstepPacket& packet, NetTransportLane lane) const;
+		void SendReturnFrameCopies(uint8_t peerId, const NetLockstepFrame& frame);
 	};
 
 } // namespace RTE
