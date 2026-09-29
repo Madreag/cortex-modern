@@ -9,9 +9,9 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from compare_sim_traces import load_trace
 from run_sim_test import make_run
 
 
@@ -25,8 +25,22 @@ def check(repo, root, label, source):
     result.update(source=str(source), bytes=len(payload), mtime_ns=source.stat().st_mtime_ns,
                   sha256=hashlib.sha256(payload).hexdigest())
     name = "row513_" + label
-    run = make_run(repo, ["-load-game", name, "-max-ticks", 600, "-tick-hashes", "-out", root / "trace.json"],
-                   root / "engine", 300, env={"CCCP_HEADLESS": "1"})
+    saved_tick = 0
+    with zipfile.ZipFile(source) as archive:
+        if "Restore.ini" in archive.namelist():
+            for line in archive.read("Restore.ini").decode("utf-8").splitlines():
+                key, separator, value = line.partition("=")
+                if separator and key.strip() == "SavedTick":
+                    saved_tick = int(value.strip())
+    probe = root / "probe/script.json"
+    probe.parent.mkdir(parents=True)
+    probe.write_text(json.dumps({"schema": 1, "timeout_ms": 180000, "steps": [
+        {"op": "wait", "screen": "Gameplay"}, {"op": "wait", "sim_at_least": saved_tick + 850},
+        {"op": "finish"}]}))
+    # Ordinary saved games have no multiplayer trace collector. Read the actual sim clock
+    # at gameplay entry and at completion; require at least 600 updates between them.
+    run = make_run(repo, ["-load-game", name, "-max-ticks", saved_tick + 900], root / "engine", 300,
+                   env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)})
     saved = Path(run.cwd) / "Userdata/UserSavedGames.rte" / f"{name}.ccsave"
     saved.parent.mkdir(parents=True, exist_ok=True)
     # Creating this module before boot also makes its usual bootstrap Index.ini our responsibility.
@@ -36,11 +50,12 @@ def check(repo, root, label, source):
     try:
         result["record"] = run.start().finish()
         text = (root / "engine/stdout.log").read_text(errors="replace")
-        ticks, info = load_trace(root / "trace.json")
-        result.update(ticks=len(ticks), first_tick=min(ticks), last_tick=max(ticks), trace=info)
+        observed = json.loads((probe.parent / "net-ui-result.json").read_text())
+        readings = [step["observed"]["sim_frame"] for step in observed.get("steps", [])]
+        first, last = readings[0], readings[-1]
+        result.update(ticks=last - first, first_tick=first, last_tick=last, saved_tick=saved_tick, probe=observed)
         result["pass"] = (result["record"]["exit_code"] == 0 and not result["record"].get("timed_out")
-                          and f'[load-game] loaded "{name}"' in text and len(ticks) == 600
-                          and max(ticks) - min(ticks) == 599)
+                          and f'[load-game] loaded "{name}"' in text and observed.get("pass") and last - first >= 600)
     except Exception as error:
         result["error"] = repr(error)
     finally:
