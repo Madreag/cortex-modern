@@ -14,10 +14,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--url", default="https://community.example.invalid/custom-directory")
     args = parser.parse_args()
     root = args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    url = "https://community.example.invalid/custom-directory"
+    url = args.url
     script = root / "settings.menu.txt"
     script.write_text("wait 40\nactivate ButtonMainToOptions\nwait 10\nassert_screen SettingsScreen\n"
                       "select_settings_page Network\nwait 3\nassert_settings_page Network\n"
