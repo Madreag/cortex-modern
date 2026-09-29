@@ -5294,10 +5294,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!StartOwnedPair(43025, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x5732315448415443ULL, hostTransport, clientTransport, host, client, error)) {
 				return false;
 			}
-			ACDropShip* ownerView = new ACDropShip();
-			ACDropShip* peerView = new ACDropShip();
-			Actor* ownerCargo = new Actor();
-			Actor* peerCargo = new Actor();
+			auto ownerViewOwner = std::make_unique<ACDropShip>();
+			ACDropShip* ownerView = ownerViewOwner.get();
+			auto peerViewOwner = std::make_unique<ACDropShip>();
+			ACDropShip* peerView = peerViewOwner.get();
+			auto ownerCargoOwner = std::make_unique<Actor>();
+			Actor* ownerCargo = ownerCargoOwner.get();
+			auto peerCargoOwner = std::make_unique<Actor>();
+			Actor* peerCargo = peerCargoOwner.get();
 			const auto finish = [&](const char* message) {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -5378,8 +5382,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 			// Closing moves what the hatch collected into the regular inventory and plays a sound. Inside
 			// the AI pass both ride the intent, so the producer keeps the cargo until every peer closes.
-			ownerView->AddInventoryItem(ownerCargo);
-			peerView->AddInventoryItem(peerCargo);
+			ownerView->AddInventoryItem(ownerCargoOwner.release());
+			peerView->AddInventoryItem(peerCargoOwner.release());
 			if (ownerView->GetCollectedInventory().size() != 1 || peerView->GetCollectedInventory().size() != 1) {
 				return finish("the open craft did not collect the selftest cargo");
 			}
@@ -5434,7 +5438,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!StartOwnedPair(48332, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x57323144524f5044ULL, hostTransport, clientTransport, host, client, error)) {
 				return false;
 			}
-			ACDropShip* craft = new ACDropShip();
+			auto craftOwner = std::make_unique<ACDropShip>();
+			ACDropShip* craft = craftOwner.get();
 			const auto finish = [&](const char* message) {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -5489,9 +5494,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!StartOwnedPair(48331, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x573231414d4f4445ULL, hostTransport, clientTransport, host, client, error)) {
 				return false;
 			}
-			Actor* ownerView = new Actor();
-			Actor* peerView = new Actor();
-			Actor* squadMate = new Actor();
+			auto ownerViewOwner = std::make_unique<Actor>();
+			Actor* ownerView = ownerViewOwner.get();
+			auto peerViewOwner = std::make_unique<Actor>();
+			Actor* peerView = peerViewOwner.get();
+			auto squadMateOwner = std::make_unique<Actor>();
+			Actor* squadMate = squadMateOwner.get();
 			const auto finish = [&](const char* message) {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -5626,8 +5634,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!StartOwnedPair(48331, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x573231414d5347ULL, hostTransport, clientTransport, host, client, error)) {
 				return false;
 			}
-			Actor* ownerView = new Actor();
-			Actor* peerView = new Actor();
+			auto ownerViewOwner = std::make_unique<Actor>();
+			Actor* ownerView = ownerViewOwner.get();
+			auto peerViewOwner = std::make_unique<Actor>();
+			Actor* peerView = peerViewOwner.get();
 			const auto finish = [&](const char* message) {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -5770,9 +5780,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!StartOwnedPair(48332, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x5732314d4f5654ULL, hostTransport, clientTransport, host, client, error)) {
 				return false;
 			}
-			Actor* ownerView = new Actor();
-			Actor* peerView = new Actor();
-			Actor* leader = new Actor();
+			auto ownerViewOwner = std::make_unique<Actor>();
+			Actor* ownerView = ownerViewOwner.get();
+			auto peerViewOwner = std::make_unique<Actor>();
+			Actor* peerView = peerViewOwner.get();
+			auto leaderOwner = std::make_unique<Actor>();
+			Actor* leader = leaderOwner.get();
 			const auto finish = [&](const char* message) {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -5864,11 +5877,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!StartOwnedPair(48333, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x5732314149474ULL, hostTransport, clientTransport, host, client, error)) {
 				return false;
 			}
-			Actor* ownerView = new Actor();
-			MOSRotating* ownerVictim = new MOSRotating();
-			MOSRotating* peerVictim = new MOSRotating();
-			MOSRotating* impulseVictim = new MOSRotating();
-			Actor* ignored = new Actor();
+			auto ownerViewOwner = std::make_unique<Actor>();
+			Actor* ownerView = ownerViewOwner.get();
+			auto ownerVictimOwner = std::make_unique<MOSRotating>();
+			MOSRotating* ownerVictim = ownerVictimOwner.get();
+			auto peerVictimOwner = std::make_unique<MOSRotating>();
+			MOSRotating* peerVictim = peerVictimOwner.get();
+			auto impulseVictimOwner = std::make_unique<MOSRotating>();
+			MOSRotating* impulseVictim = impulseVictimOwner.get();
+			auto ignoredOwner = std::make_unique<Actor>();
+			Actor* ignored = ignoredOwner.get();
 			const auto finish = [&](const char* message) {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -5916,7 +5934,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return finish("a gib the wire carries was counted as a direct write");
 			}
 			// A gib of something the world does not hold cannot be named on the wire: it stays local and says so.
-			MOSRotating* unheld = new MOSRotating();
+			auto unheldOwner = std::make_unique<MOSRotating>();
+			MOSRotating* unheld = unheldOwner.get();
 			g_CurrentAIActor = ownerView;
 			unheld->GibThisFromScript();
 			g_CurrentAIActor = nullptr;
@@ -5931,7 +5950,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				return finish("the two peers hold different gib states after the committed tick");
 			}
 			// Outside the pass a gib is immediate, as every shared script's gib stays.
-			MOSRotating* direct = new MOSRotating();
+			auto directOwner = std::make_unique<MOSRotating>();
+			MOSRotating* direct = directOwner.get();
 			if (direct->MovableObject::Create(1) < 0) {
 				return finish("the selftest gib object could not be created");
 			}
@@ -5997,10 +6017,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!StartOwnedPair(48334, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x573231524f434bULL, hostTransport, clientTransport, host, client, error)) {
 				return false;
 			}
-			ACRocket* ownerView = new ACRocket();
-			ACRocket* peerView = new ACRocket();
-			Actor* ownerCargo = new Actor();
-			Actor* peerCargo = new Actor();
+			auto ownerViewOwner = std::make_unique<ACRocket>();
+			ACRocket* ownerView = ownerViewOwner.get();
+			auto peerViewOwner = std::make_unique<ACRocket>();
+			ACRocket* peerView = peerViewOwner.get();
+			auto ownerCargoOwner = std::make_unique<Actor>();
+			Actor* ownerCargo = ownerCargoOwner.get();
+			auto peerCargoOwner = std::make_unique<Actor>();
+			Actor* peerCargo = peerCargoOwner.get();
 			const auto finish = [&](const char* message) {
 				g_CurrentAIActor = nullptr;
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -6057,8 +6081,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			}
 
 			// The close moves the hold on every peer, which is what ACRocket::Update ejects.
-			ownerView->AddInventoryItem(ownerCargo);
-			peerView->AddInventoryItem(peerCargo);
+			ownerView->AddInventoryItem(ownerCargoOwner.release());
+			peerView->AddInventoryItem(peerCargoOwner.release());
 			const MovableMan::ControllerBoundaryBaseline beforeClose = MovableMan::CaptureControllerBoundary(ownerView);
 			{
 				SoundSimulationScope aiPass(static_cast<uint64_t>(ownerView->GetUniqueID()), 1, SoundExecutionDomain::LocalSimulation);
@@ -6101,8 +6125,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!StartOwnedPair(48335, NetActorOwnershipPolicy::TeamOwner, "team-owner", 0x573231414c524dULL, hostTransport, clientTransport, host, client, error)) {
 				return false;
 			}
-			Actor* ownerView = new Actor();
-			Actor* peerView = new Actor();
+			auto ownerViewOwner = std::make_unique<Actor>();
+			Actor* ownerView = ownerViewOwner.get();
+			auto peerViewOwner = std::make_unique<Actor>();
+			Actor* peerView = peerViewOwner.get();
 			// The alarm write only lands 50 ms after the last one, so the arm moves the sim clock the way a
 			// rollback does and puts it back when it is done.
 			const long long simUpdatesBefore = g_TimerMan.GetSimUpdateCount();
