@@ -93,6 +93,8 @@ namespace RTE {
 		/// The held row's last acknowledged visibility; empty before registration or after loss.
 		std::optional<bool> GetConfirmedListed() const { return m_ConfirmedListed; }
 		const std::string& GetSessionId() const { return m_SessionId; }
+		/// The address the directory saw the last register come from.
+		const std::string& GetObservedIp() const { return m_ObservedIp; }
 		/// The session token the register reply issued; the host's signaling channel proves it.
 		const std::string& GetToken() const { return m_Token; }
 		/// Requests or retrieves the held session's short-lived relay offer without blocking a frame.
@@ -197,6 +199,7 @@ namespace RTE {
 		bool m_Running = false;
 		std::string m_SessionId;
 		std::string m_Token;
+		std::string m_ObservedIp;
 		int64_t m_HeartbeatS = 0;
 		int64_t m_ExpiresInS = 0;
 		uint64_t m_NextHeartbeatMs = 0;

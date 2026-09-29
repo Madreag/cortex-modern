@@ -38,6 +38,7 @@
 #define g_NetMatchService NetMatchService::Instance()
 
 namespace RTE {
+	class NetPortMapWan;
 
 	class Activity;
 	class LoopbackTransport;
@@ -1164,6 +1165,10 @@ namespace RTE {
 		/// The H4 seat state the round consults before it adjudicates a lost transport. Called by the
 		/// coordinator on the game thread, which never holds this lock.
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
+		/// Asks the router to map the hosted port; the directory row never waits on the answer. A null wan uses real sockets.
+		static void RequestHostPortMap(uint16_t port, NetPortMapWan* wan);
+		static void ReleaseHostPortMap();
+		friend bool TestDirectoryRowTakesTheLateRouterAnswer(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestAParkReachesTheSessionAWorkerOwns(std::string* error);
 		friend bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error);
