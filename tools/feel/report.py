@@ -416,14 +416,15 @@ def item9a_gates(run, peer='host', rows=None):
     manifest_path = run / 'manifest.json'
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     final_tick = manifest.get('ticks', TICKS)
-    rows = list(read_jsonl(raw)) if rows is None and raw.is_file() else rows or []
     clock_path = raw
     live = record_path(run / f'{peer}-live.jsonl')
     # Render iterations may skip a simulation tick during catch-up. The tick-end clock records each one.
-    if live.is_file() or not rows:
+    if live.is_file():
         clock_path = live
         rows = [dict(type='committed', tick=row['tick'], wall_ms=row['wall_ms'])
-                for row in read_jsonl(live) if 'wall_ms' in row] if live.is_file() else []
+                for row in read_jsonl(live) if 'wall_ms' in row]
+    else:
+        rows = read_jsonl(raw) if rows is None and raw.is_file() else rows or []
     committed = [row for row in rows if row.get('type') == 'committed' and 300 <= row.get('tick', 0) <= final_tick]
     by_tick = defaultdict(list)
     for row in committed:
