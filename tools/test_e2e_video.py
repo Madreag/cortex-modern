@@ -1730,6 +1730,21 @@ def check_acceptance_rows(results, scratch):
     ok &= row(results, 'audit-07/missing-stall-count-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
     driver.write_json(behavior / 'host-match.json', dict(exit_code=0, running_ticks=4201, lockstep=dict(steady_missing_frame_stalls=1)))
     ok &= row(results, 'audit-07/nonzero-stall-count-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    # sc-g9: a survivor a tick ahead of the host waited 2 ms at the hold frame itself - the bound's one wait for the spike.
+    started = '[net-lockstep] start round=7 frame=1 local_peer=1\n'
+    (behavior / 'host/stdout.log').write_text(started + '[net-match] hold peer=3 frame=364 AI in control\n[net-frame-wait] frame=364 wait_ms=2 on=ClientB\n')
+    ok &= row(results, 'held-seat/the-hold-frames-own-wait-is-not-steady', driver.native_behavior(behavior, spec)['status'] == 'PASS',
+              str(driver.native_behavior(behavior, spec)))
+    with (behavior / 'host/stdout.log').open('a') as stream:
+        stream.write('[net-frame-wait] frame=500 wait_ms=3 on=ClientB\n')
+    driver.write_json(behavior / 'host-match.json', dict(exit_code=0, running_ticks=4201, lockstep=dict(steady_missing_frame_stalls=2)))
+    ok &= row(results, 'held-seat/a-steady-stall-beside-the-hold-still-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    (behavior / 'host/stdout.log').write_text(started + '[net-match] hold peer=3 frame=364 AI in control\n[net-frame-wait] frame=364 wait_ms=51 on=ClientB\n')
+    driver.write_json(behavior / 'host-match.json', dict(exit_code=0, running_ticks=4201, lockstep=dict(steady_missing_frame_stalls=1)))
+    ok &= row(results, 'held-seat/a-hold-wait-past-50-ms-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    (behavior / 'host/stdout.log').write_text(started.replace('frame=1 ', 'frame=100 ') + '[net-match] hold peer=3 frame=364 AI in control\n[net-frame-wait] frame=364 wait_ms=2 on=ClientB\n')
+    ok &= row(results, 'held-seat/a-hold-before-the-steady-window-excuses-nothing', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    (behavior / 'host/stdout.log').write_text('[net-match] hold peer=3 frame=364 AI in control\n')
     rehold = scratch / 'rehold-native'; rehold.mkdir()
     spec = dict(kind='rehold', target='client', observers=['host', 'survivor'], holds=2,
                 reports={p: p+'-report.json' for p in ('host', 'survivor')},
