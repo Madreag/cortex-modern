@@ -7485,6 +7485,16 @@ void LuaStateWrapper::Destroy() {
 	if (!m_State) {
 		return;
 	}
+	if (MovableMan::IsConstructed()) {
+		for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) {
+			for (auto& [name, functions]: object->m_FunctionsAndScripts) {
+				std::erase_if(functions, [this](const auto& function) {
+					const auto* wrapped = function.m_LuaFunction ? function.m_LuaFunction->GetLuabindObject() : nullptr;
+					return wrapped && wrapped->interpreter() == m_State;
+				});
+			}
+		}
+	}
 	ClearLuaScriptCache();
 	for (const auto& [path, functions]: m_PreviewScriptCacheHeld) {
 		for (const auto& [name, function]: functions) delete function;
@@ -7492,8 +7502,8 @@ void LuaStateWrapper::Destroy() {
 	m_PreviewScriptCacheHeld.clear();
 	// A wrapper destructed anywhere queues its luabind object, and deleting that object unrefs a
 	// registry slot of the state it lives in. Anything still queued for this state has to go now.
-	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
 	m_NativeCache.reset();
+	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
 	m_CheckpointHeap.reset();
 	m_State = nullptr;
 }
