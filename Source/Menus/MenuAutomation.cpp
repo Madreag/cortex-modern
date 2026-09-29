@@ -323,7 +323,8 @@ namespace RTE::MenuAutomation {
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "assert_list_rows" ||
-			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert";
+			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert" ||
+			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -339,6 +340,53 @@ namespace RTE::MenuAutomation {
 		return {{"rect", rect}, {"uncovered_pixels", uncovered}, {"pixels", rect[2] * rect[3]}};
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "window_event") {
+			std::string kind;
+			args >> kind;
+			if (!FireAssertAllowed() || !g_WindowMan.GetWindow()) return false;
+			SDL_Event event{};
+			if (kind == "focus_lost") event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+			else if (kind == "focus_gained") event.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+			else if (kind == "minimized") event.type = SDL_EVENT_WINDOW_MINIMIZED;
+			else if (kind == "restored") event.type = SDL_EVENT_WINDOW_RESTORED;
+			else if (kind == "mouse_enter") event.type = SDL_EVENT_WINDOW_MOUSE_ENTER;
+			else return false;
+			event.window.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			observation = kind;
+			return SDL_PushEvent(&event);
+		}
+		if (command == "assert_window_focus") {
+			int expected = -1;
+			args >> expected;
+			const bool focused = g_WindowMan.AnyWindowHasFocus();
+			observation = "focus=" + std::to_string(focused);
+			return (expected == 0 || expected == 1) && focused == (expected == 1);
+		}
+		if (command == "game_key") {
+			std::string key, state;
+			args >> key >> state;
+			const SDL_Scancode scancode = SDL_GetScancodeFromName(key.c_str());
+			if (!FireAssertAllowed() || scancode == SDL_SCANCODE_UNKNOWN || (state != "down" && state != "up")) return false;
+			SDL_Event event{};
+			event.type = state == "down" ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+			event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
+			event.key.scancode = scancode;
+			event.key.key = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false);
+			event.key.down = state == "down";
+			observation = key + " " + state;
+			return SDL_PushEvent(&event);
+		}
+		if (command == "assert_game_input") {
+			int seat = -1, expected = -1;
+			std::string element;
+			args >> seat >> element >> expected;
+			if (seat < Players::PlayerOne || seat >= Players::MaxPlayerCount || (expected != 0 && expected != 1)) return false;
+			const int input = element == "L_UP" ? InputElements::INPUT_L_UP : element == "L_RIGHT" ? InputElements::INPUT_L_RIGHT : -1;
+			if (input < 0) return false;
+			const bool held = g_UInputMan.ElementHeld(seat, input);
+			observation = "held=" + std::to_string(held) + " typing=" + std::to_string(g_UInputMan.SeatInputTypedInto());
+			return held == (expected == 1);
+		}
 		if (command == "dump_seat_state") {
 			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 			Json members = Json::array();
