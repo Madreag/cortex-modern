@@ -1611,7 +1611,7 @@ namespace RTE {
 					// A window copy of a tick that stands behind the table's place in this sender's stream is
 					// one this peer already read: it is read past, the table stays where it is, and the copy
 					// is not offered again.
-					if (late || (windowCopy && bindingsBefore < dictionary->BindingCount())) {
+					if (late || (windowCopy && bindingsBefore < dictionary->BindingCount() && dictionary->HasReadTickAtOrAfter(payload.targetFrame, payload.roundId))) {
 						dictionary = nullptr;
 						discard = true;
 						if (outReadPast) {
