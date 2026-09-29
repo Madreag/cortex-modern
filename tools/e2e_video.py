@@ -51,6 +51,19 @@ FFMPEG_CANDIDATES = (
 SCRATCH_LIMIT = 5_000_000_000
 
 
+def setting_pair(value):
+    key, separator, setting = value.partition("=")
+    if not separator or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", key) or any(c in setting for c in "\r\n"):
+        raise argparse.ArgumentTypeError("settings require KEY=VALUE on one line")
+    return key, setting
+
+
+def render_cap_hz(value):
+    if str(value) not in ("0", "60"):
+        raise argparse.ArgumentTypeError("[feel] invalid render settings: expected RenderCapHz = 0 or 60")
+    return int(value)
+
+
 def positive_bytes(value):
     try:
         result = int(value)
@@ -1063,7 +1076,9 @@ def gameplay_signals(video, stage, epochs=1):
 def run_one(options, scenario, run, run_index, out):
     """One scenario run: its peers launched together, each recording its own video."""
     root = Path(out) / run.get("name", f"run{run_index}")
-    root.mkdir(parents=True, exist_ok=False)
+    dry = getattr(options, "dry_run", False)
+    if not dry:
+        root.mkdir(parents=True, exist_ok=False)
     size = options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE
     width, height = (int(part) for part in size.split("x"))
     port = port_for(run_index, options.port)
@@ -1091,16 +1106,30 @@ def run_one(options, scenario, run, run_index, out):
         peer_root = root / name
         # make_run owns the run directory, so this peer's scripts live beside it, never inside it.
         stage = root / f"{name}-stage"
-        stage.mkdir(parents=True, exist_ok=False)
         tokens = {**shared, "PEER": name, "STAGE": stage, "PROBE_DIR": stage / "probe",
                   "MENU_SCRIPT": stage / "menu.txt", "INPUT_SCRIPT": stage / "input.txt",
                   "VIDEO": peer_root / "video"}
-        environment = stage_peer(scenario, peer, stage, tokens)
         args = peer_arguments(peer, tokens, options.fps)
         # Every peer of a multi-peer run hashes its whole capture every N committed ticks; the pairs are compared after.
         if getattr(options, "fullstate_every", 0) and len(peers) > 1:
             args += ["-net-fullstate-hash-every", str(options.fullstate_every)]
         reference = peer.get("retain_runtime_from")
+        seed = {"ResolutionX": width, "ResolutionY": height}
+        seed.update(substitute(peer.get("settings", {}), tokens))
+        seed.update(dict(getattr(options, "setting", [])))
+        cap = render_cap_hz(getattr(options, "render_cap", 60))
+        arm = {"size": f"{seed['ResolutionX']}x{seed['ResolutionY']}", "settings": seed, "render_cap": cap}
+        if dry:
+            runtime = peer_root / "runtime"
+            if reference:
+                previous = staged.get(reference["peer"]) if reference["run"] == root.name else prior_peer(
+                    getattr(options, "completed_runs", []), reference)
+                runtime = Path(previous["runtime"]) if previous else Path(out) / reference["run"] / reference["peer"] / "runtime"
+            args += ["-feel-render-settings", str(runtime / "Userdata/FeelRender.ini")]
+            staged[name] = {"peer": name, "args": args, "runtime": str(runtime), **arm}
+            continue
+        stage.mkdir(parents=True, exist_ok=False)
+        environment = stage_peer(scenario, peer, stage, tokens)
         retained = None
         if reference:
             previous = prior_peer(getattr(options, "completed_runs", []), reference)
@@ -1114,9 +1143,20 @@ def run_one(options, scenario, run, run_index, out):
         (Path(run_handle.out) / "video").mkdir(parents=True, exist_ok=False)
         for directory in peer.get("output_dirs", []):
             (Path(run_handle.out) / directory).mkdir(parents=True, exist_ok=False)
-        seed = {"ResolutionX": width, "ResolutionY": height}
-        seed.update(substitute(peer.get("settings", {}), tokens))
         seed_settings(run_handle, seed)
+        render_path = Path(run_handle.cwd) / "Userdata/FeelRender.ini"
+        render_path.write_text(f"RenderCapHz = {cap}\n", encoding="utf-8")
+        render_args = ["-feel-render-settings", str(render_path)]
+        run_handle.argv.extend(render_args)
+        args += render_args
+        runtime_manifest = Path(run_handle.out) / "runtime.json"
+        if runtime_manifest.is_file():
+            metadata = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+            arm["settings"] = metadata["settings_overrides"] = {**metadata.get("settings_overrides", {}), **seed}
+            metadata["settings_sha256"] = file_evidence(Path(run_handle.cwd) / "Userdata/Settings.ini")["sha256"]
+            metadata["feel_render_settings"] = file_evidence(render_path)
+            metadata["render_cap"] = cap
+            write_json(runtime_manifest, metadata)
         # Fixture modules a scenario needs land in the private runtime, never in the repository.
         for entry in substitute(peer.get("runtime_files", []), tokens):
             destination = Path(run_handle.cwd) / entry["to"]
@@ -1126,11 +1166,14 @@ def run_one(options, scenario, run, run_index, out):
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
-        staged[name] = {"args": args, "env": {k: str(v) for k, v in environment.items()},
+        staged[name] = {**arm, "args": args, "env": {k: str(v) for k, v in environment.items()},
                         "runtime": str(run_handle.cwd), "retain_runtime_from": reference,
                         "stage": str(stage), "probe_dir": str(stage / "probe"),
                         "gameplay_signal": str(stage / "gameplay-started.json"),
                         "start_delay_s": peer.get("start_delay_s", 0)}
+
+    if dry:
+        return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": list(staged.values())}
 
     def drive(name):
         try:
@@ -1415,7 +1458,8 @@ def scenario_manifest(capture, out, elapsed):
     peers = []
     for run in capture["runs"]:
         for peer in run["peers"]:
-            peers.append({"run": run["name"], "peer": peer["peer"], "size": run["size"],
+            peers.append({"run": run["name"], "peer": peer["peer"], "size": peer.get("size", run["size"]),
+                          "settings": peer.get("settings", {}), "render_cap": peer.get("render_cap"),
                           "fps": capture["fps"], "frames": len(peer["index"]),
                           "wall_seconds": peer["record"].get("elapsed_seconds"),
                           "exe_sha256": peer["record"].get("exe_sha256"),
@@ -1460,6 +1504,9 @@ def aggregate_review(capture, out):
     document = {"schema": 1, "scenario": capture["scenario"], "title": capture["scenario_definition"].get("title"),
                 "source": capture["source"], "manifest": str(Path(out) / "manifest.json"),
                 "peer_selection": capture["scenario_definition"].get("peer_selection"),
+                "peers": [{"run": run["name"], "peer": peer["peer"], "size": peer.get("size", run.get("size")),
+                           "settings": peer.get("settings", {}), "render_cap": peer.get("render_cap")}
+                          for run in capture["runs"] for peer in run["peers"]],
                 "command": capture["command"], "verdict": "agent-review-required",
                 "checklist": items, "interrupted": capture.get("interrupted"),
                 "run_findings": [finding for document in documents for finding in document.get("run_findings", [])],
@@ -1605,6 +1652,10 @@ def main():
     parser.add_argument("--run", action="append", default=[], help="capture only this named run, repeatable")
     parser.add_argument("--token", action="append", default=[], metavar="NAME=VALUE")
     parser.add_argument("--size")
+    parser.add_argument("--setting", action="append", type=setting_pair, default=[], metavar="KEY=VALUE",
+                        help="seed every peer after size and scenario settings; repeatable, last value wins")
+    parser.add_argument("--render-cap", type=render_cap_hz, default=60, metavar="HZ", help="headless render cap: 0 or 60 (default)")
+    parser.add_argument("--dry-run", action="store_true", help="print planned settings and engine arguments without creating files or starting services")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
     parser.add_argument("--port-block", help=f"the calling lane's own port block LO-HI, used instead of {PORT_LO}-{PORT_HI}; --port is then required")
@@ -1670,6 +1721,16 @@ def main():
         if not PORT_LO <= options.port <= PORT_HI:
             parser.error(f"{scenario['name']}: port_base {options.port} is outside {PORT_LO}-{PORT_HI}")
     out = Path(options.out).resolve()
+    runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
+    if options.run and set(options.run) - {run.get("name", f"run{i}") for i, run in enumerate(runs)}:
+        parser.error("--run names an unknown run")
+    if options.dry_run:
+        options.completed_runs = []
+        for index, run in enumerate(runs):
+            if not options.run or run.get("name", f"run{index}") in options.run:
+                options.completed_runs.append(run_one(options, scenario, run, index, out))
+        print(json.dumps({"scenario": scenario["name"], "dry_run": True, "runs": options.completed_runs}, indent=2))
+        return 0
     out.mkdir(parents=True, exist_ok=False)
     options.scratch_root = options.scratch_root or next(
         (parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
@@ -1681,11 +1742,9 @@ def main():
     started = time.monotonic()
     source = source_evidence(options.repo)
     exe = file_evidence(capture_binary(options.repo))
-    runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
-    if options.run and set(options.run) - {run.get("name", f"run{i}") for i, run in enumerate(runs)}:
-        parser.error("--run names an unknown run")
     capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()), "out": str(out), "platform": sys.platform,
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
+               "settings": dict(options.setting), "render_cap": options.render_cap,
                "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     missing = requirement_findings(options.repo, scenario)

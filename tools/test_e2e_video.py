@@ -95,11 +95,11 @@ def check_render_arm(results, scratch):
                                        ("ResolutionY", "2160"), ("SessionDirectoryUrl", "")],
                               render_cap=0, dry_run=True)
     out = scratch / "render-plan"
+    expected = {"ResolutionX": "3840", "ResolutionY": "2160", "NetworkShowDiagnostics": "1", "SessionDirectoryUrl": ""}
     try:
         with patch.object(driver, "make_run", side_effect=AssertionError("dry run constructed an engine")):
             plan = driver.run_one(options, scenario, {"name": "first"}, 0, out)
         peer = plan["peers"][0]
-        expected = {"ResolutionX": "3840", "ResolutionY": "2160", "NetworkShowDiagnostics": "1", "SessionDirectoryUrl": ""}
         ok = row(results, "render/dry-plan-seeds-command-line-last", peer["settings"] == expected and
                  peer["size"] == "3840x2160" and peer["render_cap"] == 0 and not out.exists())
         flag = peer["args"].index("-feel-render-settings")
@@ -121,6 +121,8 @@ def check_render_arm(results, scratch):
         ok &= row(results, f"render/cap-{cap}", code == expected_code and (expected_code == 0 or
                   "[feel] invalid render settings: expected RenderCapHz = 0 or 60" in stderr.getvalue()))
 
+    handles = []
+
     class Handle:
         def __init__(self, repo, args, root, timeout, env):
             self.out, self.cwd = Path(root), Path(root) / "runtime"
@@ -128,19 +130,22 @@ def check_render_arm(results, scratch):
             (self.cwd / "Userdata/Settings.ini").write_text("Settings\n\tResolutionX = 960\n\tResolutionY = 540\n", encoding="utf-8")
             driver.write_json(self.out / "runtime.json", {"settings_overrides": {"EnableVSync": "0"}})
             self.argv = ["engine", *args]
+            handles.append(self)
         def start(self): return self
         def finish(self): return {"exit_code": 0, "timed_out": False}
         def close(self): pass
 
     options.dry_run = False
     try:
-        with patch.object(driver, "make_run", side_effect=Handle) as made:
+        with patch.object(driver, "make_run", side_effect=Handle):
             capture_run = driver.run_one(options, scenario, {"name": "first"}, 0, scratch / "render-runtime")
         peer = capture_run["peers"][0]
         runtime = Path(peer["runtime"])
         ini = (runtime / "Userdata/Settings.ini").read_text(encoding="utf-8")
         ok &= row(results, "render/private-runtime-seeded", "ResolutionX = 3840" in ini and "ResolutionY = 2160" in ini and
                   (runtime / "Userdata/FeelRender.ini").read_text(encoding="utf-8") == "RenderCapHz = 0\n")
+        ok &= row(results, "render/runner-gets-private-render-flag", handles[0].argv[-2:] ==
+                  ["-feel-render-settings", str(runtime / "Userdata/FeelRender.ini")])
         document = driver.review(scenario, capture_run, Path(capture_run["root"]))
         capture = {"scenario": scenario["name"], "scenario_definition": scenario, "runs": [capture_run], "fps": 3,
                    "source": {}, "exe": {}, "started": "synthetic", "command": []}
@@ -958,6 +963,8 @@ def check_stop_request(results, scratch):
         def __init__(self, root):
             self.out = self.cwd = Path(root)
             self.out.mkdir()
+            (self.cwd / "Userdata").mkdir()
+            self.argv = ["engine"]
             self.stopped = threading.Event()
             self.closed = False
             handles.append(self)

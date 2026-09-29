@@ -500,6 +500,8 @@ class CrossDriverTests(unittest.TestCase):
             self.assertIn('name="viewport"',page)
             self.assertNotIn('<script src=',page)
             self.assertNotIn('<link ',page)
+            self.assertIsNone(result['local_host_render']['wall_tps'])
+            self.assertIn('No wall TPS', page)
             self.assertEqual(len([r for r in result['requirements'] if isinstance(r['number'],int)]),71)
             self.assertTrue((root.parent/'index.html').is_file())
             own=cross_report.peer_root(root,plan,plan['specs'][0]); own.mkdir(parents=True,exist_ok=True)
