@@ -74,7 +74,7 @@
       "mark": "version-client-refusal",
       "what": "The joiner sees the exact refusal and both advertised versions.",
       "events": [
-        "assert_net_label LabelMultiplayerLandingStatus \"Your build differs from the host's (host stage2-p2d-local; yours fixture-other-build).\"",
+        "assert_net_label LabelMultiplayerLandingStatus \"Your build differs from the host's \\(host stage2-p2d-local; yours fixture-other-build\\)\\.\"",
         "assert_substate expected=Landing actual=Landing PASS"
       ]
     },
@@ -98,7 +98,7 @@
       "mark": "version-client-refusal",
       "what": "The joiner sees the exact refusal and both advertised versions.",
       "events": [
-        "assert_net_label LabelMultiplayerLandingStatus \"Network protocol differs (host 3; yours 2).\"",
+        "assert_net_label LabelMultiplayerLandingStatus \"Network protocol differs \\(host 3; yours 2\\)\\.\"",
         "assert_substate expected=Landing actual=Landing PASS"
       ]
     }
