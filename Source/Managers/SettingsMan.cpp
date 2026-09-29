@@ -385,12 +385,14 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("SessionDirectoryUrl", {
 		// Slashes are URL data here. Leave the newline for Reader's indentation and line accounting;
 		// all ordinary preset strings retain Reader::ReadLine's comment syntax.
+		reader.DiscardEmptySpace(true);
 		std::istream& stream = *reader.GetStream();
-		while (stream.peek() == ' ') stream.get();
 		m_SessionDirectoryUrl.clear();
 		for (int next = stream.peek(); next != std::char_traits<char>::eof() && next != '\n' && next != '\r' && next != '\t'; next = stream.peek()) {
 			m_SessionDirectoryUrl.push_back(static_cast<char>(stream.get()));
 		}
+		// Whitespace cannot be part of a URL; an inline comment after it still belongs to the INI.
+		if (const size_t comment = m_SessionDirectoryUrl.find(" //"); comment != std::string::npos) m_SessionDirectoryUrl.erase(comment);
 		while (!m_SessionDirectoryUrl.empty() && m_SessionDirectoryUrl.back() == ' ') m_SessionDirectoryUrl.pop_back();
 	});
 	MatchProperty("SessionDirectoryInstallKey", { reader >> m_SessionDirectoryInstallKey; });
@@ -873,6 +875,8 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		writeRead([&](Writer& writer) { writer.NewPropertyWithValue("SessionDirectoryUrl", url); });
 		check("directory URL roundtrip", settings.GetSessionDirectoryUrl() == url);
 	}
+	writeRead([&](Writer& writer) { writer.NewPropertyWithValue("SessionDirectoryUrl", "/* note */ community.example.invalid/serve // directory comment"); });
+	check("directory URL comments", settings.GetSessionDirectoryUrl() == "community.example.invalid/serve");
 	writeRead([&](Writer& writer) { writer.NewPropertyWithValue("NetworkDisplayName", "Pilot // a normal property comment"); });
 	check("ordinary string comments unchanged", settings.GetNetworkDisplayName() == "Pilot");
 	settings.SetNetworkDisplayName("AlphaPilot");
