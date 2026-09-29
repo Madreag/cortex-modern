@@ -12586,6 +12586,7 @@ namespace RTE {
 		return true;
 	}
 
+	namespace {
 	/// A router that answers nothing while it withholds; once answering, NAT-PMP maps the port on 203.0.113.9.
 	class WithheldRouter final : public NetPortMapWan {
 	public:
@@ -12624,6 +12625,7 @@ namespace RTE {
 		std::function<void()> run;
 		~ScopeExit() { if (run) run(); }
 	};
+	} // namespace
 
 	bool TestDirectoryRowTakesTheLateRouterAnswer(std::string* error) {
 		struct Wire {
