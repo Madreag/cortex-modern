@@ -576,6 +576,9 @@ void RTEError::AbortFunc(const std::string& description, const SourceLocation& s
 #endif
 #endif
 		}
+	} else {
+		// A validation refusal exits normally after its reason is reported.
+		std::exit(EXIT_FAILURE);
 	}
 	s_CurrentlyAborting = false;
 	AbortAction;
