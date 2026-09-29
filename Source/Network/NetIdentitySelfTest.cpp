@@ -265,6 +265,36 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestCanonicalLoadedModules(std::string* error) {
+			const NetIdentityManifest base = MakeManifest();
+			const NetHash32 hash = NetIdentity::HashSessionIdentity(base);
+			NetIdentityManifest changed = base;
+			std::swap(changed.modules[0], changed.modules[1]);
+			// Keep the content hash fixed to isolate the canonical names and versions.
+			if (NetIdentity::HashSessionIdentity(changed) != hash) {
+				*error = "loaded module list depends on enumeration order";
+				return false;
+			}
+			for (int arm = 0; arm < 3; ++arm) {
+				changed = base;
+				if (arm == 0) changed.modules.back().fileName = "VoidWanderers.rte";
+				if (arm == 1) ++changed.modules.back().version;
+				if (arm == 2) changed.modules.pop_back();
+				if (NetIdentity::HashSessionIdentity(changed) == hash) {
+					*error = "loaded module name/version/count arm " + std::to_string(arm) + " did not change identity " + NetIdentity::HashHex(hash);
+					return false;
+				}
+			}
+			changed = base;
+			std::swap(changed.modules[0], changed.modules[1]);
+			if (NetIdentity::HashModuleManifest(changed.modules) == NetIdentity::HashModuleManifest(base.modules)) {
+				*error = "canonical loaded modules weakened the separate load-order identity";
+				return false;
+			}
+			std::cout << "[net-identity-selftest] PASS loaded module names and versions are canonical; load order stays gated" << std::endl;
+			return true;
+		}
+
 		std::string NameList(const std::vector<std::string>& names) {
 			std::string text;
 			for (const std::string& name : names) {
@@ -600,7 +630,7 @@ namespace RTE {
 		std::string error;
 		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestDiffModules(&error) || !TestLuaStateCountIsABuildConstant(&error) ||
 		    !TestPresetIndependentAdmissionIdentity(&error) || !TestModuleRootOutOfIdentity(&error) ||
-		    !TestNamedModuleAdmission(&error) || !TestSelectedModuleAdmission(&error)) {
+		    !TestNamedModuleAdmission(&error) || !TestSelectedModuleAdmission(&error) || !TestCanonicalLoadedModules(&error)) {
 			std::cerr << "[net-identity-selftest] FAIL: " << error << std::endl;
 			return 1;
 		}
