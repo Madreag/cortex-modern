@@ -20766,6 +20766,51 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAheadInputIsNotASimulationStall(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A58, 29, NetTransportLane::InputUnreliable);
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0;
+		config.relayToOtherPeers = true;
+		if (!wire.StartHost(49744, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 329;
+		host.m_LocalFrames[329] = {};
+		host.m_LastQueuedTargetFrame = 329;
+		host.m_RemoteStartsReceived.insert(2);
+		host.AdvanceReadyFrames(1000);
+		if (host.GetStats().missingFrameStalls != 0) { *error = "an unconsumed future frame counted as a simulation stall"; return false; }
+		(void)host.NoteFrameWait(329, 1000);
+		(void)host.NoteFrameWait(329, 1001);
+		if (host.GetStats().missingFrameStalls != 1) { *error = "the actual missing-frame wait was not counted"; return false; }
+		std::cout << "[net-lockstep-selftest] PASS ahead_input_is_not_a_simulation_stall" << std::endl;
+		return true;
+	}
+
+	bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A59, 29, NetTransportLane::InputUnreliable);
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0;
+		config.relayToOtherPeers = true;
+		if (!wire.StartHost(49745, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 986;
+		host.m_RemoteFrames[986][2] = {};
+		host.m_Stats.peers[2].pingMs = 400;
+		host.m_Stats.peers[2].highestTargetFrame = 986;
+		host.m_ReadyFrames.resize(29);
+		if (host.JudgeOwnSeat(986, 1000) || host.JudgeOwnSeat(986, 1100) || host.m_OwnMissingFrame) {
+			*error = "the host was judged late with a full window of committed input"; return false;
+		}
+		host.m_ReadyFrames.clear();
+		if (host.JudgeOwnSeat(986, 1200) || !host.JudgeOwnSeat(986, 1251)) {
+			*error = "an exhausted runway changed the three-tick late bound"; return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS the_hosts_runway_precedes_its_late_clock" << std::endl;
+		return true;
+	}
+
 	bool TestDelayTracksASteadySendersArrivalPhase(std::string* error) {
 		NetLockstepCoordinator host;
 		host.m_Config.simTickMs = 1000.0 / 60.0;
@@ -21794,6 +21839,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAHeldHostCanReachItsReclaimHorizon, "a_held_host_can_reach_its_reclaim_horizon");
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
+		row(&TestAheadInputIsNotASimulationStall, "ahead_input_is_not_a_simulation_stall");
+		row(&TestTheHostsRunwayPrecedesItsLateClock, "the_hosts_runway_precedes_its_late_clock");
 		row(&TestANeutralGapLeavesNoCommandsToResend, "a_neutral_gap_leaves_no_commands_to_resend");
 		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");
 		row(&TestReturnFramesBypassReliableLoss, "return_frames_bypass_reliable_loss");
