@@ -1,4 +1,5 @@
 #include "ScenarioRunner.h"
+#include "System.h"
 #include "Actor.h"
 #include "ActivityMan.h"
 #include "AudioMan.h"
