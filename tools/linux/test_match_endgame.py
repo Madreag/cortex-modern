@@ -58,7 +58,8 @@ def probe_steps(case, who):
                   menu("activate ButtonLeaveMatch"),
                   {"op": "wait", "screen": "PauseLeaveConfirm", "scope": "menu"},
                   menu("activate ButtonLeaveConfirm"),
-                  {"op": "wait", "service": "Completed", "scope": "menu"}, {"op": "finish"}]
+                  {"op": "wait", "service": "Completed", "scope": "menu"},
+                  {"op": "signal", "name": "leave-complete", "scope": "menu"}, {"op": "finish"}]
         return steps
     elif case == "graceful":
         steps += [{"op": "wait", "control": "LabelNetMatchHandoverToast", "text_contains": "is now hosting"},
@@ -82,14 +83,18 @@ def run_case(repo, root, case, port):
             if host:
                 script = script.replace("activate ButtonMultiplayerCreate", "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nactivate ButtonMultiplayerCreate")
                 script += f"wait_connected {len(names)} 90\nwait_remote_ready 90\nwait_all_ready 90\nactivate ButtonMultiplayerStart\n"
-            script += "wait_ms 120000\nexit\n" if case == "graceful" and host else "wait_ms 180000\nexit\n"
+            script += (f"wait_file {root / 'host-probe/leave-complete.json'} 180\nwait_ms 200\nexit\n"
+                       if case == "graceful" and host else "wait_ms 180000\nexit\n")
             path = root / f"{who}.menu.txt"
             path.write_text(script, encoding="utf-8")
             probe = root / f"{who}-probe" / "script.json"
             probe.parent.mkdir()
             probe.write_text(json.dumps({"schema": 1, "timeout_ms": 180000, "steps": probe_steps(case, who)}, indent=2) + "\n")
-            args = ["-menu-script", path, "-seed", "42", "-max-ticks", TICKS, "-tick-hashes",
-                    "-out", root / f"{who}-trace.json", "-net-match-report", root / f"{who}-match.json"]
+            args = ["-menu-script", path, "-seed", "42", "-net-match-report", root / f"{who}-match.json"]
+            # The departing host deliberately leaves before the survivor cap. Its menu/probe is
+            # the oracle for leaving; asking its trace to reach that cap would rightly fail.
+            if not (case == "graceful" and host):
+                args += ["-max-ticks", TICKS, "-tick-hashes", "-out", root / f"{who}-trace.json"]
             if case not in ("chat", "focus"):
                 args += ["-input-script", inputs]
             env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)}
