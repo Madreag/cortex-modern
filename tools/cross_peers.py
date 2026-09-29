@@ -215,7 +215,7 @@ def make_plan(options):
             incarnation=0, root=root, own=own, repo=box['tree'], executable=box['executable'], flags=flags,
             userdata=own+'/engine/runtime/Userdata', participant_key_root=own+'/engine/runtime/Userdata',
             port_block=peer['port_block'], under_load_by_design=box['peers_per_box']>1,
-            env={'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
+            env={**box.get('environment', {}), 'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
                  'CC_TEST_CROSS_RUN': stem, 'CC_TEST_CROSS_INSTANCE': peer['name'], 'CC_TEST_CROSS_EXECUTION': 'process-0',
                  'CC_TEST_CROSS_INCARNATION': '0', 'CC_TEST_NET_UI_SCRIPT': own + '/probe.json',
                  'CC_TEST_CROSS_RECOVERIES': own + '/recoveries.json',

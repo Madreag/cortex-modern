@@ -95,6 +95,7 @@ def run_case(repo, root, case, port):
             env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)}
             if case == "locale":
                 env.update(LANG="C" if host else "de_DE.UTF-8", LC_ALL="C" if host else "de_DE.UTF-8")
+                env["CC_TEST_PROCESS_LOCALE"] = "C" if host else "German_Germany.1252" if sys.platform == "win32" else "de_DE.UTF-8"
             run = make_run(repo, args, root / who, 210, env=env)
             seed_settings(run, {"NetworkDisplayName": name, "NetworkInputDelayFrames": 3, "NetworkIceEnable": 0,
                                 "NetworkChatVisible": 1, "NetworkSlowPlayerPolicy": "Substitute"})
@@ -111,6 +112,9 @@ def run_case(repo, root, case, port):
             probes[who] = json.loads(path.read_text()) if path.exists() else {"pass": False, "error": "probe result missing"}
             result["checks"][f"{who}_probe"] = probes[who].get("pass", False)
             result["checks"][f"{who}_exit"] = records[who].get("exit_code") == 0 and not records[who].get("timed_out")
+            if case == "locale":
+                log = (root / who / "stdout.log").read_text(errors="replace")
+                result["checks"][f"{who}_locale_active"] = "decimal_probe=" + ("1.5" if who == "host" else "1,5") in log
         pairs = [("clienta", "clientb")] if case == "graceful" else [("host", "clienta")]
         result["comparisons"] = {}
         for left, right in pairs:
