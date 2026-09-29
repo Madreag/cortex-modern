@@ -21,6 +21,7 @@
 #include "NetMatchReplay.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
+#include "NetPortMap.h"
 #include "NetModerationGUI.h"
 #include "NetHostOptionsText.h"
 #include "Activity.h"
@@ -12585,6 +12586,142 @@ namespace RTE {
 		return true;
 	}
 
+	/// A router that answers nothing while it withholds; once answering, NAT-PMP maps the port on 203.0.113.9.
+	class WithheldRouter final : public NetPortMapWan {
+	public:
+		std::atomic<bool> answering{false};
+		std::atomic<size_t> exchanges{0};
+		std::string DefaultGateway() override { return "192.0.2.1"; }
+		std::string LocalAddress() override { return "192.0.2.10"; }
+		bool UdpExchange(const std::string&, uint16_t, const std::vector<uint8_t>& request, std::vector<uint8_t>& reply, uint32_t timeoutMs) override {
+			++exchanges;
+			if (!answering) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(timeoutMs));
+				return false;
+			}
+			if (request.size() == 2 && request[0] == 0 && request[1] == 0) {
+				reply = {0, 0x80, 0, 0, 0, 0, 0x03, 0xE8, 203, 0, 113, 9};
+				return true;
+			}
+			if (request.size() == 12 && request[0] == 0 && (request[1] == 1 || request[1] == 2)) {
+				reply = {0, static_cast<uint8_t>(0x80 | request[1]), 0, 0, 0, 0, 0x03, 0xE8, request[4], request[5], request[6], request[7], request[8], request[9], request[10], request[11]};
+				return true;
+			}
+			return false;
+		}
+		std::vector<std::string> SsdpDiscover(const std::string&, uint32_t windowMs) override {
+			if (!answering) std::this_thread::sleep_for(std::chrono::milliseconds(windowMs));
+			return {};
+		}
+		bool HttpGet(const std::string&, std::string&, uint32_t) override { return false; }
+		bool HttpPostSoap(const std::string&, const std::string&, const std::string&, long& status, std::string&, uint32_t) override {
+			status = 0;
+			return false;
+		}
+	};
+
+	struct ScopeExit {
+		std::function<void()> run;
+		~ScopeExit() { if (run) run(); }
+	};
+
+	bool TestDirectoryRowTakesTheLateRouterAnswer(std::string* error) {
+		struct Wire {
+			std::vector<NetDirectoryClient::Request> sent;
+		};
+		class ScriptedTransport final : public NetDirectoryClient::Transport {
+		public:
+			explicit ScriptedTransport(std::shared_ptr<Wire> wire) : m_Wire(std::move(wire)) {}
+			void Start(const NetDirectoryClient::Request& request) override { m_Wire->sent.push_back(request); }
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override {
+				if (m_Wire->sent.size() == 1)
+					return {200, R"({"session_id":"2b3c4d5e-ffff-4aaa-8bbb-ccccddddeeee","token":"tok-router","expires_in_s":90,"heartbeat_s":30,"observed_ip":"198.51.100.4"})", ""};
+				return {200, R"({"expires_in_s":90,"heartbeat_s":30})", ""};
+			}
+			void Abort() override {}
+
+		private:
+			std::shared_ptr<Wire> m_Wire;
+		};
+		const std::string url = g_SettingsMan.GetSessionDirectoryUrl();
+		const std::string key = g_SettingsMan.GetSessionDirectoryInstallKey();
+		g_SettingsMan.SetSessionDirectoryUrl("https://127.0.0.1:8464");
+		g_SettingsMan.SetSessionDirectoryInstallKey("key0123456789abcd");
+		WithheldRouter router;
+		ScopeExit restore{[&] {
+			NetMatchService::ReleaseHostPortMap();
+			g_SettingsMan.SetSessionDirectoryUrl(url);
+			g_SettingsMan.SetSessionDirectoryInstallKey(key);
+		}};
+		auto wire = std::make_shared<Wire>();
+		NetMatchService service;
+		ScopeExit finish{[&] {
+			service.m_CancelRequested.store(true);
+			service.Destroy();
+		}};
+		service.m_Directory.SetTransportFactory([wire] { return std::make_unique<ScriptedTransport>(wire); });
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.m_IsHost = true;
+			service.m_IceEnabled = false;
+			service.m_State = NetMatchServiceState::Running;
+		}
+		service.m_BeaconGamePort = 48044;
+		service.m_BeaconMaxPlayers = 2;
+		service.m_LocalName = "RouterHost";
+		service.m_DirectoryRow.name = "RouterHost";
+		service.m_DirectoryRow.activity = "Skirmish Defense";
+		service.m_DirectoryRow.mode = "PvP";
+		service.m_DirectoryRow.peerCount = 2;
+		service.m_DirectoryRow.seatsFree = 1;
+		service.m_DirectoryRow.listenPort = 48044;
+		service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+		NetMatchService::RequestHostPortMap(48044, &router);
+		const auto pumpUntil = [&](uint64_t budgetMs, const std::function<bool()>& done) {
+			const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+			while (!done() && std::chrono::steady_clock::now() < until) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				service.Update();
+			}
+			return done();
+		};
+		if (!pumpUntil(500, [&] { return service.m_Directory.GetState() == NetDirectoryClient::State::Registered; })) {
+			*error = std::string("the directory row waited on a router that has not answered; state=") + NetDirectoryClient::StateName(service.m_Directory.GetState()) +
+			         " router_exchanges=" + std::to_string(router.exchanges.load());
+			return false;
+		}
+		const auto addrsOf = [](const NetDirectoryClient::Request& request) {
+			try {
+				const nlohmann::json body = nlohmann::json::parse(request.body);
+				return body.contains("listen_addrs") ? body["listen_addrs"].get<std::vector<std::string>>() : std::vector<std::string>{};
+			} catch (const nlohmann::json::exception&) {
+				return std::vector<std::string>{};
+			}
+		};
+		if (wire->sent.empty() || addrsOf(wire->sent.front()) != std::vector<std::string>{"127.0.0.1"} || router.exchanges.load() == 0) {
+			*error = "the row did not register with the address it had while the router was asked";
+			return false;
+		}
+		router.answering = true;
+		const auto mappedBeat = [&] {
+			return std::any_of(wire->sent.begin() + 1, wire->sent.end(), [&](const NetDirectoryClient::Request& request) {
+				const auto addrs = addrsOf(request);
+				return request.path.ends_with("/heartbeat") && !addrs.empty() && addrs.front() == "203.0.113.9";
+			});
+		};
+		if (!pumpUntil(5000, mappedBeat)) {
+			*error = "the registered row never took the mapped address; requests=" + std::to_string(wire->sent.size()) + " router_exchanges=" + std::to_string(router.exchanges.load());
+			return false;
+		}
+		if (service.m_Directory.GetObservedIp() != "198.51.100.4") {
+			*error = "the register reply's observed address was not kept";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS directory_row_takes_the_late_router_answer requests=" << wire->sent.size() << std::endl;
+		return true;
+	}
+
 	bool TestCompletedLobbyExpires(std::string* error) {
 		struct Wire {
 			std::deque<NetDirectoryClient::Reply> replies;
@@ -12638,6 +12775,8 @@ namespace RTE {
 		};
 		const std::string id = "1a2b3c4d-eeee-4fff-8aaa-bbbbccccdddd";
 		const std::string beat = "/v1/sessions/" + id + "/heartbeat";
+		WithheldRouter router;
+		ScopeExit mappingGone{[] { NetMatchService::ReleaseHostPortMap(); }};
 		const auto fail = [&](const std::string& step) {
 			*error = "completed lobby expiry: " + step;
 			return false;
@@ -12714,6 +12853,8 @@ namespace RTE {
 			service.m_DirectoryRow.seatsFree = 1;
 			service.m_DirectoryRow.listenPort = port;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			// The router is asked and never answers: the row registers anyway.
+			NetMatchService::RequestHostPortMap(port, &router);
 			for (int spin = 0; spin < 250 && service.m_Directory.GetState() != NetDirectoryClient::State::Registered; ++spin) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(2));
 				service.Update();
@@ -12906,6 +13047,8 @@ namespace RTE {
 		const std::string idA = "7b8c9d2e-aaaa-4bbb-8ccc-ddddeeeeffff";
 		const std::string idB = "8c9d2e1f-bbbb-4ccc-8ddd-eeeeffff0000";
 		const std::string idLegacy = "9d2e1f30-cccc-4ddd-8eee-ffff00001111";
+		WithheldRouter router;
+		ScopeExit mappingGone{[] { NetMatchService::ReleaseHostPortMap(); }};
 		const auto registerReply = [](const std::string& id, const char* token, int heartbeatS, bool capable) {
 			return NetDirectoryClient::Reply{200, R"({"session_id":")" + id + R"(","token":")" + token + R"(","expires_in_s":15,"heartbeat_s":)" + std::to_string(heartbeatS) + R"(,"observed_ip":"127.0.0.1")" + (capable ? R"(,"supports_unlisted":true})" : "}"), ""};
 		};
@@ -12966,6 +13109,8 @@ namespace RTE {
 			service.m_DirectoryRow.seatsFree = 1;
 			service.m_DirectoryRow.listenPort = 48041;
 			service.m_DirectoryRow.listenAddrs = {"127.0.0.1"};
+			// The router is asked and never answers: the row registers anyway.
+			NetMatchService::RequestHostPortMap(48041, &router);
 			if (!pumpUntil(service, 500, [&] { return service.m_Directory.GetState() == NetDirectoryClient::State::Registered; })) {
 				step = std::string("the directory never registered; state=") + NetDirectoryClient::StateName(service.m_Directory.GetState());
 				return false;
@@ -14431,6 +14576,7 @@ namespace RTE {
 		if (!TestEndMatchWithHeldSeatKeepsItsLease(&error)) return fail(error);
 		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
 		if (!TestCompletedLobbyExpires(&error)) return fail(error);
+		if (!TestDirectoryRowTakesTheLateRouterAnswer(&error)) return fail(error);
 		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
 		NetMatchService keepaliveService;
 		if (!keepaliveService.RunSnapshotLoadKeepaliveSelfTest(&error)) return fail(error);
