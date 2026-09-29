@@ -21,13 +21,18 @@ def main():
     probe = root / "probe/script.json"
     probe.parent.mkdir()
     probe.write_text(json.dumps({"schema": 1, "timeout_ms": 180000, "steps": [
-        {"op": "wait", "screen": "Gameplay"}, {"op": "wait", "sim_at_least": 850},
-        {"op": "signal", "name": "played"}, {"op": "menu", "command": "game_key Escape down"},
+        {"op": "wait", "elapsed_ms": 6500, "scope": "menu"},
+        {"op": "menu", "command": "meta_command NewLoadButton"},
+        {"op": "wait", "elapsed_ms": 500, "scope": "menu"},
+        {"op": "menu", "command": "meta_command LoadButton"},
+        {"op": "wait", "elapsed_ms": 5000, "scope": "menu"},
+        {"op": "menu", "command": "meta_command ContinueButton"},
+        {"op": "wait", "elapsed_ms": 15000}, {"op": "signal", "name": "started"},
+        {"op": "wait", "elapsed_ms": 12000}, {"op": "signal", "name": "played"},
+        {"op": "menu", "command": "game_key Escape down"},
         {"op": "menu", "command": "game_key Escape up"}, {"op": "finish"}]}))
     script = root / "load.menu.txt"
     script.write_text("wait_ms 1500\nactivate ButtonMainToMetaGame\nwait_ms 500\nactivate ButtonContinue\n"
-                      "wait_ms 2500\nmeta_command NewLoadButton\nwait_ms 500\nmeta_command LoadButton\n"
-                      "wait_ms 5000\nmeta_command ContinueButton\n"
                       f"wait_file {probe.parent / 'played.json'} 180\nwait_ms 500\nexit\n")
     run = make_run(args.repo.resolve(), ["-menu-script", script], root / "engine", 210,
                    env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)})
@@ -45,12 +50,15 @@ def main():
     try:
         result["record"] = run.start().finish()
         outcome = json.loads((probe.parent / "net-ui-result.json").read_text())
-        frames = [step["observed"]["sim_frame"] for step in outcome.get("steps", [])]
+        readings = [step["observed"] for step in outcome.get("steps", []) if step["op"] == "signal"]
+        frames = [observed["sim_frame"] for observed in readings]
         console = Path(run.cwd) / "LogConsole.txt"
         text = console.read_text(errors="replace") if console.exists() else ""
         result.update(probe=outcome, ticks=frames[-1] - frames[0] if frames else 0,
-                      loaded="Successfully loaded Metagame 'AutoSave'" in text)
-        result["pass"] = result["loaded"] and outcome.get("pass") and result["ticks"] >= 600 and result["record"]["exit_code"] == 0
+                      loaded="Successfully loaded Metagame 'AutoSave'" in text,
+                      playing=len(readings) == 2 and all(not observed["paused"] and not observed["editing"] for observed in readings))
+        result["pass"] = (result["loaded"] and result["playing"] and outcome.get("pass")
+                          and result["ticks"] >= 600 and result["record"]["exit_code"] == 0)
     except Exception as error:
         result["error"] = repr(error)
     finally:
