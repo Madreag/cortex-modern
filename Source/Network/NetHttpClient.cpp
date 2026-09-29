@@ -9,12 +9,20 @@
 #ifdef __APPLE__
 #include "NetHttpClientApple.h"
 #endif
+#ifdef __linux__
+#include <curl/curl.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#endif
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cctype>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <string_view>
 
 namespace RTE {
 
@@ -27,7 +35,7 @@ namespace RTE {
 			Finish(Response{0, "", "client already used"});
 			return;
 		}
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
 		m_Done = false;
 		m_CancelRequested = false;
 		m_Worker = std::thread(&NetHttpClient::WorkerMain, this, method, url, headers, body, certPinSha256);
@@ -608,6 +616,183 @@ namespace RTE {
 			}
 			m_Apple = nullptr;
 		}
+	}
+
+#elif defined(__linux__)
+
+	namespace {
+		struct CurlLibrary {
+			CURLcode result = curl_global_init(CURL_GLOBAL_DEFAULT);
+			~CurlLibrary() { if (result == CURLE_OK) curl_global_cleanup(); }
+		};
+
+		struct CurlHandles {
+			CURL* easy = curl_easy_init();
+			CURLM* multi = curl_multi_init();
+			curl_slist* headers = nullptr;
+			bool attached = false;
+			~CurlHandles() {
+				if (attached) curl_multi_remove_handle(multi, easy);
+				if (easy) curl_easy_cleanup(easy);
+				if (multi) curl_multi_cleanup(multi);
+				curl_slist_free_all(headers);
+			}
+		};
+
+		struct CurlTransfer {
+			std::atomic<bool>& cancelled;
+			std::array<unsigned char, 32> pin{};
+			std::string body;
+			const char* error = nullptr;
+		};
+
+		bool ReadPin(std::string_view text, std::array<unsigned char, 32>& pin) {
+			if (text.size() != pin.size() * 2) return false;
+			const auto digit = [](char ch) {
+				if (ch >= '0' && ch <= '9') return ch - '0';
+				if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+				if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+				return -1;
+			};
+			for (size_t i = 0; i < pin.size(); ++i) {
+				const int high = digit(text[2 * i]), low = digit(text[2 * i + 1]);
+				if (high < 0 || low < 0) return false;
+				pin[i] = static_cast<unsigned char>((high << 4) | low);
+			}
+			return true;
+		}
+
+		int VerifyPinnedLeaf(X509_STORE_CTX* context, void* userdata) {
+			auto& transfer = *static_cast<CurlTransfer*>(userdata);
+			std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
+			unsigned int size = 0;
+			X509* leaf = X509_STORE_CTX_get0_cert(context);
+			const bool matches = leaf && X509_digest(leaf, EVP_sha256(), digest.data(), &size) == 1 &&
+			    size == transfer.pin.size() && CRYPTO_memcmp(digest.data(), transfer.pin.data(), transfer.pin.size()) == 0;
+			X509_STORE_CTX_set_error(context, matches ? X509_V_OK : X509_V_ERR_APPLICATION_VERIFICATION);
+			if (!matches) transfer.error = leaf ? "certificate pin mismatch" : "could not read server certificate";
+			return matches ? 1 : 0;
+		}
+
+		CURLcode ConfigurePinnedTls(CURL*, void* sslContext, void* userdata) {
+			SSL_CTX* context = static_cast<SSL_CTX*>(sslContext);
+			SSL_CTX_set_verify(context, SSL_VERIFY_PEER, nullptr);
+			SSL_CTX_set_cert_verify_callback(context, &VerifyPinnedLeaf, userdata);
+			return CURLE_OK;
+		}
+
+		size_t ReceiveCurlBody(char* bytes, size_t size, size_t count, void* userdata) {
+			auto& transfer = *static_cast<CurlTransfer*>(userdata);
+			constexpr size_t limit = 4 * 1024 * 1024;
+			if (transfer.cancelled.load()) return 0;
+			if (size != 0 && count > (limit - transfer.body.size()) / size) {
+				transfer.error = "response body too large";
+				return 0;
+			}
+			try { transfer.body.append(bytes, size * count); }
+			catch (...) { transfer.error = "out of memory"; return 0; }
+			return size * count;
+		}
+
+		int CurlProgress(void* userdata, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+			return static_cast<CurlTransfer*>(userdata)->cancelled.load() ? 1 : 0;
+		}
+	}
+
+	void NetHttpClient::Cancel() {
+		m_CancelRequested = true;
+		if (m_Worker.joinable()) m_Worker.join();
+	}
+
+	void NetHttpClient::WorkerMain(std::string method, std::string url, std::vector<std::pair<std::string, std::string>> headers, std::string body, std::string certPinSha256) {
+		try { WorkerMainImpl(std::move(method), std::move(url), std::move(headers), std::move(body), std::move(certPinSha256)); }
+		catch (const std::exception& error) { Finish(Response{0, "", std::string("worker exception: ") + error.what()}); }
+		catch (...) { Finish(Response{0, "", "worker exception"}); }
+	}
+
+	void NetHttpClient::WorkerMainImpl(std::string method, std::string url, std::vector<std::pair<std::string, std::string>> headers, std::string body, std::string certPinSha256) {
+		if (!url.starts_with("https://")) { Finish(Response{0, "", "only https urls are supported"}); return; }
+		CurlTransfer transfer{m_CancelRequested};
+		if (!certPinSha256.empty() && !ReadPin(certPinSha256, transfer.pin)) { Finish(Response{0, "", "malformed certificate pin"}); return; }
+		CurlLibrary library;
+		if (library.result != CURLE_OK) { Finish(Response{0, "", "could not initialize libcurl"}); return; }
+		const auto* version = curl_version_info(CURLVERSION_NOW);
+		if (!version || !version->ssl_version || !std::string_view(version->ssl_version).starts_with("OpenSSL/") ||
+		    !(version->features & CURL_VERSION_THREADSAFE) || !(version->features & CURL_VERSION_ASYNCHDNS)) {
+			Finish(Response{0, "", "libcurl requires OpenSSL, thread-safe initialization and asynchronous DNS"}); return;
+		}
+		CurlHandles handles;
+		if (!handles.easy || !handles.multi) { Finish(Response{0, "", "could not create libcurl request"}); return; }
+		const auto option = [&](CURLoption key, auto value) {
+			const CURLcode result = curl_easy_setopt(handles.easy, key, value);
+			if (result != CURLE_OK) throw std::runtime_error(curl_easy_strerror(result));
+		};
+		std::array<char, CURL_ERROR_SIZE> errorBuffer{};
+		option(CURLOPT_URL, url.c_str());
+		option(CURLOPT_PROTOCOLS_STR, "https");
+		option(CURLOPT_REDIR_PROTOCOLS_STR, "https");
+		option(CURLOPT_FOLLOWLOCATION, 0L);
+		option(CURLOPT_CUSTOMREQUEST, method.c_str());
+		option(CURLOPT_USERAGENT, "CortexCommand/1.0");
+		option(CURLOPT_NOSIGNAL, 1L);
+		option(CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(c_ConnectTimeoutMs));
+		option(CURLOPT_TIMEOUT_MS, static_cast<long>(c_TotalTimeoutMs));
+		option(CURLOPT_SSL_VERIFYPEER, 1L);
+		option(CURLOPT_SSL_VERIFYHOST, certPinSha256.empty() ? 2L : 0L);
+		option(CURLOPT_FRESH_CONNECT, 1L);
+		option(CURLOPT_FORBID_REUSE, 1L);
+		option(CURLOPT_SSL_SESSIONID_CACHE, 0L);
+		option(CURLOPT_WRITEFUNCTION, &ReceiveCurlBody);
+		option(CURLOPT_WRITEDATA, &transfer);
+		option(CURLOPT_XFERINFOFUNCTION, &CurlProgress);
+		option(CURLOPT_XFERINFODATA, &transfer);
+		option(CURLOPT_NOPROGRESS, 0L);
+		option(CURLOPT_ERRORBUFFER, errorBuffer.data());
+		if (!certPinSha256.empty()) {
+			// The leaf pin replaces chain, name and date checks inside the handshake.
+			option(CURLOPT_SSL_CTX_FUNCTION, &ConfigurePinnedTls);
+			option(CURLOPT_SSL_CTX_DATA, &transfer);
+		}
+		for (const auto& [name, value] : headers) {
+			auto* next = curl_slist_append(handles.headers, (name + ": " + value).c_str());
+			if (!next) throw std::bad_alloc();
+			handles.headers = next;
+		}
+		option(CURLOPT_HTTPHEADER, handles.headers);
+		if (!body.empty() || method == "POST" || method == "PUT" || method == "PATCH") {
+			if (body.size() > static_cast<size_t>(std::numeric_limits<curl_off_t>::max())) throw std::length_error("request body too large");
+			option(CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(body.size()));
+			option(CURLOPT_POSTFIELDS, body.data());
+		}
+		CURLMcode multiResult = curl_multi_add_handle(handles.multi, handles.easy);
+		if (multiResult != CURLM_OK) throw std::runtime_error(curl_multi_strerror(multiResult));
+		handles.attached = true;
+		int running = 0;
+		do {
+			if (m_CancelRequested.load()) { Finish(Response{0, "", "cancelled"}); return; }
+			multiResult = curl_multi_perform(handles.multi, &running);
+			if (multiResult != CURLM_OK) throw std::runtime_error(curl_multi_strerror(multiResult));
+			if (running) {
+				multiResult = curl_multi_poll(handles.multi, nullptr, 0, 50, nullptr);
+				if (multiResult != CURLM_OK) throw std::runtime_error(curl_multi_strerror(multiResult));
+			}
+		} while (running);
+		CURLcode result = CURLE_FAILED_INIT;
+		int remaining = 0;
+		while (auto* message = curl_multi_info_read(handles.multi, &remaining)) {
+			if (message->msg == CURLMSG_DONE && message->easy_handle == handles.easy) result = message->data.result;
+		}
+		Response response;
+		if (m_CancelRequested.load()) response.error = "cancelled";
+		else if (transfer.error) response.error = transfer.error;
+		else if (result == CURLE_OPERATION_TIMEDOUT) response.error = "timed out";
+		else if (result == CURLE_PEER_FAILED_VERIFICATION) response.error = std::string("certificate verification failed: ") + errorBuffer.data();
+		else if (result != CURLE_OK) response.error = errorBuffer[0] ? errorBuffer.data() : curl_easy_strerror(result);
+		else {
+			curl_easy_getinfo(handles.easy, CURLINFO_RESPONSE_CODE, &response.statusCode);
+			response.body = std::move(transfer.body);
+		}
+		Finish(response);
 	}
 
 #else
