@@ -65,7 +65,7 @@ namespace RTE {
 		// A round configured without an answer budget still bounds a capture park.
 		constexpr uint64_t c_DefaultCaptureParkBudgetMs = 500;
 		constexpr uint32_t c_RecoveryInputMagic = 0x314e4952;
-		constexpr uint16_t c_RecoveryInputVersion = 5;
+		constexpr uint16_t c_RecoveryInputVersion = 6;
 
 		std::optional<uint64_t> TestFrameFromEnvironment(const char* name) {
 			const char* text = std::getenv(name);
@@ -782,7 +782,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool EncodeCommandList(const std::vector<NetGameCommand>& commands, uint8_t senderPeerId, std::vector<uint8_t>& out, NetLockstepError* error, bool recovery, bool holdIdentity = true, bool admissionIdentity = true) {
+		bool EncodeCommandList(const std::vector<NetGameCommand>& commands, uint8_t senderPeerId, std::vector<uint8_t>& out, NetLockstepError* error, bool recovery, bool holdIdentity = true, bool admissionIdentity = true, bool holdMarker = false) {
 			AppendU16LE(out, static_cast<uint16_t>(commands.size()));
 			for (const NetGameCommand& command : commands) {
 				if (recovery && command.senderPeerId != senderPeerId) {
@@ -1131,6 +1131,18 @@ namespace RTE {
 			return true;
 		}
 
+		bool EncodePayload(const NetLockstepTiming& timing, std::vector<uint8_t>& out, NetLockstepError* error);
+
+		bool HasHostHold(const NetLockstepFrame& frame) {
+			return frame.hostHold || std::any_of(frame.priorWindow.begin(), frame.priorWindow.end(), [](const auto& older) { return older.hostHold.has_value(); });
+		}
+
+		bool EncodeFrameHold(const NetLockstepFrame& frame, bool enabled, std::vector<uint8_t>& out, NetLockstepError* error) {
+			if (!enabled) return !frame.hostHold;
+			AppendU8(out, frame.hostHold ? 1 : 0);
+			return !frame.hostHold || EncodePayload(*frame.hostHold, out, error);
+		}
+
 		bool EncodePayload(const NetLockstepFrame& payload, std::vector<uint8_t>& out, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, bool recovery = false, size_t* outValueObservationsEncoded = nullptr, NetLockstepObservationBlocks* blocks = nullptr, bool holdIdentity = true, bool admissionIdentity = true) {
 			if (!ValidatePeerId(payload.senderPeerId, error, "sender_peer_id") || !ValidateSortedFrames(payload.frames, error)) {
 				return false;
@@ -1173,6 +1185,7 @@ namespace RTE {
 				auto encodeTick = [&](const NetLockstepFrame& tick) {
 					if (!EncodeTickFrames(tick.targetFrame, tick.frames, previousTick, out, error) ||
 					    !EncodeCommandList(tick.commands, tick.senderPeerId, out, error, recovery, holdIdentity, admissionIdentity) ||
+					    !EncodeFrameHold(tick, holdMarker, out, error) ||
 					    !AppendTickObservations(tick, out, dictionary, blocks, true, outObservationsEncoded, outValueObservationsEncoded, error)) {
 						return false;
 					}
@@ -1188,7 +1201,8 @@ namespace RTE {
 				return encodeTick(payload);
 			}
 			if (!EncodeTickFrames(payload.targetFrame, payload.frames, nullptr, out, error) ||
-			    !EncodeCommandList(payload.commands, payload.senderPeerId, out, error, recovery, holdIdentity, admissionIdentity)) {
+			    !EncodeCommandList(payload.commands, payload.senderPeerId, out, error, recovery, holdIdentity, admissionIdentity) ||
+			    !EncodeFrameHold(payload, holdMarker, out, error)) {
 				return false;
 			}
 			AppendU64LE(out, payload.roundId);
@@ -2401,6 +2415,22 @@ namespace RTE {
 			return ValidateSortedFrames(tick.frames, error);
 		}
 
+		bool DecodeFrameHold(ByteReader& reader, NetLockstepFrame& frame, uint16_t version, NetLockstepError* error) {
+			if (version < NetLockstepCodec::c_HoldMarkerVersion) return true;
+			uint8_t present = 0;
+			if (!ReadOrTruncated(reader.ReadU8(present), reader, error, "host hold present") || present > 1) return false;
+			if (!present) return true;
+			NetLockstepPayload payload;
+			if (!DecodeTiming(reader, payload, error, version)) return false;
+			frame.hostHold = std::get<NetLockstepTiming>(std::move(payload));
+			const auto& hold = *frame.hostHold;
+			if (hold.senderPeerId != frame.senderPeerId || hold.action != NetTimingAction::Hold || hold.phase != NetTimingPhase::HoldAtFrame ||
+			    (hold.heldPeers & (1U << (frame.senderPeerId - 1))) == 0 || hold.applyFrame > frame.targetFrame) {
+				SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "invalid host marker hold"); return false;
+			}
+			return true;
+		}
+
 		bool DecodeFrame(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error, uint16_t controllerFrameVersion, uint16_t version, NetSoundObservationTables* tables, bool recovery = false) {
 			NetLockstepFrame payload;
 			uint8_t reserved = 0;
@@ -2417,7 +2447,8 @@ namespace RTE {
 			}
 			if (reserved == 0) {
 				if (!DecodeTickFrames(reader, payload, controllerFrameVersion, nullptr, error) ||
-				    !DecodeCommandList(reader, payload.commands, payload.senderPeerId, version, error)) {
+				    !DecodeCommandList(reader, payload.commands, payload.senderPeerId, version, error) ||
+				    !DecodeFrameHold(reader, payload, version, error)) {
 					return false;
 				}
 			} else {
@@ -2438,7 +2469,8 @@ namespace RTE {
 					const bool windowCopy = i + 1 < reserved;
 					bool readPast = false;
 					if (!DecodeTickFrames(reader, tick, controllerFrameVersion, previousTick, error) ||
-					    !DecodeCommandList(reader, tick.commands, tick.senderPeerId, version, error)) {
+					    !DecodeCommandList(reader, tick.commands, tick.senderPeerId, version, error) ||
+					    !DecodeFrameHold(reader, tick, version, error)) {
 						return false;
 					}
 					if (version >= NetLockstepCodec::c_RoundVersion) {
@@ -2604,7 +2636,7 @@ namespace RTE {
 
 	bool NetLockstepFrame::operator==(const NetLockstepFrame& rhs) const {
 		if (senderPeerId != rhs.senderPeerId || targetFrame != rhs.targetFrame || frames.size() != rhs.frames.size() || commands != rhs.commands ||
-		    roundId != rhs.roundId || observations != rhs.observations || valueObservations != rhs.valueObservations || priorWindow != rhs.priorWindow) {
+		    roundId != rhs.roundId || observations != rhs.observations || valueObservations != rhs.valueObservations || priorWindow != rhs.priorWindow || hostHold != rhs.hostHold) {
 			return false;
 		}
 		for (size_t i = 0; i < frames.size(); ++i) {
@@ -2761,7 +2793,7 @@ namespace RTE {
 		std::vector<uint8_t> payloadBytes;
 		const bool payloadOk = std::visit(Overloaded{
 			[&](const NetLockstepStart& payload) { return EncodePayload(payload, payloadBytes, error); },
-			[&](const NetLockstepFrame& payload) { return EncodePayload(payload, payloadBytes, error, dictionary, outObservationsEncoded, false, outValueObservationsEncoded, blocks); },
+			[&](const NetLockstepFrame& payload) { return EncodePayload(payload, payloadBytes, error, dictionary, outObservationsEncoded, false, outValueObservationsEncoded, blocks, true, true, HasHostHold(payload)); },
 			[&](const NetLockstepAck& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepStop& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepChecksum& payload) { return EncodePayload(payload, payloadBytes, error); },
@@ -2794,6 +2826,7 @@ namespace RTE {
 				return std::any_of(tick.commands.begin(), tick.commands.end(), [](const NetGameCommand& command) { return std::holds_alternative<NetGameCheckpoint>(command.payload); });
 			};
 			if (carriesCheckpoint(*frame) || std::any_of(frame->priorWindow.begin(), frame->priorWindow.end(), carriesCheckpoint)) encodeVersion = c_CheckpointVersion;
+			if (HasHostHold(*frame)) encodeVersion = c_HoldMarkerVersion;
 		}
 
 		outBytes.clear();
@@ -2811,9 +2844,9 @@ namespace RTE {
 	bool NetLockstepCodec::EncodeRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t>& outBytes, NetLockstepError* error) {
 		std::vector<uint8_t> bytes;
 		AppendU32LE(bytes, c_RecoveryInputMagic);
-		AppendU16LE(bytes, c_RecoveryInputVersion);
+		AppendU16LE(bytes, frame.hostHold ? c_RecoveryInputVersion : 5);
 		AppendU16LE(bytes, ControllerFrame::c_Version);
-		if (!EncodePayload(frame, bytes, error, nullptr, nullptr, true)) return false;
+		if (!EncodePayload(frame, bytes, error, nullptr, nullptr, true, nullptr, nullptr, true, true, frame.hostHold.has_value())) return false;
 		if (bytes.size() > c_MaxRecoveryInputBytes) {
 			SetError(error, NetLockstepErrorCode::PayloadTooLarge, bytes.size(), "recovery input exceeds maximum");
 			return false;
@@ -2839,13 +2872,13 @@ namespace RTE {
 		}
 		NetLockstepPayload payload;
 		// Each recovery layout keeps the command vocabulary it recorded.
-		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : c_CheckpointVersion, nullptr, true) || !reader.AtEnd()) return false;
+		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : version == 5 ? c_CheckpointVersion : c_HoldMarkerVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		AppendU32LE(canonical, c_RecoveryInputMagic);
 		AppendU16LE(canonical, version);
 		AppendU16LE(canonical, ControllerFrame::c_Version);
-		if (!EncodePayload(frame, canonical, error, nullptr, nullptr, true, nullptr, nullptr, version >= 3, version >= 4)) return false;
+		if (!EncodePayload(frame, canonical, error, nullptr, nullptr, true, nullptr, nullptr, version >= 3, version >= 4, version >= 6)) return false;
 		if (canonical != bytes) {
 			SetError(error, NetLockstepErrorCode::InvalidValue, 0, "noncanonical recovery input");
 			return false;
@@ -2882,7 +2915,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version < c_MinVersion || version > c_RecoveryDatagramVersion) {
+		if (version < c_MinVersion || version > c_HoldMarkerVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -2996,7 +3029,7 @@ namespace RTE {
 			default:
 				return false;
 		}
-		return magic == c_Magic && version >= c_MinVersion && version <= c_RecoveryDatagramVersion && headerBytes == c_HeaderBytes &&
+		return magic == c_Magic && version >= c_MinVersion && version <= c_HoldMarkerVersion && headerBytes == c_HeaderBytes &&
 		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
 	}
 
@@ -6753,6 +6786,13 @@ namespace RTE {
 			command.senderPeerId = m_Config.localPeerId;
 		}
 		packet.roundId = m_RoundId;
+		if (m_Config.localPeerId == GetHostPeerId() && IsSeatUnderAI(m_Config.localPeerId, targetFrame)) {
+			const auto held = m_HoldTransactions.find(m_Config.localPeerId);
+			if (held != m_HoldTransactions.end()) {
+				const auto decision = m_TimingDecisions.find(held->second.eventSequence);
+				if (decision != m_TimingDecisions.end() && decision->second.committed) packet.hostHold = decision->second.proposal;
+			}
+		}
 		// What the last frame could not hold goes first, minus anything this frame reads afresh: a newer
 		// reading for the same sound would only overwrite it in the same commit.
 		std::vector<NetSoundObservation> nextPendingObservations;
@@ -10413,6 +10453,18 @@ namespace RTE {
 			++peerStats.preStartBuffered;
 			return;
 		}
+		const auto installHold = [&](const NetLockstepFrame& tick) {
+			if (!tick.hostHold || tick.targetFrame < m_Stats.nextFrame) return true;
+			const auto& hold = *tick.hostHold;
+			if (frame.senderPeerId != GetHostPeerId() || hold.senderPeerId != frame.senderPeerId ||
+			    hold.sessionId != m_Config.sessionId || hold.roundId != m_RoundId || hold.authorityGeneration != m_Config.migrationGeneration) {
+				Fail(NetLockstepStopReason::ProtocolError, tick.targetFrame, "host marker carries a foreign hold"); return false;
+			}
+			HandleTiming(hold, nowMs, fromTransport);
+			return !IsFailed();
+		};
+		for (const auto& older: frame.priorWindow) if (!installHold(older)) return;
+		if (!installHold(frame)) return;
 		// A sender's frames never target its own delay window; one that does is a broken build.
 		for (const NetLockstepFrame& older : frame.priorWindow) {
 			// A copy read past this peer's table is a tick it already holds; committing its frames without
