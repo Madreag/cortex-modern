@@ -5963,6 +5963,8 @@ namespace RTE {
 			config.peerIncarnations[peer] = incarnation;
 			config.initialSeatReclaims[peer] = {peer, reclaim->authorityGeneration, reclaim->revision, incarnation, reclaim->applyFrame, reclaim->delayFrames,
 			    reclaim->neutralThroughFrame, reclaim->worldTransition};
+			// Its return named the delay it produces at from then on, which the start the host hands us for it carries.
+			if (reclaim->delayFrames != 0) config.initialDelayChanges[peer][reclaim->applyFrame] = reclaim->delayFrames;
 		}
 	}
 
@@ -6307,6 +6309,8 @@ namespace RTE {
 		NoteSeatTransition(peer, reclaim.applyFrame, SeatTransition::Back);
 		m_Config.peerIncarnations[peer] = reclaim.seatIncarnations[peer - 1];
 		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
+		// A return names the delay its seat produces at from the reclaim on, the same on every peer.
+		if (reclaim.delayFrames != 0 && reclaim.delayFrames != InputDelayAt(peer, reclaim.applyFrame)) m_DelayChanges[peer][reclaim.applyFrame] = reclaim.delayFrames;
 		m_PeerAdmissions[peer] = reclaim.applyFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, InputDelayAt(peer, m_Config.startFrame)} :
 		    PeerAdmission{reclaim.applyFrame, reclaim.delayFrames};
 		// The seat state this round started from may still hold the seat; the return ends that hold here, as the frame that
