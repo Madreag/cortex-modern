@@ -2358,7 +2358,7 @@ namespace RTE {
 		bool TestAPlayingPeersRampIsNotOurPark(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
-			auto a = MakeCoordinatorConfig(1, 2, 0x9A66, 3, NetTransportLane::ControlReliable);
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A66, 1, NetTransportLane::ControlReliable);
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A66, 3, NetTransportLane::ControlReliable);
 			a.startFrame = b.startFrame = 1;
 			a.roundId = b.roundId = 66;
@@ -2366,11 +2366,13 @@ namespace RTE {
 			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
 			a.timeoutMs = b.timeoutMs = 30000;
 			a.relayToOtherPeers = true;
+			a.peerInputDelayFrames = b.peerInputDelayFrames = {{1, 1}, {2, 3}};
 			a.matchConfig = b.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A66);
 			if (!StartCoordinatorPair(49557, hostWire, clientWire, host, client, a, b, error)) return false;
 			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
 			client.NoteLocalStartPark(50);
 			uint64_t hostProduced = 1, hostApplied = 0, clientProduced = 1, clientApplied = 0, hostClock = 0;
+			bool hostWaiting = false;
 			std::string queueError;
 			const auto pump = [&](uint64_t from, uint64_t to, bool clientPlays) {
 				for (uint64_t now = from; now < to; ++now) {
@@ -2381,26 +2383,33 @@ namespace RTE {
 						       client.QueueLocalInput(clientProduced, {MakeFrame(200, clientProduced)}, {}, &queueError)) ++clientProduced;
 					}
 					host.Tick(now + hostClock); client.Tick(now);
+					// Both simulate one frame a tick, as live sims do; a host whose next frame is not ready waits on it until it is.
 					NetLockstepReadyFrame ready;
-					if (now % 17 == 0 && host.PopReadyFrame(ready)) { hostApplied = ready.frame; (void)host.FinishSimulationTick(ready.frame); }
+					if (now % 17 == 0 || hostWaiting) {
+						hostWaiting = !host.PopReadyFrame(ready);
+						if (!hostWaiting) { hostApplied = ready.frame; (void)host.FinishSimulationTick(ready.frame); }
+						else if (host.IsRunning()) host.NoteFrameWait(host.GetStats().nextFrame, now + hostClock, true);
+					}
 					if (now % 17 == 0 && client.PopReadyFrame(ready)) { clientApplied = ready.frame; (void)client.FinishSimulationTick(ready.frame); }
 					hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
 				}
 			};
-			pump(0, 200, false);
+			pump(0, 100, false);
 			// The host restores its saved round: 1200 ms nobody on it was listening.
 			hostClock = 1200;
-			pump(200, 400, false);
-			pump(400, 600, true);
-			if (host.GetStats().longestOwnParkMs < 1200 || hostApplied < 4) {
-				*error = "the fixture did not give the host its restore park before the joiner played: park=" + std::to_string(host.GetStats().longestOwnParkMs) +
-				         " applied=" + std::to_string(hostApplied);
+			pump(100, 200, false);
+			pump(200, 600, true);
+			const uint64_t stalledAt = host.GetStats().nextFrame;
+			if (host.GetStats().longestOwnParkMs < 1200 || host.GetStats().peers.at(2).framePacketsReceived == 0 || stalledAt < 8 ||
+			    stalledAt > 1 + NetLockstepCoordinator::c_StartupSettleTicks || host.GetStats().peers.at(2).holds != 0) {
+				*error = "the fixture did not put a playing seat's stall inside its first second after the host's restore park: park=" +
+				         std::to_string(host.GetStats().longestOwnParkMs) + " stalled_at=" + std::to_string(stalledAt) + " holds=" + std::to_string(host.GetStats().peers.at(2).holds);
 				return false;
 			}
-			const uint64_t stalledAt = host.GetStats().nextFrame;
-			pump(600, 1300, false);
+			// It stops sending for 600 ms: its own published 50 ms of start work allows a short wait, never our restore's 1200.
+			pump(600, 1200, false);
 			const auto holds = host.GetStats().peers.at(2).holds;
-			if (stalledAt > 1 + NetLockstepCoordinator::c_StartupSettleTicks || holds != 1 || !host.IsSeatUnderAI(2, host.GetStats().nextFrame)) {
+			if (holds != 1 || !host.IsSeatUnderAI(2, host.GetStats().nextFrame)) {
 				*error = "a playing seat that stalled in its first second waited out the host's own restore park: holds=" + std::to_string(holds) +
 				         " stalled_at=" + std::to_string(stalledAt) + " own_park=" + std::to_string(host.GetStats().longestOwnParkMs) +
 				         " longest_wait=" + std::to_string(host.GetStats().peers.at(2).longestWaitMs);
