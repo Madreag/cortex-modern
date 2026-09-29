@@ -319,9 +319,11 @@ int MetagameGUI::Create(Controller* pController) {
 		m_pGUIScreen = new AllegroScreen(g_FrameMan.GetBackBuffer32());
 	if (!m_pGUIInput)
 		m_pGUIInput = new GUIInputWrapper(-1, true);
+	m_AutomationInput = static_cast<GUIInputWrapper*>(m_pGUIInput)->CreateAutomationInput();
+	GUIInput* controlInput = m_AutomationInput ? m_AutomationInput.get() : m_pGUIInput;
 	if (!m_pGUIController)
 		m_pGUIController = new GUIControlManager();
-	if (!m_pGUIController->Create(m_pGUIScreen, m_pGUIInput, "Base.rte/GUIs/Skins/Menus", "MainMenuSubMenuSkin.ini")) {
+	if (!m_pGUIController->Create(m_pGUIScreen, controlInput, "Base.rte/GUIs/Skins/Menus", "MainMenuSubMenuSkin.ini")) {
 		RTEAbort("Failed to create GUI Control Manager and load it from Base.rte/GUIs/Skins/Menus/MainMenuSubMenuSkin.ini");
 	}
 	m_pGUIController->Load("Base.rte/GUIs/MetagameGUI.ini");
@@ -695,6 +697,7 @@ int MetagameGUI::Save(Writer& writer) const {
 
 void MetagameGUI::Destroy() {
 	delete m_pGUIController;
+	m_AutomationInput.reset();
 	delete m_pGUIInput;
 	delete m_pGUIScreen;
 

@@ -8,6 +8,9 @@
 #include "ActivityMan.h"
 #include "Timer.h"
 #include "GUIBanner.h"
+#include "GUIInputWrapper.h"
+
+#include <memory>
 
 struct BITMAP;
 
@@ -590,6 +593,7 @@ namespace RTE {
 		GUIScreen* m_pGUIScreen;
 		// Input controller
 		GUIInput* m_pGUIInput;
+		std::unique_ptr<GUIInputWrapper> m_AutomationInput;
 		// The control manager which holds all the controls
 		GUIControlManager* m_pGUIController;
 		// Visibility state of the menu
