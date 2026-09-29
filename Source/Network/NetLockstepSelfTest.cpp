@@ -20864,6 +20864,47 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAReturnRebuildsArrivalSlack(std::string* error) {
+		NetLockstepCoordinator host;
+		host.m_Config.localPeerId = 1; host.m_Config.peerCount = 3;
+		host.m_Config.adaptiveInputDelay = true;
+		host.m_Config.simTickMs = 1000.0 / 60.0;
+		host.m_Config.slowPlayerBoundTicks = 3;
+		host.m_Config.peerInputDelayFrames = {{1, 41}, {2, 9}, {3, 38}};
+		host.m_RemotePeerIds = {2, 3};
+		host.m_Stats.nextFrame = 950;
+		host.m_LastDeliveredFrame = 940;
+		const auto measuredSlack = [&](uint64_t start) {
+			for (uint64_t sample = 0; sample <= 300; ++sample)
+				host.m_ArrivalLeads[2].push_back({start + sample * 1000 / 60, 600 + sample, 6});
+		};
+		measuredSlack(1000);
+		if (host.SlackLimitedDecrease(2, 6, 9, 6000) != std::optional<uint16_t>{6}) {
+			*error = "the fixture has no measured delay to spend"; return false;
+		}
+		NetLockstepTiming back;
+		back.action = NetTimingAction::Reclaim; back.peerId = 3;
+		back.applyFrame = 844; back.delayFrames = 38; back.neutralThroughFrame = 970;
+		back.seatIncarnations[2] = 2;
+		host.ApplyTiming(back);
+		if (host.SlackLimitedDecrease(2, 6, 9, 6000)) {
+			*error = "a returning receiver spent arrival slack measured while it was absent"; return false;
+		}
+		measuredSlack(6001);
+		NetLockstepFrame input;
+		input.senderPeerId = 3; input.targetFrame = 971;
+		host.AcceptRemoteTick(input, 11002, false);
+		if (host.SlackLimitedDecrease(2, 6, 9, 11002)) {
+			*error = "the first required return input kept arrival slack from its neutral gap"; return false;
+		}
+		measuredSlack(11003);
+		if (host.SlackLimitedDecrease(2, 6, 9, 16003) != std::optional<uint16_t>{6}) {
+			*error = "a returned receiver disabled a fully measured live delay decrease"; return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_return_rebuilds_arrival_slack" << std::endl;
+		return true;
+	}
+
 	bool TestEachSurvivorsRunwayUsesItsOwnLink(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -21930,6 +21971,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestArrivalLeadIncludesTheFastestSurvivor, "arrival_lead_includes_the_fastest_survivor");
 		row(&TestHostStatusKeepsTheReceiversLinkMeasurement, "host_status_keeps_the_receivers_link_measurement");
 		row(&TestEachSurvivorsRunwayUsesItsOwnLink, "each_survivors_runway_uses_its_own_link");
+		row(&TestAReturnRebuildsArrivalSlack, "a_return_rebuilds_arrival_slack");
 		row(&TestANeutralGapLeavesNoCommandsToResend, "a_neutral_gap_leaves_no_commands_to_resend");
 		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");
 		row(&TestReturnFramesBypassReliableLoss, "return_frames_bypass_reliable_loss");
