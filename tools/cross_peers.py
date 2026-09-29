@@ -499,6 +499,7 @@ def prepare_instance(spec, pin, box, runtime=None):
         dict(op='assert_window', equals=dict(width=960, height=540)),
         dict(op='assert_buy', input_player=0), dict(op='assert_pie', input_player=0), dict(op='finish')]))
     if box['kind'] == 'posix-ssh':
+        configure_posix_box(box)
         os.environ['CCCP_TEST_BINARY'] = spec['executable']
         os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform=='darwin' else 'off'
     settings = {'SessionDirectoryUrl': f'127.0.0.1:{box["directory_port"]}', 'SessionDirectoryCertSha256': pin,
@@ -572,10 +573,21 @@ def seal_evidence(own):
             compress_closed_record(path, own)
 
 
+def configure_posix_box(box):
+    if sys.platform.startswith('linux'):
+        session = command(['systemctl', '--user', 'show-environment'], timeout=10, check=False)
+        for line in session.splitlines():
+            key, _, value = line.partition('=')
+            if key in ('DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR'):
+                os.environ[key] = value
+    os.environ.update(box.get('environment', {}))
+
+
 def read_capabilities(box, root):
     from run_sim_test import make_run
     assert_box_guard(box)
     if box['kind'] == 'posix-ssh':
+        configure_posix_box(box)
         os.environ['CCCP_TEST_BINARY'] = box['executable']
         os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform == 'darwin' else 'off'
     run = make_run(Path(box['tree']), ['-net-cross-capabilities'], root / 'capabilities', timeout=30,

@@ -23,6 +23,7 @@
     },
     {
       "name": "Linux", "kind": "posix-ssh", "ssh": "3090",
+      "environment": {"DISPLAY": ":0"},
       "peers_per_box": 1,
       "tree": "/home/erol/cortex-workers/opus-run-cross-linux-20260928/repo",
       "executable": "/home/erol/cortex-workers/opus-run-cross-linux-20260928/repo/build-gcc/CortexCommand",
