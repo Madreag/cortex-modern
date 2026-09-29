@@ -627,6 +627,8 @@ namespace RTE {
 		};
 
 		struct CurlHandles {
+			// Curl can write this buffer while removing a cancelled handle.
+			std::array<char, CURL_ERROR_SIZE> errorBuffer{};
 			CURL* easy = curl_easy_init();
 			CURLM* multi = curl_multi_init();
 			curl_slist* headers = nullptr;
@@ -727,7 +729,6 @@ namespace RTE {
 			const CURLcode result = curl_easy_setopt(handles.easy, key, value);
 			if (result != CURLE_OK) throw std::runtime_error(curl_easy_strerror(result));
 		};
-		std::array<char, CURL_ERROR_SIZE> errorBuffer{};
 		option(CURLOPT_URL, url.c_str());
 		option(CURLOPT_PROTOCOLS_STR, "https");
 		option(CURLOPT_REDIR_PROTOCOLS_STR, "https");
@@ -747,7 +748,7 @@ namespace RTE {
 		option(CURLOPT_XFERINFOFUNCTION, &CurlProgress);
 		option(CURLOPT_XFERINFODATA, static_cast<void*>(&transfer));
 		option(CURLOPT_NOPROGRESS, 0L);
-		option(CURLOPT_ERRORBUFFER, errorBuffer.data());
+		option(CURLOPT_ERRORBUFFER, handles.errorBuffer.data());
 		if (!certPinSha256.empty()) {
 			// The leaf pin replaces chain, name and date checks inside the handshake.
 			option(CURLOPT_CAINFO, static_cast<const char*>(nullptr));
@@ -788,8 +789,8 @@ namespace RTE {
 		if (m_CancelRequested.load()) response.error = "cancelled";
 		else if (transfer.error) response.error = transfer.error;
 		else if (result == CURLE_OPERATION_TIMEDOUT) response.error = "timed out";
-		else if (result == CURLE_PEER_FAILED_VERIFICATION) response.error = std::string("certificate verification failed: ") + errorBuffer.data();
-		else if (result != CURLE_OK) response.error = errorBuffer[0] ? errorBuffer.data() : curl_easy_strerror(result);
+		else if (result == CURLE_PEER_FAILED_VERIFICATION) response.error = std::string("certificate verification failed: ") + handles.errorBuffer.data();
+		else if (result != CURLE_OK) response.error = handles.errorBuffer[0] ? handles.errorBuffer.data() : curl_easy_strerror(result);
 		else {
 			curl_easy_getinfo(handles.easy, CURLINFO_RESPONSE_CODE, &response.statusCode);
 			response.body = std::move(transfer.body);
