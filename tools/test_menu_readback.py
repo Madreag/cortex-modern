@@ -65,6 +65,7 @@ NETWORK_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetwo
                 "LabelMatchStatusWidget", "ComboMatchStatusWidget")
 NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
 MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which the hint states.
+LOBBY_PORT_MAP_ROW = 14  # MainMenuGUI's port-map row: the host alone maps its router port, so only its lobby carries it.
 # The saved preferences a case starts from, and what the page must have written when it ends.
 NETWORK_SEED = {"NetworkDisplayName": "ScoutLead", "NetworkHostDelayPolicy": "Auto",
                 "NetworkHostIdleWaitMinutes": "10", "NetworkHostAutoRepair": "1", "NetworkInputDelayFrames": "0",
@@ -2590,7 +2591,8 @@ def run_case(options, case, root, failing=None):
             result["mode_cycle"] = modes
             # The two header rows carry the friendly mode label, and both peers' panels are the
             # same rectangle for the same lobby state - no peer's own status text widens its panel.
-            panels = {}
+            # The host's port-map row is the host's own line, and its height is the only one a panel may add.
+            panels, port_map_rows = {}, {}
             for who in ("host", "client"):
                 matches = [image for image in images if image["peer"] == who
                            and any(c["name"] == "LabelLobbyMatchMode" for c in image["controls"])]
@@ -2605,8 +2607,17 @@ def run_case(options, case, root, failing=None):
                 for name in ("LabelLobbyMatch", "LabelLobbyMatchMode", "LabelLobbyPlayersHeader"):
                     assert controls[name]["text_fits"] is True, (who, name, controls[name])
                 panels[who] = controls["MultiplayerLobbyPanel"]["rect"]
-            assert panels["host"] == panels["client"], panels
+                port_map_rows[who] = bool(controls.get("LabelLobbyPortMap", {}).get("visible"))
+            host_panel, client_panel = panels["host"], panels["client"]
+            assert not port_map_rows["client"], port_map_rows
+            if port_map_rows["host"]:
+                assert [host_panel[0], host_panel[2]] == [client_panel[0], client_panel[2]], panels
+                assert 0 <= host_panel[3] - client_panel[3] <= LOBBY_PORT_MAP_ROW, panels
+                assert abs(2 * host_panel[1] + host_panel[3] - 2 * client_panel[1] - client_panel[3]) <= 1, panels
+            else:
+                assert host_panel == client_panel, panels
             result["lobby_panel_rects"] = panels
+            result["lobby_port_map_rows"] = port_map_rows
             result["key_committed"] = {"preset": preset, "scene": key_scene, "combo": picked_scene}
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
