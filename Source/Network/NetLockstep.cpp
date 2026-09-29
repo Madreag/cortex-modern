@@ -2781,6 +2781,7 @@ namespace RTE {
 		}
 
 		uint16_t encodeVersion = c_Version;
+		if (std::holds_alternative<NetLockstepRecoveryChunk>(packet.payload)) encodeVersion = c_RecoveryDatagramVersion;
 		if (const auto* start = std::get_if<NetLockstepStart>(&packet.payload); start && start->agreedStartRecord) {
 			encodeVersion = c_SeatDeviceVersion;
 		}
@@ -2881,7 +2882,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version < c_MinVersion || version > c_CheckpointVersion) {
+		if (version < c_MinVersion || version > c_RecoveryDatagramVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -2995,7 +2996,7 @@ namespace RTE {
 			default:
 				return false;
 		}
-		return magic == c_Magic && version >= c_MinVersion && version <= c_CheckpointVersion && headerBytes == c_HeaderBytes &&
+		return magic == c_Magic && version >= c_MinVersion && version <= c_RecoveryDatagramVersion && headerBytes == c_HeaderBytes &&
 		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
 	}
 
