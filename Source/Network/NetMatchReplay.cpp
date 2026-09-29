@@ -335,6 +335,7 @@ namespace RTE {
 		AppendU32(lengthPrefix, static_cast<uint32_t>(payload.size()));
 		AppendU32(lengthPrefix, ControllerFrameCodec::PayloadChecksum(payload));
 		{
+			if (m_BeforeWriteForTest) m_BeforeWriteForTest();
 			ReplayWorkTimer work{m_FramesWritten + 1, "write", payload.size()};
 			m_Out.write(reinterpret_cast<const char*>(lengthPrefix.data()), static_cast<std::streamsize>(lengthPrefix.size()));
 			m_Out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
