@@ -187,6 +187,7 @@ namespace RTE {
 			AppendInt(hasher, "network_protocol_version", manifest.networkProtocolVersion);
 			AppendInt(hasher, "controller_frame_version", manifest.controllerFrameVersion);
 			AppendInt(hasher, "controller_frame_encoded_size", manifest.controllerFrameEncodedSize);
+			// The content manifest gates load order independently.
 			std::vector<std::pair<std::string, int>> loadedModules;
 			loadedModules.reserve(manifest.modules.size());
 			for (const NetIdentityModuleEntry& module : manifest.modules) {
@@ -718,7 +719,7 @@ namespace RTE {
 			const NetIdentityModuleEntry& expectedModule = expected.modules[i];
 			const NetIdentityModuleEntry& actualModule = actual.modules[i];
 			if (expectedModule.fileName != actualModule.fileName) {
-				NetIdentityMismatch mismatch = MakeMismatch("module_order", NetRejectReason::ModuleManifestMismatch, ModuleLabel(expectedModule), ModuleLabel(actualModule), "loaded module order does not match");
+				NetIdentityMismatch mismatch = MakeMismatch("module_order", NetRejectReason::ModuleManifestMismatch, ModuleLabel(expectedModule), ModuleLabel(actualModule), "loaded module order does not match: expected " + expectedModule.fileName + ", received " + actualModule.fileName);
 				mismatch.moduleName = actualModule.fileName;
 				return mismatch;
 			}
