@@ -4058,6 +4058,51 @@ namespace RTE {
 			return true;
 		}
 
+		// Two held seats come back a lead apart on a raised delay: the later one sets its round up from its tail before the earlier return is in
+		// it, and the start the host hands it for the earlier seat carries that seat's admitted delay, never the round's opening one.
+		bool TestASeatBackBeforeOurReturnKeepsItsAdmittedDelay(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(49571, error) || !clientWire.Connect("loopback", 49571, error)) return false;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A57; config.roundId = 57; config.localPeerId = 3; config.peerCount = 3; config.authorityPeerId = 1;
+			config.startFrame = 308; config.joinsRunningRound = true; config.inputDelayFrames = 23; config.seatStateThroughFrame = 284;
+			config.timeoutMs = 60000; config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.remoteTransportPeerIds = {{1, 1}, {2, 1}};
+			config.scenario = "LockstepSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 3;
+			config.activePeerIds = {1, 2, 3};
+			config.peerIncarnations = {{2, 1}, {3, 2}};
+			config.initialSeatHolds[2] = NetGameSeatHold{2, 0, 1, 1, 105};
+			config.initialSeatReclaims[3] = {3, 0, 4, 2, 308, 44, 403};
+			NetLockstepTiming back;
+			back.senderPeerId = 1; back.peerId = 2; back.action = NetTimingAction::Reclaim; back.phase = NetTimingPhase::ReclaimAtFrame;
+			back.sessionId = config.sessionId; back.roundId = 57; back.revision = 3; back.applyFrame = 296; back.cutoffFrame = 296;
+			back.delayFrames = 44; back.neutralThroughFrame = 391; back.heldPeers = 2; back.requiredPeers = 1; back.seatIncarnations[1] = 2;
+			NetLockstepCoordinator::AdoptReturnsBefore(config, {back}, config.startFrame);
+			NetLockstepCoordinator client;
+			if (!client.Start(clientWire, config, error)) return false;
+			NetTransportEvent event;
+			event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+			const auto hand = [&](uint64_t startFrame, uint16_t delay, uint64_t now) {
+				NetLockstepStart start;
+				start.sessionId = config.sessionId; start.startFrame = startFrame; start.inputDelayFrames = delay;
+				start.controllerFrameVersion = ControllerFrame::c_Version; start.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+				start.localPeerId = 2; start.peerCount = 3; start.scenario = config.scenario; start.ownershipPolicy = config.ownershipPolicy; start.roundId = 57;
+				(void)NetLockstepCodec::Encode({start}, event.bytes);
+				client.InjectEvent(event, now);
+			};
+			// The host's member start for the seat at our first frame, then that seat's own start relayed.
+			hand(308, 44, 10);
+			hand(296, 44, 11);
+			if (client.IsFailed() || client.InputDelayAt(2, 308) != 44) {
+				*error = "a seat back at 296 on delay 44 ended the returning round: delay=" + std::to_string(client.InputDelayAt(2, 308)) + " " + client.GetStats().timeoutReason;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_seat_back_before_our_return_keeps_its_admitted_delay delay=" << client.InputDelayAt(2, 308) << std::endl;
+			return true;
+		}
+
 		// A handover between machines on different networks: the successor's LAN address is unreachable from outside its network, so
 		// its published endpoint carries its ICE route after it, and a survivor dials that route through the session's rendezvous,
 		// never as an address. A successor's probes of the survivors have no rendezvous to use and pass it by.
@@ -22545,6 +22590,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAJoinerTakesASeatReturnedBeforeIt(&error) ||
 		    !TestAReturnerStartsAtItsReturnsDelay(&error) ||
 		    !TestAReturnerTakesAMemberDelayResizedAfterItsTail(&error) ||
+		    !TestASeatBackBeforeOurReturnKeepsItsAdmittedDelay(&error) ||
 		    !TestAHandoverEndpointCarriesItsIceRoute(&error) ||
 		    !TestAJoinerTakesAReturnDecidedAfterItsStart(&error) ||
 		    !TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame(&error) ||
