@@ -1,9 +1,9 @@
 #!/bin/bash
-# Row 499: before the ladder's multi-box rung, bring EDITH's and the Mac's cross engines to the tip EROL-PC's alias-walk was
+# Rows 499/508: before the multi-box rung, bring EDITH, Mac and Linux to the tip EROL-PC's tree was
 # just built at. EDITH gets alias-walk's executable (the harness requires the same Windows bytes on every Windows box), every
 # DLL, tools/ and Data/ file whose hash differs, and a receipt written from the hash measured on EDITH after the copy; the Mac
 # checks the tip out in the harness's clone, rebuilds with ninja and writes its receipt from the binary's measured hash; then
-# every remote box runs the harness's own preflight and the coordinator's checks are applied to the three results (content,
+# every remote box runs the harness's own preflight and the coordinator's checks are applied to all results (content,
 # modules, fixture, the Windows hash, the receipts). A box already at the tip (executable and receipt) is a no-op. Nothing is
 # moved or deleted on any box except this script's own transfer and exit files.
 # usage: cross_refresh_boxes.sh <tip-sha> [<prev-sha>] [--lane L] [--mac-guard FILE] [--work DIR]      (Git Bash)
@@ -256,9 +256,9 @@ SHA=$(shasum -a 256 $EXE | cut -d' ' -f1)
 CXX=$(awk '$1=="command" && $3 ~ /g\+\+/ {print $3; exit}' $BUILD/build.ninja)
 COMP=$($CXX --version 2>/dev/null | head -1)
 REC=$REPO/tools/cross_peers/build.json
-old=$(/usr/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("commit",""), r.get("executable_sha256",""))' $REC 2>/dev/null)
+old=$(/opt/homebrew/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("commit",""), r.get("executable_sha256",""))' $REC 2>/dev/null)
 if [[ $old == "$TIP $SHA" ]]; then say "receipt already ties $SHA to the tip"
-else /usr/bin/python3 $OUT/refresh_helper.py receipt $REC $TIP $SHA "$COMP" $NLOG "ninja -C ${BUILD:t} in this clone at the tip" >> $LOG 2>&1 || finish 2 "receipt write failed"; fi
+else /opt/homebrew/bin/python3 $OUT/refresh_helper.py receipt $REC $TIP $SHA "$COMP" $NLOG "ninja -C ${BUILD:t} in this clone at the tip" >> $LOG 2>&1 || finish 2 "receipt write failed"; fi
 say "binary $SHA compiler $COMP"
 noop=0; [[ $was == $TIP && $nowork -gt 0 && $old == "$TIP $SHA" ]] && noop=1
 finish 0 "sha=$SHA noop=$noop"
@@ -328,9 +328,9 @@ say "ninja exit=$rc errors=$(grep -c ' error: ' $NLOG) last: $(tail -1 $NLOG | c
 SHA=$(shasum -a 256 $EXE | cut -d' ' -f1)
 COMP=$(g++ --version | head -1)
 REC=$REPO/tools/cross_peers/build.json
-old=$(/usr/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("commit",""), r.get("executable_sha256",""))' $REC 2>/dev/null)
+old=$(/opt/homebrew/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("commit",""), r.get("executable_sha256",""))' $REC 2>/dev/null)
 if [[ $old == "$TIP $SHA" ]]; then say "receipt already ties $SHA to the tip"
-else /usr/bin/python3 $OUT/refresh_helper.py receipt $REC $TIP $SHA "$COMP" $NLOG "ninja -C ${BUILD##*/} in this clone at the tip" >> $LOG 2>&1 || finish 2 "receipt write failed"; fi
+else /opt/homebrew/bin/python3 $OUT/refresh_helper.py receipt $REC $TIP $SHA "$COMP" $NLOG "ninja -C ${BUILD##*/} in this clone at the tip" >> $LOG 2>&1 || finish 2 "receipt write failed"; fi
 say "binary $SHA compiler $COMP"
 noop=0; [[ $was == $TIP && $nowork -gt 0 && $old == "$TIP $SHA" ]] && noop=1
 finish 0 "sha=$SHA noop=$noop"
@@ -415,7 +415,7 @@ if [ "$MACRC" = 0 ]; then
   elif [ "${r%% *}" != 0 ]; then MACRC=2; MACWHY="Mac half: $r"
   else
     msha=$(ssh -o BatchMode=yes "$MAC_SSH" "shasum -a 256 '$MAC_EXECUTABLE'" | cut -d' ' -f1)
-    mrec=$(ssh -o BatchMode=yes "$MAC_SSH" "/usr/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get(\"commit\",\"\"), r.get(\"executable_sha256\",\"\"))' '$MAC_TREE/tools/cross_peers/build.json'")
+    mrec=$(ssh -o BatchMode=yes "$MAC_SSH" "/opt/homebrew/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get(\"commit\",\"\"), r.get(\"executable_sha256\",\"\"))' '$MAC_TREE/tools/cross_peers/build.json'")
     say "Mac binary measured on the Mac: $msha"
     say "Mac receipt                  : $mrec"
     [ "$mrec" = "$TIP $msha" ] || { MACRC=2; MACWHY="receipt '$mrec' does not tie the binary $msha to the tip"; }
@@ -433,7 +433,7 @@ if [ -n "${LINUX_TREE:-}" ] && [ "$LINUXRC" = 0 ]; then
   elif [ "${r%% *}" != 0 ]; then LINUXRC=5; LINUXWHY="Linux refresh: $r"
   else
     lsha=$(ssh -o BatchMode=yes "$LINUX_SSH" "sha256sum '$LINUX_EXECUTABLE'" | cut -d' ' -f1)
-    lrec=$(ssh -o BatchMode=yes "$LINUX_SSH" "/usr/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get(\"commit\",\"\"), r.get(\"executable_sha256\",\"\"))' '$LINUX_TREE/tools/cross_peers/build.json'")
+    lrec=$(ssh -o BatchMode=yes "$LINUX_SSH" "/opt/homebrew/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get(\"commit\",\"\"), r.get(\"executable_sha256\",\"\"))' '$LINUX_TREE/tools/cross_peers/build.json'")
     say "Linux binary measured on Linux: $lsha"
     say "Linux receipt: $lrec"
     [ "$lrec" = "$TIP $lsha" ] || { LINUXRC=5; LINUXWHY="receipt '$lrec' does not tie the binary $lsha to the tip"; }
