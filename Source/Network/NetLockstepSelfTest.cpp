@@ -21103,6 +21103,24 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!host.QueueLocalInput(tick, {MakeFrame(100, 0)}, {}, error) || !client.QueueLocalInput(tick, {MakeFrame(200, 0)}, {}, error)) return false;
 			pump(); pump();
 		}
+		NetTransportEvent event;
+		event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+		const auto repeat = [&] {
+			for (const auto phase: {NetTimingPhase::Propose, NetTimingPhase::Commit}) {
+				NetLockstepTiming repeated = proposal;
+				repeated.phase = phase;
+				if (!NetLockstepCodec::Encode({repeated}, event.bytes)) return false;
+				client.InjectEvent(event, now);
+			}
+			pump();
+			return client.IsRunning() && client.InputDelayAt(2, 20) == 5;
+		};
+		// Committed past the decision's frame while the simulation has yet to play it, as a returner's round is before its activation.
+		if (client.GetStats().nextFrame <= 20 || !client.m_TimingDecisions.contains(proposal.revision)) { *error = "fixture: the client did not commit past 20 holding the decision"; return false; }
+		if (!repeat()) {
+			*error = "a committed decision repeated after the client committed past its frame 20 ended its round: " + client.GetStats().timeoutReason;
+			return false;
+		}
 		NetLockstepReadyFrame first, second;
 		for (uint64_t frame = 2; frame <= 26; ++frame) {
 			if (!host.PopReadyFrame(first) || !client.PopReadyFrame(second)) { *error = "fixture: frame " + std::to_string(frame) + " was not committed"; return false; }
@@ -21110,17 +21128,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		}
 		for (int pass = 0; pass < 10; ++pass) pump();
 		if (client.m_TimingDecisions.contains(proposal.revision)) { *error = "fixture: the client still holds the decision at 20 after playing past it"; return false; }
-		NetTransportEvent event;
-		event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
-		for (const auto phase: {NetTimingPhase::Propose, NetTimingPhase::Commit}) {
-			NetLockstepTiming repeated = proposal;
-			repeated.phase = phase;
-			if (!NetLockstepCodec::Encode({repeated}, event.bytes)) return false;
-			client.InjectEvent(event, now);
-		}
-		pump();
-		if (!client.IsRunning() || client.InputDelayAt(2, 20) != 5) {
-			*error = "a decision the client had taken, repeated past its frame 20, ended its round: " + client.GetStats().timeoutReason;
+		if (!repeat()) {
+			*error = "a decision the client had settled, repeated past its frame 20, ended its round: " + client.GetStats().timeoutReason;
 			return false;
 		}
 		std::cout << "[net-lockstep-selftest] PASS a_decision_repeated_past_its_frame_is_not_a_new_one revision=" << proposal.revision << std::endl;
