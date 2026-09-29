@@ -21016,6 +21016,53 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "the returner refused its independent first frame: " + returner.GetStats().timeoutReason;
 			return false;
 		}
+
+		{
+			LoopbackTransport returnWire, residentWire, joinWire;
+			NetLockstepCoordinator running, joining;
+			auto runningConfig = MakeCoordinatorConfig(1, 3, 0x9A55, 6, NetTransportLane::InputUnreliable);
+			runningConfig.peerCount = 3; runningConfig.startFrame = 1; runningConfig.roundId = 0x9A55;
+			runningConfig.relayToOtherPeers = true;
+			runningConfig.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+			if (!returnWire.StartHost(49744, error) || !residentWire.Connect("loopback", 49744, error) ||
+			    !joinWire.Connect("loopback", 49744, error) || !running.Start(returnWire, runningConfig, error)) return false;
+			running.m_State = NetLockstepState::Running;
+			running.m_Stats.nextFrame = 350;
+			running.m_PeerAdmissions[3] = {350, 6};
+			auto joinConfig = runningConfig;
+			joinConfig.localPeerId = 3; joinConfig.remotePeerId = 1; joinConfig.startFrame = 350;
+			joinConfig.joinsRunningRound = true; joinConfig.relayToOtherPeers = false;
+			joinConfig.remoteTransportPeerIds = {{1, 1}};
+			if (!joining.Start(joinWire, joinConfig, error)) return false;
+			std::optional<NetTransportEvent> memberStart;
+			for (uint64_t now = 1000; now < 1100; now += 10) {
+				returnWire.AdvanceTimeMs(10); joinWire.AdvanceTimeMs(10);
+				for (const auto& event: returnWire.PollEvents())
+					if (event.type == NetTransportEventType::PacketReceived && event.lane == NetTransportLane::InputUnreliable)
+						running.HandleEvent(event, now);
+				for (const auto& event: joinWire.PollEvents()) {
+					if (event.type != NetTransportEventType::PacketReceived || event.lane != NetTransportLane::InputUnreliable) continue;
+					const auto decoded = NetLockstepCodec::Decode(event.bytes);
+					const auto* start = decoded.ok ? std::get_if<NetLockstepStart>(&decoded.packet.payload) : nullptr;
+					if (start && start->localPeerId == 1) memberStart = event;
+					joining.HandleEvent(event, now);
+				}
+			}
+			if (!joining.IsRunning() || !joining.m_RemoteStartsReceived.contains(1) || !joining.m_RemoteStartsReceived.contains(2) || !memberStart) {
+				*error = "a returning seat waits for its starts behind reliable loss: " + joining.GetStats().timeoutReason;
+				return false;
+			}
+			auto decoded = NetLockstepCodec::Decode(memberStart->bytes);
+			auto& stale = std::get<NetLockstepStart>(decoded.packet.payload);
+			++stale.roundId;
+			if (!NetLockstepCodec::Encode(decoded.packet, memberStart->bytes)) return false;
+			joining.HandleEvent(*memberStart, 1100);
+			if (!joining.IsRunning() || joining.m_RoundId != joinConfig.roundId) {
+				*error = "an unordered start changed the returning seat's round";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS return_starts_bypass_reliable_loss_without_changing_round" << std::endl;
+		}
 		std::cout << "[net-lockstep-selftest] PASS return_frames_bypass_reliable_loss" << std::endl;
 		return true;
 	}

@@ -6378,7 +6378,10 @@ void RunGameLoop() {
 	long long drawStartTime = 0;
 	long long drawTotalTime = 0;
 
+	struct FrameStallSample { ~FrameStallSample() { StallStackSampler::TickEnd(); } };
 	while (!System::IsSetToQuit()) {
+		StallStackSampler::TickBegin(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		const FrameStallSample frameStallSample;
 		bool returnToMenuAfterNetworkEnd = false;
 		// The completed round's held pause menu ends the moment its probe does, or when the window runs out.
 		if (s_netMatchE2ECompletedMs && !ProbeHoldsE2eEnd(s_netMatchE2ECompletedMs)) {
@@ -6532,7 +6535,6 @@ void RunGameLoop() {
 			NetModerationGUIProbe::OnSimTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
-			StallStackSampler::TickBegin(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			const bool measureLockstepCost = ScenarioRunner::IsLockstepControllerSyncActive();
 			g_PerformanceMan.NewPerformanceSample();
@@ -7412,7 +7414,6 @@ void RunGameLoop() {
 				s_paceExecutionAverageMs.store(g_PerformanceMan.GetMSPSUAverage(), std::memory_order_relaxed);
 			}
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
-			StallStackSampler::TickEnd();
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
 
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
