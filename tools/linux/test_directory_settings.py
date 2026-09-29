@@ -19,8 +19,9 @@ def main():
     root.mkdir(parents=True, exist_ok=False)
     url = "https://community.example.invalid/custom-directory"
     script = root / "settings.menu.txt"
-    script.write_text("wait 40\nactivate ButtonMainToOptions\nwait 10\n"
-                      "select_settings_page Network:Internet\nwait 5\n"
+    script.write_text("wait 40\nactivate ButtonMainToOptions\nwait 10\nassert_screen SettingsScreen\n"
+                      "select_settings_page Network\nwait 3\nassert_settings_page Network\n"
+                      "select_settings_page Network:Internet\nwait 3\nassert_settings_page Network:Internet\n"
                       f"set_text TextNetworkDirUrl {url}\nassert_label TextNetworkDirUrl {url}\n"
                       "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
     run = make_run(args.repo.resolve(), ["-menu-script", script], root / "engine", 120, env={"CCCP_HEADLESS": "1"})
