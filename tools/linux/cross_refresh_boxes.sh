@@ -328,9 +328,9 @@ say "ninja exit=$rc errors=$(grep -c ' error: ' $NLOG) last: $(tail -1 $NLOG | c
 SHA=$(shasum -a 256 $EXE | cut -d' ' -f1)
 COMP=$(g++ --version | head -1)
 REC=$REPO/tools/cross_peers/build.json
-old=$(/opt/homebrew/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("commit",""), r.get("executable_sha256",""))' $REC 2>/dev/null)
+old=$(/usr/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("commit",""), r.get("executable_sha256",""))' $REC 2>/dev/null)
 if [[ $old == "$TIP $SHA" ]]; then say "receipt already ties $SHA to the tip"
-else /opt/homebrew/bin/python3 $OUT/refresh_helper.py receipt $REC $TIP $SHA "$COMP" $NLOG "ninja -C ${BUILD##*/} in this clone at the tip" >> $LOG 2>&1 || finish 2 "receipt write failed"; fi
+else /usr/bin/python3 $OUT/refresh_helper.py receipt $REC $TIP $SHA "$COMP" $NLOG "ninja -C ${BUILD##*/} in this clone at the tip" >> $LOG 2>&1 || finish 2 "receipt write failed"; fi
 say "binary $SHA compiler $COMP"
 noop=0; [[ $was == $TIP && $nowork -gt 0 && $old == "$TIP $SHA" ]] && noop=1
 finish 0 "sha=$SHA noop=$noop"
@@ -433,7 +433,7 @@ if [ -n "${LINUX_TREE:-}" ] && [ "$LINUXRC" = 0 ]; then
   elif [ "${r%% *}" != 0 ]; then LINUXRC=5; LINUXWHY="Linux refresh: $r"
   else
     lsha=$(ssh -o BatchMode=yes "$LINUX_SSH" "sha256sum '$LINUX_EXECUTABLE'" | cut -d' ' -f1)
-    lrec=$(ssh -o BatchMode=yes "$LINUX_SSH" "/opt/homebrew/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get(\"commit\",\"\"), r.get(\"executable_sha256\",\"\"))' '$LINUX_TREE/tools/cross_peers/build.json'")
+    lrec=$(ssh -o BatchMode=yes "$LINUX_SSH" "/usr/bin/python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get(\"commit\",\"\"), r.get(\"executable_sha256\",\"\"))' '$LINUX_TREE/tools/cross_peers/build.json'")
     say "Linux binary measured on Linux: $lsha"
     say "Linux receipt: $lrec"
     [ "$lrec" = "$TIP $lsha" ] || { LINUXRC=5; LINUXWHY="receipt '$lrec' does not tie the binary $lsha to the tip"; }
