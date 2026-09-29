@@ -1,3 +1,4 @@
+#include "NetReplayTestUtils.h"
 #include "NetLockstepSelfTest.h"
 
 #include "allegro.h"
@@ -15297,7 +15298,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!writer.WriteFrame(target, {MakeFrame(100, target + 1)}, {}, {}, liveByFrame[target], error)) {
 				return false;
 			}
-			writer.Close();
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 			NetMatchReplayReader reader;
 			if (!reader.Open(path.string(), error)) {
 				return false;
@@ -15418,7 +15419,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!writer.WriteFrame(0, liveFrames, liveCommands, {}, {}, error)) {
 				return false;
 			}
-			writer.Close();
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 			NetMatchReplayReader reader;
 			if (!reader.Open(path.string(), error)) {
 				return false;
@@ -15466,7 +15467,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				if (error->empty()) *error = "replay-trailers-follow-their-packets: the record could not be written";
 				return false;
 			}
-			writer.Close();
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 			NetMatchReplayReader reader;
 			NetLockstepFrame recorded;
 			bool eof = false;
@@ -15503,7 +15504,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			NetMatchReplayWriter writer;
 			std::string writeError;
 			const bool written = !created && writer.Open(path.string(), NetMatchConfigUtil::MakeDefault(0x4D455247ULL), &writeError) && writer.WriteFrame(41, frames, {}, {}, {}, &writeError);
-			writer.Close();
+			writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 			NetMatchReplayReader reader;
 			NetLockstepFrame recorded;
 			bool eof = false;
