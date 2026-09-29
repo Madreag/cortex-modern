@@ -20809,6 +20809,51 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestHeldHostMarkerPrecedesItsHold(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto a = MakeCoordinatorConfig(1, 2, 0x9A60, 2, NetTransportLane::InputUnreliable);
+		a.roundId = 0x9A60; a.relayToOtherPeers = true; a.authorityPeerId = 1;
+		a.substituteSlowPeers = true; a.simTickMs = 1000.0 / 60.0;
+		a.remoteTransportPeerIds = {{2, 1}};
+		auto b = a; b.localPeerId = 2; b.remotePeerId = 1; b.relayToOtherPeers = false;
+		b.remoteTransportPeerIds = {{1, 1}};
+		if (!hostWire.StartHost(49746, error) || !clientWire.Connect("loopback", 49746, error) ||
+		    !host.Start(hostWire, a, error) || !client.Start(clientWire, b, error)) return false;
+		for (auto* peer: {&host, &client}) {
+			peer->m_State = NetLockstepState::Running; peer->m_Stats.nextFrame = 100;
+			peer->m_ReadyFrames.clear(); peer->m_LocalFrames.clear(); peer->m_RemoteFrames.clear();
+		}
+		host.m_RemoteStartsReceived.insert(2); client.m_RemoteStartsReceived.insert(1);
+		host.m_LastQueuedTargetFrame = 99;
+		host.m_RemoteFrames[100][2] = {}; client.m_LocalFrames[100] = {};
+		(void)hostWire.PollEvents(); (void)clientWire.PollEvents();
+		if (!host.ProposePeerHold(1, 1000, error)) return false;
+		host.AdvanceReadyFrames(1000);
+		hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
+		std::vector<NetTransportEvent> reliable;
+		bool marker = false;
+		for (const auto& event: clientWire.PollEvents()) {
+			if (event.type != NetTransportEventType::PacketReceived) continue;
+			if (event.lane == NetTransportLane::ControlReliable) { reliable.push_back(event); continue; }
+			const auto decoded = NetLockstepCodec::Decode(event.bytes);
+			if (!decoded.ok || !std::holds_alternative<NetLockstepFrame>(decoded.packet.payload)) continue;
+			marker = true; client.HandleEvent(event, 1010);
+		}
+		if (!marker || host.m_ReadyFrames.empty() || client.m_ReadyFrames.empty() ||
+		    host.m_ReadyFrames.front().frame != 100 || client.m_ReadyFrames.front().frame != 100 ||
+		    host.m_ReadyFrames.front().aiHeldPeerIds != std::vector<uint8_t>{1} ||
+		    client.m_ReadyFrames.front().aiHeldPeerIds != std::vector<uint8_t>{1}) {
+			*error = "the independently delivered host marker committed without the hold at frame 100"; return false;
+		}
+		for (const auto& event: reliable) client.HandleEvent(event, 1020);
+		if (!client.IsRunning() || !client.IsSeatUnderAI(1, 100)) {
+			*error = "the late reliable hold stopped its survivor: " + client.GetStats().timeoutReason; return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS held_host_marker_precedes_its_hold" << std::endl;
+		return true;
+	}
+
 	bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -22036,6 +22081,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
 		row(&TestAheadInputIsNotASimulationStall, "ahead_input_is_not_a_simulation_stall");
+		row(&TestHeldHostMarkerPrecedesItsHold, "held_host_marker_precedes_its_hold");
 		row(&TestTheHostsRunwayPrecedesItsLateClock, "the_hosts_runway_precedes_its_late_clock");
 		row(&TestArrivalLeadIncludesTheFastestSurvivor, "arrival_lead_includes_the_fastest_survivor");
 		row(&TestHostStatusKeepsTheReceiversLinkMeasurement, "host_status_keeps_the_receivers_link_measurement");
