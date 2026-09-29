@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <string>
 #include <mutex>
@@ -56,6 +55,7 @@ namespace {
 
 	// The wrapper queue's lock, shared by the destructor that fills it and the drain that empties it.
 	std::mutex s_QueuedDeletionsMutex;
+	LuabindObjectWrapper* s_StoredObjects = nullptr;
 	// The states lua_close has already run on. A queued luabind object naming one of these may not be
 	// deleted: its destructor unrefs the registry of a lua_State that no longer exists.
 	std::vector<lua_State*> s_ClosedStates;
@@ -376,6 +376,22 @@ uint64_t LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(lua_State* l
 	}
 	s_QueuedDeletionsDrainedAtStateClose += held;
 	ApplyQueuedDeletions();
+	std::vector<std::unique_ptr<luabind::adl::object>> closing;
+	{
+		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
+		for (LuabindObjectWrapper* wrapper = s_StoredObjects; wrapper;) {
+			LuabindObjectWrapper* next = wrapper->m_NextStored;
+			if (wrapper->m_LuabindObject->interpreter() == luaState) {
+				closing.emplace_back(wrapper->m_LuabindObject);
+				wrapper->UnlinkStoredObject();
+				wrapper->m_LuabindObject = nullptr;
+				wrapper->m_OwnsObject = false;
+			}
+			wrapper = next;
+		}
+	}
+	closing.clear();
+	ApplyQueuedDeletions();
 	// A state's address can be handed out again by the next luaL_newstate, so the record is per address
 	// and InstallSimThreadDeletion takes it back off the list when a new state opens there.
 	if (std::find(s_ClosedStates.begin(), s_ClosedStates.end(), luaState) == s_ClosedStates.end()) {
@@ -399,13 +415,42 @@ void LuabindObjectWrapper::SetPreviewDeletionHook(void (*hook)(LuabindObjectWrap
 	s_PreviewDeletionHook = hook;
 }
 
+LuabindObjectWrapper::LuabindObjectWrapper(luabind::adl::object* luabindObject, const std::string_view& filePath, bool ownsObject) :
+    m_OwnsObject(ownsObject), m_LuabindObject(luabindObject), m_FilePath(filePath) {
+	if (m_OwnsObject && m_LuabindObject && !m_FilePath.empty()) {
+		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
+		LinkStoredObject();
+	}
+}
+
+void LuabindObjectWrapper::LinkStoredObject() {
+	if (!m_OwnsObject || !m_LuabindObject || m_FilePath.empty()) return;
+	m_NextStored = s_StoredObjects;
+	if (m_NextStored) m_NextStored->m_PreviousStored = this;
+	s_StoredObjects = this;
+	m_Stored = true;
+}
+
+void LuabindObjectWrapper::UnlinkStoredObject() {
+	if (!m_Stored) return;
+	if (m_PreviousStored) m_PreviousStored->m_NextStored = m_NextStored;
+	else s_StoredObjects = m_NextStored;
+	if (m_NextStored) m_NextStored->m_PreviousStored = m_PreviousStored;
+	m_PreviousStored = m_NextStored = nullptr;
+	m_Stored = false;
+}
+
 void LuabindObjectWrapper::ResetLuabindObject(luabind::adl::object* newLuabindObject, bool ownsObject) {
 	RTEAssert(s_OnSimThread, "A luabind object was replaced off the sim thread, where luabind may not touch the state.");
-	if (m_OwnsObject) {
-		delete m_LuabindObject;
+	luabind::adl::object* previous = m_OwnsObject ? m_LuabindObject : nullptr;
+	{
+		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
+		UnlinkStoredObject();
+		m_LuabindObject = newLuabindObject;
+		m_OwnsObject = ownsObject;
+		LinkStoredObject();
 	}
-	m_LuabindObject = newLuabindObject;
-	m_OwnsObject = ownsObject;
+	delete previous;
 }
 
 LuabindObjectWrapper::~LuabindObjectWrapper() {
@@ -414,9 +459,7 @@ LuabindObjectWrapper::~LuabindObjectWrapper() {
 	}
 	if (m_OwnsObject) {
 		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
-		if (s_OnSimThread && m_LuabindObject && std::find(s_ClosedStates.begin(), s_ClosedStates.end(), m_LuabindObject->interpreter()) != s_ClosedStates.end()) {
-			std::fprintf(stderr, "[lua] callback outlived its state: %s\n", m_FilePath.c_str());
-		}
+		UnlinkStoredObject();
 		s_QueuedDeletions.push_back(m_LuabindObject);
 	}
 }

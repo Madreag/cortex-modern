@@ -7485,16 +7485,6 @@ void LuaStateWrapper::Destroy() {
 	if (!m_State) {
 		return;
 	}
-	if (MovableMan::IsConstructed()) {
-		for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) {
-			for (auto& [name, functions]: object->m_FunctionsAndScripts) {
-				std::erase_if(functions, [this](const auto& function) {
-					const auto* wrapped = function.m_LuaFunction ? function.m_LuaFunction->GetLuabindObject() : nullptr;
-					return wrapped && wrapped->interpreter() == m_State;
-				});
-			}
-		}
-	}
 	ClearLuaScriptCache();
 	for (const auto& [path, functions]: m_PreviewScriptCacheHeld) {
 		for (const auto& [name, function]: functions) delete function;
