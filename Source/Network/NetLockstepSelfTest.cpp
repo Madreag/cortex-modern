@@ -7209,6 +7209,28 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				         ", observations " + std::to_string(windowFrame.priorWindow.empty() ? 0 : windowFrame.priorWindow[0].observations.size());
 				return false;
 			}
+			encodeTable.Reset();
+			blocks.clear();
+			const auto restart = tick(5, 33, 0.75F);
+			auto afterRestart = tick(6, 44, 1.0F);
+			std::vector<uint8_t> restartBytes, afterRestartBytes;
+			if (!NetLockstepCodec::Encode({restart}, restartBytes, &encodeError, &encodeTable, &encoded, &valueEncoded, &blocks) ||
+			    !NetLockstepCodec::Encode({afterRestart}, afterRestartBytes, &encodeError, &encodeTable, &encoded, &valueEncoded, &blocks)) return false;
+			afterRestart.priorWindow = {restart};
+			if (!NetLockstepCodec::Encode({afterRestart}, afterRestartBytes, &encodeError, nullptr, nullptr, nullptr, &blocks)) return false;
+			const auto restarted = NetLockstepCodec::Decode(afterRestartBytes.data(), afterRestartBytes.size(), ControllerFrame::c_Version, &inStep);
+			if (!restarted.ok) {
+				*error = "a lost first packet hid the returning sender's dictionary reset: " + restarted.error.message;
+				return false;
+			}
+			const auto& restartedFrame = std::get<NetLockstepFrame>(restarted.packet.payload);
+			if (restartedFrame.priorWindow.size() != 1 || restartedFrame.priorWindow.front().observations != restart.observations ||
+			    restartedFrame.priorWindow.front().valueObservations != restart.valueObservations || restartedFrame.observations != afterRestart.observations ||
+			    restartedFrame.valueObservations != afterRestart.valueObservations || inStep.Exactly(1).BindingCount() != 2) {
+				*error = "the repeated reset did not recover both ticks' exact observations";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_repeated_reset_repairs_the_returners_lost_first_packet" << std::endl;
 			return true;
 		}
 
