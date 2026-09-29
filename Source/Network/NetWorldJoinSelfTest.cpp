@@ -7980,7 +7980,7 @@ namespace RTE {
 			return TestReadyFramePackIncludesRemotes();
 		}
 		if (std::strcmp(name, "private-neutral-prelude") == 0 || std::strcmp(name, "-net-world-private-neutral-prelude-selftest") == 0) return TestPrivateNeutralPrelude();
-		if (std::strcmp(name, "final-tail-split") == 0) return TestLargePrivateTailChunks(true);
+		if (std::strcmp(name, "final-tail-split") == 0 || std::strcmp(name, "-net-world-final-tail-split-selftest") == 0) return TestLargePrivateTailChunks(true);
 		if (std::strcmp(name, "private-large-tail") == 0 || std::strcmp(name, "-net-world-private-large-tail-selftest") == 0) return TestLargePrivateTailChunks();
 		if (std::strcmp(name, "earlier-round-tail") == 0 || std::strcmp(name, "-net-world-earlier-round-tail-selftest") == 0) return TestAnEarlierRoundsTailChunkIsDropped();
 		if (std::strcmp(name, "private-rejoin-headroom") == 0 || std::strcmp(name, "-net-world-private-rejoin-headroom-selftest") == 0) return TestPrivateRejoinHeadroom();
