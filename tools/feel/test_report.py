@@ -350,6 +350,7 @@ class ReportTests(unittest.TestCase):
         result = dict(name='200ms-loss5', peers={'host': self.item9a()}, item9a_pass=True,
                       measurement_complete=False, launches_complete=True, off_wire_pass=True)
         with tempfile.TemporaryDirectory() as folder, patch.object(feel_measure, 'reduce_timing_case', return_value=result):
+            (Path(folder) / result['name']).mkdir()
             code = feel_measure.main(['--repo', str(feel_measure.REPO), '--out', folder, '--cases', '200ms-loss5',
                                       '--analyze-only', '--port', '49700', '--port-block', '49700-49709'])
             completed = json.loads((Path(folder) / 'completion.json').read_text())
