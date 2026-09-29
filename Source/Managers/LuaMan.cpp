@@ -9229,8 +9229,9 @@ end
 		const auto* menuPreset = dynamic_cast<const PieMenu*>(g_PresetMan.GetEntityPreset("PieMenu", "Empty Pie Menu"));
 		int before = 0, after = -1;
 		if (slicePreset && menuPreset) {
+			std::unique_ptr<PieMenu> submenu(dynamic_cast<PieMenu*>(menuPreset->Clone()));
 			std::unique_ptr<PieSlice> source(dynamic_cast<PieSlice*>(slicePreset->Clone()));
-			source->SetSubPieMenu(dynamic_cast<PieMenu*>(menuPreset->Clone()));
+			source->SetSubPieMenu(submenu.get());
 			before = inUse();
 			for (int copy = 0; copy < 3; ++copy) delete dynamic_cast<PieSlice*>(source->Clone());
 			after = inUse();
