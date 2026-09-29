@@ -21005,6 +21005,38 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAHostEndDoesNotWaitOnASilentPeer(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto a = MakeCoordinatorConfig(1, 2, 0x9A64, 4, NetTransportLane::ControlReliable);
+		auto b = MakeCoordinatorConfig(2, 1, 0x9A64, 4, NetTransportLane::ControlReliable);
+		a.roundId = b.roundId = 64; a.relayToOtherPeers = true;
+		a.timeoutMs = b.timeoutMs = 20000;
+		if (!StartCoordinatorPair(49555, hostWire, clientWire, host, client, a, b, error)) return false;
+		host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
+		uint64_t now = 0;
+		const auto pump = [&] { ++now; hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); };
+		for (int pass = 0; pass < 10; ++pass) pump();
+		// The client goes silent after frame 14; the host has sent through 24.
+		for (uint64_t tick = 0; tick <= 20; ++tick) {
+			if (!host.QueueLocalInput(tick, {MakeFrame(100, 0)}, {}, error) || (tick <= 10 && !client.QueueLocalInput(tick, {MakeFrame(200, 0)}, {}, error))) return false;
+			pump(); pump();
+		}
+		NetLockstepReadyFrame ready;
+		std::optional<uint64_t> hostLast;
+		while (host.PopReadyFrame(ready)) { hostLast = ready.frame; (void)host.FinishSimulationTick(ready.frame); }
+		if (!hostLast || !host.CompleteAtAgreedEnd("Match ended by host") || !host.IsRunning()) { *error = "the host did not play toward an agreed end"; return false; }
+		for (uint64_t step = 0; step < 40 && host.IsRunning(); ++step) { now += 100; host.Tick(now); }
+		const std::string reason = host.GetStats().timeoutReason;
+		if (host.IsRunning() || host.IsFailed() || reason != "Complete:Match ended by host") {
+			*error = "a host waiting on a silent peer for its agreed end did not end cleanly within its bound: running=" + std::to_string(host.IsRunning()) +
+			         " failed=" + std::to_string(host.IsFailed()) + " reason=" + reason + " now=" + std::to_string(now);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_host_end_does_not_wait_on_a_silent_peer last=" << *hostLast << " ended_ms=" << now << std::endl;
+		return true;
+	}
+
 	bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -22235,6 +22267,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestHeldHostMarkerPrecedesItsHold, "held_host_marker_precedes_its_hold");
 		row(&TestAReturnerDelayCoversItsTrail, "a_returner_delay_covers_its_trail");
 		row(&TestAHostEndNamesAFrameNoPeerHasPassed, "a_host_end_names_a_frame_no_peer_has_passed");
+		row(&TestAHostEndDoesNotWaitOnASilentPeer, "a_host_end_does_not_wait_on_a_silent_peer");
 		row(&TestTheHostsRunwayPrecedesItsLateClock, "the_hosts_runway_precedes_its_late_clock");
 		row(&TestArrivalLeadIncludesTheFastestSurvivor, "arrival_lead_includes_the_fastest_survivor");
 		row(&TestHostStatusKeepsTheReceiversLinkMeasurement, "host_status_keeps_the_receivers_link_measurement");

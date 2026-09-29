@@ -647,6 +647,8 @@ namespace RTE {
 		/// The host's End Match: every peer plays to the round's agreed end, and the round's own clean stop then finishes the
 		/// match with this reason. False when the round cannot end that way; the caller finishes the match itself.
 		bool EndMatchAtAgreedFrame(const std::string& reason);
+		/// The host's End Match is playing its round to the agreed end frame.
+		bool EndsAtAgreedFrame() const;
 		/// Ends the match locally as a clean leave: the other peers keep playing (N-peer) or hear
 		/// "player left" (2-peer); the session objects stay alive exactly like FinishMatch. §7's leave
 		/// exchange runs first, on the worker, so the ticket is answered while the link is still up.

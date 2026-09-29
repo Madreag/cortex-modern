@@ -8349,7 +8349,8 @@ namespace RTE {
 		if (m_AgreedEndDeadlineMs != 0 && nowMs >= m_AgreedEndDeadlineMs && m_PendingCompleteStop && IsRunning()) {
 			std::cout << "[net-match] the round did not reach its agreed end frame " << m_PendingCompleteStop->frame << " in time; it ends after applied frame "
 			          << (m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick : 0) << std::endl;
-			Complete(m_PendingCompleteStop->message);
+			const std::string message = m_PendingCompleteStop->message;
+			Complete(message);
 			return;
 		}
 		if (!m_PlaneTicking) TickMigrationRollCallLinks(nowMs);

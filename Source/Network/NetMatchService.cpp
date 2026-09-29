@@ -2371,6 +2371,11 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::EndsAtAgreedFrame() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return !m_HostEndReason.empty();
+	}
+
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
 		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
