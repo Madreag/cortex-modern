@@ -22,17 +22,6 @@
       "python": "python"
     },
     {
-      "name": "Mac", "kind": "posix-ssh", "ssh": "Erol-Mac",
-      "peers_per_box": 1,
-      "tree": "/Users/erol/cortex-workers/{lane}/repo",
-      "executable": "/Users/erol/cortex-workers/{lane}/repo/build-gcc/CortexCommand",
-      "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
-      "ports": [49900, 49919], "directory_port": 49918,
-      "sampler": "engine-pid-ps", "scratch": "/Users/erol/cortex-workers/{lane}",
-      "python": "/opt/homebrew/bin/python3",
-      "guard_file": "{mac_guard}"
-    },
-    {
       "name": "Linux", "kind": "posix-ssh", "ssh": "3090",
       "peers_per_box": 1,
       "tree": "/home/erol/cortex-workers/opus-run-cross-linux-20260928/repo",
@@ -42,6 +31,17 @@
       "sampler": "engine-pid-ps", "scratch": "/home/erol/cortex-workers/opus-run-cross-linux-20260928/runs/{lane}",
       "python": "/usr/bin/python3",
       "guard_file": "/home/erol/cortex-workers/opus-run-cross-linux-20260928/BOX-FREE-FOR-CROSS"
+    },
+    {
+      "name": "Mac", "kind": "posix-ssh", "ssh": "Erol-Mac",
+      "peers_per_box": 1,
+      "tree": "/Users/erol/cortex-workers/{lane}/repo",
+      "executable": "/Users/erol/cortex-workers/{lane}/repo/build-gcc/CortexCommand",
+      "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
+      "ports": [49900, 49919], "directory_port": 49918,
+      "sampler": "engine-pid-ps", "scratch": "/Users/erol/cortex-workers/{lane}",
+      "python": "/opt/homebrew/bin/python3",
+      "guard_file": "{mac_guard}"
     }
   ],
   "instances": [

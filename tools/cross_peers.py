@@ -76,7 +76,7 @@ def with_lane(value):
     return value
 
 
-def load_boxes(path, roster=None):
+def load_boxes(path, roster='three-way'):
     manifest = with_lane(json.loads(Path(path).read_text(encoding='utf-8-sig')))
     if roster is not None:
         manifest['instances'] = [peer for peer in manifest['instances'] if not peer.get('rosters') or roster in peer['rosters']]
