@@ -4792,6 +4792,7 @@ namespace RTE {
 		m_ProductionBaseFrame.reset();
 		m_ProductionBaseUs = m_ProductionWaitBaseUs = 0;
 		m_TimingDecisions.clear();
+		m_SettledTimings.clear();
 		m_PreStartTiming.clear();
 		m_DelayChanges = m_Config.initialDelayChanges;
 		m_DelayEstimators.clear();
@@ -6500,6 +6501,15 @@ namespace RTE {
 		// A seat joining a running round replayed every frame before its first: a delay decided for one of them belongs to that
 		// tail, so it is taken for the frames after it and never acknowledged.
 		const bool tailDelay = m_Config.joinsRunningRound && timing.action == NetTimingAction::Delay && timing.applyFrame < m_Config.startFrame;
+		// A decision this peer already took, repeated by a host answering a returning seat's start, is not a new boundary to meet.
+		if (timing.phase == NetTimingPhase::Propose || timing.phase == NetTimingPhase::Commit) {
+			NetLockstepTiming proposed = timing;
+			proposed.phase = NetTimingPhase::Propose;
+			const auto settled = m_SettledTimings.find(timing.revision);
+			const auto held = m_TimingDecisions.find(timing.revision);
+			if ((settled != m_SettledTimings.end() && settled->second == proposed) ||
+			    (held != m_TimingDecisions.end() && held->second.committed && held->second.proposal == proposed)) return;
+		}
 		if (timing.phase == NetTimingPhase::Propose) {
 			const bool ownHold = timing.action == NetTimingAction::Hold && (timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0;
 			if ((timing.action == NetTimingAction::Hold && !UsesBoundedWait()) || (!ownHold && !tailDelay && timing.applyFrame < m_Stats.nextFrame) ||
@@ -6686,8 +6696,12 @@ namespace RTE {
 		std::erase_if(m_TimingDecisions, [&](const auto& entry) {
 			const auto& decision = entry.second;
 			if (heldSeatMayReturn && (decision.proposal.phase == NetTimingPhase::HoldAtFrame || decision.proposal.phase == NetTimingPhase::ReclaimAtFrame)) return false;
-			return DecisionSettled(decision);
+			if (!DecisionSettled(decision)) return false;
+			m_SettledTimings[entry.first] = decision.proposal;
+			return true;
 		});
+		// The host answers a returning seat's repeated start with the decisions it still holds; the newest are enough to know them again.
+		while (m_SettledTimings.size() > 64) m_SettledTimings.erase(m_SettledTimings.begin());
 		const uint64_t oldest = m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew ? m_Stats.nextFrame - NetLockstepCodec::c_MaxFutureFrameSkew : 0;
 		for (auto& [peer, changes]: m_DelayChanges)
 			while (changes.size() > 1 && std::next(changes.begin())->first <= oldest) changes.erase(changes.begin());
@@ -11662,7 +11676,7 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		std::ostringstream line;
 #define CENSUS(member) line << ' ' << (#member + 2) << '=' << CensusCount(member)
-		CENSUS(m_TimingDecisions); CENSUS(m_DelayChanges); CENSUS(m_DeferredControllerFrames); CENSUS(m_SeatTransitions);
+		CENSUS(m_TimingDecisions); CENSUS(m_SettledTimings); CENSUS(m_DelayChanges); CENSUS(m_DeferredControllerFrames); CENSUS(m_SeatTransitions);
 		CENSUS(m_CommittedAtMs); CENSUS(m_DecisionCommittedAtMs); CENSUS(m_ParkCarriedCommands); CENSUS(m_AnnouncedCaptureTicks);
 		CENSUS(m_LocalFrames); CENSUS(m_RemoteFrames); CENSUS(m_LocalCommands); CENSUS(m_RemoteCommands);
 		CENSUS(m_LocalObservations); CENSUS(m_RemoteObservations); CENSUS(m_LocalValueObservations); CENSUS(m_RemoteValueObservations);

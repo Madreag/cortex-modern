@@ -1289,6 +1289,7 @@ namespace RTE {
 		friend bool TestAheadInputIsNotASimulationStall(std::string* error);
 		friend bool TestHeldHostMarkerPrecedesItsHold(std::string* error);
 		friend bool TestAReturnerDelayCoversItsTrail(std::string* error);
+		friend bool TestADecisionRepeatedPastItsFrameIsNotANewOne(std::string* error);
 		friend bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error);
 		friend bool TestArrivalLeadIncludesTheFastestSurvivor(std::string* error);
 		friend bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error);
@@ -1570,6 +1571,7 @@ namespace RTE {
 			uint64_t proposedAtMs = 0;
 		};
 		std::map<uint64_t, TimingDecision> m_TimingDecisions;
+		std::map<uint64_t, NetLockstepTiming> m_SettledTimings; //!< The newest proposals this peer took and has since let go of, by revision.
 		/// Whether a decision is committed, applied everywhere it must be and behind the frame the round resumes from.
 		bool DecisionSettled(const TimingDecision& decision) const;
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
