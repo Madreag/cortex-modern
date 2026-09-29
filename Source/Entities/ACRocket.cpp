@@ -65,7 +65,9 @@ int ACRocket::Create() {
 
 	// Save the AtomGroup read in by MOSRotating, as we are going to make it
 	// into a composite group, and want to have the base body stored for reference.
-	m_pBodyAG = dynamic_cast<AtomGroup*>(m_pAtomGroup->Clone());
+	AtomGroup* body = dynamic_cast<AtomGroup*>(m_pAtomGroup->Clone());
+	delete m_pBodyAG;
+	m_pBodyAG = body;
 
 	// Mirror the limb paths
 	for (int i = 0; i < GearStateCount; ++i) {
