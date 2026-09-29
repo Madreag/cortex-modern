@@ -239,6 +239,24 @@
         "trace": "{peer}_trace.json",
         "report": "{peer}-match.json"
       }
+    },
+    {
+      "id": "all-round-hashes-host",
+      "peer": "host",
+      "mark": "round2-play",
+      "screen": "game",
+      "gate": "all-round-hashes",
+      "what": "Every peer retains and compares every tick of every declared round.",
+      "run": "rematch"
+    },
+    {
+      "id": "all-round-hashes-client",
+      "peer": "client",
+      "mark": "round2-play",
+      "screen": "game",
+      "gate": "all-round-hashes",
+      "what": "Every peer retains and compares every tick of every declared round.",
+      "run": "rematch"
     }
   ],
   "runs": [
@@ -253,7 +271,9 @@
             "-out",
             "{OUT}/host_trace.json",
             "-max-ticks",
-            "600"
+            "600",
+            "-net-live-tick-hashes",
+            "{OUT}/host-live.jsonl"
           ],
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "mp-rematch.host.menu.txt",
@@ -268,7 +288,9 @@
             "-out",
             "{OUT}/client_trace.json",
             "-max-ticks",
-            "600"
+            "600",
+            "-net-live-tick-hashes",
+            "{OUT}/client-live.jsonl"
           ],
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "mp-rematch.client.menu.txt",
@@ -288,6 +310,14 @@
         ],
         "first_tick": 1,
         "cap": 600
+      },
+      "round_hash_gate": {
+        "peers": [
+          "host",
+          "client"
+        ],
+        "rounds": 2,
+        "ticks": 600
       }
     },
     {

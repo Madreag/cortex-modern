@@ -661,7 +661,7 @@ def check_review(results, scratch):
               document["failures"]["client"] == ["[menu-script] FAILED: assert_substate"])
     scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs"]
     ok &= row(results, "review/no-probe-is-named",
-              all(item.get("probe") == "none" for item in scenario_items))
+              all(item.get("probe") == "awaiting-review" for item in scenario_items))
     # The dialog row is written for every capture: a player would have had to answer each line it lists.
     dialog_rows = [item for item in document["checklist"] if item["id"] == "no-assert-dialogs"]
     ok &= row(results, "review/assert-dialog-row-present",
@@ -1645,6 +1645,99 @@ def check_injected_exemption(results, scratch):
     return ok
 
 
+def check_acceptance_rows(results, scratch):
+    ok = row(results, 'audit-07/missing-probe-fails', driver.probe_verdict('', {})['probe'] == 'fail')
+    resumed = driver.load_scenario('mp-resume-from-disk-autosave')
+    ok &= row(results, 'audit-09/autosave-reloads-and-plays', any(r.get('name') == 'resumed' for r in resumed['runs'])
+              and any(i.get('sim_progress') for i in resumed['checklist']))
+    root = scratch / 'round-history'; root.mkdir()
+    for peer in ('host', 'client'):
+        rows = [dict(round=round_id, tick=t, sim_gated=str(t), subsystems={'actors': str(t), 'controller': str(t)})
+                for round_id in (7, 8) for t in range(1, 4)]
+        (root / (peer + '-live.jsonl')).write_text(''.join(json.dumps(r) + '\n' for r in rows))
+    if not hasattr(driver, 'compare_round_histories'):
+        return row(results, 'audit-08/every-round-required', False) and ok
+    config = dict(peers=['host', 'client'], rounds=2, ticks=3)
+    good = driver.compare_round_histories(root, config)
+    ok &= row(results, 'audit-08/all-rounds-equal', good['status'] == 'PASS', str(good))
+    rows[0]['sim_gated'] = 'different'
+    (root / 'client-live.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
+    ok &= row(results, 'audit-08/earlier-round-divergence-fails', driver.compare_round_histories(root, config)['status'] == 'FAIL')
+    rows = rows[3:]
+    (root / 'client-live.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
+    ok &= row(results, 'audit-08/missing-earlier-round-fails', driver.compare_round_histories(root, config)['status'] == 'FAIL')
+    for name in ('mp-held-seat', 'mp-inplace-rehold', 'world-late-join'):
+        scenario = driver.load_scenario(name)
+        runs = scenario.get('runs') or [scenario]
+        ok &= row(results, 'audit-07/' + name + '-has-behavior-gate', all(r.get('behavior_gate') or scenario.get('behavior_gate') for r in runs))
+    behavior = scratch / 'behavior'; behavior.mkdir()
+    spec = driver.load_scenario('mp-held-seat')['behavior_gate']
+    (behavior / 'clientb').mkdir()
+    (behavior / 'clientb/stdout.log').write_text('[net-lockstep] start round=7 frame=1 local_peer=3\n')
+    for peer in spec['observers']:
+        (behavior / peer).mkdir()
+        (behavior / peer / 'stdout.log').write_text('[net-match] hold peer=3 frame=364 AI in control\n')
+        driver.write_json(behavior / spec['reports'][peer], dict(exit_code=0, running_ticks=4201, lockstep=dict(steady_missing_frame_stalls=0)))
+        probe = behavior / f'{peer}-stage/probe'; probe.mkdir(parents=True)
+        state = dict(members=[dict(peer=3, state='Held - AI in control')], resyncing=False, private_catch_up=False)
+        driver.write_json(probe / 'net-ui-result.json', dict(**{'pass': True}, complete=True,
+            steps=[dict(observed=dict(menu_observation=json.dumps(state)))]))
+    good = driver.native_behavior(behavior, spec)
+    ok &= row(results, 'audit-07/native-held-seat-positive', good['status'] == 'PASS', str(good))
+    (behavior / 'host/stdout.log').write_text('')
+    ok &= row(results, 'audit-07/absent-hold-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    (behavior / 'host/stdout.log').write_text('[net-match] hold peer=3 frame=364 AI in control\n')
+    driver.write_json(behavior / 'host-match.json', dict(exit_code=0, running_ticks=4201))
+    ok &= row(results, 'audit-07/missing-stall-count-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    driver.write_json(behavior / 'host-match.json', dict(exit_code=0, running_ticks=4201, lockstep=dict(steady_missing_frame_stalls=1)))
+    ok &= row(results, 'audit-07/nonzero-stall-count-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    rehold = scratch / 'rehold-native'; rehold.mkdir()
+    spec = dict(kind='rehold', target='client', observers=['host', 'survivor'], holds=2, stall_ticks=[2, 7],
+                reports={p: p+'-report.json' for p in ('host', 'survivor')},
+                ticks=dict(host=12, survivor=12), steady_peers=['host', 'survivor'])
+    (rehold / 'client').mkdir()
+    (rehold / 'client/stdout.log').write_text('[net-lockstep] start round=7 frame=1 local_peer=2\n'
+        '[net-test] live stall frame=2\n[net-test] live stall frame=7\n'
+        '[net-match] private catch-up complete frame=6\n[net-match] private catch-up complete frame=10\n')
+    for peer in spec['observers']:
+        (rehold / peer).mkdir()
+        (rehold / peer / 'stdout.log').write_text('[net-match] hold peer=2 frame=3 AI in control\n'
+            '[net-match] seat-reclaimed peer=2 frame=6\n[net-match] hold peer=2 frame=8 AI in control\n'
+            '[net-match] seat-reclaimed peer=2 frame=10\n')
+        driver.write_json(rehold / spec['reports'][peer], dict(exit_code=0, running_ticks=12, steady_missing_frame_stalls=0))
+        probe = rehold / f'{peer}-stage/probe'; probe.mkdir(parents=True)
+        state = dict(members=[dict(peer=2, state='Playing')], resyncing=False, private_catch_up=False)
+        driver.write_json(probe / 'net-ui-result.json', dict(**{'pass': True}, complete=True,
+            steps=[dict(observed=dict(menu_observation=json.dumps(state)))]))
+    good = driver.native_behavior(rehold, spec)
+    ok &= row(results, 'audit-07/reclaimed-seat-positive', good['status'] == 'PASS', str(good))
+    with (rehold / 'host/stdout.log').open('a') as stream:
+        stream.write('[net-match] hold peer=2 frame=11 AI in control\n')
+    ok &= row(results, 'audit-07/unscheduled-rehold-fails', driver.native_behavior(rehold, spec)['status'] == 'FAIL')
+    world = scratch / 'world-native'; world.mkdir(); (world / 'world').mkdir()
+    spec = dict(kind='world-continuity', ticks=dict(world=8, **{'client-first': 3, 'client-late': 3}), late_tick=6,
+                reports={p:p+'-report.json' for p in ('world', 'client-first', 'client-late')})
+    driver.write_json(world / 'world/launch.json', dict(argv=['-net-persistent-world','-net-world-fresh']))
+    for peer, ticks in [('world',range(1,9)),('client-first',range(2,5)),('client-late',range(6,9))]:
+        driver.write_json(world / spec['reports'][peer], dict(exit_code=0,running_ticks=spec['ticks'][peer]))
+        (world / (peer+'-live.jsonl')).write_text(''.join(json.dumps(dict(round=7,tick=t,sim_gated=str(t),subsystems={'controller':str(t)}))+'\n' for t in ticks))
+    good = driver.native_behavior(world, spec)
+    ok &= row(results, 'audit-07/world-continuity-positive', good['status'] == 'PASS', str(good))
+    path = world / 'world-live.jsonl'; data = path.read_text(); path.write_text('\n'.join(data.splitlines()[1:])+'\n')
+    ok &= row(results, 'audit-07/world-coverage-gap-fails', driver.native_behavior(world, spec)['status'] == 'FAIL')
+    path.write_text(data)
+    driver.write_json(world / 'world/launch.json', dict(argv=['-net-persistent-world']))
+    ok &= row(results, 'audit-07/world-fresh-flag-required', driver.native_behavior(world, spec)['status'] == 'FAIL')
+    review_root = scratch / 'unplanned-desync'; review_root.mkdir()
+    (review_root / 'stdout.log').write_text('[lockstep] desync at frame 2 against Client\n')
+    capture = dict(name='run0', peers=[dict(peer='host', root=str(review_root), video_dir=str(review_root), probe_dir='',
+        index=[dict(frame=1, screen='game', sim_tick=3)], video='retained.mp4', menu_script_failures=[], record=dict(exit_code=0))])
+    checked = driver.review(dict(name='plain', checklist=[dict(id='picture', screen='game')]), capture, review_root)
+    ok &= row(results, 'audit-08/unplanned-desync-fails-without-fullstate', bool(checked['run_findings']))
+    ok &= row(results, 'audit-07/assertionless-item-awaits-review', checked['checklist'][0]['state'] == 'AWAITING REVIEW')
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -1695,6 +1788,7 @@ def main():
         ok &= check_activity_over_applicability(results, scratch)
         ok &= check_injected_exemption(results, scratch)
         ok &= check_log_gates(results, scratch)
+        ok &= check_acceptance_rows(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",

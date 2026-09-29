@@ -4,8 +4,7 @@
   "port_base": 49470,
   "size": "960x540",
   "timeout_s": 170,
-  "title": "The capturable original run of mp-resume-from-disk",
-  "capture_policy": "Original run only; the full scenario retains the blocked disk restore definition.",
+  "title": "Autosaves survive both process deaths, reload and continued play",
   "runs": [
     {
       "name": "died",
@@ -28,7 +27,7 @@
             "1200"
           ],
           "menu_script": "mp-resume-from-disk.host.menu.txt",
-          "input_script": "play-input.txt",
+          "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.before.probe.json",
           "kill_at_tick": 601,
           "observe_after_failure": true,
@@ -36,7 +35,8 @@
             "NetworkDisplayName": "Host",
             "NetworkIceEnable": "0",
             "NetworkShowDiagnostics": "1",
-            "NetworkMatchStatusMode": "Always"
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2"
           }
         },
         {
@@ -57,7 +57,7 @@
             "1200"
           ],
           "menu_script": "mp-resume-from-disk.client.menu.txt",
-          "input_script": "play-input.txt",
+          "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.before.probe.json",
           "kill_at_tick": 601,
           "observe_after_failure": true,
@@ -65,7 +65,8 @@
             "NetworkDisplayName": "Joiner",
             "NetworkIceEnable": "0",
             "NetworkShowDiagnostics": "1",
-            "NetworkMatchStatusMode": "Always"
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2"
           },
           "start_when": {
             "peer": "host",
@@ -74,6 +75,119 @@
           }
         }
       ]
+    },
+    {
+      "name": "resumed",
+      "start_when": {
+        "run": "died",
+        "peers": [
+          "host",
+          "client"
+        ],
+        "ended": true
+      },
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "1",
+            "-net-match-e2e-resync",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-net-reconnect-ticket",
+            "{OUT}/../died/host.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-host",
+            "-net-resume-match",
+            "{RESUME_MATCH}",
+            "-net-resume-tick",
+            "{RESUME_TICK}"
+          ],
+          "start_when": {
+            "run": "died",
+            "peer": "host",
+            "ended": true
+          },
+          "input_script": "mp-resume-from-disk.input.txt",
+          "probe": "mp-resume-from-disk.after.probe.json",
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkIceEnable": "0",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2"
+          },
+          "retain_runtime_from": {
+            "run": "died",
+            "peer": "host"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "1",
+            "-net-match-e2e-resync",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-net-reconnect-ticket",
+            "{OUT}/../died/client.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "start_when": {
+            "run": "died",
+            "peer": "client",
+            "ended": true
+          },
+          "input_script": "mp-resume-from-disk.input.txt",
+          "probe": "mp-resume-from-disk.after.probe.json",
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkIceEnable": "0",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2"
+          },
+          "retain_runtime_from": {
+            "run": "died",
+            "peer": "client"
+          },
+          "start_delay_s": 2
+        }
+      ],
+      "resume_from": {
+        "run": "died",
+        "peer": "host"
+      }
     }
   ],
   "checklist": [
@@ -118,7 +232,32 @@
         600,
         650
       ],
-      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained."
+      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained.",
+      "drop_tick": 601
+    },
+    {
+      "id": "resume-reloaded-host",
+      "run": "resumed",
+      "peer": "host",
+      "mark": "resume-reloaded",
+      "screen": "game",
+      "what": "The relaunched peer displays the restored match and checkpoint tick.",
+      "log_regex": [
+        "\\[autosave\\] resuming match=\\S+ tick=\\d+ activity=.* peers=\\d+ directory=\\S+"
+      ]
+    },
+    {
+      "id": "resume-advances-host",
+      "run": "resumed",
+      "peer": "host",
+      "mark": "resume-play-continued",
+      "screen": "game",
+      "what": "The restored world continues beyond its saved tick with at least 120 further simulation updates.",
+      "sim_progress": 120,
+      "log_regex": [
+        "\\[autosave\\] tick=\\d+ capture_ms="
+      ],
+      "assert": "the resumed round's committed frames across the marked window, which closes on the round's own frame 850 (and no sooner than 5 s), so a loaded box stretches the window instead of thinning it"
     },
     {
       "id": "resume-original-play-client",
@@ -149,7 +288,32 @@
         600,
         650
       ],
-      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained."
+      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained.",
+      "drop_tick": 601
+    },
+    {
+      "id": "resume-reloaded-client",
+      "run": "resumed",
+      "peer": "client",
+      "mark": "resume-reloaded",
+      "screen": "game",
+      "what": "The relaunched peer displays the restored match and checkpoint tick.",
+      "log_regex": [
+        "\\[autosave\\] resume offer match=\\S+ tick=\\d+ (held locally|not held: .*)"
+      ]
+    },
+    {
+      "id": "resume-advances-client",
+      "run": "resumed",
+      "peer": "client",
+      "mark": "resume-play-continued",
+      "screen": "game",
+      "what": "The restored world continues beyond its saved tick with at least 120 further simulation updates.",
+      "sim_progress": 120,
+      "log_regex": [
+        "\\[autosave\\] tick=\\d+ capture_ms="
+      ],
+      "assert": "the resumed round's committed frames across the marked window, which closes on the round's own frame 850 (and no sooner than 5 s), so a loaded box stretches the window instead of thinning it"
     }
   ]
 }
