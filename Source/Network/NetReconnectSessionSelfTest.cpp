@@ -1506,6 +1506,55 @@ namespace RTE {
 			return 0;
 		}
 
+		// A stale ticket's Reclaim is refused once. The claimant's answer to the synthetic challenge, or a copy of the Reclaim, that lands after
+		// that refusal belongs to the same transaction and is not refused again: by then the connection may have joined as a new player.
+		int TestAnAnsweredReclaimIsNotRefusedTwice() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			Wire wire;
+			ConfigureWire(wire);
+			const NetPeerId connection = 84;
+			std::string error;
+			NetH4Reclaim stale;
+			stale.txId = Ramp<16>(0x91);
+			stale.epoch = Ramp<16>(0x77);
+			stale.stableSeat = 1;
+			stale.holderGeneration = 1;
+			stale.identity = MakeIdentity();
+			stale.displayName = "returning";
+			if (!wire.SendRaw(connection, stale, &error)) {
+				return Fail(error);
+			}
+			wire.nowMs += NetReconnectAdmission::c_DenialReleaseMs;
+			wire.DrainHostOutbound();
+			if (wire.host.GetStats().staleEpochDrops != 1 || CountOf<NetH4Challenge>(wire.Delivered(connection)) != 1 ||
+			    CountOf<NetJoinRejected>(wire.Delivered(connection)) != 1) {
+				return Fail("fixture: the stale Reclaim was not challenged and refused once");
+			}
+			NetH4Proof proof;
+			proof.txId = stale.txId;
+			proof.epoch = stale.epoch;
+			proof.stableSeat = stale.stableSeat;
+			proof.holderGeneration = stale.holderGeneration;
+			proof.clientNonce = Ramp<16>(0x92);
+			proof.mac = Ramp<32>(0x93);
+			wire.nowMs += 200;
+			if (!wire.SendRaw(connection, proof, &error)) {
+				return Fail(error);
+			}
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!wire.SendRaw(connection, stale, &error)) {
+				return Fail(error);
+			}
+			wire.nowMs += NetReconnectAdmission::c_DenialReleaseMs + 1;
+			wire.DrainHostOutbound();
+			if (const size_t refusals = CountOf<NetJoinRejected>(wire.Delivered(connection)); refusals != 1) {
+				return Fail("an answered Reclaim was refused " + std::to_string(refusals) + " times; a late refusal closes a connection that has joined since");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS an_answered_reclaim_is_not_refused_twice dropped=" << wire.host.GetStats().answeredTransactionsDropped << std::endl;
+			return 0;
+		}
+
 		// The census the drop-time ledger records; a file-scope table so the ownership source can be a
 		// plain function pointer the way the match runner will supply one.
 		std::vector<NetH4LedgerActor> g_Census;
@@ -7856,6 +7905,7 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestEndedCredentialsStayOutOfWorld(); result != 0) return result;
+		if (const int result = TestAnAnsweredReclaimIsNotRefusedTwice(); result != 0) return result;
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;
 		return 0;
 	}
