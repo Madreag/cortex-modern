@@ -117,7 +117,7 @@ class ReportTests(unittest.TestCase):
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
 
-    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200):
+    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
             run = Path(folder)
@@ -135,6 +135,9 @@ class ReportTests(unittest.TestCase):
             rows = [dict(type='committed', tick=300, wall_ms=5000)]
             if complete:
                 rows.append(dict(type='committed', tick=final_tick, wall_ms=5000 + wall_ms))
+            if live_clock:
+                (run / 'host-live.jsonl').write_text('\n'.join(json.dumps(dict(tick=tick, wall_ms=5000 + (tick-300)*wall_ms/(final_tick-300)))
+                    for tick in range(300, final_tick+1)), encoding='utf-8')
             return report.item9a_gates(run, rows=rows)
 
     def test_item9a_steady_rate_and_wait_boundaries(self):
@@ -179,11 +182,17 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result['metrics']['steady_wall_ms'], 15700)
         self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'FAIL')
 
-    def test_item9a_prefetch_misses_are_diagnostic_and_end_evidence_is_required(self):
-        self.assertTrue(self.item9a(missing=1)['pass_check'])
+    def test_item9a_missing_frame_stalls_are_a_required_gate(self):
+        self.assertFalse(self.item9a(missing=1)['pass_check'])
         self.assertEqual(self.item9a(missing=1)['metrics']['steady_missing_frame_stalls'], 1)
-        self.assertTrue(self.item9a(missing=None)['pass_check'])
+        self.assertFalse(self.item9a(missing=None)['pass_check'])
         self.assertFalse(self.item9a(complete=False)['pass_check'])
+
+    def test_item9a_uses_the_tick_clock_when_a_render_skips_the_final_tick(self):
+        measured = self.item9a(complete=False, live_clock=True, wall_ms=17000)
+        self.assertEqual(measured['metrics']['last_tick'], 1200)
+        self.assertAlmostEqual(measured['metrics']['steady_wall_tps'], 900000/17000)
+        self.assertEqual(measured['pins']['item9a_wall_tps']['status'], 'FAIL')
 
     def test_item9a_confirmed_horizon_lag_cannot_hide_behind_average_rate(self):
         self.assertEqual(self.item9a(wall_ms=15050)['pins']['item9a_confirmed_horizon_lag']['status'], 'PASS')
