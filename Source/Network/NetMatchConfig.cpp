@@ -167,7 +167,8 @@ namespace RTE {
 	uint32_t NetInputDelayEstimator::RequiredFrames(double tickMs, uint16_t floor) const {
 		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
 		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
-		const double frames = std::ceil(rtt / tickMs) + 1 + std::ceil(JitterMs() / tickMs);
+		// Cover one retransmission after the one-way trip.
+		const double frames = std::ceil((1.5 * rtt) / tickMs) + 1 + std::ceil(JitterMs() / tickMs);
 		return static_cast<uint32_t>(std::clamp(frames, static_cast<double>(floor), static_cast<double>(std::numeric_limits<uint32_t>::max())));
 	}
 

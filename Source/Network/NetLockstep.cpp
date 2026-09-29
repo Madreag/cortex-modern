@@ -6009,19 +6009,18 @@ namespace RTE {
 		// A park handshake is in flight: every boundary authored now is deferred to its final end, so declaring
 		// one would propose a seat hold that cannot take effect and the caller would ask again next tick.
 		if (m_CaptureParkAwaitingReports) return false;
-		// The commit horizon runs a delay window ahead of the simulation, so an idle horizon is what a full
-		// pipeline looks like: committed frames nobody has consumed yet are the round's runway. Judge a seat
-		// only once that runway can no longer carry the decision's notice - until then nothing is waiting.
-		// The runway is the shortest any survivor has: one ahead of this host runs dry first, and it is the one waiting.
-		uint64_t runwayFrames = m_ReadyFrames.size();
+		// Each receiver spends its own runway on its own link.
+		bool noticeDue = std::llround(m_ReadyFrames.size() * m_Config.simTickMs) <= 2;
 		for (uint8_t survivor: m_RemotePeerIds) {
 			if (std::find(missing.begin(), missing.end(), survivor) != missing.end() || IsPeerGoneAtFrame(survivor, frame) || IsSeatUnderAI(survivor, frame)) continue;
-			// The input for a frame is produced while simulating the frame a delay earlier, so the next frame it simulates follows that.
 			const uint64_t produced = m_Stats.peers[survivor].highestTargetFrame, delay = InputDelayAt(survivor, frame);
-			if (produced >= delay) runwayFrames = std::min<uint64_t>(runwayFrames, frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0);
+			const uint64_t runway = produced >= delay && frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0;
+			const auto estimate = m_DelayEstimators.find(survivor);
+			const auto& link = m_Stats.peers[survivor];
+			const uint64_t notice = uint64_t(2) + std::max(link.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + link.jitterMs;
+			noticeDue |= static_cast<uint64_t>(std::llround(runway * m_Config.simTickMs)) <= notice;
 		}
-		const uint64_t runwayMs = static_cast<uint64_t>(std::llround(runwayFrames * m_Config.simTickMs));
-		if (runwayMs > noticeMs) return false;
+		if (!noticeDue) return false;
 		// Declaring early lets the decision land by the bound. When the notice alone costs more than the
 		// bound - a survivor on a long link - it cannot, and the survivors wait for the decision instead;
 		// the seat is still only declared after the bound of missing input, never the instant one is late.
@@ -8838,18 +8837,18 @@ namespace RTE {
 			m_OwnMissingFrame.reset();
 			return false;
 		}
-		// The worker commits ahead of the simulation. Missing future input is not late while every survivor
-		// still has enough committed frames to receive the decision, just as for a missing remote seat.
-		uint64_t runwayFrames = m_ReadyFrames.size(), noticeMs = 2;
+		// Every receiver has its own runway and delivery time for this decision.
+		bool noticeDue = std::llround(m_ReadyFrames.size() * m_Config.simTickMs) <= 2;
 		for (uint8_t peer: m_RemotePeerIds) {
 			if (!IsRemoteRequiredForFrame(peer, frame)) continue;
 			const auto& stats = m_Stats.peers[peer];
 			const auto estimate = m_DelayEstimators.find(peer);
-			noticeMs = std::max(noticeMs, uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs);
+			const uint64_t notice = uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs;
 			const uint64_t delay = InputDelayAt(peer, frame), produced = stats.highestTargetFrame;
-			if (produced >= delay) runwayFrames = std::min(runwayFrames, frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0);
+			const uint64_t runway = produced >= delay && frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0;
+			noticeDue |= static_cast<uint64_t>(std::llround(runway * m_Config.simTickMs)) <= notice;
 		}
-		if (static_cast<uint64_t>(std::llround(runwayFrames * m_Config.simTickMs)) > noticeMs) {
+		if (!noticeDue) {
 			m_OwnMissingFrame.reset();
 			return false;
 		}
