@@ -58,6 +58,7 @@ def main():
                 time.sleep(0.05)
             for name, pin in (('wrong-pin', pins['wrong_same_key']), ('empty-pin', ''), ('correct-pin', pins['correct'])):
                 before = len(requests())
+                before_lines = len(service_log.read_text(errors='replace').splitlines())
                 engine_args = ['-net-directory-probe', url]
                 if pin:
                     engine_args.append(pin)
@@ -68,12 +69,15 @@ def main():
                     run.close()
                 text = (root / name / 'stdout.log').read_text(errors='replace')
                 seen = requests()[before:]
+                handshake_failures = [line for line in service_log.read_text(errors='replace').splitlines()[before_lines:]
+                                      if 'tls handshake failed' in line]
                 correct = name == 'correct-pin'
                 error = 'certificate pin mismatch' if name == 'wrong-pin' else 'certificate verification failed'
                 passed = (record['exit_code'] == 0 and '[net-directory-probe] PASS' in text
                           and ('POST', '/v1/sessions', '200') in seen and ('GET', '/v1/sessions', '200') in seen) if correct else (
-                          record['exit_code'] != 0 and error in text and not seen)
+                          record['exit_code'] != 0 and error in text and not seen and bool(handshake_failures))
                 result['cases'][name] = {'pass': passed, 'record': record, 'requests': seen,
+                                         'handshake_failures': handshake_failures,
                                          'diagnostics': [line for line in text.splitlines() if '[net-directory-probe]' in line and 'error=' in line]}
             before = len(requests())
             run = make_run(repo, ['-net-directory-selftest'], root / 'live-selftest', 180, env={'CCCP_HEADLESS': '1'})
