@@ -497,9 +497,17 @@ def item9a_gates(run, peer='host', rows=None):
         # The round counter includes the deliberately injected spike. Its steady interval ends at the actual injection.
         missing = steady_stalls if round_missing is not None else None
         pins['item9a_missing_frame_stalls'] = pin(missing, '0 missing-frame stalls before the actual injected spike', missing == 0, evidence, available=True)
-        spike_waits = sum(ms > 0 for tick, ms in waits if tick >= injection) if wait_fraction is not None else None
+        # A run that also drops the returner once its first catch-up completes injects a second fault: the seat's next
+        # hold after that return is the drop's, and the waits from it on are not this spike's.
+        spike_end = None
+        if (run / 'client' / 'video' / 'injected-drop.json').is_file():
+            returned = [int(frame) for frame in re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', injection_log) if int(frame) > injection]
+            if returned:
+                spike_end = next((tick for seat, tick in sorted(holds, key=lambda value: value[1]) if seat == silent_seat and tick > min(returned)), None)
+        spike_waits = (sum(ms > 0 for tick, ms in waits if tick >= injection and (spike_end is None or tick < spike_end))
+                       if wait_fraction is not None else None)
         pins['item9a_spike_waits'] = pin(spike_waits, '<= 1 blocking wait from the single injected spike through return',
-                                       spike_waits is not None and spike_waits <= 1, evidence)
+                                       spike_waits is not None and spike_waits <= 1, evidence, dict(injected_tick=injection, drop_hold_tick=spike_end))
         returns = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', log)]
         before = [tick for seat, tick in holds if seat == silent_seat and tick <= injection]
         held = next((tick for seat, tick in sorted(holds, key=lambda value: value[1]) if seat == silent_seat and tick >= injection), None)
