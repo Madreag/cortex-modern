@@ -894,9 +894,6 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	                                              settings.GetSessionDirectoryCertSha256() == "98022d8f998f4d93" && !settings.GetNetworkPortMapEnable() && settings.GetNetworkDisplayName() == "FilePilot");
 	readFile("SettingsMan\r\n\tSessionDirectoryUrl = \r\n\tSessionDirectoryInstallKey = key0123456789abce\r\n\tNetworkDisplayName = CrlfPilot\r\n");
 	check("empty directory URL in a settings file", settings.GetSessionDirectoryUrl().empty() && settings.GetSessionDirectoryInstallKey() == "key0123456789abce" && settings.GetNetworkDisplayName() == "CrlfPilot");
-	// A fresh install (no settings file) must reach the public directory; an explicit empty value above still disables it.
-	settings.Clear();
-	check("directory default after clear", settings.GetSessionDirectoryUrl() == SettingsMan::c_DefaultSessionDirectoryUrl);
 	settings.SetNetworkDisplayName("AlphaPilot");
 	if (failures != 0) {
 		return 1;
@@ -996,6 +993,10 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	}
 	settings.SetNetworkConnectionMode(NetworkConnectionMode::Automatic);
 
+	// A fresh install (no settings file) must reach the public directory; an explicit empty value above still disables it.
+	// Last, because Clear resets what the rows above set.
+	settings.Clear();
+	check("directory default after clear", settings.GetSessionDirectoryUrl() == SettingsMan::c_DefaultSessionDirectoryUrl);
 	if (failures != 0) {
 		return 1;
 	}
