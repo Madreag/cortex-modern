@@ -927,6 +927,8 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
+		/// Host: publishes the earliest activation told to a returner and not yet scheduled, for the autosave schedule.
+		void NoteAnnouncedActivationsLocked();
 		/// Moves a returning seat's activation to the first frame the agreed park cannot reach and tells the returner.
 		/// @return Whether the returner was told a new frame; false when it already used its re-announce.
 		bool MovePrivateActivationPastPark(const NetWorldJoinSession& session);
@@ -1626,6 +1628,7 @@ namespace RTE {
 		std::vector<AwaitedAutosave> m_AwaitedAutosaves;
 		std::set<uint64_t> m_ScheduledCaptures; //!< Ticks the host named that this peer has not reached.
 		uint64_t m_OpenCaptureTick = 0; //!< Host: the capture it named last, until every writer reported it.
+		std::atomic<uint64_t> m_AnnouncedActivationTick = 0; //!< Host: the earliest activation told to a returner and not yet scheduled; 0 when none.
 		bool m_OpenCaptureApplied = false; //!< Host: the capture it named reached the committed stream.
 		std::set<uint8_t> m_CaptureWriters; //!< Host: the peers still writing the open capture.
 		std::map<uint64_t, std::set<uint8_t>> m_CheckpointHolders; //!< The peers that reported an archive of each of this round's captures.

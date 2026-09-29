@@ -3598,7 +3598,10 @@ static std::string ResyncSaveName() {
 		if (m_IsHost) {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
-			input.activationPending = m_Coordinator->HasPendingSeatActivation();
+			// An activation told to a returner but not yet scheduled is decided in its last frames: a capture named at or before it
+			// would hold those frames open and push the activation a lead later, onto the same phase of the next capture.
+			const uint64_t announced = m_AnnouncedActivationTick.load(std::memory_order_relaxed);
+			input.activationPending = m_Coordinator->HasPendingSeatActivation() || (announced != 0 && announced >= tick + input.lead);
 			input.ownSeatHeld = m_Coordinator->IsOwnHostSeatHeld();
 			const auto& start = m_Coordinator->GetAgreedStartRecord();
 			input.startupPending = start && tick < start->agreedFirstFrame;
@@ -4565,7 +4568,17 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::NoteAnnouncedActivationsLocked() {
+		uint64_t earliest = 0;
+		if (m_IsHost)
+			for (const auto& session: m_WorldJoin.Sessions())
+				if (session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 && !session.activationProposed && (earliest == 0 || session.activationTick < earliest))
+					earliest = session.activationTick;
+		m_AnnouncedActivationTick.store(earliest, std::memory_order_relaxed);
+	}
+
 	void NetMatchService::DriveWorldJoins(uint64_t nowMs) {
+		NoteAnnouncedActivationsLocked();
 		if (m_WorldJoin.IsPrivateMatch()) { DrivePrivateMatchRejoins(nowMs); return; }
 		if (!m_WorldJoin.IsConfigured() || !m_Coordinator || !m_Session) {
 			return;
