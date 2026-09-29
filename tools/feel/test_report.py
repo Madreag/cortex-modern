@@ -177,6 +177,13 @@ class ReportTests(unittest.TestCase):
         measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=20\n[net-frame-wait] frame=621 wait_ms=20', silent=True)
         self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'FAIL')
 
+    def test_missing_frame_steady_counter_excludes_only_the_actual_spike(self):
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=40', missing=1, silent=True)
+        self.assertEqual(measured['metrics']['round_missing_frame_stalls'], 1)
+        self.assertEqual(measured['pins']['item9a_missing_frame_stalls']['status'], 'PASS')
+        measured = self.item9a(waits='[net-frame-wait] frame=450 wait_ms=1', missing=1, silent=True)
+        self.assertEqual(measured['pins']['item9a_missing_frame_stalls']['status'], 'FAIL')
+
     def test_item9a_recovery_elapsed_time_cannot_be_reset_away(self):
         result = self.item9a(wall_ms=15700)
         self.assertEqual(result['metrics']['steady_wall_ms'], 15700)

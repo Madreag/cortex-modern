@@ -456,6 +456,7 @@ def item9a_gates(run, peer='host', rows=None):
     latest = max(rounds, key=lambda value: value.get('next_frame', 0), default={})
     measured = [value['steady_missing_frame_stalls'] for value in rounds if value.get('steady_missing_frame_stalls') is not None]
     missing = sum(measured) if measured else None
+    round_missing = missing
     tick_ms = latest.get('sim_tick_ms')
     valid_tick = isinstance(tick_ms, (int, float)) and math.isfinite(tick_ms) and tick_ms > 0
     horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * tick_ms
@@ -485,6 +486,9 @@ def item9a_gates(run, peer='host', rows=None):
         injection = next((tick for tick in injections if tick >= manifest['silent_tick']), manifest['silent_tick'])
         steady_stalls = sum(ms > 0 for tick, ms in waits if tick < injection) if wait_fraction is not None else None
         pins['item9a_steady_stalls'] = pin(steady_stalls, '0 blocking waits before the actual injected spike', steady_stalls == 0, evidence)
+        # The round counter includes the deliberately injected spike. Its steady interval ends at the actual injection.
+        missing = steady_stalls if round_missing is not None else None
+        pins['item9a_missing_frame_stalls'] = pin(missing, '0 missing-frame stalls before the actual injected spike', missing == 0, evidence)
         spike_waits = sum(ms > 0 for tick, ms in waits if tick >= injection) if wait_fraction is not None else None
         pins['item9a_spike_waits'] = pin(spike_waits, '<= 1 blocking wait from the single injected spike through return',
                                        spike_waits is not None and spike_waits <= 1, evidence)
@@ -542,7 +546,8 @@ def item9a_gates(run, peer='host', rows=None):
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
                              confirmed_horizon_lag_ms=horizon_lag_ms,
                              confirmed_horizon_lag_ticks=horizon_lag_ms / tick_ms if horizon_lag_ms is not None else None,
-                             steady_missing_frame_stalls=missing, first_tick=first_tick, last_tick=final_tick if final_tick in by_tick else None,
+                             steady_missing_frame_stalls=missing, round_missing_frame_stalls=round_missing,
+                             first_tick=first_tick, last_tick=final_tick if final_tick in by_tick else None,
                              clock_path=str(clock_path), sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
 
 
