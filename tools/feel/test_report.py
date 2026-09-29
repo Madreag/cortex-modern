@@ -195,6 +195,20 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(self.item9a(missing=None)['pass_check'])
         self.assertFalse(self.item9a(complete=False)['pass_check'])
 
+    def test_three_peer_autosave_checks_the_survivor(self):
+        import feel_measure
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            (run / 'manifest.json').write_text(json.dumps(dict(ticks=2400, launches_complete=True,
+                per_peer_lag_ms=dict(host=200, client=200, survivor=200))), encoding='utf-8')
+            with patch.object(feel_measure, 'timing_peer', return_value=dict(measurement_complete=True, pass_check=True)), \
+                 patch.object(feel_measure, 'compare_pair', return_value=dict(pass_check=True, **{'pass': True})), \
+                 patch.object(feel_measure, 'compare_live_hashes', return_value=[dict(compared_ticks=2400, mismatched_ticks=0)]), \
+                 patch.object(feel_measure, 'write_json'):
+                measured = feel_measure.reduce_timing_case(run)
+            self.assertEqual(set(measured['peers']), {'host', 'survivor'})
+            self.assertEqual(set(measured['proof']['live_passes']), {'host/survivor', 'host/client', 'survivor/client'})
+
     def test_item9a_uses_the_tick_clock_when_a_render_skips_the_final_tick(self):
         measured = self.item9a(complete=False, live_clock=True, wall_ms=17000)
         self.assertEqual(measured['metrics']['last_tick'], 1200)
