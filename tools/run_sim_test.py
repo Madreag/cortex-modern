@@ -56,7 +56,7 @@ def prepare_runtime(repo, out, fixtures=None):
     settings = (repo / "Userdata/Settings.ini").read_text(encoding="utf-8-sig")
     values = {"MuteMaster": "1", "MuteMusic": "1", "MuteSounds": "1", "MasterVolume": "0", "MusicVolume": "0", "SoundVolume": "0", "Fullscreen": "0", "SkipIntro": "1", "EnableVSync": "0", "SessionDirectoryUrl": "", "ResolutionX": "960", "ResolutionY": "540", "UseMultiDisplays": "0"}
     for name, value in values.items():
-        pattern = rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*"
+        pattern = rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*"
         settings, count = re.subn(pattern, lambda match: match[1] + value, settings)
         if count == 0:
             settings += f"\n\t{name} = {value}\n"
@@ -84,7 +84,7 @@ def seed_settings(run, values):
     ini = Path(run.cwd) / "Userdata" / "Settings.ini"
     text = ini.read_text(encoding="utf-8")
     for name, value in values.items():
-        text, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*",
+        text, count = re.subn(rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*",
                               lambda match: match[1] + str(value), text)
         if count == 0:
             text += f"\n\t{name} = {value}\n"
