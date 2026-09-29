@@ -17,6 +17,7 @@ SUITES = (
     ("acceptance-harness", ["test_acceptance_harness.py"]),
     ("e2e-video", ["test_e2e_video.py"]),
     ("settings-seed", ["test_settings_seed.py"]),
+    ("launch-budget", ["-m", "unittest", "feel.test_launch_budget"]),
     ("cross-driver", ["-m", "unittest", "feel.test_cross_driver"]),
     ("cross-report", ["-m", "unittest", "feel.test_report"]),
     ("cross-oracles", ["-m", "unittest", "feel.test_cross_oracles"]),
