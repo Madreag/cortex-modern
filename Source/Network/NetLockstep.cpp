@@ -7260,7 +7260,12 @@ namespace RTE {
 				if (receiver == frame.senderPeerId || !IsRemoteRequiredForFrame(receiver, frame.targetFrame)) continue;
 				const uint64_t produced = m_Stats.peers[receiver].highestTargetFrame;
 				const uint64_t delay = InputDelayAt(receiver, produced);
-				if (produced >= delay) simNext = std::max(simNext, produced - delay + 1);
+				const auto& link = m_Stats.peers[receiver];
+				const auto estimate = m_DelayEstimators.find(receiver);
+				const uint32_t ping = std::max(link.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms());
+				// Its production crossed the link to reach us; this input crosses the link back to it.
+				const uint64_t trip = m_Config.simTickMs > 0 ? static_cast<uint64_t>(std::ceil((static_cast<double>(ping) + link.jitterMs) / m_Config.simTickMs)) : 0;
+				if (produced >= delay) simNext = std::max(simNext, produced - delay + 1 + trip);
 			}
 			auto& leads = m_ArrivalLeads[frame.senderPeerId];
 			leads.push_back({nowMs, frame.targetFrame, frame.targetFrame > simNext ? frame.targetFrame - simNext : 0});

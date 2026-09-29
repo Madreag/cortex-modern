@@ -20837,6 +20837,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		NetLockstepCoordinator host;
 		host.m_Config.localPeerId = 1; host.m_Config.peerCount = 3;
 		host.m_Config.adaptiveInputDelay = true;
+		host.m_Config.simTickMs = 16.6666;
 		host.m_Config.peerInputDelayFrames = {{1, 29}, {2, 29}, {3, 4}};
 		host.m_RemotePeerIds = {2, 3};
 		host.m_Stats.nextFrame = 600;
@@ -20846,13 +20847,18 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		frame.senderPeerId = 2; frame.targetFrame = 602;
 		host.AcceptRemoteTick(frame, 1000, false);
 		const uint64_t activeLead = host.m_ArrivalLeads[2].back().lead;
-		// A returning seat's neutral gap cannot make anybody else's input late.
-		host.m_ReclaimTransactions[3] = NetGameSeatReclaim{3, 0, 1, 2, 595, 4, 610, std::nullopt};
+		host.m_Stats.peers[3].highestTargetFrame = 578;
+		host.m_Stats.peers[3].pingMs = 400;
 		frame.targetFrame = 603;
 		host.AcceptRemoteTick(frame, 1017, false);
+		const uint64_t relayedLead = host.m_ArrivalLeads[2].back().lead;
+		// A returning seat's neutral gap cannot make anybody else's input late.
+		host.m_ReclaimTransactions[3] = NetGameSeatReclaim{3, 0, 1, 2, 595, 4, 610, std::nullopt};
+		frame.targetFrame = 604;
+		host.AcceptRemoteTick(frame, 1034, false);
 		const uint64_t returningLead = host.m_ArrivalLeads[2].back().lead;
-		if (activeLead != 2 || returningLead != 22) {
-			*error = "arrival lead ignores the fast survivor or charges a neutral return: active=" + std::to_string(activeLead) + " returning=" + std::to_string(returningLead);
+		if (activeLead != 2 || relayedLead != 3 || returningLead != 23) {
+			*error = "arrival lead ignores a receiver or charges a neutral return: active=" + std::to_string(activeLead) + " relayed=" + std::to_string(relayedLead) + " returning=" + std::to_string(returningLead);
 			return false;
 		}
 		std::cout << "[net-lockstep-selftest] PASS arrival_lead_includes_the_fastest_survivor" << std::endl;
