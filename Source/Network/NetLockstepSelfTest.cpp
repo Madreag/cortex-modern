@@ -4103,6 +4103,40 @@ namespace RTE {
 			return true;
 		}
 
+		// A peer whose round stopped on an error did not choose to leave: under the bound its seat is held for its return, while a
+		// clean leave's seat is released once the AI has it.
+		bool TestABrokenPeersSeatStaysReturnable(std::string* error) {
+			for (const NetLockstepStopReason reason: {NetLockstepStopReason::ProtocolError, NetLockstepStopReason::PeerLeft}) {
+				LoopbackTransport hostWire, clientWire;
+				NetLockstepCoordinator host, client;
+				auto a = MakeCoordinatorConfig(1, 2, 0x9A73, 4, NetTransportLane::ControlReliable);
+				auto b = MakeCoordinatorConfig(2, 1, 0x9A73, 4, NetTransportLane::ControlReliable);
+				a.roundId = b.roundId = 73; a.relayToOtherPeers = true;
+				a.substituteSlowPeers = b.substituteSlowPeers = true;
+				a.timeoutMs = b.timeoutMs = 20000;
+				a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+				a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
+				if (!StartCoordinatorPair(reason == NetLockstepStopReason::PeerLeft ? 49574 : 49573, hostWire, clientWire, host, client, a, b, error)) return false;
+				uint64_t now = 0;
+				const auto pump = [&] { ++now; hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); };
+				for (int pass = 0; pass < 10; ++pass) pump();
+				if (!host.IsRunning() || !client.IsRunning()) { *error = "the broken-peer fixture did not start"; return false; }
+				NetLockstepStop stop;
+				stop.senderPeerId = 2; stop.reason = reason; stop.frame = client.GetStats().nextFrame; stop.message = "decode failed";
+				std::vector<uint8_t> bytes;
+				if (!NetLockstepCodec::Encode({stop}, bytes) || !clientWire.Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
+				for (int pass = 0; pass < 10 && !host.HasHeldAISeat(2) && !host.IsSeatReleased(2); ++pass) pump();
+				const bool released = host.IsSeatReleased(2);
+				if (!host.IsRunning() || released != (reason == NetLockstepStopReason::PeerLeft) || (!released && !host.HasHeldAISeat(2))) {
+					*error = std::string("a ") + NetLockstepCodec::StopReasonName(reason) + " stop left seat 2 " + (released ? "released" : host.HasHeldAISeat(2) ? "held" : "unheld") +
+					         (host.IsRunning() ? "" : " and the round stopped");
+					return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_broken_peers_seat_stays_returnable" << std::endl;
+			return true;
+		}
+
 		// A handover between machines on different networks: the successor's LAN address is unreachable from outside its network, so
 		// its published endpoint carries its ICE route after it, and a survivor dials that route through the session's rendezvous,
 		// never as an address. A successor's probes of the survivors have no rendezvous to use and pass it by.
@@ -22648,6 +22682,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAReturnerStartsAtItsReturnsDelay(&error) ||
 		    !TestAReturnerTakesAMemberDelayResizedAfterItsTail(&error) ||
 		    !TestASeatBackBeforeOurReturnKeepsItsAdmittedDelay(&error) ||
+		    !TestABrokenPeersSeatStaysReturnable(&error) ||
 		    !TestAHandoverEndpointCarriesItsIceRoute(&error) ||
 		    !TestAJoinerTakesAReturnDecidedAfterItsStart(&error) ||
 		    !TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame(&error) ||
