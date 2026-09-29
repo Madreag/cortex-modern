@@ -1130,6 +1130,19 @@
       "gate": "item9a_steady_stalls"
     },
     {
+      "id": "lag-100-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero missing-frame stalls in the steady window.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
+    },
+    {
       "id": "lag-100-item9a_spike_waits",
       "what": "One injected spike causes at most one blocking wait through the return.",
       "screen": "game",
@@ -1286,6 +1299,19 @@
       "gate": "item9a_steady_stalls"
     },
     {
+      "id": "lag-100-survivor-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero missing-frame stalls in the steady window.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
+    },
+    {
       "id": "lag-100-survivor-item9a_spike_waits",
       "what": "One injected spike causes at most one blocking wait through the return.",
       "screen": "game",
@@ -1336,6 +1362,19 @@
         1200
       ],
       "gate": "item9a_steady_stalls"
+    },
+    {
+      "id": "lag-200-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero missing-frame stalls in the steady window.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
     },
     {
       "id": "lag-200-item9a_spike_waits",
@@ -1492,6 +1531,19 @@
         1200
       ],
       "gate": "item9a_steady_stalls"
+    },
+    {
+      "id": "lag-200-survivor-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero missing-frame stalls in the steady window.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
     },
     {
       "id": "lag-200-survivor-item9a_spike_waits",
