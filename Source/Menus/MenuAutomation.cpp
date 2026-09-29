@@ -1,4 +1,6 @@
 #include "MenuAutomation.h"
+#include "MetaMan.h"
+#include "MetagameGUI.h"
 #include "SettingsGUI.h"
 #include "MenuMan.h"
 #include "MainMenuGUI.h"
@@ -324,7 +326,7 @@ namespace RTE::MenuAutomation {
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert" ||
-			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input" || command == "open_local_pause";
+			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input" || command == "open_local_pause" || command == "meta_command";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -340,6 +342,17 @@ namespace RTE::MenuAutomation {
 		return {{"rect", rect}, {"uncovered_pixels", uncovered}, {"pixels", rect[2] * rect[3]}};
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "meta_command") {
+			std::string name;
+			args >> name;
+			if (!FireAssertAllowed() || !MetaMan::IsConstructed() || !g_MetaMan.GetGUI()) return false;
+			GUIControlManager* controls = g_MetaMan.GetGUI()->GetGUIControlManager();
+			GUIControl* control = controls ? controls->GetControl(name) : nullptr;
+			auto* input = controls ? dynamic_cast<GUIInputWrapper*>(controls->GetInput()) : nullptr;
+			observation = name + " game=" + g_MetaMan.GetGameName();
+			if (!input || !control || !Enabled(control) || !Visible(control)) return false;
+			return input->QueueAutomationCommand([control] { control->AddEvent(GUIEvent::Command, 0); });
+		}
 		if (command == "open_local_pause") {
 			if (!FireAssertAllowed() || g_MenuMan.IsLocalPauseMenuOpen()) return false;
 			const bool opened = g_MenuMan.ToggleLocalPauseMenu();
