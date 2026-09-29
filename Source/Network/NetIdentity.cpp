@@ -24,6 +24,7 @@
 #include <future>
 #include <iomanip>
 #include <iostream>
+#include <locale>
 #include <map>
 #include <mutex>
 #include <set>
@@ -101,6 +102,8 @@ namespace RTE {
 			uint32_t bits = 0;
 			std::memcpy(&bits, &value, sizeof(bits));
 			std::ostringstream oss;
+			// The identity text is compared byte for byte across machines; no locale may group its digits.
+			oss.imbue(std::locale::classic());
 			oss << "0x" << std::hex << std::setw(8) << std::setfill('0') << bits;
 			return oss.str();
 		}
