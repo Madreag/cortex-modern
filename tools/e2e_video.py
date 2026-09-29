@@ -33,7 +33,7 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 from run_sim_test import make_run, seed_settings  # noqa: E402
-from compare_sim_traces import compare_fullstate  # noqa: E402
+from compare_sim_traces import compare_fullstate, CORE  # noqa: E402
 
 SCENARIO_DIR = TOOLS / "e2e"
 PORT_LO, PORT_HI = 49400, 49479
@@ -1565,7 +1565,7 @@ def compare_round_histories(root, config):
             for key in histories[peer].keys() & histories[reference].keys():
                 a, b = histories[reference][key], histories[peer][key]
                 shared = lambda row: {k: v for k, v in row.get('subsystems', {}).items() if k not in PER_PEER_SUBSYSTEMS}
-                if not shared(a) or 'controller' not in shared(a) or shared(a) != shared(b) or a.get('sim_gated') != b.get('sim_gated') or a.get('paused', False) != b.get('paused', False):
+                if not (CORE | {'controller'}) <= shared(a).keys() or not a.get('sim_gated') or shared(a) != shared(b) or a.get('sim_gated') != b.get('sim_gated') or a.get('paused', False) != b.get('paused', False):
                     errors.append(f'{peer}: unequal round/tick {key}')
                     break
     except (OSError, ValueError, KeyError, TypeError) as error:
@@ -1598,7 +1598,7 @@ def native_behavior(root, spec):
             require(report.get('exit_code') == 0 and report.get('running_ticks', 0) >= spec['ticks'][peer], f'{peer}: incomplete continued play')
             if peer in spec.get('steady_peers', []):
                 counts = fields(report, 'steady_missing_frame_stalls')
-                require(bool(counts) and all(isinstance(v, int) and v == 0 for v in counts), f'{peer}: missing or nonzero steady stall count')
+                require(bool(counts) and all(type(v) is int and v == 0 for v in counts), f'{peer}: missing or nonzero steady stall count')
         if spec['kind'] in ('held-seat', 'rehold'):
             target = spec['target']
             target_log = text(target)
@@ -1654,7 +1654,7 @@ def native_behavior(root, spec):
             host = read_live_hashes(root / 'world-live.jsonl')
             canonical = {(row.get('round'), row['tick']): row for row in host}
             require(len(canonical) == len(host), 'world duplicated a committed tick')
-            require(len({row.get('round') for row in host}) == 1, 'world round was restarted')
+            require(len({row.get('round') for row in host}) == 1 and all(row.get('round') is not None for row in host), 'world round was restarted or not identified')
             require(set(range(1, spec['ticks']['world'] + 1)) <= {r['tick'] for r in host}, 'world stopped ticking across visits')
             for peer in ('client-first', 'client-late'):
                 rows = read_live_hashes(root / f'{peer}-live.jsonl')
@@ -1667,7 +1667,7 @@ def native_behavior(root, spec):
                 for row in rows:
                     other = canonical.get((row.get('round'), row['tick']))
                     shared = lambda value: {k: v for k, v in value.get('subsystems', {}).items() if k not in PER_PEER_SUBSYSTEMS}
-                    if other is None or not shared(row) or shared(row) != shared(other) or row.get('sim_gated') != other.get('sim_gated'):
+                    if other is None or not (CORE | {'controller'}) <= shared(row).keys() or not row.get('sim_gated') or shared(row) != shared(other) or row.get('sim_gated') != other.get('sim_gated'):
                         errors.append(f'{peer}: world state differs at tick {row["tick"]}')
                         break
         else:

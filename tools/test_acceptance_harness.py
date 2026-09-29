@@ -73,6 +73,9 @@ class AcceptanceTests(unittest.TestCase):
     def test_f11_soak_has_twenty_minutes(self):
         options = cross_peers.parse_args(['--lane', 'unit-acceptance', '--mac-guard', 'unit-marker', '--scenario', 'soak'])
         self.assertEqual(options.ticks, 72000)
+        manifest, checks = self.cross_case('soak')
+        manifest['ticks'] = 36000
+        self.assertFalse(cross_report.judge_attempt(manifest, checks, {}, [], []).get('v1_passed', True))
 
     def test_f12_unrelated_placeholder_does_not_decide_v1(self):
         for scenario in ('soak', 'chaos'):
@@ -89,6 +92,22 @@ class AcceptanceTests(unittest.TestCase):
             a, b = Path(temporary) / 'a', Path(temporary) / 'b'
             a.touch(); b.touch()
             self.assertFalse(determinism.first_object_divergence(a, b).get('identical', False))
+
+    def test_f13_held_client_must_reach_the_planned_terminal_tick(self):
+        texts='[net-match] hold peer=2 frame=50 AI in control\n[preview-argument] preview uid=7 attached=false\n'
+        records={peer:dict(exit_code=0,timed_out=False) for peer in ('host','client')}
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            for terminal in (599,600):
+                def trace(path,*_):
+                    end=600 if path.parent.name=='host' else terminal
+                    return (dict.fromkeys(range(1,end+1)),None)
+                with mock.patch.object(determinism,'peer_text',return_value=texts), \
+                     mock.patch.object(determinism,'load_trace',side_effect=trace), \
+                     mock.patch.object(determinism,'strict_compare',return_value=(True,{'compared_ticks':terminal})), \
+                     mock.patch.object(determinism,'first_object_divergence',return_value={'identical':True}):
+                    result=determinism.score(root,'argument','unit',records)
+                self.assertEqual(result['passed'],terminal==600,result)
 
     def test_f13_missing_object_tick_is_not_identical(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -64,7 +64,8 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     if manifest['scenario'] != 'match':
         required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
     workload = (manifest['ticks'] == 1201 and not manifest.get('faults')) if manifest['scenario'] == 'match' else (
-        manifest['ticks'] >= 72000 if manifest['scenario'] == 'soak' else bool(manifest.get('faults')))
+        manifest['ticks'] == 72000 if manifest['scenario'] == 'soak' else
+        bool(manifest.get('faults')) if manifest['scenario'] == 'chaos' else False)
     v1 = all(checks.get(name, False) for name in required) and workload and bool(manifest.get('fullstate_every')) and not pending and not mixed_builds
     return dict(core_passed=core,core_engine_red=engine_red,mixed_builds=list(mixed_builds),
         v1_passed=bool(v1), v1_checks=list(required), v1_workload=workload,

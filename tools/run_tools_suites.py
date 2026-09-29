@@ -18,6 +18,7 @@ SUITES = (
     ("e2e-video", ["test_e2e_video.py"]),
     ("cross-driver", ["-m", "unittest", "feel.test_cross_driver"]),
     ("cross-report", ["-m", "unittest", "feel.test_report"]),
+    ("cross-oracles", ["-m", "unittest", "feel.test_cross_oracles"]),
     ("autosave-restore-oracles", ["-m", "unittest", "test_autosave_restore"]),
     ("compare-snapshots", ["test_compare_snapshots.py"]),
     ("snapshot-inventory-roles", ["test_snapshot_inventory_roles.py"]),
