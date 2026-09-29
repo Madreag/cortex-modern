@@ -517,6 +517,19 @@ namespace RTE::FloatTextSelfTest {
 			return static_cast<std::ostringstream*>(writer.GetStream())->str();
 		}
 
+		std::string ProbeIntegerWriter() {
+			Writer writer(std::make_unique<std::ostringstream>());
+			writer << 1234567 << "|" << -1234567890LL << "|" << 1234567890123456789ULL;
+			return static_cast<std::ostringstream*>(writer.GetStream())->str();
+		}
+
+		std::string ProbeIntegerReader() {
+			Reader reader(std::make_unique<std::istringstream>("12.345\n"), "integer-locale.ini");
+			int value = 0;
+			reader >> value;
+			return std::to_string(value);
+		}
+
 		/// Both sites write the canonical hexadecimal spelling, so their packed text is the same on every platform.
 		constexpr const char* ArmHandTargetText = "0x1.8p+0|-0x1p-2|0x1.8p-1|1|reach";
 
@@ -624,6 +637,8 @@ namespace RTE::FloatTextSelfTest {
 			    // Measured on the pre-change build: the stream stored an infinity, and zero on underflow.
 			    {"reader_out_of_range", ProbeReaderOutOfRange, "0x7ff0000000000000:fail/0xfff0000000000000:fail/0x0:fail"},
 			    {"writer_float", ProbeWriter, "1.5|-0.1"},
+			    {"writer_integer", ProbeIntegerWriter, "1234567|-1234567890|1234567890123456789"},
+			    {"reader_integer_prefix", ProbeIntegerReader, "12"},
 			    {"arm_hand_target", ProbeArmHandTarget, ArmHandTargetText},
 			    {"pie_menu_cursor_angle", ProbePieMenuState, PieMenuStateText},
 			    {"attachable_deg_offset", ProbeInheritedRotAngleDegOffset, nullptr},
