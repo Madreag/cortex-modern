@@ -288,6 +288,12 @@ namespace RTE {
 					*error = "loaded module name/version/count arm " + std::to_string(arm) + " did not change identity " + NetIdentity::HashHex(hash);
 					return false;
 				}
+				const auto mismatch = NetIdentity::Compare(base, changed);
+				const std::string moduleName = arm == 0 ? "VoidWanderers.rte" : "Example.rte";
+				if (!mismatch || mismatch->summary.find(moduleName) == std::string::npos) {
+					*error = "module name/version/count arm " + std::to_string(arm) + " did not name " + moduleName + ": " + (mismatch ? mismatch->summary : "admitted");
+					return false;
+				}
 			}
 			changed = base;
 			std::swap(changed.modules[0], changed.modules[1]);
