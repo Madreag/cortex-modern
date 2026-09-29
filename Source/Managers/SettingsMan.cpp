@@ -185,7 +185,7 @@ void SettingsMan::Clear() {
 	m_AIUpdateInterval = 2;
 	m_NetworkInputDelayFrames = 0;
 	SetAutosaveSeconds(0);
-	m_SessionDirectoryUrl.clear();
+	m_SessionDirectoryUrl = c_DefaultSessionDirectoryUrl;
 	m_SessionDirectoryInstallKey.clear();
 	m_SessionDirectoryCertSha256.clear();
 	m_NetworkPortMapEnable = true;
@@ -879,6 +879,9 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	check("directory URL comments", settings.GetSessionDirectoryUrl() == "community.example.invalid/serve");
 	writeRead([&](Writer& writer) { writer.NewPropertyWithValue("NetworkDisplayName", "Pilot // a normal property comment"); });
 	check("ordinary string comments unchanged", settings.GetNetworkDisplayName() == "Pilot");
+	// A fresh install (no settings file) must reach the public directory; an explicit empty value above still disables it.
+	settings.Clear();
+	check("directory default after clear", settings.GetSessionDirectoryUrl() == SettingsMan::c_DefaultSessionDirectoryUrl);
 	settings.SetNetworkDisplayName("AlphaPilot");
 	if (failures != 0) {
 		return 1;
