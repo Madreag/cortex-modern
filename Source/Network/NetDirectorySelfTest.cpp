@@ -28,7 +28,7 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__linux__)
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -563,6 +563,63 @@ namespace RTE {
 				return false;
 			}
 
+			bool TestHttpClientRefusals(std::string* error) {
+				for (const bool plainHttp : {true, false}) {
+					NetHttpClient client;
+					client.Start("POST", plainHttp ? "http://127.0.0.1:1/" : "https://127.0.0.1:1/", {}, "{}", plainHttp ? "" : "bad-pin");
+					while (client.Poll() == NetHttpClient::PollResult::Pending) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+					const auto response = client.GetResponse();
+					const std::string expected = plainHttp ? "only https urls are supported" : "malformed certificate pin";
+					if (response.statusCode != 0 || response.error != expected) {
+						*error = "HTTP refusal expected '" + expected + "', got '" + response.error + "'";
+						return false;
+					}
+				}
+				std::cout << "[net-directory-selftest] PASS http_scheme_and_pin_refusals" << std::endl;
+				return true;
+			}
+
+			bool TestLiveHttpsDirectory(std::string* error) {
+				std::ifstream fixture("DirectoryHttpFixture.json");
+				if (!fixture) return true;
+				const auto config = json::parse(fixture, nullptr, false);
+				if (!config.is_object() || !config.contains("url") || !config["url"].is_string() || !config.contains("pin") || !config["pin"].is_string()) {
+					*error = "invalid live HTTPS fixture"; return false;
+				}
+				const std::string url = config["url"].get<std::string>(), pin = config["pin"].get<std::string>();
+				if (!url.starts_with("https://127.0.0.1:")) { *error = "live HTTPS fixture must use loopback"; return false; }
+				const auto request = [&](const char* method, const std::string& path, const std::string& body, NetHttpClient::Response& response) {
+					NetHttpClient client;
+					client.Start(method, url + path, {{"Content-Type", "application/json"}, {"X-Install-Key", "linux-http-contract-fixture"}}, body, pin);
+					while (client.Poll() == NetHttpClient::PollResult::Pending) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+					response = client.GetResponse();
+					std::cout << "[net-directory-selftest] live HTTPS " << method << " " << path << " status=" << response.statusCode << " error=" << response.error << std::endl;
+					if (response.statusCode == 200 && response.error.empty()) return true;
+					*error = "live HTTPS request failed: " + response.error;
+					return false;
+				};
+				NetHttpClient::Response response;
+				if (!request("POST", "/v1/sessions", NetDirectoryCodec::EncodeRegisterRequest(SampleRegisterRequest()), response)) return false;
+				NetDirectoryRegisterResponse created;
+				if (!NetDirectoryCodec::DecodeRegisterResponse(response.body, created, *error)) return false;
+				if (!request("GET", "/v1/sessions", "", response)) return false;
+				NetDirectoryListResponse listed;
+				if (!NetDirectoryCodec::DecodeListResponse(response.body, listed, *error)) return false;
+				if (std::none_of(listed.sessions.begin(), listed.sessions.end(), [&](const auto& row) { return row.sessionId == created.sessionId; })) {
+					*error = "live HTTPS registration is absent from list"; return false;
+				}
+				const std::string path = "/v1/sessions/" + created.sessionId;
+				if (!request("POST", path + "/ice-servers", json{{"token", created.token}, {"match_id", "linux-http-contract"}, {"ttl", 600}}.dump(), response)) return false;
+				const auto offer = json::parse(response.body, nullptr, false);
+				if (!offer.is_object() || !offer.contains("iceServers") || !offer["iceServers"].is_array() || offer["iceServers"].empty() ||
+				    !offer["iceServers"][0].contains("credential") || offer["iceServers"][0]["credential"].get<std::string>().empty()) {
+					*error = "live HTTPS mint returned no relay credential"; return false;
+				}
+				if (!request("DELETE", path, json{{"token", created.token}}.dump(), response)) return false;
+				std::cout << "[net-directory-selftest] PASS live_https_register_list_mint" << std::endl;
+				return true;
+			}
+
 			bool TestHttpClientReuse(std::string* error) {
 				NetHttpClient client;
 				client.Start("GET", "https://127.0.0.1:1/", {}, "", "");
@@ -582,7 +639,7 @@ namespace RTE {
 				return true;
 			}
 
-#if defined(_WIN32) || defined(__APPLE__)
+#if defined(_WIN32) || defined(__APPLE__) || defined(__linux__)
 			bool MeasureCancel(const std::string& url, std::string* error) {
 				NetHttpClient client;
 				client.Start("GET", url, {}, "", "");
@@ -2772,6 +2829,8 @@ namespace RTE {
 			if (!TestCannedSequence(&error)) return fail(error);
 			if (!TestUnlistedVisibility(&error)) return fail(error);
 			if (!TestHttpClientReuse(&error)) return fail(error);
+			if (!TestHttpClientRefusals(&error)) return fail(error);
+			if (!TestLiveHttpsDirectory(&error)) return fail(error);
 			if (!TestClientLifecycle(&error)) return fail(error);
 			if (!TestRelayCredentialRequest(&error)) return fail(error);
 			if (!TestHeartbeat404Reregisters(&error)) return fail(error);
@@ -2799,7 +2858,7 @@ namespace RTE {
 			if (!TestSignalPostBeforePoll(&error)) return fail(error);
 			if (!TestSignalNonceAndCredentials(&error)) return fail(error);
 			if (!TestSignalDrain(&error)) return fail(error);
-#if defined(_WIN32) || defined(__APPLE__)
+#if defined(_WIN32) || defined(__APPLE__) || defined(__linux__)
 			if (!TestHttpClientCancel(&error)) return fail(error);
 #ifdef _WIN32
 			if (!TestHttpClientStress(&error)) return fail(error);

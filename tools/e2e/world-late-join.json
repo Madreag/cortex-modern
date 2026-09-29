@@ -25,7 +25,9 @@
         "-net-match-report",
         "{OUT}/world-report.json",
         "-net-persistent-world",
-        "-net-world-fresh"
+        "-net-world-fresh",
+        "-net-live-tick-hashes",
+        "{OUT}/world-live.jsonl"
       ],
       "settings": {
         "NetworkDisplayName": "World"
@@ -54,7 +56,9 @@
         "-net-reconnect-ticket",
         "{OUT}/first.ticket",
         "-net-match-report",
-        "{OUT}/first-report.json"
+        "{OUT}/first-report.json",
+        "-net-live-tick-hashes",
+        "{OUT}/client-first-live.jsonl"
       ],
       "input_script": "play-input.txt",
       "settings": {
@@ -85,7 +89,9 @@
         "-net-reconnect-ticket",
         "{OUT}/late.ticket",
         "-net-match-report",
-        "{OUT}/late-report.json"
+        "{OUT}/late-report.json",
+        "-net-live-tick-hashes",
+        "{OUT}/client-late-live.jsonl"
       ],
       "input_script": "play-input.txt",
       "settings": {
@@ -108,7 +114,8 @@
         4200
       ],
       "what": "the dedicated world host runs without a menu and keeps ticking across both clients' visits",
-      "assert": "world report: the match runs to its tick cap"
+      "assert": "world report: the match runs to its tick cap",
+      "gate": "scenario-behavior"
     },
     {
       "id": "pw-first-join",
@@ -119,7 +126,8 @@
         1400
       ],
       "what": "the first client joins the running world and plays in it",
-      "assert": "first report plus the world's seat rows"
+      "assert": "first report plus the world's seat rows",
+      "gate": "scenario-behavior"
     },
     {
       "id": "pw-first-leave",
@@ -130,7 +138,8 @@
         2600
       ],
       "what": "the first client leaves and the world keeps its state, with the seat freed and no error",
-      "assert": "world report between the two visits"
+      "assert": "world report between the two visits",
+      "gate": "scenario-behavior"
     },
     {
       "id": "pw-late-join",
@@ -142,7 +151,8 @@
       "log_regex": [
         "\\[net-match\\] state transfer complete: \\d+ bytes",
         "\\[snapbench\\] read_ms=\\d+"
-      ]
+      ],
+      "gate": "scenario-behavior"
     },
     {
       "id": "pw-late-video-agrees",
@@ -156,7 +166,22 @@
       "what": "a run that starts the world from scratch (-net-world-fresh) is part of this scenario",
       "assert": "launch.json carries -net-persistent-world and -net-world-fresh; frames show the fresh world",
       "peer": "world",
-      "screen": "game"
+      "screen": "game",
+      "gate": "scenario-behavior"
     }
-  ]
+  ],
+  "behavior_gate": {
+    "kind": "world-continuity",
+    "late_tick": 1800,
+    "reports": {
+      "world": "world-report.json",
+      "client-first": "first-report.json",
+      "client-late": "late-report.json"
+    },
+    "ticks": {
+      "world": 4200,
+      "client-first": 1400,
+      "client-late": 1400
+    }
+  }
 }

@@ -33,7 +33,8 @@
         "NetworkSlowPlayerBoundTicks": "3",
         "NetworkSlowPlayerPolicy": "Substitute"
       },
-      "menu_script": "mp-host-migration.host.menu.txt"
+      "menu_script": "mp-host-migration.host.menu.txt",
+      "probe": "mp-held-seat.observe.probe.json"
     },
     {
       "name": "clienta",
@@ -67,7 +68,8 @@
         "peer": "host",
         "event": "video_mark migration-listening",
         "timeout_s": 90
-      }
+      },
+      "probe": "mp-held-seat.observe.probe.json"
     },
     {
       "name": "clientb",
@@ -114,7 +116,8 @@
         300,
         4200
       ],
-      "what": "The host plays on for a minute with ClientB's seat under the AI."
+      "what": "The host plays on for a minute with ClientB's seat under the AI.",
+      "gate": "scenario-behavior"
     },
     {
       "id": "held-seat-survivor-plays-on",
@@ -124,7 +127,29 @@
         300,
         4200
       ],
-      "what": "The other survivor plays on beside the held seat."
+      "what": "The other survivor plays on beside the held seat.",
+      "gate": "scenario-behavior"
     }
-  ]
+  ],
+  "behavior_gate": {
+    "kind": "held-seat",
+    "target": "clientb",
+    "observers": [
+      "host",
+      "clienta"
+    ],
+    "holds": 1,
+    "reports": {
+      "host": "host-match.json",
+      "clienta": "clienta-match.json"
+    },
+    "ticks": {
+      "host": 4200,
+      "clienta": 4200
+    },
+    "steady_peers": [
+      "host",
+      "clienta"
+    ]
+  }
 }

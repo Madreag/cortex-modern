@@ -477,6 +477,14 @@ namespace {
 	class Walk {
 	public:
 		explicit Walk(lua_State* state) : L(state) {}
+		~Walk() {
+			std::set<int> references{m_GetRef, m_SetRef};
+			for (const auto& [name, instance]: m_Instances) references.insert(instance.handle);
+			for (const auto& instance: m_Owned) references.insert(instance.handle);
+			for (const auto& [name, reference]: m_OperatorRefs) references.insert(reference);
+			references.insert(m_FreeFunctionRefs.begin(), m_FreeFunctionRefs.end());
+			for (int reference: references) luaL_unref(L, LUA_REGISTRYINDEX, reference);
+		}
 
 		bool Run();
 		bool RunWalk();
@@ -485,6 +493,7 @@ namespace {
 		lua_State* L;
 		std::map<std::string, class_rep*> m_Classes;
 		std::map<std::string, Instance> m_Instances;
+		std::vector<std::unique_ptr<const Entity>> m_PresetClones;
 		PreviewWindow m_Window;
 		WorldHash m_World;
 		std::ofstream m_Journal;
@@ -932,8 +941,9 @@ namespace {
 			for (const Entity* preset: presets) {
 				if (preset && preset->GetClassName() == name) {
 					// A script holds a copy it made before the preview; the preset itself stays the library's.
-					const Entity* copy = preset->Clone();
-					AddEntity(copy, "clone of preset " + preset->GetModuleAndPresetName(), true);
+					auto copy = std::unique_ptr<const Entity>(preset->Clone());
+					AddEntity(copy.get(), "clone of preset " + preset->GetModuleAndPresetName(), true);
+					m_PresetClones.push_back(std::move(copy));
 					break;
 				}
 			}

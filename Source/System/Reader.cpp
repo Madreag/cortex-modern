@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <locale>
 #include <sstream>
 #include <stdexcept>
 
@@ -184,6 +185,8 @@ int Reader::Create(std::unique_ptr<std::istream>&& stream, const std::string& fi
 	m_CanFail = failOK;
 
 	m_Stream = std::move(stream);
+	// Preset numbers use the same decimal point and integer grammar on every machine.
+	m_Stream->imbue(std::locale::classic());
 
 	if (!m_CanFail) {
 		RTEAssert(m_Stream->good(), "Failed to open data file \"" + m_FilePath + "\"!");

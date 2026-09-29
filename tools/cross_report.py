@@ -24,7 +24,7 @@ CAPTURE_ROWS={
     2:'capture-rows lane row 2: Windows/Mac hex-float text at Source/System/FloatText.h:324-326,608-610; PieMenu.cpp:259; Arm.cpp:506; Scene.cpp:2056,2059,2142'}
 
 
-def judge_attempt(manifest,checks,peers,matrix,recoveries):
+def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     core=all(checks.get(name,False) for name in CORE_CHECKS)
     engine_red=not checks.get('zero_unscheduled_holds',False) and bool(checks.get('only_capture_induced_holds')) and all(checks.get(name,False) for name in CORE_CHECKS if name not in ('full_history','zero_unscheduled_holds'))
     oracle=lambda passed,reason='':dict(status='PASS' if passed else 'FAIL',reason=reason)
@@ -35,6 +35,8 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries):
     coverage_status='FAIL' if any(row['status']=='FAIL' for row in matrix) else \
         'NOT COVERED' if any(row['status']=='NOT COVERED' for row in matrix) else 'PASS'
     oracles=dict(
+        preflight=dict(oracle(checks.get('preflight_complete',False),'; '.join(mixed_builds) or
+            'Every box preflighted without a driver finding, and every incarnation ran the executable its preflight hashed.'),reasons=list(mixed_builds)),
         live_hashes=oracle(checks.get('full_history',False) and checks.get('zero_desync',False),'Every declared comparable key; UNKNOWN never equals.'),
         unscheduled_holds=oracle(checks.get('zero_unscheduled_holds',False) and checks.get('hold_evidence_complete',False),
             'Every incarnation must retain its stdout hold log; missing evidence cannot establish zero holds.'),
@@ -50,13 +52,23 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries):
         record_integrity=oracle(checks.get('record_integrity',False)),
         engine_findings=oracle(checks.get('no_engine_findings',False),'All findings remain visible, including the named capture rows.'),
         exits=oracle(checks.get('all_incarnation_exits',False),'Each incarnation must exit normally or have its own scheduled, actually injected crash receipt.'))
+    if mixed_builds:
+        for name in ('live_hashes','full_state'): oracles[name]=dict(status='VOID',reason='Compared across a mixed build; the preflight names both executables.')
     if not manifest.get('faults'): oracles['recovery']['status']='NOT APPLICABLE'
     if not manifest.get('faults'): oracles['fault_effects']['status']='NOT APPLICABLE'
     if manifest['scenario']!='match':
         oracles['forced_ends']=oracle(checks.get('forced_end_during_hold',False) and checks.get('forced_end_during_transfer',False),'Actual activity-over must overlap the named recovery phase; a stale hint is insufficient.')
         oracles['rematches']=oracle(checks.get('changed_settings_rematch',False) and checks.get('fog_on_match',False))
         oracles['autosaves']=oracle(checks.get('validated_autosave_archives',False),'Archive integrity alone does not prove restoration or sealed admission.')
-    return dict(core_passed=core,core_engine_red=engine_red,
+    required = (*CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings')
+    if manifest['scenario'] != 'match':
+        required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
+    workload = (manifest['ticks'] == 1201 and not manifest.get('faults')) if manifest['scenario'] == 'match' else (
+        manifest['ticks'] == 72000 if manifest['scenario'] == 'soak' else
+        bool(manifest.get('faults')) if manifest['scenario'] == 'chaos' else False)
+    v1 = all(checks.get(name, False) for name in required) and workload and bool(manifest.get('fullstate_every')) and not pending and not mixed_builds
+    return dict(core_passed=core,core_engine_red=engine_red,mixed_builds=list(mixed_builds),
+        v1_passed=bool(v1), v1_checks=list(required), v1_workload=workload,
         gate_b_eligible=(core or engine_red) and checks.get('shared_fullstate',False) and not pending and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
 
 
@@ -87,7 +99,9 @@ def scheduled_hold(hold,receipts,recoveries):
 
 
 def attempt_label(result):
-    if result.get('passed'): return 'PASS'
+    if result.get('v1_passed'): return 'V1 PASS'
+    if 'v1_passed' not in result: return 'V1 NOT GRADED'
+    if result.get('mixed_builds'): return 'PREFLIGHT RED (mixed build); FULL GATE VOID'
     if result.get('core_engine_red'): return 'CORE-ENGINE-RED; FULL GATE RED'
     return 'CORE PASS; FULL GATE RED' if result.get('core_passed') else 'CORE FAIL; FULL GATE RED'
 
@@ -200,8 +214,8 @@ def roster_matches(manifest, configs):
     humans=sum(p.get('seat','player')=='player' for p in manifest['instances'])
     roster=manifest['roster']
     human_teams=[0]*humans if roster=='ai-heavy' else [0,0,1] if roster in ('mixed','allies') else list(range(humans))
-    cpu_teams=[1,2] if roster=='ai-heavy' else [2] if roster in ('mixed','allies') else [humans]
-    mode='coop-pve' if roster=='ai-heavy' else 'pvpve'
+    cpu_teams=[] if roster=='four-way' else [1,2] if roster=='ai-heavy' else [2] if roster in ('mixed','allies') else [humans]
+    mode='pvp-skirmish' if roster=='four-way' else 'coop-pve' if roster=='ai-heavy' else 'pvpve'
     for config in configs:
         players=config.get('players',[]); native=config.get('config',{})
         if sorted(p.get('team',-1) for p in players if p.get('human'))!=human_teams or \
@@ -345,9 +359,23 @@ def requirements(manifest, comparison, metrics):
     return items
 
 
+def local_host_render(manifest, peers):
+    local = {box['name'] for box in manifest['boxes'] if box['kind'] == 'windows-local'}
+    spec = next((spec for spec in manifest['specs'] if spec['peer'] == manifest['host'] and spec['box'] in local), None)
+    if spec is None:
+        return None
+    settings = spec.get('settings', {})
+    tps = peers.get(spec['peer'], {}).get('timing', {}).get('steady_wall_tps')
+    return dict(peer=spec['peer'], box=spec['box'], size=f"{settings.get('ResolutionX', 960)}x{settings.get('ResolutionY', 540)}",
+                render_cap=spec.get('render_cap', 60), wall_tps=tps,
+                reason='Existing steady wall TPS from retained live events; reported only.' if tps is not None else
+                       'No wall TPS available in the retained events; reported only.')
+
+
 def build_report(root):
     root = Path(root).resolve(); manifest = load(root / 'manifest.json', {})
     live, events, peers, findings, paths = {}, {}, {}, list(manifest.get('driver_findings', [])), {}
+    mixed_builds = []
     capabilities = {}
     for box in manifest['boxes']:
         box_root = root if box['kind'] == 'windows-local' else root / 'boxes' / box['name']
@@ -359,6 +387,12 @@ def build_report(root):
         name = spec['peer']; first_own = peer_root(root, manifest, spec)
         fragments=sorted(first_own.parent.glob('incarnation-*'),key=lambda p:int(p.name.split('-')[-1])) or [first_own]
         own=fragments[-1]; paths[name] = own
+        expected=manifest.get('preflights',{}).get(spec['box'],{}).get('executable_sha256')
+        for fragment in fragments:
+            runner=load(fragment/'record.json',{}) or load(fragment/'engine/launch.json',{})
+            if runner and (not expected or runner.get('exe_sha256')!=expected):
+                mixed_builds.append(f'{spec["box"]}: {name} incarnation {int(fragment.name.split("-")[-1])} ran executable sha256 '
+                                    f'{runner.get("exe_sha256")} but the preflight hashed {expected}')
         live[name] = [row for fragment in fragments for row in source_rows(fragment/'live.jsonl',root)]
         events[name] = [row for fragment in fragments for path in event_paths(fragment) for row in source_rows(path,root)]
         for observed in [*live[name],*events[name]]:
@@ -505,7 +539,7 @@ def build_report(root):
             hold.update(classify_hold(hold,events,peers))
     unscheduled_holds=sum(not h['scheduled_recovery_id'] for p in peers.values() for h in p['holds'])
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
-                  preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings'),
+                  preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings') and not mixed_builds,
                   full_history=comparison['passed'] and not missing_boundaries, zero_desync=comparison['unequal_keys'] == 0 and bool(ranges),
                   hold_evidence_complete=all(p['hold_evidence_complete'] for p in peers.values()),
                   zero_unscheduled_holds=unscheduled_holds == 0, native_completion=all(p['record'].get('exit_code') == 0 and
@@ -553,11 +587,12 @@ def build_report(root):
         peer['unkeyed']=len(unkeyed)
         peer['first_unkeyed']=dict(tick=unkeyed[0].get('tick'),path=unkeyed[0].get('_path'),line=unkeyed[0].get('_line'),
             missing=[field for field in report.HISTORY_FIELDS if unkeyed[0].get(field) is None]) if unkeyed else None
-    judgment=judge_attempt(manifest,checks,peers,matrix,recoveries)
+    judgment=judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds)
     rerun=write_rerun_command(root,manifest)
-    result = dict(version=2, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
+    result = dict(version=2, run=manifest['run'], passed=judgment['v1_passed'], diagnostic_passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
                   assigned_capture_rows={str(row):CAPTURE_ROWS[row] for row in manifest.get('capture_rows_pending',[1,2])},rerun_after_capture_fix=rerun,
-                  peers=peers, comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
+                  peers=peers, local_host_render=local_host_render(manifest, peers),
+                  comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
                   native_recovery_records=native_recovery_records,native_fault_effects=effects,unscheduled_holds=unscheduled_holds,
@@ -603,8 +638,12 @@ def write_page(root, result, events):
         f'<p>{len(result["peers"])} peers on {len(manifest["boxes"])} boxes · host {escape(manifest["host"])} · {manifest["ticks"]:,} committed ticks requested.</p>',
         '<p>Correctness gates apply throughout. Feel gates apply only in a declared quiet window with measured load absent. UNKNOWN history is never counted as equal.</p>',
         '<p>Quiet feel pins: at least 59.5 TPS, waiting below 1%, longest measured wait at most 50 ms, and nominal-dt horizon drift at most 50 ms. The steady interval is anchored at tick 300; only waits after that tick and through the declared last tick enter its denominator. Other observed waits remain visible.</p>',
-        f'<p>Recovery deadline {manifest["deadlines"]["recovery_ms"]:,} ms · capture budget {manifest["deadlines"]["capture_ms"]} ms. Memory warm-up {manifest["memory"]["warmup_s"]} s, slope bound {manifest["memory"]["slope_bytes_per_minute"]:,} B/min, retention bound {manifest["memory"]["retained_bytes"]:,} B. Raw sizes are never reduced by unmeasured instrumentation.</p>',
-        '<div class="cards">']
+        f'<p>Recovery deadline {manifest["deadlines"]["recovery_ms"]:,} ms · capture budget {manifest["deadlines"]["capture_ms"]} ms. Memory warm-up {manifest["memory"]["warmup_s"]} s, slope bound {manifest["memory"]["slope_bytes_per_minute"]:,} B/min, retention bound {manifest["memory"]["retained_bytes"]:,} B. Raw sizes are never reduced by unmeasured instrumentation.</p>']
+    if metric := result.get('local_host_render'):
+        cap = 'uncapped (0 Hz)' if metric['render_cap'] == 0 else f'{metric["render_cap"]} Hz'
+        parts.append(f'<p>Local host {escape(metric["peer"])} render size {escape(metric["size"])} · cap {escape(cap)} · '
+                     f'wall TPS {escape(value(metric["wall_tps"]))}. {escape(metric["reason"])}</p>')
+    parts.append('<div class="cards">')
     for name, peer in result['peers'].items():
         pairs = [('Frames',peer['frames']),('Feel',peer['feel_status']),('Steady TPS',peer['timing'].get('steady_wall_tps')),
                  ('All observed waits over 50 ms',peer['observed_waits_over_50']),('Steady waits over 50 ms',peer['timing'].get('steady_waits_over_50')),('Missing-frame stalls',peer['timing'].get('steady_missing_frame_stalls')),
@@ -682,4 +721,4 @@ def write_index(root):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__); parser.add_argument('root',type=Path)
     result=build_report(parser.parse_args().root)
-    raise SystemExit(0 if (result.get('gate_b_eligible') if result['manifest']['scenario']=='match' else result['passed']) else 1)
+    raise SystemExit(0 if result['v1_passed'] else 1)

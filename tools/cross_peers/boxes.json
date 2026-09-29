@@ -22,6 +22,18 @@
       "python": "python"
     },
     {
+      "name": "Linux", "kind": "posix-ssh", "ssh": "3090",
+      "environment": {"DISPLAY": ":0"},
+      "peers_per_box": 1,
+      "tree": "/home/erol/cortex-workers/opus-run-cross-linux-20260928/repo",
+      "executable": "/home/erol/cortex-workers/opus-run-cross-linux-20260928/repo/build-gcc/CortexCommand",
+      "runner": "tools/posix_test_runner.py via run_sim_test.make_run over ssh",
+      "ports": [50310, 50319], "directory_port": 50318,
+      "sampler": "engine-pid-ps", "scratch": "/home/erol/cortex-workers/opus-run-cross-linux-20260928/runs/{lane}",
+      "python": "/usr/bin/python3",
+      "guard_file": "/home/erol/cortex-workers/opus-run-cross-linux-20260928/BOX-FREE-FOR-CROSS"
+    },
+    {
       "name": "Mac", "kind": "posix-ssh", "ssh": "Erol-Mac",
       "peers_per_box": 1,
       "tree": "/Users/erol/cortex-workers/{lane}/repo",
@@ -36,6 +48,7 @@
   "instances": [
     {"name": "erol", "box": "EROL-PC", "port_block": [49900, 49904], "seat": "player"},
     {"name": "edith", "box": "EDITH", "port_block": [49900, 49904], "seat": "player"},
-    {"name": "mac", "box": "Mac", "port_block": [49900, 49904], "seat": "player"}
+    {"name": "mac", "box": "Mac", "port_block": [49900, 49904], "seat": "player"},
+    {"name": "linux", "box": "Linux", "port_block": [50310, 50314], "seat": "player", "rosters": ["four-way"]}
   ]
 }

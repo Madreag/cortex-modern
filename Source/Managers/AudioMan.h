@@ -500,6 +500,7 @@ namespace RTE {
 		FMOD::ChannelGroup* m_SFXChannelGroup; //!< The FMOD ChannelGroup for diegetic gameplay sounds.
 		FMOD::ChannelGroup* m_UIChannelGroup; //!< The FMOD ChannelGroup for UI sounds.
 		FMOD::ChannelGroup* m_MusicChannelGroup; //!< The FMOD ChannelGroup for music.
+		std::vector<std::pair<FMOD::ChannelGroup*, FMOD::DSP*>> m_GroupEffects; //!< Effects owned by the mixer groups.
 
 		bool m_AudioEnabled; //!< Bool to tell whether audio is enabled or not.
 		bool m_InaudibleTestOutputVerified = false;
@@ -657,6 +658,7 @@ namespace RTE {
 		mutable std::set<SoundObservationKey> m_ReportedAudibilityMisses; //!< Keys already reported by the CC_TRACE_AUDIBILITY diagnostic; empty unless it is on.
 		static uint8_t AudibilityAuthority(uint64_t objectUID);
 		FMOD_RESULT InitializeAudioSystem(bool silentOutput);
+		void ReleaseAudioSystem();
 		void RefreshLogicalSound(SoundContainer* container);
 		void UnregisterLogicalSound(SoundContainer* container);
 		bool VoiceMatchesContext(int identity, const SoundContainer* owner) const;

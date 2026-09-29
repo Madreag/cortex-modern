@@ -517,7 +517,7 @@ def run_ticks(pair: Path, default: int) -> int:
         return default
 
 
-def arm_restore(repo: Path, root: Path, port: int) -> dict:
+def arm_restore(repo: Path, root: Path, port: int, client_stall: str = "") -> dict:
     """A restore of the checkpoint the caller names reproduces the world that checkpoint recorded, and
     both peers restore the same one. The named checkpoint is the OLDEST of the retained set, so a restore
     that ignored the name and took the store's own pick would be red here. The two peers' world digests
@@ -530,7 +530,10 @@ def arm_restore(repo: Path, root: Path, port: int) -> dict:
         run_root, restore_at = wait_root(root, scale, ticks), 700 * scale
         extra = {who: ["-net-autosave-restore", "oldest", "-net-autosave-restore-at", str(restore_at)]
                  for who in ("host", "client")}
-        return judge_restore(run_root, ticks, run_pair(repo, run_root, port, ticks, 2, extra))
+        extra['client'] += stall_args(client_stall, scale)
+        records = run_pair(repo, run_root, port, ticks, 2, extra)
+        evidence = forced_hold_evidence(run_root, client_stall, scale)
+        return dict(judge_restore(run_root, ticks, records), forced_hold=evidence)
     return wait_for_checkpoints(attempt, 800)
 
 
@@ -614,11 +617,13 @@ def compare_live_window(root: Path, first_tick: int, last_tick: int, away: dict 
             "passes": {who: len(split_passes(rows)) for who, rows in peers.items()}}
 
 
-def arm_retention(repo: Path, root: Path, port: int) -> dict:
+def arm_retention(repo: Path, root: Path, port: int, client_stall: str = "") -> dict:
     """More checkpoints than the policy keeps leaves exactly the newest restorable ones, per peer."""
     def attempt(scale: int, ticks: int) -> dict:
         run_root = wait_root(root, scale, ticks)
-        return judge_retention(run_root, ticks, run_pair(repo, run_root, port, ticks, 2, {}))
+        records = run_pair(repo, run_root, port, ticks, 2, {'client': stall_args(client_stall, scale)})
+        evidence = forced_hold_evidence(run_root, client_stall, scale)
+        return dict(judge_retention(run_root, ticks, records), forced_hold=evidence)
     return wait_for_checkpoints(attempt, 700)
 
 
@@ -680,7 +685,8 @@ def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False
                            "-net-match-e2e-resync"],
                   "client": ["-net-match-e2e-resync", *stall_args(client_stall, scale)]},
                  {"host": {"NetworkSlowPlayerPolicy": "Pause"}} if pause_slow_peers else None)
-        return judge_anchor(run_root, ticks, perturb_at)
+        evidence = forced_hold_evidence(run_root, client_stall, scale)
+        return dict(judge_anchor(run_root, ticks, perturb_at), forced_hold=evidence)
     return wait_for_checkpoints(attempt, ANCHOR_TICKS)
 
 
@@ -690,6 +696,25 @@ def stall_args(client_stall: str, scale: int = 1) -> list[str]:
         return []
     tick, milliseconds = (int(part) for part in client_stall.split(":"))
     return ["-net-test-live-stall", f"{tick * scale}:{milliseconds}"]
+
+
+def forced_hold_evidence(root: Path, lever: str, scale: int = 1, offset: int = 0) -> dict:
+    """A requested stall is evidence only after its native hold and completed reclaim."""
+    if not lever:
+        return {'requested': False}
+    tick, milliseconds = map(int, lever.split(':'))
+    tick = tick * scale + offset
+    host, client = peer_log(root, 'host'), peer_log(root, 'client')
+    assert re.search(rf'\[net-test\] live stall frame={tick}\b', client), f'client stall {tick}:{milliseconds} never fired'
+    identity = re.search(r'\[net-lockstep\] start [^\n]*local_peer=(\d+)', client)
+    assert identity, 'client native seat identity is absent'
+    seat = int(identity[1])
+    holds = sorted(set(map(int, re.findall(rf'\[net-match\] hold peer={seat} frame=(\d+) AI in control', host))))
+    reclaims = sorted(set(map(int, re.findall(rf'\[net-match\] seat-reclaimed peer={seat} frame=(\d+)', host))))
+    completed = set(map(int, re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', client)))
+    pairs = [(hold, back) for hold in holds if hold >= tick for back in reclaims if back > hold and back in completed]
+    assert pairs, f'client stall {tick} has no native hold/completed reclaim: holds={holds}, reclaims={reclaims}'
+    return dict(requested=True, stall_tick=tick, seat=seat, hold=pairs[0][0], reclaim=pairs[0][1])
 
 
 def judge_anchor(root: Path, ticks: int, perturb_at: int) -> dict:
@@ -764,7 +789,7 @@ def arm_park(repo: Path, root: Path, port: int) -> dict:
     return details
 
 
-def arm_resume(repo: Path, root: Path, port: int) -> dict:
+def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dict:
     """A match whose host process is killed is restarted from its own checkpoint, and the client rejoins.
 
     The kill is the runner's own termination, never a leave: the client keeps its ticket and the host
@@ -794,6 +819,8 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
                 "-tick-hashes", "-max-ticks", "1200", "-out", str(first / f"{who}_trace.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         args += fullstate_args()
+        if who == 'client':
+            args += stall_args(client_stall)
         runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1"})
         stage_baseline(runs[who], 1200)
 
@@ -825,6 +852,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
         for run in runs.values():
             run.close()
     assert killed, f"the host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}"
+    died_hold = forced_hold_evidence(first, client_stall)
     held = {who: checkpoints(first, who) for who in ("host", "client")}
     assert held["host"], "the killed host left no checkpoint to resume from"
     match_id = next(iter(held["host"].values()))["MatchId"]
@@ -848,6 +876,9 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
                 "-tick-hashes", "-max-ticks", str(resume_ticks), "-out", str(second / f"{who}_trace.json")]
         args += ["-net-host", "-net-resume-match", match_id, "-net-resume-tick", str(resume_tick)] if who == "host" else ["-net-join", "127.0.0.1"]
         args += fullstate_args()
+        if who == 'client' and client_stall:
+            stall_tick, stall_ms = map(int, client_stall.split(':'))
+            args += stall_args(f'{resume_tick + stall_tick}:{stall_ms}')
         resumed[who] = make_run(repo, args, second / who, 420, env={"CCCP_HEADLESS": "1"})
         stage_baseline(resumed[who], 1200)
         # What a restarted process finds on its own disk: its checkpoints, its manifests, its admission
@@ -901,11 +932,13 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
         assert resumed_records[who].get("exit_code") == 0, (who, resumed_records[who].get("exit_code"), resumed_records[who].get("error"))
         assert not resumed_records[who].get("timed_out"), who
     # The resumed round is lockstep: the two peers' per-tick hashes must agree, tick for tick.
+    resumed_hold = forced_hold_evidence(second, client_stall, offset=resume_tick)
     compared = compare_live_window(second, resume_tick + 1, resume_tick + resume_ticks)
     reached = max(int(row[0]) for row in CAPTURE.findall(host_log)) if CAPTURE.search(host_log) else 0
     return {"match_id": match_id, "kill_tick": kill_tick, "resume_tick": resume_tick,
             "client_held_the_archive": held_locally, "manifests": [path.name for path in manifests],
-            "resumed_captures_to": reached, "peer_comparison": compared}
+            "resumed_captures_to": reached, "peer_comparison": compared,
+            "forced_hold": {'died': died_hold, 'resumed': resumed_hold}}
 
 
 def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list, own_ticks: int = 0) -> list:
@@ -1153,6 +1186,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     assert records["_killed"], (f"the world host was never killed: captures {captures_text(peer_log(first, 'host'))}; "
                                 f"the host exited while the kill waited on {records.get('_kill_blocked_by')}; "
                                 f"the returner: {return_progress(peer_log(first, 'host'))}")
+    first_hold = forced_hold_evidence(first, client_stall)
     identity = WORLD_IDENTITY.findall(peer_log(first, "host"))
     assert identity, "the world host never printed its identity"
     world_id, boot_one, round_one = identity[0][0], int(identity[0][1]), int(identity[0][2])
@@ -1213,6 +1247,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     reconnect = resumed_report["service"]["reconnect"]
     assert reconnect["client_used_stored_ticket"] and reconnect["client_reclaim_outcome"] == "reclaim_accepted", reconnect
     compared = _compare_world_round(second, world_id, resume_tick, resume_end)
+    second_hold = forced_hold_evidence(second, client_stall, offset=resume_tick)
     completed = RETAINED.findall(host_log)
     after_anchor = {int(row[0]) for row in completed if int(row[0]) > resume_tick}
     assert len(after_anchor) > RETAINED_AUTOSAVES, f"the resumed round never rotated past its anchor: {completed}"
@@ -1238,6 +1273,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
         assert fresh_records[who].get("exit_code") == 0, (who, fresh_records[who].get("exit_code"))
         assert not fresh_records[who].get("timed_out"), who
     fresh_compared = _compare_world_round(fresh, world_id, 0, round_ticks)
+    fresh_hold = forced_hold_evidence(fresh, client_stall)
     fresh_held = checkpoints(fresh, "host")
     old_rounds = {fields["RoundId"] for fields in held_two.values()}
     assert any(fields["RoundId"] not in old_rounds for fields in fresh_held.values()), \
@@ -1254,7 +1290,8 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             "manifest_binding_peers": side_state["binding_peers"],
             "seats": sorted(seats_two), "fresh_first_capture": min(fresh_captures),
             "peer_comparison": compared, "fresh_peer_comparison": fresh_compared,
-            "holds": {half.name: len(HOLD.findall(peer_log(half, "host"))) for half in (first, second, fresh)}}
+            "holds": {half.name: len(HOLD.findall(peer_log(half, "host"))) for half in (first, second, fresh)},
+            "forced_hold": {'boot1': first_hold, 'boot2': second_hold, 'fresh': fresh_hold}}
 
 
 class CheckpointWaitTests(unittest.TestCase):
@@ -1670,7 +1707,7 @@ def main() -> int:
     parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor", "resume", "world-restart", "park"), default="all",
                         help="all runs every arm but park; park is the 60 s autosave input-keeping run")
     parser.add_argument("--round-ticks", type=int, default=600, help="world-restart only: the resumed and fresh rounds' length")
-    parser.add_argument("--client-stall", default="", help="world-restart only: TICK:MS, the client stalls once past each "
+    parser.add_argument("--client-stall", default="", help="TICK:MS for restore, retention, anchor, resume and world-restart; the client stalls once past each "
                         "round's start so the host holds its seat and the seat has to rejoin")
     parser.add_argument("--world-host-stall", default="", help="world-restart only: TICK:MS, the host's simulation stalls once in the "
                         "first boot, so the round judges the host's own seat")
@@ -1691,6 +1728,11 @@ def main() -> int:
     parser.add_argument("--pause-slow-peers", action="store_true",
                         help="anchor only: the host pauses for a slow peer instead of holding it, so a sanitizer build's heal lands")
     args = parser.parse_args()
+    for lever in (args.client_stall, args.anchor_client_stall):
+        if lever and not re.fullmatch(r'[1-9]\d*:[1-9]\d*', lever):
+            parser.error('client stall must be positive TICK:MS')
+    if args.arm == 'park' and (args.client_stall or args.anchor_client_stall):
+        parser.error('park is the no-hold control; use a forced-hold arm')
     if args.fullstate_every < 0:
         parser.error("--fullstate-every must be 0 or positive")
     if not 0 <= args.saver_delay_ms <= 60000 or not 0 <= args.client_saver_delay_ms <= 60000:
@@ -1707,8 +1749,10 @@ def main() -> int:
     with engine_executable(repo).open("rb") as exe:
         exe_sha = file_sha256(exe)
     result = {"exe_sha256": exe_sha, "arms": {}}
-    arms = {"restore": arm_restore, "retention": arm_retention, "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers, args.anchor_client_stall),
-            "resume": arm_resume,
+    arms = {"restore": lambda repo, root, port: arm_restore(repo, root, port, args.client_stall),
+            "retention": lambda repo, root, port: arm_retention(repo, root, port, args.client_stall),
+            "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers, args.anchor_client_stall or args.client_stall),
+            "resume": lambda repo, root, port: arm_resume(repo, root, port, args.client_stall),
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks,
                                                                         args.client_lacks_checkpoint, args.rejoin_from_first_capture,
                                                                         args.world_host_stall),
