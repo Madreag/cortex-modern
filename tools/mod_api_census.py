@@ -160,7 +160,9 @@ def parse_luaman(repo, classes):
             lua_cls = next(iter(cpp_to_lua.values()), None) if len(cpp_to_lua) == 1 else 'LuaManager'
             globals_[m.group(1)] = lua_cls
             continue
-        cpp = expr[2:] if expr.startswith('g_') else expr
+        # The manager globals bind InstanceOrNull<X>() (nil before X is constructed), older builds &g_X; both name X.
+        instance = re.fullmatch(r'InstanceOrNull<\s*(\w+)\s*>\(\)', expr)
+        cpp = instance.group(1) if instance else expr[2:] if expr.startswith('g_') else expr
         globals_[m.group(1)] = cpp_to_lua.get(cpp, cpp)
     global_functions = set()
     for m in RE_REGISTER.finditer(src):
@@ -359,6 +361,18 @@ def self_test():
             failures.append(f'rows {sorted(rows)}; hidden {sorted(SELF_TEST_ROWS - rows)}, extra {sorted(rows - SELF_TEST_ROWS)}')
         if guarded != SELF_TEST_GUARDED:
             failures.append(f'guarded notes {sorted(guarded)}; expected {sorted(SELF_TEST_GUARDED)}')
+    # A manager global maps to its bound class whichever form LuaMan binds it with.
+    with tempfile.TemporaryDirectory() as repo:
+        for rel, text in (('Source/Lua/LuaBindingsManagers.cpp', 'luabind::class_<SceneMan>("SceneManager")\n\t.def("Bound", &SceneMan::Bound);\n'
+                                                                 'luabind::class_<TimerMan>("TimerManager")\n\t.def("Bound", &TimerMan::Bound);\n'),
+                          ('Source/Managers/LuaMan.cpp', 'luabind::globals(m_State)["SceneMan"] = InstanceOrNull<SceneMan>();\n'
+                                                         'luabind::globals(m_State)["TimerMan"] = &g_TimerMan;\n')):
+            os.makedirs(os.path.dirname(os.path.join(repo, rel)), exist_ok=True)
+            with open(os.path.join(repo, rel), 'w', encoding='utf-8', newline='\n') as f:
+                f.write(text)
+        globals_, _ = parse_luaman(repo, parse_bindings(repo)[0])
+        if globals_ != {'SceneMan': 'SceneManager', 'TimerMan': 'TimerManager'}:
+            failures.append(f'manager globals {globals_}; expected SceneMan -> SceneManager and TimerMan -> TimerManager')
     for failure in failures:
         print(f'[mod_api_census self-test] FAIL {failure}')
     print(f'[mod_api_census self-test] {"PASS" if not failures else "FAIL"} {len(failures)} failure(s)')
