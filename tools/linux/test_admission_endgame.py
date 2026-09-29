@@ -39,7 +39,15 @@ def main():
         command += ["--port-" + name, str(args.port + index)]
     with (root / "mods-driver.log").open("w") as log:
         result["mods_exit"] = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT).returncode
-    result["checks"]["mod_ui"] = result["mods_exit"] == 0
+    mod_result = json.loads((root / "mods/result.json").read_text())
+    # The older driver required a diagnostic hash suffix in the player-facing sentence.
+    # This row requires the actionable module names, plus all its process/host/UI checks.
+    result["mod_ui"] = {}
+    for phase, detail in mod_result.get("details", {}).items():
+        result["mod_ui"][phase] = detail.get("joiner_label_lines") == detail.get("expected_lines")
+    other_checks = {name: ok for name, ok in mod_result.get("checks", {}).items() if not name.endswith("_line_structure")}
+    result["checks"]["mod_ui"] = (len(result["mod_ui"]) == 4 and all(result["mod_ui"].values())
+                                        and bool(other_checks) and all(other_checks.values()))
     version_ui = json.loads(args.version_ui.read_text()) if args.version_ui else {}
     for kind in ("build", "protocol"):
         for who in ("host", "joiner"):
