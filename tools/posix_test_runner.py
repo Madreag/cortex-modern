@@ -49,6 +49,7 @@ SETTINGS_OVERRIDES = {
     "SoundVolume": "0",
     "Fullscreen": "0",
     "SkipIntro": "1",
+    "SessionDirectoryUrl": "",
     "EnableVSync": "0",
     "ResolutionX": "960",
     "ResolutionY": "540",
