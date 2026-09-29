@@ -64,6 +64,8 @@ namespace RTE {
 		constexpr uint64_t c_LoneElectionConfirmMs = 1000;
 		// A round configured without an answer budget still bounds a capture park.
 		constexpr uint64_t c_DefaultCaptureParkBudgetMs = 500;
+		// A host playing to its round's agreed end stops waiting for it after this long at most.
+		constexpr uint64_t c_AgreedEndBoundMs = 3000;
 		constexpr uint32_t c_RecoveryInputMagic = 0x314e4952;
 		constexpr uint16_t c_RecoveryInputVersion = 6;
 
@@ -5271,6 +5273,8 @@ namespace RTE {
 		if (IsSeatReclaimGap(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
 		// A host whose own seat the AI holds catches up in place: its input for the frames the AI played is discarded, as on every peer.
 		if (m_Config.localPeerId == GetHostPeerId() && IsSeatUnderAI(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
+		// Past the round's agreed end the host's input would let a peer play a frame the round never has.
+		if (m_PendingCompleteStop && m_Config.localPeerId == GetHostPeerId() && target >= m_PendingCompleteStop->frame) { m_DeferredControllerFrames.clear(); return true; }
 		// The agreed first frame can sit past our own start frame, so the ramp keeps producing targets the
 		// round will never require. Only that shift is dropped instead of refused - every peer agrees the
 		// same first frame - and a target below the round's own start is still an error.
@@ -8341,6 +8345,13 @@ namespace RTE {
 		TickStartupWait(nowMs);
 		ShiftDeadlinesPastOurOwnPark(nowMs);
 		m_TimingNowMs = nowMs;
+		// A host playing to its agreed end waits for it no longer than a stalled round is given.
+		if (m_AgreedEndDeadlineMs != 0 && nowMs >= m_AgreedEndDeadlineMs && m_PendingCompleteStop && IsRunning()) {
+			std::cout << "[net-match] the round did not reach its agreed end frame " << m_PendingCompleteStop->frame << " in time; it ends after applied frame "
+			          << (m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick : 0) << std::endl;
+			Complete(m_PendingCompleteStop->message);
+			return;
+		}
 		if (!m_PlaneTicking) TickMigrationRollCallLinks(nowMs);
 		if (IsMigrating()) {
 			if (!m_PlaneTicking) TickHostMigration(nowMs);
@@ -8430,8 +8441,32 @@ namespace RTE {
 			std::string ignored;
 			(void)SendPacket({stop}, NetTransportLane::ControlReliable, &ignored);
 		}
+		m_PendingCompleteStop.reset();
+		m_AgreedEndDeadlineMs = 0;
 		m_State = NetLockstepState::Stopped;
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::Complete)) + ":" + message;
+	}
+
+	bool NetLockstepCoordinator::CompleteAtAgreedEnd(const std::string& message) {
+		NET_PLANE_CHECK();
+		// A peer holding the host's input a delay ahead may already have played it: the round ends past the last frame the host
+		// sent, and the host plays to that frame too, so every peer's last tick is the same.
+		if (!IsRunning() || m_Playback || IsMigrating() || !m_Transport || !m_DeferStops || !m_LastCompletedSimulationTick ||
+		    m_Config.localPeerId != GetHostPeerId() || m_PendingCompleteStop || SentInputThrough() <= *m_LastCompletedSimulationTick) {
+			return false;
+		}
+		m_PendingMemberEnds.clear();
+		NetLockstepStop stop;
+		stop.senderPeerId = m_Config.localPeerId;
+		stop.reason = NetLockstepStopReason::Complete;
+		stop.frame = SentInputThrough() + 1;
+		stop.message = message;
+		std::string ignored;
+		(void)SendPacket({stop}, NetTransportLane::ControlReliable, &ignored);
+		m_PendingCompleteStop = stop;
+		m_AgreedEndDeadlineMs = (m_TimingNowMs != 0 ? m_TimingNowMs : NetLockstepNowMs()) + std::min<uint64_t>(m_Config.timeoutMs, c_AgreedEndBoundMs);
+		std::cout << "[net-match] the host ends the round at frame " << stop.frame << ", playing to it from " << *m_LastCompletedSimulationTick + 1 << std::endl;
+		return true;
 	}
 
 	void NetLockstepCoordinator::Leave(const std::string& message) {

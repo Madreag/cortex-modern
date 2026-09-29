@@ -644,6 +644,9 @@ namespace RTE {
 		void ReportRuntimeError(const std::string& error);
 		void Complete(const std::string& reason);
 		void FinishMatch(const std::string& result);
+		/// The host's End Match: every peer plays to the round's agreed end, and the round's own clean stop then finishes the
+		/// match with this reason. False when the round cannot end that way; the caller finishes the match itself.
+		bool EndMatchAtAgreedFrame(const std::string& reason);
 		/// Ends the match locally as a clean leave: the other peers keep playing (N-peer) or hear
 		/// "player left" (2-peer); the session objects stay alive exactly like FinishMatch. §7's leave
 		/// exchange runs first, on the worker, so the ticket is answered while the link is still up.
@@ -1646,6 +1649,7 @@ namespace RTE {
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint64_t m_HeldRejoinPriorInput = 0;
+		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
 		uint32_t m_ReconnectRouteTurn = 0; //!< Alternates the reconnect prompt's attempts between the ticket's host and the successors.
 		uint8_t m_ElectionHostPeer = 0; //!< Client: the round's host as last seen before an election.

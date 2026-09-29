@@ -942,6 +942,9 @@ namespace RTE {
 		void CompleteSynchronizedCapture(uint64_t completedFrame, double captureMs);
 		bool IsSynchronizedCapturePark(uint64_t frame) const;
 		void Complete(const std::string& message = "complete");
+		/// The host's own end of its running round, at a frame no peer can have played past: every peer plays to the end of the
+		/// input the host has sent, the host included. False when the round cannot end that way: nothing is sent, and Complete ends it.
+		bool CompleteAtAgreedEnd(const std::string& message);
 		/// Announces a clean local leave: peers keep our frames through the last produced one, then
 		/// advance without us. The relay host cannot leave a 3+ match alive (it is the star's hub),
 		/// so a host leave completes the match for everyone instead.
@@ -1740,6 +1743,7 @@ namespace RTE {
 		bool m_CaptureParkFinalized = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
+		uint64_t m_AgreedEndDeadlineMs = 0; //!< When a host playing to its agreed end stops waiting for it.
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;

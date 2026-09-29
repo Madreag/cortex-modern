@@ -2181,6 +2181,7 @@ static std::string ResyncSaveName() {
 			m_RejoinOfRunningMatch = false;
 			m_HostEndedTheMatch = false;
 			m_LeftMatch = false;
+			m_HostEndReason.clear();
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
 			m_PendingLobbyBytes = 0;
@@ -2359,6 +2360,17 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	bool NetMatchService::EndMatchAtAgreedFrame(const std::string& reason) {
+		// The pause menu calls this inside the frame's window, as it does FinishMatch.
+		NetLockstepPlane::Gap plane("end match");
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost || !m_Coordinator || m_State != NetMatchServiceState::Running || !m_Coordinator->IsRunning()) return false;
+		DrainPendingSessionEventsLocked(false);
+		if (!m_Coordinator->CompleteAtAgreedEnd(reason)) return false;
+		m_HostEndReason = reason;
+		return true;
+	}
+
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
 		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
@@ -2367,7 +2379,10 @@ static std::string ResyncSaveName() {
 		bool heldSeatNeedsAnswer = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			CaptureMatchSummaryLocked(result);
+			// A host's round that played to its agreed end finishes with the reason the host gave.
+			const std::string ended = m_HostEndReason.empty() ? result : std::exchange(m_HostEndReason, std::string());
+			displayResult = ended;
+			CaptureMatchSummaryLocked(ended);
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			m_HeldRejoinDriving = false;
 			heldSeatNeedsAnswer = m_IsHost && m_Coordinator && m_Coordinator->AnyHeldAISeat();
@@ -2378,7 +2393,7 @@ static std::string ResyncSaveName() {
 			DrainPendingSessionEventsLocked(false);
 			// The survivors hear the end before anything here waits on a disk: the last checkpoint's archive may still be writing.
 			if (m_Coordinator) {
-				m_Coordinator->Complete(result.empty() ? "match over" : result);
+				m_Coordinator->Complete(ended.empty() ? "match over" : ended);
 				SayGoodbyeToRejoinersLocked();
 			}
 		}
