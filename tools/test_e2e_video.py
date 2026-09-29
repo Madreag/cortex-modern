@@ -9,6 +9,7 @@ a real capture are named at the bottom of the result and are the driver's own fi
 
 import argparse
 import contextlib
+import io
 import json
 import os
 import re
@@ -82,6 +83,75 @@ def check_scratch_limit(results, scratch):
             except RuntimeError as error:
                 stopped = str(limit) in str(error) and "no cleanup performed" in str(error)
         ok &= row(results, f"scratch/enforces-{limit}", stopped == expected)
+    return ok
+
+
+def check_render_arm(results, scratch):
+    scenario = {"name": "render-arm", "path": "synthetic", "checklist": [], "size": "960x540",
+                "peers": [{"name": "host", "args": [], "settings": {"ResolutionX": 800, "ResolutionY": 600,
+                                                                    "NetworkShowDiagnostics": "1"}}]}
+    options = SimpleNamespace(repo=scratch, size="1280x720", fps=3, port=49400, scratch_root=scratch,
+                              setting=[("ResolutionX", "1920"), ("ResolutionX", "3840"),
+                                       ("ResolutionY", "2160"), ("SessionDirectoryUrl", "")],
+                              render_cap=0, dry_run=True)
+    out = scratch / "render-plan"
+    try:
+        with patch.object(driver, "make_run", side_effect=AssertionError("dry run constructed an engine")):
+            plan = driver.run_one(options, scenario, {"name": "first"}, 0, out)
+        peer = plan["peers"][0]
+        expected = {"ResolutionX": "3840", "ResolutionY": "2160", "NetworkShowDiagnostics": "1", "SessionDirectoryUrl": ""}
+        ok = row(results, "render/dry-plan-seeds-command-line-last", peer["settings"] == expected and
+                 peer["size"] == "3840x2160" and peer["render_cap"] == 0 and not out.exists())
+        flag = peer["args"].index("-feel-render-settings")
+        ok &= row(results, "render/dry-plan-private-render-flag", Path(peer["args"][flag + 1]) ==
+                  out / "first/host/runtime/Userdata/FeelRender.ini")
+    except (Exception, SystemExit) as error:
+        ok = row(results, "render/dry-plan-seeds-command-line-last", False, str(error))
+        ok &= row(results, "render/dry-plan-private-render-flag", False, str(error))
+
+    for cap in ("0", "60", "144", "-1", "garbage"):
+        stderr = io.StringIO()
+        with patch.object(sys, "argv", ["e2e_video.py", "--list", "--render-cap", cap]), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
+            try:
+                code = driver.main()
+            except SystemExit as error:
+                code = error.code
+        expected_code = 0 if cap in ("0", "60") else 2
+        ok &= row(results, f"render/cap-{cap}", code == expected_code and (expected_code == 0 or
+                  "[feel] invalid render settings: expected RenderCapHz = 0 or 60" in stderr.getvalue()))
+
+    class Handle:
+        def __init__(self, repo, args, root, timeout, env):
+            self.out, self.cwd = Path(root), Path(root) / "runtime"
+            (self.cwd / "Userdata").mkdir(parents=True)
+            (self.cwd / "Userdata/Settings.ini").write_text("Settings\n\tResolutionX = 960\n\tResolutionY = 540\n", encoding="utf-8")
+            driver.write_json(self.out / "runtime.json", {"settings_overrides": {"EnableVSync": "0"}})
+            self.argv = ["engine", *args]
+        def start(self): return self
+        def finish(self): return {"exit_code": 0, "timed_out": False}
+        def close(self): pass
+
+    options.dry_run = False
+    try:
+        with patch.object(driver, "make_run", side_effect=Handle) as made:
+            capture_run = driver.run_one(options, scenario, {"name": "first"}, 0, scratch / "render-runtime")
+        peer = capture_run["peers"][0]
+        runtime = Path(peer["runtime"])
+        ini = (runtime / "Userdata/Settings.ini").read_text(encoding="utf-8")
+        ok &= row(results, "render/private-runtime-seeded", "ResolutionX = 3840" in ini and "ResolutionY = 2160" in ini and
+                  (runtime / "Userdata/FeelRender.ini").read_text(encoding="utf-8") == "RenderCapHz = 0\n")
+        document = driver.review(scenario, capture_run, Path(capture_run["root"]))
+        capture = {"scenario": scenario["name"], "scenario_definition": scenario, "runs": [capture_run], "fps": 3,
+                   "source": {}, "exe": {}, "started": "synthetic", "command": []}
+        manifest = driver.scenario_manifest(capture, scratch / "render-runtime", 0)
+        summary = driver.aggregate_review(capture, scratch / "render-runtime")
+        for label, evidence in (("manifest", manifest["peers"][0]), ("review", document["peers"][0]),
+                                ("summary", summary["peers"][0])):
+            ok &= row(results, f"render/{label}-records-arm", evidence["size"] == "3840x2160" and
+                      evidence["render_cap"] == 0 and all(evidence["settings"][key] == val for key, val in expected.items()))
+    except (Exception, SystemExit) as error:
+        ok &= row(results, "render/private-runtime-and-evidence", False, str(error))
     return ok
 
 
@@ -1585,6 +1655,7 @@ def main():
         ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
         ok &= check_scratch_limit(results, scratch)
+        ok &= check_render_arm(results, scratch)
         ok &= check_module_requirements(results, scratch)
         ok &= check_rematch_contract(results)
         ok &= check_levers_inside_rounds(results)
