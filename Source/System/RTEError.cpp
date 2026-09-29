@@ -16,6 +16,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <mutex>
@@ -352,7 +353,7 @@ void RTEError::ShowMessageBox(const std::string& message) {
 		System::PrintFaultLine("RTE Warning (from worker thread): " + message);
 		return;
 	}
-	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+	if (std::getenv("CCCP_HEADLESS") != nullptr) {
 		System::PrintFaultLine("RTE Warning (headless): " + message);
 		return;
 	}
@@ -365,7 +366,7 @@ bool RTEError::ShowAbortMessageBox(const std::string& message) {
 		return false;
 	}
 	// Headless / automated runs can't dismiss a modal dialog — log + proceed to exit.
-	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+	if (std::getenv("CCCP_HEADLESS") != nullptr) {
 		System::PrintFaultLine("RTE Abort (headless): " + message);
 		return false;
 	}
@@ -403,7 +404,7 @@ bool RTEError::ShowAbortMessageBox(const std::string& message) {
 
 bool RTEError::ShowAssertMessageBox(const std::string& message) {
 	if (!IsOnAppMainThread()) {
-		if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+		if (std::getenv("CCCP_HEADLESS") != nullptr) {
 			s_AssertFired = true;
 		}
 		System::PrintFaultLine("RTE Assert (from worker thread): " + message);
@@ -416,7 +417,7 @@ bool RTEError::ShowAssertMessageBox(const std::string& message) {
 	}
 	// A headless run answers the dialog the way a player does: Ignore, and carry on. The fired assert is
 	// remembered so the run still ends non-zero and the reviewer reads the line the player would have read.
-	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+	if (std::getenv("CCCP_HEADLESS") != nullptr) {
 		s_AssertFired = true;
 		System::PrintFaultLine("RTE Assert (headless, continued like Ignore): " + message);
 		return false;
@@ -501,7 +502,7 @@ void RTEError::UnhandledExceptionFunc(const std::string& description, const std:
 	}
 
 	// Headless / automated runs can't dismiss a modal dialog — the CLI print above suffices.
-	if (SDL_getenv("CCCP_HEADLESS") == nullptr) {
+	if (std::getenv("CCCP_HEADLESS") == nullptr) {
 		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "RTE CATASTROPHIC ERROR!!! (X_X)", exceptionMessage.c_str(), nullptr);
 	}
 	AbortAction;
@@ -575,6 +576,9 @@ void RTEError::AbortFunc(const std::string& description, const SourceLocation& s
 #endif
 #endif
 		}
+	} else {
+		// A validation refusal exits normally after its reason is reported.
+		std::exit(EXIT_FAILURE);
 	}
 	s_CurrentlyAborting = false;
 	AbortAction;
@@ -610,7 +614,7 @@ void RTEError::AssertFunc(const std::string& description, const SourceLocation& 
 			storeAssertInfo = true;
 		}
 	} else {
-		if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+		if (std::getenv("CCCP_HEADLESS") != nullptr) {
 			s_AssertFired = true;
 		}
 		storeAssertInfo = true;
@@ -641,7 +645,7 @@ void RTEError::DispatchPendingWorkerMessages() {
 	}
 	const char* kindName = record.kind == WorkerMessageKind::Assert ? "Assert" : (record.kind == WorkerMessageKind::Abort ? "Abort" : "Warning");
 	const std::string more = dropped > 0 ? " (+" + std::to_string(dropped) + " more worker messages)" : "";
-	if (SDL_getenv("CCCP_HEADLESS") != nullptr && !s_ForceAssertDialogPathForTest) {
+	if (std::getenv("CCCP_HEADLESS") != nullptr && !s_ForceAssertDialogPathForTest) {
 		// The worker already printed and set AssertFired; the record discharges as one line.
 		System::PrintFaultLine("RTE " + std::string(kindName) + " (worker, dispatched): " + record.message + more);
 		return;

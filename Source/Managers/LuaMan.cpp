@@ -1,4 +1,5 @@
 #include "LuaMan.h"
+#include "FloatText.h"
 
 #include "LuabindObjectWrapper.h"
 #include "CaptureSentinel.h"
@@ -7485,10 +7486,15 @@ void LuaStateWrapper::Destroy() {
 	if (!m_State) {
 		return;
 	}
+	ClearLuaScriptCache();
+	for (const auto& [path, functions]: m_PreviewScriptCacheHeld) {
+		for (const auto& [name, function]: functions) delete function;
+	}
+	m_PreviewScriptCacheHeld.clear();
 	// A wrapper destructed anywhere queues its luabind object, and deleting that object unrefs a
 	// registry slot of the state it lives in. Anything still queued for this state has to go now.
-	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
 	m_NativeCache.reset();
+	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
 	m_CheckpointHeap.reset();
 	m_State = nullptr;
 }
@@ -8045,34 +8051,43 @@ static bool RunScriptSelfFetchSelfTest() {
 	    {"false_entry", "_SelfFetchTable = { ['7'] = false }"},
 	};
 	std::string failed;
+	struct LiteralCase {
+		const char* name;
+		std::string_view argument;
+		const char* expected;
+	};
+	const LiteralCase literals[] = {{"integer", "11", "11"}, {"decimal", "11.5", "11.5"},
+	    {"bounded_decimal", std::string_view("11.5suffix", 4), "11.5"}, {"empty", "", "0"}};
 	for (const auto& [name, setup]: cases) {
 		for (const bool conditional: {false, true}) {
-			wrapper.RunScriptString(setup + "; _SelfFetchCount = -1; _SelfFetchArgs = nil");
-			const bool selfDefined = wrapper.TableEntryIsDefined("_SelfFetchTable", "7");
-			const int top = lua_gettop(L);
-			bool returned = false;
-			if (conditional) {
-				wrapper.RunScriptConditionalTestFunctionObject(&test, "_SelfFetchTable", "7", returned, {}, {"11"});
-			} else {
-				wrapper.RunScriptFunctionObject(&probe, "_SelfFetchTable", "7", {}, {"11"});
-			}
-			const bool balanced = lua_gettop(L) == top;
-			// The old path passed the entry itself first, then the literal.
-			const std::string check = selfDefined ? "_SelfFetchOk = _SelfFetchCount == 2 and rawequal(_SelfFetchArgs[1], _SelfFetchTable['7']) and _SelfFetchArgs[2] == 11"
-			                                      : "_SelfFetchOk = _SelfFetchCount == 1 and _SelfFetchArgs[1] == 11";
-			wrapper.RunScriptString(check);
-			lua_getglobal(L, "_SelfFetchOk");
-			const bool same = lua_toboolean(L, -1) != 0;
-			lua_pop(L, 1);
-			if (!same || !balanced || (conditional && !returned)) {
-				failed += std::string(failed.empty() ? "" : ",") + name + (conditional ? "/conditional" : "/plain") + (same ? "" : ":arguments") +
-				          (balanced ? "" : ":stack") + (conditional && !returned ? ":result" : "");
+			for (const LiteralCase& literal: literals) {
+				wrapper.RunScriptString(setup + "; _SelfFetchCount = -1; _SelfFetchArgs = nil");
+				const bool selfDefined = wrapper.TableEntryIsDefined("_SelfFetchTable", "7");
+				const int top = lua_gettop(L);
+				bool returned = false;
+				if (conditional) {
+					wrapper.RunScriptConditionalTestFunctionObject(&test, "_SelfFetchTable", "7", returned, {}, {literal.argument});
+				} else {
+					wrapper.RunScriptFunctionObject(&probe, "_SelfFetchTable", "7", {}, {literal.argument});
+				}
+				const bool balanced = lua_gettop(L) == top;
+				// The old path passed the entry itself first, then the literal.
+				const std::string check = (selfDefined ? "_SelfFetchOk = _SelfFetchCount == 2 and rawequal(_SelfFetchArgs[1], _SelfFetchTable['7']) and _SelfFetchArgs[2] == "
+				                                      : "_SelfFetchOk = _SelfFetchCount == 1 and _SelfFetchArgs[1] == ") + std::string(literal.expected);
+				wrapper.RunScriptString(check);
+				lua_getglobal(L, "_SelfFetchOk");
+				const bool same = lua_toboolean(L, -1) != 0;
+				lua_pop(L, 1);
+				if (!same || !balanced || (conditional && !returned)) {
+					failed += std::string(failed.empty() ? "" : ",") + name + "/" + literal.name + (conditional ? "/conditional" : "/plain") + (same ? "" : ":arguments") +
+					          (balanced ? "" : ":stack") + (conditional && !returned ? ":result" : "");
+				}
 			}
 		}
 	}
 	wrapper.RunScriptString("_SelfFetchProbe = nil; _SelfFetchTest = nil; _SelfFetchTable = nil; _SelfFetchArgs = nil; _SelfFetchOk = nil");
 	const bool passed = failed.empty();
-	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_script_self_is_fetched_as_table_entry_is_defined_says cases=" << cases.size() * 2
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " a_script_self_is_fetched_as_table_entry_is_defined_says cases=" << cases.size() * 2 * std::size(literals)
 	          << (passed ? "" : " failed=" + failed) << std::endl;
 	return passed;
 }
@@ -8123,8 +8138,69 @@ static bool RunHookStackBalanceSelfTest() {
 	return passed;
 }
 
+static bool RunStoredCallbackStateCloseSelfTest() {
+	std::unique_ptr<LuabindObjectWrapper> callback;
+	const uint64_t lateBefore = LuabindObjectWrapper::QueuedDeletionsNamingAClosedState();
+	LuaStateWrapper state;
+	state.Initialize();
+	const bool made = state.RunScriptString("function StoredCallback() return 3 end") == 0;
+	callback = std::make_unique<LuabindObjectWrapper>(new luabind::object(luabind::globals(state.GetLuaState())["StoredCallback"]), "stored-callback.lua");
+	state.Destroy();
+	const bool released = !callback->GetLuabindObject() || !callback->GetLuabindObject()->is_valid();
+	callback.reset();
+	LuabindObjectWrapper::ApplyQueuedDeletions();
+	const bool safe = LuabindObjectWrapper::QueuedDeletionsNamingAClosedState() == lateBefore;
+	std::cout << "[script-graph-selftest] " << (made && released && safe ? "PASS" : "FAIL")
+	          << " a_stored_callback_releases_its_reference_before_state_close released=" << released << " safe=" << safe << std::endl;
+	return made && released && safe;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
+	std::unique_ptr<Activity> collisionActivity = std::make_unique<Activity>();
+	g_ActivityMan.SwapCheckpointActivity(collisionActivity);
+	const bool collisionObjectMade = m_MasterScriptState.RunScriptString(
+	    "_RoundCollisionObject = CreateMOPixel('Spark Yellow 1', 'Base.rte');"
+	    "assert(_RoundCollisionObject, 'collision fixture was not created');"
+	    "local uid = _RoundCollisionObject.UniqueID;"
+	    "MovableMan:AddParticle(_RoundCollisionObject);"
+	    "_RoundCollisionObject = MovableMan:RemoveParticle(_RoundCollisionObject);"
+	    "assert(_RoundCollisionObject and _RoundCollisionObject.UniqueID == uid, 'collision fixture was not removed');") == 0;
+	lua_getglobal(state, "_RoundCollisionObject");
+	const auto* collisionUserdata = luabind::detail::is_class_object(state, -1);
+	const bool collisionLuaOwned = collisionUserdata && (collisionUserdata->flags() & luabind::detail::object_rep::owner);
+	MovableObject* collisionObject = lua_isnil(state, -1) ? nullptr :
+	    luabind::object_cast<MovableObject*>(luabind::object(luabind::from_stack(state, -1)));
+	lua_pop(state, 1);
+	bool roundCollision = false;
+	bool collisionRestored = false;
+	if (collisionObjectMade && collisionLuaOwned && collisionObject) {
+		collisionObject->m_LastCollisionSimFrameNumber = 0;
+		collisionObject->m_MOIDHit = 7;
+		collisionObject->m_TerrainMatHit = 9;
+		collisionObject->m_ParticleUniqueIDHit = 11;
+		const std::string collisionCheckpoint = collisionObject->SaveMovableObjectRuntime();
+		g_MovableMan.PurgeAllMOs();
+		g_MovableMan.RestartSimUpdateFrameNumber();
+		roundCollision = collisionObject->HitWhatMOID() == g_NoMOID &&
+		    collisionObject->HitWhatTerrMaterial() == g_MaterialAir && collisionObject->HitWhatParticleUniqueID() == 0 &&
+		    collisionObject->m_MOIDHit == g_NoMOID && collisionObject->m_TerrainMatHit == g_MaterialAir &&
+		    collisionObject->m_ParticleUniqueIDHit == 0 &&
+		    collisionObject->m_LastCollisionSimFrameNumber != g_MovableMan.GetSimUpdateFrameNumber();
+		collisionRestored = collisionObject->LoadMovableObjectRuntime(collisionCheckpoint) &&
+		    collisionObject->HitWhatMOID() == 7 && collisionObject->HitWhatTerrMaterial() == 9 &&
+		    collisionObject->HitWhatParticleUniqueID() == 11 && collisionObject->m_LastCollisionSimFrameNumber == 0;
+	}
+	std::cout << "[script-graph-selftest] " << (roundCollision ? "PASS" : "FAIL")
+	          << " a_removed_lua_object_loses_collision_results_at_round_restart created=" << collisionObjectMade
+	          << " lua_owned=" << collisionLuaOwned << std::endl;
+	std::cout << "[script-graph-selftest] " << (collisionRestored ? "PASS" : "FAIL")
+	          << " a_collision_checkpoint_keeps_its_recorded_stamp_and_results" << std::endl;
+	m_MasterScriptState.RunScriptString("_RoundCollisionObject = nil; collectgarbage('collect')");
+	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+	LuabindObjectWrapper::ApplyQueuedDeletions();
+	g_ActivityMan.SwapCheckpointActivity(collisionActivity);
+	collisionActivity.reset();
 	const int id = AllocatePathCallback(m_PathCallbacks, state);
 	m_MasterScriptState.RunScriptString("_PathCallbackPurgeTest = 0; _AddAsyncPathCallback(" + std::to_string(id) + ", function(result) _PathCallbackPurgeTest = _PathCallbackPurgeTest + result.PathLength end)");
 	PathRequest result;
@@ -8148,6 +8224,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool getterCache = RunGetterCacheSelfTest();
 	const bool selfFetch = RunScriptSelfFetchSelfTest();
 	const bool hookStack = RunHookStackBalanceSelfTest();
+	const bool storedCallback = RunStoredCallbackStateCloseSelfTest();
 	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
 	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
 	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
@@ -8241,7 +8318,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && storedCallback && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
@@ -9190,8 +9267,9 @@ end
 		const auto* menuPreset = dynamic_cast<const PieMenu*>(g_PresetMan.GetEntityPreset("PieMenu", "Empty Pie Menu"));
 		int before = 0, after = -1;
 		if (slicePreset && menuPreset) {
+			std::unique_ptr<PieMenu> submenu(dynamic_cast<PieMenu*>(menuPreset->Clone()));
 			std::unique_ptr<PieSlice> source(dynamic_cast<PieSlice*>(slicePreset->Clone()));
-			source->SetSubPieMenu(dynamic_cast<PieMenu*>(menuPreset->Clone()));
+			source->SetSubPieMenu(submenu.get());
 			before = inUse();
 			for (int copy = 0; copy < 3; ++copy) delete dynamic_cast<PieSlice*>(source->Clone());
 			after = inUse();
@@ -11314,6 +11392,14 @@ static int PushScriptSelf(lua_State* state, const std::string& tableName, const 
 	return 1;
 }
 
+static bool ParseLuaLiteralNumber(std::string_view text, double& value) {
+	// The old callback path treated an empty literal as zero; keep that behavior.
+	if (text.empty()) { value = 0; return true; }
+	const auto parsed = FloatText::ParseCFallback(text.data(), text.data() + text.size(), value, true);
+	return parsed.ptr == text.data() + text.size() &&
+	    (parsed.ec == std::errc() || parsed.ec == std::errc::result_out_of_range);
+}
+
 int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functionObject, const std::string& selfGlobalTableName, const std::string& selfGlobalTableKey, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	int status = 0;
 
@@ -11334,12 +11420,12 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	}
 
 	for (const std::string_view& functionLiteralArgument: functionLiteralArguments) {
-		char* stringToDoubleConversionFailed = nullptr;
+		double argumentAsNumber = 0;
 		if (functionLiteralArgument == "nil") {
 			lua_pushnil(m_State);
 		} else if (functionLiteralArgument == "true" || functionLiteralArgument == "false") {
 			lua_pushboolean(m_State, functionLiteralArgument == "true" ? 1 : 0);
-		} else if (double argumentAsNumber = std::strtod(functionLiteralArgument.data(), &stringToDoubleConversionFailed); !*stringToDoubleConversionFailed) {
+		} else if (ParseLuaLiteralNumber(functionLiteralArgument, argumentAsNumber)) {
 			lua_pushnumber(m_State, argumentAsNumber);
 		} else {
 			lua_pushlstring(m_State, functionLiteralArgument.data(), functionLiteralArgument.size());
@@ -11419,12 +11505,12 @@ int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectW
 	}
 
 	for (const std::string_view& functionLiteralArgument: functionLiteralArguments) {
-		char* stringToDoubleConversionFailed = nullptr;
+		double argumentAsNumber = 0;
 		if (functionLiteralArgument == "nil") {
 			lua_pushnil(m_State);
 		} else if (functionLiteralArgument == "true" || functionLiteralArgument == "false") {
 			lua_pushboolean(m_State, functionLiteralArgument == "true" ? 1 : 0);
-		} else if (double argumentAsNumber = std::strtod(functionLiteralArgument.data(), &stringToDoubleConversionFailed); !*stringToDoubleConversionFailed) {
+		} else if (ParseLuaLiteralNumber(functionLiteralArgument, argumentAsNumber)) {
 			lua_pushnumber(m_State, argumentAsNumber);
 		} else {
 			lua_pushlstring(m_State, functionLiteralArgument.data(), functionLiteralArgument.size());

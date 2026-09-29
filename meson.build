@@ -232,6 +232,9 @@ if host_machine.system() in ['linux','darwin']
     dependency('gl')
   ]
   preprocessor_flags+=['-DSYSTEM_MINIZIP']
+  if host_machine.system() == 'linux'
+    deps += [dependency('libcurl', version: '>=7.85.0'), dependency('openssl')]
+  endif
   if host_machine.system()=='darwin'
     # Objective-C++ for NetHttpClientApple.mm; GCC cannot parse Foundation's headers.
     add_languages('objcpp', native: false)

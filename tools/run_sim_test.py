@@ -54,7 +54,7 @@ def prepare_runtime(repo, out, fixtures=None):
     quote = lambda value: "'" + str(value).replace("'", "''") + "'"
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path " + quote(runtime / "Data") + " -Target " + quote(repo / "Data") + " | Out-Null"], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
     settings = (repo / "Userdata/Settings.ini").read_text(encoding="utf-8-sig")
-    values = {"MuteMaster": "1", "MuteMusic": "1", "MuteSounds": "1", "MasterVolume": "0", "MusicVolume": "0", "SoundVolume": "0", "Fullscreen": "0", "SkipIntro": "1", "EnableVSync": "0", "ResolutionX": "960", "ResolutionY": "540", "UseMultiDisplays": "0"}
+    values = {"MuteMaster": "1", "MuteMusic": "1", "MuteSounds": "1", "MasterVolume": "0", "MusicVolume": "0", "SoundVolume": "0", "Fullscreen": "0", "SkipIntro": "1", "EnableVSync": "0", "SessionDirectoryUrl": "", "ResolutionX": "960", "ResolutionY": "540", "UseMultiDisplays": "0"}
     for name, value in values.items():
         pattern = rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*"
         settings, count = re.subn(pattern, lambda match: match[1] + value, settings)

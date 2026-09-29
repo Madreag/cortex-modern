@@ -22,6 +22,7 @@
 #include <utility>
 #include <future>
 #include <iostream>
+#include <locale>
 
 using namespace RTE;
 
@@ -671,6 +672,8 @@ int Writer::Create(const std::string& fileName, bool append, bool createDir) {
 
 int Writer::Create(std::unique_ptr<std::ostream>&& stream) {
 	m_Stream = std::move(stream);
+	// Integer grouping is part of a stream's locale too; saved text never uses it.
+	m_Stream->imbue(std::locale::classic());
 	if (!m_Stream->good()) {
 		return -1;
 	}
