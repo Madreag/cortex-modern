@@ -55,7 +55,9 @@ def check(repo, root, label, source):
         first, last = readings[0], readings[-1]
         result.update(ticks=last - first, first_tick=first, last_tick=last, saved_tick=saved_tick, probe=observed)
         result["pass"] = (result["record"]["exit_code"] == 0 and not result["record"].get("timed_out")
-                          and f'[load-game] loaded "{name}"' in text and observed.get("pass") and last - first >= 600)
+                          and f'[load-game] loaded "{name}"' in text and observed.get("pass") and last - first >= 600
+                          and all(not step["observed"]["paused"] and not step["observed"]["editing"]
+                                  for step in observed.get("steps", [])))
     except Exception as error:
         result["error"] = repr(error)
     finally:
