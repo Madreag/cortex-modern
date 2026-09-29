@@ -6414,7 +6414,11 @@ namespace RTE {
 			auto& stats = m_Stats.peers[timing.peerId];
 			if (timing.nextFrame > m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew) return;
 			stats.reportedNextFrame = std::max(stats.reportedNextFrame, timing.nextFrame);
-			if (authority) { stats.pingMs = timing.pingMs; stats.jitterMs = timing.jitterMs; stats.delayFrames = timing.delayFrames; }
+			if (authority) {
+				// A direct connection is measured here. The host's distance to itself is not this receiver's link.
+				if (!m_RemoteTransports.contains(timing.peerId)) { stats.pingMs = timing.pingMs; stats.jitterMs = timing.jitterMs; }
+				stats.delayFrames = timing.delayFrames;
+			}
 			return;
 		}
 		if (timing.phase == NetTimingPhase::Acknowledge) {
@@ -6528,10 +6532,10 @@ namespace RTE {
 		const uint64_t keep = std::max<uint64_t>(1, m_Config.slowPlayerBoundTicks);
 		if (least == UINT64_MAX || least >= keep) return std::nullopt;
 		// A sender keeping the tick rate can carry a fixed phase offset beyond its link's round trip.
-		const auto recent = std::find_if(first, leads.end(), [&](const ArrivalLead& arrival) { return nowMs - arrival.ms <= windowMs; });
-		if (recent != leads.end() && leads.back().ms > recent->ms) {
-			const uint64_t elapsed = leads.back().ms - recent->ms;
-			const uint64_t produced = leads.back().frame >= recent->frame ? leads.back().frame - recent->frame : 0;
+		// Missing packets at the sample boundary must not discard the cadence measured under this delay.
+		if (leads.back().ms > first->ms) {
+			const uint64_t elapsed = leads.back().ms - first->ms;
+			const uint64_t produced = leads.back().frame >= first->frame ? leads.back().frame - first->frame : 0;
 			if (elapsed + m_Config.simTickMs >= windowMs && produced >= static_cast<uint64_t>(std::floor(elapsed / m_Config.simTickMs)))
 				required = std::max<uint32_t>(required, current > least ? static_cast<uint32_t>(current - least) : 0);
 		}
@@ -7249,7 +7253,15 @@ namespace RTE {
 			std::cout << "[lockstep] first frame of returning peer " << static_cast<int>(frame.senderPeerId) << " accepted: target=" << frame.targetFrame << " next=" << m_Stats.nextFrame
 			          << " reclaim=" << back->second.activationFrame << " window=" << windowCopy << " clock=" << NetLockstepSharedClockMs() << std::endl;
 		if (!windowCopy && m_Config.adaptiveInputDelay && m_Config.localPeerId == GetHostPeerId()) {
-			const uint64_t simNext = m_LastDeliveredFrame ? *m_LastDeliveredFrame + 1 : m_Config.startFrame;
+			uint64_t simNext = m_LastDeliveredFrame ? *m_LastDeliveredFrame + 1 : m_Config.startFrame;
+			// A faster survivor may need this input before this host does. Its latest produced input names
+			// the simulation tick it has reached; held seats and neutral return gaps cannot set that clock.
+			for (uint8_t receiver: m_RemotePeerIds) {
+				if (receiver == frame.senderPeerId || !IsRemoteRequiredForFrame(receiver, frame.targetFrame)) continue;
+				const uint64_t produced = m_Stats.peers[receiver].highestTargetFrame;
+				const uint64_t delay = InputDelayAt(receiver, produced);
+				if (produced >= delay) simNext = std::max(simNext, produced - delay + 1);
+			}
 			auto& leads = m_ArrivalLeads[frame.senderPeerId];
 			leads.push_back({nowMs, frame.targetFrame, frame.targetFrame > simNext ? frame.targetFrame - simNext : 0});
 			while (!leads.empty() && nowMs - leads.front().ms > 2 * NetInputDelayEstimator::c_WindowMs) leads.pop_front();
@@ -9163,6 +9175,8 @@ namespace RTE {
 			    << "\"frame_packets_received\":" << peer.framePacketsReceived
 			    << ",\"controller_frames_received\":" << peer.controllerFramesReceived
 			    << ",\"frames_contributed\":" << peer.framesContributed
+			    << ",\"last_input_window_ticks\":" << static_cast<unsigned>(peer.lastFrameReserved)
+			    << ",\"window_copies_applied\":" << peer.windowCopiesApplied
 			    << ",\"duplicate_frames\":" << peer.duplicateFrames
 			    << ",\"out_of_order_frames\":" << peer.outOfOrderFrames
 			    << ",\"future_frame_drops\":" << peer.futureFrameDrops
