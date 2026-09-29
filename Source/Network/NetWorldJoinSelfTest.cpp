@@ -6425,6 +6425,8 @@ namespace RTE {
 			return false;
 		}
 		std::error_code ignored;
+		// The storage worker creates the file off the simulation thread.
+		for (int waited = 0; waited < 2000 && !std::filesystem::is_regular_file(first, ignored); ++waited) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		if (!std::filesystem::is_regular_file(first, ignored)) {
 			*error = "world-segment-roll-missed: no segment file was written at " + first.string();
 			return false;
@@ -6439,6 +6441,10 @@ namespace RTE {
 			return false;
 		}
 		ScenarioRunner::CloseLockstepReplayRecord();
+		if (!ScenarioRunner::WasLockstepReplayRecordClosed()) {
+			*error = "world-segment-roll-missed: the second segment's writer did not finish";
+			return false;
+		}
 		NetMatchReplayReader reader;
 		if (!reader.Open(second.string(), error)) return false;
 		if (!reader.HasWorldSegment() || reader.GetWorldSegment().tick != 1800 || reader.GetWorldSegment().worldDigest != std::string(64, 'e')) {
@@ -7180,7 +7186,7 @@ namespace RTE {
 			return false;
 		}
 		ScenarioRunner::CloseLockstepReplayRecord();
-		if (!std::filesystem::is_regular_file(segment, ignored)) {
+		if (!ScenarioRunner::WasLockstepReplayRecordClosed() || !std::filesystem::is_regular_file(segment, ignored)) {
 			*error = "resumed-world-wrote-no-segment: nothing was written at " + segment.string();
 			return false;
 		}
