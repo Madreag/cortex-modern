@@ -27,6 +27,7 @@
 #include <iterator>
 #include <map>
 #include <random>
+#include <stdexcept>
 #include <unordered_set>
 #include <utility>
 
