@@ -1630,7 +1630,7 @@ def native_behavior(root, spec):
                     if isinstance(observation, str) and observation.startswith('{'):
                         observed = json.loads(observation)
                         if 'members' in observed: dumps.append(observed)
-                require(bool(dumps) and all(not d.get('resyncing') and not d.get('private_catch_up') for d in dumps), f'{peer}: survivor state missing or privately resyncing')
+                require(bool(dumps) and all(d.get('resyncing') is False and d.get('private_catch_up') is False for d in dumps), f'{peer}: survivor state missing or privately resyncing')
                 if spec['kind'] == 'held-seat':
                     require(any(any(m.get('peer') == seat and 'AI in control' in m.get('state', '') for m in d['members']) for d in dumps), f'{peer}: held seat is not shown under AI')
                 else:
