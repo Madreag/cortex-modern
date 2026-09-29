@@ -461,7 +461,8 @@ namespace RTE::MenuAutomation {
 			std::string name, expected, text;
 			args >> name;
 			std::getline(args >> std::ws, expected);
-			const bool found = panel && panel->AutomationLabelText(name, text);
+			bool found = panel && panel->AutomationLabelText(name, text);
+			if (!found) if (auto* main = g_MenuMan.GetMainMenu()) found = main->AutomationLabelText(name, text);
 			const bool carries = found && text.find(expected) != std::string::npos;
 			observation = name + " \"" + expected + "\" text=" + Json(text).dump();
 			return found && carries == (command == "assert_net_label");

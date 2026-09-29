@@ -1,3 +1,4 @@
+#include <SDL3/SDL_stdinc.h>
 #include "NetSessionSelfTest.h"
 
 #include "TimerMan.h"
@@ -616,6 +617,49 @@ namespace RTE {
 				         " got " + NetProtocol::RejectReasonName(client.GetRejectReason()) + "/" + client.GetMismatchKey();
 				return false;
 			}
+			return true;
+		}
+
+		bool TestAdvertisedVersionsRequireHeadless(std::string* error) {
+			struct Environment {
+				std::map<std::string, std::optional<std::string>> saved;
+				Environment() {
+					for (const char* key: {"CCCP_HEADLESS", "CC_TEST_NET_ADVERTISED_BUILD", "CC_TEST_NET_ADVERTISED_PROTOCOL"}) {
+						const char* value = SDL_getenv(key); saved[key] = value ? std::optional<std::string>(value) : std::nullopt;
+					}
+				}
+				~Environment() {
+					for (const auto& [key, value]: saved) {
+						if (value) SDL_setenv_unsafe(key.c_str(), value->c_str(), 1); else SDL_unsetenv_unsafe(key.c_str());
+					}
+				}
+			} environment;
+			for (bool protocol: {false, true}) {
+				const char* key = protocol ? "CC_TEST_NET_ADVERTISED_PROTOCOL" : "CC_TEST_NET_ADVERTISED_BUILD";
+				SDL_unsetenv_unsafe("CC_TEST_NET_ADVERTISED_BUILD"); SDL_unsetenv_unsafe("CC_TEST_NET_ADVERTISED_PROTOCOL");
+				SDL_setenv_unsafe(key, protocol ? "2" : "fixture-other-build", 1);
+				SDL_setenv_unsafe("CCCP_HEADLESS", "0", 1);
+				LoopbackTransport hostWire, clientWire;
+				NetSession host, client;
+				std::string why;
+				const uint16_t port = protocol ? 49748 : 49747;
+				if (host.StartHost(hostWire, MakeConfig(port, 301, "Host"), &why) || why.find("requires CCCP_HEADLESS=1") == std::string::npos) {
+					*error = "the advertised-version lever was accepted outside headless mode"; return false;
+				}
+				SDL_setenv_unsafe("CCCP_HEADLESS", "1", 1); SDL_unsetenv_unsafe(key);
+				if (!host.StartHost(hostWire, MakeConfig(port, 301, "Host"), error)) return false;
+				SDL_setenv_unsafe(key, protocol ? "2" : "fixture-other-build", 1);
+				if (!client.StartClient(clientWire, "loopback", MakeConfig(port, 401, "Joiner"), error)) return false;
+				SDL_unsetenv_unsafe(key);
+				if (!DrivePair(hostWire, clientWire, host, client, [&] { return client.IsRejected(); }, error)) return false;
+				const std::string expected = protocol ? "Network protocol differs (host " + std::to_string(NetProtocol::c_Version) + "; yours 2)." :
+				    "Your build differs from the host's (host stage2-p2c-selftest; yours fixture-other-build).";
+				if (client.GetRejectReason() != (protocol ? NetRejectReason::ProtocolMismatch : NetRejectReason::BuildMismatch) ||
+				    client.BuildPlayerRefusalText() != expected || host.GetReadyPeerCount() != 0 || host.GetState() != NetSessionState::Listening) {
+					*error = "the advertised mismatch changed admission or lost its versions: " + client.BuildPlayerRefusalText(); return false;
+				}
+			}
+			std::cout << "[net-session-selftest] PASS advertised_versions_require_headless" << std::endl;
 			return true;
 		}
 
@@ -2139,6 +2183,7 @@ namespace RTE {
 		if (!TestAssignedPeerIdIgnoresTransportPeerId(&error)) return fail(error);
 		if (!TestReadyRequiresAcceptedConnection(&error)) return fail(error);
 		if (!TestHostWithNoRemoteSeatIsReady(&error)) return fail(error);
+		if (!TestAdvertisedVersionsRequireHeadless(&error)) return fail(error);
 		if (!TestRejects(&error)) return fail(error);
 		if (!TestLockstepCodecAdmission(&error)) return fail(error);
 		if (!TestSessionFull(&error)) return fail(error);

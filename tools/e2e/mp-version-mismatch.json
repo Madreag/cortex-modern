@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "name": "mp-version-mismatch",
+  "port_base": 49700,
+  "title": "Refuse mismatched advertised builds and protocols in the lobby",
+  "size": "640x360",
+  "timeout_s": 100,
+  "runs": [
+    {
+      "name": "build",
+      "peers": [
+        {
+          "name": "host",
+          "args": [],
+          "menu_script": "mp-version-mismatch.host.menu.txt"
+        },
+        {
+          "name": "client",
+          "args": [],
+          "menu_script": "mp-version-mismatch.build.client.menu.txt",
+          "env": {
+            "CC_TEST_NET_ADVERTISED_BUILD": "fixture-other-build"
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark version-lobby-ready",
+            "timeout_s": 80
+          }
+        }
+      ]
+    },
+    {
+      "name": "protocol",
+      "peers": [
+        {
+          "name": "host",
+          "args": [],
+          "menu_script": "mp-version-mismatch.host.menu.txt"
+        },
+        {
+          "name": "client",
+          "args": [],
+          "menu_script": "mp-version-mismatch.protocol.client.menu.txt",
+          "env": {
+            "CC_TEST_NET_ADVERTISED_PROTOCOL": "2"
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark version-lobby-ready",
+            "timeout_s": 80
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "build-host-lobby",
+      "run": "build",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "version-host-refusal",
+      "what": "The host keeps its lobby after refusing the mismatched joiner.",
+      "events": [
+        "assert_substate expected=Lobby actual=Lobby PASS",
+        "assert_enabled ButtonMultiplayerStart expected=0 actual=0 PASS"
+      ]
+    },
+    {
+      "id": "build-refusal",
+      "run": "build",
+      "peer": "client",
+      "screen": "MultiplayerScreen",
+      "mark": "version-client-refusal",
+      "what": "The joiner sees the exact refusal and both advertised versions.",
+      "events": [
+        "assert_net_label LabelMultiplayerLandingStatus \"Your build differs from the host's (host stage2-p2d-local; yours fixture-other-build).\"",
+        "assert_substate expected=Landing actual=Landing PASS"
+      ]
+    },
+    {
+      "id": "protocol-host-lobby",
+      "run": "protocol",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "version-host-refusal",
+      "what": "The host keeps its lobby after refusing the mismatched joiner.",
+      "events": [
+        "assert_substate expected=Lobby actual=Lobby PASS",
+        "assert_enabled ButtonMultiplayerStart expected=0 actual=0 PASS"
+      ]
+    },
+    {
+      "id": "protocol-refusal",
+      "run": "protocol",
+      "peer": "client",
+      "screen": "MultiplayerScreen",
+      "mark": "version-client-refusal",
+      "what": "The joiner sees the exact refusal and both advertised versions.",
+      "events": [
+        "assert_net_label LabelMultiplayerLandingStatus \"Network protocol differs (host 3; yours 2).\"",
+        "assert_substate expected=Landing actual=Landing PASS"
+      ]
+    }
+  ]
+}
