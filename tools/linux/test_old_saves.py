@@ -29,6 +29,9 @@ def check(repo, root, label, source):
                    root / "engine", 300, env={"CCCP_HEADLESS": "1"})
     saved = Path(run.cwd) / "Userdata/UserSavedGames.rte" / f"{name}.ccsave"
     saved.parent.mkdir(parents=True, exist_ok=True)
+    # Creating this module before boot also makes its usual bootstrap Index.ini our responsibility.
+    (saved.parent / "Index.ini").write_text("DataModule\n\tModuleName = Scripted Activity Saves\n"
+                                           "\tScanFolderContents = 0\n\tIgnoreMissingItems = 0\n", encoding="utf-8")
     saved.write_bytes(payload)
     try:
         result["record"] = run.start().finish()
