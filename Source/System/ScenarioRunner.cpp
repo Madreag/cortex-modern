@@ -157,6 +157,15 @@ namespace RTE {
 			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
 		};
+		struct LockstepWorkTimer {
+			uint64_t tick;
+			const char* phase;
+			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			~LockstepWorkTimer() {
+				const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+				if (ms >= 50) System::PrintDiagnosticLine("[net-frame-work] frame=" + std::to_string(tick) + " phase=" + phase + " ms=" + std::to_string(ms));
+			}
+		};
 		void (*s_StallEventPoll)() = nullptr;
 		NetMatchReplayWriter s_ReplayWriter;
 		NetMatchReplayReader s_ReplayReader;
@@ -3096,6 +3105,7 @@ namespace RTE {
 		// The recorder captures every committed tick: all peers' frames and commands. The codec wants one
 		// UID-sorted set; command order re-sorts by sender at apply.
 		const auto record = [tick](const NetLockstepReadyFrame& ready) {
+			LockstepWorkTimer work{tick, "record"};
 			// Two inputs for one actor keep the order every peer applies them in, so the recording replays to the same one.
 			std::vector<ControllerFrame> allFrames;
 			for (const ControllerFrame* input: CommittedControllerFramesInSenderOrder(ready, GetLockstepLocalPeerId())) allFrames.push_back(*input);
@@ -3166,7 +3176,10 @@ namespace RTE {
 			PublishLocalStartup();
 		}
 		while (true) {
-			if (!s_LockstepCoordinator->HasReadyFrame(tick)) s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			if (!s_LockstepCoordinator->HasReadyFrame(tick)) {
+				LockstepWorkTimer work{tick, "poll"};
+				s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			}
 			// A stalled round must not stall the admission plane with it: the peer we are waiting on may
 			// be waiting on an answer only this pump can send. Paced to the tick so the plane's own
 			// clock does not run ahead of the wall clock while we spin.
@@ -3174,6 +3187,7 @@ namespace RTE {
 				const uint32_t sincePumpMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
 				if (sincePumpMs >= nextPumpMs) {
 					nextPumpMs = sincePumpMs + 15;
+					LockstepWorkTimer work{tick, "session-pump"};
 					s_SessionPump();
 				}
 			}
