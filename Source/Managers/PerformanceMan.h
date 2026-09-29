@@ -118,7 +118,11 @@ namespace RTE {
 
 		/// Updates the individual sim update time measurements and recalculates the average. Supposed to be done every sim update.
 		void UpdateMSPSU() {
-			CalculateTimeAverage(m_MSPSUs, m_MSPSUAverage, static_cast<float>(m_SimUpdateTimer->GetElapsedRealTimeMS()));
+			UpdateMSPSU(static_cast<float>(m_SimUpdateTimer->GetElapsedRealTimeMS()));
+		}
+
+		void UpdateMSPSU(float elapsedMS) {
+			CalculateTimeAverage(m_MSPSUs, m_MSPSUAverage, elapsedMS);
 			m_SimUpdateTimer->Reset();
 		}
 

@@ -6532,8 +6532,9 @@ void RunGameLoop() {
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			StallStackSampler::TickBegin(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
+			const bool measureLockstepCost = ScenarioRunner::IsLockstepControllerSyncActive();
 			g_PerformanceMan.NewPerformanceSample();
-			g_PerformanceMan.UpdateMSPSU();
+			if (!measureLockstepCost) g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
 			g_AudioMan.RetireFinishedSimulationSounds();
 			const bool watchLedgerExpiry = s_eventLedgerPressTick > 0;
@@ -7403,6 +7404,8 @@ void RunGameLoop() {
 			const long long crossCaptureUs = g_TimerMan.GetAbsoluteTime() - crossCaptureStartUs;
 			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;
 
+			// The paced round estimates execution cost without counting its idle interval.
+			if (measureLockstepCost) g_PerformanceMan.UpdateMSPSU(static_cast<float>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)) / 1000.0F);
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 			StallStackSampler::TickEnd();
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
@@ -8546,6 +8549,7 @@ std::string BuildLoopPaceJson() {
 	out << "\"draw_ms\":" << s_paceDrawUs / 1000 << ",";
 	out << "\"wall_tps\":" << (wallUs > 0 ? static_cast<double>(s_paceSimTicks) * 1000000.0 / static_cast<double>(wallUs) : 0.0) << ",";
 	out << "\"sim_ms_per_tick\":" << (s_paceSimTicks > 0 ? static_cast<double>(s_paceSimUs) / 1000.0 / static_cast<double>(s_paceSimTicks) : 0.0) << ",";
+	out << "\"sim_execution_average_ms\":" << g_PerformanceMan.GetMSPSUAverage() << ",";
 	out << "\"draw_ms_per_iter\":" << (s_paceIterations > 0 ? static_cast<double>(s_paceDrawUs) / 1000.0 / static_cast<double>(s_paceIterations) : 0.0) << ",";
 	out << "\"net_wait_ms\":" << ScenarioRunner::GetLockstepWaitUs() / 1000 << ",";
 	const double ticksPerMs = static_cast<double>(g_TimerMan.GetTicksPerSecond()) / 1000.0;
