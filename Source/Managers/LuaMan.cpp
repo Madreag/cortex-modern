@@ -8162,7 +8162,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 		collisionObject->m_MOIDHit = 7;
 		collisionObject->m_TerrainMatHit = 9;
 		collisionObject->m_ParticleUniqueIDHit = 11;
-		const std::string collisionCheckpoint = collisionObject->MovableObject::SaveCheckpoint();
+		const std::string collisionCheckpoint = collisionObject->SaveMovableObjectRuntime();
 		g_MovableMan.PurgeAllMOs();
 		g_MovableMan.RestartSimUpdateFrameNumber();
 		roundCollision = collisionObject->HitWhatMOID() == g_NoMOID &&
@@ -8170,7 +8170,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 		    collisionObject->m_MOIDHit == g_NoMOID && collisionObject->m_TerrainMatHit == g_MaterialAir &&
 		    collisionObject->m_ParticleUniqueIDHit == 0 &&
 		    collisionObject->m_LastCollisionSimFrameNumber != g_MovableMan.GetSimUpdateFrameNumber();
-		collisionRestored = collisionObject->MovableObject::LoadCheckpoint(collisionCheckpoint) &&
+		collisionRestored = collisionObject->LoadMovableObjectRuntime(collisionCheckpoint) &&
 		    collisionObject->HitWhatMOID() == 7 && collisionObject->HitWhatTerrMaterial() == 9 &&
 		    collisionObject->HitWhatParticleUniqueID() == 11 && collisionObject->m_LastCollisionSimFrameNumber == 0;
 	}
