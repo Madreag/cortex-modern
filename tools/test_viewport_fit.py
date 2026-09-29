@@ -153,7 +153,7 @@ def set_resolution(run, res_x, res_y):
     original = ini.read_text(encoding="utf-8")
     patched = original
     for name, value in {"ResolutionX": res_x, "ResolutionY": res_y}.items():
-        patched, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*",
+        patched, count = re.subn(rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*",
                                  lambda m: m[1] + str(value), patched)
         if count == 0:
             patched += f"\n\t{name} = {value}\n"

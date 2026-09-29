@@ -226,7 +226,7 @@ def set_settings(runtime, values):
     path = runtime / "Userdata" / "Settings.ini"
     settings = path.read_text(encoding="utf-8")
     for name, value in values.items():
-        settings, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*",
+        settings, count = re.subn(rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*",
                                   lambda match: match[1] + str(value), settings)
         if count == 0:
             # A missing property must land at the SettingsMan top level, not inside
