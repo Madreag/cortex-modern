@@ -14113,6 +14113,24 @@ namespace RTE {
 		if (!NetMatchReplayReader::Verify(path.string(), report) || report.frames != 2 || report.firstFrame != 43 || report.lastFrame != 44) {
 			*error = "closing the replay did not drain its ticks in order"; return false;
 		}
+		std::string failedWrite;
+		{
+			NetMatchReplayWriter failed;
+			if (!failed.Open(path.string(), MakeConfig(), error)) return false;
+			failed.m_BeforeWriteForTest = [] { throw std::runtime_error("injected replay write failure"); };
+			(void)failed.WriteFrame(50, {}, {}, error);
+			failed.Close();
+			failedWrite = failed.GetWriteError();
+		}
+		if (failedWrite.find("injected replay write failure") == std::string::npos || NetMatchReplayReader::Verify(path.string(), report) || report.endMarker) {
+			*error = "a failed storage worker sealed a successful recording"; return false;
+		}
+		if (!writer.Open(path.string(), MakeConfig(), error)) return false;
+		std::string limitError;
+		if (writer.WriteRecordPayload(std::vector<uint8_t>(NetMatchReplayWriter::c_MaxRecordBytes + 1), &limitError) || limitError.find("limit") == std::string::npos) {
+			*error = "the replay queue accepted a record beyond its existing size limit"; return false;
+		}
+		writer.Close();
 		std::cout << "[net-match-selftest] PASS replay_storage_does_not_block_ticks" << std::endl;
 		return true;
 	}
