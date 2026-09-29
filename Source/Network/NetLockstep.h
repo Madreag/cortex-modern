@@ -702,7 +702,8 @@ namespace RTE {
 		/// Version 36 names the proposal a re-stamped timing decision withdraws, so no peer keeps the old one.
 		static constexpr uint16_t c_TimingWithdrawVersion = 36;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
-		static constexpr uint16_t c_CheckpointVersion = 40; //!< The newest wire: frames that carry the checkpoint schedule.
+		static constexpr uint16_t c_CheckpointVersion = 40; //!< Frames carrying the checkpoint schedule.
+		static constexpr uint16_t c_RecoveryDatagramVersion = 41; //!< Complete recovery inputs may use the unreliable lane.
 		/// A committed tick and a replay record may name one actor once per sender, in sender order; a build that reads them as unique
 		/// per actor is refused at admission through the deterministic config hash.
 		static constexpr uint16_t c_CommittedRecordVersion = 2;
