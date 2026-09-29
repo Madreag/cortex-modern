@@ -743,15 +743,17 @@ namespace RTE {
 		option(CURLOPT_FORBID_REUSE, 1L);
 		option(CURLOPT_SSL_SESSIONID_CACHE, 0L);
 		option(CURLOPT_WRITEFUNCTION, &ReceiveCurlBody);
-		option(CURLOPT_WRITEDATA, &transfer);
+		option(CURLOPT_WRITEDATA, static_cast<void*>(&transfer));
 		option(CURLOPT_XFERINFOFUNCTION, &CurlProgress);
-		option(CURLOPT_XFERINFODATA, &transfer);
+		option(CURLOPT_XFERINFODATA, static_cast<void*>(&transfer));
 		option(CURLOPT_NOPROGRESS, 0L);
 		option(CURLOPT_ERRORBUFFER, errorBuffer.data());
 		if (!certPinSha256.empty()) {
 			// The leaf pin replaces chain, name and date checks inside the handshake.
+			option(CURLOPT_CAINFO, static_cast<const char*>(nullptr));
+			option(CURLOPT_CAPATH, static_cast<const char*>(nullptr));
 			option(CURLOPT_SSL_CTX_FUNCTION, &ConfigurePinnedTls);
-			option(CURLOPT_SSL_CTX_DATA, &transfer);
+			option(CURLOPT_SSL_CTX_DATA, static_cast<void*>(&transfer));
 		}
 		for (const auto& [name, value] : headers) {
 			auto* next = curl_slist_append(handles.headers, (name + ": " + value).c_str());
