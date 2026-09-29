@@ -1581,6 +1581,18 @@ def compare_round_histories(root, config):
 # What every world tick hashes, actors or none: a comparison without these would be vacuous.
 WORLD_FLOOR = frozenset({'scene', 'terrain', 'sim_rng', 'lua_state'})
 
+def hold_frame_waits(text):
+    """The waits a peer took at another seat's hold frame, one of at most 50 ms per hold: the slow-player bound's own wait
+    for the spike, not a steady stall. Only a hold at least 300 frames into the round counts, where the engine's steady
+    stall count certainly holds its wait, so excusing it can never cover a stall the count left out."""
+    start = re.search(r'\[net-lockstep\] start round=\S+ frame=(\d+)', text)
+    if not start:
+        return []
+    holds = {int(frame) for frame in re.findall(r'\[net-match\] hold peer=\d+ frame=(\d+) AI in control', text)}
+    waits = [(int(frame), int(ms)) for frame, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', text)]
+    return sorted({frame for frame, ms in waits if frame in holds and ms <= 50 and frame >= int(start[1]) + 300})
+
+
 def native_behavior(root, spec):
     from feel.retained_resume import read_live_hashes, PER_PEER_SUBSYSTEMS
     errors, details = [], {}
@@ -1610,7 +1622,10 @@ def native_behavior(root, spec):
             require(exit_code == 0 and ticks >= spec['ticks'][peer], f'{peer}: incomplete continued play')
             if peer in spec.get('steady_peers', []):
                 counts = fields(report, 'steady_missing_frame_stalls')
-                require(bool(counts) and all(type(v) is int and v == 0 for v in counts), f'{peer}: missing or nonzero steady stall count')
+                excused = hold_frame_waits(text(peer))
+                details.setdefault('hold_frame_waits', {})[peer] = excused
+                require(bool(counts) and all(type(v) is int for v in counts) and sum(counts) == len(excused),
+                        f'{peer}: missing or nonzero steady stall count')
         if spec['kind'] in ('held-seat', 'rehold'):
             target = spec['target']
             target_log = text(target)
