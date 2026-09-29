@@ -188,8 +188,7 @@ void SettingsMan::Clear() {
 	m_SessionDirectoryUrl.clear();
 	m_SessionDirectoryInstallKey.clear();
 	m_SessionDirectoryCertSha256.clear();
-	// Off until the directory registration no longer waits for the router's answer (row 527); the host page turns it on.
-	m_NetworkPortMapEnable = false;
+	m_NetworkPortMapEnable = true;
 	m_NetworkPortMapEnableOverride = -1;
 	m_NetworkIceEnable = true;
 	m_NetworkStunServers = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443";
