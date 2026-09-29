@@ -328,6 +328,16 @@ class ReportTests(unittest.TestCase):
                '[net-match] hold peer=2 frame=320 AI in control\n')
         self.assertEqual(report.return_hold_violations(log), [dict(round=1, held_peer=1, hold_tick=307, returned_peer=2, return_tick=300)])
 
+    def test_failed_engine_exit_cannot_pass_its_case_gate(self):
+        import feel_measure
+        result = dict(name='unfinished', peers={'host': self.item9a()}, item9a_pass=True,
+                      off_wire_pass=True, launches_complete=False)
+        with tempfile.TemporaryDirectory() as folder:
+            gates = feel_measure.write_case_gates(Path(folder), [result])
+        self.assertFalse(gates['passed'])
+        self.assertFalse(gates['cases']['unfinished']['passed'])
+        self.assertTrue(any('launches_complete=false' in reason for reason in gates['cases']['unfinished']['reasons']))
+
     def test_an_empty_gate_run_records_why_it_failed(self):
         import feel_measure
         with tempfile.TemporaryDirectory() as folder:

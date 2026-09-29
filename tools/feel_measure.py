@@ -595,7 +595,8 @@ def failure_reasons(report):
 
 
 def write_case_gates(root, results):
-    cases = {row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False) and row.get('off_wire_pass', True), reasons=failure_reasons(row))
+    cases = {row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False) and row.get('off_wire_pass', True)
+                                    and row.get('launches_complete', False), reasons=failure_reasons(row))
              for row in results}
     for case in cases.values():
         if not case['passed'] and not case['reasons']:
@@ -646,6 +647,7 @@ def analyze(root, stock=None):
                 continue
             on, off = root / (name + '-on'), root / (name + '-off')
             manifest = json.loads((on / 'manifest.json').read_text(encoding='utf-8'))
+            off_manifest = json.loads((off / 'manifest.json').read_text(encoding='utf-8'))
             peers = {peer: reduce_or_fail(on, peer, baselines[cap_name]) for peer in ('host', 'client')}
             for value in peers.values():
                 apply_tps_call(value, dict(steady_wall_tps=baselines[cap_name]['steady_wall_tps'],
@@ -685,6 +687,7 @@ def analyze(root, stock=None):
             report = dict(name=name, mode=manifest['mode'], measured=stamp(), executable=manifest['exe'],
                           reducer=file_record(HELPERS / 'report.py'), driver=file_record(Path(__file__)),
                           peers=peers, proof=proof, off_wire_pass=all(row['pass'] for row in proof.values() if row.get('required', True)),
+                          launches_complete=manifest['launches_complete'] and off_manifest['launches_complete'],
                           measurement_complete=manifest['launches_complete'] and all(row['measurement_complete'] for row in peers.values()),
                           raw_files=[file_record(path) for path in raw_paths if record_path(path).is_file()],
                           missing_raw_files=[str(path) for path in raw_paths if not record_path(path).is_file()])
