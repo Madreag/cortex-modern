@@ -43,6 +43,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -14080,6 +14081,42 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestReplayStorageDoesNotBlockTicks(std::string* error) {
+		const auto path = std::filesystem::current_path() / ("replay-storage-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".ccreplay");
+		struct Cleanup {
+			std::filesystem::path path;
+			~Cleanup() { std::error_code ignored; std::filesystem::remove(path, ignored); }
+		} cleanup{path};
+		std::promise<void> entered, release;
+		auto enteredFuture = entered.get_future();
+		auto released = release.get_future().share();
+		std::atomic<bool> first{true};
+		NetMatchReplayWriter writer;
+		if (!writer.Open(path.string(), MakeConfig(), error)) return false;
+		writer.m_BeforeWriteForTest = [&] {
+			if (first.exchange(false)) { entered.set_value(); released.wait(); }
+		};
+		std::string writeError;
+		auto written = std::async(std::launch::async, [&] { return writer.WriteFrame(43, {}, {}, &writeError); });
+		const bool storageEntered = enteredFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		const bool tickReturned = written.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
+		release.set_value();
+		const bool accepted = written.get();
+		if (!storageEntered || !tickReturned || !accepted) {
+			writer.Close();
+			*error = "the simulation waited on blocked replay storage: entered=" + std::to_string(storageEntered) + " returned=" + std::to_string(tickReturned) + " error=" + writeError;
+			return false;
+		}
+		if (!writer.WriteFrame(44, {}, {}, error)) return false;
+		writer.Close();
+		NetReplayVerifyReport report;
+		if (!NetMatchReplayReader::Verify(path.string(), report) || report.frames != 2 || report.firstFrame != 43 || report.lastFrame != 44) {
+			*error = "closing the replay did not drain its ticks in order"; return false;
+		}
+		std::cout << "[net-match-selftest] PASS replay_storage_does_not_block_ticks" << std::endl;
+		return true;
+	}
+
 	int NetMatchSelfTest::RunBeforeInitialization() {
 		std::string error;
 		if (!TestIceDefaultsAndOverrides(&error) || !TestRelayOfferAndPolicy(&error)) {
@@ -14113,6 +14150,7 @@ namespace RTE {
 			rowsPassed = false;
 		};
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
+		row(&TestReplayStorageDoesNotBlockTicks, "replay_storage_does_not_block_ticks");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");

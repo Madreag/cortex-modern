@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -82,7 +83,9 @@ namespace RTE {
 		bool CopyDiagnosticReplay(std::string& bytes, bool& truncated) const;
 
 	private:
+		friend bool TestReplayStorageDoesNotBlockTicks(std::string* error);
 		bool WriteRecordPayload(const std::vector<uint8_t>& payload, std::string* error);
+		std::function<void()> m_BeforeWriteForTest;
 		std::ofstream m_Out;
 		uint64_t m_FramesWritten = 0;
 		std::vector<uint8_t> m_DiagnosticBytes;
