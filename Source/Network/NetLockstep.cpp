@@ -6142,7 +6142,7 @@ namespace RTE {
 		}
 		const uint64_t elapsed = nowMs >= m_ConsumerWaitStartMs ? nowMs - m_ConsumerWaitStartMs : 0;
 		const bool first = !m_ConsumerWaitCounted && elapsed > 0;
-		if (first) { ++m_Stats.blockingFrameWaits; m_ConsumerWaitCounted = true; }
+		if (first) { ++m_Stats.blockingFrameWaits; ++m_Stats.missingFrameStalls; m_ConsumerWaitCounted = true; }
 		m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, elapsed);
 		const auto remote = m_RemoteFrames.find(frame);
 		std::vector<uint8_t> missing;
@@ -6180,6 +6180,7 @@ namespace RTE {
 		if (m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs) {
 			m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, nowMs - m_ConsumerWaitStartMs);
 			if (nowMs > m_ConsumerWaitStartMs) {
+				if (!m_ConsumerWaitCounted) { ++m_Stats.blockingFrameWaits; ++m_Stats.missingFrameStalls; }
 				std::cout << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs << " on=" << m_Stats.lastMissingPeers;
 				if (nowMs - m_ConsumerWaitStartMs >= 100) std::cout << " blocked=" << m_AdvanceBlock << " duplicates=" << m_WaitDuplicates;
 				std::cout << std::endl;
@@ -8820,6 +8821,21 @@ namespace RTE {
 			m_OwnMissingFrame.reset();
 			return false;
 		}
+		// The worker commits ahead of the simulation. Missing future input is not late while every survivor
+		// still has enough committed frames to receive the decision, just as for a missing remote seat.
+		uint64_t runwayFrames = m_ReadyFrames.size(), noticeMs = 2;
+		for (uint8_t peer: m_RemotePeerIds) {
+			if (!IsRemoteRequiredForFrame(peer, frame)) continue;
+			const auto& stats = m_Stats.peers[peer];
+			const auto estimate = m_DelayEstimators.find(peer);
+			noticeMs = std::max(noticeMs, uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs);
+			const uint64_t delay = InputDelayAt(peer, frame), produced = stats.highestTargetFrame;
+			if (produced >= delay) runwayFrames = std::min(runwayFrames, frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0);
+		}
+		if (static_cast<uint64_t>(std::llround(runwayFrames * m_Config.simTickMs)) > noticeMs) {
+			m_OwnMissingFrame.reset();
+			return false;
+		}
 		if (m_OwnMissingFrame != frame) {
 			m_OwnMissingFrame = frame;
 			m_OwnMissingSinceMs = nowMs;
@@ -9072,6 +9088,10 @@ namespace RTE {
 		out << "\"frame_binding_gap_drops\":" << m_Stats.frameBindingGapDrops << ",";
 		out << "\"future_frame_drops\":" << m_Stats.futureFrameDrops << ",";
 		out << "\"missing_frame_stalls\":" << m_Stats.missingFrameStalls << ",";
+		out << "\"ahead_input_misses\":" << m_Stats.aheadInputMisses << ",";
+		out << "\"input_window_ticks\":" << static_cast<unsigned>(ConfiguredWindowTicks()) << ",";
+		out << "\"window_copies_applied\":" << m_Stats.windowCopiesApplied << ",";
+		out << "\"window_copies_skipped\":" << m_Stats.windowCopiesSkipped << ",";
 		out << "\"blocking_frame_waits\":" << m_Stats.blockingFrameWaits << ",";
 		out << "\"hold_notice_budget_ms\":" << m_Stats.holdNoticeBudgetMs << ",";
 		out << "\"last_hold_declaration_ms\":" << m_Stats.lastHoldDeclarationMs << ",";
@@ -11386,7 +11406,8 @@ namespace RTE {
 			m_WaitStartMs = nowMs;
 		}
 		if (m_LastStallFrame != m_Stats.nextFrame) {
-			++m_Stats.missingFrameStalls;
+			++m_Stats.aheadInputMisses;
+			if (!UsesBoundedWait()) ++m_Stats.missingFrameStalls;
 			m_LastStallFrame = m_Stats.nextFrame;
 		}
 		if (!UsesBoundedWait() && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs > m_Stats.longestStallMs) {
