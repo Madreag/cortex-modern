@@ -477,6 +477,14 @@ namespace {
 	class Walk {
 	public:
 		explicit Walk(lua_State* state) : L(state) {}
+		~Walk() {
+			std::set<int> references{m_GetRef, m_SetRef};
+			for (const auto& [name, instance]: m_Instances) references.insert(instance.handle);
+			for (const auto& instance: m_Owned) references.insert(instance.handle);
+			for (const auto& [name, reference]: m_OperatorRefs) references.insert(reference);
+			references.insert(m_FreeFunctionRefs.begin(), m_FreeFunctionRefs.end());
+			for (int reference: references) luaL_unref(L, LUA_REGISTRYINDEX, reference);
+		}
 
 		bool Run();
 		bool RunWalk();
