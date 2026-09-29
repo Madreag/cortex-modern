@@ -2519,6 +2519,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		// is locked. A backend refusal cannot leave the original soundscape partly changed.
 		std::vector<std::pair<FMOD::Sound*, AudioCheckpoint::Sample>> oldSamples;
 		std::array<AudioCheckpoint::Control, 4> oldGroups;
+		std::vector<std::pair<FMOD::ChannelGroup*, FMOD::DSP*>> restoredGroupEffects;
 		std::vector<std::array<FMOD_VECTOR, 4>> oldListeners;
 		const std::array<FMOD::ChannelGroup*, 4> groups = {m_MasterChannelGroup, m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
 		PreservedGroupEffects originalEffects(groups);
@@ -2548,6 +2549,17 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 						AudioCheckpoint::Require(m_AudioSystem->set3DListenerAttributes(static_cast<int>(index), &position, &velocity, &forward, &up));
 					}
 					AudioCheckpoint::Require(m_MasterChannelGroup->setMute(state.muteMaster || m_OutputSilenced));
+					for (FMOD::ChannelGroup* group: groups) {
+						int count = 0;
+						AudioCheckpoint::Require(group->getNumDSPs(&count));
+						for (int index = 0; index < count; ++index) {
+							FMOD::DSP* effect = nullptr;
+							FMOD_DSP_TYPE type = FMOD_DSP_TYPE_UNKNOWN;
+							AudioCheckpoint::Require(group->getDSP(index, &effect));
+							AudioCheckpoint::Require(effect->getType(&type));
+							if (AudioCheckpoint::Effect::Managed(type)) restoredGroupEffects.emplace_back(group, effect);
+						}
+					}
 				}
 			} catch (...) {
 				for (const auto& [sound, sample]: oldSamples) { try { sample.Apply(sound); } catch (...) {} }
@@ -2594,6 +2606,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 		}
 		cleanup.committed = true;
 		originalEffects.Commit();
+		if (m_AudioEnabled && state.enabled) m_GroupEffects.swap(restoredGroupEffects);
 		TraceCheckpointBoundary("load-committed");
 		return true;
 	} catch (const std::exception& error) {
@@ -2929,6 +2942,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			FMOD::DSP* effect;
 			AudioCheckpoint::Require(m_AudioSystem->createDSPByType(FMOD_DSP_TYPE_MULTIBAND_EQ, &effect));
 			AudioCheckpoint::Require(originalChannel->addDSP(0, effect));
+			TrackVoiceEffects(originalChannel);
 			AudioCheckpoint::Require(originalChannel->setPaused(false));
 			const auto arm = [&ok](const char* name, bool passed) { { std::ostringstream line; line << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name; System::PrintDiagnosticLine(line.str()); } ok = ok && passed; };
 			// The mixer idles a voice's DSP on its own thread, which is how two peers' saves disagree on the flag.
@@ -4443,6 +4457,7 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 					} catch (const std::exception& error) {
 						refusal = error.what();
 					}
+					TrackVoiceEffects(channel);
 					StopDetached(channel);
 				}
 			}
