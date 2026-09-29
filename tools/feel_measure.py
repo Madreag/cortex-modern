@@ -67,7 +67,7 @@ def private_settings(run, cap):
               'NetworkHostDelayPolicy': 'Auto', 'NetworkInputDelayFrames': '0',
               'NetworkSlowPlayerBoundTicks': '3', 'NetworkSlowPlayerPolicy': 'Substitute', 'NetworkShowDiagnostics': '1'}
     for name, value in values.items():
-        text, count = re.subn(rf'(?m)^(\s*{name}\s*=\s*)[^\r\n]*', lambda match: match[1] + value, text)
+        text, count = re.subn(rf'(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*', lambda match: match[1] + value, text)
         if count == 0:
             text += f'\n\t{name} = {value}\n'
     path.write_text(text, encoding='utf-8')

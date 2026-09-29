@@ -425,7 +425,7 @@ def load_settings_template(repo: Path) -> str:
 def apply_settings_overrides(text: str, values: Mapping[str, str]) -> str:
     settings = text
     for name, value in values.items():
-        pattern = rf"(?m)^(\s*{re.escape(name)}\s*=\s*)[^\r\n]*"
+        pattern = rf"(?m)^([ \t]*{re.escape(name)}[ \t]*=[ \t]*)[^\r\n]*"
         settings, count = re.subn(
             pattern, lambda match, replacement=value: match[1] + replacement, settings
         )
