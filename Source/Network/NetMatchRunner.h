@@ -183,10 +183,10 @@ namespace RTE {
 		/// inside: the handshake finishes over the pumps that follow.
 		/// @return Whether the coordinator is already running.
 		void ConfigurePrivateJoin(const NetLockstepConfig& config) { m_PrivateJoinConfig = config; m_MatchConfig = config.matchConfig; m_ActiveHostPeerId = config.authorityPeerId; }
-		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, std::string* error = nullptr);
+		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error = nullptr);
 		/// One tick of a starting joiner's handshake. Returns whether the coordinator is running; a
 		/// false with an error set is the start giving up.
-		bool PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, std::string* error = nullptr);
+		bool PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error = nullptr);
 		/// Drops a joiner's lockstep start whose activation the host has taken back; the round it follows goes on.
 		void CancelWorldJoinLockstepStart() { if (m_WorldJoinStarting) { m_WorldJoinStarting = false; m_State = NetMatchRuntimeState::Running; } }
 		/// Whether a joiner's lockstep start is mid-handshake and wants its tick this pump.
@@ -261,6 +261,7 @@ namespace RTE {
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
 		bool m_WorldJoinImage = false;
 		bool m_WorldJoinStarting = false;      //!< A joiner's lockstep start is mid-handshake.
+		std::optional<uint64_t> m_WorldJoinStartLastTick;
 		uint32_t m_WorldJoinStartTicks = 0;    //!< The joiner's own updates that start has cost.
 	};
 

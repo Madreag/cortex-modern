@@ -889,20 +889,22 @@ namespace RTE {
 		return snapshot;
 	}
 
-	bool NetMatchRunner::StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, std::string* error) {
+	bool NetMatchRunner::StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error) {
 		m_Lobby.SetStartFrame(startFrame);
 		m_Config.startFrame = startFrame;
 		m_State = NetMatchRuntimeState::LockstepStarting;
 		// The joiner handshakes while replaying toward its agreed activation frame.
 		m_WorldJoinStarting = true;
 		m_WorldJoinStartTicks = 0;
+		m_WorldJoinStartLastTick.reset();
 		if (!StartLockstep(transport, session, coordinator, m_Config, error)) {
 			return false;
 		}
-		return PumpWorldJoinLockstepStart(coordinator, error);
+		return PumpWorldJoinLockstepStart(coordinator, updateTick, error);
 	}
 
-	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, std::string* error) {
+	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error) {
+		(void)updateTick;
 		if (!IsWorldJoinLockstepStarting()) {
 			return m_State == NetMatchRuntimeState::Running;
 		}

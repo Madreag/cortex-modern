@@ -1929,7 +1929,7 @@ namespace RTE {
 			// starts the other side. The sessions are not ticked again, so only the round plane reads the wire.
 			const uint64_t e = 240;
 			NetLockstepCoordinator joinRound;
-			if (runner.StartWorldJoinLockstep(hostTransport, session, joinRound, e, &error)) {
+			if (runner.StartWorldJoinLockstep(hostTransport, session, joinRound, e, e, &error)) {
 				return Fail("world-join-lockstep-held-the-sim-update: the start reported a running lockstep while the remote was silent");
 			}
 			if (!runner.IsWorldJoinLockstepStarting()) {
@@ -1937,9 +1937,15 @@ namespace RTE {
 				            std::string(NetMatchRunner::StateName(runner.GetState())) + ", error \"" + error +
 				            "\") instead of handing the update back");
 			}
+			for (int poll = 0; poll < 32; ++poll) {
+				(void)runner.PumpWorldJoinLockstepStart(joinRound, e, &error);
+				if (!runner.IsWorldJoinLockstepStarting() || runner.GetWorldJoinStartTicks() != 1)
+					return Fail("join-start polls at one simulation tick spent the update deadline: " + error);
+			}
+			std::cout << "[net-world-join-selftest] PASS join_start_counts_simulation_updates_once" << std::endl;
 			int updates = 1;
 			for (; updates < static_cast<int>(config.worldJoinStartWaitTicks); ++updates) {
-				if (runner.PumpWorldJoinLockstepStart(joinRound, &error)) {
+				if (runner.PumpWorldJoinLockstepStart(joinRound, e + updates, &error)) {
 					return Fail("world-join-lockstep-held-the-sim-update: the silent remote produced a running lockstep after " +
 					            std::to_string(updates) + " updates");
 				}
@@ -1968,7 +1974,7 @@ namespace RTE {
 			}
 			int released = 0;
 			for (uint64_t now = 3000; released < 400 && !joinRound.IsRunning(); ++released, now += 10) {
-				(void)runner.PumpWorldJoinLockstepStart(joinRound, &error);
+				(void)runner.PumpWorldJoinLockstepStart(joinRound, e + updates + released, &error);
 				joinerSide.Tick(now);
 				hostTransport.AdvanceTimeMs(10);
 				clientTransport.AdvanceTimeMs(10);
