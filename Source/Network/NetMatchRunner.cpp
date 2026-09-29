@@ -904,11 +904,13 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error) {
-		(void)updateTick;
 		if (!IsWorldJoinLockstepStarting()) {
 			return m_State == NetMatchRuntimeState::Running;
 		}
-		++m_WorldJoinStartTicks;
+		if (m_WorldJoinStartLastTick != updateTick) {
+			m_WorldJoinStartLastTick = updateTick;
+			++m_WorldJoinStartTicks;
+		}
 		coordinator.Tick(NetLockstepNowMs());
 		if (coordinator.IsRunning()) {
 			m_State = NetMatchRuntimeState::Running;
