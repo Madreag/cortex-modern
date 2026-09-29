@@ -53,8 +53,7 @@ def probe_steps(case, who):
     elif case == "chat":
         steps += [{"op": "wait", "control": "LabelMatchChatNewest", "text_contains": "row514 chat during play"}]
     elif case == "graceful" and who == "host":
-        steps += [wait(300), {"op": "key_down", "key": "P", "sim_at_least": 300},
-                  {"op": "key_up", "key": "P", "sim_at_least": 302},
+        steps += [wait(300), menu("open_local_pause"),
                   {"op": "wait", "screen": "Pause", "scope": "menu"},
                   menu("activate ButtonLeaveMatch"),
                   {"op": "wait", "screen": "PauseLeaveConfirm", "scope": "menu"},

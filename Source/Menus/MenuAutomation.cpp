@@ -324,7 +324,7 @@ namespace RTE::MenuAutomation {
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert" ||
-			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input";
+			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input" || command == "open_local_pause";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -340,6 +340,12 @@ namespace RTE::MenuAutomation {
 		return {{"rect", rect}, {"uncovered_pixels", uncovered}, {"pixels", rect[2] * rect[3]}};
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "open_local_pause") {
+			if (!FireAssertAllowed() || g_MenuMan.IsLocalPauseMenuOpen()) return false;
+			const bool opened = g_MenuMan.ToggleLocalPauseMenu();
+			observation = "local_pause=" + std::to_string(g_MenuMan.IsLocalPauseMenuOpen());
+			return opened;
+		}
 		if (command == "window_event") {
 			std::string kind;
 			args >> kind;
