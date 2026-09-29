@@ -418,8 +418,9 @@ def item9a_gates(run, peer='host', rows=None):
     final_tick = manifest.get('ticks', TICKS)
     rows = list(read_jsonl(raw)) if rows is None and raw.is_file() else rows or []
     clock_path = raw
-    if not rows:
-        live = run / f'{peer}-live.jsonl'
+    live = record_path(run / f'{peer}-live.jsonl')
+    # Render iterations may skip a simulation tick during catch-up. The tick-end clock records each one.
+    if live.is_file() or not rows:
         clock_path = live
         rows = [dict(type='committed', tick=row['tick'], wall_ms=row['wall_ms'])
                 for row in read_jsonl(live) if 'wall_ms' in row] if live.is_file() else []
@@ -464,6 +465,7 @@ def item9a_gates(run, peer='host', rows=None):
         'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
         'item9a_steady_stalls': pin(steady_stalls, '0 blocking waits before the injected spike', steady_stalls == 0, evidence),
+        'item9a_missing_frame_stalls': pin(missing, '0 steady missing-frame stalls', missing == 0, evidence),
         'item9a_longest_wait': pin(longest, '<= 50 ms', longest is not None and longest <= 50, evidence),
         'item9a_confirmed_horizon_lag': pin(horizon_lag_ms, '<= 50 ms behind the steady confirmed-tick clock, including recovery',
             horizon_lag_ms is not None and horizon_lag_ms <= 50, evidence),

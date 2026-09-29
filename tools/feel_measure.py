@@ -138,7 +138,7 @@ AUTOSAVE_CASES = (
     ('autosave-200ms', 200, 1),
 )
 
-# The same arms with a third peer that stays in the match; only --cases runs them.
+# The same arms with a third peer that stays in the match.
 AUTOSAVE_THREE_CASES = (
     ('autosave3-100ms', 100, 1),
     ('autosave3-200ms', 200, 1),
@@ -703,7 +703,7 @@ def analyze(root, stock=None):
         report = reduce_timing_case(run, reference)
         write_json(run / 'feel-report.json', report)
         results.append(report)
-    for name, _, _ in () if subset else AUTOSAVE_CASES:
+    for name, _, _ in () if subset else AUTOSAVE_CASES + AUTOSAVE_THREE_CASES:
         run = root / name
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
@@ -910,7 +910,7 @@ def main(argv=None):
                     port += 1
         for index, case in enumerate(TIMING_CASES):
             launch_timing_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
-        for index, case in enumerate(AUTOSAVE_CASES):
+        for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES):
             launch_autosave_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
     if args.dry_run:
         print(json.dumps(dict(path='full matrix', arms=dry_run_plan(lambda: launch_matrix(root / 'input.txt', None))), indent=2), flush=True)
@@ -930,7 +930,7 @@ def main(argv=None):
                     lag_arms=args.lag_arms,
                     arms=[f'baseline-{cap}-on' for cap in ('60hz', 'uncapped')] +
                          [f'{lag}ms-{cap}-{state}' for lag in (100, 200) for cap in ('60hz', 'uncapped') for state in ('on', 'off')] +
-                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES],
+                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES],
                     lua_states={'host': args.host_lua_states, 'client': args.client_lua_states},
                     pre_match_history={'host': args.host_pre_match_history, 'client': args.client_pre_match_history})
         write_json(root / 'matrix-plan.json', plan)
