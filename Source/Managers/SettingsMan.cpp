@@ -879,6 +879,21 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	check("directory URL comments", settings.GetSessionDirectoryUrl() == "community.example.invalid/serve");
 	writeRead([&](Writer& writer) { writer.NewPropertyWithValue("NetworkDisplayName", "Pilot // a normal property comment"); });
 	check("ordinary string comments unchanged", settings.GetNetworkDisplayName() == "Pilot");
+	// A whole settings file, as a player's Settings.ini holds it: the URL's own line never reaches into the next property.
+	const auto readFile = [&](const std::string& text) {
+		{
+			std::ofstream file(path, std::ios::binary | std::ios::trunc);
+			file << text;
+		}
+		Reader reader(path, false, nullptr, true, true);
+		settings.Create(reader);
+	};
+	readFile("SettingsMan\n\tAutosaveSeconds = 0\n\tSessionDirectoryUrl = https://community.example.invalid//serve // a friend's directory\n\tSessionDirectoryInstallKey = key0123456789abcd\n"
+	         "\tSessionDirectoryCertSha256 = 98022d8f998f4d93\n\tNetworkPortMapEnable = 0\n\tNetworkDisplayName = FilePilot\n");
+	check("directory URL in a settings file", settings.GetSessionDirectoryUrl() == "https://community.example.invalid//serve" && settings.GetSessionDirectoryInstallKey() == "key0123456789abcd" &&
+	                                              settings.GetSessionDirectoryCertSha256() == "98022d8f998f4d93" && !settings.GetNetworkPortMapEnable() && settings.GetNetworkDisplayName() == "FilePilot");
+	readFile("SettingsMan\r\n\tSessionDirectoryUrl = \r\n\tSessionDirectoryInstallKey = key0123456789abce\r\n\tNetworkDisplayName = CrlfPilot\r\n");
+	check("empty directory URL in a settings file", settings.GetSessionDirectoryUrl().empty() && settings.GetSessionDirectoryInstallKey() == "key0123456789abce" && settings.GetNetworkDisplayName() == "CrlfPilot");
 	// A fresh install (no settings file) must reach the public directory; an explicit empty value above still disables it.
 	settings.Clear();
 	check("directory default after clear", settings.GetSessionDirectoryUrl() == SettingsMan::c_DefaultSessionDirectoryUrl);
