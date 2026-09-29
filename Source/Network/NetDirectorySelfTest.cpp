@@ -580,12 +580,17 @@ namespace RTE {
 			}
 
 			bool TestLiveHttpsDirectory(std::string* error) {
-				const std::string url = g_SettingsMan.GetSessionDirectoryUrl();
-				if (url.empty()) return true;
+				std::ifstream fixture("DirectoryHttpFixture.json");
+				if (!fixture) return true;
+				const auto config = json::parse(fixture, nullptr, false);
+				if (!config.is_object() || !config.contains("url") || !config["url"].is_string() || !config.contains("pin") || !config["pin"].is_string()) {
+					*error = "invalid live HTTPS fixture"; return false;
+				}
+				const std::string url = config["url"].get<std::string>(), pin = config["pin"].get<std::string>();
 				if (!url.starts_with("https://127.0.0.1:")) { *error = "live HTTPS fixture must use loopback"; return false; }
 				const auto request = [&](const char* method, const std::string& path, const std::string& body, NetHttpClient::Response& response) {
 					NetHttpClient client;
-					client.Start(method, url + path, {{"Content-Type", "application/json"}, {"X-Install-Key", "linux-http-contract-fixture"}}, body, g_SettingsMan.GetSessionDirectoryCertSha256());
+					client.Start(method, url + path, {{"Content-Type", "application/json"}, {"X-Install-Key", "linux-http-contract-fixture"}}, body, pin);
 					while (client.Poll() == NetHttpClient::PollResult::Pending) std::this_thread::sleep_for(std::chrono::milliseconds(2));
 					response = client.GetResponse();
 					std::cout << "[net-directory-selftest] live HTTPS " << method << " " << path << " status=" << response.statusCode << " error=" << response.error << std::endl;

@@ -11,7 +11,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from run_sim_test import make_run, seed_settings
+from run_sim_test import make_run
 
 
 def main():
@@ -81,7 +81,7 @@ def main():
                                          'diagnostics': [line for line in text.splitlines() if '[net-directory-probe]' in line and 'error=' in line]}
             before = len(requests())
             run = make_run(repo, ['-net-directory-selftest'], root / 'live-selftest', 180, env={'CCCP_HEADLESS': '1'})
-            seed_settings(run, {'SessionDirectoryUrl': url, 'SessionDirectoryCertSha256': pins['correct']})
+            (Path(run.cwd) / 'DirectoryHttpFixture.json').write_text(json.dumps({'url': url, 'pin': pins['correct']}))
             try:
                 record = run.start().finish()
             finally:
