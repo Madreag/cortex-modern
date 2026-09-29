@@ -538,11 +538,12 @@ def timing_peer(run, peer):
 def reduce_timing_case(run, reference=None):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
-    peers = {peer: timing_peer(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
+    three = silent or 'survivor' in manifest.get('per_peer_lag_ms', {})
+    peers = {peer: timing_peer(run, peer) for peer in (('host', 'survivor') if three else ('host',))}
     if reference is not None:
         for value in peers.values():
             apply_tps_call(value, reference)
-    proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'), manifest.get('ticks', TICKS), cross_peer=True)
+    proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if three else 'client_trace.json'), manifest.get('ticks', TICKS), cross_peer=True)
     if silent:
         # The held client's own ticks are compared too: before its hold and from the image it rejoined on.
         client_log = (run / 'client/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / 'client/stdout.log').is_file() else ''
@@ -550,7 +551,7 @@ def reduce_timing_case(run, reference=None):
         proof['held_client'] = compare_pair(run / 'host_trace.json', run / 'client_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
                                             client_away=held_client_away(client_log), window_only=True,
                                             client_rewinds=held_client_rewinds(client_log))
-    pairs = [('host', 'survivor'), ('host', 'client'), ('survivor', 'client')] if silent else [('host', 'client')]
+    pairs = [('host', 'survivor'), ('host', 'client'), ('survivor', 'client')] if three else [('host', 'client')]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
             for left, right in pairs}
     live_pass = all(passes and all(row['compared_ticks'] >= 30 and row['mismatched_ticks'] == 0 for row in passes)
