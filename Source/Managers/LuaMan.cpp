@@ -8128,6 +8128,23 @@ static bool RunHookStackBalanceSelfTest() {
 	return passed;
 }
 
+static bool RunStoredCallbackStateCloseSelfTest() {
+	std::unique_ptr<LuabindObjectWrapper> callback;
+	const uint64_t lateBefore = LuabindObjectWrapper::QueuedDeletionsNamingAClosedState();
+	LuaStateWrapper state;
+	state.Initialize();
+	const bool made = state.RunScriptString("function StoredCallback() return 3 end") == 0;
+	callback = std::make_unique<LuabindObjectWrapper>(new luabind::object(luabind::globals(state.GetLuaState())["StoredCallback"]), "stored-callback.lua");
+	state.Destroy();
+	const bool released = !callback->GetLuabindObject() || !callback->GetLuabindObject()->is_valid();
+	callback.reset();
+	LuabindObjectWrapper::ApplyQueuedDeletions();
+	const bool safe = LuabindObjectWrapper::QueuedDeletionsNamingAClosedState() == lateBefore;
+	std::cout << "[script-graph-selftest] " << (made && released && safe ? "PASS" : "FAIL")
+	          << " a_stored_callback_releases_its_reference_before_state_close released=" << released << " safe=" << safe << std::endl;
+	return made && released && safe;
+}
+
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
 	std::unique_ptr<Activity> collisionActivity = std::make_unique<Activity>();
@@ -8197,6 +8214,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool getterCache = RunGetterCacheSelfTest();
 	const bool selfFetch = RunScriptSelfFetchSelfTest();
 	const bool hookStack = RunHookStackBalanceSelfTest();
+	const bool storedCallback = RunStoredCallbackStateCloseSelfTest();
 	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
 	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
 	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
@@ -8290,7 +8308,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 			for (size_t i = 0; i < gained.size() && i < 12; ++i) std::cout << "[script-graph-selftest] round start gained: " << gained[i] << std::endl;
 		}
 	}
-	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
+	return roundCollision && collisionRestored && graphRows && roundStart && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && lazySeed && poolScopeTick && getterCache && selfFetch && hookStack && storedCallback && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectorPhase && collectionThread && emptySetPicksMaster && retainedOwners;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
