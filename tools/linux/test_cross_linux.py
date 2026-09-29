@@ -23,6 +23,7 @@ class LinuxPeerTests(unittest.TestCase):
         self.assertEqual((box['kind'], box['ssh'], box['python']), ('posix-ssh', '3090', '/usr/bin/python3'))
         self.assertEqual(box['tree'], '/home/erol/cortex-workers/opus-run-cross-linux-20260928/repo')
         self.assertEqual(box['executable'], box['tree'] + '/build-gcc/CortexCommand')
+        self.assertEqual(box['environment']['DISPLAY'], ':0')
         self.assertTrue(box['guard_file'].startswith('/home/erol/cortex-workers/opus-run-cross-linux-20260928/'))
         peer = next(peer for peer in manifest['instances'] if peer['name'] == 'linux')
         self.assertNotIn(box['directory_port'], range(peer['port_block'][0], peer['port_block'][1] + 1))
