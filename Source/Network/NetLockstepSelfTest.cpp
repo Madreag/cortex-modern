@@ -3954,6 +3954,43 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat back from its second hold sets its round up from the tail it replayed, which stopped before the round re-sized another
+		// member's delay; the member start the host hands it is the first word of that change and must not end its round.
+		bool TestAReturnerTakesAMemberDelayResizedAfterItsTail(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(49552, error) || !clientWire.Connect("loopback", 49552, error)) return false;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A56; config.roundId = 56; config.localPeerId = 2; config.peerCount = 3; config.authorityPeerId = 1;
+			config.startFrame = 1003; config.joinsRunningRound = true; config.inputDelayFrames = 20;
+			config.timeoutMs = 60000; config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.remoteTransportPeerIds = {{1, 1}, {3, 1}};
+			config.scenario = "LockstepSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 3;
+			config.activePeerIds = {1, 2, 3};
+			config.initialDelayChanges[3][833] = 23;
+			NetLockstepCoordinator client;
+			if (!client.Start(clientWire, config, error)) return false;
+			if (client.InputDelayAt(3, 1003) != 23) {
+				*error = "fixture: the replayed tail left peer 3 at " + std::to_string(client.InputDelayAt(3, 1003)) + ", not 23";
+				return false;
+			}
+			NetLockstepStart member;
+			member.sessionId = config.sessionId; member.startFrame = 1003; member.inputDelayFrames = 24;
+			member.controllerFrameVersion = ControllerFrame::c_Version; member.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			member.localPeerId = 3; member.peerCount = 3; member.scenario = config.scenario; member.ownershipPolicy = config.ownershipPolicy; member.roundId = 56;
+			NetTransportEvent event;
+			event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+			(void)NetLockstepCodec::Encode({member}, event.bytes);
+			client.InjectEvent(event, 10);
+			if (client.IsFailed() || client.InputDelayAt(3, 1003) != 24) {
+				*error = "a member delay re-sized after the returner's tail ended its round: delay=" + std::to_string(client.InputDelayAt(3, 1003)) + " " + client.GetStats().timeoutReason;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_returner_takes_a_member_delay_resized_after_its_tail" << std::endl;
+			return true;
+		}
+
 		// A handover between machines on different networks: the successor's LAN address is unreachable from outside its network, so
 		// its published endpoint carries its ICE route after it, and a survivor dials that route through the session's rendezvous,
 		// never as an address. A successor's probes of the survivors have no rendezvous to use and pass it by.
@@ -22293,6 +22330,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAJoinerTakesADelayDecidedForItsTail(&error) ||
 		    !TestAJoinerTakesASeatReturnedBeforeIt(&error) ||
 		    !TestAReturnerStartsAtItsReturnsDelay(&error) ||
+		    !TestAReturnerTakesAMemberDelayResizedAfterItsTail(&error) ||
 		    !TestAHandoverEndpointCarriesItsIceRoute(&error) ||
 		    !TestAJoinerTakesAReturnDecidedAfterItsStart(&error) ||
 		    !TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame(&error) ||

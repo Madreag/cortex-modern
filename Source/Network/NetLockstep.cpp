@@ -10196,8 +10196,23 @@ namespace RTE {
 					return;
 				}
 			}
-			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep start mismatch (" + DescribeStartMismatch(start) + ")");
-			return;
+			// A member's start the host hands a seat joining the round carries the delay in force at that frame, a change the round
+			// committed after the tail the seat replayed included: the host's word is the delay from that frame on.
+			if (m_Config.joinsRunningRound && start.localPeerId != m_Config.localPeerId && start.localPeerId != GetHostPeerId() &&
+			    LockstepPeerOfTransport(fromTransport) == GetHostPeerId() && start.startFrame >= m_Config.startFrame &&
+			    !m_PeerAdmissions.contains(start.localPeerId) && start.inputDelayFrames <= NetLockstepCodec::c_MaxInputDelayFrames) {
+				NetLockstepStart known = start;
+				known.inputDelayFrames = MemberStartDelay(start);
+				if (known.inputDelayFrames != start.inputDelayFrames && StartMatchesConfig(known)) {
+					std::cout << "[lockstep] took peer " << static_cast<int>(start.localPeerId) << "'s delay " << start.inputDelayFrames << " from frame " << start.startFrame
+					          << " from the host's start (the replayed tail had " << known.inputDelayFrames << ")" << std::endl;
+					m_DelayChanges[start.localPeerId][start.startFrame] = start.inputDelayFrames;
+				}
+			}
+			if (!StartMatchesConfig(start)) {
+				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep start mismatch (" + DescribeStartMismatch(start) + ")");
+				return;
+			}
 		}
 		if (m_RoundId == 0 && start.roundId != 0) {
 			m_RoundId = start.roundId;
