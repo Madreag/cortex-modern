@@ -18,6 +18,7 @@ import argparse
 import ctypes
 import json
 import os
+import math
 import subprocess
 import sys
 import threading
@@ -27,11 +28,61 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_sim_test import make_run  # noqa: E402
 from compare_sim_traces import compare_fullstate  # noqa: E402
-from feel.retained_resume import compare_live_hashes  # noqa: E402
+from feel.retained_resume import compare_live_hashes, read_live_hashes, PER_PEER_SUBSYSTEMS  # noqa: E402
+from feel.report import own_hold_windows  # noqa: E402
+from compare_sim_traces import CORE  # noqa: E402
 from feel_measure import input_pattern, private_settings, stage_baseline  # noqa: E402
 
 PORT_LO, PORT_HI = 49880, 49889
 TICKS_PER_SECOND = 60
+
+
+def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict:
+    records = {peer: read_live_hashes(root / f"{peer}-live.jsonl") for peer in ("host", "client")}
+    errors, indexed, windows, paces = [], {}, {}, {}
+    rounds = {row.get("round") for rows in records.values() for row in rows}
+    if None in rounds or len(rounds) != expected_rounds:
+        errors.append("round coverage differs from the declared workload")
+    for peer, rows in records.items():
+        log = root / peer / "stdout.log"
+        windows[peer] = own_hold_windows(log.read_text(encoding="utf-8", errors="replace").splitlines()) if log.is_file() else []
+        indexed[peer] = {}
+        for row in rows:
+            indexed[peer].setdefault((row.get("round"), row["tick"]), []).append(row)
+        paces[peer] = []
+        for round_id in rounds:
+            away = {tick for rid, start, end in windows[peer] if rid == round_id for tick in range(start, end)}
+            required = set(range(1, ticks + 1)) - away
+            present = {tick for rid, tick in indexed[peer] if rid == round_id}
+            if not required <= present or ticks not in present or present - set(range(1, ticks + 1)):
+                errors.append(f"{peer} round {round_id}: missing/extra ticks or terminal tick")
+            for start in range(300, ticks, 3600):
+                end = min(start + 3600, ticks)
+                if set(range(start, end + 1)) & away:
+                    continue
+                if not set(range(start, end + 1)) <= present:
+                    continue
+                first = min(row.get("wall_ms", float('nan')) for row in indexed[peer][round_id, start])
+                last = max(row.get("wall_ms", float('nan')) for row in indexed[peer][round_id, end])
+                rate = (end - start) * 1000 / (last - first) if last > first else None
+                ok = rate is not None and math.isfinite(rate) and rate >= 59.5
+                paces[peer].append(dict(round=round_id, first=start, last=end, wall_tps=rate, passed=ok))
+                if not ok:
+                    errors.append(f"{peer} round {round_id}: pace window {start}-{end} below 59.5 TPS")
+        if not paces[peer]:
+            errors.append(f"{peer}: no complete pace window")
+    shared = set(indexed['host']) & set(indexed['client'])
+    for key in sorted(shared):
+        values = indexed['host'][key] + indexed['client'][key]
+        canonical = [{k: v for k, v in row.get('subsystems', {}).items() if k not in PER_PEER_SUBSYSTEMS} for row in values]
+        if any(not (CORE | {'controller'}) <= value.keys() or value != canonical[0] for value in canonical) or \
+                any(row.get('sim_gated') != values[0].get('sim_gated') or row.get('paused', False) != values[0].get('paused', False) for row in values):
+            errors.append(f"hash mismatch or incomplete schema at {key}")
+            break
+    if not shared:
+        errors.append("no shared hashes")
+    return dict(**{'pass': not errors}, errors=errors, pace_windows=paces,
+                hold_windows=windows, compared_keys=len(shared), expected_ticks=ticks)
 
 
 class MemoryCounters(ctypes.Structure):
@@ -310,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     rejoins = count(root / "client" / "stdout.log", "[net-match] private catch-up complete")
     # Every round's own stall ends in an in-place catch-up, the rematches' rounds included.
     rounds = 1 + (max(1, options.rematches) if options.rematch else 0)
+    acceptance = acceptance_history(root, options.end_round_tick or ticks, rounds)
     each_round = count(root / "client" / "stdout.log", "[net-test] live stall frame=", " round_index=")
     in_place = count(root / "client" / "stdout.log", "[net-match] private catch-up complete", " in_place=1")
     # The host is never killed here, so a client that names a new host has split the match in two.
@@ -323,7 +375,8 @@ def main(argv: list[str] | None = None) -> int:
     checks = {"exits": all(row["exit_code"] == 0 and not row["timed_out"] for row in exits.values()),
               "hashes_equal": hashes_equal, "fullstate": fullstate is None or bool(fullstate.get("passed")),
               "holds": holds >= options.holds, "rejoins": rejoins >= options.holds, "no_split_brain": split == 0,
-              "autosaves": autosaves >= max(0, owed), "memory_sampled": minutes_sampled >= int(options.minutes)}
+              "autosaves": autosaves >= max(0, owed), "memory_sampled": minutes_sampled >= int(options.minutes),
+              "complete_history_and_pace": acceptance['pass']}
     if options.stall_each_round:
         checks["each_round_caught_up"] = each_round >= rounds and in_place >= rounds
     first = next((row for row in samples if row.get("host") and row.get("client")), None)
@@ -349,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
               "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
               "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
               "clean_ticks": clean_ticks, "pace_across_own_seat_hold": pace_across_own_seat_hold(root),
-              "plan": plan}
+              "plan": plan, "acceptance_history": acceptance}
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "
           f"autosaves={autosaves}/{owed} samples={len(samples)} -> {root / 'result.json'}", flush=True)
