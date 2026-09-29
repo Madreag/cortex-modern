@@ -351,7 +351,7 @@ namespace RTE::MenuAutomation {
 			auto* input = controls ? dynamic_cast<GUIInputWrapper*>(controls->GetInput()) : nullptr;
 			observation = name + " game=" + g_MetaMan.GetGameName();
 			if (!input || !control || !Enabled(control) || !Visible(control)) return false;
-			return input->QueueAutomationCommand([control] { control->AddEvent(GUIEvent::Command, 0); });
+			return input->QueueAutomationCommand([control] { control->AddEvent(GUIEvent::Command, 0, 0); });
 		}
 		if (command == "open_local_pause") {
 			if (!FireAssertAllowed() || g_MenuMan.IsLocalPauseMenuOpen()) return false;
