@@ -24,8 +24,8 @@ namespace RTE {
 		bool moSubtraction = false;
 		int numLuaStates = 0; //!< The build's fixed threaded-Lua-state count; hashed, so another build's count refuses.
 		int numLuaStatesOverride = -1; //!< Diagnostic only: the retired settings override an old file may still carry.
-		std::string selectedModule;
-		bool scenarioTestModuleLoaded = false;
+		std::string selectedModule; //!< Local launch diagnostic; the host publishes the activity through NetMatchConfig.
+		bool scenarioTestModuleLoaded = false; //!< Diagnostic only; the module manifest gates the loaded Tests.rte.
 		uint16_t lockstepCodecVersion = 0; //!< Target layout for diagnostics and discovery; agreed through the lobby.
 		uint16_t matchConfigVersion = 0; //!< Target layout for diagnostics; agreed through the lobby.
 		uint16_t supportedLockstepCodecVersion = 0;
