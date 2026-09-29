@@ -97,6 +97,9 @@ namespace RTE {
 		/// @return The text height, in pixels
 		int GetTextHeight();
 
+		/// Gets the width of the text before word wrapping, using the same glyph fallback as Draw.
+		int GetTextWidth() const;
+
 		/// Gets the pixel width of the longest space/newline-delimited token in the current text.
 		/// @return The widest word width, in pixels
 		int GetMaxWordWidth();

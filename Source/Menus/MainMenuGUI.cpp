@@ -58,6 +58,8 @@
 
 using namespace RTE;
 
+static constexpr std::string_view c_DirectoryFallbackHint = "the session directory is not reachable: LAN games and a typed address still work";
+
 static std::string PlayerFacingStatus(const std::string& text) {
 	const bool wireReason = text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos;
 	const std::string refusalPrefix = "A player could not join: ";
@@ -3454,6 +3456,15 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 		int contentWidth = 300;
 		int contentHeight = 250;
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup && m_MultiplayerLanGamesLabel) {
+			// The directory hint is one line. A small viewport scrolls it instead of clipping away the fallback.
+			const int desiredWidth = std::max(300, m_MultiplayerLanGamesLabel->GetTextWidth() + 24);
+			contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
+			FitMultiplayerPanelWidth(m_MultiplayerJoinPanel, m_MultiplayerLanGamesLabel, contentWidth);
+			const bool scroll = desiredWidth > contentWidth;
+			m_MultiplayerLanGamesLabel->SetHorizontalOverflowScroll(scroll);
+			m_MultiplayerLanGamesLabel->ActivateDeactivateOverflowScroll(scroll);
+		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup && m_MultiplayerHostPanel) {
 			contentHeight = m_MultiplayerHostPanel->GetHeight();
 		}
@@ -4445,6 +4456,14 @@ void MainMenuGUI::RefreshGamesList() {
 	// Browsing is a directory use: the list GET carries the install key too.
 	m_DirectoryBrowser.Configure(directoryUrl, directoryUrl.empty() ? std::string() : g_SettingsMan.GetOrCreateSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
 	m_DirectoryBrowser.PollList(m_LanBrowserNowMs);
+	if (m_MultiplayerLanGamesLabel) {
+		const std::string& text = m_MultiplayerLanGamesLabel->GetText();
+		// A selected incompatible row keeps its own explanation until the player selects another row.
+		if (text == m_LanGamesLabelText || text == c_DirectoryFallbackHint) {
+			m_MultiplayerLanGamesLabel->SetText(directoryUrl.empty() || !m_DirectoryBrowser.ListError().empty()
+			    ? c_DirectoryFallbackHint : std::string_view(m_LanGamesLabelText));
+		}
+	}
 	// A NET row can only be judged against the local identity; build it once, on first need.
 	if (!m_DirectoryIdentity && !m_DirectoryIdentityTried) {
 		m_DirectoryIdentityTried = true;
