@@ -9200,6 +9200,36 @@ end
 		std::cout << "[script-graph-selftest] " << (freed ? "PASS" : "FAIL") << " a_copied_slices_sub_pie_menu_is_freed in_use_before=" << before << " in_use_after=" << after << std::endl;
 		checkpointValues = freed && checkpointValues;
 	}
+	{
+		auto* pieMenus = const_cast<Entity::ClassInfo*>(Entity::ClassInfo::GetClass("PieMenu"));
+		const auto inUse = [pieMenus] { return pieMenus ? pieMenus->ReturnPoolMemory(pieMenus->GetPoolMemory()) : 0; };
+		const int before = inUse();
+		bool loaded = false;
+		{
+			PieSlice slice;
+			Reader reader(std::make_unique<std::stringstream>("PieSlice\n\tCopyOf = Base.rte/Empty Slice\n\tSubPieMenu = PieMenu\n\t\tCopyOf = Base.rte/Empty Pie Menu\n"), "Base.rte/SubmenuOwnerSelfTest.ini", false, nullptr, true);
+			reader.SetThrowOnError(true);
+			loaded = static_cast<Entity&>(slice).Create(reader) == 0 && slice.GetSubPieMenu();
+		}
+		const int after = inUse();
+		const bool freed = loaded && pieMenus && after == before;
+		std::cout << "[script-graph-selftest] " << (freed ? "PASS" : "FAIL") << " a_read_slices_sub_pie_menu_is_freed loaded=" << loaded << " before=" << before << " after=" << after << std::endl;
+		checkpointValues = freed && checkpointValues;
+	}
+	{
+		std::list<Entity*> presets;
+		g_PresetMan.GetAllOfType(presets, "ACRocket");
+		const int64_t before = Atom::LiveCount();
+		bool created = false;
+		if (!presets.empty()) {
+			std::unique_ptr<ACRocket> rocket(dynamic_cast<ACRocket*>(presets.front()->Clone()));
+			created = rocket && rocket->Create() == 0;
+		}
+		const int64_t after = Atom::LiveCount();
+		const bool freed = created && after == before;
+		std::cout << "[script-graph-selftest] " << (freed ? "PASS" : "FAIL") << " a_copied_rocket_releases_its_replaced_body_group created=" << created << " before=" << before << " after=" << after << std::endl;
+		checkpointValues = freed && checkpointValues;
+	}
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
 	checkpointValues = System::RunPrintDisciplineSelfTest() && checkpointValues;
 	checkpointValues = ContentFile::RunImageLoadSelfTest() && checkpointValues;

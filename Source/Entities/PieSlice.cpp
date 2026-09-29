@@ -126,8 +126,8 @@ int PieSlice::ReadProperty(const std::string_view& propName, Reader& reader) {
 	});
 	MatchProperty("SubPieMenu", {
 		SetSubPieMenu(dynamic_cast<PieMenu*>(g_PresetMan.ReadReflectedPreset(reader)));
-		// A checkpoint's instance joins no DataModule, so the slice owns it.
-		if (m_SubPieMenu) m_SubPieMenu.get_deleter().owned = reader.IsCheckpoint();
+		// The DataModule keeps a clone; the slice owns the instance read here.
+		if (m_SubPieMenu) m_SubPieMenu.get_deleter().owned = true;
 	});
 	MatchProperty("DrawFlippedToMatchAbsoluteAngle", { reader >> m_DrawFlippedToMatchAbsoluteAngle; });
 
