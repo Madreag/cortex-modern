@@ -9102,6 +9102,7 @@ namespace RTE {
 	std::string NetLockstepCoordinator::BuildReportJson() const {
 		NET_PLANE_CHECK();
 		std::ostringstream out;
+		out.imbue(std::locale::classic());
 		out << "{";
 		out << "\"state\":\"" << StateName(m_State) << "\",";
 		out << "\"session_id\":" << m_Stats.sessionId << ",";

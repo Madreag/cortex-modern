@@ -166,6 +166,7 @@ namespace RTE {
 
 	std::string NetWorldIdentityFile::Encode(const NetWorldIdentity& identity) {
 		std::ostringstream out;
+		out.imbue(std::locale::classic());
 		out << c_RecordTag << "\n"
 		    << "world_id " << identity.worldId << "\n"
 		    << "boot " << identity.boot << "\n"

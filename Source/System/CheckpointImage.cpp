@@ -594,6 +594,7 @@ void RTE::VisitCheckpointSections(const CheckpointImage& image, const std::funct
 		if (shared != bound.Text()) visit(name + ".local", CheckpointScope::PerPeer, bound.Text());
 	};
 	std::ostringstream header;
+	header.imbue(std::locale::classic());
 	header << "ActivityName " << image.activityName << "\nOriginalScenePresetName " << image.originalScenePresetName
 	       << "\nSimUpdateCount " << image.simUpdateCount << "\nSimTimeTicks " << image.simTimeTicks << "\nUniqueIDCounter " << image.uniqueIDCounter
 	       << "\nScriptRegistrationSerial " << image.scriptRegistrationSerial << "\nPlaceObjects " << image.placeObjects << "\nPlaceUnits " << image.placeUnits;

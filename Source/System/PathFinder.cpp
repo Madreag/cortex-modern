@@ -1768,6 +1768,7 @@ void PathFinder::ResetHorizonWaitStats() {
 void PathFinder::WriteHorizonWaitReport() {
 	auto& stats = HorizonStats();
 	std::ostringstream json;
+	json.imbue(std::locale::classic());
 	{
 		std::lock_guard lock(stats.mutex);
 		const double notes = static_cast<double>(std::max<uint64_t>(stats.noteCount, 1));
