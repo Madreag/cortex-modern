@@ -1793,6 +1793,15 @@ def check_acceptance_rows(results, scratch):
     ok &= row(results, 'audit-07/world-joiner-label-after-its-live-ticks-fails', driver.native_behavior(world, spec)['status'] == 'FAIL')
     late.write_text(''.join(json.dumps(dict(r, round=1 if r['tick'] < 7 else 7, subsystems=dict(r['subsystems'], actors='x') if r['tick'] == 6 else r['subsystems'])) + '\n' for r in rows))
     ok &= row(results, 'audit-07/world-joiner-mapped-tick-still-compared', driver.native_behavior(world, spec)['status'] == 'FAIL')
+    # A world with no actors in play hashes none of them (this lane's world-late-join: ticks 1769-2321 had no actor on either side).
+    world_rows_path = world / 'world-live.jsonl'; world_kept = world_rows_path.read_text()
+    empty = lambda r: dict(r, subsystems={k: v for k, v in r['subsystems'].items() if k not in ('actors', 'rot_angle', 'controller')}) if r['tick'] in (6, 7) else r
+    world_rows_path.write_text(''.join(json.dumps(empty(json.loads(line))) + '\n' for line in world_kept.splitlines()))
+    late.write_text(''.join(json.dumps(empty(r)) + '\n' for r in rows))
+    ok &= row(results, 'audit-07/world-without-actors-compares-what-it-hashes', driver.native_behavior(world, spec)['status'] == 'PASS', str(driver.native_behavior(world, spec)))
+    late.write_text(''.join(json.dumps(empty(r) if r['tick'] != 8 else dict(r, subsystems={k: v for k, v in r['subsystems'].items() if k != 'actors'})) + '\n' for r in rows))
+    ok &= row(results, 'audit-07/world-joiner-missing-a-hashed-subsystem-fails', driver.native_behavior(world, spec)['status'] == 'FAIL')
+    world_rows_path.write_text(world_kept)
     late.write_text(kept)
     driver.write_json(world / 'world/launch.json', dict(argv=['-net-persistent-world']))
     ok &= row(results, 'audit-07/world-fresh-flag-required', driver.native_behavior(world, spec)['status'] == 'FAIL')

@@ -1578,6 +1578,9 @@ def compare_round_histories(root, config):
                 expected_rounds=config['rounds'], expected_ticks=config['ticks'])
 
 
+# What every world tick hashes, actors or none: a comparison without these would be vacuous.
+WORLD_FLOOR = frozenset({'scene', 'terrain', 'sim_rng', 'lua_state'})
+
 def native_behavior(root, spec):
     from feel.retained_resume import read_live_hashes, PER_PEER_SUBSYSTEMS
     errors, details = [], {}
@@ -1695,7 +1698,9 @@ def native_behavior(root, spec):
                 for row in rows:
                     other = canonical.get((mapped.get(row.get('round'), row.get('round')), row['tick']))
                     shared = lambda value: {k: v for k, v in value.get('subsystems', {}).items() if k not in PER_PEER_SUBSYSTEMS}
-                    if other is None or not (CORE | {'controller'}) <= shared(row).keys() or not row.get('sim_gated') or shared(row) != shared(other) or row.get('sim_gated') != other.get('sim_gated'):
+                    # A world with no actors in play hashes none: the joiner must carry exactly the world's subsystems, never fewer.
+                    world_state = (CORE | {'controller'}) & shared(other).keys() if other else CORE
+                    if other is None or not WORLD_FLOOR <= shared(row).keys() or not world_state <= shared(row).keys() or not row.get('sim_gated') or shared(row) != shared(other) or row.get('sim_gated') != other.get('sim_gated'):
                         errors.append(f'{peer}: world state differs at tick {row["tick"]}')
                         break
         else:
