@@ -594,6 +594,7 @@ void RTE::VisitCheckpointSections(const CheckpointImage& image, const std::funct
 		if (shared != bound.Text()) visit(name + ".local", CheckpointScope::PerPeer, bound.Text());
 	};
 	std::ostringstream header;
+	header.imbue(std::locale::classic());
 	header << "ActivityName " << image.activityName << "\nOriginalScenePresetName " << image.originalScenePresetName
 	       << "\nSimUpdateCount " << image.simUpdateCount << "\nSimTimeTicks " << image.simTimeTicks << "\nUniqueIDCounter " << image.uniqueIDCounter
 	       << "\nScriptRegistrationSerial " << image.scriptRegistrationSerial << "\nPlaceObjects " << image.placeObjects << "\nPlaceUnits " << image.placeUnits;
@@ -636,10 +637,20 @@ std::string RTE::FullStateHashLine(const CheckpointImage& image, const std::stri
 		dump = std::filesystem::path(dumpDirectory) / std::to_string(image.tick);
 		std::filesystem::create_directories(dump);
 	}
+	// CC_TEST_FULLSTATE_DUMP_SECTIONS names the sections a dump keeps, comma-separated, so a long soak keeps only the one it diffs.
+	static const std::vector<std::string> dumpOnly = [] {
+		std::vector<std::string> names;
+		if (const char* list = std::getenv("CC_TEST_FULLSTATE_DUMP_SECTIONS")) {
+			std::istringstream in(list);
+			for (std::string name; std::getline(in, name, ',');) if (!name.empty()) names.push_back(name);
+		}
+		return names;
+	}();
 	VisitCheckpointSections(image, [&](const std::string& name, CheckpointScope scope, std::string_view bytes) {
 		const std::string hash = std::format("{:016x}", FullStateHash(bytes));
+		const bool kept = dumpOnly.empty() || std::find(dumpOnly.begin(), dumpOnly.end(), name) != dumpOnly.end();
 		// Pixels are hashed only; the text sections are what a reader diffs line by line.
-		if (!dump.empty() && !name.starts_with("layer.")) std::ofstream(dump / (name + (scope == CheckpointScope::PerPeer ? ".peer" : "") + ".txt"), std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+		if (!dump.empty() && kept && !name.starts_with("layer.")) std::ofstream(dump / (name + (scope == CheckpointScope::PerPeer ? ".peer" : "") + ".txt"), std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 		// A per-peer section is this machine's own by construction; it is named in the dump, never in the compared line.
 		if (scope != CheckpointScope::Shared) return;
 		sections += (sections.empty() ? "" : ",") + name + ":" + hash;

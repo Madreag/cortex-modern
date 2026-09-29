@@ -322,53 +322,6 @@ static std::string ResyncSaveName() {
 		std::string s_PortMapLine;       //!< The last status line handed to a snapshot.
 		uint32_t s_PortMapSerial = 0;    //!< Bumped when s_PortMapLine changes.
 
-		std::mutex s_ObservedIpMutex;
-		std::string s_DirectoryObservedIp; //!< The address the directory saw the register come from.
-
-		/// NetDirectoryClient's register reply carries observed_ip but drops it; this transport is a
-		/// pass-through NetHttpClient that copies the field out of the 200 reply so the report can
-		/// show it without touching the client.
-		class ObservedIpTransport final : public NetDirectoryClient::Transport {
-		public:
-			ObservedIpTransport(std::string baseUrl, std::string installKey, std::string certPinSha256) :
-				m_BaseUrl(std::move(baseUrl)), m_CertPinSha256(std::move(certPinSha256)) {
-				m_Headers = {
-					{"Content-Type", "application/json"},
-					{"X-Install-Key", std::move(installKey)},
-				};
-			}
-
-			void Start(const NetDirectoryClient::Request& request) override {
-				m_Method = request.method;
-				m_Path = request.path;
-				m_Client.Start(request.method, m_BaseUrl + request.path, m_Headers, request.body, m_CertPinSha256);
-			}
-			bool Finished() override { return m_Client.Poll() == NetHttpClient::PollResult::Done; }
-			NetDirectoryClient::Reply Take() override {
-				const NetHttpClient::Response response = m_Client.GetResponse();
-				if (m_Method == "POST" && m_Path == "/v1/sessions" && response.statusCode == 200) {
-					try {
-						const json parsed = json::parse(response.body);
-						if (parsed.is_object() && parsed.contains("observed_ip") && parsed["observed_ip"].is_string()) {
-							std::lock_guard<std::mutex> lock(s_ObservedIpMutex);
-							s_DirectoryObservedIp = parsed["observed_ip"].get<std::string>();
-						}
-					} catch (...) {
-					}
-				}
-				return {response.statusCode, response.body, response.error};
-			}
-			void Abort() override { m_Client.Cancel(); }
-
-		private:
-			NetHttpClient m_Client;
-			std::string m_BaseUrl;
-			std::string m_CertPinSha256;
-			std::vector<std::pair<std::string, std::string>> m_Headers;
-			std::string m_Method;
-			std::string m_Path;
-		};
-
 		uint64_t UnixNowMs(void*) {
 			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 		}
@@ -410,6 +363,20 @@ static std::string ResyncSaveName() {
 		}
 		browse.StopBrowsing();
 		return rows;
+	}
+
+	void NetMatchService::RequestHostPortMap(uint16_t port, NetPortMapWan* wan) {
+		NetPortMap::Options options = NetPortMap::ProbeOverrides();
+		if (wan) options.wan = wan;
+		s_PortMap.Request(port, NetPortMap::c_DefaultLeaseS, options);
+		s_PortMapRequested = true;
+		s_PortMapApplied = false;
+	}
+
+	void NetMatchService::ReleaseHostPortMap() {
+		s_PortMapRequested = false;
+		s_PortMap.Release();
+		s_PortMapApplied = false;
 	}
 
 	NetMatchService::NetMatchService() = default;
@@ -721,16 +688,11 @@ static std::string ResyncSaveName() {
 			m_KeepEndedDirectoryLease = false;
 			m_DirectoryRelistPending = false;
 		}
-		// The mapping request must land before the first directory register: the heartbeat never
-		// resends listen_addrs/join_mode, so the row goes out once with its final addresses.
 		if (request.host && g_SettingsMan.GetNetworkPortMapEnable()) {
-			s_PortMap.Request(request.port, NetPortMap::c_DefaultLeaseS, NetPortMap::ProbeOverrides());
-			s_PortMapRequested = true;
+			RequestHostPortMap(request.port, nullptr);
 		} else {
-			s_PortMapRequested = false;
-			s_PortMap.Release();
+			ReleaseHostPortMap();
 		}
-		s_PortMapApplied = false;
 		{
 			// A fresh lockstep round starts every peer on the host's script state, never on each machine's own history.
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -2219,6 +2181,7 @@ static std::string ResyncSaveName() {
 			m_RejoinOfRunningMatch = false;
 			m_HostEndedTheMatch = false;
 			m_LeftMatch = false;
+			m_HostEndReason.clear();
 			m_CompletedLobbySinceMs = 0;
 			m_PendingLobbyEvents.clear();
 			m_PendingLobbyBytes = 0;
@@ -2397,6 +2360,22 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	bool NetMatchService::EndMatchAtAgreedFrame(const std::string& reason) {
+		// The pause menu calls this inside the frame's window, as it does FinishMatch.
+		NetLockstepPlane::Gap plane("end match");
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost || !m_Coordinator || m_State != NetMatchServiceState::Running || !m_Coordinator->IsRunning()) return false;
+		DrainPendingSessionEventsLocked(false);
+		if (!m_Coordinator->CompleteAtAgreedEnd(reason)) return false;
+		m_HostEndReason = reason;
+		return true;
+	}
+
+	bool NetMatchService::EndsAtAgreedFrame() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return !m_HostEndReason.empty();
+	}
+
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
 		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
@@ -2405,7 +2384,10 @@ static std::string ResyncSaveName() {
 		bool heldSeatNeedsAnswer = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			CaptureMatchSummaryLocked(result);
+			// A host's round that played to its agreed end finishes with the reason the host gave.
+			const std::string ended = m_HostEndReason.empty() ? result : std::exchange(m_HostEndReason, std::string());
+			displayResult = ended;
+			CaptureMatchSummaryLocked(ended);
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			m_HeldRejoinDriving = false;
 			heldSeatNeedsAnswer = m_IsHost && m_Coordinator && m_Coordinator->AnyHeldAISeat();
@@ -2416,7 +2398,7 @@ static std::string ResyncSaveName() {
 			DrainPendingSessionEventsLocked(false);
 			// The survivors hear the end before anything here waits on a disk: the last checkpoint's archive may still be writing.
 			if (m_Coordinator) {
-				m_Coordinator->Complete(result.empty() ? "match over" : result);
+				m_Coordinator->Complete(ended.empty() ? "match over" : ended);
 				SayGoodbyeToRejoinersLocked();
 			}
 		}
@@ -2621,22 +2603,9 @@ static std::string ResyncSaveName() {
 		// The install key is minted on the first directory use, so only a listing host asks for it.
 		const std::string directoryKey = (directoryWanted && !directoryUrl.empty()) ? g_SettingsMan.GetOrCreateSessionDirectoryInstallKey() : g_SettingsMan.GetSessionDirectoryInstallKey();
 		const std::string directoryCertPin = g_SettingsMan.GetSessionDirectoryCertSha256();
-		if (s_PortMapRequested) {
-			m_Directory.SetTransportFactory([directoryUrl, directoryKey, directoryCertPin]() {
-				// The factory sees the raw settings value; Configure's own copy gets this normalization.
-				std::string baseUrl = directoryUrl;
-				while (!baseUrl.empty() && baseUrl.back() == '/') {
-					baseUrl.pop_back();
-				}
-				if (!baseUrl.empty() && baseUrl.rfind("https://", 0) != 0) {
-					baseUrl = "https://" + baseUrl;
-				}
-				return std::make_unique<ObservedIpTransport>(baseUrl, directoryKey, directoryCertPin);
-			});
-		}
 		m_Directory.Configure(directoryUrl, directoryKey, directoryCertPin);
-		// While the mapper is still working the register must wait: the row is sent exactly once.
-		if (directoryWanted && (!s_PortMapRequested || s_PortMap.Done())) {
+		// The row registers at once with the addresses it has; a mapping that answers later reaches it on the next heartbeat.
+		if (directoryWanted) {
 			NetDirectoryRegisterRequest advertised;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
@@ -3629,7 +3598,10 @@ static std::string ResyncSaveName() {
 		if (m_IsHost) {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
-			input.activationPending = m_Coordinator->HasPendingSeatActivation();
+			// An activation told to a returner but not yet scheduled is decided in its last frames: a capture named at or before it
+			// would hold those frames open and push the activation a lead later, onto the same phase of the next capture.
+			const uint64_t announced = m_AnnouncedActivationTick.load(std::memory_order_relaxed);
+			input.activationPending = m_Coordinator->HasPendingSeatActivation() || (announced != 0 && announced >= tick + input.lead);
 			input.ownSeatHeld = m_Coordinator->IsOwnHostSeatHeld();
 			const auto& start = m_Coordinator->GetAgreedStartRecord();
 			input.startupPending = start && tick < start->agreedFirstFrame;
@@ -4596,7 +4568,17 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::NoteAnnouncedActivationsLocked() {
+		uint64_t earliest = 0;
+		if (m_IsHost)
+			for (const auto& session: m_WorldJoin.Sessions())
+				if (session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 && !session.activationProposed && (earliest == 0 || session.activationTick < earliest))
+					earliest = session.activationTick;
+		m_AnnouncedActivationTick.store(earliest, std::memory_order_relaxed);
+	}
+
 	void NetMatchService::DriveWorldJoins(uint64_t nowMs) {
+		NoteAnnouncedActivationsLocked();
 		if (m_WorldJoin.IsPrivateMatch()) { DrivePrivateMatchRejoins(nowMs); return; }
 		if (!m_WorldJoin.IsConfigured() || !m_Coordinator || !m_Session) {
 			return;
@@ -8504,10 +8486,7 @@ static std::string ResyncSaveName() {
 		// ever built there, so reading it here is safe.
 		{
 			json directoryReport = json::parse(m_Directory.BuildReportJson());
-			if (s_PortMapRequested) {
-				std::lock_guard<std::mutex> observedLock(s_ObservedIpMutex);
-				directoryReport["observed_ip"] = s_DirectoryObservedIp;
-			}
+			if (s_PortMapRequested) directoryReport["observed_ip"] = m_Directory.GetObservedIp();
 			report["directory"] = std::move(directoryReport);
 		}
 		if (s_PortMapRequested) {

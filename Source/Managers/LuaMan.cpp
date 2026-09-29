@@ -7184,6 +7184,9 @@ void LuaStateWrapper::Clear() {
 	m_CurrentlyRunningScriptPath = "";
 }
 
+/// The manager behind a Lua global, or null where a self-test runs a state without it.
+template <typename Manager> static Manager* InstanceOrNull() { return Manager::IsConstructed() ? &Manager::Instance() : nullptr; }
+
 void LuaStateWrapper::Initialize() {
 	m_NativeCache.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
@@ -7394,25 +7397,25 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(MiscLuaBindings, DrawBlendMode),
 	                         RegisterLuaBindingsOfType(MiscLuaBindings, DrawDepth)];
 
-	// Assign the manager instances to globals in the lua master state
-	luabind::globals(m_State)["TimerMan"] = &g_TimerMan;
-	luabind::globals(m_State)["FrameMan"] = &g_FrameMan;
-	luabind::globals(m_State)["PerformanceMan"] = &g_PerformanceMan;
-	luabind::globals(m_State)["PostProcessMan"] = &g_PostProcessMan;
-	luabind::globals(m_State)["PrimitiveMan"] = &g_PrimitiveMan;
-	luabind::globals(m_State)["PresetMan"] = &g_PresetMan;
-	luabind::globals(m_State)["AudioMan"] = &g_AudioMan;
-	luabind::globals(m_State)["MusicMan"] = &g_MusicMan;
-	luabind::globals(m_State)["UInputMan"] = &g_UInputMan;
-	luabind::globals(m_State)["SceneMan"] = &g_SceneMan;
-	luabind::globals(m_State)["ActivityMan"] = &g_ActivityMan;
-	luabind::globals(m_State)["MetaMan"] = &g_MetaMan;
-	luabind::globals(m_State)["MovableMan"] = &g_MovableMan;
-	luabind::globals(m_State)["CameraMan"] = &g_CameraMan;
-	luabind::globals(m_State)["ConsoleMan"] = &g_ConsoleMan;
+	// Assign the manager instances to globals in the lua master state; a self-test that runs without a manager leaves it nil
+	luabind::globals(m_State)["TimerMan"] = InstanceOrNull<TimerMan>();
+	luabind::globals(m_State)["FrameMan"] = InstanceOrNull<FrameMan>();
+	luabind::globals(m_State)["PerformanceMan"] = InstanceOrNull<PerformanceMan>();
+	luabind::globals(m_State)["PostProcessMan"] = InstanceOrNull<PostProcessMan>();
+	luabind::globals(m_State)["PrimitiveMan"] = InstanceOrNull<PrimitiveMan>();
+	luabind::globals(m_State)["PresetMan"] = InstanceOrNull<PresetMan>();
+	luabind::globals(m_State)["AudioMan"] = InstanceOrNull<AudioMan>();
+	luabind::globals(m_State)["MusicMan"] = InstanceOrNull<MusicMan>();
+	luabind::globals(m_State)["UInputMan"] = InstanceOrNull<UInputMan>();
+	luabind::globals(m_State)["SceneMan"] = InstanceOrNull<SceneMan>();
+	luabind::globals(m_State)["ActivityMan"] = InstanceOrNull<ActivityMan>();
+	luabind::globals(m_State)["MetaMan"] = InstanceOrNull<MetaMan>();
+	luabind::globals(m_State)["MovableMan"] = InstanceOrNull<MovableMan>();
+	luabind::globals(m_State)["CameraMan"] = InstanceOrNull<CameraMan>();
+	luabind::globals(m_State)["ConsoleMan"] = InstanceOrNull<ConsoleMan>();
 	luabind::globals(m_State)["LuaMan"] = this;
-	luabind::globals(m_State)["SettingsMan"] = &g_SettingsMan;
-	luabind::globals(m_State)["MetricsCollector"] = &g_MetricsCollector;
+	luabind::globals(m_State)["SettingsMan"] = InstanceOrNull<SettingsMan>();
+	luabind::globals(m_State)["MetricsCollector"] = InstanceOrNull<MetricsCollector>();
 
 	// Don't draw from the sim RNG here — it would couple the RNG stream to thread count (SeedAllLuaRNGs re-seeds per state at activity start)
 	m_RandomGenerator.Seed(0);

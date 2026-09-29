@@ -12,12 +12,14 @@
 
 #include "fmod/fmod.hpp"
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <utility>
@@ -618,6 +620,20 @@ namespace RTE {
 		};
 		std::map<int, PlayingVoice> m_PlayingVoices;
 		std::unordered_map<int, int> m_BackendVoiceIdentities;
+		/// Where a channel came from, so one the positional pass finds dead can name who played it and when; a dead handle answers nothing.
+		struct ChannelOrigin {
+			int identity = 0;
+			std::string owner, path, how;
+			long long createdSimTick = 0, stoppedSimTick = -1;
+			uint64_t restoresBefore = 0, sequence = 0;
+		};
+		std::unordered_map<FMOD::Channel*, ChannelOrigin> m_ChannelOrigins;
+		std::deque<std::pair<FMOD::Channel*, uint64_t>> m_ChannelOriginOrder;
+		uint64_t m_ChannelOriginSequence = 0;
+		uint64_t m_AudioStatesRestored = 0; //!< Checkpoint audio states this process committed.
+		void NoteChannelOrigin(FMOD::Channel* channel, int identity, const SoundContainer* owner, const std::string& path, const char* how);
+		void NoteChannelStopped(FMOD::Channel* channel);
+		std::string DescribeChannelOrigin(FMOD::Channel* channel) const;
 		std::mutex m_EndedVoicesMutex;
 		std::vector<int> m_EndedVoices;
 		/// The effects a voice's own channel was given; each is released once that channel has stopped, or it outlives its voice.

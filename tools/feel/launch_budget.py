@@ -12,6 +12,9 @@ from contextlib import contextmanager
 MIN_FREE_BYTES = 10 * 1024 ** 3
 
 
+MARKER = Path('D:/mx/FEEL-MATRIX-RUNNING')
+CROSS_GUARD = Path('D:/mx/BOX-FREE-FOR-CROSS')
+
 def free_memory_bytes():
     if sys.platform != 'win32':
         raise RuntimeError('the Windows launch budget needs Windows memory counters')
@@ -38,10 +41,10 @@ def install_memory_guard():
             run.record['launch_budget'] = dict(refused=reason, **budget)
             run._save()
             raise RuntimeError(reason)
-        marker = Path('D:/mx/FEEL-MATRIX-RUNNING')
+        marker = MARKER
         if marker.is_file() and json.loads(marker.read_text(encoding='utf-8')).get('token') != os.environ.get('CCCP_FEEL_MATRIX_RUN'):
             refuse('engine launch refused: another lane owns the feel matrix marker', marker=str(marker))
-        if Path('D:/mx/BOX-FREE-FOR-CROSS').exists():
+        if CROSS_GUARD.exists():
             refuse('engine launch refused: the box is reserved for the cross match')
         free = free_memory_bytes()
         if free < MIN_FREE_BYTES:
@@ -56,10 +59,16 @@ def install_memory_guard():
 
 @contextmanager
 def exclusive_matrix():
-    marker = Path('D:/mx/FEEL-MATRIX-RUNNING')
+    marker = MARKER
     token = f'{os.getpid()}-netcode-feel'
-    if Path('D:/mx/BOX-FREE-FOR-CROSS').exists():
+    if CROSS_GUARD.exists():
         raise RuntimeError('the box is reserved for the cross match')
+    # A caller that already holds the box (its token in the environment) runs the matrix inside its own reservation,
+    # which stays for that caller to release.
+    inherited = os.environ.get('CCCP_FEEL_MATRIX_RUN')
+    if inherited and marker.is_file() and json.loads(marker.read_text(encoding='utf-8')).get('token') == inherited:
+        yield
+        return
     with marker.open('x', encoding='utf-8') as stream:
         json.dump(dict(pid=os.getpid(), token=token, note='exclusive feel matrix'), stream)
     previous = os.environ.get('CCCP_FEEL_MATRIX_RUN')

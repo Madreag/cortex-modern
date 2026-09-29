@@ -1554,9 +1554,11 @@ def compare_round_histories(root, config):
                 histories[peer][key] = row
             if len(ordered[peer]) != config['rounds'] or None in ordered[peer]:
                 errors.append(f'{peer}: expected {config["rounds"]} rounds, found {ordered[peer]}')
-            for round_id in ordered[peer]:
+            for index, round_id in enumerate(ordered[peer]):
                 ticks = {tick for rid, tick in histories[peer] if rid == round_id}
-                if ticks != set(range(1, config['ticks'] + 1)):
+                # A round the host ends early for the rematch runs to its end frame; the last plays the full count.
+                last = config['ticks'] if index + 1 == len(ordered[peer]) else max(ticks, default=0)
+                if not ticks or ticks != set(range(1, last + 1)):
                     errors.append(f'{peer} round {round_id}: incomplete tick coverage')
                 write_json(root / 'round-traces' / f'{round_id}-{peer}.json',
                            dict(round=round_id, peer=peer, tick_hashes=[r for r in rows if r.get('round') == round_id]))
@@ -1574,6 +1576,21 @@ def compare_round_histories(root, config):
         errors.append(str(error))
     return dict(status='FAIL' if errors else 'PASS', errors=errors, rounds=ordered,
                 expected_rounds=config['rounds'], expected_ticks=config['ticks'])
+
+
+# What every world tick hashes, actors or none: a comparison without these would be vacuous.
+WORLD_FLOOR = frozenset({'scene', 'terrain', 'sim_rng', 'lua_state'})
+
+def hold_frame_waits(text):
+    """The waits a peer took at another seat's hold frame, one of at most 50 ms per hold: the slow-player bound's own wait
+    for the spike, not a steady stall. Only a hold at least 300 frames into the round counts, where the engine's steady
+    stall count certainly holds its wait, so excusing it can never cover a stall the count left out."""
+    start = re.search(r'\[net-lockstep\] start round=\S+ frame=(\d+)', text)
+    if not start:
+        return []
+    holds = {int(frame) for frame in re.findall(r'\[net-match\] hold peer=\d+ frame=(\d+) AI in control', text)}
+    waits = [(int(frame), int(ms)) for frame, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', text)]
+    return sorted({frame for frame, ms in waits if frame in holds and ms <= 50 and frame >= int(start[1]) + 300})
 
 
 def native_behavior(root, spec):
@@ -1597,10 +1614,18 @@ def native_behavior(root, spec):
     try:
         for peer, filename in spec['reports'].items():
             report = load(root / filename)
-            require(report.get('exit_code') == 0 and report.get('running_ticks', 0) >= spec['ticks'][peer], f'{peer}: incomplete continued play')
+            # The service run's report carries its exit code and tick count; a lobby match's report keeps the ticks in
+            # last_match and the process record keeps the exit code.
+            exit_code = report['exit_code'] if 'exit_code' in report else load(root / peer / 'launch.json').get('exit_code')
+            ticks = report['running_ticks'] if 'running_ticks' in report else report.get('last_match', {}).get('running_ticks', 0)
+            details.setdefault('continued_play', {})[peer] = dict(exit_code=exit_code, running_ticks=ticks)
+            require(exit_code == 0 and ticks >= spec['ticks'][peer], f'{peer}: incomplete continued play')
             if peer in spec.get('steady_peers', []):
                 counts = fields(report, 'steady_missing_frame_stalls')
-                require(bool(counts) and all(type(v) is int and v == 0 for v in counts), f'{peer}: missing or nonzero steady stall count')
+                excused = hold_frame_waits(text(peer))
+                details.setdefault('hold_frame_waits', {})[peer] = excused
+                require(bool(counts) and all(type(v) is int for v in counts) and sum(counts) == len(excused),
+                        f'{peer}: missing or nonzero steady stall count')
         if spec['kind'] in ('held-seat', 'rehold'):
             target = spec['target']
             target_log = text(target)
@@ -1608,6 +1633,18 @@ def native_behavior(root, spec):
             require(identity is not None, 'held peer identity is absent')
             seat = int(identity[1]) if identity else -1
             histories = {}
+            if spec['kind'] == 'rehold':
+                # The stalls are the target's own lever arguments; each fires at the first tick at or after its request
+                # that its seat is back in play, so the holds are judged against the ticks they fired on.
+                argv = load(root / target / 'launch.json').get('argv', [])
+                if isinstance(argv, str):
+                    import ast
+                    argv = ast.literal_eval(argv)
+                declared = [int(str(argv[i + 1]).split(':')[0]) for i, value in enumerate(argv[:-1]) if value == '-net-test-live-stall']
+                fired_stalls = list(map(int, re.findall(r'\[net-test\] live stall frame=(\d+)', target_log)))
+                details['stalls'] = dict(declared=declared, fired=fired_stalls)
+                require(bool(declared) and len(fired_stalls) == len(declared) and all(tick >= want for tick, want in zip(fired_stalls, declared)),
+                        'a declared stall never fired')
             for peer in spec['observers']:
                 log = text(peer)
                 all_holds = re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)
@@ -1617,7 +1654,7 @@ def native_behavior(root, spec):
                 histories[peer] = dict(holds=holds, reclaims=reclaims)
                 require(len(holds) == spec['holds'], f'{peer}: missing or unscheduled hold')
                 if spec['kind'] == 'rehold':
-                    starts = spec['stall_ticks']
+                    starts = fired_stalls
                     require(len(reclaims) == len(holds) == len(starts), f'{peer}: incomplete reclaim sequence')
                     for index, hold in enumerate(holds[:len(starts)]):
                         end = starts[index + 1] if index + 1 < len(starts) else spec['ticks'][peer]
@@ -1640,8 +1677,6 @@ def native_behavior(root, spec):
                                     for m in d['members']) for d in dumps), f'{peer}: reclaimed seat is not shown live')
             require(all(value == next(iter(histories.values())) for value in histories.values()), 'survivors disagree about holds/reclaims')
             if spec['kind'] == 'rehold':
-                injected = list(map(int, re.findall(r'\[net-test\] live stall frame=(\d+)', target_log)))
-                require(set(spec['stall_ticks']) <= set(injected), 'a declared stall never fired')
                 completed = set(map(int, re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', target_log)))
                 require(all(frame in completed for value in histories.values() for frame in value['reclaims']), 'private reclaim did not complete at its activation frame')
             details['holds'] = histories
@@ -1658,18 +1693,29 @@ def native_behavior(root, spec):
             require(len(canonical) == len(host), 'world duplicated a committed tick')
             require(len({row.get('round') for row in host}) == 1 and all(row.get('round') is not None for row in host), 'world round was restarted or not identified')
             require(set(range(1, spec['ticks']['world'] + 1)) <= {r['tick'] for r in host}, 'world stopped ticking across visits')
+            world_round = next(iter({row.get('round') for row in host}), None)
             for peer in ('client-first', 'client-late'):
                 rows = read_live_hashes(root / f'{peer}-live.jsonl')
                 require(bool(rows), f'{peer}: no world hash history')
+                # A joiner labels the ticks it replays before it adopts the round with its own round index: one label, on a
+                # prefix wholly before its first tick under the world's round, is that round's catch-up.
+                first_live = min((row['tick'] for row in rows if row.get('round') == world_round), default=None)
+                others = {row.get('round') for row in rows if row.get('round') != world_round}
+                prefix = len(others) == 1 and first_live is not None and all(row['tick'] < first_live for row in rows if row.get('round') != world_round)
+                require(not others or prefix, f'{peer}: rows under a round the world never ran')
+                mapped = {label: world_round for label in others} if prefix else {}
+                details.setdefault('round_mapping', {})[peer] = {str(label): str(target) for label, target in mapped.items()}
                 ticks = {row['tick'] for row in rows}
                 require(len(ticks) >= spec['ticks'][peer] and ticks == set(range(min(ticks, default=0), max(ticks, default=-1) + 1)),
                         f'{peer}: incomplete continued-play history')
                 if peer == 'client-late':
                     require(any(r['tick'] >= spec['late_tick'] for r in rows), 'late join preceded the declared world boundary')
                 for row in rows:
-                    other = canonical.get((row.get('round'), row['tick']))
+                    other = canonical.get((mapped.get(row.get('round'), row.get('round')), row['tick']))
                     shared = lambda value: {k: v for k, v in value.get('subsystems', {}).items() if k not in PER_PEER_SUBSYSTEMS}
-                    if other is None or not (CORE | {'controller'}) <= shared(row).keys() or not row.get('sim_gated') or shared(row) != shared(other) or row.get('sim_gated') != other.get('sim_gated'):
+                    # A world with no actors in play hashes none: the joiner must carry exactly the world's subsystems, never fewer.
+                    world_state = (CORE | {'controller'}) & shared(other).keys() if other else CORE
+                    if other is None or not WORLD_FLOOR <= shared(row).keys() or not world_state <= shared(row).keys() or not row.get('sim_gated') or shared(row) != shared(other) or row.get('sim_gated') != other.get('sim_gated'):
                         errors.append(f'{peer}: world state differs at tick {row["tick"]}')
                         break
         else:

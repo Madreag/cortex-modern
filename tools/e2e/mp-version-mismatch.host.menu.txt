@@ -1,0 +1,24 @@
+wait_ms 1980
+activate ButtonMainToMultiplayer
+wait_ms 495
+assert_substate Landing
+settext TextMultiplayerName Host
+activate ButtonMultiplayerHostGame
+wait_ms 660
+assert_substate HostSetup
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+activate ButtonMultiplayerCreate
+video_mark version-lobby-ready
+wait_error could not join
+wait_ms 495
+video_mark version-host-refusal
+assert_substate Lobby
+assert_enabled ButtonMultiplayerStart 0
+assert_error could not join
+dump_lobby
+wait_ms 990
+goto_main
+assert_screen MainScreen
+exit

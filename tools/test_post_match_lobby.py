@@ -40,7 +40,7 @@ def set_resolution(runtime: Path, x: int, y: int) -> None:
     settings = runtime / "Userdata" / "Settings.ini"
     text = settings.read_text(encoding="utf-8")
     for name, value in (("ResolutionX", x), ("ResolutionY", y)):
-        text, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*", rf"\g<1>{value}", text)
+        text, count = re.subn(rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*", rf"\g<1>{value}", text)
         if count == 0:
             text += f"\n\t{name} = {value}\n"
     settings.write_text(text, encoding="utf-8")

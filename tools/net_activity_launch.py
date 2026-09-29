@@ -474,7 +474,7 @@ def set_resolution(runtime, width, height):
     path = Path(runtime) / "Userdata" / "Settings.ini"
     settings = path.read_text(encoding="utf-8")
     for name, value in (("ResolutionX", width), ("ResolutionY", height)):
-        settings, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*", lambda match: match[1] + str(value), settings)
+        settings, count = re.subn(rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*", lambda match: match[1] + str(value), settings)
         if count != 1:
             raise RuntimeError(f"expected one private {name} setting, found {count}")
     path.write_text(settings, encoding="utf-8")

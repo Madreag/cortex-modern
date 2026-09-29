@@ -17,6 +17,7 @@ wait_remote_ready 90
 video_mark round1-start
 assert_enabled ButtonMultiplayerStart 1
 wait_ms 800
+wait_remote_ready 90
 activate ButtonMultiplayerStart
 wait_file {PROBE_DIR}/round-1-done.json 90
 video_mark rematch-lobby-1
@@ -27,6 +28,7 @@ wait_remote_ready 90
 video_mark round2-start
 assert_enabled ButtonMultiplayerStart 1
 wait_ms 800
+wait_remote_ready 90
 activate ButtonMultiplayerStart
 wait_file {PROBE_DIR}/round-2-done.json 90
 video_mark rematch-lobby-2
@@ -37,6 +39,7 @@ wait_remote_ready 90
 video_mark round3-start
 assert_enabled ButtonMultiplayerStart 1
 wait_ms 800
+wait_remote_ready 90
 activate ButtonMultiplayerStart
 wait_file {PROBE_DIR}/round-3-done.json 90
 video_mark rematch-lobby-3
@@ -48,6 +51,7 @@ wait_remote_ready 90
 video_mark round4-start
 assert_enabled ButtonMultiplayerStart 1
 wait_ms 800
+wait_remote_ready 90
 activate ButtonMultiplayerStart
 wait_file {PROBE_DIR}/done.json 90
 wait_ms 800

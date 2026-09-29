@@ -427,6 +427,7 @@ namespace RTE {
 			// GNS reports nothing for a close we made ourselves, and forgetting the handle means its own
 			// later callback finds no peer either. A peer leaving must look the same to us however it
 			// went, or state keyed on the connection - a held seat, most of all - is never cleaned up.
+			std::cout << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
 		}
 
@@ -724,6 +725,7 @@ namespace RTE {
 
 			const NetPeerId peerId = peerIt->second;
 			ForgetConnection(connection);
+			std::cout << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
 		}
 

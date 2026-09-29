@@ -272,47 +272,6 @@ namespace RTE {
 		void Reset() { bySender.clear(); roundId = 0; }
 	};
 
-	struct NetLockstepFrame {
-		uint8_t senderPeerId = 0;
-		uint64_t targetFrame = 0;
-		std::vector<ControllerFrame> frames;
-		std::vector<NetGameCommand> commands;
-		uint64_t roundId = 0;
-		std::vector<NetSoundObservation> observations;
-		std::vector<NetValueObservation> valueObservations;
-		/// Older ticks riding this packet, oldest first. Empty on the classic reserved=0 path.
-		std::vector<NetLockstepFrame> priorWindow;
-		/// Decode state, never a wire field: this copy's observations stood behind the reader's table, so
-		/// they were read past and the tick is already in this peer's stream.
-		bool observationsReadPast = false;
-
-		bool operator==(const NetLockstepFrame& rhs) const;
-	};
-
-	/// The observation bytes one tick went out with. A window repeat sends these again exactly, so the
-	/// slots and the binding count a repaired tick carries are the ones its first send wrote.
-	struct NetLockstepObservationBlock {
-		std::vector<uint8_t> soundBytes;
-		std::vector<uint8_t> valueBytes; //!< Empty when the tick encoded no value observation.
-		size_t observationsEncoded = 0;
-		size_t valueObservationsEncoded = 0;
-	};
-
-	/// Per sender, the blocks of the ticks still inside the redundancy window, by target frame.
-	using NetLockstepObservationBlocks = std::map<uint64_t, NetLockstepObservationBlock>;
-
-	struct NetLockstepAck {
-		uint8_t senderPeerId = 0;
-		uint64_t highestContiguousFrame = 0;
-		uint32_t receivedMask = 0;
-		uint64_t roundId = 0;
-		uint32_t seatIncarnation = 0;
-		uint64_t sessionId = 0;
-		uint64_t authorityGeneration = 0;
-
-		bool operator==(const NetLockstepAck&) const = default;
-	};
-
 	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4, CapturePark = 5 };
 	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6, ReclaimAtFrame = 7 };
 
@@ -340,6 +299,48 @@ namespace RTE {
 		std::array<uint32_t, 4> seatIncarnations{};
 		std::optional<NetGameWorldTransition> worldTransition;
 		bool operator==(const NetLockstepTiming&) const = default;
+	};
+
+	struct NetLockstepFrame {
+		uint8_t senderPeerId = 0;
+		uint64_t targetFrame = 0;
+		std::vector<ControllerFrame> frames;
+		std::vector<NetGameCommand> commands;
+		uint64_t roundId = 0;
+		std::vector<NetSoundObservation> observations;
+		std::vector<NetValueObservation> valueObservations;
+		/// Older ticks riding this packet, oldest first. Empty on the classic reserved=0 path.
+		std::vector<NetLockstepFrame> priorWindow;
+		/// Decode state, never a wire field: this copy's observations stood behind the reader's table, so
+		/// they were read past and the tick is already in this peer's stream.
+		bool observationsReadPast = false;
+		std::optional<NetLockstepTiming> hostHold;
+
+		bool operator==(const NetLockstepFrame& rhs) const;
+	};
+
+	/// The observation bytes one tick went out with. A window repeat sends these again exactly, so the
+	/// slots and the binding count a repaired tick carries are the ones its first send wrote.
+	struct NetLockstepObservationBlock {
+		std::vector<uint8_t> soundBytes;
+		std::vector<uint8_t> valueBytes; //!< Empty when the tick encoded no value observation.
+		size_t observationsEncoded = 0;
+		size_t valueObservationsEncoded = 0;
+	};
+
+	/// Per sender, the blocks of the ticks still inside the redundancy window, by target frame.
+	using NetLockstepObservationBlocks = std::map<uint64_t, NetLockstepObservationBlock>;
+
+	struct NetLockstepAck {
+		uint8_t senderPeerId = 0;
+		uint64_t highestContiguousFrame = 0;
+		uint32_t receivedMask = 0;
+		uint64_t roundId = 0;
+		uint32_t seatIncarnation = 0;
+		uint64_t sessionId = 0;
+		uint64_t authorityGeneration = 0;
+
+		bool operator==(const NetLockstepAck&) const = default;
 	};
 
 	struct NetLockstepRecoveryChunk {
@@ -703,6 +704,7 @@ namespace RTE {
 		static constexpr uint16_t c_TimingWithdrawVersion = 36;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_CheckpointVersion = 40; //!< Frames carrying the checkpoint schedule.
+		static constexpr uint16_t c_HoldMarkerVersion = 42; //!< A host marker carries its hold before its input.
 		static constexpr uint16_t c_RecoveryDatagramVersion = 41; //!< Complete recovery inputs may use the unreliable lane.
 		/// A committed tick and a replay record may name one actor once per sender, in sender order; a build that reads them as unique
 		/// per actor is refused at admission through the deterministic config hash.
@@ -940,6 +942,9 @@ namespace RTE {
 		void CompleteSynchronizedCapture(uint64_t completedFrame, double captureMs);
 		bool IsSynchronizedCapturePark(uint64_t frame) const;
 		void Complete(const std::string& message = "complete");
+		/// The host's own end of its running round, at a frame no peer can have played past: every peer plays to the end of the
+		/// input the host has sent, the host included. False when the round cannot end that way: nothing is sent, and Complete ends it.
+		bool CompleteAtAgreedEnd(const std::string& message);
 		/// Announces a clean local leave: peers keep our frames through the last produced one, then
 		/// advance without us. The relay host cannot leave a 3+ match alive (it is the star's hub),
 		/// so a host leave completes the match for everyone instead.
@@ -1282,6 +1287,8 @@ namespace RTE {
 		friend bool TestAnAnnouncedCaptureExcusesEverySeatForItsCost(std::string* error);
 		friend bool TestDelayTracksASteadySendersArrivalPhase(std::string* error);
 		friend bool TestAheadInputIsNotASimulationStall(std::string* error);
+		friend bool TestHeldHostMarkerPrecedesItsHold(std::string* error);
+		friend bool TestAReturnerDelayCoversItsTrail(std::string* error);
 		friend bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error);
 		friend bool TestArrivalLeadIncludesTheFastestSurvivor(std::string* error);
 		friend bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error);
@@ -1736,6 +1743,7 @@ namespace RTE {
 		bool m_CaptureParkFinalized = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
+		uint64_t m_AgreedEndDeadlineMs = 0; //!< When a host playing to its agreed end stops waiting for it.
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;

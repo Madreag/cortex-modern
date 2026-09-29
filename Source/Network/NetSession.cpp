@@ -1,3 +1,5 @@
+#include <SDL3/SDL_stdinc.h>
+#include <charconv>
 #include "NetSession.h"
 #include "NetA7Journal.h"
 #include "NetAuthCrypto.h"
@@ -107,6 +109,7 @@ namespace RTE {
 
 	bool NetSession::StartHost(INetTransport& transport, NetSessionConfig config, std::string* error) {
 		Close("restart");
+		if (!ReadAdvertisedVersionsForTest(error)) { m_State = NetSessionState::Failed; return false; }
 		m_Transport = &transport;
 		m_Config = std::move(config);
 		m_Role = NetSessionRole::Host;
@@ -153,6 +156,7 @@ namespace RTE {
 
 	bool NetSession::StartClient(INetTransport& transport, const std::string& address, NetSessionConfig config, std::string* error) {
 		Close("restart");
+		if (!ReadAdvertisedVersionsForTest(error)) { m_State = NetSessionState::Failed; return false; }
 		m_Transport = &transport;
 		m_Config = std::move(config);
 		m_Role = NetSessionRole::Client;
@@ -1639,9 +1643,14 @@ namespace RTE {
 				case NetRejectReason::GameVersionMismatch:
 					if (const int order = CompareVersionTexts(hostValue(m_Config.localIdentity.gameVersion), m_Config.localIdentity.gameVersion)) return NewerOrOlderHost(order);
 					return "This host runs a different game version.";
-				case NetRejectReason::ProtocolMismatch:
-					if (const int order = CompareVersionTexts(hostValue(std::to_string(NetProtocol::c_Version)), std::to_string(NetProtocol::c_Version))) return NewerOrOlderHost(order);
-					return "This host runs a different game version.";
+				case NetRejectReason::ProtocolMismatch: {
+					const std::string mine = std::to_string(m_AdvertisedProtocolForTest.value_or(NetProtocol::c_Version));
+					return "Network protocol differs (host " + hostValue(mine) + "; yours " + mine + ").";
+				}
+				case NetRejectReason::BuildMismatch: {
+					const std::string mine = m_AdvertisedBuildForTest.value_or(m_Config.localIdentity.buildId);
+					return "Your build differs from the host's (host " + hostValue(mine) + "; yours " + mine + ").";
+				}
 				case NetRejectReason::ControllerFrameVersionMismatch:
 					if (const int order = CompareVersionTexts(hostValue(std::to_string(m_Config.localIdentity.controllerFrameVersion)), std::to_string(m_Config.localIdentity.controllerFrameVersion))) return NewerOrOlderHost(order);
 					return "This host runs a different game version.";
@@ -1781,17 +1790,43 @@ namespace RTE {
 		}
 	}
 
+	bool NetSession::ReadAdvertisedVersionsForTest(std::string* error) {
+		m_AdvertisedBuildForTest.reset(); m_AdvertisedProtocolForTest.reset();
+		const char* build = SDL_getenv("CC_TEST_NET_ADVERTISED_BUILD");
+		const char* protocol = SDL_getenv("CC_TEST_NET_ADVERTISED_PROTOCOL");
+		if ((!build || !*build) && (!protocol || !*protocol)) return true;
+		const char* headless = SDL_getenv("CCCP_HEADLESS");
+		if (!headless || std::string(headless) != "1") {
+			if (error) *error = "advertised-version override requires CCCP_HEADLESS=1"; return false;
+		}
+		if (build && *build) {
+			if (std::string(build).size() > NetProtocol::c_MaxShortTextBytes) {
+				if (error) *error = "advertised build exceeds the protocol text limit"; return false;
+			}
+			m_AdvertisedBuildForTest = build;
+		}
+		if (protocol && *protocol) {
+			const std::string text(protocol); uint16_t value = 0;
+			const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+			if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || value == 0) {
+				if (error) *error = "advertised protocol must be an integer from 1 to 65535"; return false;
+			}
+			m_AdvertisedProtocolForTest = value;
+		}
+		return true;
+	}
+
 	NetClientHello NetSession::BuildClientHello() const {
 		NetClientHello hello;
 		hello.clientNonce = m_Config.localNonce;
-		hello.minProtocolVersion = m_Config.minProtocolVersion;
-		hello.maxProtocolVersion = m_Config.maxProtocolVersion;
+		hello.minProtocolVersion = m_AdvertisedProtocolForTest.value_or(m_Config.minProtocolVersion);
+		hello.maxProtocolVersion = m_AdvertisedProtocolForTest.value_or(m_Config.maxProtocolVersion);
 		hello.controllerFrameVersion = m_Config.localIdentity.controllerFrameVersion;
 		hello.controllerFrameEncodedSize = m_Config.localIdentity.controllerFrameEncodedSize;
 		hello.platformId = PlatformId(m_Config.localIdentity.platform);
 		hello.displayName = m_Config.displayName;
 		hello.gameVersion = m_Config.localIdentity.gameVersion;
-		hello.buildId = m_Config.localIdentity.buildId;
+		hello.buildId = m_AdvertisedBuildForTest.value_or(m_Config.localIdentity.buildId);
 		hello.deterministicConfigHash = m_Config.localIdentity.deterministicConfigHash;
 		hello.moduleManifestHash = m_Config.localIdentity.moduleManifestHash;
 		hello.sessionRulesHash = m_Config.localIdentity.sessionRulesHash;
@@ -1804,7 +1839,7 @@ namespace RTE {
 		NetHostHello hello;
 		hello.sessionId = m_SessionId;
 		hello.hostNonce = m_Config.localNonce;
-		hello.selectedProtocolVersion = NetProtocol::c_Version;
+		hello.selectedProtocolVersion = m_AdvertisedProtocolForTest.value_or(NetProtocol::c_Version);
 		hello.controllerFrameVersion = m_Config.localIdentity.controllerFrameVersion;
 		hello.controllerFrameEncodedSize = m_Config.localIdentity.controllerFrameEncodedSize;
 		hello.assignedPeerId = assignedPeerId;
@@ -1812,7 +1847,7 @@ namespace RTE {
 		hello.hostPlatformId = PlatformId(m_Config.localIdentity.platform);
 		hello.gameVersion = m_Config.localIdentity.gameVersion;
 		hello.hostName = m_Config.displayName;
-		hello.buildId = m_Config.localIdentity.buildId;
+		hello.buildId = m_AdvertisedBuildForTest.value_or(m_Config.localIdentity.buildId);
 		hello.deterministicConfigHash = m_Config.localIdentity.deterministicConfigHash;
 		hello.moduleManifestHash = m_Config.localIdentity.moduleManifestHash;
 		hello.sessionRulesHash = m_Config.localIdentity.sessionRulesHash;

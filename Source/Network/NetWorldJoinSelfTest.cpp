@@ -1,3 +1,4 @@
+#include "NetReplayTestUtils.h"
 #include "NetWorldJoinSelfTest.h"
 
 #include "ControllerFrame.h"
@@ -3425,7 +3426,7 @@ namespace RTE {
 		return tail.Count() == 4 && tail.Covers(1) ? 0 : Fail("the neutral catch-up prefix has a gap");
 	}
 
-	int TestLargePrivateTailChunks() {
+	int TestLargePrivateTailChunks(bool endBetweenPieces = false) {
 		std::string error;
 		NetWorldJoinHost host;
 		auto config = NetMatchConfigUtil::MakeDefault(0x9A33);
@@ -3450,12 +3451,16 @@ namespace RTE {
 			NetMatchService::SendWorldJoinTailTo(pair.host, host, *host.FindSession(42));
 			pair.Pump(1);
 			NetMatchService::StepWorldJoinCatchUpClient(pair.client, client);
-			if (host.FindSession(42)->deliveredThrough < 41 && ScenarioRunner::WorldCatchUpHasFrame(41)) return Fail("partial tail bytes became a committed tick");
+			if (endBetweenPieces && chunks == 1) {
+				if (client.partialTail.empty() || !host.BeginFinalTail(42, 41)) return Fail("the final-tail fixture did not end inside a split record");
+			}
+			if (!endBetweenPieces && host.FindSession(42)->deliveredThrough < 41 && ScenarioRunner::WorldCatchUpHasFrame(41)) return Fail("partial tail bytes became a committed tick");
 		}
 		NetLockstepReadyFrame applied;
 		const bool exact = chunks > 1 && ScenarioRunner::TakeWorldCatchUpReadyFrame(41, applied, &error) && applied.remoteFrames.size() == frame.frames.size() &&
 		    std::equal(applied.remoteFrames.begin(), applied.remoteFrames.end(), frame.frames.begin(), [](const auto& a, const auto& b) { return ControllerFrameCodec::Encode(a) == ControllerFrameCodec::Encode(b); }) && client.partialTail.empty();
 		ScenarioRunner::ReleaseWorldCatchUp();
+		if (exact && endBetweenPieces) std::cout << "[net-world-join-selftest] PASS final_tail_finishes_an_ordered_record chunks=" << chunks << std::endl;
 		return exact ? 0 : Fail("a controller roster larger than one lobby chunk was truncated: " + error);
 	}
 
@@ -6326,7 +6331,7 @@ namespace RTE {
 		ControllerFrame controller;
 		controller.actorUniqueID = 101;
 		if (!writer.WriteFrame(901, {controller}, {}, error) || !writer.WriteFrame(902, {}, {}, error)) return false;
-		writer.Close();
+		writer.Close(); if (!WaitForReplayCloseForTest(writer, error)) return false;
 
 		NetMatchReplayReader reader;
 		if (!reader.Open(segmentPath.string(), error)) return false;
@@ -6420,6 +6425,8 @@ namespace RTE {
 			return false;
 		}
 		std::error_code ignored;
+		// The storage worker creates the file off the simulation thread.
+		for (int waited = 0; waited < 2000 && !std::filesystem::is_regular_file(first, ignored); ++waited) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		if (!std::filesystem::is_regular_file(first, ignored)) {
 			*error = "world-segment-roll-missed: no segment file was written at " + first.string();
 			return false;
@@ -6434,6 +6441,10 @@ namespace RTE {
 			return false;
 		}
 		ScenarioRunner::CloseLockstepReplayRecord();
+		if (!ScenarioRunner::WasLockstepReplayRecordClosed()) {
+			*error = "world-segment-roll-missed: the second segment's writer did not finish";
+			return false;
+		}
 		NetMatchReplayReader reader;
 		if (!reader.Open(second.string(), error)) return false;
 		if (!reader.HasWorldSegment() || reader.GetWorldSegment().tick != 1800 || reader.GetWorldSegment().worldDigest != std::string(64, 'e')) {
@@ -7175,7 +7186,7 @@ namespace RTE {
 			return false;
 		}
 		ScenarioRunner::CloseLockstepReplayRecord();
-		if (!std::filesystem::is_regular_file(segment, ignored)) {
+		if (!ScenarioRunner::WasLockstepReplayRecordClosed() || !std::filesystem::is_regular_file(segment, ignored)) {
 			*error = "resumed-world-wrote-no-segment: nothing was written at " + segment.string();
 			return false;
 		}
@@ -7975,6 +7986,7 @@ namespace RTE {
 			return TestReadyFramePackIncludesRemotes();
 		}
 		if (std::strcmp(name, "private-neutral-prelude") == 0 || std::strcmp(name, "-net-world-private-neutral-prelude-selftest") == 0) return TestPrivateNeutralPrelude();
+		if (std::strcmp(name, "final-tail-split") == 0 || std::strcmp(name, "-net-world-final-tail-split-selftest") == 0) return TestLargePrivateTailChunks(true);
 		if (std::strcmp(name, "private-large-tail") == 0 || std::strcmp(name, "-net-world-private-large-tail-selftest") == 0) return TestLargePrivateTailChunks();
 		if (std::strcmp(name, "earlier-round-tail") == 0 || std::strcmp(name, "-net-world-earlier-round-tail-selftest") == 0) return TestAnEarlierRoundsTailChunkIsDropped();
 		if (std::strcmp(name, "private-rejoin-headroom") == 0 || std::strcmp(name, "-net-world-private-rejoin-headroom-selftest") == 0) return TestPrivateRejoinHeadroom();
@@ -8050,6 +8062,11 @@ namespace RTE {
 	int NetWorldJoinSelfTest::Run() {
 		s_FailTag = "net-world-join-selftest";
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		// The Lua states a row brings up close with the suite, not at the process exit.
+		struct LuaTakeDown {
+			bool owned = !LuaMan::IsConstructed();
+			~LuaTakeDown() { if (owned && LuaMan::IsConstructed()) LuaMan::Destruct(); }
+		} luaTakeDown;
 		if (const int result = TestIdentitySurvivesRestart(); result != 0) {
 			return result;
 		}
@@ -8235,6 +8252,7 @@ namespace RTE {
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;
 		if (const int result = TestAReturnerKeepingPaceAtTheHeadIsActivated(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
+		if (const int result = TestLargePrivateTailChunks(true); result != 0) return result;
 		if (const int result = TestAnEarlierRoundsTailChunkIsDropped(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;

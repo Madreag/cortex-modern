@@ -253,7 +253,7 @@ namespace RTE {
 					NoteError("unlisted sessions unsupported by this directory");
 					m_HiddenUnsupported = true;
 					IssueDelete(nowMs);
-				} else if ((m_Capable && m_DesiredListed != m_ConfirmedListed) || nowMs >= m_NextHeartbeatMs) {
+				} else if ((m_Capable && m_DesiredListed != m_ConfirmedListed) || m_ListenAddrsDirty || nowMs >= m_NextHeartbeatMs) {
 					IssueHeartbeat(nowMs);
 				}
 				break;
@@ -414,6 +414,7 @@ namespace RTE {
 			}
 			m_SessionId = response.sessionId;
 			m_Token = response.token;
+			m_ObservedIp = response.observedIp;
 			// The register schema is unchanged, so a fresh row starts visible on either service.
 			m_Capable = response.supportsUnlisted;
 			m_ConfirmedListed = true;

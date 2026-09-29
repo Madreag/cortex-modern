@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -1633,6 +1634,19 @@ def check_injected_exemption(results, scratch):
     host.write_text(host.read_text().replace(fullstate_line(300, same), fullstate_line(300, perturbed)))
     second, _ = findings("injected-desync", driver.fullstate_verdict(host, client))
     ok &= row(results, "fullstate/other-divergent-tick-stays-red", len(second) == 1 and "tick 300" in second[0]["reason"], str(second))
+    # The lockstep desync the host injected is excused only where its own log names the injection (run 1 had none).
+    def unplanned(marker):
+        for peer in ("host", "client"):
+            (root / peer).mkdir(exist_ok=True)
+            lines = (["[net-test] live perturb frame=240"] if marker and peer == "host" else []) + ["[lockstep] desync at frame 240 against Peer (submitted 8, sent 8, compared 8)"]
+            (root / peer / "stdout.log").write_text("\n".join(lines) + "\n")
+        records = [{"peer": peer, "root": str(root / peer), "video_dir": str(root / peer / "video"), "video": "x.mp4", "index": [], "encode": {}, "menu_script_failures": []}
+                   for peer in ("host", "client")]
+        with patch.object(driver, "item_evidence", side_effect=lambda record, item, port=None: ([1], {"probe": "pass"})):
+            document = driver.review(scenario, {"name": "injected-desync", "peers": records}, root)
+        return [f for f in document["run_findings"] if f["reason"].startswith("Unplanned desync")]
+    ok &= row(results, "rematch/named-injection-excuses-its-desync", not unplanned(True))
+    ok &= row(results, "rematch/unnamed-injection-stays-red", len(unplanned(False)) == 2)
     rematch = driver.load_scenario("mp-rematch")
     run = next(run for run in rematch["runs"] if run["name"] == "injected-desync")
     declaration = run.get("injected_desync") or {}
@@ -1666,6 +1680,18 @@ def check_acceptance_rows(results, scratch):
     rows = rows[3:]
     (root / 'client-live.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
     ok &= row(results, 'audit-08/missing-earlier-round-fails', driver.compare_round_histories(root, config)['status'] == 'FAIL')
+    # Run 1's rematch: the host ended the first round at 292 of 600, so only the last round plays the full count.
+    early = [dict(round=round_id, tick=t, sim_gated=str(t), subsystems={key: str(t) for key in driver.CORE | {'controller'}})
+             for round_id, last in ((7, 2), (8, 3)) for t in range(1, last + 1)]
+    for peer in ('host', 'client'):
+        (root / (peer + '-live.jsonl')).write_text(''.join(json.dumps(r) + '\n' for r in early))
+    ok &= row(results, 'audit-08/host-ended-round-runs-to-its-end', driver.compare_round_histories(root, config)['status'] == 'PASS',
+              str(driver.compare_round_histories(root, config)))
+    extra = early[:2] + [dict(early[1], tick=3)] + early[2:]
+    (root / 'client-live.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in extra))
+    ok &= row(results, 'audit-08/a-tick-past-the-hosts-end-fails', driver.compare_round_histories(root, config)['status'] == 'FAIL')
+    (root / 'client-live.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in early[:-1]))
+    ok &= row(results, 'audit-08/a-short-last-round-fails', driver.compare_round_histories(root, config)['status'] == 'FAIL')
     for name in ('mp-held-seat', 'mp-inplace-rehold', 'world-late-join'):
         scenario = driver.load_scenario(name)
         runs = scenario.get('runs') or [scenario]
@@ -1704,11 +1730,27 @@ def check_acceptance_rows(results, scratch):
     ok &= row(results, 'audit-07/missing-stall-count-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
     driver.write_json(behavior / 'host-match.json', dict(exit_code=0, running_ticks=4201, lockstep=dict(steady_missing_frame_stalls=1)))
     ok &= row(results, 'audit-07/nonzero-stall-count-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    # sc-g9: a survivor a tick ahead of the host waited 2 ms at the hold frame itself - the bound's one wait for the spike.
+    started = '[net-lockstep] start round=7 frame=1 local_peer=1\n'
+    (behavior / 'host/stdout.log').write_text(started + '[net-match] hold peer=3 frame=364 AI in control\n[net-frame-wait] frame=364 wait_ms=2 on=ClientB\n')
+    ok &= row(results, 'held-seat/the-hold-frames-own-wait-is-not-steady', driver.native_behavior(behavior, spec)['status'] == 'PASS',
+              str(driver.native_behavior(behavior, spec)))
+    with (behavior / 'host/stdout.log').open('a') as stream:
+        stream.write('[net-frame-wait] frame=500 wait_ms=3 on=ClientB\n')
+    driver.write_json(behavior / 'host-match.json', dict(exit_code=0, running_ticks=4201, lockstep=dict(steady_missing_frame_stalls=2)))
+    ok &= row(results, 'held-seat/a-steady-stall-beside-the-hold-still-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    (behavior / 'host/stdout.log').write_text(started + '[net-match] hold peer=3 frame=364 AI in control\n[net-frame-wait] frame=364 wait_ms=51 on=ClientB\n')
+    driver.write_json(behavior / 'host-match.json', dict(exit_code=0, running_ticks=4201, lockstep=dict(steady_missing_frame_stalls=1)))
+    ok &= row(results, 'held-seat/a-hold-wait-past-50-ms-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    (behavior / 'host/stdout.log').write_text(started.replace('frame=1 ', 'frame=100 ') + '[net-match] hold peer=3 frame=364 AI in control\n[net-frame-wait] frame=364 wait_ms=2 on=ClientB\n')
+    ok &= row(results, 'held-seat/a-hold-before-the-steady-window-excuses-nothing', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
+    (behavior / 'host/stdout.log').write_text('[net-match] hold peer=3 frame=364 AI in control\n')
     rehold = scratch / 'rehold-native'; rehold.mkdir()
-    spec = dict(kind='rehold', target='client', observers=['host', 'survivor'], holds=2, stall_ticks=[2, 7],
+    spec = dict(kind='rehold', target='client', observers=['host', 'survivor'], holds=2,
                 reports={p: p+'-report.json' for p in ('host', 'survivor')},
                 ticks=dict(host=12, survivor=12), steady_peers=['host', 'survivor'])
     (rehold / 'client').mkdir()
+    driver.write_json(rehold / 'client/launch.json', dict(argv=['engine', '-net-test-live-stall', '2:600', '-net-test-live-stall', '7:600']))
     (rehold / 'client/stdout.log').write_text('[net-lockstep] start round=7 frame=1 local_peer=2\n'
         '[net-test] live stall frame=2\n[net-test] live stall frame=7\n'
         '[net-match] private catch-up complete frame=6\n[net-match] private catch-up complete frame=10\n')
@@ -1727,6 +1769,23 @@ def check_acceptance_rows(results, scratch):
     with (rehold / 'host/stdout.log').open('a') as stream:
         stream.write('[net-match] hold peer=2 frame=11 AI in control\n')
     ok &= row(results, 'audit-07/unscheduled-rehold-fails', driver.native_behavior(rehold, spec)['status'] == 'FAIL')
+    # Run 1's lever fired at 659 for a 653 request, once the returned seat was back in play: that is its own tick, not a miss.
+    late = scratch / 'rehold-late-lever'; shutil.copytree(rehold, late)
+    (late / 'host/stdout.log').write_text((rehold / 'survivor/stdout.log').read_text())
+    driver.write_json(late / 'client/launch.json', dict(argv=['engine', '-net-test-live-stall', '2:600', '-net-test-live-stall', '6:600']))
+    ok &= row(results, 'audit-07/a-lever-firing-after-its-request-is-its-stall', driver.native_behavior(late, spec)['status'] == 'PASS',
+              str(driver.native_behavior(late, spec)))
+    driver.write_json(late / 'client/launch.json', dict(argv=['engine', '-net-test-live-stall', '2:600', '-net-test-live-stall', '8:600']))
+    ok &= row(results, 'audit-07/a-lever-firing-before-its-request-fails', driver.native_behavior(late, spec)['status'] == 'FAIL')
+    # A lobby match's report keeps its ticks in last_match and its exit code in the process record (run 1, mp-held-seat).
+    lobby = scratch / 'behavior-lobby-report'; shutil.copytree(behavior, lobby)
+    held = driver.load_scenario('mp-held-seat')['behavior_gate']
+    for peer in held['observers']:
+        driver.write_json(lobby / held['reports'][peer], dict(last_match=dict(running_ticks=4300), runner=dict(lockstep=dict(steady_missing_frame_stalls=0))))
+        driver.write_json(lobby / peer / 'launch.json', dict(exit_code=0))
+    ok &= row(results, 'audit-07/lobby-report-counters', driver.native_behavior(lobby, held)['status'] == 'PASS', str(driver.native_behavior(lobby, held)))
+    driver.write_json(lobby / 'host/launch.json', dict(exit_code=1))
+    ok &= row(results, 'audit-07/lobby-report-failed-exit', driver.native_behavior(lobby, held)['status'] == 'FAIL')
     world = scratch / 'world-native'; world.mkdir(); (world / 'world').mkdir()
     spec = dict(kind='world-continuity', ticks=dict(world=8, **{'client-first': 3, 'client-late': 3}), late_tick=6,
                 reports={p:p+'-report.json' for p in ('world', 'client-first', 'client-late')})
@@ -1739,6 +1798,26 @@ def check_acceptance_rows(results, scratch):
     path = world / 'world-live.jsonl'; data = path.read_text(); path.write_text('\n'.join(data.splitlines()[1:])+'\n')
     ok &= row(results, 'audit-07/world-coverage-gap-fails', driver.native_behavior(world, spec)['status'] == 'FAIL')
     path.write_text(data)
+    # Run 1: the late joiner labelled its catch-up ticks with its round index and its live ticks with the world's round id.
+    late = world / 'client-late-live.jsonl'; kept = late.read_text()
+    rows = [json.loads(line) for line in kept.splitlines()]
+    late.write_text(''.join(json.dumps(dict(r, round=1 if r['tick'] < 7 else 7)) + '\n' for r in rows))
+    mapped = driver.native_behavior(world, spec)
+    ok &= row(results, 'audit-07/world-joiner-catch-up-label-maps-to-the-round', mapped['status'] == 'PASS', str(mapped))
+    late.write_text(''.join(json.dumps(dict(r, round=1 if r['tick'] == 8 else 7)) + '\n' for r in rows))
+    ok &= row(results, 'audit-07/world-joiner-label-after-its-live-ticks-fails', driver.native_behavior(world, spec)['status'] == 'FAIL')
+    late.write_text(''.join(json.dumps(dict(r, round=1 if r['tick'] < 7 else 7, subsystems=dict(r['subsystems'], actors='x') if r['tick'] == 6 else r['subsystems'])) + '\n' for r in rows))
+    ok &= row(results, 'audit-07/world-joiner-mapped-tick-still-compared', driver.native_behavior(world, spec)['status'] == 'FAIL')
+    # A world with no actors in play hashes none of them (this lane's world-late-join: ticks 1769-2321 had no actor on either side).
+    world_rows_path = world / 'world-live.jsonl'; world_kept = world_rows_path.read_text()
+    empty = lambda r: dict(r, subsystems={k: v for k, v in r['subsystems'].items() if k not in ('actors', 'rot_angle', 'controller')}) if r['tick'] in (6, 7) else r
+    world_rows_path.write_text(''.join(json.dumps(empty(json.loads(line))) + '\n' for line in world_kept.splitlines()))
+    late.write_text(''.join(json.dumps(empty(r)) + '\n' for r in rows))
+    ok &= row(results, 'audit-07/world-without-actors-compares-what-it-hashes', driver.native_behavior(world, spec)['status'] == 'PASS', str(driver.native_behavior(world, spec)))
+    late.write_text(''.join(json.dumps(empty(r) if r['tick'] != 8 else dict(r, subsystems={k: v for k, v in r['subsystems'].items() if k != 'actors'})) + '\n' for r in rows))
+    ok &= row(results, 'audit-07/world-joiner-missing-a-hashed-subsystem-fails', driver.native_behavior(world, spec)['status'] == 'FAIL')
+    world_rows_path.write_text(world_kept)
+    late.write_text(kept)
     driver.write_json(world / 'world/launch.json', dict(argv=['-net-persistent-world']))
     ok &= row(results, 'audit-07/world-fresh-flag-required', driver.native_behavior(world, spec)['status'] == 'FAIL')
     review_root = scratch / 'unplanned-desync'; review_root.mkdir()

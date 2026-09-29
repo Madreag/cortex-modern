@@ -47,6 +47,7 @@ import math
 import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 import unittest
@@ -315,7 +316,7 @@ def pin_settings(run, values: dict) -> None:
     path = Path(run.cwd) / "Userdata/Settings.ini"
     text = path.read_text(encoding="utf-8-sig")
     for name, value in values.items():
-        text, count = re.subn(rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*", lambda match: match[1] + value, text)
+        text, count = re.subn(rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*", lambda match: match[1] + value, text)
         if count == 0:
             text += f"\n\t{name} = {value}\n"
     path.write_text(text, encoding="utf-8")
@@ -711,7 +712,9 @@ def forced_hold_evidence(root: Path, lever: str, scale: int = 1, offset: int = 0
     seat = int(identity[1])
     holds = sorted(set(map(int, re.findall(rf'\[net-match\] hold peer={seat} frame=(\d+) AI in control', host))))
     reclaims = sorted(set(map(int, re.findall(rf'\[net-match\] seat-reclaimed peer={seat} frame=(\d+)', host))))
+    # A seat returns privately, or in a persistent world through the world-join tail, which names the seat it activated.
     completed = set(map(int, re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', client)))
+    completed |= set(map(int, re.findall(rf'\[net-world\] catch-up complete peer={seat} at=(\d+)', client)))
     pairs = [(hold, back) for hold in holds if hold >= tick for back in reclaims if back > hold and back in completed]
     assert pairs, f'client stall {tick} has no native hold/completed reclaim: holds={holds}, reclaims={reclaims}'
     return dict(requested=True, stall_tick=tick, seat=seat, hold=pairs[0][0], reclaim=pairs[0][1])
@@ -1564,6 +1567,20 @@ class WorldRestartOracleTests(unittest.TestCase):
         def sample(tick: int) -> str:
             return f"[fullstate] tick={tick} hash=ef9b7943247e96ec sections=header:258ea10e07185ecb round=7\n"
         self.assertEqual(_shared_samples(sample(60) + sample(120), sample(120) + sample(180)), [(7, 120)])
+
+    def test_a_world_return_completes_through_its_tail(self):
+        # Acceptance run 1, restore-all-1 world-restart boot1: the world-join tail names the seat it activated.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for who in ("host", "client"):
+                (root / who).mkdir()
+            (root / "host/stdout.log").write_text("[net-match] hold peer=2 frame=44 AI in control\n[net-match] seat-reclaimed peer=2 frame=335 live_actors=1\n", encoding="utf-8")
+            client = "[net-test] live stall frame=40 ms=1500\n[net-lockstep] start round=7 frame=1 local_peer=2 peers=2 input_delay=3\n"
+            (root / "client/stdout.log").write_text(client + "[net-world] catch-up complete peer=2 at=335 input_horizon=339\n", encoding="utf-8")
+            self.assertEqual(forced_hold_evidence(root, "40:1500")["reclaim"], 335)
+            (root / "client/stdout.log").write_text(client + "[net-world] catch-up complete peer=3 at=335 input_horizon=339\n", encoding="utf-8")
+            with self.assertRaises(AssertionError):
+                forced_hold_evidence(root, "40:1500")
 
     def test_lobby_join_with_published_offers_can_be_killed(self):
         host = self.HOST_START + self.HOST_LOBBY + self.CAPTURES

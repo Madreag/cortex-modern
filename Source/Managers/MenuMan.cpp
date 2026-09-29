@@ -192,6 +192,8 @@ void MenuMan::UpdateLocalPauseMenu() {
 			break;
 		case PauseMenuGUI::PauseMenuUpdateResult::MatchEnded:
 			CloseLocalPauseMenu();
+			// Every peer plays to the round's agreed end first; the round's own clean stop then finishes the match and leaves it.
+			if (g_NetMatchService.GetState() == NetMatchServiceState::Running && g_NetMatchService.EndMatchAtAgreedFrame("Match ended by host")) break;
 			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 				g_NetMatchService.FinishMatch("Match ended by host");
 			}
