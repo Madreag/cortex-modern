@@ -42,7 +42,8 @@ SUITES = (
     ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),
     ("acceptance-collection", [str(INVENTORY / "test_acceptance_collection.py")]),
 )
-WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement"}
+# The cross driver's suite reads the Windows boxes' trees and ctypes.WinDLL; the other platforms run the cross peers, not this suite.
+WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver"}
 
 
 def run(repo: Path, name: str, argv: list[str], timeout: float) -> tuple[str, int, str]:
