@@ -1771,6 +1771,17 @@ def check_acceptance_rows(results, scratch):
     path = world / 'world-live.jsonl'; data = path.read_text(); path.write_text('\n'.join(data.splitlines()[1:])+'\n')
     ok &= row(results, 'audit-07/world-coverage-gap-fails', driver.native_behavior(world, spec)['status'] == 'FAIL')
     path.write_text(data)
+    # Run 1: the late joiner labelled its catch-up ticks with its round index and its live ticks with the world's round id.
+    late = world / 'client-late-live.jsonl'; kept = late.read_text()
+    rows = [json.loads(line) for line in kept.splitlines()]
+    late.write_text(''.join(json.dumps(dict(r, round=1 if r['tick'] < 7 else 7)) + '\n' for r in rows))
+    mapped = driver.native_behavior(world, spec)
+    ok &= row(results, 'audit-07/world-joiner-catch-up-label-maps-to-the-round', mapped['status'] == 'PASS', str(mapped))
+    late.write_text(''.join(json.dumps(dict(r, round=1 if r['tick'] == 8 else 7)) + '\n' for r in rows))
+    ok &= row(results, 'audit-07/world-joiner-label-after-its-live-ticks-fails', driver.native_behavior(world, spec)['status'] == 'FAIL')
+    late.write_text(''.join(json.dumps(dict(r, round=1 if r['tick'] < 7 else 7, subsystems=dict(r['subsystems'], actors='x') if r['tick'] == 6 else r['subsystems'])) + '\n' for r in rows))
+    ok &= row(results, 'audit-07/world-joiner-mapped-tick-still-compared', driver.native_behavior(world, spec)['status'] == 'FAIL')
+    late.write_text(kept)
     driver.write_json(world / 'world/launch.json', dict(argv=['-net-persistent-world']))
     ok &= row(results, 'audit-07/world-fresh-flag-required', driver.native_behavior(world, spec)['status'] == 'FAIL')
     review_root = scratch / 'unplanned-desync'; review_root.mkdir()

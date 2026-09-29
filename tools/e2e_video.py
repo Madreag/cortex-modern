@@ -1673,16 +1673,25 @@ def native_behavior(root, spec):
             require(len(canonical) == len(host), 'world duplicated a committed tick')
             require(len({row.get('round') for row in host}) == 1 and all(row.get('round') is not None for row in host), 'world round was restarted or not identified')
             require(set(range(1, spec['ticks']['world'] + 1)) <= {r['tick'] for r in host}, 'world stopped ticking across visits')
+            world_round = next(iter({row.get('round') for row in host}), None)
             for peer in ('client-first', 'client-late'):
                 rows = read_live_hashes(root / f'{peer}-live.jsonl')
                 require(bool(rows), f'{peer}: no world hash history')
+                # A joiner labels the ticks it replays before it adopts the round with its own round index: one label, on a
+                # prefix wholly before its first tick under the world's round, is that round's catch-up.
+                first_live = min((row['tick'] for row in rows if row.get('round') == world_round), default=None)
+                others = {row.get('round') for row in rows if row.get('round') != world_round}
+                prefix = len(others) == 1 and first_live is not None and all(row['tick'] < first_live for row in rows if row.get('round') != world_round)
+                require(not others or prefix, f'{peer}: rows under a round the world never ran')
+                mapped = {label: world_round for label in others} if prefix else {}
+                details.setdefault('round_mapping', {})[peer] = {str(label): str(target) for label, target in mapped.items()}
                 ticks = {row['tick'] for row in rows}
                 require(len(ticks) >= spec['ticks'][peer] and ticks == set(range(min(ticks, default=0), max(ticks, default=-1) + 1)),
                         f'{peer}: incomplete continued-play history')
                 if peer == 'client-late':
                     require(any(r['tick'] >= spec['late_tick'] for r in rows), 'late join preceded the declared world boundary')
                 for row in rows:
-                    other = canonical.get((row.get('round'), row['tick']))
+                    other = canonical.get((mapped.get(row.get('round'), row.get('round')), row['tick']))
                     shared = lambda value: {k: v for k, v in value.get('subsystems', {}).items() if k not in PER_PEER_SUBSYSTEMS}
                     if other is None or not (CORE | {'controller'}) <= shared(row).keys() or not row.get('sim_gated') or shared(row) != shared(other) or row.get('sim_gated') != other.get('sim_gated'):
                         errors.append(f'{peer}: world state differs at tick {row["tick"]}')
