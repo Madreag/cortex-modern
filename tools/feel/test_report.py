@@ -207,7 +207,7 @@ class ReportTests(unittest.TestCase):
                  patch.object(feel_measure, 'write_json'):
                 measured = feel_measure.reduce_timing_case(run)
             self.assertEqual(set(measured['peers']), {'host', 'survivor'})
-            self.assertEqual(set(measured['proof']['live_passes']), {'host/survivor', 'host/client', 'survivor/client'})
+            self.assertEqual(set(measured['proof']['live_passes']), {'host/survivor', 'host/client', 'client/survivor'})
 
     def test_item9a_uses_the_tick_clock_when_a_render_skips_the_final_tick(self):
         measured = self.item9a(complete=False, live_clock=True, wall_ms=17000)
