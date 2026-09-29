@@ -282,6 +282,10 @@ namespace RTE {
 		m_PoolAllocBlockCount = (allocBlockCount > 0) ? allocBlockCount : 10;
 	}
 
+	Entity::ClassInfo::~ClassInfo() {
+		for (void* memory: m_AllocatedPool) m_Deallocate(memory);
+	}
+
 	std::list<std::string> Entity::ClassInfo::GetClassNames() {
 		std::list<std::string> retList;
 		for (const ClassInfo* itr = s_ClassHead; itr != 0; itr = itr->m_NextClass) {

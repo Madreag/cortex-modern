@@ -24,11 +24,13 @@
 #include <future>
 #include <iomanip>
 #include <iostream>
+#include <locale>
 #include <map>
 #include <mutex>
 #include <set>
 #include <sstream>
 #include <thread>
+#include <tuple>
 
 namespace RTE {
 
@@ -100,6 +102,8 @@ namespace RTE {
 			uint32_t bits = 0;
 			std::memcpy(&bits, &value, sizeof(bits));
 			std::ostringstream oss;
+			// The identity text is compared byte for byte across machines; no locale may group its digits.
+			oss.imbue(std::locale::classic());
 			oss << "0x" << std::hex << std::setw(8) << std::setfill('0') << bits;
 			return oss.str();
 		}
@@ -126,7 +130,7 @@ namespace RTE {
 
 		NetHash32 HashConfig(const NetIdentityDeterministicConfig& config) {
 			CanonicalHasher hasher;
-			hasher.UpdateLine("NetIdentityDeterministicConfig/v2");
+			hasher.UpdateLine("NetIdentityDeterministicConfig/v3");
 			AppendField(hasher, "game_version", config.gameVersion);
 			AppendInt(hasher, "network_protocol_version", config.networkProtocolVersion);
 			AppendInt(hasher, "controller_frame_version", config.controllerFrameVersion);
@@ -141,8 +145,6 @@ namespace RTE {
 			// count is a simulation input. It is a build constant now: this hashes which build is running,
 			// and a build that changed it cannot join one that did not.
 			AppendInt(hasher, "num_lua_states", static_cast<uint64_t>(config.numLuaStates));
-			AppendField(hasher, "selected_module", config.selectedModule);
-			AppendBool(hasher, "scenario_test_module_loaded", config.scenarioTestModuleLoaded);
 			// Admission checks supported layouts; the lobby agrees on the host's selected layout.
 			AppendInt(hasher, "supported_lockstep_codec_version", config.supportedLockstepCodecVersion);
 			AppendInt(hasher, "supported_world_lockstep_codec_version", config.supportedWorldLockstepCodecVersion);
@@ -182,12 +184,24 @@ namespace RTE {
 
 		NetHash32 HashIdentity(const NetIdentityManifest& manifest) {
 			CanonicalHasher hasher;
-			hasher.UpdateLine("NetIdentitySession/v1");
+			hasher.UpdateLine("NetIdentitySession/v2");
 			AppendField(hasher, "game_version", manifest.gameVersion);
 			AppendField(hasher, "build_id", manifest.buildId);
 			AppendInt(hasher, "network_protocol_version", manifest.networkProtocolVersion);
 			AppendInt(hasher, "controller_frame_version", manifest.controllerFrameVersion);
 			AppendInt(hasher, "controller_frame_encoded_size", manifest.controllerFrameEncodedSize);
+			// The content manifest gates load order independently.
+			std::vector<std::pair<std::string, int>> loadedModules;
+			loadedModules.reserve(manifest.modules.size());
+			for (const NetIdentityModuleEntry& module : manifest.modules) {
+				loadedModules.emplace_back(module.fileName, module.version);
+			}
+			std::sort(loadedModules.begin(), loadedModules.end());
+			AppendInt(hasher, "loaded_module_count", static_cast<uint64_t>(loadedModules.size()));
+			for (const auto& [name, version] : loadedModules) {
+				AppendField(hasher, "loaded_module.name", name);
+				AppendSignedInt(hasher, "loaded_module.version", version);
+			}
 			AppendHash(hasher, "deterministic_config_hash", manifest.deterministicConfigHash);
 			AppendHash(hasher, "module_manifest_hash", manifest.moduleManifestHash);
 			AppendHash(hasher, "session_rules_hash", manifest.sessionRulesHash);
@@ -690,13 +704,25 @@ namespace RTE {
 			return MakeMismatch("userdata_modules", NetRejectReason::UserdataModulesNotAllowed, "false", "true", "userdata modules are not allowed in network sessions");
 		}
 		if (expected.modules.size() != actual.modules.size()) {
-			return MakeMismatch("module_count", NetRejectReason::ModuleManifestMismatch, std::to_string(expected.modules.size()), std::to_string(actual.modules.size()), "loaded module count does not match");
+			NetIdentityMismatch mismatch = MakeMismatch("module_count", NetRejectReason::ModuleManifestMismatch, std::to_string(expected.modules.size()), std::to_string(actual.modules.size()), "loaded module count does not match");
+			for (const auto& [modules, other, action] : {
+				std::tuple{&expected.modules, &actual.modules, "Install: "},
+				std::tuple{&actual.modules, &expected.modules, "Remove: "}}) {
+				for (const NetIdentityModuleEntry& module : *modules) {
+					if (std::none_of(other->begin(), other->end(), [&](const NetIdentityModuleEntry& entry) { return entry.fileName == module.fileName; })) {
+						mismatch.moduleName = module.fileName;
+						mismatch.summary += "; " + std::string(action) + module.fileName;
+						return mismatch;
+					}
+				}
+			}
+			return mismatch;
 		}
 		for (size_t i = 0; i < expected.modules.size(); ++i) {
 			const NetIdentityModuleEntry& expectedModule = expected.modules[i];
 			const NetIdentityModuleEntry& actualModule = actual.modules[i];
 			if (expectedModule.fileName != actualModule.fileName) {
-				NetIdentityMismatch mismatch = MakeMismatch("module_order", NetRejectReason::ModuleManifestMismatch, ModuleLabel(expectedModule), ModuleLabel(actualModule), "loaded module order does not match");
+				NetIdentityMismatch mismatch = MakeMismatch("module_order", NetRejectReason::ModuleManifestMismatch, ModuleLabel(expectedModule), ModuleLabel(actualModule), "loaded module order does not match: expected " + expectedModule.fileName + ", received " + actualModule.fileName);
 				mismatch.moduleName = actualModule.fileName;
 				return mismatch;
 			}
@@ -706,12 +732,12 @@ namespace RTE {
 			    expectedModule.official != actualModule.official ||
 			    expectedModule.userdata != actualModule.userdata ||
 			    expectedModule.root != actualModule.root) {
-				NetIdentityMismatch mismatch = MakeMismatch("module_metadata", NetRejectReason::ModuleManifestMismatch, ModuleLabel(expectedModule), ModuleLabel(actualModule), "module metadata does not match");
+				NetIdentityMismatch mismatch = MakeMismatch("module_metadata", NetRejectReason::ModuleManifestMismatch, ModuleLabel(expectedModule), ModuleLabel(actualModule), "module metadata does not match: " + actualModule.fileName);
 				mismatch.moduleName = actualModule.fileName;
 				return mismatch;
 			}
 			if (expectedModule.contentHash != actualModule.contentHash) {
-				NetIdentityMismatch mismatch = MakeHashMismatch("module_content_hash", NetRejectReason::ModuleManifestMismatch, expectedModule.contentHash, actualModule.contentHash, "module content hash does not match");
+				NetIdentityMismatch mismatch = MakeHashMismatch("module_content_hash", NetRejectReason::ModuleManifestMismatch, expectedModule.contentHash, actualModule.contentHash, "module content hash does not match: " + actualModule.fileName);
 				mismatch.moduleName = actualModule.fileName;
 				return mismatch;
 			}

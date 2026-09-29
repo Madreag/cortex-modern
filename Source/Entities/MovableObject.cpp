@@ -1486,6 +1486,14 @@ bool MovableObject::OnMOHit(HitData& hd) {
 	return hd.Terminate[hd.RootBody[HITOR] == this ? HITOR : HITEE] = false;
 }
 
+void MovableObject::ResetCollisionResults() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_LastCollisionSimFrameNumber, m_MOIDHit, m_TerrainMatHit, m_ParticleUniqueIDHit); });
+	m_LastCollisionSimFrameNumber = std::numeric_limits<unsigned int>::max();
+	m_MOIDHit = g_NoMOID;
+	m_TerrainMatHit = g_MaterialAir;
+	m_ParticleUniqueIDHit = 0;
+}
+
 unsigned char MovableObject::HitWhatTerrMaterial() const {
 	return m_LastCollisionSimFrameNumber == g_MovableMan.GetSimUpdateFrameNumber() ? m_TerrainMatHit : g_MaterialAir;
 }

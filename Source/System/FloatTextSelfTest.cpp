@@ -1,6 +1,7 @@
 #include "FloatTextSelfTest.h"
 
 #include "FloatText.h"
+#include "InputScript.h"
 
 #include "allegro.h"
 
@@ -23,6 +24,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <iterator>
 #include <locale>
@@ -447,6 +450,29 @@ namespace RTE::FloatTextSelfTest {
 			}
 		}
 
+		std::string ProbeInputScriptVectors() {
+			const std::filesystem::path path = "input-script-locale.txt";
+			{
+				std::ofstream script(path);
+				script << "player=0 1 2 AIM=+1.5,-0.25 MOUSE=-0.5,0.75\n";
+			}
+			std::string error;
+			const bool loaded = InputScript::Load(path.string(), &error);
+			std::filesystem::remove(path);
+			Vector aim, mouse;
+			if (!loaded || !InputScript::AimAt(0, 1, aim) || !InputScript::MouseAt(0, 1, mouse)) return "failed: " + error;
+			return Hex(aim.m_X) + "/" + Hex(aim.m_Y) + "/" + Hex(mouse.m_X) + "/" + Hex(mouse.m_Y);
+		}
+
+		std::string ProbeSettingsDeltaTime() {
+			const float previous = g_TimerMan.GetDeltaTimeSecs();
+			Reader reader(std::make_unique<std::istringstream>("0.125\n"), "settings-locale.ini");
+			g_SettingsMan.ReadProperty("DeltaTime", reader);
+			const std::string result = Hex(g_TimerMan.GetDeltaTimeSecs());
+			g_TimerMan.SetDeltaTimeSecs(previous);
+			return result;
+		}
+
 		template <class FloatType> FloatType ReadThroughReader(const std::string& text) {
 			Reader reader(std::make_unique<std::istringstream>(text), "float-text-selftest.ini");
 			FloatType value = 0;
@@ -491,11 +517,18 @@ namespace RTE::FloatTextSelfTest {
 			return static_cast<std::ostringstream*>(writer.GetStream())->str();
 		}
 
-		/// These objects are deliberately never destroyed. Destroying a MovableObject before the engine is up
-		/// walks MovableMan::ForgetDestroyedObject into g_LuaMan, which does not exist yet; the probes are here
-		/// for the text codec, not for entity lifetime, so they keep their four objects for the process rather
-		/// than building a manager graph to satisfy a destructor.
-		template <class EntityType> EntityType& KeptAlive() { return *(new EntityType()); }
+		std::string ProbeIntegerWriter() {
+			Writer writer(std::make_unique<std::ostringstream>());
+			writer << 1234567 << "|" << -1234567890LL << "|" << 1234567890123456789ULL;
+			return static_cast<std::ostringstream*>(writer.GetStream())->str();
+		}
+
+		std::string ProbeIntegerReader() {
+			Reader reader(std::make_unique<std::istringstream>("12.345\n"), "integer-locale.ini");
+			int value = 0;
+			reader >> value;
+			return std::to_string(value);
+		}
 
 		/// Both sites write the canonical hexadecimal spelling, so their packed text is the same on every platform.
 		constexpr const char* ArmHandTargetText = "0x1.8p+0|-0x1p-2|0x1.8p-1|1|reach";
@@ -504,20 +537,20 @@ namespace RTE::FloatTextSelfTest {
 
 		std::string ProbeArmHandTarget() {
 			const std::string packed = ArmHandTargetText;
-			Arm& arm = KeptAlive<Arm>();
+			Arm arm;
 			arm.AddHandTargetFromSave(packed);
 			const std::vector<std::string> saved = arm.GetHandTargetsForSave();
 			return saved.size() == 1 ? saved[0] : "targets=" + std::to_string(saved.size());
 		}
 
 		std::string ProbePieMenuState() {
-			PieMenu& menu = KeptAlive<PieMenu>();
+			PieMenu menu;
 			menu.UnpackInteractionState(PieMenuStateText);
 			return menu.PackInteractionState();
 		}
 
 		std::string ProbeInheritedRotAngleDegOffset() {
-			Arm& arm = KeptAlive<Arm>();
+			Arm arm;
 			Reader fractional(std::make_unique<std::istringstream>("1.5\n"), "float-text-selftest.ini");
 			arm.ReadProperty("InheritedRotAngleDegOffset", fractional);
 			const float fractionalOffset = arm.GetInheritedRotAngleOffset();
@@ -527,7 +560,7 @@ namespace RTE::FloatTextSelfTest {
 		}
 
 		std::string ProbeCustomNumberValue() {
-			Arm& arm = KeptAlive<Arm>();
+			Arm arm;
 			Reader reader(std::make_unique<std::istringstream>("NumberValue\n\tFloatTextKey = 1.5\n"), "float-text-selftest.ini");
 			arm.ReadProperty("AddCustomValue", reader);
 			return Hex(arm.GetNumberValue("FloatTextKey"));
@@ -595,6 +628,8 @@ namespace RTE::FloatTextSelfTest {
 			CheckHexFloatCanonical();
 			std::cout << Tag << " stage=hexfloat" << std::endl;
 			static const LocaleProbe probes[] = {
+			    {"input_script_vectors", ProbeInputScriptVectors, "0x3fc00000/0xbe800000/0xbf000000/0x3f400000"},
+			    {"settings_delta_time", ProbeSettingsDeltaTime, "0x3e000000"},
 			    {"reader_float", ProbeReaderFloat, "0x3fc00000/0x3f800000"},
 			    {"reader_double", ProbeReaderDouble, "0xbfb999999999999a/0xbff0000000000000"},
 			    // 0x3f800000 is the answer when Reader::c_ReadFloatsAsFloats is false: flipping that switch flips this.
@@ -602,6 +637,8 @@ namespace RTE::FloatTextSelfTest {
 			    // Measured on the pre-change build: the stream stored an infinity, and zero on underflow.
 			    {"reader_out_of_range", ProbeReaderOutOfRange, "0x7ff0000000000000:fail/0xfff0000000000000:fail/0x0:fail"},
 			    {"writer_float", ProbeWriter, "1.5|-0.1"},
+			    {"writer_integer", ProbeIntegerWriter, "1234567|-1234567890|1234567890123456789"},
+			    {"reader_integer_prefix", ProbeIntegerReader, "12"},
 			    {"arm_hand_target", ProbeArmHandTarget, ArmHandTargetText},
 			    {"pie_menu_cursor_angle", ProbePieMenuState, PieMenuStateText},
 			    {"attachable_deg_offset", ProbeInheritedRotAngleDegOffset, nullptr},

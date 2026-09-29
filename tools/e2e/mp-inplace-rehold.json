@@ -48,7 +48,8 @@
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always"
           },
-          "start_delay_s": 0
+          "start_delay_s": 0,
+          "probe": "mp-inplace-rehold.observe.probe.json"
         },
         {
           "name": "client",
@@ -140,9 +141,35 @@
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always"
           },
-          "start_delay_s": 5
+          "start_delay_s": 5,
+          "probe": "mp-inplace-rehold.observe.probe.json"
         }
-      ]
+      ],
+      "behavior_gate": {
+        "kind": "rehold",
+        "target": "client",
+        "observers": [
+          "host",
+          "survivor"
+        ],
+        "holds": 2,
+        "reports": {
+          "host": "host-match.json",
+          "survivor": "survivor-match.json"
+        },
+        "ticks": {
+          "host": 1200,
+          "survivor": 1200
+        },
+        "steady_peers": [
+          "host",
+          "survivor"
+        ],
+        "stall_ticks": [
+          500,
+          653
+        ]
+      }
     }
   ],
   "checklist": [
@@ -162,7 +189,8 @@
         "resync failed",
         "lockstep stopped",
         "desync at frame"
-      ]
+      ],
+      "gate": "scenario-behavior"
     },
     {
       "id": "rehold-200-client-plays-on",
@@ -180,7 +208,8 @@
         "resync failed",
         "lockstep stopped",
         "desync at frame"
-      ]
+      ],
+      "gate": "scenario-behavior"
     },
     {
       "id": "rehold-200-survivor-plays-on",
@@ -198,7 +227,8 @@
         "resync failed",
         "lockstep stopped",
         "desync at frame"
-      ]
+      ],
+      "gate": "scenario-behavior"
     }
   ]
 }

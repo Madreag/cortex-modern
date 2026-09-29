@@ -9,7 +9,7 @@
 
 namespace RTE {
 
-	/// One asynchronous HTTPS JSON request, run off the caller's thread (a worker thread on Windows,
+	/// One asynchronous HTTPS JSON request, run off the caller's thread (a worker thread on Windows/Linux,
 	/// the session's queue on macOS). The caller owns the object, polls it
 	/// without blocking, and destroys it only after Poll() reports Done or after Cancel() joined.
 	/// One NetHttpClient serves exactly one request: Start() on a used object finishes an error

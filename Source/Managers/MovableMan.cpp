@@ -2056,7 +2056,7 @@ void MovableMan::ForgetDestroyedObject(MovableObject* mo) {
 			std::erase_if(*held, [mo](const auto& entry) { return entry.second == mo; });
 		}
 	}
-	g_LuaMan.ForgetDestroyedRegisteredMO(mo);
+	if (LuaMan::IsConstructed()) g_LuaMan.ForgetDestroyedRegisteredMO(mo);
 }
 
 MovableObject* MovableMan::ViewIfSpeculating(MovableObject* found) const {
@@ -3715,15 +3715,8 @@ bool MovableMan::RunPurgeSelfTest() {
 }
 
 void MovableMan::RestartSimUpdateFrameNumber() {
-	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
-	for (const auto& [uid, object]: m_KnownObjects) {
-		if (!object) continue;
-		object->TouchCheckpoint();
-		object->m_MOIDHit = g_NoMOID;
-		object->m_TerrainMatHit = g_MaterialAir;
-		object->m_ParticleUniqueIDHit = 0;
-		object->m_LastCollisionSimFrameNumber = std::numeric_limits<unsigned int>::max();
-	}
+	std::lock_guard<std::mutex> lock(m_ObjectRegisteredMutex);
+	for (const auto& [id, object]: m_KnownObjects) object->ResetCollisionResults();
 	m_SimUpdateFrameNumber = 0;
 }
 

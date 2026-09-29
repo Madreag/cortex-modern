@@ -433,6 +433,7 @@ GUIControlManager::~GUIControlManager() {
 
 bool GUIControlManager::Create(GUIScreen* Screen, GUIInput* Input, const std::string& SkinDir, const std::string& SkinFilename) {
 	assert(Screen && Input);
+	Destroy();
 
 	m_Screen = Screen;
 	m_Input = Input;

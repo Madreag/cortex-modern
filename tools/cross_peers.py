@@ -35,6 +35,19 @@ LIMIT = 4_000_000_000
 MST = dt.timezone(dt.timedelta(hours=-7))
 
 
+def setting_pair(value):
+    key, separator, setting = value.partition('=')
+    if not separator or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', key) or any(c in setting for c in '\r\n'):
+        raise argparse.ArgumentTypeError('settings require KEY=VALUE on one line')
+    return key, setting
+
+
+def render_cap_hz(value):
+    if str(value) not in ('0', '60'):
+        raise argparse.ArgumentTypeError('[feel] invalid render settings: expected RenderCapHz = 0 or 60')
+    return int(value)
+
+
 def write_json(path, value):
     path=Path(path)
     temporary=path.with_name(path.name+f'.incoming-{os.getpid()}-{time.monotonic_ns()}')
@@ -76,8 +89,12 @@ def with_lane(value):
     return value
 
 
-def load_boxes(path):
+def load_boxes(path, roster='three-way'):
     manifest = with_lane(json.loads(Path(path).read_text(encoding='utf-8-sig')))
+    if roster is not None:
+        manifest['instances'] = [peer for peer in manifest['instances'] if not peer.get('rosters') or roster in peer['rosters']]
+        active = {peer['box'] for peer in manifest['instances']}
+        manifest['boxes'] = [box for box in manifest['boxes'] if box['name'] in active]
     boxes, peers = manifest['boxes'], manifest['instances']
     by_name = {box['name']: box for box in boxes}
     if len({box['name'].casefold() for box in boxes}) != len(boxes) or len({p['name'].casefold() for p in peers}) != len(peers):
@@ -157,8 +174,13 @@ def schedule_for(options, peers, boxes):
     return faults
 
 
+def require_distinct_machines(preflights):
+    if len({value['machine_id'] for value in preflights.values()}) != len(preflights):
+        raise RuntimeError('each declared box must resolve to a distinct real machine')
+
+
 def make_plan(options):
-    manifest = load_boxes(options.boxes)
+    manifest = load_boxes(options.boxes, options.roster)
     boxes = {b['name']: b for b in manifest['boxes']}
     peers = manifest['instances']
     hosts = [p for p in peers if p['name'] == options.host or p['box'] == options.host]
@@ -186,8 +208,8 @@ def make_plan(options):
                  '-net-match-service-e2e', '-net-port', str(peer['port_block'][0]),
                  '-net-match-ticks', str(options.ticks - 1), '-net-match-peers', str(len(peers)),
                  '-net-match-humans', str(sum(p.get('seat', 'player') == 'player' for p in peers)),
-                 '-net-match-mode', 'coop-pve' if options.roster == 'ai-heavy' else 'pvpve',
-                 '-net-match-cpu-slots', '2' if options.roster == 'ai-heavy' else '1',
+                 '-net-match-mode', 'pvp-skirmish' if options.roster == 'four-way' else 'coop-pve' if options.roster == 'ai-heavy' else 'pvpve',
+                 '-net-match-cpu-slots', '0' if options.roster == 'four-way' else '2' if options.roster == 'ai-heavy' else '1',
                  '-net-match-service-preset', 'Multi Box Combat', '-net-match-service-module', 'UserScenes.rte',
                  '-net-match-service-scene', options.scene, '-net-match-service-scene-module', 'Base.rte',
                  '-net-match-auto-delay', '-net-local-prediction', 'on', '-net-ice', 'on', '-net-player-name', peer['name'],
@@ -206,7 +228,7 @@ def make_plan(options):
             incarnation=0, root=root, own=own, repo=box['tree'], executable=box['executable'], flags=flags,
             userdata=own+'/engine/runtime/Userdata', participant_key_root=own+'/engine/runtime/Userdata',
             port_block=peer['port_block'], under_load_by_design=box['peers_per_box']>1,
-            env={'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
+            env={**box.get('environment', {}), 'CCCP_HEADLESS': '1', 'PYTHONDONTWRITEBYTECODE': '1', 'CC_TEST_CROSS_RECORDS': own + '/events.jsonl',
                  'CC_TEST_CROSS_RUN': stem, 'CC_TEST_CROSS_INSTANCE': peer['name'], 'CC_TEST_CROSS_EXECUTION': 'process-0',
                  'CC_TEST_CROSS_INCARNATION': '0', 'CC_TEST_NET_UI_SCRIPT': own + '/probe.json',
                  'CC_TEST_CROSS_RECOVERIES': own + '/recoveries.json',
@@ -214,6 +236,10 @@ def make_plan(options):
             settings={}, roster=options.roster, scene=options.scene,
             initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
             faults=[f for f in faults if f['peer'] == peer['name']], barriers=[b for b in barriers if b['peer']==peer['name']]))
+        if box['kind'] == 'windows-local':
+            specs[-1]['settings'] = dict(options.local_setting)
+            if options.local_render_cap is not None:
+                specs[-1]['render_cap'] = options.local_render_cap
         specs[-1]['recoveries']=[f for f in specs[-1]['faults'] if f['action']!='brain-eliminate']
         specs[-1]['forced_ends']=[f for f in faults if f['action']=='brain-eliminate']
         if specs[-1]['barriers']:
@@ -419,7 +445,7 @@ def preflight_payload(path):
 
 def stage_combat(run, spec):
     from feel_measure import private_settings
-    private_settings(run, 60)
+    private_settings(run, spec.get('render_cap', 60))
     module = Path(run.cwd) / 'Userdata/UserScenes.rte'
     module.mkdir(exist_ok=True)
     for source, target in [('CrossCombat.lua', 'CrossCombat.lua'), ('CrossCombat.ini', 'Index.ini')]:
@@ -469,6 +495,13 @@ def retain_checkpoints(run, spec, *, final=False):
 
 def prepare_instance(spec, pin, box, runtime=None):
     from run_sim_test import make_run, seed_settings
+    if box['kind'] != 'windows-local' and (spec.get('settings') or 'render_cap' in spec):
+        raise ValueError('local settings and render cap require a windows-local instance')
+    cap = render_cap_hz(spec.get('render_cap', 60))
+    settings = {'SessionDirectoryUrl': f'127.0.0.1:{box["directory_port"]}', 'SessionDirectoryCertSha256': pin,
+                'SessionDirectoryInstallKey': f'cross-{spec["peer"]}-install', 'NetworkIceEnable': '1',
+                'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
+    settings.update(spec.get('settings', {}))
     own = Path(spec['own']); own.mkdir(parents=True, exist_ok=False)
     rows = []
     for start in range(1, spec['ticks'] + 1, 240):
@@ -487,20 +520,30 @@ def prepare_instance(spec, pin, box, runtime=None):
                                           dict(difficulty=100, ai_skill=100, fog=True, scene='Ketanot Hills', scene_module='Base.rte', **teams)])
     write_json(own / 'bot.json', [dict(round=0, **{'from': 3601, 'to': spec['ticks']})] if spec['ticks'] >= 3601 else [])
     write_json(own / 'probe.json', dict(schema=1, timeout_ms=120000, activate_at_tick=1, activate_phase='Running', repeat_rounds=True, steps=[
-        dict(op='assert_window', equals=dict(width=960, height=540)),
+        dict(op='assert_window', equals=dict(width=int(settings.get('ResolutionX', 960)), height=int(settings.get('ResolutionY', 540)))),
         dict(op='assert_buy', input_player=0), dict(op='assert_pie', input_player=0), dict(op='finish')]))
     if box['kind'] == 'posix-ssh':
+        configure_posix_box(box)
         os.environ['CCCP_TEST_BINARY'] = spec['executable']
         os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform=='darwin' else 'off'
-    settings = {'SessionDirectoryUrl': f'127.0.0.1:{box["directory_port"]}', 'SessionDirectoryCertSha256': pin,
-                'SessionDirectoryInstallKey': f'cross-{spec["peer"]}-install', 'NetworkIceEnable': '1',
-                'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
     run = make_run(Path(spec['repo']), spec['flags'], own / 'engine', timeout=spec['timeout'], env=spec['env'], runtime=runtime)
     if runtime is None:
         stage_combat(run, spec)
     else:
         (own / 'engine/feel').mkdir(exist_ok=True)
     seed_settings(run, settings)
+    render_path = Path(run.cwd) / 'Userdata/FeelRender.ini'
+    render_path.write_text(f'RenderCapHz = {cap}\n', encoding='utf-8')
+    if '-feel-render-settings' in run.argv:
+        run.argv[run.argv.index('-feel-render-settings') + 1] = str(render_path)
+    else:
+        run.argv += ['-feel-render-settings', str(render_path)]
+    metadata = json.loads((Path(run.out) / 'runtime.json').read_text(encoding='utf-8'))
+    metadata.setdefault('settings_overrides', {}).update(settings)
+    metadata['settings_sha256'] = digest_file(Path(run.cwd) / 'Userdata/Settings.ini')
+    metadata['feel_render_settings'] = dict(path=str(render_path), sha256=digest_file(render_path))
+    metadata['render_cap'] = cap
+    write_json(Path(run.out) / 'runtime.json', metadata)
     return run
 
 
@@ -563,10 +606,21 @@ def seal_evidence(own):
             compress_closed_record(path, own)
 
 
+def configure_posix_box(box):
+    if sys.platform.startswith('linux'):
+        session = command(['systemctl', '--user', 'show-environment'], timeout=10, check=False)
+        for line in session.splitlines():
+            key, _, value = line.partition('=')
+            if key in ('DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR'):
+                os.environ[key] = value
+    os.environ.update(box.get('environment', {}))
+
+
 def read_capabilities(box, root):
     from run_sim_test import make_run
     assert_box_guard(box)
     if box['kind'] == 'posix-ssh':
+        configure_posix_box(box)
         os.environ['CCCP_TEST_BINARY'] = box['executable']
         os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform == 'darwin' else 'off'
     run = make_run(Path(box['tree']), ['-net-cross-capabilities'], root / 'capabilities', timeout=30,
@@ -661,6 +715,14 @@ def launch_guard_selftest(root):
     return result
 
 
+def refuse_mixed_build(preflight, box, spec, run):
+    """An engine whose runner hashed another executable than this box's preflight is a mixed build, never a match."""
+    expected, actual = preflight.get('executable_sha256'), run.record.get('exe_sha256')
+    if not expected or actual != expected:
+        raise RuntimeError(f'{box["name"]}: mixed build refused: {spec["peer"]} incarnation {spec["incarnation"]} started '
+                           f'executable sha256 {actual} but the preflight hashed {expected}')
+
+
 def run_payload(path):
     from run_sim_test import make_run
     from feel.records import CaptureSealer, RecoveryLedger, NativeFaultEffects
@@ -675,6 +737,7 @@ def run_payload(path):
     try:
         assert_box_guard(box)
         write_json(root / 'payload-owned.json', dict(box=box['name'], runner_pid=os.getpid()))
+        preflight = json.loads((root / 'preflight.json').read_text(encoding='utf-8'))
         if box['kind'] == 'windows-local' and len(payload['specs']) != 1:
             raise RuntimeError('this lane permits only one local engine at a time; dry-run supports larger manifests')
         capabilities = read_capabilities(box, root)
@@ -697,6 +760,7 @@ def run_payload(path):
             runs[spec['peer']] = run
             before_launch=time.monotonic()*1000
             run.start(); started[spec['peer']] = time.monotonic()
+            refuse_mixed_build(preflight, box, spec, run)
             readers[spec['peer']] = Tail(Path(spec['own']) / 'events.jsonl')
             capture_sealers[spec['peer']] = CaptureSealer(spec['own'])
             effect_readers[spec['peer']]=NativeFaultEffects(Path(spec['own'])/'engine/stdout.log',spec['faults'],spec['incarnation'])
@@ -786,6 +850,7 @@ def run_payload(path):
                         effect_readers[peer]=NativeFaultEffects(Path(new_spec['own'])/'engine/stdout.log',new_spec['faults'],new_spec['incarnation'])
                         effect_rows[peer]=[]
                         fresh.start(); started[peer] = time.monotonic()
+                        refuse_mixed_build(preflight, box, new_spec, fresh)
                         write_json(Path(new_spec['own']) / 'instance.json', new_spec)
                         write_json(Path(new_spec['own']) / 'started.json', dict(peer=peer, incarnation=new_spec['incarnation'], engine_pid=engine_pid(fresh)))
                         continue
@@ -906,7 +971,8 @@ def run_plan(plan, root):
             else:
                 if box.get('guard_file') and not remote_exists(box, box['guard_file']):
                     raise RuntimeError(f'{box["name"]}: inventory guard active: {box["guard_file"]} absent')
-                mkdir = f'New-Item -ItemType Directory -Path {quote_ps(box_root)} | Out-Null' if box['kind'] == 'windows-task' else f'mkdir {shlex.quote(box_root)}'
+                mkdir = (f'New-Item -ItemType Directory -Path {quote_ps(box_root)} | Out-Null' if box['kind'] == 'windows-task'
+                         else f'mkdir -p {shlex.quote(str(PurePosixPath(box_root).parent))} && mkdir {shlex.quote(box_root)}')
                 command(['ssh', box['ssh'], mkdir])
                 stage_remote(box, local_payload, box_root + '/payload.json')
                 command(remote_command(box, [box['python'], box['tree'] + '/tools/cross_peers.py', '--preflight', box_root + '/payload.json']), timeout=180)
@@ -914,8 +980,7 @@ def run_plan(plan, root):
                 preflights[box['name']] = json.loads((local_box / 'preflight.json').read_text())
             payloads[box['name']] = (payload, local_payload, box_root)
         reference = preflights[local['name']]
-        if len({p['machine_id'] for p in preflights.values()}) < 3:
-            raise RuntimeError('the manifest resolves to fewer than three real machines')
+        require_distinct_machines(preflights)
         for box in boxes.values():
             value = preflights[box['name']]
             if any(value[k] != reference[k] for k in ('content', 'modules', 'fixture')):
@@ -1047,7 +1112,7 @@ def run_plan(plan, root):
         write_json(root / 'manifest.json', plan)
     import cross_report
     result = cross_report.build_report(root)
-    return 0 if (result.get('gate_b_eligible') if plan['scenario']=='match' else result['passed']) else 1
+    return 0 if result['v1_passed'] else 1
 
 
 def parse_args(argv=None):
@@ -1058,8 +1123,11 @@ def parse_args(argv=None):
                         help=f"the Mac inventory's live marker a Mac launch requires (or {MAC_GUARD_ENV}); no default")
     parser.add_argument('--out', type=Path, help='default: <lane scratch>/dry-run')
     parser.add_argument('--host', default='erol')
+    parser.add_argument('--local-setting', action='append', type=setting_pair, default=[], metavar='KEY=VALUE',
+                        help='seed windows-local after directory settings; repeatable, last value wins')
+    parser.add_argument('--local-render-cap', type=render_cap_hz, metavar='HZ', help='windows-local render cap: 0 or 60')
     parser.add_argument('--scenario', choices=['match', 'soak', 'chaos', 'endurance'], default='match')
-    parser.add_argument('--roster', choices=['three-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
+    parser.add_argument('--roster', choices=['three-way', 'four-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
     parser.add_argument('--scene', default='Grasslands')
     parser.add_argument('--ticks', type=int)
     parser.add_argument('--timeout', type=int, default=900)
@@ -1085,7 +1153,7 @@ def parse_args(argv=None):
         if MAC_GUARD is None and '{mac_guard}' in options.boxes.read_text(encoding='utf-8-sig'):
             parser.error(f"{options.boxes} guards the Mac with the live inventory marker: --mac-guard or {MAC_GUARD_ENV}")
         options.out = options.out or SCRATCH / 'dry-run'
-    options.ticks = options.ticks or (1201 if options.scenario == 'match' else 36000)
+    options.ticks = options.ticks or (1201 if options.scenario == 'match' else 72000 if options.scenario == 'soak' else 36000)
     if options.ticks < 2 or min(options.timeout, options.recovery_deadline_ms, options.capture_budget_ms) <= 0:
         parser.error('tick budget and deadlines must be positive')
     if options.fullstate_every < 0: parser.error('fullstate cadence must be nonnegative')

@@ -30,12 +30,15 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <clocale>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <locale>
 #include <mutex>
 #include <ostream>
 #include <sstream>
@@ -234,6 +237,23 @@ const std::string System::s_ZippedModulePackageExtension = ".zip";
 const std::unordered_set<std::string> System::s_SupportedExtensions = {".ini", ".txt", ".lua", ".cfg", ".bmp", ".png", ".jpg", ".jpeg", ".wav", ".ogg", ".mp3", ".flac"};
 
 void System::Initialize(const char* thisExePathAndName) {
+	if (const char* localeName = std::getenv("CC_TEST_PROCESS_LOCALE"); localeName && std::getenv("CCCP_HEADLESS")) {
+		// Select the test locale before reading settings and presets.
+		std::string cxxLocale = "unavailable";
+		try {
+			std::locale::global(std::locale(localeName));
+			cxxLocale = std::locale().name();
+		} catch (const std::exception&) {
+			// Darwin's generic libstdc++ has no named C++ locales; the C locale still applies there.
+		}
+		if (!std::setlocale(LC_ALL, localeName)) {
+			std::cerr << "[test-locale] FAIL unavailable locale " << localeName << std::endl;
+			std::exit(EXIT_FAILURE);
+		}
+		char number[32]{};
+		std::snprintf(number, sizeof(number), "%.1f", 1.5);
+		std::cout << "[test-locale] locale=" << localeName << " cxx=" << cxxLocale << " decimal_probe=" << number << std::endl;
+	}
 	s_ThisExePathAndName = std::filesystem::path(thisExePathAndName).generic_string();
 
 	s_WorkingDirectory = std::filesystem::current_path().generic_string();

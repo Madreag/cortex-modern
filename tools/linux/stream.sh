@@ -46,7 +46,9 @@ SAN_OPTS=(--buildtype=debugoptimized -Db_lto=false -Db_pch=false -Db_lundef=fals
 # The TSan suite's shards: the script-graph walk alone, the long rows, then every other row of SELFTESTS.
 TSAN_SHARD_A="script-graph"
 TSAN_SHARD_B="preview-binding-exhaustive preview-invariance save-refusal-diagnosis net-match"
-TSAN_ENV=(CCCP_TEST_BINARY=$TSAN_BIN TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:external_symbolizer_path=$SYMBOLIZER)
+TBBLIB=${TBBLIB:-$LANE/deps/tbb-tsan/lib}
+TSAN_ENV=(CCCP_TEST_BINARY=$TSAN_BIN LD_LIBRARY_PATH=$TBBLIB
+  TSAN_OPTIONS=suppressions=$REPO/tools/sanitizers/tsan.supp:halt_on_error=0:second_deadlock_stack=1:external_symbolizer_path=$SYMBOLIZER)
 UBSAN_ENV=UBSAN_OPTIONS=suppressions=$REPO/tools/sanitizers/ubsan.supp:print_stacktrace=1:halt_on_error=0:external_symbolizer_path=$SYMBOLIZER
 ASAN_ENV=(CCCP_TEST_BINARY=$ASAN_BIN $UBSAN_ENV
   ASAN_OPTIONS=detect_leaks=0:abort_on_error=0:halt_on_error=0:symbolize=1:external_symbolizer_path=$SYMBOLIZER)
@@ -90,6 +92,8 @@ HEAD=$(git -C $REPO rev-parse HEAD 2>/dev/null)
 [ "$HEAD" = "$SHA" ] || fail "HEAD $HEAD != $SHA"
 N=$($PY -c "import sys; sys.path.insert(0, '$REPO/tools'); import run_selftests as r; print(len(r.SELFTESTS))")
 say "repo HEAD $HEAD; suite N=$N (len(SELFTESTS))"
+$PY $REPO/tools/sanitizers/check_ubsan_supp.py --self-test > $EV/ubsan-suppression-check.log 2>&1 || fail "UBSan suppression validation"
+cp $REPO/tools/sanitizers/ubsan.supp $EV/ubsan.supp
 
 if want gcc; then
   say "gcc build start"
@@ -170,6 +174,11 @@ fi
 
 TSAN_PIDS=()
 if want tsan; then
+  if [ ! -f "$TBBLIB/libtbb.so.12" ]; then
+    bash $REPO/tools/linux/tsan_tbb.sh "${TBBLIB%/lib}" > $EV/tbb-tsan-build.log 2>&1 || fail "instrumented TBB build"
+  fi
+  nm -D "$TBBLIB/libtbb.so.12" | grep -q __tsan_func_entry || fail "TBB is not instrumented"
+  echo "$TBBLIB" > $EV/tsan-tbb-library.txt
   say "tsan build start"
   if [ ! -f $REPO/build-tsan/build.ninja ]; then
     ( CC=clang CXX=clang++ meson setup $REPO/build-tsan $REPO "${SAN_OPTS[@]}" -Dgns_root=$DEPS/gns -Db_sanitize=thread ) > $EV/engine-tsan-setup.log 2>&1 || say "tsan meson setup FAILED (engine-tsan-setup.log)"
@@ -266,12 +275,13 @@ fi
 if want defects; then
   for s in S5 S4 S4L S4b readback; do
     [ -d $EV/$s ] || continue
-    $PY $INV/extract_defects.py $EV/$s --out $EV/$s/DEFECTS.json --driver-hint tools/run_selftests.py > $EV/$s-extract.log 2>&1
+    $PY $INV/extract_defects.py $EV/$s --out $EV/$s/DEFECTS.raw.json --driver-hint tools/run_selftests.py > $EV/$s-extract.log 2>&1
+    $PY $REPO/tools/linux/normalize_suite_defects.py $EV/$s --input $EV/$s/DEFECTS.raw.json --out $EV/$s/DEFECTS.json >> $EV/$s-extract.log 2>&1
     say "$s DEFECTS: $($PY -c "import json; d=json.load(open('$EV/$s/DEFECTS.json')); print('defects', d['defect_count'], 'hard', d['hard_count'])" 2>&1 | tail -1)"
   done
   for s in S4 S4L S4b; do
     [ -d $EV/$s ] || continue
-    $PY $HERE/sanitizer_digest.py $EV/$s --out $EV/$s/sanitizer-digest > $EV/$s-digest.log 2>&1
+    $PY $REPO/tools/linux/sanitizer_digest.py $EV/$s --ubsan-supp $REPO/tools/sanitizers/ubsan.supp --out $EV/$s/sanitizer-digest > $EV/$s-digest.log 2>&1
     say "$s sanitizer digest: $(tail -1 $EV/$s-digest.log)"
   done
 fi

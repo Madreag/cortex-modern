@@ -1,10 +1,13 @@
 import copy
 import gzip
+import contextlib
+import io
 import json
 import zlib
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cross_peers
@@ -17,6 +20,32 @@ class CrossDriverTests(unittest.TestCase):
         for outcome in ({},{'exit_code':1},{'exit_code':137}):
             with self.assertRaisesRegex(RuntimeError,'stop the other peers'):
                 cross_peers.require_payload_success(dict(name='EDITH'),outcome)
+
+    def test_payload_refuses_an_engine_started_on_another_build_than_its_preflight(self):
+        preflighted,started='a'*64,'b'*64
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)/'box'; root.mkdir()
+            spec=dict(peer='mac',role='host',incarnation=0,own=str(root/'mac/incarnation-0'),root=str(root),faults=[],
+                      flags=['-net-match-peers','3'],timeout=60)
+            (root/'payload.json').write_text(json.dumps(dict(box=dict(name='Mac',kind='posix-ssh'),specs=[spec],pin='pin')))
+            (root/'preflight.json').write_text(json.dumps(dict(box='Mac',executable_sha256=preflighted)))
+            class Run:
+                cwd=str(root)
+                def __init__(self): self.record={}
+                def start(self): self.record.update(started=True,pid=7,exe_sha256=started); return self
+                def poll(self): return 0
+                def finish(self): self.record.update(exit_code=0,timed_out=False); return self.record
+                def close(self): pass
+            def prepare(spec,_pin,_box,runtime=None):
+                Path(spec['own']).mkdir(parents=True); (Path(spec['own'])/'events.jsonl').touch(); return Run()
+            with patch.object(cross_peers,'assert_box_guard'),patch.object(cross_peers,'read_capabilities',return_value=dict(peer_limit=4)), \
+                 patch.object(cross_peers,'wait_for_payload_release'),patch.object(cross_peers,'prepare_instance',side_effect=prepare), \
+                 patch.object(cross_peers,'sample_memory',return_value=None),patch.object(cross_peers,'retain_checkpoints'), \
+                 patch.object(cross_peers,'box_load',return_value=[]),patch.object(cross_peers,'seal_evidence'):
+                verdict=cross_peers.run_payload(root/'payload.json')
+            error=json.loads((root/'payload-error.json').read_text())['error'] if (root/'payload-error.json').is_file() else 'accepted'
+            self.assertEqual(verdict,1,error)
+            self.assertIn('mixed build',error); self.assertIn(preflighted,error); self.assertIn(started,error)
 
     def test_rerun_keeps_deadlines_faults_barriers_and_instance_counts(self):
         plan=self.plan(); plan['deadlines'].update(launch_s=1234,recovery_ms=5678,capture_ms=912)
@@ -74,8 +103,95 @@ class CrossDriverTests(unittest.TestCase):
         patcher=patch.dict(cross_peers.os.environ,{'CC_CROSS_PEERS_MAC_GUARD':'/Users/erol/cortex-workers/test-inventory/exit.txt'})
         patcher.start(); self.addCleanup(patcher.stop)
 
-    def plan(self):
-        return cross_peers.make_plan(cross_peers.parse_args(['--lane','test-lane','--dry-run']))
+    def plan(self, *arguments):
+        return cross_peers.make_plan(cross_peers.parse_args(['--lane','test-lane','--dry-run', *arguments]))
+
+    def test_local_render_arm_stays_on_local_box_with_either_host(self):
+        for host in ('erol', 'edith'):
+            with self.subTest(host=host):
+                plan = self.plan('--host', host, '--roster', 'four-way', '--local-setting', 'ResolutionX=1920',
+                                 '--local-setting', 'ResolutionX=3840', '--local-setting', 'ResolutionY=2160',
+                                 '--local-render-cap', '0')
+                local = next(spec for spec in plan['specs'] if spec['box'] == 'EROL-PC')
+                self.assertEqual(local['settings'], {'ResolutionX': '3840', 'ResolutionY': '2160'})
+                self.assertEqual(local['render_cap'], 0)
+                self.assertEqual(local['role'], 'host' if host == 'erol' else 'player')
+                for spec in plan['specs']:
+                    if spec is local: continue
+                    self.assertEqual(spec['settings'], {})
+                    self.assertNotIn('render_cap', spec)
+                    self.assertNotIn('3840', json.dumps(spec))
+                    self.assertNotIn('2160', json.dumps(spec))
+                restarted = cross_peers.restart_spec(local, {'budget_tick': 1})
+                self.assertEqual(restarted['settings'], local['settings'])
+                self.assertEqual(restarted['render_cap'], 0)
+
+    def test_local_render_cap_refuses_values_the_engine_refuses(self):
+        for cap in ('0', '60'):
+            self.assertEqual(self.plan('--local-render-cap', cap)['specs'][0]['render_cap'], int(cap))
+        for cap in ('144', '-1', 'garbage'):
+            with self.subTest(cap=cap), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as error:
+                    cross_peers.parse_args(['--lane', 'test-lane', '--local-render-cap', cap, '--dry-run'])
+                self.assertEqual(error.exception.code, 2)
+                self.assertIn('[feel] invalid render settings: expected RenderCapHz = 0 or 60', stderr.getvalue())
+
+    def test_prepare_instance_seeds_local_settings_after_directory_on_fresh_and_retained_runtime(self):
+        import run_sim_test
+        plan = self.plan()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec = copy.deepcopy(plan['specs'][0])
+            box = next(box for box in plan['boxes'] if box['name'] == spec['box'])
+            spec.update(own=str(root / 'first'), settings={'ResolutionX': '3840', 'ResolutionY': '2160',
+                        'SessionDirectoryUrl': '', 'NetworkShowDiagnostics': '0'}, render_cap=0)
+
+            def make_run(repo, flags, out, **kwargs):
+                runtime = kwargs.get('runtime') or out / 'runtime'
+                out.mkdir(parents=True)
+                (runtime / 'Userdata').mkdir(parents=True, exist_ok=True)
+                if not (runtime / 'Userdata/Settings.ini').exists():
+                    (runtime / 'Userdata/Settings.ini').write_text('Settings\n\tResolutionX = 960\n\tResolutionY = 540\n')
+                cross_peers.write_json(out / 'runtime.json', {'settings_overrides': {}} if not kwargs.get('runtime') else {})
+                return SimpleNamespace(out=out, cwd=runtime, argv=['engine', *flags])
+
+            retained = None
+            for incarnation in (0, 1):
+                with self.subTest(incarnation=incarnation), patch.object(run_sim_test, 'make_run', side_effect=make_run):
+                    spec['own'] = str(root / f'incarnation-{incarnation}')
+                    run = cross_peers.prepare_instance(spec, 'test-pin', box, runtime=retained)
+                    retained = run.cwd
+                    ini = (run.cwd / 'Userdata/Settings.ini').read_text()
+                    self.assertIn('ResolutionX = 3840', ini)
+                    self.assertIn('ResolutionY = 2160', ini)
+                    self.assertNotIn(f'127.0.0.1:{box["directory_port"]}', ini)
+                    self.assertIn('NetworkShowDiagnostics = 0', ini)
+                    self.assertEqual((run.cwd / 'Userdata/FeelRender.ini').read_text(), 'RenderCapHz = 0\n')
+                    flag = run.argv.index('-feel-render-settings')
+                    self.assertEqual(Path(run.argv[flag + 1]), run.cwd / 'Userdata/FeelRender.ini')
+                    self.assertEqual(run.argv.count('-feel-render-settings'), 1)
+                    probe = json.loads((Path(spec['own']) / 'probe.json').read_text())
+                    self.assertEqual(probe['steps'][0]['equals'], {'width': 3840, 'height': 2160})
+                    seeded = json.loads((run.out / 'runtime.json').read_text())['settings_overrides']
+                    self.assertEqual(seeded['SessionDirectoryCertSha256'], 'test-pin')
+                    for key, val in spec['settings'].items(): self.assertEqual(seeded[key], val)
+
+    def test_local_host_render_metric_reports_only_existing_wall_tps(self):
+        plan = self.plan()
+        spec = next(spec for spec in plan['specs'] if spec['peer'] == plan['host'])
+        spec.update(settings={'ResolutionX': '3840', 'ResolutionY': '2160'}, render_cap=0)
+        peers = {plan['host']: {'timing': {'steady_wall_tps': 59.75}}}
+        metric = cross_report.local_host_render(plan, peers)
+        self.assertEqual(metric['size'], '3840x2160')
+        self.assertEqual(metric['render_cap'], 0)
+        self.assertEqual(metric['wall_tps'], 59.75)
+        self.assertNotIn('passed', metric)
+        peers[plan['host']]['timing'] = {}
+        metric = cross_report.local_host_render(plan, peers)
+        self.assertIsNone(metric['wall_tps'])
+        self.assertIn('No wall TPS', metric['reason'])
+        plan['host'] = 'edith'
+        self.assertIsNone(cross_report.local_host_render(plan, peers))
 
     def test_declared_peer_count_matches_private_instances_on_a_box(self):
         manifest=json.loads((cross_peers.HERE/'cross_peers/boxes.json').read_text())
@@ -384,6 +500,8 @@ class CrossDriverTests(unittest.TestCase):
             self.assertIn('name="viewport"',page)
             self.assertNotIn('<script src=',page)
             self.assertNotIn('<link ',page)
+            self.assertIsNone(result['local_host_render']['wall_tps'])
+            self.assertIn('No wall TPS', page)
             self.assertEqual(len([r for r in result['requirements'] if isinstance(r['number'],int)]),71)
             self.assertTrue((root.parent/'index.html').is_file())
             own=cross_report.peer_root(root,plan,plan['specs'][0]); own.mkdir(parents=True,exist_ok=True)
@@ -398,8 +516,8 @@ class CrossDriverTests(unittest.TestCase):
     def test_report_requires_all_peers_shared_capture_and_binary_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)/'run'; root.mkdir()
-            plan=self.plan(); plan['ticks']=4; plan['fullstate_every']=2; plan['capture_rows_pending']=[]
-            plan['preflights']={b['name']:dict(machine_id=b['name']) for b in plan['boxes']}
+            plan=self.plan(); plan['ticks']=1201; plan['fullstate_every']=600; plan['capture_rows_pending']=[]
+            plan['preflights']={b['name']:dict(machine_id=b['name'],executable_sha256='c'*64) for b in plan['boxes']}
             (root/'manifest.json').write_text(json.dumps(plan))
             for spec in plan['specs']:
                 own=cross_report.peer_root(root,plan,spec); (own/'engine').mkdir(parents=True)
@@ -408,7 +526,7 @@ class CrossDriverTests(unittest.TestCase):
                 (box_root/'capabilities.json').write_text(json.dumps(dict(peer_limit=4)))
                 (box_root/'samples.jsonl').write_text(json.dumps(dict(peer=spec['peer'],incarnation=0,engine_pid=99,
                     elapsed_s=0,working_set=1000,private=1000,load=[]))+'\n')
-                (own/'record.json').write_text(json.dumps(dict(started=True,exit_code=0,elapsed_seconds=1,timed_out=False)))
+                (own/'record.json').write_text(json.dumps(dict(started=True,exit_code=0,elapsed_seconds=1,timed_out=False,exe_sha256='c'*64)))
                 (own/'trace.json').write_text(json.dumps(dict(runs=[dict(strings=dict(completion='completed'))])))
                 (own/'match-report.json').write_text(json.dumps(dict(exit_code=0,desync_check=dict(mismatches=0,compares=1,compare_margin=0))))
                 feel=own/'engine/feel'; feel.mkdir()
@@ -420,7 +538,7 @@ class CrossDriverTests(unittest.TestCase):
                     parts=[dict(path='raw.0.jsonl.gz',bytes=len(raw),lines=2,crc32=zlib.crc32(raw),first_sequence=0,last_sequence=1)])))
                 live=[dict(session='s',match='m',history_branch='initial',source_round=1,round=1,tick=t,
                     instance=spec['peer'],execution='one',incarnation=0,phase='live',wall_ms=t*20,gameplay_tick=True,
-                    effective_start_frame=1,sim_gated='a'*64,subsystems={key:'b'*64 for key in cross_report.REQUIRED_SUBSYSTEMS}) for t in range(1,5)]
+                    effective_start_frame=1,sim_gated='a'*64,subsystems={key:'b'*64 for key in cross_report.REQUIRED_SUBSYSTEMS}) for t in range(1,1202)]
                 (own/'live.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in live))
                 config=dict(type='adopted_config',peer_count=3,sim_tick_ms=1000/60,difficulty=50,
                     players=[dict(peer=p+1,team=p,human=True) for p in range(3)]+[dict(peer=0,team=3,human=False)],
@@ -430,9 +548,32 @@ class CrossDriverTests(unittest.TestCase):
                 (own/'engine/stdout.log').write_text(''.join(
                     f'[fullstate-context] tick={t} round=1 label=sample path=/instance/capture-{t}\n'
                     f'[fullstate] tick={t} hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round=1\n'
-                    f'[fullstate-scope] tick={t} round=1 label=sample per_peer=camera\n' for t in (1,2,4)))
+                    f'[fullstate-scope] tick={t} round=1 label=sample per_peer=camera\n' for t in (1,600,1200)))
+            complete = cross_report.build_report(root)
+            self.assertTrue(complete['diagnostic_passed'])
+            self.assertTrue(complete['v1_passed'])
+            own=cross_report.peer_root(root,plan,plan['specs'][-1]); name=plan['specs'][-1]['peer']
+            record=json.loads((own/'record.json').read_text())
+            (own/'record.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))
+            mixed=cross_report.build_report(root)
+            self.assertFalse(mixed['passed']); self.assertFalse(mixed['checks']['preflight_complete'])
+            self.assertEqual(mixed['oracles']['preflight']['status'],'FAIL')
+            self.assertTrue(any(f'{name} incarnation 0' in reason for reason in mixed['oracles']['preflight']['reasons']))
+            self.assertIn('c'*64,mixed['oracles']['preflight']['reason']); self.assertIn('d'*64,mixed['oracles']['preflight']['reason'])
+            self.assertEqual(mixed['oracles']['full_state']['status'],'VOID'); self.assertEqual(mixed['oracles']['live_hashes']['status'],'VOID')
+            self.assertTrue(cross_report.verdict_line(mixed).startswith('PREFLIGHT RED (mixed build)'))
+            (own/'record.json').write_text(json.dumps(record))
+            later=own.with_name('incarnation-1'); later.mkdir()
+            (later/'record.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))
+            restarted=cross_report.build_report(root)
+            self.assertFalse(restarted['checks']['preflight_complete'])
+            self.assertTrue(any(f'{name} incarnation 1' in reason for reason in restarted['oracles']['preflight']['reasons']))
+            (later/'record.json').unlink(); (later/'engine').mkdir(); (later/'engine/launch.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))
+            self.assertFalse(cross_report.build_report(root)['checks']['preflight_complete'])
+            (later/'engine/launch.json').write_text(json.dumps(record))
+            self.assertTrue(cross_report.build_report(root)['checks']['preflight_complete'])
+            (later/'engine/launch.json').unlink(); (later/'engine').rmdir(); later.rmdir()
             self.assertTrue(cross_report.build_report(root)['passed'])
-            own=cross_report.peer_root(root,plan,plan['specs'][-1])
             log=own/'engine/stdout.log'; saved=log.read_bytes(); log.unlink()
             missing=cross_report.build_report(root)
             self.assertFalse(missing['checks']['hold_evidence_complete'])
@@ -442,7 +583,7 @@ class CrossDriverTests(unittest.TestCase):
             (own/'live.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in unmapped))
             unkeyed=cross_report.build_report(root); name=plan['specs'][-1]['peer']
             self.assertFalse(unkeyed['passed']); self.assertEqual(unkeyed['peers'][name]['unkeyed'],1)
-            self.assertIn(f'{name}=3 frames (1 unkeyed: history_branch from tick 3)',cross_report.verdict_line(unkeyed))
+            self.assertIn(f'{name}=1200 frames (1 unkeyed: history_branch from tick 3)',cross_report.verdict_line(unkeyed))
             (own/'live.jsonl').write_bytes(rows)
             with (own/'live.jsonl').open('a') as stream: stream.write(json.dumps(live[-1])+'\n')
             failed=cross_report.build_report(root)
