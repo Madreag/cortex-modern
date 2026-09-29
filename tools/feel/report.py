@@ -467,7 +467,7 @@ def item9a_gates(run, peer='host', rows=None):
         'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
         'item9a_steady_stalls': pin(steady_stalls, '0 blocking waits before the injected spike', steady_stalls == 0, evidence),
-        'item9a_missing_frame_stalls': pin(missing, '0 steady missing-frame stalls', missing == 0, evidence),
+        'item9a_missing_frame_stalls': pin(missing, '0 steady missing-frame stalls', missing == 0, evidence, available=True),
         'item9a_longest_wait': pin(longest, '<= 50 ms', longest is not None and longest <= 50, evidence),
         'item9a_confirmed_horizon_lag': pin(horizon_lag_ms, '<= 50 ms behind the steady confirmed-tick clock, including recovery',
             horizon_lag_ms is not None and horizon_lag_ms <= 50, evidence),
@@ -496,7 +496,7 @@ def item9a_gates(run, peer='host', rows=None):
         pins['item9a_steady_stalls'] = pin(steady_stalls, '0 blocking waits before the actual injected spike', steady_stalls == 0, evidence)
         # The round counter includes the deliberately injected spike. Its steady interval ends at the actual injection.
         missing = steady_stalls if round_missing is not None else None
-        pins['item9a_missing_frame_stalls'] = pin(missing, '0 missing-frame stalls before the actual injected spike', missing == 0, evidence)
+        pins['item9a_missing_frame_stalls'] = pin(missing, '0 missing-frame stalls before the actual injected spike', missing == 0, evidence, available=True)
         spike_waits = sum(ms > 0 for tick, ms in waits if tick >= injection) if wait_fraction is not None else None
         pins['item9a_spike_waits'] = pin(spike_waits, '<= 1 blocking wait from the single injected spike through return',
                                        spike_waits is not None and spike_waits <= 1, evidence)
@@ -549,7 +549,7 @@ def item9a_gates(run, peer='host', rows=None):
             [host_path, survivor_path], dict(first_tick=held, last_tick=compare_through), available=bool(host_hashes) and bool(survivor_hashes))
         reholds = return_hold_violations(log)
         pins['item9a_no_rehold'] = pin(reholds, 'no seat is held within 100 frames after any return', not reholds, [log_path])
-    return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds),
+    return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds) and missing is not None,
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
                              confirmed_horizon_lag_ms=horizon_lag_ms,
@@ -572,7 +572,12 @@ def apply_tps_call(result, reference):
     evidence = original['evidence'] + [reference['evidence']]
     pins['item9a_wall_tps'] = pin(measured,
         '>= 59.5 after tick 300, including recovery time', measured is not None and measured >= 59.5, evidence)
-    result['tps_call'] = dict(reference=reference, absolute=original, minimum_tps=59.5, box_limited=baseline < 59.5)
+    relative_minimum = baseline * .95 if baseline < 59.5 else 59.5
+    result['tps_call'] = dict(reference=reference, absolute=original, minimum_tps=59.5, box_limited=baseline < 59.5,
+                              relative_minimum_tps=relative_minimum, relative_pass=measured is not None and measured >= relative_minimum)
+    horizon = pins.get('item9a_confirmed_horizon_lag')
+    if horizon and horizon.get('value') is not None and horizon.get('required') is False:
+        horizon['required'] = True
     result['pass_check'] = all(value['status'] == 'PASS' for value in pins.values() if value.get('required', True))
 
 
