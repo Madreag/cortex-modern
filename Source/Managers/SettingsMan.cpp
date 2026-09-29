@@ -368,7 +368,17 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 		}
 		SetAutosaveSeconds(seconds);
 	});
-	MatchProperty("SessionDirectoryUrl", { m_SessionDirectoryUrl = reader.ReadLineLiteral(); });
+	MatchProperty("SessionDirectoryUrl", {
+		// Slashes are URL data here. Leave the newline for Reader's indentation and line accounting;
+		// all ordinary preset strings retain Reader::ReadLine's comment syntax.
+		std::istream& stream = *reader.GetStream();
+		while (stream.peek() == ' ') stream.get();
+		m_SessionDirectoryUrl.clear();
+		for (int next = stream.peek(); next != std::char_traits<char>::eof() && next != '\n' && next != '\r' && next != '\t'; next = stream.peek()) {
+			m_SessionDirectoryUrl.push_back(static_cast<char>(stream.get()));
+		}
+		while (!m_SessionDirectoryUrl.empty() && m_SessionDirectoryUrl.back() == ' ') m_SessionDirectoryUrl.pop_back();
+	});
 	MatchProperty("SessionDirectoryInstallKey", { reader >> m_SessionDirectoryInstallKey; });
 	MatchProperty("SessionDirectoryCertSha256", { reader >> m_SessionDirectoryCertSha256; });
 	MatchProperty("NetworkPortMapEnable", { reader >> m_NetworkPortMapEnable; });
