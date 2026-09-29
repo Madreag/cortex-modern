@@ -20937,6 +20937,37 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// mp-rollback-lag at 100 ms one way: a returner trailing the round by 27 frames came back at delay 21, delivered every input about
+	// nine frames late and was held again 65 frames after its return.
+	bool TestAReturnerDelayCoversItsTrail(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto a = MakeCoordinatorConfig(1, 2, 0x9A62, 21, NetTransportLane::ControlReliable);
+		auto b = MakeCoordinatorConfig(2, 1, 0x9A62, 21, NetTransportLane::ControlReliable);
+		a.roundId = b.roundId = 62; a.relayToOtherPeers = true;
+		a.substituteSlowPeers = b.substituteSlowPeers = true;
+		a.timeoutMs = b.timeoutMs = 20000;
+		a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+		a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
+		if (!StartCoordinatorPair(49553, hostWire, clientWire, host, client, a, b, error)) return false;
+		for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+		if (!host.QueueLocalInput(0, {}, {}, error) || !host.ProposePeerHold(2, 10, error)) return false;
+		host.Tick(10);
+		if (!host.HasHeldAISeat(2)) { *error = "the fixture did not hold seat 2"; return false; }
+		host.m_Stats.peers[2].pingMs = 200; host.m_Stats.peers[2].jitterMs = 1;
+		const uint64_t frame = 500;
+		if (!host.SchedulePeerReclaim(2, 2, 2, frame, error, 27)) return false;
+		// 27 frames of trail and 101 ms one way, seven ticks.
+		const uint16_t returned = host.InputDelayAt(2, frame);
+		if (returned < 34 || host.InputDelayAt(2, frame - 1) != 21) {
+			*error = "a returner trailing by 27 frames on a 200 ms link came back at delay " + std::to_string(returned) + ", before its return " +
+			         std::to_string(host.InputDelayAt(2, frame - 1)) + "; every input of it would reach the survivors late";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_returner_delay_covers_its_trail delay=" << returned << std::endl;
+		return true;
+	}
+
 	bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -22165,6 +22196,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
 		row(&TestAheadInputIsNotASimulationStall, "ahead_input_is_not_a_simulation_stall");
 		row(&TestHeldHostMarkerPrecedesItsHold, "held_host_marker_precedes_its_hold");
+		row(&TestAReturnerDelayCoversItsTrail, "a_returner_delay_covers_its_trail");
 		row(&TestTheHostsRunwayPrecedesItsLateClock, "the_hosts_runway_precedes_its_late_clock");
 		row(&TestArrivalLeadIncludesTheFastestSurvivor, "arrival_lead_includes_the_fastest_survivor");
 		row(&TestHostStatusKeepsTheReceiversLinkMeasurement, "host_status_keeps_the_receivers_link_measurement");
