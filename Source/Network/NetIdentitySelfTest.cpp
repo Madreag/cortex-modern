@@ -244,6 +244,10 @@ namespace RTE {
 			client = host;
 			client.deterministicConfig.scenarioTestModuleLoaded = true;
 			if (!CheckAdmission(host, client, "", error)) return false;
+			client = host;
+			host.modules.push_back(MakeModule(3, "Tests.rte", 1, 217));
+			host.deterministicConfig.scenarioTestModuleLoaded = true;
+			if (!CheckAdmission(host, client, "Install: Tests.rte", error)) return false;
 			std::cout << "[net-identity-selftest] PASS two identities differing only in selected_module admit; scenario flag is diagnostic" << std::endl;
 			return true;
 		}
