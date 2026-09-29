@@ -21578,11 +21578,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			while (now < 9000 && !queueFailed && host.IsRunning() && client.IsRunning()) pump();
 			const auto holds = host.GetStats().peers.at(2).holds;
 			const uint16_t delay = host.InputDelayAt(2, sims[0].tick);
-			const uint16_t ceiling = start + 3 + 2;
+			const uint32_t linkDelay = host.m_DelayEstimators.at(2).RequiredFrames(hostConfig.simTickMs);
+			const uint32_t extraDelay = delay > linkDelay ? delay - linkDelay : 0;
 			const bool spikeCase = test.stallAtTick != 0;
-			if (queueFailed || holds != 0 || !host.IsRunning() || (spikeCase && (!stalled || delay <= start || sims[0].longestWaitMs > 50)) || delay > ceiling || sims[0].tick < 300) {
+			if (queueFailed || holds != 0 || !host.IsRunning() || (spikeCase && (!stalled || delay <= start || sims[0].longestWaitMs > 50)) || linkDelay != 10 || extraDelay > 3 || sims[0].tick < 300) {
 				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " stalled=" + std::to_string(stalled) + " start_delay=" + std::to_string(start) +
-				         " delay=" + std::to_string(delay) + " ceiling=" + std::to_string(ceiling) + " host_tick=" + std::to_string(sims[0].tick) +
+				         " delay=" + std::to_string(delay) + " link_delay=" + std::to_string(linkDelay) + " extra_delay=" + std::to_string(extraDelay) + " host_tick=" + std::to_string(sims[0].tick) +
 				         " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) + " queue=" + queueError;
 				return false;
 			}
