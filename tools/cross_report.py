@@ -350,6 +350,19 @@ def requirements(manifest, comparison, metrics):
     return items
 
 
+def local_host_render(manifest, peers):
+    local = {box['name'] for box in manifest['boxes'] if box['kind'] == 'windows-local'}
+    spec = next((spec for spec in manifest['specs'] if spec['peer'] == manifest['host'] and spec['box'] in local), None)
+    if spec is None:
+        return None
+    settings = spec.get('settings', {})
+    tps = peers.get(spec['peer'], {}).get('timing', {}).get('steady_wall_tps')
+    return dict(peer=spec['peer'], box=spec['box'], size=f"{settings.get('ResolutionX', 960)}x{settings.get('ResolutionY', 540)}",
+                render_cap=spec.get('render_cap', 60), wall_tps=tps,
+                reason='Existing steady wall TPS from retained live events; reported only.' if tps is not None else
+                       'No wall TPS available in the retained events; reported only.')
+
+
 def build_report(root):
     root = Path(root).resolve(); manifest = load(root / 'manifest.json', {})
     live, events, peers, findings, paths = {}, {}, {}, list(manifest.get('driver_findings', [])), {}
@@ -569,7 +582,8 @@ def build_report(root):
     rerun=write_rerun_command(root,manifest)
     result = dict(version=2, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
                   assigned_capture_rows={str(row):CAPTURE_ROWS[row] for row in manifest.get('capture_rows_pending',[1,2])},rerun_after_capture_fix=rerun,
-                  peers=peers, comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
+                  peers=peers, local_host_render=local_host_render(manifest, peers),
+                  comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
                   native_recovery_records=native_recovery_records,native_fault_effects=effects,unscheduled_holds=unscheduled_holds,
@@ -615,8 +629,12 @@ def write_page(root, result, events):
         f'<p>{len(result["peers"])} peers on {len(manifest["boxes"])} boxes · host {escape(manifest["host"])} · {manifest["ticks"]:,} committed ticks requested.</p>',
         '<p>Correctness gates apply throughout. Feel gates apply only in a declared quiet window with measured load absent. UNKNOWN history is never counted as equal.</p>',
         '<p>Quiet feel pins: at least 59.5 TPS, waiting below 1%, longest measured wait at most 50 ms, and nominal-dt horizon drift at most 50 ms. The steady interval is anchored at tick 300; only waits after that tick and through the declared last tick enter its denominator. Other observed waits remain visible.</p>',
-        f'<p>Recovery deadline {manifest["deadlines"]["recovery_ms"]:,} ms · capture budget {manifest["deadlines"]["capture_ms"]} ms. Memory warm-up {manifest["memory"]["warmup_s"]} s, slope bound {manifest["memory"]["slope_bytes_per_minute"]:,} B/min, retention bound {manifest["memory"]["retained_bytes"]:,} B. Raw sizes are never reduced by unmeasured instrumentation.</p>',
-        '<div class="cards">']
+        f'<p>Recovery deadline {manifest["deadlines"]["recovery_ms"]:,} ms · capture budget {manifest["deadlines"]["capture_ms"]} ms. Memory warm-up {manifest["memory"]["warmup_s"]} s, slope bound {manifest["memory"]["slope_bytes_per_minute"]:,} B/min, retention bound {manifest["memory"]["retained_bytes"]:,} B. Raw sizes are never reduced by unmeasured instrumentation.</p>']
+    if metric := result.get('local_host_render'):
+        cap = 'uncapped (0 Hz)' if metric['render_cap'] == 0 else f'{metric["render_cap"]} Hz'
+        parts.append(f'<p>Local host {escape(metric["peer"])} render size {escape(metric["size"])} · cap {escape(cap)} · '
+                     f'wall TPS {escape(value(metric["wall_tps"]))}. {escape(metric["reason"])}</p>')
+    parts.append('<div class="cards">')
     for name, peer in result['peers'].items():
         pairs = [('Frames',peer['frames']),('Feel',peer['feel_status']),('Steady TPS',peer['timing'].get('steady_wall_tps')),
                  ('All observed waits over 50 ms',peer['observed_waits_over_50']),('Steady waits over 50 ms',peer['timing'].get('steady_waits_over_50')),('Missing-frame stalls',peer['timing'].get('steady_missing_frame_stalls')),

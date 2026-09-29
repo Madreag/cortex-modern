@@ -35,6 +35,19 @@ LIMIT = 4_000_000_000
 MST = dt.timezone(dt.timedelta(hours=-7))
 
 
+def setting_pair(value):
+    key, separator, setting = value.partition('=')
+    if not separator or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', key) or any(c in setting for c in '\r\n'):
+        raise argparse.ArgumentTypeError('settings require KEY=VALUE on one line')
+    return key, setting
+
+
+def render_cap_hz(value):
+    if str(value) not in ('0', '60'):
+        raise argparse.ArgumentTypeError('[feel] invalid render settings: expected RenderCapHz = 0 or 60')
+    return int(value)
+
+
 def write_json(path, value):
     path=Path(path)
     temporary=path.with_name(path.name+f'.incoming-{os.getpid()}-{time.monotonic_ns()}')
@@ -223,6 +236,10 @@ def make_plan(options):
             settings={}, roster=options.roster, scene=options.scene,
             initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
             faults=[f for f in faults if f['peer'] == peer['name']], barriers=[b for b in barriers if b['peer']==peer['name']]))
+        if box['kind'] == 'windows-local':
+            specs[-1]['settings'] = dict(options.local_setting)
+            if options.local_render_cap is not None:
+                specs[-1]['render_cap'] = options.local_render_cap
         specs[-1]['recoveries']=[f for f in specs[-1]['faults'] if f['action']!='brain-eliminate']
         specs[-1]['forced_ends']=[f for f in faults if f['action']=='brain-eliminate']
         if specs[-1]['barriers']:
@@ -428,7 +445,7 @@ def preflight_payload(path):
 
 def stage_combat(run, spec):
     from feel_measure import private_settings
-    private_settings(run, 60)
+    private_settings(run, spec.get('render_cap', 60))
     module = Path(run.cwd) / 'Userdata/UserScenes.rte'
     module.mkdir(exist_ok=True)
     for source, target in [('CrossCombat.lua', 'CrossCombat.lua'), ('CrossCombat.ini', 'Index.ini')]:
@@ -478,6 +495,13 @@ def retain_checkpoints(run, spec, *, final=False):
 
 def prepare_instance(spec, pin, box, runtime=None):
     from run_sim_test import make_run, seed_settings
+    if box['kind'] != 'windows-local' and (spec.get('settings') or 'render_cap' in spec):
+        raise ValueError('local settings and render cap require a windows-local instance')
+    cap = render_cap_hz(spec.get('render_cap', 60))
+    settings = {'SessionDirectoryUrl': f'127.0.0.1:{box["directory_port"]}', 'SessionDirectoryCertSha256': pin,
+                'SessionDirectoryInstallKey': f'cross-{spec["peer"]}-install', 'NetworkIceEnable': '1',
+                'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
+    settings.update(spec.get('settings', {}))
     own = Path(spec['own']); own.mkdir(parents=True, exist_ok=False)
     rows = []
     for start in range(1, spec['ticks'] + 1, 240):
@@ -496,21 +520,30 @@ def prepare_instance(spec, pin, box, runtime=None):
                                           dict(difficulty=100, ai_skill=100, fog=True, scene='Ketanot Hills', scene_module='Base.rte', **teams)])
     write_json(own / 'bot.json', [dict(round=0, **{'from': 3601, 'to': spec['ticks']})] if spec['ticks'] >= 3601 else [])
     write_json(own / 'probe.json', dict(schema=1, timeout_ms=120000, activate_at_tick=1, activate_phase='Running', repeat_rounds=True, steps=[
-        dict(op='assert_window', equals=dict(width=960, height=540)),
+        dict(op='assert_window', equals=dict(width=int(settings.get('ResolutionX', 960)), height=int(settings.get('ResolutionY', 540)))),
         dict(op='assert_buy', input_player=0), dict(op='assert_pie', input_player=0), dict(op='finish')]))
     if box['kind'] == 'posix-ssh':
         configure_posix_box(box)
         os.environ['CCCP_TEST_BINARY'] = spec['executable']
         os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform=='darwin' else 'off'
-    settings = {'SessionDirectoryUrl': f'127.0.0.1:{box["directory_port"]}', 'SessionDirectoryCertSha256': pin,
-                'SessionDirectoryInstallKey': f'cross-{spec["peer"]}-install', 'NetworkIceEnable': '1',
-                'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
     run = make_run(Path(spec['repo']), spec['flags'], own / 'engine', timeout=spec['timeout'], env=spec['env'], runtime=runtime)
     if runtime is None:
         stage_combat(run, spec)
     else:
         (own / 'engine/feel').mkdir(exist_ok=True)
     seed_settings(run, settings)
+    render_path = Path(run.cwd) / 'Userdata/FeelRender.ini'
+    render_path.write_text(f'RenderCapHz = {cap}\n', encoding='utf-8')
+    if '-feel-render-settings' in run.argv:
+        run.argv[run.argv.index('-feel-render-settings') + 1] = str(render_path)
+    else:
+        run.argv += ['-feel-render-settings', str(render_path)]
+    metadata = json.loads((Path(run.out) / 'runtime.json').read_text(encoding='utf-8'))
+    metadata.setdefault('settings_overrides', {}).update(settings)
+    metadata['settings_sha256'] = digest_file(Path(run.cwd) / 'Userdata/Settings.ini')
+    metadata['feel_render_settings'] = dict(path=str(render_path), sha256=digest_file(render_path))
+    metadata['render_cap'] = cap
+    write_json(Path(run.out) / 'runtime.json', metadata)
     return run
 
 
@@ -1090,6 +1123,9 @@ def parse_args(argv=None):
                         help=f"the Mac inventory's live marker a Mac launch requires (or {MAC_GUARD_ENV}); no default")
     parser.add_argument('--out', type=Path, help='default: <lane scratch>/dry-run')
     parser.add_argument('--host', default='erol')
+    parser.add_argument('--local-setting', action='append', type=setting_pair, default=[], metavar='KEY=VALUE',
+                        help='seed windows-local after directory settings; repeatable, last value wins')
+    parser.add_argument('--local-render-cap', type=render_cap_hz, metavar='HZ', help='windows-local render cap: 0 or 60')
     parser.add_argument('--scenario', choices=['match', 'soak', 'chaos', 'endurance'], default='match')
     parser.add_argument('--roster', choices=['three-way', 'four-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
     parser.add_argument('--scene', default='Grasslands')
