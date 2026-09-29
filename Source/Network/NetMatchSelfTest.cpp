@@ -335,6 +335,18 @@ namespace RTE {
 		}
 
 		bool TestInputDelayUsesTheSimTick(std::string* error) {
+			NetInputDelayEstimator unmeasured;
+			for (uint64_t now = 0; now < 500; now += 100) unmeasured.Observe(now, 0);
+			unmeasured.Observe(500, 401);
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 38 || unmeasured.JitterMs() != 0) {
+				*error = "unmeasured RTT samples inflate a returning link's delay";
+				return false;
+			}
+			for (uint64_t now = 600; now <= 6000; now += 100) unmeasured.Observe(now, 0);
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 38 || unmeasured.JitterMs() != 0) {
+				*error = "an unmeasured returning link loses its measured delay";
+				return false;
+			}
 			NetInputDelayEstimator estimate;
 			estimate.Observe(0, 401);
 			if (estimate.RequiredFrames(1000.0 / 60.0) != 38 || estimate.RequiredFrames(1000.0 / 120.0) != 74) {
