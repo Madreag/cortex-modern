@@ -66,7 +66,7 @@ def main():
     parser.add_argument("--port", type=int, default=50300)
     args = parser.parse_args()
     results = {name: check(args.repo.resolve(), args.out.resolve() / name, args.port + index, url)
-               for index, (name, url) in enumerate((("unset", ""), ("unreachable", "http://127.0.0.1:1/custom-directory")))}
+               for index, (name, url) in enumerate((("unset", ""), ("unreachable", "https://127.0.0.1:1/custom-directory")))}
     (args.out / "result.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({name: result["pass"] for name, result in results.items()}))
     return 0 if all(result["pass"] for result in results.values()) else 1
