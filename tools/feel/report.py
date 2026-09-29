@@ -485,6 +485,13 @@ def item9a_gates(run, peer='host', rows=None):
         injection_log = injection_path.read_text(encoding='utf-8-sig', errors='replace') if injection_path.is_file() else ''
         injections = [int(tick) for tick in re.findall(r'\[selftest\] frame stall tick=(\d+)', injection_log)]
         injection = next((tick for tick in injections if tick >= manifest['silent_tick']), manifest['silent_tick'])
+        # A later failed reconnect can replace the final report's seat id.
+        for line in injection_log.splitlines():
+            if found := re.search(r'\[net-lockstep\] start .*local_peer=(\d+)', line):
+                silent_seat = int(found[1])
+            if found := re.search(r'\[selftest\] frame stall tick=(\d+)', line):
+                if int(found[1]) == injection:
+                    break
         steady_stalls = sum(ms > 0 for tick, ms in waits if tick < injection) if wait_fraction is not None else None
         pins['item9a_steady_stalls'] = pin(steady_stalls, '0 blocking waits before the actual injected spike', steady_stalls == 0, evidence)
         # The round counter includes the deliberately injected spike. Its steady interval ends at the actual injection.

@@ -240,6 +240,18 @@ class ReportTests(unittest.TestCase):
         for refused in (applied.replace('700', '500'), applied.replace('700', '1201'), applied.replace('actors=2', 'actors=0'), applied.replace('peer=2', 'peer=3')):
             self.assertEqual(status(refused, refused), 'FAIL')
 
+    def test_silence_keeps_the_seat_at_injection_after_a_later_reconnect(self):
+        hold = '[net-match] hold peer=3 frame=603 AI in control\n'
+        returned = '[net-match] seat-reclaimed peer=3 frame=700 live_actors=2\n'
+        client = '[net-lockstep] start round=7 frame=1 local_peer=3 peers=3\n[selftest] frame stall tick=600 ms=1500\n'
+        client += '[net-match] private catch-up complete frame=700\n[net-lockstep] start round=9 frame=1 local_peer=2 peers=2\n'
+        result = self.item9a(silent=True, waits=hold + returned, survivor_log=hold + returned, client_log=client)
+        self.assertEqual(result['pins']['item9a_hold']['status'], 'PASS')
+        self.assertEqual(result['pins']['item9a_rejoin']['status'], 'PASS')
+        absent = self.item9a(silent=True, waits=hold + returned, survivor_log=hold + returned,
+                            client_log=client.replace('[net-match] private catch-up complete frame=700\n', ''))
+        self.assertEqual(absent['pins']['item9a_rejoin']['status'], 'FAIL')
+
     def test_item9a_private_rejoin_rejects_survivor_reload(self):
         hold = '[net-match] hold peer=2 frame=603 AI in control\n'
         applied = '[net-match] seat-reclaimed peer=2 frame=700 live_actors=2\n'
