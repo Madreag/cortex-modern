@@ -86,10 +86,8 @@ namespace {
 		return latest;
 	}
 
-	// The ini reader cuts values at "//" (a comment), so the persisted form is the
-	// scheme-less host[:port][/path] the directory client puts https:// back in front of.
-	// A pasted https:// prefix is normalized away before this sees the value; the rest
-	// of what cannot persist (an http:// scheme, any remaining "//", whitespace) refuses.
+	// Validate the address after its optional https:// prefix. The stored field keeps
+	// the player's spelling, and the directory client also accepts a scheme-less address.
 	bool ValidDirectoryUrl(const std::string& url) {
 		if (url.empty()) {
 			return true;
