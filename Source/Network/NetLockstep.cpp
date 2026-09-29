@@ -5665,6 +5665,9 @@ namespace RTE {
 			if (timing.peerId != m_Config.localPeerId && !IsKnownRemotePeer(timing.peerId)) { m_RemotePeerIds.push_back(timing.peerId); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
 			m_ReclaimTransactions[timing.peerId] = {timing.peerId, timing.authorityGeneration, timing.revision,
 			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame, timing.worldTransition};
+			// A return names the delay its seat produces at from the reclaim on, the same on every peer.
+			if (timing.action == NetTimingAction::Reclaim && timing.delayFrames != 0 && timing.delayFrames != InputDelayAt(timing.peerId, timing.applyFrame))
+				m_DelayChanges[timing.peerId][timing.applyFrame] = timing.delayFrames;
 			NoteSeatTransition(timing.peerId, timing.applyFrame, SeatTransition::Back);
 			std::cout << "[net-lockstep] return of peer " << static_cast<int>(timing.peerId) << " at " << timing.applyFrame << " delay=" << timing.delayFrames
 			          << " neutral_through=" << timing.neutralThroughFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[timing.peerId - 1]
@@ -5877,7 +5880,16 @@ namespace RTE {
 		timing.action = NetTimingAction::Reclaim; timing.phase = NetTimingPhase::ReclaimAtFrame;
 		timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId; timing.authorityGeneration = m_Config.migrationGeneration;
 		timing.revision = m_NextTimingRevision++; timing.applyFrame = timing.cutoffFrame = frame; timing.nextFrame = m_Stats.nextFrame;
-		timing.neutralThroughFrame = frame + InputDelayAt(peerId, frame);
+		// A returner delivers each input as late as it trails the round plus its link's one-way trip: its return raises its own delay to
+		// cover both, so the survivors never wait on it and the lag stays with the seat that brings it.
+		uint64_t covering = trailFrames;
+		if (const NetLockstepPeerStats& link = m_Stats.peers[peerId]; std::isfinite(m_Config.simTickMs) && m_Config.simTickMs > 0) {
+			const auto estimate = m_DelayEstimators.find(peerId);
+			const uint32_t ping = std::max(link.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms());
+			covering += static_cast<uint64_t>(std::ceil((static_cast<double>(ping) / 2.0 + link.jitterMs) / m_Config.simTickMs));
+		}
+		timing.delayFrames = static_cast<uint16_t>(std::min<uint64_t>(NetLockstepCodec::c_MaxInputDelayFrames, std::max<uint64_t>(InputDelayAt(peerId, frame), covering)));
+		timing.neutralThroughFrame = frame + timing.delayFrames;
 		for (uint64_t produced = frame > NetLockstepCodec::c_MaxInputDelayFrames ? frame - NetLockstepCodec::c_MaxInputDelayFrames : 0; produced <= frame; ++produced)
 			timing.neutralThroughFrame = std::max(timing.neutralThroughFrame, produced + InputDelayAt(GetHostPeerId(), produced));
 		// A seat that catches up in place activates from the committed tail, a trip behind the round's inputs: its first required frame is a link later.
@@ -5885,7 +5897,7 @@ namespace RTE {
 			timing.neutralThroughFrame += static_cast<uint64_t>(std::ceil((static_cast<double>(link.pingMs) + link.jitterMs) / m_Config.simTickMs)) + 1;
 		// A returner at the round's pace reaches its reclaim frame as late as it trails the round.
 		timing.neutralThroughFrame += trailFrames;
-		timing.delayFrames = InputDelayAt(peerId, frame); timing.heldPeers = static_cast<uint8_t>(1U << (peerId - 1));
+		timing.heldPeers = static_cast<uint8_t>(1U << (peerId - 1));
 		timing.requiredPeers = static_cast<uint8_t>(1U << (GetHostPeerId() - 1)); timing.seatIncarnations[peerId - 1] = incarnation;
 		m_RemoteTransports[peerId] = transport;
 		m_TimingDecisions[timing.revision] = {timing, timing.requiredPeers, true, m_TimingNowMs};
