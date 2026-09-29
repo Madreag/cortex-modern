@@ -8062,6 +8062,11 @@ namespace RTE {
 	int NetWorldJoinSelfTest::Run() {
 		s_FailTag = "net-world-join-selftest";
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		// The Lua states a row brings up close with the suite, not at the process exit.
+		struct LuaTakeDown {
+			bool owned = !LuaMan::IsConstructed();
+			~LuaTakeDown() { if (owned && LuaMan::IsConstructed()) LuaMan::Destruct(); }
+		} luaTakeDown;
 		if (const int result = TestIdentitySurvivesRestart(); result != 0) {
 			return result;
 		}
