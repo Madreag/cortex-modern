@@ -17,6 +17,10 @@ from feel_measure import input_pattern, private_settings, stage_baseline
 from feel.retained_resume import compare_live_hashes, read_live_hashes
 
 
+def successor_host(reports, logs):
+    return sum('is now hosting' in logs[peer] for peer in ('first', 'second')) == 1
+
+
 def main():
     install_memory_guard()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -69,7 +73,7 @@ def main():
     restored = {peer: len(re.findall(r'round start scripts restored bytes=', logs[peer])) for peer in ('first', 'second')}
     fresh_rounds = {peer: re.findall(r'\[net-lockstep\] start round=(\d+) frame=1 ', logs[peer]) for peer in ('first', 'second')}
     checks = dict(host_killed=killed,
-                  successor_host=sum('is now hosting' in logs[peer] for peer in ('first', 'second')) == 1,
+                  successor_host=successor_host({peer: json.loads((root / f'{peer}_report.json').read_text()) for peer in ('first', 'second')}, logs),
                   survivors_completed=all(records[peer].get('exit_code') == 0 and not records[peer].get('timed_out') for peer in ('first', 'second')),
                   rematch_launched=all(len(set(rounds)) >= 2 for rounds in fresh_rounds.values()),
                   scripts_restored=all(count >= 2 for count in restored.values()),
