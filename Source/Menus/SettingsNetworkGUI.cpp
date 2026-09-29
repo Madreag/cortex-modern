@@ -325,11 +325,12 @@ void SettingsNetworkGUI::ApplyTextboxes() {
 	// Each box commits only when its own value passes; a refused value keeps the stored
 	// setting and the box reverts to it through ShowSavedValues.
 	std::string internetError;
-	std::string url = m_DirUrlTextbox->GetText();
-	if (url.compare(0, 8, "https://") == 0) {
-		url.erase(0, 8);
+	const std::string url = m_DirUrlTextbox->GetText();
+	std::string address = url;
+	if (address.compare(0, 8, "https://") == 0) {
+		address.erase(0, 8);
 	}
-	if (ValidDirectoryUrl(url)) {
+	if (ValidDirectoryUrl(address)) {
 		g_SettingsMan.SetSessionDirectoryUrl(url);
 	} else {
 		internetError = "Enter the directory as host[:port][/path] - https:// is implied.";
