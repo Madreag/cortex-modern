@@ -1312,9 +1312,12 @@ def check_cross_transfer(results, scratch):
     peer = next(peer for peer in manifest['peers'] if peer['peer'] == 'client')
     item = next(item for item in review['checklist'] if item['peer'] == 'client')
     ok &= row(results, 'cross-transfer/original-media-path-retained', peer['video'].get('original_path') == originals['client'] + '/run0/client.mp4')
-    ok &= row(results, 'cross-transfer/review-media-and-auxiliary-paths', item['video'] == str(roots[1] / 'run0/client.mp4') and
-              item['identity_file']['path'] == str(roots[1] / 'run0/client-stage/probe/match-identity.json') and
-              item['trace']['path'] == str(roots[1] / 'run0/client_trace.json'))
+    # The merge names each transferred file under its half's resolved root (macOS /tmp is /private/tmp).
+    local = roots[1].resolve()
+    ok &= row(results, 'cross-transfer/review-media-and-auxiliary-paths', item['video'] == str(local / 'run0/client.mp4') and
+              item['identity_file']['path'] == str(local / 'run0/client-stage/probe/match-identity.json') and
+              item['trace']['path'] == str(local / 'run0/client_trace.json'),
+              f"video={item['video']} identity={item['identity_file']['path']} trace={item['trace']['path']} root={local}")
     ok &= row(results, 'cross-transfer/provenance-and-inputs-unchanged', bool(manifest.get('relocations')) and
               all(Path(path).read_bytes() == data for path, data in before.items()))
     ok &= row(results, 'cross-transfer/property-path-is-not-a-file', item['readback'][0]['path'] == ['control', 'visible'])
