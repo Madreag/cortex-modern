@@ -3425,7 +3425,7 @@ namespace RTE {
 		return tail.Count() == 4 && tail.Covers(1) ? 0 : Fail("the neutral catch-up prefix has a gap");
 	}
 
-	int TestLargePrivateTailChunks() {
+	int TestLargePrivateTailChunks(bool endBetweenPieces = false) {
 		std::string error;
 		NetWorldJoinHost host;
 		auto config = NetMatchConfigUtil::MakeDefault(0x9A33);
@@ -3450,12 +3450,16 @@ namespace RTE {
 			NetMatchService::SendWorldJoinTailTo(pair.host, host, *host.FindSession(42));
 			pair.Pump(1);
 			NetMatchService::StepWorldJoinCatchUpClient(pair.client, client);
+			if (endBetweenPieces && chunks == 1) {
+				if (client.partialTail.empty() || !host.BeginFinalTail(42, 41)) return Fail("the final-tail fixture did not end inside a split record");
+			}
 			if (host.FindSession(42)->deliveredThrough < 41 && ScenarioRunner::WorldCatchUpHasFrame(41)) return Fail("partial tail bytes became a committed tick");
 		}
 		NetLockstepReadyFrame applied;
 		const bool exact = chunks > 1 && ScenarioRunner::TakeWorldCatchUpReadyFrame(41, applied, &error) && applied.remoteFrames.size() == frame.frames.size() &&
 		    std::equal(applied.remoteFrames.begin(), applied.remoteFrames.end(), frame.frames.begin(), [](const auto& a, const auto& b) { return ControllerFrameCodec::Encode(a) == ControllerFrameCodec::Encode(b); }) && client.partialTail.empty();
 		ScenarioRunner::ReleaseWorldCatchUp();
+		if (exact && endBetweenPieces) std::cout << "[net-world-join-selftest] PASS final_tail_finishes_an_ordered_record chunks=" << chunks << std::endl;
 		return exact ? 0 : Fail("a controller roster larger than one lobby chunk was truncated: " + error);
 	}
 
@@ -7975,6 +7979,7 @@ namespace RTE {
 			return TestReadyFramePackIncludesRemotes();
 		}
 		if (std::strcmp(name, "private-neutral-prelude") == 0 || std::strcmp(name, "-net-world-private-neutral-prelude-selftest") == 0) return TestPrivateNeutralPrelude();
+		if (std::strcmp(name, "final-tail-split") == 0) return TestLargePrivateTailChunks(true);
 		if (std::strcmp(name, "private-large-tail") == 0 || std::strcmp(name, "-net-world-private-large-tail-selftest") == 0) return TestLargePrivateTailChunks();
 		if (std::strcmp(name, "earlier-round-tail") == 0 || std::strcmp(name, "-net-world-earlier-round-tail-selftest") == 0) return TestAnEarlierRoundsTailChunkIsDropped();
 		if (std::strcmp(name, "private-rejoin-headroom") == 0 || std::strcmp(name, "-net-world-private-rejoin-headroom-selftest") == 0) return TestPrivateRejoinHeadroom();
@@ -8235,6 +8240,7 @@ namespace RTE {
 		if (const int result = TestALobbySeatsNoPeerPastItsRoster(); result != 0) return result;
 		if (const int result = TestAReturnerKeepingPaceAtTheHeadIsActivated(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
+		if (const int result = TestLargePrivateTailChunks(true); result != 0) return result;
 		if (const int result = TestAnEarlierRoundsTailChunkIsDropped(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
