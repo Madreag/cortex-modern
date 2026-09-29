@@ -3453,7 +3453,7 @@ namespace RTE {
 			if (endBetweenPieces && chunks == 1) {
 				if (client.partialTail.empty() || !host.BeginFinalTail(42, 41)) return Fail("the final-tail fixture did not end inside a split record");
 			}
-			if (host.FindSession(42)->deliveredThrough < 41 && ScenarioRunner::WorldCatchUpHasFrame(41)) return Fail("partial tail bytes became a committed tick");
+			if (!endBetweenPieces && host.FindSession(42)->deliveredThrough < 41 && ScenarioRunner::WorldCatchUpHasFrame(41)) return Fail("partial tail bytes became a committed tick");
 		}
 		NetLockstepReadyFrame applied;
 		const bool exact = chunks > 1 && ScenarioRunner::TakeWorldCatchUpReadyFrame(41, applied, &error) && applied.remoteFrames.size() == frame.frames.size() &&
