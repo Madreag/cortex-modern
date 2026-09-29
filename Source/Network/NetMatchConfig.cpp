@@ -136,6 +136,7 @@ namespace RTE {
 	}
 
 	void NetInputDelayEstimator::Observe(uint64_t nowMs, uint32_t rttMs) {
+		if (rttMs == 0) return;
 		if (!m_Samples.empty() && nowMs < m_Samples.back().first) {
 			m_Samples.clear();
 			m_BelowSince.reset();

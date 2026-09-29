@@ -2127,7 +2127,7 @@ namespace RTE {
 				host.Tick(500 + tick);
 				if (!host.PopReadyFrame(ready) || ready.frame != tick) { *error = "rejoin delay negotiation stalled the survivor"; return false; }
 				for (const auto& command: ready.localCommands) if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload); delay && delay->peerId == 2) {
-					if (delay->frames < 26 || applyFrame != 0) { *error = "readmission committed an insufficient or duplicate delay"; return false; }
+					if (delay->frames != 38 || applyFrame != 0) { *error = "readmission committed an insufficient or duplicate delay"; return false; }
 					applyFrame = tick;
 				}
 				(void)host.FinishSimulationTick(tick);
