@@ -20865,6 +20865,32 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestEachSurvivorsRunwayUsesItsOwnLink(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A61, 6, NetTransportLane::InputUnreliable);
+		config.peerCount = 3; config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 29}};
+		config.substituteSlowPeers = true; config.simTickMs = 16.6666;
+		config.relayToOtherPeers = true;
+		if (!wire.StartHost(49747, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 800;
+		host.m_PeersPlayedThisRound = {1, 2, 3};
+		host.m_ReadyFrames.resize(7);
+		host.m_Stats.peers[3].highestTargetFrame = 792;
+		host.m_Stats.peers[3].pingMs = 400;
+		if (host.DeclareOverdueInputs(800, 1100, 1000, {2})) {
+			*error = "a far survivor's link consumed this host's shorter runway"; return false;
+		}
+		host.m_ReadyFrames.clear();
+		if (!host.DeclareOverdueInputs(800, 1101, 1000, {2})) {
+			*error = "an exhausted local runway stopped applying the three-tick bound"; return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS each_survivors_runway_uses_its_own_link" << std::endl;
+		return true;
+	}
+
 	bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error) {
 		LoopbackTransport hostWire, clientWire;
 		NetLockstepCoordinator host, client;
@@ -21903,6 +21929,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestTheHostsRunwayPrecedesItsLateClock, "the_hosts_runway_precedes_its_late_clock");
 		row(&TestArrivalLeadIncludesTheFastestSurvivor, "arrival_lead_includes_the_fastest_survivor");
 		row(&TestHostStatusKeepsTheReceiversLinkMeasurement, "host_status_keeps_the_receivers_link_measurement");
+		row(&TestEachSurvivorsRunwayUsesItsOwnLink, "each_survivors_runway_uses_its_own_link");
 		row(&TestANeutralGapLeavesNoCommandsToResend, "a_neutral_gap_leaves_no_commands_to_resend");
 		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");
 		row(&TestReturnFramesBypassReliableLoss, "return_frames_bypass_reliable_loss");
