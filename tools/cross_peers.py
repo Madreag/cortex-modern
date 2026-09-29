@@ -76,8 +76,12 @@ def with_lane(value):
     return value
 
 
-def load_boxes(path):
+def load_boxes(path, roster=None):
     manifest = with_lane(json.loads(Path(path).read_text(encoding='utf-8-sig')))
+    if roster is not None:
+        manifest['instances'] = [peer for peer in manifest['instances'] if not peer.get('rosters') or roster in peer['rosters']]
+        active = {peer['box'] for peer in manifest['instances']}
+        manifest['boxes'] = [box for box in manifest['boxes'] if box['name'] in active]
     boxes, peers = manifest['boxes'], manifest['instances']
     by_name = {box['name']: box for box in boxes}
     if len({box['name'].casefold() for box in boxes}) != len(boxes) or len({p['name'].casefold() for p in peers}) != len(peers):
@@ -157,8 +161,13 @@ def schedule_for(options, peers, boxes):
     return faults
 
 
+def require_distinct_machines(preflights):
+    if len({value['machine_id'] for value in preflights.values()}) != len(preflights):
+        raise RuntimeError('each declared box must resolve to a distinct real machine')
+
+
 def make_plan(options):
-    manifest = load_boxes(options.boxes)
+    manifest = load_boxes(options.boxes, options.roster)
     boxes = {b['name']: b for b in manifest['boxes']}
     peers = manifest['instances']
     hosts = [p for p in peers if p['name'] == options.host or p['box'] == options.host]
@@ -186,8 +195,8 @@ def make_plan(options):
                  '-net-match-service-e2e', '-net-port', str(peer['port_block'][0]),
                  '-net-match-ticks', str(options.ticks - 1), '-net-match-peers', str(len(peers)),
                  '-net-match-humans', str(sum(p.get('seat', 'player') == 'player' for p in peers)),
-                 '-net-match-mode', 'coop-pve' if options.roster == 'ai-heavy' else 'pvpve',
-                 '-net-match-cpu-slots', '2' if options.roster == 'ai-heavy' else '1',
+                 '-net-match-mode', 'pvp-skirmish' if options.roster == 'four-way' else 'coop-pve' if options.roster == 'ai-heavy' else 'pvpve',
+                 '-net-match-cpu-slots', '0' if options.roster == 'four-way' else '2' if options.roster == 'ai-heavy' else '1',
                  '-net-match-service-preset', 'Multi Box Combat', '-net-match-service-module', 'UserScenes.rte',
                  '-net-match-service-scene', options.scene, '-net-match-service-scene-module', 'Base.rte',
                  '-net-match-auto-delay', '-net-local-prediction', 'on', '-net-ice', 'on', '-net-player-name', peer['name'],
@@ -925,8 +934,7 @@ def run_plan(plan, root):
                 preflights[box['name']] = json.loads((local_box / 'preflight.json').read_text())
             payloads[box['name']] = (payload, local_payload, box_root)
         reference = preflights[local['name']]
-        if len({p['machine_id'] for p in preflights.values()}) < 3:
-            raise RuntimeError('the manifest resolves to fewer than three real machines')
+        require_distinct_machines(preflights)
         for box in boxes.values():
             value = preflights[box['name']]
             if any(value[k] != reference[k] for k in ('content', 'modules', 'fixture')):
@@ -1070,7 +1078,7 @@ def parse_args(argv=None):
     parser.add_argument('--out', type=Path, help='default: <lane scratch>/dry-run')
     parser.add_argument('--host', default='erol')
     parser.add_argument('--scenario', choices=['match', 'soak', 'chaos', 'endurance'], default='match')
-    parser.add_argument('--roster', choices=['three-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
+    parser.add_argument('--roster', choices=['three-way', 'four-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
     parser.add_argument('--scene', default='Grasslands')
     parser.add_argument('--ticks', type=int)
     parser.add_argument('--timeout', type=int, default=900)
