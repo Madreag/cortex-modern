@@ -1,6 +1,7 @@
 #include "FloatTextSelfTest.h"
 
 #include "FloatText.h"
+#include "InputScript.h"
 
 #include "allegro.h"
 
@@ -23,6 +24,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <iterator>
 #include <locale>
@@ -447,6 +450,20 @@ namespace RTE::FloatTextSelfTest {
 			}
 		}
 
+		std::string ProbeInputScriptVectors() {
+			const std::filesystem::path path = "input-script-locale.txt";
+			{
+				std::ofstream script(path);
+				script << "player=0 1 2 AIM=+1.5,-0.25 MOUSE=-0.5,0.75\n";
+			}
+			std::string error;
+			const bool loaded = InputScript::Load(path.string(), &error);
+			std::filesystem::remove(path);
+			Vector aim, mouse;
+			if (!loaded || !InputScript::AimAt(0, 1, aim) || !InputScript::MouseAt(0, 1, mouse)) return "failed: " + error;
+			return Hex(aim.m_X) + "/" + Hex(aim.m_Y) + "/" + Hex(mouse.m_X) + "/" + Hex(mouse.m_Y);
+		}
+
 		template <class FloatType> FloatType ReadThroughReader(const std::string& text) {
 			Reader reader(std::make_unique<std::istringstream>(text), "float-text-selftest.ini");
 			FloatType value = 0;
@@ -589,6 +606,7 @@ namespace RTE::FloatTextSelfTest {
 			CheckHexFloatCanonical();
 			std::cout << Tag << " stage=hexfloat" << std::endl;
 			static const LocaleProbe probes[] = {
+			    {"input_script_vectors", ProbeInputScriptVectors, "0x3fc00000/0xbe800000/0xbf000000/0x3f400000"},
 			    {"reader_float", ProbeReaderFloat, "0x3fc00000/0x3f800000"},
 			    {"reader_double", ProbeReaderDouble, "0xbfb999999999999a/0xbff0000000000000"},
 			    // 0x3f800000 is the answer when Reader::c_ReadFloatsAsFloats is false: flipping that switch flips this.
