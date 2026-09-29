@@ -13960,11 +13960,15 @@ namespace RTE {
 			*error = "ice defaults: a relay or its credentials shipped enabled";
 			return false;
 		}
-		if (NetHostNatTraversalHint(settings, true, false, "").find("session directory URL") == std::string::npos ||
+		// A fresh install ships a directory, so the hint asks for one only when the player cleared it.
+		const bool shippedDirectoryHint = NetHostNatTraversalHint(settings, true, false, "").find("session directory URL") == std::string::npos;
+		settings.SetSessionDirectoryUrl("");
+		if (!shippedDirectoryHint || NetHostNatTraversalHint(settings, true, false, "").find("session directory URL") == std::string::npos ||
 		    NetHostNatTraversalHint(settings, false, false, "ip").find("Current session uses direct IP:") == std::string::npos) {
 			*error = "NAT hint hid the directory requirement or the direct route after host handover";
 			return false;
 		}
+		settings.SetSessionDirectoryUrl(SettingsMan::c_DefaultSessionDirectoryUrl);
 		settings.SetNetworkStunServers("");
 		if (NetMatchService::BuildIceConfig(settings, "", 41011).iceEnable != 2) {
 			*error = "ice settings: an explicitly empty STUN list did not keep LAN-only candidates";
