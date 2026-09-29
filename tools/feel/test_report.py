@@ -345,6 +345,61 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(gates['passed'])
         self.assertTrue(gates['reasons'])
 
+    def test_selected_cases_refuse_incomplete_measurements(self):
+        import feel_measure
+        result = dict(name='200ms-loss5', peers={'host': self.item9a()}, item9a_pass=True,
+                      measurement_complete=False, launches_complete=True, off_wire_pass=True)
+        with tempfile.TemporaryDirectory() as folder, patch.object(feel_measure, 'reduce_timing_case', return_value=result):
+            code = feel_measure.main(['--repo', str(feel_measure.REPO), '--out', folder, '--cases', '200ms-loss5',
+                                      '--analyze-only', '--port', '49700', '--port-block', '49700-49709'])
+            completed = json.loads((Path(folder) / 'completion.json').read_text())
+        self.assertEqual(code, 1)
+        self.assertFalse(completed['measurement_complete'])
+        self.assertTrue(completed['failure_reasons']['200ms-loss5'])
+
+    def test_missing_stall_counter_is_failed_not_missing(self):
+        for silent in (False, True):
+            result = self.item9a(missing=None, silent=silent)
+            self.assertEqual(result['pins']['item9a_missing_frame_stalls']['status'], 'FAIL')
+            self.assertFalse(result['measurement_complete'])
+
+    def test_absent_required_stall_pin_cannot_pass(self):
+        import feel_measure
+        measured = self.item9a()
+        measured['pins'].pop('item9a_missing_frame_stalls')
+        result = dict(name='absent-counter', peers={'host': measured}, item9a_pass=True,
+                      measurement_complete=True, launches_complete=True, off_wire_pass=True)
+        with tempfile.TemporaryDirectory() as folder:
+            verdict = feel_measure.write_case_gates(Path(folder), [result])
+        self.assertFalse(verdict['passed'])
+        self.assertTrue(verdict['reasons'])
+
+    def test_measured_horizon_remains_required_with_a_slow_baseline(self):
+        measured = self.item9a()
+        measured['pins']['item9a_confirmed_horizon_lag'].update(value=80, status='FAIL', required=False)
+        report.apply_tps_call(measured, dict(steady_wall_tps=50, evidence='baseline.json'))
+        self.assertFalse(measured['pass_check'])
+        self.assertTrue(measured['pins']['item9a_confirmed_horizon_lag']['required'])
+        self.assertEqual(measured['tps_call']['relative_minimum_tps'], 47.5)
+
+    def test_every_manifest_survivor_is_judged(self):
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'manifest.json').write_text(json.dumps(dict(ticks=2400, launches_complete=True,
+                per_peer_lag_ms=dict(host=0, client=200, observer=0))))
+            def measured(run, peer):
+                return dict(measurement_complete=True, pass_check=peer != 'observer')
+            with patch.object(feel_measure, 'timing_peer', side_effect=measured), \
+                 patch.object(feel_measure, 'compare_pair', return_value={'pass': True}), \
+                 patch.object(feel_measure, 'compare_live_hashes', return_value=[dict(compared_ticks=2400, mismatched_ticks=0)]) as compared:
+                result = feel_measure.reduce_timing_case(root)
+            pairs = {(Path(call.args[0]).name, Path(call.args[1]).name) for call in compared.call_args_list}
+        self.assertFalse(result['item9a_pass'])
+        self.assertEqual(set(result['peers']), {'host', 'observer'})
+        self.assertEqual(pairs, {('host-live.jsonl', 'client-live.jsonl'), ('host-live.jsonl', 'observer-live.jsonl'),
+                                 ('client-live.jsonl', 'observer-live.jsonl')})
+
     def test_correction_uses_matching_target_and_strict_four_pixel_boundary(self):
         forecast = dict(_line=3, committed_tick=9, target_tick=10, actor=dict(uid=7, x=100, y=100))
         committed = [dict(tick=10, wall_ms=170, scene_width=1000, scene_height=1000, wraps_x=False, wraps_y=False)]
