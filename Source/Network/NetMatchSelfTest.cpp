@@ -14334,6 +14334,7 @@ namespace RTE {
 		};
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
 		row(&TestReplayStorageDoesNotBlockTicks, "replay_storage_does_not_block_ticks");
+		row(&TestDirectoryRowTakesTheLateRouterAnswer, "directory_row_takes_the_late_router_answer");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");
@@ -14576,7 +14577,6 @@ namespace RTE {
 		if (!TestEndMatchWithHeldSeatKeepsItsLease(&error)) return fail(error);
 		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
 		if (!TestCompletedLobbyExpires(&error)) return fail(error);
-		if (!TestDirectoryRowTakesTheLateRouterAnswer(&error)) return fail(error);
 		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
 		NetMatchService keepaliveService;
 		if (!keepaliveService.RunSnapshotLoadKeepaliveSelfTest(&error)) return fail(error);
