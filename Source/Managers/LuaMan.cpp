@@ -1,4 +1,5 @@
 #include "LuaMan.h"
+#include "FloatText.h"
 
 #include "LuabindObjectWrapper.h"
 #include "CaptureSentinel.h"
@@ -11391,6 +11392,14 @@ static int PushScriptSelf(lua_State* state, const std::string& tableName, const 
 	return 1;
 }
 
+static bool ParseLuaLiteralNumber(std::string_view text, double& value) {
+	// The old callback path treated an empty literal as zero; keep that behavior.
+	if (text.empty()) { value = 0; return true; }
+	const auto parsed = FloatText::ParseCFallback(text.data(), text.data() + text.size(), value, true);
+	return parsed.ptr == text.data() + text.size() &&
+	    (parsed.ec == std::errc() || parsed.ec == std::errc::result_out_of_range);
+}
+
 int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functionObject, const std::string& selfGlobalTableName, const std::string& selfGlobalTableKey, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	int status = 0;
 
@@ -11411,12 +11420,12 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	}
 
 	for (const std::string_view& functionLiteralArgument: functionLiteralArguments) {
-		char* stringToDoubleConversionFailed = nullptr;
+		double argumentAsNumber = 0;
 		if (functionLiteralArgument == "nil") {
 			lua_pushnil(m_State);
 		} else if (functionLiteralArgument == "true" || functionLiteralArgument == "false") {
 			lua_pushboolean(m_State, functionLiteralArgument == "true" ? 1 : 0);
-		} else if (double argumentAsNumber = std::strtod(functionLiteralArgument.data(), &stringToDoubleConversionFailed); !*stringToDoubleConversionFailed) {
+		} else if (ParseLuaLiteralNumber(functionLiteralArgument, argumentAsNumber)) {
 			lua_pushnumber(m_State, argumentAsNumber);
 		} else {
 			lua_pushlstring(m_State, functionLiteralArgument.data(), functionLiteralArgument.size());
@@ -11496,12 +11505,12 @@ int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectW
 	}
 
 	for (const std::string_view& functionLiteralArgument: functionLiteralArguments) {
-		char* stringToDoubleConversionFailed = nullptr;
+		double argumentAsNumber = 0;
 		if (functionLiteralArgument == "nil") {
 			lua_pushnil(m_State);
 		} else if (functionLiteralArgument == "true" || functionLiteralArgument == "false") {
 			lua_pushboolean(m_State, functionLiteralArgument == "true" ? 1 : 0);
-		} else if (double argumentAsNumber = std::strtod(functionLiteralArgument.data(), &stringToDoubleConversionFailed); !*stringToDoubleConversionFailed) {
+		} else if (ParseLuaLiteralNumber(functionLiteralArgument, argumentAsNumber)) {
 			lua_pushnumber(m_State, argumentAsNumber);
 		} else {
 			lua_pushlstring(m_State, functionLiteralArgument.data(), functionLiteralArgument.size());
