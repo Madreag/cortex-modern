@@ -11295,6 +11295,8 @@ namespace RTE {
 			return;
 		}
 		while (true) {
+			// No peer plays at or past the round's named end, so nothing there is committed or judged.
+			if (m_PendingCompleteStop && m_Stats.nextFrame >= m_PendingCompleteStop->frame) { m_AdvanceBlock = "agreed-end"; break; }
 			const bool parkFrame = IsSynchronizedCapturePark(m_Stats.nextFrame);
 			if (!parkFrame && m_CaptureParkAwaitingReports && m_SynchronizedCaptureStartFrame != UINT64_MAX &&
 			    m_Stats.nextFrame > m_SynchronizedCaptureEndFrame) { m_AdvanceBlock = "capture-reports"; break; }

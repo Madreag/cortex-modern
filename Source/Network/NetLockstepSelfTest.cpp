@@ -21037,6 +21037,48 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	bool TestAHostEndJudgesNoSeatPastIt(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto a = MakeCoordinatorConfig(1, 2, 0x9A65, 4, NetTransportLane::ControlReliable);
+		auto b = MakeCoordinatorConfig(2, 1, 0x9A65, 4, NetTransportLane::ControlReliable);
+		a.roundId = b.roundId = 65; a.relayToOtherPeers = true;
+		a.substituteSlowPeers = b.substituteSlowPeers = true;
+		a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+		a.timeoutMs = b.timeoutMs = 20000;
+		if (!StartCoordinatorPair(49556, hostWire, clientWire, host, client, a, b, error)) return false;
+		host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
+		uint64_t now = 0;
+		const auto pump = [&] { ++now; hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); };
+		for (int pass = 0; pass < 10; ++pass) pump();
+		NetLockstepReadyFrame ready;
+		std::optional<uint64_t> hostLast;
+		for (uint64_t tick = 0; tick <= 110; ++tick) {
+			if ((tick <= 100 && !host.QueueLocalInput(tick, {MakeFrame(100, 0)}, {}, error)) || !client.QueueLocalInput(tick, {MakeFrame(200, 0)}, {}, error)) return false;
+			pump(); pump();
+			while (client.PopReadyFrame(ready)) (void)client.FinishSimulationTick(ready.frame);
+			while (tick < 60 && host.PopReadyFrame(ready)) { hostLast = ready.frame; (void)host.FinishSimulationTick(ready.frame); }
+		}
+		if (!hostLast || !host.CompleteAtAgreedEnd("Match ended by host")) { *error = "the host did not play toward an agreed end"; return false; }
+		// The host commits its last frame before its simulation finishes it; the input past the end never comes.
+		std::optional<NetLockstepReadyFrame> last;
+		while (host.PopReadyFrame(ready)) {
+			if (last) (void)host.FinishSimulationTick(last->frame);
+			last = ready;
+		}
+		if (!last) { *error = "the host had no frame left to play toward its end"; return false; }
+		for (int step = 0; step < 5; ++step) { now += 100; host.Tick(now); }
+		const bool heldPastTheEnd = host.AnyHeldAISeat();
+		(void)host.FinishSimulationTick(last->frame);
+		if (heldPastTheEnd || host.IsRunning() || host.GetStats().timeoutReason != "Complete:Match ended by host") {
+			*error = "a host playing to its agreed end judged a seat past it: held=" + std::to_string(heldPastTheEnd) + " last=" + std::to_string(last->frame) +
+			         " running=" + std::to_string(host.IsRunning()) + " reason=" + host.GetStats().timeoutReason;
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_host_end_judges_no_seat_past_it last=" << last->frame << std::endl;
+		return true;
+	}
+
 	bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -22268,6 +22310,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAReturnerDelayCoversItsTrail, "a_returner_delay_covers_its_trail");
 		row(&TestAHostEndNamesAFrameNoPeerHasPassed, "a_host_end_names_a_frame_no_peer_has_passed");
 		row(&TestAHostEndDoesNotWaitOnASilentPeer, "a_host_end_does_not_wait_on_a_silent_peer");
+		row(&TestAHostEndJudgesNoSeatPastIt, "a_host_end_judges_no_seat_past_it");
 		row(&TestTheHostsRunwayPrecedesItsLateClock, "the_hosts_runway_precedes_its_late_clock");
 		row(&TestArrivalLeadIncludesTheFastestSurvivor, "arrival_lead_includes_the_fastest_survivor");
 		row(&TestHostStatusKeepsTheReceiversLinkMeasurement, "host_status_keeps_the_receivers_link_measurement");
