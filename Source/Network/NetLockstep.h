@@ -1282,6 +1282,8 @@ namespace RTE {
 		friend bool TestDelayTracksASteadySendersArrivalPhase(std::string* error);
 		friend bool TestAheadInputIsNotASimulationStall(std::string* error);
 		friend bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error);
+		friend bool TestArrivalLeadIncludesTheFastestSurvivor(std::string* error);
+		friend bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error);
 		friend bool TestReturnFramesBypassReliableLoss(std::string* error);
 		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
 		friend bool TestACaptureNotYetBegunExcusesNoStall(std::string* error);

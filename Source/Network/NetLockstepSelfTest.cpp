@@ -20820,14 +20820,66 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		for (uint64_t tick = 0; tick <= 60; ++tick) host.m_ArrivalLeads[2].push_back({1000 + tick * 1000 / 60, 300 + tick, 0});
 		const auto steady = host.MarginKeepingIncrease(2, 17, 14, 2000);
 		const auto fast = host.MarginKeepingIncrease(2, 4, 1, 2000);
+		for (int lost = 0; lost < 3; ++lost) host.m_ArrivalLeads[2].pop_back();
+		const auto afterLoss = host.MarginKeepingIncrease(2, 17, 14, 2000);
 		host.m_ArrivalLeads[2].clear();
 		for (uint64_t tick = 0; tick <= 40; ++tick) host.m_ArrivalLeads[2].push_back({1000 + tick * 25, 300 + tick, 0});
 		const auto slow = host.MarginKeepingIncrease(2, 17, 14, 2000);
-		if (!steady || *steady != 20 || !fast || *fast != 7 || slow) {
-			*error = "a steady sender's phase was treated as a slow machine: steady=" + std::to_string(steady.value_or(0)) + " expected=20 slow=" + std::to_string(slow.value_or(0));
+		if (!steady || *steady != 20 || !fast || *fast != 7 || !afterLoss || *afterLoss != 20 || slow) {
+			*error = "a steady sender's phase was treated as a slow machine: steady=" + std::to_string(steady.value_or(0)) + " after_loss=" + std::to_string(afterLoss.value_or(0)) + " expected=20 slow=" + std::to_string(slow.value_or(0));
 			return false;
 		}
 		std::cout << "[net-lockstep-selftest] PASS delay_tracks_a_steady_senders_arrival_phase" << std::endl;
+		return true;
+	}
+
+	bool TestArrivalLeadIncludesTheFastestSurvivor(std::string* error) {
+		NetLockstepCoordinator host;
+		host.m_Config.localPeerId = 1; host.m_Config.peerCount = 3;
+		host.m_Config.adaptiveInputDelay = true;
+		host.m_Config.peerInputDelayFrames = {{1, 29}, {2, 29}, {3, 4}};
+		host.m_RemotePeerIds = {2, 3};
+		host.m_Stats.nextFrame = 600;
+		host.m_LastDeliveredFrame = 580;
+		host.m_Stats.peers[3].highestTargetFrame = 603;
+		NetLockstepFrame frame;
+		frame.senderPeerId = 2; frame.targetFrame = 602;
+		host.AcceptRemoteTick(frame, 1000, false);
+		const uint64_t activeLead = host.m_ArrivalLeads[2].back().lead;
+		// A returning seat's neutral gap cannot make anybody else's input late.
+		host.m_ReclaimTransactions[3] = NetGameSeatReclaim{3, 0, 1, 2, 595, 4, 610, std::nullopt};
+		frame.targetFrame = 603;
+		host.AcceptRemoteTick(frame, 1017, false);
+		const uint64_t returningLead = host.m_ArrivalLeads[2].back().lead;
+		if (activeLead != 2 || returningLead != 22) {
+			*error = "arrival lead ignores the fast survivor or charges a neutral return: active=" + std::to_string(activeLead) + " returning=" + std::to_string(returningLead);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS arrival_lead_includes_the_fastest_survivor" << std::endl;
+		return true;
+	}
+
+	bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto hc = MakeCoordinatorConfig(1, 2, 0x9A60, 29, NetTransportLane::InputUnreliable);
+		auto cc = MakeCoordinatorConfig(2, 1, 0x9A60, 29, NetTransportLane::InputUnreliable);
+		if (!StartCoordinatorPair(49746, hostWire, clientWire, host, client, hc, cc, error) ||
+		    !DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) return false;
+		client.m_Stats.peers[1].pingMs = 400;
+		client.m_Stats.peers[1].jitterMs = 7;
+		NetLockstepTiming status;
+		status.senderPeerId = status.peerId = 1;
+		status.phase = NetTimingPhase::Status;
+		status.sessionId = cc.sessionId; status.roundId = client.m_RoundId;
+		status.authorityGeneration = cc.migrationGeneration;
+		status.delayFrames = 29;
+		client.HandleTiming(status, 1000, client.m_RemoteTransports.at(1));
+		const auto& link = client.m_Stats.peers.at(1);
+		if (link.pingMs != 400 || link.jitterMs != 7 || link.delayFrames != 29) {
+			*error = "the host's own zero-RTT status replaced this receiver's measured link"; return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS host_status_keeps_the_receivers_link_measurement" << std::endl;
 		return true;
 	}
 
@@ -21843,6 +21895,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
 		row(&TestAheadInputIsNotASimulationStall, "ahead_input_is_not_a_simulation_stall");
 		row(&TestTheHostsRunwayPrecedesItsLateClock, "the_hosts_runway_precedes_its_late_clock");
+		row(&TestArrivalLeadIncludesTheFastestSurvivor, "arrival_lead_includes_the_fastest_survivor");
+		row(&TestHostStatusKeepsTheReceiversLinkMeasurement, "host_status_keeps_the_receivers_link_measurement");
 		row(&TestANeutralGapLeavesNoCommandsToResend, "a_neutral_gap_leaves_no_commands_to_resend");
 		row(&TestFreshRoundDropsRetainedCollisionResults, "fresh_round_drops_retained_collision_results");
 		row(&TestReturnFramesBypassReliableLoss, "return_frames_bypass_reliable_loss");
