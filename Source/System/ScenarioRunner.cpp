@@ -2769,12 +2769,16 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::CloseLockstepReplayRecord() {
-		if (s_ReplayWriter.IsOpen()) {
-			s_ReplayRecordFrames = s_ReplayWriter.GetFramesWritten();
-			s_ReplayRecordClosed = true;
-			std::cout << "[net-match] replay recorded: " << s_ReplayRecordFrames << " frames" << std::endl;
-		}
+		const bool wasOpen = s_ReplayWriter.IsOpen();
+		const uint64_t frames = s_ReplayWriter.GetFramesWritten();
 		s_ReplayWriter.Close();
+		const std::string writeError = s_ReplayWriter.GetWriteError();
+		if (wasOpen || !writeError.empty()) {
+			s_ReplayRecordFrames = writeError.empty() ? frames : 0;
+			s_ReplayRecordClosed = true;
+			if (writeError.empty()) std::cout << "[net-match] replay recorded: " << s_ReplayRecordFrames << " frames" << std::endl;
+			else std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
+		}
 		s_WorldSegment = {};
 		if (s_ReplayRecordArmedForRound) {
 			s_ReplayRecordArmedPath.clear();
