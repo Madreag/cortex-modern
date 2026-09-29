@@ -33,7 +33,7 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 from run_sim_test import make_run, seed_settings  # noqa: E402
-from compare_sim_traces import compare_fullstate  # noqa: E402
+from compare_sim_traces import compare_fullstate, CORE  # noqa: E402
 
 SCENARIO_DIR = TOOLS / "e2e"
 PORT_LO, PORT_HI = 49400, 49479
@@ -49,6 +49,19 @@ FFMPEG_CANDIDATES = (
     "/usr/bin/ffmpeg",
 )
 SCRATCH_LIMIT = 5_000_000_000
+
+
+def setting_pair(value):
+    key, separator, setting = value.partition("=")
+    if not separator or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", key) or any(c in setting for c in "\r\n"):
+        raise argparse.ArgumentTypeError("settings require KEY=VALUE on one line")
+    return key, setting
+
+
+def render_cap_hz(value):
+    if str(value) not in ("0", "60"):
+        raise argparse.ArgumentTypeError("[feel] invalid render settings: expected RenderCapHz = 0 or 60")
+    return int(value)
 
 
 def positive_bytes(value):
@@ -593,14 +606,14 @@ def frame_range(rows, item):
 
 
 def probe_verdict(probe_dir, item):
-    """What the peer's menu probe said about this item, as the probe itself recorded it."""
+    """Whether the peer's menu probe completed successfully."""
     result = Path(probe_dir) / "net-ui-result.json"
     if not probe_dir or not result.is_file():
-        return {"probe": "none"}
+        return {"probe": "fail", "reason": "Required probe result is absent"}
     try:
         observed = json.loads(result.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return {"probe": "unreadable"}
+        return {"probe": "fail", "reason": "Required probe result is unreadable"}
     return {"probe": "pass" if observed.get("pass") and observed.get("complete") else "fail",
             "complete": bool(observed.get("complete")), "path": str(result)}
 
@@ -830,7 +843,7 @@ def item_evidence(record, item, port=None):
         observed = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
         steps = {step["index"]: step for step in observed.get("steps", [])}
         required = probe_steps
-        evidence.update(probe="pass" if all(index in steps for index in required) else "not-reached",
+        evidence.update(probe=("pass" if all(index in steps for index in required) else "not-reached") if required else "awaiting-review",
                         assertions=[{"step": index, "command": observed.get("script", {}).get("steps", [])[index]
                                      if index < len(observed.get("script", {}).get("steps", [])) else None,
                                      "observed": steps.get(index)} for index in required], path=str(path))
@@ -840,7 +853,11 @@ def item_evidence(record, item, port=None):
             if not evidence["simulation_progress"]["pass"]:
                 evidence["probe"] = "fail"
     else:
-        evidence.update(probe_verdict(record.get("probe_dir", ""), item))
+        declared_probe = Path(record.get('probe_dir', '')) / 'probe.json'
+        evidence.update(probe_verdict(record.get("probe_dir", ""), item) if declared_probe.is_file() or probe_path.is_file()
+                        else {'probe': 'awaiting-review'})
+        if evidence['probe'] == 'pass':
+            evidence['probe'] = 'awaiting-review'
     if item.get("resumed_play"):
         # The engine's own records decide this item; a probe step that a script may never reach does not.
         evidence["resumed_play"] = resumed_play_evidence(record, item["resumed_play"])
@@ -851,12 +868,12 @@ def item_evidence(record, item, port=None):
         assertions = log_assertions(record["root"], item.get("log_regex", []), item.get("forbidden_log_regex", []))
         passed = all(bool(value["matches"]) != value["forbidden"] for value in assertions)
         evidence["log_assertions"] = assertions
-        if not passed or evidence.get("probe") == "none":
+        if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
     if item.get("report_toasts"):
         evidence["report_toasts"] = report_toast_evidence(record, item["report_toasts"])
         passed = evidence["report_toasts"]["pass"]
-        if not passed or evidence.get("probe") == "none":
+        if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
         if not passed:
             evidence["reason"] = evidence["report_toasts"]["reason"]
@@ -865,12 +882,12 @@ def item_evidence(record, item, port=None):
         if item.get(key):
             evidence[key] = measure(item[key])
             passed = evidence[key]["pass"]
-            if not passed or evidence.get("probe") == "none":
+            if not passed or evidence.get("probe") in ("none", "awaiting-review"):
                 evidence["probe"] = "pass" if passed else "fail"
     if item.get("frame_gap"):
         evidence["frame_gap"] = frame_gap_evidence(record, item["frame_gap"])
         passed = evidence["frame_gap"]["pass"]
-        if not passed or evidence.get("probe") == "none":
+        if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
         if not passed:
             evidence["reason"] = ("No presented frames to measure" if evidence["frame_gap"]["worst"] is None else
@@ -879,7 +896,7 @@ def item_evidence(record, item, port=None):
     if item.get("drop_tick") is not None:
         evidence["process_drop"] = drop_evidence(record, item["drop_tick"])
         passed = evidence["process_drop"]["pass"]
-        if not passed or evidence.get("probe") == "none":
+        if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
     if item.get("readback"):
         observed = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
@@ -904,7 +921,7 @@ def item_evidence(record, item, port=None):
             identity = json.loads(path.read_text(encoding="utf-8"))
         passed = bool(identity.get("session_id") and identity.get("round") and identity.get("config_hash"))
         evidence["match_identity"] = identity
-        if not passed or evidence.get("probe") == "none":
+        if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
     return frame_range(rows, item), evidence
 
@@ -944,7 +961,9 @@ def review(scenario, capture, out):
                           "video": record.get("video"), "contact_sheet": record.get("contact_sheet"),
                           "state": "captured" if video_frames else "no MP4 evidence",
                           **assertions}
-            if not video_frames or item.get("blocked_by") or assertions.get("probe") in ("fail", "not-reached"):
+            if assertions.get('probe') == 'awaiting-review' and video_frames:
+                resolved['state'] = 'AWAITING REVIEW'
+            if not video_frames or item.get("blocked_by") or assertions.get("probe") in (None, "none", "fail", "not-reached", "not-run"):
                 resolved["finding"] = {"class": (capture.get("stop_finding") or {}).get("class", "harness" if capture.get("interrupted") else "unclassified"), "reason": (capture.get("stop_finding") or {}).get("reason") or capture.get("interrupted") or item.get("blocked_by") or assertions.get("reason") or
                                        "Required frames or assertions absent; inspect the retained launch, probe and logs",
                                        "launch": record.get("launch"), "errors": record.get("menu_script_failures", [])}
@@ -986,7 +1005,24 @@ def review(scenario, capture, out):
     for pair, verdict in (capture.get("fullstate") or {}).items():
         if not verdict.get("not_applicable") and not verdict["passed"]:
             run_findings.append({"class": "engine", "run": capture["name"], "peer": pair,
-                                 "reason": "full-state oracle: " + "; ".join(verdict["reasons"]), "launch": None})
+                                  "reason": "full-state oracle: " + "; ".join(verdict["reasons"]), "launch": None})
+    injected = declared_run.get('injected_desync') or {}
+    repairs = injected.get('repair_items', [])
+    repaired = bool(repairs) and all(any(item.get('id') == name and item.get('probe') == 'pass' and not item.get('finding')
+                                       for item in items) for name in repairs)
+    injector = next((peer for peer in capture['peers'] if peer['peer'] == injected.get('peer')), None)
+    injection_log = Path(injector['root']) / 'stdout.log' if injector else None
+    injected_here = bool(injection_log and injection_log.is_file() and re.search(
+        rf'(?m)^\[net-test\] live perturb frame={injected.get("tick")}\b',
+        injection_log.read_text(encoding='utf-8', errors='replace')))
+    for peer in capture['peers']:
+        log = Path(peer['root']) / 'stdout.log'
+        text = log.read_text(encoding='utf-8', errors='replace') if log.is_file() else ''
+        for match in re.finditer(r'(?m)^\[lockstep\] desync at frame (\d+)[^\n]*', text):
+            if repaired and injected_here and int(match[1]) == injected.get('tick'):
+                continue
+            run_findings.append(dict(**{'class': 'engine'}, run=capture['name'], peer=peer['peer'],
+                                     reason='Unplanned desync: ' + match[0], launch=peer.get('launch')))
     document = {"schema": 1, "scenario": scenario["name"], "title": scenario.get("title", ""),
                 "requires": scenario.get("requires", []),
                 "reviewer_reads": ["review.json", "<peer>-sheet.png", "<peer>.mp4"],
@@ -1063,7 +1099,9 @@ def gameplay_signals(video, stage, epochs=1):
 def run_one(options, scenario, run, run_index, out):
     """One scenario run: its peers launched together, each recording its own video."""
     root = Path(out) / run.get("name", f"run{run_index}")
-    root.mkdir(parents=True, exist_ok=False)
+    dry = getattr(options, "dry_run", False)
+    if not dry:
+        root.mkdir(parents=True, exist_ok=False)
     size = options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE
     width, height = (int(part) for part in size.split("x"))
     port = port_for(run_index, options.port)
@@ -1091,16 +1129,30 @@ def run_one(options, scenario, run, run_index, out):
         peer_root = root / name
         # make_run owns the run directory, so this peer's scripts live beside it, never inside it.
         stage = root / f"{name}-stage"
-        stage.mkdir(parents=True, exist_ok=False)
         tokens = {**shared, "PEER": name, "STAGE": stage, "PROBE_DIR": stage / "probe",
                   "MENU_SCRIPT": stage / "menu.txt", "INPUT_SCRIPT": stage / "input.txt",
                   "VIDEO": peer_root / "video"}
-        environment = stage_peer(scenario, peer, stage, tokens)
         args = peer_arguments(peer, tokens, options.fps)
         # Every peer of a multi-peer run hashes its whole capture every N committed ticks; the pairs are compared after.
         if getattr(options, "fullstate_every", 0) and len(peers) > 1:
             args += ["-net-fullstate-hash-every", str(options.fullstate_every)]
         reference = peer.get("retain_runtime_from")
+        seed = {"ResolutionX": width, "ResolutionY": height}
+        seed.update(substitute(peer.get("settings", {}), tokens))
+        seed.update(dict(getattr(options, "setting", [])))
+        cap = render_cap_hz(getattr(options, "render_cap", 60))
+        arm = {"size": f"{seed['ResolutionX']}x{seed['ResolutionY']}", "settings": seed, "render_cap": cap}
+        if dry:
+            runtime = peer_root / "runtime"
+            if reference:
+                previous = staged.get(reference["peer"]) if reference["run"] == root.name else prior_peer(
+                    getattr(options, "completed_runs", []), reference)
+                runtime = Path(previous["runtime"]) if previous else Path(out) / reference["run"] / reference["peer"] / "runtime"
+            args += ["-feel-render-settings", str(runtime / "Userdata/FeelRender.ini")]
+            staged[name] = {"peer": name, "args": args, "runtime": str(runtime), **arm}
+            continue
+        stage.mkdir(parents=True, exist_ok=False)
+        environment = stage_peer(scenario, peer, stage, tokens)
         retained = None
         if reference:
             previous = prior_peer(getattr(options, "completed_runs", []), reference)
@@ -1114,9 +1166,20 @@ def run_one(options, scenario, run, run_index, out):
         (Path(run_handle.out) / "video").mkdir(parents=True, exist_ok=False)
         for directory in peer.get("output_dirs", []):
             (Path(run_handle.out) / directory).mkdir(parents=True, exist_ok=False)
-        seed = {"ResolutionX": width, "ResolutionY": height}
-        seed.update(substitute(peer.get("settings", {}), tokens))
         seed_settings(run_handle, seed)
+        render_path = Path(run_handle.cwd) / "Userdata/FeelRender.ini"
+        render_path.write_text(f"RenderCapHz = {cap}\n", encoding="utf-8")
+        render_args = ["-feel-render-settings", str(render_path)]
+        run_handle.argv.extend(render_args)
+        args += render_args
+        runtime_manifest = Path(run_handle.out) / "runtime.json"
+        if runtime_manifest.is_file():
+            metadata = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+            arm["settings"] = metadata["settings_overrides"] = {**metadata.get("settings_overrides", {}), **seed}
+            metadata["settings_sha256"] = file_evidence(Path(run_handle.cwd) / "Userdata/Settings.ini")["sha256"]
+            metadata["feel_render_settings"] = file_evidence(render_path)
+            metadata["render_cap"] = cap
+            write_json(runtime_manifest, metadata)
         # Fixture modules a scenario needs land in the private runtime, never in the repository.
         for entry in substitute(peer.get("runtime_files", []), tokens):
             destination = Path(run_handle.cwd) / entry["to"]
@@ -1126,11 +1189,14 @@ def run_one(options, scenario, run, run_index, out):
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
-        staged[name] = {"args": args, "env": {k: str(v) for k, v in environment.items()},
+        staged[name] = {**arm, "args": args, "env": {k: str(v) for k, v in environment.items()},
                         "runtime": str(run_handle.cwd), "retain_runtime_from": reference,
                         "stage": str(stage), "probe_dir": str(stage / "probe"),
                         "gameplay_signal": str(stage / "gameplay-started.json"),
                         "start_delay_s": peer.get("start_delay_s", 0)}
+
+    if dry:
+        return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": list(staged.values())}
 
     def drive(name):
         try:
@@ -1415,7 +1481,8 @@ def scenario_manifest(capture, out, elapsed):
     peers = []
     for run in capture["runs"]:
         for peer in run["peers"]:
-            peers.append({"run": run["name"], "peer": peer["peer"], "size": run["size"],
+            peers.append({"run": run["name"], "peer": peer["peer"], "size": peer.get("size", run["size"]),
+                          "settings": peer.get("settings", {}), "render_cap": peer.get("render_cap"),
                           "fps": capture["fps"], "frames": len(peer["index"]),
                           "wall_seconds": peer["record"].get("elapsed_seconds"),
                           "exe_sha256": peer["record"].get("exe_sha256"),
@@ -1460,6 +1527,9 @@ def aggregate_review(capture, out):
     document = {"schema": 1, "scenario": capture["scenario"], "title": capture["scenario_definition"].get("title"),
                 "source": capture["source"], "manifest": str(Path(out) / "manifest.json"),
                 "peer_selection": capture["scenario_definition"].get("peer_selection"),
+                "peers": [{"run": run["name"], "peer": peer["peer"], "size": peer.get("size", run.get("size")),
+                           "settings": peer.get("settings", {}), "render_cap": peer.get("render_cap")}
+                          for run in capture["runs"] for peer in run["peers"]],
                 "command": capture["command"], "verdict": "agent-review-required",
                 "checklist": items, "interrupted": capture.get("interrupted"),
                 "run_findings": [finding for document in documents for finding in document.get("run_findings", [])],
@@ -1468,7 +1538,155 @@ def aggregate_review(capture, out):
     return document
 
 
+def compare_round_histories(root, config):
+    from feel.retained_resume import read_live_hashes, PER_PEER_SUBSYSTEMS
+    errors, histories, ordered = [], {}, {}
+    (root / 'round-traces').mkdir(exist_ok=True)
+    try:
+        for peer in config['peers']:
+            rows = read_live_hashes(root / f'{peer}-live.jsonl')
+            ordered[peer] = list(dict.fromkeys(row.get('round') for row in rows))
+            histories[peer] = {}
+            for row in rows:
+                key = (row.get('round'), row['tick'])
+                if key in histories[peer]:
+                    errors.append(f'{peer}: duplicate round/tick {key}')
+                histories[peer][key] = row
+            if len(ordered[peer]) != config['rounds'] or None in ordered[peer]:
+                errors.append(f'{peer}: expected {config["rounds"]} rounds, found {ordered[peer]}')
+            for round_id in ordered[peer]:
+                ticks = {tick for rid, tick in histories[peer] if rid == round_id}
+                if ticks != set(range(1, config['ticks'] + 1)):
+                    errors.append(f'{peer} round {round_id}: incomplete tick coverage')
+                write_json(root / 'round-traces' / f'{round_id}-{peer}.json',
+                           dict(round=round_id, peer=peer, tick_hashes=[r for r in rows if r.get('round') == round_id]))
+        reference = config['peers'][0]
+        for peer in config['peers'][1:]:
+            if ordered[peer] != ordered[reference] or histories[peer].keys() != histories[reference].keys():
+                errors.append(f'{peer}: round histories do not match {reference}')
+            for key in histories[peer].keys() & histories[reference].keys():
+                a, b = histories[reference][key], histories[peer][key]
+                shared = lambda row: {k: v for k, v in row.get('subsystems', {}).items() if k not in PER_PEER_SUBSYSTEMS}
+                if not (CORE | {'controller'}) <= shared(a).keys() or not a.get('sim_gated') or shared(a) != shared(b) or a.get('sim_gated') != b.get('sim_gated') or a.get('paused', False) != b.get('paused', False):
+                    errors.append(f'{peer}: unequal round/tick {key}')
+                    break
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        errors.append(str(error))
+    return dict(status='FAIL' if errors else 'PASS', errors=errors, rounds=ordered,
+                expected_rounds=config['rounds'], expected_ticks=config['ticks'])
+
+
+def native_behavior(root, spec):
+    from feel.retained_resume import read_live_hashes, PER_PEER_SUBSYSTEMS
+    errors, details = [], {}
+    def require(condition, reason):
+        if not condition: errors.append(reason)
+    def load(path):
+        return json.loads(path.read_text(encoding='utf-8-sig')) if path.is_file() else {}
+    def fields(node, name):
+        found = []
+        if isinstance(node, dict):
+            if name in node: found.append(node[name])
+            for value in node.values(): found += fields(value, name)
+        elif isinstance(node, list):
+            for value in node: found += fields(value, name)
+        return found
+    def text(peer):
+        path = root / peer / 'stdout.log'
+        return path.read_text(encoding='utf-8', errors='replace') if path.is_file() else ''
+    try:
+        for peer, filename in spec['reports'].items():
+            report = load(root / filename)
+            require(report.get('exit_code') == 0 and report.get('running_ticks', 0) >= spec['ticks'][peer], f'{peer}: incomplete continued play')
+            if peer in spec.get('steady_peers', []):
+                counts = fields(report, 'steady_missing_frame_stalls')
+                require(bool(counts) and all(type(v) is int and v == 0 for v in counts), f'{peer}: missing or nonzero steady stall count')
+        if spec['kind'] in ('held-seat', 'rehold'):
+            target = spec['target']
+            target_log = text(target)
+            identity = re.search(r'\[net-lockstep\] start [^\n]*local_peer=(\d+)', target_log)
+            require(identity is not None, 'held peer identity is absent')
+            seat = int(identity[1]) if identity else -1
+            histories = {}
+            for peer in spec['observers']:
+                log = text(peer)
+                all_holds = re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)
+                require(all(int(held_seat) == seat for held_seat, _ in all_holds), f'{peer}: an undeclared seat was held')
+                holds = sorted(set(map(int, re.findall(rf'\[net-match\] hold peer={seat} frame=(\d+) AI in control', log))))
+                reclaims = sorted(set(map(int, re.findall(rf'\[net-match\] seat-reclaimed peer={seat} frame=(\d+)', log))))
+                histories[peer] = dict(holds=holds, reclaims=reclaims)
+                require(len(holds) == spec['holds'], f'{peer}: missing or unscheduled hold')
+                if spec['kind'] == 'rehold':
+                    starts = spec['stall_ticks']
+                    require(len(reclaims) == len(holds) == len(starts), f'{peer}: incomplete reclaim sequence')
+                    for index, hold in enumerate(holds[:len(starts)]):
+                        end = starts[index + 1] if index + 1 < len(starts) else spec['ticks'][peer]
+                        require(starts[index] <= hold < end, f'{peer}: hold outside its injected stall interval')
+                        require(index < len(reclaims) and hold < reclaims[index] and
+                                (index + 1 == len(holds) or reclaims[index] < holds[index + 1]), f'{peer}: return re-held before its next stall')
+                probe = load(root / f'{peer}-stage/probe/net-ui-result.json')
+                require(probe.get('pass') and probe.get('complete'), f'{peer}: seat-state probe incomplete')
+                dumps = []
+                for step in probe.get('steps', []):
+                    observation = step.get('observed', {}).get('menu_observation', '')
+                    if isinstance(observation, str) and observation.startswith('{'):
+                        observed = json.loads(observation)
+                        if 'members' in observed: dumps.append(observed)
+                require(bool(dumps) and all(d.get('resyncing') is False and d.get('private_catch_up') is False for d in dumps), f'{peer}: survivor state missing or privately resyncing')
+                if spec['kind'] == 'held-seat':
+                    require(any(any(m.get('peer') == seat and 'AI in control' in m.get('state', '') for m in d['members']) for d in dumps), f'{peer}: held seat is not shown under AI')
+                else:
+                    require(any(any(m.get('peer') == seat and m.get('state') and not re.search(r'held|rejoining|AI in control', m['state'], re.I)
+                                    for m in d['members']) for d in dumps), f'{peer}: reclaimed seat is not shown live')
+            require(all(value == next(iter(histories.values())) for value in histories.values()), 'survivors disagree about holds/reclaims')
+            if spec['kind'] == 'rehold':
+                injected = list(map(int, re.findall(r'\[net-test\] live stall frame=(\d+)', target_log)))
+                require(set(spec['stall_ticks']) <= set(injected), 'a declared stall never fired')
+                completed = set(map(int, re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', target_log)))
+                require(all(frame in completed for value in histories.values() for frame in value['reclaims']), 'private reclaim did not complete at its activation frame')
+            details['holds'] = histories
+        elif spec['kind'] == 'world-continuity':
+            launch = load(root / 'world' / 'launch.json')
+            argv = launch.get('argv', [])
+            if isinstance(argv, str):
+                import ast
+                argv = ast.literal_eval(argv)
+            require('-net-persistent-world' in argv and '-net-world-fresh' in argv,
+                    'world did not launch with its persistent/fresh flags')
+            host = read_live_hashes(root / 'world-live.jsonl')
+            canonical = {(row.get('round'), row['tick']): row for row in host}
+            require(len(canonical) == len(host), 'world duplicated a committed tick')
+            require(len({row.get('round') for row in host}) == 1 and all(row.get('round') is not None for row in host), 'world round was restarted or not identified')
+            require(set(range(1, spec['ticks']['world'] + 1)) <= {r['tick'] for r in host}, 'world stopped ticking across visits')
+            for peer in ('client-first', 'client-late'):
+                rows = read_live_hashes(root / f'{peer}-live.jsonl')
+                require(bool(rows), f'{peer}: no world hash history')
+                ticks = {row['tick'] for row in rows}
+                require(len(ticks) >= spec['ticks'][peer] and ticks == set(range(min(ticks, default=0), max(ticks, default=-1) + 1)),
+                        f'{peer}: incomplete continued-play history')
+                if peer == 'client-late':
+                    require(any(r['tick'] >= spec['late_tick'] for r in rows), 'late join preceded the declared world boundary')
+                for row in rows:
+                    other = canonical.get((row.get('round'), row['tick']))
+                    shared = lambda value: {k: v for k, v in value.get('subsystems', {}).items() if k not in PER_PEER_SUBSYSTEMS}
+                    if other is None or not (CORE | {'controller'}) <= shared(row).keys() or not row.get('sim_gated') or shared(row) != shared(other) or row.get('sim_gated') != other.get('sim_gated'):
+                        errors.append(f'{peer}: world state differs at tick {row["tick"]}')
+                        break
+        else:
+            errors.append('unknown behavior gate')
+    except (OSError, ValueError, KeyError, TypeError, StopIteration) as error:
+        errors.append(str(error))
+    return dict(status='FAIL' if errors else 'PASS', errors=errors, evidence=details)
+
+
 def feel_probes(run, capture, source):
+    for key, name, check in (('round_hash_gate', 'all-round-hashes', compare_round_histories),
+                             ('behavior_gate', 'scenario-behavior', native_behavior)):
+        if run.get(key):
+            result = check(Path(capture['root']), run[key])
+            write_json(Path(capture['root']) / (name + '.json'), result)
+            for peer in capture['peers']:
+                peer.setdefault('gates', {})[name] = result
     if run.get("migration_gate"):
         migration_probes(run["migration_gate"], capture)
     if run.get("hash_gate"):
@@ -1605,6 +1823,10 @@ def main():
     parser.add_argument("--run", action="append", default=[], help="capture only this named run, repeatable")
     parser.add_argument("--token", action="append", default=[], metavar="NAME=VALUE")
     parser.add_argument("--size")
+    parser.add_argument("--setting", action="append", type=setting_pair, default=[], metavar="KEY=VALUE",
+                        help="seed every peer after size and scenario settings; repeatable, last value wins")
+    parser.add_argument("--render-cap", type=render_cap_hz, default=60, metavar="HZ", help="headless render cap: 0 or 60 (default)")
+    parser.add_argument("--dry-run", action="store_true", help="print planned settings and engine arguments without creating files or starting services")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
     parser.add_argument("--port-block", help=f"the calling lane's own port block LO-HI, used instead of {PORT_LO}-{PORT_HI}; --port is then required")
@@ -1670,6 +1892,16 @@ def main():
         if not PORT_LO <= options.port <= PORT_HI:
             parser.error(f"{scenario['name']}: port_base {options.port} is outside {PORT_LO}-{PORT_HI}")
     out = Path(options.out).resolve()
+    runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
+    if options.run and set(options.run) - {run.get("name", f"run{i}") for i, run in enumerate(runs)}:
+        parser.error("--run names an unknown run")
+    if options.dry_run:
+        options.completed_runs = []
+        for index, run in enumerate(runs):
+            if not options.run or run.get("name", f"run{index}") in options.run:
+                options.completed_runs.append(run_one(options, scenario, run, index, out))
+        print(json.dumps({"scenario": scenario["name"], "dry_run": True, "runs": options.completed_runs}, indent=2))
+        return 0
     out.mkdir(parents=True, exist_ok=False)
     options.scratch_root = options.scratch_root or next(
         (parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
@@ -1681,11 +1913,9 @@ def main():
     started = time.monotonic()
     source = source_evidence(options.repo)
     exe = file_evidence(capture_binary(options.repo))
-    runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
-    if options.run and set(options.run) - {run.get("name", f"run{i}") for i, run in enumerate(runs)}:
-        parser.error("--run names an unknown run")
     capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()), "out": str(out), "platform": sys.platform,
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
+               "settings": dict(options.setting), "render_cap": options.render_cap,
                "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     missing = requirement_findings(options.repo, scenario)
@@ -1756,7 +1986,7 @@ def main():
             review(scenario, captured, Path(captured["root"]))
     scenario_manifest(capture, out, time.monotonic() - started)
     document = aggregate_review(capture, out)
-    complete &= not any(item.get("finding") or item.get("blocked_by") for item in document["checklist"])
+    complete &= not document.get('run_findings') and not any(item.get("finding") or item.get("blocked_by") for item in document["checklist"])
     for run in capture["runs"]:
         for peer in run["peers"]:
             peer.pop("index", None)

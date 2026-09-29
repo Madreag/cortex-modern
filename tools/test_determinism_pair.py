@@ -192,13 +192,23 @@ def shared_fields(line: str) -> list:
     return [token for token in line.split(" ") if token.split("=", 1)[0] not in PER_PEER_FIELDS]
 
 
-def first_object_divergence(host_dump: Path, client_dump: Path) -> dict:
+def first_object_divergence(host_dump: Path, client_dump: Path, expected_ticks=None) -> dict:
     """The first per-object row the two dumps disagree on outside the per-peer seat fields."""
     if not Path(host_dump).exists() or not Path(client_dump).exists():
         return {"available": False, "reason": "a simdump is missing"}
     left = load_dump(host_dump)
+    passes = load_dump_passes(client_dump)
+    observed = set().union(*(set(part) for part in passes))
+    required = set(expected_ticks) if expected_ticks is not None else set(left) | observed
+    if not required or not required <= set(left) or not required <= observed:
+        return {"available": True, "identical": False, "reason": "incomplete object-dump coverage",
+                "missing_host_ticks": sorted(required - set(left))[:20],
+                "missing_client_ticks": sorted(required - observed)[:20],
+                "unexpected_client_ticks": sorted(observed - required)[:20]}
     compared = 0
-    for right in load_dump_passes(client_dump):
+    for right in passes:
+        if right and (required & set(range(min(right), max(right) + 1))) - set(right):
+            return {"available": True, "identical": False, "reason": "object-dump pass has a gap"}
         common = sorted(set(left) & set(right))
         compared += len(common)
         for tick in common:
@@ -272,11 +282,12 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
         window = min(max(ticks["host"]), max(ticks["client"]))
         passed, comparison = strict_compare(traces["host"], traces["client"], window, prefix=True, per_peer=PER_PEER_SUBSYSTEMS,
                                             client_away=away, client_rewinds=rewinds)
-        passed = passed and lengths["host"] == case["ticks"]
+        passed = passed and lengths["host"] == case["ticks"] and case["ticks"] in ticks["client"]
     result["held"] = {"held": held, "client_away": [list(pair) for pair in away], "client_rewinds": list(rewinds),
                       "shared_ticks": comparison.get("compared_ticks"), "client_last_tick": max(ticks["client"]) if lengths else None}
     result["simulation"] = comparison
-    result["objects"] = first_object_divergence(root / "host" / "trace.json.simdump.txt", root / "client" / "trace.json.simdump.txt")
+    expected_objects = set(ticks["host"]) - away_ticks if lengths else set()
+    result["objects"] = first_object_divergence(root / "host" / "trace.json.simdump.txt", root / "client" / "trace.json.simdump.txt", expected_objects)
     if case_name == "fence":
         rows = [dict(zip(("uid", "took", "health_before", "health_after", "x_before", "x_after"), match)) for match in FENCE.findall(texts["host"])]
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12],
