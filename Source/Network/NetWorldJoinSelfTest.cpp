@@ -17,6 +17,7 @@
 #include "NetReconnectTicketStore.h"
 #include "NetWorldJoin.h"
 #include "ActivityMan.h"
+#include "AudioMan.h"
 #include "LuaMan.h"
 #include "MovableMan.h"
 #include "PresetMan.h"
@@ -894,6 +895,12 @@ namespace RTE {
 			if (!sent.pending || sent.kind != c_NetWorldReportCatchUp) {
 				return Fail("appliedThrough-did-not-reach-E-minus-1: the joiner sent no catch-up report");
 			}
+			const uint64_t reportsBefore = catchUp.reportsSent;
+			const uint64_t repeatBegan = NetLockstepNowMs();
+			for (int pump = 0; pump < 100; ++pump) NetMatchService::StepWorldJoinCatchUpClient(pair.client, catchUp);
+			const uint64_t heartbeatLimit = (NetLockstepNowMs() - repeatBegan) / 250 + 1;
+			if (catchUp.reportsSent - reportsBefore > heartbeatLimit)
+				return Fail("unchanged catch-up progress flooded the wire: reports=" + std::to_string(catchUp.reportsSent - reportsBefore));
 			const uint64_t nowFrame = 80;
 			const NetPeerId connection = NetMatchService::ResolveWorldReportConnection(host, {}, sent.fromPeer);
 			if (connection != 7) {
@@ -1821,6 +1828,19 @@ namespace RTE {
 			if (client.IsFailed() || client.IsRejected()) return Fail("the end record failed the held seat's lobby: " + client.GetFailureReason());
 			if (!client.GetRoundEndedRecord() || *client.GetRoundEndedRecord() != packed) return Fail("the held seat's lobby did not keep the end record");
 			if (client.TakeEventsAfterRoundEnded().empty()) return Fail("the lobby read what followed the end record instead of leaving it to the next lobby");
+			if (!ScenarioRunner::InstallWorldCatchUp(4899, {MakeCommittedFrame(4900)}, &error)) return Fail(error);
+			NetWorldCatchUpClient catchUp;
+			catchUp.active = catchUp.privateMatch = true;
+			catchUp.snapshotTick = catchUp.appliedThrough = 4899;
+			std::optional<uint64_t> ended;
+			NetMatchService::StepWorldJoinCatchUpClient(client, catchUp, nullptr, &ended);
+			if (ended) { ScenarioRunner::ReleaseWorldCatchUp(); return Fail("the held seat completed before replaying the round's final tick"); }
+			NetLockstepReadyFrame final;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(4900, final, &error)) return Fail(error);
+			NetMatchService::StepWorldJoinCatchUpClient(client, catchUp, nullptr, &ended);
+			const bool complete = ended == packed && ScenarioRunner::WorldCatchUpAppliedThrough() == 4900 && !ScenarioRunner::WorldCatchUpMayGrant(4901, 1);
+			ScenarioRunner::ReleaseWorldCatchUp();
+			if (!complete) return Fail("the held seat did not finish on exactly the host's final tick");
 			std::cout << "[net-world-join-selftest] PASS a_round_ended_record_reaches_a_held_seat final=4900 winner=0" << std::endl;
 			return 0;
 		}
@@ -1909,7 +1929,7 @@ namespace RTE {
 			// starts the other side. The sessions are not ticked again, so only the round plane reads the wire.
 			const uint64_t e = 240;
 			NetLockstepCoordinator joinRound;
-			if (runner.StartWorldJoinLockstep(hostTransport, session, joinRound, e, &error)) {
+			if (runner.StartWorldJoinLockstep(hostTransport, session, joinRound, e, e, &error)) {
 				return Fail("world-join-lockstep-held-the-sim-update: the start reported a running lockstep while the remote was silent");
 			}
 			if (!runner.IsWorldJoinLockstepStarting()) {
@@ -1917,9 +1937,15 @@ namespace RTE {
 				            std::string(NetMatchRunner::StateName(runner.GetState())) + ", error \"" + error +
 				            "\") instead of handing the update back");
 			}
+			for (int poll = 0; poll < 32; ++poll) {
+				(void)runner.PumpWorldJoinLockstepStart(joinRound, e, &error);
+				if (!runner.IsWorldJoinLockstepStarting() || runner.GetWorldJoinStartTicks() != 1)
+					return Fail("join-start polls at one simulation tick spent the update deadline: " + error);
+			}
+			std::cout << "[net-world-join-selftest] PASS join_start_counts_simulation_updates_once" << std::endl;
 			int updates = 1;
 			for (; updates < static_cast<int>(config.worldJoinStartWaitTicks); ++updates) {
-				if (runner.PumpWorldJoinLockstepStart(joinRound, &error)) {
+				if (runner.PumpWorldJoinLockstepStart(joinRound, e + updates, &error)) {
 					return Fail("world-join-lockstep-held-the-sim-update: the silent remote produced a running lockstep after " +
 					            std::to_string(updates) + " updates");
 				}
@@ -1948,7 +1974,7 @@ namespace RTE {
 			}
 			int released = 0;
 			for (uint64_t now = 3000; released < 400 && !joinRound.IsRunning(); ++released, now += 10) {
-				(void)runner.PumpWorldJoinLockstepStart(joinRound, &error);
+				(void)runner.PumpWorldJoinLockstepStart(joinRound, e + updates + released, &error);
 				joinerSide.Tick(now);
 				hostTransport.AdvanceTimeMs(10);
 				clientTransport.AdvanceTimeMs(10);
@@ -3730,6 +3756,15 @@ namespace RTE {
 			}
 			if (!test.activates && (activation != 0 || reason.find(test.reason) == std::string::npos)) {
 				return Fail(std::string("measured-trail-") + test.name + ": activation=" + std::to_string(activation) + " reason=" + reason + " gate=" + gate);
+			}
+			if (std::string(test.name) == "at-the-head-inside-the-lead") {
+				const uint64_t first = activation;
+				if (!host.NoteCatchUpProgress(42, applied + 1, 1, 500, round + 30, &activation, &error) || activation <= first)
+					return Fail("a returner falling behind kept its uncommitted activation at " + std::to_string(first));
+				host.MarkActivationProposed(42);
+				const uint64_t agreed = activation;
+				if (!host.NoteCatchUpProgress(42, applied + 2, 1, 500, round + 60, &activation, &error) || host.FindSession(42)->activationTick != agreed)
+					return Fail("a committed return moved after the round accepted it");
 			}
 		}
 		std::cout << "[net-world-join-selftest] PASS activation_follows_the_measured_trail" << std::endl;
@@ -7395,9 +7430,14 @@ namespace RTE {
 	/// that debt must not refuse the next round's joiners, finish its failed rejoins as "match over" or turn its catch-up link drops
 	/// into a finished match; a torn-down service carries none of it either.
 	bool TestTheGoodbyeEndsWithItsRound(std::string* error) {
+		if (!AudioMan::IsConstructed()) AudioMan::Construct();
+		if (!MovableMan::IsConstructed()) MovableMan::Construct();
+		if (!LuaMan::IsConstructed()) LuaMan::Construct();
+		if (!PresetMan::IsConstructed()) PresetMan::Construct();
 		// A round's launch reads the network settings and its end the activity, as a menu-hosted round does.
 		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
 		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
+		if (!g_LuaMan.GetMasterScriptState().GetLuaState()) g_LuaMan.Initialize();
 		const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay, uint64_t round) {
 			NetLockstepConfig lockstep;
 			lockstep.sessionId = 0x474F4F4442594531ULL;
@@ -7467,6 +7507,10 @@ namespace RTE {
 		if (!playHeldRound(service, hostTwo, clientTwo, clientRoundTwo, 43703, 2, why)) {
 			*error = "the second-round fixture: " + why;
 			service.Destroy();
+			return false;
+		}
+		if (!LuaMan::CaptureRoundStartScripts(service.m_PendingRoundStartScripts, &why)) {
+			*error = "the next round could not capture its host scripts: " + why;
 			return false;
 		}
 		{
@@ -7673,6 +7717,7 @@ namespace RTE {
 	}
 
 	int RunNamed(const char* name) {
+		if (std::strcmp(name, "-net-world-activation-trail-selftest") == 0) return TestActivationFollowsTheMeasuredTrail();
 		if (std::strcmp(name, "-net-world-second-round-selftest") == 0) {
 			s_FailTag = "net-world-second-round-selftest";
 			std::string error;

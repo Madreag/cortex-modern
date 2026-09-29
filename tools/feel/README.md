@@ -29,15 +29,19 @@ of that wall time waiting for input, and have no wait over 50 ms. The elapsed
 window spans recovery; restarted pace counters cannot remove a rejoin pause.
 Confirmed ticks may fall at most 50 ms behind their steady wall-clock baseline;
 the maximum lag spans recovery and cannot be hidden by later catch-up. The
-`steady_missing_frame_stalls` counter remains a transport/prefetch diagnostic;
-actual blocking has a separate counter and wait log. The slow client's
+`steady_missing_frame_stalls` gate requires zero actual simulation waits in the
+steady interval. `ahead_input_misses` retains the network worker's attempts to
+commit future input before the simulation needs it. A silent arm's steady interval
+ends at its actual injection tick; the full round's counter is also retained.
+The per-tick hash clock measures throughput even when a render iteration skips
+several ticks during catch-up. The slow client's
 presentation checks still run.
 
 Delay checks read the engine's timestep and measured RTT, require the initial
 pick to cover `ceil(RTT / tick) + 1`, and compare the final displayed delay with
 the live configuration. The preview's 2 ms budget applies at the full negotiated
-depth, including 25 or more ticks. None of these additions has been run in the
-compile-only work phase.
+depth, including 25 or more ticks. The full matrix includes the two- and three-peer
+autosave arms as well as loss and silence.
 
 There is one local SP baseline per render cap. It wraps the stock P4 Alpha Duel
 activity, keeps its scene and loadout, seats two humans on teams 0 and 1, and

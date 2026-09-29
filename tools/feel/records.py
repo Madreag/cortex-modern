@@ -360,7 +360,7 @@ def compress_case_records(root):
         packed = path.with_name(path.name + '.gz')
         digest, size = hashlib.sha256(), 0
         with path.open('rb') as source, packed.open('xb') as target:
-            with gzip.GzipFile(filename='', fileobj=target, mode='wb', compresslevel=3, mtime=0) as stream:
+            with gzip.GzipFile(filename='', fileobj=target, mode='wb', compresslevel=9, mtime=0) as stream:
                 while block := source.read(1024 * 1024):
                     digest.update(block)
                     size += len(block)

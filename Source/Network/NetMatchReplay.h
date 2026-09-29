@@ -5,6 +5,8 @@
 
 #include <cstdint>
 #include <fstream>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -54,6 +56,8 @@ namespace RTE {
 
 	class NetMatchReplayWriter {
 	public:
+		NetMatchReplayWriter();
+		~NetMatchReplayWriter();
 		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
 		// Version 7 lets a committed tick name one actor once per sender, in sender order; version 6 carries the world checkpoint
 		// a segment stands on; version 5 preserved each committed command's sender beside the checksummed wire frame.
@@ -63,6 +67,7 @@ namespace RTE {
 		// A length prefix above the record cap; the writer appends it as the last record so playback
 		// tells a clean end from a mid-write crash. Version-1 files have no marker.
 		static constexpr uint32_t c_EndMarker = 0xFFFFFFFFU;
+		static constexpr size_t c_MaxRecordBytes = 1U << 24;
 
 		bool Open(const std::string& path, const NetMatchConfig& config, std::string* error = nullptr);
 		/// A world segment: the header names the checkpoint the records stand on. A null segment writes
@@ -76,14 +81,20 @@ namespace RTE {
 		bool SetAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool HasAgreedStart() const { return m_AgreedStart.has_value(); }
 		void Close();
-		bool IsOpen() const { return m_Out.is_open(); }
+		bool IsOpen() const { return m_Open && GetWriteError().empty(); }
+		std::string GetWriteError() const;
 		uint64_t GetFramesWritten() const { return m_FramesWritten; }
 		/// Copies complete recorded ticks from memory, with an end marker; call only at a tick boundary.
 		bool CopyDiagnosticReplay(std::string& bytes, bool& truncated) const;
 
 	private:
+		friend bool TestReplayStorageDoesNotBlockTicks(std::string* error);
 		bool WriteRecordPayload(const std::vector<uint8_t>& payload, std::string* error);
-		std::ofstream m_Out;
+		void WriteQueuedRecords();
+		struct WriteState;
+		std::unique_ptr<WriteState> m_Writes;
+		bool m_Open = false;
+		std::function<void()> m_BeforeWriteForTest;
 		uint64_t m_FramesWritten = 0;
 		std::vector<uint8_t> m_DiagnosticBytes;
 		uint64_t m_DiagnosticFrames = 0;

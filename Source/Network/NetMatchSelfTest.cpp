@@ -43,6 +43,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -335,21 +336,33 @@ namespace RTE {
 		}
 
 		bool TestInputDelayUsesTheSimTick(std::string* error) {
+			NetInputDelayEstimator unmeasured;
+			for (uint64_t now = 0; now < 500; now += 100) unmeasured.Observe(now, 0);
+			unmeasured.Observe(500, 401);
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 38 || unmeasured.JitterMs() != 0) {
+				*error = "unmeasured RTT samples inflate a returning link's delay";
+				return false;
+			}
+			for (uint64_t now = 600; now <= 6000; now += 100) unmeasured.Observe(now, 0);
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 38 || unmeasured.JitterMs() != 0) {
+				*error = "an unmeasured returning link loses its measured delay";
+				return false;
+			}
 			NetInputDelayEstimator estimate;
 			estimate.Observe(0, 401);
-			if (estimate.RequiredFrames(1000.0 / 60.0) != 26 || estimate.RequiredFrames(1000.0 / 120.0) != 50) {
-				*error = "401ms RTT did not cover the actual simulation tick length";
+			if (estimate.RequiredFrames(1000.0 / 60.0) != 38 || estimate.RequiredFrames(1000.0 / 120.0) != 74) {
+				*error = "401ms RTT did not cover one-way transit and one retransmission at the actual tick length";
 				return false;
 			}
 			for (uint64_t now = 100; now <= 5000; now += 100) estimate.Observe(now, now >= 4700 ? 501 : 401);
-			if (estimate.P95Ms() != 501 || estimate.JitterMs() != 100 || estimate.RequiredFrames(1000.0 / 60.0) != 38 ||
-			    estimate.Change(5000, 26, 1000.0 / 60.0) != std::optional<uint16_t>{38}) {
+			if (estimate.P95Ms() != 501 || estimate.JitterMs() != 100 || estimate.RequiredFrames(1000.0 / 60.0) != 53 ||
+			    estimate.Change(5000, 26, 1000.0 / 60.0) != std::optional<uint16_t>{53}) {
 				*error = "the five-second RTT tail did not raise the delay with its jitter margin";
 				return false;
 			}
 			for (uint64_t now = 5100; now <= 10100; now += 100) estimate.Observe(now, 100);
 			if (estimate.Change(10100, 38, 1000.0 / 60.0) || estimate.Change(15099, 38, 1000.0 / 60.0) ||
-			    estimate.Change(15100, 38, 1000.0 / 60.0) != std::optional<uint16_t>{7}) {
+			    estimate.Change(15100, 38, 1000.0 / 60.0) != std::optional<uint16_t>{10}) {
 				*error = "a lower delay did not wait for five settled seconds";
 				return false;
 			}
@@ -12356,7 +12369,9 @@ namespace RTE {
 		for (auto& peer : peers) peer.FinishMatch("round over");
 		std::string rtl;
 		const uint32_t lobbyBefore = ice[0]->lobbySends.load() + ice[1]->lobbySends.load();
+		peers[0].m_RoundStartScriptsWanted = false;
 		if (!peers[0].ReturnToLobby(&rtl)) return fail("host ReturnToLobby: " + rtl);
+		if (!peers[0].m_RoundStartScriptsWanted) return fail("a successor host's rematch did not rearm its start scripts");
 		const auto rematchAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
 		while (std::chrono::steady_clock::now() < rematchAt) {
 			peers[1].PumpSessionEvents();
@@ -12429,6 +12444,10 @@ namespace RTE {
 			return false;
 		}
 		service.FinishMatch("match over");
+		if (service.SeatMidAdmission(1)) {
+			*error = "an ended round still extends its tick cap for an AI-held seat";
+			return false;
+		}
 		if (!service.m_KeepEndedDirectoryLease || !service.ShouldKeepIceDirectoryLease() || !service.m_DirectoryHidden || service.m_DirectoryRetracted) {
 			*error = "a match that ended with a held seat did not keep its listing: keep_ended=" + std::to_string(service.m_KeepEndedDirectoryLease) +
 			         " hidden=" + std::to_string(service.m_DirectoryHidden) + " retracted=" + std::to_string(service.m_DirectoryRetracted);
@@ -12556,7 +12575,7 @@ namespace RTE {
 		    persistent.completedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
 			    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
-			        {"supported_lockstep_codec_version", NetLockstepCodec::c_CheckpointVersion}, {"supported_world_lockstep_codec_version", NetLockstepCodec::c_WorldVersion},
+			        {"supported_lockstep_codec_version", NetLockstepCodec::c_RecoveryDatagramVersion}, {"supported_world_lockstep_codec_version", NetLockstepCodec::c_WorldVersion},
 		        {"supported_match_config_version", NetMatchConfigUtil::c_Version}, {"supported_world_match_config_version", NetMatchConfigUtil::c_PersistentWorldVersion}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
@@ -14062,6 +14081,60 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestReplayStorageDoesNotBlockTicks(std::string* error) {
+		const auto path = std::filesystem::current_path() / ("replay-storage-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".ccreplay");
+		struct Cleanup {
+			std::filesystem::path path;
+			~Cleanup() { std::error_code ignored; std::filesystem::remove(path, ignored); }
+		} cleanup{path};
+		std::promise<void> entered, release;
+		auto enteredFuture = entered.get_future();
+		auto released = release.get_future().share();
+		std::atomic<bool> first{true};
+		NetMatchReplayWriter writer;
+		if (!writer.Open(path.string(), MakeConfig(), error)) return false;
+		writer.m_BeforeWriteForTest = [&] {
+			if (first.exchange(false)) { entered.set_value(); released.wait(); }
+		};
+		std::string writeError;
+		auto written = std::async(std::launch::async, [&] { return writer.WriteFrame(43, {}, {}, &writeError); });
+		const bool storageEntered = enteredFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+		const bool tickReturned = written.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
+		release.set_value();
+		const bool accepted = written.get();
+		if (!storageEntered || !tickReturned || !accepted) {
+			writer.Close();
+			*error = "the simulation waited on blocked replay storage: entered=" + std::to_string(storageEntered) + " returned=" + std::to_string(tickReturned) + " error=" + writeError;
+			return false;
+		}
+		if (!writer.WriteFrame(44, {}, {}, error)) return false;
+		writer.Close();
+		NetReplayVerifyReport report;
+		if (!NetMatchReplayReader::Verify(path.string(), report) || report.frames != 2 || report.firstFrame != 43 || report.lastFrame != 44) {
+			*error = "closing the replay did not drain its ticks in order"; return false;
+		}
+		std::string failedWrite;
+		{
+			NetMatchReplayWriter failed;
+			if (!failed.Open(path.string(), MakeConfig(), error)) return false;
+			failed.m_BeforeWriteForTest = [] { throw std::runtime_error("injected replay write failure"); };
+			(void)failed.WriteFrame(50, {}, {}, error);
+			failed.Close();
+			failedWrite = failed.GetWriteError();
+		}
+		if (failedWrite.find("injected replay write failure") == std::string::npos || NetMatchReplayReader::Verify(path.string(), report) || report.endMarker) {
+			*error = "a failed storage worker sealed a successful recording"; return false;
+		}
+		if (!writer.Open(path.string(), MakeConfig(), error)) return false;
+		std::string limitError;
+		if (writer.WriteRecordPayload(std::vector<uint8_t>(NetMatchReplayWriter::c_MaxRecordBytes + 1), &limitError) || limitError.find("limit") == std::string::npos) {
+			*error = "the replay queue accepted a record beyond its existing size limit"; return false;
+		}
+		writer.Close();
+		std::cout << "[net-match-selftest] PASS replay_storage_does_not_block_ticks" << std::endl;
+		return true;
+	}
+
 	int NetMatchSelfTest::RunBeforeInitialization() {
 		std::string error;
 		if (!TestIceDefaultsAndOverrides(&error) || !TestRelayOfferAndPolicy(&error)) {
@@ -14095,6 +14168,7 @@ namespace RTE {
 			rowsPassed = false;
 		};
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
+		row(&TestReplayStorageDoesNotBlockTicks, "replay_storage_does_not_block_ticks");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");

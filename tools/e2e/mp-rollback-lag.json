@@ -774,7 +774,7 @@
       "id": "lag-100-item9a_wall_tps",
       "what": "The fast peer sustains the existing feel gate throughput.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-100",
       "sim_ticks": [
@@ -787,7 +787,7 @@
       "id": "lag-100-item9a_net_wait",
       "what": "The fast peer spends less than one percent of steady wall time waiting.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-100",
       "sim_ticks": [
@@ -800,7 +800,7 @@
       "id": "lag-100-item9a_longest_wait",
       "what": "No individual wait exceeds the existing 50 ms bound.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-100",
       "sim_ticks": [
@@ -813,7 +813,7 @@
       "id": "lag-100-item9a_confirmed_horizon_lag",
       "what": "The fast peer's confirmed tick stays within 50 ms of the steady clock, recovery included.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-100",
       "sim_ticks": [
@@ -826,7 +826,7 @@
       "id": "lag-100-item9a_loss_armed",
       "what": "Five percent send/receive loss is armed on the slow peer.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-100",
       "sim_ticks": [
@@ -837,9 +837,9 @@
     },
     {
       "id": "lag-100-item9a_hold",
-      "what": "The peer silent at tick 600 is held to the AI.",
+      "what": "The stalled peer is held to the AI at an agreed frame.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-100",
       "sim_ticks": [
@@ -852,7 +852,7 @@
       "id": "lag-100-item9a_ai_takeover_hash",
       "what": "Both surviving peers agree after the AI takeover.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-100",
       "sim_ticks": [
@@ -865,7 +865,7 @@
       "id": "lag-100-item9a_reclaim",
       "what": "The held seat is reclaimed and its live actors are restored.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-100",
       "sim_ticks": [
@@ -892,7 +892,7 @@
       "id": "lag-200-item9a_wall_tps",
       "what": "The fast peer sustains the existing feel gate throughput.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-200",
       "sim_ticks": [
@@ -905,7 +905,7 @@
       "id": "lag-200-item9a_net_wait",
       "what": "The fast peer spends less than one percent of steady wall time waiting.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-200",
       "sim_ticks": [
@@ -918,7 +918,7 @@
       "id": "lag-200-item9a_longest_wait",
       "what": "No individual wait exceeds the existing 50 ms bound.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-200",
       "sim_ticks": [
@@ -931,7 +931,7 @@
       "id": "lag-200-item9a_confirmed_horizon_lag",
       "what": "The fast peer's confirmed tick stays within 50 ms of the steady clock, recovery included.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-200",
       "sim_ticks": [
@@ -944,7 +944,7 @@
       "id": "lag-200-item9a_loss_armed",
       "what": "Five percent send/receive loss is armed on the slow peer.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-200",
       "sim_ticks": [
@@ -955,9 +955,9 @@
     },
     {
       "id": "lag-200-item9a_hold",
-      "what": "The peer silent at tick 600 is held to the AI.",
+      "what": "The stalled peer is held to the AI at an agreed frame.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-200",
       "sim_ticks": [
@@ -970,7 +970,7 @@
       "id": "lag-200-item9a_ai_takeover_hash",
       "what": "Both surviving peers agree after the AI takeover.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-200",
       "sim_ticks": [
@@ -983,7 +983,7 @@
       "id": "lag-200-item9a_reclaim",
       "what": "The held seat is reclaimed and its live actors are restored.",
       "screen": "game",
-      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "assert": "tools/feel/report.py item9a_gates",
       "peer": "host",
       "run": "lag-200",
       "sim_ticks": [
@@ -1115,6 +1115,474 @@
         "(?i)resync:",
         "(?i)resyncing the match"
       ]
+    },
+    {
+      "id": "lag-100-item9a_steady_stalls",
+      "what": "The fast peer has zero blocking waits before the injected spike.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_steady_stalls"
+    },
+    {
+      "id": "lag-100-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero missing-frame stalls in the steady window.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
+    },
+    {
+      "id": "lag-100-item9a_spike_waits",
+      "what": "One injected spike causes at most one blocking wait through the return.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_spike_waits"
+    },
+    {
+      "id": "lag-100-item9a_no_rehold",
+      "what": "No seat is held within 100 frames after any return.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_no_rehold"
+    },
+    {
+      "id": "lag-100-item9a_private_rejoin",
+      "what": "The held seat returns without reloading either survivor.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_private_rejoin"
+    },
+    {
+      "id": "lag-100-survivor-item9a_wall_tps",
+      "what": "The fast peer sustains the existing feel gate throughput.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_wall_tps"
+    },
+    {
+      "id": "lag-100-survivor-item9a_net_wait",
+      "what": "The fast peer spends less than one percent of steady wall time waiting.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_net_wait"
+    },
+    {
+      "id": "lag-100-survivor-item9a_longest_wait",
+      "what": "No individual wait exceeds the existing 50 ms bound.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_longest_wait"
+    },
+    {
+      "id": "lag-100-survivor-item9a_confirmed_horizon_lag",
+      "what": "The fast peer's confirmed tick stays within 50 ms of the steady clock, recovery included.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_confirmed_horizon_lag"
+    },
+    {
+      "id": "lag-100-survivor-item9a_loss_armed",
+      "what": "Five percent send/receive loss is armed on the slow peer.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_loss_armed"
+    },
+    {
+      "id": "lag-100-survivor-item9a_hold",
+      "what": "The stalled peer is held to the AI at an agreed frame.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_hold"
+    },
+    {
+      "id": "lag-100-survivor-item9a_ai_takeover_hash",
+      "what": "Both surviving peers agree after the AI takeover.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_ai_takeover_hash"
+    },
+    {
+      "id": "lag-100-survivor-item9a_rejoin",
+      "what": "The held seat is reclaimed and its live actors are restored.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_rejoin"
+    },
+    {
+      "id": "lag-100-survivor-item9a_steady_stalls",
+      "what": "The fast peer has zero blocking waits before the injected spike.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_steady_stalls"
+    },
+    {
+      "id": "lag-100-survivor-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero missing-frame stalls in the steady window.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
+    },
+    {
+      "id": "lag-100-survivor-item9a_spike_waits",
+      "what": "One injected spike causes at most one blocking wait through the return.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_spike_waits"
+    },
+    {
+      "id": "lag-100-survivor-item9a_no_rehold",
+      "what": "No seat is held within 100 frames after any return.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_no_rehold"
+    },
+    {
+      "id": "lag-100-survivor-item9a_private_rejoin",
+      "what": "The held seat returns without reloading either survivor.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_private_rejoin"
+    },
+    {
+      "id": "lag-200-item9a_steady_stalls",
+      "what": "The fast peer has zero blocking waits before the injected spike.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_steady_stalls"
+    },
+    {
+      "id": "lag-200-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero missing-frame stalls in the steady window.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
+    },
+    {
+      "id": "lag-200-item9a_spike_waits",
+      "what": "One injected spike causes at most one blocking wait through the return.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_spike_waits"
+    },
+    {
+      "id": "lag-200-item9a_no_rehold",
+      "what": "No seat is held within 100 frames after any return.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_no_rehold"
+    },
+    {
+      "id": "lag-200-item9a_private_rejoin",
+      "what": "The held seat returns without reloading either survivor.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_private_rejoin"
+    },
+    {
+      "id": "lag-200-survivor-item9a_wall_tps",
+      "what": "The fast peer sustains the existing feel gate throughput.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_wall_tps"
+    },
+    {
+      "id": "lag-200-survivor-item9a_net_wait",
+      "what": "The fast peer spends less than one percent of steady wall time waiting.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_net_wait"
+    },
+    {
+      "id": "lag-200-survivor-item9a_longest_wait",
+      "what": "No individual wait exceeds the existing 50 ms bound.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_longest_wait"
+    },
+    {
+      "id": "lag-200-survivor-item9a_confirmed_horizon_lag",
+      "what": "The fast peer's confirmed tick stays within 50 ms of the steady clock, recovery included.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_confirmed_horizon_lag"
+    },
+    {
+      "id": "lag-200-survivor-item9a_loss_armed",
+      "what": "Five percent send/receive loss is armed on the slow peer.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_loss_armed"
+    },
+    {
+      "id": "lag-200-survivor-item9a_hold",
+      "what": "The stalled peer is held to the AI at an agreed frame.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_hold"
+    },
+    {
+      "id": "lag-200-survivor-item9a_ai_takeover_hash",
+      "what": "Both surviving peers agree after the AI takeover.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_ai_takeover_hash"
+    },
+    {
+      "id": "lag-200-survivor-item9a_rejoin",
+      "what": "The held seat is reclaimed and its live actors are restored.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_rejoin"
+    },
+    {
+      "id": "lag-200-survivor-item9a_steady_stalls",
+      "what": "The fast peer has zero blocking waits before the injected spike.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_steady_stalls"
+    },
+    {
+      "id": "lag-200-survivor-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero missing-frame stalls in the steady window.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
+    },
+    {
+      "id": "lag-200-survivor-item9a_spike_waits",
+      "what": "One injected spike causes at most one blocking wait through the return.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_spike_waits"
+    },
+    {
+      "id": "lag-200-survivor-item9a_no_rehold",
+      "what": "No seat is held within 100 frames after any return.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_no_rehold"
+    },
+    {
+      "id": "lag-200-survivor-item9a_private_rejoin",
+      "what": "The held seat returns without reloading either survivor.",
+      "screen": "game",
+      "assert": "tools/feel/report.py item9a_gates",
+      "peer": "survivor",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_private_rejoin"
     }
   ]
 }

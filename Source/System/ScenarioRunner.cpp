@@ -1,4 +1,5 @@
 #include "ScenarioRunner.h"
+#include "System.h"
 #include "Actor.h"
 #include "ActivityMan.h"
 #include "AudioMan.h"
@@ -156,6 +157,15 @@ namespace RTE {
 		struct LockstepWaitTimer {
 			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
+		};
+		struct LockstepWorkTimer {
+			uint64_t tick;
+			const char* phase;
+			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			~LockstepWorkTimer() {
+				const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+				if (ms >= 50) System::PrintDiagnosticLine("[net-frame-work] frame=" + std::to_string(tick) + " phase=" + phase + " ms=" + std::to_string(ms));
+			}
 		};
 		void (*s_StallEventPoll)() = nullptr;
 		NetMatchReplayWriter s_ReplayWriter;
@@ -2081,6 +2091,11 @@ namespace RTE {
 		}
 		std::vector<NetGameCommand> commands;
 		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
+		if (producing->IsSeatReclaimGap(config.localPeerId, targetFrame) ||
+		    (config.localPeerId == producing->GetHostPeerId() && producing->IsSeatUnderAI(config.localPeerId, targetFrame))) {
+			s_PendingLocalGameCommands.clear();
+			return producing->QueueLocalInput(tick, frames, {}, error);
+		}
 		// The AI of a held seat writes nothing that lands once the seat is its player's again: every peer would refuse it there.
 		const auto ownerAtTarget = [&](int64_t uid, int team) {
 			if (const auto claim = s_LockstepDroppedControlOverrides.find(uid); claim != s_LockstepDroppedControlOverrides.end() && producing->HeldSeatReturnsBy(claim->second, targetFrame))
@@ -2754,12 +2769,16 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::CloseLockstepReplayRecord() {
-		if (s_ReplayWriter.IsOpen()) {
-			s_ReplayRecordFrames = s_ReplayWriter.GetFramesWritten();
-			s_ReplayRecordClosed = true;
-			std::cout << "[net-match] replay recorded: " << s_ReplayRecordFrames << " frames" << std::endl;
-		}
+		const bool wasOpen = s_ReplayWriter.IsOpen();
+		const uint64_t frames = s_ReplayWriter.GetFramesWritten();
 		s_ReplayWriter.Close();
+		const std::string writeError = s_ReplayWriter.GetWriteError();
+		if (wasOpen || !writeError.empty()) {
+			s_ReplayRecordFrames = writeError.empty() ? frames : 0;
+			s_ReplayRecordClosed = true;
+			if (writeError.empty()) std::cout << "[net-match] replay recorded: " << s_ReplayRecordFrames << " frames" << std::endl;
+			else std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
+		}
 		s_WorldSegment = {};
 		if (s_ReplayRecordArmedForRound) {
 			s_ReplayRecordArmedPath.clear();
@@ -3091,6 +3110,7 @@ namespace RTE {
 		// The recorder captures every committed tick: all peers' frames and commands. The codec wants one
 		// UID-sorted set; command order re-sorts by sender at apply.
 		const auto record = [tick](const NetLockstepReadyFrame& ready) {
+			LockstepWorkTimer work{tick, "record"};
 			// Two inputs for one actor keep the order every peer applies them in, so the recording replays to the same one.
 			std::vector<ControllerFrame> allFrames;
 			for (const ControllerFrame* input: CommittedControllerFramesInSenderOrder(ready, GetLockstepLocalPeerId())) allFrames.push_back(*input);
@@ -3161,7 +3181,10 @@ namespace RTE {
 			PublishLocalStartup();
 		}
 		while (true) {
-			if (!s_LockstepCoordinator->HasReadyFrame(tick)) s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			if (!s_LockstepCoordinator->HasReadyFrame(tick)) {
+				LockstepWorkTimer work{tick, "poll"};
+				s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			}
 			// A stalled round must not stall the admission plane with it: the peer we are waiting on may
 			// be waiting on an answer only this pump can send. Paced to the tick so the plane's own
 			// clock does not run ahead of the wall clock while we spin.
@@ -3169,6 +3192,7 @@ namespace RTE {
 				const uint32_t sincePumpMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count());
 				if (sincePumpMs >= nextPumpMs) {
 					nextPumpMs = sincePumpMs + 15;
+					LockstepWorkTimer work{tick, "session-pump"};
 					s_SessionPump();
 				}
 			}

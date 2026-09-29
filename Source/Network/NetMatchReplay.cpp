@@ -1,13 +1,30 @@
 #include "NetMatchReplay.h"
 #include "TelemetryBundle.h"
+#include "System.h"
 
 #include "NetLobbyProtocol.h"
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 
 namespace RTE {
 
 	namespace {
+		struct ReplayWorkTimer {
+			uint64_t frame;
+			const char* phase;
+			size_t bytes = 0;
+			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			~ReplayWorkTimer() {
+				const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+				if (ms >= 10) System::PrintDiagnosticLine("[net-replay-work] frame=" + std::to_string(frame) + " phase=" + phase + " ms=" + std::to_string(ms) + " bytes=" + std::to_string(bytes));
+			}
+		};
+
 		void AppendU16(std::vector<uint8_t>& out, uint16_t value) {
 			out.push_back(static_cast<uint8_t>(value & 0xFFU));
 			out.push_back(static_cast<uint8_t>((value >> 8) & 0xFFU));
@@ -113,12 +130,90 @@ namespace RTE {
 		}
 	} // namespace
 
+	struct NetMatchReplayWriter::WriteState {
+		struct Record {
+			std::vector<uint8_t> prefix;
+			std::vector<uint8_t> payload;
+			uint64_t ordinal = 0;
+		};
+		std::ofstream out;
+		std::mutex mutex;
+		std::condition_variable ready;
+		std::deque<std::shared_ptr<const Record>> records;
+		std::thread worker;
+		size_t pendingBytes = 0;
+		bool stop = false;
+		bool finished = false;
+		std::string error;
+	};
+
+	NetMatchReplayWriter::NetMatchReplayWriter() = default;
+
+	NetMatchReplayWriter::~NetMatchReplayWriter() {
+		Close();
+		if (m_Writes && m_Writes->worker.joinable()) m_Writes->worker.join();
+	}
+
+	std::string NetMatchReplayWriter::GetWriteError() const {
+		if (!m_Writes) return {};
+		std::lock_guard lock(m_Writes->mutex);
+		return m_Writes->error;
+	}
+
+	void NetMatchReplayWriter::WriteQueuedRecords() {
+		auto& state = *m_Writes;
+		for (;;) {
+			std::shared_ptr<const WriteState::Record> record;
+			{
+				std::unique_lock lock(state.mutex);
+				state.ready.wait(lock, [&] { return state.stop || !state.records.empty(); });
+				if (state.records.empty()) break;
+				record = std::move(state.records.front());
+				state.records.pop_front();
+			}
+			std::string failure;
+			try {
+				if (m_BeforeWriteForTest) m_BeforeWriteForTest();
+				ReplayWorkTimer work{record->ordinal, "write", record->payload.size()};
+				state.out.write(reinterpret_cast<const char*>(record->prefix.data()), static_cast<std::streamsize>(record->prefix.size()));
+				state.out.write(reinterpret_cast<const char*>(record->payload.data()), static_cast<std::streamsize>(record->payload.size()));
+				if (!state.out) failure = "could not write a replay record";
+			} catch (const std::exception& exception) {
+				failure = exception.what();
+			}
+			{
+				std::lock_guard lock(state.mutex);
+				state.pendingBytes -= record->prefix.size() + record->payload.size();
+				if (!failure.empty()) {
+					state.error = std::move(failure);
+					state.records.clear();
+					state.pendingBytes = 0;
+					break;
+				}
+			}
+		}
+		if (GetWriteError().empty() && state.out.good()) {
+			std::vector<uint8_t> endMarker;
+			AppendU32(endMarker, c_EndMarker);
+			state.out.write(reinterpret_cast<const char*>(endMarker.data()), static_cast<std::streamsize>(endMarker.size()));
+		}
+		state.out.close();
+		std::lock_guard lock(state.mutex);
+		if (!state.out && state.error.empty()) state.error = "could not finish the replay file";
+		state.finished = true;
+	}
+
 	bool NetMatchReplayWriter::Open(const std::string& path, const NetMatchConfig& config, std::string* error) {
 		return Open(path, config, nullptr, error);
 	}
 
 	bool NetMatchReplayWriter::Open(const std::string& path, const NetMatchConfig& config, const NetWorldSegmentHeader* segment, std::string* error) {
 		Close();
+		if (m_Writes && m_Writes->worker.joinable()) {
+			if (error) *error = "the failed replay storage worker is still finishing";
+			return false;
+		}
+		m_Writes = std::make_unique<WriteState>();
 		if (segment && (segment->worldId.empty() || segment->worldId.size() > c_MaxSegmentFieldBytes ||
 		                segment->worldDigest.size() > c_MaxSegmentFieldBytes || segment->tick == 0)) {
 			if (error) *error = "invalid world segment header";
@@ -129,8 +224,8 @@ namespace RTE {
 		m_DiagnosticTruncated = false;
 		m_AgreedStart.reset();
 		m_AgreedStartWritten = false;
-		m_Out.open(path, std::ios::binary | std::ios::trunc);
-		if (!m_Out) {
+		m_Writes->out.open(path, std::ios::binary | std::ios::trunc);
+		if (!m_Writes->out) {
 			if (error) *error = "could not open replay file for writing: " + path;
 			return false;
 		}
@@ -158,8 +253,8 @@ namespace RTE {
 			AppendU64(header, segment->boot);
 			AppendString(header, segment->worldDigest);
 		}
-		m_Out.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size()));
-		if (!m_Out) {
+		m_Writes->out.write(reinterpret_cast<const char*>(header.data()), static_cast<std::streamsize>(header.size()));
+		if (!m_Writes->out) {
 			if (error) *error = "could not write the replay header";
 			Close();
 			return false;
@@ -168,12 +263,14 @@ namespace RTE {
 		if (header.size() + 4 <= TelemetryBundle::c_MemberLimit) {
 			m_DiagnosticBytes = header;
 		} else m_DiagnosticTruncated = true;
+		m_Open = true;
+		m_Writes->worker = std::thread(&NetMatchReplayWriter::WriteQueuedRecords, this);
 		return true;
 	}
 
 	bool NetMatchReplayWriter::SetAgreedStart(const NetLockstepStart& start, std::string* error) {
-		if (!m_Out.is_open()) {
-			if (error) *error = "replay writer is not open";
+		if (!IsOpen()) {
+			if (error) *error = GetWriteError().empty() ? "replay writer is not open" : GetWriteError();
 			return false;
 		}
 		if (!start.agreedStartRecord) {
@@ -209,8 +306,9 @@ namespace RTE {
 	}
 
 	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error) {
-		if (!m_Out.is_open()) {
-			if (error) *error = "replay writer is not open";
+		ReplayWorkTimer work{frame, "frame"};
+		if (!IsOpen()) {
+			if (error) *error = GetWriteError().empty() ? "replay writer is not open" : GetWriteError();
 			return false;
 		}
 		NetLockstepFrame record;
@@ -313,20 +411,32 @@ namespace RTE {
 	}
 
 	bool NetMatchReplayWriter::WriteRecordPayload(const std::vector<uint8_t>& payload, std::string* error) {
-		if (!m_Out.is_open() || payload.empty()) {
+		if (!m_Open || payload.empty() || !m_Writes) {
 			if (error) *error = "replay writer is not open";
 			return false;
 		}
 		std::vector<uint8_t> lengthPrefix;
 		AppendU32(lengthPrefix, static_cast<uint32_t>(payload.size()));
 		AppendU32(lengthPrefix, ControllerFrameCodec::PayloadChecksum(payload));
-		m_Out.write(reinterpret_cast<const char*>(lengthPrefix.data()), static_cast<std::streamsize>(lengthPrefix.size()));
-		m_Out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
-		if (!m_Out) {
-			if (error) *error = "could not write a replay record";
-			return false;
+		auto record = std::make_shared<WriteState::Record>();
+		record->prefix = lengthPrefix;
+		record->payload = payload;
+		record->ordinal = m_FramesWritten + 1;
+		{
+			std::lock_guard lock(m_Writes->mutex);
+			const size_t bytes = lengthPrefix.size() + payload.size();
+			if (payload.size() > c_MaxRecordBytes || bytes > c_MaxRecordBytes + 8 - m_Writes->pendingBytes)
+				m_Writes->error = "the replay storage queue reached its record-size limit";
+			if (!m_Writes->error.empty()) {
+				if (error) *error = m_Writes->error;
+				return false;
+			}
+			m_Writes->pendingBytes += bytes;
+			m_Writes->records.push_back(record);
 		}
+		m_Writes->ready.notify_one();
 		if (!m_DiagnosticTruncated) {
+			ReplayWorkTimer work{m_FramesWritten + 1, "diagnostic", m_DiagnosticBytes.size()};
 			if (m_DiagnosticBytes.size() + lengthPrefix.size() + payload.size() + 4 <= TelemetryBundle::c_MemberLimit) {
 				m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), lengthPrefix.begin(), lengthPrefix.end());
 				m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), payload.begin(), payload.end());
@@ -346,14 +456,18 @@ namespace RTE {
 	}
 
 	void NetMatchReplayWriter::Close() {
-		if (m_Out.is_open()) {
-			// A successful close seals even an empty segment.
-			if (m_Out.good()) {
-				std::vector<uint8_t> endMarker;
-				AppendU32(endMarker, c_EndMarker);
-				m_Out.write(reinterpret_cast<const char*>(endMarker.data()), static_cast<std::streamsize>(endMarker.size()));
+		m_Open = false;
+		if (m_Writes) {
+			bool failedWhileBusy = false;
+			{
+				std::lock_guard lock(m_Writes->mutex);
+				m_Writes->stop = true;
+				failedWhileBusy = !m_Writes->error.empty() && !m_Writes->finished;
 			}
-			m_Out.close();
+			m_Writes->ready.notify_one();
+			if (m_Writes->worker.joinable()) {
+				if (!failedWhileBusy) m_Writes->worker.join();
+			} else if (m_Writes->out.is_open()) m_Writes->out.close();
 		}
 		m_FramesWritten = 0;
 		m_AgreedStart.reset();
@@ -497,7 +611,7 @@ namespace RTE {
 			return false;
 		}
 		m_LastStatus = NetReplayReadStatus::Corrupt;
-		if (recordLength == 0 || recordLength > (1U << 24)) {
+		if (recordLength == 0 || recordLength > NetMatchReplayWriter::c_MaxRecordBytes) {
 			if (error) *error = "invalid replay record length";
 			return false;
 		}
