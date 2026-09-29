@@ -135,6 +135,11 @@ def run_case(repo, root, case, port):
                 report = json.loads((root / f"{who}-match.json").read_text())
                 lockstep = report.get("runner", {}).get("lockstep", {})
                 result["holds"][who] = {key: value for key, value in lockstep.items() if "hold" in key or "pause" in key}
+                peer_holds = {peer: counters["holds"] for peer, counters in lockstep["peers"].items()}
+                result["holds"][who]["per_peer_holds"] = peer_holds
+                result["checks"][f"{who}_zero_hold_counters"] = (len(peer_holds) == len(names)
+                    and all(count == 0 for count in peer_holds.values()) and lockstep["ai_held_peer_ids"] == []
+                    and lockstep["relay_congestion_holds"] == 0)
                 # A committed seat hold is also printed at its boundary, including a zero-length recovery.
                 log = (root / who / "stdout.log").read_text(errors="replace")
                 result["checks"][f"{who}_no_seat_hold"] = "[net-match] held client:" not in log
