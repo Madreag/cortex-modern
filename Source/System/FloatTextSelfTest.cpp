@@ -464,6 +464,15 @@ namespace RTE::FloatTextSelfTest {
 			return Hex(aim.m_X) + "/" + Hex(aim.m_Y) + "/" + Hex(mouse.m_X) + "/" + Hex(mouse.m_Y);
 		}
 
+		std::string ProbeSettingsDeltaTime() {
+			const float previous = g_TimerMan.GetDeltaTimeSecs();
+			Reader reader(std::make_unique<std::istringstream>("0.125\n"), "settings-locale.ini");
+			g_SettingsMan.ReadProperty("DeltaTime", reader);
+			const std::string result = Hex(g_TimerMan.GetDeltaTimeSecs());
+			g_TimerMan.SetDeltaTimeSecs(previous);
+			return result;
+		}
+
 		template <class FloatType> FloatType ReadThroughReader(const std::string& text) {
 			Reader reader(std::make_unique<std::istringstream>(text), "float-text-selftest.ini");
 			FloatType value = 0;
@@ -607,6 +616,7 @@ namespace RTE::FloatTextSelfTest {
 			std::cout << Tag << " stage=hexfloat" << std::endl;
 			static const LocaleProbe probes[] = {
 			    {"input_script_vectors", ProbeInputScriptVectors, "0x3fc00000/0xbe800000/0xbf000000/0x3f400000"},
+			    {"settings_delta_time", ProbeSettingsDeltaTime, "0x3e000000"},
 			    {"reader_float", ProbeReaderFloat, "0x3fc00000/0x3f800000"},
 			    {"reader_double", ProbeReaderDouble, "0xbfb999999999999a/0xbff0000000000000"},
 			    // 0x3f800000 is the answer when Reader::c_ReadFloatsAsFloats is false: flipping that switch flips this.

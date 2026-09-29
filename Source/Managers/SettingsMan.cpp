@@ -13,9 +13,11 @@
 #include "AutosaveStore.h"
 #include "NetMatchConfig.h"
 #include "System.h"
+#include "FloatText.h"
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
@@ -31,6 +33,18 @@
 using namespace RTE;
 
 namespace {
+	float ReadSettingFloat(const std::string& text) {
+		// Keep stof's prefix grammar and exceptions, with the decimal point the writer uses.
+		const int previousErrno = errno;
+		errno = 0;
+		char* end = nullptr;
+		const float value = FloatText::StrToFloating(text.c_str(), &end, float());
+		const int parseError = errno;
+		errno = previousErrno;
+		if (end == text.c_str()) throw std::invalid_argument("stof");
+		if (parseError == ERANGE) throw std::out_of_range("stof");
+		return value;
+	}
 
 	int g_UnknownEnumWarnings = 0;
 
@@ -306,11 +320,11 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("Fullscreen", { reader >> g_WindowMan.m_Fullscreen; });
 	MatchProperty("UseMultiDisplays", { reader >> g_WindowMan.m_UseMultiDisplays; });
 	MatchProperty("TwoPlayerSplitscreenVertSplit", { reader >> g_FrameMan.m_TwoPlayerVSplit; });
-	MatchProperty("MasterVolume", { g_AudioMan.SetMasterVolume(std::stof(reader.ReadPropValue()) / 100.0F); });
+	MatchProperty("MasterVolume", { g_AudioMan.SetMasterVolume(ReadSettingFloat(reader.ReadPropValue()) / 100.0F); });
 	MatchProperty("MuteMaster", { reader >> g_AudioMan.m_MuteMaster; });
-	MatchProperty("MusicVolume", { g_AudioMan.SetMusicVolume(std::stof(reader.ReadPropValue()) / 100.0F); });
+	MatchProperty("MusicVolume", { g_AudioMan.SetMusicVolume(ReadSettingFloat(reader.ReadPropValue()) / 100.0F); });
 	MatchProperty("MuteMusic", { reader >> g_AudioMan.m_MuteMusic; });
-	MatchProperty("SoundVolume", { g_AudioMan.SetSoundsVolume(std::stof(reader.ReadPropValue()) / 100.0F); });
+	MatchProperty("SoundVolume", { g_AudioMan.SetSoundsVolume(ReadSettingFloat(reader.ReadPropValue()) / 100.0F); });
 	MatchProperty("MuteSounds", { reader >> g_AudioMan.m_MuteSounds; });
 	MatchProperty("MuteAudioOnFocusLoss", { reader >> g_AudioMan.m_MuteAudioOnFocusLoss; });
 	MatchProperty("SoundPanningEffectStrength", {
@@ -328,7 +342,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("FlashOnBrainDamage", { reader >> m_FlashOnBrainDamage; });
 	MatchProperty("BlipOnRevealUnseen", { reader >> m_BlipOnRevealUnseen; });
 	MatchProperty("MaxUnheldItems", { reader >> g_MovableMan.m_MaxDroppedItems; });
-	MatchProperty("UnheldItemsHUDDisplayRange", { SetUnheldItemsHUDDisplayRange(std::stof(reader.ReadPropValue())); });
+	MatchProperty("UnheldItemsHUDDisplayRange", { SetUnheldItemsHUDDisplayRange(ReadSettingFloat(reader.ReadPropValue())); });
 	MatchProperty("AlwaysDisplayUnheldItemsInStrategicMode", { reader >> m_AlwaysDisplayUnheldItemsInStrategicMode; });
 	MatchProperty("SubPieMenuHoverOpenDelay", { reader >> m_SubPieMenuHoverOpenDelay; });
 	MatchProperty("EndlessMode", { reader >> m_EndlessMetaGameMode; });
@@ -431,7 +445,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("ForceImmediatePathingRequestCompletion", { reader >> m_ForceImmediatePathingRequestCompletion; });
 	MatchProperty("EnableParticleSettling", { reader >> g_MovableMan.m_SettlingEnabled; });
 	MatchProperty("EnableMOSubtraction", { reader >> g_MovableMan.m_MOSubtractionEnabled; });
-	MatchProperty("DeltaTime", { g_TimerMan.SetDeltaTimeSecs(std::stof(reader.ReadPropValue())); });
+	MatchProperty("DeltaTime", { g_TimerMan.SetDeltaTimeSecs(ReadSettingFloat(reader.ReadPropValue())); });
 	MatchProperty("AllowSavingToBase", { reader >> m_AllowSavingToBase; });
 	MatchProperty("ShowMetaScenes", { reader >> m_ShowMetaScenes; });
 	MatchProperty("SkipIntro", { reader >> m_SkipIntro; });
@@ -439,10 +453,10 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("CaseSensitiveFilePaths", { System::EnableFilePathCaseSensitivity(std::stoi(reader.ReadPropValue())); });
 	MatchProperty("DisableLoadingScreenProgressReport", { reader >> m_DisableLoadingScreenProgressReport; });
 	MatchProperty("LoadingScreenProgressReportPrecision", { reader >> m_LoadingScreenProgressReportPrecision; });
-	MatchProperty("ConsoleScreenRatio", { g_ConsoleMan.SetConsoleScreenSize(std::stof(reader.ReadPropValue())); });
+	MatchProperty("ConsoleScreenRatio", { g_ConsoleMan.SetConsoleScreenSize(ReadSettingFloat(reader.ReadPropValue())); });
 	MatchProperty("ConsoleUseMonospaceFont", { reader >> g_ConsoleMan.m_ConsoleUseMonospaceFont; });
 	MatchProperty("AdvancedPerformanceStats", { reader >> g_PerformanceMan.m_AdvancedPerfStats; });
-	MatchProperty("MenuTransitionDurationMultiplier", { SetMenuTransitionDurationMultiplier(std::stof(reader.ReadPropValue())); });
+	MatchProperty("MenuTransitionDurationMultiplier", { SetMenuTransitionDurationMultiplier(ReadSettingFloat(reader.ReadPropValue())); });
 	MatchProperty("DrawAtomGroupVisualizations", { reader >> m_DrawAtomGroupVisualizations; });
 	MatchProperty("DrawHandAndFootGroupVisualizations", { reader >> m_DrawHandAndFootGroupVisualizations; });
 	MatchProperty("DrawLimbPathVisualizations", { reader >> m_DrawLimbPathVisualizations; });
