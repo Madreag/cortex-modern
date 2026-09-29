@@ -1634,6 +1634,19 @@ def check_injected_exemption(results, scratch):
     host.write_text(host.read_text().replace(fullstate_line(300, same), fullstate_line(300, perturbed)))
     second, _ = findings("injected-desync", driver.fullstate_verdict(host, client))
     ok &= row(results, "fullstate/other-divergent-tick-stays-red", len(second) == 1 and "tick 300" in second[0]["reason"], str(second))
+    # The lockstep desync the host injected is excused only where its own log names the injection (run 1 had none).
+    def unplanned(marker):
+        for peer in ("host", "client"):
+            (root / peer).mkdir(exist_ok=True)
+            lines = (["[net-test] live perturb frame=240"] if marker and peer == "host" else []) + ["[lockstep] desync at frame 240 against Peer (submitted 8, sent 8, compared 8)"]
+            (root / peer / "stdout.log").write_text("\n".join(lines) + "\n")
+        records = [{"peer": peer, "root": str(root / peer), "video_dir": str(root / peer / "video"), "video": "x.mp4", "index": [], "encode": {}, "menu_script_failures": []}
+                   for peer in ("host", "client")]
+        with patch.object(driver, "item_evidence", side_effect=lambda record, item, port=None: ([1], {"probe": "pass"})):
+            document = driver.review(scenario, {"name": "injected-desync", "peers": records}, root)
+        return [f for f in document["run_findings"] if f["reason"].startswith("Unplanned desync")]
+    ok &= row(results, "rematch/named-injection-excuses-its-desync", not unplanned(True))
+    ok &= row(results, "rematch/unnamed-injection-stays-red", len(unplanned(False)) == 2)
     rematch = driver.load_scenario("mp-rematch")
     run = next(run for run in rematch["runs"] if run["name"] == "injected-desync")
     declaration = run.get("injected_desync") or {}

@@ -6614,7 +6614,8 @@ void RunGameLoop() {
 			}
 			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && perturbDue && !s_perturbFired) {
 				s_perturbFired = true;
-				if (s_netPerturbWhenLive) System::PrintDiagnosticLine("[net-test] live perturb frame=" + std::to_string(simTick));
+				// Named in both modes: a run's oracle excuses only the desync it can see was injected.
+				System::PrintDiagnosticLine("[net-test] live perturb frame=" + std::to_string(simTick));
 				std::random_device perturbDevice;
 				const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
 				for (unsigned k = 0; k < perturbAdvance; ++k) {
