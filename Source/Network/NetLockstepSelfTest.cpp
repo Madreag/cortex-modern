@@ -21080,6 +21080,53 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A host answers a returning seat's repeated start with every decision it holds from that seat's first frame on. One this peer took and
+	// has let go of can reach it again past its frame: that is the host repeating itself, never a boundary this peer missed.
+	bool TestADecisionRepeatedPastItsFrameIsNotANewOne(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto a = MakeCoordinatorConfig(1, 2, 0x9A72, 2, NetTransportLane::ControlReliable);
+		auto b = MakeCoordinatorConfig(2, 1, 0x9A72, 2, NetTransportLane::ControlReliable);
+		a.roundId = b.roundId = 72; a.relayToOtherPeers = true;
+		if (!StartCoordinatorPair(49572, hostWire, clientWire, host, client, a, b, error)) return false;
+		host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
+		uint64_t now = 0;
+		const auto pump = [&] { ++now; hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); };
+		for (int pass = 0; pass < 10; ++pass) pump();
+		if (!host.IsRunning() || !client.IsRunning()) { *error = "the repeated-decision fixture did not start"; return false; }
+		if (!host.ProposeInputDelay(2, 5, 20, error)) return false;
+		for (int pass = 0; pass < 10; ++pass) pump();
+		const auto taken = std::find_if(client.m_TimingDecisions.begin(), client.m_TimingDecisions.end(), [](const auto& entry) { return entry.second.proposal.applyFrame == 20; });
+		if (taken == client.m_TimingDecisions.end() || !taken->second.committed) { *error = "fixture: the client did not take the delay decision at 20"; return false; }
+		const NetLockstepTiming proposal = taken->second.proposal;
+		for (uint64_t tick = 0; tick <= 30; ++tick) {
+			if (!host.QueueLocalInput(tick, {MakeFrame(100, 0)}, {}, error) || !client.QueueLocalInput(tick, {MakeFrame(200, 0)}, {}, error)) return false;
+			pump(); pump();
+		}
+		NetLockstepReadyFrame first, second;
+		for (uint64_t frame = 2; frame <= 26; ++frame) {
+			if (!host.PopReadyFrame(first) || !client.PopReadyFrame(second)) { *error = "fixture: frame " + std::to_string(frame) + " was not committed"; return false; }
+			(void)host.FinishSimulationTick(frame); (void)client.FinishSimulationTick(frame);
+		}
+		for (int pass = 0; pass < 10; ++pass) pump();
+		if (client.m_TimingDecisions.contains(proposal.revision)) { *error = "fixture: the client still holds the decision at 20 after playing past it"; return false; }
+		NetTransportEvent event;
+		event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+		for (const auto phase: {NetTimingPhase::Propose, NetTimingPhase::Commit}) {
+			NetLockstepTiming repeated = proposal;
+			repeated.phase = phase;
+			if (!NetLockstepCodec::Encode({repeated}, event.bytes)) return false;
+			client.InjectEvent(event, now);
+		}
+		pump();
+		if (!client.IsRunning() || client.InputDelayAt(2, 20) != 5) {
+			*error = "a decision the client had taken, repeated past its frame 20, ended its round: " + client.GetStats().timeoutReason;
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_decision_repeated_past_its_frame_is_not_a_new_one revision=" << proposal.revision << std::endl;
+		return true;
+	}
+
 	bool TestAHostEndNamesAFrameNoPeerHasPassed(std::string* error) {
 		LoopbackTransport hostWire, clientWire;
 		NetLockstepCoordinator host, client;
@@ -22420,6 +22467,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAheadInputIsNotASimulationStall, "ahead_input_is_not_a_simulation_stall");
 		row(&TestHeldHostMarkerPrecedesItsHold, "held_host_marker_precedes_its_hold");
 		row(&TestAReturnerDelayCoversItsTrail, "a_returner_delay_covers_its_trail");
+		row(&TestADecisionRepeatedPastItsFrameIsNotANewOne, "a_decision_repeated_past_its_frame_is_not_a_new_one");
 		row(&TestAHostEndNamesAFrameNoPeerHasPassed, "a_host_end_names_a_frame_no_peer_has_passed");
 		row(&TestAHostEndDoesNotWaitOnASilentPeer, "a_host_end_does_not_wait_on_a_silent_peer");
 		row(&TestAHostEndJudgesNoSeatPastIt, "a_host_end_judges_no_seat_past_it");
