@@ -216,7 +216,7 @@ namespace RTE {
 				host.Tick(now);
 				client.Tick(now);
 				if (refusal.empty()) {
-					if (host.GetAcceptedPeerCount() == 1 && client.GetState() == NetSessionState::Accepted) return true;
+					if (host.ActivePeerCount() == 1 && (client.GetState() == NetSessionState::Accepted || client.GetState() == NetSessionState::Ready)) return true;
 					if (client.IsRejected()) break;
 				} else if (client.IsRejected()) {
 					if (client.GetRejectReason() == NetRejectReason::ModuleManifestMismatch &&
