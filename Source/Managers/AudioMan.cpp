@@ -1114,6 +1114,7 @@ void AudioMan::Update3DEffectsForSFXChannels() {
 
 		if (result != FMOD_OK) {
 			g_ConsoleMan.PrintString("ERROR: An error occurred updating calculated sound effects for playing channel with index " + std::to_string(i) + ": " + std::string(FMOD_ErrorString(result)));
+			if (result == FMOD_ERR_INVALID_HANDLE || result == FMOD_ERR_CHANNEL_STOLEN) System::PrintDiagnosticLine("[audio-dead-channel] index=" + std::to_string(i) + " " + DescribeChannelOrigin(soundChannel));
 			continue;
 		}
 	}
@@ -1529,6 +1530,7 @@ int AudioMan::RegisterPlayingVoice(FMOD::Channel* channel, SoundContainer* owner
 	const auto inserted = m_PlayingVoices.emplace(m_NextVoiceIdentity, PlayingVoice{channel, owner, path, minimumAudibleDistance, domain, predicted});
 	inserted.first->second.playTicks = g_TimerMan.GetSimTimeTicks();
 	BindPlayingVoiceUserData(channel, inserted.first->second, m_NextVoiceIdentity);
+	NoteChannelOrigin(channel, m_NextVoiceIdentity, owner, path, predicted ? "predicted" : "played");
 	return m_NextVoiceIdentity;
 }
 
@@ -1615,8 +1617,40 @@ FMOD_RESULT AudioMan::GetVoiceChannel(int voiceIdentity, FMOD::Channel** channel
 	return FMOD_OK;
 }
 
+void AudioMan::NoteChannelOrigin(FMOD::Channel* channel, int identity, const SoundContainer* owner, const std::string& path, const char* how) {
+	if (!channel) return;
+	ChannelOrigin& origin = m_ChannelOrigins[channel];
+	origin = {identity, owner ? owner->GetModuleAndPresetName() : std::string(), path, how, g_TimerMan.GetSimUpdateCount(), -1, m_AudioStatesRestored, ++m_ChannelOriginSequence};
+	m_ChannelOriginOrder.emplace_back(channel, origin.sequence);
+	// Only the recent past can hold a dead channel still listed, so the record keeps the last few thousand.
+	while (m_ChannelOriginOrder.size() > 4096) {
+		const auto [oldest, sequence] = m_ChannelOriginOrder.front();
+		m_ChannelOriginOrder.pop_front();
+		if (const auto found = m_ChannelOrigins.find(oldest); found != m_ChannelOrigins.end() && found->second.sequence == sequence) m_ChannelOrigins.erase(found);
+	}
+}
+
+void AudioMan::NoteChannelStopped(FMOD::Channel* channel) {
+	if (const auto found = m_ChannelOrigins.find(channel); found != m_ChannelOrigins.end()) found->second.stoppedSimTick = g_TimerMan.GetSimUpdateCount();
+}
+
+std::string AudioMan::DescribeChannelOrigin(FMOD::Channel* channel) const {
+	std::ostringstream line;
+	line << "channel=" << static_cast<const void*>(channel) << " sim_tick=" << g_TimerMan.GetSimUpdateCount() << " restores=" << m_AudioStatesRestored;
+	const auto found = m_ChannelOrigins.find(channel);
+	if (found == m_ChannelOrigins.end()) return line.str() + " origin=unknown";
+	const ChannelOrigin& origin = found->second;
+	const auto voice = m_PlayingVoices.find(origin.identity);
+	line << " identity=" << origin.identity << " how=" << origin.how << " owner=" << (origin.owner.empty() ? "none" : origin.owner) << " sound=" << origin.path
+	     << " created_tick=" << origin.createdSimTick << " before_last_restore=" << (origin.restoresBefore < m_AudioStatesRestored ? 1 : 0) << " stopped_tick=" << origin.stoppedSimTick
+	     << " voice=" << (voice == m_PlayingVoices.end() ? "retired" : voice->second.Channel() == channel ? "live" : "rebound");
+	if (voice != m_PlayingVoices.end()) line << " voice_owner=" << (voice->second.owner ? voice->second.owner->GetModuleAndPresetName() : std::string("none")) << " predicted=" << voice->second.predicted;
+	return line.str();
+}
+
 FMOD_RESULT AudioMan::StopDetached(FMOD::Channel* channel) {
 	if (!channel) return FMOD_OK;
+	g_AudioMan.NoteChannelStopped(channel);
 	// A late END must not see this handle after the next Update frees it.
 	channel->setCallback(nullptr);
 	channel->setUserData(nullptr);
@@ -1845,6 +1879,7 @@ FMOD_RESULT AudioMan::BindPlayingVoiceUserData(FMOD::Channel* channel, PlayingVo
 void AudioMan::RetireVoice(int identity) {
 	const auto found = m_PlayingVoices.find(identity);
 	if (found == m_PlayingVoices.end()) return;
+	NoteChannelStopped(found->second.Channel());
 	if (found->second.owner) found->second.owner->RemovePlayingChannel(identity);
 	EraseBackendIdentity(identity);
 	if (found->second.handle) m_RetiredHandles.push_back(std::move(found->second.handle));
@@ -2039,6 +2074,7 @@ void AudioMan::StartAwaitingSampleVoices() {
 		TrackVoiceEffects(channel);
 		found->second.SetChannel(channel);
 		found->second.awaitingSample = false;
+		NoteChannelOrigin(channel, identity, found->second.owner, description.path, "sample-ready");
 		int backend;
 		if (channel->getIndex(&backend) == FMOD_OK) m_BackendVoiceIdentities[backend] = identity;
 		AudioCheckpoint::Require(BindPlayingVoiceUserData(channel, found->second, identity));
@@ -2509,6 +2545,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			FMOD::Channel* channel = nullptr;
 			AudioCheckpoint::Require(m_AudioSystem->playSound(sounds.at(voice.path), buses[voice.bus], true, &channel));
 			backendCandidates.emplace(voice.identity, channel);
+			NoteChannelOrigin(channel, voice.identity, nullptr, voice.path, "restored");
 			voice.Apply(m_AudioSystem, channel);
 			TrackVoiceEffects(channel);
 			candidates.at(voice.identity).SetChannel(channel);
@@ -2575,6 +2612,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 			if (FMOD::Channel* live = voice.Channel()) StopDetached(live);
 		}
 		m_PlayingVoices = std::move(candidates);
+		++m_AudioStatesRestored;
 		m_BackendVoiceIdentities.swap(backendIdentities);
 		for (auto& [identity, voice]: m_PlayingVoices) BindPlayingVoiceUserData(voice.Channel(), voice, identity);
 		// The saved voice graph owns both directions of this relation. Current
