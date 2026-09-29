@@ -232,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
                         "result.json names each peer's clean ticks")
     parser.add_argument("--fullstate-dump", action="store_true", help="with --fullstate-every: each peer writes every captured text section "
                         "under <out>/<peer>-fullstate/<tick>/ (-net-fullstate-dump), so a divergent section can be diffed")
+    parser.add_argument("--fullstate-dump-sections", default="", help="with --fullstate-dump: the comma-separated sections each peer keeps "
+                        "(CC_TEST_FULLSTATE_DUMP_SECTIONS), so a long soak keeps only the section it diffs")
     parser.add_argument("--cross-records", action="store_true", help="both peers write the cross harness's event records (CC_TEST_CROSS_RECORDS) beside their runs")
     parser.add_argument("--cross-event-limit", type=int, default=0, help="with --cross-records: the records' byte budget (CC_TEST_CROSS_EVENT_RAW_LIMIT); 0 = the engine's")
     options = parser.parse_args(argv)
@@ -325,6 +327,8 @@ def main(argv: list[str] | None = None) -> int:
             if options.end_round_tick:
                 flags += ["-net-match-e2e-end-round-tick", str(options.end_round_tick)]
             env = {"CCCP_HEADLESS": "1"}
+            if options.fullstate_dump_sections:
+                env["CC_TEST_FULLSTATE_DUMP_SECTIONS"] = options.fullstate_dump_sections
             if options.saver_delay_ms:
                 env["CC_TEST_SAVER_DELAY_MS"] = str(options.saver_delay_ms)
             if options.terrain_events:
