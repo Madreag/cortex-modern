@@ -368,7 +368,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 		}
 		SetAutosaveSeconds(seconds);
 	});
-	MatchProperty("SessionDirectoryUrl", { reader >> m_SessionDirectoryUrl; });
+	MatchProperty("SessionDirectoryUrl", { m_SessionDirectoryUrl = reader.ReadLineLiteral(); });
 	MatchProperty("SessionDirectoryInstallKey", { reader >> m_SessionDirectoryInstallKey; });
 	MatchProperty("SessionDirectoryCertSha256", { reader >> m_SessionDirectoryCertSha256; });
 	MatchProperty("NetworkPortMapEnable", { reader >> m_NetworkPortMapEnable; });
@@ -845,6 +845,13 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkSlowPlayerBoundTicks(0);
 	settings.SetNetworkSlowPlayerBoundTicks(121);
 	check("bounded-wait invalid range", settings.GetNetworkSlowPlayerBoundTicks() == 7);
+	for (const std::string url : {"", "http://127.0.0.1:50318/custom-directory", "https://example.invalid/a//b?next=x%2Fy#room", "custom+directory://host/path"}) {
+		writeRead([&](Writer& writer) { writer.NewPropertyWithValue("SessionDirectoryUrl", url); });
+		check("directory URL roundtrip", settings.GetSessionDirectoryUrl() == url);
+	}
+	writeRead([&](Writer& writer) { writer.NewPropertyWithValue("NetworkDisplayName", "Pilot // a normal property comment"); });
+	check("ordinary string comments unchanged", settings.GetNetworkDisplayName() == "Pilot");
+	settings.SetNetworkDisplayName("AlphaPilot");
 	if (failures != 0) {
 		return 1;
 	}
