@@ -84,6 +84,18 @@ SAVER_DELAY_MS = 0
 CLIENT_SAVER_DELAY_MS = 0
 RETAINED_AUTOSAVES = 3  # The default of the NetworkAutosavesKept option (AutosaveStore::c_RetainedAutosaves), which
                         # these runs never set; the engine's own keep= value is held to it below.
+WORLD_AUTOSAVE_TICKS = 60  # -net-autosave-seconds 1 at the round's 60 ticks a second: the world arms' requested cadence.
+
+
+def resumed_round_ticks(host_log: str, round_ticks: int) -> int:
+    """How long the resumed world round runs so it rotates past its anchor at the writer pace the first boot measured.
+    Each capture waits for the previous writer, so a build whose writer outlasts the requested second (a sanitizer
+    build's) lands one checkpoint per writer pass; the round then runs that many passes. At the requested cadence the
+    arm's own length stands, and the rotation it asserts is the same either way."""
+    captured = sorted({int(row[0]) for row in CAPTURE.findall(host_log)})
+    gaps = sorted(later - earlier for earlier, later in zip(captured, captured[1:]))
+    pace = max(WORLD_AUTOSAVE_TICKS, gaps[len(gaps) // 2]) if gaps else WORLD_AUTOSAVE_TICKS
+    return max(round_ticks, (RETAINED_AUTOSAVES + 2) * pace)
 
 
 WORLD_IDENTITY = re.compile(r"^\[net-world\] identity (\S+) boot=(\d+) round=(\d+)$", re.MULTILINE)
@@ -1213,7 +1225,8 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
 
     # Boot two: the same install, no -net-resume-match. The world reopens on its own newest checkpoint.
     second.mkdir(parents=True, exist_ok=False)
-    resume_end = resume_tick + round_ticks
+    resumed_ticks = resumed_round_ticks(peer_log(first, "host"), round_ticks)
+    resume_end = resume_tick + resumed_ticks
     # Each peer counts its cap from its own first tick, so the resumed round is given the ticks it runs past the checkpoint.
     def drop_client_copy(who: str, runtime: Path) -> None:
         # The client lost its copy of the checkpoint the world resumes on, so it is streamed the host's archive.
@@ -1221,7 +1234,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             for leftover in (runtime / "Autosaves").glob(f"{world_id}-{resume_tick}.*"):
                 leftover.unlink()
 
-    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first, own_ticks=round_ticks,
+    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first, own_ticks=resumed_ticks,
                                after_carry=drop_client_copy if client_lacks_checkpoint else None)
     host_log = peer_log(second, "host")
     if client_lacks_checkpoint:
@@ -1286,7 +1299,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
         assert re.search(rf"(?m)^WorldBoot = {boot_one + 2}$", fresh_manifest), \
             "retention kept the previous boot ahead of the fresh world's completed checkpoints"
     return {"world_id": world_id, "boot": boot_one, "resume_tick": resume_tick,
-            "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end,
+            "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end, "resumed_ticks": resumed_ticks,
             "kill_waited_on_return_s": records["_kill_waited_on_return_s"], "kill_waited_on_sample_s": records["_kill_waited_on_sample_s"],
             "kill_sample_wait_bound_s": records["_kill_sample_wait_bound_s"],
             "manifest_control_owners": side_state["control_owners"], "manifest_applied_sequences": side_state["applied_sequences"],
@@ -1448,6 +1461,14 @@ class CheckpointWaitTests(unittest.TestCase):
 
 
 class WorldRestartOracleTests(unittest.TestCase):
+    def test_the_resumed_round_is_sized_to_the_writer_pace(self):
+        # S4.win-asan-world-restart on 280: the ASan writer took 4.4 s a checkpoint, so 600 resumed ticks landed two past the anchor.
+        final = "".join(f"[autosave] tick={tick} capture_ms=9.0 bytes=1\n" for tick in (61, 121, 181, 241, 301))
+        self.assertEqual(resumed_round_ticks(final, 600), 600)
+        sanitizer = "".join(f"[autosave] tick={tick} capture_ms=160.0 bytes=1\n" for tick in (75, 351, 624))
+        self.assertEqual(resumed_round_ticks(sanitizer, 600), (RETAINED_AUTOSAVES + 2) * 276)
+        self.assertEqual(resumed_round_ticks("", 600), 600)
+
     def test_a_never_killed_world_names_the_capture_unit_and_the_returners_progress(self):
         # Ladder 12 rung 2 on 266 (S1.restore-all-1): the captures were read as seconds, and the reports that never came were not named.
         log = ("[autosave] tick=49 capture_ms=10.827 bytes=201235134\n[autosave] tick=93 capture_ms=5.451 bytes=201235124\n"
