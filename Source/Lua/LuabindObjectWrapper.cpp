@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <mutex>
@@ -413,6 +414,9 @@ LuabindObjectWrapper::~LuabindObjectWrapper() {
 	}
 	if (m_OwnsObject) {
 		std::lock_guard<std::mutex> guard(s_QueuedDeletionsMutex);
+		if (s_OnSimThread && m_LuabindObject && std::find(s_ClosedStates.begin(), s_ClosedStates.end(), m_LuabindObject->interpreter()) != s_ClosedStates.end()) {
+			std::fprintf(stderr, "[lua] callback outlived its state: %s\n", m_FilePath.c_str());
+		}
 		s_QueuedDeletions.push_back(m_LuabindObject);
 	}
 }
