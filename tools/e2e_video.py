@@ -1597,7 +1597,12 @@ def native_behavior(root, spec):
     try:
         for peer, filename in spec['reports'].items():
             report = load(root / filename)
-            require(report.get('exit_code') == 0 and report.get('running_ticks', 0) >= spec['ticks'][peer], f'{peer}: incomplete continued play')
+            # The service run's report carries its exit code and tick count; a lobby match's report keeps the ticks in
+            # last_match and the process record keeps the exit code.
+            exit_code = report['exit_code'] if 'exit_code' in report else load(root / peer / 'launch.json').get('exit_code')
+            ticks = report['running_ticks'] if 'running_ticks' in report else report.get('last_match', {}).get('running_ticks', 0)
+            details.setdefault('continued_play', {})[peer] = dict(exit_code=exit_code, running_ticks=ticks)
+            require(exit_code == 0 and ticks >= spec['ticks'][peer], f'{peer}: incomplete continued play')
             if peer in spec.get('steady_peers', []):
                 counts = fields(report, 'steady_missing_frame_stalls')
                 require(bool(counts) and all(type(v) is int and v == 0 for v in counts), f'{peer}: missing or nonzero steady stall count')
@@ -1608,6 +1613,18 @@ def native_behavior(root, spec):
             require(identity is not None, 'held peer identity is absent')
             seat = int(identity[1]) if identity else -1
             histories = {}
+            if spec['kind'] == 'rehold':
+                # The stalls are the target's own lever arguments; each fires at the first tick at or after its request
+                # that its seat is back in play, so the holds are judged against the ticks they fired on.
+                argv = load(root / target / 'launch.json').get('argv', [])
+                if isinstance(argv, str):
+                    import ast
+                    argv = ast.literal_eval(argv)
+                declared = [int(str(argv[i + 1]).split(':')[0]) for i, value in enumerate(argv[:-1]) if value == '-net-test-live-stall']
+                fired_stalls = list(map(int, re.findall(r'\[net-test\] live stall frame=(\d+)', target_log)))
+                details['stalls'] = dict(declared=declared, fired=fired_stalls)
+                require(bool(declared) and len(fired_stalls) == len(declared) and all(tick >= want for tick, want in zip(fired_stalls, declared)),
+                        'a declared stall never fired')
             for peer in spec['observers']:
                 log = text(peer)
                 all_holds = re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)
@@ -1617,7 +1634,7 @@ def native_behavior(root, spec):
                 histories[peer] = dict(holds=holds, reclaims=reclaims)
                 require(len(holds) == spec['holds'], f'{peer}: missing or unscheduled hold')
                 if spec['kind'] == 'rehold':
-                    starts = spec['stall_ticks']
+                    starts = fired_stalls
                     require(len(reclaims) == len(holds) == len(starts), f'{peer}: incomplete reclaim sequence')
                     for index, hold in enumerate(holds[:len(starts)]):
                         end = starts[index + 1] if index + 1 < len(starts) else spec['ticks'][peer]
@@ -1640,8 +1657,6 @@ def native_behavior(root, spec):
                                     for m in d['members']) for d in dumps), f'{peer}: reclaimed seat is not shown live')
             require(all(value == next(iter(histories.values())) for value in histories.values()), 'survivors disagree about holds/reclaims')
             if spec['kind'] == 'rehold':
-                injected = list(map(int, re.findall(r'\[net-test\] live stall frame=(\d+)', target_log)))
-                require(set(spec['stall_ticks']) <= set(injected), 'a declared stall never fired')
                 completed = set(map(int, re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', target_log)))
                 require(all(frame in completed for value in histories.values() for frame in value['reclaims']), 'private reclaim did not complete at its activation frame')
             details['holds'] = histories
