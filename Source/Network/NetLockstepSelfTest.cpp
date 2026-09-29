@@ -2353,6 +2353,64 @@ namespace RTE {
 			return true;
 		}
 
+		// A resumed host's own restore is its park, not the work of a seat that already plays: that seat's first-second
+		// ramp is the start work it published, so a stall of it is held without the survivors waiting out our restore.
+		bool TestAPlayingPeersRampIsNotOurPark(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A66, 3, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A66, 3, NetTransportLane::ControlReliable);
+			a.startFrame = b.startFrame = 1;
+			a.roundId = b.roundId = 66;
+			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+			a.timeoutMs = b.timeoutMs = 30000;
+			a.relayToOtherPeers = true;
+			a.matchConfig = b.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A66);
+			if (!StartCoordinatorPair(49557, hostWire, clientWire, host, client, a, b, error)) return false;
+			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
+			client.NoteLocalStartPark(50);
+			uint64_t hostProduced = 1, hostApplied = 0, clientProduced = 1, clientApplied = 0, hostClock = 0;
+			std::string queueError;
+			const auto pump = [&](uint64_t from, uint64_t to, bool clientPlays) {
+				for (uint64_t now = from; now < to; ++now) {
+					while (host.IsRunning() && hostProduced <= hostApplied + 2 &&
+					       host.QueueLocalInput(hostProduced, {MakeFrame(100, hostProduced)}, {}, &queueError)) ++hostProduced;
+					if (clientPlays) {
+						while (client.IsRunning() && clientProduced <= clientApplied + 3 &&
+						       client.QueueLocalInput(clientProduced, {MakeFrame(200, clientProduced)}, {}, &queueError)) ++clientProduced;
+					}
+					host.Tick(now + hostClock); client.Tick(now);
+					NetLockstepReadyFrame ready;
+					if (now % 17 == 0 && host.PopReadyFrame(ready)) { hostApplied = ready.frame; (void)host.FinishSimulationTick(ready.frame); }
+					if (now % 17 == 0 && client.PopReadyFrame(ready)) { clientApplied = ready.frame; (void)client.FinishSimulationTick(ready.frame); }
+					hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				}
+			};
+			pump(0, 200, false);
+			// The host restores its saved round: 1200 ms nobody on it was listening.
+			hostClock = 1200;
+			pump(200, 400, false);
+			pump(400, 600, true);
+			if (host.GetStats().longestOwnParkMs < 1200 || hostApplied < 4) {
+				*error = "the fixture did not give the host its restore park before the joiner played: park=" + std::to_string(host.GetStats().longestOwnParkMs) +
+				         " applied=" + std::to_string(hostApplied);
+				return false;
+			}
+			const uint64_t stalledAt = host.GetStats().nextFrame;
+			pump(600, 1300, false);
+			const auto holds = host.GetStats().peers.at(2).holds;
+			if (stalledAt > 1 + NetLockstepCoordinator::c_StartupSettleTicks || holds != 1 || !host.IsSeatUnderAI(2, host.GetStats().nextFrame)) {
+				*error = "a playing seat that stalled in its first second waited out the host's own restore park: holds=" + std::to_string(holds) +
+				         " stalled_at=" + std::to_string(stalledAt) + " own_park=" + std::to_string(host.GetStats().longestOwnParkMs) +
+				         " longest_wait=" + std::to_string(host.GetStats().peers.at(2).longestWaitMs);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_playing_peers_ramp_is_not_our_park stalled_at=" << stalledAt
+			          << " longest_wait=" << host.GetStats().peers.at(2).longestWaitMs << std::endl;
+			return true;
+		}
+
 		bool TestASlowStartingPeerIsJudgedByItsOwnRestart(std::string* error) {
 			// Two peers at delay 1 and ping 0: the allowance before the bound judges a sender that has not
 			// produced yet is the start work its machine does, published with its start, or ours as the floor.
@@ -22330,6 +22388,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestALinkBlipIsBridgedByAResend, "a_link_blip_is_bridged_by_a_resend");
 		row(&TestALinkBlipIsBridgedInAStar, "a_link_blip_is_bridged_in_a_star");
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");
+		row(&TestAPlayingPeersRampIsNotOurPark, "a_playing_peers_ramp_is_not_our_park");
 		row(&TestASeatIsNotLateForOurOwnDecision, "a_seat_is_not_late_for_our_own_decision");
 		row(&TestAFirstDelayChangeIsNotAMutualWait, "a_first_delay_change_is_not_a_mutual_wait");
 		row(&TestALiveDelayDecreaseKeepsAWaitedSeatsSlack, "a_live_delay_decrease_keeps_a_waited_seats_slack");

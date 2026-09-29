@@ -6124,8 +6124,10 @@ namespace RTE {
 				if (!m_PeerAdmissions.contains(peer) && (!m_PeersPlayedThisRound.contains(peer) ||
 				    frame <= EffectiveStartOf(peer) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks))) {
 					// Our own longest park is the start work this machine did; a peer that has not produced
-					// yet is doing the same, so it is allowed as much before its silence means anything.
-					const uint64_t park = std::max(peerStats.startParkMs, m_Stats.longestOwnParkMs);
+					// yet is doing the same, so it is allowed as much before its silence means anything. A peer
+					// already playing that published its start work has done it: that work is its own, never our park.
+					const uint64_t park = m_PeersPlayedThisRound.contains(peer) && peerStats.startParkMs > 0 ? peerStats.startParkMs
+					                                                                                          : std::max(peerStats.startParkMs, m_Stats.longestOwnParkMs);
 					const uint64_t ramp = static_cast<uint64_t>(std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)) +
 					    peerStats.pingMs + peerStats.jitterMs + park;
 					if (nowMs - firstMissingMs < declarationDeadline + ramp || feeding) continue;
