@@ -8845,6 +8845,10 @@ namespace RTE {
 			m_OwnMissingFrame.reset();
 			return false;
 		}
+		if (m_OwnMissingFrame != frame) {
+			m_OwnMissingFrame = frame;
+			m_OwnMissingSinceMs = nowMs;
+		}
 		// Every receiver has its own runway and delivery time for this decision.
 		bool noticeDue = std::llround(m_ReadyFrames.size() * m_Config.simTickMs) <= 2;
 		for (uint8_t peer: m_RemotePeerIds) {
@@ -8857,12 +8861,7 @@ namespace RTE {
 			noticeDue |= static_cast<uint64_t>(std::llround(runway * m_Config.simTickMs)) <= notice;
 		}
 		if (!noticeDue) {
-			m_OwnMissingFrame.reset();
 			return false;
-		}
-		if (m_OwnMissingFrame != frame) {
-			m_OwnMissingFrame = frame;
-			m_OwnMissingSinceMs = nowMs;
 		}
 		const uint64_t boundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
 		if (nowMs < m_OwnMissingSinceMs || nowMs - m_OwnMissingSinceMs < boundMs) return false;
@@ -9264,6 +9263,13 @@ namespace RTE {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];
 			}
 			const NetTransportLane destinationLane = frame && lane == m_Config.frameLane ? LaneTo(peerId, packet, lane) : lane;
+			const auto* start = std::get_if<NetLockstepStart>(&packet.payload);
+			if (start && !start->agreedStartRecord && start->roundId == m_RoundId && lane == NetTransportLane::ControlReliable) {
+				const auto admission = m_PeerAdmissions.find(peerId);
+				const bool returning = (m_Config.joinsRunningRound && start->localPeerId == m_Config.localPeerId && start->startFrame == m_Config.startFrame) ||
+				    (admission != m_PeerAdmissions.end() && start->startFrame == admission->second.frame);
+				if (returning) (void)m_Transport->Send(transportId, NetTransportLane::InputUnreliable, bytes, nullptr);
+			}
 			if (frame && destinationLane == NetTransportLane::ControlReliable && m_ReliableFramesThrough.contains(peerId)) {
 				NetLockstepFrame independent = *frame;
 				if (outObservationsEncoded) independent.observations.resize(std::min(independent.observations.size(), *outObservationsEncoded));
@@ -9965,6 +9971,11 @@ namespace RTE {
 						++m_Stats.ignoredAdmissionFaults;
 					}
 					return;
+				}
+				// An unordered start only confirms terms this round already knows.
+				if (const auto* start = std::get_if<NetLockstepStart>(&decoded.packet.payload); start && event.lane != NetTransportLane::ControlReliable) {
+					if (event.lane != NetTransportLane::InputUnreliable || start->agreedStartRecord || m_RoundId == 0 ||
+					    start->roundId != m_RoundId || !StartMatchesConfig(*start)) return;
 				}
 				const auto* recovery = std::get_if<NetLockstepRecoveryChunk>(&decoded.packet.payload);
 				const bool independent = recovery && recovery->offset == 0 && recovery->bytes.size() == recovery->totalBytes && event.lane == NetTransportLane::InputUnreliable;
