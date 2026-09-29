@@ -6197,14 +6197,14 @@ static std::string ResyncSaveName() {
 				m_Runner->ConfigurePrivateJoin(live);
 			}
 			if (!m_Runner->IsWorldJoinLockstepStarting())
-				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, &error);
+				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error);
 			else {
 				for (auto it = m_CatchUpWirePackets.begin(); it != m_CatchUpWirePackets.end();) {
 					if (it->bytes.size() >= NetLockstepCodec::c_HeaderBytes && (it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start) || it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Timing))) {
 						m_Coordinator->InjectEvent(*it, NetLockstepNowMs()); m_CatchUpWireBytes -= it->bytes.size(); it = m_CatchUpWirePackets.erase(it);
 					} else ++it;
 				}
-				m_Runner->PumpWorldJoinLockstepStart(*m_Coordinator, &error);
+				m_Runner->PumpWorldJoinLockstepStart(*m_Coordinator, m_WorldCatchUp.appliedThrough, &error);
 			}
 			if (!error.empty()) { m_PrivateJoinError = error; m_ErrorText = error; }
 		}
