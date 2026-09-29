@@ -14,6 +14,11 @@ import sys
 # The inventory tools live beside the lead's tools, outside the repository; a box without them reports N/A.
 INVENTORY = Path("D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory")
 SUITES = (
+    ("acceptance-harness", ["test_acceptance_harness.py"]),
+    ("e2e-video", ["test_e2e_video.py"]),
+    ("cross-driver", ["-m", "unittest", "feel.test_cross_driver"]),
+    ("cross-report", ["-m", "unittest", "feel.test_report"]),
+    ("autosave-restore-oracles", ["-m", "unittest", "test_autosave_restore"]),
     ("compare-snapshots", ["test_compare_snapshots.py"]),
     ("snapshot-inventory-roles", ["test_snapshot_inventory_roles.py"]),
     ("snapshot-runtime", ["snapshot_runtime.py", "--self-test"]),
@@ -34,12 +39,13 @@ SUITES = (
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
     ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),
     ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),
+    ("acceptance-collection", [str(INVENTORY / "test_acceptance_collection.py")]),
 )
 WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement"}
 
 
 def run(repo: Path, name: str, argv: list[str], timeout: float) -> tuple[str, int, str]:
-    command = [sys.executable, str(repo / "tools" / argv[0]), *argv[1:]]
+    command = [sys.executable, *argv] if argv[0] == '-m' else [sys.executable, str(repo / "tools" / argv[0]), *argv[1:]]
     try:
         done = subprocess.run(command, cwd=str(repo / "tools"), capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:

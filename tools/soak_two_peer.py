@@ -58,13 +58,16 @@ def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict
                 errors.append(f"{peer} round {round_id}: missing/extra ticks or terminal tick")
             for start in range(300, ticks, 3600):
                 end = min(start + 3600, ticks)
-                if set(range(start, end + 1)) & away:
+                needed = set(range(start, end + 1)) - away
+                if not needed <= present:
                     continue
-                if not set(range(start, end + 1)) <= present:
-                    continue
-                first = min(row.get("wall_ms", float('nan')) for row in indexed[peer][round_id, start])
-                last = max(row.get("wall_ms", float('nan')) for row in indexed[peer][round_id, end])
-                rate = (end - start) * 1000 / (last - first) if last > first else None
+                # Charge every measured adjacent interval outside this peer's proved hold. A short hold
+                # must not exempt the rest of its entire minute from the pace verdict.
+                intervals = [(tick, tick + 1) for tick in range(start, end) if tick in needed and tick + 1 in needed]
+                durations = [max(row.get('wall_ms', float('nan')) for row in indexed[peer][round_id, high]) -
+                             min(row.get('wall_ms', float('nan')) for row in indexed[peer][round_id, low]) for low, high in intervals]
+                elapsed = sum(durations)
+                rate = len(intervals) * 1000 / elapsed if elapsed > 0 and all(d >= 0 and math.isfinite(d) for d in durations) else None
                 ok = rate is not None and math.isfinite(rate) and rate >= 59.5
                 paces[peer].append(dict(round=round_id, first=start, last=end, wall_tps=rate, passed=ok))
                 if not ok:
