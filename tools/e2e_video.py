@@ -606,7 +606,7 @@ def frame_range(rows, item):
 
 
 def probe_verdict(probe_dir, item):
-    """What the peer's menu probe said about this item, as the probe itself recorded it."""
+    """Whether the peer's menu probe completed successfully."""
     result = Path(probe_dir) / "net-ui-result.json"
     if not probe_dir or not result.is_file():
         return {"probe": "fail", "reason": "Required probe result is absent"}
@@ -843,7 +843,7 @@ def item_evidence(record, item, port=None):
         observed = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
         steps = {step["index"]: step for step in observed.get("steps", [])}
         required = probe_steps
-        evidence.update(probe="pass" if all(index in steps for index in required) else "not-reached",
+        evidence.update(probe=("pass" if all(index in steps for index in required) else "not-reached") if required else "awaiting-review",
                         assertions=[{"step": index, "command": observed.get("script", {}).get("steps", [])[index]
                                      if index < len(observed.get("script", {}).get("steps", [])) else None,
                                      "observed": steps.get(index)} for index in required], path=str(path))
@@ -856,6 +856,8 @@ def item_evidence(record, item, port=None):
         declared_probe = Path(record.get('probe_dir', '')) / 'probe.json'
         evidence.update(probe_verdict(record.get("probe_dir", ""), item) if declared_probe.is_file() or probe_path.is_file()
                         else {'probe': 'awaiting-review'})
+        if evidence['probe'] == 'pass':
+            evidence['probe'] = 'awaiting-review'
     if item.get("resumed_play"):
         # The engine's own records decide this item; a probe step that a script may never reach does not.
         evidence["resumed_play"] = resumed_play_evidence(record, item["resumed_play"])

@@ -1748,6 +1748,14 @@ def check_acceptance_rows(results, scratch):
     checked = driver.review(dict(name='plain', checklist=[dict(id='picture', screen='game')]), capture, review_root)
     ok &= row(results, 'audit-08/unplanned-desync-fails-without-fullstate', bool(checked['run_findings']))
     ok &= row(results, 'audit-07/assertionless-item-awaits-review', checked['checklist'][0]['state'] == 'AWAITING REVIEW')
+    probe = review_root / 'probe'; probe.mkdir()
+    driver.write_json(probe / 'net-ui-result.json', dict(**{'pass': True}, complete=True,
+        script={'steps':[{'op':'finish'}]}, steps=[dict(index=0,observed={})]))
+    capture['peers'][0]['probe_dir'] = str(probe)
+    checked = driver.review(dict(name='plain',checklist=[dict(id='picture',screen='game')]),capture,review_root)
+    ok &= row(results, 'audit-07/global-probe-success-is-not-item-proof', checked['checklist'][0]['state'] == 'AWAITING REVIEW')
+    checked = driver.review(dict(name='plain',checklist=[dict(id='picture',screen='game',probe_steps=[])]),capture,review_root)
+    ok &= row(results, 'audit-07/empty-step-list-is-not-item-proof', checked['checklist'][0]['state'] == 'AWAITING REVIEW')
     with patch.object(driver, 'item_evidence', return_value=([1,1], {'probe':'none'})):
         checked = driver.review(dict(name='plain', checklist=[dict(id='picture', screen='game')]), capture, review_root)
     ok &= row(results, 'audit-07/probe-none-is-a-finding', bool(checked['checklist'][0].get('finding')))
