@@ -384,8 +384,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 		SetAutosaveSeconds(seconds);
 	});
 	MatchProperty("SessionDirectoryUrl", {
-		// Slashes are URL data here. Leave the newline for Reader's indentation and line accounting;
-		// all ordinary preset strings retain Reader::ReadLine's comment syntax.
+		// Preserve URL slashes without changing ordinary preset comment syntax.
 		reader.DiscardEmptySpace(true);
 		std::istream& stream = *reader.GetStream();
 		m_SessionDirectoryUrl.clear();

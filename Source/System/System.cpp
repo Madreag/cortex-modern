@@ -238,8 +238,7 @@ const std::unordered_set<std::string> System::s_SupportedExtensions = {".ini", "
 
 void System::Initialize(const char* thisExePathAndName) {
 	if (const char* localeName = std::getenv("CC_TEST_PROCESS_LOCALE"); localeName && std::getenv("CCCP_HEADLESS")) {
-		// A test peer needs the requested locale before settings and presets are read. LANG alone
-		// does not change the C runtime's initial C locale, and changing the user's OS setting would.
+		// Select the test locale before reading settings and presets.
 		std::string cxxLocale = "unavailable";
 		try {
 			std::locale::global(std::locale(localeName));

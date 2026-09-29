@@ -91,8 +91,7 @@ def run_case(repo, root, case, port):
             probe.parent.mkdir()
             probe.write_text(json.dumps({"schema": 1, "timeout_ms": 180000, "steps": probe_steps(case, who)}, indent=2) + "\n")
             args = ["-menu-script", path, "-seed", "42", "-net-match-report", root / f"{who}-match.json"]
-            # The departing host deliberately leaves before the survivor cap. Its menu/probe is
-            # the oracle for leaving; asking its trace to reach that cap would rightly fail.
+            # The host's completed leave and clean exit bound its deliberately shorter run.
             if not (case == "graceful" and host):
                 args += ["-max-ticks", TICKS, "-tick-hashes", "-out", root / f"{who}-trace.json"]
             if case not in ("chat", "focus"):
