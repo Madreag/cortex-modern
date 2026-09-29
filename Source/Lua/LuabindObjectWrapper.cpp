@@ -424,7 +424,7 @@ LuabindObjectWrapper::LuabindObjectWrapper(luabind::adl::object* luabindObject, 
 }
 
 void LuabindObjectWrapper::LinkStoredObject() {
-	if (!m_OwnsObject || !m_LuabindObject || m_FilePath.empty()) return;
+	if (!m_OwnsObject || !m_LuabindObject || !m_LuabindObject->interpreter() || m_FilePath.empty()) return;
 	m_NextStored = s_StoredObjects;
 	if (m_NextStored) m_NextStored->m_PreviousStored = this;
 	s_StoredObjects = this;
