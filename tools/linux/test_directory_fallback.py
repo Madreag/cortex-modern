@@ -24,6 +24,7 @@ def check(repo, root, port, url):
                  "activate ButtonMultiplayerJoinGame\nwait_ms 7000\n"
                  f"assert_label LabelLanGames {HINT}\n"
                  "assert_visible LabelLanGames 1\n"
+                 "assert_text_fits LabelLanGames\n"
                  f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
                  "activate ButtonMultiplayerConnect\nwait_connected 2 90\n"
                  "assert_substate Lobby\ndump_lobby\nwait_ms 500\ngoto_main\nexit\n")
@@ -42,7 +43,8 @@ def check(repo, root, port, url):
         log = (root / "guest/stdout.log").read_text(errors="replace")
         settings = (Path(runs["guest"].cwd) / "Userdata/Settings.ini").read_text(errors="replace")
         stored = re.search(r"(?m)^\s*SessionDirectoryUrl\s*=([^\r\n]*)", settings)
-        result["checks"] = {"fallback_visible": f"assert_label LabelLanGames {HINT}" in log and "FAIL" not in log,
+        result["checks"] = {"fallback_visible": f'assert_label LabelLanGames "{HINT}" text="{HINT}" PASS' in log,
+                            "fallback_fits": "assert_text_fits LabelLanGames" in log and "FAIL" not in log,
                             "typed_join": "connected:2 -> OK" in log,
                             "url_retained": stored is not None and stored[1].strip() == url,
                             "exit_zero": all(records.get(who, {}).get("exit_code") == 0 for who in ("host", "guest"))}

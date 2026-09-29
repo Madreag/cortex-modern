@@ -24,18 +24,21 @@ def menu(command):
 
 
 def wait(tick):
-    return {"op": "wait", "service": "Running", "sim_at_least": tick}
+    # sim_frame also counts the lobby; only the committed round frame proves gameplay has begun.
+    return {"op": "wait", "service": "Running", "lockstep_frame_at_least": tick}
 
 
 def probe_steps(case, who):
     steps = [wait(100)]
     if case == "focus" and who == "host":
-        steps += [menu("window_event focus_lost"), {"op": "wait", "renders": 4},
+        steps += [menu("game_key D down"), {"op": "wait", "renders": 4},
+                  menu("assert_game_input 0 L_RIGHT 1"),
+                  menu("window_event focus_lost"), {"op": "wait", "renders": 4},
                   menu("assert_window_focus 0"), wait(220), menu("assert_game_input 0 L_RIGHT 1"),
                   menu("window_event minimized"), wait(340), menu("assert_window_focus 0"),
                   menu("window_event restored"), menu("window_event focus_gained"),
                   {"op": "wait", "renders": 4}, menu("assert_window_focus 1"),
-                  menu("window_event mouse_enter"), wait(450), menu("assert_game_input 0 L_RIGHT 1")]
+                  menu("window_event mouse_enter"), wait(450), menu("assert_game_input 0 L_RIGHT 1"), menu("game_key D up")]
     elif case == "chat" and who == "host":
         steps += [menu("game_key W down"), {"op": "wait", "renders": 4},
                   menu("assert_game_input 0 L_UP 1"), menu("game_key W up"),
@@ -88,7 +91,7 @@ def run_case(repo, root, case, port):
             probe.write_text(json.dumps({"schema": 1, "timeout_ms": 180000, "steps": probe_steps(case, who)}, indent=2) + "\n")
             args = ["-menu-script", path, "-seed", "42", "-max-ticks", TICKS, "-tick-hashes",
                     "-out", root / f"{who}-trace.json", "-net-match-report", root / f"{who}-match.json"]
-            if case != "chat":
+            if case not in ("chat", "focus"):
                 args += ["-input-script", inputs]
             env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)}
             if case == "locale":
