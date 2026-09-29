@@ -140,6 +140,7 @@ namespace RTE {
 		std::string path;
 		std::vector<uint8_t> header;
 		std::deque<std::shared_ptr<const Record>> records;
+		size_t pendingBytes = 0;
 		bool stop = false;
 		bool finished = false;
 		std::string error;
@@ -190,6 +191,7 @@ namespace RTE {
 			{
 				std::lock_guard lock(storage->mutex);
 				storage->pendingBytes -= state->header.size();
+				state->pendingBytes -= state->header.size();
 				state->header.clear();
 				if (!out) state->error = "could not open or write the replay header: " + state->path;
 			}
@@ -215,15 +217,18 @@ namespace RTE {
 				{
 					std::lock_guard lock(storage->mutex);
 					storage->pendingBytes -= record->prefix.size() + record->payload.size();
+					state->pendingBytes -= record->prefix.size() + record->payload.size();
 					if (!failure.empty()) state->error = std::move(failure);
 				}
 			}
 			bool clean = false;
+			std::deque<std::shared_ptr<const WriteState::Record>> discarded;
 			{
 				std::lock_guard lock(storage->mutex);
 				clean = state->error.empty();
-				for (const auto& record: state->records) storage->pendingBytes -= record->prefix.size() + record->payload.size();
-				state->records.clear();
+				storage->pendingBytes -= state->pendingBytes;
+				state->pendingBytes = 0;
+				discarded.swap(state->records);
 			}
 			if (clean && out.good()) {
 				std::vector<uint8_t> endMarker;
@@ -294,6 +299,7 @@ namespace RTE {
 		}
 		auto next = std::make_shared<WriteState>();
 		next->path = path; next->header = std::move(header);
+		next->pendingBytes = next->header.size();
 		{
 			std::lock_guard lock(m_Storage->mutex);
 			if (next->header.size() > c_MaxRecordBytes + 8 - m_Storage->pendingBytes) {
@@ -474,6 +480,7 @@ namespace RTE {
 				return false;
 			}
 			m_Storage->pendingBytes += bytes;
+			m_Writes->pendingBytes += bytes;
 			m_Writes->records.push_back(record);
 		}
 		m_Storage->ready.notify_one();
