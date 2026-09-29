@@ -5944,6 +5944,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		const bool e2eHostEndedRound = s_netMatchServiceE2E && IsCompleteControllerStop(error) && error.find("e2e complete") == std::string::npos &&
 			error.find("match over") == std::string::npos && error.find("host handover ended") == std::string::npos &&
 			!g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running;
+		// The host's own End Match played its round to the agreed end frame: that clean stop is the end it asked for.
+		const bool hostEndedAtAgreedFrame = IsCompleteControllerStop(error) && g_NetMatchService.IsHost() && g_NetMatchService.EndsAtAgreedFrame();
 		// A held seat's rejoin is the product's own recovery too: the observed trace follows it instead of stopping.
 		const bool observeTraceRecovery = !s_netMatchServiceE2E && s_recordTickHashes &&
 		    (error.find("ResyncRequested") != std::string::npos || (error.find("PeerHeld:") != std::string::npos && g_SettingsMan.GetNetworkAutoReconnect()));
@@ -6029,7 +6031,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		} else if (error.find("Complete:") != std::string::npos &&
 		           error.find("e2e complete") == std::string::npos &&
 		           (g_NetMatchService.GetState() == NetMatchServiceState::Completed ||
-		            error.find("match over") != std::string::npos || e2eHostEndedRound)) {
+		            error.find("match over") != std::string::npos || e2eHostEndedRound || hostEndedAtAgreedFrame)) {
 			if (e2eHostEndedRound) {
 				// The round ends on the host's word, as the product's clean stop does.
 				const std::string result = NetMatchEndReason(g_ActivityMan.GetActivity());
