@@ -2844,9 +2844,10 @@ namespace RTE {
 	bool NetLockstepCodec::EncodeRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t>& outBytes, NetLockstepError* error) {
 		std::vector<uint8_t> bytes;
 		AppendU32LE(bytes, c_RecoveryInputMagic);
-		AppendU16LE(bytes, frame.hostHold ? c_RecoveryInputVersion : 5);
+		const bool holdMarker = HasHostHold(frame);
+		AppendU16LE(bytes, holdMarker ? c_RecoveryInputVersion : 5);
 		AppendU16LE(bytes, ControllerFrame::c_Version);
-		if (!EncodePayload(frame, bytes, error, nullptr, nullptr, true, nullptr, nullptr, true, true, frame.hostHold.has_value())) return false;
+		if (!EncodePayload(frame, bytes, error, nullptr, nullptr, true, nullptr, nullptr, true, true, holdMarker)) return false;
 		if (bytes.size() > c_MaxRecoveryInputBytes) {
 			SetError(error, NetLockstepErrorCode::PayloadTooLarge, bytes.size(), "recovery input exceeds maximum");
 			return false;
