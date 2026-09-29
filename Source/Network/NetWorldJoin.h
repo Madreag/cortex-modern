@@ -168,6 +168,7 @@ namespace RTE {
 		uint64_t pendingTailThrough = 0;
 		uint64_t deliveredThrough = 0;    //!< The last tail frame this connection has been sent.
 		std::optional<uint64_t> finalTailFrame;
+		std::optional<uint64_t> finalTailRewind;
 		uint64_t acknowledgedThrough = 0; //!< The last tail frame it says it applied.
 		uint64_t openedAtMs = 0;
 		uint64_t transferBytes = 0;
