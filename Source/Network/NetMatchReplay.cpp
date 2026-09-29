@@ -158,6 +158,7 @@ namespace RTE {
 
 	NetMatchReplayWriter::~NetMatchReplayWriter() {
 		Close();
+		(void)WaitForClose(c_ExitDrainMs);
 		if (m_Storage) {
 			{ std::lock_guard lock(m_Storage->mutex); m_Storage->stop = true; }
 			m_Storage->ready.notify_one();
@@ -174,6 +175,15 @@ namespace RTE {
 		if (!m_Writes || !m_Storage) return true;
 		std::lock_guard lock(m_Storage->mutex);
 		return m_Writes->finished;
+	}
+
+	bool NetMatchReplayWriter::WaitForClose(uint64_t timeoutMs) const {
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+		while (!IsCloseComplete()) {
+			if (std::chrono::steady_clock::now() >= deadline) return false;
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		return true;
 	}
 
 	void NetMatchReplayWriter::WriteQueuedRecords(std::shared_ptr<StorageState> storage) {

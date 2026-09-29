@@ -2880,7 +2880,8 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::WasLockstepReplayRecordClosed() {
-		return s_ReplayRecordClosed && s_ReplayWriter.IsCloseComplete();
+		// Asked once the run is over: the storage worker gets a bounded time to finish the file.
+		return s_ReplayRecordClosed && s_ReplayWriter.WaitForClose(NetMatchReplayWriter::c_ExitDrainMs);
 	}
 
 	ScenarioRunner::LockstepReplayOutcome ScenarioRunner::GetLockstepReplayOutcome() {
