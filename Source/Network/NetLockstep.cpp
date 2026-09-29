@@ -5636,6 +5636,8 @@ namespace RTE {
 			          << " neutral_through=" << timing.neutralThroughFrame << " revision=" << timing.revision << " incarnation=" << timing.seatIncarnations[timing.peerId - 1]
 			          << " next=" << m_Stats.nextFrame << " clock=" << NetLockstepSharedClockMs() << std::endl;
 			m_ReturnerFirstFrameNamed.erase(timing.peerId);
+			// A new receiver invalidates arrival slack measured without it.
+			m_ArrivalLeads.clear();
 			m_Config.peerIncarnations[timing.peerId] = timing.seatIncarnations[timing.peerId - 1];
 			m_PeerEffectiveStart[timing.peerId] = timing.applyFrame + timing.delayFrames;
 			m_PeerAdmissions[timing.peerId] = {timing.applyFrame, timing.delayFrames};
@@ -6249,6 +6251,7 @@ namespace RTE {
 		if (!IsKnownRemotePeer(peer)) { m_RemotePeerIds.push_back(peer); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
 		m_ReclaimTransactions[peer] = {peer, reclaim.authorityGeneration, reclaim.revision, reclaim.seatIncarnations[peer - 1], reclaim.applyFrame,
 		    reclaim.delayFrames, reclaim.neutralThroughFrame, reclaim.worldTransition};
+		m_ArrivalLeads.clear();
 		NoteSeatTransition(peer, reclaim.applyFrame, SeatTransition::Back);
 		m_Config.peerIncarnations[peer] = reclaim.seatIncarnations[peer - 1];
 		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
@@ -7248,10 +7251,13 @@ namespace RTE {
 		peerFrames[frame.senderPeerId] = frame.frames;
 		peerStats.acceptedThroughFrame = std::max(peerStats.acceptedThroughFrame, frame.targetFrame);
 		// A returning seat's first frame after its reclaim is when its stream is back; named once per return, on the shared clock.
-		if (const auto back = m_ReclaimTransactions.find(frame.senderPeerId); back != m_ReclaimTransactions.end() && frame.targetFrame >= back->second.activationFrame &&
-		    m_ReturnerFirstFrameNamed.insert(frame.senderPeerId).second)
+		if (const auto back = m_ReclaimTransactions.find(frame.senderPeerId); back != m_ReclaimTransactions.end() &&
+		    frame.targetFrame > std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames) &&
+		    m_ReturnerFirstFrameNamed.insert(frame.senderPeerId).second) {
+			m_ArrivalLeads.clear();
 			std::cout << "[lockstep] first frame of returning peer " << static_cast<int>(frame.senderPeerId) << " accepted: target=" << frame.targetFrame << " next=" << m_Stats.nextFrame
 			          << " reclaim=" << back->second.activationFrame << " window=" << windowCopy << " clock=" << NetLockstepSharedClockMs() << std::endl;
+		}
 		if (!windowCopy && m_Config.adaptiveInputDelay && m_Config.localPeerId == GetHostPeerId()) {
 			uint64_t simNext = m_LastDeliveredFrame ? *m_LastDeliveredFrame + 1 : m_Config.startFrame;
 			// A faster survivor may need this input before this host does. Its latest produced input names
@@ -8631,6 +8637,7 @@ namespace RTE {
 						std::cout << "[net-lockstep] return of peer " << static_cast<int>(reclaim->peerId) << " committed at " << outFrame.frame << " delay=" << reclaim->delayFrames
 						          << " neutral_through=" << reclaim->neutralThroughFrame << " revision=" << reclaim->eventSequence << " differs from the one this peer held" << std::endl;
 					m_ReclaimTransactions[reclaim->peerId] = *reclaim;
+					m_ArrivalLeads.clear();
 					NoteSeatTransition(reclaim->peerId, outFrame.frame, SeatTransition::Back);
 					m_Config.peerIncarnations[reclaim->peerId] = reclaim->seatIncarnation;
 					m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
