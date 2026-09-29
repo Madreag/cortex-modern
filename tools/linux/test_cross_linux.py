@@ -7,6 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cross_peers
+import cross_report
 
 
 class LinuxPeerTests(unittest.TestCase):
@@ -52,6 +53,15 @@ class LinuxPeerTests(unittest.TestCase):
         receipts['Linux']['machine_id'] = 'Mac'
         with self.assertRaisesRegex(RuntimeError, 'distinct'):
             cross_peers.require_distinct_machines(receipts)
+
+    def test_four_way_report_requires_the_adopted_four_human_roster(self):
+        plan = self.plan()
+        config = {'players': [{'human': True, 'peer': seat + 1, 'team': seat} for seat in range(4)],
+                  'difficulty': 50, 'config': {'mode': 'pvp-skirmish', 'activity_preset': 'Multi Box Combat',
+                      'scene_name': 'Grasslands', 'rules': {'teams': [{'ai_skill': 50} for _ in range(4)]}}}
+        self.assertTrue(cross_report.roster_matches(plan, [config]))
+        config['players'].pop()
+        self.assertFalse(cross_report.roster_matches(plan, [config]))
 
 
 if __name__ == '__main__':
