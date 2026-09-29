@@ -117,7 +117,7 @@ class ReportTests(unittest.TestCase):
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
 
-    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False, dropped=False):
+    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False, dropped=False, beyond=None):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
             run = Path(folder)
@@ -138,6 +138,8 @@ class ReportTests(unittest.TestCase):
             rows = [dict(type='committed', tick=300, wall_ms=5000)]
             if complete:
                 rows.append(dict(type='committed', tick=final_tick, wall_ms=5000 + wall_ms))
+            if beyond is not None:
+                rows.append(dict(type='committed', tick=final_tick + 1, wall_ms=5000 + beyond))
             if live_clock:
                 (run / 'host-live.jsonl').write_text('\n'.join(json.dumps(dict(tick=tick, wall_ms=5000 + (tick-300)*wall_ms/(final_tick-300)))
                     for tick in range(300, final_tick+1)), encoding='utf-8')
@@ -228,6 +230,14 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(measured['metrics']['last_tick'], 1200)
         self.assertAlmostEqual(measured['metrics']['steady_wall_tps'], 900000/17000)
         self.assertEqual(measured['pins']['item9a_wall_tps']['status'], 'FAIL')
+
+    def test_item9a_measures_through_a_skipped_final_tick_it_ran_past(self):
+        # The 4K lag-100 host on 280: a render iteration ran 1200 and 1201 and recorded only 1201, and every host pin read null.
+        measured = self.item9a(complete=False, beyond=15000 * 901 / 900)
+        self.assertAlmostEqual(measured['pins']['item9a_wall_tps']['value'], 60.0)
+        self.assertTrue(measured['pass_check'])
+        self.assertEqual(self.item9a(complete=False, beyond=16000)['pins']['item9a_wall_tps']['status'], 'FAIL')
+        self.assertEqual(self.item9a(complete=False)['pins']['item9a_wall_tps']['status'], 'MISS')
 
     def test_item9a_confirmed_horizon_lag_cannot_hide_behind_average_rate(self):
         self.assertEqual(self.item9a(wall_ms=15050)['pins']['item9a_confirmed_horizon_lag']['status'], 'PASS')

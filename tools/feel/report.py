@@ -425,13 +425,21 @@ def item9a_gates(run, peer='host', rows=None):
                 for row in read_jsonl(live) if 'wall_ms' in row]
     else:
         rows = read_jsonl(raw) if rows is None and raw.is_file() else rows or []
-    committed = [row for row in rows if row.get('type') == 'committed' and 300 <= row.get('tick', 0) <= final_tick]
+    rows = [row for row in rows if row.get('type') == 'committed']
+    committed = [row for row in rows if 300 <= row.get('tick', 0) <= final_tick]
     by_tick = defaultdict(list)
     for row in committed:
         by_tick[row['tick']].append(row['wall_ms'])
     first_tick = min(by_tick, default=None)
-    wall_ms = (max(by_tick[final_tick]) - min(by_tick[first_tick])) if final_tick in by_tick and first_tick is not None and first_tick < final_tick else None
-    tps = (final_tick - first_tick) * 1000 / wall_ms if wall_ms and wall_ms > 0 else None
+    # A render iteration that ran several ticks records only its last, so the final tick can have no row of its own: the
+    # window then ends at the first recorded tick past it, which that iteration's clock covers.
+    end_tick, end_ms = final_tick, by_tick.get(final_tick)
+    if not end_ms:
+        past = [row for row in rows if row.get('type') == 'committed' and row.get('tick', 0) > final_tick]
+        end_tick = min((row['tick'] for row in past), default=None)
+        end_ms = [row['wall_ms'] for row in past if row['tick'] == end_tick]
+    wall_ms = (max(end_ms) - min(by_tick[first_tick])) if end_ms and first_tick is not None and first_tick < end_tick else None
+    tps = (end_tick - first_tick) * 1000 / wall_ms if wall_ms and wall_ms > 0 else None
     log_path = run / peer / 'stdout.log'
     log = log_path.read_text(encoding='utf-8-sig', errors='replace') if log_path.is_file() else ''
     waits = [(int(tick), int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log) if 300 < int(tick) <= final_tick]
