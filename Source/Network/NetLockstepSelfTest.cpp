@@ -20770,6 +20770,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
 		auto config = MakeCoordinatorConfig(1, 2, 0x9A58, 29, NetTransportLane::InputUnreliable);
+		config.remoteTransportPeerId = 1;
 		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0;
 		config.relayToOtherPeers = true;
 		if (!wire.StartHost(49744, error) || !host.Start(wire, config, error)) return false;
@@ -20791,6 +20792,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
 		auto config = MakeCoordinatorConfig(1, 2, 0x9A59, 29, NetTransportLane::InputUnreliable);
+		config.remoteTransportPeerId = 1;
 		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0;
 		config.relayToOtherPeers = true;
 		if (!wire.StartHost(49745, error) || !host.Start(wire, config, error)) return false;
