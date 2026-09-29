@@ -123,6 +123,8 @@ namespace RTE {
 			// mt19937's operator<< text is implementation-defined; hash the next outputs of a copy instead (the stream is standard).
 			std::mt19937 copy = EngineCopy();
 			std::ostringstream oss;
+			// Every peer hashes the same bytes whatever its process locale.
+			oss.imbue(std::locale::classic());
 			for (int i = 0; i < std::mt19937::state_size; ++i) {
 				oss << static_cast<uint32_t>(copy()) << ' ';
 			}

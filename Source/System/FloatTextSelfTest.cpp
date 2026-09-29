@@ -566,6 +566,17 @@ namespace RTE::FloatTextSelfTest {
 			return Hex(arm.GetNumberValue("FloatTextKey"));
 		}
 
+		std::string ProbeRandomStateHash() {
+			RandomGenerator generator;
+			generator.Seed(42);
+			(void)generator.RandomNum<float>();
+			// The checksum's input bytes, reduced to a short digest so a failure names both.
+			const std::string text = generator.SerializeStateForHashing();
+			uint64_t digest = 1469598103934665603ULL;
+			for (const unsigned char c: text) digest = (digest ^ c) * 1099511628211ULL;
+			return std::to_string(text.size()) + ":" + std::to_string(digest);
+		}
+
 		struct LocaleProbe {
 			const char* name;
 			std::string (*run)();
@@ -643,6 +654,7 @@ namespace RTE::FloatTextSelfTest {
 			    {"pie_menu_cursor_angle", ProbePieMenuState, PieMenuStateText},
 			    {"attachable_deg_offset", ProbeInheritedRotAngleDegOffset, nullptr},
 			    {"custom_number_value", ProbeCustomNumberValue, "0x3ff8000000000000"},
+			    {"rng_state_hash", ProbeRandomStateHash, nullptr},
 			};
 			const auto expectationOf = [](const LocaleProbe& probe) { return std::string(probe.expected ? probe.expected : ""); };
 			std::string references[std::size(probes)];
