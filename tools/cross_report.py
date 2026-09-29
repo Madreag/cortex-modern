@@ -60,7 +60,14 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         oracles['forced_ends']=oracle(checks.get('forced_end_during_hold',False) and checks.get('forced_end_during_transfer',False),'Actual activity-over must overlap the named recovery phase; a stale hint is insufficient.')
         oracles['rematches']=oracle(checks.get('changed_settings_rematch',False) and checks.get('fog_on_match',False))
         oracles['autosaves']=oracle(checks.get('validated_autosave_archives',False),'Archive integrity alone does not prove restoration or sealed admission.')
+    required = (*CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings')
+    if manifest['scenario'] != 'match':
+        required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
+    workload = (manifest['ticks'] == 1201 and not manifest.get('faults')) if manifest['scenario'] == 'match' else (
+        manifest['ticks'] >= 72000 if manifest['scenario'] == 'soak' else bool(manifest.get('faults')))
+    v1 = all(checks.get(name, False) for name in required) and workload and bool(manifest.get('fullstate_every')) and not pending and not mixed_builds
     return dict(core_passed=core,core_engine_red=engine_red,mixed_builds=list(mixed_builds),
+        v1_passed=bool(v1), v1_checks=list(required), v1_workload=workload,
         gate_b_eligible=(core or engine_red) and checks.get('shared_fullstate',False) and not pending and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
 
 
@@ -91,7 +98,8 @@ def scheduled_hold(hold,receipts,recoveries):
 
 
 def attempt_label(result):
-    if result.get('passed'): return 'PASS'
+    if result.get('v1_passed'): return 'V1 PASS'
+    if 'v1_passed' not in result: return 'V1 NOT GRADED'
     if result.get('mixed_builds'): return 'PREFLIGHT RED (mixed build); FULL GATE VOID'
     if result.get('core_engine_red'): return 'CORE-ENGINE-RED; FULL GATE RED'
     return 'CORE PASS; FULL GATE RED' if result.get('core_passed') else 'CORE FAIL; FULL GATE RED'
@@ -580,7 +588,7 @@ def build_report(root):
             missing=[field for field in report.HISTORY_FIELDS if unkeyed[0].get(field) is None]) if unkeyed else None
     judgment=judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds)
     rerun=write_rerun_command(root,manifest)
-    result = dict(version=2, run=manifest['run'], passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
+    result = dict(version=2, run=manifest['run'], passed=judgment['v1_passed'], diagnostic_passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
                   assigned_capture_rows={str(row):CAPTURE_ROWS[row] for row in manifest.get('capture_rows_pending',[1,2])},rerun_after_capture_fix=rerun,
                   peers=peers, local_host_render=local_host_render(manifest, peers),
                   comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
@@ -712,4 +720,4 @@ def write_index(root):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__); parser.add_argument('root',type=Path)
     result=build_report(parser.parse_args().root)
-    raise SystemExit(0 if (result.get('gate_b_eligible') if result['manifest']['scenario']=='match' else result['passed']) else 1)
+    raise SystemExit(0 if result['v1_passed'] else 1)

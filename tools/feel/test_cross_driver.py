@@ -549,7 +549,9 @@ class CrossDriverTests(unittest.TestCase):
                     f'[fullstate-context] tick={t} round=1 label=sample path=/instance/capture-{t}\n'
                     f'[fullstate] tick={t} hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round=1\n'
                     f'[fullstate-scope] tick={t} round=1 label=sample per_peer=camera\n' for t in (1,2,4)))
-            self.assertTrue(cross_report.build_report(root)['passed'])
+            short = cross_report.build_report(root)
+            self.assertTrue(short['diagnostic_passed'])
+            self.assertFalse(short['v1_passed'])
             own=cross_report.peer_root(root,plan,plan['specs'][-1]); name=plan['specs'][-1]['peer']
             record=json.loads((own/'record.json').read_text())
             (own/'record.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))

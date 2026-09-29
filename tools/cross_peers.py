@@ -1112,7 +1112,7 @@ def run_plan(plan, root):
         write_json(root / 'manifest.json', plan)
     import cross_report
     result = cross_report.build_report(root)
-    return 0 if (result.get('gate_b_eligible') if plan['scenario']=='match' else result['passed']) else 1
+    return 0 if result['v1_passed'] else 1
 
 
 def parse_args(argv=None):
@@ -1153,7 +1153,7 @@ def parse_args(argv=None):
         if MAC_GUARD is None and '{mac_guard}' in options.boxes.read_text(encoding='utf-8-sig'):
             parser.error(f"{options.boxes} guards the Mac with the live inventory marker: --mac-guard or {MAC_GUARD_ENV}")
         options.out = options.out or SCRATCH / 'dry-run'
-    options.ticks = options.ticks or (1201 if options.scenario == 'match' else 36000)
+    options.ticks = options.ticks or (1201 if options.scenario == 'match' else 72000 if options.scenario == 'soak' else 36000)
     if options.ticks < 2 or min(options.timeout, options.recovery_deadline_ms, options.capture_budget_ms) <= 0:
         parser.error('tick budget and deadlines must be positive')
     if options.fullstate_every < 0: parser.error('fullstate cadence must be nonnegative')
