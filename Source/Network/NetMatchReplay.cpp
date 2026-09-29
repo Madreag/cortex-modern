@@ -1,13 +1,26 @@
 #include "NetMatchReplay.h"
 #include "TelemetryBundle.h"
+#include "System.h"
 
 #include "NetLobbyProtocol.h"
 
 #include <algorithm>
+#include <chrono>
 
 namespace RTE {
 
 	namespace {
+		struct ReplayWorkTimer {
+			uint64_t frame;
+			const char* phase;
+			size_t bytes = 0;
+			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			~ReplayWorkTimer() {
+				const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+				if (ms >= 10) System::PrintDiagnosticLine("[net-replay-work] frame=" + std::to_string(frame) + " phase=" + phase + " ms=" + std::to_string(ms) + " bytes=" + std::to_string(bytes));
+			}
+		};
+
 		void AppendU16(std::vector<uint8_t>& out, uint16_t value) {
 			out.push_back(static_cast<uint8_t>(value & 0xFFU));
 			out.push_back(static_cast<uint8_t>((value >> 8) & 0xFFU));
@@ -209,6 +222,7 @@ namespace RTE {
 	}
 
 	bool NetMatchReplayWriter::WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error) {
+		ReplayWorkTimer work{frame, "frame"};
 		if (!m_Out.is_open()) {
 			if (error) *error = "replay writer is not open";
 			return false;
@@ -320,13 +334,17 @@ namespace RTE {
 		std::vector<uint8_t> lengthPrefix;
 		AppendU32(lengthPrefix, static_cast<uint32_t>(payload.size()));
 		AppendU32(lengthPrefix, ControllerFrameCodec::PayloadChecksum(payload));
-		m_Out.write(reinterpret_cast<const char*>(lengthPrefix.data()), static_cast<std::streamsize>(lengthPrefix.size()));
-		m_Out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+		{
+			ReplayWorkTimer work{m_FramesWritten + 1, "write", payload.size()};
+			m_Out.write(reinterpret_cast<const char*>(lengthPrefix.data()), static_cast<std::streamsize>(lengthPrefix.size()));
+			m_Out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+		}
 		if (!m_Out) {
 			if (error) *error = "could not write a replay record";
 			return false;
 		}
 		if (!m_DiagnosticTruncated) {
+			ReplayWorkTimer work{m_FramesWritten + 1, "diagnostic", m_DiagnosticBytes.size()};
 			if (m_DiagnosticBytes.size() + lengthPrefix.size() + payload.size() + 4 <= TelemetryBundle::c_MemberLimit) {
 				m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), lengthPrefix.begin(), lengthPrefix.end());
 				m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), payload.begin(), payload.end());
