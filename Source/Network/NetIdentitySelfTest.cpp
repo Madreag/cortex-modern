@@ -1,9 +1,11 @@
 #include "NetIdentitySelfTest.h"
 
 #include "NetIdentity.h"
+#include "LoopbackTransport.h"
 #include "LuaMan.h"
 #include "MovableMan.h"
 #include "NetDirectoryCodec.h"
+#include "NetSession.h"
 #include "PresetMan.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
@@ -193,6 +195,74 @@ namespace RTE {
 			module.totalBytes = 42;
 			module.contentHash = MakeHash(hashSeed);
 			return module;
+		}
+
+		bool CheckAdmission(NetIdentityManifest hostIdentity, NetIdentityManifest clientIdentity, const std::string& refusal, std::string* error) {
+			for (NetIdentityManifest* identity : {&hostIdentity, &clientIdentity}) {
+				identity->deterministicConfigHash = NetIdentity::HashDeterministicConfig(identity->deterministicConfig);
+				identity->moduleManifestHash = NetIdentity::HashModuleManifest(identity->modules);
+				identity->sessionIdentityHash = NetIdentity::HashSessionIdentity(*identity);
+			}
+			LoopbackTransport hostTransport, clientTransport;
+			NetSession host, client;
+			NetSessionConfig hostConfig, clientConfig;
+			hostConfig.port = clientConfig.port = 50500;
+			hostConfig.localNonce = 1;
+			clientConfig.localNonce = 2;
+			hostConfig.localIdentity = hostIdentity;
+			clientConfig.localIdentity = clientIdentity;
+			if (!host.StartHost(hostTransport, hostConfig, error) || !client.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+			for (uint64_t now = 0; now <= 500; now += 10) {
+				host.Tick(now);
+				client.Tick(now);
+				if (refusal.empty()) {
+					if (host.GetAcceptedPeerCount() == 1 && client.GetState() == NetSessionState::Accepted) return true;
+					if (client.IsRejected()) break;
+				} else if (client.IsRejected()) {
+					if (client.GetRejectReason() == NetRejectReason::ModuleManifestMismatch &&
+					    client.GetRejectSummary().find(refusal) != std::string::npos &&
+					    client.BuildPlayerRefusalText().find(refusal) != std::string::npos) return true;
+					break;
+				}
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			*error = "expected " + (refusal.empty() ? std::string("admission") : refusal) + "; host=" + NetSession::StateName(host.GetState()) +
+			         " client=" + NetSession::StateName(client.GetState()) + " detail=" + client.BuildRejectText();
+			return false;
+		}
+
+		bool TestSelectedModuleAdmission(std::string* error) {
+			NetIdentityManifest host = MakeManifest();
+			host.modules.push_back(MakeModule(2, "VoidWanderers.rte", 8, 193));
+			host.deterministicConfig.selectedModule = "VoidWanderers.rte";
+			NetIdentityManifest client = host;
+			client.deterministicConfig.selectedModule.clear();
+			if (!CheckAdmission(host, client, "", error)) return false;
+			client.deterministicConfig.selectedModule = "Base.rte";
+			if (!CheckAdmission(host, client, "", error)) return false;
+			client = host;
+			client.deterministicConfig.scenarioTestModuleLoaded = true;
+			if (!CheckAdmission(host, client, "", error)) return false;
+			std::cout << "[net-identity-selftest] PASS two identities differing only in selected_module admit; scenario flag is diagnostic" << std::endl;
+			return true;
+		}
+
+		bool TestNamedModuleAdmission(std::string* error) {
+			NetIdentityManifest host = MakeManifest();
+			host.modules.push_back(MakeModule(2, "VoidWanderers.rte", 8, 193));
+			NetIdentityManifest client = host;
+			client.modules.pop_back();
+			if (!CheckAdmission(host, client, "Install: VoidWanderers.rte", error)) return false;
+			if (!CheckAdmission(client, host, "Remove: VoidWanderers.rte", error)) return false;
+			client = host;
+			client.modules.back().version = 7;
+			if (!CheckAdmission(host, client, "Update: VoidWanderers.rte (you 7, host 8)", error)) return false;
+			client = host;
+			client.modules.back().contentHash = MakeHash(201);
+			if (!CheckAdmission(host, client, "VoidWanderers.rte", error)) return false;
+			std::cout << "[net-identity-selftest] PASS a module missing on one side is refused with its name; version and content differences refuse" << std::endl;
+			return true;
 		}
 
 		std::string NameList(const std::vector<std::string>& names) {
@@ -529,7 +599,8 @@ namespace RTE {
 	int NetIdentitySelfTest::Run() {
 		std::string error;
 		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestDiffModules(&error) || !TestLuaStateCountIsABuildConstant(&error) ||
-		    !TestPresetIndependentAdmissionIdentity(&error) || !TestModuleRootOutOfIdentity(&error)) {
+		    !TestPresetIndependentAdmissionIdentity(&error) || !TestModuleRootOutOfIdentity(&error) ||
+		    !TestNamedModuleAdmission(&error) || !TestSelectedModuleAdmission(&error)) {
 			std::cerr << "[net-identity-selftest] FAIL: " << error << std::endl;
 			return 1;
 		}
