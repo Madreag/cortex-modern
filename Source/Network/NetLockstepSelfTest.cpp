@@ -20801,12 +20801,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_Stats.peers[2].pingMs = 400;
 		host.m_Stats.peers[2].highestTargetFrame = 986;
 		host.m_ReadyFrames.resize(29);
-		if (host.JudgeOwnSeat(986, 1000) || host.JudgeOwnSeat(986, 1100) || host.m_OwnMissingFrame) {
-			*error = "the host was judged late with a full window of committed input"; return false;
+		if (host.JudgeOwnSeat(986, 1000) || host.JudgeOwnSeat(986, 1100) || host.m_OwnMissingFrame != 986 || host.m_OwnMissingSinceMs != 1000) {
+			*error = "the host did not retain its missing-input clock behind the notice runway"; return false;
 		}
 		host.m_ReadyFrames.clear();
-		if (host.JudgeOwnSeat(986, 1200) || !host.JudgeOwnSeat(986, 1251)) {
-			*error = "an exhausted runway changed the three-tick late bound"; return false;
+		if (!host.JudgeOwnSeat(986, 1200)) {
+			*error = "an exhausted notice runway restarted the three-tick late bound"; return false;
 		}
 		std::cout << "[net-lockstep-selftest] PASS the_hosts_runway_precedes_its_late_clock" << std::endl;
 		return true;
