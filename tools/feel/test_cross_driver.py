@@ -516,7 +516,7 @@ class CrossDriverTests(unittest.TestCase):
     def test_report_requires_all_peers_shared_capture_and_binary_limit(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)/'run'; root.mkdir()
-            plan=self.plan(); plan['ticks']=4; plan['fullstate_every']=2; plan['capture_rows_pending']=[]
+            plan=self.plan(); plan['ticks']=1201; plan['fullstate_every']=600; plan['capture_rows_pending']=[]
             plan['preflights']={b['name']:dict(machine_id=b['name'],executable_sha256='c'*64) for b in plan['boxes']}
             (root/'manifest.json').write_text(json.dumps(plan))
             for spec in plan['specs']:
@@ -538,7 +538,7 @@ class CrossDriverTests(unittest.TestCase):
                     parts=[dict(path='raw.0.jsonl.gz',bytes=len(raw),lines=2,crc32=zlib.crc32(raw),first_sequence=0,last_sequence=1)])))
                 live=[dict(session='s',match='m',history_branch='initial',source_round=1,round=1,tick=t,
                     instance=spec['peer'],execution='one',incarnation=0,phase='live',wall_ms=t*20,gameplay_tick=True,
-                    effective_start_frame=1,sim_gated='a'*64,subsystems={key:'b'*64 for key in cross_report.REQUIRED_SUBSYSTEMS}) for t in range(1,5)]
+                    effective_start_frame=1,sim_gated='a'*64,subsystems={key:'b'*64 for key in cross_report.REQUIRED_SUBSYSTEMS}) for t in range(1,1202)]
                 (own/'live.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in live))
                 config=dict(type='adopted_config',peer_count=3,sim_tick_ms=1000/60,difficulty=50,
                     players=[dict(peer=p+1,team=p,human=True) for p in range(3)]+[dict(peer=0,team=3,human=False)],
@@ -548,10 +548,10 @@ class CrossDriverTests(unittest.TestCase):
                 (own/'engine/stdout.log').write_text(''.join(
                     f'[fullstate-context] tick={t} round=1 label=sample path=/instance/capture-{t}\n'
                     f'[fullstate] tick={t} hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round=1\n'
-                    f'[fullstate-scope] tick={t} round=1 label=sample per_peer=camera\n' for t in (1,2,4)))
-            short = cross_report.build_report(root)
-            self.assertTrue(short['diagnostic_passed'])
-            self.assertFalse(short['v1_passed'])
+                    f'[fullstate-scope] tick={t} round=1 label=sample per_peer=camera\n' for t in (1,600,1200)))
+            complete = cross_report.build_report(root)
+            self.assertTrue(complete['diagnostic_passed'])
+            self.assertTrue(complete['v1_passed'])
             own=cross_report.peer_root(root,plan,plan['specs'][-1]); name=plan['specs'][-1]['peer']
             record=json.loads((own/'record.json').read_text())
             (own/'record.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))
@@ -583,7 +583,7 @@ class CrossDriverTests(unittest.TestCase):
             (own/'live.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in unmapped))
             unkeyed=cross_report.build_report(root); name=plan['specs'][-1]['peer']
             self.assertFalse(unkeyed['passed']); self.assertEqual(unkeyed['peers'][name]['unkeyed'],1)
-            self.assertIn(f'{name}=3 frames (1 unkeyed: history_branch from tick 3)',cross_report.verdict_line(unkeyed))
+            self.assertIn(f'{name}=1200 frames (1 unkeyed: history_branch from tick 3)',cross_report.verdict_line(unkeyed))
             (own/'live.jsonl').write_bytes(rows)
             with (own/'live.jsonl').open('a') as stream: stream.write(json.dumps(live[-1])+'\n')
             failed=cross_report.build_report(root)

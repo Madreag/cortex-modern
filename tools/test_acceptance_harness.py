@@ -8,9 +8,48 @@ import cross_peers
 import cross_report
 import test_determinism_pair as determinism
 import soak_two_peer as soak
+import test_autosave_restore as autosave
+from unittest import mock
 
 
 class AcceptanceTests(unittest.TestCase):
+    def test_f25_every_forced_arm_accepts_the_lever(self):
+        import inspect
+        for name in ('restore', 'retention', 'anchor', 'resume', 'world_restart'):
+            self.assertIn('client_stall', inspect.signature(getattr(autosave, 'arm_' + name)).parameters)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(autosave, 'wait_for_checkpoints', side_effect=lambda attempt, ticks: attempt(1, ticks)), \
+                 mock.patch.object(autosave, 'run_pair', return_value={}) as pair, \
+                 mock.patch.object(autosave, 'forced_hold_evidence', return_value={'requested': True}) as proof, \
+                 mock.patch.object(autosave, 'judge_restore', return_value={}), \
+                 mock.patch.object(autosave, 'judge_retention', return_value={}), \
+                 mock.patch.object(autosave, 'judge_anchor', return_value={}):
+                for name in ('restore', 'retention', 'anchor'):
+                    result = getattr(autosave, 'arm_' + name)(root, root, 48720, client_stall='40:600')
+                    self.assertIn('40:600', pair.call_args.args[5]['client'])
+                    self.assertTrue(result['forced_hold']['requested'])
+                    proof.assert_called()
+
+    def test_f25_native_hold_and_completed_reclaim_are_required(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for peer in ('host', 'client'):
+                (root / peer).mkdir()
+            host = '[net-match] hold peer=2 frame=50 AI in control\n[net-match] seat-reclaimed peer=2 frame=170\n'
+            client = '[net-lockstep] start round=7 frame=1 local_peer=2\n[net-test] live stall frame=40 ms=600\n[net-match] private catch-up complete frame=170\n'
+            (root / 'host/stdout.log').write_text(host)
+            (root / 'client/stdout.log').write_text(client)
+            self.assertTrue(autosave.forced_hold_evidence(root, '40:600')['requested'])
+            for bad in ('', client.split('[net-match] private')[0], client.replace('frame=40', 'frame=39')):
+                (root / 'client/stdout.log').write_text(bad)
+                with self.assertRaises(AssertionError):
+                    autosave.forced_hold_evidence(root, '40:600')
+            (root / 'client/stdout.log').write_text(client)
+            (root / 'host/stdout.log').write_text('')
+            with self.assertRaises(AssertionError):
+                autosave.forced_hold_evidence(root, '40:600')
+
     def cross_case(self, scenario='match'):
         manifest = dict(scenario=scenario, ticks=1201 if scenario == 'match' else 72000,
                         fullstate_every=600, faults=[] if scenario == 'match' else [dict(id='spike')], capture_rows_pending=[])
