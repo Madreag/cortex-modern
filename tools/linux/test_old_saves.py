@@ -37,8 +37,7 @@ def check(repo, root, label, source):
     probe.write_text(json.dumps({"schema": 1, "timeout_ms": 180000, "steps": [
         {"op": "wait", "screen": "Gameplay"}, {"op": "wait", "sim_at_least": saved_tick + 850},
         {"op": "finish"}]}))
-    # Ordinary saved games have no multiplayer trace collector. Read the actual sim clock
-    # at gameplay entry and at completion; require at least 600 updates between them.
+    # Ordinary saved games expose the simulation clock without a multiplayer trace collector.
     run = make_run(repo, ["-load-game", name, "-max-ticks", saved_tick + 900], root / "engine", 300,
                    env={"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)})
     saved = Path(run.cwd) / "Userdata/UserSavedGames.rte" / f"{name}.ccsave"

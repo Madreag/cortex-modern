@@ -40,8 +40,7 @@ def main():
     with (root / "mods-driver.log").open("w") as log:
         result["mods_exit"] = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT).returncode
     mod_result = json.loads((root / "mods/result.json").read_text())
-    # The older driver required a diagnostic hash suffix in the player-facing sentence.
-    # This row requires the actionable module names, plus all its process/host/UI checks.
+    # Require exact actionable module names and retain every process, host and UI check.
     result["mod_ui"] = {}
     for phase, detail in mod_result.get("details", {}).items():
         result["mod_ui"][phase] = detail.get("joiner_label_lines") == detail.get("expected_lines")

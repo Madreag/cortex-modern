@@ -86,13 +86,12 @@ namespace {
 		return latest;
 	}
 
-	// Validate the address after its optional https:// prefix. The stored field keeps
-	// the player's spelling, and the directory client also accepts a scheme-less address.
+	// Validate the address while preserving the player's spelling.
 	bool ValidDirectoryUrl(const std::string& url) {
 		if (url.empty()) {
 			return true;
 		}
-		if (url.compare(0, 7, "http://") == 0 || url.find("//") != std::string::npos) {
+		if (url.starts_with("//") || url.find("://") < url.find('/')) {
 			return false;
 		}
 		return url.find_first_of(" \t") == std::string::npos;
