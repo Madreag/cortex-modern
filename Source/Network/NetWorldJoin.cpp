@@ -1788,9 +1788,13 @@ namespace RTE {
 		const uint64_t through = std::max(session->snapshotTick, session->acknowledgedThrough);
 		if (through < finalFrame && (!m_Tail.Covers(through + 1) || !m_Tail.Covers(finalFrame))) return false;
 		session->finalTailFrame = finalFrame;
-		session->deliveredThrough = through;
-		session->pendingTail.clear();
-		session->pendingTailOffset = 0;
+		if (session->pendingTailOffset > 0 && session->pendingTailOffset < session->pendingTail.size()) {
+			session->finalTailRewind = through;
+		} else {
+			session->deliveredThrough = through;
+			session->pendingTail.clear();
+			session->pendingTailOffset = 0;
+		}
 		session->tailInFlight.clear();
 		return true;
 	}
@@ -1920,6 +1924,10 @@ namespace RTE {
 		if (session->pendingTailOffset == session->pendingTail.size()) {
 			session->deliveredThrough = std::max(session->deliveredThrough, session->pendingTailThrough);
 			session->pendingTail.clear(); session->pendingTailOffset = 0;
+			if (session->finalTailRewind) {
+				session->deliveredThrough = std::max(*session->finalTailRewind, session->acknowledgedThrough);
+				session->finalTailRewind.reset();
+			}
 		}
 	}
 
