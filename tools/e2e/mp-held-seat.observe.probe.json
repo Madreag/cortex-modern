@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "timeout_ms": 240000,
+  "timeout_ms": 180000,
   "steps": [
     {
       "op": "wait",

@@ -1652,7 +1652,7 @@ def check_acceptance_rows(results, scratch):
               and any(i.get('sim_progress') for i in resumed['checklist']))
     root = scratch / 'round-history'; root.mkdir()
     for peer in ('host', 'client'):
-        rows = [dict(round=round_id, tick=t, sim_gated=str(t), subsystems={'actors': str(t), 'controller': str(t)})
+        rows = [dict(round=round_id, tick=t, sim_gated=str(t), subsystems={key:str(t) for key in driver.CORE | {'controller'}})
                 for round_id in (7, 8) for t in range(1, 4)]
         (root / (peer + '-live.jsonl')).write_text(''.join(json.dumps(r) + '\n' for r in rows))
     if not hasattr(driver, 'compare_round_histories'):
@@ -1670,6 +1670,13 @@ def check_acceptance_rows(results, scratch):
         scenario = driver.load_scenario(name)
         runs = scenario.get('runs') or [scenario]
         ok &= row(results, 'audit-07/' + name + '-has-behavior-gate', all(r.get('behavior_gate') or scenario.get('behavior_gate') for r in runs))
+        for run in runs:
+            for peer in run.get('peers', scenario.get('peers', [])):
+                if peer.get('probe'):
+                    probe = json.loads(driver.scenario_text(scenario, peer['probe']))
+                    ok &= row(results, 'audit-07/' + name + '-' + peer['name'] + '-native-probe-schema',
+                              probe.get('schema') == 1 and 0 < probe.get('timeout_ms', 0) <= 180000
+                              and 0 < len(probe.get('steps', [])) <= 256)
     behavior = scratch / 'behavior'; behavior.mkdir()
     spec = driver.load_scenario('mp-held-seat')['behavior_gate']
     (behavior / 'clientb').mkdir()
@@ -1720,7 +1727,7 @@ def check_acceptance_rows(results, scratch):
     driver.write_json(world / 'world/launch.json', dict(argv=['-net-persistent-world','-net-world-fresh']))
     for peer, ticks in [('world',range(1,9)),('client-first',range(2,5)),('client-late',range(6,9))]:
         driver.write_json(world / spec['reports'][peer], dict(exit_code=0,running_ticks=spec['ticks'][peer]))
-        (world / (peer+'-live.jsonl')).write_text(''.join(json.dumps(dict(round=7,tick=t,sim_gated=str(t),subsystems={'controller':str(t)}))+'\n' for t in ticks))
+        (world / (peer+'-live.jsonl')).write_text(''.join(json.dumps(dict(round=7,tick=t,sim_gated=str(t),subsystems={key:str(t) for key in driver.CORE | {'controller'}}))+'\n' for t in ticks))
     good = driver.native_behavior(world, spec)
     ok &= row(results, 'audit-07/world-continuity-positive', good['status'] == 'PASS', str(good))
     path = world / 'world-live.jsonl'; data = path.read_text(); path.write_text('\n'.join(data.splitlines()[1:])+'\n')
@@ -1735,6 +1742,9 @@ def check_acceptance_rows(results, scratch):
     checked = driver.review(dict(name='plain', checklist=[dict(id='picture', screen='game')]), capture, review_root)
     ok &= row(results, 'audit-08/unplanned-desync-fails-without-fullstate', bool(checked['run_findings']))
     ok &= row(results, 'audit-07/assertionless-item-awaits-review', checked['checklist'][0]['state'] == 'AWAITING REVIEW')
+    with patch.object(driver, 'item_evidence', return_value=([1,1], {'probe':'none'})):
+        checked = driver.review(dict(name='plain', checklist=[dict(id='picture', screen='game')]), capture, review_root)
+    ok &= row(results, 'audit-07/probe-none-is-a-finding', bool(checked['checklist'][0].get('finding')))
     return ok
 
 
