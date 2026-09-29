@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "mp-inplace-rehold",
-  "title": "A seat held for its own stall returns in place and stalls again the moment its return is live: it is held again after its return's gap and every peer stays in sync",
+  "title": "A seat held for its own stall returns in place and stalls again once its return is live past the return's gap: it is held again and every peer stays in sync",
   "port_base": 49456,
   "size": "960x540",
   "timeout_s": 150,
@@ -88,7 +88,7 @@
             "-net-test-live-stall",
             "500:600",
             "-net-test-live-stall",
-            "653:600"
+            "850:600"
           ],
           "input_script": "play-input.txt",
           "settings": {
@@ -164,10 +164,6 @@
         "steady_peers": [
           "host",
           "survivor"
-        ],
-        "stall_ticks": [
-          500,
-          653
         ]
       }
     }

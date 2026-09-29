@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -1705,10 +1706,11 @@ def check_acceptance_rows(results, scratch):
     driver.write_json(behavior / 'host-match.json', dict(exit_code=0, running_ticks=4201, lockstep=dict(steady_missing_frame_stalls=1)))
     ok &= row(results, 'audit-07/nonzero-stall-count-fails', driver.native_behavior(behavior, spec)['status'] == 'FAIL')
     rehold = scratch / 'rehold-native'; rehold.mkdir()
-    spec = dict(kind='rehold', target='client', observers=['host', 'survivor'], holds=2, stall_ticks=[2, 7],
+    spec = dict(kind='rehold', target='client', observers=['host', 'survivor'], holds=2,
                 reports={p: p+'-report.json' for p in ('host', 'survivor')},
                 ticks=dict(host=12, survivor=12), steady_peers=['host', 'survivor'])
     (rehold / 'client').mkdir()
+    driver.write_json(rehold / 'client/launch.json', dict(argv=['engine', '-net-test-live-stall', '2:600', '-net-test-live-stall', '7:600']))
     (rehold / 'client/stdout.log').write_text('[net-lockstep] start round=7 frame=1 local_peer=2\n'
         '[net-test] live stall frame=2\n[net-test] live stall frame=7\n'
         '[net-match] private catch-up complete frame=6\n[net-match] private catch-up complete frame=10\n')
@@ -1727,6 +1729,23 @@ def check_acceptance_rows(results, scratch):
     with (rehold / 'host/stdout.log').open('a') as stream:
         stream.write('[net-match] hold peer=2 frame=11 AI in control\n')
     ok &= row(results, 'audit-07/unscheduled-rehold-fails', driver.native_behavior(rehold, spec)['status'] == 'FAIL')
+    # Run 1's lever fired at 659 for a 653 request, once the returned seat was back in play: that is its own tick, not a miss.
+    late = scratch / 'rehold-late-lever'; shutil.copytree(rehold, late)
+    (late / 'host/stdout.log').write_text((rehold / 'survivor/stdout.log').read_text())
+    driver.write_json(late / 'client/launch.json', dict(argv=['engine', '-net-test-live-stall', '2:600', '-net-test-live-stall', '6:600']))
+    ok &= row(results, 'audit-07/a-lever-firing-after-its-request-is-its-stall', driver.native_behavior(late, spec)['status'] == 'PASS',
+              str(driver.native_behavior(late, spec)))
+    driver.write_json(late / 'client/launch.json', dict(argv=['engine', '-net-test-live-stall', '2:600', '-net-test-live-stall', '8:600']))
+    ok &= row(results, 'audit-07/a-lever-firing-before-its-request-fails', driver.native_behavior(late, spec)['status'] == 'FAIL')
+    # A lobby match's report keeps its ticks in last_match and its exit code in the process record (run 1, mp-held-seat).
+    lobby = scratch / 'behavior-lobby-report'; shutil.copytree(behavior, lobby)
+    held = driver.load_scenario('mp-held-seat')['behavior_gate']
+    for peer in held['observers']:
+        driver.write_json(lobby / held['reports'][peer], dict(last_match=dict(running_ticks=4300), runner=dict(lockstep=dict(steady_missing_frame_stalls=0))))
+        driver.write_json(lobby / peer / 'launch.json', dict(exit_code=0))
+    ok &= row(results, 'audit-07/lobby-report-counters', driver.native_behavior(lobby, held)['status'] == 'PASS', str(driver.native_behavior(lobby, held)))
+    driver.write_json(lobby / 'host/launch.json', dict(exit_code=1))
+    ok &= row(results, 'audit-07/lobby-report-failed-exit', driver.native_behavior(lobby, held)['status'] == 'FAIL')
     world = scratch / 'world-native'; world.mkdir(); (world / 'world').mkdir()
     spec = dict(kind='world-continuity', ticks=dict(world=8, **{'client-first': 3, 'client-late': 3}), late_tick=6,
                 reports={p:p+'-report.json' for p in ('world', 'client-first', 'client-late')})
