@@ -1,0 +1,217 @@
+{
+  "schema": 1,
+  "name": "mp-two-returners-3p",
+  "title": "Two clients held for their own 600 ms stalls ten ticks apart return in place a lead apart at 200 ms RTT with 3 peers, each on its raised delay, and every seat plays on",
+  "checklist": [
+    {
+      "id": "rtt200-host-reclaims-both",
+      "run": "rtt200",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        500,
+        1200
+      ],
+      "what": "Both held clients come back in place and the host commits each return with live actors.",
+      "log_regex": [
+        "\\[net-match\\] seat-reclaimed peer=2 frame=\\d+ live_actors=[1-9]",
+        "\\[net-match\\] seat-reclaimed peer=3 frame=\\d+ live_actors=[1-9]"
+      ],
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "resync failed",
+        "lockstep stopped",
+        "desync at frame",
+        "lockstep start mismatch"
+      ]
+    },
+    {
+      "id": "rtt200-client-returns",
+      "run": "rtt200",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        500,
+        1200
+      ],
+      "what": "The client stalls 600 ms at 500, is held, catches up in place and plays on beside the other returner.",
+      "log_regex": [
+        "\\[net-match\\] private catch-up complete frame=\\d+ in_place=1"
+      ],
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "resync failed",
+        "lockstep stopped",
+        "desync at frame",
+        "lockstep start mismatch"
+      ]
+    },
+    {
+      "id": "rtt200-survivor-returns",
+      "run": "rtt200",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        510,
+        1200
+      ],
+      "what": "The second client stalls 600 ms at 510, is held, catches up in place taking the first returner's admitted delay, and plays on.",
+      "log_regex": [
+        "\\[net-match\\] private catch-up complete frame=\\d+ in_place=1"
+      ],
+      "forbidden_log_regex": [
+        "host lost",
+        "now hosting",
+        "resync failed",
+        "lockstep stopped",
+        "desync at frame",
+        "lockstep start mismatch"
+      ]
+    }
+  ],
+  "port_base": 49431,
+  "size": "960x540",
+  "timeout_s": 150,
+  "runs": [
+    {
+      "name": "rtt200",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1",
+            "-net-fake-lag",
+            "200",
+            "-net-test-live-stall",
+            "500:600"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1",
+            "-net-fake-lag",
+            "200",
+            "-net-test-live-stall",
+            "510:600"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5
+        }
+      ]
+    }
+  ]
+}
