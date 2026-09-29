@@ -633,6 +633,7 @@ namespace RTE {
 		uint32_t frameBindingGapDrops = 0; //!< Unreliable frames whose bindings this peer missed past every window.
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
+		uint32_t aheadInputMisses = 0; //!< A future frame the network worker cannot commit yet; no simulation wait is implied.
 		uint32_t blockingFrameWaits = 0;
 		uint64_t holdNoticeBudgetMs = 0;
 		bool holdDeadlineFeasible = true;
