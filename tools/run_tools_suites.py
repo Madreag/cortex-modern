@@ -16,6 +16,8 @@ INVENTORY = Path("D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/
 SUITES = (
     ("acceptance-harness", ["test_acceptance_harness.py"]),
     ("e2e-video", ["test_e2e_video.py"]),
+    ("settings-seed", ["test_settings_seed.py"]),
+    ("launch-budget", ["-m", "unittest", "feel.test_launch_budget"]),
     ("cross-driver", ["-m", "unittest", "feel.test_cross_driver"]),
     ("cross-report", ["-m", "unittest", "feel.test_report"]),
     ("cross-oracles", ["-m", "unittest", "feel.test_cross_oracles"]),
@@ -42,7 +44,8 @@ SUITES = (
     ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),
     ("acceptance-collection", [str(INVENTORY / "test_acceptance_collection.py")]),
 )
-WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement"}
+# The cross driver's suite reads the Windows boxes' trees and ctypes.WinDLL; the other platforms run the cross peers, not this suite.
+WINDOWS_ONLY = {"runner-feel-marker", "runner-limits", "feel-engine-placement", "cross-driver"}
 
 
 def run(repo: Path, name: str, argv: list[str], timeout: float) -> tuple[str, int, str]:

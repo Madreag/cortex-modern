@@ -40,7 +40,7 @@ def patch_settings(runtime: Path, values: dict[str, str]) -> None:
     ini = runtime / "Userdata" / "Settings.ini"
     text = ini.read_text(encoding="utf-8-sig")
     for name, value in values.items():
-        pattern = rf"(?m)^(\s*{name}\s*=\s*)[^\r\n]*"
+        pattern = rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*"
         text, count = re.subn(pattern, lambda m: m[1] + value, text)
         if count == 0:
             text += f"\n\t{name} = {value}\n"

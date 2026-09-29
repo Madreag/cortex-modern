@@ -1,4 +1,5 @@
 #include "AIWriteScript.h"
+#include "FloatText.h"
 
 #include "AHuman.h"
 #include "Controller.h"
@@ -14,6 +15,13 @@
 namespace RTE {
 
 	namespace {
+		/// A script argument as a number, read the same in every process locale; 0 when it is not one.
+		float ScriptNumber(const std::string& text) {
+			float value = 0.0F;
+			(void)ParseNumberExact(text.data(), text.data() + text.size(), value);
+			return value;
+		}
+
 		struct Line {
 			uint64_t tick = 0;
 			int team = 0;
@@ -91,9 +99,9 @@ namespace RTE {
 			} else if (line.op == "flip") {
 				human.SetHFlipped(line.args[0] != "0");
 			} else if (line.op == "aim") {
-				human.SetAimAngle(std::strtof(line.args[0].c_str(), nullptr));
+				human.SetAimAngle(ScriptNumber(line.args[0]));
 			} else if (line.op == "scene-waypoint") {
-				human.AddAISceneWaypoint(Vector(std::strtof(line.args[0].c_str(), nullptr), std::strtof(line.args[1].c_str(), nullptr)));
+				human.AddAISceneWaypoint(Vector(ScriptNumber(line.args[0]), ScriptNumber(line.args[1])));
 			} else if (line.op == "clear-waypoints") {
 				human.ClearAIWaypoints();
 			}
@@ -170,7 +178,7 @@ namespace RTE {
 					std::cout << "[ai-write-script] tick " << simTick << " team " << line.team << " " << line.op << ": no target " << line.args[0] << std::endl;
 					continue;
 				}
-				dest->AddAISceneWaypoint(Vector(std::strtof(line.args[1].c_str(), nullptr), std::strtof(line.args[2].c_str(), nullptr)));
+				dest->AddAISceneWaypoint(Vector(ScriptNumber(line.args[1]), ScriptNumber(line.args[2])));
 				g_CurrentAIActor = nullptr;
 				std::cout << "[ai-write-script] tick " << simTick << " team " << line.team << " " << line.op;
 				for (const std::string& arg: line.args) {

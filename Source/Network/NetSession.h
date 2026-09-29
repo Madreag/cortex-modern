@@ -12,6 +12,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -346,6 +347,9 @@ namespace RTE {
 		void DropPeerTransport(NetPeerId peerId, const std::string& reason);
 		void RefreshHostState();
 
+		bool ReadAdvertisedVersionsForTest(std::string* error);
+		std::optional<std::string> m_AdvertisedBuildForTest;
+		std::optional<uint16_t> m_AdvertisedProtocolForTest;
 		NetClientHello BuildClientHello() const;
 		NetHostHello BuildHostHello(uint8_t assignedPeerId) const;
 		NetJoinAccepted BuildJoinAccepted(uint8_t assignedPeerId) const;

@@ -25,6 +25,7 @@
 #include "GUI.h"
 #include "GUIInputWrapper.h"
 #include "CaptureSentinel.h"
+#include "FloatText.h"
 #include "MainMenuGUI.h"
 #include "NetModerationGUI.h"
 #include "NetModerationGUIProbe.h"
@@ -1074,8 +1075,9 @@ static bool ParseE2eSpawnSpec(const std::string& spec, E2eNamedSpawn& out) {
 	out.className = parts[0];
 	out.preset = parts[1];
 	out.module = parts[2];
-	out.x = std::strtof(parts[3].c_str(), nullptr);
-	out.y = std::strtof(parts[4].c_str(), nullptr);
+	// A fixture's coordinates read the same in every process locale.
+	(void)ParseNumberExact(parts[3].data(), parts[3].data() + parts[3].size(), out.x);
+	(void)ParseNumberExact(parts[4].data(), parts[4].data() + parts[4].size(), out.y);
 	out.tick = static_cast<uint64_t>(std::strtoull(parts[5].c_str(), nullptr, 10));
 	if (parts.size() >= 7) {
 		out.team = static_cast<int32_t>(std::strtol(parts[6].c_str(), nullptr, 10));
@@ -2596,10 +2598,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			// <player>:<multiplier> — this machine's digital aim speed for the player, a per-machine setting the sim may only read off the wire.
 			const std::string spec = argValue[++i];
 			const size_t colon = spec.find(':');
-			char* end = nullptr;
-			const float speed = colon == std::string::npos ? 0.0F : std::strtof(spec.c_str() + colon + 1, &end);
+			float speed = 0.0F;
+			const bool whole = colon != std::string::npos && ParseNumberExact(spec.data() + colon + 1, spec.data() + spec.size(), speed).ptr == spec.data() + spec.size();
 			const int player = colon == std::string::npos ? -1 : std::atoi(spec.substr(0, colon).c_str());
-			if (colon == std::string::npos || player < 0 || player >= Players::MaxPlayerCount || !end || *end != '\0' || !(speed > 0.0F)) {
+			if (colon == std::string::npos || player < 0 || player >= Players::MaxPlayerCount || !whole || !(speed > 0.0F)) {
 				{
 					std::ostringstream line;
 					line << "[digital-aim-speed] bad spec '" << spec << "': expected <player>:<multiplier>";
@@ -3366,7 +3368,12 @@ void ProcessMenuScript() {
 		iss >> control;
 		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : scenarioMenu ? scenarioMenu->AutomationPostCommand(control) : menu->AutomationActivateControl(control);
 		MenuScriptPrint("activate " + control + " ok=" + std::to_string(static_cast<int>(ok)));
-		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
+		if (!ok) {
+			const auto lobby = g_NetMatchService.GetLobbySnapshot();
+			MenuScriptPrint(std::string("activate refused by ") + (pauseMenu ? "pause" : scenarioMenu ? "scenario" : "main") + " menu: service=" + lobby.serviceState +
+			                " in_lobby=" + std::to_string(lobby.inLobby) + " remote_ready=" + std::to_string(lobby.remoteReady) + " host=" + std::to_string(lobby.isHost));
+			return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control);
+		}
 	} else if (cmd == "post_command") {
 		std::string control;
 		iss >> control;
@@ -5942,6 +5949,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		const bool e2eHostEndedRound = s_netMatchServiceE2E && IsCompleteControllerStop(error) && error.find("e2e complete") == std::string::npos &&
 			error.find("match over") == std::string::npos && error.find("host handover ended") == std::string::npos &&
 			!g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running;
+		// The host's own End Match played its round to the agreed end frame: that clean stop is the end it asked for.
+		const bool hostEndedAtAgreedFrame = IsCompleteControllerStop(error) && g_NetMatchService.IsHost() && g_NetMatchService.EndsAtAgreedFrame();
 		// A held seat's rejoin is the product's own recovery too: the observed trace follows it instead of stopping.
 		const bool observeTraceRecovery = !s_netMatchServiceE2E && s_recordTickHashes &&
 		    (error.find("ResyncRequested") != std::string::npos || (error.find("PeerHeld:") != std::string::npos && g_SettingsMan.GetNetworkAutoReconnect()));
@@ -6027,7 +6036,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		} else if (error.find("Complete:") != std::string::npos &&
 		           error.find("e2e complete") == std::string::npos &&
 		           (g_NetMatchService.GetState() == NetMatchServiceState::Completed ||
-		            error.find("match over") != std::string::npos || e2eHostEndedRound)) {
+		            error.find("match over") != std::string::npos || e2eHostEndedRound || hostEndedAtAgreedFrame)) {
 			if (e2eHostEndedRound) {
 				// The round ends on the host's word, as the product's clean stop does.
 				const std::string result = NetMatchEndReason(g_ActivityMan.GetActivity());
@@ -6402,8 +6411,9 @@ void RunGameLoop() {
 			const char* lossText = std::getenv("CC_TEST_GNS_LOSS_PERCENT");
 			const char* headless = std::getenv("CCCP_HEADLESS");
 			if (lossText && headless && std::strcmp(headless, "1") == 0) {
-				char* end = nullptr;
-				const float percent = std::strtof(lossText, &end);
+				float percent = -1.0F;
+				const char* lossEnd = lossText + std::strlen(lossText);
+				const char* end = ParseNumberExact(lossText, lossEnd, percent).ptr;
 				bool applied = false;
 #ifdef CCCP_WITH_GNS
 				if (end != lossText && *end == '\0' && percent >= 0 && percent <= 100) {
@@ -6611,7 +6621,8 @@ void RunGameLoop() {
 			}
 			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && perturbDue && !s_perturbFired) {
 				s_perturbFired = true;
-				if (s_netPerturbWhenLive) System::PrintDiagnosticLine("[net-test] live perturb frame=" + std::to_string(simTick));
+				// Named in both modes: a run's oracle excuses only the desync it can see was injected.
+				System::PrintDiagnosticLine("[net-test] live perturb frame=" + std::to_string(simTick));
 				std::random_device perturbDevice;
 				const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
 				for (unsigned k = 0; k < perturbAdvance; ++k) {
@@ -8462,6 +8473,7 @@ std::string BuildNetLockstepReportJson(const NetSession& session, const NetLocks
 	const bool completed = stats.timeoutReason.rfind("Complete:", 0) == 0;
 	const char* finalState = !setupError.empty() ? "Failed" : NetLockstepCoordinator::StateName(coordinator.GetState());
 	std::ostringstream out;
+	out.imbue(std::locale::classic());
 	out << "{";
 	out << "\"final_state\":\"" << finalState << "\",";
 	out << "\"setup_error\":\"" << JsonEscape(setupError) << "\",";
@@ -8521,6 +8533,7 @@ const char* ActivityStateName(Activity::ActivityState state) {
 std::string BuildControllerBoundaryJson() {
 	const MovableMan::ControllerBoundaryStats& stats = g_MovableMan.GetControllerBoundaryStats();
 	std::ostringstream out;
+	out.imbue(std::locale::classic());
 	out << "{\"equip_commands\":" << stats.equipCommands << ",\"sound_commands\":" << stats.soundCommands << ",\"aim_intents\":" << stats.aimIntents
 	    << ",\"flip_intents\":" << stats.flipIntents << ",\"direct_writes\":" << stats.directWrites
 	    << ",\"local_script_messages\":" << stats.localScriptMessages << "}";
@@ -8532,6 +8545,7 @@ std::string BuildControllerBoundaryJson() {
 std::string BuildDesyncCheckJson() {
 	const ScenarioRunner::LockstepChecksumCounters counters = ScenarioRunner::GetLockstepChecksumCounters();
 	std::ostringstream out;
+	out.imbue(std::locale::classic());
 	const uint64_t ticks = ScenarioRunner::GetLockstepAppliedFrame();
 	const int64_t compareFloor = static_cast<int64_t>(ticks / 30) - 1;
 	const int64_t compareMargin = static_cast<int64_t>(counters.compares) - compareFloor;
@@ -8547,6 +8561,7 @@ std::string BuildDesyncCheckJson() {
 std::string BuildLoopPaceJson() {
 	const long long wallUs = s_paceUpdateUs + s_paceDrawUs;
 	std::ostringstream out;
+	out.imbue(std::locale::classic());
 	out << "{";
 	out << "\"iterations\":" << s_paceIterations << ",";
 	out << "\"sim_ticks\":" << s_paceSimTicks << ",";
@@ -8574,6 +8589,7 @@ std::string BuildLoopPaceJson() {
 // What a previewed actor put on the output and when, so a fixture can measure press to sound.
 std::string BuildPreviewEventStartsJson() {
 	std::ostringstream out;
+	out.imbue(std::locale::classic());
 	out << "[";
 	const std::vector<PreviewEventLedger::EventStart>& starts = PreviewEventLedger::GetEventStarts();
 	for (size_t index = 0; index < starts.size(); ++index) {
@@ -8589,6 +8605,7 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	const Activity* activity = g_ActivityMan.GetActivity();
 	const Activity::ActivityState activityState = activity ? activity->GetActivityState() : Activity::NoActivity;
 	std::ostringstream out;
+	out.imbue(std::locale::classic());
 	out << "{";
 	out << "\"exit_code\":" << exitCode << ",";
 	out << "\"setup_error\":\"" << JsonEscape(setupError) << "\",";

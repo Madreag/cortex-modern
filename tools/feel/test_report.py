@@ -117,7 +117,7 @@ class ReportTests(unittest.TestCase):
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
 
-    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False):
+    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False, dropped=False):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
             run = Path(folder)
@@ -129,6 +129,9 @@ class ReportTests(unittest.TestCase):
                 (run / 'survivor/stdout.log').write_text(survivor_log, encoding='utf-8')
                 (run / 'client').mkdir()
                 (run / 'client/stdout.log').write_text(client_log, encoding='utf-8')
+                if dropped:
+                    (run / 'client/video').mkdir()
+                    (run / 'client/video/injected-drop.json').write_text('{}', encoding='utf-8')
             (run / 'host_report.json').write_text(json.dumps({'runner': {'lockstep': {
                 'next_frame': final_tick + 1, 'missing_frame_stalls': 100, 'steady_missing_frame_stalls': missing,
                 'sim_tick_ms': 1000 / 60}}}), encoding='utf-8')
@@ -176,6 +179,17 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'PASS')
         measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=20\n[net-frame-wait] frame=621 wait_ms=20', silent=True)
         self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'FAIL')
+
+    def test_a_dropped_returners_hold_is_not_the_spikes_wait(self):
+        waits = ('[net-match] hold peer=2 frame=639 AI in control\n[net-frame-wait] frame=639 wait_ms=1\n'
+                 '[net-match] hold peer=2 frame=988 AI in control\n[net-frame-wait] frame=988 wait_ms=2')
+        client = '[selftest] frame stall tick=600 ms=1500\n[net-match] private catch-up complete frame=886 in_place=1 from=600'
+        self.assertEqual(self.item9a(waits=waits, silent=True, client_log=client)['pins']['item9a_spike_waits']['status'], 'FAIL')
+        dropped = self.item9a(waits=waits, silent=True, client_log=client, dropped=True)['pins']['item9a_spike_waits']
+        self.assertEqual((dropped['status'], dropped['value']), ('PASS', 1))
+        # The return's own late input still counts before the drop's hold.
+        late = self.item9a(waits=waits + '\n[net-frame-wait] frame=950 wait_ms=3', silent=True, client_log=client, dropped=True)
+        self.assertEqual(late['pins']['item9a_spike_waits']['status'], 'FAIL')
 
     def test_missing_frame_steady_counter_excludes_only_the_actual_spike(self):
         measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=40', missing=1, silent=True)

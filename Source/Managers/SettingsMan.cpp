@@ -185,11 +185,10 @@ void SettingsMan::Clear() {
 	m_AIUpdateInterval = 2;
 	m_NetworkInputDelayFrames = 0;
 	SetAutosaveSeconds(0);
-	m_SessionDirectoryUrl.clear();
+	m_SessionDirectoryUrl = c_DefaultSessionDirectoryUrl;
 	m_SessionDirectoryInstallKey.clear();
 	m_SessionDirectoryCertSha256.clear();
-	// Off until the directory registration no longer waits for the router's answer (row 527); the host page turns it on.
-	m_NetworkPortMapEnable = false;
+	m_NetworkPortMapEnable = true;
 	m_NetworkPortMapEnableOverride = -1;
 	m_NetworkIceEnable = true;
 	m_NetworkStunServers = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443";
@@ -880,6 +879,21 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	check("directory URL comments", settings.GetSessionDirectoryUrl() == "community.example.invalid/serve");
 	writeRead([&](Writer& writer) { writer.NewPropertyWithValue("NetworkDisplayName", "Pilot // a normal property comment"); });
 	check("ordinary string comments unchanged", settings.GetNetworkDisplayName() == "Pilot");
+	// A whole settings file, as a player's Settings.ini holds it: the URL's own line never reaches into the next property.
+	const auto readFile = [&](const std::string& text) {
+		{
+			std::ofstream file(path, std::ios::binary | std::ios::trunc);
+			file << text;
+		}
+		Reader reader(path, false, nullptr, true, true);
+		settings.Create(reader);
+	};
+	readFile("SettingsMan\n\tAutosaveSeconds = 0\n\tSessionDirectoryUrl = https://community.example.invalid//serve // a friend's directory\n\tSessionDirectoryInstallKey = key0123456789abcd\n"
+	         "\tSessionDirectoryCertSha256 = 98022d8f998f4d93\n\tNetworkPortMapEnable = 0\n\tNetworkDisplayName = FilePilot\n");
+	check("directory URL in a settings file", settings.GetSessionDirectoryUrl() == "https://community.example.invalid//serve" && settings.GetSessionDirectoryInstallKey() == "key0123456789abcd" &&
+	                                              settings.GetSessionDirectoryCertSha256() == "98022d8f998f4d93" && !settings.GetNetworkPortMapEnable() && settings.GetNetworkDisplayName() == "FilePilot");
+	readFile("SettingsMan\r\n\tSessionDirectoryUrl = \r\n\tSessionDirectoryInstallKey = key0123456789abce\r\n\tNetworkDisplayName = CrlfPilot\r\n");
+	check("empty directory URL in a settings file", settings.GetSessionDirectoryUrl().empty() && settings.GetSessionDirectoryInstallKey() == "key0123456789abce" && settings.GetNetworkDisplayName() == "CrlfPilot");
 	settings.SetNetworkDisplayName("AlphaPilot");
 	if (failures != 0) {
 		return 1;
@@ -979,6 +993,10 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	}
 	settings.SetNetworkConnectionMode(NetworkConnectionMode::Automatic);
 
+	// A fresh install (no settings file) must reach the public directory; an explicit empty value above still disables it.
+	// Last, because Clear resets what the rows above set.
+	settings.Clear();
+	check("directory default after clear", settings.GetSessionDirectoryUrl() == SettingsMan::c_DefaultSessionDirectoryUrl);
 	if (failures != 0) {
 		return 1;
 	}
