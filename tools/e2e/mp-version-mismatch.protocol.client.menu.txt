@@ -1,0 +1,21 @@
+wait_ms 1980
+activate ButtonMainToMultiplayer
+wait_ms 495
+assert_substate Landing
+settext TextMultiplayerName Joiner
+activate ButtonMultiplayerJoinGame
+wait_ms 660
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_state Failed
+wait_ms 495
+video_mark version-client-refusal
+assert_substate Landing
+assert_net_label LabelMultiplayerLandingStatus Network protocol differs (host 3; yours 2).
+assert_enabled ButtonMultiplayerJoinGame 1
+dump_lobby
+wait_ms 990
+goto_main
+assert_screen MainScreen
+exit
