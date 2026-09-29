@@ -2119,7 +2119,7 @@ namespace RTE {
 			}
 			std::string rejoinError;
 			if (host.PreparePeerRejoin(2, 401, 500, &rejoinError) || rejoinError.find("agreed input delay") == std::string::npos) {
-				*error = "a held seat reclaimed before its RTT-derived delay took effect"; return false;
+				*error = "a held seat reclaimed before its RTT-derived delay took effect: " + rejoinError; return false;
 			}
 			uint64_t applyFrame = 0;
 			for (uint64_t tick = 6; tick <= 80; ++tick) {
@@ -21581,7 +21581,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const uint32_t linkDelay = 10; // 90 ms RTT covers 135 ms plus one tick.
 			const uint32_t extraDelay = delay > linkDelay ? delay - linkDelay : 0;
 			const bool spikeCase = test.stallAtTick != 0;
-			if (queueFailed || holds != 0 || !host.IsRunning() || (spikeCase && (!stalled || delay <= start || sims[0].longestWaitMs > 50)) || linkDelay != 10 || extraDelay > 3 || sims[0].tick < 300) {
+			if (queueFailed || holds != 0 || !host.IsRunning() || (spikeCase && (!stalled || delay <= start || sims[0].longestWaitMs > 50)) || extraDelay > 3 || sims[0].tick < 300) {
 				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " stalled=" + std::to_string(stalled) + " start_delay=" + std::to_string(start) +
 				         " delay=" + std::to_string(delay) + " link_delay=" + std::to_string(linkDelay) + " extra_delay=" + std::to_string(extraDelay) + " host_tick=" + std::to_string(sims[0].tick) +
 				         " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) + " queue=" + queueError;
