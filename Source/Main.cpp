@@ -3368,7 +3368,12 @@ void ProcessMenuScript() {
 		iss >> control;
 		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : scenarioMenu ? scenarioMenu->AutomationPostCommand(control) : menu->AutomationActivateControl(control);
 		MenuScriptPrint("activate " + control + " ok=" + std::to_string(static_cast<int>(ok)));
-		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
+		if (!ok) {
+			const auto lobby = g_NetMatchService.GetLobbySnapshot();
+			MenuScriptPrint(std::string("activate refused by ") + (pauseMenu ? "pause" : scenarioMenu ? "scenario" : "main") + " menu: service=" + lobby.serviceState +
+			                " in_lobby=" + std::to_string(lobby.inLobby) + " remote_ready=" + std::to_string(lobby.remoteReady) + " host=" + std::to_string(lobby.isHost));
+			return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control);
+		}
 	} else if (cmd == "post_command") {
 		std::string control;
 		iss >> control;
