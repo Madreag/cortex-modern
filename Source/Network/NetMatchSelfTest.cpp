@@ -14100,15 +14100,19 @@ namespace RTE {
 		auto written = std::async(std::launch::async, [&] { return writer.WriteFrame(43, {}, {}, &writeError); });
 		const bool storageEntered = enteredFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
 		const bool tickReturned = written.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
-		release.set_value();
+		if (!storageEntered || !tickReturned) release.set_value();
 		const bool accepted = written.get();
 		if (!storageEntered || !tickReturned || !accepted) {
 			writer.Close();
 			*error = "the simulation waited on blocked replay storage: entered=" + std::to_string(storageEntered) + " returned=" + std::to_string(tickReturned) + " error=" + writeError;
 			return false;
 		}
-		if (!writer.WriteFrame(44, {}, {}, error)) return false;
-		writer.Close();
+		if (!writer.WriteFrame(44, {}, {}, error)) { release.set_value(); return false; }
+		auto closing = std::async(std::launch::async, [&] { writer.Close(); });
+		const bool closeReturned = closing.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready;
+		release.set_value();
+		closing.get();
+		if (!closeReturned) { *error = "closing a replay blocked the simulation on its storage worker"; return false; }
 		NetReplayVerifyReport report;
 		if (!NetMatchReplayReader::Verify(path.string(), report) || report.frames != 2 || report.firstFrame != 43 || report.lastFrame != 44) {
 			*error = "closing the replay did not drain its ticks in order"; return false;
