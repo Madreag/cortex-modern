@@ -310,6 +310,31 @@ class ReportTests(unittest.TestCase):
         frames = [frame(1, 95, actor()), frame(2, 220, actor(vx=-1, left=True))]
         self.assertIsNone(report.input_latencies([first, later], frames)[0]['ms'])
 
+    def test_the_drawn_controller_carries_an_edge_within_two_frames(self):
+        edge = dict(_line=1, tick=10, wall_ms=100, player=0, actor=actor(), last_presented_frame=1,
+                    changes=[dict(action='L_LEFT', held=True)])
+        previewed = [frame(1, 95, actor()), frame(2, 115, actor(left=True))]
+        value = report.input_latencies([edge], previewed)[0]
+        self.assertEqual((value['carried_frames'], value['carried_ms'], value['carried_pass']), (1, 15, True))
+        # Without the preview the drawn actor holds the committed state, the input delay later.
+        committed = [frame(1, 95, actor())] + [frame(number, 95 + 17 * (number - 1), actor(left=number >= 8)) for number in range(2, 10)]
+        value = report.input_latencies([edge], committed)[0]
+        self.assertEqual((value['carried_frames'], value['carried_pass']), (7, False))
+
+    def test_the_visible_response_is_judged_against_the_baselines_same_edge(self):
+        rows = [dict(tick=10, player=1, action='L_LEFT', held=True, ms=50.0), dict(tick=70, player=1, action='L_LEFT', held=False, ms=60.0),
+                dict(tick=130, player=1, action='AIM_VECTOR', held=True, ms=30.0), dict(tick=190, player=1, action='L_RIGHT', held=True, ms=40.0)]
+        baseline = [dict(tick=10, player=0, action='L_LEFT', held=True, ms=20.0), dict(tick=10, player=1, action='L_LEFT', held=True, ms=40.0),
+                    dict(tick=70, player=1, action='L_LEFT', held=False, ms=40.0), dict(tick=130, player=1, action='AIM_VECTOR', held=True, ms=None)]
+        judged = report.compare_responses(rows, baseline)
+        # The same player's baseline edge sets the budget: 40 + 16.7 admits 50; 60 is late.
+        self.assertEqual([row['response_pass'] for row in judged[:2]], [True, False])
+        self.assertAlmostEqual(judged[0]['response_budget_ms'], 40 + 1000 / 60)
+        self.assertTrue(judged[2]['baseline_unreflected'])
+        self.assertIsNone(judged[2]['baseline_ms'])
+        self.assertTrue(judged[3]['baseline_missing'])
+        self.assertFalse(judged[3]['response_pass'])
+
     def test_draw_percentile_is_nearest_rank_and_boundary_is_not_relaxed(self):
         values = report.distribution([1] * 99 + [51])
         self.assertEqual((values['p99'], values['max']), (1, 51))

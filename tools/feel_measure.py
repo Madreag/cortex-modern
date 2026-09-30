@@ -258,9 +258,9 @@ def case_peers(sp=False, silent_tick=None):
 DRY_RUN_PLAN = None
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False):
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True):
     if DRY_RUN_PLAN is not None:
-        DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, loss_percent=loss_percent, silent_tick=silent_tick,
+        DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, local_prediction=prediction, loss_percent=loss_percent, silent_tick=silent_tick,
                                  autosave_seconds=autosave_seconds, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
         return None
     out = root / name
@@ -270,7 +270,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     lua_states = {'host': host_lua_states, 'client': client_lua_states}
     pre_match_history = {'host': host_pre_match_history, 'client': client_pre_match_history}
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('autosave service e2e' if autosave_seconds else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop')),
-                    ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
+                    ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port, local_prediction=prediction,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     live_stalls=live_stalls, autosave_seconds=autosave_seconds, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
@@ -308,7 +308,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                           '-net-match-humans', str(len(peers)), '-net-match-peers', str(len(peers)), '-net-match-cpu-slots', '0',
                           '-net-match-service-preset', 'Determinism FeelBaseline',
                           '-net-match-service-module', 'UserScenes.rte',
-                          '-net-match-auto-delay', '-net-fake-lag', str(manifest['per_peer_lag_ms'][peer]), '-net-local-prediction', 'on',
+                          '-net-match-auto-delay', '-net-fake-lag', str(manifest['per_peer_lag_ms'][peer]), '-net-local-prediction', 'on' if prediction else 'off',
                           '-net-reconnect-ticket', str(out / f'{peer}.ticket'),
                           '-net-match-report', str(out / f'{peer}_report.json')]
                 if autosave_seconds is not None and peer == 'host':
@@ -699,6 +699,13 @@ def analyze(root, stock=None):
             report['measurement_complete'] &= not report['missing_raw_files']
             report['item9a_pass'] = all(value['status'] == 'PASS' for measured in peers.values()
                                        for name, value in measured['pins'].items() if name.startswith('item9a_'))
+            # The same match with the preview off: the input pins must fail there, or they do not measure the preview.
+            nopred = root / (name + '-nopred')
+            if nopred.is_dir():
+                off_peers = {peer: reduce_or_fail(nopred, peer, baselines[cap_name]) for peer in ('host', 'client')}
+                report['prediction_off'] = {peer: {pin_name: value['pins'].get(pin_name) for pin_name in ('input_carried', 'input_response')}
+                                            for peer, value in off_peers.items()}
+                write_json(nopred / 'feel-report.json', off_peers)
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
             results.append(report)
@@ -803,6 +810,8 @@ def parse_args(argv=None):
                         help='run only the selected autosave or timing arms, without baselines or the full matrix')
     parser.add_argument('--lag-arms', nargs='+', choices=LAG_ARMS,
                         help='run only these lag arms (each on and off) and the single-player baselines of their caps')
+    parser.add_argument('--prediction-off-arms', nargs='+', choices=LAG_ARMS, default=[],
+                        help='with --lag-arms: also run these arms recorded with local prediction off (the input pins\' RED)')
     parser.add_argument('--dry-run', action='store_true',
                         help='print every arm this command would launch with its port and peers; launch nothing, write nothing')
     parser.add_argument('--fullstate-every', type=int, default=0,
@@ -908,6 +917,10 @@ def main(argv=None):
                 for offset, enabled in enumerate((True, False)):
                     launch_case(root, f'{arm}-' + ('on' if enabled else 'off'), lag, 60 if cap_name == '60hz' else 0, enabled, args.port + 2 * index + offset,
                                 script, exe_hash, args.timeout, **counts)
+                if arm in args.prediction_off_arms:
+                    # The arms run one at a time, so the on arm's port is free again.
+                    launch_case(root, f'{arm}-nopred', lag, 60 if cap_name == '60hz' else 0, True, args.port + 2 * index,
+                                script, exe_hash, args.timeout, prediction=False, **counts)
             return
         for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
             launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe_hash, args.timeout, sp=True, **counts)
