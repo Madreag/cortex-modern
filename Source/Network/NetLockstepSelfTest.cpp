@@ -21529,6 +21529,34 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A returning seat's round that refuses a start while it waits for its own is rebuilt from its catch-up; its refusal is its own
+	// (g5 mp-two-returners-3p: the survivor's first round refused the host's start for a seat back at the same frame, its stop reached
+	// the host and the host held the survivor again once its rebuilt round ran).
+	bool TestAReturnRefusedBeforeItsStartStopsNobody(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto a = MakeCoordinatorConfig(1, 2, 0x9A77, 4, NetTransportLane::ControlReliable);
+		auto b = MakeCoordinatorConfig(2, 1, 0x9A77, 4, NetTransportLane::ControlReliable);
+		a.roundId = b.roundId = 77;
+		if (!StartCoordinatorPair(49576, hostWire, clientWire, host, client, a, b, error)) return false;
+		uint64_t now = 0;
+		const auto pump = [&] { ++now; hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); };
+		for (int pass = 0; pass < 10; ++pass) pump();
+		if (!host.IsRunning()) { *error = "fixture: the host did not start"; return false; }
+		NetGameSeatReclaim back;
+		back.peerId = 2; back.activationFrame = 40; back.delayFrames = 8; back.neutralThroughFrame = 48; back.seatIncarnation = 2;
+		client.m_ReclaimTransactions[2] = back;
+		client.m_State = NetLockstepState::WaitingForStart;
+		client.Fail(NetLockstepStopReason::ProtocolError, 40, "lockstep start mismatch (delay=60/20 unknown_peer=2/2)");
+		for (int pass = 0; pass < 20; ++pass) pump();
+		if (!host.IsRunning()) {
+			*error = "a returning seat's start refused while it waited stopped the host's round: " + host.GetStats().timeoutReason;
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_return_refused_before_its_start_stops_nobody" << std::endl;
+		return true;
+	}
+
 	// A host whose own seat came back catches up through its reclaim gap to the newest input it holds; its client's next input is not
 	// late there, only not yet due (EDITH soak on the tip: the host back at 2593 held its client at 2597, 102 ms after it first missed it).
 	bool TestAHostInItsReclaimGapJudgesNoSeatLate(std::string* error) {
@@ -22676,6 +22704,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestATickLostBeforeAnEpochComesBack, "a_tick_lost_before_an_epoch_comes_back");
 		row(&TestAPeerAtItsInputHorizonSlidesBack, "a_peer_at_its_input_horizon_slides_back");
 		row(&TestAHostInItsReclaimGapJudgesNoSeatLate, "a_host_in_its_reclaim_gap_judges_no_seat_late");
+		row(&TestAReturnRefusedBeforeItsStartStopsNobody, "a_return_refused_before_its_start_stops_nobody");
 		row(&TestAHostEndNamesAFrameNoPeerHasPassed, "a_host_end_names_a_frame_no_peer_has_passed");
 		row(&TestAHostEndDoesNotWaitOnASilentPeer, "a_host_end_does_not_wait_on_a_silent_peer");
 		row(&TestAHostEndJudgesNoSeatPastIt, "a_host_end_judges_no_seat_past_it");
