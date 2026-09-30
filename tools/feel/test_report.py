@@ -189,8 +189,13 @@ class ReportTests(unittest.TestCase):
     def test_one_spike_allows_only_one_bounded_wait(self):
         measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=40', silent=True)
         self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'PASS')
+        # Adjacent frames are one wait to the player; their sum is bounded like a single wait.
         measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=20\n[net-frame-wait] frame=621 wait_ms=20', silent=True)
+        self.assertEqual((measured['pins']['item9a_spike_waits']['status'], measured['pins']['item9a_spike_waits']['value']), ('PASS', 1))
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=30\n[net-frame-wait] frame=621 wait_ms=30', silent=True)
         self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'FAIL')
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=20\n[net-frame-wait] frame=630 wait_ms=20', silent=True)
+        self.assertEqual((measured['pins']['item9a_spike_waits']['status'], measured['pins']['item9a_spike_waits']['value']), ('FAIL', 2))
 
     def test_a_dropped_returners_hold_is_not_the_spikes_wait(self):
         waits = ('[net-match] hold peer=2 frame=639 AI in control\n[net-frame-wait] frame=639 wait_ms=1\n'
