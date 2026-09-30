@@ -6586,7 +6586,9 @@ void RunGameLoop() {
 			g_TimerMan.UpdateSim();
 			// Test lever: a slower machine's sim cost, spent inside the tick on this one.
 			static const long long s_testSimCostUs = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_US"); return text ? std::atoll(text) : 0LL; }();
-			for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testSimCostUs; s_testSimCostUs > 0 && g_TimerMan.GetAbsoluteTime() < until;) {}
+			static const long long s_testSimCostFromTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_FROM_TICK"); return text ? std::atoll(text) : 0LL; }();
+			const bool costsThisTick = s_testSimCostUs > 0 && g_TimerMan.GetSimUpdateCount() >= s_testSimCostFromTick;
+			for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testSimCostUs; costsThisTick && g_TimerMan.GetAbsoluteTime() < until;) {}
 			g_AudioMan.RetireFinishedSimulationSounds();
 			const bool watchLedgerExpiry = s_eventLedgerPressTick > 0;
 			const uint64_t expiredBefore = watchLedgerExpiry ? PreviewEventLedger::GetCounters().expired : 0;
