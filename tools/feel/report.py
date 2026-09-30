@@ -782,6 +782,11 @@ def max_in_window(values, width):
     return maximum
 
 
+def default_capture_ticks(ticks):
+    """Every 60th tick a run presents: its last tick ends the round and is never drawn, in single player too."""
+    return range(60, ticks, 60)
+
+
 def firing_records(inputs, previews, frames, stdout_path, committed=()):
     # A gun fires the tick after its trigger reads the press, in single player too, so the press's own preview can show
     # the trigger but not the shot; the shot is on time when the first preview whose horizon reaches the committed shot
@@ -924,7 +929,7 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     missing_inputs = sorted(expected_inputs - actual_inputs)
     over_50 = [frame['frame'] for frame in frames if max(frame['draw_ms'], frame['present_ms'], frame['interval_ms'] or 0) > 50]
     captures = [row for row in rows if row['type'] == 'capture']
-    capture_missing = sorted(set(range(60, ticks + 1, 60) if expected_capture_ticks is None else expected_capture_ticks) - {row['requested_tick'] for row in captures if row['saved'] and Path(row['path']).is_file()})
+    capture_missing = sorted(set(default_capture_ticks(ticks) if expected_capture_ticks is None else expected_capture_ticks) - {row['requested_tick'] for row in captures if row['saved'] and Path(row['path']).is_file()})
     rtts = [row for frame in frames for row in frame['rtt']]
     auto_picks = []
     host_log = run / host_peer / 'stdout.log'

@@ -510,6 +510,12 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result['audio_ms_upper'], 10)
         self.assertFalse(result['once'])
 
+    def test_the_final_tick_is_not_an_expected_capture(self):
+        # Every F4 arm and the single-player baseline saved 19 captures, 60-1140: tick 1200 ends the round and is never presented.
+        expected = list(report.default_capture_ticks(1200))
+        self.assertEqual((expected[0], expected[-1], len(expected)), (60, 1140, 19))
+        self.assertIn(1200, report.default_capture_ticks(1260))
+
     def test_the_shot_is_on_time_at_the_first_preview_that_reaches_the_committed_shot(self):
         # The trigger reads the press at 10 + 4 and the gun fires the tick after, as in single player.
         press = dict(_line=1, tick=10, wall_ms=100, delay=4, actor=dict(uid=7), changes=[dict(action='FIRE', held=True)])
