@@ -6107,6 +6107,10 @@ namespace RTE {
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
+				// A hold is for a seat gone silent. One still feeding - its newest frame landed within a tick and its jitter - is late,
+				// and the live delay re-size answers that, never a hold.
+				if (peerStats.lastProgressMs != 0 && nowMs >= peerStats.lastProgressMs &&
+				    nowMs - peerStats.lastProgressMs < static_cast<uint64_t>(std::ceil(m_Config.simTickMs)) + peerStats.jitterMs) continue;
 				const uint64_t captureUntil = CaptureExcuseUntil(peer, frame, firstMissingMs);
 				if (captureUntil > firstMissingMs && (nowMs < captureUntil || nowMs - captureUntil < declarationDeadline)) continue;
 				// A seat whose packets this machine set aside for its simulation thread may have sent the input it is missing; a simulation
