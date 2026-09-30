@@ -3651,9 +3651,29 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 	if (!s_out.IsOpen() || simTick < s_from || simTick > s_to) {
 		return;
 	}
+	const long long startUs = g_TimerMan.GetAbsoluteTime();
 	std::ostringstream text;
 	g_MovableMan.DumpSimState(simTick, text);
 	s_out.WriteBlock(std::move(text).str());
+	// What the dump costs the simulation thread, so a harness cost is never read as the engine's own.
+	static uint64_t s_ticks = 0, s_over2 = 0, s_over50 = 0, s_maxTick = 0;
+	static double s_totalMs = 0, s_maxMs = 0;
+	const double ms = static_cast<double>(g_TimerMan.GetAbsoluteTime() - startUs) / 1000.0;
+	++s_ticks;
+	s_totalMs += ms;
+	s_over2 += ms > 2 ? 1 : 0;
+	s_over50 += ms > 50 ? 1 : 0;
+	if (ms > s_maxMs) {
+		s_maxMs = ms;
+		s_maxTick = simTick;
+	}
+	if (ms > 50) System::PrintDiagnosticLine("[sim-dump] slow tick=" + std::to_string(simTick) + " ms=" + std::to_string(ms));
+	if (s_ticks % 600 == 0 || simTick == s_to) {
+		std::ostringstream line;
+		line << "[sim-dump] ticks=" << s_ticks << " mean_ms=" << s_totalMs / static_cast<double>(s_ticks) << " max_ms=" << s_maxMs << " max_tick=" << s_maxTick
+		     << " over_2ms=" << s_over2 << " over_50ms=" << s_over50;
+		System::PrintDiagnosticLine(line.str());
+	}
 }
 
 // CC_TERRAIN_DUMP=<tick> saves the material and FG color bitmaps beside the -out trace at that tick

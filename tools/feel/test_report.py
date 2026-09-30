@@ -152,6 +152,16 @@ class ReportTests(unittest.TestCase):
         waits = '\n'.join(f'[net-frame-wait] frame={tick} wait_ms=50' for tick in (600, 700, 800))
         self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'FAIL')
 
+    def test_item9a_harness_dump_cost_over_one_frame_fails_the_arm(self):
+        self.assertEqual(self.item9a()['pins']['item9a_harness_cost']['status'], 'PASS')
+        cheap = '[sim-dump] ticks=600 mean_ms=0.8 max_ms=49.9 max_tick=410 over_2ms=3 over_50ms=0'
+        self.assertEqual(self.item9a(waits=cheap)['pins']['item9a_harness_cost']['status'], 'PASS')
+        slow = cheap + '\n[sim-dump] slow tick=1465 ms=359.2'
+        measured = self.item9a(waits=slow)
+        self.assertEqual(measured['pins']['item9a_harness_cost']['status'], 'FAIL')
+        self.assertEqual(measured['pins']['item9a_harness_cost']['value'], 359.2)
+        self.assertFalse(measured['pass_check'])
+
     def test_single_player_reference_never_relaxes_the_feel_gate(self):
         reference = dict(steady_wall_tps=55, evidence='single-player.jsonl')
         measured = self.item9a(wall_ms=900000 / 54)
