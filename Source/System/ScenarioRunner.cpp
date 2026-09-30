@@ -1064,6 +1064,7 @@ namespace RTE {
 		NetLockstepPlane::Target(coordinator);
 		s_PreSimWait.reset();
 		s_PaceSlide.Reset();
+		g_TimerMan.SetPaceScale(1.0F);
 		s_LocalStartParkPublished = false;
 		if (!coordinator) {
 			s_SeatPresence = nullptr;
@@ -3068,8 +3069,16 @@ namespace RTE {
 	static bool RunPacedTick(uint64_t tick) {
 		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
 		const bool gapClosed = tick > 0 && s_LockstepCoordinator->IsSeatReclaimGap(local, tick - 1) && !s_LockstepCoordinator->IsSeatReclaimGap(local, tick);
-		if (gapClosed || s_PaceSlide.NoteTick(tick)) {
-			s_PaceSlide.Reset();
+		const double nominalTps = 1000.0 / std::max(1.0, s_LockstepCoordinator->GetConfig().simTickMs);
+		const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		if (gapClosed) s_PaceSlide.Reset();
+		const NetPaceSlide::Action action = gapClosed ? NetPaceSlide::Action::Slide : s_PaceSlide.NoteTickAt(tick, nowMs, nominalTps);
+		if (static_cast<float>(s_PaceSlide.Pace()) != g_TimerMan.GetPaceScale()) g_TimerMan.SetPaceScale(static_cast<float>(s_PaceSlide.Pace()));
+		if (action == NetPaceSlide::Action::Follow) {
+			System::PrintDiagnosticLine("[net-lockstep] pace follows its inputs at tick " + std::to_string(tick) + ": " + std::to_string(s_PaceSlide.FollowedRate()) +
+			                            " ticks/s since tick " + std::to_string(s_PaceSlide.FollowedSince()) + "; the clock runs at " + std::to_string(s_PaceSlide.Pace()) + " of its rate");
+		}
+		if (action == NetPaceSlide::Action::Slide) {
 			const int bound = std::max<int>(1, s_LockstepCoordinator->GetConfig().slowPlayerBoundTicks);
 			g_TimerMan.HoldSimTicks(bound);
 			System::PrintDiagnosticLine("[net-lockstep] pace slide at tick " + std::to_string(tick) + ": " +

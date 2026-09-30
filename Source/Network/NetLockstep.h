@@ -914,12 +914,75 @@ namespace RTE {
 			return true;
 		}
 
-		void Reset() { m_WaitedTick = UINT64_MAX; m_Window.clear(); m_Ahead = 0; }
+		/// What a clock found standing at its input horizon does.
+		enum class Action { None, Slide, Follow };
+
+		static constexpr double c_MinPace = 0.75; //!< Below it a seat is too slow to follow; the bounded wait holds it instead.
+		static constexpr double c_PaceRecovery = 0.0025; //!< The pace a calm second gives back toward the fixed rate.
+		static constexpr double c_PaceMargin = 0.01; //!< Followed a little faster than measured: the measure includes this clock's own waits.
+
+		/// Notes a tick about to run at this wall time. The first time the clock stands at its input horizon it slides back
+		/// once; when it stands there again the cause is still there - inputs slower than this clock - so it runs at the rate
+		/// its inputs allowed since, never slides again for it. A second in which the inputs seldom made it wait gives pace back.
+		/// @param tick The tick about to run.
+		/// @param nowMs The wall clock, in milliseconds.
+		/// @param nominalTps The fixed tick rate.
+		/// @return What to do before the tick runs.
+		Action NoteTickAt(uint64_t tick, uint64_t nowMs, double nominalTps) {
+			const bool ahead = m_WaitedTick == tick;
+			m_BlockAhead += ahead ? 1 : 0;
+			if (++m_BlockTicks == c_WindowTicks) {
+				if (m_Pace < 1.0 && m_BlockAhead < c_AheadTicks / 3) m_Pace = std::min(1.0, m_Pace + c_PaceRecovery);
+				m_BlockTicks = 0;
+				m_BlockAhead = 0;
+			}
+			if (!NoteTick(tick)) return Action::None;
+			if (!m_Slid) {
+				m_Slid = true;
+				m_TriggerTick = tick;
+				m_TriggerMs = nowMs;
+				return Action::Slide;
+			}
+			const double seconds = nowMs > m_TriggerMs ? static_cast<double>(nowMs - m_TriggerMs) / 1000.0 : 0.0;
+			const double rate = seconds > 0.0 ? static_cast<double>(tick - m_TriggerTick) / seconds : nominalTps;
+			m_FollowedRate = rate;
+			m_FollowedSince = m_TriggerTick;
+			m_TriggerTick = tick;
+			m_TriggerMs = nowMs;
+			m_Pace = std::clamp(rate / nominalTps + c_PaceMargin, c_MinPace, 1.0);
+			return Action::Follow;
+		}
+
+		/// Gets the share of the fixed rate this clock runs at.
+		/// @return 1 unless it follows its inputs.
+		double Pace() const { return m_Pace; }
+
+		/// Gets the rate the last follow measured, in ticks per second, and the tick it measured from.
+		double FollowedRate() const { return m_FollowedRate; }
+		uint64_t FollowedSince() const { return m_FollowedSince; }
+
+		void Reset() {
+			m_WaitedTick = UINT64_MAX;
+			m_Window.clear();
+			m_Ahead = 0;
+			m_Slid = false;
+			m_Pace = 1.0;
+			m_BlockTicks = 0;
+			m_BlockAhead = 0;
+		}
 
 	private:
 		uint64_t m_WaitedTick = UINT64_MAX;
 		std::deque<bool> m_Window;
 		uint32_t m_Ahead = 0;
+		bool m_Slid = false; //!< This clock slid once for standing at its horizon; the same cause is followed after.
+		uint64_t m_TriggerTick = 0;
+		uint64_t m_TriggerMs = 0;
+		double m_Pace = 1.0;
+		double m_FollowedRate = 0.0;
+		uint64_t m_FollowedSince = 0;
+		uint32_t m_BlockTicks = 0;
+		uint32_t m_BlockAhead = 0;
 	};
 
 // Every public coordinator method opens with this: inside an open window only a holder of the plane's lock may touch the coordinator.
