@@ -305,7 +305,10 @@ namespace {
 	}
 
 	void WriteResult() {
-		const std::string name = probe.script.value("repeat_rounds", false) ? "net-ui-result.round" + std::to_string(probe.round) + ".json" : "net-ui-result.json";
+		const bool repeat = probe.script.value("repeat_rounds", false);
+		// A probe that repeats per round reports per round: before its first round it has only a failure to report.
+		if (repeat && probe.round == 0 && !probe.result.contains("error")) return;
+		const std::string name = repeat ? "net-ui-result.round" + std::to_string(probe.round) + ".json" : "net-ui-result.json";
 		std::ofstream output(probe.directory / name);
 		output << probe.result.dump(2) << '\n';
 		Require(static_cast<bool>(output), "cannot write probe result");
