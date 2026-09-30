@@ -3343,6 +3343,72 @@ namespace RTE {
 			return true;
 		}
 
+		// A window stops at an epoch, and a tick from before one could no longer be resent with the bytes it first went out with:
+		// a seat's tick lost just before a return's epoch came back to nobody and the bound held the seat (run 2, 100 ms with loss:
+		// 'asked peer 3 to resend frame=370 ... highest heard=372', then 'hold peer=3 frame=370').
+		bool TestATickLostBeforeAnEpochComesBack(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A74, 12, NetTransportLane::InputUnreliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A74, 12, NetTransportLane::InputUnreliable);
+			hostConfig.roundId = clientConfig.roundId = 0x9A74;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 20000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A74);
+			if (!StartCoordinatorPair(48916, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			LoopbackTransportConfig lag;
+			lag.latencyMs = 60;
+			hostWire.SetFaultConfig(lag);
+			clientWire.SetFaultConfig(lag);
+			const uint64_t epoch = 150;
+			host.SetObservationEpoch(epoch);
+			client.SetObservationEpoch(epoch);
+			uint64_t now = 0, nextHostSimMs = 0, hostSimulated = 0, clientSimulated = 0, hostQueued = 0, clientQueued = 0;
+			bool waiting = false, dropped = false;
+			std::string queueError;
+			const auto holdsOfPeerTwo = [&] { const auto& peers = host.GetStats().peers; const auto found = peers.find(2); return found == peers.end() ? 0U : found->second.holds; };
+			const auto pump = [&] {
+				for (; hostQueued <= hostSimulated + 6; ++hostQueued) if (!host.QueueLocalInput(hostQueued, {MakeFrame(100, hostQueued)}, {}, &queueError)) break;
+				for (; clientQueued <= clientSimulated + 6; ++clientQueued) {
+					// The seat's packet for the tick just before the epoch is lost on the wire.
+					const bool lose = clientQueued + 12 == epoch - 1;
+					if (lose) { LoopbackTransportConfig drop; drop.unreliableDropEveryN = 1; clientWire.SetFaultConfig(drop); dropped = true; }
+					const bool queued = client.QueueLocalInput(clientQueued, {MakeFrame(200, clientQueued)}, {}, &queueError);
+					if (lose) clientWire.SetFaultConfig(lag);
+					if (!queued) break;
+				}
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+				NetLockstepReadyFrame ready;
+				if (now >= nextHostSimMs) {
+					if (host.PopReadyFrame(ready)) {
+						if (waiting) { host.FinishFrameWait(now); waiting = false; }
+						(void)host.FinishSimulationTick(ready.frame);
+						hostSimulated = ready.frame;
+						nextHostSimMs = now + 17;
+					} else if (hostSimulated > 0) {
+						waiting = true;
+						(void)host.NoteFrameWait(hostSimulated + 1, now);
+					}
+				}
+				while (client.PopReadyFrame(ready)) { (void)client.FinishSimulationTick(ready.frame); clientSimulated = ready.frame; }
+				++now;
+			};
+			const uint64_t target = epoch + 60;
+			while (now < 30000 && hostSimulated < target && host.IsRunning()) pump();
+			if (!dropped || holdsOfPeerTwo() != 0 || hostSimulated < target || !host.IsRunning() || !client.IsRunning()) {
+				*error = "a seat's tick lost just before the epoch at " + std::to_string(epoch) + " did not come back: dropped=" + std::to_string(dropped) +
+				         " holds=" + std::to_string(holdsOfPeerTwo()) + " host_frame=" + std::to_string(hostSimulated) + " requests=" + std::to_string(host.GetStats().frameResendRequests) +
+				         " resent=" + std::to_string(client.GetStats().framesResent) + " longest_stall_ms=" + std::to_string(host.GetStats().longestStallMs);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_tick_lost_before_an_epoch_comes_back resent=" << client.GetStats().framesResent
+			          << " longest_stall_ms=" << host.GetStats().longestStallMs << " holds=0" << std::endl;
+			return true;
+		}
+
 		// In a star every client hears the other clients through the host. A 300 ms blip of everything the host sends on the
 		// unreliable lane is repaired by the host re-serving its own ticks and the ticks it relayed, on request: no seat is held.
 		bool TestALinkBlipIsBridgedInAStar(std::string* error) {
@@ -22511,6 +22577,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestHeldHostMarkerPrecedesItsHold, "held_host_marker_precedes_its_hold");
 		row(&TestAReturnerDelayCoversItsTrail, "a_returner_delay_covers_its_trail");
 		row(&TestADecisionRepeatedPastItsFrameIsNotANewOne, "a_decision_repeated_past_its_frame_is_not_a_new_one");
+		row(&TestABrokenPeersSeatStaysReturnable, "a_broken_peers_seat_stays_returnable");
+		row(&TestASeatBackBeforeOurReturnKeepsItsAdmittedDelay, "a_seat_back_before_our_return_keeps_its_admitted_delay");
+		row(&TestATickLostBeforeAnEpochComesBack, "a_tick_lost_before_an_epoch_comes_back");
 		row(&TestAHostEndNamesAFrameNoPeerHasPassed, "a_host_end_names_a_frame_no_peer_has_passed");
 		row(&TestAHostEndDoesNotWaitOnASilentPeer, "a_host_end_does_not_wait_on_a_silent_peer");
 		row(&TestAHostEndJudgesNoSeatPastIt, "a_host_end_judges_no_seat_past_it");
@@ -22681,8 +22750,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAJoinerTakesASeatReturnedBeforeIt(&error) ||
 		    !TestAReturnerStartsAtItsReturnsDelay(&error) ||
 		    !TestAReturnerTakesAMemberDelayResizedAfterItsTail(&error) ||
-		    !TestASeatBackBeforeOurReturnKeepsItsAdmittedDelay(&error) ||
-		    !TestABrokenPeersSeatStaysReturnable(&error) ||
 		    !TestAHandoverEndpointCarriesItsIceRoute(&error) ||
 		    !TestAJoinerTakesAReturnDecidedAfterItsStart(&error) ||
 		    !TestAJoinerTakesTheSeatsAsTheyStandAtItsFirstFrame(&error) ||

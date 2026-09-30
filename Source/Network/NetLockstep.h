@@ -1828,6 +1828,10 @@ namespace RTE {
 		/// The lane a packet takes to one peer: frames ride the frame lane unless that peer is still catching up.
 		NetTransportLane LaneTo(uint8_t peerId, const NetLockstepPacket& packet, NetTransportLane lane) const;
 		void SendReturnFrameCopies(uint8_t peerId, const NetLockstepFrame& frame);
+		/// Sends one tick whole, its observations spelled out, so its receiver reads it whatever its tables hold.
+		bool SendIndependentCopy(NetPeerId link, const NetLockstepFrame& input, uint8_t senderPeerId, uint64_t roundId, NetTransportLane lane);
+		/// When a sender's next tick crosses an epoch, the ticks before it that a window can no longer carry go out once more, whole.
+		void RepeatTicksBeforeEpoch(uint8_t senderPeerId, uint64_t targetFrame);
 	};
 
 } // namespace RTE
