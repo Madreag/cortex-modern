@@ -3063,14 +3063,20 @@ namespace RTE {
 	}
 
 	// A peer that keeps standing at its input horizon holds its clock back the slow-player bound's worth, so its inputs land with the
-	// lead every other peer's do instead of the tick that needs them waiting on each.
+	// lead every other peer's do instead of the tick that needs them waiting on each. A seat whose reclaim gap has just closed caught up
+	// to the newest input it holds, so it stands there by construction and gives the inputs their lead at once.
 	static bool RunPacedTick(uint64_t tick) {
-		if (s_PaceSlide.NoteTick(tick)) {
+		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+		const bool gapClosed = tick > 0 && s_LockstepCoordinator->IsSeatReclaimGap(local, tick - 1) && !s_LockstepCoordinator->IsSeatReclaimGap(local, tick);
+		if (gapClosed || s_PaceSlide.NoteTick(tick)) {
+			s_PaceSlide.Reset();
 			const int bound = std::max<int>(1, s_LockstepCoordinator->GetConfig().slowPlayerBoundTicks);
 			g_TimerMan.HoldSimTicks(bound);
-			System::PrintDiagnosticLine("[net-lockstep] pace slide at tick " + std::to_string(tick) + ": " + std::to_string(NetPaceSlide::c_AheadTicks) + "+ of the last " +
-			                            std::to_string(NetPaceSlide::c_WindowTicks) + " ticks were due before their inputs; the clock drops what it owes and holds back " +
-			                            std::to_string(bound) + " ticks");
+			System::PrintDiagnosticLine("[net-lockstep] pace slide at tick " + std::to_string(tick) + ": " +
+			                            (gapClosed ? std::string("this seat's reclaim gap closed at the newest input it holds") :
+			                                         std::to_string(NetPaceSlide::c_AheadTicks) + "+ of the last " + std::to_string(NetPaceSlide::c_WindowTicks) +
+			                                             " ticks were due before their inputs") +
+			                            "; the clock drops what it owes and holds back " + std::to_string(bound) + " ticks");
 		}
 		return true;
 	}
