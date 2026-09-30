@@ -3,7 +3,7 @@
   "name": "mp-repair-cross-resolution",
   "title": "A repair between a 1920x1080 host and a 960x540 client: the client draws the backdrops at its own scale after it",
   "port_base": 49502,
-  "size": "960x540",
+  "size": "1920x1080",
   "timeout_s": 150,
   "checklist": [
     {
