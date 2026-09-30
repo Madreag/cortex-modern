@@ -258,6 +258,10 @@ def case_peers(sp=False, silent_tick=None):
 DRY_RUN_PLAN = None
 
 
+# A slower machine's sim cost on one peer from a tick on, as PEER:MICROSECONDS:FROM_TICK (the slow-machine proofs).
+PEER_SIM_COST = {}
+
+
 def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True):
     if DRY_RUN_PLAN is not None:
         DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, local_prediction=prediction, loss_percent=loss_percent, silent_tick=silent_tick,
@@ -321,6 +325,9 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                                CCCP_STALL_STACK_MS=os.environ.get('CCCP_STALL_STACK_MS', '80'))
             if peer == 'client' and loss_percent:
                 environment['CC_TEST_GNS_LOSS_PERCENT'] = str(loss_percent)
+            if peer in PEER_SIM_COST:
+                cost_us, from_tick = PEER_SIM_COST[peer]
+                environment.update(CCCP_TEST_SIM_COST_US=str(cost_us), CCCP_TEST_SIM_COST_FROM_TICK=str(from_tick))
             # A live stall holds the client's seat in any form; the three-peer form without one freezes a frame instead.
             if peer == 'client' and live_stalls:
                 for tick, duration in live_stalls:
@@ -814,6 +821,8 @@ def parse_args(argv=None):
                         help='run only these lag arms (each on and off) and the single-player baselines of their caps')
     parser.add_argument('--prediction-off-arms', nargs='+', choices=LAG_ARMS, default=[],
                         help='with --lag-arms: also run these arms recorded with local prediction off (the input pins\' RED)')
+    parser.add_argument('--peer-sim-cost', action='append', default=[], metavar='PEER:US:FROM_TICK',
+                        help="a slower machine's added sim cost on one peer from a tick on (the slow-machine proofs)")
     parser.add_argument('--dry-run', action='store_true',
                         help='print every arm this command would launch with its port and peers; launch nothing, write nothing')
     parser.add_argument('--fullstate-every', type=int, default=0,
@@ -848,6 +857,9 @@ def dry_run_plan(launch_all):
 
 def main(argv=None):
     parser, args = parse_args(argv)
+    for spec in args.peer_sim_cost:
+        peer, cost_us, from_tick = spec.split(':')
+        PEER_SIM_COST[peer] = (int(cost_us), int(from_tick))
     if args.repo.resolve() != REPO.resolve():
         parser.error('--repo must name the tree containing this driver')
     if args.matrix and (args.cases or args.lag_arms):
