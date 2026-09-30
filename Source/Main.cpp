@@ -2969,6 +2969,9 @@ static bool RunFrameRecorderSelfTest() {
 /// </summary>
 void PollSDLEvents() {
 	NetModerationGUIProbe::BeforePoll();
+	// A device discovery can block for hundreds of milliseconds, so a lockstep match runs it on the joystick updater thread.
+	UInputMan::SetJoystickUpdaterRunning(ScenarioRunner::HasLockstepCoordinator());
+	UInputMan::UpdateJoysticksBeforePoll();
 	SDL_Event sdlEvent;
 	while (SDL_PollEvent(&sdlEvent)) {
 		switch (sdlEvent.type) {
@@ -10034,12 +10037,7 @@ int main(int argc, char** argv) {
 	install_allegro(SYSTEM_NONE, &errno, std::atexit);
 	loadpng_init();
 
-	// Device discovery can block for hundreds of milliseconds on a slow HID device, so it runs on the joystick updater thread.
-	if (UInputMan::JoystickUpdaterEnabled()) {
-		SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, "0");
-	}
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD );
-	UInputMan::StartJoystickUpdater();
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-joystick-updater-selftest") {
 			const bool passed = UInputMan::RunJoystickUpdaterSelfTest();
