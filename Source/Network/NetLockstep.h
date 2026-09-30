@@ -887,15 +887,15 @@ namespace RTE {
 		std::lock_guard<std::recursive_mutex> m_Lock;
 	};
 
-	/// Tells a lockstep peer that it runs ahead of its inputs: most ticks of the last second each waited for them while owed time was in
-	/// hand. A spike waits once and then catches up on inputs already there; a peer standing at the input horizon, such as one back from
-	/// a catch-up, waits on nearly every tick.
+	/// Tells a lockstep peer that it runs ahead of its inputs: most ticks of the last second were due by its clock before their inputs were
+	/// here. A spike waits once and then catches up on inputs already there; a peer standing at the input horizon, such as one back from a
+	/// catch-up or a host whose peer started late, waits on nearly every tick.
 	class NetPaceSlide {
 	public:
 		static constexpr uint32_t c_WindowTicks = 60; //!< The ticks judged: a second.
-		static constexpr uint32_t c_AheadTicks = 45; //!< Of them, those that waited with owed time.
+		static constexpr uint32_t c_AheadTicks = 45; //!< Of them, those that waited for their inputs.
 
-		/// Notes that this tick waited for its inputs while the clock owed more than it.
+		/// Notes that this tick was due before its inputs were here.
 		void NoteWaitAhead(uint64_t tick) { m_WaitedTick = tick; }
 
 		/// Notes a tick about to run.
