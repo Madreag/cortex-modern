@@ -214,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fullstate-every", type=int, default=0)
     parser.add_argument("--client-sim-cost-us", type=int, default=0,
                         help="the client spends this much more per sim tick (a slower machine's sim cost on this box)")
+    parser.add_argument("--client-sim-cost-from-tick", type=int, default=0,
+                        help="the client's added sim cost starts at this tick: a machine that turns slow mid-match")
     parser.add_argument("--client-draw-cost-us", type=int, default=0,
                         help="the client spends this much more per drawn frame (a slower machine's draw cost on this box)")
     parser.add_argument("--co-hosted", action="store_true",
@@ -350,6 +352,8 @@ def main(argv: list[str] | None = None) -> int:
                 env["CC_TEST_LOCKSTEP_MUTE_INPUT"] = options.mute_input
             if peer == "client" and options.client_sim_cost_us:
                 env["CCCP_TEST_SIM_COST_US"] = str(options.client_sim_cost_us)
+                if options.client_sim_cost_from_tick:
+                    env["CCCP_TEST_SIM_COST_FROM_TICK"] = str(options.client_sim_cost_from_tick)
             if peer == "client" and options.client_draw_cost_us:
                 env["CCCP_TEST_DRAW_COST_US"] = str(options.client_draw_cost_us)
             run = make_run(repo, flags, root / peer, timeout=options.minutes * 60 + 600, env=env)
