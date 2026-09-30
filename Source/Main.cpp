@@ -1142,6 +1142,7 @@ static uint64_t s_paceIterations = 0;
 static uint64_t s_paceSimTicks = 0;
 static long long s_paceSimUs = 0;
 static std::atomic<float> s_paceExecutionAverageMs{0.0F};
+static std::deque<float> s_paceTickCostsMs; //!< The paced round's recent tick costs, whose median caps what the clock owes.
 static long long s_paceUpdateUs = 0;
 static long long s_paceDrawUs = 0;
 static long long s_pacePreviewUs = 0; //!< The draw's share spent in the local prediction preview.
@@ -6518,6 +6519,7 @@ void RunGameLoop() {
 			s_paceSimTicks = 0;
 			s_paceSimUs = 0;
 			s_paceExecutionAverageMs.store(0.0F, std::memory_order_relaxed);
+			s_paceTickCostsMs.clear();
 			s_paceUpdateUs = 0;
 			s_paceDrawUs = 0;
 			s_pacePreviewUs = 0;
@@ -6548,6 +6550,14 @@ void RunGameLoop() {
 		const bool shedsFrames = pacedRound && g_PerformanceMan.GetMSPFAverage() > g_TimerMan.GetDeltaTimeMS();
 		constexpr double c_FloorFrameMs = 1000.0 / 15.0;
 		g_TimerMan.SetOwedTicksKept(shedsFrames ? static_cast<int>(c_FloorFrameMs / g_TimerMan.GetDeltaTimeMS()) : 0);
+		// A paced round caps what it owes by the median of its last 15 ticks, so a capture or a first-tick load cannot drop owed time.
+		float owedCapTickCostMs = 0;
+		if (pacedRound && !s_paceTickCostsMs.empty()) {
+			std::vector<float> costs(s_paceTickCostsMs.begin(), s_paceTickCostsMs.end());
+			std::nth_element(costs.begin(), costs.begin() + costs.size() / 2, costs.end());
+			owedCapTickCostMs = costs[costs.size() / 2];
+		}
+		g_TimerMan.SetOwedCapTickCostMS(owedCapTickCostMs);
 		g_TimerMan.BeginSimFrame(!pacedRound ? 0 : !shedsFrames ? g_TimerMan.GetDeltaTimeTicks() :
 		                         std::max(g_TimerMan.GetDeltaTimeTicks(), static_cast<long long>((c_FloorFrameMs - g_PerformanceMan.GetMSPDAverage()) * 1000.0)));
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
@@ -7467,8 +7477,11 @@ void RunGameLoop() {
 
 			// The paced round estimates execution cost without counting its idle interval.
 			if (measureLockstepCost) {
-				g_PerformanceMan.UpdateMSPSU(static_cast<float>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)) / 1000.0F);
+				const float tickCostMs = static_cast<float>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)) / 1000.0F;
+				g_PerformanceMan.UpdateMSPSU(tickCostMs);
 				s_paceExecutionAverageMs.store(g_PerformanceMan.GetMSPSUAverage(), std::memory_order_relaxed);
+				s_paceTickCostsMs.push_back(tickCostMs);
+				if (s_paceTickCostsMs.size() > 15) s_paceTickCostsMs.pop_front();
 			}
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
