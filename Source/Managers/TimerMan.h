@@ -130,11 +130,11 @@ namespace RTE {
 		/// @return Whether the frame's budget ended its sim updates.
 		bool SimFrameBudgetSpent() const { return m_SimFrameBudgetSpent; }
 
-		/// Drops the time the sim owes and holds its clock back a number of fixed ticks, so a lockstep peer running ahead of its inputs
-		/// gives them room to land before it needs them.
+		/// Drops the time the sim owes past the update about to run and holds its clock back a number of fixed ticks, so a lockstep peer
+		/// running ahead of its inputs gives them room to land before it needs them.
 		/// @param ticks The fixed ticks of real time that go by before the sim accrues time again.
 		void HoldSimTicks(int ticks) {
-			m_SimAccumulator = 0;
+			m_SimAccumulator = std::min(m_SimAccumulator, m_DeltaTime);
 			m_SimHold += static_cast<long long>(std::max(0, ticks)) * m_DeltaTime;
 		}
 

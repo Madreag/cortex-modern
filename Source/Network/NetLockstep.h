@@ -887,12 +887,13 @@ namespace RTE {
 		std::lock_guard<std::recursive_mutex> m_Lock;
 	};
 
-	/// Tells a lockstep peer that it runs ahead of its inputs: a long run of ticks that each waited for them while owed time was in hand.
-	/// A spike waits once and then catches up on inputs already there; a peer standing at the input horizon, such as one back from a
-	/// catch-up, waits on every tick.
+	/// Tells a lockstep peer that it runs ahead of its inputs: most ticks of the last second each waited for them while owed time was in
+	/// hand. A spike waits once and then catches up on inputs already there; a peer standing at the input horizon, such as one back from
+	/// a catch-up, waits on nearly every tick.
 	class NetPaceSlide {
 	public:
-		static constexpr uint32_t c_AheadTicks = 60; //!< A second of ticks, each waited for with owed time.
+		static constexpr uint32_t c_WindowTicks = 60; //!< The ticks judged: a second.
+		static constexpr uint32_t c_AheadTicks = 45; //!< Of them, those that waited with owed time.
 
 		/// Notes that this tick waited for its inputs while the clock owed more than it.
 		void NoteWaitAhead(uint64_t tick) { m_WaitedTick = tick; }
@@ -900,17 +901,25 @@ namespace RTE {
 		/// Notes a tick about to run.
 		/// @return Whether the clock should be held back now.
 		bool NoteTick(uint64_t tick) {
-			m_AheadTicks = m_WaitedTick == tick ? m_AheadTicks + 1 : 0;
-			if (m_AheadTicks < c_AheadTicks) return false;
-			m_AheadTicks = 0;
+			const bool ahead = m_WaitedTick == tick;
+			m_Window.push_back(ahead);
+			m_Ahead += ahead ? 1 : 0;
+			if (m_Window.size() > c_WindowTicks) {
+				m_Ahead -= m_Window.front() ? 1 : 0;
+				m_Window.pop_front();
+			}
+			if (m_Window.size() < c_WindowTicks || m_Ahead < c_AheadTicks) return false;
+			m_Window.clear();
+			m_Ahead = 0;
 			return true;
 		}
 
-		void Reset() { m_WaitedTick = UINT64_MAX; m_AheadTicks = 0; }
+		void Reset() { m_WaitedTick = UINT64_MAX; m_Window.clear(); m_Ahead = 0; }
 
 	private:
 		uint64_t m_WaitedTick = UINT64_MAX;
-		uint32_t m_AheadTicks = 0;
+		std::deque<bool> m_Window;
+		uint32_t m_Ahead = 0;
 	};
 
 // Every public coordinator method opens with this: inside an open window only a holder of the plane's lock may touch the coordinator.
