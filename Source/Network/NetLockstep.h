@@ -582,6 +582,7 @@ namespace RTE {
 		uint64_t acceptedThroughFrame = 0; //!< The newest tick of this sender's the round could consume.
 		uint64_t lastHeardMs = 0;
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
+		std::deque<std::pair<uint64_t, uint64_t>> arrivals; //!< When this peer's newest tick rose, and to which, over the last seconds.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
 		bool returnsInPlace = false; //!< This seat's return replays on its own state and connection: it starts its round before its reclaim frame.
@@ -915,74 +916,31 @@ namespace RTE {
 		}
 
 		/// What a clock found standing at its input horizon does.
-		enum class Action { None, Slide, Follow };
+		enum class Action { None, Slide };
 
-		static constexpr double c_MinPace = 0.75; //!< Below it a seat is too slow to follow; the bounded wait holds it instead.
-		static constexpr double c_PaceRecovery = 0.0025; //!< The pace a calm second gives back toward the fixed rate.
-		static constexpr double c_PaceMargin = 0.01; //!< Followed a little faster than measured: the measure includes this clock's own waits.
-
-		/// Notes a tick about to run at this wall time. The first time the clock stands at its input horizon it slides back
-		/// once; when it stands there again the cause is still there - inputs slower than this clock - so it runs at the rate
-		/// its inputs allowed since, never slides again for it. A second in which the inputs seldom made it wait gives pace back.
+		/// Notes a tick about to run. The first time the clock stands at its input horizon it slides back once; standing
+		/// there again is the same cause - a slower peer - which a fast clock never slows for: the bounded wait holds that
+		/// peer's seat instead.
 		/// @param tick The tick about to run.
-		/// @param nowMs The wall clock, in milliseconds.
-		/// @param nominalTps The fixed tick rate.
 		/// @return What to do before the tick runs.
-		Action NoteTickAt(uint64_t tick, uint64_t nowMs, double nominalTps) {
-			const bool ahead = m_WaitedTick == tick;
-			m_BlockAhead += ahead ? 1 : 0;
-			if (++m_BlockTicks == c_WindowTicks) {
-				if (m_Pace < 1.0 && m_BlockAhead < c_AheadTicks / 3) m_Pace = std::min(1.0, m_Pace + c_PaceRecovery);
-				m_BlockTicks = 0;
-				m_BlockAhead = 0;
-			}
-			if (!NoteTick(tick)) return Action::None;
-			if (!m_Slid) {
-				m_Slid = true;
-				m_TriggerTick = tick;
-				m_TriggerMs = nowMs;
-				return Action::Slide;
-			}
-			const double seconds = nowMs > m_TriggerMs ? static_cast<double>(nowMs - m_TriggerMs) / 1000.0 : 0.0;
-			const double rate = seconds > 0.0 ? static_cast<double>(tick - m_TriggerTick) / seconds : nominalTps;
-			m_FollowedRate = rate;
-			m_FollowedSince = m_TriggerTick;
-			m_TriggerTick = tick;
-			m_TriggerMs = nowMs;
-			m_Pace = std::clamp(rate / nominalTps + c_PaceMargin, c_MinPace, 1.0);
-			return Action::Follow;
+		Action NoteTickAt(uint64_t tick) {
+			if (!NoteTick(tick) || m_Slid) return Action::None;
+			m_Slid = true;
+			return Action::Slide;
 		}
-
-		/// Gets the share of the fixed rate this clock runs at.
-		/// @return 1 unless it follows its inputs.
-		double Pace() const { return m_Pace; }
-
-		/// Gets the rate the last follow measured, in ticks per second, and the tick it measured from.
-		double FollowedRate() const { return m_FollowedRate; }
-		uint64_t FollowedSince() const { return m_FollowedSince; }
 
 		void Reset() {
 			m_WaitedTick = UINT64_MAX;
 			m_Window.clear();
 			m_Ahead = 0;
 			m_Slid = false;
-			m_Pace = 1.0;
-			m_BlockTicks = 0;
-			m_BlockAhead = 0;
 		}
 
 	private:
 		uint64_t m_WaitedTick = UINT64_MAX;
 		std::deque<bool> m_Window;
 		uint32_t m_Ahead = 0;
-		bool m_Slid = false; //!< This clock slid once for standing at its horizon; the same cause is followed after.
-		uint64_t m_TriggerTick = 0;
-		uint64_t m_TriggerMs = 0;
-		double m_Pace = 1.0;
-		double m_FollowedRate = 0.0;
-		uint64_t m_FollowedSince = 0;
-		uint32_t m_BlockTicks = 0;
-		uint32_t m_BlockAhead = 0;
+		bool m_Slid = false; //!< This clock slid once for standing at its horizon; the same cause never moves it again.
 	};
 
 // Every public coordinator method opens with this: inside an open window only a holder of the plane's lock may touch the coordinator.
@@ -1631,6 +1589,15 @@ namespace RTE {
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
 		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
 		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
+
+		/// Whether a seat still feeding the round sends its ticks slower than the round's rate: from some point 200 ms to 2 s back,
+		/// its newest tick fell the slow-player bound behind the rate. No delay re-size covers that; it is a slow machine.
+		/// @param peerId The seat.
+		/// @param nowMs The coordinator's clock.
+		/// @param rate Set to the seat's measured ticks a second.
+		/// @return Whether the seat is a slow machine.
+		bool FeedsBelowRoundRate(uint8_t peerId, uint64_t nowMs, double* rate = nullptr) const;
+		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Whether the wait for every peer's published startup has used the round's answer budget.
 		bool StartupWaitExpired(uint64_t nowMs) const;
 		void TickStartupWait(uint64_t nowMs);

@@ -6006,6 +6006,34 @@ namespace RTE {
 		    (!m_ReclaimTransactions.contains(peerId) || frame < m_ReclaimTransactions.at(peerId).activationFrame);
 	}
 
+	bool NetLockstepCoordinator::FeedsBelowRoundRate(uint8_t peerId, uint64_t nowMs, double* rate) const {
+		constexpr uint64_t c_ShortestMs = 200, c_LongestMs = 2000;
+		const auto found = m_Stats.peers.find(peerId);
+		if (found == m_Stats.peers.end() || m_Config.simTickMs <= 0.0) return false;
+		const NetLockstepPeerStats& stats = found->second;
+		// Still feeding: a seat gone silent is judged at the bound by its missing input.
+		if (stats.arrivals.empty() || nowMs < stats.lastProgressMs || nowMs - stats.lastProgressMs > static_cast<uint64_t>(std::ceil(4.0 * m_Config.simTickMs))) return false;
+		// From any point 200 ms to 2 s back, a seat at the round's rate is never the bound behind it; jitter moves its newest tick a
+		// tick or two, and a pause past the bound is a silent seat's hold.
+		double worst = 0.0;
+		for (auto sample = stats.arrivals.rbegin(); sample != stats.arrivals.rend(); ++sample) {
+			if (nowMs < sample->first + c_ShortestMs) continue;
+			if (nowMs > sample->first + c_LongestMs) break;
+			const double ms = static_cast<double>(nowMs - sample->first);
+			const double behind = ms / m_Config.simTickMs - static_cast<double>(stats.arrivals.back().second - sample->second);
+			if (behind > worst) {
+				worst = behind;
+				if (rate) *rate = static_cast<double>(stats.arrivals.back().second - sample->second) * 1000.0 / ms;
+			}
+		}
+		return worst >= std::max<uint16_t>(1, m_Config.slowPlayerBoundTicks);
+	}
+
+	void NetLockstepCoordinator::NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame) {
+		stats.arrivals.emplace_back(nowMs, frame);
+		while (!stats.arrivals.empty() && stats.arrivals.front().first + 3000 < nowMs) stats.arrivals.pop_front();
+	}
+
 	bool NetLockstepCoordinator::IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const {
 		const auto reclaim = m_ReclaimTransactions.find(peerId);
 		if (reclaim == m_ReclaimTransactions.end()) return false;
@@ -6086,6 +6114,19 @@ namespace RTE {
 		// A park handshake is in flight: every boundary authored now is deferred to its final end, so declaring
 		// one would propose a seat hold that cannot take effect and the caller would ask again next tick.
 		if (m_CaptureParkAwaitingReports) return false;
+		// A seat feeding below the round's rate falls further behind every second, which no delay re-size covers: it is held at
+		// the bound like a silent one, whatever each frame's own wait, and the others never run at its pace.
+		bool slowHeld = false;
+		for (uint8_t peer: missing) {
+			double rate = 0.0;
+			if (!m_PeersPlayedThisRound.contains(peer) || IsReturningSeatBeforeItsFirstInput(peer) || !FeedsBelowRoundRate(peer, nowMs, &rate)) continue;
+			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": " << rate
+			                 << " ticks/s against " << (1000.0 / m_Config.simTickMs) << "; the AI takes its seat" << std::endl;
+			std::string holdError;
+			if (ProposePeerHold(peer, nowMs, &holdError)) slowHeld = true;
+			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
+		}
+		if (slowHeld) return true;
 		// Each receiver spends its own runway on its own link.
 		bool noticeDue = std::llround(m_ReadyFrames.size() * m_Config.simTickMs) <= 2;
 		for (uint8_t survivor: m_RemotePeerIds) {
@@ -7320,7 +7361,11 @@ namespace RTE {
 	void NetLockstepCoordinator::AcceptRemoteTick(const NetLockstepFrame& frame, uint64_t nowMs, bool windowCopy) {
 		if (IsPeerGoneAtFrame(frame.senderPeerId, frame.targetFrame)) return;
 		NetLockstepPeerStats& peerStats = m_Stats.peers[frame.senderPeerId];
-		if (frame.targetFrame > peerStats.highestTargetFrame) { peerStats.highestTargetFrame = frame.targetFrame; peerStats.lastProgressMs = nowMs; }
+		if (frame.targetFrame > peerStats.highestTargetFrame) {
+			peerStats.highestTargetFrame = frame.targetFrame;
+			peerStats.lastProgressMs = nowMs;
+			NoteArrival(peerStats, nowMs, frame.targetFrame);
+		}
 		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
 			// A member admitted mid-round reads the window copies of the ticks before its own start, and a round it joins running
 			// sends it that round's own ticks before its start, which its replay carried. Neither is a broken build.
@@ -10566,7 +10611,11 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch: peer " + std::to_string(frame.senderPeerId) + " is not a remote");
 			return;
 		}
-		if (frame.targetFrame > peerStats.highestTargetFrame) { peerStats.highestTargetFrame = frame.targetFrame; peerStats.lastProgressMs = nowMs; }
+		if (frame.targetFrame > peerStats.highestTargetFrame) {
+			peerStats.highestTargetFrame = frame.targetFrame;
+			peerStats.lastProgressMs = nowMs;
+			NoteArrival(peerStats, nowMs, frame.targetFrame);
+		}
 		// How late this sender's tick lands after we first missed it is the window a resend request waits out.
 		if (frame.targetFrame == m_MissingSinceFrame && m_MissingSinceMs != 0 && nowMs >= m_MissingSinceMs) {
 			const auto held = m_RemoteFrames.find(frame.targetFrame);
