@@ -6517,8 +6517,14 @@ void RunGameLoop() {
 		ScenarioRunner::BeginWorldCatchUpFrame();
 		CrossEndTargetObservation(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
+		// A lockstep peer with owed ticks presents at least once per tick length while it catches up; a world joiner
+		// keeps its own ceiling.
+		g_TimerMan.BeginSimFrame(ScenarioRunner::IsLockstepControllerSyncActive() && !freeRunLockstep && !ScenarioRunner::WorldCatchUpActive() ? g_TimerMan.GetDeltaTimeTicks() : 0);
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (true) {
+			if (g_TimerMan.SimFrameBudgetSpent()) {
+				break;
+			}
 			const uint64_t nextSimTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
 			if (ScenarioRunner::WorldCatchUpActive()) {
 				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick)) {
@@ -8081,6 +8087,7 @@ void RunGameLoop() {
 				break;
 			}
 		}
+		g_TimerMan.BeginSimFrame(0);
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);
