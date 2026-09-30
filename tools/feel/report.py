@@ -670,6 +670,11 @@ def input_latencies(inputs, frames):
     return results
 
 
+# A response moves at least this much from the state before the edge: float drift in a steady walk is not one.
+RESPONSE_VX_FLOOR = 0.01  # pixels per frame
+RESPONSE_AIM_FLOOR = 0.001  # radians
+
+
 def edge_moves(action, held, change):
     """Whether an actor moved the way a scripted edge asks, against the state before it: aim closer to the scripted aim, velocity
     changed in the requested direction, or slowing after a release."""
@@ -678,24 +683,26 @@ def edge_moves(action, held, change):
             if not held:
                 return False
             target = -math.atan2(change['y'], change['x'])
-            return abs(angular_delta(actor['aim'], target)) < abs(angular_delta(reference['aim'], target))
+            return abs(angular_delta(actor['aim'], target)) < abs(angular_delta(reference['aim'], target)) - RESPONSE_AIM_FLOOR
         if held:
             sign = -1 if action == 'L_LEFT' else 1
-            return sign * (actor['vx'] - reference['vx']) > 0
-        return abs(actor['vx']) < abs(reference['vx'])
+            return sign * (actor['vx'] - reference['vx']) > RESPONSE_VX_FLOOR
+        return abs(actor['vx']) < abs(reference['vx']) - RESPONSE_VX_FLOOR
     return moves
 
 
-def sustained_response(sequence, reference, moves, runs=3):
-    """The first record from which the change holds for `runs` records in a row: a response, never a wobble."""
-    streak = []
+def sustained_response(sequence, reference, moves, shows, runs=3):
+    """The first record from which the change holds through `runs` sim frames in a row: a response, never a wobble. A frame
+    recorded twice counts once."""
+    streak, frames = [], set()
     for record, actor in sequence:
-        if moves(actor, reference):
-            streak.append(record)
-            if len(streak) == runs:
-                return streak[0]
-        else:
-            streak = []
+        if not moves(actor, reference):
+            streak, frames = [], set()
+            continue
+        streak.append(record)
+        frames.add(shows(record))
+        if len(frames) == runs:
+            return streak[0]
     return None
 
 
@@ -730,16 +737,18 @@ def previewed_responses(inputs, frames, committed):
             row = dict(input_line=edge['_line'], tick=edge['tick'], uid=uid, action=action, held=held, delay=delay, applied_tick=applied,
                        previewed_ms=None, committed_ms=None, budget_ms=None, judged=False, pass_check=False)
             if before_drawn and before_kept:
-                # A drawn frame shows its tick plus the preview's depth, less one: both sides search the same sim frames.
+                # A drawn frame shows its tick plus the preview's depth: both sides search the same sim frames.
                 seen = sustained_response([(frame, actor) for frame, actor in drawn[uid]
-                                           if frame['draw_begin_ms'] >= edge['wall_ms'] and applied <= frame['tick'] + max(1, frame.get('preview_depth', 0)) - 1 < later_tick],
-                                          before_drawn[-1], moves)
+                                           if frame['draw_begin_ms'] >= edge['wall_ms'] and applied <= frame['tick'] + frame.get('preview_depth', 0) < later_tick],
+                                          before_drawn[-1], moves, lambda frame: frame['tick'] + frame.get('preview_depth', 0))
                 truth = sustained_response([(record, actor) for record, actor in kept[uid] if applied <= record['tick'] < later_tick],
-                                           before_kept[-1], moves)
+                                           before_kept[-1], moves, lambda record: record['tick'])
                 if seen:
                     row['previewed_ms'] = seen['present_end_ms'] - edge['wall_ms']
-                if truth:
-                    row.update(committed_ms=truth['wall_ms'] - edge['wall_ms'], judged=True)
+                # Visible, like the preview: the first frame drawn after the committed state holds the response.
+                shown = next((frame for frame in frames if frame['draw_begin_ms'] >= truth['wall_ms']), None) if truth else None
+                if shown:
+                    row.update(committed_ms=shown['present_end_ms'] - edge['wall_ms'], judged=True)
                     row['budget_ms'] = row['committed_ms'] - delay * SIM_MS + SIM_MS
                     row['pass_check'] = row['previewed_ms'] is not None and row['previewed_ms'] <= row['budget_ms']
             results.append(row)
