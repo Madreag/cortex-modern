@@ -738,12 +738,14 @@ def previewed_responses(inputs, frames, committed):
             later_tick = min((other['tick'] + other.get('delay', 0) for other in inputs[index + 1:]
                               if other['actor']['uid'] == uid and any(item['action'] == action for item in other['changes'])), default=math.inf)
             # How long the script holds this edge before its next change of the same action: three ticks or more must be judged.
-            held_ticks = min((other['tick'] for other in inputs[index + 1:]
-                              if other['actor']['uid'] == uid and any(item['action'] == action for item in other['changes'])), default=math.inf) - edge['tick']
+            # None: the script holds it to its end.
+            next_change = min((other['tick'] for other in inputs[index + 1:]
+                               if other['actor']['uid'] == uid and any(item['action'] == action for item in other['changes'])), default=None)
+            held_ticks = next_change - edge['tick'] if next_change is not None else None
             before_drawn = [actor for frame, actor in drawn[uid] if frame['present_end_ms'] < edge['wall_ms']]
             before_kept = [actor for record, actor in kept[uid] if record['tick'] < applied]
             row = dict(input_line=edge['_line'], tick=edge['tick'], uid=uid, action=action, held=held, delay=delay, applied_tick=applied,
-                       held_ticks=held_ticks, required=held_ticks >= 3, previewed_ms=None, committed_ms=None, budget_ms=None, judged=False, pass_check=False)
+                       held_ticks=held_ticks, required=held_ticks is None or held_ticks >= 3, previewed_ms=None, committed_ms=None, budget_ms=None, judged=False, pass_check=False)
             if before_drawn and before_kept:
                 # A drawn frame shows its tick plus the preview's depth: both sides search the same sim frames.
                 seen = sustained_response([(frame, actor) for frame, actor in drawn[uid]
