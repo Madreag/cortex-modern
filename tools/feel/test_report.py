@@ -327,19 +327,20 @@ class ReportTests(unittest.TestCase):
         def committed(tick, wall, vx):
             return dict(type='committed', tick=tick, wall_ms=wall, actors=[actor(vx=vx)])
         timeline = [committed(12, 90, 0)] + [committed(13 + n, 150 + 17 * n, -1 - n) for n in range(4)]
-        previewed = [frame(1, 95, actor())] + [frame(2 + n, 115 + 17 * n, actor(vx=-1 - n)) for n in range(4)]
+        previewed = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 115 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(4)]
         row = report.previewed_responses([edge], previewed, timeline)[0]
-        # Committed at 150 ms with a 3-tick delay: the player must see it by 150 - 50 + 16.7 ms; the preview shows it at 15.
-        self.assertEqual((row['previewed_ms'], row['committed_ms'], row['judged'], row['pass_check']), (15, 50, True, True))
+        # Committed at 150 ms, visible at the next frame (66) with a 3-tick delay: the player must see it by 66 - 50 + 16.7 ms; the
+        # preview shows it at 15.
+        self.assertEqual((row['previewed_ms'], row['committed_ms'], row['judged'], row['pass_check']), (15, 66, True, True))
         # Without the preview the drawn actor is the committed one, the delay later: the pin fails by it.
-        drawn = [frame(1, 95, actor())] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n)) for n in range(4)]
+        drawn = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(4)]
         self.assertFalse(report.previewed_responses([edge], drawn, timeline)[0]['pass_check'])
 
     def test_a_one_frame_wobble_is_not_a_response(self):
         edge = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1,
                     changes=[dict(action='L_LEFT', held=True)])
         timeline = [dict(type='committed', tick=12, wall_ms=90, actors=[actor()])] +                    [dict(type='committed', tick=13 + n, wall_ms=150 + 17 * n, actors=[actor(vx=-1 - n)]) for n in range(4)]
-        wobble = [frame(1, 95, actor()), frame(2, 115, actor(vx=-0.02)), frame(3, 132, actor(vx=0.1))] +                  [frame(4 + n, 149 + 17 * n, actor(vx=-1 - n)) for n in range(3)]
+        wobble = ([frame(1, 95, actor(), tick=8), frame(2, 115, actor(vx=-0.02), tick=9), frame(3, 132, actor(vx=0.1), tick=10)] + [frame(4 + n, 149 + 17 * n, actor(vx=-1 - n), tick=11 + n) for n in range(3)])
         row = report.previewed_responses([edge], wobble, timeline)[0]
         self.assertEqual(row['previewed_ms'], 49)
 
