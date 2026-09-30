@@ -21263,6 +21263,26 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "a decision the client had settled, repeated past its frame 20, ended its round: " + client.GetStats().timeoutReason;
 			return false;
 		}
+		// A round set up from a replayed tail holds the tail's delay without the record of its decision (4K lag-200: revision 3 taken by
+		// the catch-up after the live config was built, repeated to the live round at 438).
+		client.m_SettledTimings.erase(proposal.revision);
+		if (!repeat()) {
+			*error = "a delay in force at frame 20 whose decision this round never recorded, repeated past its frame, ended its round: " + client.GetStats().timeoutReason;
+			return false;
+		}
+		// The replay hands a live round configured before it took the decision both the delay and the record.
+		client.m_SettledTimings.erase(proposal.revision);
+		client.m_TimingDecisions[proposal.revision] = {proposal, 0, true, now};
+		NetLockstepCoordinator live;
+		live.m_Config = client.GetConfig();
+		live.m_Config.startFrame = 15;
+		live.m_DelayChanges[2] = {{0, 2}};
+		live.AdoptReplayedSeatTransitions(client, 14);
+		if (live.InputDelayAt(2, 20) != 5 || !live.m_SettledTimings.contains(proposal.revision)) {
+			*error = "a live round configured before its replay took the delay at 20 runs peer 2 on delay " + std::to_string(live.InputDelayAt(2, 20)) +
+			         (live.m_SettledTimings.contains(proposal.revision) ? "" : " and does not know the decision");
+			return false;
+		}
 		std::cout << "[net-lockstep-selftest] PASS a_decision_repeated_past_its_frame_is_not_a_new_one revision=" << proposal.revision << std::endl;
 		return true;
 	}

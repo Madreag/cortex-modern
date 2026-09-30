@@ -5470,6 +5470,22 @@ namespace RTE {
 				DiagnosticLine() << "[net-lockstep] took peer " << static_cast<int>(peer) << "'s hold at " << held->second.cutoffFrame << " from the replayed tail" << std::endl;
 			}
 		}
+		// A delay the replay took after this round was configured is this round's too, and a repeat of any decision it took is known here.
+		for (const auto& [peer, changes]: replay.m_DelayChanges) {
+			for (const auto& [frame, delay]: changes) {
+				if (frame < m_Config.startFrame || m_DelayChanges[peer].contains(frame)) continue;
+				m_DelayChanges[peer][frame] = delay;
+				DiagnosticLine() << "[net-lockstep] took peer " << static_cast<int>(peer) << "'s delay " << delay << " at " << frame << " from the replayed tail" << std::endl;
+			}
+		}
+		const auto knowTaken = [&](uint64_t revision, NetLockstepTiming proposal) {
+			if (m_TimingDecisions.contains(revision)) return;
+			proposal.phase = NetTimingPhase::Propose;
+			m_SettledTimings.emplace(revision, proposal);
+		};
+		for (const auto& [revision, decision]: replay.m_TimingDecisions) if (decision.committed) knowTaken(revision, decision.proposal);
+		for (const auto& [revision, proposal]: replay.m_SettledTimings) knowTaken(revision, proposal);
+		while (m_SettledTimings.size() > 64) m_SettledTimings.erase(m_SettledTimings.begin());
 		m_AwaitingReplayedSeatState = false;
 	}
 
@@ -6510,6 +6526,15 @@ namespace RTE {
 			const auto held = m_TimingDecisions.find(timing.revision);
 			if ((settled != m_SettledTimings.end() && settled->second == proposed) ||
 			    (held != m_TimingDecisions.end() && held->second.committed && held->second.proposal == proposed)) return;
+			// A round set up from a replayed tail holds that tail's delays without their records: the delay in force at a passed frame is the decision.
+			if (timing.action == NetTimingAction::Delay && held == m_TimingDecisions.end() && timing.applyFrame < m_Stats.nextFrame) {
+				if (const auto changes = m_DelayChanges.find(timing.peerId); changes != m_DelayChanges.end()) {
+					if (const auto at = changes->second.find(timing.applyFrame); at != changes->second.end() && at->second == timing.delayFrames) {
+						m_SettledTimings[timing.revision] = proposed;
+						return;
+					}
+				}
+			}
 		}
 		if (timing.phase == NetTimingPhase::Propose) {
 			const bool ownHold = timing.action == NetTimingAction::Hold && (timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0;
