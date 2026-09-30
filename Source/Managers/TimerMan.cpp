@@ -26,6 +26,7 @@ void TimerMan::Clear() {
 	m_SimFrameStart = 0;
 	m_LastSimUpdateStart = 0;
 	m_SimFrameBudgetSpent = false;
+	m_SimHold = 0;
 	m_SimSpeed = 1.0F;
 	m_TimeScale = 1.0F;
 	m_SimPaused = false;
@@ -74,6 +75,7 @@ void TimerMan::ResetTime() {
 
 	m_RealTimeTicks = 0;
 	m_SimAccumulator = 0;
+	m_SimHold = 0;
 	m_SimTimeTicks = 0;
 	m_SimUpdateCount = 0;
 	m_SimUpdatesSinceDrawn = -1;
@@ -136,8 +138,13 @@ void TimerMan::Update() {
 
 	// If not paused, add the new time difference to the sim accumulator
 	if (!m_SimPaused) {
-		m_SimAccumulator += static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale);
-		m_PaceAccruedTicks += static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale);
+		long long accrued = static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale);
+		// A held clock lets that much real time go by first.
+		const long long held = std::min(m_SimHold, accrued);
+		m_SimHold -= held;
+		accrued -= held;
+		m_SimAccumulator += accrued;
+		m_PaceAccruedTicks += accrued;
 	} else {
 		m_PacePausedLostTicks += timeIncrease;
 	}
