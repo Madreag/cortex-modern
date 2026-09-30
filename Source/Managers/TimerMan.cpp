@@ -22,6 +22,10 @@ void TimerMan::Clear() {
 	m_DeltaBuffer.clear();
 	m_SimUpdatesSinceDrawn = -1;
 	m_DrawnSimUpdate = false;
+	m_SimFrameBudget = 0;
+	m_SimFrameStart = 0;
+	m_LastSimUpdateStart = 0;
+	m_SimFrameBudgetSpent = false;
 	m_SimSpeed = 1.0F;
 	m_TimeScale = 1.0F;
 	m_SimPaused = false;
@@ -77,8 +81,24 @@ void TimerMan::ResetTime() {
 	m_TimeScale = 1.0F;
 }
 
+void TimerMan::BeginSimFrame(long long budgetTicks) {
+	m_SimFrameBudget = budgetTicks;
+	m_SimFrameStart = GetAbsoluteTime();
+	m_LastSimUpdateStart = 0;
+	m_SimFrameBudgetSpent = false;
+}
+
 void TimerMan::UpdateSim() {
 	if (TimeForSimUpdate()) {
+		// Owed ticks past the budget wait for the next frame; this one, expected to end past it, is drawn.
+		bool budgetSpent = false;
+		if (m_SimFrameBudget > 0) {
+			// The frame's previous update is the estimate for this one; the first update of a frame always runs.
+			const long long now = GetAbsoluteTime();
+			const long long previousCost = m_LastSimUpdateStart != 0 ? now - m_LastSimUpdateStart : 0;
+			m_LastSimUpdateStart = now;
+			budgetSpent = previousCost > 0 && now - m_SimFrameStart + previousCost >= m_SimFrameBudget;
+		}
 		// Transfer ticks from the accumulator to the sim time ticks. A free-running sim outpaces
 		// the accumulator, so never draw it below zero.
 		if (m_SimAccumulator >= m_DeltaTime) {
@@ -93,7 +113,8 @@ void TimerMan::UpdateSim() {
 		++m_SimUpdatesSinceDrawn;
 
 		// If after deducting the DeltaTime from the accumulator, there is not enough time for another DeltaTime, then flag this as the last sim update before the frame is drawn.
-		m_DrawnSimUpdate = !TimeForSimUpdate();
+		m_DrawnSimUpdate = !TimeForSimUpdate() || budgetSpent;
+		m_SimFrameBudgetSpent = budgetSpent && TimeForSimUpdate();
 	} else {
 		m_DrawnSimUpdate = true;
 	}

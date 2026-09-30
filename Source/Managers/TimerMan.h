@@ -120,6 +120,15 @@ namespace RTE {
 		/// @return The number of pure sim updates that have happened since the last drawn.
 		int SimUpdatesSinceDrawn() const { return m_SimUpdatesSinceDrawn; }
 
+		/// Starts a frame's sim updates. With a budget, the update that would run past it is the drawn one, so a machine
+		/// with owed ticks presents between them instead of freezing one frame on all of them.
+		/// @param budgetTicks Wall time the frame's sim updates may take before one is drawn; 0 for no limit.
+		void BeginSimFrame(long long budgetTicks);
+
+		/// Tells whether the sim update just run was drawn because the frame's budget ran out.
+		/// @return Whether the frame's budget ended its sim updates.
+		bool SimFrameBudgetSpent() const { return m_SimFrameBudgetSpent; }
+
 		/// Gets the simulation speed over real time.
 		/// @return The value of the simulation speed over real time.
 		float GetSimSpeed() const { return m_SimSpeed; }
@@ -259,6 +268,10 @@ namespace RTE {
 
 		int m_SimUpdatesSinceDrawn; //!< How many sim updates have been done since the last drawn one.
 		bool m_DrawnSimUpdate; //!< Tells whether the current simulation update will be drawn in a frame.
+		long long m_SimFrameBudget; //!< Wall time this frame's sim updates may take before one is drawn; 0 for no limit.
+		long long m_SimFrameStart; //!< When this frame's sim updates began.
+		long long m_LastSimUpdateStart; //!< When the latest sim update of this frame began, or 0 before one.
+		bool m_SimFrameBudgetSpent; //!< The frame's budget ended its sim updates at the drawn one.
 
 		float m_SimSpeed; //!< The simulation speed over real time.
 		float m_TimeScale; //!< The relationship between the real world actual time and the simulation time. A value of 2.0 means simulation runs twice as fast as normal, as perceived by a player.
