@@ -154,6 +154,7 @@ namespace RTE {
 		uint64_t s_SlowMachineNoticeUntilMs = 0;
 		long long s_LockstepWaitUs = 0;
 		std::optional<std::chrono::steady_clock::time_point> s_PreSimWait;
+		NetPaceSlide s_PaceSlide;
 		struct LockstepWaitTimer {
 			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
@@ -1062,6 +1063,7 @@ namespace RTE {
 		s_LockstepCoordinator = coordinator;
 		NetLockstepPlane::Target(coordinator);
 		s_PreSimWait.reset();
+		s_PaceSlide.Reset();
 		s_LocalStartParkPublished = false;
 		if (!coordinator) {
 			s_SeatPresence = nullptr;
@@ -3060,6 +3062,18 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->AgreedSeatDeviceClass(seat) : 0;
 	}
 
+	// A peer that keeps standing at its input horizon holds its clock back the slow-player bound's worth, so its inputs land with the
+	// lead every other peer's do instead of the tick that needs them waiting on each.
+	static bool RunPacedTick(uint64_t tick) {
+		if (s_PaceSlide.NoteTick(tick)) {
+			const int bound = std::max<int>(1, s_LockstepCoordinator->GetConfig().slowPlayerBoundTicks);
+			g_TimerMan.HoldSimTicks(bound);
+			System::PrintDiagnosticLine("[net-lockstep] pace slide at tick " + std::to_string(tick) + ": " + std::to_string(NetPaceSlide::c_AheadTicks) +
+			                            " ticks in a row waited on their inputs with time owed; the clock drops it and holds back " + std::to_string(bound) + " ticks");
+		}
+		return true;
+	}
+
 	bool ScenarioRunner::PollLockstepSimulationTick(uint64_t tick) {
 		NetLockstepPlaneGuard plane;
 		if (!s_LockstepCoordinator || s_LockstepCoordinator->IsReplayPlayback() || WorldCatchUpActive()) return true;
@@ -3093,9 +3107,11 @@ namespace RTE {
 		if (!PrimeRestoredLockstepInputs(&primeError)) { SetControllerReplayError(primeError); return false; }
 		const auto& config = s_LockstepCoordinator->GetConfig();
 		if (s_LockstepCoordinator->HasReadyFrame(tick) || tick < s_LockstepCoordinator->GetStats().effectiveStartFrame ||
-		    (!s_LockstepCoordinator->IsMigrating() && (!s_LockstepCoordinator->UsesBoundedWait() || s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0))) return true;
+		    (!s_LockstepCoordinator->IsMigrating() && (!s_LockstepCoordinator->UsesBoundedWait() || s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0))) return RunPacedTick(tick);
 		(void)s_LockstepCoordinator->NoteFrameWait(tick, NetLockstepNowMs());
-		if (s_LockstepCoordinator->HasReadyFrame(tick)) return true;
+		if (s_LockstepCoordinator->HasReadyFrame(tick)) return RunPacedTick(tick);
+		// Time owed past this tick while its inputs are not here: the clock runs ahead of them.
+		if (g_TimerMan.GetSimAccumulator() >= 2 * g_TimerMan.GetDeltaTimeTicks()) s_PaceSlide.NoteWaitAhead(tick);
 		s_PreSimWait = now;
 		return false;
 	}

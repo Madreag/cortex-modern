@@ -3343,6 +3343,37 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat back from its catch-up stood at the newest input it held and waited on every tick after (run 2: 258 waits of ~14 ms
+		// after the return at 100 ms, 330 at 200 ms); a spike waits once and then catches up on inputs already there.
+		bool TestAPeerAtItsInputHorizonSlidesBack(std::string* error) {
+			NetPaceSlide pace;
+			for (uint64_t tick = 100; tick < 400; ++tick) {
+				// A spike every 50 ticks waits on one tick, then runs the owed ones on inputs that are there.
+				if (tick % 50 == 0) pace.NoteWaitAhead(tick);
+				if (pace.NoteTick(tick)) {
+					*error = "a spike's catch-up held the clock back at tick " + std::to_string(tick);
+					return false;
+				}
+			}
+			uint64_t slidAt = 0;
+			for (uint64_t tick = 400; tick < 600 && slidAt == 0; ++tick) {
+				pace.NoteWaitAhead(tick);
+				if (pace.NoteTick(tick)) slidAt = tick;
+			}
+			if (slidAt != 400 + NetPaceSlide::c_AheadTicks - 1) {
+				*error = "a peer waiting on every tick held its clock back at " + std::to_string(slidAt) + ", not after " + std::to_string(NetPaceSlide::c_AheadTicks) + " ticks";
+				return false;
+			}
+			// The run starts over after it: one more waited tick is not another slide.
+			pace.NoteWaitAhead(slidAt + 1);
+			if (pace.NoteTick(slidAt + 1)) {
+				*error = "the clock was held back again on the tick after a slide";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_peer_at_its_input_horizon_slides_back slid_at=" << slidAt << std::endl;
+			return true;
+		}
+
 		// A window stops at an epoch, and a tick from before one could no longer be resent with the bytes it first went out with:
 		// a seat's tick lost just before a return's epoch came back to nobody and the bound held the seat (run 2, 100 ms with loss:
 		// 'asked peer 3 to resend frame=370 ... highest heard=372', then 'hold peer=3 frame=370').
@@ -22580,6 +22611,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestABrokenPeersSeatStaysReturnable, "a_broken_peers_seat_stays_returnable");
 		row(&TestASeatBackBeforeOurReturnKeepsItsAdmittedDelay, "a_seat_back_before_our_return_keeps_its_admitted_delay");
 		row(&TestATickLostBeforeAnEpochComesBack, "a_tick_lost_before_an_epoch_comes_back");
+		row(&TestAPeerAtItsInputHorizonSlidesBack, "a_peer_at_its_input_horizon_slides_back");
 		row(&TestAHostEndNamesAFrameNoPeerHasPassed, "a_host_end_names_a_frame_no_peer_has_passed");
 		row(&TestAHostEndDoesNotWaitOnASilentPeer, "a_host_end_does_not_wait_on_a_silent_peer");
 		row(&TestAHostEndJudgesNoSeatPastIt, "a_host_end_judges_no_seat_past_it");

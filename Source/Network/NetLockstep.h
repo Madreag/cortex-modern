@@ -887,6 +887,32 @@ namespace RTE {
 		std::lock_guard<std::recursive_mutex> m_Lock;
 	};
 
+	/// Tells a lockstep peer that it runs ahead of its inputs: a long run of ticks that each waited for them while owed time was in hand.
+	/// A spike waits once and then catches up on inputs already there; a peer standing at the input horizon, such as one back from a
+	/// catch-up, waits on every tick.
+	class NetPaceSlide {
+	public:
+		static constexpr uint32_t c_AheadTicks = 60; //!< A second of ticks, each waited for with owed time.
+
+		/// Notes that this tick waited for its inputs while the clock owed more than it.
+		void NoteWaitAhead(uint64_t tick) { m_WaitedTick = tick; }
+
+		/// Notes a tick about to run.
+		/// @return Whether the clock should be held back now.
+		bool NoteTick(uint64_t tick) {
+			m_AheadTicks = m_WaitedTick == tick ? m_AheadTicks + 1 : 0;
+			if (m_AheadTicks < c_AheadTicks) return false;
+			m_AheadTicks = 0;
+			return true;
+		}
+
+		void Reset() { m_WaitedTick = UINT64_MAX; m_AheadTicks = 0; }
+
+	private:
+		uint64_t m_WaitedTick = UINT64_MAX;
+		uint32_t m_AheadTicks = 0;
+	};
+
 // Every public coordinator method opens with this: inside an open window only a holder of the plane's lock may touch the coordinator.
 #define NET_PLANE_CHECK() NetLockstepPlane::Check(this, __func__)
 
