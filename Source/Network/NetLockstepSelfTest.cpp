@@ -21529,6 +21529,34 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A host whose own seat came back catches up through its reclaim gap to the newest input it holds; its client's next input is not
+	// late there, only not yet due (EDITH soak on the tip: the host back at 2593 held its client at 2597, 102 ms after it first missed it).
+	bool TestAHostInItsReclaimGapJudgesNoSeatLate(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A76, 6, NetTransportLane::InputUnreliable);
+		config.substituteSlowPeers = true; config.simTickMs = 16.6666;
+		if (!wire.StartHost(49575, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 802;
+		host.m_PeersPlayedThisRound = {1, 2};
+		host.m_Stats.peers[2].highestTargetFrame = 801;
+		NetGameSeatReclaim back;
+		back.peerId = 1; back.activationFrame = 800; back.delayFrames = 6; back.neutralThroughFrame = 806; back.seatIncarnation = 2;
+		host.m_ReclaimTransactions[1] = back;
+		if (host.DeclareOverdueInputs(802, 5000, 4800, {2})) {
+			*error = "a host catching up through its own reclaim gap declared its client late at 802, 200 ms after it first missed its input";
+			return false;
+		}
+		host.m_Stats.nextFrame = 808;
+		if (!host.DeclareOverdueInputs(808, 5000, 4800, {2})) {
+			*error = "past its reclaim gap the host no longer applied the bound to a client missing for 200 ms";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_host_in_its_reclaim_gap_judges_no_seat_late" << std::endl;
+		return true;
+	}
+
 	bool TestEachSurvivorsRunwayUsesItsOwnLink(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
@@ -22645,6 +22673,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestASeatBackBeforeOurReturnKeepsItsAdmittedDelay, "a_seat_back_before_our_return_keeps_its_admitted_delay");
 		row(&TestATickLostBeforeAnEpochComesBack, "a_tick_lost_before_an_epoch_comes_back");
 		row(&TestAPeerAtItsInputHorizonSlidesBack, "a_peer_at_its_input_horizon_slides_back");
+		row(&TestAHostInItsReclaimGapJudgesNoSeatLate, "a_host_in_its_reclaim_gap_judges_no_seat_late");
 		row(&TestAHostEndNamesAFrameNoPeerHasPassed, "a_host_end_names_a_frame_no_peer_has_passed");
 		row(&TestAHostEndDoesNotWaitOnASilentPeer, "a_host_end_does_not_wait_on_a_silent_peer");
 		row(&TestAHostEndJudgesNoSeatPastIt, "a_host_end_judges_no_seat_past_it");

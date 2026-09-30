@@ -6065,6 +6065,9 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing) {
 		if (!UsesBoundedWait() || m_Playback || m_Config.localPeerId != GetHostPeerId() || missing.empty()) return false;
+		// A host back from its own hold runs its catch-up through its reclaim gap to the newest input it holds: an input missing
+		// there is this host ahead of the round, never a seat late to it.
+		if (IsSeatReclaimGap(m_Config.localPeerId, frame)) return false;
 		// Past this host's last tick nothing simulates the frame, so no survivor waits on the seat's input.
 		if (m_GoodbyeDrain || frame > m_FinalFrame) return false;
 		// Autosave is an agreed event: all peers are in the same capture park, so its silence is
