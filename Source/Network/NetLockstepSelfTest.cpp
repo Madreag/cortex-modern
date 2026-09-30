@@ -21563,13 +21563,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
 		auto config = MakeCoordinatorConfig(1, 2, 0x9A76, 6, NetTransportLane::InputUnreliable);
-		config.peerCount = 2; config.remoteTransportPeerIds = {{2, 1}};
-		config.peerInputDelayFrames = {{1, 6}, {2, 6}};
+		config.peerCount = 3; config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
 		config.substituteSlowPeers = true; config.simTickMs = 16.6666;
+		config.relayToOtherPeers = true;
 		if (!wire.StartHost(49575, error) || !host.Start(wire, config, error)) return false;
 		host.m_State = NetLockstepState::Running;
 		host.m_Stats.nextFrame = 802;
-		host.m_PeersPlayedThisRound = {1, 2};
+		host.m_PeersPlayedThisRound = {1, 2, 3};
 		host.m_Stats.peers[2].highestTargetFrame = 801;
 		NetGameSeatReclaim back;
 		back.peerId = 1; back.activationFrame = 800; back.delayFrames = 6; back.neutralThroughFrame = 806; back.seatIncarnation = 2;
