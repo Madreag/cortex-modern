@@ -116,11 +116,19 @@ namespace RTE {
 		/// Starts the joystick updater thread. Call after SDL_Init, with SDL_HINT_AUTO_UPDATE_JOYSTICKS set to "0" before it.
 		static void StartJoystickUpdater();
 
+		/// Hands joystick updates to the updater thread inside a lockstep match, and back to the frame loop outside one.
+		/// @param running Whether the updater thread owns joystick updates.
+		static void SetJoystickUpdaterRunning(bool running);
+
+		/// Has the updater thread update joysticks once before the frame polls events, so a press is read on the poll it
+		/// precedes, as the frame loop's own update reads it. Waits at most 2 ms, never through a device discovery.
+		static void UpdateJoysticksBeforePoll();
+
 		/// Stops the joystick updater thread. Call before SDL_Quit.
 		static void StopJoystickUpdater();
 
-		/// Selftest: a plugged, pressed and unplugged pad each reach the event queue within a second, with the frame loop
-		/// updating no joystick where the updater thread owns them.
+		/// Selftest: with the frame loop's own update and with the updater thread, a plugged and unplugged pad is announced
+		/// within a second and every press is read on the poll it precedes.
 		/// @return Whether every check passed.
 		static bool RunJoystickUpdaterSelfTest();
 #pragma endregion
