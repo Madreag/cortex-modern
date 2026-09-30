@@ -3315,6 +3315,75 @@ namespace RTE {
 			return 0;
 		}
 
+		// A player who leaves on purpose releases its seat. Coming back to the running match it is told it left, never taken
+		// for a stranger or for a host that is gone; a world tells it once and takes the next join as a new player's.
+		int TestCleanLeaverIsToldItLeft() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			for (const bool world: {false, true}) {
+				if (!ResetLaneDirectory(&error)) {
+					return Fail(error);
+				}
+				uint64_t unixNow = 1'700'000'000'000ULL;
+				Wire wire;
+				ConfigureWire(wire);
+				wire.host.SetPersistentWorld(world);
+				const std::string mode = world ? "world" : "match";
+				const NetAuthBytes32 leaver = Ramp<32>(0xB1);
+				Endpoint player;
+				player.connection = 95;
+				ConfigureEndpoint(player, world ? "left-world" : "left-match", &unixNow);
+				wire.Add(&player);
+				wire.host.BindParticipantId(player.connection, leaver);
+				if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail(mode + ": the seeding join did not settle: " + error);
+				}
+				wire.host.SetLiveMatch(true);
+				if (!player.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error) || wire.host.GetStats().seatsClosedByLeave != 1) {
+					return Fail(mode + ": the clean leave did not close the seat: " + error);
+				}
+				const auto joinAs = [&wire, &error](NetPeerId connection, const NetAuthBytes32& id, uint8_t tx) {
+					wire.host.BindParticipantId(connection, id);
+					NetH4NewJoin join;
+					join.txId = Ramp<16>(tx);
+					join.identity = MakeIdentity();
+					join.displayName = "returner";
+					const bool sent = wire.SendRaw(connection, join, &error);
+					wire.nowMs += NetReconnectAdmission::c_DenialReleaseMs;
+					wire.DrainHostOutbound();
+					return sent;
+				};
+				if (!joinAs(96, leaver, 0x61)) {
+					return Fail(error);
+				}
+				const NetJoinRejected* told = LastOf<NetJoinRejected>(wire.Delivered(96));
+				if (told == nullptr || told->rejectReason != NetRejectReason::SeatReleased || told->mismatchKey != (world ? "seat_released_joinable" : "seat_released")) {
+					return Fail(mode + ": the returning leaver was answered " + (told == nullptr ? std::string("nothing") : std::string(NetProtocol::RejectReasonName(told->rejectReason)) + " " + told->mismatchKey));
+				}
+				if (!joinAs(97, leaver, 0x62)) {
+					return Fail(error);
+				}
+				const NetJoinRejected* again = LastOf<NetJoinRejected>(wire.Delivered(97));
+				if (world ? (again != nullptr || LastOf<NetH4TicketOffer>(wire.Delivered(97)) == nullptr)
+				          : (again == nullptr || again->rejectReason != NetRejectReason::SeatReleased)) {
+					return Fail(mode + (world ? ": the join after being told was not taken as a new player's" : ": a match stopped telling its leaver it left"));
+				}
+				if (!joinAs(98, Ramp<32>(0xC1), 0x63)) {
+					return Fail(error);
+				}
+				const NetJoinRejected* stranger = LastOf<NetJoinRejected>(wire.Delivered(98));
+				if (world ? (stranger != nullptr && stranger->rejectReason == NetRejectReason::SeatReleased)
+				          : (stranger == nullptr || stranger->mismatchKey != "live_match")) {
+					return Fail(mode + ": a stranger's join was not answered as before");
+				}
+				if (wire.host.GetStats().returningLeaversTold != (world ? 1U : 2U)) {
+					return Fail(mode + ": returning_leavers_told=" + std::to_string(wire.host.GetStats().returningLeaversTold));
+				}
+			}
+			return 0;
+		}
+
 		int TestAdmissionHoldIssuesResolutions() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -7800,6 +7869,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestAdmissionHoldIssuesResolutions(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCleanLeaverIsToldItLeft(); result != 0) {
 			return result;
 		}
 		if (const int result = TestLeaveExchangeBeatsTeardown(); result != 0) {

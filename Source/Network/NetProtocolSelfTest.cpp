@@ -156,7 +156,7 @@ namespace RTE {
 			if (!RoundTrip({12, 0, emptyDiagnostics}, error)) {
 				return false;
 			}
-			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::IdentityUnproven); ++raw) {
+			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::SeatReleased); ++raw) {
 				const NetRejectReason reason = static_cast<NetRejectReason>(raw);
 				if (std::string(NetProtocol::RejectReasonName(reason)) == "Unknown") {
 					*error = "reject reason " + std::to_string(raw) + " has no name";
@@ -168,7 +168,7 @@ namespace RTE {
 				}
 			}
 			std::vector<uint8_t> beyond;
-			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::IdentityUnproven) + 1U), "refused", "key", "", ""}}, beyond, error)) {
+			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::SeatReleased) + 1U), "refused", "key", "", ""}}, beyond, error)) {
 				return false;
 			}
 			if (!ExpectDecodeError(beyond, NetProtocolErrorCode::InvalidValue, error)) {

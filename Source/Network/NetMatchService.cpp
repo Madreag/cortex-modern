@@ -293,6 +293,7 @@ static std::string ResyncSaveName() {
 				{"substitutions_superseded", stats.substitutionsSuperseded},
 				{"substitution_ack_failures", stats.substitutionAckFailures},
 				{"reassigned_reclaims_refused", stats.reassignedReclaimsRefused},
+				{"returning_leavers_told", stats.returningLeaversTold},
 				{"pending_applicants", 0},
 			};
 		}
@@ -628,6 +629,8 @@ static std::string ResyncSaveName() {
 			m_BeaconMaxPlayers = static_cast<uint8_t>(std::max(1, m_HumanSeats - (request.dedicated ? 1 : 0)));
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 			m_JoinRefusedByLiveMatch = false;
+			m_LeftMatchJoinable = false;
+			m_ToldItLeft = false;
 			if (request.host) {
 				m_DirectoryRow.name = m_LocalName;
 				m_DirectoryRow.activity = matchConfig.activityPreset;
@@ -2189,6 +2192,8 @@ static std::string ResyncSaveName() {
 			m_PendingLobbyOverflow = false;
 			m_EndedLockstepPackets = 0;
 			m_JoinRefusedByLiveMatch = false;
+			m_LeftMatchJoinable = false;
+			m_ToldItLeft = false;
 			ResetRoundGoodbyeLocked();
 			EndAdmissionSession();
 		}
@@ -2711,6 +2716,16 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::WasJoinRefusedByALiveMatch() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_JoinRefusedByLiveMatch && m_State == NetMatchServiceState::Failed;
+	}
+
+	bool NetMatchService::WasToldItLeftAJoinableMatch() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LeftMatchJoinable && m_State == NetMatchServiceState::Failed;
+	}
+
+	bool NetMatchService::WasToldItLeft() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_ToldItLeft && m_State == NetMatchServiceState::Failed;
 	}
 
 	bool NetMatchService::BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error) {
@@ -9464,8 +9479,10 @@ static std::string ResyncSaveName() {
 					return;
 				}
 				m_State = NetMatchServiceState::Failed;
-				// A start that died with the host's session is the departure itself, not a start fault.
-				const bool lostHost = !request.host &&
+				// A start that died with the host's session is the departure itself, not a start fault; a host that
+				// told this player it left its running match is still there.
+				const bool toldItLeft = m_Session && m_Session->HasReject() && m_Session->GetRejectReason() == NetRejectReason::SeatReleased;
+				const bool lostHost = !request.host && !toldItLeft &&
 				    (m_Runner->DidLoseHostDuringSetup() || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
 				m_StatusText = lostHost ? "The host left the match"
 				                        : SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
@@ -9475,6 +9492,8 @@ static std::string ResyncSaveName() {
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
 				                           m_Session->GetMismatchKey() == "live_match";
+				m_ToldItLeft = !request.host && toldItLeft;
+				m_LeftMatchJoinable = m_ToldItLeft && m_Session->GetMismatchKey() == "seat_released_joinable";
 			}
 			m_WorkerDone = true;
 		}

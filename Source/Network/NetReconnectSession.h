@@ -295,6 +295,7 @@ namespace RTE {
 		uint32_t persistenceFailures = 0;
 		uint32_t reclaimsAccepted = 0;
 		uint32_t identityRejections = 0;
+		uint32_t returningLeaversTold = 0; //!< A clean leaver came back to the running match and was told it left.
 		uint32_t denialsScheduled = 0;
 		uint32_t denialsReleased = 0;
 		uint32_t replayedResults = 0;
@@ -588,6 +589,9 @@ namespace RTE {
 		/// Ends every transaction a removed link still had open, on every seat.
 		void DropRemovedTransactions(NetPeerId connection);
 		bool RefuseIfBanned(NetPeerId connection);
+		/// Tells a proven identity that left this running match on purpose that it did, instead of admitting or refusing it
+		/// as a stranger. A world tells it once, so its next join is the new player's; a match keeps telling it.
+		bool RefuseReturningLeaver(NetPeerId connection, const NetAuthBytes16& txId, uint64_t nowMs);
 		bool LookupParticipantId(NetPeerId connection, NetAuthBytes32& out) const;
 		void UnbindParticipantId(NetPeerId connection);
 		void CaptureParticipant(SeatState& seat, NetPeerId connection);
@@ -656,6 +660,7 @@ namespace RTE {
 		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
 		NetHostBanStore* m_BanStore = nullptr;
 		std::set<NetAuthBytes32> m_RemovedParticipants;
+		std::set<NetAuthBytes32> m_LeftParticipants; //!< Proven identities that left this live match with a clean leave.
 		bool m_ProofRequired = false;
 		std::vector<std::pair<NetPeerId, NetAuthBytes32>> m_ConnectionIds;
 	};

@@ -293,6 +293,7 @@ namespace RTE {
 				case NetRejectReason::ParticipantRemoved:
 				case NetRejectReason::ParticipantBanned:
 				case NetRejectReason::IdentityUnproven:
+				case NetRejectReason::SeatReleased:
 					out = static_cast<NetRejectReason>(rawReason);
 					return true;
 			}
@@ -1319,6 +1320,7 @@ namespace RTE {
 			case NetRejectReason::ParticipantRemoved: return "ParticipantRemoved";
 			case NetRejectReason::ParticipantBanned: return "ParticipantBanned";
 			case NetRejectReason::IdentityUnproven: return "IdentityUnproven";
+			case NetRejectReason::SeatReleased: return "SeatReleased";
 		}
 		return "Unknown";
 	}
