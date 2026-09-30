@@ -126,6 +126,10 @@ namespace RTE {
 		bool Observe(uint64_t ticks, uint64_t workUs, double tickMs);
 		bool Ready() const { return m_Ready; }
 		double Ratio() const { return m_Ratio; }
+		/// Whether the replay measured at least this many ticks of work, and ran them faster than the round.
+		/// @param ticks The ticks of work the measure must span.
+		/// @return Whether it did.
+		bool AboveRateOver(uint64_t ticks) const { return m_Samples.back().first - m_Samples.front().first >= ticks && m_Ratio > 1.0; }
 	private:
 		std::deque<std::pair<uint64_t, uint64_t>> m_Samples{{0, 0}};
 		bool m_Ready = false;
