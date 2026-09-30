@@ -5439,11 +5439,12 @@ namespace RTE {
 			const auto ours = m_ReclaimTransactions.find(peer);
 			// A hold this round took after the replayed return is the seat's newer state: the return is history, never a reason to drop that hold.
 			const bool newerHold = back != replay.m_ReclaimTransactions.end() && m_AiHeldSeats.contains(peer) && m_AiHeldSeats.at(peer) > back->second.activationFrame;
-			if (newerHold && back->second.activationFrame > m_Config.seatStateThroughFrame && back->second.activationFrame <= throughFrame) {
+			// A return at this round's first frame is this round's as much as one before it, as AdoptReturnsBefore takes it from the wire.
+			if (newerHold && back->second.activationFrame > m_Config.seatStateThroughFrame && back->second.activationFrame <= throughFrame + 1) {
 				NoteSeatTransition(peer, back->second.activationFrame, SeatTransition::Back);
 				continue;
 			}
-			if (back != replay.m_ReclaimTransactions.end() && back->second.activationFrame > m_Config.seatStateThroughFrame && back->second.activationFrame <= throughFrame &&
+			if (back != replay.m_ReclaimTransactions.end() && back->second.activationFrame > m_Config.seatStateThroughFrame && back->second.activationFrame <= throughFrame + 1 &&
 			    (ours == m_ReclaimTransactions.end() || ours->second.eventSequence < back->second.eventSequence) &&
 			    (m_AiHeldSeats.contains(peer) || m_PeerLeaveFrames.contains(peer))) {
 				NetLockstepTiming reclaim;
@@ -11714,10 +11715,14 @@ namespace RTE {
 		if (m_State == NetLockstepState::Failed) {
 			return;
 		}
+		// A returning seat's round that fails before it starts is rebuilt from its catch-up: a stop from it would read as the seat
+		// leaving the round it is coming back to (a start refused while the host's answer for another seat back at our frame was on
+		// its way held this seat again once its rebuilt round was running).
+		const bool returnNotStarted = m_State == NetLockstepState::WaitingForStart && m_ReclaimTransactions.contains(m_Config.localPeerId);
 		m_State = NetLockstepState::Failed;
 		++m_Stats.timeouts;
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(reason)) + ":" + message;
-		if (m_Transport) {
+		if (m_Transport && !returnNotStarted) {
 			NetLockstepStop stop;
 			stop.senderPeerId = m_Config.localPeerId;
 			stop.reason = reason;
