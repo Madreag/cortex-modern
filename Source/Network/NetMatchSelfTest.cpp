@@ -12676,6 +12676,75 @@ namespace RTE {
 	};
 	} // namespace
 
+	// A hosting lobby whose identity is still being hashed wants its listing, only not yet: the router mapping it asked for is kept
+	// and ends in a line, never in 'Mapping the port...' for the rest of the session.
+	bool HostMappingEndsInALine(NetPortMapWan& router, uint16_t port, uint64_t budgetMs, NetMatchService::PortMapStatus& status, std::string* error) {
+		NetMatchService service;
+		ScopeExit finish{[&] {
+			service.m_CancelRequested.store(true);
+			service.Destroy();
+		}};
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.m_IsHost = true;
+			service.m_IceEnabled = false;
+			service.m_IdentityPending = true;
+			service.m_State = NetMatchServiceState::Starting;
+		}
+		service.m_BeaconGamePort = port;
+		NetMatchService::RequestHostPortMap(port, &router);
+		// The first updates run while the identity is still pending, as a lobby's first frames do.
+		for (int update = 0; update < 20; ++update) {
+			service.Update();
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		}
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.m_IdentityPending = false;
+		}
+		const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(budgetMs);
+		do {
+			service.Update();
+			status = service.GetPortMapStatus();
+			if (status.done || status.mapped) break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		} while (std::chrono::steady_clock::now() < until);
+		if (!status.done && !status.mapped) {
+			*error = "the mapping asked for while the lobby's identity was pending never ended: enabled=" + std::to_string(status.enabled) + " done=" +
+			         std::to_string(status.done) + " mapped=" + std::to_string(status.mapped) + " error='" + status.error + "'";
+			return false;
+		}
+		return true;
+	}
+
+	bool TestAHostMappingOutlastsItsPendingIdentity(std::string* error) {
+		WithheldRouter router;
+		router.answering = true;
+		ScopeExit released{[] { NetMatchService::ReleaseHostPortMap(); }};
+		NetMatchService::PortMapStatus status;
+		if (!HostMappingEndsInALine(router, 48046, 5000, status, error)) return false;
+		if (!status.mapped || status.externalIp != "203.0.113.9") {
+			*error = "the lobby's mapping ended unmapped on an answering router: error='" + status.error + "' external=" + status.externalIp;
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_host_mapping_outlasts_its_pending_identity line='Public endpoint: " << status.externalIp << ":" << status.externalPort
+		          << " via " << status.method << "'" << std::endl;
+		return true;
+	}
+
+	bool TestAHostWithNoRouterReadsNoRouterMapping(std::string* error) {
+		WithheldRouter router;
+		ScopeExit released{[] { NetMatchService::ReleaseHostPortMap(); }};
+		NetMatchService::PortMapStatus status;
+		if (!HostMappingEndsInALine(router, 48047, 30000, status, error)) return false;
+		if (status.mapped || status.error != "no method answered") {
+			*error = "a host with no router answering read mapped=" + std::to_string(status.mapped) + " error='" + status.error + "'";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_host_with_no_router_reads_no_router_mapping line='No router mapping (" << status.error << ")'" << std::endl;
+		return true;
+	}
+
 	bool TestDirectoryRowTakesTheLateRouterAnswer(std::string* error) {
 		struct Wire {
 			std::vector<NetDirectoryClient::Request> sent;
@@ -14390,6 +14459,8 @@ namespace RTE {
 		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
 		row(&TestReplayStorageDoesNotBlockTicks, "replay_storage_does_not_block_ticks");
 		row(&TestDirectoryRowTakesTheLateRouterAnswer, "directory_row_takes_the_late_router_answer");
+		row(&TestAHostMappingOutlastsItsPendingIdentity, "a_host_mapping_outlasts_its_pending_identity");
+		row(&TestAHostWithNoRouterReadsNoRouterMapping, "a_host_with_no_router_reads_no_router_mapping");
 		row(&TestCommittedEventStream, "committed_events_append_exclude_prediction_and_label_reexecution");
 		row(&RunCrossBotRangeSelfTest, "bot_producer_respects_round_and_tick_ranges");
 		row(&RunCrossRosterSelfTest, "cross_mixed_roster_preserves_seats_and_cpu_rules");

@@ -2116,7 +2116,7 @@ static std::string ResyncSaveName() {
 		SweepRestartAdmission();
 		m_LanDiscovery.Stop();
 		m_Directory.Shutdown(); // the DELETE goes out before the row would expire
-		s_PortMap.Release();    // the router mapping goes out with the listing
+		ReleaseHostPortMap();   // the router mapping goes out with the listing
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
 		std::unique_ptr<NetMatchRunner> runner;
@@ -2541,6 +2541,7 @@ static std::string ResyncSaveName() {
 		// A hosting lobby advertises itself on the LAN until the match launches.
 		bool beaconWanted = false;
 		bool directoryWanted = false;
+		bool mappingKept = false;
 		bool directoryRunning = false;
 		bool directoryListed = true;
 		int64_t directorySeatsFree = 0;
@@ -2551,9 +2552,11 @@ static std::string ResyncSaveName() {
 			if (beaconWanted) {
 				snapshot = m_LobbySnapshot;
 			}
-			directoryWanted = m_IsHost && !m_IdentityPending && !m_DirectoryRetracted &&
-			                  (m_State == NetMatchServiceState::Starting || m_State == NetMatchServiceState::ReadyToLaunch ||
-			                   m_State == NetMatchServiceState::Running || (m_DirectoryHidden && m_State == NetMatchServiceState::Completed));
+			// A listing that waits only for the lobby's identity is still wanted: its router mapping stays.
+			mappingKept = m_IsHost && !m_DirectoryRetracted &&
+			              (m_State == NetMatchServiceState::Starting || m_State == NetMatchServiceState::ReadyToLaunch ||
+			               m_State == NetMatchServiceState::Running || (m_DirectoryHidden && m_State == NetMatchServiceState::Completed));
+			directoryWanted = mappingKept && !m_IdentityPending;
 			directoryRunning = m_State == NetMatchServiceState::Running;
 			directoryListed = !m_DirectoryHidden;
 			if (directoryWanted) {
@@ -2661,11 +2664,10 @@ static std::string ResyncSaveName() {
 			} else {
 				m_Directory.Advertise(advertised, directoryRunning, directoryListed);
 			}
-		} else if (!directoryWanted) {
+		} else {
 			m_Directory.Retract();
-			if (s_PortMapRequested) {
-				s_PortMap.Release();
-			}
+			// The mapping goes out with a retracted listing or the end of hosting, and nothing is left pending after it.
+			if (s_PortMapRequested && !mappingKept) ReleaseHostPortMap();
 		}
 		m_Directory.Update(nowMs);
 		UpdateRelayOffer(nowMs);
