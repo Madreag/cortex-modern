@@ -670,24 +670,80 @@ def input_latencies(inputs, frames):
     return results
 
 
-def compare_responses(latency, baseline_edges):
-    """Judge each edge's visible response against the single-player baseline's response to the same scripted edge.
+def edge_moves(action, held, change):
+    """Whether an actor moved the way a scripted edge asks, against the state before it: aim closer to the scripted aim, velocity
+    changed in the requested direction, or slowing after a release."""
+    def moves(actor, reference):
+        if action == 'AIM_VECTOR':
+            if not held:
+                return False
+            target = -math.atan2(change['y'], change['x'])
+            return abs(angular_delta(actor['aim'], target)) < abs(angular_delta(reference['aim'], target))
+        if held:
+            sign = -1 if action == 'L_LEFT' else 1
+            return sign * (actor['vx'] - reference['vx']) > 0
+        return abs(actor['vx']) < abs(reference['vx'])
+    return moves
 
-    The same player's baseline edge when it has one, else the quickest response any baseline player gave that edge. An edge the
-    baseline never visibly answered has no budget and is counted, not judged; one the baseline lacks entirely is missing."""
-    by_edge = defaultdict(list)
-    for row in baseline_edges or ():
-        by_edge[(row['tick'], row['action'], row['held'])].append(row)
-    for row in latency:
-        candidates = by_edge.get((row['tick'], row['action'], row['held']), [])
-        same = [other for other in candidates if other.get('player') == row.get('player')] or candidates
-        answered = [other['ms'] for other in same if other['ms'] is not None]
-        row['baseline_ms'] = min(answered) if answered else None
-        row['baseline_missing'] = not same
-        row['baseline_unreflected'] = bool(same) and not answered
-        row['response_budget_ms'] = row['baseline_ms'] + SIM_MS if answered else None
-        row['response_pass'] = bool(answered) and row['ms'] is not None and row['ms'] <= row['response_budget_ms']
-    return latency
+
+def sustained_response(sequence, reference, moves, runs=3):
+    """The first record from which the change holds for `runs` records in a row: a response, never a wobble."""
+    streak = []
+    for record, actor in sequence:
+        if moves(actor, reference):
+            streak.append(record)
+            if len(streak) == runs:
+                return streak[0]
+        else:
+            streak = []
+    return None
+
+
+def previewed_responses(inputs, frames, committed):
+    """Each edge's previewed response against the committed response to that same edge.
+
+    The committed timeline applies the edge at its tick plus the input delay in force; the preview draws that frame at once. So
+    what the player sees must answer no later than the committed response less the delay, plus one frame. One detector on both
+    sides, each against its own state before the edge's frame, reading a change that holds for three records."""
+    drawn, kept = defaultdict(list), defaultdict(list)
+    for frame in frames:
+        for actor in frame['actors']:
+            drawn[actor['uid']].append((frame, actor))
+    for record in committed:
+        for actor in record.get('actors', ()):
+            kept[actor['uid']].append((record, actor))
+    results = []
+    for index, edge in enumerate(inputs):
+        uid, delay = edge['actor']['uid'], edge.get('delay', 0)
+        applied = edge['tick'] + delay
+        for change in edge['changes']:
+            action, held = change['action'], change['held']
+            if action not in ('AIM_VECTOR', 'L_LEFT', 'L_RIGHT') or (action == 'AIM_VECTOR' and not held):
+                continue
+            moves = edge_moves(action, held, change)
+            later = min((other['wall_ms'] for other in inputs[index + 1:]
+                         if other['actor']['uid'] == uid and any(item['action'] == action for item in other['changes'])), default=math.inf)
+            later_tick = min((other['tick'] + other.get('delay', 0) for other in inputs[index + 1:]
+                              if other['actor']['uid'] == uid and any(item['action'] == action for item in other['changes'])), default=math.inf)
+            before_drawn = [actor for frame, actor in drawn[uid] if frame['present_end_ms'] < edge['wall_ms']]
+            before_kept = [actor for record, actor in kept[uid] if record['tick'] < applied]
+            row = dict(input_line=edge['_line'], tick=edge['tick'], uid=uid, action=action, held=held, delay=delay, applied_tick=applied,
+                       previewed_ms=None, committed_ms=None, budget_ms=None, judged=False, pass_check=False)
+            if before_drawn and before_kept:
+                # A drawn frame shows its tick plus the preview's depth, less one: both sides search the same sim frames.
+                seen = sustained_response([(frame, actor) for frame, actor in drawn[uid]
+                                           if frame['draw_begin_ms'] >= edge['wall_ms'] and applied <= frame['tick'] + max(1, frame.get('preview_depth', 0)) - 1 < later_tick],
+                                          before_drawn[-1], moves)
+                truth = sustained_response([(record, actor) for record, actor in kept[uid] if applied <= record['tick'] < later_tick],
+                                           before_kept[-1], moves)
+                if seen:
+                    row['previewed_ms'] = seen['present_end_ms'] - edge['wall_ms']
+                if truth:
+                    row.update(committed_ms=truth['wall_ms'] - edge['wall_ms'], judged=True)
+                    row['budget_ms'] = row['committed_ms'] - delay * SIM_MS + SIM_MS
+                    row['pass_check'] = row['previewed_ms'] is not None and row['previewed_ms'] <= row['budget_ms']
+            results.append(row)
+    return results
 
 
 def warp_records(frames):
@@ -913,7 +969,7 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
         raise ValueError(f'{raw}: no measured match frames or iterations')
     destination = run / peer / 'analysis'
     destination.mkdir(exist_ok=True)
-    latency = compare_responses(input_latencies(inputs, frames), baseline.get('latency_by_edge') if baseline else None)
+    latency = input_latencies(inputs, frames)
     warps = warp_records(frames)
     controller = run / f'{peer}_controller.jsonl'
     canonical_dump = run / f'{peer}_trace.json.simdump.txt'
@@ -994,7 +1050,6 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
                    latency_lower_bounds_ms=distribution([row['latency_lower_bound_ms'] for row in latency]),
                    missing_input_stamps=missing_inputs,
                    latency_edges=len(latency), latency_unreflected=sum(row['ms'] is None for row in latency),
-                   latency_by_edge=[dict(player=row['player'], tick=row['tick'], action=row['action'], held=row['held'], ms=row['ms']) for row in latency],
                    firing_presses=len(firing), local_prediction=dict(lp, avg_ms=lp_cost),
                    delays=delays, input_delay_text=frames[-1]['input_delay_text'],
                    auto_picks=auto_picks, auto_pick_source=str(host_log),
@@ -1026,16 +1081,18 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     pins['input_carried'] = pin(carried_value, 'the drawn controller state carries each scripted edge within 2 frames of the press (<= 34 ms at 60 Hz)',
                                 bool(latency) and all(row['carried_pass'] for row in latency), [raw, paths['latencies']],
                                 'First submitted render copy whose controller holds the scripted move state or an aim closer to the scripted aim; swap-return boundary.')
-    judged = [row for row in latency if row['baseline_ms'] is not None]
-    response_value = dict(latency_value, judged=len(judged), late=sum(not row['response_pass'] for row in judged),
-                          baseline_missing=sum(row['baseline_missing'] for row in latency),
-                          baseline_unreflected=sum(row['baseline_unreflected'] for row in latency))
-    pins['input_response'] = pin(response_value, "each edge's visible response <= the single-player baseline's response to the same edge + 1 frame (16.7 ms)",
-                                 bool(judged) and all(row['response_pass'] for row in judged) and not response_value['baseline_missing'],
-                                 [raw, paths['latencies']] + ([baseline['raw_path']] if baseline else []),
-                                 'Aim closer to the scripted aim, or velocity changed in the requested direction, the same detector on both sides; '
-                                 'an edge the baseline never visibly answered is counted, not judged.',
-                                 available=bool(baseline and baseline.get('latency_by_edge')))
+    responses = previewed_responses(inputs, frames, committed)
+    write_jsonl(destination / 'responses.jsonl', responses)
+    judged = [row for row in responses if row['judged']]
+    response_value = dict(judged=len(judged), late=sum(not row['pass_check'] for row in judged),
+                          unjudged=len(responses) - len(judged), never_previewed=sum(row['previewed_ms'] is None for row in judged),
+                          previewed_ms=distribution([row['previewed_ms'] for row in judged if row['previewed_ms'] is not None]),
+                          committed_ms=distribution([row['committed_ms'] for row in judged]))
+    pins['input_response'] = pin(response_value, "each edge's previewed response <= its committed response - the input delay + 1 frame (16.7 ms)",
+                                 bool(judged) and all(row['pass_check'] for row in judged), [raw, destination / 'responses.jsonl'],
+                                 'One detector on both sides against the state before the edge applies: aim closer to the scripted aim, velocity '
+                                 'changed in the requested direction or slowing after a release, holding for three records; an edge the committed '
+                                 'timeline never answers is counted, not judged.')
     pins['preview_ms'] = pin(lp_cost, 'ms_total / previews <= 2 ms over the full negotiated delay', lp_cost is not None and lp_cost <= 2, [raw])
     pins['violations'] = pin(max(frame['local_prediction']['violations'] for frame in frames), '= 0 always',
                              all(frame['local_prediction']['violations'] == 0 for frame in frames), [raw])
