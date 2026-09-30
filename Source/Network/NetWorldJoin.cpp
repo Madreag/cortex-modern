@@ -2049,6 +2049,10 @@ namespace RTE {
 		// for would reach the survivors late. At the head the tail's arrival paces it, and standing there shows it keeps up.
 		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames && session->headroom.Ratio() > 0 && session->headroom.Ratio() < 1.0)
 			return wait("replay-slow", "its replay runs slower than the round");
+		// A seat held for its machine or its link returns once its replay ran above the round's rate for a full second, so a machine
+		// at the edge of the rate is not handed its seat back to lose it again.
+		if (provesHeadroom && !session->headroom.AboveRateOver(static_cast<uint64_t>(std::ceil(1000.0 / m_SimTickMs))))
+			return wait("capacity-unproven", "its replay has not run above the round's rate for a second");
 		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4 && session->closingMeasured && session->closingRate < -0.1)
 			return wait("closing-losing", "its replay falls behind the round");
 		// At the round's pace a returner trails by its link, which can be longer than the lead: its return leaves it that trail.
