@@ -8847,13 +8847,29 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const {
 		NET_PLANE_CHECK();
-		// A frame every peer's input reached is ready before this peer simulates it, and its own input went with it.
-		NetLockstepFrame input;
-		if (!FindLocalInput(frame, input)) {
-			return false;
+		// Only the frames are copied: the preview runs this per step. A frame every peer's input reached is ready before this peer
+		// simulates it, and its own input went with it.
+		if (const auto waiting = m_LocalFrames.find(frame); waiting != m_LocalFrames.end()) {
+			outFrames = waiting->second;
+			return true;
 		}
-		outFrames = std::move(input.frames);
-		return true;
+		for (const NetLockstepReadyFrame& ready: m_ReadyFrames) {
+			if (ready.frame == frame && ready.hasLocalInput) {
+				outFrames = ready.localFrames;
+				return true;
+			}
+		}
+		if (const auto history = m_LocalInputHistory.find(frame); history != m_LocalInputHistory.end()) {
+			outFrames = history->second.frames;
+			return true;
+		}
+		for (const auto& pending: m_RecoveryOutgoing) {
+			if (pending.frame.senderPeerId == m_Config.localPeerId && pending.frame.targetFrame == frame) {
+				outFrames = pending.frame.frames;
+				return true;
+			}
+		}
+		return false;
 	}
 
 	void NetLockstepCoordinator::RememberCommittedFrame(const NetLockstepReadyFrame& ready) {
