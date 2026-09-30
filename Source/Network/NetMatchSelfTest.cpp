@@ -12501,6 +12501,25 @@ namespace RTE {
 		return true;
 	}
 
+	// A clean leaver's marker names its session only: a later match at the same host address that refuses this player for its own
+	// reason (a full lobby) answers with that reason, never 'You left this match'.
+	bool TestTheLeftMarkerNamesItsSessionOnly(std::string* error) {
+		const std::string ticket = (std::filesystem::temp_directory_path() / ("left-marker-" + std::to_string(System::GetProcessID()) + ".ticket")).string();
+		NetClearLeftMarker(ticket);
+		NetWriteLeftMarker(ticket, "session-one");
+		const bool ownSession = NetLeftMarkerNames(ticket, "session-one");
+		const bool otherSession = NetLeftMarkerNames(ticket, "session-two");
+		NetClearLeftMarker(ticket);
+		const bool cleared = !NetLeftMarkerNames(ticket, "session-one");
+		if (!ownSession || otherSession || !cleared) {
+			*error = "the left marker named its own session " + std::to_string(ownSession) + ", another at the same address " + std::to_string(otherSession) +
+			         ", after clearing " + std::to_string(!cleared);
+			return false;
+		}
+		std::cout << "PASS the_left_marker_names_its_session_only" << std::endl;
+		return true;
+	}
+
 	bool TestCompletedLobbyIsNotARecovery(std::string* error) {
 		NetMatchService service;
 		{
@@ -14612,6 +14631,7 @@ namespace RTE {
 		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);
 		if (!TestEndMatchWithHeldSeatKeepsItsLease(&error)) return fail(error);
 		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
+		if (!TestTheLeftMarkerNamesItsSessionOnly(&error)) return fail(error);
 		if (!TestARunningMatchRejoinIsReadyOnConnect(&error)) return fail(error);
 		if (!TestCompletedLobbyExpires(&error)) return fail(error);
 		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
