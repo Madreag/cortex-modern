@@ -583,6 +583,8 @@ namespace RTE {
 		uint64_t lastHeardMs = 0;
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		std::deque<std::pair<uint64_t, uint64_t>> arrivals; //!< When this peer's newest tick rose, and to which, over the last seconds.
+		std::deque<uint64_t> waitedFrames; //!< The frames of the last second this machine waited on this peer's input.
+		uint64_t slowSinceMs = 0; //!< Since when this peer has fed below the round's rate without a break; 0 while it has not.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
 		bool returnsInPlace = false; //!< This seat's return replays on its own state and connection: it starts its round before its reclaim frame.
@@ -1590,13 +1592,14 @@ namespace RTE {
 		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
 		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
 
-		/// Whether a seat still feeding the round sends its ticks slower than the round's rate: from some point 200 ms to 2 s back,
-		/// its newest tick fell the slow-player bound behind the rate. No delay re-size covers that; it is a slow machine.
+		/// Whether a seat still feeding the round is a slow machine: this machine waited on it on 45 of the last 60 frames and its ticks
+		/// arrived under the round's rate over that second - no delay re-size covers that. Notes this frame as waited on it.
 		/// @param peerId The seat.
+		/// @param frame The frame waited for.
 		/// @param nowMs The coordinator's clock.
 		/// @param rate Set to the seat's measured ticks a second.
 		/// @return Whether the seat is a slow machine.
-		bool FeedsBelowRoundRate(uint8_t peerId, uint64_t nowMs, double* rate = nullptr) const;
+		bool FeedsBelowRoundRate(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* rate = nullptr);
 		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Whether the wait for every peer's published startup has used the round's answer budget.
 		bool StartupWaitExpired(uint64_t nowMs) const;

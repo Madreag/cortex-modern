@@ -6006,27 +6006,39 @@ namespace RTE {
 		    (!m_ReclaimTransactions.contains(peerId) || frame < m_ReclaimTransactions.at(peerId).activationFrame);
 	}
 
-	bool NetLockstepCoordinator::FeedsBelowRoundRate(uint8_t peerId, uint64_t nowMs, double* rate) const {
-		constexpr uint64_t c_ShortestMs = 200, c_LongestMs = 2000;
+	bool NetLockstepCoordinator::FeedsBelowRoundRate(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* rate) {
+		constexpr uint64_t c_WindowFrames = 60, c_WaitedFrames = 45, c_PlayedFrames = 120;
 		const auto found = m_Stats.peers.find(peerId);
 		if (found == m_Stats.peers.end() || m_Config.simTickMs <= 0.0) return false;
-		const NetLockstepPeerStats& stats = found->second;
-		// Still feeding: a seat gone silent is judged at the bound by its missing input.
-		if (stats.arrivals.empty() || nowMs < stats.lastProgressMs || nowMs - stats.lastProgressMs > static_cast<uint64_t>(std::ceil(4.0 * m_Config.simTickMs))) return false;
-		// From any point 200 ms to 2 s back, a seat at the round's rate is never the bound behind it; jitter moves its newest tick a
-		// tick or two, and a pause past the bound is a silent seat's hold.
-		double worst = 0.0;
-		for (auto sample = stats.arrivals.rbegin(); sample != stats.arrivals.rend(); ++sample) {
-			if (nowMs < sample->first + c_ShortestMs) continue;
-			if (nowMs > sample->first + c_LongestMs) break;
-			const double ms = static_cast<double>(nowMs - sample->first);
-			const double behind = ms / m_Config.simTickMs - static_cast<double>(stats.arrivals.back().second - sample->second);
-			if (behind > worst) {
-				worst = behind;
-				if (rate) *rate = static_cast<double>(stats.arrivals.back().second - sample->second) * 1000.0 / ms;
-			}
+		NetLockstepPeerStats& stats = found->second;
+		// The frames this machine waited on the seat in the last second.
+		if (stats.waitedFrames.empty() || stats.waitedFrames.back() != frame) stats.waitedFrames.push_back(frame);
+		while (!stats.waitedFrames.empty() && stats.waitedFrames.front() + c_WindowFrames <= frame) stats.waitedFrames.pop_front();
+		// Still feeding, and a full second of this round behind it past its first two.
+		if (stats.arrivals.empty() || nowMs < stats.lastProgressMs || nowMs - stats.lastProgressMs > static_cast<uint64_t>(std::ceil(4.0 * m_Config.simTickMs)) ||
+		    frame < EffectiveStartOf(peerId) + c_PlayedFrames || stats.waitedFrames.size() < c_WaitedFrames) {
+			stats.slowSinceMs = 0;
+			return false;
 		}
-		return worst >= std::max<uint16_t>(1, m_Config.slowPlayerBoundTicks);
+		// A seat back from a hold catches up first; the round judges it after.
+		if (const uint64_t back = std::max(stats.reclaimAdmittedMs, stats.returnerCaughtUpMs); back != 0 && nowMs < back + 2000) return false;
+		// Its ticks arrive well under the round's rate - a machine whose simulation cannot hold it - not a dip a busy core or a lossy
+		// link gives any seat; a seat merely late by a fixed trip arrives at the rate and waits for its re-size.
+		const uint64_t windowMs = static_cast<uint64_t>(std::llround(c_WindowFrames * m_Config.simTickMs));
+		const auto base = std::find_if(stats.arrivals.rbegin(), stats.arrivals.rend(), [nowMs, windowMs](const auto& sample) { return sample.first + windowMs <= nowMs; });
+		if (base == stats.arrivals.rend()) return false;
+		// Counted in the seat's own ticks: a delay re-size moves its target frames without the seat running faster or slower.
+		const auto ownTick = [this, peerId](uint64_t target) { const uint64_t delay = InputDelayAt(peerId, target); return target > delay ? target - delay : 0; };
+		const uint64_t newest = ownTick(stats.arrivals.back().second), then = ownTick(base->second);
+		const double measured = static_cast<double>(newest > then ? newest - then : 0) * 1000.0 / static_cast<double>(nowMs - base->first);
+		if (rate) *rate = measured;
+		// For a further second without a break: a dip a busy core or a return gives a seat passes before that.
+		if (measured >= 0.9 * 1000.0 / m_Config.simTickMs) {
+			stats.slowSinceMs = 0;
+			return false;
+		}
+		if (stats.slowSinceMs == 0) stats.slowSinceMs = nowMs;
+		return nowMs >= stats.slowSinceMs + 1000;
 	}
 
 	void NetLockstepCoordinator::NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame) {
@@ -6119,7 +6131,7 @@ namespace RTE {
 		bool slowHeld = false;
 		for (uint8_t peer: missing) {
 			double rate = 0.0;
-			if (!m_PeersPlayedThisRound.contains(peer) || IsReturningSeatBeforeItsFirstInput(peer) || !FeedsBelowRoundRate(peer, nowMs, &rate)) continue;
+			if (!m_PeersPlayedThisRound.contains(peer) || IsReturningSeatBeforeItsFirstInput(peer) || !FeedsBelowRoundRate(peer, frame, nowMs, &rate)) continue;
 			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": " << rate
 			                 << " ticks/s against " << (1000.0 / m_Config.simTickMs) << "; the AI takes its seat" << std::endl;
 			std::string holdError;
