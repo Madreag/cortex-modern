@@ -42,6 +42,7 @@ namespace RTE {
 	std::vector<MovableObject*> LocalPrediction::s_TakenResidents;
 	LocalPrediction::Outcome LocalPrediction::s_LastOutcome;
 	bool LocalPrediction::s_Rendering = false;
+	int LocalPrediction::s_LastDepth = 0;
 	bool LocalPrediction::s_RenderScriptsWereFrozen = false;
 	int LocalPrediction::s_Override = -1;
 	int LocalPrediction::s_DepthOverride = 0;
@@ -120,6 +121,7 @@ namespace RTE {
 		if (depth <= 0) {
 			return;
 		}
+		s_LastDepth = depth;
 		Activity* activity = g_ActivityMan.GetActivity();
 		std::vector<Preview> targets;
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
