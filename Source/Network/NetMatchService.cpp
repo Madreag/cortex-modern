@@ -429,7 +429,8 @@ static std::string ResyncSaveName() {
 			m_RejoinOfRunningMatch = true;
 		}
 		m_CancelRequested.store(false);
-		m_ReadyRequested.store(false);
+		// A seat rejoining its own running match has nothing to choose in the lobby round: it is ready once it connects.
+		m_ReadyRequested.store(rejoinOfARunningMatch);
 		m_StartRequested.store(false);
 		if (request.dedicated && !request.host) {
 			if (error) *error = "dedicated service requires the host role";

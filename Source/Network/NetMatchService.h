@@ -1213,6 +1213,7 @@ namespace RTE {
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestEndMatchWithHeldSeatKeepsItsLease(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
+		friend bool TestARunningMatchRejoinIsReadyOnConnect(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
 		friend bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error);
 		friend bool TestServiceWorldJoinAdoptsConfig(std::string* error);
