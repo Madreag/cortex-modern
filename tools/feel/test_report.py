@@ -336,6 +336,28 @@ class ReportTests(unittest.TestCase):
         drawn = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(4)]
         self.assertFalse(report.previewed_responses([edge], drawn, timeline)[0]['pass_check'])
 
+    def test_a_held_edge_the_committed_timeline_lost_fails_the_response_pin(self):
+        press = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1, changes=[dict(action='L_LEFT', held=True)])
+        release = dict(_line=2, tick=30, wall_ms=433, delay=3, actor=actor(), last_presented_frame=20, changes=[dict(action='L_LEFT', held=False)])
+        def committed(tick, wall, vx):
+            return dict(type='committed', tick=tick, wall_ms=wall, actors=[actor(vx=vx)])
+        # Both edges held twenty ticks and more: the press answers from tick 13, the release from tick 33.
+        timeline = ([committed(12, 90, 0)] + [committed(13 + n, 150 + 17 * n, -1 - n) for n in range(19)] +
+                    [committed(33 + n, 490 + 17 * n, -19 + 4 * (n + 1)) for n in range(4)])
+        drawn = ([frame(1, 95, actor(), tick=8)] + [frame(2 + n, 115 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(19)] +
+                 [frame(21 + n, 450 + 17 * n, actor(vx=-19 + 4 * (n + 1)), tick=29 + n) for n in range(4)])
+        rows = report.previewed_responses([press, release], drawn, timeline)
+        self.assertEqual([row['required'] for row in rows], [True, True])
+        # The committed records of the release are lost: it is not judged, and the pin fails naming it.
+        lost = report.previewed_responses([press, release], drawn, [record for record in timeline if record['tick'] < 30])
+        self.assertEqual([row['judged'] for row in lost], [True, False])
+        value, passed = report.response_verdict(lost)
+        self.assertFalse(passed)
+        self.assertEqual(value['unjudged_required'], ['L_LEFT-@30'])
+        # A flick shorter than three ticks may stay unjudged.
+        flick = [dict(row, required=False) if not row['judged'] else row for row in lost]
+        self.assertTrue(report.response_verdict(flick)[1])
+
     def test_a_one_frame_wobble_is_not_a_response(self):
         edge = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1,
                     changes=[dict(action='L_LEFT', held=True)])
