@@ -685,7 +685,7 @@ POSITION = re.compile(r'^(\d+) actor uid=(\d+) .*? pos=(\S+),(\S+) prev=')
 AUTO_DELAY = re.compile(r'^\[net-match\] auto input delay: peer (\d+) rtt (\d+)ms -> (\d+) frames \(manual floor (\d+)\)$')
 
 
-def remote_commands(path, local_peer, first_tick=1, last_tick=TICKS):
+def remote_commands(path, local_peer, first_tick=1, last_tick=TICKS, effective_start=None):
     commands = defaultdict(list)
     if not path.is_file():
         return commands, False
@@ -700,7 +700,7 @@ def remote_commands(path, local_peer, first_tick=1, last_tick=TICKS):
     launch = json.loads(launch_path.read_text(encoding='utf-8-sig'))
     verify = json.loads(verify_path.read_text(encoding='utf-8-sig'))
     complete = (launch.get('exit_code') == 0 and launch.get('evidence_complete') is True and not launch.get('timed_out')
-                and verify.get('ok') is True and verify.get('first_frame') == first_tick and verify.get('last_frame', 0) >= last_tick)
+                and verify.get('ok') is True and verify.get('first_frame') in {first_tick, effective_start} and verify.get('last_frame', 0) >= last_tick)
     return commands, complete
 
 
@@ -738,7 +738,7 @@ def canonical_positions(path, wanted, first_tick=1, last_tick=TICKS):
     return actors
 
 
-def corrections(previews, committed, canonical_path, command_path, local_peer, first_tick=1, last_tick=TICKS):
+def corrections(previews, committed, canonical_path, command_path, local_peer, first_tick=1, last_tick=TICKS, effective_start=None):
     forecasts = {}
     for row in previews:
         key = (row['target_tick'], row['actor']['uid'])
@@ -747,7 +747,7 @@ def corrections(previews, committed, canonical_path, command_path, local_peer, f
     canonical = canonical_positions(canonical_path, forecasts, first_tick, last_tick)
     candidate_duplicate = getattr(canonical_positions, 'last_duplicate', None)
     corrections.last_duplicate = candidate_duplicate if isinstance(candidate_duplicate, dict) else None
-    commands, commands_complete = remote_commands(command_path, local_peer, first_tick, last_tick)
+    commands, commands_complete = remote_commands(command_path, local_peer, first_tick, last_tick, effective_start)
     result, missing = [], []
     for (tick, uid), forecast in sorted(forecasts.items()):
         if not first_tick <= tick <= last_tick:
@@ -878,7 +878,10 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     controller = run / f'{peer}_controller.jsonl'
     canonical_dump = run / f'{peer}_trace.json.simdump.txt'
     command_log = run / 'replay-inspect/stdout.log'
-    correction_rows, correction_missing, commands_complete = corrections(previews, committed, canonical_dump, command_log, frames[-1]['peer'], first_tick, ticks)
+    # A recording starts at the round's effective start: the frames before it carry nobody's input.
+    started = re.search(r'effective_start=(\d+)', (run / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace')) if (run / peer / 'stdout.log').is_file() else None
+    correction_rows, correction_missing, commands_complete = corrections(previews, committed, canonical_dump, command_log, frames[-1]['peer'], first_tick, ticks,
+                                                                         int(started[1]) if started else None)
     duplicate_actor = getattr(corrections, 'last_duplicate', None)
     firing = firing_records(inputs, previews, frames, run / peer / 'stdout.log', committed)
     paths = {name: destination / (name + '.jsonl') for name in ('latencies', 'warps', 'corrections', 'correction-missing', 'firing')}

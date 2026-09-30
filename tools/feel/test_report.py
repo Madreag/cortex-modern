@@ -510,6 +510,19 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result['audio_ms_upper'], 10)
         self.assertFalse(result['once'])
 
+    def test_a_recording_from_the_rounds_effective_start_is_complete(self):
+        # Every F4 lag arm's replay starts at the effective start (28 at 100 ms): the frames before it carry no input.
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'replay-inspect').mkdir()
+            (root / 'replay-inspect/stdout.log').write_text('', encoding='utf-8')
+            (root / 'replay-inspect/launch.json').write_text(json.dumps(dict(exit_code=0, evidence_complete=True, timed_out=False)), encoding='utf-8')
+            (root / 'replay-report.json').write_text(json.dumps(dict(ok=True, first_frame=28, last_frame=1201)), encoding='utf-8')
+            self.assertFalse(report.remote_commands(root / 'replay-inspect/stdout.log', 1, 1, 1200)[1])
+            self.assertTrue(report.remote_commands(root / 'replay-inspect/stdout.log', 1, 1, 1200, 28)[1])
+            self.assertFalse(report.remote_commands(root / 'replay-inspect/stdout.log', 1, 1, 1200, 27)[1])
+
     def test_the_final_tick_is_not_an_expected_capture(self):
         # Every F4 arm and the single-player baseline saved 19 captures, 60-1140: tick 1200 ends the round and is never presented.
         expected = list(report.default_capture_ticks(1200))
