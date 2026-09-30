@@ -966,8 +966,9 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
                     and (auto_picks or single_player)
                     and not correction_missing and not capture_missing and (commands_complete or single_player))
     pins = {}
-    pins['canonical_duplicate_actor'] = pin(duplicate_actor, 'no duplicate committed actor in the simdump', duplicate_actor is None,
-                                            [canonical_dump])
+    # No duplicate is a reading too, once the dump gave every forecast its committed actor.
+    pins['canonical_duplicate_actor'] = pin(duplicate_actor or dict(count=0), 'no duplicate committed actor in the simdump', duplicate_actor is None,
+                                            [canonical_dump], available=bool(correction_rows) and not correction_missing)
     pins['wall_tps'] = pin(pace_tps, '>= 59.5', pace_tps is not None and pace_tps >= 59.5, [raw])
     pins['sim_ms_per_tick'] = pin(sim_cost, '<= 8 ms', sim_cost is not None and sim_cost <= 8, [raw])
     pins['auto_delay'] = pin(delays, 'initial picks cover ceil(measured RTT / measured sim tick) + 1; final draw names the committed live delay',
