@@ -27,7 +27,7 @@ void TimerMan::Clear() {
 	m_LastSimUpdateStart = 0;
 	m_SimFrameBudgetSpent = false;
 	m_SimHold = 0;
-	m_PaceScale = 1.0F;
+	m_OwedTicksKept = 0;
 	m_SimSpeed = 1.0F;
 	m_TimeScale = 1.0F;
 	m_SimPaused = false;
@@ -77,7 +77,6 @@ void TimerMan::ResetTime() {
 	m_RealTimeTicks = 0;
 	m_SimAccumulator = 0;
 	m_SimHold = 0;
-	m_PaceScale = 1.0F;
 	m_SimTimeTicks = 0;
 	m_SimUpdateCount = 0;
 	m_SimUpdatesSinceDrawn = -1;
@@ -140,7 +139,7 @@ void TimerMan::Update() {
 
 	// If not paused, add the new time difference to the sim accumulator
 	if (!m_SimPaused) {
-		long long accrued = static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale * m_PaceScale);
+		long long accrued = static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale);
 		// A held clock lets that much real time go by first.
 		const long long held = std::min(m_SimHold, accrued);
 		m_SimHold -= held;
@@ -154,7 +153,8 @@ void TimerMan::Update() {
 	float maxPossibleSimSpeed = GetDeltaTimeMS() / std::max(g_PerformanceMan.GetMSPSUAverage(), std::numeric_limits<float>::epsilon());
 
 	// Make sure we don't get runaway behind schedule
-	const long long trimCap = m_DeltaTime + static_cast<long long>(m_DeltaTime * maxPossibleSimSpeed);
+	// A lockstep machine keeps what it owes up to its floor, even when a spike (a capture, a busy core) inflates the estimate.
+	const long long trimCap = std::max(m_DeltaTime + static_cast<long long>(m_DeltaTime * maxPossibleSimSpeed), m_DeltaTime * (1 + m_OwedTicksKept));
 	if (m_SimAccumulator > trimCap) {
 		m_PaceTrimmedTicks += m_SimAccumulator - trimCap;
 		m_SimAccumulator = trimCap;
