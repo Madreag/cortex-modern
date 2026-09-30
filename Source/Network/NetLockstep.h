@@ -650,6 +650,9 @@ namespace RTE {
 		double localComputeDebtMs = 0;
 		double localProductionLateMs = 0;
 		bool localMachineSlow = false;
+		double localCapacityTps = 0; //!< The ticks a second this machine's own recent ticks' median cost allows.
+		double localBehindTicks = 0; //!< How far this machine's own ticks trail the round's clock.
+		double localRunwayTicks = 0; //!< How far this machine's newest queued input runs ahead of the host's tick.
 		std::optional<uint32_t> measuredMissingFrameBase;
 		std::optional<uint32_t> measuredBlockingWaitBase;
 		uint32_t delayChangesProposed = 0;
@@ -1138,6 +1141,10 @@ namespace RTE {
 		/// Host: the current capture park covers the frame or may still grow to cover it.
 		bool CaptureParkMayReach(uint64_t frame) const;
 		bool IsLocalSeatHeld() const { NET_PLANE_CHECK(); return m_LocalSeatHeld; }
+
+		/// Whether this machine judged itself unable to hold the round's rate and went quiet for the host's bound to hold its seat.
+		/// @return Whether it did.
+		bool IsSelfHeld() const { NET_PLANE_CHECK(); return m_SelfHeld; }
 		/// The peer whose AI drives the seats the AI holds at a frame: the host, or while the host's own seat is held, the first playing peer of its succession.
 		uint8_t AiAuthorityAt(uint64_t frame) const;
 		/// Who produces an actor's frames that its owner would: the owner, unless the owner is a host whose own seat the AI holds.
@@ -1596,6 +1603,10 @@ namespace RTE {
 		/// @return The PeerHeld reason.
 		std::string LocalHoldReason() const;
 
+		/// Judges this machine against the round: behind it past the Slow player bound with its own capacity under the round's
+		/// rate, it goes quiet.
+		void JudgeOwnPace(uint64_t producedFrame, double localElapsedMs);
+
 		/// Whether a seat still feeding the round is a slow machine: this machine waited on it on 45 of the last 60 frames and its ticks
 		/// arrived under the round's rate over that second - no delay re-size covers that. Notes this frame as waited on it.
 		/// @param peerId The seat.
@@ -1676,6 +1687,9 @@ namespace RTE {
 		uint64_t m_LastTimingStatusMs = UINT64_MAX;
 		uint64_t m_TimingNowMs = 0;
 		std::optional<uint64_t> m_ProductionBaseFrame;
+		static constexpr size_t c_OwnPaceTicks = 15; //!< The ticks whose cost this machine judges its own pace on.
+		std::deque<double> m_TickCosts; //!< This machine's own recent ticks' cost, in ms.
+		bool m_SelfHeld = false; //!< This machine judged itself unable to hold the round's rate: its seat sends nothing more.
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
