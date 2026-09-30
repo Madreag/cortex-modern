@@ -55,7 +55,7 @@ class AcceptanceTests(unittest.TestCase):
                         fullstate_every=600, faults=[] if scenario == 'match' else [dict(id='spike')], capture_rows_pending=[])
         checks = dict.fromkeys(cross_report.CORE_CHECKS, True)
         checks.update(shared_fullstate=True, bounded_recovery=True, faults_applied=True,
-                      native_fault_effects=True, all_incarnation_exits=True, no_engine_findings=True)
+                      native_fault_effects=True, all_incarnation_exits=True, no_engine_findings=True, box_pace=True)
         return manifest, checks
 
     def test_f10_capture_induced_hold_is_not_success(self):
@@ -86,6 +86,12 @@ class AcceptanceTests(unittest.TestCase):
             checks['bounded_recovery'] = False
             verdict = cross_report.judge_attempt(manifest, checks, {}, [], [])
             self.assertFalse(verdict.get('v1_passed', all(checks.values())))
+
+    def test_f12_a_box_below_the_rounds_rate_fails_v1(self):
+        for scenario in ('match', 'soak'):
+            manifest, checks = self.cross_case(scenario)
+            checks['box_pace'] = False
+            self.assertFalse(cross_report.judge_attempt(manifest, checks, {}, [], []).get('v1_passed', True))
 
     def test_f13_empty_dump_is_not_identical(self):
         with tempfile.TemporaryDirectory() as temporary:
