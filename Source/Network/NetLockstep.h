@@ -1701,6 +1701,7 @@ namespace RTE {
 		uint64_t m_TimingNowMs = 0;
 		std::optional<uint64_t> m_ProductionBaseFrame;
 		static constexpr size_t c_OwnPaceTicks = 15; //!< The ticks whose cost this machine judges its own pace on.
+		uint64_t m_JudgeAfterFrame = 0; //!< A machine back from its own hold judges itself again from this frame.
 		std::deque<double> m_TickCosts; //!< This machine's own recent ticks' cost, in ms.
 		std::deque<std::array<double, 3>> m_OthersTickSamples; //!< When (us), at which tick the fastest other machine stood, and this machine's own tick.
 		bool m_SelfHeld = false; //!< This machine judged itself unable to hold the round's rate: its seat sends nothing more.

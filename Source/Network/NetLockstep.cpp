@@ -4389,6 +4389,9 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		// The host is the round's hub: its relay and its commits are what every other peer waits on.
 		if (m_State != NetLockstepState::Running || !m_Transport || m_Playback || IsMigrating() || m_Config.localPeerId != GetHostPeerId()) return false;
+		// A host whose own seat the AI holds commits and sends the others its frames on the plane's clock, at the round's cadence,
+		// never when its slow simulation gets round to them.
+		if (IsOwnHostSeatHeld()) return true;
 		const uint64_t simTickedMs = m_SimTickedMs.load(std::memory_order_acquire);
 		return simTickedMs != 0 && nowMs >= simTickedMs && static_cast<double>(nowMs - simTickedMs) >= std::max(1.0, m_Config.simTickMs);
 	}
@@ -4795,6 +4798,7 @@ namespace RTE {
 		m_TickCosts.clear();
 		m_OthersTickSamples.clear();
 		m_SelfHeld = false;
+		m_JudgeAfterFrame = 0;
 		m_TimingDecisions.clear();
 		m_SettledTimings.clear();
 		m_PreStartTiming.clear();
@@ -6403,7 +6407,13 @@ namespace RTE {
 		// A slow machine goes quiet while the others are still two ticks from waiting on it, and says so: the host holds its seat from
 		// the frame after its last at once. A slow host holds its own seat through its plane the same way and catches up in place; a
 		// returning seat is judged after its return.
-		if (m_SelfHeld || !UsesBoundedWait() || IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) || IsOwnHostSeatHeld() ||
+		// Test lever: the judgement's inputs every third tick.
+		static const bool s_TracePace = std::getenv("CCCP_TEST_OWN_PACE_TRACE") != nullptr;
+		if (s_TracePace && producedFrame % 3 == 0)
+			DiagnosticLine() << "[net-lockstep] own pace at frame " << producedFrame << ": capacity " << m_Stats.localCapacityTps << " others " << m_Stats.localOthersTps
+			                 << " runway " << m_Stats.localRunwayTicks << " falling " << m_Stats.localRunwayFallTps << " tolerance " << tolerance << std::endl;
+		// A machine back from its own hold is judged again only a second later.
+		if (m_SelfHeld || !UsesBoundedWait() || IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) || IsOwnHostSeatHeld() || producedFrame < m_JudgeAfterFrame ||
 		    m_Stats.localRunwayTicks > 2.0 || m_Stats.localCostTps <= tolerance || m_Stats.localRunwayFallTps <= tolerance) return;
 		m_SelfHeld = true;
 		DiagnosticLine() << "[net-lockstep] this machine cannot keep up at frame " << producedFrame << ": " << m_Stats.localCapacityTps << " ticks/s against the others' "
@@ -9249,9 +9259,10 @@ namespace RTE {
 		const auto incarnation = m_Config.peerIncarnations.find(local);
 		timing.seatIncarnations[local - 1] = incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second;
 		for (uint8_t peer: m_RemotePeerIds) if (!IsPeerGoneAtFrame(peer, applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
-		// A host that held itself for its machine is judged again from here.
+		// A host that held itself for its machine is judged again a second after its seat is back.
 		m_SelfHeld = false;
 		m_OthersTickSamples.clear();
+		m_JudgeAfterFrame = applyFrame + static_cast<uint64_t>(std::ceil(1000.0 / m_Config.simTickMs));
 		DiagnosticLine() << "[net-lockstep] own seat back at frame " << applyFrame << " delay=" << delay << " applied_through=" << *m_LastCompletedSimulationTick
 		          << " next_frame=" << m_Stats.nextFrame << " held_from=" << m_AiHeldSeats.at(local) << std::endl;
 		m_TimingDecisions[timing.revision] = {timing, 0, true, nowMs};
