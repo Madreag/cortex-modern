@@ -28,6 +28,7 @@ void TimerMan::Clear() {
 	m_SimFrameBudgetSpent = false;
 	m_SimHold = 0;
 	m_OwedTicksKept = 0;
+	m_OwedCapTickCostMS = 0;
 	m_SimSpeed = 1.0F;
 	m_TimeScale = 1.0F;
 	m_SimPaused = false;
@@ -154,7 +155,8 @@ void TimerMan::Update() {
 
 	// Make sure we don't get runaway behind schedule
 	// A lockstep machine keeps what it owes up to its floor, even when a spike (a capture, a busy core) inflates the estimate.
-	const long long trimCap = std::max(m_DeltaTime + static_cast<long long>(m_DeltaTime * maxPossibleSimSpeed), m_DeltaTime * (1 + m_OwedTicksKept));
+	const float capSimSpeed = m_OwedCapTickCostMS > 0 ? GetDeltaTimeMS() / m_OwedCapTickCostMS : maxPossibleSimSpeed;
+	const long long trimCap = std::max(m_DeltaTime + static_cast<long long>(m_DeltaTime * capSimSpeed), m_DeltaTime * (1 + m_OwedTicksKept));
 	if (m_SimAccumulator > trimCap) {
 		m_PaceTrimmedTicks += m_SimAccumulator - trimCap;
 		m_SimAccumulator = trimCap;

@@ -138,6 +138,11 @@ namespace RTE {
 		/// @param ticks The owed ticks kept, 0 for the sim's own estimate alone.
 		void SetOwedTicksKept(int ticks) { m_OwedTicksKept = ticks; }
 
+		/// Sets the cost a tick is taken to have when capping what this clock owes: a lockstep round passes the median of its recent
+		/// ticks, which one spike (a capture, a first-tick load) does not move.
+		/// @param ms The tick cost in milliseconds, 0 for the sim's own estimate.
+		void SetOwedCapTickCostMS(float ms) { m_OwedCapTickCostMS = ms; }
+
 		void HoldSimTicks(int ticks) {
 			m_SimAccumulator = std::min(m_SimAccumulator, m_DeltaTime);
 			m_SimHold += static_cast<long long>(std::max(0, ticks)) * m_DeltaTime;
@@ -288,6 +293,7 @@ namespace RTE {
 		bool m_SimFrameBudgetSpent; //!< The frame's budget ended its sim updates at the drawn one.
 		long long m_SimHold; //!< Real time still to go by before the sim accrues time again.
 		int m_OwedTicksKept; //!< Owed ticks kept past the one due, whatever the sim's cost estimate says it can run.
+		float m_OwedCapTickCostMS; //!< The tick cost that caps what this clock owes, 0 for the sim's own estimate.
 
 		float m_SimSpeed; //!< The simulation speed over real time.
 		float m_TimeScale; //!< The relationship between the real world actual time and the simulation time. A value of 2.0 means simulation runs twice as fast as normal, as perceived by a player.
