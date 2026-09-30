@@ -225,18 +225,22 @@ namespace RTE {
 		return ticketPath + ".left";
 	}
 
-	static void WriteLeftMarker(const std::string& ticketPath, const NetH4TicketRecord& record) {
+	void NetWriteLeftMarker(const std::string& ticketPath, const std::string& sessionId) {
+		if (sessionId.empty()) return;
 		std::ofstream out(LeftMarkerPath(ticketPath), std::ios::trunc);
-		out << nlohmann::json{{"session", record.directorySessionId}, {"address", record.hostAddress}}.dump();
+		out << nlohmann::json{{"session", sessionId}}.dump();
 	}
 
-	static bool LeftMarkerNames(const std::string& ticketPath, const std::string& sessionId, const std::string& address) {
+	// Only the session it names: a later match at the same address is another session, and answers for itself.
+	bool NetLeftMarkerNames(const std::string& ticketPath, const std::string& sessionId) {
 		std::ifstream in(LeftMarkerPath(ticketPath));
 		const nlohmann::json marker = nlohmann::json::parse(in, nullptr, false);
-		if (!marker.is_object()) return false;
-		const std::string session = marker.value("session", "");
-		const std::string host = marker.value("address", "");
-		return (!sessionId.empty() && session == sessionId) || (!address.empty() && host == address);
+		return marker.is_object() && !sessionId.empty() && marker.value("session", "") == sessionId;
+	}
+
+	void NetClearLeftMarker(const std::string& ticketPath) {
+		std::error_code code;
+		std::filesystem::remove(LeftMarkerPath(ticketPath), code);
 	}
 
 	bool NetMatchService::s_AdmissionEnabled = true;
@@ -2071,7 +2075,7 @@ static std::string ResyncSaveName() {
 		System::PrintDiagnosticLine(std::string("[net-reconnect] leave: ") + NetReconnectClientStateName(m_ReconnectClient.GetState()) +
 		                            (m_TicketStore.HasRecord() ? " (ticket kept)" : " (ticket cleared)"));
 		if (m_LeavingRecordLoaded && m_ReconnectClient.GetState() == NetH4ClientState::Left && !m_TicketStore.HasRecord()) {
-			WriteLeftMarker(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath, m_LeavingRecord);
+			NetWriteLeftMarker(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath, m_LeavingRecord.directorySessionId);
 		}
 		m_LeavingRecordLoaded = false;
 	}
@@ -8940,7 +8944,11 @@ static std::string ResyncSaveName() {
 		}
 		browse.StopBrowsing();
 		if (!why.empty()) {
-			if (why != "no such session" && LeftMarkerNames(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath, request.sessionId, request.address)) {
+			const std::string ticketPath = s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath;
+			if (why == "no such session") {
+				// The session the marker names is gone from the directory: nothing is left to tell.
+				if (NetLeftMarkerNames(ticketPath, request.sessionId)) NetClearLeftMarker(ticketPath);
+			} else if (NetLeftMarkerNames(ticketPath, request.sessionId)) {
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_LeftRowRefused = true;
 			}
@@ -9476,6 +9484,8 @@ static std::string ResyncSaveName() {
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();
+				// A join that landed has nothing left to be told.
+				if (!request.host) NetClearLeftMarker(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 			} else {
 				// Keep the objects on failure too — the report needs the session's reject record.
 				m_Mux = std::move(mux);
@@ -9516,6 +9526,9 @@ static std::string ResyncSaveName() {
 				// told this player it left its running match is still there.
 				const bool hostSaidItLeft = m_Session && m_Session->HasReject() && m_Session->GetRejectReason() == NetRejectReason::SeatReleased;
 				const bool toldItLeft = hostSaidItLeft || m_LeftRowRefused;
+				// Any other answer from the host is this match's own: the marker has nothing more to say.
+				if (!request.host && m_Session && m_Session->HasReject() && !hostSaidItLeft)
+					NetClearLeftMarker(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 				// A session that never heard the host never reached it: its setup error is the answer, not a departure.
 				const bool reachedHost = m_Session && m_Session->GetStats().receivedMessages > 0;
 				const bool lostHost = !request.host && !toldItLeft &&

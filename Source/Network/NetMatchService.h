@@ -242,6 +242,13 @@ namespace RTE {
 		}
 	};
 
+	/// Keeps the directory session a clean leave of a running match left, beside the ticket that leave clears.
+	void NetWriteLeftMarker(const std::string& ticketPath, const std::string& sessionId);
+	/// Whether the kept marker names this session; only its own session, never another at the same address.
+	bool NetLeftMarkerNames(const std::string& ticketPath, const std::string& sessionId);
+	/// Forgets the kept marker.
+	void NetClearLeftMarker(const std::string& ticketPath);
+
 	inline NetMatchServiceRequest TicketRejoinRequestFromRecord(const NetH4TicketRecord& record, const std::string& playerName) {
 		NetMatchServiceRequest request;
 		request.host = false;
