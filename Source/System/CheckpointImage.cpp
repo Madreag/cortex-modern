@@ -4,6 +4,7 @@
 #include "ContentFile.h"
 #include "Writer.h"
 #include "Scene.h"
+#include "System.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
 #include "Atom.h"
@@ -408,26 +409,27 @@ void CheckpointCow::PublishLog(const CheckpointImage& image, int64_t workerUs) c
 		rootsRewritten = image.graphRootsRewritten;
 	}
 	p99 = Percentile99(std::move(samples));
-	std::cout << std::format("[autosave] tick={} freeze_us={} worker_us={} image_bytes={} dirty_ratio={:.6f} p99_freeze_us={}\n",
-	                         tick, freezeUs, workerUs, imageBytes, dirtyRatio, p99);
+	// The saver thread writes these: each line goes out whole under the engine's print lock.
+	System::PrintDiagnosticLine(std::format("[autosave] tick={} freeze_us={} worker_us={} image_bytes={} dirty_ratio={:.6f} p99_freeze_us={}",
+	                                        tick, freezeUs, workerUs, imageBytes, dirtyRatio, p99));
 	// Where the freeze went, and how much of it the shadows and the graph index saved.
-	std::cout << std::format("[autosave] tick={} layers_us={} activity_us={} graph_us={} scene_us={} structure_us={} scene_runtime_us={} globals_us={}\n",
-	                         tick, records[0], records[1], records[2], records[3], records[4], records[5], records[6]);
-	std::cout << std::format("[autosave] tick={} shadows_reused={} shadows_captured={} graph_roots={} graph_tables={} graph_dirty_roots={} graph_dirty_tables={} graph_unknown_table={} graph_note_us={} graph_reused={} paused_writes={}\n",
-	                         tick, reused, captured, graph.roots, graph.tables, before.dirtyRoots, before.dirtyTables,
-	                         before.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0, LuaCheckpointPausedWrites());
+	System::PrintDiagnosticLine(std::format("[autosave] tick={} layers_us={} activity_us={} graph_us={} scene_us={} structure_us={} scene_runtime_us={} globals_us={}",
+	                                        tick, records[0], records[1], records[2], records[3], records[4], records[5], records[6]));
+	System::PrintDiagnosticLine(std::format("[autosave] tick={} shadows_reused={} shadows_captured={} graph_roots={} graph_tables={} graph_dirty_roots={} graph_dirty_tables={} graph_unknown_table={} graph_note_us={} graph_reused={} paused_writes={}",
+	                                        tick, reused, captured, graph.roots, graph.tables, before.dirtyRoots, before.dirtyTables,
+	                                        before.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0, LuaCheckpointPausedWrites()));
 	// The walk is the freeze's share and the text the worker's; the counter is the archive's numbering.
 	// A root barred from reuse reached an upvalue cell or a coroutine, which no barrier watches.
-	std::cout << std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={} graph_values={} graph_dirty_values={} graph_uncacheable_roots={}\n",
-	                         tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial,
-	                         graph.values, before.dirtyValues, graph.uncacheableRoots) << std::flush;
+	System::PrintDiagnosticLine(std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={} graph_values={} graph_dirty_values={} graph_uncacheable_roots={}",
+	                                        tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial,
+	                                        graph.values, before.dirtyValues, graph.uncacheableRoots));
 	if (!luaReused) {
 		for (const auto& part: graph.walkParts) {
-			std::cout << std::format("[autosave] tick={} graph_vm={} graph_part={} graph_root={} graph_part_us={} graph_chunk_reused={} graph_unwatched=",
-			                         tick, part.state, part.part, part.root, part.elapsedUs, part.reused ? 1 : 0)
-			          << std::quoted(part.unwatched) << '\n';
+			std::ostringstream unwatched;
+			unwatched << std::quoted(part.unwatched);
+			System::PrintDiagnosticLine(std::format("[autosave] tick={} graph_vm={} graph_part={} graph_root={} graph_part_us={} graph_chunk_reused={} graph_unwatched={}",
+			                                        tick, part.state, part.part, part.root, part.elapsedUs, part.reused ? 1 : 0, unwatched.str()));
 		}
-		std::cout << std::flush;
 	}
 }
 

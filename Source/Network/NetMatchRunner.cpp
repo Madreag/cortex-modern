@@ -1,4 +1,5 @@
 #include "NetMatchRunner.h"
+#include "DiagnosticLine.h"
 
 #include "GnsTransport.h"
 #include "NetIdentity.h"
@@ -103,14 +104,14 @@ namespace RTE {
 				    estimate.RequiredFrames(tickMs, floorDelay) + margin, NetMatchConfigUtil::c_MaxInputDelayFrames));
 				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);
 				slowestRemoteDelay = std::max(slowestRemoteDelay, neededDelay);
-				std::cout << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs
+				DiagnosticLine() << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs
 				          << "ms -> " << delays[peerId - 1] << " frames (manual floor " << floorDelay << ")" << std::endl;
 			}
 			// The host's sender window covers the slowest link so its frames do not feed a peer's wait back into its stream.
 			const size_t hostIndex = m_MatchConfig.hostPeerId > 0 && m_MatchConfig.hostPeerId <= m_MatchConfig.peerCount ? m_MatchConfig.hostPeerId - 1 : 0;
 			if (delays[hostIndex] < slowestRemoteDelay) {
 				delays[hostIndex] = slowestRemoteDelay;
-				std::cout << "[net-match] auto input delay: host sender window " << delays[hostIndex]
+				DiagnosticLine() << "[net-match] auto input delay: host sender window " << delays[hostIndex]
 				          << " frames (slowest remote link)" << std::endl;
 			}
 			m_MatchConfig.peerInputDelayFrames = std::move(delays);
@@ -626,12 +627,12 @@ namespace RTE {
 					m_Config.matchConfig = stagedOptions;
 					m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
 					SyncSeatingWaitToConfig();
-					std::cout << "[net-match] host options: config revision " << m_MatchConfig.configRevision
+					DiagnosticLine() << "[net-match] host options: config revision " << m_MatchConfig.configRevision
 					          << " published to every peer" << std::endl;
 				} else {
 					// A refused draft fails the host's transaction, never the round: the lobby keeps
 					// the revision its peers have already acknowledged.
-					std::cout << "[net-match] host options refused: " << republishError << std::endl;
+					DiagnosticLine() << "[net-match] host options refused: " << republishError << std::endl;
 				}
 			}
 			const auto now = std::chrono::steady_clock::now();

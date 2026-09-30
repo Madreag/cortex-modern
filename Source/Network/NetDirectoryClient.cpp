@@ -1,6 +1,7 @@
 #include "NetDirectoryClient.h"
 
 #include "NetHttpClient.h"
+#include "System.h"
 
 #include "nlohmann/json.hpp"
 
@@ -359,14 +360,14 @@ namespace RTE {
 		}
 		// Disabled means no URL was ever configured; the directory must be silent there.
 		if (state != State::Disabled) {
-			std::cout << "[net-directory] state: " << StateName(m_State) << " -> " << StateName(state) << std::endl;
+			System::PrintDiagnosticLine(std::string("[net-directory] state: ") + StateName(m_State) + " -> " + StateName(state));
 		}
 		m_State = state;
 	}
 
 	void NetDirectoryClient::NoteError(const std::string& error) {
 		m_LastError = error;
-		std::cout << "[net-directory] " << error << std::endl;
+		System::PrintDiagnosticLine("[net-directory] " + error);
 	}
 
 	void NetDirectoryClient::ScheduleRetry(uint64_t nowMs) {
@@ -422,7 +423,7 @@ namespace RTE {
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
 			m_BackoffMs = 0;
-			std::cout << "[net-directory] registered session_id=" << m_SessionId << " heartbeat_s=" << m_HeartbeatS << std::endl;
+			System::PrintDiagnosticLine("[net-directory] registered session_id=" + m_SessionId + " heartbeat_s=" + std::to_string(m_HeartbeatS));
 			SetState(State::Registered);
 			if (!m_Listed) {
 				// The unlist beat the response: delete the row we just created.

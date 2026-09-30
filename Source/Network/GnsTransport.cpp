@@ -1,4 +1,5 @@
 #include "GnsTransport.h"
+#include "DiagnosticLine.h"
 #include "SettingsMan.h"
 #include "System.h"
 
@@ -427,7 +428,7 @@ namespace RTE {
 			// GNS reports nothing for a close we made ourselves, and forgetting the handle means its own
 			// later callback finds no peer either. A peer leaving must look the same to us however it
 			// went, or state keyed on the connection - a held seat, most of all - is never cleaned up.
-			std::cout << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
+			DiagnosticLine() << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
 		}
 
@@ -601,8 +602,8 @@ namespace RTE {
 			const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
 			const bool allowed = GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
 			if (m_RouteLogged.insert(connection).second) {
-				std::cout << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
-				std::cout << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection << std::endl;
+				DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
+				DiagnosticLine() << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection << std::endl;
 			}
 			return allowed;
 		}
@@ -725,7 +726,7 @@ namespace RTE {
 
 			const NetPeerId peerId = peerIt->second;
 			ForgetConnection(connection);
-			std::cout << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
+			DiagnosticLine() << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
 		}
 
@@ -984,7 +985,7 @@ namespace RTE {
 				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnUserList.c_str()) &&
 				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
 			}
-			if (renewed > 0) std::cout << "[net-relay] relay login renewed on " << renewed << " live connection(s)" << std::endl;
+			if (renewed > 0) DiagnosticLine() << "[net-relay] relay login renewed on " << renewed << " live connection(s)" << std::endl;
 		}
 
 		static std::vector<SteamNetworkingConfigValue_t> P2PConnectionConfigs(const GnsP2PConfig& config) {

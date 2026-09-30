@@ -1,4 +1,5 @@
 #include "NetLobbySession.h"
+#include "DiagnosticLine.h"
 
 #include "NetIdentity.h"
 #include "NetLockstep.h"
@@ -1198,7 +1199,7 @@ namespace RTE {
 			line << " ready_sent=" << (m_ReadySent ? 1 : 0) << " local_ready=" << (m_LocalReady ? 1 : 0)
 			     << " seat_assigned=" << (m_SeatAssigned ? 1 : 0) << " starts_seen=" << m_Stats.startPacketsReceived;
 		}
-		std::cout << line.str() << std::endl;
+		DiagnosticLine() << line.str() << std::endl;
 	}
 
 	void NetLobbySession::SendStartIfReady() {

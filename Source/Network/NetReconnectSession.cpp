@@ -1,4 +1,5 @@
 #include "NetReconnectSession.h"
+#include "DiagnosticLine.h"
 #include "NetA7Journal.h"
 
 #include "System/FaultInjection.h"
@@ -1127,7 +1128,7 @@ namespace RTE {
 			return true;
 		}
 		if (bound && m_RemovedParticipants.contains(id)) {
-			std::cout << "[net-reconnect] admission refused reason=ParticipantBanned action=Kick peer=" << connection << std::endl;
+			DiagnosticLine() << "[net-reconnect] admission refused reason=ParticipantBanned action=Kick peer=" << connection << std::endl;
 			Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "The host removed you from this session", "participant_removed", "", ""});
 			++m_Stats.identityRejections;
 			return true;
@@ -1135,7 +1136,7 @@ namespace RTE {
 		if (m_BanStore == nullptr || !bound || !m_BanStore->IsBanned(id, m_HostSessionId)) {
 			return false;
 		}
-		std::cout << "[net-reconnect] admission refused reason=ParticipantBanned peer=" << connection << std::endl;
+		DiagnosticLine() << "[net-reconnect] admission refused reason=ParticipantBanned peer=" << connection << std::endl;
 		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "The host banned you from this session", "participant_identity", "", ""});
 		++m_Stats.identityRejections;
 		return true;
@@ -1514,7 +1515,7 @@ namespace RTE {
 		applicant.key = key;
 		m_Applicants.push_back(applicant);
 		++m_Stats.applicantsRegistered;
-		std::cout << "[net-reconnect] applicant " << (applicant.displayName.empty() ? "a player" : applicant.displayName)
+		DiagnosticLine() << "[net-reconnect] applicant " << (applicant.displayName.empty() ? "a player" : applicant.displayName)
 		          << " asked for seat " << stableSeat << std::endl;
 		const NetH4ApplicantAck ack{c_NetH4Version, message.txId, stableSeat, static_cast<uint32_t>(c_ProvisionalExpiryMs)};
 		m_TxCache.Store(message.txId, key, ack, nowMs);
@@ -1837,7 +1838,7 @@ namespace RTE {
 		if (NetH4GetFault() == NetH4Fault::CommitDrop) {
 			// The gate's commit-result-lost fault: the transaction is committed and cached, and the
 			// answer is thrown away exactly once. The substitute's own retry has to recover it.
-			std::cout << "[net-h4-fault] commit-drop: dropping the commit result for seat " << seat->seat.stableSeat << std::endl;
+			DiagnosticLine() << "[net-h4-fault] commit-drop: dropping the commit result for seat " << seat->seat.stableSeat << std::endl;
 			NetH4SetFault(NetH4Fault::None);
 		} else {
 			Send(connection, committed);
@@ -2050,7 +2051,7 @@ namespace RTE {
 		}
 		for (const NetH4Denial& denial : m_Admission.ReleaseDueDenials(nowMs)) {
 			++m_Stats.denialsReleased;
-			std::cout << "[net-reconnect] admission refused reason=" << NetH4DenialReasonName(denial.reason) << " connection=" << denial.connection
+			DiagnosticLine() << "[net-reconnect] admission refused reason=" << NetH4DenialReasonName(denial.reason) << " connection=" << denial.connection
 			          << (m_MatchEnded ? " match_ended=1" : "") << std::endl;
 			Send(denial.connection, denial.precise ? denial.payload : NetPayload{NetJoinRejected{NetRejectReason::HostNotAccepting, c_DenialText, "", "", ""}});
 		}
@@ -2523,7 +2524,7 @@ namespace RTE {
 			m_HasPendingRequest = false;
 			if (NetH4GetFault() == NetH4Fault::AckDrop) {
 				// The gate's ack-lost fault: the ticket is persisted and then nothing is ever sent back.
-				std::cout << "[net-h4-fault] ack-drop: holding the substitution ack for seat " << offer->stableSeat << std::endl;
+				DiagnosticLine() << "[net-h4-fault] ack-drop: holding the substitution ack for seat " << offer->stableSeat << std::endl;
 				m_State = NetH4ClientState::Substituting;
 				return true;
 			}
@@ -2555,7 +2556,7 @@ namespace RTE {
 			if (m_HasPendingRequest) {
 				// The gate's delayed-duplicate fault: keep re-presenting the ack the commit answered, so
 				// every retransmit lands on the txId cache instead of on a live transaction.
-				std::cout << "[net-h4-fault] ack-duplicate: re-presenting the committed ack for seat " << committed->stableSeat << std::endl;
+				DiagnosticLine() << "[net-h4-fault] ack-duplicate: re-presenting the committed ack for seat " << committed->stableSeat << std::endl;
 			}
 			const bool a7NewCommit = m_State != NetH4ClientState::Joined || m_Incarnation != committed->incarnation || m_AssignedPeerId != committed->assignedPeerId;
 			m_Incarnation = committed->incarnation;
