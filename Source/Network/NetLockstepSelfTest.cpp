@@ -22326,8 +22326,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	// ahead still gets its lower delay, and a seat with some frames to spare spends them once: the next decrease waits for a
 	// window of arrivals under the delay it got.
 	// A seat whose inputs arrive with a frame of lead is raised to the bound's worth before a spike finds it: a 70 ms stall that held
-	// it at that lead passes with no hold and no wait past the bound, and a machine that cannot keep pace holds itself: the host holds its
-	// quiet seat with no wait past the bound and runs on at its own pace.
+	// it at that lead passes with no hold and no wait past the bound, and a machine that cannot keep pace is held - by the host at its first
+	// wait on the capacity it published, or by itself - with no wait past the bound, and the host runs on at its own pace.
 	// A world member admitted into a seat the AI kept after a release owns it: a later hold of it is reclaimable, not released.
 	bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error) {
 		LoopbackTransport hostT;
@@ -22445,7 +22445,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!spikeCase) {
 				for (const uint64_t until = now + 5000; now < until && !queueFailed && host.IsRunning();) pump();
 			}
-			const bool slowHeld = !spikeCase && holds == 1 && client.IsSelfHeld() && sims[0].tick >= hostTickAtHold + 280;
+			// Held either way it is known first: by the host at its first wait on a seat whose published capacity is slow, or by itself.
+			const bool slowHeld = !spikeCase && holds == 1 && sims[0].tick >= hostTickAtHold + 280;
 			if (queueFailed || !host.IsRunning() || sims[0].longestWaitMs > 50 || extraDelay > 3 ||
 			    (spikeCase ? holds != 0 || !stalled || delay <= start || sims[0].tick < 300 : !slowHeld)) {
 				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " self_held=" + std::to_string(client.IsSelfHeld()) + " stalled=" + std::to_string(stalled) +
