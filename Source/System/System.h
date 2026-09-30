@@ -136,6 +136,10 @@ namespace RTE {
 		/// @param line The complete line, without its terminator.
 		static void PrintFaultLine(const std::string& line);
 
+		/// Writes everything standard output has queued so far before returning, for a caller about to end the process without its exit.
+		/// Returns at once, writing nothing, when another thread is writing or queueing a line right now.
+		static void FlushConsole();
+
 		/// The console echo of an abort or assert, with the same fault-handler discipline.
 		/// @param stringToPrint The message, printed exactly as PrintToCLI prints it.
 		static void PrintFaultToCLI(const std::string& stringToPrint);
