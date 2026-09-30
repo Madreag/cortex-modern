@@ -732,10 +732,13 @@ def previewed_responses(inputs, frames, committed):
                          if other['actor']['uid'] == uid and any(item['action'] == action for item in other['changes'])), default=math.inf)
             later_tick = min((other['tick'] + other.get('delay', 0) for other in inputs[index + 1:]
                               if other['actor']['uid'] == uid and any(item['action'] == action for item in other['changes'])), default=math.inf)
+            # How long the script holds this edge before its next change of the same action: three ticks or more must be judged.
+            held_ticks = min((other['tick'] for other in inputs[index + 1:]
+                              if other['actor']['uid'] == uid and any(item['action'] == action for item in other['changes'])), default=math.inf) - edge['tick']
             before_drawn = [actor for frame, actor in drawn[uid] if frame['present_end_ms'] < edge['wall_ms']]
             before_kept = [actor for record, actor in kept[uid] if record['tick'] < applied]
             row = dict(input_line=edge['_line'], tick=edge['tick'], uid=uid, action=action, held=held, delay=delay, applied_tick=applied,
-                       previewed_ms=None, committed_ms=None, budget_ms=None, judged=False, pass_check=False)
+                       held_ticks=held_ticks, required=held_ticks >= 3, previewed_ms=None, committed_ms=None, budget_ms=None, judged=False, pass_check=False)
             if before_drawn and before_kept:
                 # A drawn frame shows its tick plus the preview's depth: both sides search the same sim frames.
                 seen = sustained_response([(frame, actor) for frame, actor in drawn[uid]
@@ -753,6 +756,19 @@ def previewed_responses(inputs, frames, committed):
                     row['pass_check'] = row['previewed_ms'] is not None and row['previewed_ms'] <= row['budget_ms']
             results.append(row)
     return results
+
+
+def response_verdict(responses):
+    """The input_response pin's value and verdict: every judged edge answers in time, and every edge the script holds for three ticks
+    or longer is judged - only the script's shorter flicks may stay unjudged, so a recording that lost its committed timeline never
+    passes on the edges left."""
+    judged = [row for row in responses if row['judged']]
+    missing = [f"{row['action']}{'+' if row['held'] else '-'}@{row['tick']}" for row in responses if row.get('required') and not row['judged']]
+    value = dict(judged=len(judged), late=sum(not row['pass_check'] for row in judged),
+                 unjudged=len(responses) - len(judged), unjudged_required=missing, never_previewed=sum(row['previewed_ms'] is None for row in judged),
+                 previewed_ms=distribution([row['previewed_ms'] for row in judged if row['previewed_ms'] is not None]),
+                 committed_ms=distribution([row['committed_ms'] for row in judged]))
+    return value, bool(judged) and all(row['pass_check'] for row in judged) and not missing
 
 
 def warp_records(frames):
@@ -1092,16 +1108,12 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
                                 'First submitted render copy whose controller holds the scripted move state or an aim closer to the scripted aim; swap-return boundary.')
     responses = previewed_responses(inputs, frames, committed)
     write_jsonl(destination / 'responses.jsonl', responses)
-    judged = [row for row in responses if row['judged']]
-    response_value = dict(judged=len(judged), late=sum(not row['pass_check'] for row in judged),
-                          unjudged=len(responses) - len(judged), never_previewed=sum(row['previewed_ms'] is None for row in judged),
-                          previewed_ms=distribution([row['previewed_ms'] for row in judged if row['previewed_ms'] is not None]),
-                          committed_ms=distribution([row['committed_ms'] for row in judged]))
+    response_value, response_passed = response_verdict(responses)
     pins['input_response'] = pin(response_value, "each edge's previewed response <= its committed response - the input delay + 1 frame (16.7 ms)",
-                                 bool(judged) and all(row['pass_check'] for row in judged), [raw, destination / 'responses.jsonl'],
+                                 response_passed, [raw, destination / 'responses.jsonl'],
                                  'One detector on both sides against the state before the edge applies: aim closer to the scripted aim, velocity '
-                                 'changed in the requested direction or slowing after a release, holding for three records; an edge the committed '
-                                 'timeline never answers is counted, not judged.')
+                                 'changed in the requested direction or slowing after a release, holding for three records; every edge the script '
+                                 'holds for three ticks or longer must be judged, and only its shorter flicks may be counted, not judged.')
     pins['preview_ms'] = pin(lp_cost, 'ms_total / previews <= 2 ms over the full negotiated delay', lp_cost is not None and lp_cost <= 2, [raw])
     pins['violations'] = pin(max(frame['local_prediction']['violations'] for frame in frames), '= 0 always',
                              all(frame['local_prediction']['violations'] == 0 for frame in frames), [raw])
