@@ -358,6 +358,9 @@ class ReportTests(unittest.TestCase):
                  [frame(21 + n, 450 + 17 * n, actor(vx=-19 + 4 * (n + 1)), tick=29 + n) for n in range(4)])
         rows = report.previewed_responses([press, release], drawn, timeline)
         self.assertEqual([row['required'] for row in rows], [True, True])
+        # The release is held to the script's end: still required, and the row is plain JSON.
+        self.assertEqual([row['held_ticks'] for row in rows], [20, None])
+        json.dumps(rows, allow_nan=False)
         # The committed records of the release are lost: it is not judged, and the pin fails naming it.
         lost = report.previewed_responses([press, release], drawn, [record for record in timeline if record['tick'] < 30])
         self.assertEqual([row['judged'] for row in lost], [True, False])
