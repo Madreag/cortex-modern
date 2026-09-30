@@ -1331,6 +1331,7 @@ namespace RTE {
 		friend bool TestEachSurvivorsRunwayUsesItsOwnLink(std::string* error);
 		friend bool TestAHostInItsReclaimGapJudgesNoSeatLate(std::string* error);
 		friend bool TestAReturnRefusedBeforeItsStartStopsNobody(std::string* error);
+		friend bool TestAReadyFrameKeepsItsLocalInputForThePreview(std::string* error);
 		friend bool TestAReturnRebuildsArrivalSlack(std::string* error);
 		friend bool TestReturnFramesBypassReliableLoss(std::string* error);
 		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);

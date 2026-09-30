@@ -21529,6 +21529,24 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A peer behind the others finds frames ready before it simulates them; the preview still plays its own input for them (g5 F4
+	// client: the fire pressed at 180 for 203 was missing from the preview at 181, so every previewed shot came a delay late).
+	bool TestAReadyFrameKeepsItsLocalInputForThePreview(std::string* error) {
+		NetLockstepCoordinator client;
+		client.m_Config.localPeerId = 2; client.m_Config.peerCount = 2;
+		NetLockstepReadyFrame ready;
+		ready.frame = 203; ready.hasLocalInput = true; ready.localPeerId = 2;
+		ready.localFrames = {MakeFrame(200, 0x5)};
+		client.m_ReadyFrames.push_back(ready);
+		std::vector<ControllerFrame> frames;
+		if (!client.PeekLocalFrames(203, frames) || frames.size() != 1 || frames.front().stateMask != 0x5) {
+			*error = "the preview found no local input for a frame that was ready before it was simulated";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_ready_frame_keeps_its_local_input_for_the_preview" << std::endl;
+		return true;
+	}
+
 	// A returning seat's round that refuses a start while it waits for its own is rebuilt from its catch-up; its refusal is its own
 	// (g5 mp-two-returners-3p: the survivor's first round refused the host's start for a seat back at the same frame, its stop reached
 	// the host and the host held the survivor again once its rebuilt round ran).
@@ -22706,6 +22724,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAPeerAtItsInputHorizonSlidesBack, "a_peer_at_its_input_horizon_slides_back");
 		row(&TestAHostInItsReclaimGapJudgesNoSeatLate, "a_host_in_its_reclaim_gap_judges_no_seat_late");
 		row(&TestAReturnRefusedBeforeItsStartStopsNobody, "a_return_refused_before_its_start_stops_nobody");
+		row(&TestAReadyFrameKeepsItsLocalInputForThePreview, "a_ready_frame_keeps_its_local_input_for_the_preview");
 		row(&TestAHostEndNamesAFrameNoPeerHasPassed, "a_host_end_names_a_frame_no_peer_has_passed");
 		row(&TestAHostEndDoesNotWaitOnASilentPeer, "a_host_end_does_not_wait_on_a_silent_peer");
 		row(&TestAHostEndJudgesNoSeatPastIt, "a_host_end_judges_no_seat_past_it");
