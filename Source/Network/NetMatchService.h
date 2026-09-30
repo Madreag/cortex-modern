@@ -791,6 +791,10 @@ namespace RTE {
 		/// Whether the host refused the last join because its match is already running, which is the
 		/// only case §9b's applicant path exists for.
 		bool WasJoinRefusedByALiveMatch() const;
+		/// Whether the host told the last join that this player left its running world, which takes it back as a new player.
+		bool WasToldItLeftAJoinableMatch() const;
+		/// Whether the host told the last join that this player left its running match.
+		bool WasToldItLeft() const;
 		/// Asks the host for a seat instead of joining one: the same connection the join used, with
 		/// §9b's application in place of the new-join request. The host picks the seat.
 		bool BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error = nullptr);
@@ -1488,6 +1492,8 @@ namespace RTE {
 		static uint16_t s_ApplySeat;
 		static bool s_ApplyOnce; //!< The menu's one-shot application; consumed by the next join's plane.
 		bool m_JoinRefusedByLiveMatch = false; //!< The last join was refused by a running match (§9b).
+		bool m_LeftMatchJoinable = false; //!< The last join was told it left a running world that admits new players.
+		bool m_ToldItLeft = false; //!< The last join was told it left the running match.
 		static bool s_AutoSubstitute;
 		static uint16_t s_AutoSubstituteSeat;
 		static uint64_t s_AutoSubstituteDelayMs;

@@ -23,6 +23,7 @@ namespace RTE {
 		ApplicantBoundReached = 7,
 		SubstitutionSuperseded = 8,
 		SeatReassigned = 9,
+		SeatReleased = 10,
 	};
 
 	const char* NetH4DenialReasonName(NetH4DenialReason reason);

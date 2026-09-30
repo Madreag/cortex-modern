@@ -681,6 +681,20 @@ static bool CrossEffectsChanged(uint64_t& seenGeneration, nlohmann::json& effect
 	return true;
 }
 
+// A return the running match answered with 'you left' ends an announced leave's recovery: the seat was released on purpose.
+static void CrossRecoveryToldItLeft(const std::string& text) {
+	if (!g_MetricsCollector.EventsEnabled()) return;
+	const unsigned incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
+	for (const auto& recovery: s_crossRecoveryCases) {
+		const std::string id = recovery.at("id");
+		if (s_crossRecoveryDone.contains(id) || recovery.value("return_incarnation", 0u) != incarnation || recovery.value("action", "") != "announced-leave-rejoin") continue;
+		g_MetricsCollector.WriteObservation({{"type", "recovery"}, {"id", id}, {"recovery_phase", "told_it_left"}, {"terminal", true},
+		    {"deadline_ms", recovery.at("deadline_ms")}, {"text", text}, {"joinable", g_NetMatchService.WasToldItLeftAJoinableMatch()},
+		    {"proof", "NetMatchService::WasToldItLeft"}});
+		s_crossRecoveryDone.insert(id);
+	}
+}
+
 static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
 	CrossRememberRestoredInput();
 	if (!g_MetricsCollector.EventsEnabled() || s_crossRecoveryStarts.empty()) return;
@@ -9225,6 +9239,7 @@ int RunNetMatchServiceE2E() {
 			line << "[net-match-service-e2e] setup failed: " << setupError;
 			System::PrintDiagnosticErrorLine(line.str());
 		}
+		if (s_crossTicketRejoin && g_NetMatchService.WasToldItLeft()) CrossRecoveryToldItLeft(setupError);
 	}
 
 	CrossRecoveryAtCommittedTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));

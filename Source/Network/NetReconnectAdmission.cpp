@@ -116,6 +116,7 @@ namespace RTE {
 			case NetH4DenialReason::ApplicantBoundReached: return "ApplicantBoundReached";
 			case NetH4DenialReason::SubstitutionSuperseded: return "SubstitutionSuperseded";
 			case NetH4DenialReason::SeatReassigned: return "SeatReassigned";
+			case NetH4DenialReason::SeatReleased: return "SeatReleased";
 		}
 		return "Unknown";
 	}

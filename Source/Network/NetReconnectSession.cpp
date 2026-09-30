@@ -50,7 +50,7 @@ namespace RTE {
 				}
 			}
 		}
-		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"left", m_LeftParticipants}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
 	}
 
 	int64_t NetReconnectHost::CountExportedOpenSeats(const std::vector<uint8_t>& bytes, uint8_t localPeerId) {
@@ -190,6 +190,7 @@ namespace RTE {
 					return false;
 			}
 			if (object.contains("removed")) next.m_RemovedParticipants = object.at("removed").get<std::set<NetAuthBytes32>>();
+			if (object.contains("left")) next.m_LeftParticipants = object.at("left").get<std::set<NetAuthBytes32>>();
 			registry = std::move(nextRegistry);
 			next.m_Registry = &registry;
 			next.m_DropOwnershipSource = m_DropOwnershipSource;
@@ -364,6 +365,7 @@ namespace RTE {
 			m_PendingReclaims.clear();
 			m_Fences.clear();
 			m_RemovedParticipants.clear();
+			m_LeftParticipants.clear();
 			m_Outbound.clear();
 			m_PendingReseats.clear();
 			m_Commits.clear();
@@ -383,6 +385,7 @@ namespace RTE {
 		NoteStateChanged();
 		m_LiveMatch = false;
 		m_MatchEnded = true;
+		m_LeftParticipants.clear();
 		m_PendingReseats.clear();
 		m_PendingHoldResolutions.clear();
 		m_Ledger.Clear();
@@ -663,7 +666,7 @@ namespace RTE {
 		if (!ValidateIdentity(connection, message.identity)) {
 			return;
 		}
-		if (RefuseIfBanned(connection)) {
+		if (RefuseIfBanned(connection) || RefuseReturningLeaver(connection, message.txId, nowMs)) {
 			return;
 		}
 		const NetH4TxKey key = MakeKey(NetMessageType::NewJoin, 0, 0, message.identity);
@@ -987,6 +990,9 @@ namespace RTE {
 		}
 		m_Admission.DropConnection(connection);
 		if (m_LiveMatch) {
+			if (seat->hasParticipantId) {
+				m_LeftParticipants.insert(seat->participantId);
+			}
 			CloseSeatWithoutHold(*seat);
 			// A world's slot reopens for the next player; a match seat closes with the round. Either
 			// way the leaver's credential is revoked and the generation moves, so it cannot come back.
@@ -1139,6 +1145,26 @@ namespace RTE {
 		DiagnosticLine() << "[net-reconnect] admission refused reason=ParticipantBanned peer=" << connection << std::endl;
 		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "The host banned you from this session", "participant_identity", "", ""});
 		++m_Stats.identityRejections;
+		return true;
+	}
+
+	bool NetReconnectHost::RefuseReturningLeaver(NetPeerId connection, const NetAuthBytes16& txId, uint64_t nowMs) {
+		NetAuthBytes32 id{};
+		if (!m_LiveMatch || !LookupParticipantId(connection, id)) {
+			return false;
+		}
+		const auto left = m_LeftParticipants.find(id);
+		if (left == m_LeftParticipants.end()) {
+			return false;
+		}
+		if (m_PersistentWorld) {
+			m_LeftParticipants.erase(left);
+		}
+		++m_Stats.returningLeaversTold;
+		DiagnosticLine() << "[net-reconnect] admission refused reason=SeatReleased peer=" << connection << " joinable=" << (m_PersistentWorld ? 1 : 0) << std::endl;
+		const NetPayload refusal = NetJoinRejected{NetRejectReason::SeatReleased, "you left this match; it is still running", m_PersistentWorld ? "seat_released_joinable" : "seat_released", "", ""};
+		m_Admission.ScheduleDenial(connection, txId, NetH4DenialReason::SeatReleased, nowMs, &refusal);
+		++m_Stats.denialsScheduled;
 		return true;
 	}
 

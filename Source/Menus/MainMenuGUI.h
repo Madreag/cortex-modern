@@ -648,6 +648,8 @@ namespace RTE {
 		void StartMultiplayer(bool host);
 		/// §9b: answers a live match's refusal by asking the host for a seat instead of a new one.
 		void ApplyToSubstitute();
+		/// Joins the running world this player left again, as a new player: the host told the last join it left.
+		void JoinAsNewPlayer();
 
 		/// Launches the activity once the multiplayer runtime reaches lockstep ready.
 		void MaybeLaunchMultiplayerActivity();

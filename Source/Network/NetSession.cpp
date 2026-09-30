@@ -1680,6 +1680,9 @@ namespace RTE {
 			case NetRejectReason::Timeout: return "The connection timed out. Please try again.";
 			case NetRejectReason::SessionEnded: return "This session has ended.";
 			case NetRejectReason::SeatReassigned: return "The host gave your seat to another player.";
+			case NetRejectReason::SeatReleased:
+				return m_MismatchKey == "seat_released_joinable" ? "You left this match. It is still running. You can join it again as a new player."
+				                                                  : "You left this match. It is still running. It takes no new players until it ends.";
 			case NetRejectReason::ParticipantRemoved:
 				if (m_Role == NetSessionRole::Host && !m_RefusedPlayerName.empty()) return m_RefusedPlayerName + " was removed from this session";
 				return "The host removed you from this session";
