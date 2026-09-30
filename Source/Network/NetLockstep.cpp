@@ -4398,6 +4398,24 @@ namespace RTE {
 
 	void NetLockstepCoordinator::PlaneTick(uint64_t nowMs) {
 		NET_PLANE_CHECK();
+		// Test lever: the plane's longest stretch without a tick while this host's own seat is held, once a second.
+		static const bool s_TracePlane = std::getenv("CCCP_TEST_OWN_PACE_TRACE") != nullptr;
+		if (s_TracePlane && IsOwnHostSeatHeld()) {
+			static uint64_t s_LastMs = 0, s_SinceMs = 0, s_LongestMs = 0, s_Ticks = 0, s_Over8 = 0;
+			if (s_LastMs != 0 && nowMs >= s_LastMs) {
+				s_LongestMs = std::max(s_LongestMs, nowMs - s_LastMs);
+				s_Over8 += nowMs - s_LastMs > 8 ? 1 : 0;
+			}
+			s_LastMs = nowMs;
+			++s_Ticks;
+			if (s_SinceMs == 0) s_SinceMs = nowMs;
+			if (nowMs - s_SinceMs >= 1000) {
+				DiagnosticLine() << "[plane-trace] ticks=" << s_Ticks << " longest_gap_ms=" << s_LongestMs << " gaps_over_8ms=" << s_Over8
+				                 << " held_transports=" << m_PlaneHeldTransports.size() << " deferred=" << m_PlaneDeferredEvents.size() << " next_frame=" << m_Stats.nextFrame << std::endl;
+				s_SinceMs = nowMs;
+				s_LongestMs = s_Ticks = s_Over8 = 0;
+			}
+		}
 		m_PlaneTicking = true;
 		Tick(nowMs);
 		m_PlaneTicking = false;
@@ -6420,13 +6438,14 @@ namespace RTE {
 		if (othersTick < 0 || m_LastQueuedTargetFrame == UINT64_MAX) return;
 		m_Stats.localRunwayTicks = static_cast<double>(m_LastQueuedTargetFrame) - othersTick - othersTrip;
 		// With the others' capacities published nothing is estimated: this machine is slow when what it can run falls short of the
-		// fastest machine's past the tolerance for nearly equal machines, for a whole capacity window (a burst's uneven end never lasts
-		// that long), and it goes quiet when its slack to the others is down to one tick, before any of them waits on it.
+		// fastest machine's past the tolerance for nearly equal machines - its capacity is already the median of a 15-tick window, and
+		// five slow readings in a row outlast a burst's uneven end - and it goes quiet when its slack to the others is down to one tick,
+		// before any of them waits on it.
 		if (const double fastest = FastestPublishedCapacity(m_Config.localPeerId, false); fastest > 0) {
 			m_Stats.localOthersTps = fastest;
 			m_SlowTicks = SlowAgainst(m_Stats.localCapacityTps, fastest) ? m_SlowTicks + 1 : 0;
 			if (!m_SelfHeld && UsesBoundedWait() && !IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) && !IsOwnHostSeatHeld() &&
-			    producedFrame >= m_JudgeAfterFrame && m_SlowTicks >= c_OwnPaceTicks && m_Stats.localRunwayTicks <= 1.0)
+			    producedFrame >= m_JudgeAfterFrame && m_SlowTicks >= c_FirstCapacityTicks && m_Stats.localRunwayTicks <= 1.0)
 				GoQuiet(producedFrame);
 			return;
 		}
@@ -6460,7 +6479,7 @@ namespace RTE {
 
 	double NetLockstepCoordinator::FastestPublishedCapacity(uint8_t except, bool includeOwn) const {
 		const double rate = 1000.0 / m_Config.simTickMs;
-		double fastest = includeOwn ? OwnCapacityTps(true) : 0.0;
+		double fastest = includeOwn ? OwnCapacityTps(true, c_FirstCapacityTicks) : 0.0;
 		for (const auto& [peer, capacity]: m_PublishedCapacity) {
 			if (peer == except || peer == m_Config.localPeerId || IsPeerGoneAtFrame(peer, m_Stats.nextFrame) || IsSeatUnderAI(peer, m_Stats.nextFrame)) continue;
 			fastest = std::max(fastest, std::min(capacity, rate));
@@ -7304,7 +7323,23 @@ namespace RTE {
 			return;
 		}
 		if ((ack.receivedMask & NetLockstepCodec::c_CapacityMask) != 0) {
-			m_PublishedCapacity[ack.senderPeerId] = static_cast<double>(ack.receivedMask & 0xFFFFU) / 10.0;
+			static const bool s_TraceCapacity = std::getenv("CCCP_TEST_OWN_PACE_TRACE") != nullptr;
+			if (s_TraceCapacity && !m_PublishedCapacity.contains(ack.senderPeerId)) {
+				DiagnosticLine() << "[own-pace] first capacity from peer " << static_cast<int>(ack.senderPeerId) << " at its tick " << ack.highestContiguousFrame << ": "
+				                 << static_cast<double>(ack.receivedMask & 0xFFFFU) / 10.0 << " ticks/s; here next_frame=" << m_Stats.nextFrame << " own="
+				                 << OwnCapacityTps(false, c_FirstCapacityTicks) << " now_ms=" << m_TimingNowMs << std::endl;
+			}
+			const double capacity = static_cast<double>(ack.receivedMask & 0xFFFFU) / 10.0;
+			if (s_TraceCapacity) {
+				const double fastest = FastestPublishedCapacity(ack.senderPeerId, true);
+				const auto before = m_PublishedCapacity.find(ack.senderPeerId);
+				if (before != m_PublishedCapacity.end() && fastest > 0 && SlowAgainst(before->second, fastest) != SlowAgainst(capacity, fastest)) {
+					DiagnosticLine() << "[own-pace] capacity from peer " << static_cast<int>(ack.senderPeerId) << " at its tick " << ack.highestContiguousFrame << ": " << capacity
+					                 << " against the fastest's " << fastest << (SlowAgainst(capacity, fastest) ? " - slow" : " - not slow") << "; here next_frame=" << m_Stats.nextFrame
+					                 << " now_ms=" << m_TimingNowMs << std::endl;
+				}
+			}
+			m_PublishedCapacity[ack.senderPeerId] = capacity;
 			return;
 		}
 		// A seat that went quiet says so: nothing about its silence is unknown, so the host holds it from the frame after its last
