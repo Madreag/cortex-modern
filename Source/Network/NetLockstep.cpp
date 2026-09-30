@@ -8843,11 +8843,12 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const {
 		NET_PLANE_CHECK();
-		const auto found = m_LocalFrames.find(frame);
-		if (found == m_LocalFrames.end()) {
+		// A frame every peer's input reached is ready before this peer simulates it, and its own input went with it.
+		NetLockstepFrame input;
+		if (!FindLocalInput(frame, input)) {
 			return false;
 		}
-		outFrames = found->second;
+		outFrames = std::move(input.frames);
 		return true;
 	}
 
