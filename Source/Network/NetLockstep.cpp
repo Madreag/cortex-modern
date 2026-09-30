@@ -5729,7 +5729,7 @@ namespace RTE {
 				m_LocalSeatHeld = true;
 				m_LocalHoldFrame = timing.applyFrame;
 				m_PeerLeaveFrames[m_Config.localPeerId] = timing.applyFrame;
-				m_Stats.timeoutReason = "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
+				m_Stats.timeoutReason = LocalHoldReason();
 				m_State = NetLockstepState::Stopped;
 				return;
 			}
@@ -6004,6 +6004,12 @@ namespace RTE {
 		const auto seat = m_AiHeldSeats.find(peerId);
 		return seat != m_AiHeldSeats.end() && frame >= seat->second &&
 		    (!m_ReclaimTransactions.contains(peerId) || frame < m_ReclaimTransactions.at(peerId).activationFrame);
+	}
+
+	std::string NetLockstepCoordinator::LocalHoldReason() const {
+		// This machine's own ticks ran over the step: the seat is held for the machine, not the link.
+		return m_Stats.localMachineSlow ? "PeerHeld:Your machine cannot keep up with this match. The AI is playing your seat."
+		                                : "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
 	}
 
 	bool NetLockstepCoordinator::FeedsBelowRoundRate(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* rate) {
@@ -10049,7 +10055,7 @@ namespace RTE {
 					if (m_SessionEventSink) m_SessionEventSink(event);
 					m_LocalSeatHeld = true;
 					m_PeerLeaveFrames[m_Config.localPeerId] = m_Stats.nextFrame;
-					m_Stats.timeoutReason = "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
+					m_Stats.timeoutReason = LocalHoldReason();
 					m_State = NetLockstepState::Stopped;
 					break;
 				}

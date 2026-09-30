@@ -1592,6 +1592,10 @@ namespace RTE {
 		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
 		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
 
+		/// The reason a held seat shows its own player: its machine, when its own ticks ran over the step, else its link.
+		/// @return The PeerHeld reason.
+		std::string LocalHoldReason() const;
+
 		/// Whether a seat still feeding the round is a slow machine: this machine waited on it on 45 of the last 60 frames and its ticks
 		/// arrived under the round's rate over that second - no delay re-size covers that. Notes this frame as waited on it.
 		/// @param peerId The seat.
