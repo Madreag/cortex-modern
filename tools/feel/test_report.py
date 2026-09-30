@@ -321,19 +321,27 @@ class ReportTests(unittest.TestCase):
         value = report.input_latencies([edge], committed)[0]
         self.assertEqual((value['carried_frames'], value['carried_pass']), (7, False))
 
-    def test_the_visible_response_is_judged_against_the_baselines_same_edge(self):
-        rows = [dict(tick=10, player=1, action='L_LEFT', held=True, ms=50.0), dict(tick=70, player=1, action='L_LEFT', held=False, ms=60.0),
-                dict(tick=130, player=1, action='AIM_VECTOR', held=True, ms=30.0), dict(tick=190, player=1, action='L_RIGHT', held=True, ms=40.0)]
-        baseline = [dict(tick=10, player=0, action='L_LEFT', held=True, ms=20.0), dict(tick=10, player=1, action='L_LEFT', held=True, ms=40.0),
-                    dict(tick=70, player=1, action='L_LEFT', held=False, ms=40.0), dict(tick=130, player=1, action='AIM_VECTOR', held=True, ms=None)]
-        judged = report.compare_responses(rows, baseline)
-        # The same player's baseline edge sets the budget: 40 + 16.7 admits 50; 60 is late.
-        self.assertEqual([row['response_pass'] for row in judged[:2]], [True, False])
-        self.assertAlmostEqual(judged[0]['response_budget_ms'], 40 + 1000 / 60)
-        self.assertTrue(judged[2]['baseline_unreflected'])
-        self.assertIsNone(judged[2]['baseline_ms'])
-        self.assertTrue(judged[3]['baseline_missing'])
-        self.assertFalse(judged[3]['response_pass'])
+    def test_the_previewed_response_is_judged_against_the_committed_response_to_the_same_edge(self):
+        edge = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1,
+                    changes=[dict(action='L_LEFT', held=True)])
+        def committed(tick, wall, vx):
+            return dict(type='committed', tick=tick, wall_ms=wall, actors=[actor(vx=vx)])
+        timeline = [committed(12, 90, 0)] + [committed(13 + n, 150 + 17 * n, -1 - n) for n in range(4)]
+        previewed = [frame(1, 95, actor())] + [frame(2 + n, 115 + 17 * n, actor(vx=-1 - n)) for n in range(4)]
+        row = report.previewed_responses([edge], previewed, timeline)[0]
+        # Committed at 150 ms with a 3-tick delay: the player must see it by 150 - 50 + 16.7 ms; the preview shows it at 15.
+        self.assertEqual((row['previewed_ms'], row['committed_ms'], row['judged'], row['pass_check']), (15, 50, True, True))
+        # Without the preview the drawn actor is the committed one, the delay later: the pin fails by it.
+        drawn = [frame(1, 95, actor())] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n)) for n in range(4)]
+        self.assertFalse(report.previewed_responses([edge], drawn, timeline)[0]['pass_check'])
+
+    def test_a_one_frame_wobble_is_not_a_response(self):
+        edge = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1,
+                    changes=[dict(action='L_LEFT', held=True)])
+        timeline = [dict(type='committed', tick=12, wall_ms=90, actors=[actor()])] +                    [dict(type='committed', tick=13 + n, wall_ms=150 + 17 * n, actors=[actor(vx=-1 - n)]) for n in range(4)]
+        wobble = [frame(1, 95, actor()), frame(2, 115, actor(vx=-0.02)), frame(3, 132, actor(vx=0.1))] +                  [frame(4 + n, 149 + 17 * n, actor(vx=-1 - n)) for n in range(3)]
+        row = report.previewed_responses([edge], wobble, timeline)[0]
+        self.assertEqual(row['previewed_ms'], 49)
 
     def test_draw_percentile_is_nearest_rank_and_boundary_is_not_relaxed(self):
         values = report.distribution([1] * 99 + [51])
