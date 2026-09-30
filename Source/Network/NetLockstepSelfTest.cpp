@@ -3387,47 +3387,30 @@ namespace RTE {
 			return true;
 		}
 
-		// A clock its inputs keep waiting slides back once; standing at its horizon again, it runs at the rate the inputs allowed
-		// instead of sliding every second (the four-machine 4K match: seven slides in 1000 ticks behind a 55 tick/s peer).
-		bool TestAClockBehindASlowPeerFollowsItOnce(std::string* error) {
+		// A clock its inputs keep waiting slides back once and never again for the same cause: a fast peer does not run slower for a
+		// slow one (the four-machine 4K match: seven slides in 1000 ticks behind a 55 tick/s peer).
+		bool TestAClockBehindASlowPeerSlidesOnce(std::string* error) {
 			NetPaceSlide pace;
-			int slides = 0, follows = 0;
-			double lastRate = 0.0;
-			uint64_t nowMs = 10000;
-			// A peer's inputs arrive at 55 ticks a second: every tick waits, one tick per 1000/55 ms.
+			int slides = 0;
 			for (uint64_t tick = 100; tick < 1300; ++tick) {
-				nowMs += tick % 11 == 0 ? 19 : 18;
 				pace.NoteWaitAhead(tick);
-				const NetPaceSlide::Action action = pace.NoteTickAt(tick, nowMs, 60.0);
-				slides += action == NetPaceSlide::Action::Slide ? 1 : 0;
-				if (action == NetPaceSlide::Action::Follow) {
-					++follows;
-					lastRate = pace.FollowedRate();
-				}
+				slides += pace.NoteTickAt(tick) == NetPaceSlide::Action::Slide ? 1 : 0;
 			}
-			if (slides != 1 || follows == 0) {
-				*error = "a clock behind a 55 tick/s peer slid " + std::to_string(slides) + " times and followed " + std::to_string(follows);
+			if (slides != 1) {
+				*error = "a clock behind a slower peer slid " + std::to_string(slides) + " times in 1200 ticks";
 				return false;
 			}
-			if (lastRate < 53.0 || lastRate > 56.5 || pace.Pace() > 56.5 / 60.0 + NetPaceSlide::c_PaceMargin || pace.Pace() < 53.0 / 60.0) {
-				*error = "the followed pace " + std::to_string(pace.Pace()) + " is not the inputs' rate " + std::to_string(lastRate);
+			pace.Reset();
+			pace.NoteWaitAhead(1300);
+			for (uint64_t tick = 1300; tick < 1400 && slides == 1; ++tick) {
+				pace.NoteWaitAhead(tick);
+				slides += pace.NoteTickAt(tick) == NetPaceSlide::Action::Slide ? 1 : 0;
+			}
+			if (slides != 2) {
+				*error = "a new cause after a reset did not slide once";
 				return false;
 			}
-			// Inputs that stop making it wait give the pace back, a calm second at a time.
-			const double followed = pace.Pace();
-			for (uint64_t tick = 1300; tick < 1300 + 10 * NetPaceSlide::c_WindowTicks; ++tick) {
-				nowMs += 17;
-				if (pace.NoteTickAt(tick, nowMs, 60.0) != NetPaceSlide::Action::None) {
-					*error = "a calm clock acted at tick " + std::to_string(tick);
-					return false;
-				}
-			}
-			if (!(pace.Pace() > followed) || pace.Pace() > 1.0) {
-				*error = "ten calm seconds left the pace at " + std::to_string(pace.Pace()) + " from " + std::to_string(followed);
-				return false;
-			}
-			std::cout << "[net-lockstep-selftest] PASS a_clock_behind_a_slow_peer_follows_it_once slides=" << slides << " follows=" << follows
-			          << " rate=" << lastRate << " pace=" << followed << " -> " << pace.Pace() << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS a_clock_behind_a_slow_peer_slides_once slides=1" << std::endl;
 			return true;
 		}
 
@@ -22799,7 +22782,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestASeatBackBeforeOurReturnKeepsItsAdmittedDelay, "a_seat_back_before_our_return_keeps_its_admitted_delay");
 		row(&TestATickLostBeforeAnEpochComesBack, "a_tick_lost_before_an_epoch_comes_back");
 		row(&TestAPeerAtItsInputHorizonSlidesBack, "a_peer_at_its_input_horizon_slides_back");
-		row(&TestAClockBehindASlowPeerFollowsItOnce, "a_clock_behind_a_slow_peer_follows_it_once");
+		row(&TestAClockBehindASlowPeerSlidesOnce, "a_clock_behind_a_slow_peer_slides_once");
 		row(&TestAHostInItsReclaimGapJudgesNoSeatLate, "a_host_in_its_reclaim_gap_judges_no_seat_late");
 		row(&TestAReturnRefusedBeforeItsStartStopsNobody, "a_return_refused_before_its_start_stops_nobody");
 		row(&TestAReadyFrameKeepsItsLocalInputForThePreview, "a_ready_frame_keeps_its_local_input_for_the_preview");

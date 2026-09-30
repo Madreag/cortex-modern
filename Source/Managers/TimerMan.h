@@ -133,13 +133,10 @@ namespace RTE {
 		/// Drops the time the sim owes past the update about to run and holds its clock back a number of fixed ticks, so a lockstep peer
 		/// running ahead of its inputs gives them room to land before it needs them.
 		/// @param ticks The fixed ticks of real time that go by before the sim accrues time again.
-		/// Sets the share of real time this clock accrues: a lockstep peer that its inputs keep waiting runs at their pace.
-		/// @param paceScale The share, 1 for the fixed rate.
-		void SetPaceScale(float paceScale) { m_PaceScale = paceScale; }
-
-		/// Gets the share of real time this clock accrues.
-		/// @return The share, 1 for the fixed rate.
-		float GetPaceScale() const { return m_PaceScale; }
+		/// Sets how many ticks this clock keeps owing, past the one due, instead of dropping them: a lockstep machine that
+		/// cannot present every tick runs what it owes back to back and presents less often.
+		/// @param ticks The owed ticks kept, 0 for the sim's own estimate alone.
+		void SetOwedTicksKept(int ticks) { m_OwedTicksKept = ticks; }
 
 		void HoldSimTicks(int ticks) {
 			m_SimAccumulator = std::min(m_SimAccumulator, m_DeltaTime);
@@ -290,7 +287,7 @@ namespace RTE {
 		long long m_LastSimUpdateStart; //!< When the latest sim update of this frame began, or 0 before one.
 		bool m_SimFrameBudgetSpent; //!< The frame's budget ended its sim updates at the drawn one.
 		long long m_SimHold; //!< Real time still to go by before the sim accrues time again.
-		float m_PaceScale; //!< The share of real time the sim accrues, below 1 while a lockstep peer runs at its inputs' pace.
+		int m_OwedTicksKept; //!< Owed ticks kept past the one due, whatever the sim's cost estimate says it can run.
 
 		float m_SimSpeed; //!< The simulation speed over real time.
 		float m_TimeScale; //!< The relationship between the real world actual time and the simulation time. A value of 2.0 means simulation runs twice as fast as normal, as perceived by a player.
