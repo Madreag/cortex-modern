@@ -652,7 +652,10 @@ namespace RTE {
 		bool localMachineSlow = false;
 		double localCapacityTps = 0; //!< The ticks a second this machine's own recent ticks' median cost allows.
 		double localBehindTicks = 0; //!< How far this machine's own ticks trail the round's clock.
-		double localRunwayTicks = 0; //!< How far this machine's newest queued input runs ahead of the host's tick.
+		double localRunwayTicks = 0; //!< How far this machine's newest queued input runs ahead of the fastest other machine's tick.
+		double localOthersTps = 0; //!< The fastest other machine's ticks a second over the last second.
+		double localCostTps = 0; //!< How much faster the others run than this machine can: what it costs them.
+		double localRunwayFallTps = 0; //!< How fast the others pulled ahead of this machine over the last half second.
 		std::optional<uint32_t> measuredMissingFrameBase;
 		std::optional<uint32_t> measuredBlockingWaitBase;
 		uint32_t delayChangesProposed = 0;
@@ -723,6 +726,10 @@ namespace RTE {
 		static constexpr uint32_t c_InputAcceptedMask = 0x40000000U;
 		/// Asks the named sender (the low byte) to resend its ticks from highestContiguousFrame on the reliable lane; an older peer ignores it.
 		static constexpr uint32_t c_FrameResendRequestMask = 0x20000000U;
+		/// The sender goes quiet after highestContiguousFrame, the last frame it fed, for the reason in the low byte: the host holds
+		/// its seat from the next frame at once. An older peer ignores it and judges the silence at its bound.
+		static constexpr uint32_t c_QuietAnnouncementMask = 0x10000000U;
+		static constexpr uint8_t c_QuietSlowMachine = 1;
 		static constexpr uint8_t c_MaxWindowTicks = 32;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
@@ -1058,7 +1065,8 @@ namespace RTE {
 		std::string DescribePendingTimingDecisions(uint64_t frame) const;
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
-		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
+		/// @param fromFrame The first frame the hold covers, when the seat named it; 0 for the first frame the host lacks its input.
+		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr, uint64_t fromFrame = 0);
 		/// trailFrames: how far the returner's replay trails the round at the round's pace; its first required frame comes that much later.
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
@@ -1605,10 +1613,15 @@ namespace RTE {
 
 		/// Judges this machine against the round: behind it past the Slow player bound with its own capacity under the round's
 		/// rate, it goes quiet.
-		void JudgeOwnPace(uint64_t producedFrame, double localElapsedMs);
+		void JudgeOwnPace(uint64_t producedFrame, uint64_t nowUs, double localElapsedMs);
+
+		/// The ticks a second this machine's own recent ticks allow; 0 before it has measured them.
+		/// @param capped Whether to cap it at the round's rate, which is all this machine can run the round at.
+		double OwnCapacityTps(bool capped = true) const;
 
 		/// Whether a seat still feeding the round is a slow machine: this machine waited on it on 45 of the last 60 frames and its ticks
-		/// arrived under the round's rate over that second - no delay re-size covers that. Notes this frame as waited on it.
+		/// arrived slower than this machine can run, past the tolerance for nearly equal machines, over that second - no delay re-size
+		/// covers that. Notes this frame as waited on it.
 		/// @param peerId The seat.
 		/// @param frame The frame waited for.
 		/// @param nowMs The coordinator's clock.
@@ -1689,6 +1702,7 @@ namespace RTE {
 		std::optional<uint64_t> m_ProductionBaseFrame;
 		static constexpr size_t c_OwnPaceTicks = 15; //!< The ticks whose cost this machine judges its own pace on.
 		std::deque<double> m_TickCosts; //!< This machine's own recent ticks' cost, in ms.
+		std::deque<std::array<double, 3>> m_OthersTickSamples; //!< When (us), at which tick the fastest other machine stood, and this machine's own tick.
 		bool m_SelfHeld = false; //!< This machine judged itself unable to hold the round's rate: its seat sends nothing more.
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
