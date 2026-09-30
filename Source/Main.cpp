@@ -6596,16 +6596,19 @@ void RunGameLoop() {
 			g_PerformanceMan.NewPerformanceSample();
 			if (!measureLockstepCost) g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
-			// Test lever: a slower machine's sim cost, spent inside the tick on this one.
+			// Test lever: a slower machine's sim cost, spent inside the tick on this one - in the simulation's update, where a slower
+			// machine spends it; CCCP_TEST_SIM_COST_OUTSIDE_WINDOW spends it before the update instead, where the plane cannot tick.
 			static const long long s_testSimCostUs = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_US"); return text ? std::atoll(text) : 0LL; }();
-			if (s_testSimCostUs > 0) {
+			static const bool s_testSimCostOutside = std::getenv("CCCP_TEST_SIM_COST_OUTSIDE_WINDOW") != nullptr;
+			const auto spendTestSimCost = [] {
 				static const long long s_fromTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_FROM_TICK"); return text ? std::atoll(text) : 0LL; }();
 				static const long long s_untilTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_UNTIL_TICK"); return text ? std::atoll(text) : 0LL; }();
 				const long long tick = g_TimerMan.GetSimUpdateCount();
 				if (tick >= s_fromTick && (s_untilTick == 0 || tick < s_untilTick)) {
 					for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testSimCostUs; g_TimerMan.GetAbsoluteTime() < until;) {}
 				}
-			}
+			};
+			if (s_testSimCostUs > 0 && s_testSimCostOutside) spendTestSimCost();
 			g_AudioMan.RetireFinishedSimulationSounds();
 			const bool watchLedgerExpiry = s_eventLedgerPressTick > 0;
 			const uint64_t expiredBefore = watchLedgerExpiry ? PreviewEventLedger::GetCounters().expired : 0;
@@ -7101,6 +7104,7 @@ void RunGameLoop() {
 					SoundSimulationScope simulationSounds(0, soundPhase);
 					// A long update is this machine's own: the plane commits for the round meanwhile, and the update reads the coordinator only through guarded calls.
 					NetLockstepPlane::Window planeWindow;
+					if (s_testSimCostUs > 0 && !s_testSimCostOutside) spendTestSimCost();
 					g_ActivityMan.Update();
 
 					if (g_SceneMan.GetScene()) {
