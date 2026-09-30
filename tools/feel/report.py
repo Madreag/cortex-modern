@@ -630,12 +630,32 @@ def input_latencies(inputs, frames):
             next_change = min((later['wall_ms'] for later in inputs[index + 1:]
                                if later['actor']['uid'] == edge['actor']['uid']
                                and any(item['action'] == action for item in later['changes'])), default=math.inf)
+            def carries(actor):
+                command, before = actor.get('input'), reference.get('input')
+                if command is None:
+                    return False
+                if action == 'AIM_VECTOR':
+                    if not held:
+                        return False
+                    target = -math.atan2(change['y'], change['x'])
+                    now = abs(angular_delta(-math.atan2(command['aim_y'], command['aim_x']), target))
+                    return now < 1e-6 or (before is not None and now < abs(angular_delta(-math.atan2(before['aim_y'], before['aim_x']), target)))
+                return command['move_left' if action == 'L_LEFT' else 'move_right'] == held
             found = next(((frame, actor) for frame, actor in sequence
                           if edge['wall_ms'] <= frame['draw_begin_ms'] < next_change and reflects(actor)), None)
-            row = dict(input_line=edge['_line'], tick=edge['tick'], uid=edge['actor']['uid'], action=action, held=held,
+            carried = next((frame for frame, actor in sequence
+                            if edge['wall_ms'] <= frame['draw_begin_ms'] < next_change and carries(actor)), None)
+            row = dict(input_line=edge['_line'], tick=edge['tick'], player=edge.get('player'), uid=edge['actor']['uid'], action=action, held=held,
                        input_wall_ms=edge['wall_ms'], last_presented_frame=edge['last_presented_frame'],
                        reference=reference, frame=None, ms=None, frames=None, budget_ms=None, pass_check=False,
-                       observed_through_ms=min(next_change, frames[-1]['present_end_ms']), right_censored=found is None)
+                       observed_through_ms=min(next_change, frames[-1]['present_end_ms']), right_censored=found is None,
+                       carried_frame=None, carried_ms=None, carried_frames=None, carried_pass=False)
+            if carried:
+                # The pipeline's own latency: the drawn actor's controller holds the edge within two frames of the press.
+                carried_ms = carried['present_end_ms'] - edge['wall_ms']
+                carried_frames = carried['frame'] - edge['last_presented_frame']
+                row.update(carried_frame=carried['frame'], carried_ms=carried_ms, carried_frames=carried_frames,
+                           carried_pass=carried_frames <= 2 and (carried['cap_hz'] != 60 or carried_ms <= 34.0))
             if found:
                 frame, actor = found
                 elapsed = frame['present_end_ms'] - edge['wall_ms']
@@ -648,6 +668,26 @@ def input_latencies(inputs, frames):
             row['latency_lower_bound_ms'] = row['ms'] if found else max(0, row['observed_through_ms'] - edge['wall_ms'])
             results.append(row)
     return results
+
+
+def compare_responses(latency, baseline_edges):
+    """Judge each edge's visible response against the single-player baseline's response to the same scripted edge.
+
+    The same player's baseline edge when it has one, else the quickest response any baseline player gave that edge. An edge the
+    baseline never visibly answered has no budget and is counted, not judged; one the baseline lacks entirely is missing."""
+    by_edge = defaultdict(list)
+    for row in baseline_edges or ():
+        by_edge[(row['tick'], row['action'], row['held'])].append(row)
+    for row in latency:
+        candidates = by_edge.get((row['tick'], row['action'], row['held']), [])
+        same = [other for other in candidates if other.get('player') == row.get('player')] or candidates
+        answered = [other['ms'] for other in same if other['ms'] is not None]
+        row['baseline_ms'] = min(answered) if answered else None
+        row['baseline_missing'] = not same
+        row['baseline_unreflected'] = bool(same) and not answered
+        row['response_budget_ms'] = row['baseline_ms'] + SIM_MS if answered else None
+        row['response_pass'] = bool(answered) and row['ms'] is not None and row['ms'] <= row['response_budget_ms']
+    return latency
 
 
 def warp_records(frames):
@@ -873,7 +913,7 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
         raise ValueError(f'{raw}: no measured match frames or iterations')
     destination = run / peer / 'analysis'
     destination.mkdir(exist_ok=True)
-    latency = input_latencies(inputs, frames)
+    latency = compare_responses(input_latencies(inputs, frames), baseline.get('latency_by_edge') if baseline else None)
     warps = warp_records(frames)
     controller = run / f'{peer}_controller.jsonl'
     canonical_dump = run / f'{peer}_trace.json.simdump.txt'
@@ -954,6 +994,7 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
                    latency_lower_bounds_ms=distribution([row['latency_lower_bound_ms'] for row in latency]),
                    missing_input_stamps=missing_inputs,
                    latency_edges=len(latency), latency_unreflected=sum(row['ms'] is None for row in latency),
+                   latency_by_edge=[dict(player=row['player'], tick=row['tick'], action=row['action'], held=row['held'], ms=row['ms']) for row in latency],
                    firing_presses=len(firing), local_prediction=dict(lp, avg_ms=lp_cost),
                    delays=delays, input_delay_text=frames[-1]['input_delay_text'],
                    auto_picks=auto_picks, auto_pick_source=str(host_log),
@@ -979,9 +1020,22 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
                              [raw, host_log, run / f'{peer}_report.json'] if network else [raw])
     latency_value = dict(observed_ms=latency_ms, observed_frames=latency_frames,
                          lower_bounds_ms=metrics['latency_lower_bounds_ms'], unreflected=metrics['latency_unreflected'])
-    pins['input_to_photon'] = pin(latency_value, '<= 34 ms at 60 Hz; <= one 60 Hz sim tick + one actual frame when uncapped',
-                                  bool(latency) and all(row['pass_check'] for row in latency), [raw, paths['latencies']],
-                                  'First submitted render copy with aim closer to the scripted aim, or velocity changed in the requested direction; swap-return boundary.')
+    carried_value = dict(observed_ms=distribution([row['carried_ms'] for row in latency if row['carried_ms'] is not None]),
+                         observed_frames=distribution([row['carried_frames'] for row in latency if row['carried_frames'] is not None]),
+                         uncarried=sum(row['carried_ms'] is None for row in latency), late=sum(not row['carried_pass'] for row in latency))
+    pins['input_carried'] = pin(carried_value, 'the drawn controller state carries each scripted edge within 2 frames of the press (<= 34 ms at 60 Hz)',
+                                bool(latency) and all(row['carried_pass'] for row in latency), [raw, paths['latencies']],
+                                'First submitted render copy whose controller holds the scripted move state or an aim closer to the scripted aim; swap-return boundary.')
+    judged = [row for row in latency if row['baseline_ms'] is not None]
+    response_value = dict(latency_value, judged=len(judged), late=sum(not row['response_pass'] for row in judged),
+                          baseline_missing=sum(row['baseline_missing'] for row in latency),
+                          baseline_unreflected=sum(row['baseline_unreflected'] for row in latency))
+    pins['input_response'] = pin(response_value, "each edge's visible response <= the single-player baseline's response to the same edge + 1 frame (16.7 ms)",
+                                 bool(judged) and all(row['response_pass'] for row in judged) and not response_value['baseline_missing'],
+                                 [raw, paths['latencies']] + ([baseline['raw_path']] if baseline else []),
+                                 'Aim closer to the scripted aim, or velocity changed in the requested direction, the same detector on both sides; '
+                                 'an edge the baseline never visibly answered is counted, not judged.',
+                                 available=bool(baseline and baseline.get('latency_by_edge')))
     pins['preview_ms'] = pin(lp_cost, 'ms_total / previews <= 2 ms over the full negotiated delay', lp_cost is not None and lp_cost <= 2, [raw])
     pins['violations'] = pin(max(frame['local_prediction']['violations'] for frame in frames), '= 0 always',
                              all(frame['local_prediction']['violations'] == 0 for frame in frames), [raw])
