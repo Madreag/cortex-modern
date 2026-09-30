@@ -1,4 +1,5 @@
 #include "NetReconnectUx.h"
+#include "DiagnosticLine.h"
 
 #include "NetMatchService.h"
 
@@ -325,7 +326,7 @@ namespace RTE {
 		m_StatusText = result == NetH4ModerationResult::Ok
 		                   ? "Seat " + std::to_string(row.stableSeat) + ": " + name + " accepted."
 		                   : "Seat " + std::to_string(row.stableSeat) + ": " + name + " refused - " + NetH4ModerationResultName(result) + ".";
-		std::cout << "[net-moderation] " << name << " seat=" << row.stableSeat
+		DiagnosticLine() << "[net-moderation] " << name << " seat=" << row.stableSeat
 		          << " applicant=" << static_cast<int>(row.applicant) << " result=" << NetH4ModerationResultName(result) << std::endl;
 		return result;
 	}

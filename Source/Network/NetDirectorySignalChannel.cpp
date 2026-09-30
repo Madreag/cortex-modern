@@ -1,4 +1,5 @@
 #include "NetDirectorySignalChannel.h"
+#include "DiagnosticLine.h"
 
 #include "NetHttpClient.h"
 
@@ -268,19 +269,19 @@ namespace RTE {
 		}
 		// Disabled means no URL was configured; the channel is silent there.
 		if (state != State::Disabled) {
-			std::cout << "[net-directory-signal] " << Role() << " state: " << StateName(m_State) << " -> " << StateName(state) << std::endl;
+			DiagnosticLine() << "[net-directory-signal] " << Role() << " state: " << StateName(m_State) << " -> " << StateName(state) << std::endl;
 		}
 		m_State = state;
 	}
 
 	void NetDirectorySignalChannel::NoteError(const std::string& error) {
 		m_LastError = error;
-		std::cout << "[net-directory-signal] " << Role() << " " << error << std::endl;
+		DiagnosticLine() << "[net-directory-signal] " << Role() << " " << error << std::endl;
 	}
 
 	void NetDirectorySignalChannel::Fail(const std::string& reason, const std::string& detail) {
 		m_LastError = reason;
-		std::cout << "[net-directory-signal] " << Role() << " failed: " << reason << (detail.empty() ? "" : " (" + detail + ")") << std::endl;
+		DiagnosticLine() << "[net-directory-signal] " << Role() << " failed: " << reason << (detail.empty() ? "" : " (" + detail + ")") << std::endl;
 		AbortRequest();
 		m_Outbox.clear();
 		SetState(State::Failed);
