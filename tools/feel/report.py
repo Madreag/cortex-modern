@@ -517,10 +517,17 @@ def item9a_gates(run, peer='host', rows=None):
             returned = [int(frame) for frame in re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', injection_log) if int(frame) > injection]
             if returned:
                 spike_end = next((tick for seat, tick in sorted(holds, key=lambda value: value[1]) if seat == silent_seat and tick > min(returned)), None)
-        spike_waits = (sum(ms > 0 for tick, ms in waits if tick >= injection and (spike_end is None or tick < spike_end))
-                       if wait_fraction is not None else None)
-        pins['item9a_spike_waits'] = pin(spike_waits, '<= 1 blocking wait from the single injected spike through return',
-                                       spike_waits is not None and spike_waits <= 1, evidence, dict(injected_tick=injection, drop_hold_tick=spike_end))
+        # Waits on adjacent frames are one event to the player: one wait, and their sum is what the 50 ms bound reads.
+        windows = []
+        for tick, ms in sorted((tick, ms) for tick, ms in waits if ms > 0 and tick >= injection and (spike_end is None or tick < spike_end)):
+            if windows and tick <= windows[-1]['last'] + 1:
+                windows[-1].update(last=tick, ms=windows[-1]['ms'] + ms)
+            else:
+                windows.append(dict(first=tick, last=tick, ms=ms))
+        spike_waits = len(windows) if wait_fraction is not None else None
+        pins['item9a_spike_waits'] = pin(spike_waits, '<= 1 blocking wait from the single injected spike through return (waits on adjacent frames are one wait, their sum <= 50 ms)',
+                                       spike_waits is not None and spike_waits <= 1 and all(window['ms'] <= 50 for window in windows), evidence,
+                                       dict(injected_tick=injection, drop_hold_tick=spike_end, wait_windows=windows))
         returns = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+)', log)]
         before = [tick for seat, tick in holds if seat == silent_seat and tick <= injection]
         held = next((tick for seat, tick in sorted(holds, key=lambda value: value[1]) if seat == silent_seat and tick >= injection), None)
