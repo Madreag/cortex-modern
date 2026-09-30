@@ -42,6 +42,34 @@ class CrossReducers(unittest.TestCase):
             self.assertIn('crash',restart)
             self.assertEqual(restart['crash']['engine_after_wall_ms'],0)
             self.assertTrue(restart['crash']['effect_finished'])
+    def test_the_soaks_announced_leave_ends_told_it_left_and_the_soak_plays_on(self):
+        import sys
+        from types import SimpleNamespace
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import cross_peers, cross_report
+        peers = [dict(name='erol', box='EROL-PC'), dict(name='edith', box='EDITH'), dict(name='mac', box='Mac')]
+        boxes = {'EROL-PC': dict(kind='windows-local'), 'EDITH': dict(kind='windows-task'), 'Mac': dict(kind='posix-ssh')}
+        options = SimpleNamespace(schedule=None, scenario='soak', host='erol', recovery_deadline_ms=120000, ticks=72000, chaos_seed=1, chaos_faults=0)
+        faults = cross_peers.schedule_for(options, peers, boxes)
+        leave = next(f for f in faults if f['action'] == 'announced-leave-rejoin')
+        # The ruled outcome: a clean leaver's return reads that it left, and nothing waits on a catch-up it will not have.
+        self.assertEqual((leave['outcomes'], leave['incarnation'], leave['return_incarnation']), (['told_it_left'], 0, 1))
+        self.assertFalse([f for f in faults if f.get('recovery_id') == leave['id']])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'recovery.jsonl'
+            ledger = records.RecoveryLedger(path, 'mac', 'payload:3', 0, [leave])
+            ledger.external_start(leave, 0, 100, 110, dict(tick=leave['tick']))
+            told = dict(type='recovery', id=leave['id'], recovery_phase='told_it_left', terminal=True,
+                        text='You left this match. It is still running. It takes no new players until it ends.')
+            ledger.observe([told], 1, 4000, 4100)
+            self.assertIn(leave['id'], ledger.completed)
+            rows = [__import__('json').loads(line) for line in path.read_text().splitlines()]
+            result = report.reduce_recoveries([leave], rows, now_ms=5000)[0]
+            self.assertEqual((result['outcome'], result['passed']), ('told_it_left', True))
+            # The refused return exits 1 by design; its own row excuses that exit, and the old text would not.
+            refused = dict(started=True, exit_code=1, timed_out=False)
+            self.assertTrue(cross_report.judge_exit(refused, 'mac', 1, faults, rows)['passed'])
+            self.assertFalse(cross_report.judge_exit(refused, 'mac', 1, faults, [dict(r, phase='catch_up') for r in rows])['passed'])
     def histories(self):
         return {p: [sample(t, p) for t in range(1, 5)] for p in ('a', 'b', 'c')}
 
