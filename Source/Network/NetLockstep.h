@@ -1716,7 +1716,8 @@ namespace RTE {
 		uint64_t m_TimingNowMs = 0;
 		std::optional<uint64_t> m_ProductionBaseFrame;
 		static constexpr size_t c_OwnPaceTicks = 15; //!< The ticks whose cost this machine judges its own pace on.
-		static constexpr size_t c_FirstCapacityTicks = 5; //!< The fewest ticks whose median this machine publishes, until it has its full window.
+		static constexpr size_t c_FirstCapacityTicks = 3; //!< The fewest ticks whose median this machine publishes, until it has its full window.
+		static constexpr uint32_t c_SlowReadings = 5; //!< The slow capacity readings in a row that make this machine go quiet.
 		uint64_t m_JudgeAfterFrame = 0; //!< A machine back from its own hold judges itself again from this frame.
 		std::map<uint8_t, double> m_PublishedCapacity; //!< What each machine this one talks to published it can run, in ticks a second.
 		uint64_t m_CapacityPublishedAt = 0; //!< The produced frame this machine last published its capacity at.

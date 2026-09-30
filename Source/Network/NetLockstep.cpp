@@ -6166,11 +6166,11 @@ namespace RTE {
 		// one would propose a seat hold that cannot take effect and the caller would ask again next tick.
 		if (m_CaptureParkAwaitingReports) return false;
 		// A seat that published a capacity slower than the fastest machine's is held the moment this machine waits on it: no bound,
-		// no ramp, nothing left to estimate.
+		// no ramp, nothing left to estimate. Its capacity is its ticks in this round, so it need not have sent a frame yet.
 		bool slowHeld = false;
 		for (uint8_t peer: missing) {
 			const auto published = m_PublishedCapacity.find(peer);
-			if (published == m_PublishedCapacity.end() || !m_PeersPlayedThisRound.contains(peer) || IsReturningSeatBeforeItsFirstInput(peer)) continue;
+			if (published == m_PublishedCapacity.end() || IsReturningSeatBeforeItsFirstInput(peer)) continue;
 			const double fastest = FastestPublishedCapacity(peer, true);
 			if (fastest <= 0 || !SlowAgainst(published->second, fastest)) continue;
 			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": it runs " << published->second
@@ -6415,7 +6415,7 @@ namespace RTE {
 
 	void NetLockstepCoordinator::JudgeOwnPace(uint64_t producedFrame, uint64_t nowUs, double localElapsedMs) {
 		// What this machine can run travels to every machine it talks to on every tick, so none needs to guess another's pace; from
-		// its fifth tick, so a machine slow from its start is known before its first slack runs out.
+		// its third tick, so a machine slow from its start is known before its first slack runs out.
 		if (const double published = OwnCapacityTps(false, c_FirstCapacityTicks); m_Transport && published > 0 && producedFrame != m_CapacityPublishedAt) {
 			m_CapacityPublishedAt = producedFrame;
 			NetLockstepAck capacity;
@@ -6445,7 +6445,7 @@ namespace RTE {
 			m_Stats.localOthersTps = fastest;
 			m_SlowTicks = SlowAgainst(m_Stats.localCapacityTps, fastest) ? m_SlowTicks + 1 : 0;
 			if (!m_SelfHeld && UsesBoundedWait() && !IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) && !IsOwnHostSeatHeld() &&
-			    producedFrame >= m_JudgeAfterFrame && m_SlowTicks >= c_FirstCapacityTicks && m_Stats.localRunwayTicks <= 1.0)
+			    producedFrame >= m_JudgeAfterFrame && m_SlowTicks >= c_SlowReadings && m_Stats.localRunwayTicks <= 1.0)
 				GoQuiet(producedFrame);
 			return;
 		}
