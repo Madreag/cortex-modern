@@ -5206,6 +5206,7 @@ static int ScriptGraphPathQueueSelfTest(lua_State* L) {
 	entered.get_future().wait();
 	if (destroyedFuture.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready) {
 		std::cout << "[path-queue-selftest] FAIL destroyed_with_queued_request" << std::endl;
+		System::FlushConsole();
 		std::_Exit(1);
 	}
 	pool.unpause();
