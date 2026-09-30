@@ -429,9 +429,7 @@ bool FrameMan::FeelBeginDraw() {
 	s_Feel.drawBeginMS = FeelNowMS();
 	s_Feel.frame = {{"type", "frame"}, {"frame", s_Feel.frameNumber + 1}, {"tick", g_TimerMan.GetSimUpdateCount()},
 	    {"draw_begin_ms", s_Feel.drawBeginMS}, {"cap_hz", s_Feel.capHz}, {"active", s_Feel.iterationActive},
-	    {"alpha", g_TimerMan.GetSimUpdateProportion()}, {"actors", FeelLocalActors()}};
-	const int delay = LocalPrediction::GetDepthOverride() > 0 ? LocalPrediction::GetDepthOverride() : ScenarioRunner::GetLockstepLocalInputDelay();
-	s_Feel.frame["preview_depth"] = LocalPrediction::IsRendering() ? std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks())) : 0;
+	    {"alpha", g_TimerMan.GetSimUpdateProportion()}, {"committed_actors", FeelLocalActors()}};
 	s_Feel.frame["scene_width"] = g_SceneMan.GetSceneWidth();
 	s_Feel.frame["scene_height"] = g_SceneMan.GetSceneHeight();
 	s_Feel.frame["wraps_x"] = g_SceneMan.SceneWrapsX();
@@ -454,6 +452,9 @@ void FrameMan::FeelAfterPresent() {
 	if (!FeelRecordingEnabled()) return;
 	const double now = FeelNowMS();
 	++s_Feel.frameNumber;
+	// What the frame showed: inside the render window the controlled actors are the preview clones the player saw.
+	s_Feel.frame["actors"] = FeelLocalActors();
+	s_Feel.frame["preview_depth"] = LocalPrediction::IsRendering() ? LocalPrediction::GetLastDepth() : 0;
 	s_Feel.frame["present_begin_ms"] = s_Feel.presentBeginMS;
 	s_Feel.frame["present_end_ms"] = now;
 	s_Feel.frame["draw_ms"] = s_Feel.presentBeginMS - s_Feel.drawBeginMS;
