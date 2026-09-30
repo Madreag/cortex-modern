@@ -730,6 +730,9 @@ namespace RTE {
 		/// its seat from the next frame at once. An older peer ignores it and judges the silence at its bound.
 		static constexpr uint32_t c_QuietAnnouncementMask = 0x10000000U;
 		static constexpr uint8_t c_QuietSlowMachine = 1;
+		/// The sender publishes what it can run: its capacity in tenths of a tick a second in the low 16 bits, the median cost of its
+		/// last 15 ticks, measured at highestContiguousFrame. An older peer ignores it.
+		static constexpr uint32_t c_CapacityMask = 0x08000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 32;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
@@ -1615,9 +1618,21 @@ namespace RTE {
 		/// rate, it goes quiet.
 		void JudgeOwnPace(uint64_t producedFrame, uint64_t nowUs, double localElapsedMs);
 
+		/// The fastest capacity another machine published, at most the round's rate; 0 when none has.
+		/// @param except A seat whose own capacity is not counted.
+		/// @param includeOwn Whether this machine's own capacity counts.
+		double FastestPublishedCapacity(uint8_t except, bool includeOwn) const;
+
+		/// Whether a capacity is slow against the fastest, past the tolerance for nearly equal machines.
+		static bool SlowAgainst(double capacity, double fastest);
+
+		/// Goes quiet: a client stops queueing input and announces it, a host holds its own seat through its plane.
+		void GoQuiet(uint64_t producedFrame);
+
 		/// The ticks a second this machine's own recent ticks allow; 0 before it has measured them.
 		/// @param capped Whether to cap it at the round's rate, which is all this machine can run the round at.
-		double OwnCapacityTps(bool capped = true) const;
+		/// @param fewestTicks The fewest ticks the median may read, up to its full window.
+		double OwnCapacityTps(bool capped = true, size_t fewestTicks = c_OwnPaceTicks) const;
 
 		/// Whether a seat still feeding the round is a slow machine: this machine waited on it on 45 of the last 60 frames and its ticks
 		/// arrived slower than this machine can run, past the tolerance for nearly equal machines, over that second - no delay re-size
@@ -1701,7 +1716,11 @@ namespace RTE {
 		uint64_t m_TimingNowMs = 0;
 		std::optional<uint64_t> m_ProductionBaseFrame;
 		static constexpr size_t c_OwnPaceTicks = 15; //!< The ticks whose cost this machine judges its own pace on.
+		static constexpr size_t c_FirstCapacityTicks = 5; //!< The fewest ticks whose median this machine publishes, until it has its full window.
 		uint64_t m_JudgeAfterFrame = 0; //!< A machine back from its own hold judges itself again from this frame.
+		std::map<uint8_t, double> m_PublishedCapacity; //!< What each machine this one talks to published it can run, in ticks a second.
+		uint64_t m_CapacityPublishedAt = 0; //!< The produced frame this machine last published its capacity at.
+		uint32_t m_SlowTicks = 0; //!< The consecutive ticks this machine's capacity has been slow against the fastest published one.
 		std::deque<double> m_TickCosts; //!< This machine's own recent ticks' cost, in ms.
 		std::deque<std::array<double, 3>> m_OthersTickSamples; //!< When (us), at which tick the fastest other machine stood, and this machine's own tick.
 		bool m_SelfHeld = false; //!< This machine judged itself unable to hold the round's rate: its seat sends nothing more.

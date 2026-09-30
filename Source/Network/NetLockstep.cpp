@@ -4799,6 +4799,9 @@ namespace RTE {
 		m_OthersTickSamples.clear();
 		m_SelfHeld = false;
 		m_JudgeAfterFrame = 0;
+		m_PublishedCapacity.clear();
+		m_CapacityPublishedAt = 0;
+		m_SlowTicks = 0;
 		m_TimingDecisions.clear();
 		m_SettledTimings.clear();
 		m_PreStartTiming.clear();
@@ -6144,12 +6147,27 @@ namespace RTE {
 		// A park handshake is in flight: every boundary authored now is deferred to its final end, so declaring
 		// one would propose a seat hold that cannot take effect and the caller would ask again next tick.
 		if (m_CaptureParkAwaitingReports) return false;
-		// A seat feeding below the round's rate falls further behind every second, which no delay re-size covers: it is held at
-		// the bound like a silent one, whatever each frame's own wait, and the others never run at its pace.
+		// A seat that published a capacity slower than the fastest machine's is held the moment this machine waits on it: no bound,
+		// no ramp, nothing left to estimate.
 		bool slowHeld = false;
 		for (uint8_t peer: missing) {
+			const auto published = m_PublishedCapacity.find(peer);
+			if (published == m_PublishedCapacity.end() || !m_PeersPlayedThisRound.contains(peer) || IsReturningSeatBeforeItsFirstInput(peer)) continue;
+			const double fastest = FastestPublishedCapacity(peer, true);
+			if (fastest <= 0 || !SlowAgainst(published->second, fastest)) continue;
+			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": it runs " << published->second
+			                 << " ticks/s against the fastest's " << fastest << "; the AI takes its seat" << std::endl;
+			std::string holdError;
+			if (ProposePeerHold(peer, nowMs, &holdError)) slowHeld = true;
+			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
+		}
+		if (slowHeld) return true;
+		// A seat that publishes nothing and feeds below the round's rate falls further behind every second, which no delay re-size
+		// covers: it is held at the bound like a silent one, whatever each frame's own wait, and the others never run at its pace.
+		for (uint8_t peer: missing) {
 			double rate = 0.0;
-			if (!m_PeersPlayedThisRound.contains(peer) || IsReturningSeatBeforeItsFirstInput(peer) || !FeedsBelowRoundRate(peer, frame, nowMs, &rate)) continue;
+			if (m_PublishedCapacity.contains(peer) || !m_PeersPlayedThisRound.contains(peer) || IsReturningSeatBeforeItsFirstInput(peer) ||
+			    !FeedsBelowRoundRate(peer, frame, nowMs, &rate)) continue;
 			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": " << rate
 			                 << " ticks/s against " << (1000.0 / m_Config.simTickMs) << "; the AI takes its seat" << std::endl;
 			std::string holdError;
@@ -6378,6 +6396,17 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::JudgeOwnPace(uint64_t producedFrame, uint64_t nowUs, double localElapsedMs) {
+		// What this machine can run travels to every machine it talks to on every tick, so none needs to guess another's pace; from
+		// its fifth tick, so a machine slow from its start is known before its first slack runs out.
+		if (const double published = OwnCapacityTps(false, c_FirstCapacityTicks); m_Transport && published > 0 && producedFrame != m_CapacityPublishedAt) {
+			m_CapacityPublishedAt = producedFrame;
+			NetLockstepAck capacity;
+			capacity.senderPeerId = m_Config.localPeerId;
+			capacity.highestContiguousFrame = producedFrame;
+			capacity.receivedMask = NetLockstepCodec::c_CapacityMask | static_cast<uint32_t>(std::clamp<long long>(std::llround(published * 10.0), 1, 0xFFFF));
+			std::string ignored;
+			(void)SendPacket({capacity}, NetTransportLane::ControlReliable, &ignored);
+		}
 		m_Stats.localCapacityTps = OwnCapacityTps(false);
 		if (m_Stats.localCapacityTps <= 0) return;
 		m_Stats.localBehindTicks = localElapsedMs / m_Config.simTickMs - static_cast<double>(producedFrame - *m_ProductionBaseFrame);
@@ -6390,6 +6419,17 @@ namespace RTE {
 		}
 		if (othersTick < 0 || m_LastQueuedTargetFrame == UINT64_MAX) return;
 		m_Stats.localRunwayTicks = static_cast<double>(m_LastQueuedTargetFrame) - othersTick - othersTrip;
+		// With the others' capacities published nothing is estimated: this machine is slow when what it can run falls short of the
+		// fastest machine's past the tolerance for nearly equal machines, for a whole capacity window (a burst's uneven end never lasts
+		// that long), and it goes quiet when its slack to the others is down to one tick, before any of them waits on it.
+		if (const double fastest = FastestPublishedCapacity(m_Config.localPeerId, false); fastest > 0) {
+			m_Stats.localOthersTps = fastest;
+			m_SlowTicks = SlowAgainst(m_Stats.localCapacityTps, fastest) ? m_SlowTicks + 1 : 0;
+			if (!m_SelfHeld && UsesBoundedWait() && !IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) && !IsOwnHostSeatHeld() &&
+			    producedFrame >= m_JudgeAfterFrame && m_SlowTicks >= c_OwnPaceTicks && m_Stats.localRunwayTicks <= 1.0)
+				GoQuiet(producedFrame);
+			return;
+		}
 		// The last half second: how fast the fastest other machine advanced, and this one.
 		m_OthersTickSamples.push_back({static_cast<double>(nowUs), othersTick, static_cast<double>(producedFrame)});
 		while (m_OthersTickSamples.size() > 2 && m_OthersTickSamples[1][0] + 500000 <= nowUs) m_OthersTickSamples.pop_front();
@@ -6415,10 +6455,28 @@ namespace RTE {
 		// A machine back from its own hold is judged again only a second later.
 		if (m_SelfHeld || !UsesBoundedWait() || IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) || IsOwnHostSeatHeld() || producedFrame < m_JudgeAfterFrame ||
 		    m_Stats.localRunwayTicks > 2.0 || m_Stats.localCostTps <= tolerance || m_Stats.localRunwayFallTps <= tolerance) return;
+		GoQuiet(producedFrame);
+	}
+
+	double NetLockstepCoordinator::FastestPublishedCapacity(uint8_t except, bool includeOwn) const {
+		const double rate = 1000.0 / m_Config.simTickMs;
+		double fastest = includeOwn ? OwnCapacityTps(true) : 0.0;
+		for (const auto& [peer, capacity]: m_PublishedCapacity) {
+			if (peer == except || peer == m_Config.localPeerId || IsPeerGoneAtFrame(peer, m_Stats.nextFrame) || IsSeatUnderAI(peer, m_Stats.nextFrame)) continue;
+			fastest = std::max(fastest, std::min(capacity, rate));
+		}
+		return fastest;
+	}
+
+	bool NetLockstepCoordinator::SlowAgainst(double capacity, double fastest) {
+		// Nearly equal machines stay in together: at 59.5 or more the fastest may lose half a tick a second, below that a tenth of its rate.
+		return std::min(capacity, fastest) < fastest - (fastest >= 59.5 ? 0.5 : fastest / 10.0);
+	}
+
+	void NetLockstepCoordinator::GoQuiet(uint64_t producedFrame) {
 		m_SelfHeld = true;
 		DiagnosticLine() << "[net-lockstep] this machine cannot keep up at frame " << producedFrame << ": " << m_Stats.localCapacityTps << " ticks/s against the others' "
-		                 << m_Stats.localOthersTps << ", its runway falling " << m_Stats.localRunwayFallTps << " ticks/s to " << m_Stats.localRunwayTicks
-		                 << "; its seat goes quiet after frame " << m_LastQueuedTargetFrame
+		                 << m_Stats.localOthersTps << ", " << m_Stats.localRunwayTicks << " ticks of slack; its seat goes quiet after frame " << m_LastQueuedTargetFrame
 		                 << " for the AI" << std::endl;
 		if (m_Config.localPeerId == GetHostPeerId()) {
 			std::string holdError;
@@ -6437,14 +6495,15 @@ namespace RTE {
 		(void)SendPacket({quiet}, NetTransportLane::ControlReliable, &ignored);
 	}
 
-	double NetLockstepCoordinator::OwnCapacityTps(bool capped) const {
+	double NetLockstepCoordinator::OwnCapacityTps(bool capped, size_t fewestTicks) const {
 		// The median of its own recent ticks' cost, which a capture or a first-tick load does not move.
-		if (m_TickCosts.size() < c_OwnPaceTicks) return 0;
+		const size_t ticks = std::min(m_TickCosts.size(), c_OwnPaceTicks);
+		if (ticks == 0 || ticks < std::min(fewestTicks, c_OwnPaceTicks)) return 0;
 		std::array<double, c_OwnPaceTicks> costs;
-		std::copy(m_TickCosts.end() - c_OwnPaceTicks, m_TickCosts.end(), costs.begin());
-		std::nth_element(costs.begin(), costs.begin() + c_OwnPaceTicks / 2, costs.end());
+		std::copy(m_TickCosts.end() - ticks, m_TickCosts.end(), costs.begin());
+		std::nth_element(costs.begin(), costs.begin() + ticks / 2, costs.begin() + ticks);
 		const double rate = 1000.0 / m_Config.simTickMs;
-		const double own = costs[c_OwnPaceTicks / 2] > 0 ? 1000.0 / costs[c_OwnPaceTicks / 2] : 1000.0;
+		const double own = costs[ticks / 2] > 0 ? 1000.0 / costs[ticks / 2] : 1000.0;
 		return capped ? std::min(rate, own) : own;
 	}
 
@@ -7242,6 +7301,10 @@ namespace RTE {
 		}
 		if (ack.receivedMask == NetLockstepCodec::c_InputAcceptedMask) {
 			// Kept as a wire-compatible no-op; local input commits without a per-frame round trip.
+			return;
+		}
+		if ((ack.receivedMask & NetLockstepCodec::c_CapacityMask) != 0) {
+			m_PublishedCapacity[ack.senderPeerId] = static_cast<double>(ack.receivedMask & 0xFFFFU) / 10.0;
 			return;
 		}
 		// A seat that went quiet says so: nothing about its silence is unknown, so the host holds it from the frame after its last
@@ -9262,6 +9325,7 @@ namespace RTE {
 		// A host that held itself for its machine is judged again a second after its seat is back.
 		m_SelfHeld = false;
 		m_OthersTickSamples.clear();
+		m_SlowTicks = 0;
 		m_JudgeAfterFrame = applyFrame + static_cast<uint64_t>(std::ceil(1000.0 / m_Config.simTickMs));
 		DiagnosticLine() << "[net-lockstep] own seat back at frame " << applyFrame << " delay=" << delay << " applied_through=" << *m_LastCompletedSimulationTick
 		          << " next_frame=" << m_Stats.nextFrame << " held_from=" << m_AiHeldSeats.at(local) << std::endl;
