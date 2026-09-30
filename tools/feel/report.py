@@ -471,7 +471,12 @@ def item9a_gates(run, peer='host', rows=None):
     horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * tick_ms
                                   for tick, stamps in by_tick.items())) if valid_tick and wall_ms is not None else None)
     evidence = [clock_path, log_path, report_path]
+    # The harness's own per-tick sim dump is not the engine's cost: one frame of it past 50 ms fails the arm, never passes as feel.
+    dump_ms = [float(ms) for ms in re.findall(r'\[sim-dump\] ticks=\d+ mean_ms=\S+ max_ms=([0-9.eE+-]+)', log)]
+    dump_ms += [float(ms) for ms in re.findall(r'\[sim-dump\] slow tick=\d+ ms=([0-9.eE+-]+)', log)]
+    harness_ms = max(dump_ms, default=0.0) if log_path.is_file() else None
     pins = {
+        'item9a_harness_cost': pin(harness_ms, '<= 50 ms of the harness sim dump in any one frame', harness_ms is not None and harness_ms <= 50, [log_path]),
         'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
         'item9a_steady_stalls': pin(steady_stalls, '0 blocking waits before the injected spike', steady_stalls == 0, evidence),
