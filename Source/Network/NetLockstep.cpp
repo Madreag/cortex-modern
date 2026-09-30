@@ -4792,6 +4792,8 @@ namespace RTE {
 		m_TimingNowMs = 0;
 		m_ProductionBaseFrame.reset();
 		m_ProductionBaseUs = m_ProductionWaitBaseUs = 0;
+		m_TickCosts.clear();
+		m_SelfHeld = false;
 		m_TimingDecisions.clear();
 		m_SettledTimings.clear();
 		m_PreStartTiming.clear();
@@ -5273,6 +5275,8 @@ namespace RTE {
 			}
 		}
 		if (IsSeatReclaimGap(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
+		// A machine that judged itself too slow sends nothing more: the host's bound holds its silent seat.
+		if (m_SelfHeld) { m_DeferredControllerFrames.clear(); return true; }
 		// A host whose own seat the AI holds catches up in place: its input for the frames the AI played is discarded, as on every peer.
 		if (m_Config.localPeerId == GetHostPeerId() && IsSeatUnderAI(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
 		// Past the round's agreed end the host's input would let a peer play a frame the round never has.
@@ -6008,7 +6012,7 @@ namespace RTE {
 
 	std::string NetLockstepCoordinator::LocalHoldReason() const {
 		// This machine's own ticks ran over the step: the seat is held for the machine, not the link.
-		return m_Stats.localMachineSlow ? "PeerHeld:Your machine cannot keep up with this match. The AI is playing your seat."
+		return m_Stats.localMachineSlow || m_SelfHeld ? "PeerHeld:Your machine cannot keep up with this match. The AI is playing your seat."
 		                                : "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
 	}
 
@@ -6341,6 +6345,8 @@ namespace RTE {
 		const bool overrun = computeMs > m_Config.simTickMs;
 		if (overrun) ++m_Stats.localTickOverruns;
 		m_Stats.localComputeDebtMs = std::max(0.0, m_Stats.localComputeDebtMs + computeMs - m_Config.simTickMs);
+		m_TickCosts.push_back(computeMs);
+		if (m_TickCosts.size() > c_OwnPaceTicks) m_TickCosts.pop_front();
 	}
 
 	void NetLockstepCoordinator::NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs) {
@@ -6359,6 +6365,37 @@ namespace RTE {
 		if (late) { ++m_Stats.localLateInputs; ++m_Stats.consecutiveLateInputs; }
 		else m_Stats.consecutiveLateInputs = 0;
 		m_Stats.localMachineSlow = m_Stats.consecutiveLateInputs >= 8 && m_Stats.localComputeDebtMs >= m_Config.simTickMs;
+		JudgeOwnPace(producedFrame, localElapsedMs);
+		if (m_SelfHeld) m_Stats.localMachineSlow = true;
+	}
+
+	void NetLockstepCoordinator::JudgeOwnPace(uint64_t producedFrame, double localElapsedMs) {
+		// What this machine can simulate: the median of its own recent ticks' cost, which a capture or a first-tick load does not move.
+		if (m_TickCosts.size() < c_OwnPaceTicks) return;
+		std::array<double, c_OwnPaceTicks> costs;
+		std::copy(m_TickCosts.end() - c_OwnPaceTicks, m_TickCosts.end(), costs.begin());
+		std::nth_element(costs.begin(), costs.begin() + c_OwnPaceTicks / 2, costs.end());
+		m_Stats.localCapacityTps = costs[c_OwnPaceTicks / 2] > 0 ? 1000.0 / costs[c_OwnPaceTicks / 2] : 0;
+		m_Stats.localBehindTicks = localElapsedMs / m_Config.simTickMs - static_cast<double>(producedFrame - *m_ProductionBaseFrame);
+		// The runway this machine's queued inputs still give the host: its newest target past the host's own tick, read from the
+		// host's newest frame, its delay and the trip it took.
+		const uint8_t host = GetHostPeerId();
+		if (const auto hostStats = m_Stats.peers.find(host); hostStats != m_Stats.peers.end() && hostStats->second.highestTargetFrame != 0 && m_LastQueuedTargetFrame != UINT64_MAX) {
+			const double hostTick = static_cast<double>(hostStats->second.highestTargetFrame) - InputDelayAt(host, hostStats->second.highestTargetFrame) +
+			    hostStats->second.pingMs / 2.0 / m_Config.simTickMs;
+			m_Stats.localRunwayTicks = static_cast<double>(m_LastQueuedTargetFrame) - hostTick;
+		}
+		// A machine that cannot run the round's rate goes quiet once it is behind the round past the bound, or sooner when its queued
+		// inputs are down to two ticks of runway, so the last of them still reach the host in time: the host's bound then holds the
+		// silent seat once, within the bound, and the others never run at this machine's pace. The host itself and a round with no
+		// bound never go quiet; a seat still returning is judged after its return.
+		const uint16_t bound = std::max<uint16_t>(1, m_Config.slowPlayerBoundTicks);
+		if (m_SelfHeld || m_Config.localPeerId == host || !UsesBoundedWait() || IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) ||
+		    (m_Stats.localBehindTicks <= bound && m_Stats.localRunwayTicks > 2.0) || m_Stats.localCapacityTps == 0 || m_Stats.localCapacityTps >= 1000.0 / m_Config.simTickMs) return;
+		m_SelfHeld = true;
+		DiagnosticLine() << "[net-lockstep] this machine cannot keep up at frame " << producedFrame << ": " << m_Stats.localCapacityTps << " ticks/s against "
+		                 << (1000.0 / m_Config.simTickMs) << ", " << m_Stats.localBehindTicks << " ticks behind the round, " << m_Stats.localRunwayTicks
+		                 << " ticks of runway; its seat goes quiet for the AI" << std::endl;
 	}
 
 	void NetLockstepCoordinator::CommitTiming(uint64_t revision) {
@@ -9374,6 +9411,7 @@ namespace RTE {
 		out << "\"local_compute_debt_ms\":" << m_Stats.localComputeDebtMs << ",";
 		out << "\"local_production_late_ms\":" << m_Stats.localProductionLateMs << ",";
 		out << "\"local_machine_slow\":" << (m_Stats.localMachineSlow ? "true" : "false") << ",";
+		out << "\"local_self_held\":" << (m_SelfHeld ? "true" : "false") << ",\"local_capacity_tps\":" << m_Stats.localCapacityTps << ",";
 		out << "\"slow_player_bound_ticks\":" << m_Config.slowPlayerBoundTicks << ",";
 		out << "\"sim_tick_ms\":" << m_Config.simTickMs << ",";
 		out << "\"longest_stall_ms\":" << m_Stats.longestStallMs << ",";
