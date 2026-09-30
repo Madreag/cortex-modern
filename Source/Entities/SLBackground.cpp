@@ -5,6 +5,8 @@
 #include "FrameMan.h"
 #include "SceneMan.h"
 #include "SettingsMan.h"
+#include "PresetMan.h"
+#include "System.h"
 #include <algorithm>
 
 #include "raylib/raylib.h"
@@ -184,6 +186,7 @@ void SLBackground::InitScaleFactors() {
 		}
 		m_ScrollInfo *= m_ScaleFactor;
 		InitScrollRatios();
+		System::PrintDiagnosticLine("[scene] backdrop " + GetPresetName() + " fit scale=" + std::to_string(m_ScaleFactor.GetX()) + "," + std::to_string(m_ScaleFactor.GetY()));
 	}
 }
 
@@ -338,4 +341,18 @@ bool SLBackground::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		m_CheckpointBitmaps = std::move(owned); m_Bitmaps = std::move(bitmaps); m_MainBitmap = main; m_BackBitmap = back.release();
 		return true;
 	} catch (const std::exception&) { return false; }
+}
+
+void SLBackground::RefitToThisScreen() {
+	if (m_IgnoreAutoScale || !m_MainBitmap) {
+		return;
+	}
+	const auto* preset = dynamic_cast<const SLBackground*>(g_PresetMan.GetEntityPreset(GetClassName(), GetPresetName(), GetModuleID()));
+	if (!preset) {
+		return;
+	}
+	System::PrintDiagnosticLine("[scene] backdrop " + GetPresetName() + " restored scale=" + std::to_string(m_ScaleFactor.GetX()) + "," + std::to_string(m_ScaleFactor.GetY()));
+	m_ScrollInfo = preset->m_ScrollInfo;
+	m_ScaleFactor = preset->m_ScaleFactor;
+	InitScaleFactors();
 }
