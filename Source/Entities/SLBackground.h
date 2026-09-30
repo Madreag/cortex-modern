@@ -134,6 +134,9 @@ namespace RTE {
 		/// Initializes the scale factors for all auto-scaling modes for this SLBackground, then sets the appropriate factor according to the auto-scaling setting.
 		/// Has to be done during Scene loading to correctly adjust the factors in cases the Scene does not vertically cover the player's whole screen.
 		void InitScaleFactors();
+
+		/// Fits a layer restored from another machine's image to this machine's screen again, from its preset's own scroll and scale.
+		void RefitToThisScreen();
 #pragma endregion
 
 #pragma region Virtual Override Methods
