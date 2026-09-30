@@ -216,6 +216,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="the client spends this much more per sim tick (a slower machine's sim cost on this box)")
     parser.add_argument("--client-sim-cost-from-tick", type=int, default=0,
                         help="the client's added sim cost starts at this tick: a machine that turns slow mid-match")
+    parser.add_argument("--client-sim-cost-until-tick", type=int, default=0, help="the client's added sim cost ends at this tick (0: never)")
+    parser.add_argument("--host-sim-cost-us", type=int, default=0, help="the host spends this much more per sim tick")
+    parser.add_argument("--host-sim-cost-from-tick", type=int, default=0, help="the host's added sim cost starts at this tick")
+    parser.add_argument("--host-sim-cost-until-tick", type=int, default=0, help="the host's added sim cost ends at this tick (0: never)")
     parser.add_argument("--client-draw-cost-us", type=int, default=0,
                         help="the client spends this much more per drawn frame (a slower machine's draw cost on this box)")
     parser.add_argument("--co-hosted", action="store_true",
@@ -350,10 +354,14 @@ def main(argv: list[str] | None = None) -> int:
                 env["CC_TEST_GNS_LOSS_PERCENT"] = str(options.loss)
             if peer == "client" and options.mute_input:
                 env["CC_TEST_LOCKSTEP_MUTE_INPUT"] = options.mute_input
-            if peer == "client" and options.client_sim_cost_us:
-                env["CCCP_TEST_SIM_COST_US"] = str(options.client_sim_cost_us)
-                if options.client_sim_cost_from_tick:
-                    env["CCCP_TEST_SIM_COST_FROM_TICK"] = str(options.client_sim_cost_from_tick)
+            cost, from_tick, until_tick = ((options.client_sim_cost_us, options.client_sim_cost_from_tick, options.client_sim_cost_until_tick) if peer == "client" else
+                                           (options.host_sim_cost_us, options.host_sim_cost_from_tick, options.host_sim_cost_until_tick))
+            if cost:
+                env["CCCP_TEST_SIM_COST_US"] = str(cost)
+                if from_tick:
+                    env["CCCP_TEST_SIM_COST_FROM_TICK"] = str(from_tick)
+                if until_tick:
+                    env["CCCP_TEST_SIM_COST_UNTIL_TICK"] = str(until_tick)
             if peer == "client" and options.client_draw_cost_us:
                 env["CCCP_TEST_DRAW_COST_US"] = str(options.client_draw_cost_us)
             run = make_run(repo, flags, root / peer, timeout=options.minutes * 60 + 600, env=env)

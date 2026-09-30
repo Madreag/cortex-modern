@@ -4081,7 +4081,9 @@ static void DrawFrameWithPreviews() {
 	}
 	// Test lever: a slower machine's draw cost, spent inside the frame's draw on this one.
 	static const long long s_testDrawCostUs = [] { const char* text = std::getenv("CCCP_TEST_DRAW_COST_US"); return text ? std::atoll(text) : 0LL; }();
-	for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testDrawCostUs; s_testDrawCostUs > 0 && g_TimerMan.GetAbsoluteTime() < until;) {}
+	if (s_testDrawCostUs > 0) {
+		for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testDrawCostUs; g_TimerMan.GetAbsoluteTime() < until;) {}
+	}
 	for (int screen = 0; screen < c_MaxScreenCount; ++screen) g_FrameMan.SetHudDisabled(hudDisabled[screen], screen);
 	LocalPredictionHudSelfTest::SampleAfterDraw();
 	{
@@ -6586,9 +6588,14 @@ void RunGameLoop() {
 			g_TimerMan.UpdateSim();
 			// Test lever: a slower machine's sim cost, spent inside the tick on this one.
 			static const long long s_testSimCostUs = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_US"); return text ? std::atoll(text) : 0LL; }();
-			static const long long s_testSimCostFromTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_FROM_TICK"); return text ? std::atoll(text) : 0LL; }();
-			const bool costsThisTick = s_testSimCostUs > 0 && g_TimerMan.GetSimUpdateCount() >= s_testSimCostFromTick;
-			for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testSimCostUs; costsThisTick && g_TimerMan.GetAbsoluteTime() < until;) {}
+			if (s_testSimCostUs > 0) {
+				static const long long s_fromTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_FROM_TICK"); return text ? std::atoll(text) : 0LL; }();
+				static const long long s_untilTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_UNTIL_TICK"); return text ? std::atoll(text) : 0LL; }();
+				const long long tick = g_TimerMan.GetSimUpdateCount();
+				if (tick >= s_fromTick && (s_untilTick == 0 || tick < s_untilTick)) {
+					for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testSimCostUs; g_TimerMan.GetAbsoluteTime() < until;) {}
+				}
+			}
 			g_AudioMan.RetireFinishedSimulationSounds();
 			const bool watchLedgerExpiry = s_eventLedgerPressTick > 0;
 			const uint64_t expiredBefore = watchLedgerExpiry ? PreviewEventLedger::GetCounters().expired : 0;
