@@ -1274,7 +1274,9 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
 
     # The fresh flag: the same install and the same checkpoints, a NEW round from the scene.
     fresh.mkdir(parents=True, exist_ok=False)
-    fresh_records = _run_world_round(repo, fresh, port + 4, round_ticks, stall(0, {"host": ["-net-world-fresh"]}), carry=second)
+    # The fresh world rotates the previous boot out only once it has completed its own retained checkpoints: it runs as many
+    # writer passes as the resumed round did.
+    fresh_records = _run_world_round(repo, fresh, port + 4, resumed_ticks, stall(0, {"host": ["-net-world-fresh"]}), carry=second)
     fresh_log = peer_log(fresh, "host")
     assert not RESUMING.search(fresh_log), "a fresh world boot resumed a checkpoint anyway"
     fresh_identity = WORLD_IDENTITY.findall(fresh_log)
@@ -1288,7 +1290,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     for who in ("host", "client"):
         assert fresh_records[who].get("exit_code") == 0, (who, fresh_records[who].get("exit_code"))
         assert not fresh_records[who].get("timed_out"), who
-    fresh_compared = _compare_world_round(fresh, world_id, 0, round_ticks)
+    fresh_compared = _compare_world_round(fresh, world_id, 0, resumed_ticks)
     fresh_hold = forced_hold_evidence(fresh, client_stall)
     fresh_held = checkpoints(fresh, "host")
     old_rounds = {fields["RoundId"] for fields in held_two.values()}
