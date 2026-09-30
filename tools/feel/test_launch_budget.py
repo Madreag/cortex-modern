@@ -4,6 +4,7 @@ Acceptance run 1's feel shards ran under the chain's reservation and died with F
 """
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -46,6 +47,52 @@ class ExclusiveMatrixTest(unittest.TestCase):
                 self.assertEqual(json.loads(self.marker.read_text(encoding='utf-8'))['token'], os.environ['CCCP_FEEL_MATRIX_RUN'])
             self.assertFalse(self.marker.exists())
             self.assertNotIn('CCCP_FEEL_MATRIX_RUN', os.environ)
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'the launch guard wraps the Windows runner')
+class CrossFlagTest(unittest.TestCase):
+    """The cross match's reservation keeps strangers off the box, never the cross driver's own launch (r2-erol-match/payload.log:
+    'PAYLOAD FAIL: engine launch refused: the box is reserved for the cross match')."""
+
+    def setUp(self):
+        import win32_test_runner
+        self.root = Path(tempfile.mkdtemp())
+        self.marker = self.root / 'FEEL-MATRIX-RUNNING'
+        self.guard = self.root / 'BOX-FREE-FOR-CROSS'
+        self.guard.write_text('cross', encoding='utf-8')
+        self.patches = [patch.object(launch_budget, 'MARKER', self.marker), patch.object(launch_budget, 'CROSS_GUARD', self.guard),
+                        patch.object(launch_budget, 'free_memory_bytes', lambda: 64 * 1024 ** 3),
+                        patch.object(win32_test_runner.IsolatedRun, 'start', lambda run: 'launched')]
+        for active in self.patches:
+            active.start()
+        launch_budget.install_memory_guard()
+        self.start = win32_test_runner.IsolatedRun.start
+
+    def tearDown(self):
+        for active in reversed(self.patches):
+            active.stop()
+
+    def run_record(self):
+        class Run:
+            record = {}
+            def _save(self):
+                pass
+        return Run()
+
+    def test_a_marker_owner_launches_under_the_cross_flag(self):
+        self.marker.write_text(json.dumps(dict(pid=1, token='cross-driver')), encoding='utf-8')
+        with patch.dict(os.environ, {'CCCP_FEEL_MATRIX_RUN': 'cross-driver'}):
+            self.assertEqual(self.start(self.run_record()), 'launched')
+
+    def test_a_stranger_is_refused_under_the_cross_flag(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('CCCP_FEEL_MATRIX_RUN', None)
+            with self.assertRaisesRegex(RuntimeError, 'reserved for the cross match'):
+                self.start(self.run_record())
+        self.marker.write_text(json.dumps(dict(pid=1, token='cross-driver')), encoding='utf-8')
+        with patch.dict(os.environ, {'CCCP_FEEL_MATRIX_RUN': 'some-lane'}):
+            with self.assertRaisesRegex(RuntimeError, 'refused'):
+                self.start(self.run_record())
 
 
 if __name__ == '__main__':

@@ -29,6 +29,17 @@ def free_memory_bytes():
     return status.available
 
 
+def holds_marker():
+    """Whether this process holds the box: the feel marker carries the token in its environment."""
+    token = os.environ.get('CCCP_FEEL_MATRIX_RUN')
+    if not token or not MARKER.is_file():
+        return False
+    try:
+        return json.loads(MARKER.read_text(encoding='utf-8')).get('token') == token
+    except (OSError, ValueError):
+        return False
+
+
 def install_memory_guard():
     if sys.platform != 'win32':
         return
@@ -44,7 +55,8 @@ def install_memory_guard():
         marker = MARKER
         if marker.is_file() and json.loads(marker.read_text(encoding='utf-8')).get('token') != os.environ.get('CCCP_FEEL_MATRIX_RUN'):
             refuse('engine launch refused: another lane owns the feel matrix marker', marker=str(marker))
-        if CROSS_GUARD.exists():
+        # The cross driver claims the marker before its own local launch; only a process without it is kept off the reserved box.
+        if CROSS_GUARD.exists() and not holds_marker():
             refuse('engine launch refused: the box is reserved for the cross match')
         free = free_memory_bytes()
         if free < MIN_FREE_BYTES:
@@ -61,7 +73,7 @@ def install_memory_guard():
 def exclusive_matrix():
     marker = MARKER
     token = f'{os.getpid()}-netcode-feel'
-    if CROSS_GUARD.exists():
+    if CROSS_GUARD.exists() and not holds_marker():
         raise RuntimeError('the box is reserved for the cross match')
     # A caller that already holds the box (its token in the environment) runs the matrix inside its own reservation,
     # which stays for that caller to release.
