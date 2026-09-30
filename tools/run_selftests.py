@@ -62,6 +62,7 @@ SELFTESTS = [
     "headless-render-cap",
     "preview-invariance",
     "preview-binding-exhaustive",
+    "joystick-updater",
 ]
 # Rows whose verdict carries a wall-clock window, so a loaded box can fail them without a defect. They run last, one at
 # a time, after every other row has finished (the quiet tail); a red one runs once more alone once the box has no other

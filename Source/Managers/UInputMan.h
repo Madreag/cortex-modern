@@ -108,6 +108,23 @@ namespace RTE {
 		static bool ScriptedPadButtonPressed(int whichButton);
 #pragma endregion
 
+#pragma region Joystick Updater
+		/// Gets whether joysticks update and discover devices on their own thread on this platform, never in the frame loop.
+		/// @return Whether the joystick updater thread owns joystick updates.
+		static bool JoystickUpdaterEnabled();
+
+		/// Starts the joystick updater thread. Call after SDL_Init, with SDL_HINT_AUTO_UPDATE_JOYSTICKS set to "0" before it.
+		static void StartJoystickUpdater();
+
+		/// Stops the joystick updater thread. Call before SDL_Quit.
+		static void StopJoystickUpdater();
+
+		/// Selftest: a plugged, pressed and unplugged pad each reach the event queue within a second, with the frame loop
+		/// updating no joystick where the updater thread owns them.
+		/// @return Whether every check passed.
+		static bool RunJoystickUpdaterSelfTest();
+#pragma endregion
+
 #pragma region Control Scheme and Input Mapping Handling
 		/// Sets whether to skip handling any special input (F1-F12, etc.) to avoid shenanigans during manual input mapping.
 		/// @param skip Whether to skip handling special input or not.
