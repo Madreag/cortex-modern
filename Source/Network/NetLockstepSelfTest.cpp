@@ -21529,6 +21529,39 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A hold is for a seat gone silent; a seat still feeding but late is answered by the delay re-size. With a survivor's notice at
+	// 45 ms the declaration deadline was 5 ms, so a seat whose frames kept landing each tick 5 ms late was held (r3-mac-match: seats held
+	// 15-21 ms after their input went missing).
+	bool TestAFeedingSeatIsNotHeldForLateness(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A78, 6, NetTransportLane::InputUnreliable);
+		config.peerCount = 3; config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		config.substituteSlowPeers = true; config.simTickMs = 16.6666;
+		config.relayToOtherPeers = true;
+		if (!wire.StartHost(49577, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 800;
+		host.m_PeersPlayedThisRound = {1, 2, 3};
+		host.m_Stats.peers[3].pingMs = 40; host.m_Stats.peers[3].jitterMs = 3;
+		host.m_Stats.peers[2].jitterMs = 2; host.m_Stats.peers[2].highestTargetFrame = 799;
+		// Feeding: its frame for 799 landed 5 ms ago, the one for 800 is 10 ms late.
+		host.m_Stats.peers[2].lastProgressMs = 4995;
+		if (host.DeclareOverdueInputs(800, 5000, 4990, {2})) {
+			*error = "a seat whose frames kept landing each tick was held 10 ms after its next one went missing (notice " + std::to_string(host.GetStats().holdNoticeBudgetMs) + " ms)";
+			return false;
+		}
+		// Silent: nothing from it for 200 ms.
+		host.m_Stats.peers[2].lastProgressMs = 4800;
+		if (!host.DeclareOverdueInputs(800, 5000, 4900, {2})) {
+			*error = "a seat silent for 200 ms and missing for 100 ms was not held";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_feeding_seat_is_not_held_for_lateness notice_ms=" << host.GetStats().holdNoticeBudgetMs << std::endl;
+		return true;
+	}
+
 	// A peer behind the others finds frames ready before it simulates them; the preview still plays its own input for them (g5 F4
 	// client: the fire pressed at 180 for 203 was missing from the preview at 181, so every previewed shot came a delay late).
 	bool TestAReadyFrameKeepsItsLocalInputForThePreview(std::string* error) {
@@ -22725,6 +22758,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAHostInItsReclaimGapJudgesNoSeatLate, "a_host_in_its_reclaim_gap_judges_no_seat_late");
 		row(&TestAReturnRefusedBeforeItsStartStopsNobody, "a_return_refused_before_its_start_stops_nobody");
 		row(&TestAReadyFrameKeepsItsLocalInputForThePreview, "a_ready_frame_keeps_its_local_input_for_the_preview");
+		row(&TestAFeedingSeatIsNotHeldForLateness, "a_feeding_seat_is_not_held_for_lateness");
 		row(&TestAHostEndNamesAFrameNoPeerHasPassed, "a_host_end_names_a_frame_no_peer_has_passed");
 		row(&TestAHostEndDoesNotWaitOnASilentPeer, "a_host_end_does_not_wait_on_a_silent_peer");
 		row(&TestAHostEndJudgesNoSeatPastIt, "a_host_end_judges_no_seat_past_it");
