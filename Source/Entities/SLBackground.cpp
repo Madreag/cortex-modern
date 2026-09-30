@@ -274,7 +274,9 @@ std::string SLBackground::SaveCheckpoint() const {
 		m_WrapX, m_WrapY, m_OriginOffset);
 	// Where this machine's camera scrolled the layer, and the back buffer it draws through, are its own.
 	writer.PerPeer(m_Offset);
-	writer(m_ZOrder, m_ScrollInfo, m_ScrollRatio, m_ScaleFactor, m_ScaledDimensions);
+	writer(m_ZOrder);
+	// Scaled to this machine's screen height under its own auto-scale setting (InitScaleFactors): a 4K peer draws the backdrops twice as large.
+	writer.PerPeer(m_ScrollInfo, m_ScrollRatio, m_ScaleFactor, m_ScaledDimensions);
 	writer(m_Drawings.size());
 	for (const auto& rectangle: m_Drawings) writer(rectangle.m_Left, rectangle.m_Top, rectangle.m_Right, rectangle.m_Bottom);
 	std::vector<CheckpointText> frames;
