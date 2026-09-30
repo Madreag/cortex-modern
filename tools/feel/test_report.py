@@ -510,6 +510,23 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result['audio_ms_upper'], 10)
         self.assertFalse(result['once'])
 
+    def test_the_shot_is_on_time_at_the_first_preview_that_reaches_the_committed_shot(self):
+        # The trigger reads the press at 10 + 4 and the gun fires the tick after, as in single player.
+        press = dict(_line=1, tick=10, wall_ms=100, delay=4, actor=dict(uid=7), changes=[dict(action='FIRE', held=True)])
+        committed = [dict(tick=tick, actors=[dict(uid=7, fired=tick == 15)]) for tick in range(10, 20)]
+        log = '[preview-event] voice committed=11 tick=15 uid=8 previewed=1 asset=0 preset=2 seq=0 preset_name="gun" path=fire.flac\n'
+        on_time = dict(_line=4, committed_tick=11, target_tick=15, wall_lower_ms=110, wall_upper_ms=118,
+                       actor=dict(uid=7, gun_uid=8, fired=True))
+        late = dict(on_time, committed_tick=13, _line=6)
+        with patch.object(Path, 'read_text', return_value=log):
+            shown = report.firing_records([press], [on_time], [], Path('stdout'), committed)[0]
+            missed = report.firing_records([press], [late], [], Path('stdout'), committed)[0]
+            unknown = report.firing_records([press], [on_time], [], Path('stdout'))[0]
+        self.assertTrue(shown['preview_tick'])
+        self.assertEqual(shown['fire_tick'], 15)
+        self.assertFalse(missed['preview_tick'])
+        self.assertFalse(unknown['preview_tick'])
+
 
 class EarlyDecidedArmTest(unittest.TestCase):
     """An arm whose peer stopped early is a failed pin on that arm, not the end of the matrix."""

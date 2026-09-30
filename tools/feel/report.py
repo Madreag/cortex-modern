@@ -782,7 +782,15 @@ def max_in_window(values, width):
     return maximum
 
 
-def firing_records(inputs, previews, frames, stdout_path):
+def firing_records(inputs, previews, frames, stdout_path, committed=()):
+    # A gun fires the tick after its trigger reads the press, in single player too, so the press's own preview can show
+    # the trigger but not the shot; the shot is on time when the first preview whose horizon reaches the committed shot
+    # tick shows it at that tick.
+    fired_ticks = defaultdict(list)
+    for row in committed:
+        for actor in row['actors']:
+            if actor['fired']:
+                fired_ticks[actor['uid']].append(row['tick'])
     voices = []
     for number, text in enumerate(stdout_path.read_text(encoding='utf-8-sig', errors='replace').splitlines(), 1):
         match = VOICE.match(text)
@@ -803,6 +811,8 @@ def firing_records(inputs, previews, frames, stdout_path):
                    observation_end_ms=min(end_ms, frames[-1]['present_end_ms']) if frames else press['wall_ms'],
                    right_censored=first is None)
         if first:
+            fire_tick = min((tick for tick in fired_ticks.get(press['actor']['uid'], ()) if press['tick'] <= tick
+                             and (index + 1 == len(presses) or tick <= presses[index + 1]['tick'] + presses[index + 1].get('delay', 0))), default=None)
             matches = [voice for voice in voices if voice['uid'] in (first['actor']['uid'], first['actor'].get('gun_uid'))
                        and abs(voice['tick'] - first['target_tick']) <= 1]
             early = [voice for voice in matches if voice['committed'] == first['committed_tick']]
@@ -815,7 +825,9 @@ def firing_records(inputs, previews, frames, stdout_path):
                        firing_ms_upper=first['wall_upper_ms'] - press['wall_ms'],
                        firing_ms_lower=max(0, first['wall_lower_ms'] - press['wall_ms']),
                        audio_ms_upper=first['wall_upper_ms'] - press['wall_ms'] if early else None,
-                       preview_tick=first['committed_tick'] == press['tick'] and bool(early),
+                       fire_tick=fire_tick,
+                       preview_tick=bool(early) and fire_tick is not None and first['target_tick'] == fire_tick
+                       and first['committed_tick'] + press.get('delay', 0) == fire_tick,
                        once=bool(early) and not duplicate, voices=matches, duplicate_voices=duplicate,
                        presented_firing_ms=visible['present_end_ms'] - press['wall_ms'] if visible else None)
         result.append(row)
@@ -863,7 +875,7 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     command_log = run / 'replay-inspect/stdout.log'
     correction_rows, correction_missing, commands_complete = corrections(previews, committed, canonical_dump, command_log, frames[-1]['peer'], first_tick, ticks)
     duplicate_actor = getattr(corrections, 'last_duplicate', None)
-    firing = firing_records(inputs, previews, frames, run / peer / 'stdout.log')
+    firing = firing_records(inputs, previews, frames, run / peer / 'stdout.log', committed)
     paths = {name: destination / (name + '.jsonl') for name in ('latencies', 'warps', 'corrections', 'correction-missing', 'firing')}
     for name, values in [('latencies', latency), ('warps', warps), ('corrections', correction_rows),
                          ('correction-missing', correction_missing), ('firing', firing)]:
