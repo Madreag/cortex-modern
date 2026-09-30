@@ -212,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=PORT_LO)
     parser.add_argument("--port-block", default=f"{PORT_LO}-{PORT_HI}", help="the calling lane's own port block, LO-HI; --port stays inside it")
     parser.add_argument("--fullstate-every", type=int, default=0)
+    parser.add_argument("--co-hosted", action="store_true",
+                        help="both peers share one machine: its pace and its holds after a return measure that machine, so they are reported, not gated")
     parser.add_argument("--sample-seconds", type=float, default=60)
     parser.add_argument("--rematch", action="store_true", help="both peers ride the e2e rematch: when match 1 ends they return to the lobby and play match 2")
     parser.add_argument("--end-round-tick", type=int, default=0, help="both peers end the round at this sim tick (team 0 wins), so a rematch starts while a seat may still be held")
@@ -390,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
     return_holds = {peer: return_hold_violations((root / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
                     for peer in ('host', 'client')}
     checks['no_hold_after_return'] = not any(return_holds.values())
+    # Two engines and a once-a-second capture on one machine: its pace and its holds after a return are that machine's.
+    measured = {name: checks.pop(name) for name in ('complete_history_and_pace', 'no_hold_after_return')} if options.co_hosted else {}
     if options.host_stall:
         checks['host_stalls_fired'] = count(root / 'host/stdout.log', '[net-test] live stall frame=') == len(options.host_stall)
         checks['host_returned'] = count(root / 'host/stdout.log', '[net-match] seat-reclaimed peer=1') >= len(options.host_stall)
@@ -412,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     private_mb = {peer: census_private(root / peer / "stdout.log") for peer in ("host", "client")}
     clean_ticks = {peer: terrain_event_ticks(root, peer, "clean") for peer in ("host", "client")} if options.terrain_events else None
     result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
+              "measured_not_gated": dict(measured, reason="co-hosted: both engines share one machine; pace and holds after a return are gated by the four-machine soak") if measured else None,
               "holds_after_returns": return_holds,
               "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
               "autosaves_published": autosaves, "autosaves_owed": owed,
@@ -423,6 +428,9 @@ def main(argv: list[str] | None = None) -> int:
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "
           f"autosaves={autosaves}/{owed} samples={len(samples)} -> {root / 'result.json'}", flush=True)
+    if measured:
+        print(f"[soak] measured, not gated ({result['measured_not_gated']['reason']}): {json.dumps(measured)} "
+              f"holds_after_returns={sum(len(rows) for rows in return_holds.values())}", flush=True)
     return 0 if result["pass"] else 1
 
 
