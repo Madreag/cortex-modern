@@ -6875,6 +6875,7 @@ namespace RTE {
 		if (!recovery) {
 			// Every sender spells its keys out again from the epoch, so a member admitted there reads
 			// this frame with the empty table it starts with; the window stops at the epoch too.
+			RepeatTicksBeforeEpoch(m_Config.localPeerId, packet.targetFrame);
 			ApplyObservationEpoch(m_Config.localPeerId, packet.targetFrame);
 			AttachFrameWindow(packet);
 		}
@@ -7124,8 +7125,16 @@ namespace RTE {
 			DiagnosticLine() << "[lockstep] holds no relayed tick " << fromFrame << " of peer " << static_cast<int>(senderPeerId) << " for peer " << static_cast<int>(requesterPeerId)
 			          << "; first kept=" << (firstKept == kept->second.end() ? -1 : static_cast<int64_t>(firstKept->first)) << " heard through=" << m_Stats.peers[senderPeerId].highestTargetFrame << std::endl;
 		for (auto it = firstKept; it != kept->second.end() && it->first < fromFrame + NetLockstepCodec::c_MaxWindowTicks; ++it) {
-			// Repeated only with the bytes it was first forwarded with, so the requester binds what the others bound.
-			if (!blocks.contains(it->first)) break;
+			// Repeated only with the bytes it was first forwarded with, so the requester binds what the others bound; one from
+			// before the epoch goes whole instead.
+			if (!blocks.contains(it->first)) {
+				const auto applied = m_ObservationEpochApplied.find(senderPeerId);
+				if (applied == m_ObservationEpochApplied.end() || it->first >= applied->second ||
+				    !SendIndependentCopy(m_RemoteTransports.at(requesterPeerId), it->second, senderPeerId, m_RoundId, NetTransportLane::ControlReliable)) break;
+				last = it->first;
+				++resent;
+				continue;
+			}
 			std::string error;
 			if (!SendPacket({it->second}, NetTransportLane::ControlReliable, &error, &m_ObservationEncodeTables.Exactly(senderPeerId), nullptr, requesterPeerId, nullptr, &blocks)) break;
 			last = it->first;
@@ -7158,8 +7167,14 @@ namespace RTE {
 			NetLockstepFrame own;
 			if (!FindLocalInput(target, own)) continue;
 			// A tick is repeated only with the bytes it first went out with; re-encoding it against a table that has
-			// moved on would bind keys the requester never saw.
-			if (!blocks.contains(target)) break;
+			// moved on would bind keys the requester never saw. One from before the epoch goes whole instead.
+			if (!blocks.contains(target)) {
+				const auto applied = m_ObservationEpochApplied.find(m_Config.localPeerId);
+				if (applied == m_ObservationEpochApplied.end() || target >= applied->second ||
+				    !SendIndependentCopy(m_RemoteTransports.at(requesterPeerId), own, m_Config.localPeerId, m_RoundId, NetTransportLane::ControlReliable)) break;
+				++resent;
+				continue;
+			}
 			own.priorWindow.clear();
 			std::string error;
 			if (!SendPacket({own}, NetTransportLane::ControlReliable, &error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), nullptr, requesterPeerId, nullptr, &blocks)) break;
@@ -9674,6 +9689,7 @@ namespace RTE {
 		const NetLockstepFrame* relayed = std::get_if<NetLockstepFrame>(&packet.payload);
 		if (relayed) {
 			// The forwarded sender spells its keys out again from the epoch, on the frame that says so.
+			RepeatTicksBeforeEpoch(fromPeerId, relayed->targetFrame);
 			ApplyObservationEpoch(fromPeerId, relayed->targetFrame);
 		}
 		NetLockstepObservationBlocks* blocks = relayed ? &ObservationBlocksOf(fromPeerId, relayed->targetFrame) : nullptr;
@@ -10615,26 +10631,60 @@ namespace RTE {
 		keptTicks.erase(keptTicks.begin(), keptTicks.lower_bound(keepFrom));
 	}
 
+	bool NetLockstepCoordinator::SendIndependentCopy(NetPeerId link, const NetLockstepFrame& input, uint8_t senderPeerId, uint64_t roundId, NetTransportLane lane) {
+		NetLockstepFrame independent = input;
+		independent.senderPeerId = senderPeerId;
+		independent.roundId = roundId;
+		independent.priorWindow.clear();
+		NetLockstepRecoveryChunk chunk;
+		chunk.senderPeerId = senderPeerId;
+		chunk.sessionId = m_Config.sessionId;
+		chunk.roundId = roundId;
+		chunk.targetFrame = input.targetFrame;
+		if (!NetLockstepCodec::EncodeRecoveryInput(independent, chunk.bytes) || chunk.bytes.size() > NetLockstepCodec::c_MaxRecoveryChunkBytes) return false;
+		chunk.totalBytes = static_cast<uint32_t>(chunk.bytes.size());
+		std::vector<uint8_t> bytes;
+		return NetLockstepCodec::Encode({chunk}, bytes) && m_Transport->Send(link, lane, bytes);
+	}
+
+	// A window stops at an epoch and a tick from before it can no longer be repeated with the bytes it first went out with, so a
+	// tick lost just before the epoch would come back to nobody: the ticks the next window would have carried go out once more,
+	// whole and on the reliable lane, the moment the sender crosses the epoch.
+	void NetLockstepCoordinator::RepeatTicksBeforeEpoch(uint8_t senderPeerId, uint64_t targetFrame) {
+		if (!m_Transport || m_Config.frameLane == NetTransportLane::ControlReliable) return;
+		const auto above = m_ObservationEpochs.upper_bound(targetFrame);
+		if (above == m_ObservationEpochs.begin()) return;
+		const uint64_t due = *std::prev(above);
+		if (const auto applied = m_ObservationEpochApplied.find(senderPeerId); applied != m_ObservationEpochApplied.end() && applied->second >= due) return;
+		const uint64_t window = std::max<uint64_t>(2, ConfiguredWindowTicks());
+		const auto kept = m_RelayedTickFrames.find(senderPeerId);
+		std::vector<NetLockstepFrame> ticks;
+		for (uint64_t target = due > window - 1 ? due - (window - 1) : 0; target < due; ++target) {
+			NetLockstepFrame tick;
+			if (senderPeerId == m_Config.localPeerId) {
+				if (!FindLocalInput(target, tick)) continue;
+			} else {
+				if (kept == m_RelayedTickFrames.end()) break;
+				const auto found = kept->second.find(target);
+				if (found == kept->second.end()) continue;
+				tick = found->second;
+			}
+			ticks.push_back(std::move(tick));
+		}
+		size_t sent = 0;
+		for (const auto& [peerId, transportId]: m_RemoteTransports) {
+			if (peerId == senderPeerId) continue;
+			for (const NetLockstepFrame& tick: ticks) sent += SendIndependentCopy(transportId, tick, senderPeerId, m_RoundId, NetTransportLane::ControlReliable) ? 1 : 0;
+		}
+		m_Stats.framesResent += static_cast<uint32_t>(sent);
+	}
+
 	void NetLockstepCoordinator::SendReturnFrameCopies(uint8_t peerId, const NetLockstepFrame& frame) {
 		const auto through = m_ReliableFramesThrough.find(peerId);
 		const auto link = m_RemoteTransports.find(peerId);
 		if (!m_Transport || m_Config.frameLane == NetTransportLane::ControlReliable || link == m_RemoteTransports.end() ||
 		    through == m_ReliableFramesThrough.end() || frame.targetFrame > through->second) return;
-		const auto send = [&](const NetLockstepFrame& input) {
-			NetLockstepFrame independent = input;
-			independent.senderPeerId = frame.senderPeerId;
-			independent.roundId = frame.roundId;
-			independent.priorWindow.clear();
-			NetLockstepRecoveryChunk chunk;
-			chunk.senderPeerId = frame.senderPeerId;
-			chunk.sessionId = m_Config.sessionId;
-			chunk.roundId = frame.roundId;
-			chunk.targetFrame = input.targetFrame;
-			if (!NetLockstepCodec::EncodeRecoveryInput(independent, chunk.bytes) || chunk.bytes.size() > NetLockstepCodec::c_MaxRecoveryChunkBytes) return;
-			chunk.totalBytes = static_cast<uint32_t>(chunk.bytes.size());
-			std::vector<uint8_t> bytes;
-			if (NetLockstepCodec::Encode({chunk}, bytes)) (void)m_Transport->Send(link->second, NetTransportLane::InputUnreliable, bytes);
-		};
+		const auto send = [&](const NetLockstepFrame& input) { (void)SendIndependentCopy(link->second, input, frame.senderPeerId, frame.roundId, NetTransportLane::InputUnreliable); };
 		// These copies carry their own observations while the ordered stream fills the member's dictionaries.
 		const size_t keep = std::max<uint8_t>(1, m_Config.frameRedundancyTicks) - 1;
 		const size_t first = frame.priorWindow.size() > keep ? frame.priorWindow.size() - keep : 0;
