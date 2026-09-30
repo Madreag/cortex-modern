@@ -21535,6 +21535,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		LoopbackTransport wire;
 		NetLockstepCoordinator host;
 		auto config = MakeCoordinatorConfig(1, 2, 0x9A76, 6, NetTransportLane::InputUnreliable);
+		config.peerCount = 2; config.remoteTransportPeerIds = {{2, 1}};
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}};
 		config.substituteSlowPeers = true; config.simTickMs = 16.6666;
 		if (!wire.StartHost(49575, error) || !host.Start(wire, config, error)) return false;
 		host.m_State = NetLockstepState::Running;
