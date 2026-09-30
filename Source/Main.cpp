@@ -4076,6 +4076,9 @@ static void DrawFrameWithPreviews() {
 		NetLockstepPlane::Window sceneDraw("scene draw");
 		g_FrameMan.Draw();
 	}
+	// Test lever: a slower machine's draw cost, spent inside the frame's draw on this one.
+	static const long long s_testDrawCostUs = [] { const char* text = std::getenv("CCCP_TEST_DRAW_COST_US"); return text ? std::atoll(text) : 0LL; }();
+	for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testDrawCostUs; s_testDrawCostUs > 0 && g_TimerMan.GetAbsoluteTime() < until;) {}
 	for (int screen = 0; screen < c_MaxScreenCount; ++screen) g_FrameMan.SetHudDisabled(hudDisabled[screen], screen);
 	LocalPredictionHudSelfTest::SampleAfterDraw();
 	{
@@ -6534,7 +6537,14 @@ void RunGameLoop() {
 
 		// A lockstep peer with owed ticks presents at least once per tick length while it catches up, the round's first ticks
 		// included (the round starts inside this frame's first poll); a world joiner keeps its own ceiling.
-		g_TimerMan.BeginSimFrame(ScenarioRunner::HasLockstepCoordinator() && !freeRunLockstep && !ScenarioRunner::WorldCatchUpActive() ? g_TimerMan.GetDeltaTimeTicks() : 0);
+		// A machine whose frames take longer than a tick sheds frames, never ticks: it keeps what it owes, runs it back to back and
+		// presents at least 15 times a second. One that keeps up spreads a catch-up burst over frames a tick apart.
+		const bool pacedRound = ScenarioRunner::HasLockstepCoordinator() && !freeRunLockstep && !ScenarioRunner::WorldCatchUpActive();
+		const bool shedsFrames = pacedRound && g_PerformanceMan.GetMSPFAverage() > g_TimerMan.GetDeltaTimeMS();
+		constexpr double c_FloorFrameMs = 1000.0 / 15.0;
+		g_TimerMan.SetOwedTicksKept(shedsFrames ? static_cast<int>(c_FloorFrameMs / g_TimerMan.GetDeltaTimeMS()) : 0);
+		g_TimerMan.BeginSimFrame(!pacedRound ? 0 : !shedsFrames ? g_TimerMan.GetDeltaTimeTicks() :
+		                         std::max(g_TimerMan.GetDeltaTimeTicks(), static_cast<long long>((c_FloorFrameMs - g_PerformanceMan.GetMSPDAverage()) * 1000.0)));
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (true) {
 			if (g_TimerMan.SimFrameBudgetSpent()) {
