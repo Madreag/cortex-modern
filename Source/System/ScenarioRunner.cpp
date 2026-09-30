@@ -3068,8 +3068,9 @@ namespace RTE {
 		if (s_PaceSlide.NoteTick(tick)) {
 			const int bound = std::max<int>(1, s_LockstepCoordinator->GetConfig().slowPlayerBoundTicks);
 			g_TimerMan.HoldSimTicks(bound);
-			System::PrintDiagnosticLine("[net-lockstep] pace slide at tick " + std::to_string(tick) + ": " + std::to_string(NetPaceSlide::c_AheadTicks) +
-			                            " ticks in a row waited on their inputs with time owed; the clock drops it and holds back " + std::to_string(bound) + " ticks");
+			System::PrintDiagnosticLine("[net-lockstep] pace slide at tick " + std::to_string(tick) + ": " + std::to_string(NetPaceSlide::c_AheadTicks) + "+ of the last " +
+			                            std::to_string(NetPaceSlide::c_WindowTicks) + " ticks waited on their inputs with time owed; the clock drops it and holds back " +
+			                            std::to_string(bound) + " ticks");
 		}
 		return true;
 	}

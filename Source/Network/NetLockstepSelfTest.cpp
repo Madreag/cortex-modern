@@ -3360,8 +3360,20 @@ namespace RTE {
 				pace.NoteWaitAhead(tick);
 				if (pace.NoteTick(tick)) slidAt = tick;
 			}
-			if (slidAt != 400 + NetPaceSlide::c_AheadTicks - 1) {
-				*error = "a peer waiting on every tick held its clock back at " + std::to_string(slidAt) + ", not after " + std::to_string(NetPaceSlide::c_AheadTicks) + " ticks";
+			if (slidAt != 400 + NetPaceSlide::c_WindowTicks - 1) {
+				*error = "a peer waiting on every tick held its clock back at " + std::to_string(slidAt) + ", not after " + std::to_string(NetPaceSlide::c_WindowTicks) + " ticks";
+				return false;
+			}
+			// Run 2's returned client waited in runs split by single ticks that did not (894, 896-900, 902-903, ...): that is still standing
+			// at the horizon.
+			NetPaceSlide split;
+			uint64_t splitAt = 0;
+			for (uint64_t tick = 1000; tick < 1200 && splitAt == 0; ++tick) {
+				if (tick % 5 != 0) split.NoteWaitAhead(tick);
+				if (split.NoteTick(tick)) splitAt = tick;
+			}
+			if (splitAt == 0 || splitAt > 1000 + NetPaceSlide::c_WindowTicks) {
+				*error = "a peer that waited on four ticks of every five never held its clock back";
 				return false;
 			}
 			// The run starts over after it: one more waited tick is not another slide.
