@@ -1187,6 +1187,9 @@ namespace RTE {
 		static void RequestHostPortMap(uint16_t port, NetPortMapWan* wan);
 		static void ReleaseHostPortMap();
 		friend bool TestDirectoryRowTakesTheLateRouterAnswer(std::string* error);
+		friend bool HostMappingEndsInALine(NetPortMapWan& router, uint16_t port, uint64_t budgetMs, PortMapStatus& status, std::string* error);
+		friend bool TestAHostMappingOutlastsItsPendingIdentity(std::string* error);
+		friend bool TestAHostWithNoRouterReadsNoRouterMapping(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestAParkReachesTheSessionAWorkerOwns(std::string* error);
 		friend bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error);
