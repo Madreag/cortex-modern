@@ -652,6 +652,15 @@ class RuntimeProjectionTests(unittest.TestCase):
         self.assert_field(value, ("scroll_timer", "sim_start"), True)
         self.assert_field(value, ("scroll_timer", "sim_limit"), False)
 
+    def test_background_scaling_to_the_screen_is_the_peers_own(self):
+        # r3-erol-match4k: the 4K peer's backdrops read scale 2.0, scroll ratio 0.5 and 6000 wide where the others read 1.0, 0.25, 3000.
+        value = dict(version="SLBackground2", offset=[1, 2], auto_offset=[3, 4], z_order=5,
+            scroll_timer=dict(sim_start=100, sim_limit=20, real_start=101, real_limit=30), back_bitmap=None,
+            scroll_info=[0.5, 0.5], scroll_ratio=[0.5, 0.25], scale=[2.0, 2.0], scaled_dimensions=[6000.0, 1360.0])
+        for key in ("scroll_info", "scroll_ratio", "scale", "scaled_dimensions"):
+            self.assert_field(value, (key, 0), True)
+        self.assert_field(value, ("z_order",), False)
+
     def test_only_local_activity_slot_is_projected(self):
         value = dict(version="Activity1", **{key: [1, 2, 3, 4] for key in
             ("player_team", "team_funds_share", "funds_contribution", "human", "actor_links")}, team_funds=[20, 20, 20, 20])

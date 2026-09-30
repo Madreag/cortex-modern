@@ -700,7 +700,8 @@ def project(value, shared=False, snapshot_name=None, path=(), masked=None, local
                             remap(child, (*location, index))
                 remap(result, path)
         if version in ("SLBackground1", "SLBackground2"):
-            for key in ("offset", "auto_offset"):
+            # The camera's scroll and the scaling to this machine's screen height (a 4K peer's backdrops are twice as large).
+            for key in ("offset", "auto_offset", "scroll_info", "scroll_ratio", "scale", "scaled_dimensions"):
                 mask(key)
             result["scroll_timer"]["sim_start"] = "LOCAL"
             masked.append((*path, "scroll_timer", "sim_start"))
