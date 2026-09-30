@@ -51,7 +51,8 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         memory=dict(status=memory_status,reason='Declared per-incarnation warm-up, slope and retention; raw sizes and measured instrumentation remain separate.'),
         record_integrity=oracle(checks.get('record_integrity',False)),
         engine_findings=oracle(checks.get('no_engine_findings',False),'All findings remain visible, including the named capture rows.'),
-        exits=oracle(checks.get('all_incarnation_exits',False),'Each incarnation must exit normally or have its own scheduled, actually injected crash receipt.'))
+        exits=oracle(checks.get('all_incarnation_exits',False),'Each incarnation must exit normally or have its own scheduled, actually injected crash receipt.'),
+        pace=oracle(checks.get('box_pace',False),'Every box whose own sim fits the tick holds >= 59.5 ticks/s over the match: a slow presenter sheds frames, never ticks.'))
     if mixed_builds:
         for name in ('live_hashes','full_state'): oracles[name]=dict(status='VOID',reason='Compared across a mixed build; the preflight names both executables.')
     if not manifest.get('faults'): oracles['recovery']['status']='NOT APPLICABLE'
@@ -60,7 +61,7 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         oracles['forced_ends']=oracle(checks.get('forced_end_during_hold',False) and checks.get('forced_end_during_transfer',False),'Actual activity-over must overlap the named recovery phase; a stale hint is insufficient.')
         oracles['rematches']=oracle(checks.get('changed_settings_rematch',False) and checks.get('fog_on_match',False))
         oracles['autosaves']=oracle(checks.get('validated_autosave_archives',False),'Archive integrity alone does not prove restoration or sealed admission.')
-    required = (*CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings')
+    required = (*CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings', 'box_pace')
     if manifest['scenario'] != 'match':
         required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
     workload = (manifest['ticks'] == 1201 and not manifest.get('faults')) if manifest['scenario'] == 'match' else (
@@ -70,6 +71,15 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     return dict(core_passed=core,core_engine_red=engine_red,mixed_builds=list(mixed_builds),
         v1_passed=bool(v1), v1_checks=list(required), v1_workload=workload,
         gate_b_eligible=(core or engine_red) and checks.get('shared_fullstate',False) and not pending and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
+
+
+def pace_verdict(native, tick_ms=1000/60):
+    """A box whose own simulation fits the tick holds the round's rate: it sheds presentation, never ticks. A box whose sim alone
+    cannot is a slow machine, held by the bound; its rate is reported, not gated."""
+    pace = (native or {}).get('pace') or {}
+    sim, tps = pace.get('sim_ms_per_tick'), pace.get('wall_tps')
+    gated = sim is not None and sim < tick_ms
+    return dict(sim_ms_per_tick=sim, wall_tps=tps, gated=gated, passed=not gated or (tps is not None and tps >= 59.5))
 
 
 def judge_exit(record,peer,incarnation,faults,receipts):
@@ -492,7 +502,7 @@ def build_report(root):
         final_tick=trace.get('runs',[{}])[-1].get('numeric',{}).get('final_tick') if trace.get('runs') else None
         peers[name] = dict(box=spec['box'], role=spec['role'], instance=name, incarnation=int(own.name.split('-')[-1]), frames=len(live[name]),
             observed_waits_over_50=sum(r['wait_ms']>50 for r in waits) if log else None, observed_wait_records=len(waits),
-            native=native, record=record, timing=timing, presentation_window=presentation_window,
+            native=native, record=record, timing=timing, presentation_window=presentation_window, pace=pace_verdict(native),
             retired_diagnostics=[r for fragment in fragments for r in source_rows(fragment/'retired-diagnostics.jsonl',root)],
             presentation_by_incarnation=presentation_by_incarnation,presentation_valid=presentation_valid,
             tick_compute_ms=report.distribution([r['compute_us']/1000 for r in tick_cost]),
@@ -563,6 +573,7 @@ def build_report(root):
                       for values in events.values()),
                   no_engine_findings=not findings)
     checks['all_incarnation_exits']=all(p['exits'] and all(e['passed'] for e in p['exits']) for p in peers.values())
+    checks['box_pace']=bool(peers) and all(p['pace']['passed'] for p in peers.values())
     checks['record_integrity'] &= all(p['presentation_valid'] for p in peers.values())
     checks['only_capture_induced_holds']=all(h['classification']=='capture-induced' for p in peers.values() for h in p['holds'] if not h['scheduled_recovery_id'])
     checks['shared_fullstate']=bool(cadence) and fullstate['passed']

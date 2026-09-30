@@ -85,6 +85,16 @@ class AttemptOracles(unittest.TestCase):
         self.assertFalse(cross_report.judge_exit(crash,'a',1,[fault],[receipt])['passed'])
         self.assertFalse(cross_report.judge_exit(dict(good,timed_out=True),'a',0,[],[])['passed'])
 
+    def test_a_box_whose_sim_fits_the_tick_holds_the_rounds_rate(self):
+        # The four-machine block's EDITH: 10.4 ms of sim a tick at 55 ticks/s - its sim fits, so the rate is a verdict, not a report.
+        self.assertFalse(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=10.4, wall_tps=55.0)))['passed'])
+        self.assertTrue(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=10.4, wall_tps=59.6)))['passed'])
+        # A box whose sim alone cannot hold the rate is a slow machine: held by the bound, its rate reported.
+        slow = cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=19.5, wall_tps=48.9)))
+        self.assertEqual((slow['gated'], slow['passed']), (False, True))
+        self.assertTrue(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=3.1, wall_tps=None)))['gated'])
+        self.assertFalse(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=3.1, wall_tps=None)))['passed'])
+
     def test_a_return_told_it_left_exits_refused_by_design(self):
         refused=dict(started=True,exit_code=1,timed_out=False)
         leave=dict(id='left',action='announced-leave-rejoin',peer='a',incarnation=0,return_incarnation=1)
