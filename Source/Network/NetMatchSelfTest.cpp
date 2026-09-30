@@ -12471,6 +12471,36 @@ namespace RTE {
 
 	// The menus route a recovery pump to the title screen and keep it alive past Back; an ordinary
 	// match end is not one, so it must answer the lobby pump's read instead.
+	// A seat rejoining its running match over a fresh connection answers its own lobby round: no menu or driver readies it.
+	bool TestARunningMatchRejoinIsReadyOnConnect(std::string* error) {
+		for (const bool running: {false, true}) {
+			NetMatchService service;
+			{
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				service.m_MatchWasRunning = running;
+			}
+			NetMatchServiceRequest request;
+			request.host = false;
+			request.rejoin = true;
+			request.address = "127.0.0.1";
+			request.port = 49476;
+			std::string startError;
+			const bool started = service.Start(request, &startError);
+			const bool ready = service.m_ReadyRequested.load();
+			service.Destroy();
+			if (!started) {
+				*error = "the rejoin did not start: " + startError;
+				return false;
+			}
+			if (ready != running) {
+				*error = running ? "a rejoin of its running match waited for a ready nobody sends" : "a join outside a running match readied itself";
+				return false;
+			}
+		}
+		std::cout << "PASS a_running_match_rejoin_is_ready_on_connect" << std::endl;
+		return true;
+	}
+
 	bool TestCompletedLobbyIsNotARecovery(std::string* error) {
 		NetMatchService service;
 		{
@@ -14582,6 +14612,7 @@ namespace RTE {
 		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);
 		if (!TestEndMatchWithHeldSeatKeepsItsLease(&error)) return fail(error);
 		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
+		if (!TestARunningMatchRejoinIsReadyOnConnect(&error)) return fail(error);
 		if (!TestCompletedLobbyExpires(&error)) return fail(error);
 		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
 		NetMatchService keepaliveService;
