@@ -1494,6 +1494,9 @@ namespace RTE {
 		bool m_JoinRefusedByLiveMatch = false; //!< The last join was refused by a running match (§9b).
 		bool m_LeftMatchJoinable = false; //!< The last join was told it left a running world that admits new players.
 		bool m_ToldItLeft = false; //!< The last join was told it left the running match.
+		bool m_LeftRowRefused = false; //!< The directory row of a match this player left refused the join: that match still runs.
+		NetH4TicketRecord m_LeavingRecord; //!< The ticket a clean leave of a running match is about to clear.
+		bool m_LeavingRecordLoaded = false;
 		static bool s_AutoSubstitute;
 		static uint16_t s_AutoSubstituteSeat;
 		static uint64_t s_AutoSubstituteDelayMs;
