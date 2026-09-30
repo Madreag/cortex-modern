@@ -984,6 +984,13 @@ namespace RTE {
 		}
 		if (WorldCatchUpActive()) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", GetLockstepLocalPeerId()});
 		if (WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({s_WorldCatchUpAppliedThrough, "slow_machine", "Your machine cannot keep up with this match. The AI is playing your seat.", GetLockstepLocalPeerId()});
+		// A host whose own machine held its seat catches up in place, and says so on its own screen.
+		uint64_t heldAt = 0;
+		{
+			NetLockstepPlaneGuard plane;
+			if (s_LockstepCoordinator && s_LockstepCoordinator->IsOwnHostSeatHeld() && s_LockstepCoordinator->IsSelfHeld()) heldAt = s_LockstepCoordinator->GetStats().nextFrame;
+		}
+		if (heldAt != 0 && !WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({heldAt, "slow_machine", "Your machine cannot keep up with this match. The AI is playing your seat.", GetLockstepLocalPeerId()});
 		return visible;
 	}
 
