@@ -59,6 +59,16 @@ class CrossReducers(unittest.TestCase):
         # A refused return is a failed exit: no outcome excuses it.
         refused = dict(started=True, exit_code=1, timed_out=False)
         self.assertFalse(cross_report.judge_exit(refused, 'mac', 1, faults, [])['passed'])
+    def test_a_fault_on_an_incarnation_that_never_plays_is_named_and_fails(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import cross_report
+        faults = [dict(id='mac-ack-drop', peer='mac', incarnation=1), dict(id='mac-loss', peer='mac', incarnation=1), dict(id='edith-stall', peer='edith', incarnation=0)]
+        # Only the stall on a playing incarnation left a receipt: the two aimed at an incarnation that never joined are named.
+        receipts = [dict(type='fault', id='edith-stall', applied=True)]
+        self.assertEqual(cross_report.unapplied_faults(faults, receipts), ['mac-ack-drop', 'mac-loss'])
+        receipts += [dict(type='fault', id='mac-ack-drop', applied=True), dict(type='fault', id='mac-loss', applied=True)]
+        self.assertEqual(cross_report.unapplied_faults(faults, receipts), [])
     def histories(self):
         return {p: [sample(t, p) for t in range(1, 5)] for p in ('a', 'b', 'c')}
 

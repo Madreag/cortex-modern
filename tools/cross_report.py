@@ -24,6 +24,11 @@ CAPTURE_ROWS={
     2:'capture-rows lane row 2: Windows/Mac hex-float text at Source/System/FloatText.h:324-326,608-610; PieMenu.cpp:259; Arm.cpp:506; Scene.cpp:2056,2059,2142'}
 
 
+
+def unapplied_faults(faults, receipts):
+    """The scheduled faults no receipt shows applied, by id: a fault whose target incarnation never reached its tick is one."""
+    return [f['id'] for f in faults if not any(r.get('id') == f['id'] and r.get('applied') for r in receipts)]
+
 def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     core=all(checks.get(name,False) for name in CORE_CHECKS)
     engine_red=not checks.get('zero_unscheduled_holds',False) and bool(checks.get('only_capture_induced_holds')) and all(checks.get(name,False) for name in CORE_CHECKS if name not in ('full_history','zero_unscheduled_holds'))
@@ -531,7 +536,8 @@ def build_report(root):
     fault_receipts = [dict(r, source_peer=name) for name,values in events.items() for r in values if r.get('type') == 'fault']
     fault_receipts += [dict(r['native'],source_peer=name,id=r['id'],type='fault',applied=True,source='owning payload termination')
         for name,p in peers.items() for r in p['recovery_observations'] if r.get('phase')=='fault_applied' and r.get('native',{}).get('action')=='crash-restart']
-    faults_applied = all(any(r.get('id') == f['id'] and r.get('applied') for r in fault_receipts) for f in manifest['faults'])
+    unapplied = unapplied_faults(manifest['faults'], fault_receipts)
+    faults_applied = not unapplied
     effects=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='fault_effect']
     h4_effects=all(any(r.get('id')==f['id'] and r.get('source_peer')==f['peer'] and r.get('effect_observed') for r in effects)
                   for f in manifest['faults'] if f['action'] in ('ack-drop','ack-duplicate','commit-drop'))
@@ -602,6 +608,7 @@ def build_report(root):
     rerun=write_rerun_command(root,manifest)
     result = dict(version=2, run=manifest['run'], passed=judgment['v1_passed'], diagnostic_passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
                   assigned_capture_rows={str(row):CAPTURE_ROWS[row] for row in manifest.get('capture_rows_pending',[1,2])},rerun_after_capture_fix=rerun,
+                  faults_unapplied=unapplied,
                   peers=peers, local_host_render=local_host_render(manifest, peers),
                   comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
@@ -684,6 +691,8 @@ def write_page(root, result, events):
     for row in result['coverage']:
         parts.append(f'<details><summary>{escape(row["item"])} — {row["status"]}</summary><p>{escape(row["unit"])}; minimum {row["minimum"]}. {escape(row["reason"])}</p><pre>{escape(json.dumps(row["peers"],indent=2))}</pre></details>')
     parts.append('<h2>Faults and recovery</h2><p>Queued admission and cancelled reclaim are phase evidence, never completed recovery. Durations use the owning payload clock across engine incarnations; the deadline judges the conservative upper duration, not subtraction between engine clocks. Native phase/input evidence stays separate. The chaos seed fixes choices only.</p><pre>' + escape(json.dumps(dict(seed=manifest['chaos_seed'],schedule=manifest['faults'],applied=result['fault_receipts'],recoveries=result['recoveries'],native_evidence=result['native_recovery_records']),indent=2)) + '</pre>')
+    parts.append('<p>Scheduled faults never applied (their target incarnation was not in the match at their tick): ' +
+                 escape(', '.join(result.get('faults_unapplied', [])) or 'none') + '</p>')
     parts.append('<p>H4 effects require the native substitution log and a reset receipt; arming alone is insufficient. If no substitution ack is sent, NetReconnectSession.cpp:2513-2515 remains an unexercised engine seam.</p><pre>'+escape(json.dumps(result['native_fault_effects'],indent=2))+'</pre>')
     parts.append('<h2>Wire egress</h2><p>NOT COVERED. Transport wire counters are not exposed at an owned seam. Application bytes and host relayed bytes are not wire egress; no upstream curve is fabricated.</p>')
     parts.append('<h2>Capture and writer barriers</h2><p>Each arm has its own declared timeout; timeout is a failed outcome.</p><pre>' + escape(json.dumps(dict(schedule=manifest.get('capture_barriers',[]),receipts=result['barrier_receipts']),indent=2)) + '</pre>')
