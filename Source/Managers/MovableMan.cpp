@@ -4,6 +4,7 @@
 #include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
+#include "SimDumpTape.h"
 #include "NetA7Journal.h"
 #include "PrimitiveMan.h"
 #include <chrono>
@@ -1590,7 +1591,8 @@ static uint64_t ScriptSetHash(const MovableObject& mo) {
 }
 
 // Snapshot forensics: one line per attachable and wound, recursively, so limb-level state is diffable.
-static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::ostream& out) {
+template <class Out>
+static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, Out& out) {
 	auto dumpNode = [&](const char* kind, const Attachable* node) {
 		const HDFirearm* parentFirearm = dynamic_cast<const HDFirearm*>(parent);
 		const AEmitter* parentEmitter = dynamic_cast<const AEmitter*>(parent);
@@ -1649,7 +1651,8 @@ static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::os
 	}
 }
 
-void MovableMan::DumpMOSimState(uint64_t tick, const char* kind, MovableObject* mo, std::ostream& out) const {
+template <class Out>
+void MovableMan::DumpMOLines(uint64_t tick, const char* kind, MovableObject* mo, Out& out) const {
 	out << tick << " " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName()
 	    << " pos=" << std::hexfloat << mo->GetPos().m_X << "," << mo->GetPos().m_Y
 	    << " prev=" << mo->GetPrevPos().m_X << "," << mo->GetPrevPos().m_Y
@@ -1813,10 +1816,24 @@ void MovableMan::DumpMOSimState(uint64_t tick, const char* kind, MovableObject* 
 	}
 }
 
+void MovableMan::DumpMOSimState(uint64_t tick, const char* kind, MovableObject* mo, std::ostream& out) const {
+	DumpMOLines(tick, kind, mo, out);
+}
+
 void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
+	DumpSimLines(tick, out);
+	out.flush();
+}
+
+void MovableMan::CaptureSimState(uint64_t tick, SimDumpTape& tape) const {
+	DumpSimLines(tick, tape);
+}
+
+template <class Out>
+void MovableMan::DumpSimLines(uint64_t tick, Out& out) const {
 	// The queued MOID draw renumbers m_MOID on the pool while this reads it; join it so one dump holds one tick's numbering.
 	g_MovableMan.CompleteQueuedMOIDDrawings();
-	const auto dumpMO = [&](const char* kind, MovableObject* mo) { DumpMOSimState(tick, kind, mo, out); };
+	const auto dumpMO = [&](const char* kind, MovableObject* mo) { DumpMOLines(tick, kind, mo, out); };
 	if (const Activity* activity = g_ActivityMan.GetActivity()) {
 		out << tick << " activity state=" << static_cast<int>(activity->GetActivityState());
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -1833,7 +1850,6 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 	for (MovableObject* particle: m_Particles) {
 		dumpMO("particle", particle);
 	}
-	out.flush();
 }
 
 int64_t MovableMan::GetFirstCraftUniqueID(int team) const {
