@@ -1523,6 +1523,7 @@ int ShutDown(int exitCode) {
 	NetIdentity::StopManifestPriming();
 	// The writer holds frames the run has already presented, so it drains while SDL is still up.
 	FrameRecorder::Instance().Finish();
+	MenuAutomation::ReportWatches();
 	if (!MenuAutomation::FinishReadbacks()) {
 		System::PrintDiagnosticErrorLine("[menu-readback] queued snapshot write failed");
 		exitCode = EXIT_FAILURE;
