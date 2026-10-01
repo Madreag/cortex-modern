@@ -2737,8 +2737,15 @@ MovableMan::KnownObjectsScope::KnownObjectsScope() {
 	m_Previous = manager.m_KnownObjectsScope.exchange(this);
 }
 
+static std::atomic<double> s_KnownObjectsCopyMs{0.0};
+
+double MovableMan::KnownObjectsScope::CopyMs() {
+	return s_KnownObjectsCopyMs.load();
+}
+
 void MovableMan::KnownObjectsScope::Copy() const {
 	std::call_once(m_Copied, [this] {
+		const auto copyStart = std::chrono::steady_clock::now();
 		CaptureSentinel::NoteCreation("known-objects index", this);
 		MovableMan& manager = g_MovableMan;
 		{
@@ -2748,6 +2755,7 @@ void MovableMan::KnownObjectsScope::Copy() const {
 		}
 		m_ByAddress.assign(m_ByIdentity.begin(), m_ByIdentity.end());
 		std::sort(m_ByAddress.begin(), m_ByAddress.end());
+		s_KnownObjectsCopyMs = s_KnownObjectsCopyMs.load() + std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - copyStart).count();
 	});
 }
 

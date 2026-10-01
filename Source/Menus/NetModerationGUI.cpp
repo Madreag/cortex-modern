@@ -12,11 +12,14 @@
 #include "NetPlayerPresentation.h"
 #include "ScenarioRunner.h"
 #include "SettingsMan.h"
+#include "System.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "FrameRecorder.h"
 #include "UInputMan.h"
 #include "GUI.h"
+#include <chrono>
+#include <array>
 #include "GUIEvent.h"
 #include "GUIManager.h"
 #include "GUIInputWrapper.h"
@@ -1505,9 +1508,36 @@ void NetModerationGUI::GhostWatchTick() {
 	}
 }
 
+// Test lever CCCP_TEST_DRAW_PHASES: the overlay's own stages, their means every 600 frames.
+namespace {
+	struct OverlayPhases {
+		const bool armed = std::getenv("CCCP_TEST_DRAW_PHASES") != nullptr;
+		std::array<double, 5> totalUs{};
+		uint64_t frames = 0;
+		std::chrono::steady_clock::time_point lap;
+		void Begin() { if (armed) lap = std::chrono::steady_clock::now(); }
+		void Lap(size_t phase) {
+			if (!armed) return;
+			const auto now = std::chrono::steady_clock::now();
+			totalUs[phase] += std::chrono::duration<double, std::micro>(now - lap).count();
+			lap = now;
+		}
+		void End() {
+			if (!armed || ++frames < 600) return;
+			System::PrintDiagnosticLine("[overlay-phase] frames=600 mean_us: snapshot=" + std::to_string(totalUs[0] / 600) + " surfaces=" + std::to_string(totalUs[1] / 600) +
+			                            " status=" + std::to_string(totalUs[2] / 600) + " panel=" + std::to_string(totalUs[3] / 600) + " chat=" + std::to_string(totalUs[4] / 600));
+			totalUs = {};
+			frames = 0;
+		}
+	};
+	OverlayPhases s_OverlayPhases;
+}
+
 void NetModerationGUI::Draw() {
+	s_OverlayPhases.Begin();
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	NetPlayerPresentation::Remember(snapshot, g_SettingsMan.GetNetworkDisplayName());
+	s_OverlayPhases.Lap(0);
 	m_StatusRect = {};
 	m_ChatRect = {};
 	m_RosterRect = {};
@@ -1536,10 +1566,12 @@ void NetModerationGUI::Draw() {
 	}
 	// The lobby arm sits inside inMatch: the rematch lobby keeps the seats reading beside its own box.
 	if (menuLobby) DrawRoster(snapshot);
+	s_OverlayPhases.Lap(1);
 	if (inMatch && (menuLobby || MatchStatusWanted())) {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
 	}
+	s_OverlayPhases.Lap(2);
 	if (m_Open) {
 		uint64_t hash = std::hash<std::string>{}(snapshot.serviceState);
 		hash ^= std::hash<std::string>{}(snapshot.statusText) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
@@ -1566,6 +1598,7 @@ void NetModerationGUI::Draw() {
 		}
 		m_Controls->Draw();
 	}
+	s_OverlayPhases.Lap(3);
 	if (inMatch) {
 		DrawMatchChat(snapshot);
 	} else {
@@ -1578,6 +1611,8 @@ void NetModerationGUI::Draw() {
 	}
 	if (m_Open) m_Controls->DrawMouse();
 	t_simRNGOverride = previousRNG;
+	s_OverlayPhases.Lap(4);
+	s_OverlayPhases.End();
 }
 
 bool NetModerationGUI::AutomationModerate(const std::string& action, int stableSeat) {

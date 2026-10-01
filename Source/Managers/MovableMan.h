@@ -323,6 +323,8 @@ namespace RTE {
 			~KnownObjectsScope();
 			KnownObjectsScope(const KnownObjectsScope&) = delete;
 			KnownObjectsScope& operator=(const KnownObjectsScope&) = delete;
+			/// The time every scope of this process has spent copying the registry, in milliseconds.
+			static double CopyMs();
 		private:
 			/// Copies the known objects the first time anything asks; a change since the scope opened stops it being asked.
 			void Copy() const;
