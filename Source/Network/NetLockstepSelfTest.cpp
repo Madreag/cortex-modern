@@ -3550,6 +3550,98 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat that comes back starts with empty sound tables from its return's epoch, but a sender's input runs ahead of the commit
+		// by its delay: the relay host has already forwarded the sender's ticks past the epoch, spelled against the table the epoch
+		// empties. Asked for them again, the host must send what a returner can read (the four-box run: 'sound observation bindings
+		// jump from 0 to 13', then 'asked peer 1 to resend frame=877 of peer 2 ... highest heard=0', nothing resent, eight times).
+		bool TestAReturnerReadsTicksRelayedPastItsEpoch(std::string* error) {
+			const uint16_t port = 48915;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) return false;
+			const uint64_t round = 0x9A75;
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+				NetLockstepConfig c;
+				c.sessionId = round; c.roundId = round; c.startFrame = 0; c.inputDelayFrames = 3; c.timeoutMs = 20000;
+				c.localPeerId = local; c.peerCount = 3; c.remoteTransportPeerIds = std::move(transports); c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::InputUnreliable; c.scenario = "LockstepSelfTest"; c.ownershipPolicy = "unique-id-split";
+				c.substituteSlowPeers = true; c.simTickMs = 1000.0 / 60.0;
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) || !clientA.Start(clientAT, cfg(2, {{1, 1}}, false), error) ||
+			    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false), error)) return false;
+			struct Peer { NetLockstepCoordinator* coordinator; LoopbackTransport* wire; int64_t uid; uint64_t simulated = 0, queued = 0; };
+			Peer peers[3] = {{&host, &hostT, 100}, {&clientA, &clientAT, 200}, {&clientB, &clientBT, 300}};
+			uint64_t now = 0;
+			std::string queueError;
+			// Seat 2 binds new sound keys on every tick, so its table grows as the round runs.
+			const auto pump = [&](bool withB, bool hostSimulates = true) {
+				for (Peer& peer: peers) {
+					if (!withB && &peer == &peers[2]) { peer.wire->AdvanceTimeMs(1); continue; }
+					for (; peer.queued <= peer.simulated + 6; ++peer.queued) {
+						const auto observations = &peer == &peers[1] ? MakeObservationSet(2, 3, peer.queued, 0.1F) : std::vector<NetSoundObservation>{};
+						if (!peer.coordinator->IsRunning() || !peer.coordinator->QueueLocalInput(peer.queued, {MakeFrame(peer.uid, peer.queued)}, {}, &queueError, observations)) break;
+					}
+					peer.wire->AdvanceTimeMs(1);
+					peer.coordinator->Tick(now);
+				}
+				NetLockstepReadyFrame ready;
+				for (size_t index = 0; index < 3; ++index) {
+					if ((!withB && index == 2) || (!hostSimulates && index == 0)) continue;
+					while (peers[index].coordinator->PopReadyFrame(ready)) { (void)peers[index].coordinator->FinishSimulationTick(ready.frame); peers[index].simulated = ready.frame; }
+				}
+				++now;
+			};
+			while (now < 4000 && (peers[0].simulated < 60 || peers[1].simulated < 60 || peers[2].simulated < 60)) pump(true);
+			if (peers[0].simulated < 60) { *error = "the star never reached its steady state: host_frame=" + std::to_string(peers[0].simulated); return false; }
+			// Seat 2's input runs ahead of the commit, as a long delay makes it: the host's own sim waits a moment while the seats produce.
+			for (const uint64_t until = now + 40; now < until;) pump(true, false);
+			// Seat 3's return lands at a frame the host has already heard and forwarded seat 2's ticks for; every peer hears it.
+			const uint64_t epoch = peers[0].simulated + 2;
+			const auto heard = host.GetStats().peers.find(2);
+			if (heard == host.GetStats().peers.end() || heard->second.highestTargetFrame < epoch + 2) {
+				*error = "seat 2's ticks past the epoch were not forwarded before it: heard=" + std::to_string(heard == host.GetStats().peers.end() ? 0 : heard->second.highestTargetFrame);
+				return false;
+			}
+			for (Peer& peer: peers) peer.coordinator->SetObservationEpoch(epoch);
+			// The returner's link goes quiet while the round runs on past the epoch: the host empties seat 2's table on the next tick.
+			for (const uint64_t until = now + 40; now < until;) pump(false);
+			(void)clientBT.PollEvents();
+			NetLockstepAck request;
+			request.senderPeerId = 3;
+			request.highestContiguousFrame = epoch;
+			request.receivedMask = NetLockstepCodec::c_FrameResendRequestMask | 2;
+			NetTransportEvent asked;
+			asked.type = NetTransportEventType::PacketReceived; asked.peerId = 2; asked.lane = NetTransportLane::ControlReliable;
+			if (!NetLockstepCodec::Encode({request}, asked.bytes)) { *error = "the resend request did not encode"; return false; }
+			const uint64_t resentBefore = host.GetStats().framesResent;
+			host.InjectEvent(asked, now);
+			for (const uint64_t until = now + 10; now < until;) pump(false);
+			// What reaches the returner, read the way a returner reads it: tables empty from its epoch on.
+			NetSoundObservationTables fresh;
+			fresh.roundId = round;
+			bool readEpoch = false;
+			size_t gaps = 0;
+			for (const NetTransportEvent& event: clientBT.PollEvents()) {
+				if (event.type != NetTransportEventType::PacketReceived) continue;
+				const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(event.bytes, ControllerFrame::c_Version, &fresh);
+				if (!decoded.ok) { gaps += decoded.error.code == NetLockstepErrorCode::ObservationBindingGap ? 1 : 0; continue; }
+				if (const auto* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload); frame && frame->senderPeerId == 2 && frame->targetFrame == epoch) readEpoch = true;
+				if (const auto* chunk = std::get_if<NetLockstepRecoveryChunk>(&decoded.packet.payload); chunk && chunk->senderPeerId == 2 && chunk->targetFrame == epoch) {
+					NetLockstepFrame whole;
+					readEpoch = readEpoch || NetLockstepCodec::DecodeRecoveryInput(chunk->bytes, whole) && whole.targetFrame == epoch && !whole.observations.empty();
+				}
+			}
+			if (!readEpoch) {
+				*error = "the returner cannot read seat 2's tick " + std::to_string(epoch) + " the host forwarded before the epoch was known: resent=" +
+				         std::to_string(host.GetStats().framesResent - resentBefore) + " unreadable=" + std::to_string(gaps);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_returner_reads_ticks_relayed_past_its_epoch epoch=" << epoch << " resent=" << host.GetStats().framesResent - resentBefore
+			          << " unreadable_live=" << gaps << std::endl;
+			return true;
+		}
+
 		// The redundancy window is the unreliable lane's only repair. The round samples its link on its first tick, so the
 		// first frames of a 200 ms link already ride out a burst longer than the window's floor of eight.
 		bool TestTheFirstFramesRideOutABurstOnALongLink(std::string* error) {
@@ -22868,6 +22960,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestPlaneCheckTripsOnAnUnguardedAccess, "plane_check_trips_on_an_unguarded_access");
 		row(&TestALinkBlipIsBridgedByAResend, "a_link_blip_is_bridged_by_a_resend");
 		row(&TestALinkBlipIsBridgedInAStar, "a_link_blip_is_bridged_in_a_star");
+		row(&TestAReturnerReadsTicksRelayedPastItsEpoch, "a_returner_reads_ticks_relayed_past_its_epoch");
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");
 		row(&TestAPlayingPeersRampIsNotOurPark, "a_playing_peers_ramp_is_not_our_park");
 		row(&TestASeatIsNotLateForOurOwnDecision, "a_seat_is_not_late_for_our_own_decision");
