@@ -1485,9 +1485,9 @@ namespace RTE {
 				return Fail("a retransmitted leave did not replay its ack");
 			}
 
-			// The closed link drops the seat, which stays held for its player; TestCleanLeaverKeepsTheSeat pins the return.
-			if (wire.host.NotifyDisconnect(player.connection, 360) != NetH4DisconnectOutcome::SeatDropped) {
-				return Fail("the leaver's closed link did not drop its seat");
+			// The leave drops the seat, which stays held for its player; TestCleanLeaverKeepsTheSeat pins the return.
+			if (!wire.host.IsSeatHeldForReclaim(MakeSeatTable()[0].lockstepPeerId) || wire.host.GetStats().seatsDropped == 0) {
+				return Fail("the leave of a running match did not hold the seat for its player");
 			}
 			return 0;
 		}
@@ -1711,15 +1711,13 @@ namespace RTE {
 				}
 			}
 
-			// A clean leave of the running match keeps the seat, and its closed link records the seat's ownership as a drop does.
+			// A clean leave of the running match keeps the seat and records the seat's ownership as a drop does.
 			wire.ClearDelivered();
 			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			g_Census = {{104, 1, 2, true}};
+			wire.host.NoteLockstepFrame(300);
 			if (!returner.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the leave did not settle: " + error);
-			}
-			g_Census = {{104, 1, 2, true}};
-			if (wire.host.NotifyDisconnect(returner.connection, 300) != NetH4DisconnectOutcome::SeatDropped) {
-				return Fail("the leaver's closed link did not drop its seat");
 			}
 			const NetH4SeatOwnership* left = wire.host.GetLedger().Find(0);
 			if (left == nullptr || left->droppedAtFrame != 300 || left->actorUIDs != std::vector<int64_t>{104}) {
@@ -3293,14 +3291,10 @@ namespace RTE {
 				return Fail("a reclaimed seat did not become worth waiting for again");
 			}
 
-			// A clean leave in a running match is a drop the player chose: once its link closes the seat is held for it again.
+			// A clean leave in a running match is a drop the player chose: the seat is held for it again at once.
 			if (!returner.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the leave did not settle: " + error);
 			}
-			if (wire.host.NotifyDisconnect(returner.connection, 240) != NetH4DisconnectOutcome::SeatDropped) {
-				return Fail("the leaver's closed link did not drop its seat");
-			}
-			returner.connected = false;
 			if (!wire.host.IsSeatHeldForReclaim(held)) {
 				return Fail("a seat left on purpose was not held for its player");
 			}
@@ -3344,8 +3338,9 @@ namespace RTE {
 				if (player.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) {
 					return Fail(mode + ": the leaver's ticket was not kept: " + error);
 				}
-				if (wire.host.NotifyDisconnect(player.connection, 300) != NetH4DisconnectOutcome::SeatDropped) {
-					return Fail(mode + ": the leaver's closed link did not drop its seat");
+				// The leave is the drop: the link closing later has nothing left to do.
+				if (wire.host.NotifyDisconnect(player.connection, 300) != NetH4DisconnectOutcome::Unknown) {
+					return Fail(mode + ": the leaver's seat was still bound to its link after the leave");
 				}
 				player.connected = false;
 				wire.Remove(player.connection);
@@ -5377,14 +5372,13 @@ namespace RTE {
 			}
 			wire.host.SetLiveMatch(true);
 			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			g_Census = {};
 			if (!leaver.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the clean leave did not settle: " + error);
 			}
-			g_Census = {};
-			if (wire.host.NotifyDisconnect(leaver.connection, 400) != NetH4DisconnectOutcome::SeatDropped || wire.host.IsSeatClosed(1)) {
+			if (wire.host.IsSeatClosed(1) || !wire.host.IsSeatHeldForReclaim(MakeSeatTable()[1].lockstepPeerId)) {
 				return Fail("a clean mid-match leave did not hold the seat for its player");
 			}
-			leaver.connected = false;
 			if (!second.client.BeginApplication(1, wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the application for the vacated seat did not settle: " + error);
 			}
@@ -5415,6 +5409,13 @@ namespace RTE {
 			if (rejoin.sessionId != "sess-re-resolve-1" || rejoin.address != "10.0.0.8:41010" || rejoin.host) {
 				return Fail("BeginTicketRejoin.sessionId did not take the stored directory session id");
 			}
+			// Rejoin Match dials the port the record keeps beside the address, not the default one.
+			record.hostAddress = "127.0.0.1:49460";
+			const NetMatchServiceRequest menuRejoin = NetMatchService::BuildTicketRejoinRequest(record, "Client", false);
+			if (menuRejoin.address != "127.0.0.1" || menuRejoin.port != 49460) {
+				return Fail("a ticket rejoin dialled " + menuRejoin.address + " port " + std::to_string(menuRejoin.port) + " for a host at 127.0.0.1:49460");
+			}
+			record.hostAddress = "10.0.0.8:41010";
 			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "9.9.9.9:1", false) != "9.9.9.9:1") {
 				return Fail("SessionFull resolveJoinAddress ignored a remapped directory address");
 			}

@@ -212,7 +212,10 @@ namespace RTE {
 		const NetParticipantId& GetLocalParticipantId() const { return m_LocalParticipantId; }
 		bool HasLocalParticipantId() const { return m_HasLocalParticipantId; }
 		/// The frame a seat drop is recorded against; the match runner keeps it current.
-		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
+		void SetLockstepFrame(uint64_t frame) {
+			m_LockstepFrame = frame;
+			if (m_ReconnectHost) m_ReconnectHost->NoteLockstepFrame(frame);
+		}
 
 		/// Queues a chat line for the session's own pump thread to put on the wire, so the caller
 		/// (usually the UI) never touches peers, the transport or session state. Presentation only:
