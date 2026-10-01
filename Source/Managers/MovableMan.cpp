@@ -3566,7 +3566,15 @@ MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
 	m_LinkRoot = shadow;
 	shadow->ResolveFaithfulLinks();
 	m_LinkRoot = previousRoot;
+	if (m_ShadowMadeHook) {
+		m_ShadowMadeHook(resident, shadow);
+	}
 	return shadow;
+}
+
+MovableObject* MovableMan::ExistingShadowOf(const MovableObject* resident) const {
+	const auto existing = m_Speculation.shadows.find(resident);
+	return existing != m_Speculation.shadows.end() ? existing->second.object : nullptr;
 }
 
 MovableObject* MovableMan::SpeculativeView(MovableObject* found) {

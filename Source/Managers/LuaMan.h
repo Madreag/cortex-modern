@@ -341,6 +341,8 @@ namespace RTE {
 		void TrackPreviewBornWrapper(LuabindObjectWrapper* wrapper, const std::string& scriptPath, const std::string& functionName);
 		bool BindPreviewScriptObject(MovableObject* clone, bool sharedSlot);
 		bool RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass);
+		/// Releases the handles a window kept alive for its held world references.
+		void ClearPreviewHeldHandles();
 		void DropPreviewScriptObject(long uniqueID);
 		bool AttachPreviewInvStride(MovableObject* object);
 
@@ -622,6 +624,8 @@ namespace RTE {
 		static bool TakePreviewCoroutineResumed();
 		/// While set, every self the next windows copy is frozen, as a refused copy is.
 		static void SetPreviewScriptsFrozen(bool frozen) { s_PreviewScriptsForcedFrozen = frozen; }
+		/// While set, every held world reference is shadowed at the bind instead of at its first use.
+		static void SetPreviewEagerShadows(bool eager);
 		/// Wall time per stage of the preview windows' script work, averaged per window, for the preview counters.
 		static std::string DescribePreviewWindowCost();
 		/// Whether previews fence the Lua states' globals; CC_PREVIEW_GLOBALS_FENCE=0 turns the fence off.
