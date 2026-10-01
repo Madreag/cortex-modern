@@ -1009,6 +1009,19 @@ def report_toast_evidence(record, spec):
             "reason": "no toast " + "; ".join(missing) + " in " + str(report) if missing else None}
 
 
+# What decides an item without eyes: a log line, a numeric gate, a probe step or an engine record. Such an item is a LOG item,
+# judged by its probe alone; every other item names what the screen must show and is a PICTURE item for the reviewer.
+LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop")
+
+
+def item_kind(item):
+    """An item's own 'kind' when it names one, else what its evidence makes it."""
+    if item.get("kind") in ("log", "picture"):
+        return item["kind"]
+    # Evidence that names nothing (an empty step list) proves nothing.
+    return "log" if any(item.get(key) for key in LOG_EVIDENCE) else "picture"
+
+
 def item_evidence(record, item, port=None):
     rows = record["index"]
     events_path = Path(record["video_dir"]) / "events.jsonl"
@@ -1169,12 +1182,12 @@ def review(scenario, capture, out):
                 indexed = {row["frame"]: row for row in record["index"]}
                 video_frames = [indexed[frame]["video_frame"] for frame in found if "video_frame" in indexed.get(frame, {})]
                 seconds = [frame / encode_result["fps"] for frame in video_frames]
-            resolved = {**item, "peer": name, "run": capture["name"], "frames": video_frames,
+            resolved = {**item, "kind": item_kind(item), "peer": name, "run": capture["name"], "frames": video_frames,
                           "capture_frames": found, "video_seconds": seconds,
                           "video": record.get("video"), "contact_sheet": record.get("contact_sheet"),
                           "state": "captured" if video_frames else "no MP4 evidence",
                           **assertions}
-            if assertions.get('probe') == 'awaiting-review' and video_frames:
+            if assertions.get('probe') == 'awaiting-review' and video_frames and resolved["kind"] == "picture":
                 resolved['state'] = 'AWAITING REVIEW'
             if not video_frames or item.get("blocked_by") or assertions.get("probe") in (None, "none", "fail", "not-reached", "not-run"):
                 resolved["finding"] = {"class": (capture.get("stop_finding") or {}).get("class", "harness" if capture.get("interrupted") else "unclassified"), "reason": (capture.get("stop_finding") or {}).get("reason") or capture.get("interrupted") or item.get("blocked_by") or assertions.get("reason") or
