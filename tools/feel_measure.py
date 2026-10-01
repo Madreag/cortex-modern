@@ -395,23 +395,38 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     return out
 
 
-def held_client_away(log):
-    """The ticks a held client never simulated: from the tick its seat was held at through the image it rejoined on."""
-    ranges = []
-    for stop, image in re.findall(r'\[net-match\] recovery requested tick=(\d+) [^\n]*PeerHeld:[^\n]*\n(?:[^\n]*\n)*?\[net-match\] bootstrap checkpoint=(\d+) ', log):
-        if int(image) >= int(stop):
-            ranges.append((int(stop), int(image)))
-    return tuple(ranges)
+def held_client_images(log, live=None):
+    """Each image a held client rejoined on, as (first tick it did not keep, image tick). The first tick is the live stream's
+    abandon record when the client wrote one (it voids its own rows from there), else the tick its seat was held at, else
+    the tick its recovery was asked at."""
+    abandons = []
+    if live is not None and Path(live).is_file():
+        for line in Path(live).read_text(encoding='utf-8').splitlines():
+            row = json.loads(line) if line.strip() else {}
+            if 'abandon_from' in row:
+                abandons.append(int(row['abandon_from']))
+    images, held, stop = [], None, None
+    for line in log.splitlines():
+        if (match := re.match(r'\[net-lockstep\] hold of this seat at (\d+) ', line)):
+            held = int(match.group(1))
+        elif (match := re.match(r'\[net-match\] recovery requested tick=(\d+) .*PeerHeld:', line)):
+            asked = int(match.group(1))
+            stop = abandons.pop(0) if abandons else held if held is not None and held <= asked else asked
+        elif stop is not None and (match := re.match(r'\[net-match\] bootstrap checkpoint=(\d+) ', line)):
+            images.append((stop, int(match.group(1))))
+            stop = None
+    return images
 
 
-def held_client_rewinds(log):
+def held_client_away(log, live=None):
+    """The ticks a held client never kept: from the first tick it did not keep through the image it rejoined on."""
+    return tuple((stop, image) for stop, image in held_client_images(log, live) if image >= stop)
+
+
+def held_client_rewinds(log, live=None):
     """The images a held client replayed from that were older than the tick it stopped at: it simulates the ticks
     between them twice, and both readings are compared."""
-    images = []
-    for stop, image in re.findall(r'\[net-match\] recovery requested tick=(\d+) [^\n]*PeerHeld:[^\n]*\n(?:[^\n]*\n)*?\[net-match\] bootstrap checkpoint=(\d+) ', log):
-        if int(image) < int(stop):
-            images.append(int(image))
-    return tuple(images)
+    return tuple(image for stop, image in held_client_images(log, live) if image < stop)
 
 
 def fullstate_proof(run, pairs):
@@ -448,9 +463,15 @@ def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False, client_a
     try:
         left = [shared(row) for row in json.loads(first.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']]
         right = [shared(row) for row in json.loads(second.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']]
-        exact_coverage = [row['tick'] for row in left] == [row['tick'] for row in right] == list(range(1, expected_ticks + 1))
-        result['all_tick_hashes_identical'] = exact_coverage and left == right
-        result['first_full_row_difference'] = next((a['tick'] for a, b in zip(left, right) if a != b), None)
+        if window_only:
+            left = [row for row in left if row['tick'] <= expected_ticks]
+            right = [row for row in right if row['tick'] <= expected_ticks]
+        # The second peer's rows are the first's without the ticks it never kept, each identical.
+        away = {tick for low, high in client_away for tick in range(low, high + 1)}
+        kept = [row for row in left if row['tick'] not in away]
+        exact_coverage = [row['tick'] for row in left] == list(range(1, expected_ticks + 1)) and [row['tick'] for row in kept] == [row['tick'] for row in right]
+        result['all_tick_hashes_identical'] = exact_coverage and kept == right
+        result['first_full_row_difference'] = next((a['tick'] for a, b in zip(kept, right) if a != b), None)
     except (OSError, ValueError, KeyError, IndexError) as error:
         result.update(all_tick_hashes_identical=False, error=str(error))
     result['pass'] = bool(ok and result['all_tick_hashes_identical'])
@@ -565,14 +586,21 @@ def reduce_timing_case(run, reference=None):
     if reference is not None:
         for value in peers.values():
             apply_tps_call(value, reference)
-    proof = compare_pair(run / 'host_trace.json', run / f'{comparison_peer}_trace.json', manifest.get('ticks', TICKS), cross_peer=True)
+    # A peer that rejoined from an image is compared on every tick it kept: the ticks it voided up to the image are skipped, and
+    # as it counts its cap from the image only the planned window is compared.
+    peer_log = (run / f'{comparison_peer}/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / f'{comparison_peer}/stdout.log').is_file() else ''
+    peer_live = run / f'{comparison_peer}-live.jsonl'
+    rejoined = bool(held_client_images(peer_log, peer_live))
+    proof = compare_pair(run / 'host_trace.json', run / f'{comparison_peer}_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
+                         client_away=held_client_away(peer_log, peer_live), window_only=rejoined, client_rewinds=held_client_rewinds(peer_log, peer_live))
     if silent:
         # The held client's own ticks are compared too: before its hold and from the image it rejoined on.
         client_log = (run / 'client/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / 'client/stdout.log').is_file() else ''
+        client_live = run / 'client-live.jsonl'
         # A rejoined client runs its own cap from its image, so only the planned window is compared.
         proof['held_client'] = compare_pair(run / 'host_trace.json', run / 'client_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
-                                            client_away=held_client_away(client_log), window_only=True,
-                                            client_rewinds=held_client_rewinds(client_log))
+                                            client_away=held_client_away(client_log, client_live), window_only=True,
+                                            client_rewinds=held_client_rewinds(client_log, client_live))
     pairs = [(left, right) for index, left in enumerate(members) for right in members[index + 1:]]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
             for left, right in pairs}

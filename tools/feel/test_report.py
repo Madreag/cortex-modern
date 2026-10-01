@@ -96,6 +96,37 @@ class ReportTests(unittest.TestCase):
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
 
+    def test_an_image_rejoin_is_compared_on_every_tick_it_kept(self):
+        import feel_measure
+        from compare_sim_traces import CORE
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            # The client is held at 10, asks its recovery at 12, loads the host's image of 14 and counts its cap from there.
+            rows = {tick: {'tick': tick, 'total': f'{tick:064x}', 'subsystems': dict.fromkeys(CORE | {'controller'}, f'{tick:064x}')} for tick in range(1, 22)}
+            (root / 'host.json').write_text(json.dumps({'runs': [{'tick_hashes': [rows[tick] for tick in range(1, 21)]}]}), encoding='utf-8')
+            client = [rows[tick] for tick in list(range(1, 10)) + list(range(15, 22))]
+            (root / 'client.json').write_text(json.dumps({'runs': [{'tick_hashes': client}]}), encoding='utf-8')
+            log = ('[net-lockstep] hold of this seat at 27 revision=1\n[net-match] held client: catching up in place from frame 26\n'
+                   '[net-lockstep] hold of this seat at 10 revision=2\n[net-match] held client: no in-place catch-up (sim at 11, held from 10)\n'
+                   '[net-match] recovery requested tick=12 catch_up=0 reason=tick 12 lockstep stopped: PeerHeld:Your seat is held by the AI.\n'
+                   '[net-match] bootstrap checkpoint=14 local_peer=2\n')
+            live = root / 'client-live.jsonl'
+            live.write_text(json.dumps({'abandon_from': 10, 'round': 1}) + '\n', encoding='utf-8')
+            self.assertEqual(feel_measure.held_client_away(log, live), ((10, 14),))
+            # Without its abandon record the gap starts at the hold, never at the recovery's ask.
+            self.assertEqual(feel_measure.held_client_away(log), ((10, 14),))
+            proof = feel_measure.compare_pair(root / 'host.json', root / 'client.json', 20, cross_peer=True,
+                                              client_away=feel_measure.held_client_away(log, live), window_only=True)
+            self.assertTrue(proof['pass'], proof)
+            self.assertEqual(proof['existing_comparator']['compared_ticks'], 15)
+            # The gap from the recovery's ask leaves two voided ticks unexplained.
+            self.assertFalse(feel_measure.compare_pair(root / 'host.json', root / 'client.json', 20, cross_peer=True, client_away=((12, 14),), window_only=True)['pass'])
+            # A kept tick that differs still fails.
+            client[3] = dict(client[3], subsystems=dict(client[3]['subsystems'], actors='f' * 64))
+            (root / 'client.json').write_text(json.dumps({'runs': [{'tick_hashes': client}]}), encoding='utf-8')
+            self.assertFalse(feel_measure.compare_pair(root / 'host.json', root / 'client.json', 20, cross_peer=True,
+                                                       client_away=((10, 14),), window_only=True)['pass'])
+
     def test_a_rematch_compares_each_round_with_its_own_round(self):
         from tempfile import TemporaryDirectory
         from feel.retained_resume import compare_live_hashes
