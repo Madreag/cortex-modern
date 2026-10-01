@@ -7093,6 +7093,37 @@ namespace RTE {
 		return true;
 	}
 
+	// A held seat catching up in place takes its round's end record and completes on it; the next round's drive then stepped the
+	// same catch-up and took the same record again, completing each new round at once (the four-box run: 'end record received
+	// final=4875 ... in_place=1' at rounds 2 to 6, until the rejoin ceiling failed the seat).
+	bool TestACaughtUpSeatTakesItsRoundsRecordOnce(std::string* error) {
+		NetMatchService service;
+		NetLobbySession lobby;
+		const uint64_t record = PackRoundEndedRecord(4875, 2);
+		service.m_WorldCatchUp.active = true;
+		service.m_WorldCatchUp.privateMatch = true;
+		service.m_WorldCatchUp.roundId = 61;
+		service.m_WorldCatchUp.endRecord = record;
+		service.m_WorldCatchUp.appliedThrough = 4875;
+		uint64_t refusal = 0, taken = 0;
+		const bool first = service.TakeCatchUpRoundEndLocked(lobby, &refusal);
+		ScenarioRunner::ClearControllerReplayError();
+		const bool tookRecord = service.TakeRoundEndRecord(taken);
+		// The drive steps a seat's catch-up only while it is active; the next round's drive is this second call.
+		const bool again = service.m_WorldCatchUp.active && service.TakeCatchUpRoundEndLocked(lobby, &refusal);
+		ScenarioRunner::ClearControllerReplayError();
+		if (!first || !tookRecord || taken != record) {
+			*error = "the caught-up seat did not take its round's end record";
+			return false;
+		}
+		if (again) {
+			*error = "the caught-up seat took its round's end record again after completing on it, so every next round completes at once";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_caught_up_seat_takes_its_rounds_record_once" << std::endl;
+		return true;
+	}
+
 	bool TestHoldResolutionPumpDoesNotRelock(std::string* error) {
 		auto pumpOne = [&](NetHoldResolution resolution) -> bool {
 			NetMatchService service;
@@ -14708,6 +14739,7 @@ namespace RTE {
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestAnInPlaceReturnKeepsAnOpenReturnGap(&error)) return fail(error);
 		if (!TestAReturnerToldTheMatchIsOverGetsItsRecord(&error)) return fail(error);
+		if (!TestACaughtUpSeatTakesItsRoundsRecordOnce(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);

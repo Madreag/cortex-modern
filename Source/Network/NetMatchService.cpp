@@ -6008,6 +6008,25 @@ static std::string ResyncSaveName() {
 		return live.initialSeatReclaims.contains(m_LocalPeerId);
 	}
 
+	bool NetMatchService::TakeCatchUpRoundEndLocked(NetLobbySession& lobby, uint64_t* refusal) {
+		std::optional<uint64_t> roundEnded;
+		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, refusal, &roundEnded);
+		if (!roundEnded) return false;
+		// The round ended while this seat caught up: the host's end record is its result, and the lobby that follows is the rematch's.
+		m_RoundEndRecord = *roundEnded;
+		m_ReceivedEndWinner = RoundEndedWinnerTeam(*roundEnded);
+		m_HostGoodbyeSeen = true;
+		m_CompletedRoundFinalFrame = RoundEndedFinalFrame(*roundEnded);
+		for (const NetTransportEvent& event: lobby.TakeEventsAfterRoundEnded()) QueueLobbyEvent(event);
+		System::PrintDiagnosticLine("[net-match] end record received final=" + std::to_string(m_CompletedRoundFinalFrame) + " winner_team=" +
+		                            std::to_string(*m_ReceivedEndWinner) + " local_team=" + std::to_string(m_LocalTeam) + " in_place=1");
+		ScenarioRunner::SetControllerReplayError("MatchOver: the round ended while this seat caught up");
+		// The round this catch-up replayed is over: its record is taken once, and no later drive steps this catch-up again.
+		m_WorldCatchUp.active = false;
+		m_WorldCatchUp.endRecord.reset();
+		return true;
+	}
+
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
 		// This runs under m_Mutex and hands lobby messages to the session below, so the service calls
 		// those messages make have to take the locked path.
@@ -6108,21 +6127,8 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		uint64_t refusal = 0;
-		std::optional<uint64_t> roundEnded;
 		const uint64_t priorActivation = m_WorldCatchUp.activationTick;
-		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal, &roundEnded);
-		if (roundEnded) {
-			// The round ended while this seat caught up: the host's end record is its result, and the lobby that follows is the rematch's.
-			m_RoundEndRecord = *roundEnded;
-			m_ReceivedEndWinner = RoundEndedWinnerTeam(*roundEnded);
-			m_HostGoodbyeSeen = true;
-			m_CompletedRoundFinalFrame = RoundEndedFinalFrame(*roundEnded);
-			for (const NetTransportEvent& event: lobby.TakeEventsAfterRoundEnded()) QueueLobbyEvent(event);
-			System::PrintDiagnosticLine("[net-match] end record received final=" + std::to_string(m_CompletedRoundFinalFrame) + " winner_team=" +
-			                            std::to_string(*m_ReceivedEndWinner) + " local_team=" + std::to_string(m_LocalTeam) + " in_place=1");
-			ScenarioRunner::SetControllerReplayError("MatchOver: the round ended while this seat caught up");
-			return;
-		}
+		if (TakeCatchUpRoundEndLocked(lobby, &refusal)) return;
 		if (m_WorldCatchUp.endRecord) return;
 		// A different frame is the host's next return for this seat: it held the seat again after the last one, and the start that
 		// return began is over whether or not this peer saw the hold.
