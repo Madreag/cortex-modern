@@ -2770,6 +2770,16 @@ static std::string ResyncSaveName() {
 			hasRecord = m_TicketStore.HasRecord();
 			matchWasRunning = m_MatchWasRunning;
 			reason = m_ErrorText;
+			// The host gave this seat away or released it: the answer is final, so the ticket goes and nothing retries.
+			const bool seatGone = state == NetMatchServiceState::Failed && !isHost && m_Session && m_Session->HasReject() &&
+			                      (m_Session->GetRejectReason() == NetRejectReason::SeatReassigned || m_Session->GetRejectReason() == NetRejectReason::SeatReleased);
+			if (seatGone) {
+				if (!m_ReconnectUx.IsRefused()) {
+					if (m_TicketStore.HasRecord()) (void)m_TicketStore.Clear(nullptr);
+					m_ReconnectUx.NoteRefused(m_Session->BuildPlayerRefusalText());
+				}
+				return;
+			}
 			// The held seat's own rejoin is trying the hosts the match named; the prompt takes over only once it gives up.
 			if (m_HeldRejoinDriving) return;
 			// A match the host ended by leaving it is over for this seat: it lands, and nothing reconnects.

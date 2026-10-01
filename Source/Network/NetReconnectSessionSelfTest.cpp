@@ -3149,6 +3149,18 @@ namespace RTE {
 				return Fail("a successful reconnect did not settle the banner");
 			}
 
+			// A seat the host gave away is a final answer: its sentence alone, no retry, no offer, no schedule.
+			{
+				NetReconnectUx given;
+				given.NoteDropped(5000, "link lost");
+				given.NoteAttemptStarted(5000);
+				given.NoteRefused("The host gave your seat to another player.");
+				if (!given.IsRefused() || given.IsActive() || given.CanRetryManually() || given.Tick(500000) ||
+				    given.GetStatusText() != "The host gave your seat to another player." || given.GetOffer() != NetReconnectOffer::None) {
+					return Fail("a seat the host gave away still read '" + given.GetStatusText() + "' with retry " + std::to_string(given.CanRetryManually()));
+				}
+			}
+
 			// The window closing is a real end, not just a spent counter.
 			{
 				NetReconnectUx expired;

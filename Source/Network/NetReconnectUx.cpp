@@ -66,6 +66,13 @@ namespace RTE {
 		              : NetReconnectUxState::Waiting;
 	}
 
+	void NetReconnectUx::NoteRefused(std::string reason) {
+		m_Reason = std::move(reason);
+		m_State = NetReconnectUxState::Refused;
+		DismissOffer();
+		StopWatchingForHostReturn();
+	}
+
 	void NetReconnectUx::Cancel(uint64_t nowMs) {
 		(void)nowMs;
 		if (!CanCancel()) {
@@ -181,6 +188,7 @@ namespace RTE {
 			case NetReconnectUxState::Reconnected: return "Reconnected.";
 			case NetReconnectUxState::GaveUp: return "Could not reconnect" + tail + ". Retry to try again.";
 			case NetReconnectUxState::Cancelled: return "Reconnecting cancelled. Retry to try again.";
+			case NetReconnectUxState::Refused: return m_Reason;
 			case NetReconnectUxState::Connected:
 			case NetReconnectUxState::Idle: break;
 		}
@@ -445,6 +453,7 @@ namespace RTE {
 			case NetReconnectUxState::Reconnected: return "Reconnected";
 			case NetReconnectUxState::GaveUp: return "GaveUp";
 			case NetReconnectUxState::Cancelled: return "Cancelled";
+			case NetReconnectUxState::Refused: return "Refused";
 		}
 		return "Unknown";
 	}
