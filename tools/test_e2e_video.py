@@ -104,6 +104,20 @@ def check_recording_health(results, scratch):
     return ok
 
 
+def check_dropped_index(results, scratch):
+    video = scratch / "dropped-index"
+    video.mkdir(parents=True, exist_ok=True)
+    rows = [{"frame": i, "saved": True, "wall_ms": 1000 + i * 33, "sim_tick": 880 + i} for i in range(30)]
+    (video / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows) + '{"frame": 30, "sa', encoding="utf-8")
+    record = {"video_dir": str(video), "index": driver.read_index(video)}
+    kept = driver.dropped_index_evidence(record, 900)
+    ok = row(results, "dropped/index-kept-to-the-kill", kept["pass"] and kept["last_sim_tick"] == 909 and kept["torn_lines"] == [30])
+    short = driver.dropped_index_evidence(record, 950)
+    ok &= row(results, "dropped/index-short-of-the-kill-fails", not short["pass"])
+    ok &= row(results, "dropped/drop-tick-is-log-evidence", driver.item_kind({"id": "x", "drop_tick": 900}) == "log")
+    return ok
+
+
 def check_port_claims(results):
     import subprocess as sub
     holder = sub.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
@@ -1999,6 +2013,7 @@ def main():
         ok &= check_streamed_capture(results, scratch)
         ok &= check_item_kinds(results)
         ok &= check_port_claims(results)
+        ok &= check_dropped_index(results, scratch)
         ok &= check_freeze_stills(results)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_render_arm(results, scratch)
