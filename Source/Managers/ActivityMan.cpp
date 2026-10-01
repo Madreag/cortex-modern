@@ -1155,6 +1155,13 @@ bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std:
 	}
 	m_FullStateRound = round;
 	m_FullStateLabel = label;
+	// The collector visits one script state a tick, so a capture's own answers outlive the next capture when the lever samples
+	// faster than that round; walked again they answer in turn, and the walk doubles each sample until the copy cannot be mapped.
+	if (label.empty()) {
+		const uint64_t collectorRound = g_LuaMan.GetThreadedScriptStates().size() + 1;
+		if (m_FullStateLastTick != 0 && tick > m_FullStateLastTick && tick - m_FullStateLastTick < collectorRound) g_LuaMan.CollectGarbageForCheckpoint();
+		m_FullStateLastTick = tick;
+	}
 	std::shared_future<bool> task;
 	size_t bytes = 0;
 	const auto captureStart = std::chrono::steady_clock::now();

@@ -462,6 +462,7 @@ namespace RTE {
 		std::string m_FullStateLabel; //!< The label of the oracle capture being queued; empty for a scheduled sample.
 		std::string m_FullStateDumpRoot; //!< The dump directory the scheduled samples name; labelled captures dump beneath it.
 		bool m_FullStateLever = false; //!< Whether this run samples the full state, so saves and restores log theirs too.
+		uint64_t m_FullStateLastTick = 0; //!< The tick of the lever's last scheduled capture, 0 before the first.
 		std::string m_LastAutosavePath;
 		uint64_t m_LastAutosaveTick = 0;
 		size_t m_LastAutosaveBytes = 0;
