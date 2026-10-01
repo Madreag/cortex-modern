@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "name": "mp-port-map",
+  "port_base": 49473,
+  "directory_port": 49477,
+  "size": "960x540",
+  "timeout_s": 120,
+  "title": "The host's router mapping line in the lobby: mapped while the lobby is listed, and kept",
+  "capture_policy": "The routers are loopback fakes started beside the run (tools/net_port_map_fake.py), so no packet reaches a real router; every runner seeds NetworkPortMapEnable = 0 and only this scene's host turns the mapping on by its argv. The lobby line is read from the label the player sees.",
+  "requires_tokens": [
+    "PORTMAP_OK_GATEWAY",
+    "PORTMAP_OK_IGD"
+  ],
+  "runs": [
+    {
+      "name": "mapped",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-port-map",
+            "on",
+            "-net-port-map-gateway",
+            "{PORTMAP_OK_GATEWAY}",
+            "-net-port-map-igd",
+            "{PORTMAP_OK_IGD}"
+          ],
+          "menu_script": "mp-port-map.mapped.host.menu.txt",
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "port-map-mapped",
+      "run": "mapped",
+      "peer": "host",
+      "mark": "port-map-mapped",
+      "screen": "MultiplayerScreen",
+      "what": "The listed lobby's router line reads the public endpoint the router mapped, through NAT-PMP, while the listing waits for the lobby's identity.",
+      "events": [
+        "assert_label LabelLobbyPortMap \"Public endpoint: 203\\.0\\.113\\.7:\" text=\"Public endpoint: 203\\.0\\.113\\.7:\\d+ via natpmp\" PASS",
+        "assert_label LabelLobbyPortMap \"via natpmp\" text=\"Public endpoint: 203\\.0\\.113\\.7:\\d+ via natpmp\" PASS"
+      ]
+    },
+    {
+      "id": "port-map-mapped-stays",
+      "run": "mapped",
+      "peer": "host",
+      "mark": "port-map-mapped-stays",
+      "screen": "MultiplayerScreen",
+      "what": "Three seconds later the line still reads the mapped endpoint: the mapping is not released while the lobby is listed.",
+      "events": [
+        "assert_label LabelLobbyPortMap \"Public endpoint: 203\\.0\\.113\\.7:\" text=\"Public endpoint: 203\\.0\\.113\\.7:\\d+ via natpmp\" PASS"
+      ]
+    }
+  ]
+}
