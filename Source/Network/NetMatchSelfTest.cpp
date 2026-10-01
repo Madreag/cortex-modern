@@ -6275,6 +6275,7 @@ namespace RTE {
 			    {"a cpu slot", NetMatchRunner::DeriveRematchSurvivors(withCpu, {}, {}, nullptr), {1, 2, 3, 4}},
 			    {"the in-round drop case", NetMatchRunner::DeriveRematchSurvivors(three, {{2, 7}}, {}, &inRoundDrop), {1, 3}},
 			    {"the between-rounds drop case", NetMatchRunner::DeriveRematchSurvivors(three, {}, {}, &unobserved), {1, 2, 3}},
+			    {"a held seat deriving its own rematch", NetMatchRunner::DeriveRematchSurvivors(four, {{4, 40}}, {}, &fourDropped, 4), {1, 2, 3, 4}},
 			};
 			for (const Survivors& survivors: survivorCases) {
 				if (survivors.derived != survivors.expected) {
