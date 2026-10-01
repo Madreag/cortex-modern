@@ -109,6 +109,26 @@ static std::string FitDiscoveredGameRow(const NetDirectoryClient::GameRow& row, 
 }
 
 // Windows-1252 for one Unicode codepoint; 0xA0-0xFF match Latin-1.
+/// Sets a path on one line of the label; one that does not fit keeps its root and as many of its last folders as fit, the middle elided.
+static void SetFittedPath(GUILabel* label, const std::string& prefix, const std::filesystem::path& path) {
+	const std::string full = path.generic_string();
+	label->SetText(prefix + full);
+	if (label->GetTextWidth() <= label->GetWidth()) return;
+	std::vector<std::string> parts;
+	for (size_t start = 0; start <= full.size();) {
+		const size_t end = std::min(full.find('/', start), full.size());
+		if (end > start) parts.push_back(full.substr(start, end - start));
+		start = end + 1;
+	}
+	for (size_t kept = parts.size() > 1 ? parts.size() - 1 : 1; kept > 0; --kept) {
+		std::string tail;
+		for (size_t index = parts.size() - kept; index < parts.size(); ++index) tail += "/" + parts[index];
+		label->SetText(prefix + (parts.size() > kept ? parts.front() + "/..." : std::string()) + tail);
+		if (label->GetTextWidth() <= label->GetWidth()) return;
+	}
+	label->SetText(prefix + ".../" + parts.back());
+}
+
 static bool Cp1252FromCodepoint(int codepoint, char& out) {
 	if (codepoint < 0) {
 		return false;
@@ -2185,12 +2205,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	}
 
 	// Files page: local paths, local retention, and the local status-widget preference.
-	if (m_HostFilesSavePathLabel) {
-		m_HostFilesSavePathLabel->SetText("Autosaves: " + (std::filesystem::path(System::GetWorkingDirectory()) / "Autosaves").generic_string());
-	}
-	if (m_HostFilesDiagPathLabel) {
-		m_HostFilesDiagPathLabel->SetText("Diagnostics: " + (std::filesystem::path(System::GetWorkingDirectory()) / "Telemetry").generic_string());
-	}
+	if (m_HostFilesSavePathLabel) SetFittedPath(m_HostFilesSavePathLabel, "Autosaves: ", std::filesystem::path(System::GetWorkingDirectory()) / "Autosaves");
+	if (m_HostFilesDiagPathLabel) SetFittedPath(m_HostFilesDiagPathLabel, "Diagnostics: ", std::filesystem::path(System::GetWorkingDirectory()) / "Telemetry");
 	HostOptSelectComboIndex(m_HostFilesWidgetCombo, static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
 	HostOptSetEditable(m_HostFilesWidgetCombo, true); // local preference, editable on every peer
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostFilesSaveDiagButton], true);
