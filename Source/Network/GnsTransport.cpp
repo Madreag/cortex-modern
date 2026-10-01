@@ -166,6 +166,7 @@ namespace RTE {
 		}
 
 		int s_SimulatedLagMs = 0;
+		int s_SimulatedJitterMs = 0;
 		int s_RendezvousLogLevel = 0;
 		static constexpr size_t c_MaxHeldBytesBeforeAnnounce = 256 * 1024;
 
@@ -215,13 +216,22 @@ namespace RTE {
 			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, s_RendezvousLogLevel);
 		}
 
-		// Test harness: splits the requested RTT across the send/recv legs of every connection.
+		// Test harness: splits the requested RTT across the send/recv legs of every connection, and adds its jitter.
 		void ApplySimulatedLag() {
-			if (s_SimulatedLagMs <= 0) {
-				return;
+			if (s_SimulatedLagMs > 0) {
+				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, s_SimulatedLagMs / 2);
+				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, s_SimulatedLagMs - s_SimulatedLagMs / 2);
 			}
-			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, s_SimulatedLagMs / 2);
-			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, s_SimulatedLagMs - s_SimulatedLagMs / 2);
+			if (s_SimulatedJitterMs > 0) {
+				// The mapping a cross fault's jitter_ms gets: half on average, the whole at worst, on every packet.
+				const float jitter = static_cast<float>(s_SimulatedJitterMs);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Avg, jitter / 2);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Avg, jitter / 2);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Max, jitter);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Max, jitter);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, 100.0F);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Pct, 100.0F);
+			}
 		}
 	}
 
@@ -1300,6 +1310,16 @@ namespace RTE {
 		s_SimulatedLagMs = lagMs;
 #else
 		(void)lagMs;
+#endif
+	}
+
+	void GnsTransport::SetSimulatedJitterMs(int jitterMs) {
+#ifdef CCCP_WITH_GNS
+		// A harness lever: only a headless run jitters its links, within a cross fault's range.
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		s_SimulatedJitterMs = headless && std::string_view(headless) == "1" && jitterMs >= 0 && jitterMs <= 10000 ? jitterMs : 0;
+#else
+		(void)jitterMs;
 #endif
 	}
 
