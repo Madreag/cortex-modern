@@ -1135,14 +1135,16 @@ static long long s_paceDrawUs = 0;
 static long long s_pacePreviewUs = 0; //!< The draw's share spent in the local prediction preview.
 static long long s_paceInterfaceUs = 0; //!< The draw's share spent on input, the menus and the activity's render update.
 static uint64_t s_paceFramesDrawn = 0; //!< Frames the presentation cap let through.
+static uint64_t s_paceFramesShed = 0; //!< Frames a paced round skipped because it still owed ticks.
+static long long s_paceLastPresentUs = 0; //!< When the paced round last drew a frame.
 static long long s_paceFrameDrawUs = 0; //!< Time spent drawing and presenting those frames.
 static long long s_paceMaxDrawUs = 0; //!< The longest single iteration's draw since the previous census line.
 
 // The loop pace since the previous memory census line, with the draw split where it spends its time.
 static std::string PaceCensusSinceLast() {
-	struct Mark { uint64_t iterations = 0, ticks = 0; long long simUs = 0, updateUs = 0, drawUs = 0, previewUs = 0, interfaceUs = 0, waitUs = 0, trimmedTicks = 0; uint64_t previews = 0, framesDrawn = 0; long long frameDrawUs = 0; };
+	struct Mark { uint64_t iterations = 0, ticks = 0; long long simUs = 0, updateUs = 0, drawUs = 0, previewUs = 0, interfaceUs = 0, waitUs = 0, trimmedTicks = 0; uint64_t previews = 0, framesDrawn = 0; long long frameDrawUs = 0; uint64_t framesShed = 0; };
 	static Mark last;
-	const Mark now{s_paceIterations, s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs, s_pacePreviewUs, s_paceInterfaceUs, ScenarioRunner::GetLockstepWaitUs(), g_TimerMan.GetPaceTrimmedTicks(), LocalPrediction::GetPreviewCount(), s_paceFramesDrawn, s_paceFrameDrawUs};
+	const Mark now{s_paceIterations, s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs, s_pacePreviewUs, s_paceInterfaceUs, ScenarioRunner::GetLockstepWaitUs(), g_TimerMan.GetPaceTrimmedTicks(), LocalPrediction::GetPreviewCount(), s_paceFramesDrawn, s_paceFrameDrawUs, s_paceFramesShed};
 	// A new round restarts the counters.
 	if (now.iterations < last.iterations || now.ticks < last.ticks) last = Mark{};
 	const double ticks = static_cast<double>(std::max<uint64_t>(1, now.ticks - last.ticks));
@@ -1159,6 +1161,7 @@ static std::string PaceCensusSinceLast() {
 	    << " net_wait_ms=" << (now.waitUs - last.waitUs) / 1000 << " previews=" << now.previews - last.previews
 	    << " trimmed_ms=" << static_cast<double>(now.trimmedTicks - last.trimmedTicks) * 1000.0 / static_cast<double>(g_TimerMan.GetTicksPerSecond())
 	    << " mspsu_average=" << g_PerformanceMan.GetMSPSUAverage() << " frames_drawn=" << now.framesDrawn - last.framesDrawn
+	    << " frames_shed=" << now.framesShed - last.framesShed
 	    << " ms_per_frame_drawn=" << static_cast<double>(now.frameDrawUs - last.frameDrawUs) / 1000.0 / static_cast<double>(std::max<uint64_t>(1, now.framesDrawn - last.framesDrawn))
 	    << " max_iteration_draw_ms=" << static_cast<double>(s_paceMaxDrawUs) / 1000.0 << " preview_phase_ms=" << LocalPrediction::DescribePhasesSinceLastCall();
 	s_paceMaxDrawUs = 0;
@@ -6596,6 +6599,7 @@ void RunGameLoop() {
 			s_pacePreviewUs = 0;
 			s_paceInterfaceUs = 0;
 			s_paceFramesDrawn = 0;
+			s_paceFramesShed = 0;
 			s_paceFrameDrawUs = 0;
 			ScenarioRunner::ResetLockstepWaitUs();
 			g_TimerMan.ResetPaceCounters();
@@ -6615,12 +6619,12 @@ void RunGameLoop() {
 
 		// A lockstep peer with owed ticks presents at least once per tick length while it catches up, the round's first ticks
 		// included (the round starts inside this frame's first poll); a world joiner keeps its own ceiling.
-		// A machine whose frames take longer than a tick sheds frames, never ticks: it keeps what it owes, runs it back to back and
-		// presents at least 15 times a second. One that keeps up spreads a catch-up burst over frames a tick apart.
+		// A paced round sheds frames, never ticks: it keeps what it owes up to the floor's span, runs it back to back and
+		// presents at least 15 times a second. One whose frames fit spreads a catch-up burst over frames a tick apart.
 		const bool pacedRound = ScenarioRunner::HasLockstepCoordinator() && !freeRunLockstep && !ScenarioRunner::WorldCatchUpActive();
 		const bool shedsFrames = pacedRound && g_PerformanceMan.GetMSPFAverage() > g_TimerMan.GetDeltaTimeMS();
 		constexpr double c_FloorFrameMs = 1000.0 / 15.0;
-		g_TimerMan.SetOwedTicksKept(shedsFrames ? static_cast<int>(c_FloorFrameMs / g_TimerMan.GetDeltaTimeMS()) : 0);
+		g_TimerMan.SetOwedTicksKept(pacedRound ? static_cast<int>(c_FloorFrameMs / g_TimerMan.GetDeltaTimeMS()) : 0);
 		// A paced round caps what it owes by the median of its last 15 ticks, so a capture or a first-tick load cannot drop owed time.
 		float owedCapTickCostMs = 0;
 		if (pacedRound && !s_paceTickCostsMs.empty()) {
@@ -8229,6 +8233,8 @@ void RunGameLoop() {
 				break;
 			}
 		}
+		// The frame's budget ran out with ticks still due: the round is behind its schedule, not waiting on a peer.
+		const bool ticksOwed = pacedRound && g_TimerMan.SimFrameBudgetSpent();
 		g_TimerMan.BeginSimFrame(0);
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
@@ -8277,8 +8283,11 @@ void RunGameLoop() {
 		std::optional<NetLockstepPlane::Window> drawWindow;
 		drawWindow.emplace("frame draw");
 		FrameMan::FeelBeforePreview();
+		// Behind its schedule, a paced round skips this frame's preview and draw so the owed ticks run first, down to the floor.
+		const bool shedFrame = ticksOwed && !NetMatchScreenshotDue() &&
+		                       g_TimerMan.GetAbsoluteTime() - s_paceLastPresentUs < static_cast<long long>(c_FloorFrameMs * 1000.0);
 		const long long previewStartTime = g_TimerMan.GetAbsoluteTime();
-		LocalPrediction::RunPreview();
+		if (!shedFrame) LocalPrediction::RunPreview();
 		const long long interfaceStartTime = g_TimerMan.GetAbsoluteTime();
 
 		{
@@ -8297,8 +8306,12 @@ void RunGameLoop() {
 			t_simRNGOverride = prevSimRNG;
 		}
 		const long long frameDrawStartTime = g_TimerMan.GetAbsoluteTime();
-		if (!freeRunLockstep || NetMatchScreenshotDue()) {
+		if (shedFrame) {
+			++s_paceFramesShed;
+		} else if (!freeRunLockstep || NetMatchScreenshotDue()) {
+			const uint64_t framesBefore = s_paceFramesDrawn;
 			DrawFrameWithPreviews();
+			if (s_paceFramesDrawn != framesBefore) s_paceLastPresentUs = g_TimerMan.GetAbsoluteTime();
 		}
 		drawWindow.reset();
 
