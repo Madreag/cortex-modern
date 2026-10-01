@@ -313,6 +313,8 @@ namespace RTE {
 		/// The last frame this peer will simulate in the round, once its end is known.
 		static void SetLockstepFinalFrame(uint64_t frame);
 		static bool IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame);
+		/// Whether the host released this held seat: the AI keeps its units and its player no longer reclaims it.
+		static bool IsLockstepSeatReleased(uint8_t peerId);
 		static bool IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame);
 		static void FilterReclaimControllerInputs(NetLockstepReadyFrame& ready);
 		static void ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame);

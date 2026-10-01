@@ -51,9 +51,11 @@ namespace RTE::NetPlayerPresentation {
 
 	inline std::string State(uint8_t peer, bool aiHeld, bool dropped, bool reclaiming) {
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
-		const bool left = Departed(peer);
-		const bool ai = aiHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame) ||
-		    (left && Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, frame));
+		const bool released = ScenarioRunner::IsLockstepSeatReleased(peer) || g_NetMatchService.GetSeatPresence().StateOf(peer) == NetSeatPresenceState::Left;
+		// A seat the AI plays for its player is held, however its player went; only the host's release makes it Left.
+		const bool held = !released && (aiHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame));
+		const bool left = !held && Departed(peer);
+		const bool ai = held || (left && (ScenarioRunner::IsLockstepSeatUnderAI(peer, frame) || (Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, frame))));
 		if (left) return ai ? "Left - AI in control" : "Left";
 		if (ai) return reclaiming ? "Held - AI in control - rejoining" : "Held - AI in control";
 		if (reclaiming) return "Rejoining";
