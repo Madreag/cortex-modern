@@ -1,0 +1,7 @@
+# The leaver comes back after the 20 s hold window has closed: nobody loses a seat without the host's click.
+wait_label ButtonMultiplayerReconnect Rejoin Match
+video_mark window-leaver-offer
+wait_ms 25000
+activate ButtonMultiplayerReconnect
+wait_file {PROBE_DIR}/done.json 240
+exit

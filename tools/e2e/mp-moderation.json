@@ -224,6 +224,18 @@
         "wait_error.*The host gave your seat to another player",
         "assert_error.*The host gave your seat to another player.*PASS"
       ]
+    },
+    {
+      "id": "leave-leaver-final",
+      "run": "leave-apply",
+      "peer": "leaver",
+      "screen": "MultiplayerScreen",
+      "mark": "leaver-seat-given",
+      "what": "The refusal is final: the landing line carries no Retry and the Rejoin button is gone.",
+      "events": [
+        "assert_label_absent LabelMultiplayerLandingStatus \"Retry\".*PASS",
+        "assert_visible.*ButtonMultiplayerReconnect.*PASS"
+      ]
     }
   ],
   "runs": [
@@ -326,7 +338,11 @@
             "-net-h4-substitute",
             "1",
             "-net-h4-substitute-delay",
-            "3000"
+            "3000",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
           ],
           "input_script": "play-input.txt",
           "settings": {
@@ -336,7 +352,23 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 0,
-          "probe": "mp-moderation.leave-host.probe.json"
+          "probe": "mp-moderation.leave-host.probe.json",
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 6000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         },
         {
           "name": "leaver",
@@ -372,7 +404,11 @@
             "127.0.0.1",
             "-net-match-e2e-leave",
             "-net-match-e2e-leave-tick",
-            "600"
+            "600",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
           ],
           "input_script": "play-input.txt",
           "settings": {
@@ -382,7 +418,23 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 1,
-          "menu_script": "mp-moderation.leave-leaver.menu.txt"
+          "menu_script": "mp-moderation.leave-leaver.menu.txt",
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 6000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         },
         {
           "name": "newcomer",
@@ -417,7 +469,11 @@
             "-net-join",
             "127.0.0.1",
             "-net-h4-apply",
-            "1"
+            "1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
           ],
           "input_script": "play-input.txt",
           "settings": {
@@ -431,7 +487,23 @@
             "event": "video_mark leaver-rejoin-offer",
             "timeout_s": 90
           },
-          "probe": "mp-moderation.leave-newcomer.probe.json"
+          "probe": "mp-moderation.leave-newcomer.probe.json",
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 6000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         }
       ]
     }
