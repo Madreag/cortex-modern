@@ -81,6 +81,31 @@ class SoakJudgement(unittest.TestCase):
                                                         encoding="utf-8")
         self.assertFalse(soak.acceptance_history(self.root, TICKS)["pass"], "a stall its hold does not follow at once is still charged")
 
+    def test_a_soaks_holds_are_judged_by_its_own_plan(self) -> None:
+        (self.root / "host").mkdir(parents=True, exist_ok=True)
+        (self.root / "client").mkdir(parents=True, exist_ok=True)
+
+        def host(extra: str = "") -> None:
+            (self.root / "host" / "stdout.log").write_text(
+                "[net-match] hold peer=2 frame=1005 AI in control\n" + extra + "[net-match] hold peer=2 frame=2500 AI in control\n", encoding="utf-8")
+        (self.root / "client" / "stdout.log").write_text("[net-match] bootstrap checkpoint=2620 local_peer=2\n", encoding="utf-8")
+        # The planned stall's hold is planned; the other has no named cause.
+        host()
+        judged = soak.soak_hold_judgement(self.root, [1000])
+        self.assertEqual((judged["planned"], judged["passed"]), ([1005], False))
+        self.assertFalse(judged["unexplained"][0]["cause"])
+        # A lost frame named at that tick, the image followed, no survivor waited: explained.
+        host("[lockstep-recv] asked peer 2 to resend frame=2500 of peer 2 after 51 ms; highest heard=2499\n")
+        self.assertTrue(soak.soak_hold_judgement(self.root, [1000])["passed"])
+        # The same hold the survivor felt is a defect.
+        host("[lockstep-recv] asked peer 2 to resend frame=2500 of peer 2 after 51 ms; highest heard=2499\n"
+             "[net-frame-wait] frame=2500 wait_ms=90 on=Client\n")
+        self.assertFalse(soak.soak_hold_judgement(self.root, [1000])["passed"])
+        # A cause with no recovery after it is a defect.
+        host("[lockstep-recv] asked peer 2 to resend frame=2500 of peer 2 after 51 ms; highest heard=2499\n")
+        (self.root / "client" / "stdout.log").write_text("", encoding="utf-8")
+        self.assertFalse(soak.soak_hold_judgement(self.root, [1000])["passed"])
+
     def test_a_hold_after_a_return_is_excused_only_for_a_slow_machine_whose_sim_does_not_fit(self) -> None:
         row = {"round": ROUND, "held_peer": 1, "hold_tick": 1325, "returned_peer": 1, "return_tick": 1234}
         slow = "[net-lockstep] slow machine peer 1 at frame 1300 : it runs 52 ticks a second\n"
