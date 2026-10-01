@@ -12,6 +12,7 @@
 #include "NetWorldJoin.h"
 #include "nlohmann/json.hpp"
 
+#include <limits>
 #include <algorithm>
 #include <set>
 #include <iostream>
@@ -33,7 +34,7 @@ namespace RTE {
 		using json = nlohmann::json;
 		json seats = json::array();
 		for (const auto& state: m_Seats) {
-			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", state.committed}, {"closed", state.closed}, {"dropped", state.dropped}, {"left", state.leftByChoice}, {"expired", state.holdExpired}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"display", state.holderName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs ? state.retiredUntilMs - m_NowMs : 0}};
+			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", state.committed}, {"closed", state.closed}, {"dropped", state.dropped}, {"left", state.leftByChoice}, {"expired", state.holdExpired}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"display", state.holderName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs && state.retiredUntilMs != std::numeric_limits<uint64_t>::max() ? state.retiredUntilMs - m_NowMs : 0}, {"retired_kept", state.retiredGeneration != 0 && state.retiredUntilMs == std::numeric_limits<uint64_t>::max()}};
 			if (state.hasParticipantId) {
 				row["participant_id"] = state.participantId;
 			}
@@ -143,7 +144,7 @@ namespace RTE {
 				const uint64_t retiredRemaining = row.at("retired_remaining").get<uint64_t>();
 				if (retiredRemaining > c_ProvisionalExpiryMs)
 					return false;
-				state->retiredUntilMs = retiredRemaining != 0 ? nowMs + retiredRemaining : 0;
+				state->retiredUntilMs = row.value("retired_kept", false) ? std::numeric_limits<uint64_t>::max() : retiredRemaining != 0 ? nowMs + retiredRemaining : 0;
 				state->identity = identity;
 				if (row.contains("participant_id")) {
 					state->participantId = row.at("participant_id").get<NetAuthBytes32>();
@@ -1842,7 +1843,8 @@ namespace RTE {
 		seat->saturated = false;
 		if (pending->supersededGeneration != 0) {
 			seat->retiredGeneration = pending->supersededGeneration;
-			seat->retiredUntilMs = nowMs + c_ProvisionalExpiryMs;
+			// The seat's owner may come back at any time while the match runs, and is told precisely that its seat was given away.
+			seat->retiredUntilMs = std::numeric_limits<uint64_t>::max();
 		}
 		if (!BindIncarnation(*seat, connection)) {
 			m_Registry->ClearRetired(message.stableSeat);
