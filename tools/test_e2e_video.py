@@ -49,6 +49,12 @@ def check_freeze_stills(results):
     menu = [dict(row, screen="MultiplayerScreen") if 20 <= row["frame"] <= 45 else row for row in running]
     ok &= row(results, "stills/menu-still-passes", [still["start_s"] for still in driver.running_stills(spans, menu)] == [9.0])
     ok &= row(results, "stills/short-still-passes", driver.running_stills([(1.0, 1.5)], running) == [])
+    # The still that holds the harness's capped stop is the run ending, named; one anywhere else still fails.
+    allowed = []
+    capped = driver.running_stills(spans, running, capped_stop_ms=1000 + 9050, allowed=allowed)
+    ok &= row(results, "stills/capped-stop-still-allowed", [still["start_s"] for still in capped] == [2.5] and
+              [still["start_s"] for still in allowed] == [9.0] and "capped stop" in allowed[0]["reason"])
+    ok &= row(results, "stills/capped-stop-elsewhere-fails", [still["start_s"] for still in driver.running_stills(spans, running, capped_stop_ms=1000 + 6000)] == [2.5, 9.0])
     return ok
 
 
@@ -74,6 +80,26 @@ def check_recording_health(results, scratch):
     (video / "dropped.jsonl").write_text("", encoding="utf-8")
     quiet = driver.recording_health(video)
     ok &= row(results, "recording/screen-gap-is-not-the-recorders", quiet["recorder_gap_ms"] == 0 and quiet["longest_gap_ms"] == 400)
+    return ok
+
+
+def check_streamed_capture(results, scratch):
+    video = scratch / "streamed" / "video"
+    video.mkdir(parents=True, exist_ok=True)
+    (video / "capture.mp4").write_bytes(b"not a real video")
+    rows = [{"frame": i, "video_frame": i * 2, "saved": True, "wall_ms": 1000 + i * 66, "screen": "game"} for i in range(5)]
+    (video / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    (video / "manifest.json").write_text(json.dumps({"fps": 30, "encoder": {"codec": "libx264", "video": "capture.mp4", "exit": 0}}), encoding="utf-8")
+    destination = scratch / "streamed" / "host.mp4"
+    taken = driver.encode(None, video, 30, destination)
+    ok = row(results, "stream/engine-video-taken", taken["encoded"] and taken["timing"] == "engine-slots" and destination.is_file() and not (video / "capture.mp4").exists())
+    ok &= row(results, "stream/encoder-recorded", taken["encoder"] == {"codec": "libx264", "video": "capture.mp4", "exit": 0} and taken["origin_wall_ms"] == 1000)
+    tokens = {"VIDEO": str(scratch / "streamed" / "stage-video"), "STAGE": str(scratch / "streamed" / "stage")}
+    (scratch / "streamed" / "stage").mkdir(exist_ok=True)
+    environment = driver.stage_peer({"name": "probe-scenario"}, {"name": "host"}, scratch / "streamed" / "stage", tokens)
+    ffmpeg = driver.find_ffmpeg()
+    ok &= row(results, "stream/every-peer-gets-the-encoder", (not ffmpeg) or (environment.get("CCCP_TEST_RECORD_ENCODER") == str(ffmpeg) and
+              environment.get("CCCP_TEST_RECORD_CODEC") in ("h264_nvenc", "libx264")))
     return ok
 
 
@@ -1920,6 +1946,7 @@ def main():
         ok &= check_capture_binary(results, scratch)
         ok &= check_recording_health(results, scratch)
         ok &= check_screen_watches(results, scratch)
+        ok &= check_streamed_capture(results, scratch)
         ok &= check_freeze_stills(results)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_render_arm(results, scratch)
