@@ -1,0 +1,25 @@
+# The host's router never answers (a silent loopback gateway, no IGD listening): the lobby says the mapping is
+# under way, then that no method answered.
+wait_ms 1800
+activate ButtonMainToMultiplayer
+wait_ms 495
+assert_substate Landing
+settext TextMultiplayerName Host
+activate ButtonMultiplayerHostGame
+wait_ms 450
+assert_substate HostSetup
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+wait_ms 500
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+wait_ms 495
+activate ButtonMultiplayerCreate
+wait_ms 600
+assert_substate Lobby
+video_mark port-map-pending
+assert_label LabelLobbyPortMap Mapping the port...
+wait_ms 8000
+video_mark port-map-unanswered
+assert_label LabelLobbyPortMap No router mapping (no method answered)
+wait_ms 2000
+exit
