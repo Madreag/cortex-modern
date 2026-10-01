@@ -6072,7 +6072,7 @@ namespace RTE {
 		while (!stats.waitedFrames.empty() && stats.waitedFrames.front() + c_WindowFrames <= frame) stats.waitedFrames.pop_front();
 		// Still feeding, and a full second of this round behind it past its first two.
 		if (stats.arrivals.empty() || nowMs < stats.lastProgressMs || nowMs - stats.lastProgressMs > static_cast<uint64_t>(std::ceil(4.0 * m_Config.simTickMs)) ||
-		    frame < EffectiveStartOf(peerId) + c_PlayedFrames || stats.waitedFrames.size() < c_WaitedFrames) {
+		    frame < std::max(EffectiveStartOf(peerId) + c_PlayedFrames, CapacityJudgedFrom(peerId, c_WindowFrames)) || stats.waitedFrames.size() < c_WaitedFrames) {
 			stats.slowSinceMs = 0;
 			return false;
 		}
@@ -6190,7 +6190,7 @@ namespace RTE {
 		bool slowHeld = false;
 		for (uint8_t peer: missing) {
 			const auto published = m_PublishedCapacity.find(peer);
-			if (published == m_PublishedCapacity.end() || IsReturningSeatBeforeItsFirstInput(peer)) continue;
+			if (published == m_PublishedCapacity.end() || IsReturningSeatBeforeItsFirstInput(peer) || frame < CapacityJudgedFrom(peer, c_OwnPaceTicks)) continue;
 			const double fastest = FastestPublishedCapacity(peer, true);
 			if (fastest <= 0 || !SlowAgainst(published->second, fastest)) continue;
 			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": it runs " << published->second
@@ -6465,7 +6465,7 @@ namespace RTE {
 			m_Stats.localOthersTps = fastest;
 			m_SlowTicks = SlowAgainst(m_Stats.localCapacityTps, fastest) ? m_SlowTicks + 1 : 0;
 			if (!m_SelfHeld && UsesBoundedWait() && !IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) && !IsOwnHostSeatHeld() &&
-			    producedFrame >= m_JudgeAfterFrame && m_SlowTicks >= c_SlowReadings && m_Stats.localRunwayTicks <= 1.0)
+			    producedFrame >= std::max(m_JudgeAfterFrame, CapacityJudgedFrom(m_Config.localPeerId, c_OwnPaceTicks)) && m_SlowTicks >= c_SlowReadings && m_Stats.localRunwayTicks <= 1.0)
 				GoQuiet(producedFrame);
 			return;
 		}
@@ -6492,7 +6492,8 @@ namespace RTE {
 			DiagnosticLine() << "[net-lockstep] own pace at frame " << producedFrame << ": capacity " << m_Stats.localCapacityTps << " others " << m_Stats.localOthersTps
 			                 << " runway " << m_Stats.localRunwayTicks << " falling " << m_Stats.localRunwayFallTps << " tolerance " << tolerance << std::endl;
 		// A machine back from its own hold is judged again only a second later.
-		if (m_SelfHeld || !UsesBoundedWait() || IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) || IsOwnHostSeatHeld() || producedFrame < m_JudgeAfterFrame ||
+		if (m_SelfHeld || !UsesBoundedWait() || IsReturningSeatBeforeItsFirstInput(m_Config.localPeerId) || IsOwnHostSeatHeld() ||
+		    producedFrame < std::max(m_JudgeAfterFrame, CapacityJudgedFrom(m_Config.localPeerId, c_OwnPaceTicks)) ||
 		    m_Stats.localRunwayTicks > 2.0 || m_Stats.localCostTps <= tolerance || m_Stats.localRunwayFallTps <= tolerance) return;
 		GoQuiet(producedFrame);
 	}

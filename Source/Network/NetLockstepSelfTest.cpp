@@ -22500,8 +22500,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 	bool TestAThinLeadIsRaisedBeforeASpike(std::string* error) {
 		// A steady machine computes its tick in a fraction of the period; one that cannot keep pace spends all of it.
-		struct Case { const char* name; uint64_t clientPeriodMs; uint64_t stallAtTick; double clientComputeMs; }; // 0: no stall
-		const Case cases[] = {{"a spike on a thin lead", 17, 330, 2.0}, {"a machine that cannot keep pace", 25, 0, 25.0}};
+		// A machine slow only through its first ticks is warming up, as every machine does at a round's start: it is never held for it.
+		struct Case { const char* name; uint64_t clientPeriodMs; uint64_t stallAtTick; double clientComputeMs; uint64_t warmupTicks = 0; }; // 0: no stall
+		const Case cases[] = {{"a spike on a thin lead", 17, 330, 2.0}, {"a machine that cannot keep pace", 25, 0, 25.0}, {"a slow warm-up", 17, 0, 2.0, 100}};
 		for (const Case& test: cases) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
@@ -22528,6 +22529,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			             uint64_t waitedUs = 0; uint64_t totalWaitMs = 0; };
 			Sim sims[2] = {{&host, 100, 17}, {&client, 200, test.clientPeriodMs}};
 			const double computeMs[2] = {2.0, test.clientComputeMs};
+			const auto warming = [&](const Sim& sim) { return sim.coordinator == &client && sim.tick < test.warmupTicks; };
 			uint64_t now = 0;
 			std::string queueError;
 			bool queueFailed = false, stalled = false;
@@ -22550,11 +22552,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
 					} else if (sim.produced && frameReady && sim.coordinator->PopReadyFrame(ready)) {
 						(void)sim.coordinator->FinishSimulationTick(ready.frame);
-						sim.coordinator->NoteLocalTickCost(ready.frame, computeMs[&sim - sims]);
+						sim.coordinator->NoteLocalTickCost(ready.frame, warming(sim) ? 25.0 : computeMs[&sim - sims]);
 						sim.waitedUs += (now - sim.startAtMs) * 1000;
 						if (now > 1000) sim.longestWaitMs = std::max(sim.longestWaitMs, now - sim.startAtMs);
 						sim.totalWaitMs += now - sim.startAtMs;
-						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
+						sim.startAtMs = now + (warming(sim) ? 25 : sim.periodMs);
+						++sim.tick; sim.produced = false;
 						// The client's machine stops for 70 ms once: a load spike, not a slow link.
 						if (sim.coordinator == &client && test.stallAtTick != 0 && sim.tick == test.stallAtTick && !stalled) { stalled = true; sim.startAtMs = now + 70; }
 					} else if (sim.coordinator == &host && !beforeStart) {
@@ -22568,17 +22571,17 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const uint16_t delay = host.InputDelayAt(2, sims[0].tick);
 			const uint32_t linkDelay = 10; // 90 ms RTT covers 135 ms plus one tick.
 			const uint32_t extraDelay = delay > linkDelay ? delay - linkDelay : 0;
-			const bool spikeCase = test.stallAtTick != 0;
+			const bool spikeCase = test.stallAtTick != 0, warmCase = test.warmupTicks != 0;
 			// A spike on a steady machine is never held; a machine that cannot run the round's rate holds itself, the host holds its quiet
 			// seat within the bound - no wait past 50 ms - and then runs on at its own pace.
 			const uint64_t hostTickAtHold = sims[0].tick, hostWaitBeforeHold = sims[0].totalWaitMs;
-			if (!spikeCase) {
+			if (!spikeCase && !warmCase) {
 				for (const uint64_t until = now + 5000; now < until && !queueFailed && host.IsRunning();) pump();
 			}
 			// Held either way it is known first: by the host at its first wait on a seat whose published capacity is slow, or by itself.
 			const bool slowHeld = !spikeCase && holds == 1 && sims[0].tick >= hostTickAtHold + 280;
-			if (queueFailed || !host.IsRunning() || sims[0].longestWaitMs > 50 || extraDelay > 3 ||
-			    (spikeCase ? holds != 0 || !stalled || delay <= start || sims[0].tick < 300 : !slowHeld)) {
+			if (queueFailed || !host.IsRunning() || sims[0].longestWaitMs > 50 || (!warmCase && extraDelay > 3) ||
+			    (warmCase ? holds != 0 || client.IsSelfHeld() || sims[0].tick < 300 : spikeCase ? holds != 0 || !stalled || delay <= start || sims[0].tick < 300 : !slowHeld)) {
 				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " self_held=" + std::to_string(client.IsSelfHeld()) + " stalled=" + std::to_string(stalled) +
 				         " start_delay=" + std::to_string(start) + " delay=" + std::to_string(delay) + " link_delay=" + std::to_string(linkDelay) + " extra_delay=" + std::to_string(extraDelay) +
 				         " host_tick=" + std::to_string(sims[0].tick) + " host_tick_at_hold=" + std::to_string(hostTickAtHold) + " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) +
