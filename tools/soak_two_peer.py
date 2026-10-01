@@ -60,6 +60,29 @@ def window_sim_ms(census: dict[int, dict], start: int, end: int) -> float | None
     return census[closing].get("sim_ms_per_tick") if closing is not None else None
 
 
+def soak_hold_judgement(root: Path, stalls: list[int]) -> dict:
+    """A soak's holds by its own rules. A hold within 30 ticks after one of its planned stalls is planned. Any other passes only
+    when the host's log names its network cause at that tick (a resend asked for the held peer's frame), the designed recovery
+    followed on the held peer (its private catch-up or its image) and no survivor waited a frame over 50 ms around it."""
+    def text(peer: str) -> str:
+        path = Path(root) / peer / "stdout.log"
+        return path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else ""
+    host, client = text("host"), text("client")
+    waits = [(int(tick), int(ms)) for tick, ms in re.findall(r"^\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)", host, re.M)]
+    recoveries = [int(tick) for tick in re.findall(r"^\[net-match\] (?:private catch-up complete frame|bootstrap checkpoint)=(\d+)", client, re.M)]
+    planned, explained, unexplained = [], [], []
+    for peer, frame in ((int(peer), int(frame)) for peer, frame in re.findall(r"^\[net-match\] hold peer=(\d+) frame=(\d+)", host, re.M)):
+        if any(stall <= frame <= stall + 30 for stall in stalls):
+            planned.append(frame)
+            continue
+        asked = [int(tick) for tick in re.findall(rf"^\[lockstep-recv\] asked peer {peer} to resend frame=(\d+) of peer {peer} ", host, re.M)]
+        row = dict(frame=frame, peer=peer, cause=any(abs(tick - frame) <= 5 for tick in asked),
+                   recovered=any(frame <= tick <= frame + 3600 for tick in recoveries),
+                   survivor_waits_over_50=[ms for tick, ms in waits if frame - 10 <= tick <= frame + 60 and ms > 50])
+        (explained if row["cause"] and row["recovered"] and not row["survivor_waits_over_50"] else unexplained).append(row)
+    return dict(planned=planned, explained=explained, unexplained=unexplained, passed=not unexplained)
+
+
 def excused_return_holds(root: Path, rows: list[dict]) -> tuple[list[dict], list[dict]]:
     """Splits holds after a return into the excused (the held engine said it is a slow machine and its own sim does not
     fit the tick there) and the rest."""

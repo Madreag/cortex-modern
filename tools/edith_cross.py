@@ -885,8 +885,15 @@ def analyze_match(h, root, meta):
     compared = sum(row['compared_ticks'] for row in passes)
     mismatched = sum(row['mismatched_ticks'] + row['mismatched_applied_input_ticks'] for row in passes)
     holds = sum(row['holds'] for row in peers.values())
-    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds == 0)
-    verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds,
+    # A soak plans its holds: they are judged by its own rules, every other run by holds == 0.
+    soak_plan = read_json(root / 'soak-verdict.json')
+    hold_judgement = None
+    if soak_plan:
+        import soak_two_peer
+        hold_judgement = soak_two_peer.soak_hold_judgement(root, soak_plan.get('stalls', []))
+    holds_pass = hold_judgement['passed'] if hold_judgement else holds == 0
+    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass)
+    verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds, hold_judgement=hold_judgement,
                    trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest)
     write_json(root / 'verdict.json', verdict)
     cell = lambda key, fmt='{}': '/'.join('-' if peers[peer][key] is None else fmt.format(peers[peer][key]) for peer in ('host', 'client'))
@@ -894,7 +901,8 @@ def analyze_match(h, root, meta):
     route = route or next((f'{peer}: {line}' for peer in ('client', 'host') for line in peers[peer]['route']), None)
     say(f'RUN {meta["name"]} {"PASS" if passed else "FAIL"} host@{peers["host"]["machine"]} {peers["host"]["live_ticks"]}/{mismatched} '
         f'client@{peers["client"]["machine"]} {peers["client"]["live_ticks"]}/{mismatched} compared={compared} desyncs={mismatched} '
-        f'holds={holds} exits={cell("exit_code")} waits>50ms={cell("waits_over_50")} (steady {cell("steady_waits_over_50")}) '
+        f'holds={holds}' + (f' (planned {len(hold_judgement["planned"])}, explained {len(hold_judgement["explained"])}, unexplained {len(hold_judgement["unexplained"])})' if hold_judgement else '') +
+        f' exits={cell("exit_code")} waits>50ms={cell("waits_over_50")} (steady {cell("steady_waits_over_50")}) '
         f'longest_ms={cell("longest_steady_wait_ms", "{:.0f}")} waiting%={cell("waiting_percent", "{:.2f}")} tps={cell("wall_tps", "{:.1f}")} '
         f'sim_ms/tick={cell("sim_ms_per_tick", "{:.2f}")} delays={cell("input_delays")} route={route or meta.get("note") or "none logged"}')
     return verdict
