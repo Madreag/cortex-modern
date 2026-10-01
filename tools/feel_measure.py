@@ -35,6 +35,8 @@ MATRIX_BYTE_LIMIT = 10_000_000_000
 FULLSTATE_EVERY = 0
 # --pin-alike: two engines on one box each get their own half of the runner's cores at the same priority.
 PIN_ALIKE = False
+# --sp-one-screen: the single-player arms draw one screen, as each match peer does (CCCP_TEST_SINGLE_SCREEN).
+SP_ONE_SCREEN = False
 LAG_ARMS = tuple(f'{lag}ms-{cap}' for lag in (100, 200) for cap in ('60hz', 'uncapped'))
 
 
@@ -343,6 +345,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                                CCCP_STALL_STACK_MS=os.environ.get('CCCP_STALL_STACK_MS', '80'), CCCP_TEST_PREVIEW_FIDELITY='1')
             if peer == 'client' and loss_percent:
                 environment['CC_TEST_GNS_LOSS_PERCENT'] = str(loss_percent)
+            if sp and SP_ONE_SCREEN:
+                environment['CCCP_TEST_SINGLE_SCREEN'] = '1'
             if peer in PEER_SIM_COST:
                 cost_us, from_tick = PEER_SIM_COST[peer]
                 environment.update(CCCP_TEST_SIM_COST_US=str(cost_us), CCCP_TEST_SIM_COST_FROM_TICK=str(from_tick))
@@ -872,6 +876,8 @@ def parse_args(argv=None):
                         help="a slower machine's added sim cost on one peer from a tick on (the slow-machine proofs)")
     parser.add_argument('--dry-run', action='store_true',
                         help='print every arm this command would launch with its port and peers; launch nothing, write nothing')
+    parser.add_argument('--sp-one-screen', action='store_true',
+                        help='the single-player arms draw one screen of the same activity, as each match peer does, instead of a split screen')
     parser.add_argument('--pin-alike', action='store_true',
                         help="two engines each get their own half of the runner's cores at the same priority, so neither reads the other's share")
     parser.add_argument('--fullstate-every', type=int, default=0,
@@ -921,9 +927,10 @@ def main(argv=None):
         parser.error('--host-lua-states and --client-lua-states must be positive')
     if args.fullstate_every < 0:
         parser.error('--fullstate-every must be 0 or positive')
-    global FULLSTATE_EVERY, PIN_ALIKE
+    global FULLSTATE_EVERY, PIN_ALIKE, SP_ONE_SCREEN
     FULLSTATE_EVERY = args.fullstate_every
     PIN_ALIKE = args.pin_alike
+    SP_ONE_SCREEN = args.sp_one_screen
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
