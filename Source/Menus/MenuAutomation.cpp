@@ -330,6 +330,7 @@ namespace RTE::MenuAutomation {
 	struct TextWatch {
 		std::string rule, state, control, text;
 		uint64_t frames = 0, active = 0, violations = 0;
+		int64_t costUs = 0, worstUs = 0; //!< What judging this watch has cost the frames it ran on.
 		Json first;
 		std::set<std::string> offenders; //!< Each distinct offence is logged once, so one run lists them all.
 	};
@@ -501,6 +502,16 @@ namespace RTE::MenuAutomation {
 		bool linesRead = false;
 		for (auto& [name, watch]: s_Watches) {
 			++watch.frames;
+			const auto judged = std::chrono::steady_clock::now();
+			struct Cost {
+				TextWatch& watch;
+				std::chrono::steady_clock::time_point began;
+				~Cost() {
+					const int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count();
+					watch.costUs += us;
+					watch.worstUs = std::max(watch.worstUs, us);
+				}
+			} cost{watch, judged};
 			if (!WatchStateHolds(watch.state)) continue;
 			++watch.active;
 			if (!linesRead && watch.rule != "layout" && watch.rule != "rtt" && watch.rule != "seat_rows") {
@@ -572,7 +583,7 @@ namespace RTE::MenuAutomation {
 	void ReportWatches() {
 		for (const auto& [name, watch]: s_Watches) {
 			System::PrintDiagnosticLine("[text-watch] summary " + Json{{"watch", name}, {"rule", watch.rule}, {"state", watch.state}, {"frames", watch.frames},
-			    {"active_frames", watch.active}, {"violations", watch.violations}, {"offences", watch.offenders.size()}}.dump());
+			    {"active_frames", watch.active}, {"violations", watch.violations}, {"offences", watch.offenders.size()}, {"cost_us", watch.costUs}, {"worst_us", watch.worstUs}}.dump());
 		}
 	}
 

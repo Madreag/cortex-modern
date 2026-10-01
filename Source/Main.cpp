@@ -7930,6 +7930,7 @@ void RunGameLoop() {
 					}
 					// Hand over what we still owe BEFORE the goodbye, so a client one input-delay
 					// behind can finish its own last tick instead of losing the round to our exit.
+					FrameRecorder::Instance().RecordEvent("capped stop");
 					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 					g_NetMatchService.Complete("menu mp trace complete");
 					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
@@ -8068,6 +8069,8 @@ void RunGameLoop() {
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
 						// socket open before quitting drops it.
 						if (!s_netMatchE2ECompletedMs) {
+							// The screen holds its last picture while the harness drains, lingers and writes its records.
+							FrameRecorder::Instance().RecordEvent("capped stop");
 							(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 							g_NetMatchService.Complete("e2e complete");
 							s_netMatchE2ECompletedMs = SteadyMilliseconds();
