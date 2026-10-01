@@ -412,6 +412,10 @@ namespace RTE {
 		void BeginSpeculation();
 		bool IsResident(const MovableObject* mo) const { return ResidentKind(mo) != 0; }
 		MovableObject* ViewIfSpeculating(MovableObject* found) const;
+		/// The shadow a resident already has in the overlay, or null; never makes one.
+		MovableObject* ExistingShadowOf(const MovableObject* resident) const;
+		/// Called with each shadow the overlay makes, once it is made.
+		void SetShadowMadeHook(void (*hook)(MovableObject* resident, MovableObject* shadow)) { m_ShadowMadeHook = hook; }
 		/// Ends the overlay: its unowned shadows and spawns are deleted, the rosters and flags go back.
 		/// @param takenResidents Receives the residents whose shadows were taken out of the overlay's world.
 		void EndSpeculation(std::vector<MovableObject*>* takenResidents = nullptr);
@@ -1148,6 +1152,7 @@ namespace RTE {
 		std::unordered_set<const MovableObject*> m_RenderHidden;
 		std::unordered_set<const MovableObject*> m_RenderSubstitutes;
 		MovableObject* m_LinkRoot = nullptr;
+		void (*m_ShadowMadeHook)(MovableObject* resident, MovableObject* shadow) = nullptr;
 
 		MovableObject* LookupMOID(MOID whichID) const;
 		int ResidentKind(const MovableObject* mo) const;

@@ -13068,6 +13068,54 @@ namespace {
 		return root && root != mo && (g_MovableMan.IsResident(root) || g_MovableMan.ValidMO(root));
 	}
 
+	MovableObject* FencedMovableObject(const luabind::detail::object_rep* rep, int& offset);
+
+	// A held world reference's own handle in the window, waiting for its object's shadow.
+	struct PreviewHeldHandle {
+		luabind::detail::object_rep* rep = nullptr;
+		const MovableObject* object = nullptr;
+		int offset = 0;
+	};
+	std::unordered_map<const MovableObject*, std::vector<PreviewHeldHandle>> s_PreviewHeldByRoot;
+	std::unordered_set<LuaStateWrapper*> s_PreviewHeldStates;
+	LuaStateWrapper* s_PreviewRemappingState = nullptr;
+	const char* const c_PreviewHeldRegistryKey = "cccp.preview_held";
+
+	bool s_PreviewEagerShadowsForced = false;
+
+	bool PreviewEagerShadows() {
+		static const bool eager = std::getenv("CCCP_TEST_PREVIEW_EAGER_SHADOWS") != nullptr;
+		return eager || s_PreviewEagerShadowsForced;
+	}
+
+	// Every handle the window holds on a resident follows it to the shadow just made, as a lookup of it would.
+	void FollowShadowToHeldHandles(MovableObject* resident, MovableObject* shadow) {
+		const auto held = s_PreviewHeldByRoot.find(resident);
+		if (held == s_PreviewHeldByRoot.end()) {
+			return;
+		}
+		for (const PreviewHeldHandle& handle: held->second) {
+			MovableObject* target = handle.object == resident ? shadow : shadow->FindPartByUniqueID(handle.object->GetUniqueID());
+			handle.rep->set_object(reinterpret_cast<char*>(target ? target : shadow) - handle.offset);
+		}
+		s_PreviewHeldByRoot.erase(held);
+	}
+
+	// Keeps the handle alive for the window in the state's registry, so a script dropping it cannot free what the window points at.
+	void AnchorPreviewHeldHandle(lua_State* L, int index) {
+		index = AbsoluteLuaIndex(L, index);
+		lua_getfield(L, LUA_REGISTRYINDEX, c_PreviewHeldRegistryKey);
+		if (!lua_istable(L, -1)) {
+			lua_pop(L, 1);
+			lua_newtable(L);
+			lua_pushvalue(L, -1);
+			lua_setfield(L, LUA_REGISTRYINDEX, c_PreviewHeldRegistryKey);
+		}
+		lua_pushvalue(L, index);
+		lua_rawseti(L, -2, static_cast<int>(lua_objlen(L, -2)) + 1);
+		lua_pop(L, 1);
+	}
+
 	bool RemapPreviewUserdata(lua_State* L, int index, std::string& freezeClass) {
 		index = AbsoluteLuaIndex(L, index);
 		const auto* object = luabind::detail::is_class_object(L, index);
@@ -13108,6 +13156,26 @@ namespace {
 		} else if (const auto part = s_PreviewPartByUID.find(mo->GetUniqueID()); part != s_PreviewPartByUID.end() && part->second != mo) {
 			mapped = part->second;
 		} else if (LiveWorldMO(mo)) {
+			// Until the window makes its shadow a held world object keeps a handle of its own, which then follows it there.
+			MovableObject* root = mo->GetRootParent();
+			if (!PreviewEagerShadows() && s_PreviewRemappingState && g_MovableMan.IsResident(root) && !g_MovableMan.ExistingShadowOf(root)) {
+				if (!ScriptGraphPushEntity(L, mo, className) && !ScriptGraphPushEntity(L, mo, mo->GetClassName())) {
+					freezeClass = className;
+					return false;
+				}
+				auto* rep = luabind::detail::is_class_object(L, -1);
+				int offset = 0;
+				if (!rep || !FencedMovableObject(rep, offset)) {
+					lua_pop(L, 1);
+					freezeClass = className;
+					return false;
+				}
+				AnchorPreviewHeldHandle(L, -1);
+				s_PreviewHeldByRoot[root].push_back({rep, mo, offset});
+				s_PreviewHeldStates.insert(s_PreviewRemappingState);
+				lua_replace(L, index);
+				return true;
+			}
 			mapped = g_MovableMan.ViewIfSpeculating(mo);
 		} else {
 			freezeClass = mo->GetClassName();
@@ -13792,9 +13860,17 @@ bool LuaStateWrapper::RemapPreviewHoldReferences(long uniqueID, std::string& fre
 		return true;
 	}
 	lua_newtable(m_State);
+	s_PreviewRemappingState = this;
 	const bool ok = RemapPreviewValue(m_State, -2, lua_gettop(m_State), freezeClass);
+	s_PreviewRemappingState = nullptr;
 	lua_settop(m_State, top);
 	return ok;
+}
+
+void LuaStateWrapper::ClearPreviewHeldHandles() {
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	lua_pushnil(m_State);
+	lua_setfield(m_State, LUA_REGISTRYINDEX, c_PreviewHeldRegistryKey);
 }
 
 void LuaStateWrapper::DropPreviewScriptObject(long uniqueID) {
@@ -13936,6 +14012,8 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
 	s_PreviewCoroutineResumed = false;
+	s_PreviewHeldByRoot.clear();
+	g_MovableMan.SetShadowMadeHook(&FollowShadowToHeldHandles);
 	laps.Lap(0);
 	if (!sharedSlot) {
 		for (const MovableObject* root: roots) {
@@ -13967,6 +14045,10 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 		}
 	}
 	laps.Lap(2);
+}
+
+void LuaMan::SetPreviewEagerShadows(bool eager) {
+	s_PreviewEagerShadowsForced = eager;
 }
 
 bool LuaMan::TakePreviewCoroutineResumed() {
@@ -14056,6 +14138,12 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 
 void LuaMan::EndPreviewScripts() {
 	PreviewWindowLaps laps{s_PreviewWindowMs};
+	g_MovableMan.SetShadowMadeHook(nullptr);
+	s_PreviewHeldByRoot.clear();
+	for (LuaStateWrapper* state: s_PreviewHeldStates) {
+		state->ClearPreviewHeldHandles();
+	}
+	s_PreviewHeldStates.clear();
 	std::unordered_set<long> dropped;
 	for (const auto& [uid, clone, state]: s_PreviewCloneBindings) {
 		if (!state) {

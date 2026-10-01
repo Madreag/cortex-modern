@@ -63,6 +63,10 @@ namespace RTE {
 	static uint64_t s_FrozenPreviews = 0;
 	static uint64_t s_CoroutineReruns = 0;
 	static bool s_RerunningFrozen = false;
+	// Test lever CCCP_TEST_PREVIEW_SHADOW_CHECK: each preview is made again with every held reference shadowed at the bind.
+	static bool s_CheckingShadows = false;
+	static uint64_t s_ShadowChecks = 0;
+	static uint64_t s_ShadowCheckDiffers = 0;
 	uint64_t LocalPrediction::s_ReusedFrames = 0;
 	double LocalPrediction::s_ReusedMs = 0.0;
 	std::array<double, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseMs{};
@@ -509,6 +513,36 @@ namespace RTE {
 			LuaMan::SetPreviewScriptsFrozen(false);
 			s_RerunningFrozen = false;
 		}
+		static const bool s_ShadowCheck = std::getenv("CCCP_TEST_PREVIEW_SHADOW_CHECK") != nullptr;
+		if (s_ShadowCheck && !s_RerunningFrozen && !s_CheckingShadows && !s_Previews.empty()) {
+			const auto dumps = [simCount, depth]() {
+				std::vector<std::string> texts;
+				for (const Preview& preview: s_Previews) {
+					std::ostringstream text;
+					g_MovableMan.DumpMOSimState(static_cast<uint64_t>(simCount + depth), "actor", preview.clone, text);
+					std::istringstream tokens(text.str());
+					std::string kept;
+					for (std::string token; tokens >> token;) {
+						if (token.rfind("moid=", 0) != 0 && token.rfind("uid=", 0) != 0) kept += token + ' ';
+					}
+					texts.push_back(kept);
+				}
+				return texts;
+			};
+			const std::vector<std::string> lazy = dumps();
+			Clear();
+			s_CheckingShadows = true;
+			LuaMan::SetPreviewEagerShadows(true);
+			RunPreview();
+			LuaMan::SetPreviewEagerShadows(false);
+			s_CheckingShadows = false;
+			const std::vector<std::string> eager = dumps();
+			++s_ShadowChecks;
+			if (lazy != eager) {
+				++s_ShadowCheckDiffers;
+				std::cout << "[shadow-check] tick=" << simCount << " the preview with lazy shadows ends unlike the eager one" << std::endl;
+			}
+		}
 	}
 
 	void LocalPrediction::BeginRender() {
@@ -668,6 +702,7 @@ namespace RTE {
 		       " known_copy_avg_ms=" + std::to_string(MovableMan::KnownObjectsScope::CopyMs() / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
 		       " frozen_previews=" + std::to_string(s_FrozenPreviews) + " coroutine_reruns=" + std::to_string(s_CoroutineReruns) +
+		       " shadow_checks=" + std::to_string(s_ShadowChecks) + " shadow_check_differs=" + std::to_string(s_ShadowCheckDiffers) +
 		       " preview_ghosts_peak=" + std::to_string(g_MovableMan.GetPreviewGhostPeak()) +
 		       (events.empty() ? std::string() : " " + events) + " terrain_pages_written=" + std::to_string(PageWriteFence::GetFaultCount()) +
 		       " reused_frames=" + std::to_string(s_ReusedFrames) + " reuse_avg_us=" + std::to_string(s_ReusedFrames ? 1000.0 * s_ReusedMs / static_cast<double>(s_ReusedFrames) : 0.0) + " phase_avg_ms=" + phases + " window_avg_ms=" + LuaMan::DescribePreviewWindowCost();
