@@ -133,6 +133,12 @@ TIMING_CASES = (
     ('200ms-loss5-silent600', 200, 5, 600),
 )
 
+# Jittery links on both peers (the user, 2026-09-30: 'add jitter to V1'): judged by the same item9a bars as the loss arms.
+JITTER_CASES = (
+    ('100ms-jitter40-loss5', 100, 5, None, 40),
+    ('200ms-jitter60-loss5', 200, 5, None, 60),
+)
+
 AUTOSAVE_CASES = (
     ('autosave-100ms', 100, 1),
     ('autosave-200ms', 200, 1),
@@ -262,9 +268,9 @@ DRY_RUN_PLAN = None
 PEER_SIM_COST = {}
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True):
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True, jitter_ms=0):
     if DRY_RUN_PLAN is not None:
-        DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, local_prediction=prediction, loss_percent=loss_percent, silent_tick=silent_tick,
+        DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, jitter_ms=jitter_ms, local_prediction=prediction, loss_percent=loss_percent, silent_tick=silent_tick,
                                  autosave_seconds=autosave_seconds, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
         return None
     out = root / name
@@ -274,7 +280,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     lua_states = {'host': host_lua_states, 'client': client_lua_states}
     pre_match_history = {'host': host_pre_match_history, 'client': client_pre_match_history}
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('autosave service e2e' if autosave_seconds else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop')),
-                    ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port, local_prediction=prediction,
+                    ticks=final_tick, lag_ms=lag, jitter_ms=jitter_ms, cap_hz=cap, instrumentation=record, port=None if sp else port, local_prediction=prediction,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     live_stalls=live_stalls, autosave_seconds=autosave_seconds, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
@@ -283,6 +289,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     write_json(out / 'manifest.json', manifest)
     peers = ['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
+    # The jitter rides with the lag: the peer that carries the link's delay jitters both of its directions, as a cross fault does.
+    manifest['per_peer_jitter_ms'] = {peer: jitter_ms if manifest['per_peer_lag_ms'][peer] else 0 for peer in peers}
     basis = runner_cpu_basis() if len(peers) == 3 and sys.platform == 'win32' else None
     placements = engine_placements(peers, basis)
     manifest['engine_placement'] = {}
@@ -317,6 +325,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                           '-net-match-report', str(out / f'{peer}_report.json')]
                 if autosave_seconds is not None and peer == 'host':
                     flags += ['-net-autosave-seconds', str(autosave_seconds)]
+                if manifest['per_peer_jitter_ms'][peer]:
+                    flags += ['-net-fake-jitter', str(manifest['per_peer_jitter_ms'][peer])]
                 if FULLSTATE_EVERY:
                     flags += ['-net-fullstate-hash-every', str(FULLSTATE_EVERY)]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
@@ -719,7 +729,7 @@ def analyze(root, stock=None):
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
             results.append(report)
-    for name, _, _, _ in () if subset else TIMING_CASES:
+    for name, *_ in () if subset else TIMING_CASES + JITTER_CASES:
         run = root / name
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
@@ -742,7 +752,7 @@ def analyze(root, stock=None):
     for report in results:
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
         failures = sum(row['status'] == 'FAIL' for peer in report['peers'].values() for row in peer['pins'].values())
-        link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
+        link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + JITTER_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {failures} FAIL, {misses} MISS; [{report["name"]}]({link}) |')
     lines += ['', 'Item 9a requires 59.5 TPS, zero steady blocking waits, less than one percent waiting,',
               'and a 50 ms maximum wait and confirmed-horizon lag. The single-player rate is diagnostic.',
@@ -816,7 +826,7 @@ def parse_args(argv=None):
     parser.add_argument('--client-lua-states', type=int, default=4, help='retired: the build fixes the Lua state count')
     parser.add_argument('--host-pre-match-history', type=int, default=0, help='objects the host runtime spends before the match')
     parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
-    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES] + [name for name, *_ in TIMING_CASES],
+    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES] + [name for name, *_ in TIMING_CASES + JITTER_CASES],
                         help='run only the selected autosave or timing arms, without baselines or the full matrix')
     parser.add_argument('--lag-arms', nargs='+', choices=LAG_ARMS,
                         help='run only these lag arms (each on and off) and the single-player baselines of their caps')
@@ -833,9 +843,9 @@ def parse_args(argv=None):
 
 def launch_timing_arm(root, index, case, port_base, script, exe_hash, timeout, counts):
     """One loss or silent-seat arm, launched the same way by the full matrix and by --cases."""
-    name, lag, loss, silent = case
+    name, lag, loss, silent = case[:4]
     return launch_case(root, name, lag, 60, True, port_base + 8 + index % 2, script, exe_hash, timeout,
-                       loss_percent=loss, silent_tick=silent, **counts)
+                       loss_percent=loss, silent_tick=silent, jitter_ms=case[4] if len(case) > 4 else 0, **counts)
 
 
 def launch_autosave_arm(root, index, case, port_base, script, exe_hash, timeout, counts):
@@ -884,8 +894,8 @@ def main(argv=None):
                   host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
     if args.cases:
         selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES) if case[0] in args.cases] + \
-                   [(index, case) for index, case in enumerate(TIMING_CASES) if case[0] in args.cases]
-        launch_selected = lambda script, exe_hash: [(launch_timing_arm if len(case) == 4 else launch_autosave_arm)(root, index, case, args.port, script, exe_hash, args.timeout, counts)
+                   [(index, case) for index, case in enumerate(TIMING_CASES + JITTER_CASES) if case[0] in args.cases]
+        launch_selected = lambda script, exe_hash: [(launch_autosave_arm if len(case) == 3 else launch_timing_arm)(root, index, case, args.port, script, exe_hash, args.timeout, counts)
                                                     for index, case in selected]
         if args.dry_run:
             print(json.dumps(dict(path='--cases', arms=dry_run_plan(lambda: launch_selected(root / 'input.txt', None))), indent=2), flush=True)
@@ -949,7 +959,7 @@ def main(argv=None):
                     name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
                     launch_case(root, name, lag, cap, enabled, port, script, exe_hash, args.timeout, **counts)
                     port += 1
-        for index, case in enumerate(TIMING_CASES):
+        for index, case in enumerate(TIMING_CASES + JITTER_CASES):
             launch_timing_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
         for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES):
             launch_autosave_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
@@ -971,7 +981,7 @@ def main(argv=None):
                     lag_arms=args.lag_arms,
                     arms=[f'baseline-{cap}-on' for cap in ('60hz', 'uncapped')] +
                          [f'{lag}ms-{cap}-{state}' for lag in (100, 200) for cap in ('60hz', 'uncapped') for state in ('on', 'off')] +
-                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES],
+                         [name for name, *_ in TIMING_CASES + JITTER_CASES] + [name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES],
                     lua_states={'host': args.host_lua_states, 'client': args.client_lua_states},
                     pre_match_history={'host': args.host_pre_match_history, 'client': args.client_pre_match_history})
         write_json(root / 'matrix-plan.json', plan)
