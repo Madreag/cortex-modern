@@ -7022,6 +7022,55 @@ namespace RTE {
 		return true;
 	}
 
+	// A seat that returns in place starts its live round while another seat's return is still inside its neutral gap. The round
+	// it was held from agreed that return before the hold, so no packet of the catch-up carries it; a live round without it waits
+	// for real input in the gap that its owner never sends (the four-box run: seat 2 back at 717 with its gap through 827, seat 3
+	// back at 786, the replay through 781 - seat 3 waited for seat 2's frame 786 and was held again eight times).
+	bool TestAnInPlaceReturnKeepsAnOpenReturnGap(std::string* error) {
+		NetMatchService service;
+		service.m_LocalPeerId = 3;
+		NetLockstepConfig round;
+		round.sessionId = 0x9A60; round.roundId = 60; round.localPeerId = 3; round.peerCount = 4; round.authorityPeerId = 1;
+		round.matchConfig = NetMatchConfigUtil::MakeDefault(round.sessionId);
+		round.matchConfig.peerCount = 4;
+		// The held round: seat 2 came back at 717 with a 55-frame delay and its neutral gap through 827; seat 4 came back at 600
+		// with its gap long closed; neither leaves a packet in the catch-up.
+		NetLockstepConfig held = round;
+		held.startFrame = 720;
+		held.initialSeatReclaims[2] = NetGameSeatReclaim{2, 0, 25, 2, 717, 55, 827};
+		held.initialSeatReclaims[4] = NetGameSeatReclaim{4, 0, 12, 1, 600, 10, 620};
+		LoopbackTransport heldWire, replayWire;
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		if (!service.m_Coordinator->StartReplay(heldWire, held, error)) return false;
+		NetLockstepConfig replay = round;
+		replay.startFrame = 718;
+		service.m_CatchUpTransport = std::make_unique<LoopbackTransport>();
+		service.m_CatchUpCoordinator = std::make_unique<NetLockstepCoordinator>();
+		if (!service.m_CatchUpCoordinator->StartReplay(*service.m_CatchUpTransport, replay, error)) return false;
+		service.m_WorldCatchUp.privateMatch = true;
+		service.m_WorldCatchUp.roundId = 60;
+		service.m_WorldCatchUp.appliedThrough = 781;
+		service.m_WorldCatchUp.activationTick = 786;
+		NetLockstepTiming own;
+		own.senderPeerId = 1; own.peerId = 3; own.action = NetTimingAction::Reclaim; own.phase = NetTimingPhase::ReclaimAtFrame;
+		own.sessionId = round.sessionId; own.roundId = 60; own.revision = 28; own.applyFrame = 786; own.delayFrames = 10;
+		own.neutralThroughFrame = 806; own.seatIncarnations[2] = 4; own.cutoffFrame = 786; own.heldPeers = 1U << 2; own.requiredPeers = 1;
+		NetTransportEvent ownReturn;
+		ownReturn.type = NetTransportEventType::PacketReceived; ownReturn.peerId = 1; ownReturn.lane = NetTransportLane::ControlReliable;
+		if (!NetLockstepCodec::Encode({own}, ownReturn.bytes)) { *error = "this seat's own return did not encode"; return false; }
+		service.m_CatchUpWirePackets.push_back(ownReturn);
+		NetLockstepConfig live;
+		if (!service.InPlaceLiveRoundLocked(live)) { *error = "the in-place live round was not formed from this seat's own return"; return false; }
+		const auto open = live.initialSeatReclaims.find(2);
+		if (open == live.initialSeatReclaims.end() || open->second.activationFrame != 717 || open->second.neutralThroughFrame != 827) {
+			*error = "the live round from 786 dropped seat 2's return at 717 whose neutral gap runs through 827: seat 2's frames 786..827 are waited for";
+			return false;
+		}
+		if (live.initialSeatReclaims.contains(4)) { *error = "the live round from 786 carried seat 4's return whose gap closed at 620"; return false; }
+		std::cout << "[net-match-selftest] PASS in_place_return_keeps_an_open_return_gap returns=" << live.initialSeatReclaims.size() << std::endl;
+		return true;
+	}
+
 	bool TestHoldResolutionPumpDoesNotRelock(std::string* error) {
 		auto pumpOne = [&](NetHoldResolution resolution) -> bool {
 			NetMatchService service;
@@ -14635,6 +14684,7 @@ namespace RTE {
 		if (!earlyOverTickError.empty()) return fail(earlyOverTickError);
 		if (!healedEndError.empty()) return fail(healedEndError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
+		if (!TestAnInPlaceReturnKeepsAnOpenReturnGap(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
