@@ -47,6 +47,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
@@ -332,6 +333,11 @@ namespace RTE::MenuAutomation {
 		std::set<std::string> offenders; //!< Each distinct offence is logged once, so one run lists them all.
 	};
 	std::map<std::string, TextWatch> s_Watches;
+	std::vector<std::pair<std::string, std::string>> s_DrawnText; //!< This frame's font-drawn lines, cleared once judged.
+
+	void NoteDrawnText(const std::string& source, const std::string& text) {
+		if (!s_Watches.empty()) s_DrawnText.emplace_back(source, text);
+	}
 
 	bool Shown(GUIControl* control) {
 		return Visible(control) && PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds);
@@ -372,6 +378,7 @@ namespace RTE::MenuAutomation {
 			}
 		}
 		if (g_ActivityMan.IsInActivity()) add("screen", "ScreenText", g_FrameMan.GetScreenText(0));
+		for (const auto& [source, text]: s_DrawnText) add("drawn", source, text);
 		return lines;
 	}
 
@@ -385,8 +392,13 @@ namespace RTE::MenuAutomation {
 		if (state == "running") return snapshot.serviceState == "Running";
 		if (state == "local_held" || state == "remote_held") {
 			const bool local = state == "local_held";
+			// A catch-up alone is no hold: a host serves one and a late joiner runs one with nobody's seat held. This peer's
+			// own return is the catch-up or resync that follows the hold its host told it of.
 			const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
-			if (local && ScenarioRunner::WorldCatchUpActive()) return true;
+			if (local && !snapshot.isHost && (ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing())) {
+				const auto& log = ScenarioRunner::GetNetUiToastLog();
+				if (std::any_of(log.begin(), log.end(), [](const auto& toast) { return toast.kind == "seat_held" && toast.senderPeerId == 0; })) return true;
+			}
 			for (const auto& member: snapshot.members) {
 				if (member.cpu || (member.peerId == snapshot.localPeerId) != local || ScenarioRunner::IsLockstepSeatReleased(member.peerId)) continue;
 				if (member.aiHeld || member.reclaiming || ScenarioRunner::IsLockstepSeatUnderAI(member.peerId, frame)) return true;
@@ -459,6 +471,20 @@ namespace RTE::MenuAutomation {
 	}
 
 	void EvaluateWatches(GUIControlManager* menu) {
+		// A harness arms the same watches on every peer, scripted or not: one 'start' line per watch, read on the first drawn frame.
+		static bool leverRead = false;
+		if (!leverRead) {
+			leverRead = true;
+			if (const char* path = std::getenv("CCCP_TEST_SCREEN_WATCHES"); path && *path) {
+				std::ifstream lines(path);
+				for (std::string line; std::getline(lines, line);) {
+					if (line.empty() || line[0] == '#') continue;
+					std::istringstream args("start " + line);
+					std::string observation;
+					if (!Execute(nullptr, "", "text_watch", args, observation)) System::PrintDiagnosticErrorLine("[text-watch] refused: " + line + " " + observation);
+				}
+			}
+		}
 		if (s_Watches.empty()) return;
 		std::vector<ShownLine> lines;
 		bool linesRead = false;
@@ -529,6 +555,7 @@ namespace RTE::MenuAutomation {
 				System::PrintDiagnosticLine("[text-watch] violation " + name + " " + watch.rule + " " + record.dump());
 			}
 		}
+		s_DrawnText.clear();
 	}
 
 	void ReportWatches() {
