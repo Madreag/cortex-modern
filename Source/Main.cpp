@@ -7337,11 +7337,29 @@ void RunGameLoop() {
 			}
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
 			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) {
+				// The census runs on the sim thread, so each part's own cost goes on its line.
+				std::string costs;
+				const auto timed = [&costs](const char* name, const auto& part) {
+					const auto begin = std::chrono::steady_clock::now();
+					std::ostringstream text;
+					text << part();
+					costs += std::string(costs.empty() ? "" : ",") + name + ":" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count());
+					return text.str();
+				};
+				const std::string heap = timed("heap", [] { return ProcessHeapCensus(); });
+				const std::string lua = timed("lua", [] { return g_LuaMan.GetTotalHeapBytes(); });
+				const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census(); });
+				const std::string movable = timed("movable", [] { return g_MovableMan.Census(); });
+				const std::string atoms = timed("atoms", [] { return Atom::SampledConstructionStacks(); });
+				const std::string audio = timed("audio", [] { return g_AudioMan.Census(); });
+				const std::string runner = timed("runner", [] { return ScenarioRunner::MemoryCensus(); });
+				const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
+				const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
 				std::ostringstream line;
-				line << "[mem-census] tick=" << simTick << ProcessHeapCensus() << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << g_LuaMan.GetTotalHeapBytes()
-				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << CheckpointCow::Get().Cache().Census()
-				     << " movable: " << g_MovableMan.Census() << ' ' << Atom::SampledConstructionStacks() << " audio: " << g_AudioMan.Census() << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus()
-				     << PaceCensusSinceLast();
+				line << "[mem-census] tick=" << simTick << heap << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
+				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
+				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console
+				     << pace << " census_us=" << costs;
 				System::PrintDiagnosticLine(line.str());
 			}
 			if (s_scriptedLeaveDue) {
