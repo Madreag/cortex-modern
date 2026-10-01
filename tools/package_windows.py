@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -43,6 +44,14 @@ def package_files(repo: Path) -> list[Path]:
     return files
 
 
+def source_of(repo: Path) -> dict:
+    """The commit and tree the package was built from, and whether the working tree differed from them."""
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout.strip()
+    return dict(commit=git("rev-parse", "HEAD"), tree=git("rev-parse", "HEAD^{tree}"),
+                dirty=bool(git("status", "--porcelain", "--untracked-files=no")))
+
+
 def package(repo: Path, out: Path) -> Path:
     version = (repo / "VERSION.txt").read_text(encoding="utf-8").strip()
     if not VERSION_FORM.fullmatch(version):
@@ -57,7 +66,7 @@ def package(repo: Path, out: Path) -> Path:
             name = path.relative_to(repo).as_posix()
             bundle.write(path, name)
             entries.append(dict(path=name, bytes=path.stat().st_size, sha256=sha256(path)))
-        manifest = dict(version=version, executable=EXECUTABLE, files=entries)
+        manifest = dict(version=version, tag=f"v{version}", source=source_of(repo), executable=EXECUTABLE, files=entries)
         bundle.writestr("MANIFEST.json", json.dumps(manifest, indent=1))
     (out / f"{archive.name}.sha256").write_text(f"{sha256(archive)}  {archive.name}\n", encoding="utf-8")
     print(f"[package] {archive} files={len(entries)} bytes={archive.stat().st_size} version={version}", flush=True)
