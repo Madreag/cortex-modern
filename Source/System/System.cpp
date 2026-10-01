@@ -26,6 +26,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <atomic>
 #include <bit>
@@ -325,6 +326,18 @@ unsigned long System::GetProcessID() {
 #else
 	return static_cast<unsigned long>(getpid());
 #endif
+}
+
+const std::string& System::GetBuildVersion() {
+	static const std::string version = [] {
+		std::ifstream file(ThisExecutablePath().parent_path() / "VERSION.txt");
+		std::string line;
+		std::getline(file, line);
+		// Only a version's own characters reach the menu.
+		line.erase(std::remove_if(line.begin(), line.end(), [](unsigned char c) { return !(std::isalnum(c) || c == '.' || c == '-' || c == '+'); }), line.end());
+		return line.substr(0, 32);
+	}();
+	return version;
 }
 
 bool System::s_Quit = false;

@@ -19,6 +19,7 @@
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "System.h"
+#include "NetProtocol.h"
 #include "ScenarioRunner.h"
 #include "TelemetryBundle.h"
 
@@ -410,7 +411,8 @@ void MainMenuGUI::CreateMainScreen() {
 	}
 
 	m_VersionLabel = dynamic_cast<GUILabel*>(m_MainMenuScreenGUIControlManager->GetControl("VersionLabel"));
-	m_VersionLabel->SetText("Community Project\nv" + c_GameVersion.str());
+	const std::string& build = System::GetBuildVersion();
+	m_VersionLabel->SetText("Community Project\nv" + c_GameVersion.str() + (build.empty() ? std::string() : ", multiplayer " + build + " (protocol " + std::to_string(NetProtocol::c_Version) + ")"));
 	m_VersionLabel->SetPositionAbs(10, g_WindowMan.GetResY() - m_VersionLabel->GetTextHeight() - 5);
 }
 
