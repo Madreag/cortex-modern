@@ -2942,6 +2942,7 @@ static std::string ResyncSaveName() {
 			}
 			System::PrintDiagnosticLine(std::format("[net-match] round start scripts restored bytes={}", scripts.size()));
 		}
+		m_LaunchedFreshRound = freshRound;
 		if (freshRound) g_MovableMan.RestartSimUpdateFrameNumber();
 		const uint64_t launchRound = m_WorldCatchUp.active && m_WorldCatchUp.privateMatch ? m_WorldCatchUp.roundId : m_Coordinator->GetRoundId();
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), m_PendingResyncState.has_value());
@@ -10080,6 +10081,15 @@ static std::string ResyncSaveName() {
 		const bool started = BeginTicketRejoinOnRoute(error, liveRoute ? &*liveRoute : nullptr);
 		if (started) ScenarioRunner::SetWorldCatchUpPriorInputThrough(prior);
 		return started;
+	}
+
+	void NetMatchService::EndHeldRejoinInNextRound() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_HeldRejoinDriving = false;
+		m_HeldRejoinRoutes.clear();
+		m_HeldRejoinPriorInput = 0;
+		// The input this seat sent belongs to the round that ended; the new round fences none of it.
+		ScenarioRunner::SetWorldCatchUpPriorInputThrough(0);
 	}
 
 	bool NetMatchService::BeginHeldRejoinOnNextHost(std::string* error) {

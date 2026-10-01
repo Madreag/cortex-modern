@@ -5964,19 +5964,52 @@ static bool CrossDrawLobbySurface(std::string* error) {
 	return true;
 }
 
-// The e2e rematch ride-through: the finished round's result is logged, the live session reconvenes in the lobby and the next
-// round launches; false with the e2e error set when any step fails.
-static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
+// The e2e round boundary: the finished round's count and result.
+static void NoteNetMatchE2ERoundOver(const std::string& result) {
 	++s_netMatchServiceE2ERematches;
 	if (s_crossRematches) {
 		g_MetricsCollector.WriteObservation({{"type", "match_boundary"}, {"result", result},
 		    {"final_tick", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())}, {"rematch", s_netMatchServiceE2ERematches}, {"budget_tick", s_crossBudget}});
 	}
+	std::ostringstream line;
+	line << "[net-match-service-e2e] rematch: match " << s_netMatchServiceE2ERematches << " over (" << result << "), returning to lobby";
+	System::PrintDiagnosticLine(line.str());
+}
+
+// Builds and starts the round the lobby launched; false with the e2e error set when any step fails.
+static bool LaunchNetMatchE2ERound(const std::string& preset) {
+	std::string configureError;
+	if (!ConfigureNetMatchServiceE2EActivity(preset, &configureError)) {
+		s_netMatchServiceE2EError = "rematch configure failed: " + configureError;
+		s_netMatchServiceE2EExitCode = 1;
+		System::SetQuit(true);
+		return false;
+	}
+	// Restart NOW: the fresh coordinator expects frame 1, so no sim tick may run before
+	// RestartActivity resets the sim count (the poll above also left real-time debt in
+	// the sim accumulator, which ResetTime clears).
+	g_TimerMan.PauseSim(true);
+	if (!g_ActivityMan.RestartActivity()) {
+		s_netMatchServiceE2EError = "rematch activity restart failed";
+		s_netMatchServiceE2EExitCode = 1;
+		System::SetQuit(true);
+		return false;
+	}
 	{
 		std::ostringstream line;
-		line << "[net-match-service-e2e] rematch: match " << s_netMatchServiceE2ERematches << " over (" << result << "), returning to lobby";
+		line << "[net-match-service-e2e] rematch: round " << (s_netMatchServiceE2ERematches + 1) << " launching";
 		System::PrintDiagnosticLine(line.str());
 	}
+	// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
+	s_netMatchE2ETicks.OnNewMatch();
+	s_netMatchE2EOwedSampleFrame = 0;
+	return true;
+}
+
+// The e2e rematch ride-through: the finished round's result is logged, the live session reconvenes in the lobby and the next
+// round launches; false with the e2e error set when any step fails.
+static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
+	NoteNetMatchE2ERoundOver(result);
 	if (!finished) {
 		g_NetMatchService.FinishMatch(result);
 		g_ActivityMan.EndActivity();
@@ -6017,37 +6050,13 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
-	std::string rematchConfigureError;
 	if (!rematchReady) {
 		s_netMatchServiceE2EError = "rematch launch failed: " + g_NetMatchService.GetErrorText();
 		s_netMatchServiceE2EExitCode = 1;
 		System::SetQuit(true);
 		return false;
-	} else if (!ConfigureNetMatchServiceE2EActivity(rematchPreset, &rematchConfigureError)) {
-		s_netMatchServiceE2EError = "rematch configure failed: " + rematchConfigureError;
-		s_netMatchServiceE2EExitCode = 1;
-		System::SetQuit(true);
-		return false;
 	}
-	// Restart NOW: the fresh coordinator expects frame 1, so no sim tick may run before
-	// RestartActivity resets the sim count (the poll above also left real-time debt in
-	// the sim accumulator, which ResetTime clears).
-	g_TimerMan.PauseSim(true);
-	if (!g_ActivityMan.RestartActivity()) {
-		s_netMatchServiceE2EError = "rematch activity restart failed";
-		s_netMatchServiceE2EExitCode = 1;
-		System::SetQuit(true);
-		return false;
-	}
-	{
-		std::ostringstream line;
-		line << "[net-match-service-e2e] rematch: round " << (s_netMatchServiceE2ERematches + 1) << " launching";
-		System::PrintDiagnosticLine(line.str());
-	}
-	// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
-	s_netMatchE2ETicks.OnNewMatch();
-	s_netMatchE2EOwedSampleFrame = 0;
-	return true;
+	return LaunchNetMatchE2ERound(rematchPreset);
 }
 
 /// Whether a controller stop carries a Complete stop, as the finish path passes it or as the poll and the controller path prefix it ("tick N lockstep stopped: Complete:...").
@@ -6273,9 +6282,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			if (heldRejoin) {
 				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
+			std::string launchPreset;
 			for (bool attempt = resyncOk; attempt;) {
 				attempt = false;
-				std::string launchPreset;
 				const auto resyncWaitStart = std::chrono::steady_clock::now();
 				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
 					// The round ended while this seat was on its way back: the host's end record is the result, and the session stays.
@@ -6311,6 +6320,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					}
 				}
 			}
+			// The held round ended while this seat was on its way back and the host's next round took it in: it plays that round.
+			const bool landedInNextRound = resyncOk && heldRejoin && g_NetMatchService.LaunchedFreshRound();
+			if (landedInNextRound) resyncOk = false;
 			if (resyncOk) {
 				resyncOk = StageResyncedMatchActivity(&resyncError);
 			}
@@ -6348,6 +6360,27 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					s_netMatchE2ETicks.OnResyncRelaunch(resumeFrame);
 					// The relaunch restarts the editor phase, so its budget restarts.
 					s_netMatchE2EEditorTicks = 0;
+				}
+			} else if (landedInNextRound) {
+				RetractAbandonedTickHashes();
+				System::PrintDiagnosticLine("[net-match] completed_by_next_round=1 held_from=" + std::to_string(s_netMatchHeldFromTick));
+				g_ConsoleMan.PrintString("NETWORK: The round ended while you were rejoining - the next round starts");
+				g_NetMatchService.EndHeldRejoinInNextRound();
+				g_ActivityMan.EndActivity();
+				g_ActivityMan.SetInActivity(false);
+				ScenarioRunner::ClearControllerReplayError();
+				ScenarioRunner::ClearNetUiToasts();
+				if (s_netMatchServiceE2E) {
+					NoteNetMatchE2ERoundOver("Match over");
+					(void)LaunchNetMatchE2ERound(launchPreset);
+				} else {
+					std::string launchError;
+					g_TimerMan.PauseSim(true);
+					if (!ConfigureNetMatchServiceE2EActivity(launchPreset, &launchError) || !g_ActivityMan.RestartActivity()) {
+						g_ConsoleMan.PrintString("NETWORK: The next round could not start: " + launchError);
+						g_NetMatchService.ReportRuntimeError("next round launch failed: " + launchError);
+						returnToMenuAfterNetworkEnd = true;
+					}
 				}
 			} else if (endedByRecord) {
 				// The round ended while this seat was held or rejoining: it shows the host's result and stays for the rematch.
