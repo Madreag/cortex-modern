@@ -662,6 +662,11 @@ namespace RTE {
 		bool LaunchedFreshRound() const { return m_LaunchedFreshRound; }
 		/// Held client: its rejoin landed in the host's next round, so the held round is over for it and the new round is an ordinary one.
 		void EndHeldRejoinInNextRound();
+		/// Client: whether a rematch setup that failed returns this seat through the rejoin - its link to the host closed without the
+		/// host's goodbye, so the host plays the next round with the seat held for it.
+		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason);
+		/// Client: the last rematch setup lost its link to the host and the seat is owed its return to the round the host plays.
+		bool RematchReturnOwed() const;
 		void PreparePrivateRejoinCheckpoint();
 		/// Host: the lockstep state a returning seat's base carries beside its archive, read at the base's own tick.
 		bool ReadPrivateBaseLocked(uint64_t tick, NetWorldCheckpointImage& image, std::string* error);
@@ -1677,6 +1682,7 @@ namespace RTE {
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
 		bool m_LaunchedFreshRound = false; //!< The last launch handed up starts a lobby's fresh round.
+		bool m_RematchReturnOwed = false; //!< Client: the last rematch setup lost its link and the seat returns through the rejoin.
 		uint32_t m_ReconnectRouteTurn = 0; //!< Alternates the reconnect prompt's attempts between the ticket's host and the successors.
 		uint8_t m_ElectionHostPeer = 0; //!< Client: the round's host as last seen before an election.
 		uint64_t m_HostSilenceAtElectionMs = UINT64_MAX; //!< Client: how long that host was quiet when its election began.

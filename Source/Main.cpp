@@ -5978,8 +5978,10 @@ static void NoteNetMatchE2ERoundOver(const std::string& result) {
 
 // Builds and starts the round the lobby launched; false with the e2e error set when any step fails.
 static bool LaunchNetMatchE2ERound(const std::string& preset) {
+	// A seat returning to a round the host already plays loads that round's image instead of building a fresh one.
+	const bool fresh = g_NetMatchService.LaunchedFreshRound();
 	std::string configureError;
-	if (!ConfigureNetMatchServiceE2EActivity(preset, &configureError)) {
+	if (!(fresh ? ConfigureNetMatchServiceE2EActivity(preset, &configureError) : StageResyncedMatchActivity(&configureError))) {
 		s_netMatchServiceE2EError = "rematch configure failed: " + configureError;
 		s_netMatchServiceE2EExitCode = 1;
 		System::SetQuit(true);
@@ -5994,6 +5996,14 @@ static bool LaunchNetMatchE2ERound(const std::string& preset) {
 		s_netMatchServiceE2EExitCode = 1;
 		System::SetQuit(true);
 		return false;
+	}
+	if (!fresh) {
+		System::PrintDiagnosticLine("[net-match] held client: replaying the private committed tail");
+		g_NetMatchService.NoteResyncRelaunched();
+		const uint64_t lockstepResume = ScenarioRunner::HasLockstepCoordinator() ? ScenarioRunner::GetLockstepResumeFrame() : 0;
+		s_netMatchE2ETicks.OnResyncRelaunch(lockstepResume > 0 ? lockstepResume : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1);
+		s_netMatchE2EEditorTicks = 0;
+		return true;
 	}
 	{
 		std::ostringstream line;
@@ -6049,6 +6059,25 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 			break;
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	if (!rematchReady && g_NetMatchService.RematchReturnOwed()) {
+		// The link to the host closed in the lobby: the host plays the round with this seat held, and the seat returns to it.
+		System::PrintDiagnosticLine("[net-match] rematch lobby link lost: rejoining the host");
+		std::string rejoinError;
+		if (g_NetMatchService.BeginHeldRejoin(&rejoinError)) {
+			const auto rejoinStart = std::chrono::steady_clock::now();
+			while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rejoinStart).count() < 60) {
+				CrossReadyForCurrentConfig(crossReadyRevision);
+				if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
+					rematchReady = true;
+					break;
+				}
+				if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) break;
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			}
+		} else {
+			System::PrintDiagnosticLine("[net-match] rematch return could not start: " + rejoinError);
+		}
 	}
 	if (!rematchReady) {
 		s_netMatchServiceE2EError = "rematch launch failed: " + g_NetMatchService.GetErrorText();

@@ -1922,6 +1922,7 @@ static std::string ResyncSaveName() {
 			m_WorkerSession = nullptr;
 			m_Coordinator = std::move(coordinator);
 			m_Runner = std::move(runner);
+			m_RematchReturnOwed = false;
 			if (started) {
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
@@ -1941,6 +1942,8 @@ static std::string ResyncSaveName() {
 				const bool missingPlayers = error == "rematch roster: not enough players for a rematch";
 				const bool lostHost = m_Runner->DidLoseHostDuringSetup() || (departedHost && missingPlayers) || m_HostEndedTheMatch;
 				if (lostHost && departedHost && !m_IsHost) NoteHostEndedTheMatchLocked();
+				m_RematchReturnOwed = RematchLossReturnsThroughRejoin(m_IsHost, m_HostEndedTheMatch, error.starts_with("rematch roster"), m_Session && m_Session->IsReady(),
+				                                                      m_Session && m_Session->HasReject(), m_Session && m_Session->HasReject() ? m_Session->GetRejectReason() : NetRejectReason::InternalError);
 				m_ErrorText = lostHost ? "The host left the match" :
 				              missingPlayers ? "The other players left the match" :
 				              error.starts_with("rematch roster") ? "The match could not return to the lobby" : error;
@@ -10090,6 +10093,17 @@ static std::string ResyncSaveName() {
 		m_HeldRejoinPriorInput = 0;
 		// The input this seat sent belongs to the round that ended; the new round fences none of it.
 		ScenarioRunner::SetWorldCatchUpPriorInputThrough(0);
+	}
+
+	bool NetMatchService::RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason) {
+		if (isHost || hostEndedMatch || rosterRefused || sessionReady) return false;
+		// A link closed with no reason from the host, or lost in transport, is a drop: the host keeps the seat for its return.
+		return !hasReject || reason == NetRejectReason::InternalError || reason == NetRejectReason::Timeout;
+	}
+
+	bool NetMatchService::RematchReturnOwed() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_RematchReturnOwed;
 	}
 
 	bool NetMatchService::BeginHeldRejoinOnNextHost(std::string* error) {

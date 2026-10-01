@@ -7125,6 +7125,35 @@ namespace RTE {
 		return true;
 	}
 
+	// A client whose link to the host dropped in the rematch's lobby ended its match (the four-box run: 'rematch setup failed:
+	// Connection dropped', exit 1) while the host played the round with its seat held; a lobby drop returns as a match drop does.
+	bool TestARematchLobbyDropReturnsThroughTheRejoin(std::string* error) {
+		struct Case {
+			const char* name;
+			bool isHost, hostEnded, rosterRefused, ready, hasReject;
+			NetRejectReason reason;
+			bool returns;
+		};
+		const Case cases[] = {
+		    {"a link the transport dropped", false, false, false, false, true, NetRejectReason::InternalError, true},
+		    {"a link that timed out", false, false, false, false, true, NetRejectReason::Timeout, true},
+		    {"a link closed with no reason", false, false, false, false, false, NetRejectReason::InternalError, true},
+		    {"the host's goodbye", false, false, false, false, true, NetRejectReason::SessionEnded, false},
+		    {"a match the host ended", false, true, false, false, true, NetRejectReason::InternalError, false},
+		    {"a roster the rematch refused", false, false, true, false, true, NetRejectReason::InternalError, false},
+		    {"a session still ready", false, false, false, true, false, NetRejectReason::InternalError, false},
+		    {"the host itself", true, false, false, false, true, NetRejectReason::InternalError, false},
+		};
+		for (const Case& c: cases) {
+			if (NetMatchService::RematchLossReturnsThroughRejoin(c.isHost, c.hostEnded, c.rosterRefused, c.ready, c.hasReject, c.reason) != c.returns) {
+				*error = std::string("a rematch lobby loss on ") + c.name + (c.returns ? " ended the match instead of returning the seat through the rejoin" : " sent the seat back through the rejoin");
+				return false;
+			}
+		}
+		std::cout << "PASS a_rematch_lobby_drop_returns_through_the_rejoin cases=" << sizeof(cases) / sizeof(cases[0]) << std::endl;
+		return true;
+	}
+
 	// A seat whose player is away when its round ends is kept, held by the AI (A12); the host formed the rematch from the peers
 	// connected that moment, so the seat either vanished from the next round or - its old link still counted - the lobby waited
 	// for an endpoint the player never sent (the four-box run: 'rematch setup failed: waiting for Client 2's handover endpoint').
@@ -14773,6 +14802,7 @@ namespace RTE {
 		if (!TestAReturnerToldTheMatchIsOverGetsItsRecord(&error)) return fail(error);
 		if (!TestACaughtUpSeatTakesItsRoundsRecordOnce(&error)) return fail(error);
 		if (!TestARematchKeepsAnAbsentPlayersSeatHeld(&error)) return fail(error);
+		if (!TestARematchLobbyDropReturnsThroughTheRejoin(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
