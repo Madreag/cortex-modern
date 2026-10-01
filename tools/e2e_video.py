@@ -385,13 +385,22 @@ def parse_freezedetect(text):
     return spans
 
 
-def running_stills(spans, rows, minimum_s=1.0):
+# The engine marks the moment the harness ends a round by its tick cap; the screen then holds its last picture while
+# the run drains its relay, lingers and writes its records, and no player ever sees a match end that way.
+CAPPED_STOP_EVENT = "capped stop"
+# The mark is stamped just after the last picture is presented; freezedetect starts the still at that picture.
+CAPPED_STOP_SLACK_S = 0.2
+
+
+def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None):
     """The stills that fall while this screen's match runs: every saved frame over the span shows the game with the service Running.
-    A still over a menu, a load or a stopped service is not the match freezing."""
+    A still over a menu, a load or a stopped service is not the match freezing; the one still that holds the harness's capped stop
+    is the run ending, recorded in `allowed` with its reason, and is not a freeze either."""
     saved = [row for row in rows if row.get("saved", True) and "wall_ms" in row]
     if not saved:
         return []
     origin, last = saved[0]["wall_ms"], saved[-1]["wall_ms"]
+    capped_s = (capped_stop_ms - origin) / 1000.0 if capped_stop_ms is not None else None
     stills = []
     for start, end in spans:
         stop = end if end is not None else (last - origin) / 1000.0
@@ -399,17 +408,37 @@ def running_stills(spans, rows, minimum_s=1.0):
             continue
         inside = [row for row in saved if origin + start * 1000 <= row["wall_ms"] <= origin + stop * 1000]
         if inside and all(row.get("screen") == "game" and row.get("service_state") == "Running" for row in inside):
-            stills.append({"start_s": round(start, 3), "end_s": round(stop, 3), "frames": [inside[0].get("frame"), inside[-1].get("frame")]})
+            still = {"start_s": round(start, 3), "end_s": round(stop, 3), "frames": [inside[0].get("frame"), inside[-1].get("frame")]}
+            if capped_s is not None and start - CAPPED_STOP_SLACK_S <= capped_s <= stop:
+                if allowed is not None:
+                    allowed.append({**still, "reason": "the harness's capped stop at %.2f s" % capped_s})
+                continue
+            stills.append(still)
     return stills
 
 
-def freeze_scan(ffmpeg, video, rows):
+def capped_stop_ms(video_dir):
+    """The recorder's clock when the harness ended this round by its tick cap, or None."""
+    path = Path(video_dir) / "events.jsonl" if video_dir else None
+    if not path or not path.is_file():
+        return None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("message") == CAPPED_STOP_EVENT:
+            return event.get("wall_ms")
+    return None
+
+
+def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None):
     """ffmpeg's freezedetect over one peer's encoded capture: a still picture over one second while the match runs."""
     if not ffmpeg or not video or not Path(video).is_file():
         return None
     result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), "-vf", "freezedetect=n=-60dB:d=1", "-map", "0:v:0", "-f", "null", "-"],
                             capture_output=True, text=True, errors="replace", timeout=600)
-    return running_stills(parse_freezedetect(result.stderr), rows)
+    return running_stills(parse_freezedetect(result.stderr), rows, capped_stop_ms=capped_stop_ms(video_dir), allowed=allowed)
 
 
 def recording_health(video_dir, minimum_share=0.9):
@@ -582,8 +611,39 @@ def read_manifest(video_dir):
         return {}
 
 
+_ENCODER_CODEC = {}
+
+
+def encoder_codec(ffmpeg):
+    """The codec the engines stream into: the GPU's h264 encoder when this box offers one, libx264 otherwise; probed once."""
+    if ffmpeg not in _ENCODER_CODEC:
+        probe = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=0.2",
+                                "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, text=True) if ffmpeg else None
+        _ENCODER_CODEC[ffmpeg] = "h264_nvenc" if probe is not None and probe.returncode == 0 else "libx264"
+    return _ENCODER_CODEC[ffmpeg]
+
+
+def probe_video(ffmpeg, destination):
+    ffprobe = find_ffprobe(ffmpeg)
+    if not ffprobe:
+        return {}
+    check = subprocess.run([ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
+                            "stream=width,height,nb_read_frames,r_frame_rate:format=duration", "-of", "json", str(destination)],
+                           capture_output=True, text=True)
+    return json.loads(check.stdout) if check.returncode == 0 else {}
+
+
 def encode(ffmpeg, video_dir, fps, destination):
-    """One peer's frames to h264. Even dimensions are forced because yuv420p needs them."""
+    """One peer's frames to h264. Even dimensions are forced because yuv420p needs them. A capture the engine streamed into
+    its own encoder is taken as it is: one video frame per capture slot, the last picture held over a slot nothing filled."""
+    streamed = Path(video_dir) / "capture.mp4"
+    if streamed.is_file():
+        rows = [row for row in read_index(video_dir) if row.get("saved", True) and "video_frame" in row]
+        os.replace(streamed, destination)
+        manifest = read_manifest(video_dir) or {}
+        return {"encoded": Path(destination).is_file() and bool(rows), "timing": "engine-slots", "origin_wall_ms": rows[0]["wall_ms"] if rows else None,
+                "fps": fps, "ffprobe": probe_video(ffmpeg, destination), "encoder": manifest.get("encoder"),
+                "capture_duration_s": (rows[-1]["wall_ms"] - rows[0]["wall_ms"]) / 1000 + 1 / fps if rows else 0, "path": str(destination)}
     frames = Path(video_dir) / "frames"
     if not frames.is_dir() or not any(frames.glob("frame-*.png")):
         return {"encoded": False, "reason": f"no frames in {frames}"}
@@ -605,14 +665,7 @@ def encode(ffmpeg, video_dir, fps, destination):
                "-i", str(timeline), "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-r", str(fps), "-fps_mode", "cfr",
                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", str(destination)]
     result = subprocess.run(command, capture_output=True, text=True)
-    metadata = {}
-    ffprobe = find_ffprobe(ffmpeg)
-    if result.returncode == 0 and ffprobe:
-        check = subprocess.run([ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
-                                "stream=width,height,nb_read_frames,r_frame_rate:format=duration", "-of", "json", str(destination)],
-                               capture_output=True, text=True)
-        if check.returncode == 0:
-            metadata = json.loads(check.stdout)
+    metadata = probe_video(ffmpeg, destination) if result.returncode == 0 else {}
     return {"encoded": result.returncode == 0 and Path(destination).is_file(), "timing": "wall-clock-cfr",
             "origin_wall_ms": rows[0]["wall_ms"], "fps": fps, "ffprobe": metadata,
             "capture_duration_s": (rows[-1]["wall_ms"] - rows[0]["wall_ms"]) / 1000 + 1 / fps,
@@ -620,12 +673,34 @@ def encode(ffmpeg, video_dir, fps, destination):
             "stderr": result.stderr[-2000:], "path": str(destination)}
 
 
-def contact_sheet(video_dir, rows, destination, every, ffmpeg):
+def extract_frames(ffmpeg, video, rows, frames):
+    """The picked rows' pictures out of a streamed capture's MP4, named as the PNG path would have named them."""
+    wanted = [row for row in rows if "video_frame" in row and not (frames / f"frame-{row['frame']:06d}.png").is_file()]
+    if not wanted or not ffmpeg or not Path(video).is_file():
+        return
+    frames.mkdir(parents=True, exist_ok=True)
+    select = "+".join(f"eq(n,{row['video_frame']})" for row in wanted)
+    scratch = frames / "extract"
+    scratch.mkdir(exist_ok=True)
+    subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-vf", f"select='{select}'",
+                    "-fps_mode", "passthrough", str(scratch / "pick-%06d.png")], capture_output=True, text=True)
+    for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1):
+        picture = scratch / f"pick-{index:06d}.png"
+        if picture.is_file():
+            os.replace(picture, frames / f"frame-{row['frame']:06d}.png")
+    for leftover in scratch.glob("*.png"):
+        leftover.unlink()
+    scratch.rmdir()
+
+
+def contact_sheet(video_dir, rows, destination, every, ffmpeg, video=None):
     """Every `every`-th frame tiled SHEET_COLUMNS wide, each thumbnail labelled with what it is."""
     frames = Path(video_dir) / "frames"
     picked = rows[::every] if rows else []
     if not picked:
         return {"written": False, "reason": "no frames to tile"}
+    if video:
+        extract_frames(ffmpeg, video, picked, frames)
     try:
         from PIL import Image, ImageDraw  # noqa: PLC0415
     except ImportError:
@@ -1133,14 +1208,15 @@ def review(scenario, capture, out):
                       **({"finding": {"class": "harness", "reason": "starved capture: %.1f of %d frames a second saved, longest gap %d ms, the recorder's own %s ms" %
                                       (health["saved_fps"], health["fps"], health["longest_gap_ms"], health["recorder_gap_ms"]), "launch": None, "errors": []}}
                          if health["starved"] else {})})
-        stills = freeze_scan(find_ffmpeg(), peer.get("video"), read_index(peer["video_dir"]))
+        allowed_stills = []
+        stills = freeze_scan(find_ffmpeg(), peer.get("video"), read_index(peer["video_dir"]), peer["video_dir"], allowed_stills)
         if stills is None:
             continue
         items.append({"id": "recording-stills-" + peer["peer"], "run": capture["name"], "peer": peer["peer"], "screen": "game",
                       "what": "No still picture over one second while this screen's match runs.",
                       "assert": "ffmpeg freezedetect (-60 dB, 1 s) finds no still over saved frames that all show the game with the service Running",
                       "frames": None, "capture_frames": None, "video_seconds": None, "video": peer.get("video"),
-                      "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if stills else "pass", "stills": stills,
+                      "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if stills else "pass", "stills": stills, "allowed_stills": allowed_stills,
                       **({"finding": {"class": "harness", "reason": "%d still(s) over 1 s while the match runs, first at %.1f s" % (len(stills), stills[0]["start_s"]),
                                       "launch": None, "errors": []}} if stills else {})})
     # What the screen showed is asserted too: each armed screen watch is one item per peer.
@@ -1239,6 +1315,11 @@ def stage_peer(scenario, peer, root, tokens):
     watches = Path(root) / "screen-watches.txt"
     watches.write_text(SCREEN_WATCHES, encoding="utf-8")
     environment["CCCP_TEST_SCREEN_WATCHES"] = str(watches)
+    # Frames stream into one encoder process as they land (H11): no capture spools its pictures to disk first.
+    ffmpeg = find_ffmpeg()
+    if ffmpeg:
+        environment["CCCP_TEST_RECORD_ENCODER"] = str(ffmpeg)
+        environment["CCCP_TEST_RECORD_CODEC"] = encoder_codec(ffmpeg)
     environment.update(substitute(peer.get("env", {}), tokens))
     if environment["CCCP_HEADLESS"] != "1":
         raise ValueError("a scenario cannot override CCCP_HEADLESS=1")
@@ -1568,7 +1649,7 @@ def render(capture_run, fps, every):
         video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
         peer["video"] = video.get("path") if video.get("encoded") else None
         peer["encode"] = video
-        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg)
+        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg, peer["video"])
         peer["contact_sheet"] = sheet.get("path") if sheet.get("written") else None
         peer["sheet"] = sheet
     capture_run["ffmpeg"] = ffmpeg
