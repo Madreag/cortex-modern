@@ -7409,6 +7409,22 @@ void RunGameLoop() {
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
+			// Test lever CCCP_TEST_MINIMIZE_TICKS=<from>:<to>: the window is minimized at the first tick and restored at the second.
+			static const std::pair<uint64_t, uint64_t> s_minimizeTicks = [] {
+				unsigned long long from = 0, to = 0;
+				const char* text = std::getenv("CCCP_TEST_MINIMIZE_TICKS");
+				return text && std::sscanf(text, "%llu:%llu", &from, &to) == 2 && to > from ? std::pair<uint64_t, uint64_t>(from, to) : std::pair<uint64_t, uint64_t>(0, 0);
+			}();
+			if (s_minimizeTicks.second != 0 && g_WindowMan.GetWindow()) {
+				const uint64_t tick = static_cast<uint64_t>(simTick);
+				if (tick == s_minimizeTicks.first) SDL_MinimizeWindow(g_WindowMan.GetWindow());
+				if (tick == s_minimizeTicks.second) SDL_RestoreWindow(g_WindowMan.GetWindow());
+				if (tick == s_minimizeTicks.first || tick == s_minimizeTicks.first + 60 || tick == s_minimizeTicks.second || tick == s_minimizeTicks.second + 60) {
+					const SDL_WindowFlags flags = SDL_GetWindowFlags(g_WindowMan.GetWindow());
+					System::PrintDiagnosticLine("[selftest] window tick=" + std::to_string(tick) + " minimized=" + std::to_string((flags & SDL_WINDOW_MINIMIZED) != 0) +
+					                            " hidden=" + std::to_string((flags & SDL_WINDOW_HIDDEN) != 0));
+				}
+			}
 			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) {
 				// The census's counts are read on the sim thread and each part's cost goes on its line; the census worker sums the process heaps and prints it.
 				std::string costs;
