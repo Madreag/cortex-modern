@@ -3573,15 +3573,16 @@ namespace RTE {
 
 		// §6 over two real sessions, on a peer-id space the first incarnation has saturated: the seat's
 		// own id is taken, so the returner proves on a provisional one and the commit hands it the
-		// seat's. Without this the host answers SessionFull and 1v1 fencing cannot happen at all.
-		int TestReturningHolderOnAFullSession() {
+		// seat's. Without this the host answers SessionFull and 1v1 fencing cannot happen at all. Between rounds the seat is still
+		// its player's, so a returner whose old link still holds the id is admitted the same way.
+		int TestReturningHolderOnAFullSession(bool betweenRounds) {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
 			std::string error;
 			if (!ResetLaneDirectory(&error)) {
 				return Fail(error);
 			}
-			const uint16_t port = 42134;
+			const uint16_t port = betweenRounds ? 42137 : 42134;
 			LoopbackTransport hostTransport;
 			LoopbackTransport firstTransport;
 			NetSession host;
@@ -3592,7 +3593,7 @@ namespace RTE {
 			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
 			admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
 			NetReconnectTicketStore store;
-			store.SetPath(StorePath("fence-live"));
+			store.SetPath(StorePath(betweenRounds ? "fence-ended" : "fence-live"));
 			NetReconnectClient firstClient;
 			uint64_t unixNow = 1'700'000'000'000ULL;
 			firstClient.Configure(&store, MakeIdentity(), "Player");
@@ -3623,7 +3624,7 @@ namespace RTE {
 				LoopbackTransport lobbyTransport;
 				NetSession lobbyJoiner;
 				NetReconnectTicketStore lobbyStore;
-				lobbyStore.SetPath(StorePath("fence-live-lobby"));
+				lobbyStore.SetPath(StorePath(betweenRounds ? "fence-ended-lobby" : "fence-live-lobby"));
 				NetReconnectClient lobbyClient;
 				lobbyClient.Configure(&lobbyStore, MakeIdentity(), "Player");
 				lobbyClient.SetUnixClock(&FixedUnixClock, &unixNow);
@@ -3650,6 +3651,8 @@ namespace RTE {
 
 			// Live match, and the second incarnation arrives while the first is STILL connected.
 			admission.SetLiveMatch(true);
+			// The round played and ended; the next has not started.
+			if (betweenRounds) admission.SetMatchEnded();
 			LoopbackTransport secondTransport;
 			NetSession second;
 			NetReconnectClient secondClient;
@@ -3669,7 +3672,7 @@ namespace RTE {
 				secondTransport.AdvanceTimeMs(10);
 			}
 			if (secondClient.GetState() != NetH4ClientState::Joined) {
-				return Fail(std::string("the second incarnation did not commit: ") + NetReconnectClientStateName(secondClient.GetState()) +
+				return Fail(std::string(betweenRounds ? "a returner between rounds did not commit: " : "the second incarnation did not commit: ") + NetReconnectClientStateName(secondClient.GetState()) +
 				            " session=" + NetSession::StateName(second.GetState()) + " reject=" + second.BuildRejectText());
 			}
 			if (!secondClient.UsedStoredTicket() || secondClient.GetIncarnation() != 2) {
@@ -7908,7 +7911,10 @@ namespace RTE {
 		if (const int result = TestLeaveExchangeBeatsTeardown(); result != 0) {
 			return result;
 		}
-		if (const int result = TestReturningHolderOnAFullSession(); result != 0) {
+		if (const int result = TestReturningHolderOnAFullSession(false); result != 0) {
+			return result;
+		}
+		if (const int result = TestReturningHolderOnAFullSession(true); result != 0) {
 			return result;
 		}
 		if (const int result = TestLobbySeatIsFreedForTheNextJoiner(); result != 0) {
