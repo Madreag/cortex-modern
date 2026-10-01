@@ -431,6 +431,7 @@ class Session:
         self.install_key = ""
         self.ice_offer: Optional[dict[str, Any]] = None
         self.ice_generation = 0
+        self.ice_refused = False  # the host's last mint was refused by its relay backend
 
     def age_s(self, now: float) -> int:
         return max(0, int(now - self.created_at))
@@ -614,13 +615,20 @@ class SessionDirectory:
                 raise FieldError("invalid_field", "iceServers") from None
             offer = {"match_id": match_id, "expires_at": wall + ttl, "iceServers": servers}
         else:
-            offer = self.turn_provider.mint(match_id, ttl, wall)
+            try:
+                offer = self.turn_provider.mint(match_id, ttl, wall)
+            except TurnError:
+                with self._lock:
+                    if self._sessions.get(session_id) is sess and generation == sess.ice_generation:
+                        sess.ice_refused = True
+                raise
         with self._lock:
             if self._sessions.get(session_id) is not sess or generation != sess.ice_generation:
                 raise TurnError(409, "relay_request_superseded")
             if offer["expires_at"] <= int(time.time()):
                 raise TurnError(503, "relay_credential_expired")
             sess.ice_offer = offer
+            sess.ice_refused = False
             return offer
 
     def get_ice_servers(self, session_id: str, now: float) -> dict[str, Any]:
@@ -629,6 +637,9 @@ class SessionDirectory:
             if not sess:
                 raise KeyError(session_id)
             if not sess.ice_offer or sess.ice_offer["expires_at"] <= int(time.time()):
+                # A client must tell a relay that refused the host from a match that has none.
+                if sess.ice_refused:
+                    raise TurnError(502, "relay_provider_refused")
                 raise TurnError(404, "relay_offer_unavailable")
             return sess.ice_offer
 
