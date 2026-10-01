@@ -6526,6 +6526,8 @@ static std::string ResyncSaveName() {
 			for (const auto& peer: m_ChatSession->GetReadyPeers())
 				members.push_back(static_cast<uint8_t>(peer.assignedPeerId + 1));
 		std::sort(members.begin(), members.end());
+		// A seat can have two live links at once - its leaver's, still up at its menu, and its substitute's - but it is one member.
+		members.erase(std::unique(members.begin(), members.end()), members.end());
 		const auto admission = m_ReconnectHost.ExportMigrationState();
 		if (admission.empty())
 			return false;
