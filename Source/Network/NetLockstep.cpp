@@ -7433,12 +7433,14 @@ namespace RTE {
 			DiagnosticLine() << "[lockstep] holds no relayed tick " << fromFrame << " of peer " << static_cast<int>(senderPeerId) << " for peer " << static_cast<int>(requesterPeerId)
 			          << "; first kept=" << (firstKept == kept->second.end() ? -1 : static_cast<int64_t>(firstKept->first)) << " heard through=" << m_Stats.peers[senderPeerId].highestTargetFrame << std::endl;
 		for (auto it = firstKept; it != kept->second.end() && it->first < fromFrame + NetLockstepCodec::c_MaxWindowTicks; ++it) {
-			// Repeated only with the bytes it was first forwarded with, so the requester binds what the others bound; one from
-			// before the epoch goes whole instead.
+			// Repeated only with the bytes it was first forwarded with, so the requester binds what the others bound; one whose block
+			// is gone - spelled against a table an epoch emptied, or out of the window - goes whole instead.
 			if (!blocks.contains(it->first)) {
-				const auto applied = m_ObservationEpochApplied.find(senderPeerId);
-				if (applied == m_ObservationEpochApplied.end() || it->first >= applied->second ||
-				    !SendIndependentCopy(m_RemoteTransports.at(requesterPeerId), it->second, senderPeerId, m_RoundId, NetTransportLane::ControlReliable)) break;
+				if (!SendIndependentCopy(m_RemoteTransports.at(requesterPeerId), it->second, senderPeerId, m_RoundId, NetTransportLane::ControlReliable)) {
+					DiagnosticLine() << "[lockstep] cannot resend relayed tick " << it->first << " of peer " << static_cast<int>(senderPeerId) << " to peer "
+					          << static_cast<int>(requesterPeerId) << ": it does not fit one recovery chunk" << std::endl;
+					break;
+				}
 				last = it->first;
 				++resent;
 				continue;
@@ -7475,11 +7477,13 @@ namespace RTE {
 			NetLockstepFrame own;
 			if (!FindLocalInput(target, own)) continue;
 			// A tick is repeated only with the bytes it first went out with; re-encoding it against a table that has
-			// moved on would bind keys the requester never saw. One from before the epoch goes whole instead.
+			// moved on would bind keys the requester never saw. One whose block is gone goes whole instead.
 			if (!blocks.contains(target)) {
-				const auto applied = m_ObservationEpochApplied.find(m_Config.localPeerId);
-				if (applied == m_ObservationEpochApplied.end() || target >= applied->second ||
-				    !SendIndependentCopy(m_RemoteTransports.at(requesterPeerId), own, m_Config.localPeerId, m_RoundId, NetTransportLane::ControlReliable)) break;
+				if (!SendIndependentCopy(m_RemoteTransports.at(requesterPeerId), own, m_Config.localPeerId, m_RoundId, NetTransportLane::ControlReliable)) {
+					DiagnosticLine() << "[lockstep] cannot resend tick " << target << " to peer " << static_cast<int>(requesterPeerId)
+					          << ": it does not fit one recovery chunk" << std::endl;
+					break;
+				}
 				++resent;
 				continue;
 			}
@@ -9935,10 +9939,10 @@ namespace RTE {
 		// An emptied encode table says so on the wire - the block's binding count reads 0 where the
 		// receiver holds more - and every receiver resets that sender's table before it binds again.
 		m_ObservationEncodeTables.Exactly(senderPeerId).Reset();
-		// A window may not carry a copy from before the epoch: its kept block was spelled against
-		// the table this reset emptied. The encoder leaves a tick off when its block is gone.
-		NetLockstepObservationBlocks& blocks = m_ObservationBlocks[senderPeerId];
-		blocks.erase(blocks.begin(), blocks.lower_bound(due));
+		// Every kept block was spelled against the table this reset emptied - those of ticks past the epoch that went out before it was
+		// known too, which a returner starting from empty tables cannot read. The encoder leaves a tick off a window when its block is
+		// gone, and a resend sends it whole.
+		m_ObservationBlocks[senderPeerId].clear();
 		m_ObservationEpochApplied[senderPeerId] = due;
 	}
 
