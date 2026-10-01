@@ -1584,6 +1584,11 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatUnderAI(peerId, frame);
 	}
 
+	bool ScenarioRunner::IsLockstepSeatReleased(uint8_t peerId) {
+		NetLockstepPlaneGuard plane;
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatReleased(peerId);
+	}
+
 	bool ScenarioRunner::IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame) {
 		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatReclaimGap(peerId, frame);
