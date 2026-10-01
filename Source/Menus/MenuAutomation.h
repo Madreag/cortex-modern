@@ -27,6 +27,8 @@ namespace RTE {
 		bool FireAssertAllowed();
 		/// Judges every armed text watch against what this frame shows; call once per drawn frame.
 		void EvaluateWatches(GUIControlManager* menu);
+		/// Records a line this frame drew straight with a font, so the watches read it beside the controls.
+		void NoteDrawnText(const std::string& source, const std::string& text);
 		/// Logs each armed watch's frame and offence counts; call once at shutdown.
 		void ReportWatches();
 		bool RunSelfTest();
