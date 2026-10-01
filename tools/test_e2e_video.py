@@ -104,6 +104,27 @@ def check_recording_health(results, scratch):
     return ok
 
 
+def check_port_claims(results):
+    import subprocess as sub
+    holder = sub.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        driver.PORT_CLAIMS.mkdir(parents=True, exist_ok=True)
+        (driver.PORT_CLAIMS / "49399.claim").write_text(f"{holder.pid}\n", encoding="utf-8")
+        refused = False
+        try:
+            driver.PortClaim([49399]).__enter__()
+        except RuntimeError as error:
+            refused = "49399" in str(error)
+        ok = row(results, "ports/live-claim-refuses-a-second-run", refused)
+    finally:
+        holder.kill()
+        holder.wait()
+    with driver.PortClaim([49399, None]) as claim:
+        taken = [path.name for path in claim.taken]
+    ok &= row(results, "ports/stale-claim-is-taken-over-and-released", taken == ["49399.claim"] and not (driver.PORT_CLAIMS / "49399.claim").exists())
+    return ok
+
+
 def check_item_kinds(results):
     ok = row(results, "kind/gate-is-log", driver.item_kind({"id": "x", "gate": "item9a_wall_tps", "screen": "game"}) == "log")
     ok &= row(results, "kind/log-regex-is-log", driver.item_kind({"id": "x", "log_regex": ["a"]}) == "log")
@@ -1977,6 +1998,7 @@ def main():
         ok &= check_screen_watches(results, scratch)
         ok &= check_streamed_capture(results, scratch)
         ok &= check_item_kinds(results)
+        ok &= check_port_claims(results)
         ok &= check_freeze_stills(results)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_render_arm(results, scratch)
