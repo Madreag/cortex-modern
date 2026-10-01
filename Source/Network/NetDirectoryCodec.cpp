@@ -192,17 +192,21 @@ namespace RTE {
 			return ReadInt(obj, key, 0, NetDirectoryLimits::c_MaxIntField, out, reason);
 		}
 
-		bool ReadOptionalSpectatorFree(const json& obj, std::optional<int64_t>& out, std::string& reason) {
-			if (!obj.contains("spectator_free")) {
+		bool ReadOptionalCount(const json& obj, const char* key, std::optional<int64_t>& out, std::string& reason) {
+			if (!obj.contains(key)) {
 				out.reset();
 				return true;
 			}
 			int64_t value = 0;
-			if (!ReadInt(obj, "spectator_free", 0, NetDirectoryLimits::c_MaxIntField, value, reason)) {
+			if (!ReadInt(obj, key, 0, NetDirectoryLimits::c_MaxIntField, value, reason)) {
 				return false;
 			}
 			out = value;
 			return true;
+		}
+
+		bool ReadOptionalSpectatorFree(const json& obj, std::optional<int64_t>& out, std::string& reason) {
+			return ReadOptionalCount(obj, "spectator_free", out, reason);
 		}
 
 		// The register body and each list row carry the same named fields.
@@ -282,6 +286,10 @@ namespace RTE {
 				obj["spectator_free"] = in.spectatorFree;
 				obj["spectator_max"] = in.spectatorMax;
 			}
+			// Only a resumed running row can hold seats at its register; an older service ignores the key.
+			if (in.seatsHeld > 0) {
+				obj["seats_held"] = in.seatsHeld;
+			}
 		}
 
 		bool ReadRowFields(const json& obj, NetDirectorySessionRow& out, std::string& reason) {
@@ -309,6 +317,9 @@ namespace RTE {
 			out.worldBoot = fields.worldBoot;
 			out.spectatorFree = fields.spectatorFree;
 			out.spectatorMax = fields.spectatorMax;
+			std::optional<int64_t> held;
+			if (!ReadOptionalCount(obj, "seats_held", held, reason)) return false;
+			out.seatsHeld = held.value_or(0);
 			return ReadStr(obj, "session_id", out.sessionId, reason) &&
 			       ReadInt(obj, "age_s", 0, std::numeric_limits<int64_t>::max(), out.ageS, reason) &&
 			       ReadStr(obj, "observed_ip", out.observedIp, reason) &&
@@ -403,6 +414,7 @@ namespace RTE {
 		obj["peer_count"] = request.peerCount;
 		obj["seats_free"] = request.seatsFree;
 		if (request.spectatorFree.has_value()) obj["spectator_free"] = *request.spectatorFree;
+		if (request.seatsHeld.has_value()) obj["seats_held"] = *request.seatsHeld;
 		if (request.listenAddrs.has_value()) obj["listen_addrs"] = *request.listenAddrs;
 		if (request.state.has_value()) obj["state"] = *request.state;
 		if (request.listed.has_value()) obj["listed"] = *request.listed;
@@ -417,6 +429,7 @@ namespace RTE {
 		    !ReadVersionField(obj, "seats_free", out.seatsFree, reason) ||
 		    !ReadOptionalListenAddrs(obj, out.listenAddrs, reason) ||
 		    !ReadOptionalSpectatorFree(obj, out.spectatorFree, reason) ||
+		    !ReadOptionalCount(obj, "seats_held", out.seatsHeld, reason) ||
 		    !ReadOptionalStr(obj, "state", out.state, reason)) {
 			return false;
 		}

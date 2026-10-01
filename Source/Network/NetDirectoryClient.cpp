@@ -609,6 +609,7 @@ namespace RTE {
 		heartbeat.token = m_Token;
 		heartbeat.peerCount = m_Row.peerCount;
 		heartbeat.seatsFree = m_Row.seatsFree;
+		heartbeat.seatsHeld = m_Row.seatsHeld;
 		heartbeat.state = m_Running ? "running" : "lobby";
 		if (m_Capable) {
 			// A capable service gets the desired visibility on each heartbeat and must echo it.
@@ -742,6 +743,7 @@ namespace RTE {
 			row.worldBoot = session.worldBoot;
 			row.state = session.state;
 			row.seatsFree = session.seatsFree;
+			row.seatsHeld = session.seatsHeld;
 			row.peerCount = session.peerCount;
 			row.spectatorFree = session.spectatorFree;
 			row.spectatorMax = session.spectatorMax;
@@ -749,7 +751,8 @@ namespace RTE {
 			const NetDirectoryLocalIdentity& ident = (session.persistentWorld && worldLocal != nullptr) ? *worldLocal : local;
 			if (!NetDirectoryCodec::IsJoinable(session, ident, &why)) {
 				row.reason = MapMismatchReason(why);
-			} else if (session.seatsFree == 0 && !session.persistentWorld) {
+			} else if (session.seatsFree == 0 && !session.persistentWorld && !(session.state == "running" && session.seatsHeld > 0)) {
+				// A running match that holds a seat is reached anyway: its host answers, and a newcomer may apply.
 				row.reason = "full";
 			} else if ((row.address.empty() || row.port == 0) && session.joinMode != "ice" && session.joinMode != "either") {
 				// An ICE row is reached through its session id, so it has no address to be refused for.

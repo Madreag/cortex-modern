@@ -48,6 +48,7 @@ namespace RTE {
 		int64_t worldBoot = 0;
 		int64_t spectatorFree = 0; //!< Watchers a full world could still admit. A world's field only.
 		int64_t spectatorMax = 0;  //!< The watcher capacity those free slots are counted against.
+		int64_t seatsHeld = 0; //!< Seats a running match holds for players who are gone; a newcomer may apply for one.
 		std::string resumeSessionId; //!< The existing match row or a world's durable UUID.
 		std::string resumeToken;     //!< The row's current token, the proof a resume may take it over.
 
@@ -73,6 +74,7 @@ namespace RTE {
 		int64_t seatsFree = 0;
 		std::optional<std::vector<std::string>> listenAddrs;
 		std::optional<int64_t> spectatorFree; //!< Absent keeps the row's current count.
+		std::optional<int64_t> seatsHeld; //!< Absent keeps the row's current count; an older service ignores it.
 		std::optional<std::string> state; //!< "lobby" | "running"
 		std::optional<bool> listed; //!< Absent keeps current visibility; false hides, true relists.
 
@@ -130,6 +132,7 @@ namespace RTE {
 		int64_t worldBoot = 0;
 		int64_t spectatorFree = 0;
 		int64_t spectatorMax = 0;
+		int64_t seatsHeld = 0; //!< Absent from an older service's rows, which reads as none held.
 
 		bool operator==(const NetDirectorySessionRow&) const = default;
 	};

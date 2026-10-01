@@ -286,6 +286,13 @@ namespace RTE {
 		return lockstepPeerId != 0 && lockstepPeerId != localPeerId && !committed && !closed;
 	}
 
+	/// Whether a running match holds this seat for a player who is gone (dropped or left), so a newcomer may apply to
+	/// the host for it. The directory row's held count reads this; NetReconnectHost::IsSeatSubstitutable is the host's
+	/// own form of the same rule.
+	inline bool NetH4SeatIsHeld(uint8_t lockstepPeerId, uint8_t localPeerId, bool dropped, bool closed) {
+		return lockstepPeerId != 0 && lockstepPeerId != localPeerId && (dropped || closed);
+	}
+
 	struct NetReconnectHostStats {
 		uint32_t newJoins = 0;
 		uint32_t ticketOffersSent = 0;

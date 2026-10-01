@@ -1884,6 +1884,28 @@ class DirectoryTests(unittest.TestCase):
         rows = {row["session_id"]: row for row in listed["sessions"]}
         self.assertNotIn("spectator_free", rows[plain["session_id"]])
 
+    def test_running_row_lists_the_seats_it_holds(self) -> None:
+        self.start()
+        status, first = self.register(name="held")
+        self.assertEqual(status, 200, first)
+        status, listed = self.list_sessions()
+        self.assertNotIn("seats_held", listed["sessions"][0])
+        # A running match whose player dropped is full, but a newcomer may apply for the held seat.
+        status, ok = self.beat(first["session_id"], first["token"], seats_free=0, seats_held=1, state="running")
+        self.assertEqual(status, 200, ok)
+        status, listed = self.list_sessions()
+        row = listed["sessions"][0]
+        self.assertEqual((row.get("state"), row.get("seats_free"), row.get("seats_held")), ("running", 0, 1), row)
+        # A beat that names none leaves the count alone; a reclaim's beat clears it.
+        status, ok = self.beat(first["session_id"], first["token"], seats_free=0)
+        status, listed = self.list_sessions()
+        self.assertEqual(listed["sessions"][0].get("seats_held"), 1, listed)
+        status, ok = self.beat(first["session_id"], first["token"], seats_free=0, seats_held=0)
+        status, listed = self.list_sessions()
+        self.assertEqual(listed["sessions"][0].get("seats_held"), 0, listed)
+        status, err = self.beat(first["session_id"], first["token"], seats_held=-1)
+        self.assertEqual((status, err), (400, {"error": "invalid_field", "field": "seats_held"}), err)
+
     def test_world_row_refuses_a_negative_spectator_count(self) -> None:
         self.start()
         world_id = str(uuid.uuid4())
