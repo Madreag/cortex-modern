@@ -392,7 +392,7 @@ CAPPED_STOP_EVENT = "capped stop"
 CAPPED_STOP_SLACK_S = 0.2
 
 
-def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None):
+def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None, named=None):
     """The stills that fall while this screen's match runs: every saved frame over the span shows the game with the service Running.
     A still over a menu, a load or a stopped service is not the match freezing; the one still that holds the harness's capped stop
     is the run ending, recorded in `allowed` with its reason, and is not a freeze either."""
@@ -413,8 +413,37 @@ def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None
                 if allowed is not None:
                     allowed.append({**still, "reason": "the harness's capped stop at %.2f s" % capped_s})
                 continue
+            window = next((window for window in named or [] if window[0] <= origin + start * 1000 and origin + stop * 1000 <= window[1]), None)
+            if window:
+                if allowed is not None:
+                    allowed.append({**still, "reason": window[2]})
+                continue
             stills.append(still)
     return stills
+
+
+def named_still_windows(scenario, run_name, peer, video_dir):
+    """The scenario's still states for this peer as recorder-clock windows, each from its first mark to its closing mark."""
+    path = Path(video_dir) / "events.jsonl" if video_dir else None
+    if not path or not path.is_file():
+        return []
+    marks = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = event.get("message", "")
+        if message.startswith("video_mark ") and not message.endswith(" PASS"):
+            marks.setdefault(message.split(" ", 2)[1], event.get("wall_ms"))
+    windows = []
+    for spec in scenario.get("allowed_stills", []):
+        if spec.get("peer") != peer or spec.get("run", run_name) != run_name:
+            continue
+        begin, end = marks.get(spec["from_mark"]), marks.get(spec["to_mark"])
+        if begin is not None and end is not None and begin < end:
+            windows.append((begin, end, spec["reason"]))
+    return windows
 
 
 def capped_stop_ms(video_dir):
@@ -432,13 +461,13 @@ def capped_stop_ms(video_dir):
     return None
 
 
-def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None):
+def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None, named=None):
     """ffmpeg's freezedetect over one peer's encoded capture: a still picture over one second while the match runs."""
     if not ffmpeg or not video or not Path(video).is_file():
         return None
     result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), "-vf", "freezedetect=n=-60dB:d=1", "-map", "0:v:0", "-f", "null", "-"],
                             capture_output=True, text=True, errors="replace", timeout=600)
-    return running_stills(parse_freezedetect(result.stderr), rows, capped_stop_ms=capped_stop_ms(video_dir), allowed=allowed)
+    return running_stills(parse_freezedetect(result.stderr), rows, capped_stop_ms=capped_stop_ms(video_dir), allowed=allowed, named=named)
 
 
 def recording_health(video_dir, minimum_share=0.9):
@@ -1227,7 +1256,8 @@ def review(scenario, capture, out):
                                       (health["saved_fps"], health["fps"], health["longest_gap_ms"], health["recorder_gap_ms"]), "launch": None, "errors": []}}
                          if health["starved"] else {})})
         allowed_stills = []
-        stills = freeze_scan(find_ffmpeg(), peer.get("video"), read_index(peer["video_dir"]), peer["video_dir"], allowed_stills)
+        stills = freeze_scan(find_ffmpeg(), peer.get("video"), read_index(peer["video_dir"]), peer["video_dir"], allowed_stills,
+                             named_still_windows(scenario, capture["name"], peer["peer"], peer["video_dir"]))
         if stills is None:
             continue
         items.append({"id": "recording-stills-" + peer["peer"], "run": capture["name"], "peer": peer["peer"], "screen": "game",

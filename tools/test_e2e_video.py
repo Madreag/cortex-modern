@@ -54,6 +54,10 @@ def check_freeze_stills(results):
     capped = driver.running_stills(spans, running, capped_stop_ms=1000 + 9050, allowed=allowed)
     ok &= row(results, "stills/capped-stop-still-allowed", [still["start_s"] for still in capped] == [2.5] and
               [still["start_s"] for still in allowed] == [9.0] and "capped stop" in allowed[0]["reason"])
+    named = []
+    inside = driver.running_stills(spans, running, allowed=named, named=[(1000 + 2000, 1000 + 4500, "the F6 panel over an idle world")])
+    ok &= row(results, "stills/named-state-still-allowed", [still["start_s"] for still in inside] == [9.0] and named and named[0]["reason"] == "the F6 panel over an idle world")
+    ok &= row(results, "stills/still-past-its-named-state-fails", [still["start_s"] for still in driver.running_stills(spans, running, named=[(1000 + 3000, 1000 + 4500, "late")])] == [2.5, 9.0])
     ok &= row(results, "stills/capped-stop-elsewhere-fails", [still["start_s"] for still in driver.running_stills(spans, running, capped_stop_ms=1000 + 6000)] == [2.5, 9.0])
     return ok
 
