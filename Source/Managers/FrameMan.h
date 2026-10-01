@@ -69,6 +69,14 @@ namespace RTE {
 		static double FeelClockMS();
 		static void FeelInputSample(const Actor* actor, int player);
 		static void FeelPreviewStep(const Actor* actor, uint64_t committedTick, uint64_t predictedTick, double beginMS);
+		/// Records a committed tick where a locally driven actor's first preview step and the committed actor differ: the world acted on
+		/// it where no preview could, or the clone fell short of it.
+		/// @param tick The committed tick.
+		/// @param uid The actor.
+		/// @param fields Every differing field of the sim dump's lines, its attachables' as att.<field>, comma separated.
+		/// @param source What hit it this tick; "damage" when nothing did but its health, wounds or mass changed (a script, an activity
+		/// rule); "clone" when the clone fell short of the actor.
+		static void FeelInteraction(uint64_t tick, long uid, const std::string& fields, const std::string& source);
 		/// One record per seamless swap: the ghost went and the spawn it led took the frame.
 		static void FeelPreviewSwap(uint64_t adoptionTick, uint64_t swapTick, uint64_t leadTicks, float poseDelta);
 		static void FeelBeginIteration();

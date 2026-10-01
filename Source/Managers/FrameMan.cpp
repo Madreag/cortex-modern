@@ -401,6 +401,11 @@ void FrameMan::FeelPreviewStep(const Actor* actor, uint64_t committedTick, uint6
 	FeelEvents(beginMS, endMS);
 }
 
+void FrameMan::FeelInteraction(uint64_t tick, long uid, const std::string& fields, const std::string& source) {
+	if (!FeelRecordingEnabled()) return;
+	FeelWrite({{"type", "interaction"}, {"tick", tick}, {"uid", uid}, {"fields", fields}, {"source", source}});
+}
+
 void FrameMan::FeelBeginIteration() {
 	if (!FeelRecordingEnabled()) return;
 	s_Feel.iterationActive = g_ActivityMan.ActivityRunning();
