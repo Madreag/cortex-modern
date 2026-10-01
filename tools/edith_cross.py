@@ -34,7 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / 'edith'))
 from remote_box import SSH_NOISE, WINDOWS_TAR, RemoteBox  # noqa: E402  (shipped beside this file on EDITH)
 
 HERE = Path(__file__).resolve().parent
-LANE = 'opus-edith-cross-20260926'
+# The calling lane's own scratch root, the same absolute path on both boxes.
+LANE = os.environ.get('CC_EDITH_CROSS_LANE', 'opus-edith-cross-20260926')
 SCRATCH = Path('D:/mx') / LANE  # the same absolute path on both boxes
 PAYLOAD = SCRATCH / 'payload'
 SESSION1_SCRIPT = 'D:/mx/session1/run.ps1'
@@ -168,7 +169,7 @@ def remote_peer(spec_path):
         write_json(root / 'tick-budget.json', budget)
         print(f'{stamp()} tick budget {json.dumps(budget)}', flush=True)
     h.records.compress_case_records(root)
-    print(f'{stamp()} scratch bytes {h.feel.scratch_bytes(SCRATCH, SCRATCH_LIMIT * 10)}', flush=True)
+    print(f'{stamp()} scratch bytes {h.feel.scratch_bytes(Path(root).parents[-3], SCRATCH_LIMIT * 10)}', flush=True)
     return 0 if record.get('exit_code') == 0 else 1
 
 
@@ -252,9 +253,9 @@ def remote_mkdir(path):
     box().mkdir(path)
 
 
-def exe_hashes(repo):
+def exe_hashes(repo, remote_repo=None):
     local = hashlib.sha256((Path(repo) / 'Cortex Command.exe').read_bytes()).hexdigest()
-    return local, box().sha256(Path(repo) / 'Cortex Command.exe')
+    return local, box().sha256(Path(remote_repo or repo) / 'Cortex Command.exe')
 
 
 def ship_driver():
@@ -557,7 +558,7 @@ def run_match(h, options, index, login):
         root = options.out / name
     else:
         root.mkdir(parents=True, exist_ok=False)
-        h.feel.input_pattern(root / 'input.txt')
+        looped_input(h, root / 'input.txt', match_ticks(options))
     remote_mkdir(root)
     if not DRY_RUN:
         scp_to(root / 'input.txt', root / 'input.txt')
@@ -582,7 +583,8 @@ def run_match(h, options, index, login):
 
     def spec(peer, session_id=None):
         return match_spec(peer, root, port, role(peer, session_id), network_settings(options.path, sides[peer], pin, login),
-                          repo=options.repo, timeout=options.timeout, record=options.feel_records,
+                          repo=options.remote_repo or options.repo if sides[peer] == 'edith' else options.repo,
+                          ticks=match_ticks(options), timeout=match_timeout(options), record=options.feel_records,
                           lean=options.instrumentation == 'lean')
 
     load = {} if DRY_RUN else wait_quiet(options.quiet_wait)
@@ -610,7 +612,7 @@ def run_match(h, options, index, login):
                 local = launch_local(h, spec('client', session_id))
         if local is not None and not DRY_RUN and not note:
             local.finish()
-        remote_state = wait_done(root, options.timeout + 300) if not (note and local_peer == 'host') else 'not started'
+        remote_state = wait_done(root, match_timeout(options) + 300) if not (note and local_peer == 'host') else 'not started'
     finally:
         if local is not None and not DRY_RUN:
             local.close()
@@ -627,7 +629,7 @@ def run_match(h, options, index, login):
         return dict(name=name, dry_run=True)
     if remote_state != 'not started':
         fetch(root, [f'{remote_peer_name}*', 'session1*'], [f'{remote_peer_name}/runtime'])
-    return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path,
+    return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path, ticks=match_ticks(options),
                                        port=port, machines={peer: MACHINE[side] for peer, side in sides.items()},
                                        local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note,
                                        feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load))
@@ -684,7 +686,7 @@ ROUTE = re.compile(r'\[net-ice\][^\n]*(?:selected|candidate|fail|timeout|retryin
 def analyze_match(h, root, meta):
     records = {peer: read_json(root / f'{peer}-record.json') for peer in ('host', 'client')}
     complete = all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values())
-    manifest = dict(meta, mode='two-machine service e2e, EROL-PC <-> EDITH over the internet', ticks=MATCH_TICKS, lag_ms=0, cap_hz=60,
+    manifest = dict(meta, mode='two-machine service e2e, EROL-PC <-> EDITH over the internet', ticks=meta.get('ticks', MATCH_TICKS), lag_ms=0, cap_hz=60,
                     instrumentation=meta['feel_records'], loss_percent=0, silent_tick=None, live_stalls=None, autosave_seconds=None,
                     per_peer_lag_ms={'host': 0, 'client': 0}, launches_complete=complete,
                     exe={peer: row.get('exe_sha256') for peer, row in records.items()})
@@ -736,6 +738,15 @@ def analyze_match(h, root, meta):
 
 # --- the soak -------------------------------------------------------------------------------------------------------
 
+def match_ticks(options):
+    return int(round(options.match_minutes * 60 * 60)) if options.match_minutes else MATCH_TICKS
+
+
+def match_timeout(options):
+    # A longer match keeps the per-engine margin the 1200-tick arm has over its own length.
+    return max(options.timeout, match_ticks(options) // 60 + 400)
+
+
 def looped_input(h, path, ticks):
     """The feel driver's 1200-tick input pattern repeated to the soak's length."""
     h.feel.input_pattern(path)
@@ -785,12 +796,14 @@ def parse_args(argv=None):
                              'TCP stream, UDP from this box), for a TURN server with no public forward')
     parser.add_argument('--out', type=Path, help=f'a fresh directory under {SCRATCH} (the same path is used on EDITH)')
     parser.add_argument('--minutes', type=float, default=10, help='sp-soak length')
+    parser.add_argument('--match-minutes', type=float, help='mp-host-join length in minutes, the feel inputs looped (default: the 1200-tick arm)')
     parser.add_argument('--timeout', type=int, default=420, help='each match engine (seconds)')
     parser.add_argument('--instrumentation', choices=['lean', 'matrix'], default='lean',
                         help='lean: tick hashes, live hashes and the match report (the relay compare); matrix: plus the '
                              'per-tick sim dump and the controller dump (the feel matrix arms)')
     parser.add_argument('--feel-records', action='store_true', help='add -feel-measure to both match peers (the matrix -on arms)')
     parser.add_argument('--repo', type=Path, default=REPO, help='the engine tree on both boxes (its executable must match)')
+    parser.add_argument('--remote-repo', type=Path, help="EDITH's engine tree when it is not --repo's path (a firewall-ruled tree holding the same executable)")
     parser.add_argument('--quiet-wait', type=int, default=1200, help='seconds to wait for other builds on this box to end')
     parser.add_argument('--box-wait', type=int, default=2700, help='seconds to wait while the inventory feel matrix holds this box')
     parser.add_argument('--dry-run', action='store_true', help='print the launches, copies and ssh commands instead of running them')
@@ -828,7 +841,7 @@ def main(argv=None):
     if not DRY_RUN:
         if options.out.exists() and options.scenario == 'sp-soak':
             parser.error(f'{options.out} exists; every run takes a fresh --out')
-        local, remote = exe_hashes(options.repo)
+        local, remote = exe_hashes(options.repo, options.remote_repo)
         say(f'executable here {local[:16]} on EDITH {remote[:16]}')
         if local != remote:
             say('REFUSED: the executables differ; refresh EDITH per EDITH_SSH_RUNBOOK.md section 7')
