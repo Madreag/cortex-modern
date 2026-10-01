@@ -343,12 +343,14 @@ namespace RTE {
 		++m_IceReplies;
 		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 		NetRelayConfig offer;
+		m_IceRelayRefused = reply.statusCode == 502 && reply.body.find("\"relay_provider_refused\"") != std::string::npos;
 		if (reply.statusCode == 200 && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
 			m_IceServers = std::move(offer);
 			m_IceError.clear();
 		} else {
 			if (!m_IceServers.Usable(now)) m_IceServers = {};
-			m_IceError = reply.statusCode == 429 ? "Relay credential rate limit; retrying shortly" :
+			m_IceError = m_IceRelayRefused ? "The host's relay refused the credentials" :
+			             reply.statusCode == 429 ? "Relay credential rate limit; retrying shortly" :
 			             reply.statusCode == 403 ? "Relay credential request refused by the directory" :
 			             "Relay credentials unavailable or expired";
 		}
