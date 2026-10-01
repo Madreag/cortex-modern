@@ -56,6 +56,8 @@ namespace RTE {
 		if (!m_Index) return refuse("could not open the frame index in " + directory);
 		m_Events.open(std::filesystem::path(directory) / "events.jsonl", std::ios::out);
 		if (!m_Events) return refuse("could not open the event index in " + directory);
+		m_DroppedIndex.open(std::filesystem::path(directory) / "dropped.jsonl", std::ios::out);
+		if (!m_DroppedIndex) return refuse("could not open the dropped-frame index in " + directory);
 
 		m_Directory = directory;
 		m_FramesDirectory = frames.string();
@@ -99,6 +101,8 @@ namespace RTE {
 		}
 		if (m_Queue.size() >= m_QueueBound) {
 			++m_Dropped;
+			m_PendingDrops.emplace_back(wallMS, m_Admitted - 1);
+			m_Wake.notify_one();
 			return nullptr;
 		}
 		if (!m_Pool.empty()) {
@@ -130,11 +134,17 @@ namespace RTE {
 			QueuedFrame frame;
 			{
 				std::unique_lock<std::mutex> lock(m_Mutex);
-				m_Wake.wait(lock, [this] { return !m_Queue.empty() || m_Stopping; });
-				if (m_Queue.empty()) return;
+				m_Wake.wait(lock, [this] { return !m_Queue.empty() || !m_PendingDrops.empty() || m_Stopping; });
+				if (m_Queue.empty() && m_PendingDrops.empty()) return;
+				if (m_Queue.empty()) {
+					lock.unlock();
+					WritePendingDrops();
+					continue;
+				}
 				frame = std::move(m_Queue.front());
 				m_Queue.pop_front();
 			}
+			WritePendingDrops();
 			WriteFrame(frame);
 			frame.pixels.clear();
 			{
@@ -172,6 +182,19 @@ namespace RTE {
 		m_LastSimTick = frame.meta.simTick;
 	}
 
+	// A gap between two saved frames is the recorder's own when its slots were turned away here, so the review can tell
+	// a starved recording from a screen that presented nothing new.
+	void FrameRecorder::WritePendingDrops() {
+		std::vector<std::pair<long long, std::size_t>> drops;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			drops.swap(m_PendingDrops);
+		}
+		if (drops.empty()) return;
+		for (const auto& [wallMS, slot]: drops) m_DroppedIndex << nlohmann::json({{"wall_ms", wallMS}, {"slot", slot}}).dump() << '\n';
+		m_DroppedIndex << std::flush;
+	}
+
 	void FrameRecorder::WriteManifest() {
 		nlohmann::json manifest = {{"schema", 1}, {"fps", m_Fps}, {"queue_bound", m_QueueBound},
 		    {"frames_saved", m_Saved}, {"frames_dropped", m_Dropped}, {"frames_rate_limited", m_RateLimited},
@@ -204,9 +227,11 @@ namespace RTE {
 			auto action = std::move(m_FinishAction);
 			action();
 		}
+		WritePendingDrops();
 		m_Index.flush();
 		WriteManifest();
 		m_Index.close();
+		m_DroppedIndex.close();
 		m_Events.close();
 		m_Enabled = false;
 	}
