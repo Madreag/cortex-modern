@@ -6020,6 +6020,23 @@ namespace RTE {
 		}
 	}
 
+	void NetLockstepCoordinator::AdoptOpenReturns(NetLockstepConfig& config, const std::map<uint8_t, NetGameSeatReclaim>& reclaims, uint64_t firstFrame) {
+		for (const auto& [peer, reclaim]: reclaims) {
+			if (peer == 0 || peer > config.peerCount || peer == config.localPeerId || reclaim.activationFrame > firstFrame ||
+			    std::max<uint64_t>(reclaim.neutralThroughFrame, reclaim.activationFrame + reclaim.delayFrames) < firstFrame) continue;
+			if (const auto hold = config.initialSeatHolds.find(peer); hold != config.initialSeatHolds.end() && hold->second.cutoffFrame > reclaim.activationFrame) continue;
+			if (const auto leave = config.initialPeerLeaves.find(peer); leave != config.initialPeerLeaves.end() && leave->second > reclaim.activationFrame) continue;
+			if (const auto known = config.initialSeatReclaims.find(peer); known != config.initialSeatReclaims.end() && known->second.eventSequence >= reclaim.eventSequence) continue;
+			config.initialSeatHolds.erase(peer);
+			config.initialPeerLeaves.erase(peer);
+			if (const auto known = config.peerIncarnations.find(peer); known == config.peerIncarnations.end() || known->second < reclaim.seatIncarnation)
+				config.peerIncarnations[peer] = reclaim.seatIncarnation;
+			config.initialSeatReclaims[peer] = reclaim;
+			// The gap's frames are produced at the delay the return named.
+			if (reclaim.delayFrames != 0) config.initialDelayChanges[peer][reclaim.activationFrame] = reclaim.delayFrames;
+		}
+	}
+
 	bool NetLockstepCoordinator::IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const {
 		NET_PLANE_CHECK();
 		if (const auto retired = m_RetiredReclaimGaps.find(peerId); retired != m_RetiredReclaimGaps.end()) {

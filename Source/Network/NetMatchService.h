@@ -973,6 +973,8 @@ namespace RTE {
 		/// Bounds a returning seat's wait on the private capture's writer: one fresh capture, then the seat stays with the AI.
 		void BoundPrivateImageWait(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
+		/// The live round an in-place catch-up starts at its activation; false until the host's return for this seat is in hand.
+		bool InPlaceLiveRoundLocked(NetLockstepConfig& live);
 		/// Held client: a round stopped by this peer's own seat hold, with its sim short of the hold frame, keeps its world and its
 		/// connection and replays the committed tail from its own tick. Returns whether it began; otherwise the stop reloads an image.
 		bool BeginInPlaceCatchUp();
@@ -1239,6 +1241,7 @@ namespace RTE {
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
 		friend bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);
+		friend bool TestAnInPlaceReturnKeepsAnOpenReturnGap(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();

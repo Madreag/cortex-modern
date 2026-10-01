@@ -1090,11 +1090,15 @@ namespace RTE {
 		bool UsesBoundedWait() const { NET_PLANE_CHECK(); return m_Config.substituteSlowPeers; }
 		/// A copy of the agreed holds: a reader outside the plane's lock never keeps a reference into what a plane tick changes.
 		std::map<uint8_t, NetGameSeatHold> HeldTransactions() const { NET_PLANE_CHECK(); return m_HoldTransactions; }
+		std::map<uint8_t, NetGameSeatReclaim> ReclaimTransactions() const { NET_PLANE_CHECK(); return m_ReclaimTransactions; }
 		/// Moves each seat the round took back before a joining seat's first frame out of the held state its replayed tail ended on.
 		/// @param config The joining round's configuration; its holds, departures, incarnations and reclaims are updated.
 		/// @param reclaims The host's ReclaimAtFrame decisions the joining seat has received.
 		/// @param firstFrame The joining round's first frame.
 		static void AdoptReturnsBefore(NetLockstepConfig& config, const std::vector<NetLockstepTiming>& reclaims, uint64_t firstFrame);
+		/// Carries every other seat's agreed return whose neutral gap still runs at firstFrame into a round starting there, however far the
+		/// seat state was replayed; a later hold or leave of that seat in the config ended the return and wins.
+		static void AdoptOpenReturns(NetLockstepConfig& config, const std::map<uint8_t, NetGameSeatReclaim>& reclaims, uint64_t firstFrame);
 		bool HasAgreedSeatReclaim(uint8_t peer) const { NET_PLANE_CHECK(); return m_ReclaimTransactions.contains(peer); }
 		/// What a seat has waited SINCE it was last reclaimed: what the player is shown, while the
 		/// match record in GetStats()/BuildReportJson keeps the round's totals.
