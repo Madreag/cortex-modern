@@ -578,7 +578,7 @@ def run_match(h, options, index, login):
         else:
             cert, key, pin = make_cert(root)
             service = directory.start_service(root, DIRECTORY_PORT, cert, key,
-                                              ('--turn-config', str(CLOUDFLARE_TURN_CONFIG)) if options.path == 'directory-relay' else ())
+                                              ('--turn-config', str(options.turn_config)) if options.path == 'directory-relay' else ())
 
     def role(peer, session_id=None):
         ice = ['-net-ice', 'off' if options.path == 'ip' else 'on']
@@ -751,7 +751,7 @@ def match_ticks(options):
 
 def match_timeout(options):
     # A longer match keeps the per-engine margin the 1200-tick arm has over its own length.
-    return max(options.timeout, match_ticks(options) // 60 + 400)
+    return max(options.timeout, match_ticks(options) // 60 + 400) if options.match_minutes else options.timeout
 
 
 def looped_input(h, path, ticks):
@@ -797,6 +797,8 @@ def parse_args(argv=None):
     parser.add_argument('--scenario', choices=sorted(SCENARIOS), help='; '.join(f'{key}: {value}' for key, value in SCENARIOS.items()))
     parser.add_argument('--direction', choices=['host-here', 'host-edith'], default='host-here')
     parser.add_argument('--path', choices=['direct', 'relay', 'directory-relay', 'ip'], default='direct')
+    parser.add_argument('--turn-config', type=Path, default=CLOUDFLARE_TURN_CONFIG,
+                        help="the directory-relay path's backend file (its path only is passed; default the Cloudflare key file)")
     parser.add_argument('--runs', type=int, default=1)
     parser.add_argument('--relay-bridge', action='store_true',
                         help='relay only: EDITH reaches the TURN server through a UDP-over-ssh bridge (its loopback UDP, an ssh -R '
