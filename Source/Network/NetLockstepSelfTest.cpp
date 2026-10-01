@@ -1642,15 +1642,15 @@ namespace RTE {
 				         std::to_string(coordinator.IsSynchronizedCapturePark(101 + firstTicks)) + " capture_ms=97";
 				return false;
 			}
-			// The next park is sized by what the last one cost: ceil(97 / 16.7) = 6 frames, not a round trip more.
+			// The next park is sized by what the last one cost plus a tick: ceil((97 + 16.7) / 16.7) = 7 frames, not a round trip more.
 			coordinator.BeginSynchronizedCapture(200);
-			if (!coordinator.IsSynchronizedCapturePark(201) || !coordinator.IsSynchronizedCapturePark(206) || coordinator.IsSynchronizedCapturePark(207)) {
-				*error = "the capture park was not bounded by the measured capture duration: park206=" +
-				         std::to_string(coordinator.IsSynchronizedCapturePark(206)) + " park207=" +
-				         std::to_string(coordinator.IsSynchronizedCapturePark(207)) + " capture_ms=97";
+			if (!coordinator.IsSynchronizedCapturePark(201) || !coordinator.IsSynchronizedCapturePark(207) || coordinator.IsSynchronizedCapturePark(208)) {
+				*error = "the capture park was not bounded by the measured capture duration and its tick: park207=" +
+				         std::to_string(coordinator.IsSynchronizedCapturePark(207)) + " park208=" +
+				         std::to_string(coordinator.IsSynchronizedCapturePark(208)) + " capture_ms=97";
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS synchronized_capture_park first_ticks=" << firstTicks << " measured_ticks=6" << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS synchronized_capture_park first_ticks=" << firstTicks << " measured_ticks=7" << std::endl;
 			return true;
 		}
 
@@ -20121,6 +20121,45 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 	/// A capture that completes while this peer still waits for the previous park's final belongs to the NEXT
 	/// park: a report spent on the old window leaves the new park without this seat's report.
+	bool TestAParkCoversTheBoxsSlowCaptures(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A7F, 6, NetTransportLane::InputUnreliable);
+		config.startFrame = 1; config.roundId = 0x9A7F; config.remoteTransportPeerId = 1;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A7F);
+		if (!wire.StartHost(49744, error) || !host.Start(wire, config, error)) return false;
+		// A box whose captures mostly cost 33 ms and sometimes 58 sizes its park for the 58: the median would hold the seat
+		// whose capture ran long.
+		host.m_ParkCaptureHistoryMs = {33, 33, 58, 33, 33, 33, 58, 33, 33, 33};
+		if (const double sized = host.ParkCaptureCostMs(); std::abs(sized - (58.0 + config.simTickMs)) > 0.001 || host.SteadyCaptureCostMs() != 33.0) {
+			*error = "the park was not sized from the box's slow captures: sized_ms=" + std::to_string(sized) + " steady_ms=" +
+			         std::to_string(host.SteadyCaptureCostMs());
+			return false;
+		}
+		// This engine's own capture still running is its own work: its seat is not judged late inside twice the park's size,
+		// and is judged after it.
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 607;
+		host.m_LastCompletedSimulationTick = 600;
+		host.m_SimTickedMs.store(1000);
+		host.m_LastQueuedTargetFrame = 606;
+		host.m_PeersPlayedThisRound = {1, 2};
+		host.m_RemoteFrames[607][2] = {};
+		host.m_LocalCaptureRunning = true;
+		host.m_LocalCaptureStartedMs = 1000;
+		const uint64_t covered = 1000 + static_cast<uint64_t>(2.0 * host.ParkCaptureCostMs());
+		if (host.JudgeOwnSeat(607, 1000) || host.JudgeOwnSeat(607, covered - 1) || host.JudgeOwnSeat(607, covered + 1) || !host.JudgeOwnSeat(607, covered + 60)) {
+			*error = "the own running capture did not excuse exactly twice the park's size: covered_until_ms=" + std::to_string(covered);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_park_covers_the_boxs_slow_captures sized_ms=" << host.ParkCaptureCostMs()
+		          << " own_capture_covered_ms=" << covered - 1000 << std::endl;
+		return true;
+	}
+
 	bool TestACaptureReportsToItsOwnPark(std::string* error) {
 		LoopbackTransport hostWire, clientWire;
 		NetLockstepCoordinator host, client;
@@ -22960,6 +22999,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestDelayPaddingPassesAParkedFrame(&error) ||
 		    !TestAnEndedRoundHandsAReturnToTheSession(&error) ||
 		    !TestACaptureReportsToItsOwnPark(&error) ||
+		    !TestAParkCoversTheBoxsSlowCaptures(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestTheDrainWaitsOnARejoinsOwnProgress(&error) ||
