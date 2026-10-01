@@ -1,0 +1,9 @@
+# The leaver's way back: its leave at tick 600 keeps its seat, and back at the menu the landing offers Rejoin Match.
+# It waits a few seconds so the others show the held seat, then presses it and plays on in its own seat.
+wait_label ButtonMultiplayerReconnect Rejoin Match
+video_mark leaver-rejoin-offer
+assert_substate Landing
+wait_ms 4000
+activate ButtonMultiplayerReconnect
+wait_file {PROBE_DIR}/done.json 240
+exit
