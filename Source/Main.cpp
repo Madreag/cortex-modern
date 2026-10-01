@@ -6629,6 +6629,16 @@ void RunGameLoop() {
 			if (g_TimerMan.SimFrameBudgetSpent()) {
 				break;
 			}
+			// A joiner launched from the menu restores its base before asking for the tick after it, as a launch at the loop's start does:
+			// the counter still reads the round this process left, whose next tick the catch-up never grants.
+			if (ScenarioRunner::WorldCatchUpActive() && !g_ActivityMan.IsInActivity() && g_ActivityMan.ActivitySetToRestart()) {
+				g_TimerMan.PauseSim(false);
+				g_LoadingScreen.DrawLoadingSplash();
+				g_WindowMan.UploadFrame();
+				if (!g_ActivityMan.RestartActivity() && !HandleFailedActivityLaunch()) return;
+				g_NetMatchService.PreparePrivateRejoinCheckpoint();
+				break;
+			}
 			const uint64_t nextSimTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
 			if (ScenarioRunner::WorldCatchUpActive()) {
 				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick)) {
