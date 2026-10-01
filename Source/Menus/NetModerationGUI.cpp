@@ -240,7 +240,11 @@ namespace {
 	bool ToastStillApplies(const ScenarioRunner::NetUiToastRecord& toast) {
 		if (toast.kind == "slow_machine") return ScenarioRunner::IsLockstepLocalMachineSlow();
 		if (toast.kind != "seat_held") return true;
-		if (toast.text.find("rejoining") != std::string::npos) return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing();
+		if (toast.text.find("rejoining") != std::string::npos) {
+			const uint8_t local = ScenarioRunner::GetLockstepLocalPeerId();
+			return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing() ||
+			    (local != 0 && ScenarioRunner::IsLockstepSeatUnderAI(local, ScenarioRunner::GetLockstepCompletedFrame()) && !ScenarioRunner::IsLockstepSeatReleased(local));
+		}
 		const uint8_t peer = toast.senderPeerId ? toast.senderPeerId : ScenarioRunner::GetLockstepLocalPeerId();
 		return ScenarioRunner::IsLockstepSeatUnderAI(peer, ScenarioRunner::GetLockstepCompletedFrame());
 	}
@@ -806,7 +810,13 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	}
 	char metrics[128];
 	std::snprintf(metrics, sizeof(metrics), "delay %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), m_MatchDelayFrames * g_TimerMan.GetDeltaTimeMS());
-	const auto ping = g_NetMatchService.GetMatchPingMs();
+	// The summary reads the links the per-player lines list - the widest a host has, a client's own to its host - so the
+	// two never disagree; a link not measured yet reads as unknown in both.
+	std::optional<uint32_t> ping;
+	for (const auto& member: snapshot.members) {
+		if (member.cpu || member.isLocal || member.pingMs == 0 || (!snapshot.isHost && member.peerId != snapshot.hostPeerId)) continue;
+		ping = std::max(ping.value_or(0), member.pingMs);
+	}
 	const bool hostLost = snapshot.statusText.starts_with("Host lost") || snapshot.serviceState == "HostLost" || snapshot.serviceState == "Migrating";
 	// Sim updates against wall time over the last second, so a stalled or paused match reads its true pace
 	static long long s_paceMarkUs = 0;
@@ -977,7 +987,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (g_SettingsMan.GetNetworkShowDiagnostics()) {
 			for (const auto& member: snapshot.members) {
 				if (member.cpu) continue;
-				composed += "\nP" + std::to_string(member.peerId) + ": Ping " + (hostLost && member.peerId == snapshot.hostPeerId ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
+				composed += "\nP" + std::to_string(member.peerId) + ": Ping " + ((hostLost && member.peerId == snapshot.hostPeerId) || member.pingMs == 0 ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
 				composed += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
 				if (member.reclaiming || member.aiHeld || !member.connected) composed += " / " + NetPlayerPresentation::State(member);
 			}
@@ -1364,8 +1374,13 @@ void NetModerationGUI::DrawMatchToasts() {
 	const auto queued = ScenarioRunner::GetVisibleNetUiToasts();
 	std::vector<ScenarioRunner::NetUiToastRecord> visible;
 	std::vector<size_t> indices;
+	std::vector<std::string> lines;
 	for (size_t index = 0; index < queued.size(); ++index) {
 		if (!ToastStillApplies(queued[index])) continue;
+		// A seat's toast reads its current state, so two events about one seat can read alike: the band shows that line once.
+		std::string line = ToastText(queued[index]);
+		if (std::find(lines.begin(), lines.end(), line) != lines.end()) continue;
+		lines.push_back(std::move(line));
 		visible.push_back(queued[index]);
 		indices.push_back(index);
 	}
