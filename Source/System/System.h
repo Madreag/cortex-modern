@@ -36,6 +36,9 @@ namespace RTE {
 		/// @return Absolute path to this executable.
 		static const std::string& GetThisExePathAndName() { return s_ThisExePathAndName; }
 
+		/// The multiplayer build's version: the first line of VERSION.txt beside the executable, empty when there is none.
+		static const std::string& GetBuildVersion();
+
 		/// The SHA-256 of this executable's own bytes. Every diagnostic that names the build shares this
 		/// one read: the file is hashed once, on the first call, and the digest is kept for the process.
 		/// @return Lowercase hex digest, or "unavailable" when the executable could not be read.
