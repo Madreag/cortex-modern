@@ -9957,15 +9957,6 @@ static std::string ResyncSaveName() {
 		NetMatchServiceRequest request;
 		request.host = false;
 		request.address = record.hostAddress;
-		// An IPv4 address or a name with one ':' carries its port.
-		if (const size_t colon = record.hostAddress.rfind(':'); colon != std::string::npos && colon == record.hostAddress.find(':') && colon + 1 < record.hostAddress.size() &&
-		    record.hostAddress.size() - colon - 1 <= 5 && record.hostAddress.find_first_not_of("0123456789", colon + 1) == std::string::npos) {
-			const unsigned long port = std::stoul(record.hostAddress.substr(colon + 1));
-			if (port != 0 && port <= 65535) {
-				request.address = record.hostAddress.substr(0, colon);
-				request.port = static_cast<uint16_t>(port);
-			}
-		}
 		request.sessionId = record.directorySessionId;
 		request.playerName = playerName.empty() ? "Client" : playerName;
 		request.resyncOnDesync = true;

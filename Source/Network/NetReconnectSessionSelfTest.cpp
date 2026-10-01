@@ -5409,11 +5409,11 @@ namespace RTE {
 			if (rejoin.sessionId != "sess-re-resolve-1" || rejoin.address != "10.0.0.8:41010" || rejoin.host) {
 				return Fail("BeginTicketRejoin.sessionId did not take the stored directory session id");
 			}
-			// Rejoin Match dials the port the record keeps beside the address, not the default one.
+			// Rejoin Match dials the address with the port the record keeps; the transport takes the port from it.
 			record.hostAddress = "127.0.0.1:49460";
 			const NetMatchServiceRequest menuRejoin = NetMatchService::BuildTicketRejoinRequest(record, "Client", false);
-			if (menuRejoin.address != "127.0.0.1" || menuRejoin.port != 49460) {
-				return Fail("a ticket rejoin dialled " + menuRejoin.address + " port " + std::to_string(menuRejoin.port) + " for a host at 127.0.0.1:49460");
+			if (menuRejoin.address != "127.0.0.1:49460") {
+				return Fail("a ticket rejoin dialled " + menuRejoin.address + " for a host at 127.0.0.1:49460");
 			}
 			record.hostAddress = "10.0.0.8:41010";
 			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "9.9.9.9:1", false) != "9.9.9.9:1") {
