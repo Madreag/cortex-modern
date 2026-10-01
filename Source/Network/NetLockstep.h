@@ -1614,6 +1614,8 @@ namespace RTE {
 		/// The delay a member's start must carry: its own, or in a round joined while running, the one in force at the start.
 		uint16_t MemberStartDelay(const NetLockstepStart& start) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
+		/// The first frame a seat's capacity is judged at: past its warm-up grace, with the judgement's window wholly after it.
+		uint64_t CapacityJudgedFrom(uint8_t peerId, uint64_t windowTicks) const { return EffectiveStartOf(peerId) + c_CapacityGraceTicks + windowTicks; }
 		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
 		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
 
@@ -1726,6 +1728,7 @@ namespace RTE {
 		std::optional<uint64_t> m_ProductionBaseFrame;
 		static constexpr size_t c_OwnPaceTicks = 15; //!< The ticks whose cost this machine judges its own pace on.
 		static constexpr size_t c_FirstCapacityTicks = 3; //!< The fewest ticks whose median this machine publishes, until it has its full window.
+		static constexpr uint64_t c_CapacityGraceTicks = 180; //!< A seat's first ticks are its warm-up: no capacity hold reads them.
 		static constexpr uint32_t c_SlowReadings = 5; //!< The slow capacity readings in a row that make this machine go quiet.
 		uint64_t m_JudgeAfterFrame = 0; //!< A machine back from its own hold judges itself again from this frame.
 		std::map<uint8_t, double> m_PublishedCapacity; //!< What each machine this one talks to published it can run, in ticks a second.
