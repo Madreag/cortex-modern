@@ -54,6 +54,14 @@ CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json
 TURN_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
 BOX_LOG = Path('D:/mx/inventory-confirming-2-20260926/steps.log')
 SECRET_KEYS = ('NetworkTurnPass', 'NetworkPlayerTurnPass')
+# The Linux box (BOXES.md): the lane's directory there, its clone of the tree at the tip and that tree's gcc build.
+LINUX_SSH = '3090'
+LINUX_LANE = f'/home/erol/cortex-workers/{LANE}'
+LINUX_REPO = f'{LINUX_LANE}/repo'
+LINUX_BINARY = f'{LINUX_REPO}/build-gcc/CortexCommand'
+# The soak (tools/soak_two_peer.py's defaults): an autosave a minute on the host, three 1.5 s stalls of the client, the memory
+# census every minute and the full-state hash every second.
+SOAK_AUTOSAVE_S, SOAK_HOLDS, SOAK_STALL_MS, SOAK_CENSUS_TICKS, SOAK_FULLSTATE_EVERY = 60, 3, 1500, 3600, 60
 MATCH_TICKS = 1200
 TICK_MS = 1000 / 60
 SCRATCH_LIMIT = 4_000_000_000
@@ -171,7 +179,8 @@ def remote_peer(spec_path):
         write_json(root / 'tick-budget.json', budget)
         print(f'{stamp()} tick budget {json.dumps(budget)}', flush=True)
     h.records.compress_case_records(root)
-    print(f'{stamp()} scratch bytes {h.feel.scratch_bytes(Path(root).parents[-3], SCRATCH_LIMIT * 10)}', flush=True)
+    lane_root = next((parent for parent in Path(root).parents if parent.name == LANE), Path(root).parents[-3])
+    print(f'{stamp()} scratch bytes {h.feel.scratch_bytes(lane_root, SCRATCH_LIMIT * 10)}', flush=True)
     return 0 if record.get('exit_code') == 0 else 1
 
 
@@ -292,6 +301,129 @@ def start_session1(root, spec, label):
     write_json(local_spec, redacted)
     box().start_task(local_script)
     say(f'{label}: {spec["peer"]} started on EDITH through {TASK}')
+
+
+def soak_stalls(ticks):
+    return [ticks * (index + 1) // (SOAK_HOLDS + 1) for index in range(SOAK_HOLDS)]
+
+
+def soak_flags(peer, ticks):
+    """What the soak adds to a match peer: soak_two_peer's census, full-state hashing, the host's autosaves, the client's stalls."""
+    flags = ['-memory-census-ticks', str(SOAK_CENSUS_TICKS), '-net-fullstate-hash-every', str(SOAK_FULLSTATE_EVERY)]
+    if peer == 'host':
+        return flags + ['-net-autosave-seconds', str(SOAK_AUTOSAVE_S)]
+    return flags + [part for tick in soak_stalls(ticks) for part in ('-net-test-live-stall', f'{tick}:{SOAK_STALL_MS}')]
+
+
+class LinuxPeer:
+    """A match peer on the Linux box: its spec with this box's run root mapped to the lane's there, this file's remote-peer path
+    run over ssh (the POSIX runner, the tree's gcc build), its files fetched back here when it ends."""
+
+    def __init__(self, spec, local_root, log_path):
+        self.local_root = Path(local_root)
+        self.remote_root = f'{LINUX_LANE}/runs/{self.local_root.parent.name}/{self.local_root.name}'
+        local = str(self.local_root)
+
+        def posix(value):
+            return value.replace(local, self.remote_root).replace('\\', '/') if isinstance(value, str) and local in value else value
+        self.spec = dict(spec, root=self.remote_root, repo=LINUX_REPO, flags=[posix(flag) for flag in spec['flags']],
+                         expected=[posix(path) for path in spec['expected']], env=dict(spec['env'], CCCP_TEST_BINARY=LINUX_BINARY))
+        self.peer, self.record, self.log_path, self.process = spec['peer'], {}, Path(log_path), None
+        if DRY_RUN:
+            say(f'dry-run: Linux {self.peer} under {self.remote_root}: ' + ' '.join(self.spec['flags']))
+            return
+        spec_path = self.local_root / f'{self.peer}-spec.linux.json'
+        write_json(spec_path, self.spec)
+        remote_spec = f'{self.remote_root}/{self.peer}-spec.json'
+        payload = f'{LINUX_LANE}/payload'
+        run([*SSH_LINUX, f'mkdir -p {self.remote_root} {payload}/edith'])
+        for source, target in ((spec_path, remote_spec), (self.local_root / 'input.txt', f'{self.remote_root}/input.txt'),
+                               (self.local_root / 'input-schedule.json', f'{self.remote_root}/input-schedule.json'),
+                               (Path(__file__), f'{payload}/edith_cross.py'), (HERE / 'edith/remote_box.py', f'{payload}/edith/remote_box.py')):
+            run(['scp', '-q', '-o', 'BatchMode=yes', str(source), f'{LINUX_SSH}:{target}'])
+        command = (f'cd {LINUX_REPO} && export CCCP_HEADLESS=1 PYTHONDONTWRITEBYTECODE=1 CCCP_TEST_BINARY={LINUX_BINARY} '
+                   f'CC_EDITH_CROSS_LANE={LANE} DISPLAY=${{DISPLAY:-:0}} && python3 {payload}/edith_cross.py --remote-peer {remote_spec}')
+        self.process = subprocess.Popen([*SSH_LINUX, command], stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'),
+                                        stderr=subprocess.STDOUT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        say(f'{self.peer} started on the Linux box (ssh pid {self.process.pid})')
+
+    def poll(self):
+        return self.process.poll() if self.process else 0
+
+    def finish(self):
+        return self.process.wait() if self.process else 0
+
+    def close(self):
+        if not self.process:
+            return
+        if self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=30)
+        # The tar stream only; its runtime is a link into the tree, so it never travels.
+        with subprocess.Popen([*SSH_LINUX, f'tar -C {self.remote_root} --exclude=./{self.peer}/runtime -cf - .'],
+                              stdout=subprocess.PIPE, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as source:
+            subprocess.run([WINDOWS_TAR, '-xf', '-', '-C', str(self.local_root)], stdin=source.stdout, check=False,
+                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        record = self.local_root / f'{self.peer}-record.json'
+        self.record = json.loads(record.read_text(encoding='utf-8')) if record.is_file() else {}
+
+
+SSH_LINUX = ['ssh', '-o', 'BatchMode=yes', LINUX_SSH]
+
+
+def run(argv):
+    result = subprocess.run(argv, capture_output=True, text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if result.returncode != 0:
+        raise RuntimeError(f'{argv[0]} failed ({result.returncode}): {SSH_NOISE.sub("", result.stderr)[-300:]}')
+    return result.stdout
+
+
+class LinuxTunnel:
+    """ssh -R: the Linux box's 127.0.0.1:<the directory port> reaches the directory on this box's loopback (signalling only)."""
+
+    def __init__(self, log_path):
+        self.log_path, self.process = Path(log_path), None
+
+    def open(self):
+        argv = ['ssh', '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'BatchMode=yes', '-R',
+                f'127.0.0.1:{DIRECTORY_PORT}:127.0.0.1:{DIRECTORY_PORT}', LINUX_SSH]
+        self.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'), stderr=subprocess.STDOUT,
+                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        time.sleep(4)
+        probe = run([*SSH_LINUX, f"python3 -c \"import socket; s=socket.socket(); s.settimeout(3); print('open' if s.connect_ex(('127.0.0.1', {DIRECTORY_PORT})) == 0 else 'closed')\""]).strip()
+        if self.process.poll() is not None or probe != 'open':
+            raise RuntimeError(f'the ssh -R tunnel did not open on the Linux box (probe {probe}); see {self.log_path}')
+
+    def close(self):
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=10)
+
+
+def soak_verdict(root, ticks):
+    """soak_two_peer's own judgement of the fetched pair: history and pace per engine (through pace_verdict), holds after returns
+    (excused only for a slow machine whose sim does not fit), autosaves owed and published, and every own-seat hold of the client
+    that follows an autosave by at most 300 ticks (H7c)."""
+    sys.path.insert(0, str(HERE))
+    import soak_two_peer as soak
+    history = soak.acceptance_history(Path(root), ticks)
+    holds = {peer: soak.return_hold_violations((Path(root) / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
+             for peer in ('host', 'client')}
+    kept = {peer: soak.excused_return_holds(Path(root), rows)[1] for peer, rows in holds.items()}
+    host_log = (Path(root) / 'host/stdout.log').read_text(encoding='utf-8', errors='replace')
+    client_log = (Path(root) / 'client/stdout.log').read_text(encoding='utf-8', errors='replace')
+    autosaves = sum(line.startswith('[autosave] tick=') and 'capture_ms=' in line for line in host_log.splitlines())
+    owed = int(ticks // (60 * SOAK_AUTOSAVE_S)) - 1
+    saves = [int(match) for match in re.findall(r'^\[autosave\] tick=(\d+)', host_log, re.M)]
+    own_holds = [int(match) for match in re.findall(r'hold of this seat at (\d+)', client_log)]
+    after_saves = [tick for tick in own_holds if any(0 <= tick - save <= 300 for save in saves)]
+    pace = {peer: dict(windows=len(rows), failed=[(row['first'], round(row['wall_tps'] or 0, 2), row.get('sim_ms_per_tick')) for row in rows if not row['passed']])
+            for peer, rows in history['pace_windows'].items()}
+    checks = dict(complete_history_and_pace=history['pass'], no_hold_after_return=not any(kept.values()), autosaves=autosaves >= max(0, owed),
+                  no_hold_after_autosave=not after_saves)
+    return dict(passed=all(checks.values()), checks=checks, errors_not_pace=[e for e in history['errors'] if 'pace window' not in e], pace=pace,
+                holds_after_returns=kept, autosaves=f'{autosaves}/{owed}', client_own_holds=own_holds, client_holds_after_autosaves=after_saves,
+                stalls=soak_stalls(ticks))
 
 
 def wait_done(root, budget_s):
@@ -590,10 +722,13 @@ def run_match(h, options, index, login):
         return ['-net-join-session', session_id or '<session id>', *ice]
 
     def spec(peer, session_id=None):
-        return match_spec(peer, root, port, role(peer, session_id), network_settings(options.path, sides[peer], pin, login, peer),
+        made = match_spec(peer, root, port, role(peer, session_id), network_settings(options.path, sides[peer], pin, login, peer),
                           repo=options.remote_repo or options.repo if sides[peer] == 'edith' else options.repo,
                           ticks=match_ticks(options), timeout=match_timeout(options), record=options.feel_records,
                           lean=options.instrumentation == 'lean')
+        if options.soak:
+            made['flags'] += soak_flags(peer, match_ticks(options))
+        return made
 
     load = {} if DRY_RUN else wait_quiet(options.quiet_wait)
     started, local, local_record, session_id, note = stamp(), None, {}, None, None
@@ -617,7 +752,7 @@ def run_match(h, options, index, login):
             else:
                 time.sleep(0 if DRY_RUN else 20)
             if not note:
-                local = launch_local(h, spec('client', session_id))
+                local = LinuxPeer(spec('client', session_id), root, root / 'client-linux.log') if options.client_box == 'linux' else launch_local(h, spec('client', session_id))
         if local is not None and not DRY_RUN and not note:
             local.finish()
         remote_state = wait_done(root, match_timeout(options) + 300) if not (note and local_peer == 'host') else 'not started'
@@ -625,7 +760,8 @@ def run_match(h, options, index, login):
         if local is not None and not DRY_RUN:
             local.close()
             local_spec = spec(local_peer, session_id)
-            redact(h, local, local_spec)
+            if not isinstance(local, LinuxPeer):
+                redact(h, local, local_spec)
             local_record = local.record
             write_json(root / f'{local_peer}-record.json', local_record)
             write_json(root / f'{local_peer}-spec.json', dict(local_spec, settings={key: ('redacted' if key in SECRET_KEYS else value)
@@ -637,8 +773,13 @@ def run_match(h, options, index, login):
         return dict(name=name, dry_run=True)
     if remote_state != 'not started':
         fetch(root, [f'{remote_peer_name}*', 'session1*'], [f'{remote_peer_name}/runtime'])
+    if options.soak:
+        verdict = soak_verdict(root, match_ticks(options))
+        write_json(root / 'soak-verdict.json', verdict)
+        say(f'{name}: SOAK {"PASS" if verdict["passed"] else "FAIL"} {json.dumps(verdict["checks"])} autosaves={verdict["autosaves"]} '
+            f'client_holds_after_autosaves={verdict["client_holds_after_autosaves"]}')
     return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path, ticks=match_ticks(options),
-                                       port=port, machines={peer: MACHINE[side] for peer, side in sides.items()},
+                                       port=port, machines={peer: 'LINUX-3090' if peer == 'client' and options.client_box == 'linux' else MACHINE[side] for peer, side in sides.items()},
                                        local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note,
                                        feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load))
 
@@ -808,6 +949,9 @@ def parse_args(argv=None):
                              'TCP stream, UDP from this box), for a TURN server with no public forward')
     parser.add_argument('--out', type=Path, help=f'a fresh directory under {SCRATCH} (the same path is used on EDITH)')
     parser.add_argument('--minutes', type=float, default=10, help='sp-soak length')
+    parser.add_argument('--client-box', choices=['here', 'linux'], default='here',
+                        help='with --direction host-edith: the client runs on this box or on the Linux box (EDITH then runs one engine alone)')
+    parser.add_argument('--soak', action='store_true', help="the soak's autosaves, client stalls, census and full-state hashing, judged as soak_two_peer judges")
     parser.add_argument('--match-minutes', type=float, help='mp-host-join length in minutes, the feel inputs looped (default: the 1200-tick arm)')
     parser.add_argument('--timeout', type=int, default=420, help='each match engine (seconds)')
     parser.add_argument('--instrumentation', choices=['lean', 'matrix'], default='lean',
@@ -825,6 +969,8 @@ def parse_args(argv=None):
     parser.add_argument('--bridge-bind', default='', help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
     if options.remote_peer is None and not options.bridge_edith and options.reanalyze is None:
+        if options.client_box == 'linux' and options.direction != 'host-edith':
+            parser.error('--client-box linux runs the client there: the host is on EDITH (--direction host-edith)')
         if options.relay_bridge and options.path != 'relay':
             parser.error('--relay-bridge needs --path relay')
         if not options.scenario or not options.out:
@@ -868,6 +1014,7 @@ def main(argv=None):
     login = turn_login() if options.path == 'relay' else None
     label = f'{options.direction}-{path_label(options)}'
     tunnel = Tunnel(options.out.resolve() / f'tunnel-{label}.log', options.relay_bridge) if options.path != 'ip' else None
+    linux_tunnel = LinuxTunnel(options.out.resolve() / f'tunnel-linux-{label}.log') if options.client_box == 'linux' and options.path != 'ip' else None
     bridge = None
     verdicts = []
     try:
@@ -875,6 +1022,8 @@ def main(argv=None):
             options.out.mkdir(parents=True, exist_ok=True)
         if tunnel:
             tunnel.open()
+        if linux_tunnel and not DRY_RUN:
+            linux_tunnel.open()
         if options.relay_bridge:
             lan = '192.168.3.55' if DRY_RUN else ssh('(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address.IPAddress').strip()
             TURN['edith'] = f'turn:{lan}:{BRIDGE_UDP}?transport=udp'
@@ -895,6 +1044,8 @@ def main(argv=None):
             bridge.close()
         if tunnel:
             tunnel.close()
+        if linux_tunnel:
+            linux_tunnel.close()
     if DRY_RUN:
         return 0
     passed = sum(bool(row.get('passed')) for row in verdicts)
