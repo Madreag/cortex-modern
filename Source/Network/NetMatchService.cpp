@@ -629,6 +629,8 @@ static std::string ResyncSaveName() {
 			m_BeaconMaxPlayers = static_cast<uint8_t>(std::max(1, m_HumanSeats - (request.dedicated ? 1 : 0)));
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 			m_JoinRefusedByLiveMatch = false;
+			// A new join is not the substitute this process was; its own rejoin carries on as one.
+			if (!request.rejoin) m_SubstituteRejoinStarted = false;
 			if (request.host) {
 				m_DirectoryRow.name = m_LocalName;
 				m_DirectoryRow.activity = matchConfig.activityPreset;
@@ -2762,11 +2764,13 @@ static std::string ResyncSaveName() {
 		bool isHost = false;
 		bool hasRecord = false;
 		bool matchWasRunning = false;
+		bool substituteCommitted = false;
 		std::string reason;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			state = m_State;
 			isHost = m_IsHost;
+			substituteCommitted = m_ReconnectClient.GetState() == NetH4ClientState::Joined && m_ReconnectClient.GetStats().substitutionAcksSent > 0;
 			hasRecord = m_TicketStore.HasRecord();
 			matchWasRunning = m_MatchWasRunning;
 			reason = m_ErrorText;
@@ -2791,6 +2795,19 @@ static std::string ResyncSaveName() {
 			} else if (m_ReconnectUx.GetState() == NetReconnectUxState::Idle) {
 				m_ReconnectUx.NoteConnected(nowMs);
 			}
+			return;
+		}
+		// The host accepts an application only for a seat of a running match: the accepted substitute holds that seat's
+		// credential and joins the way a returner does, through the round's image, never through a lobby round.
+		if (state == NetMatchServiceState::Starting && !isHost && !m_SubstituteRejoinStarted && substituteCommitted) {
+			m_SubstituteRejoinStarted = true;
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_MatchWasRunning = true;
+			}
+			System::PrintDiagnosticLine("[net-match] substitute accepted: joining the running match through its image");
+			std::string error;
+			if (!BeginTicketRejoin(&error)) System::PrintDiagnosticLine("[net-match] substitute join failed: " + error);
 			return;
 		}
 		// §11's same-process loss: the link died mid-MATCH and we still hold the record that proves the
@@ -9906,7 +9923,8 @@ static std::string ResyncSaveName() {
 		m_ReconnectClient.SetHostContext(bareAddress && request.port != 0 ? request.address + ":" + std::to_string(request.port) : request.address, NetHash32{});
 		m_ReconnectClient.SetWorldTarget(request.persistentWorld || matchConfig.persistentWorld);
 		m_ReconnectClient.SetDirectorySessionId(request.sessionId);
-		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat || s_ApplyOnce, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
+		// A rejoin holds its seat already: it reclaims, it never applies again.
+		m_ReconnectClient.SetApplyForSeat((s_ApplyForSeat || s_ApplyOnce) && !request.rejoin, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
 		s_ApplyOnce = false;
 		session.SetReconnectClient(&m_ReconnectClient);
 		session.EnableParticipantProof(&m_ParticipantStore);

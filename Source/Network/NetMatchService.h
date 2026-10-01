@@ -1492,6 +1492,7 @@ namespace RTE {
 		static uint16_t s_ApplySeat;
 		static bool s_ApplyOnce; //!< The menu's one-shot application; consumed by the next join's plane.
 		bool m_JoinRefusedByLiveMatch = false; //!< The last join was refused by a running match (§9b).
+		bool m_SubstituteRejoinStarted = false; //!< This process's accepted application has started its join into the running match.
 		static bool s_AutoSubstitute;
 		static uint16_t s_AutoSubstituteSeat;
 		static uint64_t s_AutoSubstituteDelayMs;
