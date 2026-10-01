@@ -169,6 +169,29 @@ class DirectoryTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 14)
 
+    def test_a_refused_mint_is_told_to_the_fetching_client(self) -> None:
+        store = session_directory.SessionDirectory(300, 5, turn_config={"backend": "cloudflare", "turn_key_id": "key-id", "api_token": "backend-token"})
+        row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
+        with self.assertRaises(session_directory.TurnError) as none:
+            store.get_ice_servers(row["session_id"], 11)
+        self.assertEqual((none.exception.status, none.exception.body["error"]), (404, "relay_offer_unavailable"))
+        data = {"token": row["token"], "match_id": "match:1", "ttl": 600}
+        with mock.patch.object(session_directory, "urlopen", side_effect=OSError("backend-token")):
+            with self.assertRaises(session_directory.TurnError):
+                store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 11)
+        with self.assertRaises(session_directory.TurnError) as refused:
+            store.get_ice_servers(row["session_id"], 12)
+        self.assertEqual((refused.exception.status, refused.exception.body["error"]), (502, "relay_provider_refused"))
+        self.assertNotIn("backend-token", json.dumps(refused.exception.body))
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 201
+        response.read.return_value = json.dumps({"iceServers": [{"urls": ["turn:turn.cloudflare.com:3478?transport=udp"],
+                                                                 "username": "u", "credential": "c"}]}).encode()
+        with mock.patch.object(session_directory, "urlopen", return_value=response):
+            store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 13)
+        self.assertEqual(store.get_ice_servers(row["session_id"], 14)["iceServers"][0]["username"], "u")
+
     def test_turn_max_ttl_caps_the_minted_lifetime(self) -> None:
         store = session_directory.SessionDirectory(300, 5, turn_config={
             "backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"],
