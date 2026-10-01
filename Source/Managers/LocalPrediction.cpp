@@ -24,6 +24,7 @@
 #include "ScenarioRunner.h"
 #include "SceneMan.h"
 #include "SettingsMan.h"
+#include "SimDumpTape.h"
 #include "System.h"
 #include "PageWriteFence.h"
 #include "TerrainLayerSnapshot.h"
@@ -56,6 +57,8 @@ namespace RTE {
 	uint64_t LocalPrediction::s_PreviewCount = 0;
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
 	double LocalPrediction::s_PreviewMs = 0.0;
+	// The harness's own records of each preview step, kept out of the preview's cost.
+	static double s_HarnessMs = 0.0;
 	uint64_t LocalPrediction::s_ReusedFrames = 0;
 	double LocalPrediction::s_ReusedMs = 0.0;
 	std::array<double, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseMs{};
@@ -72,7 +75,7 @@ namespace RTE {
 	}();
 	struct FidelityStep {
 		int step;
-		std::string line;
+		SimDumpTape lines; //!< Recorded inside the preview, written out at the committed tick, so the preview's own time holds none of it.
 	};
 	static std::multimap<std::pair<long, uint64_t>, FidelityStep> s_FidelitySteps;
 	static uint64_t s_FidelityEqual = 0;
@@ -91,7 +94,9 @@ namespace RTE {
 					std::ostringstream committed;
 					g_MovableMan.DumpMOSimState(tick, "actor", actor, committed);
 					// Token by token; the clone's own identities (its UIDs and MOIDs) are not compared.
-					std::istringstream previewed(it->second.line), actual(committed.str());
+					std::ostringstream previewedText;
+					it->second.lines.Replay(previewedText);
+					std::istringstream previewed(previewedText.str()), actual(committed.str());
 					std::vector<std::string> previewTokens{std::istream_iterator<std::string>(previewed), {}}, actualTokens{std::istream_iterator<std::string>(actual), {}};
 					std::vector<std::string> differing;
 					for (size_t i = 0; i < std::max(previewTokens.size(), actualTokens.size()); ++i) {
@@ -339,6 +344,7 @@ namespace RTE {
 
 		std::string error;
 		std::vector<ControllerFrame> frames;
+		double previewHarnessMs = 0.0;
 		for (int step = 1; step <= depth; ++step) {
 			g_TimerMan.AdvanceSimTickForPreview();
 			const uint64_t tick = static_cast<uint64_t>(simCount) + static_cast<uint64_t>(step);
@@ -377,17 +383,22 @@ namespace RTE {
 					std::cout << std::endl;
 				}
 				MovableMan::PostUpdateStage(clone);
+				// What the harness records of each step is its own cost, not the preview's: timed apart and kept out of the preview's.
+				const auto harnessStart = std::chrono::steady_clock::now();
 				FrameMan::FeelPreviewStep(clone, static_cast<uint64_t>(simCount), tick, feelStepBeginMS);
 				if (s_FidelityProbe && (step == 1 || (tick >= s_FidelityWindow.first && tick <= s_FidelityWindow.second))) {
-					std::ostringstream line;
-					g_MovableMan.DumpMOSimState(tick, "actor", clone, line);
-					s_FidelitySteps.insert({{preview.original->GetUniqueID(), tick}, {step, line.str()}});
+					SimDumpTape lines;
+					g_MovableMan.CaptureMOSimState(tick, "actor", clone, lines);
+					s_FidelitySteps.insert({{preview.original->GetUniqueID(), tick}, {step, std::move(lines)}});
 				}
+				previewHarnessMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - harnessStart).count();
 			}
 			g_MovableMan.HarvestSpeculativeSpawns();
 		}
 		Trace("stepped");
 		lap(8);
+		s_PhaseMs[8] -= previewHarnessMs;
+		s_HarnessMs += previewHarnessMs;
 
 		Outcome outcome;
 		for (const Preview& preview: targets) {
@@ -480,7 +491,7 @@ namespace RTE {
 		s_PreviewedTick = simCount;
 		++s_PreviewCount;
 		s_PreviewTicks += static_cast<uint64_t>(depth) * s_Previews.size();
-		s_PreviewMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		s_PreviewMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() - previewHarnessMs;
 	}
 
 	void LocalPrediction::BeginRender() {
@@ -636,6 +647,7 @@ namespace RTE {
 			phases += (phase ? "," : "") + std::string(s_PhaseNames[phase]) + ":" + std::to_string(s_PhaseMs[phase] / static_cast<double>(s_PreviewCount));
 		}
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
+		       " harness_ms_total=" + std::to_string(s_HarnessMs) + " harness_avg_ms=" + std::to_string(s_HarnessMs / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
 		       " preview_ghosts_peak=" + std::to_string(g_MovableMan.GetPreviewGhostPeak()) +
 		       (events.empty() ? std::string() : " " + events) + " terrain_pages_written=" + std::to_string(PageWriteFence::GetFaultCount()) +

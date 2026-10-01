@@ -1829,6 +1829,10 @@ void MovableMan::CaptureSimState(uint64_t tick, SimDumpTape& tape) const {
 	DumpSimLines(tick, tape);
 }
 
+void MovableMan::CaptureMOSimState(uint64_t tick, const char* kind, MovableObject* mo, SimDumpTape& tape) const {
+	DumpMOLines(tick, kind, mo, tape);
+}
+
 template <class Out>
 void MovableMan::DumpSimLines(uint64_t tick, Out& out) const {
 	// The queued MOID draw renumbers m_MOID on the pool while this reads it; join it so one dump holds one tick's numbering.

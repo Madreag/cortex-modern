@@ -988,6 +988,13 @@ namespace RTE {
 		/// @param tape The tape to record into.
 		void CaptureSimState(uint64_t tick, SimDumpTape& tape) const;
 
+		/// Records one MO's lines of the sim dump, for DumpMOSimState's text later.
+		/// @param tick The sim tick to label the lines with.
+		/// @param kind The MO's list, as the dump names it.
+		/// @param mo The MO.
+		/// @param tape The tape to record into.
+		void CaptureMOSimState(uint64_t tick, const char* kind, MovableObject* mo, SimDumpTape& tape) const;
+
 		/// Runs one paused lockstep tick: exchanges an empty controller frame and applies only the
 		/// game commands it carries, so an unpause can arrive while the sim holds still.
 		/// @return Whether the exchange succeeded; a failure sets the controller replay error.
