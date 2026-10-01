@@ -21,7 +21,8 @@ import os
 import math
 import subprocess
 import sys
-from feel.report import return_hold_violations
+from feel.report import peer_id_of, return_hold_violations
+from cross_report import pace_verdict
 import threading
 import time
 from pathlib import Path
@@ -40,6 +41,42 @@ TICKS_PER_SECOND = 60
 install_memory_guard()
 
 
+def census_pace(log: Path) -> dict[int, dict]:
+    """Each [mem-census] line's own pace (wall_tps, sim_ms_per_tick, ...) by the tick that closes its window."""
+    rows = {}
+    for line in log.read_text(encoding="utf-8", errors="replace").splitlines() if log.is_file() else []:
+        if line.startswith("[mem-census] ") and " pace: " in line:
+            fields = dict(part.split("=", 1) for part in line.split(" pace: ", 1)[1].split() if "=" in part)
+            rows[int(line.split("tick=")[1].split()[0])] = {key: float(value) for key, value in fields.items()
+                                                          if value.replace(".", "", 1).replace("-", "", 1).isdigit()}
+    return rows
+
+
+def window_sim_ms(census: dict[int, dict], start: int, end: int) -> float | None:
+    """The engine's sim cost over the census window that holds most of [start, end]."""
+    middle = (start + end) // 2
+    closing = min((tick for tick in census if tick >= middle), default=None)
+    return census[closing].get("sim_ms_per_tick") if closing is not None else None
+
+
+def excused_return_holds(root: Path, rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Splits holds after a return into the excused (the held engine said it is a slow machine and its own sim does not
+    fit the tick there) and the rest."""
+    engines = {peer_id_of(root / f"{peer}_report.json"): peer for peer in ("host", "client")}
+    logs = {peer: (root / peer / "stdout.log").read_text(encoding="utf-8", errors="replace") if (root / peer / "stdout.log").is_file() else ""
+            for peer in ("host", "client")}
+    excused, kept = [], []
+    for row in rows:
+        engine = engines.get(row["held_peer"])
+        slow = any(f"[net-lockstep] slow machine peer {row['held_peer']} at frame {frame} " in text
+                   for text in logs.values() for frame in range(row["return_tick"], row["hold_tick"] + 1))
+        sim = window_sim_ms(census_pace(root / engine / "stdout.log"), row["return_tick"], row["hold_tick"]) if engine else None
+        fits = pace_verdict({"pace": {"sim_ms_per_tick": sim, "wall_tps": None}})["gated"]
+        (excused if slow and sim is not None and not fits else kept).append(dict(row, held_engine=engine, sim_ms_per_tick=sim,
+                                                                                   slow_machine_line=slow))
+    return excused, kept
+
+
 def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict:
     records = {peer: read_live_hashes(root / f"{peer}-live.jsonl") for peer in ("host", "client")}
     errors, indexed, windows, paces = [], {}, {}, {}
@@ -49,15 +86,18 @@ def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict
     for peer, rows in records.items():
         log = root / peer / "stdout.log"
         windows[peer] = own_hold_windows(log.read_text(encoding="utf-8", errors="replace").splitlines()) if log.is_file() else []
+        census = census_pace(log)
         indexed[peer] = {}
         for row in rows:
             indexed[peer].setdefault((row.get("round"), row["tick"]), []).append(row)
         paces[peer] = []
         for round_id in rounds:
             away = {tick for rid, start, end in windows[peer] if rid == round_id for tick in range(start, end)}
-            required = set(range(1, ticks + 1)) - away
+            # The engine commits its terminal tick one past the match's tick count, on both peers alike.
+            terminal = ticks + 1
+            required = set(range(1, terminal + 1)) - away
             present = {tick for rid, tick in indexed[peer] if rid == round_id}
-            if not required <= present or ticks not in present or present - set(range(1, ticks + 1)):
+            if not required <= present or terminal not in present or present - set(range(1, terminal + 1)):
                 errors.append(f"{peer} round {round_id}: missing/extra ticks or terminal tick")
             for start in range(300, ticks, 3600):
                 end = min(start + 3600, ticks)
@@ -71,8 +111,12 @@ def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict
                              min(row.get('wall_ms', float('nan')) for row in indexed[peer][round_id, low]) for low, high in intervals]
                 elapsed = sum(durations)
                 rate = len(intervals) * 1000 / elapsed if elapsed > 0 and all(d >= 0 and math.isfinite(d) for d in durations) else None
-                ok = rate is not None and math.isfinite(rate) and rate >= 59.5
-                paces[peer].append(dict(round=round_id, first=start, last=end, wall_tps=rate, passed=ok))
+                # A window is gated when this engine's own sim fits the tick there; a slower one is reported, not gated.
+                verdict = pace_verdict({"pace": {"sim_ms_per_tick": window_sim_ms(census, start, end),
+                                                 "wall_tps": rate if rate is not None and math.isfinite(rate) else None}})
+                ok = verdict["passed"] if verdict["sim_ms_per_tick"] is not None else rate is not None and math.isfinite(rate) and rate >= 59.5
+                paces[peer].append(dict(round=round_id, first=start, last=end, wall_tps=rate, passed=ok,
+                                        sim_ms_per_tick=verdict["sim_ms_per_tick"], gated=verdict["gated"] or verdict["sim_ms_per_tick"] is None))
                 if not ok:
                     errors.append(f"{peer} round {round_id}: pace window {start}-{end} below 59.5 TPS")
         if not paces[peer]:
@@ -222,8 +266,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host-sim-cost-until-tick", type=int, default=0, help="the host's added sim cost ends at this tick (0: never)")
     parser.add_argument("--client-draw-cost-us", type=int, default=0,
                         help="the client spends this much more per drawn frame (a slower machine's draw cost on this box)")
-    parser.add_argument("--co-hosted", action="store_true",
-                        help="both peers share one machine: its pace and its holds after a return measure that machine, so they are reported, not gated")
     parser.add_argument("--sample-seconds", type=float, default=60)
     parser.add_argument("--rematch", action="store_true", help="both peers ride the e2e rematch: when match 1 ends they return to the lobby and play match 2")
     parser.add_argument("--end-round-tick", type=int, default=0, help="both peers end the round at this sim tick (team 0 wins), so a rematch starts while a seat may still be held")
@@ -411,9 +453,8 @@ def main(argv: list[str] | None = None) -> int:
               "complete_history_and_pace": acceptance['pass']}
     return_holds = {peer: return_hold_violations((root / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
                     for peer in ('host', 'client')}
-    checks['no_hold_after_return'] = not any(return_holds.values())
-    # Two engines and a once-a-second capture on one machine: its pace and its holds after a return are that machine's.
-    measured = {name: checks.pop(name) for name in ('complete_history_and_pace', 'no_hold_after_return')} if options.co_hosted else {}
+    excused_holds = {peer: excused_return_holds(root, rows) for peer, rows in return_holds.items()}
+    checks['no_hold_after_return'] = not any(kept for _, kept in excused_holds.values())
     if options.host_stall:
         checks['host_stalls_fired'] = count(root / 'host/stdout.log', '[net-test] live stall frame=') == len(options.host_stall)
         checks['host_returned'] = count(root / 'host/stdout.log', '[net-match] seat-reclaimed peer=1') >= len(options.host_stall)
@@ -436,8 +477,8 @@ def main(argv: list[str] | None = None) -> int:
     private_mb = {peer: census_private(root / peer / "stdout.log") for peer in ("host", "client")}
     clean_ticks = {peer: terrain_event_ticks(root, peer, "clean") for peer in ("host", "client")} if options.terrain_events else None
     result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
-              "measured_not_gated": dict(measured, reason="co-hosted: both engines share one machine; pace and holds after a return are gated by the four-machine soak") if measured else None,
-              "holds_after_returns": return_holds,
+              "holds_after_returns": {peer: kept for peer, (_, kept) in excused_holds.items()},
+              "holds_after_returns_excused": {peer: excused for peer, (excused, _) in excused_holds.items()},
               "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
               "autosaves_published": autosaves, "autosaves_owed": owed,
               "each_round_stalls": each_round, "in_place_catch_ups": in_place, "rounds": rounds,
@@ -447,10 +488,7 @@ def main(argv: list[str] | None = None) -> int:
               "plan": plan, "acceptance_history": acceptance}
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "
-          f"autosaves={autosaves}/{owed} samples={len(samples)} -> {root / 'result.json'}", flush=True)
-    if measured:
-        print(f"[soak] measured, not gated ({result['measured_not_gated']['reason']}): {json.dumps(measured)} "
-              f"holds_after_returns={sum(len(rows) for rows in return_holds.values())}", flush=True)
+          f"autosaves={autosaves}/{owed} samples={len(samples)} holds_after_returns={sum(len(kept) for _, kept in excused_holds.values())} -> {root / 'result.json'}", flush=True)
     return 0 if result["pass"] else 1
 
 

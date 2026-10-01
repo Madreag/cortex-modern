@@ -138,7 +138,7 @@ class AcceptanceTests(unittest.TestCase):
                 (root / peer / 'stdout.log').write_text('')
                 records = [dict(round=7, tick=tick, wall_ms=tick * 1000 / 60,
                                 sim_gated=str(tick), subsystems={key: str(tick) for key in soak.CORE | {'controller'}})
-                           for tick in range(1, 7201)]
+                           for tick in range(1, 7202)]
                 (root / (peer + '-live.jsonl')).write_text(''.join(json.dumps(r) + '\n' for r in records))
             score = soak.acceptance_history(root, 7200)
             self.assertTrue(score['pass'], score)
