@@ -87,15 +87,10 @@ def judge_exit(record,peer,incarnation,faults,receipts):
     injected=bool(expected and record.get('injected_termination')=='scheduled crash '+expected['id'] and
         any(r.get('id')==expected['id'] and r.get('peer')==peer and r.get('incarnation')==incarnation and
             r.get('phase')=='fault_applied' and r.get('native',{}).get('action')=='crash-restart' for r in receipts))
-    # The return after an announced leave ends refused once the running match told it that it left.
-    told=next((f for f in faults if f['peer']==peer and f['action']=='announced-leave-rejoin' and
-               f.get('return_incarnation',f.get('incarnation',0)+1)==incarnation and
-               any(r.get('id')==f['id'] and r.get('peer')==peer and r.get('incarnation')==incarnation and
-                   r.get('phase')=='told_it_left' for r in receipts)),None)
     normal=record.get('exit_code')==0 and not record.get('injected_termination')
-    return dict(passed=bool(record.get('started') and not record.get('timed_out') and (injected or normal or told is not None)),
+    return dict(passed=bool(record.get('started') and not record.get('timed_out') and (injected or normal)),
                 exit_code=record.get('exit_code'),timed_out=record.get('timed_out'),incarnation=incarnation,
-                expected='scheduled crash '+expected['id'] if expected else 'told it left by '+told['id'] if told else 'normal exit',
+                expected='scheduled crash '+expected['id'] if expected else 'normal exit',
                 actual=record.get('injected_termination','normal exit'),injection_proved=injected)
 
 

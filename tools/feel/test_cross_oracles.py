@@ -95,15 +95,12 @@ class AttemptOracles(unittest.TestCase):
         self.assertTrue(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=3.1, wall_tps=None)))['gated'])
         self.assertFalse(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=3.1, wall_tps=None)))['passed'])
 
-    def test_a_return_told_it_left_exits_refused_by_design(self):
+    def test_a_return_after_an_announced_leave_must_exit_clean(self):
         refused=dict(started=True,exit_code=1,timed_out=False)
         leave=dict(id='left',action='announced-leave-rejoin',peer='a',incarnation=0,return_incarnation=1)
-        told=dict(id='left',peer='a',incarnation=1,phase='told_it_left',native=dict(recovery_phase='told_it_left',terminal=True))
-        self.assertTrue(cross_report.judge_exit(refused,'a',1,[leave],[told])['passed'])
-        # Only its own terminal row excuses it: no row, another incarnation's, or another phase fail as before.
-        self.assertFalse(cross_report.judge_exit(refused,'a',1,[leave],[])['passed'])
-        self.assertFalse(cross_report.judge_exit(refused,'a',0,[leave],[dict(told,incarnation=0)])['passed'])
-        self.assertFalse(cross_report.judge_exit(refused,'a',1,[leave],[dict(told,phase='catch_up')])['passed'])
+        row=dict(id='left',peer='a',incarnation=1,phase='first_controllable_input',native=dict(recovery_phase='first_controllable_input'))
+        self.assertFalse(cross_report.judge_exit(refused,'a',1,[leave],[row])['passed'])
+        self.assertTrue(cross_report.judge_exit(dict(refused,exit_code=0),'a',1,[leave],[row])['passed'])
 
     def test_hold_is_scheduled_only_with_matching_native_start_and_completed_recovery(self):
         recovery=dict(id='stall',peer='a',passed=True,phases=[dict(phase='first_controllable_input',native=dict(source_round=1,tick=45))])

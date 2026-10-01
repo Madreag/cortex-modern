@@ -4796,7 +4796,8 @@ namespace RTE {
 		m_CaptureParkFinalized = false;
 		m_AiHeldSeats.clear();
 		m_ReleasedAiSeats.clear();
-		m_ReleaseWhenHeld.clear();
+		m_AnnouncedLeavers.clear();
+		m_SlowMachineHolds.clear();
 		m_PendingMemberEnds.clear();
 		m_EvictAfterReclaim.clear();
 		m_HoldTransactions.clear();
@@ -5782,7 +5783,7 @@ namespace RTE {
 				m_Stats.peers[peer].returnsInPlace = false;
 				// The held seat keeps its connection: its player catches up in place on the committed tail and reclaims over it.
 				// The hold goes to it here too, since a queue flushed after its link left the round would drop it.
-				if (m_Config.localPeerId == GetHostPeerId() && m_Transport && !m_ReleaseWhenHeld.contains(peer))
+				if (m_Config.localPeerId == GetHostPeerId() && m_Transport && !m_AnnouncedLeavers.contains(peer))
 					if (const auto link = m_RemoteTransports.find(peer); link != m_RemoteTransports.end()) {
 						NetLockstepTiming hold = timing;
 						hold.phase = NetTimingPhase::HoldAtFrame;
@@ -5794,8 +5795,8 @@ namespace RTE {
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 				++m_Stats.peers[peer].holds;
 				DiagnosticLine() << "[net-match] hold peer=" << static_cast<int>(peer) << " frame=" << timing.applyFrame << " AI in control" << std::endl;
-				// A clean leaver's seat goes to the AI like any other and is released at once: a return is a new join.
-				if (m_ReleaseWhenHeld.erase(peer) != 0) ReleaseHeldSeat(peer, m_TimingNowMs, true, "a clean leave held by the bound");
+				// A clean leaver's seat is held for it like a dropped one's: its return is a reclaim.
+				m_AnnouncedLeavers.erase(peer);
 			}
 			for (auto& [revision, pending]: m_TimingDecisions) pending.acknowledgedPeers |= timing.heldPeers;
 		}
@@ -6113,7 +6114,7 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		if (!UsesBoundedWait() || !m_AiHeldSeats.contains(peerId)) return true;
 		if (m_ReleasedAiSeats.contains(peerId)) {
-			if (error) *error = "Your seat was released; you can join the match again as a new player.";
+			if (error) *error = "The host released your seat. You can join the match again as a new player.";
 			return false;
 		}
 		if (!m_LastDeliveredFrame || *m_LastDeliveredFrame < m_AiHeldSeats.at(peerId)) {
@@ -6176,7 +6177,7 @@ namespace RTE {
 			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": it runs " << published->second
 			                 << " ticks/s against the fastest's " << fastest << "; the AI takes its seat" << std::endl;
 			std::string holdError;
-			if (ProposePeerHold(peer, nowMs, &holdError)) slowHeld = true;
+			if (ProposePeerHold(peer, nowMs, &holdError)) { slowHeld = true; m_SlowMachineHolds.insert(peer); }
 			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 		}
 		if (slowHeld) return true;
@@ -6189,7 +6190,7 @@ namespace RTE {
 			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": " << rate
 			                 << " ticks/s against " << (1000.0 / m_Config.simTickMs) << "; the AI takes its seat" << std::endl;
 			std::string holdError;
-			if (ProposePeerHold(peer, nowMs, &holdError)) slowHeld = true;
+			if (ProposePeerHold(peer, nowMs, &holdError)) { slowHeld = true; m_SlowMachineHolds.insert(peer); }
 			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 		}
 		if (slowHeld) return true;
@@ -6312,7 +6313,7 @@ namespace RTE {
 					continue;
 				}
 				std::string holdError;
-				if (ProposePeerHold(peer, nowMs, &holdError)) held = true;
+				if (ProposePeerHold(peer, nowMs, &holdError)) { held = true; m_SlowMachineHolds.erase(peer); }
 				else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 			}
 			return held;
@@ -6943,7 +6944,7 @@ namespace RTE {
 					}
 				}
 			}
-			for (uint8_t peer: unresponsive) ProposePeerHold(peer, nowMs);
+			for (uint8_t peer: unresponsive) if (ProposePeerHold(peer, nowMs)) m_SlowMachineHolds.erase(peer);
 		}
 		for (const auto& [revision, decision]: m_TimingDecisions) if (!decision.committed) pending.push_back(revision);
 		for (uint64_t revision: pending) CommitTiming(revision);
@@ -7349,8 +7350,8 @@ namespace RTE {
 			DiagnosticLine() << "[net-lockstep] peer " << static_cast<int>(ack.senderPeerId) << " goes quiet after frame " << ack.highestContiguousFrame << " (reason "
 			                 << (ack.receivedMask & 0xFFU) << ": its machine cannot keep up); the AI takes its seat" << std::endl;
 			std::string holdError;
-			if (!ProposePeerHold(ack.senderPeerId, m_TimingNowMs, &holdError, ack.highestContiguousFrame + 1))
-				DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(ack.senderPeerId) << ": " << holdError << std::endl;
+			if (ProposePeerHold(ack.senderPeerId, m_TimingNowMs, &holdError, ack.highestContiguousFrame + 1)) m_SlowMachineHolds.insert(ack.senderPeerId);
+			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(ack.senderPeerId) << ": " << holdError << std::endl;
 			return;
 		}
 		if (ack.receivedMask & NetLockstepCodec::c_FrameWindowCapabilityMask) {
@@ -11063,11 +11064,10 @@ namespace RTE {
 		// A seat the round has already dropped cannot end it: a link that fails one way leaves the evicted
 		// peer able to send, and its own grace runs out on a round it is no longer in.
 		const auto leftIt = m_PeerLeaveFrames.find(stop.senderPeerId);
-		// A seat the bound held before its announced leave arrived is released: a clean leaver's return is a new join.
+		// A seat the bound held before its announced leave arrived stays held for its player, as a drop's does.
 		if (leftIt != m_PeerLeaveFrames.end() && stop.reason == NetLockstepStopReason::PeerLeft && m_RelayHost && UsesBoundedWait() && HasHeldAISeat(stop.senderPeerId)) {
 			DiagnosticLine() << "[net-lockstep] " << DescribePeer(stop.senderPeerId) << " announced its leave while held at frame " << leftIt->second
-			          << ": the seat is released" << std::endl;
-			ReleaseHeldSeat(stop.senderPeerId, nowMs, true, "its leave announced while held");
+			          << ": the seat stays held for it" << std::endl;
 			return;
 		}
 		if (leftIt != m_PeerLeaveFrames.end()) {
@@ -11506,10 +11506,11 @@ namespace RTE {
 		if (UsesBoundedWait() && !agreedBoundary && !removed && m_Config.localPeerId == GetHostPeerId() && !m_GoodbyeDrain && firstFrameWithout <= m_FinalFrame) {
 			DiagnosticLine() << "[net-lockstep] a leave becomes a hold for peer " << static_cast<int>(peerId)
 			          << " at frame " << firstFrameWithout << ": " << message << std::endl;
-			// A clean leaver's seat is released once the AI has it: a return is a new join, never a reclaim.
-			if (announced && cleanLeave) m_ReleaseWhenHeld.insert(peerId);
+			// A clean leaver's link is closing: its hold is not sent to it.
+			if (announced && cleanLeave) m_AnnouncedLeavers.insert(peerId);
 			std::string holdError;
-			if (!ProposePeerHold(peerId, nowMs, &holdError) && holdError != "the capture park deferred this hold") m_ReleaseWhenHeld.erase(peerId);
+			m_SlowMachineHolds.erase(peerId);
+			if (!ProposePeerHold(peerId, nowMs, &holdError) && holdError != "the capture park deferred this hold") m_AnnouncedLeavers.erase(peerId);
 			return;
 		}
 		// A seat that came back from an earlier leave and now leaves again: the later of the two decides, so its return is retired and the

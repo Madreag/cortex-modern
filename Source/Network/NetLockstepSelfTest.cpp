@@ -4240,8 +4240,7 @@ namespace RTE {
 			return true;
 		}
 
-		// A peer whose round stopped on an error did not choose to leave: under the bound its seat is held for its return, while a
-		// clean leave's seat is released once the AI has it.
+		// Under the bound a seat is held for its player's return whether its round broke or it left on purpose.
 		bool TestABrokenPeersSeatStaysReturnable(std::string* error) {
 			for (const NetLockstepStopReason reason: {NetLockstepStopReason::ProtocolError, NetLockstepStopReason::PeerLeft}) {
 				LoopbackTransport hostWire, clientWire;
@@ -4264,7 +4263,7 @@ namespace RTE {
 				if (!NetLockstepCodec::Encode({stop}, bytes) || !clientWire.Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
 				for (int pass = 0; pass < 10 && !host.HasHeldAISeat(2) && !host.IsSeatReleased(2); ++pass) pump();
 				const bool released = host.IsSeatReleased(2);
-				if (!host.IsRunning() || released != (reason == NetLockstepStopReason::PeerLeft) || (!released && !host.HasHeldAISeat(2))) {
+				if (!host.IsRunning() || released || !host.HasHeldAISeat(2)) {
 					*error = std::string("a ") + NetLockstepCodec::StopReasonName(reason) + " stop left seat 2 " + (released ? "released" : host.HasHeldAISeat(2) ? "held" : "unheld") +
 					         (host.IsRunning() ? "" : " and the round stopped");
 					return false;

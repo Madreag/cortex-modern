@@ -219,11 +219,23 @@ namespace RTE {
 		return "unknown";
 	}
 
+	std::string NetModerationUx::HoldCause(const NetH4ModerationSeat& seat) {
+		const auto ago = [](uint64_t ms) {
+			const uint64_t seconds = ms / 1000;
+			return seconds < 60 ? std::to_string(seconds) + " s ago" : std::to_string(seconds / 60) + " min ago";
+		};
+		if (seat.closed) return {};
+		if (seat.leftByChoice) return "Left " + ago(seat.leftForMs);
+		if (seat.slowMachine) return "Machine too slow";
+		if (seat.dropped) return "Connection lost " + ago(seat.droppedForMs);
+		return {};
+	}
+
 	std::string NetModerationUx::DescribeSeat(const NetH4ModerationSeat& seat) {
 		std::string text = "Seat " + std::to_string(seat.stableSeat) + " - " +
 		                   (seat.displayName.empty() ? "peer " + std::to_string(seat.lockstepPeerId) : seat.displayName);
-		if (seat.dropped) {
-			text += " - dropped " + std::to_string(seat.droppedForMs / 1000) + "s ago";
+		if (const std::string cause = HoldCause(seat); !cause.empty()) {
+			text += " - " + cause;
 		} else if (seat.closed) {
 			text += " - left";
 		}
@@ -237,7 +249,7 @@ namespace RTE {
 	void NetModerationUx::Refresh(const std::vector<NetH4ModerationSeat>& seats) {
 		m_Rows.clear();
 		for (const NetH4ModerationSeat& seat: seats) {
-			if (seat.cpu || (!seat.substitutable && !seat.substituting && !seat.dropped)) {
+			if (seat.cpu || (!seat.substitutable && !seat.substituting && !seat.dropped && !seat.slowMachine)) {
 				continue;
 			}
 			Row row;

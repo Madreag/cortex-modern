@@ -219,30 +219,6 @@ namespace RTE {
 		return "no such session";
 	}
 
-	// A clean leave of a running match is kept beside the ticket it clears, so a return is told it left rather than taken for
-	// a stranger: the running match's directory row refuses a ticketless join before the host can say so.
-	static std::string LeftMarkerPath(const std::string& ticketPath) {
-		return ticketPath + ".left";
-	}
-
-	void NetWriteLeftMarker(const std::string& ticketPath, const std::string& sessionId) {
-		if (sessionId.empty()) return;
-		std::ofstream out(LeftMarkerPath(ticketPath), std::ios::trunc);
-		out << nlohmann::json{{"session", sessionId}}.dump();
-	}
-
-	// Only the session it names: a later match at the same address is another session, and answers for itself.
-	bool NetLeftMarkerNames(const std::string& ticketPath, const std::string& sessionId) {
-		std::ifstream in(LeftMarkerPath(ticketPath));
-		const nlohmann::json marker = nlohmann::json::parse(in, nullptr, false);
-		return marker.is_object() && !sessionId.empty() && marker.value("session", "") == sessionId;
-	}
-
-	void NetClearLeftMarker(const std::string& ticketPath) {
-		std::error_code code;
-		std::filesystem::remove(LeftMarkerPath(ticketPath), code);
-	}
-
 	bool NetMatchService::s_AdmissionEnabled = true;
 	uint32_t NetMatchService::s_AutosaveSeconds = 0;
 	bool NetMatchService::s_AutosaveSecondsOverridden = false;
@@ -317,7 +293,6 @@ static std::string ResyncSaveName() {
 				{"substitutions_superseded", stats.substitutionsSuperseded},
 				{"substitution_ack_failures", stats.substitutionAckFailures},
 				{"reassigned_reclaims_refused", stats.reassignedReclaimsRefused},
-				{"returning_leavers_told", stats.returningLeaversTold},
 				{"pending_applicants", 0},
 			};
 		}
@@ -654,9 +629,6 @@ static std::string ResyncSaveName() {
 			m_BeaconMaxPlayers = static_cast<uint8_t>(std::max(1, m_HumanSeats - (request.dedicated ? 1 : 0)));
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 			m_JoinRefusedByLiveMatch = false;
-			m_LeftMatchJoinable = false;
-			m_ToldItLeft = false;
-			m_LeftRowRefused = false;
 			if (request.host) {
 				m_DirectoryRow.name = m_LocalName;
 				m_DirectoryRow.activity = matchConfig.activityPreset;
@@ -2047,9 +2019,6 @@ static std::string ResyncSaveName() {
 				return;
 			}
 			std::string error;
-			if (m_MatchWasRunning && m_TicketStore.Load(UnixNowMs(nullptr), m_LeavingRecord, nullptr) == NetH4TicketLoadResult::Loaded) {
-				m_LeavingRecordLoaded = true;
-			}
 			if (!m_ReconnectClient.BeginLeave(AdmissionNowMs(), &error)) {
 				return;
 			}
@@ -2074,10 +2043,6 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		System::PrintDiagnosticLine(std::string("[net-reconnect] leave: ") + NetReconnectClientStateName(m_ReconnectClient.GetState()) +
 		                            (m_TicketStore.HasRecord() ? " (ticket kept)" : " (ticket cleared)"));
-		if (m_LeavingRecordLoaded && m_ReconnectClient.GetState() == NetH4ClientState::Left && !m_TicketStore.HasRecord()) {
-			NetWriteLeftMarker(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath, m_LeavingRecord.directorySessionId);
-		}
-		m_LeavingRecordLoaded = false;
 	}
 
 	void NetMatchService::LeaveWorkerMain(std::string result) {
@@ -2225,8 +2190,6 @@ static std::string ResyncSaveName() {
 			m_PendingLobbyOverflow = false;
 			m_EndedLockstepPackets = 0;
 			m_JoinRefusedByLiveMatch = false;
-			m_LeftMatchJoinable = false;
-			m_ToldItLeft = false;
 			ResetRoundGoodbyeLocked();
 			EndAdmissionSession();
 		}
@@ -2751,16 +2714,6 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::WasJoinRefusedByALiveMatch() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_JoinRefusedByLiveMatch && m_State == NetMatchServiceState::Failed;
-	}
-
-	bool NetMatchService::WasToldItLeftAJoinableMatch() const {
-		std::lock_guard<std::mutex> lock(m_Mutex);
-		return m_LeftMatchJoinable && m_State == NetMatchServiceState::Failed;
-	}
-
-	bool NetMatchService::WasToldItLeft() const {
-		std::lock_guard<std::mutex> lock(m_Mutex);
-		return m_ToldItLeft && m_State == NetMatchServiceState::Failed;
 	}
 
 	bool NetMatchService::BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error) {
@@ -6406,6 +6359,7 @@ static std::string ResyncSaveName() {
 		std::vector<NetSeatPresenceEntry> presence;
 		for (auto& seat: seats) {
 			if (seat.cpu || seat.lockstepPeerId == 0) continue;
+			seat.slowMachine = m_Coordinator->IsHeldAsSlowMachine(seat.lockstepPeerId);
 			for (const auto& member: m_LobbySnapshot.members) {
 				if (member.peerId == seat.lockstepPeerId) { seat.displayName = member.displayName; break; }
 			}
@@ -7458,7 +7412,13 @@ static std::string ResyncSaveName() {
 				for (auto it = m_PendingHeldResolutions.begin(); it != m_PendingHeldResolutions.end();) {
 					const NetHoldResolutionNotice& notice = *it;
 					if (notice.resolution == NetHoldResolution::Reclaimed && m_Coordinator->HasAgreedSeatReclaim(notice.lockstepPeerId)) { it = m_PendingHeldResolutions.erase(it); continue; }
-					if (m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(notice.lockstepPeerId) && notice.resolution != NetHoldResolution::Expired) { ++it; continue; }
+					if (m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(notice.lockstepPeerId)) {
+						// The AI plays a held seat and nobody waits on it, so its holder's window closing gives nothing up: only the host's
+						// release does.
+						if (notice.resolution == NetHoldResolution::Expired) { it = m_PendingHeldResolutions.erase(it); continue; }
+						++it;
+						continue;
+					}
 					if (notice.resolution == NetHoldResolution::Reclaimed && !PrepareHeldPeerRejoinLocked(notice.lockstepPeerId)) { ++it; continue; }
 					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
 					switch (notice.resolution) {
@@ -8946,14 +8906,6 @@ static std::string ResyncSaveName() {
 		}
 		browse.StopBrowsing();
 		if (!why.empty()) {
-			const std::string ticketPath = s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath;
-			if (why == "no such session") {
-				// The session the marker names is gone from the directory: nothing is left to tell.
-				if (NetLeftMarkerNames(ticketPath, request.sessionId)) NetClearLeftMarker(ticketPath);
-			} else if (NetLeftMarkerNames(ticketPath, request.sessionId)) {
-				std::lock_guard<std::mutex> lock(m_Mutex);
-				m_LeftRowRefused = true;
-			}
 			if (error) *error = "session " + request.sessionId + ": " + why;
 			return false;
 		}
@@ -9486,8 +9438,6 @@ static std::string ResyncSaveName() {
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();
-				// A join that landed has nothing left to be told.
-				if (!request.host) NetClearLeftMarker(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 			} else {
 				// Keep the objects on failure too — the report needs the session's reject record.
 				m_Mux = std::move(mux);
@@ -9525,31 +9475,21 @@ static std::string ResyncSaveName() {
 				}
 				m_State = NetMatchServiceState::Failed;
 				// A start that died with the host's session is the departure itself, not a start fault; a host that
-				// told this player it left its running match is still there.
-				const bool hostSaidItLeft = m_Session && m_Session->HasReject() && m_Session->GetRejectReason() == NetRejectReason::SeatReleased;
-				const bool toldItLeft = hostSaidItLeft || m_LeftRowRefused;
-				// Any other answer from the host is this match's own: the marker has nothing more to say.
-				if (!request.host && m_Session && m_Session->HasReject() && !hostSaidItLeft)
-					NetClearLeftMarker(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+				// released this player's seat is still there.
+				const bool seatReleased = m_Session && m_Session->HasReject() && m_Session->GetRejectReason() == NetRejectReason::SeatReleased;
 				// A session that never heard the host never reached it: its setup error is the answer, not a departure.
 				const bool reachedHost = m_Session && m_Session->GetStats().receivedMessages > 0;
-				const bool lostHost = !request.host && !toldItLeft &&
+				const bool lostHost = !request.host && !seatReleased &&
 				    (m_Runner->DidLoseHostDuringSetup() || (reachedHost && ClientSessionLossIsHostDeparture(*m_Session)));
-				System::PrintDiagnosticLine("[net-match] setup failed: " + error + (lostHost ? " (the host left)" : toldItLeft ? " (this player left the running match)" : ""));
+				System::PrintDiagnosticLine("[net-match] setup failed: " + error + (lostHost ? " (the host left)" : ""));
 				m_StatusText = lostHost ? "The host left the match"
 				                        : SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
 				m_ErrorText = lostHost ? m_StatusText : (m_Session && m_Session->HasReject() ? m_Session->BuildPlayerRefusalText() : error);
-				if (toldItLeft) {
-					if (!hostSaidItLeft) m_ErrorText = NetSession::LeftMatchText(false);
-					m_StatusText = m_ErrorText;
-				}
 				// A refusal that says the round is over is an answer, not a lost link: the seat completes.
 				(void)NoteHostGoodbyeLocked(m_Session.get());
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
 				                           m_Session->GetMismatchKey() == "live_match";
-				m_ToldItLeft = !request.host && toldItLeft;
-				m_LeftMatchJoinable = m_ToldItLeft && m_Session->GetMismatchKey() == "seat_released_joinable";
 			}
 			m_WorkerDone = true;
 		}

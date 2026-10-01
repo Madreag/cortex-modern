@@ -150,8 +150,8 @@ def schedule_for(options, peers, boxes):
                   dict(id='mac-loss',tick=28800, peer=posix, action='loss', percent=5, duration_ticks=1800),
                   dict(id='end-under-hold',tick=7200,peer=host,action='brain-eliminate',phase='hold',target_peer=remote_windows,
                        target_incarnation=0,recovery_id='edith-live-stall',phase_window_ticks=600),
-                  dict(id='end-under-catchup',tick=21600,peer=host,action='brain-eliminate',phase='catch_up',target_peer=remote_windows,
-                       target_incarnation=1,recovery_id='edith-crash-restart',phase_window_ticks=6000)]
+                  dict(id='end-under-catchup',tick=14400,peer=host,action='brain-eliminate',phase='catch_up',target_peer=posix,
+                       target_incarnation=1,recovery_id='mac-announced-rejoin',phase_window_ticks=6000)]
     if options.scenario == 'chaos':
         import random
         rng = random.Random(options.chaos_seed)
@@ -166,12 +166,10 @@ def schedule_for(options, peers, boxes):
         if fault['action'] == 'host-kill': raise ValueError('migration with EDITH is NOT COVERED until the endpoint fix')
         incarnation = fault.get('incarnation', incarnations[fault['peer']])
         restarting = fault['action'] in ('announced-leave-rejoin', 'crash-restart')
-        # A player who leaves on purpose releases its seat: its return is told it left and the match runs on without it.
-        told = fault['action'] == 'announced-leave-rejoin'
         fault.update(id=fault.get('id', f'fault-{number}'), incarnation=incarnation,
                      return_incarnation=incarnation+int(restarting),
                      deadline_ms=fault.get('deadline_ms', options.recovery_deadline_ms),
-                     outcomes=fault.get('outcomes', ['told_it_left'] if told else ['first_controllable_input', 'match_over_goodbye']))
+                     outcomes=fault.get('outcomes', ['first_controllable_input', 'match_over_goodbye']))
         if restarting: incarnations[fault['peer']] = incarnation + 1
     return faults
 
@@ -864,10 +862,7 @@ def run_payload(path):
                             recovery_ledgers[peer].observe(tail_rows,spec['incarnation'],clean_reads[peer],observed_at)
                             if readers[peer].drained or not tail_rows: break
                         write_json(Path(spec['own']) / 'record.json', record)
-                        # The return after an announced leave ends refused by design once it read that it left.
-                        told = any(f['action'] == 'announced-leave-rejoin' and f['return_incarnation'] == spec['incarnation'] and f['id'] in recovery_ledgers[peer].completed
-                                   for f in spec.get('recoveries', spec['faults']))
-                        if (record.get('exit_code') != 0 and not told) or record.get('timed_out'): verdict = 1
+                        if record.get('exit_code') != 0 or record.get('timed_out'): verdict = 1
                 time.sleep(.05)
     except Exception as error:
         verdict = 1

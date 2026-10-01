@@ -1147,6 +1147,8 @@ namespace RTE {
 		bool AnyHeldAISeat() const { NET_PLANE_CHECK(); return std::any_of(m_AiHeldSeats.begin(), m_AiHeldSeats.end(), [&](const auto& seat) { return !m_ReleasedAiSeats.contains(seat.first); }); }
 		/// Whether the seat's hold was ended by a kick, a ban, a release or a clean leave: its units stay with the AI and a return is a new join.
 		bool IsSeatReleased(uint8_t peerId) const { NET_PLANE_CHECK(); return m_ReleasedAiSeats.contains(peerId); }
+		/// Host: whether a held seat was held because its machine cannot keep up with the round.
+		bool IsHeldAsSlowMachine(uint8_t peerId) const { NET_PLANE_CHECK(); return m_SlowMachineHolds.contains(peerId) && HasHeldAISeat(peerId); }
 		/// A seat's reclaim or admission is agreed and its activation frame is still ahead.
 		bool HasPendingSeatActivation() const { NET_PLANE_CHECK(); for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (reclaim.activationFrame >= m_Stats.nextFrame) return true; return false; }
 		/// Host: the current capture park covers the frame or may still grow to cover it.
@@ -1729,7 +1731,8 @@ namespace RTE {
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
 		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
-		std::set<uint8_t> m_ReleaseWhenHeld; //!< Host: clean leavers whose hold releases the seat as soon as it lands.
+		std::set<uint8_t> m_AnnouncedLeavers; //!< Host: clean leavers being held, whose closing links are not sent their hold.
+		std::set<uint8_t> m_SlowMachineHolds; //!< Host: seats whose latest hold was for a machine that cannot keep up.
 		std::map<uint8_t, std::pair<NetLockstepStop, NetPeerId>> m_PendingMemberEnds; //!< Host: members' own ends this round has not played past yet.
 		/// Host: takes each member's end this round has played past, and goes on, as that member's leave.
 		void TakeMemberEndsPlayedPast(uint64_t nowMs);

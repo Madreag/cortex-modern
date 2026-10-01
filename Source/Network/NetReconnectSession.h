@@ -221,6 +221,9 @@ namespace RTE {
 		uint32_t seatGeneration = 0;  //!< The value a pending approval compares against at commit.
 		uint64_t droppedAtMs = 0;     //!< When the holder's link went, on the admission plane's clock.
 		uint64_t droppedForMs = 0;    //!< How long ago that was, so the panel needs no clock of its own.
+		bool leftByChoice = false;    //!< The holder left on purpose; the seat is held for it as for a drop.
+		uint64_t leftForMs = 0;       //!< How long ago it left.
+		bool slowMachine = false;     //!< Held because the holder's machine cannot keep up with the round.
 		uint64_t holdFramesRemaining = 0; //!< Frames the round still holds the seat for; a frame, never a clock.
 		std::vector<NetH4ApplicantView> applicants;
 
@@ -295,7 +298,6 @@ namespace RTE {
 		uint32_t persistenceFailures = 0;
 		uint32_t reclaimsAccepted = 0;
 		uint32_t identityRejections = 0;
-		uint32_t returningLeaversTold = 0; //!< A clean leaver came back to the running match and was told it left.
 		uint32_t denialsScheduled = 0;
 		uint32_t denialsReleased = 0;
 		uint32_t replayedResults = 0;
@@ -475,6 +477,8 @@ namespace RTE {
 			bool saturated = false;
 			bool dropped = false;
 			uint64_t droppedAtMs = 0;
+			bool leftByChoice = false; //!< The holder left the running match on purpose; the seat is held for it like a drop.
+			uint64_t leftAtMs = 0;
 			bool holdExpired = false;
 			// The compare-and-swap value a pending substitution captures at approval. Anything that
 			// changes who may hold the seat moves it, so an approval that was overtaken cannot commit.
@@ -589,9 +593,6 @@ namespace RTE {
 		/// Ends every transaction a removed link still had open, on every seat.
 		void DropRemovedTransactions(NetPeerId connection);
 		bool RefuseIfBanned(NetPeerId connection);
-		/// Tells a proven identity that left this running match on purpose that it did, instead of admitting or refusing it
-		/// as a stranger. A world tells it once, so its next join is the new player's; a match keeps telling it.
-		bool RefuseReturningLeaver(NetPeerId connection, const NetAuthBytes16& txId, uint64_t nowMs);
 		bool LookupParticipantId(NetPeerId connection, NetAuthBytes32& out) const;
 		void UnbindParticipantId(NetPeerId connection);
 		void CaptureParticipant(SeatState& seat, NetPeerId connection);
@@ -660,7 +661,6 @@ namespace RTE {
 		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
 		NetHostBanStore* m_BanStore = nullptr;
 		std::set<NetAuthBytes32> m_RemovedParticipants;
-		std::set<NetAuthBytes32> m_LeftParticipants; //!< Proven identities that left this live match with a clean leave.
 		bool m_ProofRequired = false;
 		std::vector<std::pair<NetPeerId, NetAuthBytes32>> m_ConnectionIds;
 	};

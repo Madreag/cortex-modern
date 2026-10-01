@@ -1445,7 +1445,7 @@ namespace RTE {
 				}
 			}
 
-			// The acknowledged leave clears the ticket and closes the seat. Mid-match: in a lobby the
+			// The acknowledged leave of a running match keeps the ticket and the seat, as a drop does. In a lobby the
 			// seat goes back in the pool instead, which TestLobbySeatIsFreedForTheNextJoiner pins.
 			wire.host.SetLiveMatch(true);
 			wire.ClearDelivered();
@@ -1455,17 +1455,17 @@ namespace RTE {
 			if (player.client.GetState() != NetH4ClientState::Left) {
 				return Fail("the acknowledged leave did not complete");
 			}
-			if (player.store.HasRecord()) {
-				return Fail("the acknowledged leave did not clear the ticket");
+			if (!player.store.HasRecord()) {
+				return Fail("the acknowledged leave of a running match cleared the ticket");
 			}
 			if (player.client.GetStats().ambiguousLosses != 0 || player.client.GetStats().unacknowledgedLeaves != 0) {
 				return Fail("the acknowledged leave was counted as an ambiguous loss");
 			}
-			if (!wire.host.IsSeatClosed(record.stableSeat)) {
-				return Fail("the leave did not close the seat");
+			if (wire.host.IsSeatClosed(record.stableSeat)) {
+				return Fail("the leave of a running match closed the seat");
 			}
-			if (wire.registry.GetActiveGeneration(record.stableSeat) != 0) {
-				return Fail("the leave did not revoke the holder generation");
+			if (wire.registry.GetActiveGeneration(record.stableSeat) != record.holderGeneration) {
+				return Fail("the leave of a running match revoked the holder generation");
 			}
 
 			// A retransmitted request replays the same ack rather than failing.
@@ -1485,23 +1485,9 @@ namespace RTE {
 				return Fail("a retransmitted leave did not replay its ack");
 			}
 
-			// The old ticket cannot reclaim the closed seat.
-			wire.ClearDelivered();
-			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
-			NetH4Reclaim stale;
-			stale.txId = Ramp<16>(0x90);
-			stale.epoch = record.epoch;
-			stale.stableSeat = record.stableSeat;
-			stale.holderGeneration = record.holderGeneration;
-			stale.identity = MakeIdentity();
-			stale.displayName = "left";
-			if (!wire.SendRaw(83, stale, &error)) {
-				return Fail(error);
-			}
-			wire.nowMs += NetReconnectAdmission::c_DenialReleaseMs;
-			wire.DrainHostOutbound();
-			if (CountOf<NetH4JoinCommitted>(wire.Delivered(83)) != 0 || CountOf<NetJoinRejected>(wire.Delivered(83)) != 1) {
-				return Fail("a ticket for a cleanly left seat still reclaimed it");
+			// The closed link drops the seat, which stays held for its player; TestCleanLeaverKeepsTheSeat pins the return.
+			if (wire.host.NotifyDisconnect(player.connection, 360) != NetH4DisconnectOutcome::SeatDropped) {
+				return Fail("the leaver's closed link did not drop its seat");
 			}
 			return 0;
 		}
@@ -1725,14 +1711,19 @@ namespace RTE {
 				}
 			}
 
-			// A clean leave clears the seat's ledger entry along with its credential.
+			// A clean leave of the running match keeps the seat, and its closed link records the seat's ownership as a drop does.
 			wire.ClearDelivered();
 			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
 			if (!returner.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the leave did not settle: " + error);
 			}
-			if (wire.host.GetLedger().Find(0) != nullptr) {
-				return Fail("the leave left the seat ownership ledger behind");
+			g_Census = {{104, 1, 2, true}};
+			if (wire.host.NotifyDisconnect(returner.connection, 300) != NetH4DisconnectOutcome::SeatDropped) {
+				return Fail("the leaver's closed link did not drop its seat");
+			}
+			const NetH4SeatOwnership* left = wire.host.GetLedger().Find(0);
+			if (left == nullptr || left->droppedAtFrame != 300 || left->actorUIDs != std::vector<int64_t>{104}) {
+				return Fail("the leave did not record the seat's ownership for its return");
 			}
 			return 0;
 		}
@@ -3302,22 +3293,23 @@ namespace RTE {
 				return Fail("a reclaimed seat did not become worth waiting for again");
 			}
 
-			// A clean leave closes the seat, so a round with nobody left ends at once rather than waiting.
+			// A clean leave in a running match is a drop the player chose: once its link closes the seat is held for it again.
 			if (!returner.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the leave did not settle: " + error);
 			}
-			if (wire.host.GetStats().seatsClosedByLeave != 1) {
-				return Fail("the leave did not close the seat");
+			if (wire.host.NotifyDisconnect(returner.connection, 240) != NetH4DisconnectOutcome::SeatDropped) {
+				return Fail("the leaver's closed link did not drop its seat");
 			}
-			if (wire.host.IsSeatHeldForReclaim(held)) {
-				return Fail("a seat closed by a clean leave is still being waited for");
+			returner.connected = false;
+			if (!wire.host.IsSeatHeldForReclaim(held)) {
+				return Fail("a seat left on purpose was not held for its player");
 			}
 			return 0;
 		}
 
-		// A player who leaves on purpose releases its seat. Coming back to the running match it is told it left, never taken
-		// for a stranger or for a host that is gone; a world tells it once and takes the next join as a new player's.
-		int TestCleanLeaverIsToldItLeft() {
+		// A player who leaves a running match on purpose keeps its seat exactly as a dropped one does: the ticket stays, the seat is
+		// held, and the return is a reclaim; nobody is told it left. A stranger is answered as before.
+		int TestCleanLeaverKeepsTheSeat() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
 			std::string error;
@@ -3339,46 +3331,69 @@ namespace RTE {
 				if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
 					return Fail(mode + ": the seeding join did not settle: " + error);
 				}
+				const uint8_t held = MakeSeatTable()[0].lockstepPeerId;
 				wire.host.SetLiveMatch(true);
-				if (!player.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error) || wire.host.GetStats().seatsClosedByLeave != 1) {
-					return Fail(mode + ": the clean leave did not close the seat: " + error);
+				if (!player.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error) || player.client.GetState() != NetH4ClientState::Left) {
+					return Fail(mode + ": the clean leave did not settle: " + error);
+				}
+				const NetH4LeaveAck* ack = LastOf<NetH4LeaveAck>(wire.Delivered(player.connection));
+				if (ack == nullptr || ack->seatClosed) {
+					return Fail(mode + ": the leave was answered " + (ack == nullptr ? std::string("nothing") : std::string("with its seat closed")));
+				}
+				NetH4TicketRecord record;
+				if (player.store.Load(unixNow, record, &error) != NetH4TicketLoadResult::Loaded) {
+					return Fail(mode + ": the leaver's ticket was not kept: " + error);
+				}
+				if (wire.host.NotifyDisconnect(player.connection, 300) != NetH4DisconnectOutcome::SeatDropped) {
+					return Fail(mode + ": the leaver's closed link did not drop its seat");
+				}
+				player.connected = false;
+				wire.Remove(player.connection);
+				if (!wire.host.IsSeatHeldForReclaim(held)) {
+					return Fail(mode + ": the seat left on purpose was not held for its player");
+				}
+				// The host's Seats panel names why the seat is held.
+				wire.nowMs += 125'000;
+				wire.host.Tick(wire.nowMs);
+				const std::vector<NetH4ModerationSeat> view = wire.host.GetModerationView();
+				const auto row = std::find_if(view.begin(), view.end(), [&](const NetH4ModerationSeat& seat) { return seat.stableSeat == record.stableSeat; });
+				const std::string cause = row == view.end() ? std::string("no row") : NetModerationUx::HoldCause(*row);
+				if (cause != "Left 2 min ago") {
+					return Fail(mode + ": the Seats panel read the held seat's cause as '" + cause + "'");
+				}
+				Endpoint returner;
+				returner.connection = 96;
+				ConfigureEndpoint(returner, world ? "left-world-return" : "left-match-return", &unixNow);
+				wire.Add(&returner);
+				wire.host.BindParticipantId(returner.connection, leaver);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!returner.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail(mode + ": the leaver's return did not settle: " + error);
+				}
+				if (returner.client.GetState() != NetH4ClientState::Joined) {
+					const NetJoinRejected* refused = LastOf<NetJoinRejected>(wire.Delivered(returner.connection));
+					return Fail(mode + ": the leaver's return was refused " + (refused == nullptr ? std::string("silently") : std::string(NetProtocol::RejectReasonName(refused->rejectReason))));
 				}
 				const auto joinAs = [&wire, &error](NetPeerId connection, const NetAuthBytes32& id, uint8_t tx) {
 					wire.host.BindParticipantId(connection, id);
 					NetH4NewJoin join;
 					join.txId = Ramp<16>(tx);
 					join.identity = MakeIdentity();
-					join.displayName = "returner";
+					join.displayName = "stranger";
 					const bool sent = wire.SendRaw(connection, join, &error);
 					wire.nowMs += NetReconnectAdmission::c_DenialReleaseMs;
 					wire.DrainHostOutbound();
 					return sent;
 				};
-				if (!joinAs(96, leaver, 0x61)) {
-					return Fail(error);
-				}
-				const NetJoinRejected* told = LastOf<NetJoinRejected>(wire.Delivered(96));
-				if (told == nullptr || told->rejectReason != NetRejectReason::SeatReleased || told->mismatchKey != (world ? "seat_released_joinable" : "seat_released")) {
-					return Fail(mode + ": the returning leaver was answered " + (told == nullptr ? std::string("nothing") : std::string(NetProtocol::RejectReasonName(told->rejectReason)) + " " + told->mismatchKey));
-				}
-				if (!joinAs(97, leaver, 0x62)) {
-					return Fail(error);
-				}
-				const NetJoinRejected* again = LastOf<NetJoinRejected>(wire.Delivered(97));
-				if (world ? (again != nullptr || LastOf<NetH4TicketOffer>(wire.Delivered(97)) == nullptr)
-				          : (again == nullptr || again->rejectReason != NetRejectReason::SeatReleased)) {
-					return Fail(mode + (world ? ": the join after being told was not taken as a new player's" : ": a match stopped telling its leaver it left"));
-				}
 				if (!joinAs(98, Ramp<32>(0xC1), 0x63)) {
 					return Fail(error);
 				}
 				const NetJoinRejected* stranger = LastOf<NetJoinRejected>(wire.Delivered(98));
-				if (world ? (stranger != nullptr && stranger->rejectReason == NetRejectReason::SeatReleased)
-				          : (stranger == nullptr || stranger->mismatchKey != "live_match")) {
-					return Fail(mode + ": a stranger's join was not answered as before");
+				if (stranger != nullptr && stranger->rejectReason == NetRejectReason::SeatReleased) {
+					return Fail(mode + ": a stranger was told its seat was released");
 				}
-				if (wire.host.GetStats().returningLeaversTold != (world ? 1U : 2U)) {
-					return Fail(mode + ": returning_leavers_told=" + std::to_string(wire.host.GetStats().returningLeaversTold));
+				if (!world && (stranger == nullptr || stranger->mismatchKey != "live_match")) {
+					return Fail(mode + ": a stranger's join was not answered as before");
 				}
 			}
 			return 0;
@@ -5347,7 +5362,7 @@ namespace RTE {
 			ConfigureEndpoint(second, "subst-ledger-none", &unixNow);
 			wire.Add(&second);
 			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
-			// Seat 1 was never held, so a clean leave is what makes it empty rather than a drop.
+			// Seat 1 owns nothing, so its player's leave leaves a held seat with no actors to hand anyone.
 			wire.host.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
 			Endpoint leaver;
 			leaver.connection = 182;
@@ -5365,20 +5380,22 @@ namespace RTE {
 			if (!leaver.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the clean leave did not settle: " + error);
 			}
-			if (!wire.host.IsSeatClosed(1)) {
-				return Fail("a clean mid-match leave did not close the seat");
+			g_Census = {};
+			if (wire.host.NotifyDisconnect(leaver.connection, 400) != NetH4DisconnectOutcome::SeatDropped || wire.host.IsSeatClosed(1)) {
+				return Fail("a clean mid-match leave did not hold the seat for its player");
 			}
+			leaver.connected = false;
 			if (!second.client.BeginApplication(1, wire.nowMs, &error) || !wire.Pump(&error)) {
 				return Fail("the application for the vacated seat did not settle: " + error);
 			}
 			if (second.client.GetState() != NetH4ClientState::Applied) {
-				return Fail("a seat left empty by a clean leave refused an applicant");
+				return Fail("a seat held after a clean leave refused an applicant");
 			}
 			if (wire.host.SubstituteApplicant(1, second.connection, wire.nowMs) != NetH4ModerationResult::Ok || !wire.Pump(&error)) {
 				return Fail("the second substitution did not settle: " + error);
 			}
 			if (second.client.GetState() != NetH4ClientState::Joined) {
-				return Fail("a substitute could not take a seat somebody cleanly left");
+				return Fail("a substitute the host accepted could not take a seat its player left");
 			}
 			if (!wire.host.TakePendingReseats().empty()) {
 				return Fail("a seat with no ledger entry handed a substitute somebody's actors");
@@ -6359,11 +6376,12 @@ namespace RTE {
 					            " session=" + NetSession::StateName(pair.client.GetState()) +
 					            " reject=" + pair.client.BuildRejectText());
 				}
-				if (pair.store.HasRecord() || pair.reconnect.GetStats().leaveAcksReceived != 1) {
-					return Fail("R2 arm: an acknowledged leave did not clear the recovery record");
+				// The match runs on, so the seat stays the player's and its recovery record stays for Rejoin Match.
+				if (!pair.store.HasRecord() || pair.reconnect.GetStats().leaveAcksReceived != 1) {
+					return Fail("R2 arm: an acknowledged leave of a running match cleared the recovery record");
 				}
 				if (pair.admission.GetStats().seatsClosedByLeave != 1) {
-					return Fail("R2 arm: the host did not close the seat on the leave");
+					return Fail("R2 arm: the host did not answer the leave");
 				}
 				if (pair.client.GetStats().timeouts != 0) {
 					return Fail("R2 arm: the leave exchange timed the host out instead of talking to it");
@@ -7871,7 +7889,7 @@ namespace RTE {
 		if (const int result = TestAdmissionHoldIssuesResolutions(); result != 0) {
 			return result;
 		}
-		if (const int result = TestCleanLeaverIsToldItLeft(); result != 0) {
+		if (const int result = TestCleanLeaverKeepsTheSeat(); result != 0) {
 			return result;
 		}
 		if (const int result = TestLeaveExchangeBeatsTeardown(); result != 0) {

@@ -33,7 +33,7 @@ namespace RTE {
 		using json = nlohmann::json;
 		json seats = json::array();
 		for (const auto& state: m_Seats) {
-			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", state.committed}, {"closed", state.closed}, {"dropped", state.dropped}, {"expired", state.holdExpired}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"display", state.holderName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs ? state.retiredUntilMs - m_NowMs : 0}};
+			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", state.committed}, {"closed", state.closed}, {"dropped", state.dropped}, {"left", state.leftByChoice}, {"expired", state.holdExpired}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"display", state.holderName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs ? state.retiredUntilMs - m_NowMs : 0}};
 			if (state.hasParticipantId) {
 				row["participant_id"] = state.participantId;
 			}
@@ -50,7 +50,7 @@ namespace RTE {
 				}
 			}
 		}
-		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"left", m_LeftParticipants}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
 	}
 
 	int64_t NetReconnectHost::CountExportedOpenSeats(const std::vector<uint8_t>& bytes, uint8_t localPeerId) {
@@ -156,11 +156,14 @@ namespace RTE {
 						return false;
 					state->activeConnection = peer->second;
 					state->dropped = false;
+					state->leftByChoice = false;
 					if (state->hasParticipantId)
 						next.BindParticipantId(peer->second, state->participantId);
 				} else if (state->committed && !state->seat.local) {
 					state->dropped = true;
 					state->droppedAtMs = nowMs;
+					state->leftByChoice = row.value("left", false);
+					state->leftAtMs = nowMs;
 				}
 				if (row.contains("ledger")) {
 					const auto& ledger = row.at("ledger");
@@ -190,7 +193,6 @@ namespace RTE {
 					return false;
 			}
 			if (object.contains("removed")) next.m_RemovedParticipants = object.at("removed").get<std::set<NetAuthBytes32>>();
-			if (object.contains("left")) next.m_LeftParticipants = object.at("left").get<std::set<NetAuthBytes32>>();
 			registry = std::move(nextRegistry);
 			next.m_Registry = &registry;
 			next.m_DropOwnershipSource = m_DropOwnershipSource;
@@ -365,7 +367,6 @@ namespace RTE {
 			m_PendingReclaims.clear();
 			m_Fences.clear();
 			m_RemovedParticipants.clear();
-			m_LeftParticipants.clear();
 			m_Outbound.clear();
 			m_PendingReseats.clear();
 			m_Commits.clear();
@@ -385,7 +386,6 @@ namespace RTE {
 		NoteStateChanged();
 		m_LiveMatch = false;
 		m_MatchEnded = true;
-		m_LeftParticipants.clear();
 		m_PendingReseats.clear();
 		m_PendingHoldResolutions.clear();
 		m_Ledger.Clear();
@@ -666,7 +666,7 @@ namespace RTE {
 		if (!ValidateIdentity(connection, message.identity)) {
 			return;
 		}
-		if (RefuseIfBanned(connection) || RefuseReturningLeaver(connection, message.txId, nowMs)) {
+		if (RefuseIfBanned(connection)) {
 			return;
 		}
 		const NetH4TxKey key = MakeKey(NetMessageType::NewJoin, 0, 0, message.identity);
@@ -969,7 +969,7 @@ namespace RTE {
 
 	void NetReconnectHost::HandleLeaveRequest(NetPeerId connection, const NetH4LeaveRequest& message, uint64_t nowMs) {
 		// Test-only: the ack the host sends never arrives, which is §7's ambiguous loss. Everything else
-		// about the exchange is unchanged - the seat is still closed and the generation still revoked.
+		// about the exchange is unchanged.
 		const bool dropAck = FaultInjected("drop_leave_ack");
 		const NetH4TxKey key = MakeKey(NetMessageType::LeaveRequest, message.stableSeat, message.holderGeneration, m_LocalIdentity);
 		if (const NetPayload* cached = FindCached(message.txId, key, nowMs)) {
@@ -989,20 +989,23 @@ namespace RTE {
 			return;
 		}
 		m_Admission.DropConnection(connection);
-		if (m_LiveMatch) {
-			if (seat->hasParticipantId) {
-				m_LeftParticipants.insert(seat->participantId);
-			}
+		const bool liveLeave = m_LiveMatch && !m_MatchEnded;
+		if (liveLeave) {
+			// A leave in a running match is a drop the player chose: the seat stays theirs and the AI plays it until
+			// they rejoin or the host gives it away. The link's close runs the drop itself.
+			seat->leftByChoice = true;
+			seat->leftAtMs = nowMs;
+			NoteStateChanged();
+		} else if (m_LiveMatch) {
 			CloseSeatWithoutHold(*seat);
-			// A world's slot reopens for the next player; a match seat closes with the round. Either
-			// way the leaver's credential is revoked and the generation moves, so it cannot come back.
 			seat->closed = !m_PersistentWorld;
 		} else {
 			// A lobby leave takes nothing with it: the seat goes back in the pool so the next player -
 			// this one returning or somebody new - joins exactly as they did before H4 existed.
 			ReleaseSeat(*seat);
 		}
-		const NetH4LeaveAck ack{c_NetH4Version, message.txId, message.stableSeat, message.holderGeneration, true};
+		// The client keeps its ticket for a seat that stays its own.
+		const NetH4LeaveAck ack{c_NetH4Version, message.txId, message.stableSeat, message.holderGeneration, !liveLeave};
 		m_TxCache.Store(message.txId, key, ack, nowMs);
 		++m_Stats.seatsClosedByLeave;
 		if (dropAck && NetA7Journal::Enabled()) NetA7Journal::Session("leave_ack_suppressed", nowMs, {{"transaction", NetA7Journal::Hex(message.txId.data(), message.txId.size())},
@@ -1026,6 +1029,7 @@ namespace RTE {
 		++seat.incarnation;
 		seat.activeConnection = connection;
 		seat.dropped = false;
+		seat.leftByChoice = false;
 		seat.holdExpired = false;
 		CaptureParticipant(seat, connection);
 		BumpSeatGeneration(seat);
@@ -1080,6 +1084,7 @@ namespace RTE {
 		seat.committed = false;
 		seat.activeConnection = c_InvalidNetPeerId;
 		seat.dropped = false;
+		seat.leftByChoice = false;
 		BumpSeatGeneration(seat);
 		seat.retiredGeneration = 0;
 		seat.retiredUntilMs = 0;
@@ -1145,26 +1150,6 @@ namespace RTE {
 		DiagnosticLine() << "[net-reconnect] admission refused reason=ParticipantBanned peer=" << connection << std::endl;
 		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "The host banned you from this session", "participant_identity", "", ""});
 		++m_Stats.identityRejections;
-		return true;
-	}
-
-	bool NetReconnectHost::RefuseReturningLeaver(NetPeerId connection, const NetAuthBytes16& txId, uint64_t nowMs) {
-		NetAuthBytes32 id{};
-		if (!m_LiveMatch || !LookupParticipantId(connection, id)) {
-			return false;
-		}
-		const auto left = m_LeftParticipants.find(id);
-		if (left == m_LeftParticipants.end()) {
-			return false;
-		}
-		if (m_PersistentWorld) {
-			m_LeftParticipants.erase(left);
-		}
-		++m_Stats.returningLeaversTold;
-		DiagnosticLine() << "[net-reconnect] admission refused reason=SeatReleased peer=" << connection << " joinable=" << (m_PersistentWorld ? 1 : 0) << std::endl;
-		const NetPayload refusal = NetJoinRejected{NetRejectReason::SeatReleased, "you left this match; it is still running", m_PersistentWorld ? "seat_released_joinable" : "seat_released", "", ""};
-		m_Admission.ScheduleDenial(connection, txId, NetH4DenialReason::SeatReleased, nowMs, &refusal);
-		++m_Stats.denialsScheduled;
 		return true;
 	}
 
@@ -1277,6 +1262,7 @@ namespace RTE {
 		seat.closed = false;
 		seat.saturated = false;
 		seat.dropped = false;
+		seat.leftByChoice = false;
 		seat.holdExpired = false;
 		seat.identity = {};
 		seat.holderName.clear();
@@ -1580,6 +1566,8 @@ namespace RTE {
 			});
 			entry.droppedAtMs = seat.droppedAtMs;
 			entry.droppedForMs = entry.dropped && m_NowMs > seat.droppedAtMs ? m_NowMs - seat.droppedAtMs : 0;
+			entry.leftByChoice = seat.leftByChoice;
+			entry.leftForMs = seat.leftByChoice && m_NowMs > seat.leftAtMs ? m_NowMs - seat.leftAtMs : 0;
 			for (const Applicant& applicant : m_Applicants) {
 				if (applicant.stableSeat != seat.seat.stableSeat) {
 					continue;
@@ -2008,6 +1996,7 @@ namespace RTE {
 			seat.closed = false;
 			seat.saturated = false;
 			seat.dropped = false;
+			seat.leftByChoice = false;
 			seat.holdExpired = false;
 			seat.retiredGeneration = 0;
 			seat.retiredUntilMs = 0;
