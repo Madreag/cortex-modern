@@ -7163,6 +7163,7 @@ void RunGameLoop() {
 			}
 
 			DumpSimStateIfArmed(simTick);
+			LocalPrediction::CompareFidelityAtTick(simTick);
 			NoteE2eSwitchOwnerLog(simTick);
 			TickProbeIfArmed(simTick);
 			LocalPredictionInvarianceOnTick(simTick);

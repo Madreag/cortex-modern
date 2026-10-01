@@ -24,6 +24,7 @@
 #include "ScenarioRunner.h"
 #include "SceneMan.h"
 #include "SettingsMan.h"
+#include "System.h"
 #include "PageWriteFence.h"
 #include "TerrainLayerSnapshot.h"
 #include "TimerMan.h"
@@ -34,6 +35,8 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <iterator>
+#include <map>
 #include <unordered_set>
 
 namespace RTE {
@@ -57,6 +60,52 @@ namespace RTE {
 	const std::array<const char*, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseNames{"drop", "wait", "fence", "terrain_capture", "self_copies", "clone", "scripts_in", "links", "step", "discard", "terrain_restore", "restore", "scripts_out"};
 
 	// Gives the clone the MOIDs its original holds this frame, so its own rays and hits ignore the original.
+	// The preview's first step of each actor, as the sim dump writes it, keyed by the actor and the tick it predicts.
+	static const bool s_FidelityProbe = std::getenv("CCCP_TEST_PREVIEW_FIDELITY") != nullptr;
+	static std::map<std::pair<long, uint64_t>, std::string> s_FidelitySteps;
+	static uint64_t s_FidelityEqual = 0;
+	static uint64_t s_FidelityDiffering = 0;
+
+	void LocalPrediction::CompareFidelityAtTick(uint64_t tick) {
+		if (!s_FidelityProbe) return;
+		for (auto it = s_FidelitySteps.begin(); it != s_FidelitySteps.end();) {
+			if (it->first.second > tick) {
+				++it;
+				continue;
+			}
+			if (it->first.second == tick) {
+				if (MovableObject* actor = g_MovableMan.FindObjectByUniqueID(it->first.first)) {
+					std::ostringstream committed;
+					g_MovableMan.DumpMOSimState(tick, "actor", actor, committed);
+					// Token by token; the clone's own identities (its UIDs and MOIDs) are not compared.
+					std::istringstream previewed(it->second), actual(committed.str());
+					std::vector<std::string> previewTokens{std::istream_iterator<std::string>(previewed), {}}, actualTokens{std::istream_iterator<std::string>(actual), {}};
+					std::vector<std::string> differing;
+					for (size_t i = 0; i < std::max(previewTokens.size(), actualTokens.size()); ++i) {
+						const std::string p = i < previewTokens.size() ? previewTokens[i] : "<none>", a = i < actualTokens.size() ? actualTokens[i] : "<none>";
+						if (p != a && p.rfind("moid=", 0) != 0 && p.rfind("uid=", 0) != 0) differing.push_back(p + " | " + a);
+					}
+					if (differing.empty()) {
+						++s_FidelityEqual;
+					} else {
+						++s_FidelityDiffering;
+						std::ostringstream line;
+						line << "[preview-fidelity] tick=" << tick << " uid=" << it->first.first << " differing=" << differing.size() << " first: ";
+						for (size_t i = 0; i < std::min<size_t>(differing.size(), 6); ++i) line << (i ? " ;; " : "") << differing[i];
+						System::PrintDiagnosticLine(line.str());
+						// The first two in full, both sides.
+						if (s_FidelityDiffering <= 2) {
+							System::PrintDiagnosticLine("[preview-fidelity] preview:\n" + it->second);
+							System::PrintDiagnosticLine("[preview-fidelity] committed:\n" + committed.str());
+						}
+					}
+				}
+			}
+			it = s_FidelitySteps.erase(it);
+		}
+		if (tick % 600 == 0) System::PrintDiagnosticLine("[preview-fidelity] tick=" + std::to_string(tick) + " equal=" + std::to_string(s_FidelityEqual) + " differing=" + std::to_string(s_FidelityDiffering));
+	}
+
 	static void AdoptMOIDs(Actor* clone, const Actor* original) {
 		const MOID rootMOID = original->GetID();
 		if (rootMOID == g_NoMOID || rootMOID <= 0) {
@@ -239,6 +288,8 @@ namespace RTE {
 			// Links into the world resolve to the overlay's shadows; links inside the clone stay inside it.
 			g_MovableMan.SetFaithfulLinkRoot(preview.clone);
 			preview.clone->ResolveFaithfulLinks();
+			// Copying a limb path ends its traversal: the clone walks on from the gait the actor is in, not from a fresh stride.
+			preview.clone->AdoptCarriedWalkState();
 			g_MovableMan.SetFaithfulLinkRoot(nullptr);
 			AdoptMOIDs(preview.clone, preview.original);
 		}
@@ -286,6 +337,11 @@ namespace RTE {
 				}
 				MovableMan::PostUpdateStage(clone);
 				FrameMan::FeelPreviewStep(clone, static_cast<uint64_t>(simCount), tick, feelStepBeginMS);
+				if (s_FidelityProbe && step == 1) {
+					std::ostringstream line;
+					g_MovableMan.DumpMOSimState(tick, "actor", clone, line);
+					s_FidelitySteps[{preview.original->GetUniqueID(), tick}] = line.str();
+				}
 			}
 			g_MovableMan.HarvestSpeculativeSpawns();
 		}

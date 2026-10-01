@@ -975,6 +975,13 @@ namespace RTE {
 		/// @param out The stream to append to.
 		void DumpSimState(uint64_t tick, std::ostream& out) const;
 
+		/// Writes one MO's line of the sim dump, and its attachables' lines, as DumpSimState writes them.
+		/// @param tick The sim tick to label the lines with.
+		/// @param kind The MO's list, as the dump names it.
+		/// @param mo The MO.
+		/// @param out The stream to append to.
+		void DumpMOSimState(uint64_t tick, const char* kind, MovableObject* mo, std::ostream& out) const;
+
 		/// Runs one paused lockstep tick: exchanges an empty controller frame and applies only the
 		/// game commands it carries, so an unpause can arrive while the sim holds still.
 		/// @return Whether the exchange succeeded; a failure sets the controller replay error.

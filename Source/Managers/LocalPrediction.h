@@ -34,6 +34,11 @@ namespace RTE {
 
 		/// Drops the previews outright (a match teardown).
 		static void Clear();
+
+		/// Test lever CCCP_TEST_PREVIEW_FIDELITY: compares each preview's first step with the committed actor at the same tick and names
+		/// the first field of the sim dump's line that differs. Call once a committed tick is complete.
+		/// @param tick The committed tick.
+		static void CompareFidelityAtTick(uint64_t tick);
 		/// One line of counters for the match report; empty when nothing was previewed.
 		static std::string DescribeStats();
 
