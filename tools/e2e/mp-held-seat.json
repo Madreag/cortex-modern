@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "mp-held-seat",
   "port_base": 49476,
-  "title": "Three peers; one seat drops at tick 300 and stays under the AI for a minute while the host and the other survivor play on",
+  "title": "Three peers; one seat drops at tick 300 and stays under the AI for a minute while the host and the other survivor play on (FeelBaseline: the human teams parked apart, no AI team, so the held seat's AI cannot end the survivors' minute)",
   "size": "960x540",
   "timeout_s": 240,
   "peers": [
@@ -33,8 +33,24 @@
         "NetworkSlowPlayerBoundTicks": "3",
         "NetworkSlowPlayerPolicy": "Substitute"
       },
-      "menu_script": "mp-host-migration.host.menu.txt",
-      "probe": "mp-held-seat.observe.probe.json"
+      "menu_script": "mp-held-seat.host.menu.txt",
+      "probe": "mp-held-seat.observe.probe.json",
+      "runtime_files": [
+        {
+          "copy": "tools/feel/FeelBaseline.lua",
+          "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+          "replace": [
+            [
+              "^local WINDOW_TICKS = \\d+;$",
+              "local WINDOW_TICKS = 5400;"
+            ]
+          ]
+        },
+        {
+          "to": "Userdata/UserScenes.rte/Index.ini",
+          "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+        }
+      ]
     },
     {
       "name": "clienta",
@@ -69,7 +85,23 @@
         "event": "video_mark migration-listening",
         "timeout_s": 90
       },
-      "probe": "mp-held-seat.observe.probe.json"
+      "probe": "mp-held-seat.observe.probe.json",
+      "runtime_files": [
+        {
+          "copy": "tools/feel/FeelBaseline.lua",
+          "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+          "replace": [
+            [
+              "^local WINDOW_TICKS = \\d+;$",
+              "local WINDOW_TICKS = 5400;"
+            ]
+          ]
+        },
+        {
+          "to": "Userdata/UserScenes.rte/Index.ini",
+          "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+        }
+      ]
     },
     {
       "name": "clientb",
@@ -104,7 +136,23 @@
         "event": "video_mark migration-client-admitted",
         "timeout_s": 90
       },
-      "kill_at_tick": 300
+      "kill_at_tick": 300,
+      "runtime_files": [
+        {
+          "copy": "tools/feel/FeelBaseline.lua",
+          "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+          "replace": [
+            [
+              "^local WINDOW_TICKS = \\d+;$",
+              "local WINDOW_TICKS = 5400;"
+            ]
+          ]
+        },
+        {
+          "to": "Userdata/UserScenes.rte/Index.ini",
+          "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+        }
+      ]
     }
   ],
   "checklist": [
