@@ -2,12 +2,13 @@
 
 #include "System.h"
 
-#include "SDL3/SDL_surface.h"
-#include <SDL3_image/SDL_image.h>
+#include "png.h"
 
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
@@ -20,6 +21,32 @@ namespace RTE {
 			std::ostringstream name;
 			name << "frame-" << std::setw(6) << std::setfill('0') << index << ".png";
 			return name.str();
+		}
+
+		// The fastest deflate level with the Sub filter: a recording is read once by the encoder, so speed beats size.
+		bool SaveRgbPng(const std::string& path, const unsigned char* pixels, int width, int height) {
+			std::FILE* file = std::fopen(path.c_str(), "wb");
+			if (!file) return false;
+			png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+			png_infop info = png ? png_create_info_struct(png) : nullptr;
+			bool saved = false;
+			if (png && info && !setjmp(png_jmpbuf(png))) {
+				png_init_io(png, file);
+				png_set_compression_level(png, 1);
+				png_set_filter(png, PNG_FILTER_TYPE_BASE, PNG_FILTER_SUB);
+				png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+				png_write_info(png, info);
+				for (int row = 0; row < height; ++row) png_write_row(png, const_cast<png_bytep>(pixels + static_cast<std::size_t>(row) * width * 3));
+				png_write_end(png, nullptr);
+				saved = true;
+			}
+			png_destroy_write_struct(png ? &png : nullptr, info ? &info : nullptr);
+			return std::fclose(file) == 0 && saved;
+		}
+
+		/// Writers enough to keep a 4K capture's rate on a desktop CPU without taking the engine's own cores.
+		std::size_t WriterCount() {
+			return std::clamp<std::size_t>(std::thread::hardware_concurrency() / 5, 2, 6);
 		}
 	} // namespace
 
@@ -67,7 +94,7 @@ namespace RTE {
 		m_StartedWallMS = SteadyNowMS();
 		m_StartedUnixMS = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		m_Enabled = true;
-		m_Writer = std::thread(&FrameRecorder::WriterLoop, this);
+		for (std::size_t writer = 0, count = WriterCount(); writer < count; ++writer) m_Writers.emplace_back(&FrameRecorder::WriterLoop, this);
 		return true;
 	}
 
@@ -145,27 +172,30 @@ namespace RTE {
 				m_Queue.pop_front();
 			}
 			WritePendingDrops();
-			WriteFrame(frame);
+			std::string row = WriteFrame(frame);
 			frame.pixels.clear();
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_Pool.push_back(std::move(frame.pixels));
+				// Flushed per frame and in frame order: a scenario that kills a peer still keeps the index of what it saw.
+				m_FinishedRows.emplace(frame.index, std::move(row));
+				for (auto next = m_FinishedRows.find(m_NextRow); next != m_FinishedRows.end(); next = m_FinishedRows.find(m_NextRow)) {
+					m_Index << next->second << '\n';
+					m_FinishedRows.erase(next);
+					++m_NextRow;
+				}
+				m_Index << std::flush;
 			}
 		}
 	}
 
-	void FrameRecorder::WriteFrame(const QueuedFrame& frame) {
+	std::string FrameRecorder::WriteFrame(const QueuedFrame& frame) {
 		const std::string path = (std::filesystem::path(m_FramesDirectory) / FrameLeaf(frame.index)).string();
-		SDL_Surface* surface = SDL_CreateSurfaceFrom(frame.meta.width, frame.meta.height, SDL_PIXELFORMAT_RGB24,
-		    const_cast<unsigned char*>(frame.pixels.data()), frame.meta.width * 3);
-		const bool saved = surface != nullptr && IMG_SavePNG(surface, path.c_str());
-		if (surface) SDL_DestroySurface(surface);
+		const bool saved = SaveRgbPng(path, frame.pixels.data(), frame.meta.width, frame.meta.height);
 
 		nlohmann::json line = {{"frame", frame.index}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
 		    {"screen", frame.meta.screen}, {"resolution", {frame.meta.width, frame.meta.height}}, {"saved", saved}};
 		if (!frame.meta.serviceState.empty()) line["service_state"] = frame.meta.serviceState;
-		// Flushed per frame: a scenario that kills a peer still keeps the index of what it saw.
-		m_Index << line.dump() << '\n' << std::flush;
 
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (saved) {
@@ -175,21 +205,20 @@ namespace RTE {
 		}
 		m_Width = frame.meta.width;
 		m_Height = frame.meta.height;
-		if (!m_SawFrame) {
-			m_SawFrame = true;
-			m_FirstSimTick = frame.meta.simTick;
-		}
-		m_LastSimTick = frame.meta.simTick;
+		// Writers finish out of order, so the span is the least and the greatest tick seen.
+		m_FirstSimTick = m_SawFrame ? std::min<unsigned long long>(m_FirstSimTick, frame.meta.simTick) : frame.meta.simTick;
+		m_SawFrame = true;
+		m_LastSimTick = std::max<unsigned long long>(m_LastSimTick, frame.meta.simTick);
+		return line.dump();
 	}
 
 	// A gap between two saved frames is the recorder's own when its slots were turned away here, so the review can tell
 	// a starved recording from a screen that presented nothing new.
 	void FrameRecorder::WritePendingDrops() {
+		// Every writer files drops, so the file is written under the lock as the frame index is.
+		std::lock_guard<std::mutex> lock(m_Mutex);
 		std::vector<std::pair<long long, std::size_t>> drops;
-		{
-			std::lock_guard<std::mutex> lock(m_Mutex);
-			drops.swap(m_PendingDrops);
-		}
+		drops.swap(m_PendingDrops);
 		if (drops.empty()) return;
 		for (const auto& [wallMS, slot]: drops) m_DroppedIndex << nlohmann::json({{"wall_ms", wallMS}, {"slot", slot}}).dump() << '\n';
 		m_DroppedIndex << std::flush;
@@ -220,7 +249,10 @@ namespace RTE {
 			m_Stopping = true;
 		}
 		m_Wake.notify_all();
-		if (m_Writer.joinable()) m_Writer.join();
+		for (std::thread& writer: m_Writers) {
+			if (writer.joinable()) writer.join();
+		}
+		m_Writers.clear();
 		m_EndedWallMS = SteadyNowMS();
 		m_EndedUnixMS = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		if (m_FinishAction) {
