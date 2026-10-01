@@ -222,6 +222,8 @@ namespace RTE {
 		bool m_ChatKeysHeld = false;
 		bool m_ChatDisabledKeys = false;
 		std::string m_StripText;
+		std::string m_StatusLayoutKey; //!< Every input the status box was last laid out from.
+		OverlayRect m_StatusLayoutRect; //!< Where that layout put the box.
 		mutable long long m_AutoShowUntilUs = 0;
 		uint16_t m_MatchDelayFrames = 0;
 		uint16_t m_BaseDelayFrames = 0;

@@ -42,8 +42,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -865,6 +869,50 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (menuLobby) LobbyMenuColumn(editor);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);
 	const int countNeed = font->CalculateWidth(countOnly) + 14;
+	// The box is laid out again only when an input it reads changes; otherwise the kept box and line are drawn as they were.
+	const auto layoutKey = [&](char mode, std::initializer_list<long long> geometry) {
+		char pace[32];
+		std::snprintf(pace, sizeof(pace), "%.1f", s_paceTps);
+		std::string key{mode};
+		for (const long long value: {static_cast<long long>(backbuffer->w), static_cast<long long>(backbuffer->h), static_cast<long long>(reinterpret_cast<intptr_t>(font)),
+		                             static_cast<long long>(m_Open), static_cast<long long>(g_SettingsMan.GetNetworkShowDiagnostics()), static_cast<long long>(menuLobby),
+		                             static_cast<long long>(hostLost), static_cast<long long>(resyncing), static_cast<long long>(placing), static_cast<long long>(placed),
+		                             static_cast<long long>(seats), static_cast<long long>(holdPause), static_cast<long long>(holdSeconds), static_cast<long long>(missingFrames),
+		                             static_cast<long long>(paused), static_cast<long long>((countdown + 59) / 60), static_cast<long long>(waiting),
+		                             hostLost || missingFrames ? currentWaitMs : 0LL, static_cast<long long>(m_MatchDelayFrames), static_cast<long long>(m_BaseDelayFrames),
+		                             ping ? static_cast<long long>(*ping) : -1LL, static_cast<long long>(snapshot.isHost), static_cast<long long>(snapshot.hostPeerId)}) {
+			key += ' ' + std::to_string(value);
+		}
+		for (const long long value: geometry) key += ' ' + std::to_string(value);
+		key += '|' + std::string(pace) + '|' + placementNames + '|' + holdName + '|' + snapshot.statusText + '|' + m_StatusProbeLine;
+		if (missingFrames) key += '|' + ScenarioRunner::GetLockstepMissingPeers();
+		for (const auto& member: snapshot.members) {
+			key += '|' + std::to_string(member.peerId) + ',' + member.displayName + ',' + std::to_string(member.team) + ',' + std::to_string(member.cpu) + ',' +
+			       std::to_string(member.isLocal) + ',' + std::to_string(member.ready) + ',' + std::to_string(member.connected) + ',' + std::to_string(member.pingMs) + ',' +
+			       std::to_string(member.inputDelayFrames) + ',' + std::to_string(member.waits) + ',' + std::to_string(member.longestWaitMs) + ',' +
+			       std::to_string(member.aiHeld) + ',' + std::to_string(member.dropped) + ',' + std::to_string(member.reclaiming) + ',' + member.connectedRoute + ',' +
+			       member.statusLine + ',' + NetPlayerPresentation::Name(member) + ',' + NetPlayerPresentation::State(member);
+		}
+		return key;
+	};
+	// Test lever: lay the box out every frame and name any frame whose kept key would have drawn a different text.
+	static const bool s_CheckStatusCache = [] { const char* value = std::getenv("CCCP_TEST_STATUS_CACHE_CHECK"); return value && std::string(value) == "1"; }();
+	const auto checkKept = [&](bool keyKept, const std::string& keptText) {
+		if (s_CheckStatusCache && keyKept && m_NetStatus->GetText() != keptText) {
+			System::PrintDiagnosticLine("[status-cache] stale tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " kept=\"" + keptText + "\" fresh=\"" + m_NetStatus->GetText() + "\"");
+		}
+	};
+	const auto drawKept = [&] {
+		const OverlayRect& kept = m_StatusLayoutRect;
+		m_NetStatusBox->SetVisible(true);
+		m_StatusRect = kept;
+		AllegroBitmap bitmap(backbuffer);
+		rectfill(backbuffer, kept.x, kept.y, kept.x + kept.width - 1, kept.y + kept.height - 1, makeacol32(20, 22, 27, 255));
+		rect(backbuffer, kept.x, kept.y, kept.x + kept.width - 1, kept.y + kept.height - 1, makeacol32(59, 65, 83, 255));
+		hline(backbuffer, kept.x + 1, kept.y + 1, kept.x + kept.width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
+		m_NetStatus->Draw(&bitmap, false);
+		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
+	};
 	if (backbuffer->h < c_CompactMaxHeight && (m_Open || !g_SettingsMan.GetNetworkShowDiagnostics())) {
 		// The short-screen layout is one line in the gap between the funds block and the controller icon;
 		// while the editor holds the world it takes the widest column-free gap, or the top band when none fits.
@@ -887,6 +935,13 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			}
 		}
 		const int maxTextWidth = std::max(0, freeRight - freeLeft - 14);
+		const std::string stripKey = layoutKey('c', {y, height, fullHeight, freeLeft, freeRight, topBand, maxTextWidth});
+		const bool stripKept = stripKey == m_StatusLayoutKey;
+		if (stripKept && !s_CheckStatusCache) {
+			drawKept();
+			return;
+		}
+		const std::string stripKeptText = s_CheckStatusCache ? m_NetStatus->GetText() : std::string();
 		const std::string pingText = !hostLost && ping ? std::to_string(*ping) : "--";
 		char tail[96];
 		std::snprintf(tail, sizeof(tail), " / delay %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
@@ -954,6 +1009,9 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
 		hline(backbuffer, x + 1, y + 1, x + width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
 		m_NetStatus->Draw(&bitmap, false);
+		checkKept(stripKept, stripKeptText);
+		m_StatusLayoutKey = stripKey;
+		m_StatusLayoutRect = m_StatusRect;
 		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 		return;
 	}
@@ -969,6 +1027,13 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		available = backbuffer->w;
 	}
 	const int maxPanelWidth = std::max(1, available - 2 * c_StatusBoxMargin);
+	const std::string panelKey = layoutKey('f', {freeLeft, freeRight, available, topBand, maxPanelWidth, editor.editing});
+	const bool panelKept = panelKey == m_StatusLayoutKey;
+	if (panelKept && !s_CheckStatusCache) {
+		drawKept();
+		return;
+	}
+	const std::string panelKeptText = s_CheckStatusCache ? m_NetStatus->GetText() : std::string();
 	m_NetStatusBox->SetVisible(true);
 	m_NetStatus->SetFont(font);
 	const auto compose = [&](int textWidth) {
@@ -1054,6 +1119,9 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
 	hline(backbuffer, x + 1, y + 1, x + width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
 	m_NetStatus->Draw(&bitmap, false);
+	checkKept(panelKept, panelKeptText);
+	m_StatusLayoutKey = panelKey;
+	m_StatusLayoutRect = m_StatusRect;
 	RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 }
 
