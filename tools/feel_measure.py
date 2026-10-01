@@ -33,6 +33,8 @@ BYTE_LIMIT = 5_000_000_000
 MATRIX_BYTE_LIMIT = 10_000_000_000
 # Every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
 FULLSTATE_EVERY = 0
+# --pin-alike: two engines on one box each get their own half of the runner's cores at the same priority.
+PIN_ALIKE = False
 LAG_ARMS = tuple(f'{lag}ms-{cap}' for lag in (100, 200) for cap in ('60hz', 'uncapped'))
 
 
@@ -171,12 +173,12 @@ def cpu_ranges(cpus):
     return ','.join(f'{first}-{last}' for first, last in spans)
 
 
-def engine_placements(peers, basis=None):
+def engine_placements(peers, basis=None, alike=False):
     """Three engines on one box each get their own cores and the host a third of them at above-normal priority: a
     real match runs one engine per machine, so a host starved by its neighbours is the harness's limit, not the round's.
     Whole SMT pairs, the host's third rounded up, all inside the runner's job mask (a job with an affinity limit keeps
     its processes inside it); a box with no mask splits every whole pair of the machine."""
-    if len(peers) != 3 or sys.platform != 'win32':
+    if len(peers) != (2 if alike else 3) or sys.platform != 'win32':
         return {}
     mask = (basis or runner_cpu_basis())['mask']
     cpus = [cpu for cpu in range(mask.bit_length()) if mask >> cpu & 1] if mask else list(range(2 * ((os.cpu_count() or 0) // 2)))
@@ -186,8 +188,13 @@ def engine_placements(peers, basis=None):
             units[-1].append(cpu)
         else:
             units.append([cpu])
-    if len(units) < 3:
+    if len(units) < len(peers):
         return {}
+    if alike:
+        # Two engines measured against each other: the same number of cores each, neither above the other.
+        half = len(units) // 2
+        placed = dict(zip(peers, ([cpu for unit in units[:half] for cpu in unit], [cpu for unit in units[half:2 * half] for cpu in unit])))
+        return {peer: dict(mask=sum(1 << cpu for cpu in placed[peer]), logical=cpu_ranges(placed[peer]), priority='normal') for peer in peers}
     host_units = -(-len(units) // 3)
     client_units = -(-(len(units) - host_units) // 2)
     spans = dict(host=units[:host_units], client=units[host_units:host_units + client_units], survivor=units[host_units + client_units:])
@@ -291,8 +298,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
     # The jitter rides with the lag: the peer that carries the link's delay jitters both of its directions, as a cross fault does.
     manifest['per_peer_jitter_ms'] = {peer: jitter_ms if manifest['per_peer_lag_ms'][peer] else 0 for peer in peers}
-    basis = runner_cpu_basis() if len(peers) == 3 and sys.platform == 'win32' else None
-    placements = engine_placements(peers, basis)
+    basis = runner_cpu_basis() if (len(peers) == 3 or PIN_ALIKE and len(peers) == 2) and sys.platform == 'win32' else None
+    placements = engine_placements(peers, basis, alike=PIN_ALIKE and len(peers) == 2)
     manifest['engine_placement'] = {}
     if basis:
         manifest['engine_placement_basis'] = dict(runner_affinity_mask=basis['runner_affinity_mask'], source=basis['source'],
@@ -865,6 +872,8 @@ def parse_args(argv=None):
                         help="a slower machine's added sim cost on one peer from a tick on (the slow-machine proofs)")
     parser.add_argument('--dry-run', action='store_true',
                         help='print every arm this command would launch with its port and peers; launch nothing, write nothing')
+    parser.add_argument('--pin-alike', action='store_true',
+                        help="two engines each get their own half of the runner's cores at the same priority, so neither reads the other's share")
     parser.add_argument('--fullstate-every', type=int, default=0,
                         help='every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off')
     return parser, parser.parse_args(argv)
@@ -912,8 +921,9 @@ def main(argv=None):
         parser.error('--host-lua-states and --client-lua-states must be positive')
     if args.fullstate_every < 0:
         parser.error('--fullstate-every must be 0 or positive')
-    global FULLSTATE_EVERY
+    global FULLSTATE_EVERY, PIN_ALIKE
     FULLSTATE_EVERY = args.fullstate_every
+    PIN_ALIKE = args.pin_alike
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
