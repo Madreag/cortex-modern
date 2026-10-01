@@ -141,6 +141,8 @@ TIMING_CASES = (
 JITTER_CASES = (
     ('100ms-jitter40-loss5', 100, 5, None, 40),
     ('200ms-jitter60-loss5', 200, 5, None, 60),
+    # Reordered and duplicated packets on both peers (RD1, the user 2026-10-01): the reliable lanes should make it a no-op.
+    ('100ms-reorder10-dup5', 100, 0, None, 0, 10, 5),
 )
 
 AUTOSAVE_CASES = (
@@ -277,7 +279,7 @@ DRY_RUN_PLAN = None
 PEER_SIM_COST = {}
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True, jitter_ms=0):
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True, jitter_ms=0, reorder_percent=0, dup_percent=0):
     if DRY_RUN_PLAN is not None:
         DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, jitter_ms=jitter_ms, local_prediction=prediction, loss_percent=loss_percent, silent_tick=silent_tick,
                                  autosave_seconds=autosave_seconds, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
@@ -289,7 +291,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     lua_states = {'host': host_lua_states, 'client': client_lua_states}
     pre_match_history = {'host': host_pre_match_history, 'client': client_pre_match_history}
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('autosave service e2e' if autosave_seconds else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop')),
-                    ticks=final_tick, lag_ms=lag, jitter_ms=jitter_ms, cap_hz=cap, instrumentation=record, port=None if sp else port, local_prediction=prediction,
+                    ticks=final_tick, lag_ms=lag, jitter_ms=jitter_ms, reorder_percent=reorder_percent, dup_percent=dup_percent, cap_hz=cap, instrumentation=record, port=None if sp else port, local_prediction=prediction,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     live_stalls=live_stalls, autosave_seconds=autosave_seconds, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
@@ -336,6 +338,10 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                     flags += ['-net-autosave-seconds', str(autosave_seconds)]
                 if manifest['per_peer_jitter_ms'][peer]:
                     flags += ['-net-fake-jitter', str(manifest['per_peer_jitter_ms'][peer])]
+                if reorder_percent:
+                    flags += ['-net-fake-reorder', str(reorder_percent)]
+                if dup_percent:
+                    flags += ['-net-fake-dup', str(dup_percent)]
                 if FULLSTATE_EVERY:
                     flags += ['-net-fullstate-hash-every', str(FULLSTATE_EVERY)]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
@@ -889,7 +895,8 @@ def launch_timing_arm(root, index, case, port_base, script, exe_hash, timeout, c
     """One loss or silent-seat arm, launched the same way by the full matrix and by --cases."""
     name, lag, loss, silent = case[:4]
     return launch_case(root, name, lag, 60, True, port_base + 8 + index % 2, script, exe_hash, timeout,
-                       loss_percent=loss, silent_tick=silent, jitter_ms=case[4] if len(case) > 4 else 0, **counts)
+                       loss_percent=loss, silent_tick=silent, jitter_ms=case[4] if len(case) > 4 else 0,
+                       reorder_percent=case[5] if len(case) > 5 else 0, dup_percent=case[6] if len(case) > 6 else 0, **counts)
 
 
 def launch_autosave_arm(root, index, case, port_base, script, exe_hash, timeout, counts):
