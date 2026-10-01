@@ -84,6 +84,15 @@ def check_recording_health(results, scratch):
     (video / "dropped.jsonl").write_text("", encoding="utf-8")
     quiet = driver.recording_health(video)
     ok &= row(results, "recording/screen-gap-is-not-the-recorders", quiet["recorder_gap_ms"] == 0 and quiet["longest_gap_ms"] == 400)
+    # The harness's capped stop ends the recording that is judged: a long tail after it is the run ending.
+    capped = scratch / "recording-capped"
+    capped.mkdir(parents=True, exist_ok=True)
+    walls = [1000 + i * 33 for i in range(120)] + [1000 + 119 * 33 + 11000]
+    (capped / "manifest.json").write_text(json.dumps({"fps": 30, "frames_saved": len(walls), "frames_dropped": 0, "frames_rate_limited": 0}), encoding="utf-8")
+    (capped / "frames.jsonl").write_text("".join(json.dumps({"frame": i, "saved": True, "wall_ms": wall}) + "\n" for i, wall in enumerate(walls)), encoding="utf-8")
+    (capped / "events.jsonl").write_text(json.dumps({"wall_ms": 1000 + 119 * 33 + 5, "message": "capped stop"}) + "\n", encoding="utf-8")
+    tail = driver.recording_health(capped)
+    ok &= row(results, "recording/capped-stop-tail-not-judged", not tail["starved"] and tail["longest_gap_ms"] == 33)
     return ok
 
 
