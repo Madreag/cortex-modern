@@ -61,6 +61,12 @@ using namespace RTE;
 
 static constexpr std::string_view c_DirectoryFallbackHint = "the session directory is not reachable: LAN games and a typed address still work";
 
+// The game's version, then the multiplayer build's own version and the network protocol it speaks.
+static std::string VersionLine() {
+	const std::string& build = System::GetBuildVersion();
+	return "v" + c_GameVersion.str() + (build.empty() ? std::string() : ", multiplayer " + build + " (protocol " + std::to_string(NetProtocol::c_Version) + ")");
+}
+
 static std::string PlayerFacingStatus(const std::string& text) {
 	const bool wireReason = text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos;
 	const std::string refusalPrefix = "A player could not join: ";
@@ -332,6 +338,7 @@ void MainMenuGUI::Clear() {
 	m_PortMapSerialShown = 0;
 	m_MultiplayerLobbyChatLabels.fill(nullptr);
 	m_MultiplayerLobbyChatInput = nullptr;
+	m_MultiplayerLobbyVersionLabel = nullptr;
 	m_MultiplayerLobbyChatLines.clear();
 
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
@@ -411,8 +418,7 @@ void MainMenuGUI::CreateMainScreen() {
 	}
 
 	m_VersionLabel = dynamic_cast<GUILabel*>(m_MainMenuScreenGUIControlManager->GetControl("VersionLabel"));
-	const std::string& build = System::GetBuildVersion();
-	m_VersionLabel->SetText("Community Project\nv" + c_GameVersion.str() + (build.empty() ? std::string() : ", multiplayer " + build + " (protocol " + std::to_string(NetProtocol::c_Version) + ")"));
+	m_VersionLabel->SetText("Community Project\n" + VersionLine());
 	m_VersionLabel->SetPositionAbs(10, g_WindowMan.GetResY() - m_VersionLabel->GetTextHeight() - 5);
 }
 
@@ -542,6 +548,14 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 		if (chatFont) m_MultiplayerLobbyChatInput->SetFont(chatFont);
 		m_MultiplayerLobbyChatInput->SetMaxTextLength(static_cast<int>(NetProtocol::c_MaxShortTextBytes));
 		m_MultiplayerLobbyChatInput->SetVisible(false);
+	}
+	m_MultiplayerLobbyVersionLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->AddControl(
+	    "LabelLobbyVersion", "LABEL", m_MultiplayerLobbyPanel, 8, 0, 284, 10));
+	if (m_MultiplayerLobbyVersionLabel) {
+		if (chatFont) m_MultiplayerLobbyVersionLabel->SetFont(chatFont);
+		m_MultiplayerLobbyVersionLabel->SetVAlignment(GUIFont::Middle);
+		m_MultiplayerLobbyVersionLabel->SetText(VersionLine());
+		m_MultiplayerLobbyVersionLabel->SetVisible(false);
 	}
 
 	m_MultiplayerModerationSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSummary"));
@@ -3783,8 +3797,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// a time - before any of them do.
 	const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
 	const int fixedExtra = statusExtra + portMapHeight + summaryHeight;
-	const int panelCap = g_WindowMan.GetResY() - 24; // the Back button's band sits under the panel
-	const int inputBlock = 25;                     // textbox 13 px + a bottom margin matching its sides
+	const int panelCap = g_WindowMan.GetResY() - backReserve; // the Back button's band sits under the panel
+	const int inputBlock = 37;                     // textbox 13 px, the 10 px version line 2 px under it, a bottom margin matching its sides
 	// The Leave/Seats row ends at rel 240; the first chat row keeps a 4px gap under it and the
 	// error block must not reach into that band.
 	const int c_LobbyChatTop = 261;
@@ -3843,6 +3857,18 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			m_MultiplayerLobbyChatInput->Resize(chatW, 13);
 		}
 		m_MultiplayerLobbyChatInput->SetVisible(true);
+	}
+	if (m_MultiplayerLobbyVersionLabel) {
+		m_MultiplayerLobbyVersionLabel->SetPositionRel(chatX, chatTop + chatRows * 10 + 15);
+		if (m_MultiplayerLobbyVersionLabel->GetWidth() != chatW) {
+			m_MultiplayerLobbyVersionLabel->Resize(chatW, 10);
+		}
+		// FontSmall, the font the line was given.
+		GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont;
+		const bool wide = font && font->CalculateWidth(m_MultiplayerLobbyVersionLabel->GetText()) > chatW;
+		m_MultiplayerLobbyVersionLabel->SetHorizontalOverflowScroll(wide);
+		m_MultiplayerLobbyVersionLabel->ActivateDeactivateOverflowScroll(wide);
+		m_MultiplayerLobbyVersionLabel->SetVisible(true);
 	}
 
 	if (m_MultiplayerLobbyPanel->GetHeight() != contentHeight) {

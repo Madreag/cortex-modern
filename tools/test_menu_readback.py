@@ -245,6 +245,14 @@ def sha(path):
         return file_sha256(stream)
 
 
+def version_line():
+    """The line the main menu and the lobby show: the game's version, VERSION.txt's and the network protocol's, read from this tree."""
+    tree = Path(__file__).resolve().parents[1]
+    game = re.search(r'c_VersionString = "([^"]+)"', (tree / "Source/System/GameVersion.h").read_text(encoding="utf-8"))[1]
+    protocol = re.search(r"c_Version = (\d+);", (tree / "Source/Network/NetProtocol.h").read_text(encoding="utf-8"))[1]
+    return f"v{game}, multiplayer {(tree / 'VERSION.txt').read_text(encoding='utf-8').strip()} (protocol {protocol})"
+
+
 def checks(control, parent):
     return (f"assert_visible {control} 1\nassert_rect_inside {control} {parent}\n"
             f"assert_rect_inside {control} viewport\nassert_text_fits {control}\n")
@@ -1289,6 +1297,9 @@ def scripts(case, port, root, size="960x540"):
         text += "assert_enabled ButtonMultiplayerModerate 0\n"
         text += "dump_host_options\n"
         text += checks("LabelLobbyPlayersHeader", "MultiplayerLobbyPanel")
+        # The lobby shows the main menu's version line inside its panel, under the chat entry.
+        text += checks("LabelLobbyVersion", "MultiplayerLobbyPanel")
+        text += f"assert_label LabelLobbyVersion {version_line()}\nassert_no_overlap LabelLobbyVersion TextLobbyChat\n"
         text += "assert_enabled ButtonMultiplayerStart 0\n"
         # H01-H35: the six host-options pages behind the lobby's Options button. Each tab shows its
         # own collection box, every visited control answers the fit checks, and the dump rows land
