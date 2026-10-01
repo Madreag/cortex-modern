@@ -83,6 +83,14 @@ def check_recording_health(results, scratch):
     return ok
 
 
+def check_item_kinds(results):
+    ok = row(results, "kind/gate-is-log", driver.item_kind({"id": "x", "gate": "item9a_wall_tps", "screen": "game"}) == "log")
+    ok &= row(results, "kind/log-regex-is-log", driver.item_kind({"id": "x", "log_regex": ["a"]}) == "log")
+    ok &= row(results, "kind/screen-only-is-picture", driver.item_kind({"id": "x", "screen": "game", "what": "the panel shows"}) == "picture")
+    ok &= row(results, "kind/explicit-kind-wins", driver.item_kind({"id": "x", "log_regex": ["a"], "kind": "picture"}) == "picture")
+    return ok
+
+
 def check_streamed_capture(results, scratch):
     video = scratch / "streamed" / "video"
     video.mkdir(parents=True, exist_ok=True)
@@ -1947,6 +1955,7 @@ def main():
         ok &= check_recording_health(results, scratch)
         ok &= check_screen_watches(results, scratch)
         ok &= check_streamed_capture(results, scratch)
+        ok &= check_item_kinds(results)
         ok &= check_freeze_stills(results)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_render_arm(results, scratch)
