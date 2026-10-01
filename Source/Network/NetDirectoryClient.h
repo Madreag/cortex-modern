@@ -70,6 +70,7 @@ namespace RTE {
 			int64_t worldBoot = 0;
 			std::string state; //!< "lobby" | "running", as the directory publishes it.
 			int64_t seatsFree = 0;
+			int64_t seatsHeld = 0; //!< Seats a running match holds for players who are gone.
 			int64_t peerCount = 0;
 			int64_t spectatorFree = 0;
 			int64_t spectatorMax = 0;

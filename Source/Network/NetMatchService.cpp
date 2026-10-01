@@ -2512,6 +2512,7 @@ static std::string ResyncSaveName() {
 		bool directoryRunning = false;
 		bool directoryListed = true;
 		int64_t directorySeatsFree = 0;
+		int64_t directorySeatsHeld = 0;
 		NetLobbySnapshot snapshot;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -2537,6 +2538,9 @@ static std::string ResyncSaveName() {
 						}
 						if (NetH4SeatIsOpen(seat.lockstepPeerId, m_LocalPeerId, seat.committed, seat.closed)) {
 							++directorySeatsFree;
+						}
+						if (NetH4SeatIsHeld(seat.lockstepPeerId, m_LocalPeerId, seat.dropped, seat.closed)) {
+							++directorySeatsHeld;
 						}
 					}
 				} else if (!m_LobbySnapshot.members.empty()) {
@@ -2620,6 +2624,7 @@ static std::string ResyncSaveName() {
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
 				m_DirectoryRow.seatsFree = directorySeatsFree;
+				m_DirectoryRow.seatsHeld = directorySeatsHeld;
 				m_DirectoryRow.spectatorFree = m_WorldSpectatorsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
 				advertised = m_DirectoryRow;

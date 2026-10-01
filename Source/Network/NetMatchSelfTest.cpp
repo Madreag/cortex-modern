@@ -13793,9 +13793,20 @@ namespace RTE {
 			*error = "reserved-seat rejoin was judged as a new join: new=" + ordinary + " returning=" + returning;
 			return false;
 		}
+		// A newcomer reaches a full running match that holds a seat, so its host can answer and it may apply; a full
+		// running match holding none, and a full lobby, stay refused on the newcomer's side.
+		row.seatsHeld = 1;
+		if (const auto held = NetIceResolveSessionRow({row}, identity, row.sessionId, &target); !held.empty()) {
+			*error = "a newcomer could not reach a running match holding a seat: " + held;
+			return false;
+		}
+		row.state = "lobby";
+		if (NetIceResolveSessionRow({row}, identity, row.sessionId, &target) != "full") { *error = "a full lobby was reached by a newcomer"; return false; }
+		row.state = "running";
+		row.seatsHeld = 0;
 		row.lockstepCodecVersion = 1;
 		if (NetIceResolveSessionRow({row}, identity, row.sessionId, &target, nullptr, true).empty()) { *error = "reserved seat bypassed identity validation"; return false; }
-		std::cout << "[net-match-selftest] PASS reserved_seat_directory_resolve full_new=refused full_returning=resolved identity=checked" << std::endl;
+		std::cout << "[net-match-selftest] PASS reserved_seat_directory_resolve full_new=refused full_returning=resolved held_new=resolved identity=checked" << std::endl;
 		return true;
 	}
 
