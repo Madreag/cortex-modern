@@ -1,0 +1,24 @@
+# A Relay-only player joins the listed session by id; with no relay to take it stays Relay only and is told why.
+wait_ms 1800
+activate ButtonMainToMultiplayer
+wait_ms 495
+assert_substate Landing
+settext TextMultiplayerName Joiner
+activate ButtonMultiplayerJoinGame
+wait_ms 660
+assert_substate JoinSetup
+wait_file {DIRECTORY_ROOT}/listed.json 30
+wait_ms 2000
+settext TextJoinAddress session:{DIRECTORY_SESSION}
+settext TextJoinPort {PORT}
+wait_ms 600
+activate ButtonMultiplayerConnect
+wait_ms 9000
+video_mark relay-reason-none
+assert_substate Landing
+assert_label LabelMultiplayerLandingStatus No relay is configured for this match - switch Connection to Automatic or Direct only
+# The reason stays on the landing, the cause on its first drawn line, for as long as the player looks at it.
+text_watch start h15-scene-relay-none require substate:Landing No relay is configured for this match
+wait_ms 3000
+text_watch close h15-scene-relay-none
+exit

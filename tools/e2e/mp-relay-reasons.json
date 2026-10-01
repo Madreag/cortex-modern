@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "name": "mp-relay-reasons",
+  "port_base": 49406,
+  "directory_port": 49411,
+  "size": "960x540",
+  "timeout_s": 150,
+  "title": "A Relay-only player with no relay is told why and what to change, and is never downgraded",
+  "capture_policy": "The refused run's directory asks Cloudflare for a relay with a key that does not exist (no secret is involved); the other run's host has no relay. The joiner stays Relay only in both.",
+  "runs": [
+    {
+      "name": "refused",
+      "peers": [
+        {
+          "name": "host",
+          "args": [],
+          "menu_script": "mp-relay-reasons.host.menu.txt",
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkIceEnable": "1",
+            "NetworkHostRelayMode": "Directory",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
+          }
+        },
+        {
+          "name": "client",
+          "args": [],
+          "menu_script": "mp-relay-reasons.refused.client.menu.txt",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkIceEnable": "1",
+            "NetworkConnectionMode": "RelayOnly",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark relay-reason-lobby-host",
+            "timeout_s": 90,
+            "directory_listed": true
+          }
+        }
+      ],
+      "directory_turn_config": {
+        "backend": "cloudflare",
+        "turn_key_id": "cccp-cf3-refusal-probe",
+        "api_token": "cccp-cf3-not-a-token"
+      }
+    },
+    {
+      "name": "none",
+      "peers": [
+        {
+          "name": "host",
+          "args": [],
+          "menu_script": "mp-relay-reasons.host.menu.txt",
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkIceEnable": "1",
+            "NetworkHostRelayMode": "Off",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
+          }
+        },
+        {
+          "name": "client",
+          "args": [],
+          "menu_script": "mp-relay-reasons.none.client.menu.txt",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkIceEnable": "1",
+            "NetworkConnectionMode": "RelayOnly",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark relay-reason-lobby-host",
+            "timeout_s": 90,
+            "directory_listed": true
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "relay-reason-refused",
+      "run": "refused",
+      "peer": "client",
+      "mark": "relay-reason-refused",
+      "screen": "MultiplayerScreen",
+      "what": "The Relay-only joiner reads why it cannot join and what to change: 'The host's relay refused the credentials - ask the host to check the relay setting'.",
+      "events": [
+        "assert_label LabelMultiplayerLandingStatus .*The host.s relay refused the credentials - ask the host to check the relay setting.*PASS"
+      ]
+    },
+    {
+      "id": "relay-reason-none",
+      "run": "none",
+      "peer": "client",
+      "mark": "relay-reason-none",
+      "screen": "MultiplayerScreen",
+      "what": "The Relay-only joiner reads why it cannot join and what to change: 'No relay is configured for this match - switch Connection to Automatic or Direct only'.",
+      "events": [
+        "assert_label LabelMultiplayerLandingStatus .*No relay is configured for this match - switch Connection to Automatic or Direct only.*PASS"
+      ]
+    },
+    {
+      "id": "relay-reason-refused-not-downgraded",
+      "run": "refused",
+      "peer": "client",
+      "what": "Relay only never falls back to a direct or IP route.",
+      "forbidden_log_regex": [
+        "\\[net-ice\\] session .* taking the IP half",
+        "\\[net-route\\] RouteAllowed route=(direct|host|srflx)"
+      ],
+      "log_regex": [
+        "setup failed: The host.s relay refused the credentials - ask the host to check the relay setting"
+      ]
+    },
+    {
+      "id": "relay-reason-none-not-downgraded",
+      "run": "none",
+      "peer": "client",
+      "what": "Relay only never falls back to a direct or IP route.",
+      "forbidden_log_regex": [
+        "\\[net-ice\\] session .* taking the IP half",
+        "\\[net-route\\] RouteAllowed route=(direct|host|srflx)"
+      ],
+      "log_regex": [
+        "setup failed: No relay is configured for this match - switch Connection to Automatic or Direct only"
+      ]
+    }
+  ]
+}
