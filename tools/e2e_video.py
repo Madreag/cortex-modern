@@ -367,6 +367,24 @@ def port_for(run_index, base):
     return port
 
 
+def recording_health(video_dir, minimum_share=0.9):
+    """The recorder's own account of a capture: frames saved a second over the recorded span against the rate it was asked for,
+    and the longest wait between two saved frames. A capture that saved fewer than minimum_share of its frames is starved."""
+    manifest_path = Path(video_dir) / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    saved = [row["wall_ms"] for row in read_index(video_dir) if row.get("saved", True) and "wall_ms" in row]
+    fps = manifest.get("fps") or 0
+    span_s = (saved[-1] - saved[0]) / 1000.0 if len(saved) > 1 else 0.0
+    saved_fps = (len(saved) - 1) / span_s if span_s > 0 else 0.0
+    longest_gap_ms = max((later - earlier for earlier, later in zip(saved, saved[1:])), default=0)
+    starved = fps <= 0 or saved_fps < minimum_share * fps
+    return {"fps": fps, "frames_saved": manifest.get("frames_saved"), "frames_dropped": manifest.get("frames_dropped"),
+            "frames_rate_limited": manifest.get("frames_rate_limited"), "span_s": round(span_s, 3), "saved_fps": round(saved_fps, 2),
+            "longest_gap_ms": longest_gap_ms, "starved": starved}
+
+
 def read_index(video_dir):
     """The engine's per-frame index; a capture that never presented a frame leaves it empty."""
     path = Path(video_dir) / "frames.jsonl"
@@ -995,6 +1013,20 @@ def review(scenario, capture, out):
                                   "launch": None, "errors": [row["line"] for row in dialogs[:3]]}} if dialogs else
                      {"finding": {"class": "harness", "reason": capture["interrupted"], "launch": None, "errors": []}}
                      if capture.get("interrupted") else {})})
+    # The recording is itself asserted: a capture that saved too few frames shows stills, whatever the scenario passed.
+    for peer in [] if capture.get("interrupted") else capture["peers"]:
+        health = recording_health(peer["video_dir"]) if peer.get("video_dir") else None
+        if health is None:
+            continue
+        items.append({"id": "recording-rate-" + peer["peer"], "run": capture["name"], "peer": peer["peer"], "screen": "any",
+                      "what": "The recorder saved its frames at the rate it was asked for, so the footage moves as the screen did.",
+                      "assert": "frames saved a second over the recorded span >= 90 % of the recorder's rate",
+                      "frames": None, "capture_frames": None, "video_seconds": None, "video": peer.get("video"),
+                      "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if health["starved"] else "pass",
+                      "recording": health,
+                      **({"finding": {"class": "harness", "reason": "starved capture: %.1f of %d frames a second saved, longest gap %d ms" %
+                                      (health["saved_fps"], health["fps"], health["longest_gap_ms"]), "launch": None, "errors": []}}
+                         if health["starved"] else {})})
     run_findings = []
     for peer in capture["peers"]:
         record = peer.get("record", {})

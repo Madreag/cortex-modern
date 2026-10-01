@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "mp-leave",
   "title": "A leaving player and a held player hand their seats to AI while two survivors play on",
-  "port_base": 49460,
+  "port_base": 49459,
   "size": "960x540",
   "timeout_s": 240,
   "runs": [
@@ -787,7 +787,7 @@
       "id": "announced-rejoin-offer",
       "peer": "leaver",
       "run": "announced",
-      "screen": "menu",
+      "screen": "MultiplayerScreen",
       "mark": "leaver-rejoin-offer",
       "what": "Back at the menu after its leave, the leaver's landing offers Rejoin Match."
     },
