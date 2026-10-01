@@ -1652,6 +1652,8 @@ void MOSRotating::AdoptPersistedUniqueID() {
 	if (m_HasPersistedAttachableAndWoundMass) {
 		m_AttachableAndWoundMass = m_PersistedAttachableAndWoundMass;
 		m_HasPersistedAttachableAndWoundMass = false;
+		// The restored sum is exact; the copy's own capture would put back the load's re-summed one.
+		m_FaithfulAttachableAndWoundMass.reset();
 	}
 	for (Attachable* attachable: m_Attachables) {
 		attachable->AdoptPersistedUniqueID();
@@ -1664,6 +1666,7 @@ void MOSRotating::AdoptPersistedUniqueID() {
 	if (!m_PersistedMOSRotatingRuntime.empty()) {
 		if (!LoadMOSRotatingRuntime(m_PersistedMOSRotatingRuntime)) throw std::runtime_error("could not restore MOSRotating runtime checkpoint");
 		m_PersistedMOSRotatingRuntime.clear();
+		m_FaithfulAttachableAndWoundMass.reset();
 	}
 }
 
