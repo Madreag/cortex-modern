@@ -776,8 +776,8 @@ static std::string ResyncSaveName() {
 			if (m_IsHost)
 				(void)GetNetAuthCrypto().RandomBytes(m_MigrationKey.data(), m_MigrationKey.size());
 			// The round that just ended is the only thing that knows who left it; the next lobby is
-			// formed from the peers it still had. The host derives its own roster from the live session.
-			if (!m_IsHost) {
+			// formed from the peers it still had. The host adds the peers its live session holds.
+			{
 				std::map<uint8_t, uint64_t> leaves;
 				std::set<uint8_t> refilled;
 				std::optional<NetLockstepSeatSnapshot> seats;
