@@ -8,6 +8,7 @@
 #include "MOSprite.h"
 #include "Gib.h"
 
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -583,6 +584,7 @@ namespace RTE {
 		bool m_HasPersistedGroupInertia; //!< Whether a saved moment of inertia is pending application.
 		std::vector<long> m_FaithfulAttachableOrder; //!< The live attachable order a faithful clone lays back in ResolveFaithfulLinks.
 		long m_FaithfulRadiusAffectingAttachableUID = 0; //!< The radius-affecting attachable a faithful clone relinks in ResolveFaithfulLinks.
+		std::optional<float> m_FaithfulAttachableAndWoundMass; //!< The live attachable and wound mass a faithful clone takes back in ResolveFaithfulLinks, once its parts are re-attached.
 		float m_FaithfulFarthestAttachableDistanceAndRadius = 0.0F; //!< The live farthest distance a faithful clone lays back with the link above.
 		float m_PersistedAttachableAndWoundMass; //!< Saved accumulated attachable+wound mass, applied on snapshot adopt.
 		bool m_HasPersistedAttachableAndWoundMass; //!< Whether a saved accumulated mass is pending application.

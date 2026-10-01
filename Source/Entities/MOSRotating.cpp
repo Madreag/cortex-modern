@@ -329,6 +329,8 @@ int MOSRotating::Create(const MOSRotating& reference) {
 		m_FaithfulRadiusAffectingAttachableUID = referencePending ? reference.m_FaithfulRadiusAffectingAttachableUID : (reference.m_RadiusAffectingAttachable ? reference.m_RadiusAffectingAttachable->GetUniqueID() : 0);
 		m_FarthestAttachableDistanceAndRadius = m_FaithfulFarthestAttachableDistanceAndRadius;
 		m_AttachableAndWoundMass = reference.m_AttachableAndWoundMass;
+		// A derived class re-attaches its hardcoded parts after this, adding their mass again; the clone takes the live sum back once built.
+		m_FaithfulAttachableAndWoundMass = reference.m_AttachableAndWoundMass;
 		// Hardcoded attachables re-attach in declaration order; remember the live order so the update order survives.
 		if (!reference.m_FaithfulAttachableOrder.empty()) {
 			m_FaithfulAttachableOrder = reference.m_FaithfulAttachableOrder;
@@ -1715,6 +1717,10 @@ void MOSRotating::ResolveFaithfulLinks() {
 	}
 	for (AEmitter* wound: m_Wounds) {
 		wound->ResolveFaithfulLinks();
+	}
+	if (m_FaithfulAttachableAndWoundMass) {
+		m_AttachableAndWoundMass = *m_FaithfulAttachableAndWoundMass;
+		m_FaithfulAttachableAndWoundMass.reset();
 	}
 }
 
