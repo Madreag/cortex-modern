@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "timeout_ms": 95000,
+  "timeout_ms": 180000,
   "steps": [
     {
       "op": "wait",
@@ -45,6 +45,16 @@
       "text_contains": "AI in control"
     },
     {
+      "op": "assert_control",
+      "control": "NetworkSeatDetail0",
+      "text_contains": "Held - AI in control"
+    },
+    {
+      "op": "assert_control",
+      "control": "NetworkSeatDetail0",
+      "text_contains": "Left "
+    },
+    {
       "op": "assert",
       "equals": {
         "service": "Running"
@@ -73,6 +83,17 @@
         "service": "Running"
       },
       "sim_at_least": 1000
+    },
+    {
+      "op": "wait",
+      "sim_at_least": 3000
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      },
+      "sim_at_least": 3000
     },
     {
       "op": "finish"

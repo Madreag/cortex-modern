@@ -4,7 +4,7 @@
   "title": "A leaving player and a held player hand their seats to AI while two survivors play on",
   "port_base": 49460,
   "size": "960x540",
-  "timeout_s": 100,
+  "timeout_s": 240,
   "runs": [
     {
       "name": "announced",
@@ -22,7 +22,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "3600",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -64,7 +64,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "3600",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -94,7 +94,9 @@
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always"
           },
-          "start_delay_s": 1
+          "start_delay_s": 1,
+          "menu_script": "mp-leave.leaver.menu.txt",
+          "probe": "mp-leave.leaver.probe.json"
         },
         {
           "name": "survivor",
@@ -109,7 +111,7 @@
             "-net-match-cpu-slots",
             "0",
             "-net-match-ticks",
-            "1200",
+            "3600",
             "-net-match-auto-delay",
             "-net-autosave-seconds",
             "0",
@@ -369,7 +371,7 @@
       "run": "announced",
       "screen": "game",
       "mark": "survivor-after-leave",
-      "what": "The departed seat reads Left - AI in control, without drop or hold timers.",
+      "what": "The departed seat reads Held - AI in control: it is still its player's.",
       "probe_steps": [
         9
       ]
@@ -566,7 +568,7 @@
       "peer": "survivor",
       "screen": "game",
       "mark": "survivor-after-leave",
-      "what": "The departed row uses the same Left - AI in control phrase as the seat detail.",
+      "what": "The departed row uses the same Held - AI in control phrase as the seat detail.",
       "probe_steps": [
         9
       ],
@@ -577,7 +579,7 @@
             "control",
             "text"
           ],
-          "contains": "Left - AI in control"
+          "contains": "Held - AI in control"
         }
       ]
     },
@@ -587,7 +589,7 @@
       "peer": "host",
       "screen": "game",
       "mark": "survivor-after-leave",
-      "what": "The departure toast names the player and uses Left - AI in control.",
+      "what": "The departure toast names the player and uses Held - AI in control.",
       "probe_steps": [
         2
       ],
@@ -598,7 +600,7 @@
             "control",
             "text"
           ],
-          "contains": "leaver: Left - AI in control"
+          "contains": "leaver: Held - AI in control"
         }
       ]
     },
@@ -616,6 +618,56 @@
       "forbidden_log_regex": [
         "hold peer=3 frame=",
         "PeerHeld:"
+      ]
+    },
+    {
+      "id": "announced-seat-cause",
+      "peer": "host",
+      "run": "announced",
+      "screen": "game",
+      "mark": "survivor-after-leave",
+      "what": "The host's Seats panel holds the left seat for its player and names why: Held - AI in control / Left N s ago.",
+      "probe_steps": [
+        10,
+        11
+      ],
+      "readback": [
+        {
+          "step": 10,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Held - AI in control"
+        },
+        {
+          "step": 11,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Left "
+        }
+      ]
+    },
+    {
+      "id": "announced-rejoin-offer",
+      "peer": "leaver",
+      "run": "announced",
+      "screen": "menu",
+      "mark": "leaver-rejoin-offer",
+      "what": "Back at the menu after its leave, the leaver's landing offers Rejoin Match."
+    },
+    {
+      "id": "announced-leaver-back",
+      "peer": "leaver",
+      "run": "announced",
+      "screen": "game",
+      "mark": "leaver-back",
+      "what": "Rejoin Match brings the leaver back into its own seat and it plays on while the match runs.",
+      "assert": "The leaver's probe asserts Running at tick 2700 after its rejoin, in its own seat; the host plays on to tick 3000.",
+      "probe_steps": [
+        2
       ]
     }
   ]
