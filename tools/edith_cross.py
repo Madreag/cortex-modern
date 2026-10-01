@@ -49,6 +49,8 @@ ADDRESS = {'here': '68.3.162.151', 'edith': '24.251.145.96'}
 MACHINE = {'here': 'EROL-PC', 'edith': 'EDITH'}
 # The TURN URL each side can reach; EDITH reaches this site only through its public address.
 TURN = {'here': 'turn:192.168.50.122:3479?transport=udp', 'edith': 'turn:68.3.162.151:3479?transport=udp'}
+# The Cloudflare key stays in this file on this box: only its path is passed, to the run's own directory.
+CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json')
 TURN_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
 BOX_LOG = Path('D:/mx/inventory-confirming-2-20260926/steps.log')
 SECRET_KEYS = ('NetworkTurnPass', 'NetworkPlayerTurnPass')
@@ -493,13 +495,17 @@ def turn_login():
     raise RuntimeError(f'{TURN_CONF} has no user=<name>:<password> line')
 
 
-def network_settings(path, side, pin, login):
+def network_settings(path, side, pin, login, peer='host'):
     if path == 'ip':
         return {'NetworkIceEnable': '0'}
     rendezvous = {'SessionDirectoryUrl': f'127.0.0.1:{DIRECTORY_PORT if side == "here" else EDITH_TCP[DIRECTORY_PORT]}', 'SessionDirectoryCertSha256': pin,
                   'SessionDirectoryInstallKey': f'edith-cross-{side}-install'}
     if path == 'direct':
         return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
+    if path == 'directory-relay':
+        # The host asks the directory for the relay; the client may take only the relay it was handed.
+        return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkHostRelayMode': 'Directory',
+                'NetworkConnectionMode': 'Automatic' if peer == 'host' else 'RelayOnly'}
     user, secret = login
     return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkStunServers': '', 'NetworkConnectionMode': 'RelayOnly',
             'NetworkHostRelayMode': 'Fixed', 'NetworkTurnServers': TURN[side], 'NetworkTurnUser': user, 'NetworkTurnPass': secret,
@@ -571,7 +577,8 @@ def run_match(h, options, index, login):
             say(f'dry-run: session directory on 127.0.0.1:{DIRECTORY_PORT} with a fresh certificate under {root}')
         else:
             cert, key, pin = make_cert(root)
-            service = directory.start_service(root, DIRECTORY_PORT, cert, key)
+            service = directory.start_service(root, DIRECTORY_PORT, cert, key,
+                                              ('--turn-config', str(CLOUDFLARE_TURN_CONFIG)) if options.path == 'directory-relay' else ())
 
     def role(peer, session_id=None):
         ice = ['-net-ice', 'off' if options.path == 'ip' else 'on']
@@ -582,7 +589,7 @@ def run_match(h, options, index, login):
         return ['-net-join-session', session_id or '<session id>', *ice]
 
     def spec(peer, session_id=None):
-        return match_spec(peer, root, port, role(peer, session_id), network_settings(options.path, sides[peer], pin, login),
+        return match_spec(peer, root, port, role(peer, session_id), network_settings(options.path, sides[peer], pin, login, peer),
                           repo=options.remote_repo or options.repo if sides[peer] == 'edith' else options.repo,
                           ticks=match_ticks(options), timeout=match_timeout(options), record=options.feel_records,
                           lean=options.instrumentation == 'lean')
@@ -789,7 +796,7 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--scenario', choices=sorted(SCENARIOS), help='; '.join(f'{key}: {value}' for key, value in SCENARIOS.items()))
     parser.add_argument('--direction', choices=['host-here', 'host-edith'], default='host-here')
-    parser.add_argument('--path', choices=['direct', 'relay', 'ip'], default='direct')
+    parser.add_argument('--path', choices=['direct', 'relay', 'directory-relay', 'ip'], default='direct')
     parser.add_argument('--runs', type=int, default=1)
     parser.add_argument('--relay-bridge', action='store_true',
                         help='relay only: EDITH reaches the TURN server through a UDP-over-ssh bridge (its loopback UDP, an ssh -R '

@@ -65,13 +65,13 @@ def wait_engine_free(budget_s: float = 7200) -> None:
     raise SystemExit("gave up waiting for a free engine")
 
 
-def start_service(out: Path, port: int, cert: Path, key: Path) -> subprocess.Popen:
+def start_service(out: Path, port: int, cert: Path, key: Path, extra: tuple = ()) -> subprocess.Popen:
     log = out / "service.log"
     handle = (out / "service-stdout.log").open("w", encoding="utf-8")
     proc = subprocess.Popen(
         [sys.executable, str(SERVICE), "--bind", "127.0.0.1", "--port", str(port),
          "--cert", str(cert), "--key", str(key), "--log-file", str(log),
-         "--expiry-s", "120", "--heartbeat-s", "5"],
+         "--expiry-s", "120", "--heartbeat-s", "5", *extra],
         stdout=handle, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
     context = ssl.create_default_context()
     context.check_hostname = False
