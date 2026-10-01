@@ -1176,6 +1176,9 @@ namespace RTE {
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
+		/// Delay a sender needs once its start work is published: its link's need plus the start work its machine did beyond ours,
+		/// since it begins the round that much later and stays that far behind until its stream shows the slack.
+		static uint32_t StartSkewDelayFrames(uint32_t linkFrames, uint64_t peerStartMs, uint64_t ownStartMs, double tickMs);
 		std::vector<uint8_t> ResumePeerIds() const;
 
 		NetLockstepState GetState() const { NET_PLANE_CHECK(); return m_State; }
@@ -1710,6 +1713,7 @@ namespace RTE {
 		};
 		std::map<uint8_t, std::deque<ArrivalLead>> m_ArrivalLeads; //!< Per remote sender, the recent arrivals of its new input.
 		std::map<uint8_t, std::deque<uint32_t>> m_ArrivalLateness; //!< Per remote sender, how long its recent ticks landed after we first missed them.
+		std::set<uint8_t> m_StartSkewSized; //!< Host: senders whose delay this round already took their published start work.
 		static constexpr size_t c_ArrivalLatenessSamples = 64;
 		/// The decrease a live delay change may make without a wait at its frame: never more than the sender's inputs arrived early by, less the slow-player bound.
 		std::optional<uint16_t> SlackLimitedDecrease(uint8_t peerId, uint16_t proposed, uint16_t current, uint64_t nowMs);

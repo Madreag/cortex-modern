@@ -4834,6 +4834,7 @@ namespace RTE {
 		m_CaptureExcuseUntilMs.clear();
 		m_ArrivalLeads.clear();
 		m_ArrivalLateness.clear();
+		m_StartSkewSized.clear();
 		m_TimingOutgoing.clear();
 		m_DeferredControllerFrames.clear();
 		m_NextTimingRevision = 1;
@@ -6129,6 +6130,12 @@ namespace RTE {
 		return linkFrames > UINT32_MAX - restartFrames ? UINT32_MAX : linkFrames + restartFrames;
 	}
 
+	uint32_t NetLockstepCoordinator::StartSkewDelayFrames(uint32_t linkFrames, uint64_t peerStartMs, uint64_t ownStartMs, double tickMs) {
+		if (!std::isfinite(tickMs) || tickMs <= 0 || peerStartMs <= ownStartMs) return linkFrames;
+		const uint64_t skewFrames = static_cast<uint64_t>(std::ceil(static_cast<double>(peerStartMs - ownStartMs) / tickMs));
+		return static_cast<uint32_t>(std::min<uint64_t>(static_cast<uint64_t>(linkFrames) + skewFrames, UINT32_MAX));
+	}
+
 	bool NetLockstepCoordinator::PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error) {
 		NET_PLANE_CHECK();
 		if (!UsesBoundedWait() || !m_AiHeldSeats.contains(peerId)) return true;
@@ -6912,7 +6919,14 @@ namespace RTE {
 					if (delay && *delay < stats.delayFrames) delay = SlackLimitedDecrease(peer, *delay, stats.delayFrames, nowMs);
 					const uint32_t required = estimator.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
 					if (const auto kept = MarginKeepingIncrease(peer, stats.delayFrames, required, nowMs); kept && (!delay || *kept > *delay)) delay = kept;
-					if (delay) ProposeInputDelay(peer, *delay, FutureTimingFrame());
+					// A sender whose start took longer than ours plays the round that much behind; its delay covers it once, from its own measurement.
+					bool startSkew = false;
+					if (m_PeerStartupPublished.contains(peer) && stats.startParkMs > 0 && !m_StartSkewSized.contains(peer)) {
+						const uint32_t started = std::min<uint32_t>(StartSkewDelayFrames(required, stats.startParkMs, m_LocalStartParkMs, m_Config.simTickMs), NetLockstepCodec::c_MaxInputDelayFrames);
+						if (started <= stats.delayFrames) m_StartSkewSized.insert(peer);
+						else if (!delay || started > *delay) delay = static_cast<uint16_t>(started), startSkew = true;
+					}
+					if (delay && ProposeInputDelay(peer, *delay, FutureTimingFrame()) && startSkew) m_StartSkewSized.insert(peer);
 				}
 			}
 		}

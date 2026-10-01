@@ -7125,6 +7125,36 @@ namespace RTE {
 		return true;
 	}
 
+	// A machine whose round-start restart took longer than the host's plays the round that much behind: EDITH's 302 ms against the
+	// host's 164 ms left it 8 ticks late on an 8-tick delay sized from its link alone, and the first jitter past the bound held it
+	// (four-box runs, round frames 140-265). Its delay covers the start work it published beyond ours.
+	bool TestARoundStartsDelayCoversTheStartWork(std::string* error) {
+		struct Case {
+			const char* name;
+			uint32_t link;
+			uint64_t peerStart, ownStart;
+			double tick;
+			uint32_t expected;
+		};
+		const Case cases[] = {
+		    {"a slower start than ours", 8, 302, 164, 1000.0 / 60.0, 17},
+		    {"a faster start than ours", 8, 62, 164, 1000.0 / 60.0, 8},
+		    {"an equal start", 8, 164, 164, 1000.0 / 60.0, 8},
+		    {"a start no machine measured", 8, 0, 164, 1000.0 / 60.0, 8},
+		    {"no tick length", 8, 302, 164, 0.0, 8},
+		};
+		for (const Case& c: cases) {
+			const uint32_t delay = NetLockstepCoordinator::StartSkewDelayFrames(c.link, c.peerStart, c.ownStart, c.tick);
+			if (delay != c.expected) {
+				*error = std::string("the delay for ") + c.name + " is " + std::to_string(delay) + " frames, which leaves the sender " +
+				         (delay < c.expected ? "behind its own start work" : "a delay its start never cost");
+				return false;
+			}
+		}
+		std::cout << "PASS a_round_starts_delay_covers_the_start_work cases=" << sizeof(cases) / sizeof(cases[0]) << std::endl;
+		return true;
+	}
+
 	// A client whose link to the host dropped in the rematch's lobby ended its match (the four-box run: 'rematch setup failed:
 	// Connection dropped', exit 1) while the host played the round with its seat held; a lobby drop returns as a match drop does.
 	bool TestARematchLobbyDropReturnsThroughTheRejoin(std::string* error) {
@@ -14803,6 +14833,7 @@ namespace RTE {
 		if (!TestACaughtUpSeatTakesItsRoundsRecordOnce(&error)) return fail(error);
 		if (!TestARematchKeepsAnAbsentPlayersSeatHeld(&error)) return fail(error);
 		if (!TestARematchLobbyDropReturnsThroughTheRejoin(&error)) return fail(error);
+		if (!TestARoundStartsDelayCoversTheStartWork(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
