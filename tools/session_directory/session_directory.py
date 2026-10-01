@@ -450,9 +450,11 @@ class Session:
 class SessionDirectory:
     def __init__(
         self, expiry_s: float, heartbeat_s: float, queue_idle_s: float = QUEUE_IDLE_S,
-        turn_config: Optional[dict[str, Any]] = None,
+        turn_config: Optional[dict[str, Any]] = None, turn_max_ttl: int = TURN_MAX_TTL,
     ) -> None:
         self.expiry_s = expiry_s
+        # The longest relay credential this directory mints; a client asking for longer gets this much.
+        self.turn_max_ttl = max(TURN_MIN_TTL, min(TURN_MAX_TTL, int(turn_max_ttl)))
         self.heartbeat_s = heartbeat_s
         self.queue_idle_s = queue_idle_s
         self._lock = threading.RLock()
@@ -591,7 +593,7 @@ class SessionDirectory:
         match_id = require_str_unbounded(data, "match_id")
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", match_id):
             raise FieldError("invalid_field", "match_id")
-        ttl = require_int(data, "ttl", TURN_MIN_TTL, TURN_MAX_TTL)
+        ttl = min(require_int(data, "ttl", TURN_MIN_TTL, TURN_MAX_TTL), self.turn_max_ttl)
         with self._lock:
             sess = self._get(session_id, now)
             if not sess:
@@ -896,7 +898,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--heartbeat-s", type=float, default=5)
     parser.add_argument("--log-file", type=Path, default=None)
     parser.add_argument("--turn-config", type=Path, default=None)
-    return parser.parse_args(argv)
+    parser.add_argument("--turn-max-ttl", type=int, default=TURN_MAX_TTL,
+                        help=f"the longest relay credential minted, {TURN_MIN_TTL}-{TURN_MAX_TTL} s")
+    args = parser.parse_args(argv)
+    if not TURN_MIN_TTL <= args.turn_max_ttl <= TURN_MAX_TTL:
+        parser.error(f"--turn-max-ttl must be {TURN_MIN_TTL}-{TURN_MAX_TTL}")
+    return args
 
 
 def check_tls_args(args: argparse.Namespace) -> None:
@@ -1227,6 +1234,7 @@ def spawn_server(
     log_file: Optional[Path] = None,
     queue_idle_s: float = QUEUE_IDLE_S,
     turn_config: Optional[dict[str, Any]] = None,
+    turn_max_ttl: int = TURN_MAX_TTL,
 ) -> RunningServer:
     configure_logging(log_file)
     if cert is None or key is None:
@@ -1235,7 +1243,7 @@ def spawn_server(
         cert = None
         key = None
     store = SessionDirectory(
-        expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config
+        expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config, turn_max_ttl=turn_max_ttl
     )
     store.start_pruner()
     httpd = build_httpd(bind, port, store, cert, key)

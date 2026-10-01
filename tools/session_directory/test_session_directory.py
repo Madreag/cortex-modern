@@ -169,6 +169,19 @@ class DirectoryTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 14)
 
+    def test_turn_max_ttl_caps_the_minted_lifetime(self) -> None:
+        store = session_directory.SessionDirectory(300, 5, turn_config={
+            "backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"],
+        }, turn_max_ttl=300)
+        row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            offer = store.mint_ice_servers(row["session_id"], {"token": row["token"], "match_id": "match:1", "ttl": 86400}, INSTALL_KEY, 11)
+        self.assertEqual(offer["expires_at"], 1300)
+        self.assertTrue(offer["iceServers"][0]["username"].startswith("1300:"))
+        self.assertEqual(session_directory.SessionDirectory(300, 5).turn_max_ttl, session_directory.TURN_MAX_TTL)
+        with self.assertRaises(SystemExit):
+            session_directory.parse_args(["--turn-max-ttl", "299"])
+
     def test_fixed_offer_and_secret_refusal(self) -> None:
         store = session_directory.SessionDirectory(300, 5)
         row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
