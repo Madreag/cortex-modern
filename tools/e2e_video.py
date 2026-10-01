@@ -2470,7 +2470,7 @@ def main():
                 continue
             if directory_port:
                 from e2e.directory import serve
-                service = serve(out / f"{name}-directory", directory_port, (PORT_LO, PORT_HI))
+                service = serve(out / f"{name}-directory", directory_port, (PORT_LO, PORT_HI), turn_config=run.get("directory_turn_config"))
             with claim, service as tokens:
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
