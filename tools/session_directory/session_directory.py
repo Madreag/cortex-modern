@@ -1290,6 +1290,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         key=args.key if use_tls else None,
         log_file=args.log_file,
         turn_config=turn_config,
+        turn_max_ttl=args.turn_max_ttl,
     )
     print(f"session_directory listening on {args.bind}:{server.port}", flush=True)
     try:
