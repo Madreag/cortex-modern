@@ -7,6 +7,7 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -18,6 +19,8 @@ namespace RTE {
 	/// Writes a run's presented frames to numbered PNGs and a JSONL index on a small pool of writer threads.
 	/// The render thread only copies pixels into a pooled buffer; encoding and file writes never
 	/// touch it, and a full queue drops the frame instead of waiting.
+	class EncoderPipe;
+
 	class FrameRecorder {
 
 	public:
@@ -36,7 +39,7 @@ namespace RTE {
 		/// Frames the writer may fall behind by before the render thread starts dropping.
 		static constexpr std::size_t c_DefaultQueueBound = 8;
 
-		FrameRecorder() = default;
+		FrameRecorder();
 		~FrameRecorder();
 		FrameRecorder(const FrameRecorder&) = delete;
 		FrameRecorder& operator=(const FrameRecorder&) = delete;
@@ -80,6 +83,7 @@ namespace RTE {
 			std::vector<unsigned char> pixels;
 			FrameMeta meta;
 			std::size_t index = 0;
+			std::size_t slot = 0; //!< The capture-rate slot the frame was admitted in.
 		};
 
 		/// Whether the capture rate admits a frame at this wall time, advancing the pacer when it does.
@@ -87,6 +91,8 @@ namespace RTE {
 		void WriterLoop();
 		/// Encodes the frame; returns its index row, which the caller files in frame order.
 		std::string WriteFrame(const QueuedFrame& frame);
+		/// Streams the frame into the encoder, the last picture repeated for the slots before it that nothing filled.
+		std::string EncodeFrame(QueuedFrame& frame);
 		void WritePendingDrops();
 		void WriteManifest();
 
@@ -114,6 +120,21 @@ namespace RTE {
 
 		std::vector<unsigned char> m_Staging;
 		bool m_StagingHeld = false;
+		std::size_t m_StagingSlot = 0;
+
+		// The encoder a harness names (CCCP_TEST_RECORD_ENCODER, its codec in CCCP_TEST_RECORD_CODEC); writer thread only.
+		std::string m_EncoderPath;
+		std::string m_EncoderCodec;
+		std::unique_ptr<EncoderPipe> m_Encoder;
+		std::string m_EncoderError;
+		int m_EncoderExit = -1;
+		bool m_EncoderTried = false;
+		int m_EncodedWidth = 0;
+		int m_EncodedHeight = 0;
+		std::size_t m_FirstSlot = 0;
+		std::size_t m_NextSlot = 0;
+		std::size_t m_Repeated = 0;
+		std::vector<unsigned char> m_LastPicture;
 
 		mutable std::mutex m_Mutex;
 		std::condition_variable m_Wake;

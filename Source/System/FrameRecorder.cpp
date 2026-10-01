@@ -9,12 +9,122 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
 #include <utility>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace RTE {
+
+	/// One encoder process reading raw frames on its standard input; nothing else of this process reaches it.
+	class EncoderPipe {
+	public:
+		~EncoderPipe() { Close(0); }
+
+		bool Open(const std::string& command, const std::string& logPath, std::string& error) {
+#ifdef _WIN32
+			SECURITY_ATTRIBUTES inherit{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+			HANDLE readEnd = nullptr;
+			if (!CreatePipe(&readEnd, &m_Write, &inherit, 1 << 22)) return Fail(error, "CreatePipe");
+			SetHandleInformation(m_Write, HANDLE_FLAG_INHERIT, 0);
+			HANDLE log = CreateFileA(logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			// Only the pipe and the log are handed down: an inherited socket would outlive this process in the encoder.
+			HANDLE handles[2] = {readEnd, log};
+			const DWORD handleCount = log != INVALID_HANDLE_VALUE ? 2 : 1;
+			SIZE_T attributeBytes = 0;
+			InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeBytes);
+			std::vector<unsigned char> attributeList(attributeBytes);
+			auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeList.data());
+			STARTUPINFOEXA startup{};
+			startup.StartupInfo.cb = sizeof(startup);
+			startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+			startup.StartupInfo.hStdInput = readEnd;
+			startup.StartupInfo.hStdOutput = log != INVALID_HANDLE_VALUE ? log : nullptr;
+			startup.StartupInfo.hStdError = startup.StartupInfo.hStdOutput;
+			PROCESS_INFORMATION process{};
+			std::string mutableCommand = command;
+			const bool listed = InitializeProcThreadAttributeList(attributes, 1, 0, &attributeBytes) &&
+			    UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, handleCount * sizeof(HANDLE), nullptr, nullptr);
+			startup.lpAttributeList = listed ? attributes : nullptr;
+			const bool started = listed && CreateProcessA(nullptr, mutableCommand.data(), nullptr, nullptr, TRUE,
+			    CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo, &process);
+			if (listed) DeleteProcThreadAttributeList(attributes);
+			CloseHandle(readEnd);
+			if (log != INVALID_HANDLE_VALUE) CloseHandle(log);
+			if (!started) return Fail(error, "CreateProcess");
+			CloseHandle(process.hThread);
+			m_Process = process.hProcess;
+			return true;
+#else
+			m_Pipe = popen((command + " 2>\"" + logPath + "\"").c_str(), "w");
+			if (!m_Pipe) {
+				error = "popen failed";
+				return false;
+			}
+			return true;
+#endif
+		}
+
+		bool Write(const unsigned char* data, std::size_t size) {
+#ifdef _WIN32
+			while (size > 0) {
+				DWORD written = 0;
+				if (!m_Write || !WriteFile(m_Write, data, static_cast<DWORD>(std::min<std::size_t>(size, 1 << 30)), &written, nullptr) || written == 0) return false;
+				data += written;
+				size -= written;
+			}
+			return true;
+#else
+			return m_Pipe && std::fwrite(data, 1, size, m_Pipe) == size;
+#endif
+		}
+
+		/// Ends the input and waits for the encoder to write its file; the exit code, or -1 when it did not finish in time.
+		int Close(int timeoutMs) {
+#ifdef _WIN32
+			if (m_Write) {
+				CloseHandle(m_Write);
+				m_Write = nullptr;
+			}
+			if (!m_Process) return m_Exit;
+			if (WaitForSingleObject(m_Process, static_cast<DWORD>(timeoutMs)) == WAIT_OBJECT_0) {
+				DWORD code = 0;
+				GetExitCodeProcess(m_Process, &code);
+				m_Exit = static_cast<int>(code);
+			}
+			CloseHandle(m_Process);
+			m_Process = nullptr;
+			return m_Exit;
+#else
+			if (m_Pipe) {
+				m_Exit = pclose(m_Pipe);
+				m_Pipe = nullptr;
+			}
+			(void)timeoutMs;
+			return m_Exit;
+#endif
+		}
+
+	private:
+#ifdef _WIN32
+		static bool Fail(std::string& error, const char* step) {
+			error = std::string(step) + " failed with " + std::to_string(GetLastError());
+			return false;
+		}
+		HANDLE m_Write = nullptr;
+		HANDLE m_Process = nullptr;
+#else
+		std::FILE* m_Pipe = nullptr;
+#endif
+		int m_Exit = -1;
+	};
 
 	namespace {
 		std::string FrameLeaf(std::size_t index) {
@@ -59,6 +169,8 @@ namespace RTE {
 		return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 	}
 
+	FrameRecorder::FrameRecorder() = default;
+
 	FrameRecorder::~FrameRecorder() {
 		Finish();
 	}
@@ -94,7 +206,13 @@ namespace RTE {
 		m_StartedWallMS = SteadyNowMS();
 		m_StartedUnixMS = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		m_Enabled = true;
-		for (std::size_t writer = 0, count = WriterCount(); writer < count; ++writer) m_Writers.emplace_back(&FrameRecorder::WriterLoop, this);
+		const char* encoder = std::getenv("CCCP_TEST_RECORD_ENCODER");
+		const char* codec = std::getenv("CCCP_TEST_RECORD_CODEC");
+		m_EncoderPath = encoder ? encoder : "";
+		m_EncoderCodec = codec && *codec ? codec : "libx264";
+		// An encoder takes the frames in order on one pipe, so it has one writer; PNGs encode on a pool.
+		const std::size_t writers = m_EncoderPath.empty() ? WriterCount() : 1;
+		for (std::size_t writer = 0; writer < writers; ++writer) m_Writers.emplace_back(&FrameRecorder::WriterLoop, this);
 		return true;
 	}
 
@@ -136,6 +254,7 @@ namespace RTE {
 			m_Staging = std::move(m_Pool.back());
 			m_Pool.pop_back();
 		}
+		m_StagingSlot = m_Admitted - 1;
 		lock.unlock();
 		m_Staging.resize(bytes);
 		m_StagingHeld = true;
@@ -148,6 +267,7 @@ namespace RTE {
 		QueuedFrame frame;
 		frame.pixels = std::move(m_Staging);
 		frame.meta = meta;
+		frame.slot = m_StagingSlot;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			frame.index = m_NextIndex++;
@@ -172,7 +292,7 @@ namespace RTE {
 				m_Queue.pop_front();
 			}
 			WritePendingDrops();
-			std::string row = WriteFrame(frame);
+			std::string row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
 			frame.pixels.clear();
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
@@ -212,6 +332,49 @@ namespace RTE {
 		return line.dump();
 	}
 
+	std::string FrameRecorder::EncodeFrame(QueuedFrame& frame) {
+		if (!m_EncoderTried) {
+			m_EncoderTried = true;
+			m_EncodedWidth = frame.meta.width;
+			m_EncodedHeight = frame.meta.height;
+			m_FirstSlot = frame.slot;
+			m_NextSlot = frame.slot;
+			const std::string preset = m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
+			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f rawvideo -pix_fmt rgb24 -s " +
+			    std::to_string(m_EncodedWidth) + "x" + std::to_string(m_EncodedHeight) + " -framerate " + std::to_string(m_Fps) +
+			    " -i - -vf pad=ceil(iw/2)*2:ceil(ih/2)*2 -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
+			    (std::filesystem::path(m_Directory) / "capture.mp4").string() + "\"";
+			auto encoder = std::make_unique<EncoderPipe>();
+			if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) m_Encoder = std::move(encoder);
+			RecordEvent("encoder " + m_EncoderCodec + (m_Encoder ? " started" : " refused: " + m_EncoderError));
+		}
+		bool written = false;
+		if (m_Encoder && frame.meta.width == m_EncodedWidth && frame.meta.height == m_EncodedHeight) {
+			// Slots nothing filled keep the last picture, so the video runs on the wall clock the index is stamped with.
+			written = true;
+			for (; written && !m_LastPicture.empty() && m_NextSlot < frame.slot; ++m_NextSlot, ++m_Repeated) written = m_Encoder->Write(m_LastPicture.data(), m_LastPicture.size());
+			written = written && m_Encoder->Write(frame.pixels.data(), frame.pixels.size());
+			m_NextSlot = frame.slot + 1;
+			std::swap(frame.pixels, m_LastPicture);
+			if (!written) m_EncoderError = "the encoder stopped reading";
+		}
+		nlohmann::json line = {{"frame", frame.index}, {"video_frame", frame.slot - m_FirstSlot}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
+		    {"screen", frame.meta.screen}, {"resolution", {frame.meta.width, frame.meta.height}}, {"saved", written}};
+		if (!frame.meta.serviceState.empty()) line["service_state"] = frame.meta.serviceState;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (written) {
+			++m_Saved;
+		} else {
+			++m_WriteFailures;
+		}
+		m_Width = frame.meta.width;
+		m_Height = frame.meta.height;
+		m_FirstSimTick = m_SawFrame ? std::min<unsigned long long>(m_FirstSimTick, frame.meta.simTick) : frame.meta.simTick;
+		m_SawFrame = true;
+		m_LastSimTick = std::max<unsigned long long>(m_LastSimTick, frame.meta.simTick);
+		return line.dump();
+	}
+
 	// A gap between two saved frames is the recorder's own when its slots were turned away here, so the review can tell
 	// a starved recording from a screen that presented nothing new.
 	void FrameRecorder::WritePendingDrops() {
@@ -233,6 +396,10 @@ namespace RTE {
 		    {"started_wall_ms", m_StartedWallMS}, {"ended_wall_ms", m_EndedWallMS},
 		    {"started_unix_ms", m_StartedUnixMS}, {"ended_unix_ms", m_EndedUnixMS},
 		    {"directory", std::filesystem::path(m_Directory).generic_string()}};
+		if (!m_EncoderPath.empty()) {
+			manifest["encoder"] = {{"codec", m_EncoderCodec}, {"video", "capture.mp4"}, {"exit", m_EncoderExit}, {"error", m_EncoderError},
+			    {"repeated_slots", m_Repeated}, {"first_slot", m_FirstSlot}};
+		}
 		std::ofstream out(std::filesystem::path(m_Directory) / "manifest.json", std::ios::out);
 		if (out) out << manifest.dump(2) << '\n';
 	}
@@ -253,6 +420,10 @@ namespace RTE {
 			if (writer.joinable()) writer.join();
 		}
 		m_Writers.clear();
+		if (m_Encoder) {
+			m_EncoderExit = m_Encoder->Close(120000);
+			m_Encoder.reset();
+		}
 		m_EndedWallMS = SteadyNowMS();
 		m_EndedUnixMS = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		if (m_FinishAction) {
