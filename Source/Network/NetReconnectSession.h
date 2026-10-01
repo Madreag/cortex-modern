@@ -373,6 +373,8 @@ namespace RTE {
 		/// Retains credentials between rounds without carrying world ownership into the lobby.
 		void SetMatchEnded();
 		bool IsLiveMatch() const { return m_LiveMatch; }
+		/// Whether a seat's own player can come back to it now: a match running, or one between its rounds.
+		bool HoldsSeatsForReturn() const { return m_LiveMatch || m_MatchEnded; }
 		void SetHostAddress(std::string address) { m_HostAddress = std::move(address); }
 		void SetMatchConfigHash(const NetHash32& hash) { m_MatchConfigHash = hash; }
 		/// The actors the ledger records when a seat drops. Supplied by the match runner at the drop

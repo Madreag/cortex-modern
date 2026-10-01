@@ -1737,7 +1737,7 @@ namespace RTE {
 	}
 
 	uint8_t NetSession::AllocatePendingAdmissionPeerId() const {
-		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr || !m_ReconnectHost->IsLiveMatch()) {
+		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr || !m_ReconnectHost->HoldsSeatsForReturn()) {
 			return 0;
 		}
 		for (uint16_t candidate = static_cast<uint16_t>(m_Config.maxPeers) + 1;
