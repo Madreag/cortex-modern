@@ -804,6 +804,20 @@ def peer_log(root, peer):
     return path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
 
 
+def live_ticks(path):
+    """The ticks a peer's live stream holds: an {"abandon_from": N} record (an image rejoin) voids the rows from N it wrote before."""
+    ticks = set()
+    for line in Path(path).read_text(encoding='utf-8').splitlines() if Path(path).is_file() else []:
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if 'abandon_from' in row:
+            ticks = {tick for tick in ticks if tick < row['abandon_from']}
+        elif 'tick' in row:
+            ticks.add(row['tick'])
+    return ticks
+
+
 def read_json(path):
     path = Path(path)
     try:
@@ -853,7 +867,7 @@ def analyze_match(h, root, meta):
     for peer in ('host', 'client'):
         log = peer_log(root, peer)
         live = root / f'{peer}-live.jsonl'
-        ticks = {json.loads(line)['tick'] for line in live.read_text(encoding='utf-8').splitlines() if line.strip()} if live.is_file() else set()
+        ticks = live_ticks(live)
         waits = [(int(frame), int(ms)) for frame, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)]
         metrics = result.get('peers', {}).get(peer, {}).get('metrics', {})
         report = read_json(root / f'{peer}_report.json')
