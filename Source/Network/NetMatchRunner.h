@@ -211,7 +211,11 @@ namespace RTE {
 
 		std::string BuildReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator) const;
 
-		/// Client: the survivors to hand SetRematchRoster, from what its own round saw.
+		/// Host: a rematch's roster and its active members, from the peers connected now and the survivors the round derived (every
+		/// client derives the same). A roster seat that is not active starts the round held, its player returning through the rejoin.
+		static void RematchMembers(uint8_t hostPeerId, uint8_t peerCount, const std::vector<uint8_t>& readyPeerIds, const std::vector<uint8_t>& derivedSurvivors,
+		                           std::vector<uint8_t>& roster, std::vector<uint8_t>& active);
+		/// The survivors to hand SetRematchRoster, from what its own round saw.
 		static std::vector<uint8_t> DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats);
 		/// Whether a host's rematch proposal is the roster this peer derived, less seats only the host knows are gone.
 		/// derivedLocalPeerId names this peer in its own derivation when the host reseated it; 0 means the same id.

@@ -190,19 +190,15 @@ namespace RTE {
 			if (error) *error = m_SetupError;
 			return false;
 		};
-		std::vector<uint8_t> survivors;
+		std::vector<uint8_t> survivors, present;
 		if (m_Config.host) {
 			// Nothing has polled the transport since the round stopped, and it may know of a drop.
 			session.Tick(m_Config.nowMs ? m_Config.nowMs() : session.GetClockMs());
-			// The host's roster is the peers it can still run a lobby with; a joiner on a provisional id
-			// past the roster is not one of them.
-			survivors.push_back(m_MatchConfig.hostPeerId);
-			for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) {
-				const uint8_t peerId = LockstepPeerId(peer.assignedPeerId);
-				if (peerId != m_MatchConfig.hostPeerId && peerId <= m_MatchConfig.peerCount) {
-					survivors.push_back(peerId);
-				}
-			}
+			// The roster is the peers the host can run a lobby with and the seats its round kept for players who are away; a joiner on a
+			// provisional id past the roster is not one of them.
+			std::vector<uint8_t> ready;
+			for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) ready.push_back(LockstepPeerId(peer.assignedPeerId));
+			RematchMembers(m_MatchConfig.hostPeerId, m_MatchConfig.peerCount, ready, survivingPeerIds, survivors, present);
 		} else {
 			survivors = survivingPeerIds;
 		}
@@ -212,6 +208,11 @@ namespace RTE {
 			return refuse("rematch roster: " + deriveError);
 		}
 		m_RematchRound = true;
+		// A seat kept for a player who is away starts the round held: only the members present are active.
+		if (m_Config.host && present.size() < survivors.size()) {
+			for (const uint8_t peer : present) m_RematchConfig.activePeerIds.push_back(seatMap.at(peer));
+			std::sort(m_RematchConfig.activePeerIds.begin(), m_RematchConfig.activePeerIds.end());
+		}
 		if (!m_Config.host) {
 			const auto mine = seatMap.find(LocalLockstepPeerId(session));
 			m_RematchDerivedPeerId = mine == seatMap.end() ? 0 : mine->second;
@@ -274,7 +275,8 @@ namespace RTE {
 		m_MatchConfig = m_RematchConfig;
 		m_Config.matchConfig = m_RematchConfig;
 		m_ActiveHostPeerId = m_RematchConfig.hostPeerId;
-		m_ActivePeerIds.clear();
+		// The host's active members stand; a client takes the host's from the lobby's agreed config.
+		m_ActivePeerIds = m_Config.host ? m_RematchConfig.activePeerIds : std::vector<uint8_t>{};
 		return true;
 	}
 
@@ -285,6 +287,20 @@ namespace RTE {
 		m_Config.startFrame = result.boundary + 1;
 		m_SnapshotProviderPeerId = result.snapshotProviderPeerId;
 		m_State = NetMatchRuntimeState::Running;
+	}
+
+	void NetMatchRunner::RematchMembers(uint8_t hostPeerId, uint8_t peerCount, const std::vector<uint8_t>& readyPeerIds, const std::vector<uint8_t>& derivedSurvivors,
+	                                   std::vector<uint8_t>& roster, std::vector<uint8_t>& active) {
+		// The members present: the host and every connected peer the round seated.
+		active = {hostPeerId};
+		for (const uint8_t peer: readyPeerIds)
+			if (peer != hostPeerId && peer <= peerCount && std::find(active.begin(), active.end(), peer) == active.end()) active.push_back(peer);
+		// The roster keeps every seat the round kept for a player who is away, as each client derives it.
+		roster = active;
+		for (const uint8_t peer: derivedSurvivors)
+			if (peer != 0 && peer <= peerCount && std::find(roster.begin(), roster.end(), peer) == roster.end()) roster.push_back(peer);
+		std::sort(active.begin() + 1, active.end());
+		std::sort(roster.begin() + 1, roster.end());
 	}
 
 	std::vector<uint8_t> NetMatchRunner::DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats) {
@@ -433,6 +449,8 @@ namespace RTE {
 		if (!VerifyRematchProposal(LocalLockstepPeerId(session), error)) {
 			return false;
 		}
+		// A rematch's members are the host's to name: the seats it starts held are the ones the agreed config leaves out.
+		if (m_RematchRound && !m_Config.host) m_ActivePeerIds = m_MatchConfig.activePeerIds;
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
 		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error)) {

@@ -1500,8 +1500,11 @@ namespace RTE {
 			return false;
 		if (m_Config.activePeerCount != 0 && !m_Config.matchConfig.successorOrder.empty())
 			return true;
+		// A seat the round starts held, its player away, has no endpoint to wait for and hosts nothing: the members present do.
+		const std::vector<uint8_t>& active = m_Config.matchConfig.activePeerIds;
+		const auto member = [&active](uint8_t peer) { return active.empty() || std::find(active.begin(), active.end(), peer) != active.end(); };
 		for (uint8_t peer = 1; peer <= m_Config.matchConfig.peerCount; ++peer)
-			if (!m_MigrationEndpoints.contains(peer))
+			if (member(peer) && !m_MigrationEndpoints.contains(peer))
 				return false;
 		NetMatchConfig next = m_Config.matchConfig;
 		next.migrationPeers.clear();
@@ -1510,7 +1513,7 @@ namespace RTE {
 				next.migrationPeers.push_back(endpoint);
 		if (next.successorOrder.empty())
 			for (uint8_t peer = 1; peer <= next.peerCount; ++peer)
-				if (peer != next.hostPeerId)
+				if (peer != next.hostPeerId && member(peer))
 					next.successorOrder.push_back(peer);
 		std::string error;
 		if (!NetMatchConfigUtil::ValidateLocalAlpha(next, &error)) {

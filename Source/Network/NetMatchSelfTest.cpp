@@ -7124,6 +7124,37 @@ namespace RTE {
 		return true;
 	}
 
+	// A seat whose player is away when its round ends is kept, held by the AI (A12); the host formed the rematch from the peers
+	// connected that moment, so the seat either vanished from the next round or - its old link still counted - the lobby waited
+	// for an endpoint the player never sent (the four-box run: 'rematch setup failed: waiting for Client 2's handover endpoint').
+	bool TestARematchKeepsAnAbsentPlayersSeatHeld(std::string* error) {
+		const auto text = [](const std::vector<uint8_t>& peers) {
+			std::string out;
+			for (const uint8_t peer: peers) out += (out.empty() ? "" : ",") + std::to_string(peer);
+			return "{" + out + "}";
+		};
+		std::vector<uint8_t> roster, active;
+		// That run: the host is peer 1, peers 3 and 4 are connected, seat 2 is held with its player away; every client derives 1-4.
+		NetMatchRunner::RematchMembers(1, 4, {3, 4}, {1, 2, 3, 4}, roster, active);
+		if (roster != std::vector<uint8_t>{1, 2, 3, 4} || active != std::vector<uint8_t>{1, 3, 4}) {
+			*error = "a rematch with seat 2's player away formed roster " + text(roster) + " active " + text(active) + ": the held seat is not kept for its player to return to";
+			return false;
+		}
+		NetMatchRunner::RematchMembers(1, 4, {2, 3, 4}, {1, 2, 3, 4}, roster, active);
+		if (roster != std::vector<uint8_t>{1, 2, 3, 4} || active != roster) {
+			*error = "a rematch with every player present formed roster " + text(roster) + " active " + text(active);
+			return false;
+		}
+		// A seat the round closed or dropped is gone from the rematch as before.
+		NetMatchRunner::RematchMembers(1, 4, {3, 4}, {1, 3, 4}, roster, active);
+		if (roster != std::vector<uint8_t>{1, 3, 4} || active != roster) {
+			*error = "a rematch after a seat was closed formed roster " + text(roster) + " active " + text(active);
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_rematch_keeps_an_absent_players_seat_held" << std::endl;
+		return true;
+	}
+
 	bool TestHoldResolutionPumpDoesNotRelock(std::string* error) {
 		auto pumpOne = [&](NetHoldResolution resolution) -> bool {
 			NetMatchService service;
@@ -14740,6 +14771,7 @@ namespace RTE {
 		if (!TestAnInPlaceReturnKeepsAnOpenReturnGap(&error)) return fail(error);
 		if (!TestAReturnerToldTheMatchIsOverGetsItsRecord(&error)) return fail(error);
 		if (!TestACaughtUpSeatTakesItsRoundsRecordOnce(&error)) return fail(error);
+		if (!TestARematchKeepsAnAbsentPlayersSeatHeld(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
