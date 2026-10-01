@@ -19,6 +19,7 @@ import ctypes
 import json
 import os
 import math
+import re
 import subprocess
 import sys
 from feel.report import peer_id_of, return_hold_violations
@@ -85,7 +86,11 @@ def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict
         errors.append("round coverage differs from the declared workload")
     for peer, rows in records.items():
         log = root / peer / "stdout.log"
-        windows[peer] = own_hold_windows(log.read_text(encoding="utf-8", errors="replace").splitlines()) if log.is_file() else []
+        text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+        windows[peer] = own_hold_windows(text.splitlines())
+        # The soak's own injected stall belongs to the seat it stalls, like the hold it causes: that seat's away time starts there.
+        stalls = [int(frame) for frame in re.findall(r"^\[net-test\] live stall frame=(\d+)", text, re.M)]
+        windows[peer] = [(rid, next((stall for stall in stalls if stall <= start <= stall + 30), start), end) for rid, start, end in windows[peer]]
         census = census_pace(log)
         indexed[peer] = {}
         for row in rows:
