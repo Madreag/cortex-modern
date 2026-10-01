@@ -1122,7 +1122,24 @@ def report_toast_evidence(record, spec):
 
 # What decides an item without eyes: a log line, a numeric gate, a probe step or an engine record. Such an item is a LOG item,
 # judged by its probe alone; every other item names what the screen must show and is a PICTURE item for the reviewer.
-LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop")
+LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop", "drop_tick")
+
+
+def dropped_index_evidence(record, drop_tick):
+    """A killed peer's own recording: its index reaches the tick it was killed after, and no line but the last is torn."""
+    path = Path(record["video_dir"]) / "frames.jsonl" if record.get("video_dir") else None
+    lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()] if path and path.is_file() else []
+    torn = []
+    for number, line in enumerate(lines):
+        try:
+            json.loads(line)
+        except json.JSONDecodeError:
+            torn.append(number)
+    ticks = [row.get("sim_tick", 0) for row in record.get("index", []) if row.get("saved", True)]
+    reached = max(ticks, default=0)
+    passed = bool(ticks) and reached >= drop_tick and all(number == len(lines) - 1 for number in torn)
+    return {"pass": passed, "rows": len(lines), "torn_lines": torn, "last_sim_tick": reached, "drop_tick": drop_tick,
+            "reason": None if passed else f"the killed peer's index ends at tick {reached} (killed after {drop_tick}) with torn lines {torn}"}
 
 
 def item_kind(item):
@@ -1196,6 +1213,11 @@ def item_evidence(record, item, port=None):
         evidence["probe"] = "pass" if evidence["resumed_play"]["pass"] else "fail"
         if not evidence["resumed_play"]["pass"]:
             evidence["reason"] = evidence["resumed_play"]["reason"]
+    if item.get("drop_tick") is not None:
+        evidence["dropped_index"] = dropped_index_evidence(record, int(item["drop_tick"]))
+        evidence["probe"] = "pass" if evidence["dropped_index"]["pass"] else "fail"
+        if not evidence["dropped_index"]["pass"]:
+            evidence["reason"] = evidence["dropped_index"]["reason"]
     if item.get("log_regex") or item.get("forbidden_log_regex"):
         assertions = log_assertions(record["root"], item.get("log_regex", []), item.get("forbidden_log_regex", []))
         passed = all(bool(value["matches"]) != value["forbidden"] for value in assertions)

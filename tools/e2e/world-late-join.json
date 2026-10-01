@@ -159,7 +159,11 @@
       "peer": "client-late",
       "screen": "game",
       "what": "the late joiner's first frames show the same world the host's video shows at that tick",
-      "assert": "compare the two contact sheets at the same sim tick"
+      "assert": "compare the two contact sheets at the same sim tick",
+      "sim_ticks": [
+        1800,
+        2400
+      ]
     },
     {
       "id": "pw-fresh-world-flag",
