@@ -196,6 +196,8 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://rtc.live.cloudflare.com/v1/turn/keys/key-id/credentials/generate-ice-servers")
         self.assertEqual(json.loads(request.data), {"ttl": 900})
         self.assertEqual(request.get_header("Authorization"), "Bearer backend-token")
+        # The request urlopen receives names the product, never urllib's default agent Cloudflare refuses.
+        self.assertEqual(request.get_header("User-agent"), "cccp-session-directory/1")
         self.assertEqual(offer["expires_at"], 1900)
         self.assertEqual(offer["iceServers"][1]["credential"], "temporary-password")
         self.assertNotIn("backend-token", json.dumps(offer))
