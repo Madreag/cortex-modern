@@ -118,6 +118,28 @@ def check_dropped_index(results, scratch):
     return ok
 
 
+def check_still_confirmation(results, scratch):
+    import subprocess
+    ffmpeg = driver.find_ffmpeg()
+    if not ffmpeg:
+        return row(results, "stills/confirmation-has-ffmpeg", False, "no ffmpeg")
+    folder = scratch / "still-confirmation"
+    folder.mkdir(parents=True, exist_ok=True)
+    frozen, moving = folder / "frozen.mp4", folder / "moving.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x2a4a7a:s=1920x1080:d=2:r=30", "-pix_fmt", "yuv420p",
+                    str(frozen)], check=True)
+    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x2a4a7a:s=1920x1080:d=2:r=30", "-f", "lavfi",
+                    "-i", "color=c=white:s=24x48:d=2:r=30", "-filter_complex", "[0][1]overlay=x='200+t*120':y=600", "-pix_fmt", "yuv420p",
+                    str(moving)], check=True)
+    still = driver.changed_pixels(ffmpeg, frozen, 0.2, 1.5)
+    moved = driver.changed_pixels(ffmpeg, moving, 0.2, 1.5)
+    ok = row(results, "stills/frozen-picture-stays-still", still is not None and still < driver.MOTION_PIXELS, f"changed={still}")
+    ok &= row(results, "stills/small-mover-is-confirmed-moved", moved is not None and moved >= driver.MOTION_PIXELS, f"changed={moved}")
+    unread = driver.changed_pixels(ffmpeg, folder / "absent.mp4", 0.2, 1.5)
+    ok &= row(results, "stills/unreadable-span-stays-still", unread is None, f"changed={unread}")
+    return ok
+
+
 def check_port_claims(results):
     import subprocess as sub
     holder = sub.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
@@ -2014,6 +2036,7 @@ def main():
         ok &= check_item_kinds(results)
         ok &= check_port_claims(results)
         ok &= check_dropped_index(results, scratch)
+        ok &= check_still_confirmation(results, scratch)
         ok &= check_freeze_stills(results)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_render_arm(results, scratch)

@@ -528,13 +528,39 @@ def capped_stop_ms(video_dir):
     return None
 
 
+# A still is confirmed on the picture: a frozen one changes no pixel by more than this many levels between its ends, while
+# encoder noise stays far below it; this many such pixels is a picture that moved (a soldier walking on a 4K whole-map view).
+MOTION_LEVELS = 40
+MOTION_PIXELS = 1000
+
+
+def changed_pixels(ffmpeg, video, start_s, end_s):
+    """The pixels that changed by more than MOTION_LEVELS between the frames an encoded capture shows at two times."""
+    graph = (f"[0:v]select='gte(t\\,{start_s:.3f})',format=gray,setpts=N[a];[1:v]select='gte(t\\,{end_s:.3f})',format=gray,setpts=N[b];"
+             f"[a][b]blend=all_mode=difference,lutyuv=y='if(gt(val\\,{MOTION_LEVELS})\\,255\\,0)',signalstats,"
+             "metadata=print:key=lavfi.signalstats.YAVG")
+    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), "-i", str(video), "-filter_complex", graph,
+                             "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True, errors="replace", timeout=600)
+    found = re.search(r"lavfi\.signalstats\.YAVG=([0-9.]+)", result.stderr)
+    size = re.search(r"Stream #0:0.*?, (\d+)x(\d+)", result.stderr)
+    if not found or not size:
+        return None
+    return round(float(found[1]) / 255 * int(size[1]) * int(size[2]))
+
+
 def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None, named=None):
-    """ffmpeg's freezedetect over one peer's encoded capture: a still picture over one second while the match runs."""
+    """ffmpeg's freezedetect over one peer's encoded capture: a still picture over one second while the match runs. Each
+    span it calls still is confirmed on the picture; one whose ends differ in MOTION_PIXELS pixels moved and is kept as moved."""
     if not ffmpeg or not video or not Path(video).is_file():
         return None
     result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), "-vf", "freezedetect=n=-60dB:d=1", "-map", "0:v:0", "-f", "null", "-"],
                             capture_output=True, text=True, errors="replace", timeout=600)
-    return running_stills(parse_freezedetect(result.stderr), rows, capped_stop_ms=capped_stop_ms(video_dir), allowed=allowed, named=named)
+    stills = running_stills(parse_freezedetect(result.stderr), rows, capped_stop_ms=capped_stop_ms(video_dir), allowed=allowed, named=named)
+    for still in stills:
+        # The span's last picture shows a little before its end time; a span open to the end of the video stays a still.
+        if still.get("end_s") is not None and still["end_s"] - still["start_s"] > 0.1:
+            still["changed_pixels"] = changed_pixels(ffmpeg, video, still["start_s"], still["end_s"] - 0.05)
+    return stills
 
 
 def recording_health(video_dir, minimum_share=0.9):
@@ -1365,11 +1391,15 @@ def review(scenario, capture, out):
                              named_still_windows(scenario, capture["name"], peer["peer"], peer["video_dir"]))
         if stills is None:
             continue
+        moved = [still for still in stills if (still.get("changed_pixels") or 0) >= MOTION_PIXELS]
+        stills = [still for still in stills if still not in moved]
         items.append({"id": "recording-stills-" + peer["peer"], "run": capture["name"], "peer": peer["peer"], "screen": "game",
                       "what": "No still picture over one second while this screen's match runs.",
-                      "assert": "ffmpeg freezedetect (-60 dB, 1 s) finds no still over saved frames that all show the game with the service Running",
+                      "assert": f"ffmpeg freezedetect (-60 dB, 1 s) finds no still over saved frames that all show the game with the service Running, "
+                                f"each confirmed on the picture (fewer than {MOTION_PIXELS} pixels changed by more than {MOTION_LEVELS} levels between its ends)",
                       "frames": None, "capture_frames": None, "video_seconds": None, "video": peer.get("video"),
-                      "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if stills else "pass", "stills": stills, "allowed_stills": allowed_stills,
+                      "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if stills else "pass", "stills": stills, "moved_stills": moved,
+                      "allowed_stills": allowed_stills,
                       **({"finding": {"class": "harness", "reason": "%d still(s) over 1 s while the match runs, first at %.1f s" % (len(stills), stills[0]["start_s"]),
                                       "launch": None, "errors": []}} if stills else {})})
     # What the screen showed is asserted too: each armed screen watch is one item per peer.
