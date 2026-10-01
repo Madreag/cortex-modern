@@ -478,6 +478,10 @@ def recording_health(video_dir, minimum_share=0.9):
         return None
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     saved = [row["wall_ms"] for row in read_index(video_dir) if row.get("saved", True) and "wall_ms" in row]
+    # The recording is the match's: what follows the harness's capped stop is the run ending, not a frame the recorder owed.
+    capped = capped_stop_ms(video_dir)
+    if capped is not None:
+        saved = [wall for wall in saved if wall <= capped]
     fps = manifest.get("fps") or 0
     span_s = (saved[-1] - saved[0]) / 1000.0 if len(saved) > 1 else 0.0
     saved_fps = (len(saved) - 1) / span_s if span_s > 0 else 0.0
