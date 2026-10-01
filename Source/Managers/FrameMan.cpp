@@ -66,6 +66,7 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <sstream>
 #include <vector>
 #include <deque>
 #include <memory>
@@ -1607,9 +1608,55 @@ void FrameMan::UpdateScreenOffsetForSplitScreen(int playerScreen, Vector& screen
 	}
 }
 
+namespace {
+	// Test lever CCCP_TEST_DRAW_PHASES: the stages of FrameMan::Draw, each screen's summed, every 600 frames.
+	struct SceneDrawPhases {
+		static constexpr const char* c_Names[] = {"setup", "view_update", "scene_draw", "primitives", "text_flash_blit", "after_screens"};
+		static constexpr size_t c_Count = std::size(c_Names);
+		const bool armed = std::getenv("CCCP_TEST_DRAW_PHASES") != nullptr;
+		std::array<std::vector<float>, c_Count> samples;
+		std::array<long long, c_Count> frame{};
+		long long lapUs = 0;
+		int screens = 0;
+		void Begin() {
+			if (!armed) return;
+			frame.fill(0);
+			lapUs = g_TimerMan.GetAbsoluteTime();
+		}
+		void Lap(size_t stage) {
+			if (!armed) return;
+			const long long now = g_TimerMan.GetAbsoluteTime();
+			frame[stage] += now - lapUs;
+			lapUs = now;
+		}
+		void End(int screenCount) {
+			if (!armed) return;
+			Lap(c_Count - 1);
+			screens = screenCount;
+			for (size_t i = 0; i < c_Count; ++i) samples[i].push_back(static_cast<float>(frame[i]));
+			if (samples[0].size() < 600) return;
+			std::ostringstream line;
+			line << "[draw-scene-phase] frames=600 screens=" << screens << " us(mean/p50/p99):";
+			for (size_t i = 0; i < c_Count; ++i) {
+				std::vector<float>& values = samples[i];
+				double total = 0;
+				for (float value: values) total += value;
+				std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+				const float median = values[values.size() / 2];
+				std::nth_element(values.begin(), values.begin() + values.size() * 99 / 100, values.end());
+				line << " " << c_Names[i] << "=" << total / values.size() << "/" << median << "/" << values[values.size() * 99 / 100];
+				values.clear();
+			}
+			System::PrintDiagnosticLine(line.str());
+		}
+	};
+	SceneDrawPhases s_SceneDrawPhases;
+} // namespace
+
 void FrameMan::Draw() {
 	ZoneScopedN("Draw");
 	TracyGpuZone("FrameMan::Draw");
+	s_SceneDrawPhases.Begin();
 
 	// rlSetShader(rlGetShaderIdDefault(), rlGetShaderLocsDefault());
 	Shader backgroundShader;
@@ -1632,6 +1679,7 @@ void FrameMan::Draw() {
 	std::list<Box> screenRelativeGlowBoxes;
 
 	const Activity* pActivity = g_ActivityMan.GetActivity();
+	s_SceneDrawPhases.Lap(0);
 
 	for (int playerScreen = 0; playerScreen < screenCount; ++playerScreen) {
 		screenRelativeEffects.clear();
@@ -1659,6 +1707,7 @@ void FrameMan::Draw() {
 		// Update the scene view to line up with a specific screen and then draw it onto the intermediate screen
 		g_CameraMan.Update(playerScreen);
 		g_SceneMan.Update(playerScreen);
+		s_SceneDrawPhases.Lap(1);
 
 		Vector targetPos = g_CameraMan.GetRenderOffset(playerScreen);
 
@@ -1673,8 +1722,10 @@ void FrameMan::Draw() {
 
 		// Draw the scene
 		g_SceneMan.Draw(drawScreen, drawScreenGUI, targetPos);
+		s_SceneDrawPhases.Lap(2);
 
 		g_PrimitiveMan.DrawPrimitives(playerScreen, drawScreenGUI, targetPos);
+		s_SceneDrawPhases.Lap(3);
 
 		// Get only the scene-relative post effects that affect this player's screen
 		if (pActivity) {
@@ -1708,6 +1759,7 @@ void FrameMan::Draw() {
 			m_BackBuffer->End();
 		}
 		g_PostProcessMan.AdjustEffectsPosToPlayerScreen(playerScreen, drawScreen, screenOffset, screenRelativeEffects, screenRelativeGlowBoxes);
+		s_SceneDrawPhases.Lap(4);
 	}
 
 	// Clears the pixels that have been revealed from the unseen layers
@@ -1747,6 +1799,7 @@ void FrameMan::Draw() {
 	// Draw scene seam
 	vline(m_BackBuffer8.get(), 0, 0, g_SceneMan.GetSceneHeight(), 5);
 #endif
+	s_SceneDrawPhases.End(screenCount);
 }
 
 FrameMan::ScreenTextLayout FrameMan::GetScreenTextLayout(int playerScreen, bool decorated) {
