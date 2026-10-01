@@ -4906,11 +4906,11 @@ namespace RTE {
 					return Fail("a claimant that proved nothing was told the seat was reassigned");
 				}
 
-				// Past P2 the retired credential is gone, so nothing can be answered precisely again.
-				wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs;
+				// The seat's owner may come back at any time while the match runs, so the retired credential stays to answer it precisely.
+				wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 600'000;
 				wire.host.Tick(wire.nowMs);
-				if (wire.registry.HasRetiredGeneration(0, record.holderGeneration)) {
-					return Fail("the retired credential outlived the window it is kept for");
+				if (!wire.registry.HasRetiredGeneration(0, record.holderGeneration)) {
+					return Fail("the retired credential was forgotten while the match runs");
 				}
 			}
 			return 0;
