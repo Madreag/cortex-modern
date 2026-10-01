@@ -518,5 +518,25 @@
       "assert": "probe asserts ButtonLeaveConfirm and activates it; both launch records end without a timeout"
     }
   ],
-  "directory_port": 49479
+  "directory_port": 49479,
+  "allowed_stills": [
+    {
+      "peer": "host",
+      "from_mark": "ui-f6-overlay",
+      "to_mark": "ui-pause-match-options",
+      "reason": "the F6 seats panel and its options over an idle world"
+    },
+    {
+      "peer": "client",
+      "from_mark": "ui-f6-overlay",
+      "to_mark": "ui-pause-match-options",
+      "reason": "the F6 seats panel and its options over an idle world"
+    },
+    {
+      "peer": "client",
+      "from_mark": "ui-pause-match-options",
+      "to_mark": "ui-leave-confirm-client",
+      "reason": "the pause menu's match options over the paused world"
+    }
+  ]
 }
