@@ -5446,7 +5446,8 @@ namespace RTE {
 		const auto seat = std::pair{peerId, key};
 		if (const auto found = m_CaptureExcuseUntilMs.find(seat); found != m_CaptureExcuseUntilMs.end()) return found->second;
 		uint64_t began = firstMissingMs;
-		double cost = capture ? SteadyCaptureCostMs() : ParkCaptureCostMs();
+		// A park's seat sends again only once its capture and the ticks the capture cost have run: at most twice the park's size.
+		double cost = capture ? SteadyCaptureCostMs() : 2.0 * ParkCaptureCostMs();
 		if (peerId == m_Config.localPeerId && capture) {
 			if (m_LocalCaptureTick == capture) {
 				began = m_LocalCaptureStartedMs;
@@ -9268,9 +9269,10 @@ namespace RTE {
 		const uint64_t excusedThrough = back != m_ReclaimTransactions.end()
 			? std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames)
 			: EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks);
-		// This engine's own capture still running is the engine's own work, not a slow machine, up to twice the park's size.
+		// This engine's own capture and the catch-up of the ticks it cost are the engine's own work, not a slow machine: up to
+		// twice the park's size from the capture's start, whether or not it is still running.
 		const bool capturing = nowMs < CaptureExcuseUntil(local, frame, m_OwnMissingFrame == frame ? m_OwnMissingSinceMs : nowMs) ||
-		                       (m_LocalCaptureRunning && nowMs < m_LocalCaptureStartedMs + static_cast<uint64_t>(2.0 * ParkCaptureCostMs()));
+		                       (m_LocalCaptureStartedMs != 0 && nowMs < m_LocalCaptureStartedMs + static_cast<uint64_t>(2.0 * ParkCaptureCostMs()));
 		if (frame <= excusedThrough || m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || capturing) {
 			m_OwnMissingFrame.reset();
 			return false;
