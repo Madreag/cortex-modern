@@ -559,7 +559,8 @@ def reduce_timing_case(run, reference=None):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
     members = tuple(manifest.get('per_peer_lag_ms') or (('host', 'client', 'survivor') if silent else ('host', 'client')))
-    peers = {peer: timing_peer(run, peer) for peer in members if peer != 'client'}
+    # A jitter arm judges the client too: its link jitters, yet it must hold the round's rate like the host.
+    peers = {peer: timing_peer(run, peer) for peer in members if peer != 'client' or manifest.get('jitter_ms')}
     comparison_peer = next((peer for peer in peers if peer != 'host'), 'client')
     if reference is not None:
         for value in peers.values():
