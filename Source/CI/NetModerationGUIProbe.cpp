@@ -14,6 +14,7 @@
 #include "MainMenuGUI.h"
 #include "PauseMenuGUI.h"
 #include "MenuMan.h"
+#include "MenuAutomation.h"
 #include "Scene.h"
 #include "SceneMan.h"
 #include "NetLobbySnapshot.h"
@@ -1025,8 +1026,14 @@ bool RunCrossScopeSelfTest(std::string* error) {
 }
 
 void BeforePoll() { Process(Phase::Poll); }
-void AfterDraw() { Process(Phase::Draw); }
-void AfterMenuDraw() { Process(Phase::Draw, true); }
+void AfterDraw() {
+	MenuAutomation::EvaluateWatches(MenuControls());
+	Process(Phase::Draw);
+}
+void AfterMenuDraw() {
+	MenuAutomation::EvaluateWatches(MenuControls());
+	Process(Phase::Draw, true);
+}
 
 void OnSimTick(uint64_t simUpdateCount) {
 	if (!probe.enabled || probe.done) return;
