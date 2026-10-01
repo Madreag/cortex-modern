@@ -7367,6 +7367,7 @@ void RunGameLoop() {
 			}
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (hashThisTick) {
+				const auto harnessStart = std::chrono::steady_clock::now();
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
 				// archive below writes the same deques, so both have to read one instant.
 				g_MovableMan.FeedTickEndChecksum();
@@ -7383,6 +7384,15 @@ void RunGameLoop() {
 					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
 					    {"subsystems", std::move(subsystems)}});
 					LiveTickHashStream().Write(observation.dump());
+					// The harness's own tick-end cost on this machine, beside the capacity it publishes: the share of a slow seat that is the harness's.
+					static std::vector<double> s_harnessTickUs;
+					s_harnessTickUs.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - harnessStart).count());
+					if (s_harnessTickUs.size() == 600) {
+						std::sort(s_harnessTickUs.begin(), s_harnessTickUs.end());
+						System::PrintDiagnosticLine(std::format("[harness-cost] tick={} window=600 tick_end_us p50={:.0f} p95={:.0f} max={:.0f}", simTick, s_harnessTickUs[300],
+						                                        s_harnessTickUs[570], s_harnessTickUs.back()));
+						s_harnessTickUs.clear();
+					}
 				}
 				if (a7HashTick && ScenarioRunner::GetLockstepAppliedFrame() == simTick) {
 					const uint64_t round = ScenarioRunner::GetLockstepRoundId();
