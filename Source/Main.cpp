@@ -5878,7 +5878,10 @@ static bool NetMatchActivityHasWinner(const Activity* activity) {
 
 static bool E2ERematchesLeft() {
 	const auto& args = ScenarioRunner::GetArgs();
-	return s_netMatchServiceE2ERematches < static_cast<int>(std::max<uint32_t>(args.selftestRematch ? 1 : 0, args.selftestRematches));
+	// The cross driver's rematch budget counts here as it does for a round that ends in play, so a seat whose round ended while it caught up follows the match.
+	const int rematches = s_crossRematches ? static_cast<int>(s_crossRematches)
+	                                       : static_cast<int>(std::max<uint32_t>(args.selftestRematch ? 1 : 0, args.selftestRematches));
+	return s_netMatchServiceE2ERematches < rematches;
 }
 
 static bool IsE2ERematchReady() {
