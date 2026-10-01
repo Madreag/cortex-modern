@@ -130,7 +130,8 @@ activate ButtonLobbyOptions
 wait_ms 660
 assert_substate HostOptions
 # A line the joiner types while this page is open is still on the host's screen.
-wait_label LabelLobbyChatAny And the joiner can answer on the same line
+# The joiner chats about a second after this page opens; its row is blank while the page hides the band, so the wait is timed.
+wait_ms 3000
 text_watch start h15-scene-chat-under-page require substate:HostOptions And the joiner can answer on the same line
 video_mark ui-hosted-recovery
 activate TabHostPageRecovery

@@ -715,7 +715,7 @@ SCREEN_WATCH_RULES = {
     "rtt": ("NET STATUS's round-trip summary agrees with the per-player pings listed beside it.", "rtt always"),
     "seat-rows": ("Every seat the open seats panel lists has its row drawn inside the panel.", "seat_rows panel_open"),
 }
-SCREEN_WATCHES = "".join(f"text_watch start h15-{name} {spec}\n" for name, (_, spec) in SCREEN_WATCH_RULES.items())
+SCREEN_WATCHES = "".join(f"h15-{name} {spec}\n" for name, (_, spec) in SCREEN_WATCH_RULES.items())
 TEXT_WATCH_LINE = re.compile(r"^\[text-watch\] (armed|violation|summary) (.*)$", re.M)
 
 
@@ -1234,7 +1234,11 @@ def stage_peer(scenario, peer, root, tokens):
         path.write_text(substitute(scenario_text(scenario, peer["input_script"]), tokens), encoding="utf-8")
     if peer.get("menu_script"):
         path = Path(root) / "menu.txt"
-        path.write_text(SCREEN_WATCHES + substitute(scenario_text(scenario, peer["menu_script"]), tokens), encoding="utf-8")
+        path.write_text(substitute(scenario_text(scenario, peer["menu_script"]), tokens), encoding="utf-8")
+    # Every peer's engine arms the shared screen watches from this file on its first drawn frame.
+    watches = Path(root) / "screen-watches.txt"
+    watches.write_text(SCREEN_WATCHES, encoding="utf-8")
+    environment["CCCP_TEST_SCREEN_WATCHES"] = str(watches)
     environment.update(substitute(peer.get("env", {}), tokens))
     if environment["CCCP_HEADLESS"] != "1":
         raise ValueError("a scenario cannot override CCCP_HEADLESS=1")
