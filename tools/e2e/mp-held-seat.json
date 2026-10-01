@@ -23,7 +23,7 @@
         "-net-match-report",
         "{OUT}/host-match.json"
       ],
-      "input_script": "mp-host-migration.input.txt",
+      "input_script": "mp-held-seat.input.txt",
       "observe_after_failure": true,
       "settings": {
         "NetworkDisplayName": "Host",
@@ -53,7 +53,7 @@
         "-net-match-report",
         "{OUT}/clienta-match.json"
       ],
-      "input_script": "mp-host-migration.input.txt",
+      "input_script": "mp-held-seat.input.txt",
       "observe_after_failure": true,
       "settings": {
         "NetworkDisplayName": "ClientA",
@@ -88,7 +88,7 @@
         "-net-match-report",
         "{OUT}/clientb-match.json"
       ],
-      "input_script": "mp-host-migration.input.txt",
+      "input_script": "mp-held-seat.input.txt",
       "observe_after_failure": true,
       "settings": {
         "NetworkDisplayName": "ClientB",
