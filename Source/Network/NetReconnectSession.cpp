@@ -992,10 +992,16 @@ namespace RTE {
 		const bool liveLeave = m_LiveMatch && !m_MatchEnded;
 		if (liveLeave) {
 			// A leave in a running match is a drop the player chose: the seat stays theirs and the AI plays it until
-			// they rejoin or the host gives it away. The link's close runs the drop itself.
+			// they rejoin or the host gives it away. The link may stay up at the leaver's menu, so the drop runs now.
 			seat->leftByChoice = true;
 			seat->leftAtMs = nowMs;
-			NoteStateChanged();
+			seat->activeConnection = c_InvalidNetPeerId;
+			seat->dropped = true;
+			seat->droppedAtMs = nowMs;
+			seat->holdExpired = false;
+			BumpSeatGeneration(*seat);
+			RecordDrop(*seat, m_LockstepFrame);
+			++m_Stats.seatsDropped;
 		} else if (m_LiveMatch) {
 			CloseSeatWithoutHold(*seat);
 			seat->closed = !m_PersistentWorld;

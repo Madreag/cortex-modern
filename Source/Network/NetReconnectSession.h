@@ -416,6 +416,8 @@ namespace RTE {
 		/// §9b's moderation API: every seat, whether it may be reassigned, and who is asking for it.
 		/// The host UI renders this and calls one of the three verbs below; nothing here is a secret.
 		std::vector<NetH4ModerationSeat> GetModerationView() const;
+		/// The round's frame, which a leave's drop is recorded at.
+		void NoteLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
 		/// Folds every field GetModerationView shows into one stamp, without allocating, so a caller
 		/// polling at the lobby's cadence rebuilds the view only when a row actually changed.
 		uint64_t GetModerationSignature() const;
@@ -661,6 +663,7 @@ namespace RTE {
 		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
 		NetHostBanStore* m_BanStore = nullptr;
 		std::set<NetAuthBytes32> m_RemovedParticipants;
+		uint64_t m_LockstepFrame = 0;
 		bool m_ProofRequired = false;
 		std::vector<std::pair<NetPeerId, NetAuthBytes32>> m_ConnectionIds;
 	};

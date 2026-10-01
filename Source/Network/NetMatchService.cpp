@@ -2458,6 +2458,8 @@ static std::string ResyncSaveName() {
 				m_StatusText = displayResult.empty() ? "Left the match" : displayResult;
 				m_ErrorText.clear();
 			}
+			// The seat stays this player's while the match runs, so the landing offers Rejoin Match at once.
+			if (!m_IsHost && m_MatchWasRunning && m_TicketStore.HasRecord()) ScanStoredTicket();
 		}
 		if (!exchangeOwed) {
 			return;
@@ -9889,7 +9891,9 @@ static std::string ResyncSaveName() {
 		m_ReconnectClient.SetUnixClock(&UnixNowMs, nullptr);
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
 		// adopts the host's match config in the lobby round that follows.
-		m_ReconnectClient.SetHostContext(request.address, NetHash32{});
+		// The record keeps the host's port beside its address, so a rejoin finds a host on any port.
+		const bool bareAddress = !request.address.empty() && request.address.find(':') == std::string::npos;
+		m_ReconnectClient.SetHostContext(bareAddress && request.port != 0 ? request.address + ":" + std::to_string(request.port) : request.address, NetHash32{});
 		m_ReconnectClient.SetWorldTarget(request.persistentWorld || matchConfig.persistentWorld);
 		m_ReconnectClient.SetDirectorySessionId(request.sessionId);
 		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat || s_ApplyOnce, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
@@ -9953,6 +9957,15 @@ static std::string ResyncSaveName() {
 		NetMatchServiceRequest request;
 		request.host = false;
 		request.address = record.hostAddress;
+		// An IPv4 address or a name with one ':' carries its port.
+		if (const size_t colon = record.hostAddress.rfind(':'); colon != std::string::npos && colon == record.hostAddress.find(':') && colon + 1 < record.hostAddress.size() &&
+		    record.hostAddress.size() - colon - 1 <= 5 && record.hostAddress.find_first_not_of("0123456789", colon + 1) == std::string::npos) {
+			const unsigned long port = std::stoul(record.hostAddress.substr(colon + 1));
+			if (port != 0 && port <= 65535) {
+				request.address = record.hostAddress.substr(0, colon);
+				request.port = static_cast<uint16_t>(port);
+			}
+		}
 		request.sessionId = record.directorySessionId;
 		request.playerName = playerName.empty() ? "Client" : playerName;
 		request.resyncOnDesync = true;
