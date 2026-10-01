@@ -20,6 +20,7 @@ namespace RTE {
 		Reconnected = 4, //!< Back in the match.
 		GaveUp = 5,      //!< The resume window closed; only a manual retry starts another attempt.
 		Cancelled = 6,   //!< The player stopped the automatic retries.
+		Refused = 7,     //!< The host gave the seat away or released it: nothing is left to rejoin.
 	};
 
 	/// What the startup scan of the recovery record found. The protocol does not care; the player does.
@@ -51,6 +52,9 @@ namespace RTE {
 		bool Tick(uint64_t nowMs);
 		void NoteAttemptStarted(uint64_t nowMs);
 		void NoteAttemptFailed(uint64_t nowMs, std::string reason);
+		/// The host's final answer to a rejoin: the seat is no longer this player's, so nothing retries and nothing is offered.
+		void NoteRefused(std::string reason);
+		bool IsRefused() const { return m_State == NetReconnectUxState::Refused; }
 
 		/// Stops the automatic attempts. The record is untouched - a cancel is not a leave.
 		void Cancel(uint64_t nowMs);

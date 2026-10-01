@@ -7,5 +7,8 @@ activate ButtonMultiplayerReconnect
 wait_error The host gave your seat to another player
 video_mark leaver-seat-given
 assert_error The host gave your seat to another player
+# The answer is final: no Retry in the line and no Rejoin button.
+assert_label_absent LabelMultiplayerLandingStatus Retry
+assert_visible ButtonMultiplayerReconnect 0
 wait_ms 2000
 exit
