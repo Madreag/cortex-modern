@@ -47,6 +47,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <condition_variable>
 #include <deque>
@@ -339,8 +340,14 @@ namespace RTE::MenuAutomation {
 		if (!s_Watches.empty()) s_DrawnText.emplace_back(source, text);
 	}
 
+	double s_FrameSpanMs = c_DrawWindowSeconds * 1000;
+	std::chrono::steady_clock::time_point s_LastEvaluated;
+
+	/// Drawn during the frame being judged: since the previous frame's evaluation.
 	bool Shown(GUIControl* control) {
-		return Visible(control) && PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds);
+		if (!Visible(control)) return false;
+		const double age = PanelDrawAgeMs(control->GetPanel());
+		return age >= 0 && age <= s_FrameSpanMs;
 	}
 
 	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagers(GUIControlManager* menu) {
@@ -486,6 +493,10 @@ namespace RTE::MenuAutomation {
 			}
 		}
 		if (s_Watches.empty()) return;
+		const auto now = std::chrono::steady_clock::now();
+		const double span = s_LastEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 : std::chrono::duration<double, std::milli>(now - s_LastEvaluated).count();
+		s_FrameSpanMs = std::clamp(span + 1.0, 1.0, c_DrawWindowSeconds * 1000);
+		s_LastEvaluated = now;
 		std::vector<ShownLine> lines;
 		bool linesRead = false;
 		for (auto& [name, watch]: s_Watches) {
