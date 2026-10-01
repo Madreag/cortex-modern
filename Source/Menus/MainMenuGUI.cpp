@@ -518,6 +518,13 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	}
 	m_LastMatchSummaryLabel->SetHorizontalOverflowScroll(true);
 	m_LastMatchSummaryLabel->ActivateDeactivateOverflowScroll(true);
+	m_PageChatNotice = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->AddControl("LabelPageChatNotice", "LABEL", nullptr, 0, 0, 545, 12));
+	if (m_PageChatNotice) {
+		if (chatFont) m_PageChatNotice->SetFont(chatFont);
+		m_PageChatNotice->SetHAlignment(GUIFont::Left);
+		m_PageChatNotice->SetVAlignment(GUIFont::Middle);
+		m_PageChatNotice->SetVisible(false);
+	}
 	for (size_t row = 0; row < m_MultiplayerLobbyChatLabels.size(); ++row) {
 		m_MultiplayerLobbyChatLabels[row] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->AddControl(
 		    "LabelLobbyChat" + std::to_string(row), "LABEL", m_MultiplayerLobbyPanel, 8, 0, 284, 10));
@@ -3419,6 +3426,27 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving..." : "Save Diagnostics");
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
+void MainMenuGUI::TakeLobbyChat(const NetLobbySnapshot& snapshot) {
+	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
+		std::string name = entry.senderName;
+		if (name.empty()) {
+			for (const NetLobbyMember& member : snapshot.members) {
+				if (member.peerId == entry.senderPeerId + 1) {
+					name = member.displayName;
+					break;
+				}
+			}
+		}
+		if (name.empty()) {
+			name = "Player " + std::to_string(entry.senderPeerId + 1);
+		}
+		m_MultiplayerLobbyChatLines.push_back(std::string(entry.scope == c_NetChatScopeTeam ? "  [team] " : "") + name + ": " + entry.text);
+		while (m_MultiplayerLobbyChatLines.size() > m_MultiplayerLobbyChatLabels.size()) {
+			m_MultiplayerLobbyChatLines.pop_front();
+		}
+	}
+}
+
 	const auto summary = g_NetMatchService.GetLastMatchSummary();
 	m_LastMatchSummaryLabel->SetText(summary ? summary->LineText() : "");
 	m_LastMatchSummaryLabel->SetVisible(lobby && summary.has_value());
@@ -3446,6 +3474,25 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 		if (m_MultiplayerLobbyChatInput) {
 			m_MultiplayerLobbyChatInput->SetVisible(false);
+	// A host page hides the lobby's chat band, so a line that lands while it is open is shown above the page instead.
+	const bool pageHidesChat = m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && g_NetMatchService.GetState() != NetMatchServiceState::Idle;
+	if (pageHidesChat) TakeLobbyChat(snapshot);
+	if (m_PageChatNotice) {
+		const bool notice = pageHidesChat && !m_MultiplayerLobbyChatLines.empty();
+		m_PageChatNotice->SetVisible(notice);
+		if (notice) {
+			const int x = m_HostOptionsPanel->GetXPos(), width = m_HostOptionsPanel->GetWidth();
+			m_PageChatNotice->SetPositionAbs(x, std::max(0, m_HostOptionsPanel->GetYPos() - m_PageChatNotice->GetHeight() - 2));
+			if (m_PageChatNotice->GetWidth() != width) m_PageChatNotice->Resize(width, m_PageChatNotice->GetHeight());
+			std::string line = "Chat - " + m_MultiplayerLobbyChatLines.back();
+			m_PageChatNotice->SetText(line);
+			// One line: the newest message's end gives way to an ellipsis before the notice wraps.
+			while (m_PageChatNotice->GetTextWidth() > width - 4 && line.size() > 8) {
+				line.pop_back();
+				m_PageChatNotice->SetText(line + "...");
+			}
+		}
+	}
 		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser) {
 			RefreshReplayBrowserControls();
@@ -3734,24 +3781,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 
 	// The newest chatRows lines, oldest on top; the entry box takes Enter for All, Ctrl+Enter for
 	// Team. Team lines indent two cells as well as carrying their [team] mark.
-	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
-		std::string name = entry.senderName;
-		if (name.empty()) {
-			for (const NetLobbyMember& member : snapshot.members) {
-				if (member.peerId == entry.senderPeerId + 1) {
-					name = member.displayName;
-					break;
-				}
-			}
-		}
-		if (name.empty()) {
-			name = "Player " + std::to_string(entry.senderPeerId + 1);
-		}
-		m_MultiplayerLobbyChatLines.push_back(std::string(entry.scope == c_NetChatScopeTeam ? "  [team] " : "") + name + ": " + entry.text);
-		while (m_MultiplayerLobbyChatLines.size() > m_MultiplayerLobbyChatLabels.size()) {
-			m_MultiplayerLobbyChatLines.pop_front();
-		}
-	}
+	TakeLobbyChat(snapshot);
 	// Lines sit bottom-aligned above the input: the newest line is always the lowest drawn row.
 	const size_t chatOffset = m_MultiplayerLobbyChatLines.size() > static_cast<size_t>(chatRows)
 	                              ? m_MultiplayerLobbyChatLines.size() - chatRows : 0;
