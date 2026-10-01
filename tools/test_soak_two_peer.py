@@ -27,7 +27,7 @@ def write_peer(root: Path, peer: str, peer_id: int, tick_ms: float, census_sim_m
     (root / peer).mkdir(parents=True, exist_ok=True)
     census = "".join(f"[mem-census] tick={tick} private_mb=1 pace: wall_tps={1000 / tick_ms:.3f} sim_ms_per_tick={census_sim_ms}\n"
                      for tick in (3600, 7200))
-    (root / peer / "stdout.log").write_text(f"[net-lockstep] start round={ROUND} peer={peer_id}\n" + census + log, encoding="utf-8")
+    (root / peer / "stdout.log").write_text(f"[net-lockstep] start round={ROUND} frame=1 local_peer={peer_id} peers=2\n" + census + log, encoding="utf-8")
     (root / f"{peer}_report.json").write_text(json.dumps({"service": {"local_peer_id": peer_id}}), encoding="utf-8")
 
 
@@ -63,6 +63,23 @@ class SoakJudgement(unittest.TestCase):
         result = soak.acceptance_history(self.root, TICKS)
         self.assertTrue(result["pass"], result["errors"])
         self.assertTrue(all(not window["gated"] for window in result["pace_windows"]["host"]))
+
+    def test_an_injected_stall_is_its_own_seats_away_time(self) -> None:
+        # The client stalls 1.5 s at tick 1000 (the soak's own fault) and is held at 1004 until 1100.
+        stall = ("[net-test] live stall frame=1000 ms=1500\n[net-lockstep] hold of this seat at 1004 revision=1\n"
+                 f"[net-match] seat-reclaimed peer=2 frame=1100 live_actors=2\n")
+        write_peer(self.root, "host", 1, 1000 / 60, 8.0, TICKS + 1)
+        write_peer(self.root, "client", 2, 1000 / 60, 8.0, TICKS + 1, stall)
+        path = self.root / "client-live.jsonl"
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        for row in rows:
+            if row["tick"] > 1000:
+                row["wall_ms"] += 1500
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        self.assertTrue(soak.acceptance_history(self.root, TICKS)["pass"], "the stalled seat was charged its own injected stall")
+        (self.root / "client" / "stdout.log").write_text(f"[net-lockstep] start round={ROUND} frame=1 local_peer=2 peers=2\n" + stall.replace("frame=1000", "frame=900"),
+                                                        encoding="utf-8")
+        self.assertFalse(soak.acceptance_history(self.root, TICKS)["pass"], "a stall its hold does not follow at once is still charged")
 
     def test_a_hold_after_a_return_is_excused_only_for_a_slow_machine_whose_sim_does_not_fit(self) -> None:
         row = {"round": ROUND, "held_peer": 1, "hold_tick": 1325, "returned_peer": 1, "return_tick": 1234}
