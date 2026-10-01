@@ -4166,7 +4166,7 @@ static void PollStallEventsForCapture() {
 	PollSDLEvents();
 }
 
-// Test lever CCCP_TEST_DRAW_PHASES: each stage of the frame's draw, its mean and its median, once every 600 frames.
+// Test lever CCCP_TEST_DRAW_PHASES: each stage of the frame's draw, its mean, median and 99th percentile, once every 600 frames.
 struct DrawPhases {
 	static constexpr const char* c_Names[] = {"previews_in", "scene", "net_ui", "toasts", "post", "pause_menu"};
 	static constexpr size_t c_Count = std::size(c_Names);
@@ -4181,13 +4181,15 @@ struct DrawPhases {
 		lapUs = now;
 		if (phase + 1 == c_Count && samples[phase].size() == 600) {
 			std::ostringstream line;
-			line << "[draw-phase] frames=600 us(mean/p50):";
+			line << "[draw-phase] frames=600 us(mean/p50/p99):";
 			for (size_t i = 0; i < c_Count; ++i) {
 				std::vector<float>& values = samples[i];
 				double total = 0;
 				for (float value: values) total += value;
 				std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
-				line << " " << c_Names[i] << "=" << total / values.size() << "/" << values[values.size() / 2];
+				const float median = values[values.size() / 2];
+				std::nth_element(values.begin(), values.begin() + values.size() * 99 / 100, values.end());
+				line << " " << c_Names[i] << "=" << total / values.size() << "/" << median << "/" << values[values.size() * 99 / 100];
 				values.clear();
 			}
 			System::PrintDiagnosticLine(line.str());
