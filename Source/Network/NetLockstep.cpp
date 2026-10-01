@@ -4830,6 +4830,7 @@ namespace RTE {
 		m_LocalCaptureTick.reset();
 		m_LocalCaptureStartedMs = 0;
 		m_LocalCaptureCostMs = 0;
+		m_LocalCaptureRunning = false;
 		m_CaptureExcuseUntilMs.clear();
 		m_ArrivalLeads.clear();
 		m_ArrivalLateness.clear();
@@ -5445,7 +5446,7 @@ namespace RTE {
 		const auto seat = std::pair{peerId, key};
 		if (const auto found = m_CaptureExcuseUntilMs.find(seat); found != m_CaptureExcuseUntilMs.end()) return found->second;
 		uint64_t began = firstMissingMs;
-		double cost = SteadyCaptureCostMs();
+		double cost = capture ? SteadyCaptureCostMs() : ParkCaptureCostMs();
 		if (peerId == m_Config.localPeerId && capture) {
 			if (m_LocalCaptureTick == capture) {
 				began = m_LocalCaptureStartedMs;
@@ -8157,6 +8158,7 @@ namespace RTE {
 		m_LocalCaptureTick = completedFrame;
 		m_LocalCaptureStartedMs = NetLockstepNowMs();
 		m_LocalCaptureCostMs = SteadyCaptureCostMs();
+		m_LocalCaptureRunning = true;
 		// Every peer measures its own capture, but the window is one host fact.  A client that opened a window
 		// from its own budget would empty frames the host commits with real input, so it only measures here and
 		// takes the window from the host's publication.
@@ -8191,12 +8193,12 @@ namespace RTE {
 			uint32_t slowest = 0;
 			for (const auto& [peer, captureMs]: m_CaptureParkReportsMs) slowest = std::max(slowest, captureMs);
 			m_ParkCaptureHistoryMs.push_back(slowest);
-			while (m_ParkCaptureHistoryMs.size() > 3) m_ParkCaptureHistoryMs.pop_front();
+			while (m_ParkCaptureHistoryMs.size() > 15) m_ParkCaptureHistoryMs.pop_front();
 		}
 		// The window is bounded by what a capture costs, never by a round trip: every frame in it still carries its
 		// input, so it only keeps the bound from judging a seat while the capture runs. It is one host fact, final
 		// when published; a capture that runs past it is judged by the bound like any late input.
-		const double captureMs = SteadyCaptureCostMs();
+		const double captureMs = ParkCaptureCostMs();
 		const uint64_t ticks = static_cast<uint64_t>(std::max(1.0, std::ceil(captureMs / m_Config.simTickMs)));
 		m_SynchronizedCaptureEndFrame = m_SynchronizedCaptureStartFrame + ticks - 1;
 		m_CaptureParkDeadlineMs = 0;
@@ -8206,7 +8208,8 @@ namespace RTE {
 		// Each park closes on its own reports: a previous park's duration is not evidence about this one.
 		m_CaptureParkReportsMs.clear();
 		DiagnosticLine() << "[net-lockstep] capture park begin frame=" << m_SynchronizedCaptureStartFrame
-		          << " end=" << m_SynchronizedCaptureEndFrame << " completed=" << completedFrame << " capture_estimate_ms=" << captureMs << std::endl;
+		          << " end=" << m_SynchronizedCaptureEndFrame << " completed=" << completedFrame << " capture_estimate_ms=" << captureMs
+		          << " measured_parks=" << m_ParkCaptureHistoryMs.size() << " steady_ms=" << SteadyCaptureCostMs() << std::endl;
 		if (!IsRunning() || m_NextTimingRevision == UINT64_MAX) return;
 		NetLockstepTiming timing;
 		timing.senderPeerId = GetHostPeerId();
@@ -8235,15 +8238,25 @@ namespace RTE {
 		// The middle of the last three parks' slowest captures: one cold capture never sizes a window alone.
 		// Before any park was measured the window is the slow-player bound, the wait the round already accepts.
 		if (m_ParkCaptureHistoryMs.empty()) return std::max(m_Config.simTickMs, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
-		std::vector<uint32_t> sorted(m_ParkCaptureHistoryMs.begin(), m_ParkCaptureHistoryMs.end());
+		std::vector<uint32_t> sorted(m_ParkCaptureHistoryMs.end() - std::min<ptrdiff_t>(3, m_ParkCaptureHistoryMs.size()), m_ParkCaptureHistoryMs.end());
 		std::sort(sorted.begin(), sorted.end());
 		return static_cast<double>(sorted[sorted.size() / 2]);
+	}
+
+	double NetLockstepCoordinator::ParkCaptureCostMs() const {
+		// A park covers this box's slow captures, not its typical one: a capture past its window holds the seat that took it.
+		if (m_ParkCaptureHistoryMs.empty()) return SteadyCaptureCostMs();
+		std::vector<uint32_t> sorted(m_ParkCaptureHistoryMs.begin(), m_ParkCaptureHistoryMs.end());
+		std::sort(sorted.begin(), sorted.end());
+		const size_t index = std::min(sorted.size() - 1, (sorted.size() * 9 + 9) / 10 - 1);
+		return static_cast<double>(sorted[index]) + m_Config.simTickMs;
 	}
 
 	void NetLockstepCoordinator::CompleteSynchronizedCapture(uint64_t completedFrame, double captureMs) {
 		NET_PLANE_CHECK();
 		if (m_Playback || completedFrame == UINT64_MAX || !std::isfinite(captureMs) || captureMs < 0 || m_Config.simTickMs <= 0) return;
 		if (m_LocalCaptureTick == completedFrame) {
+			m_LocalCaptureRunning = false;
 			m_LocalCaptureCostMs = captureMs;
 			m_CaptureExcuseUntilMs[{m_Config.localPeerId, completedFrame}] = m_LocalCaptureStartedMs + static_cast<uint64_t>(std::ceil(captureMs));
 		}
@@ -9255,7 +9268,9 @@ namespace RTE {
 		const uint64_t excusedThrough = back != m_ReclaimTransactions.end()
 			? std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames)
 			: EffectiveStartOf(local) + std::max<uint64_t>(m_Config.slowPlayerBoundTicks, c_StartupSettleTicks);
-		const bool capturing = nowMs < CaptureExcuseUntil(local, frame, m_OwnMissingFrame == frame ? m_OwnMissingSinceMs : nowMs);
+		// This engine's own capture still running is the engine's own work, not a slow machine, up to twice the park's size.
+		const bool capturing = nowMs < CaptureExcuseUntil(local, frame, m_OwnMissingFrame == frame ? m_OwnMissingSinceMs : nowMs) ||
+		                       (m_LocalCaptureRunning && nowMs < m_LocalCaptureStartedMs + static_cast<uint64_t>(2.0 * ParkCaptureCostMs()));
 		if (frame <= excusedThrough || m_CaptureParkAwaitingReports || TimingDecisionPendingAt(frame) || capturing) {
 			m_OwnMissingFrame.reset();
 			return false;
