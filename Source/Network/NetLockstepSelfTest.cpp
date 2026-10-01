@@ -20139,8 +20139,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			         std::to_string(host.SteadyCaptureCostMs());
 			return false;
 		}
-		// This engine's own capture still running is its own work: its seat is not judged late inside twice the park's size,
-		// and is judged after it.
+		// This engine's own capture and its catch-up are its own work: its seat is not judged late inside twice the park's size
+		// from the capture's start, running or finished, and is judged after it.
 		host.m_State = NetLockstepState::Running;
 		host.m_Stats.nextFrame = 607;
 		host.m_LastCompletedSimulationTick = 600;
@@ -20148,7 +20148,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_LastQueuedTargetFrame = 606;
 		host.m_PeersPlayedThisRound = {1, 2};
 		host.m_RemoteFrames[607][2] = {};
-		host.m_LocalCaptureRunning = true;
+		host.m_LocalCaptureRunning = false;
 		host.m_LocalCaptureStartedMs = 1000;
 		const uint64_t covered = 1000 + static_cast<uint64_t>(2.0 * host.ParkCaptureCostMs());
 		if (host.JudgeOwnSeat(607, 1000) || host.JudgeOwnSeat(607, covered - 1) || host.JudgeOwnSeat(607, covered + 1) || !host.JudgeOwnSeat(607, covered + 60)) {
