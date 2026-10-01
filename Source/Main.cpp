@@ -6619,12 +6619,13 @@ void RunGameLoop() {
 
 		// A lockstep peer with owed ticks presents at least once per tick length while it catches up, the round's first ticks
 		// included (the round starts inside this frame's first poll); a world joiner keeps its own ceiling.
-		// A paced round sheds frames, never ticks: it keeps what it owes up to the floor's span, runs it back to back and
-		// presents at least 15 times a second. One whose frames fit spreads a catch-up burst over frames a tick apart.
+		// A paced round sheds frames, never ticks: it keeps up to a second of what it owes, runs it back to back and presents
+		// at least 15 times a second. One whose frames fit spreads a catch-up burst over frames a tick apart.
 		const bool pacedRound = ScenarioRunner::HasLockstepCoordinator() && !freeRunLockstep && !ScenarioRunner::WorldCatchUpActive();
 		const bool shedsFrames = pacedRound && g_PerformanceMan.GetMSPFAverage() > g_TimerMan.GetDeltaTimeMS();
 		constexpr double c_FloorFrameMs = 1000.0 / 15.0;
-		g_TimerMan.SetOwedTicksKept(pacedRound ? static_cast<int>(c_FloorFrameMs / g_TimerMan.GetDeltaTimeMS()) : 0);
+		constexpr double c_OwedKeptMs = 1000.0;
+		g_TimerMan.SetOwedTicksKept(pacedRound ? static_cast<int>(c_OwedKeptMs / g_TimerMan.GetDeltaTimeMS()) : 0);
 		// A paced round caps what it owes by the median of its last 15 ticks, so a capture or a first-tick load cannot drop owed time.
 		float owedCapTickCostMs = 0;
 		if (pacedRound && !s_paceTickCostsMs.empty()) {
