@@ -104,6 +104,8 @@ namespace RTE {
 		uint64_t IceReplies() const { return m_IceReplies; }
 		const NetRelayConfig& IceServers() const { return m_IceServers; }
 		const std::string& IceError() const { return m_IceError; }
+		/// The directory said the host's relay backend refused the host's last request (not that the match has no relay).
+		bool IceRelayRefused() const { return m_IceRelayRefused; }
 
 		/// Host: keep the row registered. The first call after Idle registers; the row passed on
 		/// each call carries the live peer_count/seats_free for the next heartbeat. `listed`
@@ -217,7 +219,7 @@ namespace RTE {
 		std::unique_ptr<Transport> m_Request;
 		std::unique_ptr<Transport> m_IceRequest;
 		NetRelayConfig m_IceServers;
-		std::string m_IceError;
+		std::string m_IceError; bool m_IceRelayRefused = false;
 		uint64_t m_IceReplies = 0;
 		RequestKind m_RequestKind = RequestKind::None;
 

@@ -8990,7 +8990,13 @@ static std::string ResyncSaveName() {
 		}
 		spec.p2p = BuildIceConfig(g_SettingsMan, std::string(), c_IceVirtualPort, relay);
 		if (spec.p2p.connectionMode == 2 && spec.p2p.turnServerList.empty()) {
-			if (error) *error = "Relay setup failed: no unexpired relay credentials; configure your relay or choose Automatic";
+			// Relay only never falls back: the player is told why there is no relay and what to change.
+			if (error) {
+				*error = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride()
+				             ? "Your relay has no unexpired login - check your relay setting or switch Connection to Automatic"
+				         : browse.IceRelayRefused() ? "The host's relay refused the credentials - ask the host to check the relay setting"
+				                                    : "No relay is configured for this match - switch Connection to Automatic or Direct only";
+			}
 			return false;
 		}
 		{
@@ -9035,7 +9041,8 @@ static std::string ResyncSaveName() {
 		if (transportReady && runner.Start(wire, session, coordinator, config, error)) return true;
 		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;
 		if (m_ConnectionMode == 2) {
-			if (error) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
+			// A setup that never reached the transport already says why; only a relay that failed to connect is named here.
+			if (error && transportReady) *error = "Relay connection failed: " + *error + "; check the relay or choose Automatic";
 			return false;
 		}
 		const auto routeFailed = [&] {
