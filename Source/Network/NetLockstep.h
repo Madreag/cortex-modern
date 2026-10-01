@@ -1666,8 +1666,10 @@ namespace RTE {
 		void PublishCapturePark(uint64_t startFrame);
 		void ApplyCapturePark(const NetLockstepTiming& timing);
 		uint64_t CaptureParkCapTicks() const;
-		/// What the next park's window is sized from: the middle of the last three parks' slowest captures.
+		/// What an announced capture is expected to cost: the middle of the last three parks' slowest captures.
 		double SteadyCaptureCostMs() const;
+		/// What the next park's window is sized from: the 90th percentile of the recent parks' slowest captures plus one tick.
+		double ParkCaptureCostMs() const;
 		void SendCaptureParkReport(uint64_t nowMs = 0);
 		void RetryLateStartReclaims();
 		void FlushDeferredParkTimings();
@@ -1896,6 +1898,7 @@ namespace RTE {
 		std::optional<uint64_t> m_LocalCaptureTick;
 		uint64_t m_LocalCaptureStartedMs = 0;
 		double m_LocalCaptureCostMs = 0;
+		bool m_LocalCaptureRunning = false; //!< This engine's synchronized capture has begun and not yet completed.
 		std::map<std::pair<uint8_t, uint64_t>, uint64_t> m_CaptureExcuseUntilMs;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
