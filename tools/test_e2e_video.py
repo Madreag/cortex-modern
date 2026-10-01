@@ -39,6 +39,19 @@ def row(results, name, ok, detail=""):
     return ok
 
 
+def check_freeze_stills(results):
+    text = "\n".join(["[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 2.5", "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 1.5",
+                      "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 4", "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 9"])
+    spans = driver.parse_freezedetect(text)
+    ok = row(results, "stills/parsed", spans == [(2.5, 4.0), (9.0, None)], str(spans))
+    running = [{"frame": i, "saved": True, "wall_ms": 1000 + i * 100, "screen": "game", "service_state": "Running"} for i in range(120)]
+    ok &= row(results, "stills/running-still-fails", [still["start_s"] for still in driver.running_stills(spans, running)] == [2.5, 9.0])
+    menu = [dict(row, screen="MultiplayerScreen") if 20 <= row["frame"] <= 45 else row for row in running]
+    ok &= row(results, "stills/menu-still-passes", [still["start_s"] for still in driver.running_stills(spans, menu)] == [9.0])
+    ok &= row(results, "stills/short-still-passes", driver.running_stills([(1.0, 1.5)], running) == [])
+    return ok
+
+
 def check_recording_health(results, scratch):
     def capture(name, spacing_ms, count=120):
         video = scratch / name
@@ -674,7 +687,7 @@ def check_review(results, scratch):
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))
     ok &= row(results, "review/failures-carried",
               document["failures"]["client"] == ["[menu-script] FAILED: assert_substate"])
-    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-rate-")]
+    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-")]
     ok &= row(results, "review/no-probe-is-named",
               all(item.get("probe") == "awaiting-review" for item in scenario_items))
     # The dialog row is written for every capture: a player would have had to answer each line it lists.
@@ -747,7 +760,7 @@ def check_interruption(results, scratch):
     manifest = driver.scenario_manifest(capture, out, 1)
     review = driver.aggregate_review(capture, out)
     ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
-    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-rate-")]
+    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-")]
     ok &= row(results, "interruption/unstarted-checklist-retained", len(started_items) == 2 and started_items[1]["run"] == "second")
     ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
     return ok
@@ -1034,7 +1047,7 @@ def check_finalizer(results, scratch):
     saved = json.loads((out / "capture.json").read_text())
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
-    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-rate-")]
+    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-")]
     ok &= row(results, "finalize/names-unstarted-run", len(finalized_items) == 2 and finalized_items[1]["run"] == "second")
     ok &= row(results, "finalize/manifest-retains-budget", manifest.get("scratch_limit_bytes") == 8_000_000_000 and
               manifest.get("scratch_root") == str(scratch))
@@ -1875,6 +1888,7 @@ def main():
         ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
         ok &= check_recording_health(results, scratch)
+        ok &= check_freeze_stills(results)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_render_arm(results, scratch)
         ok &= check_module_requirements(results, scratch)

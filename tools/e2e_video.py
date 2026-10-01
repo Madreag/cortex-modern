@@ -367,6 +367,50 @@ def port_for(run_index, base):
     return port
 
 
+def parse_freezedetect(text):
+    """The still spans ffmpeg's freezedetect reports, in seconds of the video: (start, end); a span still open at the end runs to None."""
+    spans, start = [], None
+    for line in text.splitlines():
+        found = re.search(r"freeze_(start|end): ([0-9.]+)", line)
+        if not found:
+            continue
+        if found.group(1) == "start":
+            start = float(found.group(2))
+        elif start is not None:
+            spans.append((start, float(found.group(2))))
+            start = None
+    if start is not None:
+        spans.append((start, None))
+    return spans
+
+
+def running_stills(spans, rows, minimum_s=1.0):
+    """The stills that fall while this screen's match runs: every saved frame over the span shows the game with the service Running.
+    A still over a menu, a load or a stopped service is not the match freezing."""
+    saved = [row for row in rows if row.get("saved", True) and "wall_ms" in row]
+    if not saved:
+        return []
+    origin, last = saved[0]["wall_ms"], saved[-1]["wall_ms"]
+    stills = []
+    for start, end in spans:
+        stop = end if end is not None else (last - origin) / 1000.0
+        if stop - start < minimum_s:
+            continue
+        inside = [row for row in saved if origin + start * 1000 <= row["wall_ms"] <= origin + stop * 1000]
+        if inside and all(row.get("screen") == "game" and row.get("service_state") == "Running" for row in inside):
+            stills.append({"start_s": round(start, 3), "end_s": round(stop, 3), "frames": [inside[0].get("frame"), inside[-1].get("frame")]})
+    return stills
+
+
+def freeze_scan(ffmpeg, video, rows):
+    """ffmpeg's freezedetect over one peer's encoded capture: a still picture over one second while the match runs."""
+    if not ffmpeg or not video or not Path(video).is_file():
+        return None
+    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), "-vf", "freezedetect=n=-60dB:d=1", "-map", "0:v:0", "-f", "null", "-"],
+                            capture_output=True, text=True, errors="replace", timeout=600)
+    return running_stills(parse_freezedetect(result.stderr), rows)
+
+
 def recording_health(video_dir, minimum_share=0.9):
     """The recorder's own account of a capture: frames saved a second over the recorded span against the rate it was asked for,
     and the longest wait between two saved frames. A capture that saved fewer than minimum_share of its frames is starved."""
@@ -1027,6 +1071,16 @@ def review(scenario, capture, out):
                       **({"finding": {"class": "harness", "reason": "starved capture: %.1f of %d frames a second saved, longest gap %d ms" %
                                       (health["saved_fps"], health["fps"], health["longest_gap_ms"]), "launch": None, "errors": []}}
                          if health["starved"] else {})})
+        stills = freeze_scan(find_ffmpeg(), peer.get("video"), read_index(peer["video_dir"]))
+        if stills is None:
+            continue
+        items.append({"id": "recording-stills-" + peer["peer"], "run": capture["name"], "peer": peer["peer"], "screen": "game",
+                      "what": "No still picture over one second while this screen's match runs.",
+                      "assert": "ffmpeg freezedetect (-60 dB, 1 s) finds no still over saved frames that all show the game with the service Running",
+                      "frames": None, "capture_frames": None, "video_seconds": None, "video": peer.get("video"),
+                      "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if stills else "pass", "stills": stills,
+                      **({"finding": {"class": "harness", "reason": "%d still(s) over 1 s while the match runs, first at %.1f s" % (len(stills), stills[0]["start_s"]),
+                                      "launch": None, "errors": []}} if stills else {})})
     run_findings = []
     for peer in capture["peers"]:
         record = peer.get("record", {})
