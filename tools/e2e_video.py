@@ -1949,7 +1949,8 @@ def native_behavior(root, spec):
                 require(probe.get('pass') and probe.get('complete'), f'{peer}: seat-state probe incomplete')
                 dumps = []
                 for step in probe.get('steps', []):
-                    observation = step.get('observed', {}).get('menu_observation', '')
+                    # A failed step records no observation; it is read as none, not as a harness error.
+                    observation = (step.get('observed') or {}).get('menu_observation', '')
                     if isinstance(observation, str) and observation.startswith('{'):
                         observed = json.loads(observation)
                         if 'members' in observed: dumps.append(observed)
