@@ -303,7 +303,7 @@ namespace RTE {
 		std::sort(roster.begin() + 1, roster.end());
 	}
 
-	std::vector<uint8_t> NetMatchRunner::DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats) {
+	std::vector<uint8_t> NetMatchRunner::DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats, uint8_t localPeerId) {
 		std::vector<uint8_t> survivors{played.hostPeerId}; // the star's hub cannot have left
 		for (const NetMatchPlayerSlot& slot : played.players) {
 			if (slot.cpu || slot.peerId == 0 || slot.peerId == played.hostPeerId) {
@@ -316,7 +316,7 @@ namespace RTE {
 					return seat.peerId == slot.peerId && seat.state != NetSeatPresenceState::Present && seat.state != NetSeatPresenceState::Substituted;
 				});
 			}
-			if (!gone) {
+			if (!gone || slot.peerId == localPeerId) {
 				survivors.push_back(slot.peerId);
 			}
 		}

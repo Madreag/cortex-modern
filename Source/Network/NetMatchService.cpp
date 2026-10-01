@@ -801,7 +801,7 @@ static std::string ResyncSaveName() {
 				// A seat that took the end record on its way back never ran a round here: the host's config names the hub.
 				if (m_Coordinator && m_Coordinator->GetRoundId() != 0)
 					played.hostPeerId = m_Coordinator->GetHostPeerId();
-				m_Runner->SetRematchRoster(NetMatchRunner::DeriveRematchSurvivors(played, leaves, refilled, seats ? &*seats : nullptr));
+				m_Runner->SetRematchRoster(NetMatchRunner::DeriveRematchSurvivors(played, leaves, refilled, seats ? &*seats : nullptr, m_LocalPeerId));
 			}
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
