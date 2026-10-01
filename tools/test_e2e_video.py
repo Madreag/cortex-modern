@@ -63,6 +63,37 @@ def check_recording_health(results, scratch):
     ok = row(results, "recording/full-rate-passes", full is not None and not full["starved"] and full["longest_gap_ms"] == 33)
     ok &= row(results, "recording/starved-capture-fails", starved is not None and starved["starved"] and 9.9 < starved["saved_fps"] < 10.1)
     ok &= row(results, "recording/no-manifest-is-not-judged", driver.recording_health(scratch / "recording-missing") is None)
+    # A full-rate capture whose one long gap holds slots the queue turned away is the recorder's still; the same gap with
+    # nothing dropped is a screen that presented nothing new.
+    video = scratch / "recording-full"
+    gapped = [1000 + i * 33 for i in range(60)] + [1000 + 59 * 33 + 400 + i * 33 for i in range(60)]
+    (video / "frames.jsonl").write_text("".join(json.dumps({"frame": i, "saved": True, "wall_ms": wall}) + "\n" for i, wall in enumerate(gapped)), encoding="utf-8")
+    (video / "dropped.jsonl").write_text(json.dumps({"wall_ms": 1000 + 59 * 33 + 200, "slot": 65}) + "\n", encoding="utf-8")
+    dropped = driver.recording_health(video)
+    ok &= row(results, "recording/recorder-gap-fails", dropped["recorder_gap_ms"] == 400 and dropped["starved"])
+    (video / "dropped.jsonl").write_text("", encoding="utf-8")
+    quiet = driver.recording_health(video)
+    ok &= row(results, "recording/screen-gap-is-not-the-recorders", quiet["recorder_gap_ms"] == 0 and quiet["longest_gap_ms"] == 400)
+    return ok
+
+
+def check_screen_watches(results, scratch):
+    peer = scratch / "screen-watch-peer"
+    peer.mkdir(parents=True, exist_ok=True)
+    lines = ['[text-watch] armed {"armed": "h15-layout", "rule": "layout", "state": "always", "control": "", "text": ""}',
+             '[text-watch] armed {"armed": "h15-duplicates", "rule": "duplicates", "state": "always", "control": "", "text": ""}',
+             '[text-watch] armed {"armed": "private", "rule": "require", "state": "always", "control": "", "text": "x"}',
+             '[text-watch] violation h15-layout layout {"wall_ms": 5, "detail": {"control": "LabelFiles", "in_parent": false}, "shown": []}',
+             '[text-watch] violation h15-layout layout {"wall_ms": 6, "detail": {"control": "LabelTelemetry", "in_parent": false}, "shown": []}',
+             '[text-watch] violation private require {"wall_ms": 7, "detail": "no shown line carries the text", "shown": []}',
+             '[text-watch] summary {"watch": "h15-duplicates", "rule": "duplicates", "frames": 900, "active_frames": 900, "violations": 0}']
+    (peer / "stdout.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    watches = driver.screen_watch_results(peer)
+    ok = row(results, "screen/armed-watches-only", set(watches) == {"layout", "duplicates"})
+    ok &= row(results, "screen/each-offence-listed", [o["detail"]["control"] for o in watches["layout"]["offences"]] == ["LabelFiles", "LabelTelemetry"])
+    ok &= row(results, "screen/clean-watch-has-summary", watches["duplicates"]["offences"] == [] and watches["duplicates"]["summary"]["frames"] == 900)
+    ok &= row(results, "screen/nothing-armed-is-not-judged", driver.screen_watch_results(scratch / "screen-watch-none") is None)
+    ok &= row(results, "screen/every-menu-script-arms-them", all(f"text_watch start h15-{name} " in driver.SCREEN_WATCHES for name in driver.SCREEN_WATCH_RULES))
     return ok
 
 
@@ -687,7 +718,7 @@ def check_review(results, scratch):
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))
     ok &= row(results, "review/failures-carried",
               document["failures"]["client"] == ["[menu-script] FAILED: assert_substate"])
-    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-")]
+    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-"))]
     ok &= row(results, "review/no-probe-is-named",
               all(item.get("probe") == "awaiting-review" for item in scenario_items))
     # The dialog row is written for every capture: a player would have had to answer each line it lists.
@@ -760,7 +791,7 @@ def check_interruption(results, scratch):
     manifest = driver.scenario_manifest(capture, out, 1)
     review = driver.aggregate_review(capture, out)
     ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
-    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-")]
+    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-"))]
     ok &= row(results, "interruption/unstarted-checklist-retained", len(started_items) == 2 and started_items[1]["run"] == "second")
     ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
     return ok
@@ -1047,7 +1078,7 @@ def check_finalizer(results, scratch):
     saved = json.loads((out / "capture.json").read_text())
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
-    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-")]
+    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-"))]
     ok &= row(results, "finalize/names-unstarted-run", len(finalized_items) == 2 and finalized_items[1]["run"] == "second")
     ok &= row(results, "finalize/manifest-retains-budget", manifest.get("scratch_limit_bytes") == 8_000_000_000 and
               manifest.get("scratch_root") == str(scratch))
@@ -1888,6 +1919,7 @@ def main():
         ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
         ok &= check_recording_health(results, scratch)
+        ok &= check_screen_watches(results, scratch)
         ok &= check_freeze_stills(results)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_render_arm(results, scratch)

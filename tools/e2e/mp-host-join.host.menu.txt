@@ -78,6 +78,8 @@ wait_ms 500
 activate ButtonMultiplayerStart
 wait_file {PROBE_DIR}/done.json 90
 video_mark mp-post-match-host
+# From the post-match lobby on, the returning player's row reads its name, never the placeholder of an empty seat.
+text_watch start h15-scene-rejoin-row-named forbid always Client 2 - 
 wait_ms 1320
 assert_substate Lobby
 dump_lobby
@@ -87,4 +89,5 @@ dump_lobby
 # The client leaves on its own script; the lobby row it vacates is what this last stretch records.
 wait_ms 6600
 dump_lobby
+text_watch close h15-scene-rejoin-row-named
 exit

@@ -17,6 +17,7 @@ import argparse
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
+import bisect
 import json
 import os
 from pathlib import Path
@@ -423,15 +424,30 @@ def recording_health(video_dir, minimum_share=0.9):
     span_s = (saved[-1] - saved[0]) / 1000.0 if len(saved) > 1 else 0.0
     saved_fps = (len(saved) - 1) / span_s if span_s > 0 else 0.0
     longest_gap_ms = max((later - earlier for earlier, later in zip(saved, saved[1:])), default=0)
-    starved = fps <= 0 or saved_fps < minimum_share * fps
+    # The engine indexes each slot its full queue turned away; a gap holding such slots is the recorder's, not the screen's.
+    dropped_path = Path(video_dir) / "dropped.jsonl"
+    drops = sorted(row["wall_ms"] for row in read_rows(dropped_path) if "wall_ms" in row) if dropped_path.is_file() else None
+    recorder_gap_ms = None
+    if drops is not None:
+        recorder_gap_ms = 0
+        for earlier, later in zip(saved, saved[1:]):
+            if later - earlier > recorder_gap_ms and bisect.bisect_right(drops, earlier) < bisect.bisect_left(drops, later):
+                recorder_gap_ms = later - earlier
+    # More than two slots in a row lost to the queue shows as a still of the recorder's own making.
+    gap_bar_ms = 3 * 1000 // fps if fps > 0 else 0
+    starved = fps <= 0 or saved_fps < minimum_share * fps or (recorder_gap_ms is not None and recorder_gap_ms > gap_bar_ms)
     return {"fps": fps, "frames_saved": manifest.get("frames_saved"), "frames_dropped": manifest.get("frames_dropped"),
             "frames_rate_limited": manifest.get("frames_rate_limited"), "span_s": round(span_s, 3), "saved_fps": round(saved_fps, 2),
-            "longest_gap_ms": longest_gap_ms, "starved": starved}
+            "longest_gap_ms": longest_gap_ms, "recorder_gap_ms": recorder_gap_ms, "recorder_gap_bar_ms": gap_bar_ms, "starved": starved}
 
 
 def read_index(video_dir):
     """The engine's per-frame index; a capture that never presented a frame leaves it empty."""
-    path = Path(video_dir) / "frames.jsonl"
+    return read_rows(Path(video_dir) / "frames.jsonl")
+
+
+def read_rows(path):
+    """One JSON object per line; a torn or missing file reads as what it holds."""
     rows = []
     if not path.is_file():
         return rows
@@ -687,6 +703,52 @@ def probe_verdict(probe_dir, item):
         return {"probe": "fail", "reason": "Required probe result is unreadable"}
     return {"probe": "pass" if observed.get("pass") and observed.get("complete") else "fail",
             "complete": bool(observed.get("complete")), "path": str(result)}
+
+
+# The screen checks every scenario carries (A13): the engine judges each drawn frame from its arming to the process's end and logs
+# every distinct offence once, so one capture lists them all.
+SCREEN_WATCH_RULES = {
+    "layout": ("Every shown label's text fits its own rect, its rect sits inside its panel and the screen.", "layout always"),
+    "duplicates": ("No two shown overlay controls carry the same line at once (the status strip and a toast never stack one event).", "duplicates always"),
+    "held-reads-held": ("A seat kept for its player never reads 'Left' on another screen while it is held.", "forbid remote_held Left - AI in control"),
+    "own-hold-line": ("The held player's own screen says it is held from the hold's first frame to the frame its control returns.", "require local_held Held - AI in control"),
+    "rtt": ("NET STATUS's round-trip summary agrees with the per-player pings listed beside it.", "rtt always"),
+    "seat-rows": ("Every seat the open seats panel lists has its row drawn inside the panel.", "seat_rows panel_open"),
+}
+SCREEN_WATCHES = "".join(f"text_watch start h15-{name} {spec}\n" for name, (_, spec) in SCREEN_WATCH_RULES.items())
+TEXT_WATCH_LINE = re.compile(r"^\[text-watch\] (armed|violation|summary) (.*)$", re.M)
+
+
+def screen_watch_results(peer_root):
+    """Each screen watch the peer armed, with the offences its engine logged; None when the peer armed none."""
+    log = Path(peer_root) / "stdout.log"
+    text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+    results = {}
+    for kind, body in TEXT_WATCH_LINE.findall(text):
+        if kind == "armed":
+            try:
+                armed = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            if str(armed.get("armed", "")).startswith("h15-"):
+                results.setdefault(armed["armed"][4:], {"offences": [], "summary": None, "armed": armed})
+        elif kind == "violation":
+            name, _, rest = body.partition(" ")
+            if name.startswith("h15-") and name[4:] in results:
+                record = rest.partition(" ")[2]
+                try:
+                    results[name[4:]]["offences"].append(json.loads(record))
+                except json.JSONDecodeError:
+                    results[name[4:]]["offences"].append({"raw": record})
+        else:
+            try:
+                summary = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            name = str(summary.get("watch", ""))
+            if name.startswith("h15-") and name[4:] in results:
+                results[name[4:]]["summary"] = summary
+    return results or None
 
 
 def menu_script_failures(peer_root):
@@ -1064,12 +1126,12 @@ def review(scenario, capture, out):
             continue
         items.append({"id": "recording-rate-" + peer["peer"], "run": capture["name"], "peer": peer["peer"], "screen": "any",
                       "what": "The recorder saved its frames at the rate it was asked for, so the footage moves as the screen did.",
-                      "assert": "frames saved a second over the recorded span >= 90 % of the recorder's rate",
+                      "assert": "frames saved a second over the recorded span >= 90 % of the recorder's rate, and no gap between saved frames holding slots the recorder dropped longer than three frame slots",
                       "frames": None, "capture_frames": None, "video_seconds": None, "video": peer.get("video"),
                       "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if health["starved"] else "pass",
                       "recording": health,
-                      **({"finding": {"class": "harness", "reason": "starved capture: %.1f of %d frames a second saved, longest gap %d ms" %
-                                      (health["saved_fps"], health["fps"], health["longest_gap_ms"]), "launch": None, "errors": []}}
+                      **({"finding": {"class": "harness", "reason": "starved capture: %.1f of %d frames a second saved, longest gap %d ms, the recorder's own %s ms" %
+                                      (health["saved_fps"], health["fps"], health["longest_gap_ms"], health["recorder_gap_ms"]), "launch": None, "errors": []}}
                          if health["starved"] else {})})
         stills = freeze_scan(find_ffmpeg(), peer.get("video"), read_index(peer["video_dir"]))
         if stills is None:
@@ -1081,6 +1143,24 @@ def review(scenario, capture, out):
                       "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if stills else "pass", "stills": stills,
                       **({"finding": {"class": "harness", "reason": "%d still(s) over 1 s while the match runs, first at %.1f s" % (len(stills), stills[0]["start_s"]),
                                       "launch": None, "errors": []}} if stills else {})})
+    # What the screen showed is asserted too: each armed screen watch is one item per peer.
+    for peer in [] if capture.get("interrupted") else capture["peers"]:
+        watches = screen_watch_results(peer["root"]) if peer.get("root") else None
+        for name, result in (watches or {}).items():
+            armed = result.get("armed") or {}
+            spec = " ".join(str(armed.get(key, "")) for key in ("rule", "state", "control", "text") if armed.get(key))
+            what, rule = SCREEN_WATCH_RULES.get(name, ("The scenario's own screen check: " + spec, spec))
+            offences = list(result["offences"])
+            # A scenario's own watch judged nothing when its state never held while it was armed.
+            if name.startswith("scene-") and (result.get("summary") or {}).get("active_frames", 1) == 0:
+                offences.append({"detail": "its state never held while it was armed"})
+            items.append({"id": f"screen-{name}-" + peer["peer"], "run": capture["name"], "peer": peer["peer"], "screen": "any",
+                          "what": what, "assert": "text_watch " + rule + ", every drawn frame",
+                          "frames": None, "capture_frames": None, "video_seconds": None, "video": peer.get("video"),
+                          "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if offences else "pass",
+                          "watch": {"summary": result["summary"], "offences": offences[:40]},
+                          **({"finding": {"class": "product", "reason": "%d screen offence(s), first: %s" % (len(offences), json.dumps(offences[0].get("detail", offences[0]))[:300]),
+                                          "launch": None, "errors": []}} if offences else {})})
     run_findings = []
     for peer in capture["peers"]:
         record = peer.get("record", {})
@@ -1154,7 +1234,7 @@ def stage_peer(scenario, peer, root, tokens):
         path.write_text(substitute(scenario_text(scenario, peer["input_script"]), tokens), encoding="utf-8")
     if peer.get("menu_script"):
         path = Path(root) / "menu.txt"
-        path.write_text(substitute(scenario_text(scenario, peer["menu_script"]), tokens), encoding="utf-8")
+        path.write_text(SCREEN_WATCHES + substitute(scenario_text(scenario, peer["menu_script"]), tokens), encoding="utf-8")
     environment.update(substitute(peer.get("env", {}), tokens))
     if environment["CCCP_HEADLESS"] != "1":
         raise ValueError("a scenario cannot override CCCP_HEADLESS=1")
