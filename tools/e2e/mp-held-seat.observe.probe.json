@@ -5,6 +5,42 @@
     {
       "op": "wait",
       "service": "Running",
+      "lockstep_frame_at_least": 1000
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running",
+        "local_actor_alive": true
+      }
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "lockstep_frame_at_least": 2000
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running",
+        "local_actor_alive": true
+      }
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "lockstep_frame_at_least": 3000
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running",
+        "local_actor_alive": true
+      }
+    },
+    {
+      "op": "wait",
+      "service": "Running",
       "lockstep_frame_at_least": 4000
     },
     {
