@@ -39,6 +39,20 @@ def row(results, name, ok, detail=""):
     return ok
 
 
+def check_recording_health(results, scratch):
+    def capture(name, spacing_ms, count=120):
+        video = scratch / name
+        video.mkdir(parents=True, exist_ok=True)
+        (video / "manifest.json").write_text(json.dumps({"fps": 30, "frames_saved": count, "frames_dropped": 0, "frames_rate_limited": 0}), encoding="utf-8")
+        (video / "frames.jsonl").write_text("".join(json.dumps({"frame": i, "saved": True, "wall_ms": 1000 + i * spacing_ms}) + "\n" for i in range(count)), encoding="utf-8")
+        return driver.recording_health(video)
+    full, starved = capture("recording-full", 33), capture("recording-starved", 100)
+    ok = row(results, "recording/full-rate-passes", full is not None and not full["starved"] and full["longest_gap_ms"] == 33)
+    ok &= row(results, "recording/starved-capture-fails", starved is not None and starved["starved"] and 9.9 < starved["saved_fps"] < 10.1)
+    ok &= row(results, "recording/no-manifest-is-not-judged", driver.recording_health(scratch / "recording-missing") is None)
+    return ok
+
+
 def check_capture_binary(results, scratch):
     platform = sys.platform
     previous = os.environ.pop("CCCP_TEST_BINARY", None)
@@ -660,7 +674,7 @@ def check_review(results, scratch):
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))
     ok &= row(results, "review/failures-carried",
               document["failures"]["client"] == ["[menu-script] FAILED: assert_substate"])
-    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs"]
+    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-rate-")]
     ok &= row(results, "review/no-probe-is-named",
               all(item.get("probe") == "awaiting-review" for item in scenario_items))
     # The dialog row is written for every capture: a player would have had to answer each line it lists.
@@ -733,7 +747,7 @@ def check_interruption(results, scratch):
     manifest = driver.scenario_manifest(capture, out, 1)
     review = driver.aggregate_review(capture, out)
     ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
-    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs"]
+    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-rate-")]
     ok &= row(results, "interruption/unstarted-checklist-retained", len(started_items) == 2 and started_items[1]["run"] == "second")
     ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
     return ok
@@ -1020,7 +1034,7 @@ def check_finalizer(results, scratch):
     saved = json.loads((out / "capture.json").read_text())
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
-    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs"]
+    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith("recording-rate-")]
     ok &= row(results, "finalize/names-unstarted-run", len(finalized_items) == 2 and finalized_items[1]["run"] == "second")
     ok &= row(results, "finalize/manifest-retains-budget", manifest.get("scratch_limit_bytes") == 8_000_000_000 and
               manifest.get("scratch_root") == str(scratch))
@@ -1860,6 +1874,7 @@ def main():
         ok &= check_item_screens_reachable(results, options.repo)
         ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
+        ok &= check_recording_health(results, scratch)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_render_arm(results, scratch)
         ok &= check_module_requirements(results, scratch)
