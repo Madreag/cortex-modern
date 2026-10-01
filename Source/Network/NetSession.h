@@ -273,9 +273,6 @@ namespace RTE {
 		/// @return The reason text, or an empty string when nothing was rejected.
 		std::string BuildRejectText() const;
 		std::string BuildPlayerRefusalText() const;
-		/// What a player who left a running match on purpose reads when it comes back.
-		/// @param joinable Whether the match takes new players while it runs.
-		static std::string LeftMatchText(bool joinable);
 
 		bool IsReady() const { return m_State == NetSessionState::Ready; }
 		bool IsRejected() const { return m_State == NetSessionState::Rejected; }

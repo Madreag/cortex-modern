@@ -1167,11 +1167,6 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		// §9b: ask the host for a seat whose holder is gone. The host picks which one.
 		ApplyToSubstitute();
 		g_GUISound.ButtonPressSound()->Play();
-	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] && m_MultiplayerApplyOffered && g_NetMatchService.WasToldItLeftAJoinableMatch() &&
-	           g_NetMatchService.GetReconnectUx().GetOffer() != NetReconnectOffer::Available &&
-	           !g_NetMatchService.GetReconnectUx().IsActive()) {
-		JoinAsNewPlayer();
-		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]) {
 		// §11's manual retry, and the same button that takes up the stored ticket after a relaunch.
 		NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
@@ -3185,17 +3180,6 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	g_GUISound.ButtonPressSound()->Play();
 }
 
-void MainMenuGUI::JoinAsNewPlayer() {
-	// The same join again: the host told the last one it left, and admits the next as a new player.
-	std::string error;
-	if (g_NetMatchService.Start(m_MultiplayerJoinRequest, &error)) {
-		m_MultiplayerLandingStatusLabel->SetText("Joining the host's lobby...");
-	} else {
-		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(error));
-	}
-	m_ReconnectStatusShown = m_MultiplayerLandingStatusLabel->GetText();
-}
-
 void MainMenuGUI::ApplyToSubstitute() {
 	std::string error;
 	m_MultiplayerApplyOffered = false;
@@ -3308,18 +3292,16 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// §9b: the one refusal a joiner can answer. The same two buttons carry it, so the landing panel
 	// keeps one pair of controls whatever it is offering.
 	const bool applying = !recovering && !offering && m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch();
-	// A running world this player left takes it back as a new player; a match that takes none says so in the status.
-	const bool rejoiningAsNew = !recovering && !offering && !applying && m_MultiplayerApplyOffered && g_NetMatchService.WasToldItLeftAJoinableMatch();
 	// 7e: the match died with its host and no successor took it. The prompt stays up and waits for that
 	// host to come back: enabled once its row is listed again, or at once when there is no directory to
 	// watch and the only route left is the address the player types.
 	const bool awaiting = reconnect.IsAwaitingHostReturn() && !recovering;
 	const bool hostBack = reconnect.HasHostReturned() || !reconnect.CanWatchHostReturn();
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || rejoiningAsNew || awaiting || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (applying || rejoiningAsNew || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? "Apply to Substitute" : (rejoiningAsNew ? "Join as a New Player" : "Retry")));
-	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || rejoiningAsNew || awaiting || recovering));
-	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || rejoiningAsNew || awaiting || reconnect.CanCancel());
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || awaiting || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (applying || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? "Apply to Substitute" : "Retry"));
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || awaiting || recovering));
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || awaiting || reconnect.CanCancel());
 	if (!landing) {
 		return;
 	}

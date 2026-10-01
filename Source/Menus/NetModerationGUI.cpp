@@ -648,7 +648,8 @@ void NetModerationGUI::Refresh() {
 		if (!used) continue;
 		const auto& seat = m_Model.GetRow(row);
 		controls.name->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.view.displayName)), controls.name->GetWidth()), controls.name->GetWidth()));
-		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming));
+		const std::string cause = NetModerationUx::HoldCause(seat.view);
+		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming) + (cause.empty() ? "" : "  /  " + cause));
 		controls.applicant->SetText(DisplayName(seat.applicantText));
 		controls.applicant->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
 		for (size_t action = 0; action < controls.actions.size(); ++action) {

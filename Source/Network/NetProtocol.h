@@ -97,7 +97,7 @@ namespace RTE {
 		ParticipantBanned = 19,
 		// Connection proof missing, forged, replayed or bound to another host.
 		IdentityUnproven = 20,
-		// Host-authored: this proven identity left the running match on purpose. Not SessionEnded (the match runs on).
+		// Host-authored: the host released this player's seat. Not SessionEnded (the match runs on).
 		SeatReleased = 21,
 	};
 

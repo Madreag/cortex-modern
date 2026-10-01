@@ -2436,14 +2436,15 @@ namespace RTE {
 			leave.stableSeat = offer.stableSeat;
 			leave.holderGeneration = offer.holderGeneration;
 			host.HandleMessage(13, leave, 10);
-			bool closed = false;
+			bool closed = true;
 			for (const NetH4SeatStatus& status: host.GetSeatStatuses()) {
 				if (status.stableSeat == offer.stableSeat) {
-					closed = status.closed;
+					closed = status.closed || !status.committed;
 				}
 			}
-			if (!closed) {
-				return Fail("H4 clean leave left an ordinary match seat open");
+			// A leave in a running match keeps the seat for its player, as a drop does.
+			if (closed) {
+				return Fail("H4 clean leave gave up an ordinary match seat");
 			}
 		}
 		return 0;
@@ -2453,7 +2454,7 @@ namespace RTE {
 		ScriptedAuthCrypto crypto;
 		ScopedTestCrypto scope(&crypto);
 		const NetH4Identity identity = MakeH4Identity();
-		const std::vector<NetH4Seat> seats = {{0, 0, 0, false, 1, true}, {1, 1, 1, false, 2, false}};
+		const std::vector<NetH4Seat> seats = {{0, 0, 0, false, 1, true}, {1, 1, 1, false, 2, false}, {2, 2, 2, false, 3, false}};
 		NetSeatAuthRegistry registry;
 		if (!registry.BeginHostedSession()) {
 			return Fail("rejoin registry did not arm");
@@ -2488,13 +2489,17 @@ namespace RTE {
 		leave.holderGeneration = offer.holderGeneration;
 		host.HandleMessage(12, leave, 10);
 		host.TakeOutbound();
+		// The leaver keeps its seat, held as for a drop; a join without its ticket is a newcomer and takes the free slot.
 		NetH4NewJoin rejoin = join;
 		rejoin.txId.fill(14);
 		host.HandleMessage(14, rejoin, 20);
 		host.Tick(NetReconnectAdmission::c_DenialReleaseMs);
 		bool landed = false;
 		for (const NetH4Outbound& outbound: host.TakeOutbound()) {
-			if (std::holds_alternative<NetH4TicketOffer>(outbound.payload)) {
+			if (const auto* ticket = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
+				if (ticket->stableSeat == offer.stableSeat) {
+					return Fail("a newcomer was given the seat its player left");
+				}
 				landed = true;
 			}
 			if (const auto* rejected = std::get_if<NetJoinRejected>(&outbound.payload)) {
@@ -2505,6 +2510,11 @@ namespace RTE {
 		}
 		if (!landed) {
 			return Fail("rejoin after a clean leave did not land in the running world");
+		}
+		for (const NetH4SeatStatus& status: host.GetSeatStatuses()) {
+			if (status.stableSeat == offer.stableSeat && (!status.committed || status.closed)) {
+				return Fail("the world gave up the seat its player left");
+			}
 		}
 		return 0;
 	}
@@ -4356,7 +4366,7 @@ namespace RTE {
 		return true;
 	}
 
-	// The H4 row a world leave leaves behind names a lockstep id the next holder of that slot plays on.
+	// A world member who leaves keeps its slot: its H4 row stays its own and nothing releases the slot to the next holder.
 	int TestWorldCleanLeaveReleasesOnlyTheSeatThatLeft() {
 		ScriptedAuthCrypto crypto;
 		ScopedTestCrypto scope(&crypto);
@@ -4429,68 +4439,21 @@ namespace RTE {
 		admission.HandleMessage(51, departure, 10);
 		admission.TakeOutbound();
 		const std::vector<NetH4SeatStatus> afterLeave = admission.GetSeatStatuses();
-		bool leftRowIsOpen = false;
-		uint8_t leftRowLockstep = 0;
+		// A member's leave keeps its slot for it, as a drop does: the row stays its own and no spectator is promoted into it.
 		for (const NetH4SeatStatus& status: afterLeave) {
-			if (status.stableSeat == leaverOffer.stableSeat) {
-				leftRowIsOpen = !status.committed && !status.closed && !status.dropped && !status.reclaiming;
-				leftRowLockstep = status.lockstepPeerId;
+			if (status.stableSeat == leaverOffer.stableSeat && (!status.committed || status.closed || status.lockstepPeerId != 2)) {
+				return Fail("clean-leave-released-the-wrong-seat: the leave gave up the member's row on lockstep " + std::to_string(static_cast<int>(status.lockstepPeerId)));
 			}
 		}
-		if (!leftRowIsOpen || leftRowLockstep != 2) {
-			return Fail("clean-leave-released-the-wrong-seat: the fixture's leave did not leave an open row on lockstep 2");
-		}
-		if (!NetMatchService::FindWorldCleanLeave(afterLeave, world, leave) || leave.peerId != 2 ||
-		    leave.stableSeat != leaverOffer.stableSeat || leave.connection != 51) {
-			return Fail("clean-leave-was-not-detected: the departed seat read peer " +
-			            std::to_string(static_cast<int>(leave.peerId)) + " seat " + std::to_string(leave.stableSeat) +
-			            " connection " + std::to_string(leave.connection));
-		}
-		// What DriveWorldJoins does with it, then the promotion the freed slot earns.
-		if (!world.Membership().Release(leave.peerId, &error)) {
-			return Fail("clean-leave-was-not-detected: the release was refused (" + error + ")");
-		}
-		world.CancelJoin(leave.connection, "clean leave");
-		world.NoteSentInputThrough(memberE + 40);
-		uint64_t promotedAt = 0;
-		NetPeerId promoted = c_InvalidNetPeerId;
-		if (!world.PromoteWaitingSpectator(memberE + 50, &promotedAt, &promoted, &error) || promoted != 52) {
-			return Fail("clean-leave-was-not-detected: the freed slot promoted nobody (" + error + ")");
-		}
-		if (!world.NoteCatchUpProgress(52, promotedAt - 1, 1, 1, promotedAt - 1, nullptr, &error) ||
-		    !world.CompleteActivation(52, promotedAt - 1, &error)) {
-			return Fail("clean-leave-was-not-detected: the promotee never reached Active (" + error + ")");
-		}
-		const NetWorldJoinSession* seated = world.FindSession(52);
-		if (seated == nullptr || seated->assignedPeerId != 2 || seated->stableSeat != watcherOffer.stableSeat) {
-			return Fail("clean-leave-was-not-detected: the promotee does not hold the freed slot");
-		}
-		// THE RED: bob plays on lockstep 2 while his H4 seat names lockstep 3, and alice's row still
-		// names lockstep 2. Two more pumps against the same statuses must find nothing to release.
 		for (int pump = 0; pump < 2; ++pump) {
 			if (NetMatchService::FindWorldCleanLeave(afterLeave, world, leave)) {
-				return Fail("clean-leave-released-the-wrong-seat: pump " + std::to_string(pump + 1) +
-				            " released peer " + std::to_string(static_cast<int>(leave.peerId)) + " on seat " +
-				            std::to_string(leave.stableSeat) + " for connection " + std::to_string(leave.connection) +
-				            " while the departed seat is " + std::to_string(leaverOffer.stableSeat));
+				return Fail("clean-leave-released-the-wrong-seat: pump " + std::to_string(pump + 1) + " released peer " +
+				            std::to_string(static_cast<int>(leave.peerId)) + " on seat " + std::to_string(leave.stableSeat) + " after a leave that keeps it");
 			}
 		}
-		const NetWorldJoinSession* survivor = world.FindSession(52);
-		if (survivor == nullptr || survivor->phase != NetWorldJoinPhase::Active) {
-			return Fail("clean-leave-released-the-wrong-seat: the promotee's bootstrap did not survive the pumps");
-		}
-		// Bob's own leave is still found, on the slot he actually holds.
-		NetH4LeaveRequest second;
-		second.txId.fill(32);
-		second.epoch = watcherOffer.epoch;
-		second.stableSeat = watcherOffer.stableSeat;
-		second.holderGeneration = watcherOffer.holderGeneration;
-		admission.HandleMessage(52, second, 20);
-		admission.TakeOutbound();
-		if (!NetMatchService::FindWorldCleanLeave(admission.GetSeatStatuses(), world, leave) || leave.peerId != 2 ||
-		    leave.stableSeat != watcherOffer.stableSeat || leave.connection != 52) {
-			return Fail("clean-leave-was-not-detected: the promotee's own leave read peer " +
-			            std::to_string(static_cast<int>(leave.peerId)) + " seat " + std::to_string(leave.stableSeat));
+		const NetWorldJoinSession* watcher = world.FindSession(52);
+		if (watcher == nullptr || !watcher->spectator) {
+			return Fail("clean-leave-released-the-wrong-seat: a spectator took the slot its member left");
 		}
 		return 0;
 	}
@@ -4550,20 +4513,13 @@ namespace RTE {
 		    !world.CompleteActivation(63, daveWatchE, &error)) {
 			return Fail("reclaim-hold-missed-the-slot: dave never reached his stream (" + error + ")");
 		}
-		// Alice leaves and dave is promoted onto her slot, keeping his own H4 seat.
-		NetH4LeaveRequest departure;
-		departure.txId.fill(41);
-		departure.epoch = aliceOffer.epoch;
-		departure.stableSeat = aliceOffer.stableSeat;
-		departure.holderGeneration = aliceOffer.holderGeneration;
-		admission.HandleMessage(61, departure, 10);
-		admission.TakeOutbound();
-		NetMatchService::WorldCleanLeave leave;
-		if (!NetMatchService::FindWorldCleanLeave(admission.GetSeatStatuses(), world, leave) ||
-		    !world.Membership().Release(leave.peerId, &error)) {
-			return Fail("reclaim-hold-missed-the-slot: the clean leave did not free a slot (" + error + ")");
+		// The host releases alice's slot and dave is promoted onto it, keeping his own H4 seat. A leave keeps the slot its
+		// member's, so only the host frees one.
+		const NetWorldJoinSession* alice = world.FindSession(61);
+		if (alice == nullptr || !world.Membership().Release(alice->assignedPeerId, &error)) {
+			return Fail("reclaim-hold-missed-the-slot: the host's release did not free a slot (" + error + ")");
 		}
-		world.CancelJoin(leave.connection, "clean leave");
+		world.CancelJoin(61, "slot released");
 		world.NoteSentInputThrough(daveWatchE + 40);
 		uint64_t promotedAt = 0;
 		NetPeerId promoted = c_InvalidNetPeerId;
@@ -4716,20 +4672,13 @@ namespace RTE {
 		    !world.CompleteActivation(63, daveWatchE, &error)) {
 			return Fail("promoted-drop-named-the-seats-id: dave never reached his stream (" + error + ")");
 		}
-		// Alice leaves and dave is promoted onto her slot, keeping his own H4 seat.
-		NetH4LeaveRequest departure;
-		departure.txId.fill(43);
-		departure.epoch = aliceOffer.epoch;
-		departure.stableSeat = aliceOffer.stableSeat;
-		departure.holderGeneration = aliceOffer.holderGeneration;
-		admission.HandleMessage(61, departure, 10);
-		admission.TakeOutbound();
-		NetMatchService::WorldCleanLeave leave;
-		if (!NetMatchService::FindWorldCleanLeave(admission.GetSeatStatuses(), world, leave) ||
-		    !world.Membership().Release(leave.peerId, &error)) {
-			return Fail("promoted-drop-named-the-seats-id: the clean leave did not free a slot (" + error + ")");
+		// The host releases alice's slot and dave is promoted onto it, keeping his own H4 seat. A leave keeps the slot its
+		// member's, so only the host frees one.
+		const NetWorldJoinSession* alice = world.FindSession(61);
+		if (alice == nullptr || !world.Membership().Release(alice->assignedPeerId, &error)) {
+			return Fail("promoted-drop-named-the-seats-id: the host's release did not free a slot (" + error + ")");
 		}
-		world.CancelJoin(leave.connection, "clean leave");
+		world.CancelJoin(61, "slot released");
 		world.NoteSentInputThrough(daveWatchE + 40);
 		uint64_t promotedAt = 0;
 		NetPeerId promoted = c_InvalidNetPeerId;

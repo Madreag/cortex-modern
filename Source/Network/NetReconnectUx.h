@@ -168,6 +168,8 @@ namespace RTE {
 
 		/// The seat's line. Time since the drop, the hold in frames AND seconds, and who is waiting.
 		static std::string DescribeSeat(const NetH4ModerationSeat& seat);
+		/// Why a held seat is held, for the host: "Left 2 min ago", "Connection lost 10 s ago" or "Machine too slow"; empty when it is not held.
+		static std::string HoldCause(const NetH4ModerationSeat& seat);
 
 	private:
 		std::vector<Row> m_Rows;

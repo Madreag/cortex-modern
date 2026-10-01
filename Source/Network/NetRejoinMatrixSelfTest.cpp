@@ -117,8 +117,8 @@ namespace RTE {
 			const bool activeLike = s == State::Active || s == State::Parked;
 			// The client's session reading when the event does not concern it: a rejoin keeps its phase, a handshake keeps going.
 			const std::string quiet = s == State::RejoinConnecting ? "sess=alive" : rejoin ? std::string("sess=phase:") + PhaseOf(s) : "sess=ready";
-			// R-B: a clean leaver's seat is released (the AI keeps its units); a return is a new join.
-			const std::string held = s == State::Left ? "seat=Left peer=left" : rejoin ? "seat=Held" : "seat=Held peer=held";
+			// R6v2: a clean leaver's seat is held for it like a dropped one's (the AI plays it); its return is a reclaim.
+			const std::string held = s == State::Left ? "seat=Held peer=left" : rejoin ? "seat=Held" : "seat=Held peer=held";
 			const auto set = [&x](std::string expect, std::string source, std::string gap = {}) {
 				x.expect = std::move(expect);
 				x.source = std::move(source);
@@ -220,7 +220,7 @@ namespace RTE {
 					if (activeLike) set("round=relaunch peer=relaunch " + quiet, "LS-STOP");
 					else if (s == State::Draining) set("round=run " + quiet, "GAP", "a relaunch requested after the round's last tick");
 					else if (s == State::Held) set("round=relaunch seat=Held " + quiet, "LS-STOP");
-					else if (s == State::Left) set("round=relaunch seat=Left " + quiet, "LS-STOP R-B");
+					else if (s == State::Left) set("round=relaunch seat=Held " + quiet, "LS-STOP R6v2");
 					else if (s == State::Reclaiming) set("round=relaunch " + quiet, "LS-STOP", "what an agreed reclaim becomes across a relaunch is not ruled");
 					else if (rejoin) set("round=relaunch " + quiet, "LS-STOP", "a relaunch while the seat's rejoin is in flight: the conservative expectation keeps the rejoin's session");
 					else set("round=relaunch " + quiet, "LS-STOP");
@@ -263,7 +263,7 @@ namespace RTE {
 				case Event::HeldRejoin:
 					if (activeLike || s == State::Draining) set("api=refused seat=Active round=run " + quiet, "H4-4 R2D3");
 					else if (s == State::Held || rejoin) set("api=ok seat=Reclaiming round=run " + quiet, "RB3 R2D3");
-					else if (s == State::Left) set("api=refused seat=Left round=run " + quiet, "R-B H4-7");
+					else if (s == State::Left) set("api=ok seat=Reclaiming round=run " + quiet, "R6v2 RB3");
 					else if (s == State::Reclaiming) set("api=ok seat=Reclaiming round=run " + quiet, "H4-6");
 					else set("api=refused round=relaunch " + quiet, "GAP", "a returner arriving during a relaunch (conservative: the running round refuses; the relaunch's own admission carries it)");
 					break;
@@ -285,9 +285,9 @@ namespace RTE {
 					else set("round=relaunch " + quiet, "LS-STOP");
 					break;
 				case Event::OwnCap:
-					if (activeLike) set("seat=Left round=run sess=ended", "R1F7 R-B");
+					if (activeLike) set("seat=Held round=run sess=ended", "R1F7 R6v2");
 					else if (s == State::Draining) set("peer=over sess=ended", "LS-DRAIN");
-					else if (heldLike) set(std::string(s == State::Left ? "seat=Left" : "seat=Held") + " round=run sess=ended", "R1F7 R-B");
+					else if (heldLike) set("seat=Held round=run sess=ended", "R1F7 R6v2");
 					else if (s == State::Reclaiming) set("seat=Reclaiming round=run sess=ended", "GAP", "a returner that reaches its own cap before its activation frame");
 					else set("round=relaunch sess=ended", "R1F7");
 					break;
