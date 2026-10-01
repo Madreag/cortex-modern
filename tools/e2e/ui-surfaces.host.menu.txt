@@ -129,6 +129,9 @@ dump_lobby
 activate ButtonLobbyOptions
 wait_ms 660
 assert_substate HostOptions
+# A line the joiner types while this page is open is still on the host's screen.
+wait_label LabelLobbyChatAny And the joiner can answer on the same line
+text_watch start h15-scene-chat-under-page require substate:HostOptions And the joiner can answer on the same line
 video_mark ui-hosted-recovery
 activate TabHostPageRecovery
 wait_ms 700
@@ -166,6 +169,7 @@ dump_host_options
 observe activate ButtonHostSeatDlgClose
 wait_ms 495
 observe assert_visible HostSeatDialog 0
+text_watch close h15-scene-chat-under-page
 activate ButtonHostOptBack
 wait_ms 495
 assert_substate Lobby
