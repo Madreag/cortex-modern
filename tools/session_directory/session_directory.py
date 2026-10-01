@@ -24,6 +24,9 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
+# Cloudflare refuses urllib's default agent (403, error code 1010), so the relay request names the product.
+USER_AGENT = "cccp-session-directory/1"
+
 LOGGER = logging.getLogger("session_directory")
 
 MAX_ROWS = 4096
@@ -158,7 +161,7 @@ class TurnCredentialProvider:
             request = Request(
                 f"https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}/credentials/generate-ice-servers",
                 data=json.dumps({"ttl": ttl}).encode(),
-                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", "User-Agent": USER_AGENT},
                 method="POST",
             )
             try:
