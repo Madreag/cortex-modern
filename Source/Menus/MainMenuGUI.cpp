@@ -1497,6 +1497,12 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostOptionsPages[i] = dynamic_cast<GUICollectionBox*>(get(pageNames[i]));
 	}
 	m_HostOptionsStatusLabel = dynamic_cast<GUILabel*>(get("LabelHostOptStatus"));
+	// Two lines beside the buttons; a longer status scrolls through them rather than run out of the panel.
+	if (m_HostOptionsStatusLabel) {
+		m_HostOptionsStatusLabel->SetVAlignment(GUIFont::Top);
+		m_HostOptionsStatusLabel->SetVerticalOverflowScroll(true);
+		m_HostOptionsStatusLabel->ActivateDeactivateOverflowScroll(true);
+	}
 	m_HostSeatPlayersCombo = dynamic_cast<GUIComboBox*>(get("ComboHostSeatPlayers"));
 	m_HostSeatCapacityHint = dynamic_cast<GUILabel*>(get("LabelHostSeatCapacityHint"));
 	for (int row = 0; row < c_HostSeatRows; ++row) {
