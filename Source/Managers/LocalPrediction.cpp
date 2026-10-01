@@ -59,6 +59,10 @@ namespace RTE {
 	double LocalPrediction::s_PreviewMs = 0.0;
 	// The harness's own records of each preview step, kept out of the preview's cost.
 	static double s_HarnessMs = 0.0;
+	// Previews that ran a clone's scripts frozen, and those run again because a script resumed a coroutine stand-in.
+	static uint64_t s_FrozenPreviews = 0;
+	static uint64_t s_CoroutineReruns = 0;
+	static bool s_RerunningFrozen = false;
 	uint64_t LocalPrediction::s_ReusedFrames = 0;
 	double LocalPrediction::s_ReusedMs = 0.0;
 	std::array<double, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseMs{};
@@ -323,6 +327,9 @@ namespace RTE {
 			}
 		}
 		LuaMan::BeginPreviewScripts(clones, PreviewScriptSelfTest::SharedSlot(), cloned);
+		if (LuaMan::PreviewFrozenCount() > 0) {
+			++s_FrozenPreviews;
+		}
 		lap(6);
 		if (PreviewScriptSelfTest::StrideCounterRequested()) {
 			for (MovableObject* clone: clones) {
@@ -492,6 +499,16 @@ namespace RTE {
 		++s_PreviewCount;
 		s_PreviewTicks += static_cast<uint64_t>(depth) * s_Previews.size();
 		s_PreviewMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() - previewHarnessMs;
+		// A script resumed a coroutine its copy only stands in for, so this tick's preview runs again with the scripts frozen.
+		if (LuaMan::TakePreviewCoroutineResumed() && !s_RerunningFrozen) {
+			++s_CoroutineReruns;
+			Clear();
+			s_RerunningFrozen = true;
+			LuaMan::SetPreviewScriptsFrozen(true);
+			RunPreview();
+			LuaMan::SetPreviewScriptsFrozen(false);
+			s_RerunningFrozen = false;
+		}
 	}
 
 	void LocalPrediction::BeginRender() {
@@ -650,6 +667,7 @@ namespace RTE {
 		       " harness_ms_total=" + std::to_string(s_HarnessMs) + " harness_avg_ms=" + std::to_string(s_HarnessMs / static_cast<double>(s_PreviewCount)) +
 		       " known_copy_avg_ms=" + std::to_string(MovableMan::KnownObjectsScope::CopyMs() / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
+		       " frozen_previews=" + std::to_string(s_FrozenPreviews) + " coroutine_reruns=" + std::to_string(s_CoroutineReruns) +
 		       " preview_ghosts_peak=" + std::to_string(g_MovableMan.GetPreviewGhostPeak()) +
 		       (events.empty() ? std::string() : " " + events) + " terrain_pages_written=" + std::to_string(PageWriteFence::GetFaultCount()) +
 		       " reused_frames=" + std::to_string(s_ReusedFrames) + " reuse_avg_us=" + std::to_string(s_ReusedFrames ? 1000.0 * s_ReusedMs / static_cast<double>(s_ReusedFrames) : 0.0) + " phase_avg_ms=" + phases + " window_avg_ms=" + LuaMan::DescribePreviewWindowCost();

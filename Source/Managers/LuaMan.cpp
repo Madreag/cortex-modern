@@ -12945,13 +12945,36 @@ namespace {
 		return index < 0 ? lua_gettop(L) + index + 1 : index;
 	}
 
+	std::atomic<bool> s_PreviewCoroutineResumed{false};
+
+	// The body of a copied coroutine's stand-in: resuming it in a preview marks the window.
+	int PreviewCoroutineStandIn(lua_State* L) {
+		s_PreviewCoroutineResumed = true;
+		return 0;
+	}
+
 	void PushPreviewClone(lua_State* L, int src, int seen, std::vector<std::string>& problems) {
 		src = AbsoluteLuaIndex(L, src);
 		seen = AbsoluteLuaIndex(L, seen);
 		const int type = lua_type(L, src);
 		if (type == LUA_TTHREAD) {
-			problems.emplace_back("preview clone refused a coroutine");
+			// A coroutine cannot be copied: the copy holds a stand-in that reads as the original does, suspended or dead, and
+			// resuming it marks the window so the preview runs again with the scripts frozen.
 			lua_pushvalue(L, src);
+			lua_rawget(L, seen);
+			if (!lua_isnil(L, -1)) {
+				return;
+			}
+			lua_pop(L, 1);
+			lua_State* original = lua_tothread(L, src);
+			const int status = lua_status(original);
+			lua_State* standIn = lua_newthread(L);
+			if (status == LUA_YIELD || (status == 0 && lua_gettop(original) > 0)) {
+				lua_pushcfunction(standIn, PreviewCoroutineStandIn);
+			}
+			lua_pushvalue(L, src);
+			lua_pushvalue(L, -2);
+			lua_rawset(L, seen);
 			return;
 		}
 		if (type == LUA_TUSERDATA) {
@@ -13912,6 +13935,7 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 	OpenPreviewWindow();
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
+	s_PreviewCoroutineResumed = false;
 	laps.Lap(0);
 	if (!sharedSlot) {
 		for (const MovableObject* root: roots) {
@@ -13921,7 +13945,7 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 					return;
 				}
 				std::vector<std::string> problems;
-				if (!state->CopyScriptInstanceToPreviewHold(mo->GetUniqueID(), problems)) {
+				if (s_PreviewScriptsForcedFrozen || !state->CopyScriptInstanceToPreviewHold(mo->GetUniqueID(), problems)) {
 					s_PreviewFrozenUIDs.insert(mo->GetUniqueID());
 					++s_PreviewCodecFallbacks;
 				}
@@ -13943,6 +13967,10 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 		}
 	}
 	laps.Lap(2);
+}
+
+bool LuaMan::TakePreviewCoroutineResumed() {
+	return s_PreviewCoroutineResumed.exchange(false);
 }
 
 bool LuaMan::PreviewGlobalFenceEnabled() {
