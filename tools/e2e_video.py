@@ -1440,7 +1440,7 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
 
-    interrupted, stop_finding, footprint_peak = None, None, 0
+    interrupted, stop_finding, footprint = None, None, {"peak": 0}
     try:
         for peer in peers:
             name = peer["name"]
@@ -1484,7 +1484,16 @@ def run_one(options, scenario, run, run_index, out):
                 watcher = threading.Thread(target=kill_when, args=(name, peer["kill_when"]), daemon=True)
                 watcher.start()
                 killers.append(watcher)
-        next_size_check, footprint_peak = time.monotonic(), 0
+        def measure_footprint():
+            # A full scratch takes seconds to walk; the loop below writes the probes' gameplay signal and never waits on it.
+            while True:
+                footprint["peak"] = note_footprint(options.scratch_root, footprint["peak"])
+                if stop_watchers.wait(10):
+                    return
+
+        measurer = threading.Thread(target=measure_footprint, daemon=True)
+        measurer.start()
+        killers.append(measurer)
         while any(thread.is_alive() for thread in threads):
             request = Path(out) / "stop-request.json"
             if request.is_file():
@@ -1506,9 +1515,6 @@ def run_one(options, scenario, run, run_index, out):
                     drop_peer(handle, "another scenario peer failed")
             for thread in threads:
                 thread.join(.1)
-            if time.monotonic() >= next_size_check:
-                footprint_peak = note_footprint(options.scratch_root, footprint_peak)
-                next_size_check = time.monotonic() + 10
     except (KeyboardInterrupt, Exception) as error:
         interrupted = f"{type(error).__name__}: {error}"
         for handle in runs.values():
@@ -1524,7 +1530,7 @@ def run_one(options, scenario, run, run_index, out):
             timer.join()
     for name, handle in runs.items():
         handle.close()
-    footprint_peak = note_footprint(options.scratch_root, footprint_peak)
+    footprint_peak = note_footprint(options.scratch_root, footprint["peak"])
 
     collected = []
     for peer in peers:
