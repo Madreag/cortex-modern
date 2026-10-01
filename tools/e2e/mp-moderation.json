@@ -221,8 +221,10 @@
       "mark": "leaver-seat-given",
       "what": "The leaver's Rejoin Match is answered: The host gave your seat to another player.",
       "events": [
-        "wait_error.*The host gave your seat to another player",
         "assert_error.*The host gave your seat to another player.*PASS"
+      ],
+      "log_regex": [
+        "\\[menu-script\\] error:The host gave your seat to another player -> OK"
       ]
     },
     {
