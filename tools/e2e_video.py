@@ -347,6 +347,73 @@ def bind_directory_session(staged_menu, session):
     return False
 
 
+def process_alive(pid):
+    """Whether a process with this id still runs; a pid that cannot be opened for that reason is gone."""
+    if sys.platform == "win32":
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return kernel.GetLastError() != 87  # ERROR_INVALID_PARAMETER: no such process
+        code = ctypes.c_ulong()
+        kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+PORT_CLAIMS = Path(os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp") / "e2e-video-ports"
+
+
+class PortClaim:
+    """A run's ports, claimed on this machine for its lifetime. Two captures of one scenario at once share its ports, and a
+    host of the second then answers to the first run's directory; a claim a live process holds refuses the second run."""
+
+    def __init__(self, ports):
+        self.ports = sorted({port for port in ports if port})
+        self.taken = []
+
+    def __enter__(self):
+        if self.taken:
+            return self
+        PORT_CLAIMS.mkdir(parents=True, exist_ok=True)
+        for port in self.ports:
+            path = PORT_CLAIMS / f"{port}.claim"
+            for _ in range(2):
+                try:
+                    handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError:
+                    try:
+                        holder = int(path.read_text(encoding="utf-8").split()[0])
+                    except (OSError, ValueError, IndexError):
+                        holder = 0
+                    if holder and holder != os.getpid() and process_alive(holder):
+                        self.__exit__(None, None, None)
+                        raise RuntimeError(f"port {port} is claimed by the live capture process {holder}")
+                    path.unlink(missing_ok=True)
+                    continue
+                os.write(handle, f"{os.getpid()}\n".encode())
+                os.close(handle)
+                self.taken.append(path)
+                break
+            else:
+                self.__exit__(None, None, None)
+                raise RuntimeError(f"port {port} could not be claimed")
+        return self
+
+    def __exit__(self, *exc):
+        for path in self.taken:
+            path.unlink(missing_ok=True)
+        self.taken = []
+        return False
+
+
 def directory_port_for(scenario, run, base):
     """The run's session directory port: the scenario's place below the top of the driver's block, so a lane's own block
     carries it with the runs. None when the scenario serves no directory."""
@@ -2337,10 +2404,22 @@ def main():
                 continue
             service = nullcontext({})
             directory_port = directory_port_for(scenario, run, options.port)
+            try:
+                claim = PortClaim([port_for(index, options.port), directory_port]).__enter__()
+            except RuntimeError as error:
+                root = out / name
+                root.mkdir(parents=True, exist_ok=False)
+                captured = {"name": name, "root": str(root), "size": options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE,
+                            "peers": [], "skip_finding": {"class": "harness", "reason": str(error)}}
+                capture["runs"].append(captured)
+                review(scenario, captured, root)
+                write_json(out / "capture.json", capture)
+                complete = False
+                continue
             if directory_port:
                 from e2e.directory import serve
                 service = serve(out / f"{name}-directory", directory_port, (PORT_LO, PORT_HI))
-            with service as tokens:
+            with claim, service as tokens:
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
                 captured["services"] = {key: str(value) for key, value in tokens.items()}
