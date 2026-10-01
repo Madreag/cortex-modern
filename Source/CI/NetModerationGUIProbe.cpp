@@ -1,5 +1,6 @@
 #include "NetModerationGUIProbe.h"
 
+#include "Actor.h"
 #include "ActivityMan.h"
 #include "CameraMan.h"
 #include "Controller.h"
@@ -199,6 +200,17 @@ namespace {
 			    {"applicants", seat.applicants.size()}, {"actions_available", seat.actionsAvailable},
 			    {"holder_generation", seat.holderGeneration}, {"seat_generation", seat.seatGeneration}});
 		}
+		// This peer's own player plays on only while its controlled actor is there and alive.
+		bool localActorAlive = false;
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+				if (!activity->IsLocalHumanSeat(player)) continue;
+				const Actor* actor = activity->GetControlledActor(player);
+				localActorAlive = actor && !actor->IsDead();
+				break;
+			}
+		}
+		observed["local_actor_alive"] = localActorAlive;
 		// The setup editor a lockstep match holds in, so a script can drive and read this peer's own seats.
 		auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 		observed["editing"] = game && game->GetActivityState() == Activity::Editing;
