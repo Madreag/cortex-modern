@@ -35,6 +35,8 @@ MATRIX_BYTE_LIMIT = 10_000_000_000
 FULLSTATE_EVERY = 0
 # --pin-alike: two engines on one box each get their own half of the runner's cores at the same priority.
 PIN_ALIKE = False
+# --pin-swapped (with --pin-alike): the halves trade places, the method's own control for which half a ratio reads.
+PIN_SWAPPED = False
 # --sp-one-screen: the single-player arms draw one screen, as each match peer does (CCCP_TEST_SINGLE_SCREEN).
 SP_ONE_SCREEN = False
 LAG_ARMS = tuple(f'{lag}ms-{cap}' for lag in (100, 200) for cap in ('60hz', 'uncapped'))
@@ -177,7 +179,7 @@ def cpu_ranges(cpus):
     return ','.join(f'{first}-{last}' for first, last in spans)
 
 
-def engine_placements(peers, basis=None, alike=False):
+def engine_placements(peers, basis=None, alike=False, swapped=False):
     """Three engines on one box each get their own cores and the host a third of them at above-normal priority: a
     real match runs one engine per machine, so a host starved by its neighbours is the harness's limit, not the round's.
     Whole SMT pairs, the host's third rounded up, all inside the runner's job mask (a job with an affinity limit keeps
@@ -197,7 +199,8 @@ def engine_placements(peers, basis=None, alike=False):
     if alike:
         # Engines measured against each other: the same number of cores each, neither above the other; a lone engine takes the first half.
         half = len(units) // 2
-        placed = dict(zip(peers, ([cpu for unit in units[:half] for cpu in unit], [cpu for unit in units[half:2 * half] for cpu in unit])))
+        halves = [[cpu for unit in units[:half] for cpu in unit], [cpu for unit in units[half:2 * half] for cpu in unit]]
+        placed = dict(zip(peers, halves[::-1] if swapped else halves))
         return {peer: dict(mask=sum(1 << cpu for cpu in placed[peer]), logical=cpu_ranges(placed[peer]), priority='normal') for peer in peers}
     host_units = -(-len(units) // 3)
     client_units = -(-(len(units) - host_units) // 2)
@@ -303,7 +306,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     # The jitter rides with the lag: the peer that carries the link's delay jitters both of its directions, as a cross fault does.
     manifest['per_peer_jitter_ms'] = {peer: jitter_ms if manifest['per_peer_lag_ms'][peer] else 0 for peer in peers}
     basis = runner_cpu_basis() if (len(peers) == 3 or PIN_ALIKE and len(peers) in (1, 2)) and sys.platform == 'win32' else None
-    placements = engine_placements(peers, basis, alike=PIN_ALIKE and len(peers) in (1, 2))
+    placements = engine_placements(peers, basis, alike=PIN_ALIKE and len(peers) in (1, 2), swapped=PIN_SWAPPED)
     manifest['engine_placement'] = {}
     if basis:
         manifest['engine_placement_basis'] = dict(runner_affinity_mask=basis['runner_affinity_mask'], source=basis['source'],
@@ -886,6 +889,8 @@ def parse_args(argv=None):
                         help='the single-player arms draw one screen of the same activity, as each match peer does, instead of a split screen')
     parser.add_argument('--pin-alike', action='store_true',
                         help="two engines each get their own half of the runner's cores at the same priority, so neither reads the other's share")
+    parser.add_argument('--pin-swapped', action='store_true',
+                        help='with --pin-alike, the host and a lone engine take the second half and the client the first')
     parser.add_argument('--fullstate-every', type=int, default=0,
                         help='every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off')
     return parser, parser.parse_args(argv)
@@ -934,9 +939,12 @@ def main(argv=None):
         parser.error('--host-lua-states and --client-lua-states must be positive')
     if args.fullstate_every < 0:
         parser.error('--fullstate-every must be 0 or positive')
-    global FULLSTATE_EVERY, PIN_ALIKE, SP_ONE_SCREEN
+    global FULLSTATE_EVERY, PIN_ALIKE, PIN_SWAPPED, SP_ONE_SCREEN
+    if args.pin_swapped and not args.pin_alike:
+        parser.error('--pin-swapped needs --pin-alike')
     FULLSTATE_EVERY = args.fullstate_every
     PIN_ALIKE = args.pin_alike
+    PIN_SWAPPED = args.pin_swapped
     SP_ONE_SCREEN = args.sp_one_screen
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
