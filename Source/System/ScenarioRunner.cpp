@@ -982,7 +982,10 @@ namespace RTE {
 				visible.push_back(toast.record);
 			}
 		}
-		if (WorldCatchUpActive()) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", GetLockstepLocalPeerId()});
+		// This machine's own seat reads held from the hold until its control returns: the catch-up ends before the reclaim lands.
+		const uint8_t localPeer = GetLockstepLocalPeerId();
+		const bool ownSeatHeld = localPeer != 0 && IsLockstepSeatUnderAI(localPeer, GetLockstepCompletedFrame()) && !IsLockstepSeatReleased(localPeer);
+		if (WorldCatchUpActive() || ownSeatHeld) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", localPeer});
 		if (WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({s_WorldCatchUpAppliedThrough, "slow_machine", "Your machine cannot keep up with this match. The AI is playing your seat.", GetLockstepLocalPeerId()});
 		// A host whose own machine held its seat catches up in place, and says so on its own screen.
 		uint64_t heldAt = 0;
