@@ -1408,6 +1408,8 @@ def scripts(case, port, root, size="960x540"):
         text += checks("LabelHostRecAutosaveHint", "CollectionBoxHostPageRecovery")
         text += checks("LabelHostRecAutosaveNote", "CollectionBoxHostPageRecovery")
         text += "assert_label LabelHostRecAutosaveNote Every player takes each checkpoint at the same tick; a player who rejoins starts from one.\n"
+        text += checks("LabelHostRecAutosaveCost", "CollectionBoxHostPageRecovery")
+        text += "assert_label LabelHostRecAutosaveCost Saving may cause a brief pause for other players on slower hosts\n"
         text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
                  "assert_enabled TextHostRecAutosaveInterval 1\n"
                  # Switching autosave on from off starts at the shortest cadence, not the off zero.
