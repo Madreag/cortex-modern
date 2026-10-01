@@ -3420,12 +3420,6 @@ void MainMenuGUI::LayoutMultiplayerFooter(int width, int y) {
 	diagnostics->SetPositionRel(left + back->GetWidth() + 8, y);
 }
 
-void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
-	NetPlayerPresentation::Remember(snapshot, m_MultiplayerNameTextBox ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
-	const bool savingDiagnostics = TelemetryBundle::IsBusy();
-	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
-	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving..." : "Save Diagnostics");
-	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 void MainMenuGUI::TakeLobbyChat(const NetLobbySnapshot& snapshot) {
 	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
 		std::string name = entry.senderName;
@@ -3447,6 +3441,12 @@ void MainMenuGUI::TakeLobbyChat(const NetLobbySnapshot& snapshot) {
 	}
 }
 
+void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
+	NetPlayerPresentation::Remember(snapshot, m_MultiplayerNameTextBox ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
+	const bool savingDiagnostics = TelemetryBundle::IsBusy();
+	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
+	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving..." : "Save Diagnostics");
+	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 	const auto summary = g_NetMatchService.GetLastMatchSummary();
 	m_LastMatchSummaryLabel->SetText(summary ? summary->LineText() : "");
 	m_LastMatchSummaryLabel->SetVisible(lobby && summary.has_value());
@@ -3468,12 +3468,6 @@ void MainMenuGUI::TakeLobbyChat(const NetLobbySnapshot& snapshot) {
 	if (moderating) {
 		RefreshModerationControls(snapshot);
 	}
-	if (!lobby) {
-		for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
-			if (label) label->SetVisible(false);
-		}
-		if (m_MultiplayerLobbyChatInput) {
-			m_MultiplayerLobbyChatInput->SetVisible(false);
 	// A host page hides the lobby's chat band, so a line that lands while it is open is shown above the page instead.
 	const bool pageHidesChat = m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && g_NetMatchService.GetState() != NetMatchServiceState::Idle;
 	if (pageHidesChat) TakeLobbyChat(snapshot);
@@ -3493,6 +3487,12 @@ void MainMenuGUI::TakeLobbyChat(const NetLobbySnapshot& snapshot) {
 			}
 		}
 	}
+	if (!lobby) {
+		for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
+			if (label) label->SetVisible(false);
+		}
+		if (m_MultiplayerLobbyChatInput) {
+			m_MultiplayerLobbyChatInput->SetVisible(false);
 		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser) {
 			RefreshReplayBrowserControls();
