@@ -1,6 +1,7 @@
 """Packages the Windows build: CortexCommand-mp-<version>-win64.zip with the executable, the DLLs it ships with, Data and the
-VERSION, LICENSE and README files, a MANIFEST.json naming every file with its bytes and sha256 inside the zip, and the zip's own
-sha256 beside it. The version is the VERSION file at the tree's root.
+VERSION.txt, LICENSE and README files, a MANIFEST.json naming every file with its bytes and sha256 inside the zip, and the zip's own
+sha256 beside it. The version is VERSION.txt at the tree's root (a file named VERSION there would shadow the C++ <version>
+header on a case-insensitive file system: the root is on the include path).
 
   python tools/package_windows.py [--repo <tree>] [--out <dir>]     (the default out is <tree>/dist)
   python tools/package_windows.py --verify <unpacked dir>           (every manifest file present with its sha256)
@@ -32,20 +33,20 @@ def sha256(path: Path) -> str:
 
 
 def package_files(repo: Path) -> list[Path]:
-    """The executable, the DLLs beside it, every file under Data (no link followed) and the tree's VERSION, LICENSE, README."""
+    """The executable, the DLLs beside it, every file under Data (no link followed) and the tree's VERSION.txt, LICENSE, README."""
     files = [repo / EXECUTABLE]
     files += sorted(path for path in repo.glob("*.dll") if not EXCLUDED_DLLS.fullmatch(path.name))
     for folder, directories, names in os.walk(repo / "Data", followlinks=False):
         directories[:] = sorted(name for name in directories if not (Path(folder) / name).is_symlink())
         files += [Path(folder) / name for name in sorted(names)]
-    files += [repo / name for name in ("VERSION", "LICENSE", "README.md") if (repo / name).is_file()]
+    files += [repo / name for name in ("VERSION.txt", "LICENSE", "README.md") if (repo / name).is_file()]
     return files
 
 
 def package(repo: Path, out: Path) -> Path:
-    version = (repo / "VERSION").read_text(encoding="utf-8").strip()
+    version = (repo / "VERSION.txt").read_text(encoding="utf-8").strip()
     if not VERSION_FORM.fullmatch(version):
-        raise SystemExit(f"VERSION reads {version!r}, not a version")
+        raise SystemExit(f"VERSION.txt reads {version!r}, not a version")
     if not (repo / EXECUTABLE).is_file():
         raise SystemExit(f"no {EXECUTABLE} in {repo}: build first")
     out.mkdir(parents=True, exist_ok=True)
