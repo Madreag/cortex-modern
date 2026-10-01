@@ -961,6 +961,7 @@
     <ClInclude Include="Source\Network\NetPortMap.h" />
     <ClInclude Include="Source\Network\NetProtocol.h" />
     <ClInclude Include="Source\System\AsyncLineWriter.h" />
+    <ClInclude Include="Source\System\SimDumpTape.h" />
     <ClInclude Include="Source\System\DiagnosticLine.h" />
     <ClInclude Include="Source\System\StallStackSampler.h" />
     <ClInclude Include="Source\System\FrameRecorder.h" />

@@ -42,6 +42,7 @@ namespace RTE {
 	struct NetGameDeliverCargo;
 	struct LuaPathCallbackContext;
 	class MovableObject;
+	class SimDumpTape;
 	class ACraft;
 	class GameActivity;
 	class Actor;
@@ -982,6 +983,11 @@ namespace RTE {
 		/// @param out The stream to append to.
 		void DumpMOSimState(uint64_t tick, const char* kind, MovableObject* mo, std::ostream& out) const;
 
+		/// Records the sim dump's values for one tick, for another thread to write: the text is DumpSimState's.
+		/// @param tick The sim tick to label the lines with.
+		/// @param tape The tape to record into.
+		void CaptureSimState(uint64_t tick, SimDumpTape& tape) const;
+
 		/// Runs one paused lockstep tick: exchanges an empty controller frame and applies only the
 		/// game commands it carries, so an unpause can arrive while the sim holds still.
 		/// @return Whether the exchange succeeded; a failure sets the controller replay error.
@@ -1248,6 +1254,12 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		/// The sim dump's lines for one tick, into a stream or a tape.
+		template <class Out> void DumpSimLines(uint64_t tick, Out& out) const;
+
+		/// One MO's line of the sim dump and its attachables' lines, into a stream or a tape.
+		template <class Out> void DumpMOLines(uint64_t tick, const char* kind, MovableObject* mo, Out& out) const;
+
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_SplashRatio, self.m_MaxDroppedItems, self.m_SettlingEnabled, self.m_MOSubtractionEnabled,

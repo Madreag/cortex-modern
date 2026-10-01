@@ -127,6 +127,7 @@
 #include "AIWriteScript.h"
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
+#include "SimDumpTape.h"
 #include "LocalPredictionHudSelfTest.h"
 #include "OwnedMovableObjects.h"
 #include "PreviewEventLedger.h"
@@ -3632,7 +3633,7 @@ static std::string NetMatchEndReason(const Activity* activity) {
 static void DumpSimStateIfArmed(uint64_t simTick) {
 	static uint64_t s_from = 1;
 	static uint64_t s_to = 0;
-	// Every tick's dump goes to the disk from a writer thread; the simulation only formats it.
+	// Every tick's dump is written and formatted by a writer thread; the simulation only records its values.
 	static AsyncLineWriter s_out;
 	static bool s_checked = false;
 	if (!s_checked) {
@@ -3652,13 +3653,32 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 		return;
 	}
 	const long long startUs = g_TimerMan.GetAbsoluteTime();
-	std::ostringstream text;
-	g_MovableMan.DumpSimState(simTick, text);
-	s_out.WriteBlock(std::move(text).str());
+	auto tape = std::make_shared<SimDumpTape>();
+	g_MovableMan.CaptureSimState(simTick, *tape);
 	// What the dump costs the simulation thread, so a harness cost is never read as the engine's own.
 	static uint64_t s_ticks = 0, s_over2 = 0, s_over50 = 0, s_maxTick = 0;
 	static double s_totalMs = 0, s_maxMs = 0;
 	const double ms = static_cast<double>(g_TimerMan.GetAbsoluteTime() - startUs) / 1000.0;
+	// Test lever: the simulation also writes the text itself, and the writer compares it with the tape's.
+	static const bool s_compare = std::getenv("CCCP_TEST_SIM_DUMP_COMPARE") != nullptr;
+	std::shared_ptr<const std::string> inlineText;
+	if (s_compare) {
+		std::ostringstream text;
+		g_MovableMan.DumpSimState(simTick, text);
+		inlineText = std::make_shared<const std::string>(std::move(text).str());
+	}
+	s_out.WriteMade([tape, inlineText, simTick, last = s_to]() {
+		std::ostringstream text;
+		tape->Replay(text);
+		std::string made = std::move(text).str();
+		if (inlineText) {
+			static uint64_t s_compared = 0, s_mismatched = 0;
+			++s_compared;
+			if (made != *inlineText && ++s_mismatched <= 3) System::PrintDiagnosticLine("[sim-dump] tape mismatch tick=" + std::to_string(simTick));
+			if (simTick == last) System::PrintDiagnosticLine("[sim-dump] tape compared=" + std::to_string(s_compared) + " mismatched=" + std::to_string(s_mismatched));
+		}
+		return made;
+	});
 	++s_ticks;
 	s_totalMs += ms;
 	s_over2 += ms > 2 ? 1 : 0;
