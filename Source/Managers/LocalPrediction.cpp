@@ -31,10 +31,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <unordered_set>
@@ -62,12 +64,23 @@ namespace RTE {
 	// Gives the clone the MOIDs its original holds this frame, so its own rays and hits ignore the original.
 	// The preview's first step of each actor, as the sim dump writes it, keyed by the actor and the tick it predicts.
 	static const bool s_FidelityProbe = std::getenv("CCCP_TEST_PREVIEW_FIDELITY") != nullptr;
-	static std::map<std::pair<long, uint64_t>, std::string> s_FidelitySteps;
+	// Every step whose tick falls inside CCCP_TEST_PREVIEW_FIDELITY_WINDOW=<first>:<last> is compared too, not only the first.
+	static const std::pair<uint64_t, uint64_t> s_FidelityWindow = [] {
+		unsigned long long first = 0, last = 0;
+		const char* text = std::getenv("CCCP_TEST_PREVIEW_FIDELITY_WINDOW");
+		return text && std::sscanf(text, "%llu:%llu", &first, &last) == 2 ? std::pair<uint64_t, uint64_t>(first, last) : std::pair<uint64_t, uint64_t>(1, 0);
+	}();
+	struct FidelityStep {
+		int step;
+		std::string line;
+	};
+	static std::multimap<std::pair<long, uint64_t>, FidelityStep> s_FidelitySteps;
 	static uint64_t s_FidelityEqual = 0;
 	static uint64_t s_FidelityDiffering = 0;
 
 	void LocalPrediction::CompareFidelityAtTick(uint64_t tick) {
 		if (!s_FidelityProbe) return;
+		const bool inWindow = tick >= s_FidelityWindow.first && tick <= s_FidelityWindow.second;
 		for (auto it = s_FidelitySteps.begin(); it != s_FidelitySteps.end();) {
 			if (it->first.second > tick) {
 				++it;
@@ -78,26 +91,54 @@ namespace RTE {
 					std::ostringstream committed;
 					g_MovableMan.DumpMOSimState(tick, "actor", actor, committed);
 					// Token by token; the clone's own identities (its UIDs and MOIDs) are not compared.
-					std::istringstream previewed(it->second), actual(committed.str());
+					std::istringstream previewed(it->second.line), actual(committed.str());
 					std::vector<std::string> previewTokens{std::istream_iterator<std::string>(previewed), {}}, actualTokens{std::istream_iterator<std::string>(actual), {}};
 					std::vector<std::string> differing;
 					for (size_t i = 0; i < std::max(previewTokens.size(), actualTokens.size()); ++i) {
 						const std::string p = i < previewTokens.size() ? previewTokens[i] : "<none>", a = i < actualTokens.size() ? actualTokens[i] : "<none>";
 						if (p != a && p.rfind("moid=", 0) != 0 && p.rfind("uid=", 0) != 0) differing.push_back(p + " | " + a);
 					}
-					if (differing.empty()) {
-						++s_FidelityEqual;
-					} else {
-						++s_FidelityDiffering;
+					const int step = it->second.step;
+					if (step == 1) ++(differing.empty() ? s_FidelityEqual : s_FidelityDiffering);
+					// A first step from the committed state with the committed input differs where the world acted on the actor - a hit, damage, a
+					// script - or where the clone falls short of the actor; the record says which, and every field that differs.
+					if (step == 1 && !differing.empty()) {
+						std::vector<std::string> keys;
+						bool attachable = false;
+						for (size_t i = 0; i < std::max(previewTokens.size(), actualTokens.size()); ++i) {
+							const std::string p = i < previewTokens.size() ? previewTokens[i] : "<none>", a = i < actualTokens.size() ? actualTokens[i] : "<none>";
+							if (p == "att") attachable = true;
+							if (p == a || p.rfind("moid=", 0) == 0 || p.rfind("uid=", 0) == 0) continue;
+							// A token without a name is one of a list's values, such as the limb positions.
+							const size_t equals = p.find('=');
+							const std::string key = (attachable ? "att." : "") + (equals != std::string::npos ? p.substr(0, equals) : std::string("value"));
+							if (std::find(keys.begin(), keys.end(), key) == keys.end()) keys.push_back(key);
+						}
+						std::string fields;
+						for (const std::string& key: keys) fields += (fields.empty() ? "" : ",") + key;
+						std::string source;
+						const std::function<void(const MovableObject*)> hitBy = [&source, &hitBy](const MovableObject* body) {
+							if (!source.empty()) return;
+							if (const MovableObject* hitter = g_MovableMan.GetMOFromID(body->HitWhatMOID()); hitter && hitter->GetRootID() != body->GetRootID()) {
+								source = hitter->GetPresetName() + "#" + std::to_string(hitter->GetUniqueID());
+							} else if (const long particle = body->HitWhatParticleUniqueID(); particle != 0) {
+								source = "particle#" + std::to_string(particle);
+							} else if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(body)) {
+								for (const Attachable* part: rotating->GetAttachableList()) hitBy(part);
+							}
+						};
+						hitBy(actor);
+						const bool damaged = std::any_of(keys.begin(), keys.end(), [](const std::string& key) {
+							return key == "health" || key == "prevhealth" || key == "wounds" || key == "mass" || key == "awm" || key == "status" || key == "att.dmg";
+						});
+						FrameMan::FeelInteraction(tick, it->first.first, fields, source.empty() ? (damaged ? "damage" : "clone") : source);
+					}
+					if (!differing.empty() || inWindow) {
 						std::ostringstream line;
-						line << "[preview-fidelity] tick=" << tick << " uid=" << it->first.first << " differing=" << differing.size() << " first: ";
+						line << "[preview-fidelity] tick=" << tick << " step=" << step << " from=" << tick - static_cast<uint64_t>(step) << " uid=" << it->first.first << " differing=" << differing.size();
+						if (!differing.empty()) line << " first: ";
 						for (size_t i = 0; i < std::min<size_t>(differing.size(), 6); ++i) line << (i ? " ;; " : "") << differing[i];
 						System::PrintDiagnosticLine(line.str());
-						// The first two in full, both sides.
-						if (s_FidelityDiffering <= 2) {
-							System::PrintDiagnosticLine("[preview-fidelity] preview:\n" + it->second);
-							System::PrintDiagnosticLine("[preview-fidelity] committed:\n" + committed.str());
-						}
 					}
 				}
 			}
@@ -337,10 +378,10 @@ namespace RTE {
 				}
 				MovableMan::PostUpdateStage(clone);
 				FrameMan::FeelPreviewStep(clone, static_cast<uint64_t>(simCount), tick, feelStepBeginMS);
-				if (s_FidelityProbe && step == 1) {
+				if (s_FidelityProbe && (step == 1 || (tick >= s_FidelityWindow.first && tick <= s_FidelityWindow.second))) {
 					std::ostringstream line;
 					g_MovableMan.DumpMOSimState(tick, "actor", clone, line);
-					s_FidelitySteps[{preview.original->GetUniqueID(), tick}] = line.str();
+					s_FidelitySteps.insert({{preview.original->GetUniqueID(), tick}, {step, line.str()}});
 				}
 			}
 			g_MovableMan.HarvestSpeculativeSpawns();
