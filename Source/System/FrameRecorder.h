@@ -6,6 +6,7 @@
 #include <deque>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -14,7 +15,7 @@
 
 namespace RTE {
 
-	/// Writes a run's presented frames to numbered PNGs and a JSONL index on one worker thread.
+	/// Writes a run's presented frames to numbered PNGs and a JSONL index on a small pool of writer threads.
 	/// The render thread only copies pixels into a pooled buffer; encoding and file writes never
 	/// touch it, and a full queue drops the frame instead of waiting.
 	class FrameRecorder {
@@ -84,7 +85,8 @@ namespace RTE {
 		/// Whether the capture rate admits a frame at this wall time, advancing the pacer when it does.
 		bool DueAt(long long wallMS);
 		void WriterLoop();
-		void WriteFrame(const QueuedFrame& frame);
+		/// Encodes the frame; returns its index row, which the caller files in frame order.
+		std::string WriteFrame(const QueuedFrame& frame);
 		void WritePendingDrops();
 		void WriteManifest();
 
@@ -117,7 +119,9 @@ namespace RTE {
 		std::condition_variable m_Wake;
 		std::deque<QueuedFrame> m_Queue;
 		std::vector<std::vector<unsigned char>> m_Pool;
-		std::thread m_Writer;
+		std::vector<std::thread> m_Writers;
+		std::map<std::size_t, std::string> m_FinishedRows; //!< Index rows written ahead of an earlier frame still encoding.
+		std::size_t m_NextRow = 0;
 		bool m_Stopping = false;
 
 		std::size_t m_Saved = 0;
