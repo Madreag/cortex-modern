@@ -1572,6 +1572,10 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		autosaveNote->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 		autosaveNote->SetText(NetAutosaveNote());
 	}
+	if (auto* autosaveCost = dynamic_cast<GUILabel*>(get("LabelHostRecAutosaveCost"))) {
+		autosaveCost->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+		autosaveCost->SetText(NetAutosaveCostHint());
+	}
 	if (m_HostNetIceHintLabel) {
 		m_HostNetIceHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	}

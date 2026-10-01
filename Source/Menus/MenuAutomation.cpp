@@ -1418,6 +1418,7 @@ namespace RTE::MenuAutomation {
 			same("hint_auto_delay", NetAutoDelayText(3), "ping plus a 3-tick margin, raised live if inputs arrive late");
 			same("hint_autosave_range", NetAutosaveRangeHint(), "Every 60 s to 60 min, or off (default)");
 			same("hint_autosave_note", NetAutosaveNote(), "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.");
+			same("hint_autosave_cost", NetAutosaveCostHint(), "Saving may cause a brief pause for other players on slower hosts");
 			same("hint_connection_automatic", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::Automatic), "Direct first: lowest latency; relay adds a round trip if direct fails.");
 			same("hint_connection_direct", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::DirectOnly), "Direct only: lowest latency; fails when routers block a direct route.");
 			same("hint_connection_relay", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::RelayOnly), "Relay only: every packet uses the relay and adds its round trip.");

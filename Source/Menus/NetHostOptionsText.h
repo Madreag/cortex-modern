@@ -36,6 +36,11 @@ namespace RTE {
 		return "Every 60 s to 60 min, or off (default)";
 	}
 
+	/// What an autosave can cost the other players.
+	inline const char* NetAutosaveCostHint() {
+		return "Saving may cause a brief pause for other players on slower hosts";
+	}
+
 	/// What a match checkpoint is to the players.
 	inline const char* NetAutosaveNote() {
 		return "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.";
