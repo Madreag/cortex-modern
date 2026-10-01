@@ -670,6 +670,9 @@ namespace RTE {
 		static double SteadyCaptureMs(const std::deque<double>& costs);
 		/// Whether the round's goodbye is owed to a ready seat at the round's end: one the round does not use, or one still under the AI at its last frame.
 		static bool EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd);
+		/// Whether an ended round holds its record back from a held seat until that seat asks for its final tail; a seat whose rejoin
+		/// this round already told the match is over never asks.
+		static bool EndedRoundAwaitsFinalTail(bool joining, bool seatUnderAIAtEnd, bool privateMatch, uint64_t tailLastFrame, bool toldMatchOver);
 		/// Refuses, with the round's goodbye, every ready peer of the session the ended round does not use, and with
 		/// joiningToo every connection still in its handshake: a returning seat's, when a held seat can still be coming back.
 		static void RefuseEndedPeers(NetSession& session, const NetLockstepCoordinator& coordinator, const std::string& reason, bool joiningToo);
@@ -1242,6 +1245,7 @@ namespace RTE {
 		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
 		friend bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);
 		friend bool TestAnInPlaceReturnKeepsAnOpenReturnGap(std::string* error);
+		friend bool TestAReturnerToldTheMatchIsOverGetsItsRecord(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -1604,6 +1608,7 @@ namespace RTE {
 		bool m_HostGoodbyeSeen = false;
 		std::optional<uint64_t> m_RoundEndRecord;
 		std::set<NetPeerId> m_EndRecordSent;
+		std::set<NetPeerId> m_ToldMatchOver; //!< Host: returning connections this round told the match is over; they wait on no final tail.
 		int m_EndWinnerTeam = -1;
 		std::optional<int> m_ReceivedEndWinner; //!< The winner an end record named for the round this seat was held or rejoining in.
 		/// Host: a seat was held when the round ended, so a rejoin still arriving is owed the goodbye.

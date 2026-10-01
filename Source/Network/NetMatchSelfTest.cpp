@@ -7071,6 +7071,28 @@ namespace RTE {
 		return true;
 	}
 
+	// A held seat whose rejoin meets its round's end is told the match is over and its join cancelled; the round's record then waited
+	// for that seat to ask for its final tail, which it never does, so it never heard its round end and drifted into the next round
+	// (the four-box run: 'rejoin answered connection=...: the match is over', then 'end waits peer=2 final=518 tail=518', again and again).
+	bool TestAReturnerToldTheMatchIsOverGetsItsRecord(std::string* error) {
+		// That run's seat: no join session left, under the AI at the end, a private match whose tail runs through 518.
+		if (NetMatchService::EndedRoundAwaitsFinalTail(false, true, true, 518, true)) {
+			*error = "a held seat told the match is over waits for a final-tail request it never sends, so no end record reaches it";
+			return false;
+		}
+		// A held seat still owed its final tail asks for it, and the record follows the tail.
+		if (!NetMatchService::EndedRoundAwaitsFinalTail(false, true, true, 518, false)) {
+			*error = "a held seat still owed its final tail was sent the round's record before the tail";
+			return false;
+		}
+		if (NetMatchService::EndedRoundAwaitsFinalTail(true, true, true, 518, false)) {
+			*error = "a seat still joining was held back by the final-tail rule its join session answers";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_returner_told_the_match_is_over_gets_its_record" << std::endl;
+		return true;
+	}
+
 	bool TestHoldResolutionPumpDoesNotRelock(std::string* error) {
 		auto pumpOne = [&](NetHoldResolution resolution) -> bool {
 			NetMatchService service;
@@ -14685,6 +14707,7 @@ namespace RTE {
 		if (!healedEndError.empty()) return fail(healedEndError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestAnInPlaceReturnKeepsAnOpenReturnGap(&error)) return fail(error);
+		if (!TestAReturnerToldTheMatchIsOverGetsItsRecord(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);

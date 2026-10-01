@@ -755,6 +755,7 @@ static std::string ResyncSaveName() {
 			}
 			m_FreshRelayRequested = true;
 			m_EndRecordSent.clear();
+			m_ToldMatchOver.clear();
 			m_EndWinnerTeam = Activity::NoTeam;
 			m_ReceivedEndWinner.reset();
 			m_PendingResyncState.reset();
@@ -964,6 +965,10 @@ static std::string ResyncSaveName() {
 		return !coordinatorUsesPeer || seatUnderAIAtEnd;
 	}
 
+	bool NetMatchService::EndedRoundAwaitsFinalTail(bool joining, bool seatUnderAIAtEnd, bool privateMatch, uint64_t tailLastFrame, bool toldMatchOver) {
+		return !joining && !toldMatchOver && seatUnderAIAtEnd && privateMatch && tailLastFrame != 0;
+	}
+
 	void NetMatchService::RefuseEndedPeersLocked(const std::string& reason) {
 		if (!m_IsHost || !m_Session || !m_Coordinator) return;
 		RefuseEndedPeers(*m_Session, *m_Coordinator, reason, false);
@@ -998,8 +1003,8 @@ static std::string ResyncSaveName() {
 				for (const auto& held: m_ReconnectHost.GetSeatStatuses()) if (stable != 0 && held.stableSeat == stable) seat = held.lockstepPeerId;
 			}
 			if (!EndedRoundOwesGoodbye(m_Coordinator->UsesTransportPeer(peer.transportPeerId), seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame))) continue;
-			if (!m_WorldJoin.FindSession(peer.transportPeerId) && seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame) &&
-			    m_WorldJoin.IsPrivateMatch() && m_WorldJoin.Tail().LastFrame() != 0) {
+			if (seat != 0 && EndedRoundAwaitsFinalTail(m_WorldJoin.FindSession(peer.transportPeerId) != nullptr, m_Coordinator->IsSeatUnderAI(seat, lastFrame),
+			                                           m_WorldJoin.IsPrivateMatch(), m_WorldJoin.Tail().LastFrame(), m_ToldMatchOver.contains(peer.transportPeerId))) {
 				const std::string reason = "the ended round awaits its held seat's final-tail request";
 				if (m_PrivateTransferHeldReasons[peer.transportPeerId] != reason) {
 					m_PrivateTransferHeldReasons[peer.transportPeerId] = reason;
@@ -4564,6 +4569,7 @@ static std::string ResyncSaveName() {
 			for (const NetPeerId connection: ended) {
 				System::PrintDiagnosticLine("[net-match] rejoin answered connection=" + std::to_string(connection) + ": the match is over");
 				m_WorldJoin.CancelJoin(connection, "the match is over");
+				m_ToldMatchOver.insert(connection);
 			}
 			if (!ended.empty() && m_Coordinator) {
 				const uint64_t resume = m_Coordinator->GetResumeFrame();
