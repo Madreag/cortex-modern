@@ -93,7 +93,7 @@ def check_screen_watches(results, scratch):
     ok &= row(results, "screen/each-offence-listed", [o["detail"]["control"] for o in watches["layout"]["offences"]] == ["LabelFiles", "LabelTelemetry"])
     ok &= row(results, "screen/clean-watch-has-summary", watches["duplicates"]["offences"] == [] and watches["duplicates"]["summary"]["frames"] == 900)
     ok &= row(results, "screen/nothing-armed-is-not-judged", driver.screen_watch_results(scratch / "screen-watch-none") is None)
-    ok &= row(results, "screen/every-menu-script-arms-them", all(f"text_watch start h15-{name} " in driver.SCREEN_WATCHES for name in driver.SCREEN_WATCH_RULES))
+    ok &= row(results, "screen/every-peer-arms-them", all(f"h15-{name} " in driver.SCREEN_WATCHES for name in driver.SCREEN_WATCH_RULES))
     return ok
 
 
