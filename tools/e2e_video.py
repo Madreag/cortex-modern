@@ -1164,6 +1164,11 @@ def review(scenario, capture, out):
                 indexed = {row["frame"]: row for row in record["index"]}
                 seconds = [(indexed[frame]["wall_ms"] - encode_result["origin_wall_ms"]) / 1000 for frame in found]
                 video_frames = [round(second * encode_result["fps"]) for second in seconds]
+            elif video_frames and encode_result.get("timing") == "engine-slots":
+                # A streamed capture names each frame's place in its own video: one frame per capture slot.
+                indexed = {row["frame"]: row for row in record["index"]}
+                video_frames = [indexed[frame]["video_frame"] for frame in found if "video_frame" in indexed.get(frame, {})]
+                seconds = [frame / encode_result["fps"] for frame in video_frames]
             resolved = {**item, "peer": name, "run": capture["name"], "frames": video_frames,
                           "capture_frames": found, "video_seconds": seconds,
                           "video": record.get("video"), "contact_sheet": record.get("contact_sheet"),
