@@ -691,7 +691,8 @@ def run_match(h, options, index, login):
     sides = {'host': host_side, 'client': 'edith' if host_side == 'here' else 'here'}
     local_peer = 'host' if host_side == 'here' else 'client'
     remote_peer_name = 'client' if local_peer == 'host' else 'host'
-    say(f'{name}: host={MACHINE[sides["host"]]} client={MACHINE[sides["client"]]} path={options.path} port={port} {stamp()}')
+    machines = {peer: 'LINUX-3090' if peer == 'client' and options.client_box == 'linux' else MACHINE[side] for peer, side in sides.items()}
+    say(f'{name}: host={machines["host"]} client={machines["client"]} path={options.path} port={port} {stamp()}')
     if DRY_RUN:
         root = options.out / name
     else:
@@ -779,7 +780,7 @@ def run_match(h, options, index, login):
         say(f'{name}: SOAK {"PASS" if verdict["passed"] else "FAIL"} {json.dumps(verdict["checks"])} autosaves={verdict["autosaves"]} '
             f'client_holds_after_autosaves={verdict["client_holds_after_autosaves"]}')
     return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path, ticks=match_ticks(options),
-                                       port=port, machines={peer: 'LINUX-3090' if peer == 'client' and options.client_box == 'linux' else MACHINE[side] for peer, side in sides.items()},
+                                       port=port, machines=machines,
                                        local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note,
                                        feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load))
 
