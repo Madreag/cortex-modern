@@ -178,7 +178,10 @@
 #include <iostream>
 #include <iomanip>
 #include <random>
+#include <condition_variable>
 #include <deque>
+#include <functional>
+#include <mutex>
 #include <array>
 #include <list>
 #include <map>
@@ -239,24 +242,38 @@ static void RetractAbandonedTickHashes() {
 }
 
 static uint64_t s_memoryCensusTicks = 0; //!< Every this many ticks one line names what each record holds; 0 = never.
-static bool s_memoryCensusHistogram = false; //!< The census also walks the process heap and names the block sizes holding the most.
+static bool s_memoryCensusHistogram = false; //!< The census also sums the process heaps, walks the default one and names the block sizes holding the most.
 static size_t s_memoryCensusProbeSize = 0; //!< Blocks of this size have their first bytes printed, so a leaked object can be named.
 
-// Private bytes, and what the process heaps hold allocated and committed, for the memory census.
-static std::string ProcessHeapCensus() {
+// Private bytes, and what the process heaps hold allocated and committed, for the memory census; costs gets each part's microseconds.
+static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 #ifdef _WIN32
+	auto lapStart = std::chrono::steady_clock::now();
+	const auto lap = [&costs, &lapStart](const char* name) {
+		const auto now = std::chrono::steady_clock::now();
+		costs += std::string(",") + name + ":" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(now - lapStart).count());
+		lapStart = now;
+	};
 	PROCESS_MEMORY_COUNTERS_EX counters{};
 	K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters));
-	HANDLE heaps[256];
-	const DWORD count = std::min<DWORD>(GetProcessHeaps(256, heaps), 256);
-	unsigned long long allocated = 0, committed = 0;
-	for (DWORD index = 0; index < count; ++index) {
-		HEAP_SUMMARY summary{};
-		summary.cb = sizeof(summary);
-		if (HeapSummary(heaps[index], 0, &summary)) {
-			allocated += summary.cbAllocated;
-			committed += summary.cbCommitted;
+	lap("heap_counters");
+	// Summing a heap holds its lock for as long as the heap is large, and every thread that allocates waits on it, the simulation's
+	// included: the heaps are summed only with the census's heap walk.
+	std::string heapFigures;
+	if (s_memoryCensusHistogram) {
+		HANDLE heaps[256];
+		const DWORD count = std::min<DWORD>(GetProcessHeaps(256, heaps), 256);
+		unsigned long long allocated = 0, committed = 0;
+		for (DWORD index = 0; index < count; ++index) {
+			HEAP_SUMMARY summary{};
+			summary.cb = sizeof(summary);
+			if (HeapSummary(heaps[index], 0, &summary)) {
+				allocated += summary.cbAllocated;
+				committed += summary.cbCommitted;
+			}
 		}
+		heapFigures = std::format(" heaps={} heap_allocated_mb={} heap_committed_mb={}", count, allocated >> 20, committed >> 20);
+		lap("heap_summary");
 	}
 	DWORD handles = 0;
 	GetProcessHandleCount(GetCurrentProcess(), &handles);
@@ -269,6 +286,7 @@ static std::string ProcessHeapCensus() {
 		}
 		CloseHandle(snapshot);
 	}
+	lap("heap_threads");
 	std::string histogram;
 	if (s_memoryCensusHistogram) {
 		// Busy blocks by exact size below 64 KB, larger ones by power of two; the walk allocates nothing while the heap is locked.
@@ -323,11 +341,64 @@ static std::string ProcessHeapCensus() {
 		histogram += " heap_top=";
 		for (size_t index = 0; index < std::min<size_t>(top.size(), 12); ++index) histogram += (index ? "," : "") + top[index].second;
 	}
-	return std::format(" private_mb={} heaps={} heap_allocated_mb={} heap_committed_mb={} threads={} handles={}{}", counters.PrivateUsage >> 20, count, allocated >> 20, committed >> 20, threads, handles, histogram);
+	return std::format(" private_mb={}{} threads={} handles={}{}", counters.PrivateUsage >> 20, heapFigures, threads, handles, histogram);
 #else
 	return {};
 #endif
 }
+
+// The memory census's process figures are summed here, off the simulation thread: on a large heap they cost hundreds of milliseconds.
+class CensusWorker {
+public:
+	static CensusWorker& Get() {
+		static CensusWorker worker;
+		return worker;
+	}
+
+	void Post(std::function<void()> job) {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_Jobs.push_back(std::move(job));
+		}
+		m_Wake.notify_one();
+	}
+
+	~CensusWorker() {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_Stopping = true;
+		}
+		m_Wake.notify_one();
+		m_Thread.join();
+	}
+
+private:
+	CensusWorker() :
+	    m_Thread([this] { Run(); }) {}
+
+	// Every posted line is printed before the worker stops.
+	void Run() {
+		for (;;) {
+			std::function<void()> job;
+			{
+				std::unique_lock<std::mutex> lock(m_Mutex);
+				m_Wake.wait(lock, [this] { return m_Stopping || !m_Jobs.empty(); });
+				if (m_Jobs.empty()) {
+					return;
+				}
+				job = std::move(m_Jobs.front());
+				m_Jobs.pop_front();
+			}
+			job();
+		}
+	}
+
+	std::mutex m_Mutex;
+	std::condition_variable m_Wake;
+	std::deque<std::function<void()>> m_Jobs;
+	bool m_Stopping = false;
+	std::thread m_Thread;
+};
 // Test lever: every N committed lockstep ticks each peer hashes its whole capture; 0 is off.
 static uint32_t s_netFullStateEvery = 0;
 static std::string s_netFullStateDump;
@@ -7337,7 +7408,7 @@ void RunGameLoop() {
 			}
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
 			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) {
-				// The census runs on the sim thread, so each part's own cost goes on its line.
+				// The census's counts are read on the sim thread and each part's cost goes on its line; the census worker sums the process heaps and prints it.
 				std::string costs;
 				const auto timed = [&costs](const char* name, const auto& part) {
 					const auto begin = std::chrono::steady_clock::now();
@@ -7346,7 +7417,6 @@ void RunGameLoop() {
 					costs += std::string(costs.empty() ? "" : ",") + name + ":" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count());
 					return text.str();
 				};
-				const std::string heap = timed("heap", [] { return ProcessHeapCensus(); });
 				const std::string lua = timed("lua", [] { return g_LuaMan.GetTotalHeapBytes(); });
 				const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census(); });
 				const std::string movable = timed("movable", [] { return g_MovableMan.Census(); });
@@ -7355,12 +7425,14 @@ void RunGameLoop() {
 				const std::string runner = timed("runner", [] { return ScenarioRunner::MemoryCensus(); });
 				const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
 				const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
-				std::ostringstream line;
-				line << "[mem-census] tick=" << simTick << heap << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
+				std::ostringstream rest;
+				rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
 				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
-				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console
-				     << pace << " census_us=" << costs;
-				System::PrintDiagnosticLine(line.str());
+				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << pace;
+				CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
+					const std::string heap = ProcessHeapCensus(costs);
+					System::PrintDiagnosticLine("[mem-census] tick=" + std::to_string(simTick) + heap + rest + " census_us=" + costs);
+				});
 			}
 			if (s_scriptedLeaveDue) {
 				s_scriptedLeaveDue = false;

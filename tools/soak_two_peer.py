@@ -278,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mute-input", default="", help="FRAME:COUNT - the client sends none of its own input for those frames while it keeps simulating them")
     parser.add_argument("--stall-each-round", type=int, default=0,
                         help="TICK - the client also stalls --stall-ms at this tick of every round, so each round of a rematch chain holds its seat and catches up")
-    parser.add_argument("--census-histogram", action="store_true", help="the census also walks the heap by block size (seconds per line)")
+    parser.add_argument("--census-histogram", action="store_true", help="the census also sums the heaps and walks the heap by block size (seconds per line, the simulation waiting on the heap lock)")
     parser.add_argument("--no-tick-trace", action="store_true",
                         help="keep no per-tick trace in memory: the checks read the live stream, and over an endurance soak the trace is its own grower")
     parser.add_argument("--census-probe-size", type=int, default=0, help="print the first bytes of heap blocks of this size")
