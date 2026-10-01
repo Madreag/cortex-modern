@@ -2553,6 +2553,14 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			GnsTransport::SetSimulatedJitterMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
 			continue;
 		}
+		if (!lastArg && currentArg == "-net-fake-reorder") {
+			GnsTransport::SetSimulatedReorderPercent(std::strtof(argValue[++i], nullptr));
+			continue;
+		}
+		if (!lastArg && currentArg == "-net-fake-dup") {
+			GnsTransport::SetSimulatedDuplicatePercent(std::strtof(argValue[++i], nullptr));
+			continue;
+		}
 		if (!lastArg && currentArg == "-net-rendezvous-log") {
 			GnsTransport::SetRendezvousLogLevel(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
 			continue;

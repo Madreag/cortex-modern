@@ -167,6 +167,8 @@ namespace RTE {
 
 		int s_SimulatedLagMs = 0;
 		int s_SimulatedJitterMs = 0;
+		float s_SimulatedReorderPercent = 0;
+		float s_SimulatedDuplicatePercent = 0;
 		int s_RendezvousLogLevel = 0;
 		static constexpr size_t c_MaxHeldBytesBeforeAnnounce = 256 * 1024;
 
@@ -231,6 +233,16 @@ namespace RTE {
 				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Max, jitter);
 				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, 100.0F);
 				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Pct, 100.0F);
+			}
+			if (s_SimulatedReorderPercent > 0) {
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketReorder_Send, s_SimulatedReorderPercent);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketReorder_Recv, s_SimulatedReorderPercent);
+				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketReorder_Time, 20);
+			}
+			if (s_SimulatedDuplicatePercent > 0) {
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketDup_Send, s_SimulatedDuplicatePercent);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketDup_Recv, s_SimulatedDuplicatePercent);
+				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketDup_TimeMax, 20);
 			}
 		}
 	}
@@ -1310,6 +1322,26 @@ namespace RTE {
 		s_SimulatedLagMs = lagMs;
 #else
 		(void)lagMs;
+#endif
+	}
+
+	void GnsTransport::SetSimulatedReorderPercent(float percent) {
+#ifdef CCCP_WITH_GNS
+		// A harness lever: only a headless run reorders its packets.
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		s_SimulatedReorderPercent = headless && std::string_view(headless) == "1" && percent >= 0 && percent <= 100 ? percent : 0;
+#else
+		(void)percent;
+#endif
+	}
+
+	void GnsTransport::SetSimulatedDuplicatePercent(float percent) {
+#ifdef CCCP_WITH_GNS
+		// A harness lever: only a headless run duplicates its packets.
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		s_SimulatedDuplicatePercent = headless && std::string_view(headless) == "1" && percent >= 0 && percent <= 100 ? percent : 0;
+#else
+		(void)percent;
 #endif
 	}
 
