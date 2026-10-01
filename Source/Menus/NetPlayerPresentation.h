@@ -68,6 +68,8 @@ namespace RTE::NetPlayerPresentation {
 	}
 
 	inline std::string Row(const NetLobbyMember& member) {
+		// A seat nobody holds is open: no remembered name, and nothing reads it as connected.
+		if (!member.connected && !member.cpu && !member.isLocal && !member.dropped && !member.reclaiming && !member.aiHeld && Placeholder(member.peerId, member.displayName)) return "Open seat";
 		std::string row = Name(member) + "  /  " + State(member);
 		// A seat that is gone has no live route to name.
 		if (!member.connectedRoute.empty() && member.connected && !Departed(member.peerId)) row += " / via " + member.connectedRoute;

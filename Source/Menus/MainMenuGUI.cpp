@@ -3608,7 +3608,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const NetLobbyMember& member = *visibleMembers[i];
 		// The seat line is the verbose form of the seat mark; the row keeps whichever fits.
 		const std::string seatMark = std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming));
-		const auto buildTail = [&member, &snapshot](const std::string& seat, bool withMetrics = true) {
+		const bool open = isOpenSeat(member);
+		const auto buildTail = [&member, &snapshot, open](const std::string& seat, bool withMetrics = true) {
+			// An open seat has no player to be ready or to measure: it names its team and nothing else.
+			if (open) return " - Team " + std::to_string(member.team + 1);
 			std::string tail = member.isLocal ? " (you)" : "";
 			tail += " - Team " + std::to_string(member.team + 1);
 			tail += member.peerId == snapshot.hostPeerId ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
@@ -3616,8 +3619,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			if (!member.cpu && withMetrics) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
 			return tail;
 		};
-		// An open seat wears its unseated name, never the remembered name of the player who held it.
-		lobbyRowName[i] = isOpenSeat(member) ? member.displayName
+		// An open seat reads open, never as a player who is not ready, nor by the remembered name of the one who held it.
+		lobbyRowName[i] = open ? std::string("Open seat")
 		                                     : LobbyRowName(member, m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty()
 		                                                            ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
 		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
