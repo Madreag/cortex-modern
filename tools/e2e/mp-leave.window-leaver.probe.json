@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "timeout_ms": 180000,
+  "steps": [
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark window-leaver-back"
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      },
+      "sim_at_least": 3000
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}
