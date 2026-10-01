@@ -4101,15 +4101,47 @@ static void PollStallEventsForCapture() {
 	PollSDLEvents();
 }
 
+// Test lever CCCP_TEST_DRAW_PHASES: each stage of the frame's draw, its mean and its median, once every 600 frames.
+struct DrawPhases {
+	static constexpr const char* c_Names[] = {"previews_in", "scene", "net_ui", "toasts", "post", "pause_menu"};
+	static constexpr size_t c_Count = std::size(c_Names);
+	const bool armed = std::getenv("CCCP_TEST_DRAW_PHASES") != nullptr;
+	std::array<std::vector<float>, c_Count> samples;
+	long long lapUs = 0;
+	void Begin() { if (armed) lapUs = g_TimerMan.GetAbsoluteTime(); }
+	void Lap(size_t phase) {
+		if (!armed) return;
+		const long long now = g_TimerMan.GetAbsoluteTime();
+		samples[phase].push_back(static_cast<float>(now - lapUs));
+		lapUs = now;
+		if (phase + 1 == c_Count && samples[phase].size() == 600) {
+			std::ostringstream line;
+			line << "[draw-phase] frames=600 us(mean/p50):";
+			for (size_t i = 0; i < c_Count; ++i) {
+				std::vector<float>& values = samples[i];
+				double total = 0;
+				for (float value: values) total += value;
+				std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+				line << " " << c_Names[i] << "=" << total / values.size() << "/" << values[values.size() / 2];
+				values.clear();
+			}
+			System::PrintDiagnosticLine(line.str());
+		}
+	}
+};
+static DrawPhases s_drawPhases;
+
 static void DrawFrameWithPreviews() {
 	if (!FrameMan::FeelBeginDraw()) return;
 	const long long drawBeganUs = g_TimerMan.GetAbsoluteTime();
+	s_drawPhases.Begin();
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	g_SceneMan.SetRenderDrawContext(true);
 	LocalPredictionHudSelfTest::SampleBeforeRender();
 	LocalPrediction::BeginRender();
 	LocalPredictionHudSelfTest::SampleDuringRender();
+	s_drawPhases.Lap(0);
 	std::array<bool, c_MaxScreenCount> hudDisabled;
 	const bool localPause = g_MenuMan.IsLocalPauseMenuOpen();
 	for (int screen = 0; screen < c_MaxScreenCount; ++screen) {
@@ -4120,6 +4152,7 @@ static void DrawFrameWithPreviews() {
 		NetLockstepPlane::Window sceneDraw("scene draw");
 		g_FrameMan.Draw();
 	}
+	s_drawPhases.Lap(1);
 	// Test lever: a slower machine's draw cost, spent inside the frame's draw on this one.
 	static const long long s_testDrawCostUs = [] { const char* text = std::getenv("CCCP_TEST_DRAW_COST_US"); return text ? std::atoll(text) : 0LL; }();
 	if (s_testDrawCostUs > 0) {
@@ -4130,10 +4163,15 @@ static void DrawFrameWithPreviews() {
 	{
 		// The overlays read the match service, which reaches the round without the plane's lock.
 		NetLockstepPlane::Gap plane("overlay draw");
+		s_drawPhases.Begin();
 		g_MenuMan.DrawNetworkUI();
+		s_drawPhases.Lap(2);
 		ScenarioRunner::DrawNetUiToasts();
+		s_drawPhases.Lap(3);
 		g_WindowMan.DrawPostProcessBuffer();
+		s_drawPhases.Lap(4);
 		g_MenuMan.DrawLocalPauseMenu();
+		s_drawPhases.Lap(5);
 	}
 	FrameMan::FeelBeforePresent();
 	{
