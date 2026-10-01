@@ -59,7 +59,9 @@ def prepare_runtime(repo, out, fixtures=None):
         (runtime / name).mkdir()
     quote = lambda value: "'" + str(value).replace("'", "''") + "'"
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path " + quote(runtime / "Data") + " -Target " + quote(repo / "Data") + " | Out-Null"], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-    settings = (repo / "Userdata/Settings.ini").read_text(encoding="utf-8-sig")
+    # An unpacked release package ships no Settings.ini: the runtime holds the overrides alone and the game keeps its defaults for the rest.
+    source = repo / "Userdata/Settings.ini"
+    settings = source.read_text(encoding="utf-8-sig") if source.is_file() else "SettingsMan\n"
     values = RUNTIME_SETTINGS
     for name, value in values.items():
         pattern = rf"(?m)^([ \t]*{name}[ \t]*=[ \t]*)[^\r\n]*"

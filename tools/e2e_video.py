@@ -179,6 +179,13 @@ def finish_run(scenario, run, captured, source, options):
 
 
 def source_evidence(repo):
+    package = Path(repo) / "MANIFEST.json"
+    if not (Path(repo) / ".git").exists() and package.is_file():
+        # An unpacked release package is no git tree: its manifest names the commit and tree it was built from.
+        manifest = json.loads(package.read_text(encoding="utf-8"))
+        return {"tip": manifest["source"]["commit"], "tree": manifest["source"]["tree"], "package": manifest["tag"],
+                "dirty": ["package built from a modified tree"] if manifest["source"]["dirty"] else [], "diff_sha256": None}
+
     def git(*args):
         return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
     return {"tip": git("rev-parse", "HEAD"), "dirty": git("status", "--porcelain").splitlines(),
@@ -1628,7 +1635,11 @@ def run_one(options, scenario, run, run_index, out):
             destination = Path(run_handle.cwd) / entry["to"]
             destination.parent.mkdir(parents=True, exist_ok=True)
             if "copy" in entry:
-                destination.write_bytes(staged_copy(Path(options.repo) / entry["copy"], entry.get("replace", [])))
+                source = Path(options.repo) / entry["copy"]
+                # An unpacked package carries the game alone: a harness fixture comes from the driver's own tree.
+                if not source.is_file() and (Path(options.repo) / "MANIFEST.json").is_file():
+                    source = TOOLS.parent / entry["copy"]
+                destination.write_bytes(staged_copy(source, entry.get("replace", [])))
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
