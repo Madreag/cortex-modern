@@ -85,6 +85,7 @@ namespace RTE {
 		bool DueAt(long long wallMS);
 		void WriterLoop();
 		void WriteFrame(const QueuedFrame& frame);
+		void WritePendingDrops();
 		void WriteManifest();
 
 		bool m_Enabled = false;
@@ -95,6 +96,7 @@ namespace RTE {
 		std::string m_Directory;
 		std::string m_FramesDirectory;
 		std::ofstream m_Index;
+		std::ofstream m_DroppedIndex; //!< One row per frame slot the full queue turned away, written by the writer thread.
 		std::ofstream m_Events;
 
 		long long m_StartedWallMS = 0;
@@ -120,6 +122,7 @@ namespace RTE {
 
 		std::size_t m_Saved = 0;
 		std::size_t m_Dropped = 0;
+		std::vector<std::pair<long long, std::size_t>> m_PendingDrops; //!< Wall time and slot of each drop the writer has not indexed yet.
 		std::size_t m_WriteFailures = 0;
 		int m_Width = 0;
 		int m_Height = 0;
