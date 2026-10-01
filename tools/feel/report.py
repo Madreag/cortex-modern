@@ -718,12 +718,20 @@ def sustained_response(sequence, reference, moves, shows, runs=3):
     return None
 
 
-def previewed_responses(inputs, frames, committed):
+def previewed_responses(inputs, frames, committed, interactions=()):
     """Each edge's previewed response against the committed response to that same edge.
 
     The committed timeline applies the edge at its tick plus the input delay in force; the preview draws that frame at once. So
     what the player sees must answer no later than the committed response less the delay, plus one frame. One detector on both
-    sides, each against its own state before the edge's frame, reading a change that holds for three records."""
+    sides, each against its own state before the edge's frame, reading a change that holds for three records.
+
+    The world acting on the actor (a hit, a script) is not the player's input and no preview drawn before it lands can know it: an
+    edge whose response window holds such an interaction is judged on the previews drawn from it on, and its row names it."""
+    acted = defaultdict(list)
+    for record in interactions:
+        # A clone that fell short of the actor is the preview's own fault and excuses nothing.
+        if record['source'] != 'clone':
+            acted[record['uid']].append(record)
     drawn, kept = defaultdict(list), defaultdict(list)
     for frame in frames:
         for actor in frame['actors']:
@@ -754,12 +762,27 @@ def previewed_responses(inputs, frames, committed):
             row = dict(input_line=edge['_line'], tick=edge['tick'], uid=uid, action=action, held=held, delay=delay, applied_tick=applied,
                        held_ticks=held_ticks, required=held_ticks is None or held_ticks >= 3, previewed_ms=None, committed_ms=None, budget_ms=None, judged=False, pass_check=False)
             if before_drawn and before_kept:
+                # An input shows from the record after the tick it applies on, so the edge's own frames run through the record of the tick
+                # the next change applies on; an edge held fewer than three ticks is judged on as many frames as it is held.
+                runs = min(3, held_ticks) if held_ticks else 3
                 # A drawn frame shows its tick plus the preview's depth: both sides search the same sim frames.
                 seen = sustained_response([(frame, actor) for frame, actor in drawn[uid]
-                                           if frame['draw_begin_ms'] >= edge['wall_ms'] and applied <= frame['tick'] + frame.get('preview_depth', 0) < later_tick],
-                                          before_drawn[-1], moves, lambda frame: frame['tick'] + frame.get('preview_depth', 0))
-                truth = sustained_response([(record, actor) for record, actor in kept[uid] if applied <= record['tick'] < later_tick],
-                                           before_kept[-1], moves, lambda record: record['tick'])
+                                           if frame['draw_begin_ms'] >= edge['wall_ms'] and applied <= frame['tick'] + frame.get('preview_depth', 0) <= later_tick],
+                                          before_drawn[-1], moves, lambda frame: frame['tick'] + frame.get('preview_depth', 0), runs)
+                truth = sustained_response([(record, actor) for record, actor in kept[uid] if applied <= record['tick'] <= later_tick],
+                                           before_kept[-1], moves, lambda record: record['tick'], runs)
+                # The last interaction between the press and the committed response: only previews drawn from its tick on could know it.
+                window_end = truth['tick'] if truth else later_tick
+                # Only an interaction that changed what this edge is judged on: the aim for an aim edge, the velocity for a move.
+                judged_field = 'aim' if action == 'AIM_VECTOR' else 'vel'
+                touched = max((record for record in acted.get(uid, ()) if edge['tick'] < record['tick'] <= window_end and judged_field in record['fields'].split(',')),
+                              key=lambda record: record['tick'], default=None)
+                if touched:
+                    after = [(frame, actor) for frame, actor in drawn[uid] if frame['tick'] >= touched['tick'] and frame['draw_begin_ms'] >= edge['wall_ms']]
+                    seen = sustained_response([(frame, actor) for frame, actor in after if applied <= frame['tick'] + frame.get('preview_depth', 0) <= later_tick],
+                                              before_drawn[-1], moves, lambda frame: frame['tick'] + frame.get('preview_depth', 0), runs)
+                    row['interaction'] = dict(tick=touched['tick'], source=touched['source'], fields=touched['fields'],
+                                              judged_from_ms=after[0][0]['draw_begin_ms'] - edge['wall_ms'] if after else None)
                 if seen:
                     row['previewed_ms'] = seen['present_end_ms'] - edge['wall_ms']
                 # Visible, like the preview: the first frame drawn after the committed state holds the response.
@@ -767,6 +790,9 @@ def previewed_responses(inputs, frames, committed):
                 if shown:
                     row.update(committed_ms=shown['present_end_ms'] - edge['wall_ms'], judged=True)
                     row['budget_ms'] = row['committed_ms'] - delay * SIM_MS + SIM_MS
+                    # From the first preview after an interaction landed, the response is due within a frame.
+                    if row.get('interaction') and row['interaction']['judged_from_ms'] is not None:
+                        row['budget_ms'] = max(row['budget_ms'], row['interaction']['judged_from_ms'] + SIM_MS)
                     row['pass_check'] = row['previewed_ms'] is not None and row['previewed_ms'] <= row['budget_ms']
             results.append(row)
     return results
@@ -1002,6 +1028,7 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     inputs = [row for row in rows if row['type'] == 'input' and first_tick <= row['tick'] <= ticks]
     previews = [row for row in rows if row['type'] == 'preview' and first_tick <= row['committed_tick'] <= ticks]
     committed = [row for row in rows if row['type'] == 'committed']
+    interactions = [row for row in rows if row['type'] == 'interaction']
     all_iterations = [row for row in rows if row['type'] == 'iteration']
     iterations = [row for row in all_iterations if row['active'] and first_tick <= row['tick'] <= ticks]
     if not frames or not iterations:
@@ -1120,7 +1147,7 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     pins['input_carried'] = pin(carried_value, 'the drawn controller state carries each scripted edge within 2 frames of the press (<= 34 ms at 60 Hz)',
                                 bool(latency) and all(row['carried_pass'] for row in latency), [raw, paths['latencies']],
                                 'First submitted render copy whose controller holds the scripted move state or an aim closer to the scripted aim; swap-return boundary.')
-    responses = previewed_responses(inputs, frames, committed)
+    responses = previewed_responses(inputs, frames, committed, interactions)
     write_jsonl(destination / 'responses.jsonl', responses)
     response_value, response_passed = response_verdict(responses)
     pins['input_response'] = pin(response_value, "each edge's previewed response <= its committed response - the input delay + 1 frame (16.7 ms)",
