@@ -3526,10 +3526,30 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		int contentWidth = 300;
 		int contentHeight = 250;
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup && m_MultiplayerLanGamesLabel) {
+			// The address shows whole (a session id is wider than an IP): the page widens until the field holds it, the field
+			// keeping the page's right margin. Measured as the skin draws a text box: its font, kerning and both margins.
+			int addressWidth = 0;
+			if (GUISkin* skin = m_SubMenuScreenGUIControlManager->GetSkin()) {
+				std::string fontName;
+				int margin = 3, kerning = 0;
+				if (skin->GetValue("TextBox", "Font", &fontName)) {
+					if (GUIFont* font = skin->GetFont(fontName)) {
+						skin->GetValue("TextBox", "WidthMargin", &margin);
+						skin->GetValue("TextBox", "FontKerning", &kerning);
+						const int savedKerning = font->GetKerning();
+						font->SetKerning(kerning);
+						addressWidth = font->CalculateWidth(m_MultiplayerJoinAddressTextBox->GetText()) + 2 * margin + 2;
+						font->SetKerning(savedKerning);
+					}
+				}
+			}
+			// The field starts 110 px in and ends 24 px short of a 300 px page; a page widened by d moves it d/2 right.
+			const int addressPageWidth = 2 * (std::max(166, addressWidth) - 16);
 			// The directory hint is one line. A small viewport scrolls it instead of clipping away the fallback.
-			const int desiredWidth = std::max(300, m_MultiplayerLanGamesLabel->GetTextWidth() + 24);
+			const int desiredWidth = std::max({300, m_MultiplayerLanGamesLabel->GetTextWidth() + 24, addressPageWidth});
 			contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
 			FitMultiplayerPanelWidth(m_MultiplayerJoinPanel, m_MultiplayerLanGamesLabel, contentWidth);
+			m_MultiplayerJoinAddressTextBox->Resize(contentWidth - 24 - m_MultiplayerJoinAddressTextBox->GetRelXPos(), m_MultiplayerJoinAddressTextBox->GetHeight());
 			const bool scroll = desiredWidth > contentWidth;
 			m_MultiplayerLanGamesLabel->SetHorizontalOverflowScroll(scroll);
 			m_MultiplayerLanGamesLabel->ActivateDeactivateOverflowScroll(scroll);
