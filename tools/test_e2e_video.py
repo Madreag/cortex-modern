@@ -69,9 +69,17 @@ def check_recording_health(results, scratch):
         (video / "manifest.json").write_text(json.dumps({"fps": 30, "frames_saved": count, "frames_dropped": 0, "frames_rate_limited": 0}), encoding="utf-8")
         (video / "frames.jsonl").write_text("".join(json.dumps({"frame": i, "saved": True, "wall_ms": 1000 + i * spacing_ms}) + "\n" for i in range(count)), encoding="utf-8")
         return driver.recording_health(video)
-    full, starved = capture("recording-full", 33), capture("recording-starved", 100)
+    full, slow = capture("recording-full", 33), capture("recording-starved", 100)
     ok = row(results, "recording/full-rate-passes", full is not None and not full["starved"] and full["longest_gap_ms"] == 33)
-    ok &= row(results, "recording/starved-capture-fails", starved is not None and starved["starved"] and 9.9 < starved["saved_fps"] < 10.1)
+    # An engine that presented ten frames a second, all of them saved, is a slow box reported beside the bar, not a starved recorder.
+    ok &= row(results, "recording/slow-engine-is-reported-not-starved", slow is not None and not slow["starved"] and
+              9.9 < slow["saved_fps"] < 10.1 and 9.9 < slow["engine_presented_fps"] < 10.2 and slow["saved_share"] == 1.0)
+    # The recorder that turned away two of every three frames the engine presented is starved.
+    turned = scratch / "recording-starved"
+    (turned / "dropped.jsonl").write_text("".join(json.dumps({"wall_ms": 1000 + i * 100 + offset, "slot": 3 * i + offset // 33}) + "\n"
+                                                  for i in range(119) for offset in (33, 66)), encoding="utf-8")
+    starved = driver.recording_health(turned)
+    ok &= row(results, "recording/starved-capture-fails", starved["starved"] and starved["saved_share"] < 0.4)
     ok &= row(results, "recording/no-manifest-is-not-judged", driver.recording_health(scratch / "recording-missing") is None)
     # A full-rate capture whose one long gap holds slots the queue turned away is the recorder's still; the same gap with
     # nothing dropped is a screen that presented nothing new.

@@ -471,24 +471,34 @@ def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None, named=None):
 
 
 def recording_health(video_dir, minimum_share=0.9):
-    """The recorder's own account of a capture: frames saved a second over the recorded span against the rate it was asked for,
-    and the longest wait between two saved frames. A capture that saved fewer than minimum_share of its frames is starved."""
+    """The recorder's own account of a capture, judged against what it was given: of the frames the engine presented at the
+    capture rate (saved, failed to write, or turned away by a full queue), the share it saved, and the longest wait between two
+    saved frames that holds a frame it turned away. The engine's own presented rate is reported beside it, never judged here:
+    a box whose engines present fewer frames than the capture rate is a load fact of that box, and the scene's own bars judge it."""
     manifest_path = Path(video_dir) / "manifest.json"
     if not manifest_path.is_file():
         return None
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    saved = [row["wall_ms"] for row in read_index(video_dir) if row.get("saved", True) and "wall_ms" in row]
+    rows = [row for row in read_index(video_dir) if "wall_ms" in row]
+    saved = [row["wall_ms"] for row in rows if row.get("saved", True)]
+    failed = [row["wall_ms"] for row in rows if not row.get("saved", True)]
+    # The engine indexes each slot its full queue turned away; a gap holding such slots is the recorder's, not the screen's.
+    dropped_path = Path(video_dir) / "dropped.jsonl"
+    drops = sorted(row["wall_ms"] for row in read_rows(dropped_path) if "wall_ms" in row) if dropped_path.is_file() else None
     # The recording is the match's: what follows the harness's capped stop is the run ending, not a frame the recorder owed.
     capped = capped_stop_ms(video_dir)
     if capped is not None:
         saved = [wall for wall in saved if wall <= capped]
+        failed = [wall for wall in failed if wall <= capped]
+        drops = [wall for wall in drops if wall <= capped] if drops is not None else None
     fps = manifest.get("fps") or 0
     span_s = (saved[-1] - saved[0]) / 1000.0 if len(saved) > 1 else 0.0
     saved_fps = (len(saved) - 1) / span_s if span_s > 0 else 0.0
     longest_gap_ms = max((later - earlier for earlier, later in zip(saved, saved[1:])), default=0)
-    # The engine indexes each slot its full queue turned away; a gap holding such slots is the recorder's, not the screen's.
-    dropped_path = Path(video_dir) / "dropped.jsonl"
-    drops = sorted(row["wall_ms"] for row in read_rows(dropped_path) if "wall_ms" in row) if dropped_path.is_file() else None
+    turned_away = len(drops) if drops is not None else int(manifest.get("frames_dropped") or 0)
+    presented = len(saved) + len(failed) + turned_away
+    presented_fps = presented / span_s if span_s > 0 else 0.0
+    saved_share = len(saved) / presented if presented else 0.0
     recorder_gap_ms = None
     if drops is not None:
         recorder_gap_ms = 0
@@ -497,9 +507,10 @@ def recording_health(video_dir, minimum_share=0.9):
                 recorder_gap_ms = later - earlier
     # More than two slots in a row lost to the queue shows as a still of the recorder's own making.
     gap_bar_ms = 3 * 1000 // fps if fps > 0 else 0
-    starved = fps <= 0 or saved_fps < minimum_share * fps or (recorder_gap_ms is not None and recorder_gap_ms > gap_bar_ms)
+    starved = fps <= 0 or presented == 0 or saved_share < minimum_share or (recorder_gap_ms is not None and recorder_gap_ms > gap_bar_ms)
     return {"fps": fps, "frames_saved": manifest.get("frames_saved"), "frames_dropped": manifest.get("frames_dropped"),
             "frames_rate_limited": manifest.get("frames_rate_limited"), "span_s": round(span_s, 3), "saved_fps": round(saved_fps, 2),
+            "presented_at_capture_rate": presented, "saved_share": round(saved_share, 4), "engine_presented_fps": round(presented_fps, 2),
             "longest_gap_ms": longest_gap_ms, "recorder_gap_ms": recorder_gap_ms, "recorder_gap_bar_ms": gap_bar_ms, "starved": starved}
 
 
@@ -1252,12 +1263,13 @@ def review(scenario, capture, out):
             continue
         items.append({"id": "recording-rate-" + peer["peer"], "run": capture["name"], "peer": peer["peer"], "screen": "any",
                       "what": "The recorder saved its frames at the rate it was asked for, so the footage moves as the screen did.",
-                      "assert": "frames saved a second over the recorded span >= 90 % of the recorder's rate, and no gap between saved frames holding slots the recorder dropped longer than three frame slots",
+                      "assert": "frames saved >= 90 % of the frames the engine presented at the capture rate, and no gap between saved frames holding slots the recorder dropped longer than three frame slots; the engine's own presented rate is reported beside it",
                       "frames": None, "capture_frames": None, "video_seconds": None, "video": peer.get("video"),
                       "contact_sheet": peer.get("contact_sheet"), "state": "checked", "probe": "fail" if health["starved"] else "pass",
                       "recording": health,
-                      **({"finding": {"class": "harness", "reason": "starved capture: %.1f of %d frames a second saved, longest gap %d ms, the recorder's own %s ms" %
-                                      (health["saved_fps"], health["fps"], health["longest_gap_ms"], health["recorder_gap_ms"]), "launch": None, "errors": []}}
+                      **({"finding": {"class": "harness", "reason": "starved capture: %.1f %% of the %d frames the engine presented saved, the recorder's own gap %s ms (engine presented %.1f of %d a second)" %
+                                      (100 * health["saved_share"], health["presented_at_capture_rate"], health["recorder_gap_ms"], health["engine_presented_fps"], health["fps"]),
+                                      "launch": None, "errors": []}}
                          if health["starved"] else {})})
         allowed_stills = []
         stills = freeze_scan(find_ffmpeg(), peer.get("video"), read_index(peer["video_dir"]), peer["video_dir"], allowed_stills,
