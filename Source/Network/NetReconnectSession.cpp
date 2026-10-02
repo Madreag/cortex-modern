@@ -24,6 +24,12 @@ namespace RTE {
 		/// Stable seats count from 0, roster seats from 1.
 		uint8_t RosterIdOf(uint16_t stableSeat) { return static_cast<uint8_t>(stableSeat + 1); }
 	} // namespace
+
+	uint64_t NetRosterMatchIdOf(const NetAuthBytes16& epoch) {
+		uint64_t id = 0;
+		for (size_t index = 0; index < 8; ++index) id |= static_cast<uint64_t>(epoch[index]) << (8 * index);
+		return id;
+	}
 	namespace {
 		// A world's watcher seats sit above its roster and hold no world slot, so they name no roster
 		// player and carry the ids reserved for overflow spectators instead.
@@ -56,7 +62,7 @@ namespace RTE {
 				}
 			}
 		}
-		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"roster", {m_Roster.revision, m_Roster.roundNo, m_Roster.migrationGen, m_Roster.hostSeat}}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
 	}
 
 	int64_t NetReconnectHost::CountExportedOpenSeats(const std::vector<uint8_t>& bytes, uint8_t localPeerId) {
@@ -162,16 +168,16 @@ namespace RTE {
 					if (state->hasParticipantId)
 						next.BindParticipantId(peer->second, state->participantId);
 				}
-				// The roster carried whole: the match runs, and a holder that has not reconnected is away.
+				// The roster carried whole: the round changes host, and a holder that has not reconnected is away.
 				next.RebuildRoster();
-				next.m_Roster.stage = NetRosterStage::Running;
+				next.m_Roster.stage = NetRosterStage::Migrating;
 				for (NetRosterSeat& held: next.m_Roster.seats) {
 					if (held.seatId != RosterIdOf(seat)) continue;
 					held.owner = rowCommitted ? (static_cast<uint64_t>(seat) + 1) << 32 | state->holderGeneration : 0;
 					held.ticket = held.owner;
 					const bool away = rowCommitted && !state->seat.local && transports.find(state->seat.lockstepPeerId) == transports.end();
 					held.link = held.owner != 0 && !away ? NetSeatLink::Connected : NetSeatLink::Dropped;
-					held.phase = away ? NetSeatPhase::Held : NetSeatPhase::Running;
+					held.phase = away ? NetSeatPhase::Held : NetSeatPhase::Migrating;
 					held.holdCause = !away ? NetSeatHoldCause::None : row.value("left", false) ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
 					held.heldSinceMs = away ? nowMs : 0;
 					if (!rowCommitted && rowClosed) {
@@ -207,6 +213,22 @@ namespace RTE {
 					return false;
 			}
 			if (object.contains("removed")) next.m_RemovedParticipants = object.at("removed").get<std::set<NetAuthBytes32>>();
+			// The roster numbers on from the old host's; taking the round over is its next revision, under the next host generation.
+			if (object.contains("roster")) {
+				const auto& roster = object.at("roster");
+				next.m_Roster.revision = roster.at(0).get<uint32_t>();
+				next.m_Roster.roundNo = roster.at(1).get<uint32_t>();
+				next.m_Roster.migrationGen = roster.at(2).get<uint16_t>();
+				next.m_Roster.hostSeat = roster.at(3).get<uint8_t>();
+			}
+			for (const SeatState& state: next.m_Seats)
+				if (state.seat.local) next.ApplySeatEvent(state, NetRosterEventKind::HostChanged);
+			if (next.m_Roster.stage == NetRosterStage::Migrating) {
+				// A plane whose own seat holds no player cannot take the round over as a member: it carries it on unchanged.
+				next.m_Roster.stage = NetRosterStage::Running;
+				for (NetRosterSeat& seat: next.m_Roster.seats)
+					if (seat.phase == NetSeatPhase::Migrating) seat.phase = NetSeatPhase::Running;
+			}
 			registry = std::move(nextRegistry);
 			next.m_Registry = &registry;
 			next.m_DropOwnershipSource = m_DropOwnershipSource;
@@ -389,11 +411,14 @@ namespace RTE {
 			m_LiveMatch = false;
 			m_MatchEnded = false;
 			m_Stats = {};
+			// A new hosted session numbers its roster from the start.
+			m_Roster = {};
 		}
 		m_Registry = registry;
 		m_HostSessionId = hostSessionId;
 		m_ConfiguredEpoch = epoch;
 		m_LocalIdentity = std::move(localIdentity);
+		m_Roster.matchId = NetRosterMatchIdOf(epoch);
 	}
 
 	void NetReconnectHost::SetMatchEnded() {
@@ -2135,6 +2160,7 @@ namespace RTE {
 			BumpSeatGeneration(seat);
 		}
 		m_Roster = {};
+		m_Roster.matchId = NetRosterMatchIdOf(m_ConfiguredEpoch);
 		RebuildRoster();
 	}
 
@@ -2307,6 +2333,8 @@ namespace RTE {
 		m_Store = store;
 		m_Identity = std::move(identity);
 		m_DisplayName = std::move(displayName);
+		// Attaching to a hosted session starts this peer's copy of its seat roster there.
+		m_RosterReplica.Reset();
 	}
 
 	void NetReconnectClient::SetUnixClock(uint64_t (*clock)(void*), void* context) {
@@ -2561,6 +2589,7 @@ namespace RTE {
 		if (const auto* revision = std::get_if<NetH4RosterRevision>(&payload)) {
 			NetSeatRoster roster;
 			std::string why;
+			if (m_HasRecord) m_RosterReplica.Attach(NetRosterMatchIdOf(m_Record.epoch));
 			if (!DecodeRoster(revision->roster, roster, &why) || !m_RosterReplica.Apply(roster, &why)) {
 				DiagnosticLine() << "[roster] this peer refused a revision: " << why << std::endl;
 			}

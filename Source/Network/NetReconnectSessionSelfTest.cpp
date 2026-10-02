@@ -3476,6 +3476,170 @@ namespace RTE {
 			return 0;
 		}
 
+		// Ruling qqq: one game process plays one hosted session after another, and a client's copy of the seat roster follows the
+		// session it joined - the new host's revisions and its round's start are its own, never 'older' than the last session's.
+		int TestRosterCopyFollowsANewHostedSession() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Endpoint player;
+			player.connection = 131;
+			ConfigureEndpoint(player, "two-sessions", &unixNow);
+			Wire first;
+			ConfigureWire(first);
+			first.Add(&player);
+			if (!player.client.BeginNewJoin(first.nowMs, &error) || !first.Pump(&error)) {
+				return Fail("the first session's join did not settle: " + error);
+			}
+			// The first session plays two rounds, so its roster numbers past the second session's first revisions.
+			for (int round = 0; round < 2; ++round) {
+				first.host.SetLiveMatch(true);
+				first.host.SetMatchEnded();
+			}
+			if (!first.Pump(&error)) {
+				return Fail(error);
+			}
+			const uint32_t firstRevision = player.client.GetRosterReplica().Roster().revision;
+			Wire second;
+			ConfigureWire(second);
+			if (second.registry.GetEpoch() == first.registry.GetEpoch()) {
+				return Fail("the fixture's two hosted sessions drew one epoch");
+			}
+			// Another player is seated in the second session first, so its roster is not the first session's over again.
+			Endpoint other;
+			other.connection = 132;
+			ConfigureEndpoint(other, "two-sessions-other", &unixNow);
+			second.Add(&other);
+			if (!other.client.BeginNewJoin(second.nowMs, &error) || !second.Pump(&error)) {
+				return Fail("the second session's first join did not settle: " + error);
+			}
+			// The service configures its one reconnect client again for every join it starts.
+			ConfigureEndpoint(player, "two-sessions", &unixNow);
+			second.Add(&player);
+			second.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!player.client.BeginNewJoin(second.nowMs, &error) || !second.Pump(&error)) {
+				return Fail("the second session's join did not settle: " + error);
+			}
+			std::string why;
+			const auto agreed = [&](const char* when) {
+				const NetSeatRoster& hosted = second.host.GetRoster();
+				if (player.client.GetRosterReplica().AgreesAt(hosted.revision, HashRoster(hosted), &why)) return true;
+				why = std::string(when) + ": " + why + " (the first session's last revision " + std::to_string(firstRevision) + ", the second's " + std::to_string(hosted.revision) + ")";
+				return false;
+			};
+			if (!agreed("the second session's lobby")) {
+				return Fail("a client carried into a second hosted session refused its roster at " + why);
+			}
+			second.host.SetLiveMatch(true);
+			if (!second.Pump(&error)) {
+				return Fail(error);
+			}
+			if (!agreed("the second session's round start")) {
+				return Fail("a client carried into a second hosted session refused its roster at " + why);
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS roster_copy_follows_a_new_hosted_session first_revision=" << firstRevision
+			          << " second_revision=" << second.host.GetRoster().revision << std::endl;
+			return 0;
+		}
+
+		// Ruling qqq: a successor numbers its roster on from the old host's and takes the round over as its next revision under the next
+		// host generation; a survivor takes that revision and every later one, and a rematch under the successor starts on it.
+		int TestRosterNumbersOnAcrossAMigration() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x135);
+			match.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}, {3, 2, false, "Client"}};
+			match.peerCount = 3;
+			Wire wire;
+			if (!wire.registry.BeginHostedSession()) {
+				return Fail("the migration fixture's registry drew no epoch");
+			}
+			wire.host.Configure(&wire.registry, match.sessionId, MakeIdentity());
+			wire.host.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
+			wire.host.SetLiveMatch(false);
+			NetH4TicketRecord hostTicket;
+			if (!wire.host.EnsureLocalTicket(hostTicket)) {
+				return Fail("the old host's own seat took no ticket");
+			}
+			Endpoint successor;
+			successor.connection = 141;
+			ConfigureEndpoint(successor, "migration-successor", &unixNow);
+			wire.Add(&successor);
+			if (!successor.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the successor's join did not settle: " + error);
+			}
+			Endpoint survivor;
+			survivor.connection = 142;
+			ConfigureEndpoint(survivor, "migration-survivor", &unixNow);
+			wire.Add(&survivor);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!survivor.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the survivor's join did not settle: " + error);
+			}
+			const auto lockstepOf = [&wire](const Endpoint& peer) {
+				for (const NetH4Seat& seat: wire.host.GetSeatTable())
+					if (seat.stableSeat == peer.client.GetRecord().stableSeat) return seat.lockstepPeerId;
+				return uint8_t{0};
+			};
+			const uint8_t successorPeer = lockstepOf(successor), survivorPeer = lockstepOf(survivor);
+			// The old host plays a round and starts the next before it is lost.
+			wire.host.SetLiveMatch(true);
+			wire.host.SetMatchEnded();
+			wire.host.SetLiveMatch(true);
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			const NetSeatRoster old = wire.host.GetRoster();
+			const std::vector<uint8_t> state = wire.host.ExportMigrationState();
+			NetMatchConfig successorMatch = match;
+			successorMatch.hostPeerId = successorPeer;
+			NetReconnectHost next;
+			NetSeatAuthRegistry nextRegistry;
+			if (successorPeer == 0 || survivorPeer == 0 || !next.ImportMigrationState(state, nextRegistry, successorMatch, successorPeer, {{survivorPeer, survivor.connection}}, wire.nowMs)) {
+				return Fail("the successor did not import the old host's plane");
+			}
+			const auto deliver = [&]() {
+				for (NetH4Outbound& outbound: next.TakeOutbound()) {
+					NetPayload payload;
+					if (!Wire::Roundtrip(outbound.payload, payload, &error)) return false;
+					if (outbound.connection == survivor.connection) survivor.client.HandleMessage(payload, wire.nowMs);
+				}
+				return true;
+			};
+			if (!deliver()) {
+				return Fail(error);
+			}
+			(void)survivor.client.MigrateHostContext("successor", "", NetMatchConfigUtil::HashConfig(successorMatch));
+			// The rematch under the successor: the round ends there and the next one forms.
+			next.SetMatchEnded();
+			next.FormRematch();
+			if (!deliver()) {
+				return Fail(error);
+			}
+			const NetSeatRoster& hosted = next.GetRoster();
+			std::string why;
+			if (!survivor.client.GetRosterReplica().AgreesAt(hosted.revision, HashRoster(hosted), &why)) {
+				return Fail("a survivor refused the successor's rematch roster: " + why + " (the old host's revision " + std::to_string(old.revision) + " generation " +
+				            std::to_string(old.migrationGen) + ", the successor's " + std::to_string(hosted.revision) + " generation " + std::to_string(hosted.migrationGen) + ")");
+			}
+			if (hosted.revision <= old.revision || hosted.migrationGen != old.migrationGen + 1 || hosted.matchId != old.matchId || hosted.matchId == 0) {
+				return Fail("the successor's roster did not number on from the old host's: revision " + std::to_string(old.revision) + " -> " + std::to_string(hosted.revision) +
+				            ", generation " + std::to_string(old.migrationGen) + " -> " + std::to_string(hosted.migrationGen) + ", match " + std::to_string(old.matchId) + " -> " + std::to_string(hosted.matchId));
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS roster_numbers_on_across_a_migration old_revision=" << old.revision << " successor_revision=" << hosted.revision
+			          << " generation=" << hosted.migrationGen << std::endl;
+			return 0;
+		}
+
 		// The host's seat roster reaches every holder whole and in order; no peer derives one (SEAT-ROSTER.md 5).
 		int TestRosterRevisionsReachEveryHolder() {
 			ScriptedAuthCrypto crypto;
@@ -8028,6 +8192,12 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestHostOpenedSeatsFollowTheRoster(); result != 0) {
+			return result;
+		}
+		if (const int result = TestRosterCopyFollowsANewHostedSession(); result != 0) {
+			return result;
+		}
+		if (const int result = TestRosterNumbersOnAcrossAMigration(); result != 0) {
 			return result;
 		}
 		if (const int result = TestCleanLeaverKeepsTheSeat(); result != 0) {
