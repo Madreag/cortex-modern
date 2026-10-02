@@ -35,6 +35,7 @@ if str(TOOLS) not in sys.path:
 
 from run_sim_test import make_run, seed_settings  # noqa: E402
 from compare_sim_traces import compare_fullstate, CORE  # noqa: E402
+from net_lobby_wire import session_protocol  # noqa: E402
 
 SCENARIO_DIR = TOOLS / "e2e"
 PORT_LO, PORT_HI = 49400, 49479
@@ -241,6 +242,14 @@ def scenario_text(scenario, key):
     return path.read_text(encoding="utf-8")
 
 
+def source_tokens(repo):
+    """The tree's own wire values a scenario may name; a tree without the headers names none."""
+    try:
+        return {"NET_PROTOCOL_VERSION": session_protocol(repo).value}
+    except (OSError, RuntimeError):
+        return {}
+
+
 def substitute(value, tokens):
     if isinstance(value, str):
         for name, replacement in tokens.items():
@@ -321,7 +330,8 @@ def run_preflight(scenario, run, captures, tokens):
                 return {"class": "harness", "reason": "A same-run runtime may be reused only after its earlier owner ends"}
         elif reference and (not prior_peer(captures, reference) or not cross_run_ready(captures, {**reference, "ended": True})):
             return {"class": "harness", "reason": f"Retained runtime is unavailable: {reference}"}
-    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN", "DIRECTORY_ROOT", "DIRECTORY_SESSION"}
+    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN", "DIRECTORY_ROOT", "DIRECTORY_SESSION",
+                "NET_PROTOCOL_VERSION"}
     builtins.update(f"{prefix}_{peer['name']}" for peer in peers for prefix in ("STAGE", "PROBE_DIR", "VIDEO"))
     body = json.dumps(peers)
     for peer in peers:
@@ -1329,6 +1339,9 @@ def review(scenario, capture, out):
                 items.append({**item, "peer": name, "run": capture["name"], "frames": None, "probe": "not-run", "state": "skipped",
                               "finding": capture.get("skip_finding") or {"class": "harness", "reason": "No such peer in this capture"}})
                 continue
+            # A check that names the session protocol reads it from the tree the capture launched.
+            if capture.get("repo") and "{NET_PROTOCOL_VERSION}" in json.dumps(item):
+                item = substitute(item, source_tokens(capture["repo"]))
             found, assertions = item_evidence(record, item, capture.get("port"))
             if item.get("peer_drop"):
                 required = item["peer_drop"]
@@ -1567,6 +1580,7 @@ def run_one(options, scenario, run, run_index, out):
     # the other peer's probe directory and done file.
     shared = {**getattr(options, "tokens", {}), **getattr(options, "resume_tokens", {}),
               "REPO": Path(options.repo).resolve(), "PORT": port, "OUT": root, "SIZE": size,
+              **source_tokens(options.repo),
               "WIDTH": width, "HEIGHT": height, "FPS": options.fps, **getattr(options, "service_tokens", {})}
     for peer in peers:
         stage = root / f"{peer['name']}-stage"

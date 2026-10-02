@@ -7,6 +7,7 @@ import re
 
 LOBBY_HEADER = "Source/Network/NetLobbyProtocol.h"
 CONFIG_HEADER = "Source/Network/NetMatchConfig.h"
+SESSION_HEADER = "Source/Network/NetProtocol.h"
 # An integer literal with its C++ suffix; anything else (an expression, another constant) is not a wire value.
 LITERAL = r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]*"
 
@@ -53,6 +54,8 @@ class LobbyWire:
     header_bytes: Constant
     config_version: Constant
     match_config_type: Constant
+    relay_version: Constant
+    roster_version: Constant
 
     def describe(self):
         return (f"lobby protocol version {self.version.value} ({self.version.site})"
@@ -60,7 +63,7 @@ class LobbyWire:
 
     def as_json(self):
         return {name: {"value": getattr(self, name).value, "site": getattr(self, name).site}
-                for name in ("magic", "version", "header_bytes", "config_version", "match_config_type")}
+                for name in ("magic", "version", "header_bytes", "config_version", "match_config_type", "relay_version", "roster_version")}
 
 
 def read(repo):
@@ -75,4 +78,14 @@ def read(repo):
         version=_constant(lobby, LOBBY_HEADER, lobby_start, lobby_body, "NetLobbyProtocol", "c_Version"),
         header_bytes=_constant(lobby, LOBBY_HEADER, lobby_start, lobby_body, "NetLobbyProtocol", "c_HeaderBytes"),
         config_version=_constant(config, CONFIG_HEADER, config_start, config_body, "NetMatchConfigUtil", "c_Version"),
-        match_config_type=_enumerator(lobby, LOBBY_HEADER, type_start, type_body, "NetLobbyMessageType", "MatchConfig"))
+        match_config_type=_enumerator(lobby, LOBBY_HEADER, type_start, type_body, "NetLobbyMessageType", "MatchConfig"),
+        relay_version=_constant(config, CONFIG_HEADER, config_start, config_body, "NetMatchConfigUtil", "c_RelayLayoutVersion"),
+        roster_version=_constant(config, CONFIG_HEADER, config_start, config_body, "NetMatchConfigUtil", "c_SeatRosterVersion"))
+
+
+def session_protocol(repo):
+    """The session protocol a host on this tree speaks: what a refused peer is told the host runs."""
+    path = Path(repo) / SESSION_HEADER
+    text = path.read_text(encoding="utf-8")
+    start, body = _scope(text, SESSION_HEADER, r"(?m)^[ \t]*class\s+NetProtocol\b[^;{]*\{", "class NetProtocol")
+    return _constant(text, SESSION_HEADER, start, body, "NetProtocol", "c_Version")

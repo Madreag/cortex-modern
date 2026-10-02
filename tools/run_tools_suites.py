@@ -16,6 +16,7 @@ INVENTORY = Path("D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/
 SUITES = (
     ("acceptance-harness", ["test_acceptance_harness.py"]),
     ("e2e-video", ["test_e2e_video.py"]),
+    ("lobby-wire", ["test_net_lobby_wire.py"]),
     ("settings-seed", ["test_settings_seed.py"]),
     ("launch-budget", ["-m", "unittest", "feel.test_launch_budget"]),
     ("cross-driver", ["-m", "unittest", "feel.test_cross_driver"]),
