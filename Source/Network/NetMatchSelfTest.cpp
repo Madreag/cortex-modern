@@ -7125,6 +7125,38 @@ namespace RTE {
 		return true;
 	}
 
+	// A held seat's rejoin image was streaming when its round ended; the rest of that transfer reached the rematch's new lobby, which
+	// failed on it ('rematch setup failed: state transfer does not start with a new first chunk'). Chunks ride an ordered reliable
+	// lane, so a later chunk with no transfer open is an abandoned transfer's tail; a new transfer still opens at chunk 0.
+	bool TestALobbyDropsAnAbandonedTransfersTail(std::string* error) {
+		NetLobbySession lobby;
+		NetLobbyStateChunk tail;
+		tail.transferId = 7;
+		tail.totalBytes = 3 * NetLobbyProtocol::c_MaxStateChunkBytes;
+		tail.chunkIndex = 2;
+		tail.chunkCount = 3;
+		tail.bytes.assign(16, 1);
+		lobby.HandleStateChunk(tail);
+		if (lobby.IsFailed()) {
+			*error = "a new lobby failed on the tail of a transfer it never opened: " + lobby.GetFailureReason();
+			return false;
+		}
+		NetLobbyStateChunk first = tail;
+		first.transferId = 8;
+		first.chunkIndex = 0;
+		lobby.HandleStateChunk(first);
+		NetLobbyStateChunk skipped = first;
+		skipped.transferId = 9;
+		skipped.chunkIndex = 1;
+		lobby.HandleStateChunk(skipped);
+		if (!lobby.IsFailed()) {
+			*error = "a new transfer that skipped its first chunk while another was open was taken";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_lobby_drops_an_abandoned_transfers_tail" << std::endl;
+		return true;
+	}
+
 	// A seat still catching up privately when its round ended went to the rematch with that catch-up active, so the next round's
 	// fresh start read as a catch-up launch ('bootstrap checkpoint=4319') and failed ('no world join snapshot to load').
 	bool TestARematchStartsWithoutTheEndedRoundsCatchUp(std::string* error) {
@@ -14853,6 +14885,7 @@ namespace RTE {
 		if (!TestARematchLobbyDropReturnsThroughTheRejoin(&error)) return fail(error);
 		if (!TestARoundStartsDelayCoversTheStartWork(&error)) return fail(error);
 		if (!TestARematchStartsWithoutTheEndedRoundsCatchUp(&error)) return fail(error);
+		if (!TestALobbyDropsAnAbandonedTransfersTail(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);

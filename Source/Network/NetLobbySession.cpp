@@ -537,6 +537,8 @@ namespace RTE {
 			return;
 		}
 		if (m_IncomingStateId != message.transferId) {
+			// Chunks ride an ordered reliable lane: a later chunk with no transfer open is the tail of one its round abandoned.
+			if (message.chunkIndex != 0 && m_IncomingStateId == 0) return;
 			if (message.chunkIndex != 0 || message.transferId <= m_LastIncomingStateId) {
 				Fail("state transfer does not start with a new first chunk");
 				return;
