@@ -10238,6 +10238,7 @@ int RunNetPortMapProbe() {
 /// </summary>
 int main(int argc, char** argv) {
 	bool netMatchSelfTest = false;
+	bool netRejoinGridSelfTest = false;
 	bool netMatchLobbyLifecycleSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
@@ -10334,6 +10335,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-rejoin-matrix-selftest") {
 			return NetRejoinMatrixSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-rejoin-grid-selftest") {
+			netRejoinGridSelfTest = true;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-world-join-selftest") {
 			return NetWorldJoinSelfTest::Run();
@@ -10587,6 +10591,12 @@ int main(int argc, char** argv) {
 	// thread, so the multiplayer landing and Create Lobby do not each walk every module on their frame.
 	NetIdentity::PrimeManifest();
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
+	if (netRejoinGridSelfTest) {
+		NetMatchService::Destruct();
+		const int result = NetRejoinMatrixSelfTest::RunGrid();
+		NetMatchService::Construct();
+		return ShutDown(result);
+	}
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
 		const int result = netMatchLobbyLifecycleSelfTest ? NetMatchSelfTest::RunLobbyLifecycle() : NetMatchSelfTest::Run();

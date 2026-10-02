@@ -6,6 +6,7 @@
 #include "NetIdentity.h"
 #include "NetLockstep.h"
 #include "NetMatchConfig.h"
+#include "NetMatchRunner.h"
 #include "NetProtocol.h"
 #include "NetSession.h"
 
@@ -15,12 +16,42 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <set>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace RTE {
+
+	// The rows that already prove a grid cell, run again by the grid.
+	bool TestServiceKick(std::string* error);
+	bool TestLobbyModerationRows(std::string* error);
+	bool TestKickedSeatReadsOpen(std::string* error);
+	bool TestALinklessMemberIsHeldByTheStart(std::string* error);
+	bool TestARematchLobbyHoldsADroppedSeat(std::string* error);
+	bool TestALobbyDropsAnAbandonedTransfersTail(std::string* error);
+	bool TestALaterLobbysTransferIsNewToItsPeers(std::string* error);
+	bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
+	bool TestAStartHeldSeatsReturnCompletes(std::string* error);
+	bool TestASeatKnockingWhileTheRoundFormsIsAnswered(std::string* error);
+	bool TestAQueuedReturnLeavesALaterHold(std::string* error);
+	bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
+	bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
+	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
+	bool TestAHeldHostsFrameCrossesAMigration(std::string* error);
+	bool TestEndMatchWithHeldSeatKeepsItsLease(std::string* error);
+	bool TestAReturnerToldTheMatchIsOverGetsItsRecord(std::string* error);
+	bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
+	bool TestARematchStartsWithoutTheEndedRoundsCatchUp(std::string* error);
+	bool TestACaughtUpSeatTakesItsRoundsRecordOnce(std::string* error);
+	bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
+	bool TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(std::string* error);
+	bool TestARunningMatchRejoinIsReadyOnConnect(std::string* error);
+	bool TestAReturnRefusedBeforeItsStartStopsNobody(std::string* error);
+	bool TestANextRoundLandingEndsTheRejoinPhase(std::string* error);
+	bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error);
+	bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);
 
 	namespace {
 		constexpr const char* c_Tag = "[net-rejoin-matrix-selftest]";
@@ -970,6 +1001,82 @@ namespace RTE {
 			int gaps = 0;
 			int notWalked = 0;
 		};
+
+		/// One matrix pair walked on its own rig, for a grid cell that the pair proves.
+		bool WalkPair(State state, Event event, uint16_t& port, std::string& detail) {
+			const Expectation x = Expect(state, event);
+			const std::string name = std::string(StateName(state)) + " x " + EventName(event);
+			if (!x.notWalked.empty()) { detail = name + " is not walked: " + x.notWalked; return false; }
+			Observation observed;
+			if (state == State::Migrating) {
+				auto star = std::make_unique<StarRig>();
+				star->port = static_cast<uint16_t>(port + 1000);
+				port = static_cast<uint16_t>(port + 4);
+				if (!EnterMigrating(*star)) { detail = name + " could not enter: " + star->error; return false; }
+				const std::string api = ApplyStar(*star, event);
+				PumpStar(*star, 4000, [&star] { return !star->subject.IsMigrating(); });
+				PumpStar(*star, 200);
+				observed = ObserveStar(*star, api);
+			} else {
+				auto rig = std::make_unique<Rig>();
+				rig->port = port;
+				port = static_cast<uint16_t>(port + 2);
+				if (!Enter(*rig, state)) { detail = name + " could not enter: " + rig->error; return false; }
+				rig->holdsAtEntry = HoldsOfSeat(*rig);
+				const std::string api = Apply(*rig, event);
+				Pump(*rig, 500);
+				observed = Observe(*rig, api);
+			}
+			std::string why;
+			const bool pass = Matches(x.expect, observed, why);
+			detail = name + (pass ? " matched '" : " expected '") + x.expect + (pass ? "'" : "' got '" + observed.Describe() + "' unmet '" + why + "'");
+			return pass;
+		}
+
+		/// Cell 8m: two seats drop at a round's end and the rematch forms without them; both stay held with their numbers.
+		bool DriveTwoDropsInARematchLobby(std::string* error) {
+			NetMatchConfig played = NetMatchConfigUtil::MakeDefault(0x4D38);
+			played.peerCount = 4;
+			played.hostPeerId = 1;
+			played.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Two"}, NetMatchPlayerSlot{3, 2, false, "Three"}, NetMatchPlayerSlot{4, 3, false, "Four"}};
+			NetLockstepSeatSnapshot seats;
+			for (uint8_t peer = 1; peer <= 4; ++peer) {
+				NetSeatPresenceEntry entry;
+				entry.stableSeat = peer;
+				entry.peerId = peer;
+				entry.state = peer == 2 || peer == 4 ? NetSeatPresenceState::Disconnected : NetSeatPresenceState::Present;
+				seats.seats.push_back(entry);
+			}
+			const std::vector<uint8_t> survivors = NetMatchRunner::DeriveRematchSurvivors(played, {}, {}, &seats, 1);
+			NetMatchConfig derived;
+			std::map<uint8_t, uint8_t> seatMap;
+			std::string deriveError;
+			if (!NetMatchConfigUtil::DeriveRematchConfig(played, survivors, derived, &seatMap, &deriveError)) {
+				*error = "the rematch config could not be derived: " + deriveError;
+				return false;
+			}
+			std::string kept;
+			for (const uint8_t peer: survivors) kept += (kept.empty() ? "" : ",") + std::to_string(peer);
+			bool renumbered = false;
+			for (const auto& [from, to]: seatMap) renumbered = renumbered || from != to;
+			// The lobby holds the two dropped seats: the round starts with the members present and both seats held.
+			LoopbackTransport wire;
+			NetLockstepCoordinator host;
+			NetLockstepConfig config = CoordinatorConfig(1, 2, 0x4D38);
+			config.peerCount = derived.peerCount;
+			config.activePeerIds = {1, 3};
+			config.remoteTransportPeerIds = {{3, 2}};
+			config.relayToOtherPeers = true;
+			config.matchConfig = derived;
+			std::string startError;
+			const bool started = wire.StartHost(47381, &startError) && host.Start(wire, config, &startError);
+			if (derived.peerCount != played.peerCount || renumbered || !started) {
+				*error = "two seats dropped at the round's end: kept=" + kept + " seats=" + std::to_string(derived.peerCount) + "/" + std::to_string(played.peerCount) +
+				         " renumbered=" + std::to_string(renumbered) + " start='" + (started ? std::string("ok") : startError) + "'";
+				return false;
+			}
+			return true;
+		}
 	} // namespace
 
 	int NetRejoinMatrixSelfTest::Run() {
@@ -1049,6 +1156,208 @@ namespace RTE {
 		}
 		std::cout << c_Tag << " PASS" << std::endl;
 		return 0;
+	}
+
+	int NetRejoinMatrixSelfTest::RunGrid() {
+		constexpr const char* tag = "[net-rejoin-grid-selftest]";
+		using Row = std::pair<const char*, bool (*)(std::string*)>;
+		struct Cell {
+			const char* id;
+			const char* na = nullptr;                   // why the game cannot reach it
+			std::vector<std::pair<State, Event>> pairs; // matrix pairs that prove it
+			std::vector<Row> rows;                      // existing rows that prove it
+			bool (*drive)(std::string*) = nullptr;      // a driver written for the cell
+			const char* undriven = nullptr;             // what no driver checks yet
+		};
+		const auto P = [](State s, Event e) { return std::make_pair(s, e); };
+		const Row kick{"service_kick", &TestServiceKick}, moderation{"lobby_moderation_rows", &TestLobbyModerationRows}, kickedOpen{"kicked_seat_reads_open", &TestKickedSeatReadsOpen};
+		const Row linkless{"a_linkless_member_is_held_by_the_start", &TestALinklessMemberIsHeldByTheStart}, lobbyHold{"a_rematch_lobby_holds_a_dropped_seat", &TestARematchLobbyHoldsADroppedSeat};
+		const Row abandoned{"a_lobby_drops_an_abandoned_transfers_tail", &TestALobbyDropsAnAbandonedTransfersTail}, laterLobby{"a_later_lobbys_transfer_is_new_to_its_peers", &TestALaterLobbysTransferIsNewToItsPeers};
+		const Row traffic{"lobby_traffic_keeps_a_host_link_alive", &TestLobbyTrafficKeepsAHostLinkAlive}, startHeld{"a_start_held_seats_return_completes", &TestAStartHeldSeatsReturnCompletes};
+		const Row knocking{"a_seat_knocking_while_the_round_forms_is_answered", &TestASeatKnockingWhileTheRoundFormsIsAnswered}, queued{"a_queued_return_leaves_a_later_hold", &TestAQueuedReturnLeavesALaterHold};
+		const Row ownSeat{"a_hosts_own_late_seat_is_held_and_taken_back", &TestAHostsOwnLateSeatIsHeldAndTakenBack}, nobodyWaits{"a_host_nobody_waits_on_keeps_its_seat", &TestAHostNobodyWaitsOnKeepsItsSeat};
+		const Row hearsHost{"a_held_seat_hears_its_host_until_its_catch_up_opens", &TestAHeldSeatHearsItsHostUntilItsCatchUpOpens}, crossesMigration{"a_held_hosts_frame_crosses_a_migration", &TestAHeldHostsFrameCrossesAMigration};
+		const Row lease{"end_match_with_held_seat_keeps_its_lease", &TestEndMatchWithHeldSeatKeepsItsLease}, toldOver{"a_returner_told_the_match_is_over_gets_its_record", &TestAReturnerToldTheMatchIsOverGetsItsRecord};
+		const Row stuckImage{"a_stuck_private_image_is_retaken_once_then_refused", &TestAStuckPrivateImageIsRetakenOnceThenRefused}, rematchCatchUp{"a_rematch_starts_without_the_ended_rounds_catch_up", &TestARematchStartsWithoutTheEndedRoundsCatchUp};
+		const Row recordOnce{"a_caught_up_seat_takes_its_rounds_record_once", &TestACaughtUpSeatTakesItsRoundsRecordOnce}, nextRoster{"service_return_to_lobby_forms_the_next_roster", &TestServiceReturnToLobbyFormsTheNextRoster};
+		const Row imageClose{"a_link_closed_for_the_image_keeps_the_seat_at_the_rematch", &TestALinkClosedForTheImageKeepsTheSeatAtTheRematch}, landing{"a_next_round_landing_ends_the_rejoin_phase", &TestANextRoundLandingEndsTheRejoinPhase};
+		const char* fs4 = "FS4: the relaunched process's births twice need the two-process relaunch with the birth probe (ruling ggg)";
+		const char* twoProcess = "needs a host and a returning process with an activity and the image transfer (the two-process harness)";
+		const std::vector<Cell> cells = {
+			{"1a", nullptr, {}, {linkless}, nullptr, "the seat's listing in the first lobby"},
+			{"1b", nullptr, {}, {}, nullptr, twoProcess},
+			{"1c", nullptr, {}, {}, nullptr, "a ticket return into the first lobby needs a service pair with the reconnect plane"},
+			{"1d", nullptr, {}, {kick, moderation, kickedOpen}},
+			{"1e", nullptr, {}, {}, nullptr, "another seat's return into the first lobby"},
+			{"1f", "no round exists"}, {"1g", "a rematch follows a round"},
+			{"1h", nullptr, {}, {}, nullptr, "the loading-host heartbeat row lives in another row's own fixture"},
+			{"1i", nullptr, {}, {}, nullptr, "the host lost before any round"},
+			{"1j", nullptr, {}, {linkless}},
+			{"1k", nullptr, {}, {abandoned, laterLobby}},
+			{"1l", nullptr, {}, {traffic}},
+			{"1m", nullptr, {}, {}, nullptr, "two drops in the first lobby"},
+			{"1n", "capacity is judged inside a round"},
+			{"2a", nullptr, {}, {linkless}},
+			{"2b", nullptr, {}, {startHeld}, nullptr, twoProcess},
+			{"2c", nullptr, {}, {knocking}},
+			{"2d", nullptr, {}, {}, nullptr, "a kick at the start gate"},
+			{"2e", nullptr, {}, {}, nullptr, "another seat's return at the start gate"},
+			{"2f", "no frame has run"}, {"2g", "the gate follows the formation"},
+			{"2h", nullptr, {}, {}, nullptr, "the startup-budget rows live in another row's own fixtures"},
+			{"2i", nullptr, {}, {}, nullptr, "the host lost before frame 1"},
+			{"2j", nullptr, {}, {linkless}},
+			{"2k", nullptr, {}, {}, nullptr, "a start whose round-start scripts did not arrive"},
+			{"2l", nullptr, {}, {traffic}},
+			{"2m", nullptr, {}, {}, nullptr, "two drops at the start gate"},
+			{"2n", nullptr, {}, {}, nullptr, "the capacity grace in a round's first 180 ticks"},
+			{"3a", nullptr, {P(State::Active, Event::HoldProposed), P(State::Active, Event::LinkBlip)}},
+			{"3b", nullptr, {}, {}, nullptr, fs4},
+			{"3c", nullptr, {P(State::Active, Event::TicketRejoin)}},
+			{"3d", nullptr, {P(State::Active, Event::Kick), P(State::Active, Event::Ban)}},
+			{"3e", nullptr, {}, {startHeld, queued}},
+			{"3f", nullptr, {P(State::Active, Event::MatchOver)}},
+			{"3g", "a rematch follows the round's end"},
+			{"3h", nullptr, {}, {ownSeat, nobodyWaits}, nullptr, "the election guard under a stalled host's live plane (its rows live in another row's fixtures)"},
+			{"3i", nullptr, {P(State::Migrating, Event::HostLost), P(State::Migrating, Event::MigrationComplete)}},
+			{"3j", "after the start a change is a drop or a return"}, {"3k", "a running seat has no transfer in flight"},
+			{"3l", nullptr, {}, {traffic}},
+			{"3m", nullptr, {}, {}, nullptr, "two holds at once in a running round"},
+			{"3n", nullptr, {}, {}, nullptr, "the slow-machine rows live in another row's own fixtures"},
+			{"4a", nullptr, {P(State::Held, Event::LinkBlip), P(State::Held, Event::LinkRestore)}},
+			{"4b", nullptr, {}, {}, nullptr, fs4},
+			{"4c", nullptr, {P(State::Held, Event::HeldRejoin), P(State::Held, Event::TicketRejoin)}, {startHeld}},
+			{"4d", nullptr, {P(State::Held, Event::Kick), P(State::Held, Event::Ban)}},
+			{"4e", nullptr, {}, {}, nullptr, "two returns at once"},
+			{"4f", nullptr, {P(State::Held, Event::MatchOver), P(State::Held, Event::HostGoodbye)}, {lease, toldOver}},
+			{"4g", nullptr, {}, {startHeld}},
+			{"4h", nullptr, {}, {}, nullptr, "a held seat while the host's own seat is held for a stall"},
+			{"4i", nullptr, {}, {hearsHost, crossesMigration}},
+			{"4j", "after the start a change is a drop or a return"}, {"4k", "no transfer before its return starts"},
+			{"4l", nullptr, {}, {traffic}},
+			{"4m", nullptr, {}, {}, nullptr, "two seats held at once"},
+			{"4n", nullptr, {}, {}, nullptr, "the headroom rows live in another row's own fixtures"},
+			{"5a", nullptr, {P(State::RejoinImagePending, Event::LinkBlip)}, {}, nullptr, "the returner's re-dial with backoff and its message"},
+			{"5b", nullptr, {}, {}, nullptr, twoProcess},
+			{"5c", nullptr, {P(State::RejoinImagePending, Event::TicketRejoin)}},
+			{"5d", nullptr, {P(State::RejoinImagePending, Event::Kick), P(State::RejoinImagePending, Event::Ban)}},
+			{"5e", nullptr, {}, {stuckImage}},
+			{"5f", nullptr, {}, {laterLobby, landing}, nullptr, "RT4: the end record during the image, the next round held and the return there (two-process)"},
+			{"5g", nullptr, {}, {}, nullptr, twoProcess},
+			{"5h", nullptr, {}, {}, nullptr, "the image prepared off the host's sim thread"},
+			{"5i", nullptr, {}, {}, nullptr, "the returner dialling the successor"},
+			{"5j", "after the start a change is a drop or a return"},
+			{"5k", nullptr, {}, {stuckImage}, nullptr, "past the bound the seat stays held with its message, never an exit"},
+			{"5l", nullptr, {}, {}, nullptr, "the transfer-progress row lives in another row's own fixture"},
+			{"5m", nullptr, {}, {}, nullptr, "two drops while one returns"},
+			{"5n", nullptr, {}, {}, nullptr, "the headroom rows live in another row's own fixtures"},
+			{"6a", nullptr, {P(State::RejoinTailReplay, Event::LinkBlip)}, {}, nullptr, "the re-dial after the link drops during the replay"},
+			{"6b", nullptr, {}, {}, nullptr, fs4},
+			{"6c", nullptr, {P(State::RejoinTailReplay, Event::TicketRejoin)}},
+			{"6d", nullptr, {P(State::RejoinTailReplay, Event::Kick), P(State::RejoinTailReplay, Event::Ban)}},
+			{"6e", nullptr, {}, {}, nullptr, "DS1's release row lives inside the world-join row's fixture"},
+			{"6f", nullptr, {P(State::RejoinTailReplay, Event::MatchOver)}, {rematchCatchUp, recordOnce}},
+			{"6g", nullptr, {}, {startHeld}},
+			{"6h", nullptr, {}, {}, nullptr, "the replay while the host's own seat is held for a stall"},
+			{"6i", nullptr, {}, {hearsHost, crossesMigration}},
+			{"6j", "after the start a change is a drop or a return"},
+			{"6k", nullptr, {}, {}, nullptr, "the tail asked for again after an abort"},
+			{"6l", nullptr, {}, {traffic}},
+			{"6m", nullptr, {}, {}, nullptr, "two drops while one replays"},
+			{"6n", nullptr, {}, {}, nullptr, "the headroom rows live in another row's own fixtures"},
+			{"7a", nullptr, {}, {lobbyHold}},
+			{"7b", nullptr, {}, {}, nullptr, "RT4 form A: a relaunched seat's end record and the next lobby (two-process)"},
+			{"7c", nullptr, {}, {toldOver}},
+			{"7d", nullptr, {}, {}, nullptr, "a kick at the round's end"},
+			{"7e", "the same cell as 7c from the other seat"}, {"7f", "this is the end"}, {"7g", "row 8"},
+			{"7h", nullptr, {}, {}, nullptr, "the end record under a stalled host"},
+			{"7i", nullptr, {}, {}, nullptr, "the host lost after its end record"},
+			{"7j", "row 8"},
+			{"7k", nullptr, {}, {abandoned, laterLobby}},
+			{"7l", nullptr, {}, {}, nullptr, "liveness at the round's end"},
+			{"7m", nullptr, {}, {}, nullptr, "two drops at the round's end"},
+			{"7n", "the round has ended"},
+			{"8a", nullptr, {}, {lobbyHold}},
+			{"8b", nullptr, {}, {}, nullptr, twoProcess},
+			{"8c", nullptr, {}, {imageClose}, nullptr, "the re-dial into the rematch lobby (l4p-48's 'session full')"},
+			{"8d", nullptr, {}, {kick, moderation}},
+			{"8e", "the same cell as 8c from the other seat"}, {"8f", "no round runs in the lobby"},
+			{"8g", nullptr, {}, {nextRoster}},
+			{"8h", nullptr, {}, {}, nullptr, "the loading-host heartbeat row lives in another row's own fixture"},
+			{"8i", nullptr, {}, {}, nullptr, "the host lost in the rematch lobby"},
+			{"8j", nullptr, {}, {lobbyHold}},
+			{"8k", nullptr, {}, {abandoned, laterLobby}},
+			{"8l", nullptr, {}, {traffic}},
+			{"8m", nullptr, {}, {}, &DriveTwoDropsInARematchLobby},
+			{"8n", "judged inside the round"},
+			{"9a", nullptr, {}, {}, nullptr, twoProcess},
+			{"9b", "a second relaunch is the same cell from the start"},
+			{"9c", nullptr, {P(State::Relaunching, Event::TicketRejoin)}, {}, nullptr, fs4},
+			{"9d", nullptr, {P(State::Relaunching, Event::Kick), P(State::Relaunching, Event::Ban)}},
+			{"9e", nullptr, {}, {}, nullptr, twoProcess},
+			{"9f", nullptr, {}, {}, nullptr, "RT4 form A (two-process)"},
+			{"9g", nullptr, {}, {}, nullptr, twoProcess},
+			{"9h", nullptr, {}, {}, nullptr, twoProcess},
+			{"9i", nullptr, {}, {}, nullptr, twoProcess},
+			{"9j", "after the start a change is a drop or a return"},
+			{"9k", nullptr, {}, {}, nullptr, twoProcess},
+			{"9l", nullptr, {}, {}, nullptr, "the transfer-progress row lives in another row's own fixture"},
+			{"9m", nullptr, {}, {}, nullptr, twoProcess},
+			{"9n", nullptr, {}, {}, nullptr, "the headroom rows live in another row's own fixtures"},
+			{"10a", nullptr, {P(State::Migrating, Event::LinkBlip)}},
+			{"10b", nullptr, {}, {}, nullptr, twoProcess},
+			{"10c", nullptr, {P(State::Migrating, Event::TicketRejoin)}},
+			{"10d", "no host exists to click until the successor hosts"},
+			{"10e", nullptr, {}, {}, nullptr, "a return during a migration: the matrix refuses it at once (marked a gap); the grid expects it to wait for the successor"},
+			{"10f", "no host authors an end while the migration runs"}, {"10g", "no end during a migration"}, {"10h", "the host is gone; the successor's stall is 3h"},
+			{"10i", nullptr, {P(State::Migrating, Event::SuccessorLost)}},
+			{"10j", "after the start a change is a drop or a return"},
+			{"10k", nullptr, {}, {}, nullptr, "a held seat's catch-up resumed from the successor"},
+			{"10l", nullptr, {}, {}, nullptr, "liveness during a migration"},
+			{"10m", nullptr, {}, {}, nullptr, "two drops during a migration"},
+			{"10n", "capacity is judged by a host"},
+		};
+		int pass = 0, fail = 0, partial = 0, undriven = 0, na = 0;
+		uint16_t port = 47000;
+		for (const Cell& cell: cells) {
+			if (cell.na) {
+				++na;
+				std::cout << tag << " cell " << cell.id << " result=N/A reason=\"" << cell.na << "\"" << std::endl;
+				continue;
+			}
+			const bool driven = !cell.pairs.empty() || !cell.rows.empty() || cell.drive;
+			if (!driven) {
+				++undriven;
+				std::cout << tag << " cell " << cell.id << " result=NOT-DRIVEN reason=\"" << cell.undriven << "\"" << std::endl;
+				continue;
+			}
+			bool ok = true;
+			std::string detail;
+			for (const auto& [state, event]: cell.pairs) {
+				std::string line;
+				const bool matched = WalkPair(state, event, port, line);
+				ok = ok && matched;
+				detail += (detail.empty() ? "" : "; ") + line;
+			}
+			for (const auto& [name, row]: cell.rows) {
+				std::string error;
+				const bool passed = row(&error);
+				ok = ok && passed;
+				detail += (detail.empty() ? "" : "; ") + std::string(name) + (passed ? " PASS" : " FAIL: " + error);
+			}
+			if (cell.drive) {
+				std::string error;
+				const bool passed = cell.drive(&error);
+				ok = ok && passed;
+				detail += (detail.empty() ? "" : "; ") + (passed ? std::string("driver PASS") : "driver FAIL: " + error);
+			}
+			const char* result = !ok ? "FAIL" : cell.undriven ? "PARTIAL" : "PASS";
+			(!ok ? fail : cell.undriven ? partial : pass) += 1;
+			std::cout << tag << " cell " << cell.id << " result=" << result << " detail=\"" << detail << "\"" << (ok && cell.undriven ? std::string(" undriven=\"") + cell.undriven + "\"" : std::string()) << std::endl;
+		}
+		std::cout << tag << " totals cells=" << cells.size() << " pass=" << pass << " fail=" << fail << " partial=" << partial << " not_driven=" << undriven << " na=" << na << std::endl;
+		const bool whole = fail == 0 && partial == 0 && undriven == 0;
+		std::cout << tag << (whole ? " PASS" : " FAIL") << std::endl;
+		return whole ? 0 : 1;
 	}
 
 } // namespace RTE
