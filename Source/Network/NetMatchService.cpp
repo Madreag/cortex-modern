@@ -6518,6 +6518,9 @@ static std::string ResyncSaveName() {
 		if (!m_Coordinator) {
 			return;
 		}
+		// What the setup worker queued while it held the round reaches the session first, in order.
+		if (m_Runner)
+			for (NetTransportEvent& event: m_Runner->TakeSessionTraffic()) m_PendingSessionEvents.push_back(std::move(event));
 		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
 			if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 				const auto message = NetLobbyProtocol::Decode(event.bytes);
