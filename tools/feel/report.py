@@ -206,9 +206,10 @@ def reduce_memory(samples, *, warmup_s, slope_bytes_per_minute, retained_bytes, 
         sizes[field] = dict(first=values[0][1], last=values[-1][1], peak=max(v for _, v in values),
                             slope_bytes_per_minute=slope, retained_bytes=growth,
                             passed=slope is not None and slope <= slope_bytes_per_minute and growth <= retained_bytes)
-    return dict(passed=bool(sizes) and len(slots) >= expected and all(v['passed'] for v in sizes.values()),
+    missing_slots = sorted(set(range(expected)) - slots)
+    return dict(passed=bool(sizes) and not missing_slots and all(v['passed'] for v in sizes.values()),
                 warmup_s=warmup_s, slope_bound=slope_bytes_per_minute, retention_bound=retained_bytes,
-                expected_samples=expected, observed_samples=len(samples), missing_samples=max(0, expected-len(slots)),
+                expected_samples=expected, observed_samples=len(samples), missing_samples=len(missing_slots), missing_slots=missing_slots,
                 sizes=sizes, instrumentation_growth='N/A without measured allocation records; no subtraction')
 
 
@@ -217,7 +218,9 @@ CENSUS_PROCESS = re.compile(r' (?:private|resident)_mb=(\d+)')
 CENSUS_INSTRUMENT = re.compile(r' cow: entries=\d+ entry_mb=(\d+) pixels=\d+ retired=\d+ retired_mb=(\d+)(?: last_image_mb=(\d+))?')
 
 
-def reduce_memory_census(text, *, warm_slope_mb_per_minute=10):
+def reduce_memory_census(text, *, warm_slope_mb_per_minute=10, warmup_s=120,
+                         slope_bytes_per_minute=8*1024*1024, retained_bytes=128*1024*1024,
+                         sample_seconds=60, elapsed_s=None):
     """One process's [mem-census] lines: its memory each minute net of the full-state instrument's own cache, and the slope between
     minutes. Warm-up is a falling slope that reaches under the bound; a slope that never does, or rises past it again, is a leak."""
     rows = []
@@ -232,9 +235,15 @@ def reduce_memory_census(text, *, warm_slope_mb_per_minute=10):
               for minute, (uptime, process, instrument) in sorted(minutes.items())]
     slopes = [round((b['net_mb'] - a['net_mb']) * 60000 / (b['uptime_ms'] - a['uptime_ms']), 1) for a, b in zip(series, series[1:]) if b['uptime_ms'] > a['uptime_ms']]
     warm = next((index for index, slope in enumerate(slopes) if slope < warm_slope_mb_per_minute), None)
-    status = 'NOT COVERED' if not slopes else 'PASS' if warm is not None and all(slope < warm_slope_mb_per_minute for slope in slopes[warm:]) else 'FAIL'
+    bounded = reduce_memory([dict(elapsed_s=row['uptime_ms']/1000, private=row['net_mb']*1024*1024) for row in series],
+        warmup_s=warmup_s, slope_bytes_per_minute=slope_bytes_per_minute, retained_bytes=retained_bytes,
+        sample_seconds=sample_seconds, elapsed_s=elapsed_s if elapsed_s is not None else max((row['uptime_ms']/1000 for row in series), default=0))
+    slope_pass = warm is not None and all(slope < warm_slope_mb_per_minute for slope in slopes[warm:])
+    covered = bool(bounded['sizes']) and not bounded['missing_samples']
+    status = 'NOT COVERED' if not covered else 'PASS' if slope_pass and bounded['passed'] else 'FAIL'
     return dict(status=status, census_lines=len(rows), series=series, slopes_mb_per_minute=slopes, warm_slope_bound=warm_slope_mb_per_minute,
-                warm_up_ends_after_interval=warm)
+                warm_up_ends_after_interval=warm, census_slope_pass=slope_pass, declared_bounds=bounded,
+                complete=covered)
 
 
 HOLD_OF_THIS_SEAT = re.compile(r'^\[net-lockstep\] hold of this seat at (\d+) ')

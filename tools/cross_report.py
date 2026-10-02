@@ -29,20 +29,32 @@ def unapplied_faults(faults, receipts):
     """The scheduled faults no receipt shows applied, by id: a fault whose target incarnation never reached its tick is one."""
     return [f['id'] for f in faults if not any(r.get('id') == f['id'] and r.get('applied') for r in receipts)]
 
+def memory_verdict(peers):
+    rows = []
+    for name, peer in peers.items():
+        bounds = peer.get('memory_by_incarnation') or {}
+        census = peer.get('memory_census') or {}
+        incarnations = set(bounds) | set(census) | {str(peer.get('incarnation', 0))}
+        for incarnation in sorted(incarnations):
+            declared, measured = bounds.get(incarnation, {}), census.get(incarnation, {})
+            covered = bool(declared.get('sizes')) and not declared.get('missing_samples', 1) and measured.get('status') in ('PASS', 'FAIL')
+            passed = covered and declared.get('passed') is True and measured.get('status') == 'PASS'
+            failed = declared.get('passed') is False and bool(declared.get('sizes')) or measured.get('status') == 'FAIL'
+            status = 'PASS' if passed else 'FAIL' if failed else 'NOT COVERED'
+            rows.append(dict(peer=name, incarnation=incarnation, status=status,
+                             declared_bounds_passed=declared.get('passed'), census_status=measured.get('status', 'NOT COVERED')))
+    status = 'FAIL' if any(row['status'] == 'FAIL' for row in rows) else 'PASS' if rows and all(row['status'] == 'PASS' for row in rows) else 'NOT COVERED'
+    failures = [f"{row['peer']} incarnation {row['incarnation']}: bounds={row['declared_bounds_passed']!r}, census={row['census_status']}"
+                for row in rows if row['status'] != 'PASS']
+    return dict(status=status, incarnations=rows, reason='; '.join(failures) or ('all incarnations sampled within both bounds' if rows else 'no incarnation memory evidence'))
+
+
 def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     core=all(checks.get(name,False) for name in CORE_CHECKS)
     engine_red=not checks.get('zero_unscheduled_holds',False) and bool(checks.get('only_capture_induced_holds')) and all(checks.get(name,False) for name in CORE_CHECKS if name not in ('full_history','zero_unscheduled_holds'))
     oracle=lambda passed,reason='':dict(status='PASS' if passed else 'FAIL',reason=reason)
     pending=manifest.get('capture_rows_pending',[1,2])
-    memory=[value for peer in peers.values() for value in peer.get('memory_by_incarnation',{}).values()]
-    memory_status='PASS' if memory and all(m['passed'] for m in memory) else \
-        'FAIL' if any(m.get('sizes') or m.get('missing_samples') for m in memory) else 'NOT COVERED'
-    memory_reason='Declared per-incarnation warm-up, slope and retention; raw sizes and measured instrumentation remain separate.'
-    census=[c for peer in peers.values() for c in peer.get('memory_census',{}).values() if c.get('status')!='NOT COVERED']
-    if census:
-        memory_status='FAIL' if any(c['status']=='FAIL' for c in census) else 'PASS'
-        memory_reason=('Each process each minute, net of the full-state instrument cache: warm-up is a falling slope reaching under '
-                       f"{census[0]['warm_slope_bound']} MB/min and staying under it; the declared-bounds read stays reported beside it.")
+    memory = memory_verdict(peers)
     coverage_status='FAIL' if any(row['status']=='FAIL' for row in matrix) else \
         'NOT COVERED' if any(row['status']=='NOT COVERED' for row in matrix) else 'PASS'
     oracles=dict(
@@ -59,7 +71,7 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         coverage=dict(status=coverage_status,reason='Each matrix row retains its own minimum, counts and reason.'),
         feel=dict(status=('PASS' if checks.get('quiet_feel',False) else 'FAIL') if any(p.get('feel_gated') for p in peers.values()) else
                          'UNDER LOAD' if any(p.get('feel_status')=='UNDER LOAD' for p in peers.values()) else 'REPORTED',reason='Gated only in a declared quiet window without measured load.'),
-        memory=dict(status=memory_status,reason=memory_reason),
+        memory=memory,
         record_integrity=oracle(checks.get('record_integrity',False)),
         engine_findings=oracle(checks.get('no_engine_findings',False),'All findings remain visible, including the named capture rows.'),
         exits=oracle(checks.get('all_incarnation_exits',False),'Each incarnation must exit normally or have its own scheduled, actually injected crash receipt.'),
@@ -82,7 +94,8 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     workload = (manifest['ticks'] == 1201 and not manifest.get('faults')) if manifest['scenario'] == 'match' else (
         manifest['ticks'] == 72000 if manifest['scenario'] == 'soak' else
         bool(manifest.get('faults')) if manifest['scenario'] == 'chaos' else False)
-    v1 = all(checks.get(name, False) for name in required) and workload and bool(manifest.get('fullstate_every')) and not pending and not mixed_builds
+    v1 = (all(checks.get(name, False) for name in required) and workload and bool(manifest.get('fullstate_every'))
+          and not pending and not mixed_builds and memory['status'] == 'PASS')
     return dict(core_passed=core,core_engine_red=engine_red,mixed_builds=list(mixed_builds),
         v1_passed=bool(v1), v1_checks=list(required), v1_workload=workload,
         gate_b_eligible=(core or engine_red) and checks.get('shared_fullstate',False) and not pending and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
@@ -672,7 +685,8 @@ def build_report(root):
             memory_by_incarnation[str(incarnation)]=report.reduce_memory([r for r in samples if r.get('incarnation',0)==incarnation],
                 **manifest['memory'],elapsed_s=fragment_record.get('elapsed_seconds',0))
         memory=memory_by_incarnation[str(int(own.name.split('-')[-1]))]
-        memory_census={fragment.name.split('-')[-1]: report.reduce_memory_census(''.join(line for _, line in read_log(fragment/'engine/stdout.log')))
+        memory_census={fragment.name.split('-')[-1]: report.reduce_memory_census(''.join(line for _, line in read_log(fragment/'engine/stdout.log')),
+                        **manifest['memory'], elapsed_s=load(fragment/'record.json',{}).get('elapsed_seconds', 0))
                        for fragment in fragments}
         archives=[r for fragment in fragments for r in source_rows(fragment/'archives.jsonl',root)]
         payload_sizes = [r['trace_vector_payload_bytes'] for r in events[name]
@@ -799,10 +813,7 @@ def build_report(root):
         checks['fog_on_match'] = all(any(c.get('fog') for c in p['configs']) for p in peers.values())
         checks['round_ended'] = any(r.get('type')=='match_boundary' for values in events.values() for r in values)
         checks['validated_autosave_archives'] = False
-        checks['memory_bounds']=all(p['memory_by_incarnation'] and all(m['passed'] for m in p['memory_by_incarnation'].values()) for p in peers.values())
-        # Ruling (w): with the engine's census the bar is each process's slope net of the instrument, never its total.
-        census=[c for p in peers.values() for c in p.get('memory_census',{}).values() if c['status']!='NOT COVERED']
-        if census: checks['memory_bounds']=all(c['status']=='PASS' for c in census)
+    checks['memory_bounds'] = memory_verdict(peers)['status'] == 'PASS'
     for name,peer in peers.items():
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
