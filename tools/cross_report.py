@@ -807,7 +807,8 @@ def build_report(root):
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
         # Rows the writer left without a history key are retained and counted, never compared.
-        unkeyed=[r for r in live[name] if any(r.get(field) is None for field in report.HISTORY_FIELDS)]
+        # The engine's retraction records ({abandon_from, round}) void rows; they are not rows themselves.
+        unkeyed=[r for r in live[name] if not ('abandon_from' in r and r.get('session') is None) and any(r.get(field) is None for field in report.HISTORY_FIELDS)]
         peer['unkeyed']=len(unkeyed)
         peer['first_unkeyed']=dict(tick=unkeyed[0].get('tick'),path=unkeyed[0].get('_path'),line=unkeyed[0].get('_line'),
             missing=[field for field in report.HISTORY_FIELDS if unkeyed[0].get(field) is None]) if unkeyed else None
