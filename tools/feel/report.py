@@ -31,8 +31,10 @@ def declared_history_ranges(host_rows, boundaries, peers, *, smoke_ticks=None, f
     return ranges, missing
 
 
-def compare_histories(peers, ranges, required_subsystems):
-    """Compare every observation, preserving disagreement in earlier executions."""
+def compare_histories(peers, ranges, required_subsystems, away=None):
+    """Compare every observation, preserving disagreement in earlier executions. away maps (peer, history prefix) to the
+    inclusive ticks that seat never simulated there (it left the round held); those keys are not expected of it."""
+    away = away or {}
     indexed, invalid, duplicates, first_difference = {}, [], 0, None
     for peer, rows in peers.items():
         observations, seen = defaultdict(list), set()
@@ -75,6 +77,11 @@ def compare_histories(peers, ranges, required_subsystems):
             expected_keys.add(key)
             values, absent = [], []
             for peer in interval['peers']:
+                skipped = away.get((peer, prefix))
+                if skipped and skipped[0] <= tick <= skipped[1] and not indexed.get(peer, {}).get(key):
+                    counts.setdefault(peer, dict(expected=0, present=0, missing=0)).setdefault('away', 0)
+                    counts[peer]['away'] += 1
+                    continue
                 counts.setdefault(peer, dict(expected=0, present=0, missing=0))['expected'] += 1
                 found = indexed.get(peer, {}).get(key, [])
                 counts[peer]['present' if found else 'missing'] += 1

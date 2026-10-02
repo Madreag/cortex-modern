@@ -113,6 +113,34 @@ def scheduled_hold(hold,receipts,recoveries):
     return None
 
 
+def host_clock(host_rows):
+    """The host's own wall clock at each (round, tick) it simulated: one clock for every box's events."""
+    clock = {}
+    for r in host_rows:
+        if r.get('phase') == 'live' and isinstance(r.get('tick'), int) and isinstance(r.get('wall_ms'), (int, float)):
+            clock.setdefault((str(r.get('round')), r['tick']), r['wall_ms'])
+    return clock
+
+
+def fault_windows(faults, receipts, clock):
+    """Each applied fault with a duration, as a span of the host's clock from the frame it was applied at."""
+    windows = []
+    for receipt in receipts:
+        fault = next((f for f in faults if f.get('id') == receipt.get('id')), None)
+        if not fault or not receipt.get('applied') or not fault.get('duration_ms'): continue
+        start = clock.get((str(receipt.get('round')), receipt.get('applied_frame')))
+        if start is None: continue
+        windows.append(dict(id=fault['id'], peer=receipt.get('peer'), start_ms=start, end_ms=start + fault['duration_ms']))
+    return windows
+
+
+def fault_window_hold(hold, windows, clock):
+    """A hold of the faulted seat inside its scheduled fault's window is that fault's."""
+    at = clock.get((str(hold.get('round')), hold.get('tick')))
+    if at is None: return None
+    return next((w['id'] for w in windows if w['peer'] == hold.get('peer') and w['start_ms'] <= at <= w['end_ms']), None)
+
+
 def attempt_label(result):
     if result.get('v1_passed'): return 'V1 PASS'
     if 'v1_passed' not in result: return 'V1 NOT GRADED'
@@ -387,6 +415,25 @@ def local_host_render(manifest, peers):
                        'No wall TPS available in the retained events; reported only.')
 
 
+COMPLETED_HELD = re.compile(r'\[net-match\] completed_by_(?:end_record|next_round|host_goodbye)=1 held_from=\d+')
+
+
+def held_away_ranges(live, ranges, logs):
+    """A seat that left a round while held (its own completed_by_* line) never simulated that round past its last record:
+    from the tick after it to the round's end is its away range, as an image rejoin's is. Any other missing key stays UNKNOWN."""
+    away = {}
+    for name, peer_rows in live.items():
+        left = sum(len(COMPLETED_HELD.findall(text)) for text in logs.get(name, []))
+        for interval in ranges:
+            if left == 0: break
+            prefix = tuple(interval[field] for field in report.HISTORY_FIELDS[:-1])
+            ticks = sorted({r['tick'] for r in peer_rows if isinstance(r.get('tick'), int) and tuple(r.get(field) for field in report.HISTORY_FIELDS[:-1]) == prefix})
+            if not ticks or ticks[0] != interval['first'] or ticks[-1] >= interval['last'] or len(ticks) != ticks[-1] - ticks[0] + 1: continue
+            away[(name, prefix)] = (ticks[-1] + 1, interval['last'])
+            left -= 1
+    return away
+
+
 def build_report(root):
     root = Path(root).resolve(); manifest = load(root / 'manifest.json', {})
     live, events, peers, findings, paths = {}, {}, {}, list(manifest.get('driver_findings', [])), {}
@@ -528,7 +575,10 @@ def build_report(root):
         [r for r in events.get(manifest['host'],[]) if r.get('type')=='match_boundary'], peers,
         smoke_ticks=manifest['ticks'] if manifest['scenario']=='match' else None,
         final_tick=peers[manifest['host']]['native_final_tick'])
-    comparison = report.compare_histories(live, ranges, REQUIRED_SUBSYSTEMS)
+    logs = {name: [''.join(line for _, line in read_log(root / fragment / 'engine/stdout.log')) for fragment in peer['fragments']] for name, peer in peers.items()}
+    away = held_away_ranges(live, ranges, logs)
+    comparison = report.compare_histories(live, ranges, REQUIRED_SUBSYSTEMS, away)
+    comparison['away_ranges'] = [dict(peer=peer, prefix=list(prefix), first=first, last=last) for (peer, prefix), (first, last) in away.items()]
     fullstate_documents={name:report.parse_fullstate([root/fragment/'engine/stdout.log' for fragment in peer['fragments']]) for name,peer in peers.items()}
     cadence=manifest.get('fullstate_every',0)
     fullstate=report.compare_fullstate_histories(fullstate_documents,fullstate_expected(host_rows,cadence)) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
@@ -549,10 +599,15 @@ def build_report(root):
         last_clock=peers[fault['peer']]['payload_clock_last_ms']
         recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
+    clock = host_clock(host_rows)
+    windows = fault_windows(manifest['faults'], fault_receipts, clock)
     for p in peers.values():
         for hold in p['holds']:
             hold['scheduled_recovery_id']=scheduled_hold(hold,fault_receipts,recoveries)
             hold.update(classify_hold(hold,events,peers))
+            if not hold['scheduled_recovery_id'] and (window := fault_window_hold(hold, windows, clock)):
+                hold.update(scheduled_recovery_id=window, classification='scheduled-fault',
+                            reason='The held seat is the faulted one and the hold falls inside its scheduled fault window, on the host clock.')
     unscheduled_holds=sum(not h['scheduled_recovery_id'] for p in peers.values() for h in p['holds'])
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
                   preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings') and not mixed_builds,
