@@ -662,6 +662,8 @@ namespace RTE {
 		bool LaunchedFreshRound() const { return m_LaunchedFreshRound; }
 		/// Held client: its rejoin landed in the host's next round, so the held round is over for it and the new round is an ordinary one.
 		void EndHeldRejoinInNextRound();
+		/// Client: a private catch-up its round ended under belongs to that round; the next round starts fresh, never from its image.
+		void EndRoundCatchUpLocked();
 		/// Client: whether a rematch setup that failed returns this seat through the rejoin - its link to the host closed without the
 		/// host's goodbye, so the host plays the next round with the seat held for it.
 		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason);
@@ -1258,6 +1260,7 @@ namespace RTE {
 		friend bool TestAnInPlaceReturnKeepsAnOpenReturnGap(std::string* error);
 		friend bool TestAReturnerToldTheMatchIsOverGetsItsRecord(std::string* error);
 		friend bool TestACaughtUpSeatTakesItsRoundsRecordOnce(std::string* error);
+		friend bool TestARematchStartsWithoutTheEndedRoundsCatchUp(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
