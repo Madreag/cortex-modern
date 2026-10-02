@@ -251,3 +251,41 @@ class ScheduleKeyedOracles(unittest.TestCase):
         o=self.judge(hold, round_ended=True, forced_end_during_hold=False)
         self.assertEqual(o['forced_ends']['status'],'FAIL')
 
+
+    def test_a_round_that_ends_while_its_seat_replays_is_its_departure(self):
+        # l4p-23's Mac: held at 1964 in round 5, still replaying its way back when the round ended.
+        live = {p: [live_row(t, p) for t in range(1, 11)] for p in ('a', 'b')}
+        live['c'] = [live_row(t, 'c') for t in range(1, 6)]
+        rng = HeldSeatAwayRange.RANGE
+        held = '[net-lockstep] hold of this seat at 6 revision=2' + chr(10) + '[net-match-service-e2e] activity over at frame 10: no full-state sample follows'
+        self.assertEqual(cross_report.held_away_ranges(live, rng, {'c': [held]}), {('c', ('s', 'm', 'initial', 1)): (6, 10)})
+        # A seat that went live again before the round ended played it: no departure, its missing keys stay unknown.
+        back = '[net-lockstep] hold of this seat at 6 revision=2' + chr(10) + '[net-match] rejoin phase TailReplay -> Active' + chr(10) + '[net-match-service-e2e] activity over at frame 10: no full-state sample follows'
+        self.assertEqual(cross_report.held_away_ranges(live, rng, {'c': [back]}), {})
+
+
+
+    def test_a_departure_belongs_to_the_round_its_hold_began_in(self):
+        # l4p-23's Mac: in round 4 it was held at 242, saw an 'activity over' while replaying, and returned live; in round 5 it
+        # was held at 1964 and the round ended. Round 5's away range starts at 1964, never at round 4's 242.
+        rng = [dict(session='s', match=m, history_branch='initial', source_round=1, first=1, last=10, peers=['a', 'b', 'c']) for m in ('4', '5')]
+        live = {p: [dict(live_row(t, p), match=m) for m in ('4', '5') for t in range(1, 11)] for p in ('a', 'b')}
+        live['c'] = [dict(live_row(t, 'c'), match='4') for t in range(1, 11)] + [dict(live_row(t, 'c'), match='5') for t in range(1, 7)]
+        n = chr(10)
+        log = (n.join(['[net-lockstep] start round=4 frame=1 local_peer=2', '[net-lockstep] hold of this seat at 3 revision=1',
+                       '[net-match-service-e2e] activity over at frame 3: no full-state sample follows', '[net-match] rejoin phase TailReplay -> Active',
+                       '[net-lockstep] start round=5 frame=1 local_peer=2', '[net-lockstep] hold of this seat at 7 revision=2',
+                       '[net-match-service-e2e] activity over at frame 10: no full-state sample follows']))
+        away = cross_report.held_away_ranges(live, rng, {'c': [log]})
+        self.assertEqual(away, {('c', ('s', '5', 'initial', 1)): (7, 10)})
+
+
+class AbandonedTicks(unittest.TestCase):
+    def test_the_engines_retraction_voids_the_rows_before_it(self):
+        rows = [live_row(t, 'c') for t in range(1, 7)] + [dict(abandon_from=5, round=None)] + [live_row(9, 'c')]
+        kept = cross_report.void_abandoned(rows)
+        self.assertEqual([r['tick'] for r in kept], [1, 2, 3, 4, 9])
+        # A retraction names its round: another round's rows stay.
+        other = [dict(live_row(t, 'c'), round=7) for t in range(5, 8)] + [dict(abandon_from=5, round=8)]
+        self.assertEqual(len(cross_report.void_abandoned(other)), 3)
+
