@@ -8139,6 +8139,52 @@ namespace RTE {
 		return true;
 	}
 
+	// l4p-40/42: a seat coming back while the host formed its next round knocked on a wire the forming round's coordinator owned with no
+	// reader for the session's traffic; its handshake was dropped and the returner timed out. That traffic now reaches the session.
+	bool TestASeatKnockingWhileTheRoundFormsIsAnswered(std::string* error) {
+		const uint16_t port = 43231;
+		LoopbackTransport hostTransport, clientTransport;
+		NetSession host, client;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 2;
+		hostConfig.heartbeatIntervalMs = 25;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "forming-round-session-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Returner";
+		++clientConfig.localNonce;
+		if (!host.StartHost(hostTransport, hostConfig, error)) return false;
+		// The forming round's coordinator owns the wire: every event reaches the host through it.
+		NetLockstepCoordinator coordinator;
+		coordinator.m_State = NetLockstepState::WaitingForStart;
+		coordinator.m_RelayHost = true;
+		NetMatchRunner runner;
+		runner.CarrySessionTraffic(coordinator);
+		if (!client.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+		for (uint64_t now = 0; now <= 3000 && !client.IsReady(); now += 10) {
+			client.Tick(now);
+			for (const NetTransportEvent& event: hostTransport.PollEvents()) coordinator.HandleEvent(event, now);
+			runner.DeliverSessionTraffic(host, now);
+			host.Tick(now, false);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (!client.IsReady() || host.GetReadyPeerCount() != 1) {
+			*error = std::string("a seat knocking while the round formed was not answered: client=") + NetSession::StateName(client.GetState()) +
+			         " host_ready_peers=" + std::to_string(host.GetReadyPeerCount()) + " host_received=" + std::to_string(host.GetStats().receivedMessages);
+			return false;
+		}
+		std::cout << "PASS a_seat_knocking_while_the_round_forms_is_answered" << std::endl;
+		return true;
+	}
+
 	// l4p-38: the host's session timed out a returner's catch-up link after 5001 ms of 'silence' while a catch-up report came over it every
 	// second. Lobby traffic on a link the session admitted is that link heard.
 	bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error) {
@@ -15233,6 +15279,7 @@ namespace RTE {
 		if (!chatCarryError.empty()) return fail(chatCarryError);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestLobbyTrafficKeepsAHostLinkAlive(&error)) return fail(error);
+		if (!TestASeatKnockingWhileTheRoundFormsIsAnswered(&error)) return fail(error);
 		if (!TestServiceKick(&error)) return fail(error);
 		if (!TestServiceKickRejoin(&error)) return fail(error);
 		if (!TestTheGoodbyeReachesAHandshakingReturner(&error)) return fail(error);

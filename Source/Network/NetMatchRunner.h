@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -224,6 +225,13 @@ namespace RTE {
 		static std::vector<uint8_t> SettledRoundMembers(bool lobbyAgreed, const std::vector<uint8_t>& formed, const NetMatchConfig& agreed);
 		/// The setup error of a client whose seat the agreed round starts held: it takes the round through the held rejoin, not a start.
 		static constexpr const char* c_SeatStartsHeld = "this seat starts the round held";
+		/// From a round's formation its coordinator owns the wire: the session's traffic on it is queued here, in order and bounded,
+		/// until a reader takes it - the setup worker while it waits for the round, the service once it takes the round over.
+		void CarrySessionTraffic(NetLockstepCoordinator& coordinator);
+		/// Hands the queued session traffic to the session, oldest first.
+		void DeliverSessionTraffic(NetSession& session, uint64_t nowMs);
+		/// The queued session traffic, oldest first, for the reader that takes the round over.
+		std::vector<NetTransportEvent> TakeSessionTraffic();
 		/// The survivors to hand SetRematchRoster, from what its own round saw. The deriving peer (localPeerId) is in the lobby it derives
 		/// for, so its own seat survives even when the round ended with it held.
 		static std::vector<uint8_t> DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats, uint8_t localPeerId = 0);
@@ -245,7 +253,7 @@ namespace RTE {
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
 		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error, std::vector<NetTransportEvent> pendingEvents = {});
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
-		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error);
+		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session = nullptr);
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
 		// Lockstep peer ids are 1-based and dense; the session assigns the host id 0 and clients 1.. .
@@ -264,6 +272,8 @@ namespace RTE {
 		bool m_HostLostDuringSetup = false;
 		bool m_HostOptionsRefused = false;
 		std::vector<uint8_t> m_RematchRoster; //!< Client: the peers its last round still had; consumed by the next rematch.
+		std::deque<NetTransportEvent> m_SessionTraffic; //!< Session traffic the coordinator owned the wire for, waiting for a reader.
+		uint32_t m_SessionTrafficDropped = 0; //!< Events past the queue's bound, named once.
 		NetMatchConfig m_RematchConfig;       //!< This peer's own derivation of the rematch roster.
 		uint8_t m_RematchDerivedPeerId = 0;   //!< Client: its own seat in m_RematchConfig, before the host reseats it.
 		bool m_RematchRound = false;

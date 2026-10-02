@@ -138,7 +138,7 @@ namespace RTE {
 		}
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
-		if (!StartLockstep(transport, session, coordinator, config, error) || !WaitForLockstepRunning(coordinator, config.lockstepWaitMs, error)) {
+		if (!StartLockstep(transport, session, coordinator, config, error) || !WaitForLockstepRunning(coordinator, config.lockstepWaitMs, error, &session)) {
 			return false;
 		}
 		m_State = NetMatchRuntimeState::Running;
@@ -478,7 +478,7 @@ namespace RTE {
 		}
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
-		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error)) {
+		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error, &session)) {
 			return false;
 		}
 		m_SnapshotProviderPeerId = 0;
@@ -740,6 +740,33 @@ namespace RTE {
 		}
 	}
 
+	void NetMatchRunner::CarrySessionTraffic(NetLockstepCoordinator& coordinator) {
+		coordinator.SetSessionEventSink([this](const NetTransportEvent& event) {
+			// The lobby has ended: its late packets are not the session's.
+			if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) return;
+			if (m_SessionTraffic.size() >= 512) {
+				if (m_SessionTrafficDropped++ == 0)
+					DiagnosticLine() << "[net-match] the session traffic queue is full at 512 events: dropping from transport peer " << event.peerId << std::endl;
+				return;
+			}
+			m_SessionTraffic.push_back(event);
+		});
+	}
+
+	void NetMatchRunner::DeliverSessionTraffic(NetSession& session, uint64_t nowMs) {
+		while (!m_SessionTraffic.empty()) {
+			const NetTransportEvent event = std::move(m_SessionTraffic.front());
+			m_SessionTraffic.pop_front();
+			session.InjectEvent(event, nowMs);
+		}
+	}
+
+	std::vector<NetTransportEvent> NetMatchRunner::TakeSessionTraffic() {
+		std::vector<NetTransportEvent> events(std::make_move_iterator(m_SessionTraffic.begin()), std::make_move_iterator(m_SessionTraffic.end()));
+		m_SessionTraffic.clear();
+		return events;
+	}
+
 	bool NetMatchRunner::StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
 		NetLockstepConfig lockstepConfig;
 		lockstepConfig.sessionId = session.GetSessionId();
@@ -830,6 +857,8 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= lockstepConfig.peerCount; ++peer)
 				if (peer == lockstepConfig.localPeerId || !lockstepConfig.initialPeerLeaves.contains(peer)) lockstepConfig.activePeerIds.push_back(peer);
 		}
+		// A seat knocking to come back while the round forms is the session's traffic, never dropped for want of a reader.
+		CarrySessionTraffic(coordinator);
 		if (!coordinator.Start(transport, lockstepConfig, error)) {
 			SetFailed(error ? *error : "lockstep start failed");
 			return false;
@@ -837,7 +866,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetMatchRunner::WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error) {
+	bool NetMatchRunner::WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session) {
 		// The handshake and the round must feed the coordinator ONE clock, or its per-peer liveness
 		// and retransmit timers see time run backwards at the handoff into the sim loop.
 		const uint64_t startMs = NetLockstepNowMs();
@@ -849,6 +878,7 @@ namespace RTE {
 			}
 			const uint64_t nowMs = NetLockstepNowMs();
 			coordinator.Tick(nowMs);
+			if (session) DeliverSessionTraffic(*session, m_Config.nowMs ? m_Config.nowMs() : session->GetClockMs());
 			if (coordinator.IsFailed() || coordinator.IsStopped()) {
 				m_HostLostDuringSetup = !m_Config.host && coordinator.GetStats().timeoutReason.starts_with("PeerDisconnected:");
 				SetFailed(coordinator.GetStats().timeoutReason);
