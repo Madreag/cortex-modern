@@ -135,11 +135,14 @@ def reduce_recoveries(schedule, events, now_ms):
         start_upper=min((row.get('upper_wall_ms',row['wall_ms']) for row in starts),default=None)
         lower=max(0,terminal.get('lower_wall_ms',terminal['wall_ms'])-start_upper) if terminal and start_upper is not None else None
         domains={row.get('clock_domain','legacy_native') for row in [*starts,*([terminal] if terminal else [])]}
+        # A seat cannot begin recovering before its scheduled fault ends: the deadline runs from the fault's end (ruling t).
+        after_end = duration - (case.get('duration_ms') or 0) if duration is not None else None
         result=dict(case)
         result.update(phases=rows, scheduled_duration_ms=case.get('duration_ms'), duration_ms=duration,
                       duration_lower_ms=lower,duration_upper_ms=duration,clock_domains=sorted(domains),
+                      recovery_after_fault_end_ms=after_end,
                       censored=terminal is None, outcome=terminal['phase'] if terminal else None,
-                      passed=terminal is not None and len(domains)==1 and 0 <= duration <= case['deadline_ms'])
+                      passed=terminal is not None and len(domains)==1 and 0 <= duration and after_end <= case['deadline_ms'])
         results.append(result)
     return results
 

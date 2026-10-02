@@ -144,7 +144,16 @@ def fault_window_hold(hold, windows, clock):
     return next((w['id'] for w in windows if w['peer'] == hold.get('peer') and w['start_ms'] <= at <= w['end_ms']), None)
 
 
+DRIVER_STOPS = ('stopped without deletion',)
+
+
+def driver_stop(findings):
+    """The reason the driver itself stopped the run (its scratch guard), if it did: such a run is reported STOPPED, never judged."""
+    return next((f['reason'] for f in findings if f.get('kind') == 'driver' and any(stop in f.get('reason', '') for stop in DRIVER_STOPS)), None)
+
+
 def attempt_label(result):
+    if result.get('stopped'): return f"STOPPED ({result['stopped']}); NOT JUDGED"
     if result.get('v1_passed'): return 'V1 PASS'
     if 'v1_passed' not in result: return 'V1 NOT GRADED'
     if result.get('mixed_builds'): return 'PREFLIGHT RED (mixed build); FULL GATE VOID'
@@ -455,6 +464,29 @@ def held_away_ranges(live, ranges, logs):
     return away
 
 
+PROPOSE_HOLD = re.compile(r'\[net-lockstep\] propose hold peer=(\d+) next_frame=(\d+)')
+HEARD_THROUGH = re.compile(r' heard_through=(\d+)')
+HOLD_CAUSE = re.compile(r' cause=(\w+)')
+HOLD_LINE = re.compile(r'\[net-match\] hold peer=(\d+) frame=(\d+)')
+# The A1 rules: a seat whose machine or stream cannot keep the round's pace is held, the design (ruling s).
+DESIGN_CAUSES = ('capacity', 'late_stream', 'quiet')
+
+
+def hold_causes(host_text):
+    """The cause the host named for each hold it authored, by (round, seat, frame). A log from before the cause field names a late stream
+    by its own arrival fields: the host had heard nothing from the seat past the frame before."""
+    causes, pending, current = {}, {}, None
+    for line in host_text.splitlines():
+        if (found := ROUND_START.search(line)): current = found.group(1)
+        elif (found := PROPOSE_HOLD.search(line)):
+            heard, named = HEARD_THROUGH.search(line), HOLD_CAUSE.search(line)
+            peer, frame, heard, named = int(found.group(1)), int(found.group(2)), heard and heard.group(1), named and named.group(1)
+            pending[peer] = named or ('late_stream' if heard is not None and int(heard) < frame else None)
+        elif (found := HOLD_LINE.search(line)) and int(found.group(1)) in pending:
+            causes[(current, int(found.group(1)), int(found.group(2)))] = pending.pop(int(found.group(1)))
+    return causes
+
+
 def void_abandoned(rows):
     """The engine's own retraction: an {abandon_from: N, round: R} record voids the rows of round R from N its seat wrote before it."""
     kept = []
@@ -672,6 +704,7 @@ def build_report(root):
         recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
     clock = host_clock(host_rows)
+    causes = hold_causes(''.join(line for fragment in peers[manifest['host']]['fragments'] for _, line in read_log(root / fragment / 'engine/stdout.log')))
     windows = fault_windows(manifest['faults'], fault_receipts, clock)
     for p in peers.values():
         for hold in p['holds']:
@@ -680,7 +713,10 @@ def build_report(root):
             if not hold['scheduled_recovery_id'] and (window := fault_window_hold(hold, windows, clock)):
                 hold.update(scheduled_recovery_id=window, classification='scheduled-fault',
                             reason='The held seat is the faulted one and the hold falls inside its scheduled fault window, on the host clock.')
-    unscheduled_holds=sum(not h['scheduled_recovery_id'] for p in peers.values() for h in p['holds'])
+            if not hold['scheduled_recovery_id'] and (cause := causes.get((str(hold.get('round')), hold['peer'], hold['tick']))) in DESIGN_CAUSES:
+                hold.update(design_cause=cause, classification='capacity (design)',
+                            reason='The host held the seat under its A1 rule (' + cause + '): the seat could not keep the round pace.')
+    unscheduled_holds=sum(not h['scheduled_recovery_id'] and not h.get('design_cause') for p in peers.values() for h in p['holds'])
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
                   preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings') and not mixed_builds,
                   full_history=comparison['passed'] and not missing_boundaries, zero_desync=comparison['unequal_keys'] == 0 and bool(ranges),
@@ -742,7 +778,8 @@ def build_report(root):
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
                   native_recovery_records=native_recovery_records,native_fault_effects=effects,unscheduled_holds=unscheduled_holds,
-                  findings=findings, triage=load(root/'triage.json',[]), requirements=requirements(manifest, comparison, peers))
+                  findings=findings, triage=load(root/'triage.json',[]), requirements=requirements(manifest, comparison, peers),
+                  stopped=driver_stop(findings))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
     write_index(root.parent)
