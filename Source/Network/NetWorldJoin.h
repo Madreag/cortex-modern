@@ -458,6 +458,7 @@ namespace RTE {
 		std::set<uint64_t> droppedForeignRounds; //!< Rounds whose stray tail chunks this catch-up dropped, each named once.
 		std::optional<NetWorldHandover> handover; //!< Where the round it replays changed hands, once its successor said so.
 		bool handoverCrossed = false;             //!< The replay runs under the successor's authority from the handover on.
+		bool handedToRound = false;               //!< The replay gave the sim to the live round at its activation; nothing replays after it.
 	};
 
 	/// The catch-up report a joiner sends: what its sim has applied, never the host's frame.

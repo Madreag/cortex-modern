@@ -1080,6 +1080,18 @@ namespace RTE {
 				            " appliedThrough " + std::to_string(catchUp.appliedThrough) + ", runner active " +
 				            std::string(ScenarioRunner::WorldCatchUpActive() ? "true" : "false"));
 			}
+			// l4p-43: a returner's round stopped again in the pass that handed it the sim, and its replay ran on for the rest of the
+			// round with nothing applying the round's later holds and returns. A replay that handed over ends whether or not the round still runs.
+			NetWorldCatchUpClient handedOver;
+			handedOver.active = true;
+			handedOver.privateMatch = true;
+			handedOver.appliedThrough = e - 1;
+			handedOver.activationTick = e;
+			handedOver.handedToRound = true;
+			if (!NetMatchService::ReleaseWorldCatchUpOnceRunning(false, handedOver) || handedOver.active) {
+				return Fail("world-catch-up-outlived-its-round: a replay that handed the sim to its round at " + std::to_string(e) +
+				            " stayed active after the round stopped (client active " + std::string(handedOver.active ? "true" : "false") + ")");
+			}
 			// With the catch-up gone the stop gate owns the window again: the round is what drives ticks.
 			if (!ScenarioRunner::LockstepStopHoldsControllers() || !ScenarioRunner::OfflineCommandsDriveTick()) {
 				return Fail("world-catch-up-outlived-its-round: after the release the stop gate answered " +
