@@ -7290,6 +7290,25 @@ static std::string ResyncSaveName() {
 			for (const NetPeerId peer: m_PendingTrafficNotes) m_Session->NotePeerTraffic(peer, heardMs);
 			m_PendingTrafficNotes.clear();
 		}
+		// A link the coordinator heard an authenticated lockstep packet on is heard by the host's session as well.
+		if (m_IsHost && m_Coordinator) {
+			std::vector<NetPeerId> heard;
+			{
+				NetLockstepPlaneGuard plane;
+				const auto& peers = m_Coordinator->GetStats().peers;
+				for (const auto& [peer, transport]: m_Coordinator->RemoteTransports()) {
+					const auto stats = peers.find(peer);
+					if (stats == peers.end() || stats->second.lastHeardMs == 0) continue;
+					uint64_t& seen = m_CoordinatorHeardMs[peer];
+					if (stats->second.lastHeardMs != seen) {
+						seen = stats->second.lastHeardMs;
+						heard.push_back(transport);
+					}
+				}
+			}
+			const uint64_t heardMs = AdmissionNowMs();
+			for (const NetPeerId transport: heard) m_Session->NotePeerTraffic(transport, heardMs);
+		}
 		if (m_PendingSessionEvents.empty()) {
 			return;
 		}
@@ -10162,13 +10181,31 @@ static std::string ResyncSaveName() {
 		return m_RematchReturnOwed;
 	}
 
+	bool NetMatchService::HeldRejoinRetriesTheHost(bool lostDuringSetup, bool hasReject, NetRejectReason reason, const std::string& rejectSummary) {
+		return !lostDuringSetup && hasReject && reason == NetRejectReason::Timeout && rejectSummary == "client hello timeout";
+	}
+
 	bool NetMatchService::BeginHeldRejoinOnNextHost(std::string* error) {
+		uint32_t retryInMs = 0;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			// Only a host that is gone sends the seat on; a refusal from a live host is that host's answer.
-			const bool hostGone = !m_IsHost && ((m_Runner && m_Runner->DidLoseHostDuringSetup()) || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
-			// A host that answered the round is over is not gone: the seat completes on what it holds.
-			if (!hostGone || NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
+			const bool lostDuringSetup = m_Runner && m_Runner->DidLoseHostDuringSetup();
+			if (!m_IsHost && m_Session && HeldRejoinRetriesTheHost(lostDuringSetup, m_Session->HasReject(), m_Session->HasReject() ? m_Session->GetRejectReason() : NetRejectReason::InternalError,
+			                                                       m_Session->GetRejectSummary())) {
+				m_HeldRejoinHostRetryMs = std::min<uint32_t>(2000, std::max<uint32_t>(250, m_HeldRejoinHostRetryMs * 2));
+				retryInMs = m_HeldRejoinHostRetryMs;
+				m_StatusText = "Could not reach the host - retrying";
+			} else {
+				// Only a host that is gone sends the seat on; a refusal from a live host is that host's answer.
+				const bool hostGone = !m_IsHost && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
+				// A host that answered the round is over is not gone: the seat completes on what it holds.
+				if (!hostGone || NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
+			}
+		}
+		if (retryInMs != 0) {
+			System::PrintDiagnosticLine("[net-match] held rejoin: the host did not answer; asking the host again in " + std::to_string(retryInMs) + " ms");
+			std::this_thread::sleep_for(std::chrono::milliseconds(retryInMs));
+			return BeginTicketRejoin(error);
 		}
 		while (!m_HeldRejoinRoutes.empty()) {
 			const NetMatchServiceRequest route = m_HeldRejoinRoutes.front();

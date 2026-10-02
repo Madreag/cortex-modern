@@ -7229,6 +7229,33 @@ namespace RTE {
 
 	// A client whose link to the host dropped in the rematch's lobby ended its match (the four-box run: 'rematch setup failed:
 	// Connection dropped', exit 1) while the host played the round with its seat held; a lobby drop returns as a match drop does.
+	// l4p-40: a held rejoin to a live host whose hello went unanswered took the host for gone, dialled the peers that host nothing in a
+	// loop and ended its match. A host that does not answer one dial is asked again.
+	bool TestAHeldRejoinAsksAnUnansweringHostAgain(std::string* error) {
+		struct Case {
+			const char* name;
+			bool lostDuringSetup, hasReject;
+			NetRejectReason reason;
+			const char* summary;
+			bool retriesHost;
+		};
+		const Case cases[] = {
+		    {"a hello the host never answered", false, true, NetRejectReason::Timeout, "client hello timeout", true},
+		    {"a session that timed out after the host accepted it", false, true, NetRejectReason::Timeout, "session timeout", false},
+		    {"a host lost while the rejoin was setting up", true, true, NetRejectReason::Timeout, "client hello timeout", false},
+		    {"the host's goodbye", false, true, NetRejectReason::SessionEnded, "the host ended the session", false},
+		    {"a link with no refusal", false, false, NetRejectReason::InternalError, "", false},
+		};
+		for (const Case& c: cases) {
+			if (NetMatchService::HeldRejoinRetriesTheHost(c.lostDuringSetup, c.hasReject, c.reason, c.summary) != c.retriesHost) {
+				*error = std::string("a held rejoin after ") + c.name + (c.retriesHost ? " took the host for gone instead of asking it again" : " asked the host again");
+				return false;
+			}
+		}
+		std::cout << "PASS a_held_rejoin_asks_an_unanswering_host_again cases=" << sizeof(cases) / sizeof(cases[0]) << std::endl;
+		return true;
+	}
+
 	bool TestARematchLobbyDropReturnsThroughTheRejoin(std::string* error) {
 		struct Case {
 			const char* name;
@@ -8177,7 +8204,19 @@ namespace RTE {
 			*error = "the host's session timed out a link that carried lobby traffic every 100 ms";
 			return false;
 		}
-		std::cout << "PASS lobby_traffic_keeps_a_host_link_alive" << std::endl;
+		// l4p-41: the host timed out a lagged client's main link while the coordinator was hearing its frames. Lockstep traffic alone now.
+		for (int step = 0; step < 30; ++step) {
+			now += 100;
+			hostTransport.AdvanceTimeMs(100);
+			coordinator.m_Stats.peers[2].lastHeardMs = now;
+			service.DrainPendingSessionEventsLocked(false);
+			service.m_Session->Tick(now);
+		}
+		if (service.m_Session->GetReadyPeerCount() != 1) {
+			*error = "the host's session timed out a link the coordinator heard lockstep traffic on every 100 ms";
+			return false;
+		}
+		std::cout << "PASS lobby_traffic_keeps_a_host_link_alive lockstep_traffic=1" << std::endl;
 		return true;
 	}
 
@@ -15159,6 +15198,7 @@ namespace RTE {
 		if (!TestACaughtUpSeatTakesItsRoundsRecordOnce(&error)) return fail(error);
 		if (!TestARematchKeepsAnAbsentPlayersSeatHeld(&error)) return fail(error);
 		if (!TestARematchLobbyDropReturnsThroughTheRejoin(&error)) return fail(error);
+		if (!TestAHeldRejoinAsksAnUnansweringHostAgain(&error)) return fail(error);
 		if (!TestARoundStartsDelayCoversTheStartWork(&error)) return fail(error);
 		if (!TestARematchStartsWithoutTheEndedRoundsCatchUp(&error)) return fail(error);
 		if (!TestALobbyDropsAnAbandonedTransfersTail(&error)) return fail(error);

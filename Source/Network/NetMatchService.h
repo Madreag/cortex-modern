@@ -668,6 +668,9 @@ namespace RTE {
 		/// without the host's goodbye, so the host plays the next round with the seat held for it. A protocol failure is not a drop.
 		/// startNeverCame: the round's lockstep start timed out, which a link the host dropped looks like even while this side still reads ready.
 		/// heldAtStart: the agreed round starts this seat held, so its player returns through the rejoin while the round runs.
+		/// A held rejoin whose host never answered its handshake asks that host again: a host that does not answer one dial is not shown
+		/// gone, and the peers that host nothing are never dialled for it.
+		static bool HeldRejoinRetriesTheHost(bool lostDuringSetup, bool hasReject, NetRejectReason reason, const std::string& rejectSummary);
 		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost,
 		                                            bool startNeverCame, bool heldAtStart);
 		/// Client: the last rematch setup lost its link to the host and the seat is owed its return to the round the host plays.
@@ -1600,6 +1603,7 @@ namespace RTE {
 		NetSession* m_ChatSession = nullptr;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
 		std::vector<NetPeerId> m_PendingTrafficNotes; //!< Game-thread only: links whose lobby traffic the host's session counts as heard.
+		std::map<uint8_t, uint64_t> m_CoordinatorHeardMs; //!< The coordinator's last-heard stamp per seat the host's session last counted.
 		//!< Coordinator counters a resync would otherwise zero, accumulated at every teardown.
 		struct LockstepTotals {
 			uint64_t peerFramesWaived = 0;
@@ -1692,6 +1696,7 @@ namespace RTE {
 		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
+		uint32_t m_HeldRejoinHostRetryMs = 0; //!< The backoff before the next dial of a host that did not answer a held rejoin.
 		uint64_t m_HeldRejoinPriorInput = 0;
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
