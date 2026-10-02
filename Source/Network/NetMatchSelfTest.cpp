@@ -8112,6 +8112,75 @@ namespace RTE {
 		return true;
 	}
 
+	// l4p-38: the host's session timed out a returner's catch-up link after 5001 ms of 'silence' while a catch-up report came over it every
+	// second. Lobby traffic on a link the session admitted is that link heard.
+	bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error) {
+		const uint16_t port = 43227;
+		LoopbackTransport hostTransport, clientTransport;
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		service.m_Session = std::make_unique<NetSession>();
+		NetSession client;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 1;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 1000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "lobby-traffic-liveness-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Client";
+		++clientConfig.localNonce;
+		if (!service.m_Session->StartHost(hostTransport, hostConfig, error) || !client.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+		uint64_t now = 0;
+		for (; now <= 2000 && service.m_Session->GetReadyPeerCount() != 1; now += 10) {
+			service.m_Session->Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (service.m_Session->GetReadyPeerCount() != 1) {
+			*error = "the liveness fixture never seated the client on the host session";
+			return false;
+		}
+		const NetPeerId link = service.m_Session->GetReadyPeers().front().transportPeerId;
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		NetLockstepCoordinator& coordinator = *service.m_Coordinator;
+		coordinator.m_RelayHost = true;
+		coordinator.m_State = NetLockstepState::Running;
+		coordinator.m_RemotePeerIds = {2};
+		coordinator.m_RemoteTransports[2] = link;
+		coordinator.SetSeatStateSource(&FencedSeatState, nullptr);
+		service.AttachCoordinatorSessionSink();
+		std::vector<uint8_t> report;
+		if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyReady{2, true}}, report)) {
+			*error = "the liveness fixture could not encode a lobby packet";
+			return false;
+		}
+		// The client sends no heartbeat from here: only lobby traffic arrives on its link, for three times the timeout.
+		for (int step = 0; step < 30; ++step) {
+			now += 100;
+			hostTransport.AdvanceTimeMs(100);
+			coordinator.HandleEvent({NetTransportEventType::PacketReceived, link, NetTransportLane::ControlReliable, report, {}}, now);
+			service.DrainPendingSessionEventsLocked(false);
+			service.m_Session->Tick(now);
+		}
+		if (service.m_Session->GetReadyPeerCount() != 1) {
+			*error = "the host's session timed out a link that carried lobby traffic every 100 ms";
+			return false;
+		}
+		std::cout << "PASS lobby_traffic_keeps_a_host_link_alive" << std::endl;
+		return true;
+	}
+
 	/// The round's goodbye reaches a returning seat still in its handshake, not only a seated one: one that is mid-handshake
 	/// when the host leaves reads the round ending instead of a lost link, and completes rather than failing.
 	bool TestTheGoodbyeReachesAHandshakingReturner(std::string* error) {
@@ -15123,6 +15192,7 @@ namespace RTE {
 		if (!chatRaceError.empty()) return fail(chatRaceError);
 		if (!chatCarryError.empty()) return fail(chatCarryError);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
+		if (!TestLobbyTrafficKeepsAHostLinkAlive(&error)) return fail(error);
 		if (!TestServiceKick(&error)) return fail(error);
 		if (!TestServiceKickRejoin(&error)) return fail(error);
 		if (!TestTheGoodbyeReachesAHandshakingReturner(&error)) return fail(error);
