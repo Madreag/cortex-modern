@@ -461,6 +461,8 @@ namespace RTE {
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
 		/// The host's seat roster: the one record of whether each seat's holder is away, why and since when.
 		const NetSeatRoster& GetRoster() const { return m_Roster; }
+		/// The roster seat a lockstep peer plays, read off the same binding the coordinator asks by; null when none.
+		const NetRosterSeat* RosterSeatOfPeer(uint8_t lockstepPeerId) const;
 		/// The seat table as the plane holds it now, in table order.
 		std::vector<NetH4Seat> GetSeatTable() const;
 		std::vector<uint8_t> ExportMigrationState() const;
