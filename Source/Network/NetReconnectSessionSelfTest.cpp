@@ -1577,6 +1577,12 @@ namespace RTE {
 				player.connected = false;
 				wire.Remove(player.connection);
 				player.client.NotifyAmbiguousLoss();
+				// A drop on either side of the round's end leaves the seat held for its player (A12).
+				const std::vector<NetH4SeatStatus> statuses = wire.host.GetSeatStatuses();
+				const auto held = std::find_if(statuses.begin(), statuses.end(), [](const NetH4SeatStatus& status) { return status.dropped; });
+				if (held == statuses.end() || !wire.host.IsSeatHeldForReclaim(held->lockstepPeerId)) {
+					return Fail(std::string(dropBeforeEnd ? "a drop before" : "a drop after") + " the round's end left the seat not held for its player");
+				}
 				if (censusCalls != (dropBeforeEnd ? 1 : 0) || wire.host.GetLedger().Size() != 0 || !player.store.HasRecord()) {
 					return Fail("ended disconnect census=" + std::to_string(censusCalls) + " ledger=" + std::to_string(wire.host.GetLedger().Size()) +
 					            " record=" + (player.store.HasRecord() ? "kept" : "lost"));
