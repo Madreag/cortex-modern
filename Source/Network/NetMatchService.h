@@ -1222,6 +1222,7 @@ namespace RTE {
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
+		friend bool TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestServiceKickRejoin(std::string* error);
 		friend bool TestStartingKickMarshals(std::string* error);
