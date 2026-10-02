@@ -2211,6 +2211,25 @@ namespace RTE {
 		return nullptr;
 	}
 
+	void NetReconnectHost::FormRematch() {
+		// Not every way a round ends tells the plane; a rematch forming means it has.
+		if (m_LiveMatch || m_Roster.stage == NetRosterStage::Running) SetMatchEnded();
+		if (m_Roster.stage == NetRosterStage::Ended || m_Roster.stage == NetRosterStage::Lobby) ApplyStageEvent(NetRosterEventKind::RematchFormed);
+	}
+
+	std::vector<uint8_t> NetReconnectHost::StartMembers() const {
+		std::vector<uint8_t> members;
+		if (m_Roster.stage != NetRosterStage::Starting) return members;
+		for (const SeatState& seat: m_Seats) {
+			if (seat.seat.cpu) continue;
+			const uint8_t id = RosterIdOf(seat.seat.stableSeat);
+			if (seat.seat.local || id == m_Roster.hostSeat || m_Roster.StartWaitsOn(id)) members.push_back(SimIdentityOfSeat(seat.seat).peerId);
+		}
+		std::sort(members.begin(), members.end());
+		members.erase(std::unique(members.begin(), members.end()), members.end());
+		return members;
+	}
+
 	bool NetReconnectHost::IsSeatHeldForReclaim(uint8_t lockstepPeerId) const {
 		// The coordinator asks by the id it runs the sim on, so the answer is read off the same binding.
 		return std::any_of(m_Seats.begin(), m_Seats.end(), [&](const SeatState& seat) {

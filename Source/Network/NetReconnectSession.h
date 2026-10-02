@@ -463,6 +463,12 @@ namespace RTE {
 		const NetSeatRoster& GetRoster() const { return m_Roster; }
 		/// The roster seat a lockstep peer plays, read off the same binding the coordinator asks by; null when none.
 		const NetRosterSeat* RosterSeatOfPeer(uint8_t lockstepPeerId) const;
+		/// A rematch forms in its lobby: the round before it is over, its present seats go to the start and the seats whose players
+		/// are away or that the host opened start held.
+		void FormRematch();
+		/// The lockstep peers a forming round's start waits on - the roster's seats at the start on a live link - and the host's,
+		/// sorted; empty when no round is forming.
+		std::vector<uint8_t> StartMembers() const;
 		/// The seat table as the plane holds it now, in table order.
 		std::vector<NetH4Seat> GetSeatTable() const;
 		std::vector<uint8_t> ExportMigrationState() const;

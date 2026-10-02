@@ -10497,8 +10497,9 @@ namespace RTE {
 	// A kicked seat is an open seat: the roster the lobby publishes must stop naming the member the
 	// host removed, or the row shows a player holding a seat nobody sits in.
 	// rematch=false is a resumed match's lobby: the roster holds its seats from the first start on just the same (A12).
-	bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch) {
-		const uint16_t port = rematch ? 43251 : 43253;
+	// @param kick The host kicks the member instead of its link dropping: from the first start on its seat opens and the AI plays it.
+	bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick) {
+		const uint16_t port = kick ? 43257 : rematch ? 43251 : 43253;
 		LoopbackTransport hostTransport;
 		LoopbackTransport clientTransport;
 		LoopbackTransport stayingTransport;
@@ -10588,9 +10589,10 @@ namespace RTE {
 			         NetReconnectClientStateName(clientTicket.GetState()) + "/" + NetReconnectClientStateName(stayingTicket.GetState());
 			return false;
 		}
-		// The round was played and ended: this is its rematch lobby.
+		// The round was played and ended: this is its rematch lobby, and a rematch forms its round there as the host's runner does.
 		admission.SetLiveMatch(true);
 		admission.SetMatchEnded();
+		if (rematch) admission.FormRematch();
 		NetPeerId seated = c_InvalidNetPeerId;
 		uint8_t kickedPeerId = 0;
 		uint8_t stayingPeerId = 0;
@@ -10627,7 +10629,6 @@ namespace RTE {
 		lobbyConfig.platform = "test";
 		lobbyConfig.autoStart = false;
 		lobbyConfig.assignSeats = rematch; // a rematch assigns the seats; a resumed match's lobby does not
-		lobbyConfig.activePeerCount = 3; // the runner names the rematch's members
 		if (!hostLobby.Start(hostTransport, lobbyConfig, error)) {
 			return false;
 		}
@@ -10652,7 +10653,20 @@ namespace RTE {
 		const uint64_t revisionBefore = hostLobby.GetMatchConfig().configRevision;
 		// l4p-25: the Mac's link dropped by heartbeat timeout in round 5's lobby, its seat was opened and the host waited for its
 		// handover endpoint forever ('waiting at WaitingForConfigAck ... config_sent=0'), so EDITH's 'timed out waiting for lobby start'.
-		hostSession.DisconnectReadyPeer(seated, NetRejectReason::Timeout, "heartbeat timeout");
+		if (kick) {
+			NetModerationSelection selected{};
+			for (const NetH4ModerationSeat& seat: admission.GetModerationView()) {
+				if (seat.lockstepPeerId == kickedPeerId) selected = NetSelectModerationSeat(seat);
+			}
+			NetParticipantRemovalIssue issued;
+			if (admission.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, now, 1'700'000'000'000ULL, matchConfig.sessionId, 1, 10, issued) != NetKickBanResult::Ok) {
+				*error = "the host could not kick the joiner in the rematch lobby";
+				return false;
+			}
+			hostSession.DisconnectReadyPeer(seated, NetRejectReason::ParticipantRemoved, "removed from this session");
+		} else {
+			hostSession.DisconnectReadyPeer(seated, NetRejectReason::Timeout, "heartbeat timeout");
+		}
 		for (const uint64_t until = now + 500; now <= until; now += 10) {
 			hostLobby.Tick(now);
 			clientSession.Tick(now);
@@ -10662,9 +10676,21 @@ namespace RTE {
 			stayingTransport.AdvanceTimeMs(10);
 		}
 		const std::vector<uint8_t>& active = hostLobby.GetMatchConfig().activePeerIds;
+		const std::string members = [&active] {
+			std::string text;
+			for (const uint8_t peer: active) text += (text.empty() ? "" : ",") + std::to_string(peer);
+			return "{" + text + "}";
+		}();
+		// A seat the host opened keeps its number and the AI plays it: its slot reads open and nobody waits for it at the start.
+		if (kick && (slotName(kickedPeerId) != NetMatchConfigUtil::UnseatedSlotName(kickedPeerId, false) || std::find(active.begin(), active.end(), kickedPeerId) != active.end() ||
+		             std::find(active.begin(), active.end(), stayingPeerId) == active.end() || hostLobby.GetMatchConfig().configRevision != revisionBefore + 1)) {
+			*error = "a formed rematch's kicked seat reads '" + slotName(kickedPeerId) + "' with the round's members " + members + " at revision " +
+			         std::to_string(hostLobby.GetMatchConfig().configRevision - revisionBefore) + " past the kick: the round waits for a seat the AI plays";
+			return false;
+		}
 		const bool held = slotName(kickedPeerId) == "Joiner" && std::find(active.begin(), active.end(), kickedPeerId) == active.end() &&
 		                  std::find(active.begin(), active.end(), stayingPeerId) != active.end() && hostLobby.GetMatchConfig().configRevision == revisionBefore + 1;
-		if (!held) {
+		if (!kick && !held) {
 			*error = "a rematch member whose link dropped had its seat named '" + slotName(kickedPeerId) + "' with " + std::to_string(active.size()) +
 			         " active members: the round waits for a player who is not there instead of starting the seat held";
 			return false;
@@ -10676,8 +10702,8 @@ namespace RTE {
 		reack.matchConfigHash = hostLobby.GetMatchConfigHash();
 		hostLobby.HandleConfigAck(reack);
 		if (!hostLobby.AllConfigAcked()) {
-			*error = "the rematch lobby with a held seat has " + std::to_string(hostLobby.m_RemotePeerIds.size() + 1) + " members present against the " +
-			         std::to_string(hostLobby.m_Config.activePeerCount) + " its start waits for: the round never starts";
+			*error = "the rematch lobby with " + std::string(kick ? "an opened" : "a held") + " seat has " + std::to_string(hostLobby.m_RemotePeerIds.size() + 1) +
+			         " members present and the members " + members + " named, and its start still waits: the round never starts";
 			return false;
 		}
 		// l4p-26: the held seat sends no handover endpoint, so the round's migration roster must stand on its members present, as a
@@ -10689,7 +10715,9 @@ namespace RTE {
 			*error = std::string("the rematch lobby with a held seat ") + (hostLobby.IsFailed() ? "failed: " + hostLobby.GetFailureReason() : std::string("waits for the held seat's endpoint"));
 			return false;
 		}
-		std::cout << "[net-match-selftest] PASS " << (rematch ? "a_rematch_lobby_holds_a_dropped_seat" : "a_resumed_match_lobby_holds_a_dropped_seat") << std::endl;
+		std::cout << "[net-match-selftest] PASS "
+		          << (kick ? "a_formed_round_starts_without_a_seat_the_host_opened" : rematch ? "a_rematch_lobby_holds_a_dropped_seat" : "a_resumed_match_lobby_holds_a_dropped_seat")
+		          << " members=" << members << std::endl;
 		return true;
 	}
 
@@ -15388,8 +15416,9 @@ namespace RTE {
 		if (!TestManifestPrimingStopsOnRequest(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
 		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, true)) return fail(error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, false)) return fail("a resumed match's lobby: " + error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, false)) return fail(error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, false, false)) return fail("a resumed match's lobby: " + error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, true)) return fail("a formed rematch's kick: " + error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		std::string stopCancelError, endedAdmissionError, twoIceRoundsError;
 		if (!TestServiceIceRematchPlaysTwoRounds(&twoIceRoundsError)) std::cerr << "[net-match-selftest] FAIL: " << twoIceRoundsError << std::endl;

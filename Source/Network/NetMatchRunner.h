@@ -211,9 +211,10 @@ namespace RTE {
 
 		std::string BuildReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator) const;
 
-		/// Host: a rematch's present members, ascending: the host and every connected peer of the round's seats. Every seat is kept;
-		/// one that is not present starts the round held, its player returning through the rejoin.
-		static std::vector<uint8_t> RematchMembers(uint8_t hostPeerId, uint8_t peerCount, const std::vector<uint8_t>& readyPeerIds);
+		/// Host: a round's members, ascending: the host and each named peer of the round's seats. Every seat is kept; one not named
+		/// starts the round held, its player returning through the rejoin.
+		/// @param presentPeerIds The peers the round's start waits on: the seat roster's, or with no admission plane the ready links.
+		static std::vector<uint8_t> RematchMembers(uint8_t hostPeerId, uint8_t peerCount, const std::vector<uint8_t>& presentPeerIds);
 		/// A round's active members once its lobby has started: a lobby round's are the agreed config's on the host and every client
 		/// alike (none named means every seat), so no peer starts on a member set another does not hash.
 		/// @param lobbyAgreed Whether a lobby agreed the round's config.
