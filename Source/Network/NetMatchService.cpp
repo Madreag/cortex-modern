@@ -10105,6 +10105,8 @@ static std::string ResyncSaveName() {
 		m_HeldRejoinDriving = false;
 		m_HeldRejoinRoutes.clear();
 		m_HeldRejoinPriorInput = 0;
+		// The rejoin is over: its phase, and the ceiling that phase keeps, end with it.
+		SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
 		// The input this seat sent belongs to the round that ended; the new round fences none of it.
 		ScenarioRunner::SetWorldCatchUpPriorInputThrough(0);
 	}

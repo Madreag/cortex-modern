@@ -7163,6 +7163,22 @@ namespace RTE {
 		return true;
 	}
 
+	// l4p-24's Mac: its held rejoin landed in the next round with its session's rejoin phase still ImagePending, and 180 s later
+	// that phase's ceiling closed its session ('rejoin phase ImagePending outlived its ceiling') and the rematch was unavailable.
+	bool TestANextRoundLandingEndsTheRejoinPhase(std::string* error) {
+		NetMatchService service;
+		service.m_Session = std::make_unique<NetSession>();
+		service.m_Session->SetRejoinPhase(NetSession::RejoinPhase::ImagePending);
+		service.EndHeldRejoinInNextRound();
+		if (service.m_Session->GetRejoinPhase() != NetSession::RejoinPhase::Active) {
+			*error = std::string("a seat whose held rejoin landed in the next round kept its rejoin phase ") + NetSession::RejoinPhaseName(service.m_Session->GetRejoinPhase()) +
+			         ", whose ceiling later closes its session";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_next_round_landing_ends_the_rejoin_phase" << std::endl;
+		return true;
+	}
+
 	// A seat still catching up privately when its round ended went to the rematch with that catch-up active, so the next round's
 	// fresh start read as a catch-up launch ('bootstrap checkpoint=4319') and failed ('no world join snapshot to load').
 	bool TestARematchStartsWithoutTheEndedRoundsCatchUp(std::string* error) {
@@ -14894,6 +14910,7 @@ namespace RTE {
 		if (!TestARoundStartsDelayCoversTheStartWork(&error)) return fail(error);
 		if (!TestARematchStartsWithoutTheEndedRoundsCatchUp(&error)) return fail(error);
 		if (!TestALobbyDropsAnAbandonedTransfersTail(&error)) return fail(error);
+		if (!TestANextRoundLandingEndsTheRejoinPhase(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
