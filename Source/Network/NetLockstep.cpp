@@ -5805,7 +5805,7 @@ namespace RTE {
 		}
 	}
 
-	bool NetLockstepCoordinator::ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error, uint64_t fromFrame) {
+	bool NetLockstepCoordinator::ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error, uint64_t fromFrame, const char* cause) {
 		NET_PLANE_CHECK();
 		m_TimingNowMs = nowMs;
 		// The host holds its own seat like any other: its session plane authors the hold while its simulation is away.
@@ -5831,7 +5831,7 @@ namespace RTE {
 		          << " now=" << nowMs << " own_park=" << m_Stats.longestOwnParkMs
 		          << " peer_park=" << m_Stats.peers[peerId].startParkMs << " ready=" << m_ReadyFrames.size()
 		          << " heard_through=" << m_Stats.peers[peerId].highestTargetFrame << " accepted_through=" << m_Stats.peers[peerId].acceptedThroughFrame
-		          << " last_heard_ms=" << m_Stats.peers[peerId].lastProgressMs << std::endl;
+		          << " last_heard_ms=" << m_Stats.peers[peerId].lastProgressMs << " cause=" << cause << std::endl;
 		NetLockstepTiming timing;
 		timing.senderPeerId = m_Config.localPeerId; timing.peerId = peerId;
 		timing.action = NetTimingAction::Hold;
@@ -6205,7 +6205,7 @@ namespace RTE {
 			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": it runs " << published->second
 			                 << " ticks/s against the fastest's " << fastest << "; the AI takes its seat" << std::endl;
 			std::string holdError;
-			if (ProposePeerHold(peer, nowMs, &holdError)) { slowHeld = true; m_SlowMachineHolds.insert(peer); }
+			if (ProposePeerHold(peer, nowMs, &holdError, 0, "capacity")) { slowHeld = true; m_SlowMachineHolds.insert(peer); }
 			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 		}
 		if (slowHeld) return true;
@@ -6218,7 +6218,7 @@ namespace RTE {
 			DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << frame << ": " << rate
 			                 << " ticks/s against " << (1000.0 / m_Config.simTickMs) << "; the AI takes its seat" << std::endl;
 			std::string holdError;
-			if (ProposePeerHold(peer, nowMs, &holdError)) { slowHeld = true; m_SlowMachineHolds.insert(peer); }
+			if (ProposePeerHold(peer, nowMs, &holdError, 0, "capacity")) { slowHeld = true; m_SlowMachineHolds.insert(peer); }
 			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 		}
 		if (slowHeld) return true;
@@ -6341,7 +6341,7 @@ namespace RTE {
 					continue;
 				}
 				std::string holdError;
-				if (ProposePeerHold(peer, nowMs, &holdError)) { held = true; m_SlowMachineHolds.erase(peer); }
+				if (ProposePeerHold(peer, nowMs, &holdError, 0, "late_stream")) { held = true; m_SlowMachineHolds.erase(peer); }
 				else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 			}
 			return held;
@@ -6529,7 +6529,7 @@ namespace RTE {
 		                 << " for the AI" << std::endl;
 		if (m_Config.localPeerId == GetHostPeerId()) {
 			std::string holdError;
-			if (!ProposePeerHold(m_Config.localPeerId, m_TimingNowMs, &holdError, m_LastQueuedTargetFrame + 1)) {
+			if (!ProposePeerHold(m_Config.localPeerId, m_TimingNowMs, &holdError, m_LastQueuedTargetFrame + 1, "own_seat")) {
 				DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(m_Config.localPeerId) << ": " << holdError << std::endl;
 				m_SelfHeld = false;
 			}
@@ -6980,7 +6980,7 @@ namespace RTE {
 					}
 				}
 			}
-			for (uint8_t peer: unresponsive) if (ProposePeerHold(peer, nowMs)) m_SlowMachineHolds.erase(peer);
+			for (uint8_t peer: unresponsive) if (ProposePeerHold(peer, nowMs, nullptr, 0, "timing_ack")) m_SlowMachineHolds.erase(peer);
 		}
 		for (const auto& [revision, decision]: m_TimingDecisions) if (!decision.committed) pending.push_back(revision);
 		for (uint64_t revision: pending) CommitTiming(revision);
@@ -7386,7 +7386,7 @@ namespace RTE {
 			DiagnosticLine() << "[net-lockstep] peer " << static_cast<int>(ack.senderPeerId) << " goes quiet after frame " << ack.highestContiguousFrame << " (reason "
 			                 << (ack.receivedMask & 0xFFU) << ": its machine cannot keep up); the AI takes its seat" << std::endl;
 			std::string holdError;
-			if (ProposePeerHold(ack.senderPeerId, m_TimingNowMs, &holdError, ack.highestContiguousFrame + 1)) m_SlowMachineHolds.insert(ack.senderPeerId);
+			if (ProposePeerHold(ack.senderPeerId, m_TimingNowMs, &holdError, ack.highestContiguousFrame + 1, "quiet")) m_SlowMachineHolds.insert(ack.senderPeerId);
 			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(ack.senderPeerId) << ": " << holdError << std::endl;
 			return;
 		}
@@ -9360,7 +9360,7 @@ namespace RTE {
 		DiagnosticLine() << "[net-lockstep] own seat late at frame " << frame << ": missing_ms=" << (nowMs - m_OwnMissingSinceMs) << " sim_quiet_ms="
 		          << (simTickedMs != 0 && nowMs >= simTickedMs ? nowMs - simTickedMs : 0) << " sent_through=" << SentInputThrough() << " plane=" << m_PlaneTicking << std::endl;
 		std::string holdError;
-		if (!ProposePeerHold(local, nowMs, &holdError)) {
+		if (!ProposePeerHold(local, nowMs, &holdError, 0, "own_seat")) {
 			DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(local) << ": " << holdError << std::endl;
 			return false;
 		}
@@ -11565,7 +11565,7 @@ namespace RTE {
 			if (announced && cleanLeave) m_AnnouncedLeavers.insert(peerId);
 			std::string holdError;
 			m_SlowMachineHolds.erase(peerId);
-			if (!ProposePeerHold(peerId, nowMs, &holdError) && holdError != "the capture park deferred this hold") m_AnnouncedLeavers.erase(peerId);
+			if (!ProposePeerHold(peerId, nowMs, &holdError, 0, "leave") && holdError != "the capture park deferred this hold") m_AnnouncedLeavers.erase(peerId);
 			return;
 		}
 		// A seat that came back from an earlier leave and now leaves again: the later of the two decides, so its return is retired and the
