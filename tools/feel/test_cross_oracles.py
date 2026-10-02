@@ -145,6 +145,21 @@ class HeldSeatAwayRange(unittest.TestCase):
         self.assertTrue(result['passed'])
         self.assertEqual((result['unknown_keys'], result['equal_keys'], result['peers']['c']['away']), (0, 10, 4))
 
+    def test_a_held_seat_abandons_its_ticks_from_its_hold_frame(self):
+        # l4p-21's Mac: it simulated frame 561 before the hold from 561 reached it, then left the round on its record.
+        c_ticks = [live_row(t, 'c') for t in range(1, 6)] + [dict(live_row(6, 'c'), sim_gated='d' * 64)]
+        def judge(log):
+            live = {p: [live_row(t, p) for t in range(1, 11)] for p in ('a', 'b')}
+            live['c'] = c_ticks
+            away = cross_report.held_away_ranges(live, self.RANGE, {'a': [''], 'b': [''], 'c': [log]})
+            return away, cross_report.report.compare_histories(live, self.RANGE, {'controller', 'sim_rng'}, away)
+        away, result = judge('[net-lockstep] hold of this seat at 6 revision=4' + chr(10) + self.LEFT)
+        self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): (6, 10)})
+        self.assertTrue(result['passed'])
+        # Without the seat's own hold line the same differing tick is compared.
+        away, result = judge(self.LEFT)
+        self.assertEqual(result['unequal_keys'], 1)
+
     def test_a_present_seat_missing_keys_stays_unknown(self):
         # No word from the seat that it left: the same missing tail is UNKNOWN.
         away, result = self.judge(range(1, 7), '')
