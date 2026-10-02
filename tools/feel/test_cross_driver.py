@@ -126,6 +126,17 @@ class CrossDriverTests(unittest.TestCase):
                 self.assertEqual(restarted['settings'], local['settings'])
                 self.assertEqual(restarted['render_cap'], 0)
 
+    def test_host_stall_reaches_only_the_host(self):
+        plan = self.plan('--host', 'erol', '--roster', 'four-way', '--host-stall', '900:200')
+        for spec in plan['specs']:
+            stalled = '-net-test-live-stall-each-round' in spec['flags']
+            self.assertEqual(stalled, spec['role'] == 'host', spec['peer'])
+            if stalled: self.assertEqual(spec['flags'][spec['flags'].index('-net-test-live-stall-each-round') + 1], '900:200')
+        for bad in ('0:200', '900:0', '900:25000', 'x'):
+            with self.subTest(bad=bad), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    cross_peers.parse_args(['--lane', 'test-lane', '--host-stall', bad, '--dry-run'])
+
     def test_local_render_cap_refuses_values_the_engine_refuses(self):
         for cap in ('0', '60'):
             self.assertEqual(self.plan('--local-render-cap', cap)['specs'][0]['render_cap'], int(cap))
