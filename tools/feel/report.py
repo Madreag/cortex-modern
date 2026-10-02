@@ -192,6 +192,31 @@ def reduce_memory(samples, *, warmup_s, slope_bytes_per_minute, retained_bytes, 
                 sizes=sizes, instrumentation_growth='N/A without measured allocation records; no subtraction')
 
 
+CENSUS_UPTIME = re.compile(r' uptime_ms=(\d+)')
+CENSUS_PROCESS = re.compile(r' (?:private|resident)_mb=(\d+)')
+CENSUS_INSTRUMENT = re.compile(r' cow: entries=\d+ entry_mb=(\d+) pixels=\d+ retired=\d+ retired_mb=(\d+)')
+
+
+def reduce_memory_census(text, *, warm_slope_mb_per_minute=10):
+    """One process's [mem-census] lines: its memory each minute net of the full-state instrument's own cache, and the slope between
+    minutes. Warm-up is a falling slope that reaches under the bound; a slope that never does, or rises past it again, is a leak."""
+    rows = []
+    for line in text.splitlines():
+        if not line.startswith('[mem-census] '): continue
+        uptime, process, instrument = CENSUS_UPTIME.search(line), CENSUS_PROCESS.search(line), CENSUS_INSTRUMENT.search(line)
+        if uptime and process and instrument:
+            rows.append((int(uptime[1]), int(process[1]), int(instrument[1]) + int(instrument[2])))
+    minutes = {}
+    for uptime, process, instrument in rows: minutes[uptime // 60000] = (uptime, process, instrument)
+    series = [dict(minute=minute, uptime_ms=uptime, process_mb=process, instrument_mb=instrument, net_mb=process - instrument)
+              for minute, (uptime, process, instrument) in sorted(minutes.items())]
+    slopes = [round((b['net_mb'] - a['net_mb']) * 60000 / (b['uptime_ms'] - a['uptime_ms']), 1) for a, b in zip(series, series[1:]) if b['uptime_ms'] > a['uptime_ms']]
+    warm = next((index for index, slope in enumerate(slopes) if slope < warm_slope_mb_per_minute), None)
+    status = 'NOT COVERED' if not slopes else 'PASS' if warm is not None and all(slope < warm_slope_mb_per_minute for slope in slopes[warm:]) else 'FAIL'
+    return dict(status=status, census_lines=len(rows), series=series, slopes_mb_per_minute=slopes, warm_slope_bound=warm_slope_mb_per_minute,
+                warm_up_ends_after_interval=warm)
+
+
 HOLD_OF_THIS_SEAT = re.compile(r'^\[net-lockstep\] hold of this seat at (\d+) ')
 ROUND_START = re.compile(r'^\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+) ')
 SEAT_RECLAIMED = re.compile(r'^\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+) ')

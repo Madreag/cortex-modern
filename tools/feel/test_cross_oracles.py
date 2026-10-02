@@ -301,6 +301,35 @@ class AbandonedTicks(unittest.TestCase):
         other = [dict(live_row(t, 'c'), round=7) for t in range(5, 8)] + [dict(abandon_from=5, round=8)]
         self.assertEqual(len(cross_report.void_abandoned(other)), 3)
 
+class MemorySlope(unittest.TestCase):
+    @staticmethod
+    def census(points):
+        # points: (minute, process_mb, instrument_mb); one census line each.
+        return chr(10).join(f'[mem-census] tick=1800 private_mb={process} threads=90 uptime_ms={minute*60000+500} tick_hashes=0 lua_bytes=1 '
+                            f'actors=4 particles=9 cow: entries=3 entry_mb={instrument} pixels=2 retired=0 retired_mb=0 movable: x=1' for minute, process, instrument in points)
+
+    def test_a_falling_slope_that_reaches_the_bound_is_warm_up(self):
+        from feel import report
+        # l4p-27's Mac shape: +617, +335, +122, +61, then flat.
+        verdict = report.reduce_memory_census(self.census([(1, 2892, 0), (2, 3509, 0), (3, 3844, 0), (4, 3966, 0), (5, 4027, 0), (6, 4030, 0)]))
+        self.assertEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['warm_up_ends_after_interval'], 4)
+
+    def test_a_slope_that_never_falls_is_a_leak(self):
+        from feel import report
+        verdict = report.reduce_memory_census(self.census([(1, 3000, 0), (2, 3060, 0), (3, 3120, 0), (4, 3180, 0)]))
+        self.assertEqual(verdict['status'], 'FAIL'); self.assertEqual(verdict['slopes_mb_per_minute'][-1], 60.0)
+        # Rising again after reaching the bound is growth, not warm-up.
+        again = report.reduce_memory_census(self.census([(1, 3000, 0), (2, 3005, 0), (3, 3060, 0)]))
+        self.assertEqual(again['status'], 'FAIL')
+
+    def test_the_instruments_cache_is_taken_out(self):
+        from feel import report
+        # The process grows exactly as the full-state cache does: no growth of its own.
+        verdict = report.reduce_memory_census(self.census([(1, 3000, 100), (2, 3200, 300), (3, 3400, 500)]))
+        self.assertEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['slopes_mb_per_minute'], [0.0, 0.0])
+        self.assertEqual(report.reduce_memory_census('')['status'], 'NOT COVERED')
+
+
 class CausesDeadlinesStops(unittest.TestCase):
     def test_a_hold_names_its_cause(self):
         n = chr(10)

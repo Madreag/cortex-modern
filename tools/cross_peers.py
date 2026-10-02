@@ -217,6 +217,8 @@ def make_plan(options):
                  '-net-cross-schedule', own + '/faults.json', '-net-cross-host-options', own + '/host-options.json']
         if options.fullstate_every:
             flags += ['-net-fullstate-hash-every', str(options.fullstate_every), '-net-fullstate-dump', own + '/fullstate']
+        if getattr(options, 'memory_census_ticks', 0):
+            flags += ['-memory-census-ticks', str(options.memory_census_ticks)]
         if peer['name'] == host:
             flags += ['-net-host', '-net-replay-out', own + '/match.ccreplay']
             if options.scenario != 'match': flags += ['-net-autosave-seconds', '180']
@@ -236,6 +238,9 @@ def make_plan(options):
             settings={}, roster=options.roster, scene=options.scene,
             initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
             faults=[f for f in faults if f['peer'] == peer['name']], barriers=[b for b in barriers if b['peer']==peer['name']]))
+        if getattr(options, 'keep_fullstate_sections', ''):
+            specs[-1]['keep_fullstate_sections'] = [name for name in options.keep_fullstate_sections.split(',') if name]
+            specs[-1]['env']['CC_TEST_FULLSTATE_DUMP_SECTIONS'] = ','.join(specs[-1]['keep_fullstate_sections'])
         if box['kind'] == 'windows-local':
             specs[-1]['settings'] = dict(options.local_setting)
             if options.local_render_cap is not None:
@@ -725,11 +730,12 @@ def refuse_mixed_build(preflight, box, spec, run):
 
 def run_payload(path):
     from run_sim_test import make_run
-    from feel.records import CaptureSealer, RecoveryLedger, NativeFaultEffects
+    from feel.records import CaptureSealer, RecoveryLedger, NativeFaultEffects, LobbyWatch
     payload = json.loads(Path(path).read_text(encoding='utf-8'))
     root, box = Path(path).parent, payload['box']
     runs, started, completed, readers, progress, fired = {}, {}, set(), {}, {}, set()
     capture_sealers = {}
+    lobby_watches = {}
     effect_readers = {}; effect_rows = {}
     recovery_ledgers={}; clean_reads={}
     specifications = {s['peer']: s for s in payload['specs']}
@@ -762,7 +768,8 @@ def run_payload(path):
             run.start(); started[spec['peer']] = time.monotonic()
             refuse_mixed_build(preflight, box, spec, run)
             readers[spec['peer']] = Tail(Path(spec['own']) / 'events.jsonl')
-            capture_sealers[spec['peer']] = CaptureSealer(spec['own'])
+            capture_sealers[spec['peer']] = CaptureSealer(spec['own'], captures=None if spec.get('keep_fullstate_sections') else 2)
+            lobby_watches[spec['peer']] = LobbyWatch(Path(spec['own'])/'engine/stdout.log')
             effect_readers[spec['peer']]=NativeFaultEffects(Path(spec['own'])/'engine/stdout.log',spec['faults'],spec['incarnation'])
             effect_rows[spec['peer']]=[]
             progress[spec['peer']] = {}
@@ -817,15 +824,17 @@ def run_payload(path):
                         effect_rows[peer]+=effects
                         write_json(Path(spec['own'])/'h4-effects.json',effect_rows[peer])
                     current = progress[peer]
+                    # A lobby-phase drop waits for the rematch lobby, so the host loses the link where the round's seats are settled.
+                    in_lobby = lobby_watches[peer].poll()
                     due = next((f for f in spec['faults'] if f['action'] == 'crash-restart' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
-                                and current.get('budget_tick', 0) >= f['tick']), None)
+                                and current.get('budget_tick', 0) >= f['tick'] and (f.get('phase') != 'lobby' or in_lobby)), None)
                     leaving = next((f for f in spec['faults'] if f['action'] == 'announced-leave-rejoin' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
                                     and current.get('budget_tick', 0) >= f['tick']), None)
                     if due or (leaving and run.poll() is not None):
                         fault = due or leaving; fired.add(fault['id'])
                         if due and run.poll() is not None: raise RuntimeError(f'{peer}: process exited before scheduled crash {fault["id"]}')
                         receipt = dict(type='lifecycle', id=fault['id'], peer=peer, incarnation=spec['incarnation'],
-                                       action=fault['action'], requested_tick=fault['tick'], actual=current,
+                                       action=fault['action'], phase=fault.get('phase', 'play'), in_lobby=in_lobby, requested_tick=fault['tick'], actual=current,
                                        observed_wall_ms=time.monotonic()*1000, engine_pid=engine_pid(run))
                         with (root / 'lifecycle.jsonl').open('a', encoding='utf-8') as lifecycle:
                             lifecycle.write(json.dumps(receipt)+'\n')
@@ -846,7 +855,8 @@ def run_payload(path):
                         fresh = prepare_instance(new_spec, payload['pin'], box, runtime=retained)
                         runs[peer] = fresh; specifications[peer] = new_spec
                         readers[peer] = Tail(Path(new_spec['own']) / 'events.jsonl')
-                        capture_sealers[peer] = CaptureSealer(new_spec['own'])
+                        capture_sealers[peer] = CaptureSealer(new_spec['own'], captures=None if new_spec.get('keep_fullstate_sections') else 2)
+                        lobby_watches[peer] = LobbyWatch(Path(new_spec['own'])/'engine/stdout.log')
                         effect_readers[peer]=NativeFaultEffects(Path(new_spec['own'])/'engine/stdout.log',new_spec['faults'],new_spec['incarnation'])
                         effect_rows[peer]=[]
                         fresh.start(); started[peer] = time.monotonic()
@@ -1139,6 +1149,8 @@ def parse_args(argv=None):
     parser.add_argument('--recovery-deadline-ms', type=int, default=120000)
     parser.add_argument('--capture-budget-ms', type=float, default=1000)
     parser.add_argument('--fullstate-every', type=int, default=600)
+    parser.add_argument('--keep-fullstate-sections', default='', help='comma-separated full-state sections every capture keeps as text, all captures retained (a diff run)')
+    parser.add_argument('--memory-census-ticks', type=int, default=1800, help="the engine's memory census every this many round ticks (its checkpoint cache is the instrument's own share); 0 = off")
     parser.add_argument('--quiet-window', action='store_true', help='lead-scheduled quiet window; load still suppresses feel gating')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--selftest-launch-guard',action='store_true',help='exercise simulated QUNS clearance and all-box release without starting an engine')

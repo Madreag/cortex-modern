@@ -37,6 +37,12 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     memory=[value for peer in peers.values() for value in peer.get('memory_by_incarnation',{}).values()]
     memory_status='PASS' if memory and all(m['passed'] for m in memory) else \
         'FAIL' if any(m.get('sizes') or m.get('missing_samples') for m in memory) else 'NOT COVERED'
+    memory_reason='Declared per-incarnation warm-up, slope and retention; raw sizes and measured instrumentation remain separate.'
+    census=[c for peer in peers.values() for c in peer.get('memory_census',{}).values() if c.get('status')!='NOT COVERED']
+    if census:
+        memory_status='FAIL' if any(c['status']=='FAIL' for c in census) else 'PASS'
+        memory_reason=('Each process each minute, net of the full-state instrument cache: warm-up is a falling slope reaching under '
+                       f"{census[0]['warm_slope_bound']} MB/min and staying under it; the declared-bounds read stays reported beside it.")
     coverage_status='FAIL' if any(row['status']=='FAIL' for row in matrix) else \
         'NOT COVERED' if any(row['status']=='NOT COVERED' for row in matrix) else 'PASS'
     oracles=dict(
@@ -53,7 +59,7 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         coverage=dict(status=coverage_status,reason='Each matrix row retains its own minimum, counts and reason.'),
         feel=dict(status=('PASS' if checks.get('quiet_feel',False) else 'FAIL') if any(p.get('feel_gated') for p in peers.values()) else
                          'UNDER LOAD' if any(p.get('feel_status')=='UNDER LOAD' for p in peers.values()) else 'REPORTED',reason='Gated only in a declared quiet window without measured load.'),
-        memory=dict(status=memory_status,reason='Declared per-incarnation warm-up, slope and retention; raw sizes and measured instrumentation remain separate.'),
+        memory=dict(status=memory_status,reason=memory_reason),
         record_integrity=oracle(checks.get('record_integrity',False)),
         engine_findings=oracle(checks.get('no_engine_findings',False),'All findings remain visible, including the named capture rows.'),
         exits=oracle(checks.get('all_incarnation_exits',False),'Each incarnation must exit normally or have its own scheduled, actually injected crash receipt.'),
@@ -642,6 +648,8 @@ def build_report(root):
             memory_by_incarnation[str(incarnation)]=report.reduce_memory([r for r in samples if r.get('incarnation',0)==incarnation],
                 **manifest['memory'],elapsed_s=fragment_record.get('elapsed_seconds',0))
         memory=memory_by_incarnation[str(int(own.name.split('-')[-1]))]
+        memory_census={fragment.name.split('-')[-1]: report.reduce_memory_census(''.join(line for _, line in read_log(fragment/'engine/stdout.log')))
+                       for fragment in fragments}
         archives=[r for fragment in fragments for r in source_rows(fragment/'archives.jsonl',root)]
         payload_sizes = [r['trace_vector_payload_bytes'] for r in events[name]
                          if r.get('type') == 'tick_timing' and 'trace_vector_payload_bytes' in r]
@@ -667,7 +675,7 @@ def build_report(root):
             frame_interval_ms=report.distribution([r['interval_ms'] for r in frames if r.get('interval_ms') is not None]),
             frame_count=len(frames), frames_over_50_ms=[r['frame'] for r in frames if max(r['draw_ms'], r['present_ms'], r.get('interval_ms') or 0) > 50],
             effective_hz=(len(frames)-1)*1000/(frames[-1]['present_end_ms']-frames[0]['present_end_ms']) if len(frames)>1 and frames[-1]['present_end_ms']>frames[0]['present_end_ms'] else None,
-            memory=memory, memory_by_incarnation=memory_by_incarnation, instrumentation=instrumentation, archives=archives,
+            memory=memory, memory_by_incarnation=memory_by_incarnation, memory_census=memory_census, instrumentation=instrumentation, archives=archives,
             recovery_observations=recovery_observations,payload_clock_last_ms=max([payload_done.get('payload_monotonic_ms',0),*[r.get('payload_monotonic_ms',0) for r in samples],*[r.get('upper_wall_ms',0) for r in recovery_observations]]),
             native_completion=completion, native_final_tick=final_tick, exits=exits,own_hold_notifications=own_hold_notifications,
             hold_evidence_complete=all((f/'engine/stdout.log').is_file() and (f/'engine/stdout.log').stat().st_size>0 for f in fragments),
@@ -763,6 +771,9 @@ def build_report(root):
         checks['round_ended'] = any(r.get('type')=='match_boundary' for values in events.values() for r in values)
         checks['validated_autosave_archives'] = False
         checks['memory_bounds']=all(p['memory_by_incarnation'] and all(m['passed'] for m in p['memory_by_incarnation'].values()) for p in peers.values())
+        # Ruling (w): with the engine's census the bar is each process's slope net of the instrument, never its total.
+        census=[c for p in peers.values() for c in p.get('memory_census',{}).values() if c['status']!='NOT COVERED']
+        if census: checks['memory_bounds']=all(c['status']=='PASS' for c in census)
     for name,peer in peers.items():
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']

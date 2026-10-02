@@ -29,6 +29,18 @@ class PresentationRetention(unittest.TestCase):
             receipts=[json.loads(s) for s in (own/'retired-diagnostics.jsonl').read_text().splitlines()]
             self.assertEqual(len(receipts),3);self.assertTrue(all(len(r['sha256'])==64 for r in receipts))
 
+    def test_a_diff_run_keeps_every_capture(self):
+        # A run that keeps only named sections retains every capture, so a round-start sample can be diffed after the run.
+        with tempfile.TemporaryDirectory() as temporary:
+            own=Path(temporary);window=DiagnosticWindow(own,captures=None,pngs=1)
+            captures=[]
+            for n in range(4):
+                path=own/f'fullstate/capture-{n}';path.mkdir(parents=True)
+                (path/'globals.audio.txt.gz').write_bytes(gzip.compress(str(n).encode()));captures.append(path)
+                window.completed_capture(path)
+            self.assertTrue(all((path/'globals.audio.txt.gz').exists() for path in captures))
+            self.assertFalse((own/'retired-diagnostics.jsonl').exists())
+
     def fixture(self, root):
         raw=b'{"type":"frame","frame":91}\n{"type":"end","frames":91}\n'
         (root/'raw.4.jsonl.gz').write_bytes(gzip.compress(raw))
