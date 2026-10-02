@@ -767,6 +767,7 @@ static std::string ResyncSaveName() {
 			m_MigrationMembers.clear();
 			m_MigrationGeneration = 0;
 			m_MigrationRepairPending = false;
+			EndRoundCatchUpLocked();
 			// The rejoin plane and its committed tail belong to the round that ended: the next round opens its own.
 			if (m_WorldJoin.IsPrivateMatch()) {
 				m_WorldJoin.Reset();
@@ -10084,6 +10085,15 @@ static std::string ResyncSaveName() {
 		const bool started = BeginTicketRejoinOnRoute(error, liveRoute ? &*liveRoute : nullptr);
 		if (started) ScenarioRunner::SetWorldCatchUpPriorInputThrough(prior);
 		return started;
+	}
+
+	void NetMatchService::EndRoundCatchUpLocked() {
+		if (!m_WorldCatchUp.active && !m_InPlaceCatchUp) return;
+		m_CatchUpCoordinator.reset();
+		m_ActivateCatchUpLocalSeat = {};
+		m_InPlaceCatchUp = false;
+		m_WorldCatchUp = {};
+		ScenarioRunner::ReleaseWorldCatchUp();
 	}
 
 	void NetMatchService::EndHeldRejoinInNextRound() {

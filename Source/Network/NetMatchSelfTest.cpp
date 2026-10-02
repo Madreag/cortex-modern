@@ -7125,6 +7125,24 @@ namespace RTE {
 		return true;
 	}
 
+	// A seat still catching up privately when its round ended went to the rematch with that catch-up active, so the next round's
+	// fresh start read as a catch-up launch ('bootstrap checkpoint=4319') and failed ('no world join snapshot to load').
+	bool TestARematchStartsWithoutTheEndedRoundsCatchUp(std::string* error) {
+		NetMatchService service;
+		service.m_WorldCatchUp.active = true;
+		service.m_WorldCatchUp.privateMatch = true;
+		service.m_WorldCatchUp.roundId = 61;
+		service.m_WorldCatchUp.snapshotTick = 4319;
+		service.m_InPlaceCatchUp = true;
+		service.EndRoundCatchUpLocked();
+		if (service.m_WorldCatchUp.active || service.m_WorldCatchUp.snapshotTick != 0 || service.m_InPlaceCatchUp) {
+			*error = "the next round would launch from the ended round's private catch-up (snapshot tick " + std::to_string(service.m_WorldCatchUp.snapshotTick) + ")";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_rematch_starts_without_the_ended_rounds_catch_up" << std::endl;
+		return true;
+	}
+
 	// A machine whose round-start restart took longer than the host's plays the round that much behind: EDITH's 302 ms against the
 	// host's 164 ms left it 8 ticks late on an 8-tick delay sized from its link alone, and the first jitter past the bound held it
 	// (four-box runs, round frames 140-265). Its delay covers the start work it published beyond ours.
@@ -14834,6 +14852,7 @@ namespace RTE {
 		if (!TestARematchKeepsAnAbsentPlayersSeatHeld(&error)) return fail(error);
 		if (!TestARematchLobbyDropReturnsThroughTheRejoin(&error)) return fail(error);
 		if (!TestARoundStartsDelayCoversTheStartWork(&error)) return fail(error);
+		if (!TestARematchStartsWithoutTheEndedRoundsCatchUp(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestTwoThreadsSendOnOneTransport(&error)) return fail(error);
