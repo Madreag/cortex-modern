@@ -5879,9 +5879,9 @@ namespace RTE {
 		// double pump, and stopping dead across a pause. The seat hold is measured here in elapsed
 		// milliseconds against a real NetReconnectHost, driven exactly as the service drives it.
 		int TestAdmissionClockIsElapsedTime() {
-			// How long a seat survives, in elapsed ms, when the plane is ticked `pumpsPerStep` times per
-			// 10 ms of elapsed time through the given clock discipline.
-			auto holdEndsAtMs = [](bool countPumps, uint32_t pumpsPerStep, uint64_t stepMs, uint64_t giveUpMs) -> uint64_t {
+			// How long the seat roster says the holder has been away after `runMs` of elapsed time, when the plane is ticked
+			// `pumpsPerStep` times per `stepMs` through the given clock discipline (the roster's held-since is the instrument).
+			auto awayForMs = [](bool countPumps, uint32_t pumpsPerStep, uint64_t stepMs, uint64_t runMs) -> uint64_t {
 				ScriptedAuthCrypto crypto;
 				ScopedTestCrypto scope(&crypto);
 				std::string error;
@@ -5912,28 +5912,43 @@ namespace RTE {
 				wire.host.Tick(planeNowMs());
 				wire.host.NotifyDisconnect(player.connection, 120);
 				player.connected = false;
-				for (uint64_t elapsedMs = 0; elapsedMs <= giveUpMs; elapsedMs += stepMs) {
+				for (uint64_t elapsedMs = 0; elapsedMs <= runMs; elapsedMs += stepMs) {
 					for (uint32_t pump = 0; pump < pumpsPerStep; ++pump) {
 						wire.host.Tick(planeNowMs());
-						if (!wire.host.IsSeatHeldForReclaim(seats[0].lockstepPeerId)) {
-							return elapsedMs;
-						}
 					}
-					steadyMs += stepMs;
+					if (elapsedMs < runMs) steadyMs += stepMs;
 				}
-				return giveUpMs + 1;
+				for (const NetH4ModerationSeat& seat: wire.host.GetModerationView()) {
+					if (seat.stableSeat == seats[0].stableSeat) return seat.dropped && seat.heldForReclaim ? seat.droppedForMs : UINT64_MAX;
+				}
+				return UINT64_MAX;
 			};
 
-			const uint64_t windowMs = NetReconnectHost::c_ProvisionalExpiryMs;
-			const uint64_t giveUpMs = windowMs * 3;
-
-			// A held seat has no window (A12): under every pump discipline the seat is still held when the run gives up.
-			for (const auto& [pumps, stepMs]: {std::pair<uint32_t, uint64_t>{1, 10}, {2, 10}, {200, 10}, {1, 5000}}) {
-				const uint64_t endedMs = holdEndsAtMs(false, pumps, stepMs, giveUpMs);
-				if (endedMs <= giveUpMs) {
-					return Fail("a seat hold ended at " + std::to_string(endedMs) + " ms with " + std::to_string(pumps) + " pumps per " + std::to_string(stepMs) + " ms");
+			// A held seat has no window (A12); how long its holder has been away is elapsed time, whatever the pump.
+			const uint64_t runMs = NetReconnectHost::c_ProvisionalExpiryMs * 3;
+			const uint64_t singleMs = awayForMs(false, 1, 10, runMs);
+			if (singleMs != runMs) {
+				return Fail("a singly-pumped hold reads " + std::to_string(singleMs) + " ms away after " + std::to_string(runMs) + " ms");
+			}
+			// Two pumps a tick is what the game loop and the lockstep wait do together; a stall pumps hundreds of times in a few
+			// milliseconds; a pause pumps rarely over a long time. None of them moves the reading.
+			for (const auto& [pumps, stepMs]: {std::pair<uint32_t, uint64_t>{2, 10}, {200, 10}, {1, 5000}}) {
+				const uint64_t awayMs = awayForMs(false, pumps, stepMs, runMs);
+				if (awayMs != singleMs) {
+					return Fail("pumping " + std::to_string(pumps) + " times per " + std::to_string(stepMs) + " ms moved the held-since reading to " + std::to_string(awayMs) + " ms");
 				}
 			}
+			// The negative control: counting pumps is the defect, and the instrument must still see it.
+			const uint64_t countedDoubleMs = awayForMs(true, 2, 10, runMs);
+			if (countedDoubleMs <= singleMs) {
+				return Fail("the pump-counting control did not inflate the reading, so this case proves nothing");
+			}
+			const uint64_t countedPausedMs = awayForMs(true, 1, 5000, runMs);
+			if (countedPausedMs >= singleMs) {
+				return Fail("the pump-counting control did not shrink a paused reading, so this case proves nothing");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS admission_clock_on_the_roster away_ms=" << singleMs << " counted_double_ms=" << countedDoubleMs
+			          << " counted_paused_ms=" << countedPausedMs << std::endl;
 
 			// The clock itself: an origin is not part of the answer, and it never runs backwards.
 			NetAdmissionClock clock;
