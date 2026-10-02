@@ -1944,7 +1944,8 @@ static std::string ResyncSaveName() {
 				const bool lostHost = m_Runner->DidLoseHostDuringSetup() || (departedHost && missingPlayers) || m_HostEndedTheMatch;
 				if (lostHost && departedHost && !m_IsHost) NoteHostEndedTheMatchLocked();
 				m_RematchReturnOwed = RematchLossReturnsThroughRejoin(m_IsHost, m_HostEndedTheMatch, error.starts_with("rematch roster"), m_Session && m_Session->IsReady(),
-				                                                      m_Session && m_Session->HasReject(), m_Session && m_Session->HasReject() ? m_Session->GetRejectReason() : NetRejectReason::InternalError);
+				                                                      m_Session && m_Session->HasReject(), m_Session && m_Session->HasReject() ? m_Session->GetRejectReason() : NetRejectReason::InternalError,
+				                                                      m_Runner->DidLoseHostDuringSetup());
 				m_ErrorText = lostHost ? "The host left the match" :
 				              missingPlayers ? "The other players left the match" :
 				              error.starts_with("rematch roster") ? "The match could not return to the lobby" : error;
@@ -10105,8 +10106,8 @@ static std::string ResyncSaveName() {
 		ScenarioRunner::SetWorldCatchUpPriorInputThrough(0);
 	}
 
-	bool NetMatchService::RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason) {
-		if (isHost || hostEndedMatch || rosterRefused || sessionReady) return false;
+	bool NetMatchService::RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost) {
+		if (isHost || hostEndedMatch || rosterRefused || sessionReady || !linkLost) return false;
 		// A link closed with no reason from the host, or lost in transport, is a drop: the host keeps the seat for its return.
 		return !hasReject || reason == NetRejectReason::InternalError || reason == NetRejectReason::Timeout;
 	}
