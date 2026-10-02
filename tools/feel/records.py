@@ -30,7 +30,7 @@ class DiagnosticWindow:
         path=Path(path)
         if path in self.completed:return
         self.completed.append(path)
-        while len(self.completed)>self.captures:
+        while self.captures is not None and len(self.completed)>self.captures:
             old=self.completed.pop(0)
             for part in sorted(old.glob('*.txt.gz')):retire_diagnostic(part,self.own,'fullstate dump; native hashes and scope retained')
 
@@ -72,6 +72,26 @@ def presentation_records(index):
         previous+=count
         if previous-1!=part['last_sequence']: raise ValueError('presentation last sequence differs')
     if previous!=document['total_lines']: raise ValueError('presentation retained count differs')
+
+
+class LobbyWatch:
+    """Whether an engine is in a rematch lobby: from its 'returning to lobby' line until its next round starts."""
+    ENTERED=re.compile(r'\[net-match-service-e2e\] rematch: match \d+ over .*returning to lobby')
+    LEFT=re.compile(r'\[net-lockstep\] start round=\d+ frame=')
+
+    def __init__(self,path):
+        self.path=Path(path); self.offset=0; self.pending=b''; self.in_lobby=False
+
+    def poll(self):
+        if not self.path.is_file(): return self.in_lobby
+        with self.path.open('rb') as stream:
+            stream.seek(self.offset); block=stream.read(1024*1024); self.offset=stream.tell()
+        lines=(self.pending+block).split(b'\n'); self.pending=lines.pop()
+        for raw in lines:
+            text=raw.decode('utf-8',errors='replace')
+            if self.ENTERED.search(text): self.in_lobby=True
+            elif self.LEFT.search(text): self.in_lobby=False
+        return self.in_lobby
 
 
 class NativeFaultEffects:
@@ -315,12 +335,12 @@ class CaptureSealer:
     every section file. Repeated keys with several queued paths are ambiguous;
     those captures remain raw until the owning process exits.
     """
-    def __init__(self, own):
+    def __init__(self, own, captures=2):
         self.announced_own=Path(os.path.abspath(own))
         self.own=Path(own).resolve()
         self.log=self.own/'engine/stdout.log'
         self.offset=0; self.pending=b''; self.contexts={}; self.sealed=set()
-        self.window=DiagnosticWindow(self.own)
+        self.window=DiagnosticWindow(self.own, captures=captures)
 
     def poll(self):
         self.window.poll_pngs()

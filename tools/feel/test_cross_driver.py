@@ -590,4 +590,20 @@ class CrossDriverTests(unittest.TestCase):
             self.assertFalse(failed['passed']); self.assertEqual(failed['comparison']['duplicates'],1)
 
 
+class LobbyPhaseLever(unittest.TestCase):
+    def test_the_lobby_watch_is_set_only_between_a_rounds_end_and_the_next_start(self):
+        from feel.records import LobbyWatch
+        with tempfile.TemporaryDirectory() as temporary:
+            log=Path(temporary)/'stdout.log'; n=chr(10)
+            log.write_text('[net-lockstep] start round=7 frame=1 local_peer=2'+n+'[net-match] rejoin phase Connecting -> ImagePending'+n
+                           +'[net-lobby] waiting at WaitingForReady role=client'+n)
+            watch=LobbyWatch(log)
+            self.assertFalse(watch.poll())  # a mid-round rejoin's lobby lines are not the rematch lobby
+            with log.open('a') as out: out.write('[net-match-service-e2e] rematch: match 1 over (Victory!), returning to lobby'+n)
+            self.assertTrue(watch.poll())
+            self.assertTrue(watch.poll())
+            with log.open('a') as out: out.write('[net-lockstep] start round=8 frame=1 local_peer=2'+n)
+            self.assertFalse(watch.poll())
+
+
 if __name__ == '__main__': unittest.main()
