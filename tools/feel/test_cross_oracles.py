@@ -240,6 +240,14 @@ class ImageRejoinHistory(unittest.TestCase):
         self.assertEqual(away, {})
         self.assertFalse(cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)['passed'])
 
+class CrashHolds(unittest.TestCase):
+    def test_a_hold_inside_a_crashed_seats_recovery_is_the_crash(self):
+        hold=dict(scheduled_recovery_id='edith-round-drop',classification='other')
+        self.assertEqual(cross_report.crash_hold(hold,{'edith-round-drop'})['classification'],'scheduled-fault')
+        # A hold no crash recovery claims, or one a lag fault claims, keeps its own classification.
+        self.assertEqual(cross_report.crash_hold(dict(hold,scheduled_recovery_id=None),{'edith-round-drop'}),{})
+        self.assertEqual(cross_report.crash_hold(dict(hold,scheduled_recovery_id='mac-lag'),{'edith-round-drop'}),{})
+
 class ScheduleKeyedOracles(unittest.TestCase):
     def judge(self, faults, **checks):
         manifest=dict(scenario='soak',ticks=14400,faults=faults,fullstate_every=600,capture_rows_pending=[])
