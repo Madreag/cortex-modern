@@ -187,7 +187,7 @@ class ImageRejoinHistory(unittest.TestCase):
 
     def test_an_image_rejoin_is_compared_from_its_resume_frame(self):
         compared, away = cross_report.adopt_restored_histories(self.live(), self.RANGE, {'c': [self.RELAUNCH]})
-        self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): (4, 7)})
+        self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): [(4, 7)]})
         result = cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)
         self.assertTrue(result['passed'])
         self.assertEqual((result['equal_keys'], result['peers']['c']['away']), (12, 4))
@@ -196,8 +196,43 @@ class ImageRejoinHistory(unittest.TestCase):
         compared, away = cross_report.adopt_restored_histories(changed, self.RANGE, {'c': [self.RELAUNCH]})
         self.assertEqual(cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)['unequal_keys'], 1)
 
+    def test_two_returns_in_one_round_are_both_compared(self):
+        # The four-box run's Mac: an image return at 7978, held again, an in-place return at 10295.
+        rng = [dict(self.RANGE[0], last=20)]
+        live = {p: [live_row(t, p) for t in range(1, 21)] for p in ('a', 'b')}
+        first = [dict(live_row(t, 'c'), history_branch=None, configured_start_frame=8) for t in range(8, 12)]
+        second = [dict(live_row(t, 'c'), history_branch=None, configured_start_frame=15) for t in range(15, 21)]
+        live['c'] = [live_row(t, 'c') for t in range(1, 4)] + first + second
+        compared, away = cross_report.adopt_restored_histories(live, rng, {'c': [self.RELAUNCH]})
+        self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): [(4, 7), (12, 14)]})
+        result = cross_report.report.compare_histories(compared, rng, {'controller', 'sim_rng'}, away)
+        self.assertTrue(result['passed'])
+        self.assertEqual((result['equal_keys'], result['peers']['c']['away']), (20, 7))
+
     def test_records_without_a_relaunch_stay_unplaced(self):
         compared, away = cross_report.adopt_restored_histories(self.live(), self.RANGE, {'c': ['']})
         self.assertEqual(away, {})
         self.assertFalse(cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)['passed'])
+
+class ScheduleKeyedOracles(unittest.TestCase):
+    def judge(self, faults, **checks):
+        manifest=dict(scenario='soak',ticks=14400,faults=faults,fullstate_every=600,capture_rows_pending=[])
+        base=dict.fromkeys(cross_report.CORE_CHECKS,True); base.update(checks)
+        peers={n:dict(memory_by_incarnation={'0':dict(passed=True,sizes={},missing_samples=0)}) for n in ('a','b','c')}
+        return cross_report.judge_attempt(manifest,base,peers,[],[])['oracles']
+
+    def test_items_the_schedule_never_asks_for_are_not_applicable(self):
+        lag=[dict(id='lag',peer='mac',action='lag',duration_ms=1000)]
+        o=self.judge(lag, round_ended=False)
+        self.assertEqual((o['forced_ends']['status'],o['rematches']['status'],o['autosaves']['status']),('NOT APPLICABLE',)*3)
+
+    def test_what_the_schedule_asks_for_is_judged(self):
+        hold=[dict(id='end',peer='erol',action='brain-eliminate',phase='hold'),dict(id='crash',peer='edith',action='crash-restart')]
+        o=self.judge(hold, round_ended=True, forced_end_during_hold=True, forced_end_during_transfer=False, changed_settings_rematch=True, fog_on_match=True, validated_autosave_archives=False)
+        # Only the scheduled hold phase is judged; a transfer-phase end the schedule never forced does not count against it.
+        self.assertEqual(o['forced_ends']['status'],'PASS')
+        self.assertEqual(o['rematches']['status'],'PASS')
+        self.assertEqual(o['autosaves']['status'],'FAIL')
+        o=self.judge(hold, round_ended=True, forced_end_during_hold=False)
+        self.assertEqual(o['forced_ends']['status'],'FAIL')
 

@@ -63,9 +63,12 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     if not manifest.get('faults'): oracles['recovery']['status']='NOT APPLICABLE'
     if not manifest.get('faults'): oracles['fault_effects']['status']='NOT APPLICABLE'
     if manifest['scenario']!='match':
-        oracles['forced_ends']=oracle(checks.get('forced_end_during_hold',False) and checks.get('forced_end_during_transfer',False),'Actual activity-over must overlap the named recovery phase; a stale hint is insufficient.')
-        oracles['rematches']=oracle(checks.get('changed_settings_rematch',False) and checks.get('fog_on_match',False))
-        oracles['autosaves']=oracle(checks.get('validated_autosave_archives',False),'Archive integrity alone does not prove restoration or sealed admission.')
+        # Each item is judged for what the schedule asks of it; one the schedule never asks for is not applicable, with its reason.
+        phases={f.get('phase','hold') for f in manifest.get('faults',[]) if f.get('action')=='brain-eliminate'}
+        forced={'hold':checks.get('forced_end_during_hold',False),'catch_up':checks.get('forced_end_during_transfer',False)}
+        oracles['forced_ends']=oracle(all(forced.get(phase,False) for phase in phases),'Actual activity-over must overlap the named recovery phase; a stale hint is insufficient.') if phases else             dict(status='NOT APPLICABLE',reason='The schedule forces no end.')
+        oracles['rematches']=oracle(checks.get('changed_settings_rematch',False) and checks.get('fog_on_match',False)) if checks.get('round_ended',True) else             dict(status='NOT APPLICABLE',reason='No round ended inside the budget, so no rematch carried changed settings.')
+        oracles['autosaves']=oracle(checks.get('validated_autosave_archives',False),'Archive integrity alone does not prove restoration or sealed admission.')             if any(f.get('action')=='crash-restart' for f in manifest.get('faults',[])) else             dict(status='NOT APPLICABLE',reason='The schedule restarts no peer from its archive, so no restoration or sealed admission is exercised.')
     required = (*CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings', 'box_pace')
     if manifest['scenario'] != 'match':
         required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
@@ -453,12 +456,19 @@ def adopt_restored_histories(live, ranges, logs):
                 restored = [r for r in rows if r.get('history_branch') is None and r.get('phase') == 'live' and isinstance(r.get('tick'), int) and
                             r.get('session') == session and r.get('match') == match and r.get('source_round') == source]
                 if not keyed or not restored: continue
-                ticks = sorted(r['tick'] for r in restored)
-                start = ticks[0]
-                if start <= keyed[-1] or ticks != list(range(start, ticks[-1] + 1)) or any(r.get('configured_start_frame') != start for r in restored): continue
-                chosen = {id(r) for r in restored}
+                # Each return starts a contiguous history at its own resume frame; the frames between them are away.
+                segments = []
+                for r in sorted(restored, key=lambda r: r['tick']):
+                    if segments and r['tick'] == segments[-1][-1]['tick'] + 1 and r.get('configured_start_frame') == segments[-1][0]['tick']: segments[-1].append(r)
+                    else: segments.append([r])
+                if any(s[0].get('configured_start_frame') != s[0]['tick'] for s in segments) or segments[0][0]['tick'] <= keyed[-1]: continue
+                chosen = {id(r) for s in segments for r in s}
                 rows = [dict(r, history_branch=branch) if id(r) in chosen else r for r in rows]
-                if start > keyed[-1] + 1: away[(name, prefix)] = (keyed[-1] + 1, start - 1)
+                gaps, last = [], keyed[-1]
+                for s in segments:
+                    if s[0]['tick'] > last + 1: gaps.append((last + 1, s[0]['tick'] - 1))
+                    last = s[-1]['tick']
+                if gaps: away[(name, prefix)] = gaps
             rows = [r for r in rows if not (r.get('history_branch') is None and r.get('phase') == 'catchup')]
         adopted[name] = rows
     return adopted, away
@@ -609,7 +619,8 @@ def build_report(root):
     compared, restored_away = adopt_restored_histories(live, ranges, logs)
     away = {**held_away_ranges(compared, ranges, logs), **restored_away}
     comparison = report.compare_histories(compared, ranges, REQUIRED_SUBSYSTEMS, away)
-    comparison['away_ranges'] = [dict(peer=peer, prefix=list(prefix), first=first, last=last) for (peer, prefix), (first, last) in away.items()]
+    comparison['away_ranges'] = [dict(peer=peer, prefix=list(prefix), first=first, last=last) for (peer, prefix), spans in away.items()
+                                 for first, last in (spans if isinstance(spans, list) else [spans])]
     fullstate_documents={name:report.parse_fullstate([root/fragment/'engine/stdout.log' for fragment in peer['fragments']]) for name,peer in peers.items()}
     cadence=manifest.get('fullstate_every',0)
     fullstate=report.compare_fullstate_histories(fullstate_documents,fullstate_expected(host_rows,cadence)) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
@@ -680,6 +691,7 @@ def build_report(root):
             w.get('observed_tick',0)>=r.get('final_tick',1) and w.get('catchup_at_end') for w in witnesses) for r in endings)
         checks['changed_settings_rematch'] = all(changed_settings(p['configs']) for p in peers.values())
         checks['fog_on_match'] = all(any(c.get('fog') for c in p['configs']) for p in peers.values())
+        checks['round_ended'] = any(r.get('type')=='match_boundary' for values in events.values() for r in values)
         checks['validated_autosave_archives'] = False
         checks['memory_bounds']=all(p['memory_by_incarnation'] and all(m['passed'] for m in p['memory_by_incarnation'].values()) for p in peers.values())
     for name,peer in peers.items():
