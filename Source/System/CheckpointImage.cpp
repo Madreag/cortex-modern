@@ -22,6 +22,7 @@
 #include "TimerMan.h"
 #include "SceneMan.h"
 #include "ActivityMan.h"
+#include "FrameMan.h"
 
 #include "lua.hpp"
 
@@ -1273,6 +1274,8 @@ bool RTE::RunCheckpointImageSelfTest() {
 			else fail("the_last_drawn_screen_is_per_peer", mismatch);
 			if (const std::string mismatch = ActivityMan::CheckpointPerPeerSelfTestMismatch(); mismatch.empty()) pass("the_pause_menu_skip_is_per_peer", "archived, left out of the shared state, in-activity kept");
 			else fail("the_pause_menu_skip_is_per_peer", mismatch);
+			if (const std::string mismatch = FrameMan::CheckpointPerPeerSelfTestMismatch(); mismatch.empty()) pass("a_font_loaded_by_drawing_is_per_peer", "archived, left out of the shared state");
+			else fail("a_font_loaded_by_drawing_is_per_peer", mismatch);
 		}
 		// A capture's bitmap index is kept while the loaded bitmaps' version holds, so every way that changes them moves it.
 		{
