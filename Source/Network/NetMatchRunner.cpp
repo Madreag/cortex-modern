@@ -198,10 +198,18 @@ namespace RTE {
 		if (m_Config.host) {
 			// Nothing has polled the transport since the round stopped, and it may know of a drop.
 			session.Tick(m_Config.nowMs ? m_Config.nowMs() : session.GetClockMs());
-			std::vector<uint8_t> ready;
-			for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) ready.push_back(LockstepPeerId(peer.assignedPeerId));
-			// A seat whose player is away starts the round held: only the members present are active.
-			const std::vector<uint8_t> present = RematchMembers(m_RematchConfig.hostPeerId, m_RematchConfig.peerCount, ready);
+			// The seat roster forms the round: its seats at the start on a live link are the members, and a seat whose player is away
+			// or that the host opened starts held.
+			std::vector<uint8_t> waitsOn;
+			if (NetReconnectHost* admission = session.GetReconnectHost()) {
+				admission->FormRematch();
+				waitsOn = admission->StartMembers();
+				if (waitsOn.empty()) DiagnosticLine() << "[net-match] the seat roster formed no rematch; its members are the ready links" << std::endl;
+			}
+			// With no admission plane nobody can return to a seat: the ready links are the members.
+			if (waitsOn.empty())
+				for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) waitsOn.push_back(LockstepPeerId(peer.assignedPeerId));
+			const std::vector<uint8_t> present = RematchMembers(m_RematchConfig.hostPeerId, m_RematchConfig.peerCount, waitsOn);
 			if (present.size() < m_RematchConfig.peerCount) m_RematchConfig.activePeerIds = present;
 		}
 		if (NetMatchConfigUtil::HashConfig(m_RematchConfig) == NetMatchConfigUtil::HashConfig(m_MatchConfig)) {
@@ -229,9 +237,9 @@ namespace RTE {
 		m_State = NetMatchRuntimeState::Running;
 	}
 
-	std::vector<uint8_t> NetMatchRunner::RematchMembers(uint8_t hostPeerId, uint8_t peerCount, const std::vector<uint8_t>& readyPeerIds) {
+	std::vector<uint8_t> NetMatchRunner::RematchMembers(uint8_t hostPeerId, uint8_t peerCount, const std::vector<uint8_t>& presentPeerIds) {
 		std::vector<uint8_t> present{hostPeerId};
-		for (const uint8_t peer: readyPeerIds)
+		for (const uint8_t peer: presentPeerIds)
 			if (peer != 0 && peer <= peerCount && std::find(present.begin(), present.end(), peer) == present.end()) present.push_back(peer);
 		std::sort(present.begin(), present.end());
 		return present;
@@ -505,8 +513,6 @@ namespace RTE {
 		lobbyConfig.resumeDigest = m_Config.resumeDigest;
 		lobbyConfig.resumeSideStateHash = m_Config.resumeSideStateHash;
 		lobbyConfig.resumeHeld = m_Config.resumeHeld;
-		if (!m_ActivePeerIds.empty())
-			lobbyConfig.activePeerCount = static_cast<uint8_t>(m_ActivePeerIds.size());
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
 		// silence is not death here. Transport disconnects still abort it immediately. This is the
 		// technical message-hearing deadline; the host's seating policy is the budget below.
@@ -555,6 +561,11 @@ namespace RTE {
 				stamped.configRevision = m_MatchConfig.configRevision + 1;
 				stamped.seatRosterRevision = admission->GetRoster().revision;
 				stamped.seatRosterHash = HashRoster(admission->GetRoster());
+				// A forming round's members are the roster's: a seat that drops or that the host opens leaves them and starts held.
+				if (const std::vector<uint8_t> waitsOn = admission->StartMembers(); !waitsOn.empty()) {
+					const std::vector<uint8_t> present = RematchMembers(stamped.hostPeerId, stamped.peerCount, waitsOn);
+					stamped.activePeerIds = present.size() < stamped.peerCount ? present : std::vector<uint8_t>{};
+				}
 				std::string stampError;
 				if (m_Lobby.RepublishMatchConfig(stamped, &stampError)) {
 					m_MatchConfig = stamped;

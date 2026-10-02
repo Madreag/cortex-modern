@@ -19612,8 +19612,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				*error = "capsule crypto=" + std::to_string(GetNetAuthCrypto().IsRealCrypto()) + " credential=" + std::to_string(credentialDrawn);
 				return false;
 			}
-			const auto configHash = NetMatchConfigUtil::HashConfig(match);
-			const auto plaintext = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"session", match.sessionId}, {"config_hash", configHash}, {"state", envelope}});
+			// The successor's round is peers 2 and 3: the agreed config names them.
+			NetMatchConfig round = match;
+			round.activePeerIds = {2, 3};
+			const auto configHash = NetMatchConfigUtil::HashConfig(round);
+			const auto plaintext = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"session", round.sessionId}, {"config_hash", configHash}, {"state", envelope}});
 			size_t openedCapsules = 0;
 			LoopbackTransport hostWire, clientWire;
 			if (!hostWire.StartHost(delegated ? 45806 : 45805, error) || !clientWire.Connect("loopback", delegated ? 45806 : 45805, error))
@@ -19624,9 +19627,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			hostConfig.host = true;
 			hostConfig.localPeerId = 3;
 			hostConfig.remoteTransportPeerIds = {{2, 1}};
-			hostConfig.matchConfig = match;
+			hostConfig.matchConfig = round;
 			hostConfig.startFrame = 6;
-			hostConfig.activePeerCount = 2;
 			hostConfig.autoReady = true;
 			hostConfig.autoStart = true;
 			hostConfig.enableMigration = true;
@@ -19693,7 +19695,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 						return false;
 					}
 					received = client.TakeReceivedState();
-					if (received != envelope || (delegated && host.TakeReceivedState() != envelope) || client.GetStartFrame() != 6 || client.GetMatchConfig() != match) {
+					if (received != envelope || (delegated && host.TakeReceivedState() != envelope) || client.GetStartFrame() != 6 || client.GetMatchConfig() != round) {
 						*error = "successor resync changed the archive, roster or applied boundary";
 						return false;
 					}
