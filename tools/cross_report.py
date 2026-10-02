@@ -720,7 +720,9 @@ def build_report(root):
                                  for first, last in (spans if isinstance(spans, list) else [spans])]
     fullstate_documents={name:report.parse_fullstate([root/fragment/'engine/stdout.log' for fragment in peer['fragments']]) for name,peer in peers.items()}
     cadence=manifest.get('fullstate_every',0)
-    fullstate=report.compare_fullstate_histories(fullstate_documents,fullstate_expected(host_rows,cadence)) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
+    # Every return is followed by a labelled sample the host takes (FSS1): each one is owed by every peer that played that tick.
+    landed=sorted({tuple(sample['key']) for sample in fullstate_documents.get(manifest.get('host'),{}).get('samples',[]) if sample['key'][2]=='landed'})
+    fullstate=report.compare_fullstate_histories(fullstate_documents,fullstate_expected(host_rows,cadence)+landed) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
     matrix = coverage(events, peers, manifest)
     fault_receipts = [dict(r, source_peer=name) for name,values in events.items() for r in values if r.get('type') == 'fault']
     fault_receipts += [dict(r['native'],source_peer=name,id=r['id'],type='fault',applied=True,source='owning payload termination')

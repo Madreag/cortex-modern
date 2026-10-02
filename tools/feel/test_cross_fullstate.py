@@ -25,6 +25,27 @@ class FullStateTests(unittest.TestCase):
         result=report.compare_fullstate_histories({p:copy.deepcopy(document) for p in 'abc'},[(1,600,'sample'),(1,1200,'sample')])
         self.assertFalse(result['passed']); self.assertEqual(len(result['missing']),3)
 
+    def test_a_labelled_capture_is_parsed_under_its_label(self):
+        # l4p-42: '[fullstate-landed]' hash lines matched no pattern, so every post-return sample went unread.
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'stdout.log'
+            path.write_text('[fullstate-context] tick=989 round=1 label=landed path=/run/process-1/round-1/capture-4/landed\n'
+                '[fullstate-landed] tick=989 hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round=1\n'
+                '[fullstate-scope] tick=989 round=1 label=landed per_peer=graph.1,camera\n')
+            document=report.parse_fullstate([path])
+        self.assertEqual([tuple(s['key']) for s in document['samples']],[(1,989,'landed')])
+        self.assertTrue(document['samples'][0]['scope_valid'])
+
+    def test_a_landed_sample_is_owed_by_every_playing_peer(self):
+        # l4p-42: the host's post-return samples were never compared. A peer missing one fails; a peer held over that tick does not owe it.
+        document=self.document()
+        landed=copy.deepcopy(document); landed['samples'][0]['key']=[1,600,'landed']
+        result=report.compare_fullstate_histories({'a':copy.deepcopy(landed),'b':copy.deepcopy(landed),'c':copy.deepcopy(document)},[(1,600,'landed')])
+        self.assertFalse(result['passed']); self.assertEqual([m['peer'] for m in result['missing']],['c'])
+        held=copy.deepcopy(document); held['holds']=[(1,500,700)]
+        result=report.compare_fullstate_histories({'a':copy.deepcopy(landed),'b':copy.deepcopy(landed),'c':held},[(1,600,'landed')])
+        self.assertEqual(result['missing'],[])
+
     def test_missing_scope_is_not_an_exclusion(self):
         document=self.document(); document['samples'][0]['scope_valid']=False
         self.assertFalse(report.compare_fullstate_histories({p:copy.deepcopy(document) for p in 'abc'},[(1,600,'sample')])['passed'])
