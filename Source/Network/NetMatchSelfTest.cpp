@@ -7234,22 +7234,25 @@ namespace RTE {
 			const char* name;
 			bool isHost, hostEnded, rosterRefused, ready, hasReject;
 			NetRejectReason reason;
-			bool linkLost, returns;
+			bool linkLost, startNeverCame, returns;
 		};
 		const Case cases[] = {
-		    {"a link the transport dropped", false, false, false, false, true, NetRejectReason::InternalError, true, true},
-		    {"a link that timed out", false, false, false, false, true, NetRejectReason::Timeout, true, true},
-		    {"a link closed with no reason", false, false, false, false, false, NetRejectReason::InternalError, true, true},
+		    {"a link the transport dropped", false, false, false, false, true, NetRejectReason::InternalError, true, false, true},
+		    {"a link that timed out", false, false, false, false, true, NetRejectReason::Timeout, true, false, true},
+		    {"a link closed with no reason", false, false, false, false, false, NetRejectReason::InternalError, true, false, true},
 		    // l4p-19: the lobby failed its own state-transfer check; the session closed, but no transport lost anything.
-		    {"a lobby that failed its own protocol check", false, false, false, false, true, NetRejectReason::InternalError, false, false},
-		    {"the host's goodbye", false, false, false, false, true, NetRejectReason::SessionEnded, true, false},
-		    {"a match the host ended", false, true, false, false, true, NetRejectReason::InternalError, true, false},
-		    {"a roster the rematch refused", false, false, true, false, true, NetRejectReason::InternalError, true, false},
-		    {"a session still ready", false, false, false, true, false, NetRejectReason::InternalError, true, false},
-		    {"the host itself", true, false, false, false, true, NetRejectReason::InternalError, true, false},
+		    {"a lobby that failed its own protocol check", false, false, false, false, true, NetRejectReason::InternalError, false, false, false},
+		    {"the host's goodbye", false, false, false, false, true, NetRejectReason::SessionEnded, true, false, false},
+		    {"a match the host ended", false, true, false, false, true, NetRejectReason::InternalError, true, false, false},
+		    {"a roster the rematch refused", false, false, true, false, true, NetRejectReason::InternalError, true, false, false},
+		    {"a session still ready", false, false, false, true, false, NetRejectReason::InternalError, true, false, false},
+		    // l4p-33: the Mac's lobby link dropped on the host's side under its lag while its own session still read ready; the host
+		    // started the round with its seat held, its lockstep start timed out and it ended its match ('timed out waiting for lockstep start').
+		    {"a ready session whose round started without it", false, false, false, true, false, NetRejectReason::InternalError, true, true, true},
+		    {"the host itself", true, false, false, false, true, NetRejectReason::InternalError, true, false, false},
 		};
 		for (const Case& c: cases) {
-			if (NetMatchService::RematchLossReturnsThroughRejoin(c.isHost, c.hostEnded, c.rosterRefused, c.ready, c.hasReject, c.reason, c.linkLost) != c.returns) {
+			if (NetMatchService::RematchLossReturnsThroughRejoin(c.isHost, c.hostEnded, c.rosterRefused, c.ready, c.hasReject, c.reason, c.linkLost, c.startNeverCame) != c.returns) {
 				*error = std::string("a rematch lobby loss on ") + c.name + (c.returns ? " ended the match instead of returning the seat through the rejoin" : " sent the seat back through the rejoin");
 				return false;
 			}
