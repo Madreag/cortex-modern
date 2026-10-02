@@ -678,7 +678,7 @@ def judge_retention(root: Path, ticks: int, records: dict) -> dict:
     return details
 
 
-def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False, client_stall: str = "") -> dict:
+def arm_anchor(repo: Path, root: Path, port: int, slow_peers: bool = False, client_stall: str = "") -> dict:
     """A heal names one rewind point for the whole match, and it survives later rotation.
 
     The perturbation is timed late on purpose: at the stock tick 50 the heal lands before the first
@@ -692,12 +692,12 @@ def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False
         # The live perturbation fires on a multiple of 30 ticks; 720 keeps every scaled run's on a full-state sample tick.
         run_root, perturb_at = wait_root(root, scale, ticks), 720 * scale
         # The perturbation waits for both seats to be live; a peer the host holds (a sanitizer build's slow client) keeps it
-        # from landing, so such a build asks the host to pause for a slow peer instead.
+        # from landing, so such a build plays the default policy with the host's largest slow-player bound.
         run_pair(repo, run_root, port, ticks, 2,
                  {"host": ["-net-test-perturb-when-live", "-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
                            "-net-match-e2e-resync"],
                   "client": ["-net-match-e2e-resync", *stall_args(client_stall, scale)]},
-                 {"host": {"NetworkSlowPlayerPolicy": "Pause"}} if pause_slow_peers else None)
+                 {"host": {"NetworkSlowPlayerBoundTicks": "120"}} if slow_peers else None)
         evidence = forced_hold_evidence(run_root, client_stall, scale)
         return dict(judge_anchor(run_root, ticks, perturb_at), forced_hold=evidence)
     return wait_for_checkpoints(attempt, ANCHOR_TICKS)
@@ -1765,8 +1765,8 @@ def main() -> int:
     parser.add_argument("--client-saver-delay-ms", type=int, default=0,
                         help="the client's archive writer alone pauses this long before each task, so a heal can come while the host's "
                         "newest checkpoint is still unpublished on the client")
-    parser.add_argument("--pause-slow-peers", action="store_true",
-                        help="anchor only: the host pauses for a slow peer instead of holding it, so a sanitizer build's heal lands")
+    parser.add_argument("--slow-peers", action="store_true",
+                        help="anchor only: the default policy with the host's largest slow-player bound (120 ticks), so a sanitizer build's slow client stays live and its heal lands")
     args = parser.parse_args()
     for lever in (args.client_stall, args.anchor_client_stall):
         if lever and not re.fullmatch(r'[1-9]\d*:[1-9]\d*', lever):
@@ -1791,7 +1791,7 @@ def main() -> int:
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"restore": lambda repo, root, port: arm_restore(repo, root, port, args.client_stall),
             "retention": lambda repo, root, port: arm_retention(repo, root, port, args.client_stall),
-            "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers, args.anchor_client_stall or args.client_stall),
+            "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.slow_peers, args.anchor_client_stall or args.client_stall),
             "resume": lambda repo, root, port: arm_resume(repo, root, port, args.client_stall),
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks,
                                                                         args.client_lacks_checkpoint, args.rejoin_from_first_capture,
