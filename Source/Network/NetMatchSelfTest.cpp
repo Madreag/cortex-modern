@@ -7285,6 +7285,21 @@ namespace RTE {
 			*error = "a rematch after a seat was closed formed roster " + text(roster) + " active " + text(active);
 			return false;
 		}
+		// l4p-30: two links dropped in the lobby after the rematch formed with all four; the lobby held both seats, the client started
+		// with the agreed members and the host with the formed ones, so the host's start waited for the held seats until it timed out.
+		NetMatchConfig agreed;
+		agreed.activePeerIds = {1, 3};
+		const std::vector<uint8_t> hostMembers = NetMatchRunner::SettledRoundMembers(true, true, {1, 2, 3, 4}, agreed);
+		const std::vector<uint8_t> clientMembers = NetMatchRunner::SettledRoundMembers(false, true, {}, agreed);
+		if (hostMembers != agreed.activePeerIds || clientMembers != agreed.activePeerIds) {
+			*error = "after the lobby held seats 2 and 4 the host's round waits for " + text(hostMembers) + " and the client's for " + text(clientMembers);
+			return false;
+		}
+		if (NetMatchRunner::SettledRoundMembers(true, false, {1, 2}, agreed) != std::vector<uint8_t>{1, 2} ||
+		    NetMatchRunner::SettledRoundMembers(true, true, {1, 2}, NetMatchConfig{}) != std::vector<uint8_t>{1, 2}) {
+			*error = "a first round or a rematch whose agreed config names no members took members it did not form";
+			return false;
+		}
 		std::cout << "[net-match-selftest] PASS a_rematch_keeps_an_absent_players_seat_held" << std::endl;
 		return true;
 	}

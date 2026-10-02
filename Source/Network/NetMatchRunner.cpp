@@ -280,6 +280,13 @@ namespace RTE {
 		return true;
 	}
 
+	std::vector<uint8_t> NetMatchRunner::SettledRoundMembers(bool host, bool rematchRound, const std::vector<uint8_t>& formed, const NetMatchConfig& agreed) {
+		if (!rematchRound) return formed;
+		// The host's own lobby held a seat whose link dropped after the rematch formed; its start never waits for that seat.
+		if (host && agreed.activePeerIds.empty()) return formed;
+		return agreed.activePeerIds;
+	}
+
 	void NetMatchRunner::AdoptHostMigration(const NetHostMigrationResult& result, uint8_t localPeerId) {
 		m_Config.host = result.hostPeerId == localPeerId;
 		m_ActiveHostPeerId = result.hostPeerId;
@@ -453,7 +460,7 @@ namespace RTE {
 			return false;
 		}
 		// A rematch's members are the host's to name: the seats it starts held are the ones the agreed config leaves out.
-		if (m_RematchRound && !m_Config.host) m_ActivePeerIds = m_MatchConfig.activePeerIds;
+		m_ActivePeerIds = SettledRoundMembers(m_Config.host, m_RematchRound, m_ActivePeerIds, m_MatchConfig);
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
 		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error)) {
