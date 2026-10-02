@@ -1093,6 +1093,12 @@ bool RTE::RunCheckpointImageSelfTest() {
 		} else {
 			pass("peek_reuses_the_shadow_when_the_stamp_matches", "stamp 12");
 		}
+		// The memory census names which channel and how many owners hold the cache's entries.
+		if (const std::string census = cache.Census(); census.find("owners=1 ") == std::string::npos || census.find("channels=1:1") == std::string::npos) {
+			fail("census_names_the_entries_owners_and_channels", census);
+		} else {
+			pass("census_names_the_entries_owners_and_channels", census);
+		}
 
 		// One walk spans every state: a state that rewrote all of its roots must not drop the tables
 		// another state kept by reusing its chunk.
