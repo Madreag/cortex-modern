@@ -7017,7 +7017,7 @@ void RunGameLoop() {
 			if (!lockstepPausedTick) {
 				{
 					// The scripts' own housekeeping reads the round only through guarded calls, as the update below does.
-					NetLockstepPlane::Window planeWindow;
+					NetLockstepPlane::Window planeWindow("lua update");
 					g_LuaMan.Update();
 				}
 
@@ -7351,7 +7351,7 @@ void RunGameLoop() {
 					static const uint64_t soundPhase = Hash("Tick");
 					SoundSimulationScope simulationSounds(0, soundPhase);
 					// A long update is this machine's own: the plane commits for the round meanwhile, and the update reads the coordinator only through guarded calls.
-					NetLockstepPlane::Window planeWindow;
+					NetLockstepPlane::Window planeWindow("activity update");
 					if (s_testSimCostUs > 0 && !s_testSimCostOutside) spendTestSimCost();
 					g_ActivityMan.Update();
 
@@ -7375,7 +7375,7 @@ void RunGameLoop() {
 
 			if (!lockstepPausedTick) {
 				// A long late script is this machine's own like the update's: the plane commits for the round meanwhile.
-				NetLockstepPlane::Window planeWindow;
+				NetLockstepPlane::Window planeWindow("late scripts");
 				if (s_lateScriptStallMs > 0 && !s_lateScriptStallFired && g_TimerMan.GetSimUpdateCount() >= s_lateScriptStallTick) {
 					// A late global script that runs long: the main thread is inside the tick's scripts, not waiting on the round.
 					s_lateScriptStallFired = true;

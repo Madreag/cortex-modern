@@ -843,6 +843,8 @@ namespace RTE {
 		static void Forget(const NetLockstepCoordinator* coordinator);
 		/// How many plane ticks have run this process, for the harness.
 		static uint64_t Ticks();
+		/// The innermost window open on the simulation thread now, for a diagnostic line; "none" outside every window.
+		static const char* OpenWindow();
 		/// Arms the check that every access to the targeted coordinator inside an open window holds Lock(). Harness and self-test runs arm it.
 		static void ArmChecks(bool armed);
 		/// Whether the checks are armed.
@@ -873,6 +875,7 @@ namespace RTE {
 			const char* m_Name = nullptr;
 			uint64_t m_OpenedMs = 0;
 			uint64_t m_TicksAtOpen = 0;
+			const char* m_Enclosing = nullptr;
 		};
 		/// Keeps the plane from ticking for a stretch that reaches the coordinator through code that does not take the lock, such as the
 		/// match service, whatever windows open and close inside it; a tick in flight finishes first, and the plane may tick again once

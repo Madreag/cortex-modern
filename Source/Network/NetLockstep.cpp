@@ -4225,6 +4225,7 @@ namespace RTE {
 			std::recursive_mutex lock;
 			std::atomic<NetLockstepCoordinator*> target{nullptr};
 			std::atomic<int> windows{0};
+			std::atomic<const char*> openWindow{nullptr}; //!< The innermost window open on the simulation thread.
 			std::atomic<int> gaps{0};
 			std::atomic<uint64_t> ticks{0};
 			std::atomic<bool> checksArmed{false};
@@ -4303,6 +4304,11 @@ namespace RTE {
 
 	uint64_t NetLockstepPlane::Ticks() { return Plane().ticks.load(std::memory_order_relaxed); }
 
+	const char* NetLockstepPlane::OpenWindow() {
+		const char* name = Plane().openWindow.load(std::memory_order_acquire);
+		return name ? name : "none";
+	}
+
 	void NetLockstepPlane::ArmChecks(bool armed) {
 		Plane().checksArmed.store(armed, std::memory_order_release);
 		if (armed) DiagnosticLine() << "[net-plane] lock checks armed" << std::endl;
@@ -4359,6 +4365,7 @@ namespace RTE {
 		if (RefuseForeignScope("window", name)) return;
 		if (m_Name) { m_OpenedMs = NetLockstepNowMs(); m_TicksAtOpen = Ticks(); }
 		Plane().windows.fetch_add(1, std::memory_order_acq_rel);
+		m_Enclosing = Plane().openWindow.exchange(m_Name ? m_Name : "unnamed window", std::memory_order_acq_rel);
 		m_Counted = true;
 	}
 	NetLockstepPlane::Window::~Window() {
@@ -4367,6 +4374,7 @@ namespace RTE {
 		PlaneState& plane = Plane();
 		std::lock_guard<std::recursive_mutex> lock(plane.lock);
 		plane.windows.fetch_sub(1, std::memory_order_acq_rel);
+		plane.openWindow.store(m_Enclosing, std::memory_order_release);
 		if (m_Name) {
 			const uint64_t openMs = NetLockstepNowMs() - m_OpenedMs;
 			if (openMs >= 250)
@@ -9358,7 +9366,8 @@ namespace RTE {
 		if (nowMs < m_OwnMissingSinceMs || nowMs - m_OwnMissingSinceMs < boundMs) return false;
 		const uint64_t simTickedMs = m_SimTickedMs.load(std::memory_order_acquire);
 		DiagnosticLine() << "[net-lockstep] own seat late at frame " << frame << ": missing_ms=" << (nowMs - m_OwnMissingSinceMs) << " sim_quiet_ms="
-		          << (simTickedMs != 0 && nowMs >= simTickedMs ? nowMs - simTickedMs : 0) << " sent_through=" << SentInputThrough() << " plane=" << m_PlaneTicking << std::endl;
+		          << (simTickedMs != 0 && nowMs >= simTickedMs ? nowMs - simTickedMs : 0) << " sent_through=" << SentInputThrough() << " plane=" << m_PlaneTicking
+		          << " sim_window=" << NetLockstepPlane::OpenWindow() << std::endl;
 		std::string holdError;
 		if (!ProposePeerHold(local, nowMs, &holdError, 0, "own_seat")) {
 			DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(local) << ": " << holdError << std::endl;
