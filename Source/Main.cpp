@@ -6089,38 +6089,45 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 	}
 	std::string rematchError;
 	// The cross driver draws and checks the post-match lobby first; its offered lobby may already have returned the session.
+	bool lobbyLost = false;
 	if (!CrossDrawLobbySurface(&rematchError) ||
 	    ((!s_crossRematches || g_NetMatchService.GetState() == NetMatchServiceState::Completed) && !g_NetMatchService.ReturnToLobby(&rematchError))) {
-		s_netMatchServiceE2EError = "rematch return-to-lobby failed: " + rematchError;
-		s_netMatchServiceE2EExitCode = 1;
-		System::SetQuit(true);
-		return false;
-	}
-	g_NetMatchService.SetReady();
-	// The peer that hosts the match now asks for the next one: after a migration that is the successor.
-	if (g_NetMatchService.IsHost() || s_netDedicated) {
-		if (!CrossHostOptions(s_netMatchServiceE2ERematches, &rematchError)) {
-			s_netMatchServiceE2EError = "rematch host options: " + rematchError;
+		// A seat whose link the host closed or lost keeps its place: it returns through its ticket below.
+		lobbyLost = g_NetMatchService.RematchReturnOwed();
+		if (!lobbyLost) {
+			s_netMatchServiceE2EError = "rematch return-to-lobby failed: " + rematchError;
 			s_netMatchServiceE2EExitCode = 1;
 			System::SetQuit(true);
 			return false;
 		}
-		g_NetMatchService.RequestStart();
 	}
 	std::string rematchPreset;
 	bool rematchReady = false;
 	uint64_t crossReadyRevision = UINT64_MAX;
-	const auto rematchWaitStart = std::chrono::steady_clock::now();
-	while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rematchWaitStart).count() < 60) {
-		CrossReadyForCurrentConfig(crossReadyRevision);
-		if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
-			rematchReady = true;
-			break;
+	if (!lobbyLost) {
+		g_NetMatchService.SetReady();
+		// The peer that hosts the match now asks for the next one: after a migration that is the successor.
+		if (g_NetMatchService.IsHost() || s_netDedicated) {
+			if (!CrossHostOptions(s_netMatchServiceE2ERematches, &rematchError)) {
+				s_netMatchServiceE2EError = "rematch host options: " + rematchError;
+				s_netMatchServiceE2EExitCode = 1;
+				System::SetQuit(true);
+				return false;
+			}
+			g_NetMatchService.RequestStart();
 		}
-		if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
-			break;
+		const auto rematchWaitStart = std::chrono::steady_clock::now();
+		while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rematchWaitStart).count() < 60) {
+			CrossReadyForCurrentConfig(crossReadyRevision);
+			if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
+				rematchReady = true;
+				break;
+			}
+			if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
+				break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
 	if (!rematchReady && g_NetMatchService.RematchReturnOwed()) {
 		// The link to the host closed in the lobby: the host plays the round with this seat held, and the seat returns to it.

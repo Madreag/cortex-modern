@@ -58,6 +58,9 @@ std::string BuildLoopPaceJson();
 
 namespace RTE {
 
+	// A live host's answer to a held return its tail cannot reach: the seat comes back through the image.
+	static constexpr const char* c_ImageRejoinDetail = "slow player: rejoin from the host's image";
+
 	std::string NetMatchSummary::DurationText() const {
 		const uint64_t seconds = runningTicks / 60;
 		std::ostringstream text;
@@ -741,10 +744,18 @@ static std::string ResyncSaveName() {
 			if (!m_Session->IsReady()) {
 				// Session lost (the other player quit); settle so the UI stops offering a rematch.
 				m_State = NetMatchServiceState::Failed;
+				// A link the host closed to bring this seat back through its image keeps the seat: its ticket returns it.
+				m_RematchReturnOwed = !m_IsHost && !m_HostEndedTheMatch && m_Session->HasReject() && m_Session->BuildRejectText().find(c_ImageRejoinDetail) != std::string::npos;
 				{
 					std::ostringstream line;
-					line << "[net-match] rematch unavailable: " << m_Session->BuildRejectText();
+					line << "[net-match] rematch unavailable: " << m_Session->BuildRejectText() << (m_RematchReturnOwed ? "; the seat returns through its ticket" : "");
 					System::PrintDiagnosticLine(line.str());
+				}
+				if (m_RematchReturnOwed) {
+					m_ErrorText = "Could not reach the host - retrying";
+					m_StatusText = m_ErrorText;
+					if (error) *error = m_ErrorText;
+					return false;
 				}
 				m_ErrorText = departedHost ? "The host left the match" : "The other players left the match";
 				m_StatusText = m_ErrorText;
@@ -1047,13 +1058,11 @@ static std::string ResyncSaveName() {
 
 	uint64_t NetLobbyLastStateTransferMs();
 
-	// A client's session has exactly one remote - the host. Its loss is the host's departure unless the
-	// host's own record says it removed or refused this seat, which keeps its own text.
-	// A live host's answer to a held return its tail cannot reach: the seat comes back through the image.
-	static constexpr const char* c_ImageRejoinDetail = "slow player: rejoin from the host's image";
 	// The close the transport records when this peer stops it itself.
 	static constexpr const char* c_OwnTransportStopDetail = "transport stopped";
 
+	// A client's session has exactly one remote - the host. Its loss is the host's departure unless the
+	// host's own record says it removed or refused this seat, which keeps its own text.
 	static bool ClientSessionLossIsHostDeparture(const NetSession& session) {
 		if (session.IsReady()) return false;
 		if (!session.HasReject()) return true;

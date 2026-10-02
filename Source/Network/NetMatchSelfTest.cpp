@@ -8200,6 +8200,65 @@ namespace RTE {
 		return true;
 	}
 
+	// l4p-45: the host closed a catching-up seat's link to bring it back through the image as its round ended; at the rematch the
+	// seat read the closed link as the host leaving, dropped its ticket and exited. The seat is still the host's: it returns through its ticket.
+	bool TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(std::string* error) {
+		const uint16_t port = 43233;
+		LoopbackTransport hostTransport, clientTransport, wire;
+		NetSession host;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 2;
+		hostConfig.heartbeatIntervalMs = 25;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "image-rejoin-rematch-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Returner";
+		++clientConfig.localNonce;
+		NetMatchService service;
+		NetSession& client = *(service.m_Session = std::make_unique<NetSession>());
+		if (!host.StartHost(hostTransport, hostConfig, error) || !client.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+		uint64_t now = 0;
+		for (; now <= 3000 && !client.IsReady(); now += 10) {
+			client.Tick(now); host.Tick(now);
+			hostTransport.AdvanceTimeMs(10); clientTransport.AdvanceTimeMs(10);
+		}
+		const auto ready = host.GetReadyPeers();
+		if (!client.IsReady() || ready.size() != 1) {
+			*error = "the returner never joined the host: client=" + std::string(NetSession::StateName(client.GetState()));
+			return false;
+		}
+		host.DisconnectReadyPeer(ready.front().transportPeerId, NetRejectReason::HostNotAccepting, "slow player: rejoin from the host's image");
+		for (const uint64_t until = now + 2000; now <= until && client.IsReady(); now += 10) {
+			client.Tick(now); host.Tick(now);
+			hostTransport.AdvanceTimeMs(10); clientTransport.AdvanceTimeMs(10);
+		}
+		if (client.IsReady()) {
+			*error = "the host's close never reached the returner";
+			return false;
+		}
+		service.m_MigratedTransport = std::make_unique<LoopbackTransport>();
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		service.m_IsHost = false;
+		service.m_State = NetMatchServiceState::Completed;
+		std::string returnError;
+		const bool returned = service.ReturnToLobby(&returnError);
+		if (returned || !service.RematchReturnOwed() || service.m_HostEndedTheMatch) {
+			*error = "a seat whose link the host closed for its image read the host as gone at the rematch: returned=" + std::to_string(returned) +
+			         " return_owed=" + std::to_string(service.RematchReturnOwed()) + " host_ended=" + std::to_string(service.m_HostEndedTheMatch) +
+			         " error='" + returnError + "' reject='" + client.BuildRejectText() + "'";
+			return false;
+		}
+		std::cout << "PASS a_link_closed_for_the_image_keeps_the_seat_at_the_rematch reject='" << client.BuildRejectText() << "'" << std::endl;
+		return true;
+	}
+
 	// l4p-38: the host's session timed out a returner's catch-up link after 5001 ms of 'silence' while a catch-up report came over it every
 	// second. Lobby traffic on a link the session admitted is that link heard.
 	bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error) {
@@ -15296,6 +15355,7 @@ namespace RTE {
 		if (!TestLobbyTrafficKeepsAHostLinkAlive(&error)) return fail(error);
 		if (!TestASeatKnockingWhileTheRoundFormsIsAnswered(&error)) return fail(error);
 		if (!TestAStartHeldSeatReturnsAsTheNextIncarnation(&error)) return fail(error);
+		if (!TestALinkClosedForTheImageKeepsTheSeatAtTheRematch(&error)) return fail(error);
 		if (!TestServiceKick(&error)) return fail(error);
 		if (!TestServiceKickRejoin(&error)) return fail(error);
 		if (!TestTheGoodbyeReachesAHandshakingReturner(&error)) return fail(error);
