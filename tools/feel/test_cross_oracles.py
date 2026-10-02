@@ -174,3 +174,30 @@ class FaultWindowHolds(unittest.TestCase):
         # A fault never applied opens no window.
         self.assertEqual(cross_report.fault_windows(faults, [dict(receipts[0], applied=False)], clock), [])
 
+class ImageRejoinHistory(unittest.TestCase):
+    RANGE = [dict(session='s', match='m', history_branch='initial', source_round=1, first=1, last=12, peers=['a', 'b', 'c'])]
+    RELAUNCH = '[net-match] held client: replaying the private committed tail'
+
+    def live(self):
+        live = {p: [live_row(t, p) for t in range(1, 13)] for p in ('a', 'b')}
+        restored = [dict(live_row(t, 'c'), history_branch=None, configured_start_frame=8) for t in range(8, 13)]
+        replay = [dict(live_row(t, 'c'), history_branch=None, phase='catchup') for t in range(5, 8)]
+        live['c'] = [live_row(t, 'c') for t in range(1, 4)] + replay + restored
+        return live
+
+    def test_an_image_rejoin_is_compared_from_its_resume_frame(self):
+        compared, away = cross_report.adopt_restored_histories(self.live(), self.RANGE, {'c': [self.RELAUNCH]})
+        self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): (4, 7)})
+        result = cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)
+        self.assertTrue(result['passed'])
+        self.assertEqual((result['equal_keys'], result['peers']['c']['away']), (12, 4))
+        # A resumed history that differs is a difference, not an absence.
+        changed = self.live(); changed['c'][-1] = dict(changed['c'][-1], sim_gated='d' * 64)
+        compared, away = cross_report.adopt_restored_histories(changed, self.RANGE, {'c': [self.RELAUNCH]})
+        self.assertEqual(cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)['unequal_keys'], 1)
+
+    def test_records_without_a_relaunch_stay_unplaced(self):
+        compared, away = cross_report.adopt_restored_histories(self.live(), self.RANGE, {'c': ['']})
+        self.assertEqual(away, {})
+        self.assertFalse(cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)['passed'])
+
