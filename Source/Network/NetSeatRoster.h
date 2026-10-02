@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -101,6 +102,27 @@ namespace RTE {
 	std::string RosterSeatLabel(const NetRosterSeat& seat);
 	const char* NetSeatPhaseName(NetSeatPhase phase);
 	const char* NetRosterEventName(NetRosterEventKind kind);
+
+	/// A roster revision as it goes to the peers: tickets and the ban list stay on the host.
+	std::vector<uint8_t> EncodeRoster(const NetSeatRoster& roster);
+	bool DecodeRoster(const std::vector<uint8_t>& bytes, NetSeatRoster& roster, std::string* error);
+	/// The hash the agreed config carries: what every peer must hold of the roster to start the round.
+	std::array<uint8_t, 32> HashRoster(const NetSeatRoster& roster);
+
+	/// A peer's copy of the host's roster: revisions are applied in order and never derived locally.
+	class NetRosterReplica {
+	public:
+		/// Takes a newer revision of this match's roster; says why when it does not.
+		bool Apply(const NetSeatRoster& revision, std::string* why);
+		/// Whether this copy is the one the host hashed; the reason names the difference for the refusal.
+		bool Agrees(const std::array<uint8_t, 32>& hostHash, std::string* why) const;
+		const NetSeatRoster& Roster() const { return m_Roster; }
+		bool HasRoster() const { return m_HasRoster; }
+
+	private:
+		NetSeatRoster m_Roster;
+		bool m_HasRoster = false;
+	};
 
 	/// The net-roster self-test: drives every reachable cell of REJOIN-GRID.md through ApplyRosterEvent.
 	class NetSeatRosterSelfTest {
