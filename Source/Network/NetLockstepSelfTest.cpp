@@ -4,6 +4,7 @@
 #include "allegro.h"
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
+#include "NetMatchService.h"
 #include "NetAuthCrypto.h"
 #include "NetLobbySession.h"
 #include "PieMenu.h"
@@ -21321,6 +21322,56 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// l4p-44: a rematch started seat 2 held, its config carrying the incarnation of the seat's ticket (4), and the player's return
+	// through the image named that same incarnation, so the host refused the reclaim for the rest of the round.
+	bool TestAStartHeldSeatsReturnCompletes(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A5E, 6, NetTransportLane::InputUnreliable);
+		config.startFrame = 1; config.roundId = 0x9A5E; config.peerCount = 3;
+		config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		config.peerIncarnations = {{1, 1}, {2, 4}, {3, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A5E);
+		config.matchConfig.peerCount = 3; config.matchConfig.players.push_back({3, 2, false, "Survivor"});
+		if (!wire.StartHost(49757, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 900;
+		host.m_LastCompletedSimulationTick = 899;
+		host.m_LastQueuedTargetFrame = 899;
+		host.m_PeersPlayedThisRound = {1, 3};
+		// The round held seat 2 from its first frames: its player was away when the rematch formed.
+		host.m_PeerLeaveFrames[2] = 12;
+		host.m_AiHeldSeats[2] = 12;
+		host.NoteSeatTransition(2, 12, NetLockstepCoordinator::SeatTransition::Held);
+		const uint64_t activation = 960;
+		const uint32_t ticket = 4;
+		std::string refusal;
+		if (host.SchedulePeerReclaim(2, 7, ticket, activation, &refusal)) {
+			*error = "the round took a return at the incarnation it already holds for the seat (" + std::to_string(ticket) + ")";
+			return false;
+		}
+		const uint32_t returning = NetMatchService::ImageReturnIncarnation(ticket, host.GetConfig().peerIncarnations.at(2));
+		std::string reclaimError;
+		if (!host.SchedulePeerReclaim(2, 7, returning, activation, &reclaimError)) {
+			*error = "the start-held seat's return at incarnation " + std::to_string(returning) + " was refused: " + reclaimError;
+			return false;
+		}
+		const auto reclaims = host.ReclaimTransactions();
+		if (!reclaims.contains(2) || reclaims.at(2).activationFrame != activation || reclaims.at(2).seatIncarnation != returning ||
+		    !host.IsSeatUnderAI(2, activation - 1) || host.IsSeatUnderAI(2, activation)) {
+			*error = "the start-held seat did not come back at its return: reclaim=" + std::to_string(reclaims.contains(2)) +
+			         " at=" + std::to_string(reclaims.contains(2) ? reclaims.at(2).activationFrame : 0) +
+			         " incarnation=" + std::to_string(reclaims.contains(2) ? reclaims.at(2).seatIncarnation : 0) +
+			         " ai_before=" + std::to_string(host.IsSeatUnderAI(2, activation - 1)) + " ai_at=" + std::to_string(host.IsSeatUnderAI(2, activation));
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_start_held_seats_return_completes incarnation=" << returning << " at=" << activation << std::endl;
+		return true;
+	}
+
 	// l4p-37: a seat the start holds sends no start, and the host and every client waited for one until each timed out. Its stand-in
 	// comes from the host, so every start gate is complete without it.
 	bool TestNoStartGateWaitsForAHeldSeat(std::string* error) {
@@ -23106,6 +23157,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestALinklessMemberIsHeldByTheStart, "a_linkless_member_is_held_by_the_start");
 		row(&TestNoStartGateWaitsForAHeldSeat, "no_start_gate_waits_for_a_held_seat");
 		row(&TestARefusedHoldEscalatesToTheFirstOwedFrame, "a_refused_hold_escalates_to_the_first_owed_frame");
+		row(&TestAStartHeldSeatsReturnCompletes, "a_start_held_seats_return_completes");
 		row(&TestAHeldHostCanReachItsReclaimHorizon, "a_held_host_can_reach_its_reclaim_horizon");
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
