@@ -1696,7 +1696,7 @@ namespace RTE {
 			});
 			const uint64_t awaySince = HolderAwaySinceMs(seat);
 			entry.droppedAtMs = awaySince;
-			entry.droppedForMs = entry.dropped && awaySince != 0 && m_NowMs > awaySince ? m_NowMs - awaySince : 0;
+			entry.droppedForMs = entry.dropped && IsHolderAway(seat) && m_NowMs > awaySince ? m_NowMs - awaySince : 0;
 			entry.leftByChoice = HolderLeftByChoice(seat);
 			entry.leftForMs = entry.leftByChoice && m_NowMs > awaySince ? m_NowMs - awaySince : 0;
 			for (const Applicant& applicant : m_Applicants) {
