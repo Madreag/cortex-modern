@@ -78,7 +78,8 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
             values, absent = [], []
             for peer in interval['peers']:
                 skipped = away.get((peer, prefix))
-                if skipped and skipped[0] <= tick <= skipped[1] and not indexed.get(peer, {}).get(key):
+                spans = skipped if isinstance(skipped, list) else [skipped] if skipped else []
+                if any(low <= tick <= high for low, high in spans) and not indexed.get(peer, {}).get(key):
                     counts.setdefault(peer, dict(expected=0, present=0, missing=0)).setdefault('away', 0)
                     counts[peer]['away'] += 1
                     continue
