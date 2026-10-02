@@ -7536,7 +7536,8 @@ void RunGameLoop() {
 					return text.str();
 				};
 				const std::string lua = timed("lua", [] { return g_LuaMan.GetTotalHeapBytes(); });
-				const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census(); });
+				// The capture keeps its last image for the next one to share; that image is the full-state instrument's own memory.
+				const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census() + " last_image_mb=" + std::to_string(CheckpointCow::Get().LastImageBytes() >> 20); });
 				const std::string movable = timed("movable", [] { return g_MovableMan.Census(); });
 				const std::string atoms = timed("atoms", [] { return Atom::SampledConstructionStacks(); });
 				const std::string audio = timed("audio", [] { return g_AudioMan.Census(); });
