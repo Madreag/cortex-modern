@@ -10352,6 +10352,7 @@ namespace RTE {
 		lobbyConfig.platform = "test";
 		lobbyConfig.autoStart = false;
 		lobbyConfig.assignSeats = true; // a rematch: the seats are the round's players'
+		lobbyConfig.activePeerCount = 3; // the runner names the rematch's members
 		if (!hostLobby.Start(hostTransport, lobbyConfig, error)) {
 			return false;
 		}
@@ -10391,6 +10392,17 @@ namespace RTE {
 		if (!held) {
 			*error = "a rematch member whose link dropped had its seat named '" + slotName(kickedPeerId) + "' with " + std::to_string(active.size()) +
 			         " active members: the round waits for a player who is not there instead of starting the seat held";
+			return false;
+		}
+		// l4p-28: the round's start gate counts the members present; with the held seat still counted it waited forever ('occupancy=0').
+		NetLobbyConfigAck reack;
+		reack.peerId = stayingPeerId;
+		reack.accepted = true;
+		reack.matchConfigHash = hostLobby.GetMatchConfigHash();
+		hostLobby.HandleConfigAck(reack);
+		if (!hostLobby.AllConfigAcked()) {
+			*error = "the rematch lobby with a held seat has " + std::to_string(hostLobby.m_RemotePeerIds.size() + 1) + " members present against the " +
+			         std::to_string(hostLobby.m_Config.activePeerCount) + " its start waits for: the round never starts";
 			return false;
 		}
 		// l4p-26: the held seat sends no handover endpoint, so the round's migration roster must stand on its members present, as a
