@@ -86,6 +86,9 @@
 #include "MenuAutomation.h"
 #ifdef __APPLE__
 #include "AppleApplication.h"
+#include <mach/mach.h>
+#elif defined(__linux__)
+#include <unistd.h>
 #endif
 
 #include "ControllerFrame.h"
@@ -342,6 +345,16 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 		for (size_t index = 0; index < std::min<size_t>(top.size(), 12); ++index) histogram += (index ? "," : "") + top[index].second;
 	}
 	return std::format(" private_mb={}{} threads={} handles={}{}", counters.PrivateUsage >> 20, heapFigures, threads, handles, histogram);
+#elif defined(__APPLE__)
+	mach_task_basic_info_data_t info{};
+	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+	if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) return {};
+	return std::format(" resident_mb={}", info.resident_size >> 20);
+#elif defined(__linux__)
+	unsigned long long pages = 0, resident = 0;
+	std::ifstream statm("/proc/self/statm");
+	if (!(statm >> pages >> resident)) return {};
+	return std::format(" resident_mb={}", (resident * static_cast<unsigned long long>(sysconf(_SC_PAGESIZE))) >> 20);
 #else
 	return {};
 #endif
@@ -7531,6 +7544,9 @@ void RunGameLoop() {
 				const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
 				const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
 				std::ostringstream rest;
+				// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
+				static const auto s_censusEpoch = std::chrono::steady_clock::now();
+				rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_censusEpoch).count();
 				rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
 				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
 				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << pace;
