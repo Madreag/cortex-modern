@@ -485,6 +485,18 @@ namespace RTE {
 		DiagnosticLine() << "[roster] rev=" << result.roster.revision << " seat=" << static_cast<int>(event.seat) << ' ' << NetRosterEventName(kind) << ' '
 		          << (before ? NetSeatPhaseName(before->phase) : "-") << "->" << (after ? NetSeatPhaseName(after->phase) : "-") << ": " << result.reason << std::endl;
 		m_Roster = result.roster;
+		SendRoster();
+	}
+
+	void NetReconnectHost::SendRoster(NetPeerId only) {
+		NetH4RosterRevision revision;
+		revision.roster = EncodeRoster(m_Roster);
+		if (revision.roster.empty()) return;
+		for (const SeatState& seat: m_Seats) {
+			if (seat.seat.local || seat.activeConnection == c_InvalidNetPeerId) continue;
+			if (only != c_InvalidNetPeerId && seat.activeConnection != only) continue;
+			Send(seat.activeConnection, revision);
+		}
 	}
 
 	void NetReconnectHost::SettleReturn(const SeatState& seat) {
@@ -509,6 +521,7 @@ namespace RTE {
 			return;
 		}
 		m_Roster = result.roster;
+		if (result.changed) SendRoster();
 	}
 
 	void NetReconnectHost::RebuildRoster() {
@@ -1147,6 +1160,8 @@ namespace RTE {
 		if (returning) {
 			ApplySeatEvent(seat, NetRosterEventKind::Returned);
 			SettleReturn(seat);
+		} else {
+			SendRoster(connection);
 		}
 		CaptureParticipant(seat, connection);
 		BumpSeatGeneration(seat);
@@ -2516,6 +2531,14 @@ namespace RTE {
 	}
 
 	bool NetReconnectClient::HandleMessage(const NetPayload& payload, uint64_t nowMs) {
+		if (const auto* revision = std::get_if<NetH4RosterRevision>(&payload)) {
+			NetSeatRoster roster;
+			std::string why;
+			if (!DecodeRoster(revision->roster, roster, &why) || !m_RosterReplica.Apply(roster, &why)) {
+				DiagnosticLine() << "[roster] this peer refused a revision: " << why << std::endl;
+			}
+			return true;
+		}
 		if (const auto* offer = std::get_if<NetH4TicketOffer>(&payload)) {
 			if (m_State != NetH4ClientState::Joining && m_State != NetH4ClientState::Storing) {
 				return true;
