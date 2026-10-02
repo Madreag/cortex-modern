@@ -2222,7 +2222,14 @@ namespace RTE {
 		session->phase = NetWorldJoinPhase::Failed;
 		session->refusal = reason;
 		++m_JoinsCancelled;
+		if (session->assignedPeerId != 0) m_CancelledJoins.push_back(session->assignedPeerId);
 		std::erase_if(m_Sessions, [&](const NetWorldJoinSession& entry) { return entry.connection == connection; });
+	}
+
+	std::vector<uint8_t> NetWorldJoinHost::TakeCancelledJoins() {
+		std::vector<uint8_t> taken;
+		taken.swap(m_CancelledJoins);
+		return taken;
 	}
 
 	bool NetWorldJoinHost::ShowsReplayHeadroom(const NetWorldJoinSession& session) {

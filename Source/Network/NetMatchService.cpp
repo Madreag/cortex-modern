@@ -4445,6 +4445,7 @@ static std::string ResyncSaveName() {
 			m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
 			// A return already agreed is on its way; if it passes, the seat is held again and its player answered then.
 			if (!m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(member) || m_Coordinator->HasAgreedSeatReclaim(member)) continue;
+			if (!RosterOffersReturnLocked(member, holder)) continue;
 			std::string error;
 			if (!m_WorldJoin.BeginRejoin(holder, seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
 			{
@@ -4538,6 +4539,30 @@ static std::string ResyncSaveName() {
 		}
 		// After the walk: CancelJoin erases from the vector the loop above is iterating.
 		for (const NetPeerId connection: missed) m_WorldJoin.CancelJoin(connection, "the returner could not be moved past the capture park");
+	}
+
+	void NetMatchService::FeedRosterReturnsLocked() {
+		for (const uint8_t peer: m_WorldJoin.TakeCancelledJoins()) m_ReconnectHost.NoteReturnAborted(peer);
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
+			if (session.phase == NetWorldJoinPhase::CatchingUp || session.phase == NetWorldJoinPhase::Active) m_ReconnectHost.NoteReturnWorldReady(session.assignedPeerId);
+		if (!m_Coordinator || !m_Coordinator->IsRunning()) return;
+		const uint64_t next = m_Coordinator->GetStats().nextFrame;
+		if (next == 0) return;
+		// A returner is back when the round needs its seat's input at a committed frame and the AI no longer plays it.
+		for (const uint8_t peer: m_ReconnectHost.ReturningPeers())
+			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteReturnCaughtUp(peer);
+	}
+
+	bool NetMatchService::RosterOffersReturnLocked(uint8_t lockstepPeerId, NetPeerId holder) {
+		const NetRosterSeat* seat = m_ReconnectHost.RosterSeatOfPeer(lockstepPeerId);
+		if (!seat || seat->phase != NetSeatPhase::Held || seat->holdCause != NetSeatHoldCause::RejoinFailed) return true;
+		std::string refusal;
+		if (m_ReconnectHost.ReofferReturn(lockstepPeerId, &refusal)) return true;
+		if (!refusal.empty()) {
+			System::PrintDiagnosticLine("[net-match] return refused peer=" + std::to_string(static_cast<int>(lockstepPeerId)) + ": " + refusal);
+			RefuseReturnerLocked(holder, refusal, refusal);
+		}
+		return false;
 	}
 
 	void NetMatchService::SendSuccessorCapsuleToLocked(uint8_t member) {
@@ -4699,6 +4724,12 @@ static std::string ResyncSaveName() {
 			uint32_t holderIncarnation = 0;
 			const bool credentialedHolder = m_ReconnectHost.GetSeatHolder(stableSeat, holderConnection, holderGeneration, holderIncarnation) &&
 			                                holderConnection == peer.transportPeerId;
+			if (credentialedHolder) {
+				uint8_t played = 0;
+				for (const NetH4Seat& seat: m_ReconnectHost.GetSeatTable())
+					if (seat.stableSeat == stableSeat) played = m_ReconnectHost.SimIdentityOfSeat(seat).peerId;
+				if (played != 0 && !RosterOffersReturnLocked(played, peer.transportPeerId)) continue;
+			}
 			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, &joinError, credentialedHolder)) {
 				// A world with no seat and no watcher slot answers the connection once, before it has
 				// read a byte of image, with the reason the joiner shows.
@@ -7559,6 +7590,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && (m_Coordinator->IsPersistentWorldRound() || m_WorldJoin.IsPrivateMatch())) {
 			DriveWorldJoins(nowMs);
 		}
+		if (m_IsHost) FeedRosterReturnsLocked();
 		if (m_Runner) AdoptWorldTicketSession(m_Runner->GetLobbySession().GetMatchConfig());
 		DriveWorldJoinClient(nowMs);
 		// The round has already said goodbye: a rejoin that lands in the drain window is answered with it,

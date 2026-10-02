@@ -2914,6 +2914,11 @@ namespace RTE {
 			if (seatOf(2).holds == holds && !host.ProposePeerHold(2, now, error)) return false;
 			while (now < silentFrom + 600 && (seatOf(2).holds == holds || !host.IsSeatUnderAI(2, committed))) pump(false);
 			if (seatOf(2).holds == holds) { *error = "the silent seat was never held: frame=" + std::to_string(committed); return false; }
+			if (!host.SeatPlaysAtFrame(2, 10) || host.SeatPlaysAtFrame(2, committed)) {
+				*error = "the seat's play reads " + std::to_string(host.SeatPlaysAtFrame(2, 10)) + " before its hold and " + std::to_string(host.SeatPlaysAtFrame(2, committed)) +
+				         " while the AI holds it at frame " + std::to_string(committed);
+				return false;
+			}
 			const uint32_t waitsWhileAway = seatOf(2).waits;
 			const uint64_t longestWhileAway = seatOf(2).longestWaitMs;
 			if (waitsWhileAway == 0 || longestWhileAway == 0) {
@@ -2929,6 +2934,11 @@ namespace RTE {
 			if (committed < activation) {
 				*error = "the round never reached the activation frame: frame=" + std::to_string(committed) +
 				         " activation=" + std::to_string(activation);
+				return false;
+			}
+			// A returner owes no input inside its reclaim window, so it does not play there yet.
+			if (host.SeatPlaysAtFrame(2, activation)) {
+				*error = "a returning seat read as playing inside its reclaim window at frame " + std::to_string(activation);
 				return false;
 			}
 			if (host.WaitsSinceReclaim(2) != 0 || host.LongestWaitMsSinceReclaim(2) != 0) {

@@ -30,6 +30,21 @@ namespace RTE {
 		for (size_t index = 0; index < 8; ++index) id |= static_cast<uint64_t>(epoch[index]) << (8 * index);
 		return id;
 	}
+
+	uint64_t NetRosterOwnerIdOf(const NetAuthBytes32& participantId) {
+		uint64_t id = 0;
+		for (size_t index = 0; index < 8; ++index) id |= static_cast<uint64_t>(participantId[index]) << (8 * index);
+		return id;
+	}
+
+	uint64_t NetRosterTicketIdOf(const NetAuthBytes16& epoch, uint16_t stableSeat, uint32_t holderGeneration) {
+		uint64_t hash = 1469598103934665603ULL;
+		const auto mix = [&hash](uint8_t byte) { hash = (hash ^ byte) * 1099511628211ULL; };
+		for (const uint8_t byte: epoch) mix(byte);
+		for (int shift = 0; shift < 16; shift += 8) mix(static_cast<uint8_t>(stableSeat >> shift));
+		for (int shift = 0; shift < 32; shift += 8) mix(static_cast<uint8_t>(holderGeneration >> shift));
+		return hash != 0 ? hash : 1;
+	}
 	namespace {
 		// A world's watcher seats sit above its roster and hold no world slot, so they name no roster
 		// player and carry the ids reserved for overflow spectators instead.
@@ -173,8 +188,8 @@ namespace RTE {
 				next.m_Roster.stage = NetRosterStage::Migrating;
 				for (NetRosterSeat& held: next.m_Roster.seats) {
 					if (held.seatId != RosterIdOf(seat)) continue;
-					held.owner = rowCommitted ? (static_cast<uint64_t>(seat) + 1) << 32 | state->holderGeneration : 0;
-					held.ticket = held.owner;
+					held.owner = rowCommitted ? next.RosterOwnerOf(*state) : 0;
+					held.ticket = rowCommitted ? NetRosterTicketIdOf(next.m_ConfiguredEpoch, seat, state->holderGeneration) : 0;
 					const bool away = rowCommitted && !state->seat.local && transports.find(state->seat.lockstepPeerId) == transports.end();
 					held.link = held.owner != 0 && !away ? NetSeatLink::Connected : NetSeatLink::Dropped;
 					held.phase = away ? NetSeatPhase::Held : NetSeatPhase::Migrating;
@@ -508,11 +523,11 @@ namespace RTE {
 		event.seat = RosterIdOf(seat.seat.stableSeat);
 		event.nowMs = m_NowMs;
 		event.byChoice = byChoice;
-		event.keptWorld = true;
-		// The holder's credential generation names the player on this plane; the plane checked the ticket itself.
-		event.owner = (static_cast<uint64_t>(seat.seat.stableSeat) + 1) << 32 | seat.holderGeneration;
+		// A returner takes the round's image, except a seat whose holder never takes one.
+		event.keptWorld = seat.seat.local || seat.seat.lockstepPeerId >= c_WorldSpectatorLobbyPeerFirst;
+		event.owner = RosterOwnerOf(seat);
+		event.ticket = NetRosterTicketIdOf(m_ConfiguredEpoch, seat.seat.stableSeat, seat.holderGeneration);
 		const NetRosterSeat* held = m_Roster.Find(event.seat);
-		event.ticket = kind == NetRosterEventKind::Returned && held ? held->ticket : event.owner;
 		const NetRosterResult result = RTE::ApplyRosterEvent(m_Roster, event);
 		if (result.refused) {
 			DiagnosticLine() << "[roster] refused " << NetRosterEventName(kind) << " seat=" << static_cast<int>(event.seat) << ": " << result.reason << std::endl;
@@ -539,6 +554,7 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::SettleReturn(const SeatState& seat) {
+		if (!seat.seat.local && seat.seat.lockstepPeerId < c_WorldSpectatorLobbyPeerFirst) return;
 		if (const NetRosterSeat* held = RosterSeatOf(seat); held && held->phase == NetSeatPhase::RejoinImage) ApplySeatEvent(seat, NetRosterEventKind::ImageLoaded);
 		if (const NetRosterSeat* held = RosterSeatOf(seat); held && held->phase == NetSeatPhase::RejoinCatchUp) ApplySeatEvent(seat, NetRosterEventKind::CaughtUp);
 	}
@@ -548,6 +564,80 @@ namespace RTE {
 		if (!held) return;
 		ApplySeatEvent(seat, held->owner == 0 ? NetRosterEventKind::Admitted : NetRosterEventKind::ApplicantAccepted);
 		SettleReturn(seat);
+	}
+
+	uint64_t NetReconnectHost::RosterOwnerOf(const SeatState& seat) const {
+		if (seat.hasParticipantId) {
+			if (const uint64_t player = NetRosterOwnerIdOf(seat.participantId); player != 0) return player;
+		}
+		return NetRosterTicketIdOf(m_ConfiguredEpoch, seat.seat.stableSeat, seat.holderGeneration);
+	}
+
+	std::string NetReconnectHost::RosterRefusesReturn(const SeatState& seat, uint32_t holderGeneration) const {
+		NetRosterEvent event;
+		event.kind = NetRosterEventKind::Returned;
+		event.seat = RosterIdOf(seat.seat.stableSeat);
+		event.nowMs = m_NowMs;
+		event.owner = RosterOwnerOf(seat);
+		event.ticket = NetRosterTicketIdOf(m_ConfiguredEpoch, seat.seat.stableSeat, holderGeneration);
+		const NetRosterResult result = RTE::ApplyRosterEvent(m_Roster, event);
+		return result.refused ? result.reason : std::string();
+	}
+
+	const NetReconnectHost::SeatState* NetReconnectHost::SeatOfPeer(uint8_t lockstepPeerId) const {
+		// A world slot's member plays that id even where another seat's own id is the same number.
+		const SeatState* own = nullptr;
+		for (const SeatState& seat: m_Seats) {
+			if (seat.seat.cpu) continue;
+			const NetH4SeatSimIdentity played = SimIdentityOfSeat(seat.seat);
+			if (played.peerId != lockstepPeerId) continue;
+			if (played.fromWorldSlot) return &seat;
+			if (!own) own = &seat;
+		}
+		return own;
+	}
+
+	void NetReconnectHost::NoteReturnWorldReady(uint8_t lockstepPeerId) {
+		const SeatState* seat = SeatOfPeer(lockstepPeerId);
+		if (const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr; held && held->phase == NetSeatPhase::RejoinImage) ApplySeatEvent(*seat, NetRosterEventKind::ImageLoaded);
+	}
+
+	void NetReconnectHost::NoteReturnCaughtUp(uint8_t lockstepPeerId) {
+		const SeatState* seat = SeatOfPeer(lockstepPeerId);
+		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
+		if (!held || (held->phase != NetSeatPhase::RejoinImage && held->phase != NetSeatPhase::RejoinCatchUp)) return;
+		// A seat that plays again has its world: an image never reported is in by now.
+		if (held->phase == NetSeatPhase::RejoinImage) ApplySeatEvent(*seat, NetRosterEventKind::ImageLoaded);
+		ApplySeatEvent(*seat, NetRosterEventKind::CaughtUp);
+	}
+
+	void NetReconnectHost::NoteReturnAborted(uint8_t lockstepPeerId) {
+		const SeatState* seat = SeatOfPeer(lockstepPeerId);
+		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
+		if (held && (held->phase == NetSeatPhase::RejoinImage || held->phase == NetSeatPhase::RejoinCatchUp)) ApplySeatEvent(*seat, NetRosterEventKind::TransferAborted);
+	}
+
+	std::vector<uint8_t> NetReconnectHost::ReturningPeers() const {
+		std::vector<uint8_t> returning;
+		for (const SeatState& seat: m_Seats) {
+			const NetRosterSeat* held = seat.seat.cpu ? nullptr : RosterSeatOf(seat);
+			if (held && (held->phase == NetSeatPhase::RejoinImage || held->phase == NetSeatPhase::RejoinCatchUp)) returning.push_back(SimIdentityOfSeat(seat.seat).peerId);
+		}
+		return returning;
+	}
+
+	bool NetReconnectHost::ReofferReturn(uint8_t lockstepPeerId, std::string* refusal) {
+		SeatState* seat = SeatOfPeer(lockstepPeerId);
+		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
+		if (!held || held->phase != NetSeatPhase::Held || held->holdCause != NetSeatHoldCause::RejoinFailed || seat->activeConnection == c_InvalidNetPeerId) return false;
+		if (held->failedReturns >= c_RosterReturnAttempts) {
+			if (refusal) *refusal = "Could not rejoin - the return failed " + std::to_string(held->failedReturns) + " times";
+			return false;
+		}
+		if (m_NowMs < held->returnAfterMs) return false;
+		ApplySeatEvent(*seat, NetRosterEventKind::Returned);
+		const NetRosterSeat* after = RosterSeatOf(*seat);
+		return after && (after->phase == NetSeatPhase::RejoinImage || after->phase == NetSeatPhase::RejoinCatchUp);
 	}
 
 	void NetReconnectHost::ApplyStageEvent(NetRosterEventKind kind) {
@@ -952,6 +1042,8 @@ namespace RTE {
 		seat->holderGeneration = pending->holderGeneration;
 		seat->incarnation = 0;
 		seat->saturated = false;
+		// The roster names the player by the identity it proved on this link.
+		CaptureParticipant(*seat, connection);
 		SeatHolder(*seat);
 		if (!BindIncarnation(*seat, connection)) {
 			Send(connection, NetJoinRejected{NetRejectReason::InternalError, c_DenialText, "incarnation", "", ""});
@@ -1088,7 +1180,11 @@ namespace RTE {
 			const bool proved = m_Registry != nullptr && m_Registry->VerifyRetiredProof(message.stableSeat, message.holderGeneration, transcript, message.mac);
 			if (proved) {
 				++m_Stats.reassignedReclaimsRefused;
-				const NetPayload refusal = NetJoinRejected{NetRejectReason::SeatReassigned, "this seat was given to another player", "seat_reassigned", "", ""};
+				// The proven retired ticket is the one the roster recorded giving away: its refusal is the roster's.
+				const SeatState* givenAway = FindSeat(message.stableSeat);
+				std::string why = givenAway ? RosterRefusesReturn(*givenAway, message.holderGeneration) : std::string();
+				if (why.empty()) why = "the ticket is not this seat's";
+				const NetPayload refusal = NetJoinRejected{NetRejectReason::SeatReassigned, why, "seat_reassigned", "", ""};
 				m_Admission.ScheduleDenial(connection, message.txId, NetH4DenialReason::SeatReassigned, nowMs, &refusal);
 				++m_Stats.denialsScheduled;
 			} else {
@@ -1101,6 +1197,15 @@ namespace RTE {
 		if (seat == nullptr || !IsSeated(*seat) || IsHostOpened(*seat) || m_Registry == nullptr ||
 		    !m_Registry->VerifySeatProof(message.stableSeat, message.holderGeneration, transcript, message.mac)) {
 			DenyUniformly(connection, message.txId, NetH4DenialReason::BadProof, nowMs);
+			return;
+		}
+		// The seat roster decides whether this return may begin now: its ticket the seat's, its backoff over, its host hosting.
+		if (const std::string why = RosterRefusesReturn(*seat, message.holderGeneration); !why.empty()) {
+			++m_Stats.rosterRefusedReturns;
+			const NetPayload refusal = NetJoinRejected{NetRejectReason::HostNotAccepting, why, "return_refused", "", ""};
+			m_Admission.ScheduleDenial(connection, message.txId, NetH4DenialReason::RateLimited, nowMs, &refusal);
+			++m_Stats.denialsScheduled;
+			if (pending != m_PendingReclaims.end()) m_PendingReclaims.erase(pending);
 			return;
 		}
 		const NetPeerId supersededConnection = seat->activeConnection != connection ? seat->activeConnection : c_InvalidNetPeerId;
@@ -1993,6 +2098,7 @@ namespace RTE {
 		seat->holderGeneration = message.holderGeneration;
 		seat->incarnation = 0;
 		seat->saturated = false;
+		CaptureParticipant(*seat, connection);
 		SeatHolder(*seat);
 		if (pending->supersededGeneration != 0) {
 			seat->retiredGeneration = pending->supersededGeneration;
@@ -2095,23 +2201,20 @@ namespace RTE {
 		}), m_PendingReclaims.end());
 		for (SeatState& seat : m_Seats) {
 			if (IsSeated(seat) && seat.activeConnection == connection) {
-				if (!m_LiveMatch && m_Roster.stage != NetRosterStage::Lobby) {
-					// A drop between rounds keeps the seat held into the next round, as a drop inside one does.
-					seat.activeConnection = c_InvalidNetPeerId;
-					ApplySeatEvent(seat, NetRosterEventKind::LinkDropped);
-					++m_Stats.seatsDropped;
-					return NetH4DisconnectOutcome::SeatDropped;
-				}
-				if (!m_LiveMatch) {
+				if (m_Roster.stage == NetRosterStage::Lobby) {
 					// Nothing has been played, so there is no ownership to hold and no world to come
 					// back to; the seat is free for the next joiner.
 					ReleaseSeat(seat, NetRosterEventKind::LinkDropped);
 					return NetH4DisconnectOutcome::SeatDropped;
 				}
+				// From the first start on the seat is held for its player, inside a round and between rounds.
 				seat.activeConnection = c_InvalidNetPeerId;
 				ApplySeatEvent(seat, NetRosterEventKind::LinkDropped);
-				BumpSeatGeneration(seat);
-				RecordDrop(seat, frame);
+				if (m_LiveMatch) {
+					// A running round's actors pass to the AI, and their owner is recorded for the return.
+					BumpSeatGeneration(seat);
+					RecordDrop(seat, frame);
+				}
 				++m_Stats.seatsDropped;
 				return NetH4DisconnectOutcome::SeatDropped;
 			}
@@ -2231,10 +2334,8 @@ namespace RTE {
 	}
 
 	const NetRosterSeat* NetReconnectHost::RosterSeatOfPeer(uint8_t lockstepPeerId) const {
-		for (const SeatState& seat: m_Seats) {
-			if (SimIdentityOfSeat(seat.seat).peerId == lockstepPeerId) return RosterSeatOf(seat);
-		}
-		return nullptr;
+		const SeatState* seat = SeatOfPeer(lockstepPeerId);
+		return seat ? RosterSeatOf(*seat) : nullptr;
 	}
 
 	void NetReconnectHost::FormRematch() {

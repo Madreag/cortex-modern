@@ -949,6 +949,12 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
+		/// Host: the seat roster's return phases from the round - a returner's world in, its seat playing at a committed frame, its
+		/// transfer abandoned.
+		void FeedRosterReturnsLocked();
+		/// Host: whether a held seat's connected holder may begin a return now. A return the roster failed is offered again only after
+		/// its backoff and under its bound; past the bound the holder is told why, once.
+		bool RosterOffersReturnLocked(uint8_t lockstepPeerId, NetPeerId holder);
 		/// Host: publishes the earliest activation told to a returner and not yet scheduled, for the autosave schedule.
 		void NoteAnnouncedActivationsLocked();
 		/// Moves a returning seat's activation to the first frame the agreed park cannot reach and tells the returner.
@@ -1265,6 +1271,7 @@ namespace RTE {
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
 		friend bool TestAHealNamesACheckpointEveryPeerHolds(std::string* error);
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
+		friend bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
 		friend bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);

@@ -3476,6 +3476,185 @@ namespace RTE {
 			return 0;
 		}
 
+		// SEAT-ROSTER S2 and ruling mmm: a return's phases follow the round - the image, the catch-up, play - moved on only by the
+		// service's events; a return whose transfer is abandoned is the roster's to offer again after its backoff and under its bound,
+		// and a return inside the backoff is refused by the roster with its reason.
+		int TestReturnPhasesFollowTheRound() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint player;
+			player.connection = 161;
+			ConfigureEndpoint(player, "return-phases", &unixNow);
+			wire.Add(&player);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, player, record, unixNow, &error) != 0) {
+				return Fail("could not drop a seat: " + error);
+			}
+			const uint8_t seatId = static_cast<uint8_t>(record.stableSeat + 1);
+			uint8_t peer = 0;
+			for (const NetH4Seat& seat: wire.host.GetSeatTable())
+				if (seat.stableSeat == record.stableSeat) peer = seat.lockstepPeerId;
+			const auto held = [&wire, seatId]() { return wire.host.GetRoster().Find(seatId); };
+			const auto phaseText = [&held]() { return std::string(held() ? NetSeatPhaseName(held()->phase) : "no seat"); };
+			std::vector<std::unique_ptr<Endpoint>> links;
+			const auto reclaim = [&](NetPeerId connection) -> Endpoint* {
+				links.push_back(std::make_unique<Endpoint>());
+				Endpoint* back = links.back().get();
+				back->connection = connection;
+				ConfigureEndpoint(*back, "return-phases", &unixNow);
+				wire.Add(back);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!back->client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) return nullptr;
+				return back;
+			};
+			const auto drop = [&](Endpoint* link) {
+				wire.host.NotifyDisconnect(link->connection, 200);
+				link->connected = false;
+				wire.Remove(link->connection);
+			};
+			Endpoint* first = reclaim(162);
+			if (!first || first->client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the first return was not admitted: " + error);
+			}
+			if (!held() || held()->phase != NetSeatPhase::RejoinImage) {
+				return Fail("an admitted return skipped its image: the roster reads " + phaseText());
+			}
+			wire.host.NoteReturnWorldReady(peer);
+			if (held()->phase != NetSeatPhase::RejoinCatchUp) {
+				return Fail("a return whose image is in is not catching up: the roster reads " + phaseText());
+			}
+			wire.host.NoteReturnCaughtUp(peer);
+			if (held()->phase != NetSeatPhase::Running) {
+				return Fail("a return that plays again is not playing: the roster reads " + phaseText());
+			}
+			// The seat drops again; this return's transfer is abandoned with its player still connected.
+			drop(first);
+			Endpoint* second = reclaim(163);
+			if (!second || second->client.GetState() != NetH4ClientState::Joined || held()->phase != NetSeatPhase::RejoinImage) {
+				return Fail("the second return was not admitted: " + error + " (" + phaseText() + ")");
+			}
+			wire.host.NoteReturnAborted(peer);
+			if (held()->phase != NetSeatPhase::Held || held()->holdCause != NetSeatHoldCause::RejoinFailed || held()->failedReturns != 1) {
+				return Fail("an abandoned return did not leave the seat held with one failed return: " + phaseText() + " failed=" + std::to_string(held()->failedReturns));
+			}
+			std::string refusal;
+			if (wire.host.ReofferReturn(peer, &refusal)) {
+				return Fail("a failed return was offered again inside its backoff");
+			}
+			// A return its player starts again inside the backoff is the roster's to refuse.
+			drop(second);
+			const uint64_t earlyAtMs = wire.nowMs + NetReconnectAdmission::c_AttemptIntervalMs;
+			Endpoint* early = reclaim(164);
+			if (!early) {
+				return Fail("the early return did not settle: " + error);
+			}
+			wire.nowMs = earlyAtMs + NetReconnectAdmission::c_DenialReleaseMs;
+			wire.DrainHostOutbound();
+			const NetJoinRejected* told = LastOf<NetJoinRejected>(wire.Delivered(early->connection));
+			if (early->client.GetState() == NetH4ClientState::Joined || told == nullptr || told->rejectReason != NetRejectReason::HostNotAccepting ||
+			    told->humanMessage != "Could not rejoin - retrying") {
+				return Fail(std::string("a return inside the roster's backoff was not refused by it: client=") + NetReconnectClientStateName(early->client.GetState()) +
+				            " told=" + (told ? NetProtocol::RejectReasonName(told->rejectReason) + std::string(" '") + told->humanMessage + "'" : std::string("nothing")));
+			}
+			wire.Remove(early->connection);
+			// Past the backoff the return is offered again; past the bound it is not, and the refusal names why.
+			wire.nowMs = held()->returnAfterMs + 1;
+			Endpoint* third = reclaim(165);
+			if (!third || third->client.GetState() != NetH4ClientState::Joined || held()->phase != NetSeatPhase::RejoinImage) {
+				return Fail("a return past the backoff was not admitted: " + error + " (" + phaseText() + ")");
+			}
+			for (uint8_t failed = held()->failedReturns; failed < c_RosterReturnAttempts; ++failed) {
+				if (held()->phase != NetSeatPhase::RejoinImage) {
+					wire.nowMs = std::max(wire.nowMs, held()->returnAfterMs);
+					wire.host.Tick(wire.nowMs);
+					if (!wire.host.ReofferReturn(peer, &refusal)) {
+						return Fail("a failed return was not offered again past its backoff (failed " + std::to_string(failed) + "): " + refusal);
+					}
+				}
+				wire.host.NoteReturnAborted(peer);
+			}
+			wire.nowMs = held()->returnAfterMs + 1;
+			wire.host.Tick(wire.nowMs);
+			refusal.clear();
+			if (wire.host.ReofferReturn(peer, &refusal) || refusal.empty() || held()->phase != NetSeatPhase::Held) {
+				return Fail("a return past the roster's bound was offered again or not refused: '" + refusal + "' " + phaseText());
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS return_phases_follow_the_round failed_returns=" << static_cast<int>(held()->failedReturns)
+			          << " refusal='" << refusal << "'" << std::endl;
+			return 0;
+		}
+
+		// Ruling mmm: the roster names a seat's owner by the identity its player proved and its ticket by the ticket the player holds;
+		// a ticket the host gave away is refused by the roster's record of it, with the roster's reason.
+		int TestStaleTicketRefusedThroughTheRoster() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint holder;
+			holder.connection = 171;
+			ConfigureEndpoint(holder, "stale-holder", &unixNow);
+			wire.Add(&holder);
+			const NetAuthBytes32 holderId = Ramp<32>(0x31), substituteId = Ramp<32>(0x51);
+			wire.host.BindParticipantId(holder.connection, holderId);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+				return Fail("could not drop a seat: " + error);
+			}
+			const uint8_t seatId = static_cast<uint8_t>(record.stableSeat + 1);
+			if (wire.host.GetRoster().Find(seatId)->owner != NetRosterOwnerIdOf(holderId)) {
+				return Fail("the roster does not name the seated player by the identity it proved: owner " + std::to_string(wire.host.GetRoster().Find(seatId)->owner));
+			}
+			Endpoint substitute;
+			substitute.connection = 172;
+			ConfigureEndpoint(substitute, "stale-substitute", &unixNow);
+			wire.Add(&substitute);
+			wire.host.BindParticipantId(substitute.connection, substituteId);
+			if (!substitute.client.BeginApplication(record.stableSeat, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the application did not settle: " + error);
+			}
+			if (wire.host.SubstituteApplicant(record.stableSeat, substitute.connection, wire.nowMs) != NetH4ModerationResult::Ok || !wire.Pump(&error) ||
+			    substitute.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the substitution did not settle: " + error);
+			}
+			const NetRosterSeat* given = wire.host.GetRoster().Find(seatId);
+			if (given->owner != NetRosterOwnerIdOf(substituteId) || given->givenAwayTicket != NetRosterTicketIdOf(wire.registry.GetEpoch(), record.stableSeat, record.holderGeneration)) {
+				return Fail("the roster did not record the seat given away from the held ticket to the substitute: owner " + std::to_string(given->owner));
+			}
+			// The ex-holder returns with the ticket the host gave away: the roster's record of it is the refusal.
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			const uint64_t reclaimAtMs = wire.nowMs;
+			Endpoint exHolder;
+			exHolder.connection = 173;
+			ConfigureEndpoint(exHolder, "stale-holder", &unixNow);
+			wire.Add(&exHolder);
+			if (!exHolder.client.BeginReclaim(record, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the stale reclaim did not settle: " + error);
+			}
+			wire.nowMs = reclaimAtMs + NetReconnectAdmission::c_DenialReleaseMs;
+			wire.DrainHostOutbound();
+			const NetJoinRejected* told = LastOf<NetJoinRejected>(wire.Delivered(exHolder.connection));
+			if (exHolder.client.GetState() == NetH4ClientState::Joined || told == nullptr || told->rejectReason != NetRejectReason::SeatReassigned ||
+			    told->humanMessage != "The host gave your seat to another player") {
+				return Fail(std::string("a given-away ticket was not refused by the roster's record: client=") + NetReconnectClientStateName(exHolder.client.GetState()) +
+				            " told=" + (told ? told->humanMessage : std::string("nothing")));
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS stale_ticket_refused_through_the_roster owner=player_identity told='" << told->humanMessage << "'" << std::endl;
+			return 0;
+		}
+
 		// Ruling qqq: one game process plays one hosted session after another, and a client's copy of the seat roster follows the
 		// session it joined - the new host's revisions and its round's start are its own, never 'older' than the last session's.
 		int TestRosterCopyFollowsANewHostedSession() {
@@ -4761,6 +4940,9 @@ namespace RTE {
 			if (substituteRecord.stableSeat != 0 || substituteRecord.holderGeneration != record.holderGeneration + 1) {
 				return Fail("the substitute's record names the wrong seat or generation");
 			}
+			// The substitute plays the seat before it drops, as the service reports it.
+			for (const NetH4Seat& seat: wire.host.GetSeatTable())
+				if (seat.stableSeat == 0) wire.host.NoteReturnCaughtUp(seat.lockstepPeerId);
 			wire.host.NotifyDisconnect(substitute.connection, 200);
 			substitute.connected = false;
 			wire.Remove(substitute.connection);
@@ -6884,6 +7066,8 @@ namespace RTE {
 			if (first.store.Load(unixNow, second, &error) != NetH4TicketLoadResult::Loaded) {
 				return Fail("the reclaim left no record to come back with: " + error);
 			}
+			// The first return plays the round again before the seat drops on the next round's setup, as the service reports it.
+			wire.host.NoteReturnCaughtUp(leaverPeer);
 
 			// The off-tick second drop: the census refuses, so the seat records nothing.
 			const std::vector<NetH4LedgerActor> live = census;
@@ -8198,6 +8382,12 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestRosterNumbersOnAcrossAMigration(); result != 0) {
+			return result;
+		}
+		if (const int result = TestReturnPhasesFollowTheRound(); result != 0) {
+			return result;
+		}
+		if (const int result = TestStaleTicketRefusedThroughTheRoster(); result != 0) {
 			return result;
 		}
 		if (const int result = TestCleanLeaverKeepsTheSeat(); result != 0) {

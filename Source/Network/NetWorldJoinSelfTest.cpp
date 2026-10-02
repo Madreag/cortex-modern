@@ -4382,6 +4382,45 @@ namespace RTE {
 		return true;
 	}
 
+	// A dropped holder comes back on a new transport with its ticket: the reclaim, the challenge and the proof.
+	bool ReclaimWorldSeat(NetReconnectHost& admission, const NetH4Identity& identity, const NetH4TicketOffer& offer, NetPeerId connection, uint64_t nowMs) {
+		NetH4Reclaim reclaim;
+		reclaim.txId.fill(static_cast<uint8_t>(connection));
+		reclaim.epoch = offer.epoch;
+		reclaim.stableSeat = offer.stableSeat;
+		reclaim.holderGeneration = offer.holderGeneration;
+		reclaim.identity = identity;
+		reclaim.displayName = "returner";
+		admission.HandleMessage(connection, reclaim, nowMs);
+		NetAuthBytes32 challenge{};
+		bool challenged = false;
+		for (const NetH4Outbound& outbound: admission.TakeOutbound()) {
+			if (const auto* issued = std::get_if<NetH4Challenge>(&outbound.payload)) {
+				challenge = issued->challenge;
+				challenged = true;
+			}
+		}
+		if (!challenged) return false;
+		NetH4Transcript transcript;
+		transcript.domain = NetH4ProofDomain::Reclaim;
+		transcript.protocolVersion = NetProtocol::c_Version;
+		transcript.epoch = offer.epoch;
+		transcript.stableSeat = offer.stableSeat;
+		transcript.holderGeneration = offer.holderGeneration;
+		transcript.challenge = challenge;
+		transcript.clientNonce.fill(0x22);
+		NetH4Proof proof;
+		proof.txId = reclaim.txId;
+		proof.epoch = offer.epoch;
+		proof.stableSeat = offer.stableSeat;
+		proof.holderGeneration = offer.holderGeneration;
+		proof.clientNonce = transcript.clientNonce;
+		if (!NetH4ComputeProof(offer.credential, transcript, proof.mac)) return false;
+		admission.HandleMessage(connection, proof, nowMs + 10);
+		admission.TakeOutbound();
+		return true;
+	}
+
 	// A world member who leaves keeps its slot: its H4 row stays its own and nothing releases the slot to the next holder.
 	int TestWorldCleanLeaveReleasesOnlyTheSeatThatLeft() {
 		ScriptedAuthCrypto crypto;
@@ -4708,6 +4747,8 @@ namespace RTE {
 			return Fail("promoted-drop-named-the-seats-id: dave does not hold the freed slot");
 		}
 		const uint8_t playedSlot = seated->assignedPeerId;
+		// Dave plays his slot from his activation, as the host's service reports it to the seat roster.
+		admission.NoteReturnCaughtUp(playedSlot);
 		uint8_t daveSeatLockstep = 0;
 		for (const NetH4Seat& seat: seats) {
 			if (seat.stableSeat == daveOffer.stableSeat) {
@@ -7121,6 +7162,95 @@ namespace RTE {
 		return true;
 	}
 
+	// SEAT-ROSTER S2 at the service: a private return's phases come from the round - its image in moves the roster on, an abandoned
+	// transfer fails the return - and a failed return is begun again only after the roster's backoff and under its bound.
+	bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error) {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		NetMatchService host;
+		host.m_IsHost = true;
+		const NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x9A61);
+		if (!host.m_SeatAuth.BeginHostedSession()) {
+			*error = "the private-return row's registry did not arm";
+			return false;
+		}
+		NetReconnectHost& plane = host.m_ReconnectHost;
+		plane.Configure(&host.m_SeatAuth, config.sessionId, identity);
+		plane.SetSeatTable(NetH4BuildSeatTable(config), config.mode);
+		plane.SetLiveMatch(false);
+		NetH4TicketOffer offer;
+		if (!CommitWorldSeat(plane, identity, 61, "returner", offer)) {
+			*error = "the private-return row could not seat its player";
+			return false;
+		}
+		plane.SetLiveMatch(true);
+		uint8_t peer = 0;
+		for (const NetH4Seat& seat: plane.GetSeatTable())
+			if (seat.stableSeat == offer.stableSeat) peer = seat.lockstepPeerId;
+		const uint8_t seatId = static_cast<uint8_t>(offer.stableSeat + 1);
+		const auto held = [&plane, seatId]() { return plane.GetRoster().Find(seatId); };
+		const auto phaseText = [&held]() { return std::string(held() ? NetSeatPhaseName(held()->phase) : "no seat"); };
+		// The player plays the round, drops, and returns with its ticket on a new link.
+		plane.NotifyDisconnect(61, 100);
+		if (!ReclaimWorldSeat(plane, identity, offer, 65, 1500) || !held() || held()->phase != NetSeatPhase::RejoinImage) {
+			*error = "the private-return row's return was not admitted into its image: " + phaseText();
+			return false;
+		}
+		NetPeerId holder = c_InvalidNetPeerId;
+		uint32_t generation = 0, incarnation = 0;
+		std::string setupError;
+		if (!plane.GetSeatHolder(offer.stableSeat, holder, generation, incarnation) || holder != 65 ||
+		    !host.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &setupError) || !host.m_WorldJoin.BeginRejoin(65, offer.stableSeat, peer, incarnation, "returner", 1500, &setupError)) {
+			*error = "the private-return row could not open the rejoin: " + setupError;
+			return false;
+		}
+		host.FeedRosterReturnsLocked();
+		if (held()->phase != NetSeatPhase::RejoinImage) {
+			*error = "a private return moved on before its image was in: " + phaseText();
+			return false;
+		}
+		if (!host.m_WorldJoin.NoteTransferComplete(65, 32, &setupError)) {
+			*error = "the private-return row's image did not complete: " + setupError;
+			return false;
+		}
+		host.FeedRosterReturnsLocked();
+		if (held()->phase != NetSeatPhase::RejoinCatchUp) {
+			*error = "a private return whose image is in did not reach the roster's catch-up: " + phaseText();
+			return false;
+		}
+		// The rejoin is abandoned with the player still connected: the roster fails the return, and nothing begins it again inside the backoff.
+		host.m_WorldJoin.CancelJoin(65, "the returner could not be moved past the capture park");
+		host.FeedRosterReturnsLocked();
+		if (held()->phase != NetSeatPhase::Held || held()->holdCause != NetSeatHoldCause::RejoinFailed || held()->failedReturns != 1) {
+			*error = "an abandoned private return did not fail on the roster: " + phaseText() + " failed=" + std::to_string(held()->failedReturns);
+			return false;
+		}
+		if (host.RosterOffersReturnLocked(peer, 65)) {
+			*error = "a failed private return was begun again inside its backoff";
+			return false;
+		}
+		// Past the backoff it is begun again; past the roster's bound it is not.
+		uint8_t offered = 0;
+		while (held()->failedReturns < c_RosterReturnAttempts) {
+			plane.Tick(held()->returnAfterMs);
+			if (!host.RosterOffersReturnLocked(peer, 65) || held()->phase != NetSeatPhase::RejoinImage) {
+				*error = "a failed private return was not begun again past its backoff: " + phaseText() + " failed=" + std::to_string(held()->failedReturns);
+				return false;
+			}
+			++offered;
+			plane.NoteReturnAborted(peer);
+		}
+		plane.Tick(held()->returnAfterMs);
+		if (host.RosterOffersReturnLocked(peer, 65) || held()->phase != NetSeatPhase::Held) {
+			*error = "a private return past the roster's bound was begun again: " + phaseText();
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_private_return_follows_the_round_on_the_roster offered_again=" << static_cast<int>(offered)
+		          << " failed=" << static_cast<int>(held()->failedReturns) << std::endl;
+		return true;
+	}
+
 	// The corrective: a round that opens ON a checkpoint records a segment from its FIRST frame, not an
 	// ordinary file that names no world.
 	bool TestResumedWorldRecordsASegment(std::string* error) {
@@ -8243,6 +8373,7 @@ namespace RTE {
 			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);
 			if (!TestAHealNamesACheckpointEveryPeerHolds(&error)) return Fail(error);
 			if (!TestAStuckPrivateImageIsRetakenOnceThenRefused(&error)) return Fail(error);
+			if (!TestAPrivateReturnFollowsTheRoundOnTheRoster(&error)) return Fail(error);
 			if (!TestCheckpointCommandCrossesTheWire(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);

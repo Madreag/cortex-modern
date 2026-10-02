@@ -1155,6 +1155,8 @@ namespace RTE {
 		bool AnyHeldAISeat() const { NET_PLANE_CHECK(); return std::any_of(m_AiHeldSeats.begin(), m_AiHeldSeats.end(), [&](const auto& seat) { return !m_ReleasedAiSeats.contains(seat.first); }); }
 		/// Whether the seat's hold was ended by a kick, a ban, a release or a clean leave: its units stay with the AI and a return is a new join.
 		bool IsSeatReleased(uint8_t peerId) const { NET_PLANE_CHECK(); return m_ReleasedAiSeats.contains(peerId); }
+		/// Whether a remote member's seat plays the round at the frame: its input is required there and the AI does not hold it.
+		bool SeatPlaysAtFrame(uint8_t peerId, uint64_t frame) const { NET_PLANE_CHECK(); return IsKnownRemotePeer(peerId) && IsRemoteRequiredForFrame(peerId, frame) && !IsSeatUnderAI(peerId, frame); }
 		/// Host: whether a held seat was held because its machine cannot keep up with the round.
 		bool IsHeldAsSlowMachine(uint8_t peerId) const { NET_PLANE_CHECK(); return m_SlowMachineHolds.contains(peerId) && HasHeldAISeat(peerId); }
 		/// A seat's reclaim or admission is agreed and its activation frame is still ahead.

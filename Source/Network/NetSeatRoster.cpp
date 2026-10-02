@@ -230,7 +230,7 @@ namespace RTE {
 				return changed ? commit("the seats left out start held") : keep("every seat is a member");
 			}
 			case NetRosterEventKind::TransferAborted: {
-				if (!seat || seat->phase != NetSeatPhase::RejoinImage) return refuse("no image is in transfer to the seat");
+				if (!seat || (seat->phase != NetSeatPhase::RejoinImage && seat->phase != NetSeatPhase::RejoinCatchUp)) return refuse("no return is in transfer to the seat");
 				FailReturn(*seat, event.nowMs);
 				return commit("Could not rejoin - retrying");
 			}
@@ -614,7 +614,7 @@ namespace RTE {
 			/*  3 RUNNING        */ "HZRHHMX-GXXX-HHHXXX",
 			/*  4 HELD           */ "-ZIHHEX--XXX----XIH",
 			/*  5 REJOIN_IMAGE   */ "HZIHHMX-HXXH-HH-XXX",
-			/*  6 REJOIN_CATCHUP */ "HZIHHMX-HXXX-HH-XXX",
+			/*  6 REJOIN_CATCHUP */ "HZIHHMX-HXXH-HH-XXX",
 			/*  7 ROUND_END      */ "-ZMHHXH.XX-X----XMH",
 			/*  8 REMATCH_LOBBY  */ "HZMHHXS.XXHX-HH-XXX",
 			/*  9 RELAUNCHING    */ "--IHH-X--XXX----XIH",

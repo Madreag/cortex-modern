@@ -338,6 +338,7 @@ namespace RTE {
 		uint32_t substitutionsSuperseded = 0; //!< Lost the seat-generation CAS to a returner.
 		uint32_t substitutionAckFailures = 0;
 		uint32_t reassignedReclaimsRefused = 0; //!< Proved the retired credential and was told why.
+		uint32_t rosterRefusedReturns = 0;      //!< A proven return the seat roster refused: its backoff, its ticket or its host.
 	};
 
 	/// The host's §4/§6/§7 state machine: it runs the admission transaction, fences a superseded
@@ -466,6 +467,17 @@ namespace RTE {
 		/// A rematch forms in its lobby: the round before it is over, its present seats go to the start and the seats whose players
 		/// are away or that the host opened start held.
 		void FormRematch();
+		/// A returning seat's world is the round's: its image is in, or its player kept the world.
+		void NoteReturnWorldReady(uint8_t lockstepPeerId);
+		/// A returning seat plays the round again at a committed frame.
+		void NoteReturnCaughtUp(uint8_t lockstepPeerId);
+		/// A returning seat's transfer was abandoned: the AI keeps the seat and the return is offered again after the roster's backoff.
+		void NoteReturnAborted(uint8_t lockstepPeerId);
+		/// The lockstep peers whose seats are on their way back, through the image or the catch-up.
+		std::vector<uint8_t> ReturningPeers() const;
+		/// A seat whose return failed while its player stayed connected: true when the return is offered again now (its backoff over,
+		/// under the roster's bound). Past the bound the refusal names why and nothing more is offered on this link.
+		bool ReofferReturn(uint8_t lockstepPeerId, std::string* refusal);
 		/// The lockstep peers a forming round's start waits on - the roster's seats at the start on a live link - and the host's,
 		/// sorted; empty when no round is forming.
 		std::vector<uint8_t> StartMembers() const;
@@ -609,8 +621,15 @@ namespace RTE {
 		void ApplyStageEvent(NetRosterEventKind kind);
 		/// Sends the roster's current revision to every connected holder, or to one connection.
 		void SendRoster(NetPeerId only = c_InvalidNetPeerId);
-		/// A holder this plane seats or takes back is playing: the plane sees no image or catch-up of its own.
+		/// A seat whose holder never takes the round's image - the host's own, a watcher's - is back the moment it is seated.
 		void SettleReturn(const SeatState& seat);
+		/// The roster's owner for the seat's holder: the player's proven identity, or with none proven its ticket.
+		uint64_t RosterOwnerOf(const SeatState& seat) const;
+		/// The seat roster's answer to a return with the ticket of this holder generation; empty when the return may begin.
+		std::string RosterRefusesReturn(const SeatState& seat, uint32_t holderGeneration) const;
+		/// The plane seat a lockstep peer plays: a world slot's member before a seat whose own id it is.
+		const SeatState* SeatOfPeer(uint8_t lockstepPeerId) const;
+		SeatState* SeatOfPeer(uint8_t lockstepPeerId) { return const_cast<SeatState*>(std::as_const(*this).SeatOfPeer(lockstepPeerId)); }
 		/// Seats a new holder in the roster: an open seat is admitted, a held one given to the applicant.
 		void SeatHolder(const SeatState& seat);
 		/// Keeps one roster seat per plane seat, the existing ones as they are.
@@ -726,6 +745,10 @@ namespace RTE {
 	const char* NetReconnectClientStateName(NetH4ClientState state);
 	/// The seat roster's match: the hosted session's admission epoch, which every admitted peer holds in its ticket; 0 for none.
 	uint64_t NetRosterMatchIdOf(const NetAuthBytes16& epoch);
+	/// The seat roster's owner for a player who proved its participant identity; 0 for none.
+	uint64_t NetRosterOwnerIdOf(const NetAuthBytes32& participantId);
+	/// The seat roster's ticket id: the ticket a holder returns with, named by its session's epoch, its seat and its holder generation.
+	uint64_t NetRosterTicketIdOf(const NetAuthBytes16& epoch, uint16_t stableSeat, uint32_t holderGeneration);
 
 	struct NetReconnectClientStats {
 		uint32_t requestsSent = 0;

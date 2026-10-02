@@ -667,6 +667,8 @@ namespace RTE {
 		void MarkActivationCommitted(NetPeerId connection);
 		/// Ends a bootstrap without a seat drop: a failed or slow fresh join is not a departure.
 		void CancelJoin(NetPeerId connection, const std::string& reason);
+		/// The peers whose joins were cancelled since the last call, oldest first.
+		std::vector<uint8_t> TakeCancelledJoins();
 		/// Cancels every bootstrap past its deadline. Returns how many it ended.
 		size_t ExpireStaleJoins(uint64_t nowMs);
 		/// Ends every bootstrap whose connection is gone, so a spectator's lobby id returns to the pool.
@@ -716,6 +718,7 @@ namespace RTE {
 		uint64_t m_SentInputThrough = 0; //!< The round's highest sent target, from the coordinator.
 		uint64_t m_ActivationsCommitted = 0;
 		uint64_t m_JoinsCancelled = 0;
+		std::vector<uint8_t> m_CancelledJoins; //!< The assigned peers of the joins cancelled, for the host's seat roster.
 	};
 
 } // namespace RTE
