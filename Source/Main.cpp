@@ -1203,6 +1203,7 @@ static std::atomic<float> s_paceExecutionAverageMs{0.0F};
 static std::deque<float> s_paceTickCostsMs; //!< The paced round's recent tick costs, whose median caps what the clock owes.
 static long long s_paceUpdateUs = 0;
 static long long s_paceDrawUs = 0;
+static long long s_paceTrailingUs = 0; //!< Time since the round's last simulated tick, which the round did not run.
 static long long s_pacePreviewUs = 0; //!< The draw's share spent in the local prediction preview.
 static long long s_paceInterfaceUs = 0; //!< The draw's share spent on input, the menus and the activity's render update.
 static uint64_t s_paceFramesDrawn = 0; //!< Frames the presentation cap let through.
@@ -6742,6 +6743,7 @@ void RunGameLoop() {
 			s_paceTickCostsMs.clear();
 			s_paceUpdateUs = 0;
 			s_paceDrawUs = 0;
+			s_paceTrailingUs = 0;
 			s_pacePreviewUs = 0;
 			s_paceInterfaceUs = 0;
 			s_paceFramesDrawn = 0;
@@ -6751,6 +6753,7 @@ void RunGameLoop() {
 			g_TimerMan.ResetPaceCounters();
 		}
 		s_pacePrevActive = paceActiveAtIterStart;
+		const uint64_t paceTicksAtIterStart = s_paceSimTicks;
 
 		// A free-running lockstep match takes one tick per iteration, so the preview and the polls still run per tick.
 		const bool freeRunLockstep = ScenarioRunner::GetArgs().freeRunSim && ScenarioRunner::IsLockstepControllerSyncActive();
@@ -8519,6 +8522,8 @@ void RunGameLoop() {
 			++s_paceIterations;
 			s_paceUpdateUs += updateTotalTime;
 			s_paceDrawUs += drawTotalTime;
+			// A run that ends while this machine waits on a frame past its last tick ran no round in that wait.
+			s_paceTrailingUs = s_paceSimTicks != paceTicksAtIterStart ? 0 : s_paceTrailingUs + updateTotalTime + drawTotalTime;
 			s_pacePreviewUs += interfaceStartTime - previewStartTime;
 			s_paceInterfaceUs += frameDrawStartTime - interfaceStartTime;
 			s_paceMaxDrawUs = std::max(s_paceMaxDrawUs, drawTotalTime);
@@ -8913,13 +8918,14 @@ std::string BuildDesyncCheckJson() {
 // dt's intended rate", sim_ms_per_tick is the full-tick compute cost (and, in playback, the
 // rollback re-sim cost — playback runs no AI).
 std::string BuildLoopPaceJson() {
-	const long long wallUs = s_paceUpdateUs + s_paceDrawUs;
+	const long long wallUs = s_paceUpdateUs + s_paceDrawUs - s_paceTrailingUs;
 	std::ostringstream out;
 	out.imbue(std::locale::classic());
 	out << "{";
 	out << "\"iterations\":" << s_paceIterations << ",";
 	out << "\"sim_ticks\":" << s_paceSimTicks << ",";
 	out << "\"wall_ms\":" << wallUs / 1000 << ",";
+	out << "\"trailing_ms\":" << s_paceTrailingUs / 1000 << ",";
 	out << "\"sim_ms\":" << s_paceSimUs / 1000 << ",";
 	out << "\"draw_ms\":" << s_paceDrawUs / 1000 << ",";
 	out << "\"wall_tps\":" << (wallUs > 0 ? static_cast<double>(s_paceSimTicks) * 1000000.0 / static_cast<double>(wallUs) : 0.0) << ",";
