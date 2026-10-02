@@ -7818,6 +7818,11 @@ void RunGameLoop() {
 				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !reclaimStart && simTick > 0; ++peer)
 					reclaimStart = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 1);
 				if (reclaimStart) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "reclaim");
+				// Sixty ticks after a returner's reclaim gap closes it plays live on every peer, so that tick is sampled too.
+				bool landed = false;
+				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !landed && simTick > 60; ++peer)
+					landed = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 60) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 59);
+				if (landed && !reclaimStart) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "landed");
 				if ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
