@@ -312,8 +312,11 @@ namespace RTE {
 			// A reclaimed seat is back; one the host last showed closed or dropped is gone.
 			bool gone = leaveFrames.contains(slot.peerId) && !refilledPeerIds.contains(slot.peerId);
 			if (seats) {
-				gone = gone || std::any_of(seats->seats.begin(), seats->seats.end(), [&slot](const NetSeatPresenceEntry& seat) {
-					return seat.peerId == slot.peerId && seat.state != NetSeatPresenceState::Present && seat.state != NetSeatPresenceState::Substituted;
+				// A seat the round handed to the AI is still its player's whatever its link does; only a leave ends it.
+				const bool held = refilledPeerIds.contains(slot.peerId);
+				gone = gone || std::any_of(seats->seats.begin(), seats->seats.end(), [&slot, held](const NetSeatPresenceEntry& seat) {
+					if (seat.peerId != slot.peerId) return false;
+					return held ? seat.state == NetSeatPresenceState::Left : seat.state != NetSeatPresenceState::Present && seat.state != NetSeatPresenceState::Substituted;
 				});
 			}
 			if (!gone || slot.peerId == localPeerId) {

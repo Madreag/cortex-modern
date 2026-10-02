@@ -664,9 +664,9 @@ namespace RTE {
 		void EndHeldRejoinInNextRound();
 		/// Client: a private catch-up its round ended under belongs to that round; the next round starts fresh, never from its image.
 		void EndRoundCatchUpLocked();
-		/// Client: whether a rematch setup that failed returns this seat through the rejoin - its link to the host closed without the
-		/// host's goodbye, so the host plays the next round with the seat held for it.
-		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason);
+		/// Client: whether a rematch setup that failed returns this seat through the rejoin - the transport lost its link to the host
+		/// without the host's goodbye, so the host plays the next round with the seat held for it. A protocol failure is not a drop.
+		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost);
 		/// Client: the last rematch setup lost its link to the host and the seat is owed its return to the round the host plays.
 		bool RematchReturnOwed() const;
 		void PreparePrivateRejoinCheckpoint();
