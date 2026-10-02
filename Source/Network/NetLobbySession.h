@@ -264,6 +264,7 @@ namespace RTE {
 
 		bool IsKnownRemote(uint8_t peerId) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
+		friend bool TestALobbyDropsAnAbandonedTransfersTail(std::string* error);
 		bool IsCommittedTransport(NetPeerId transportPeerId) const;
 		uint16_t OutgoingChunkIndex(uint8_t peerId) const;
 		/// Whether the round seats a human on a peer other than this host's own.
