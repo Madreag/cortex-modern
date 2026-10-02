@@ -418,6 +418,7 @@ def local_host_render(manifest, peers):
                        'No wall TPS available in the retained events; reported only.')
 
 
+HOLD_OF_SEAT = re.compile(r'\[net-lockstep\] hold of this seat at (\d+)')
 COMPLETED_HELD = re.compile(r'\[net-match\] completed_by_(?:end_record|next_round|host_goodbye)=1 held_from=\d+')
 
 
@@ -426,14 +427,21 @@ def held_away_ranges(live, ranges, logs):
     from the tick after it to the round's end is its away range, as an image rejoin's is. Any other missing key stays UNKNOWN."""
     away = {}
     for name, peer_rows in live.items():
-        left = sum(len(COMPLETED_HELD.findall(text)) for text in logs.get(name, []))
+        # Each departure with the frame its hold began: ticks the seat ran from there were on a branch it then abandoned.
+        departures = []
+        for text in logs.get(name, []):
+            held = None
+            for line in text.splitlines():
+                if (found := HOLD_OF_SEAT.search(line)): held = int(found.group(1))
+                elif COMPLETED_HELD.search(line): departures.append(held); held = None
         for interval in ranges:
-            if left == 0: break
+            if not departures: break
             prefix = tuple(interval[field] for field in report.HISTORY_FIELDS[:-1])
             ticks = sorted({r['tick'] for r in peer_rows if isinstance(r.get('tick'), int) and tuple(r.get(field) for field in report.HISTORY_FIELDS[:-1]) == prefix})
             if not ticks or ticks[0] != interval['first'] or ticks[-1] >= interval['last'] or len(ticks) != ticks[-1] - ticks[0] + 1: continue
-            away[(name, prefix)] = (ticks[-1] + 1, interval['last'])
-            left -= 1
+            held = departures.pop(0)
+            first = held if held is not None and ticks[0] < held <= ticks[-1] + 1 else ticks[-1] + 1
+            away[(name, prefix)] = (first, interval['last'])
     return away
 
 
