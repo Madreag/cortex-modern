@@ -469,6 +469,13 @@ namespace RTE {
 			DiagnosticLine() << "[net-match] round members=" << list(m_ActivePeerIds) << " formed=" << list(formedMembers) << " agreed=" << list(m_MatchConfig.activePeerIds)
 			          << " revision=" << m_MatchConfig.configRevision << " rematch=" << m_RematchRound << " resync=" << m_ResyncRound << std::endl;
 		}
+		// A seat the agreed round holds is not one of its members: its player comes back through the rejoin while the round runs.
+		if (m_UseLobbyProtocol && !m_Config.host && !m_ActivePeerIds.empty() &&
+		    std::find(m_ActivePeerIds.begin(), m_ActivePeerIds.end(), LocalLockstepPeerId(session)) == m_ActivePeerIds.end()) {
+			SetFailed(c_SeatStartsHeld);
+			if (error) *error = m_SetupError;
+			return false;
+		}
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
 		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error)) {

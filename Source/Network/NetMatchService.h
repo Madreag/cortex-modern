@@ -667,8 +667,9 @@ namespace RTE {
 		/// Client: whether a rematch setup that failed returns this seat through the rejoin - the transport lost its link to the host
 		/// without the host's goodbye, so the host plays the next round with the seat held for it. A protocol failure is not a drop.
 		/// startNeverCame: the round's lockstep start timed out, which a link the host dropped looks like even while this side still reads ready.
+		/// heldAtStart: the agreed round starts this seat held, so its player returns through the rejoin while the round runs.
 		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost,
-		                                            bool startNeverCame);
+		                                            bool startNeverCame, bool heldAtStart);
 		/// Client: the last rematch setup lost its link to the host and the seat is owed its return to the round the host plays.
 		bool RematchReturnOwed() const;
 		/// The survivors a peer hands its rematch roster. A client that left its round held (it took the round's record) holds no view

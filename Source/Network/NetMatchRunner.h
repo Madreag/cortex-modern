@@ -222,6 +222,8 @@ namespace RTE {
 		/// @param agreed The config the lobby agreed.
 		/// @return The members the round's start waits for.
 		static std::vector<uint8_t> SettledRoundMembers(bool lobbyAgreed, const std::vector<uint8_t>& formed, const NetMatchConfig& agreed);
+		/// The setup error of a client whose seat the agreed round starts held: it takes the round through the held rejoin, not a start.
+		static constexpr const char* c_SeatStartsHeld = "this seat starts the round held";
 		/// The survivors to hand SetRematchRoster, from what its own round saw. The deriving peer (localPeerId) is in the lobby it derives
 		/// for, so its own seat survives even when the round ended with it held.
 		static std::vector<uint8_t> DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats, uint8_t localPeerId = 0);
