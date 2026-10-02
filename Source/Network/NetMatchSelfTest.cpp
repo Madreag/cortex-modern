@@ -3764,7 +3764,7 @@ namespace RTE {
 				*error = "same-size restart mixed old/new state or lost progress";
 				return false;
 			}
-			const uint64_t firstId = 0x50355354ULL ^ static_cast<uint32_t>(original.size()) ^ (6ULL << 32);
+			const uint64_t firstId = (config.matchConfig.configRevision << 32) | (0x50355354U ^ static_cast<uint32_t>(original.size()) ^ (6U << 16));
 			const std::vector<uint8_t> smaller(17, 0x72);
 			host.BeginStateTransfer(smaller);
 			host.RequestStart();
@@ -7160,6 +7160,40 @@ namespace RTE {
 			return false;
 		}
 		std::cout << "[net-match-selftest] PASS a_lobby_drops_an_abandoned_transfers_tail" << std::endl;
+		return true;
+	}
+
+	// l4p-48's Mac: its rejoin connection took the round-start scripts from the host's lobby of the round that was ending, then the host's
+	// lobby for the next round opened its own transfer of a blob of the same size, and the Mac failed the rematch on it ('state transfer
+	// does not start with a new first chunk'): every lobby numbered its first transfer from the blob's size alone.
+	bool TestALaterLobbysTransferIsNewToItsPeers(std::string* error) {
+		const auto transferIdOf = [](uint64_t revision, size_t bytes, int restarts) {
+			NetLobbySession host;
+			host.m_Config.host = true;
+			host.m_Config.matchConfig.configRevision = revision;
+			host.m_StateBytesToSend.assign(bytes, 1);
+			for (int restart = 0; restart <= restarts; ++restart) host.RestartStateTransfer();
+			return host.m_OutgoingStateId;
+		};
+		const size_t bytes = 3 * NetLobbyProtocol::c_MaxStateChunkBytes;
+		// The ending round's lobby restarted its transfer once for the returner's connection; the next round's lobby starts afresh.
+		const uint64_t ending = transferIdOf(30, bytes, 1), next = transferIdOf(31, bytes, 0);
+		NetLobbySession client;
+		NetLobbyStateChunk chunk;
+		chunk.totalBytes = static_cast<uint32_t>(bytes);
+		chunk.chunkCount = 3;
+		chunk.bytes.assign(NetLobbyProtocol::c_MaxStateChunkBytes, 1);
+		chunk.transferId = ending;
+		for (uint16_t index = 0; index < 3; ++index) { chunk.chunkIndex = index; client.HandleStateChunk(chunk); }
+		chunk.transferId = next;
+		chunk.chunkIndex = 0;
+		client.HandleStateChunk(chunk);
+		if (client.IsFailed()) {
+			*error = "a peer refused the next round's lobby transfer after the ending round's: ending=" + std::to_string(ending) + " next=" + std::to_string(next) +
+			         " reason='" + client.GetFailureReason() + "'";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_later_lobbys_transfer_is_new_to_its_peers" << std::endl;
 		return true;
 	}
 
@@ -15322,6 +15356,7 @@ namespace RTE {
 		if (!TestARoundStartsDelayCoversTheStartWork(&error)) return fail(error);
 		if (!TestARematchStartsWithoutTheEndedRoundsCatchUp(&error)) return fail(error);
 		if (!TestALobbyDropsAnAbandonedTransfersTail(&error)) return fail(error);
+		if (!TestALaterLobbysTransferIsNewToItsPeers(&error)) return fail(error);
 		if (!TestANextRoundLandingEndsTheRejoinPhase(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
