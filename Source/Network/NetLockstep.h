@@ -1372,6 +1372,7 @@ namespace RTE {
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 		friend bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
 		friend bool TestAReturnGapDoesNotStartTheHostsClock(std::string* error);
+		friend bool TestAHoldLandsAtTheFirstFrameItsSeatOwes(std::string* error);
 		friend bool TestANeutralGapLeavesNoCommandsToResend(std::string* error);
 		friend bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error);
 		friend bool TestAnAnnouncedCaptureExcusesEverySeatForItsCost(std::string* error);
@@ -1801,6 +1802,7 @@ namespace RTE {
 		std::map<uint8_t, NetLockstepStart> m_RemoteStarts; //!< Each accepted start, re-sent when a peer repeats its own.
 		std::set<uint8_t> m_PeersPlayedThisRound; //!< Remotes whose frames this round took; they are not still forming it.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
+		std::map<uint8_t, uint64_t> m_RefusedHoldFrames; //!< The frame each seat's last refused hold was asked at, so a refusal is named once.
 		std::map<uint8_t, uint64_t> m_PeerFrameWaivers; //!< Fenced peers -> the first frame the round stopped requiring.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
 		std::set<uint8_t> m_DroppedSeats;   //!< Classic holds pause; bounded holds commit empty input from their agreed frame.
