@@ -21180,6 +21180,55 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// l4p-35: two seats returned in one round; the late one owed frames from 1646 and its hold landed at 1663, the frame the other
+	// returner's landing reported, so its owed frames were never held and the refused hold was asked for 268,320 times.
+	bool TestAHoldLandsAtTheFirstFrameItsSeatOwes(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A5A, 6, NetTransportLane::InputUnreliable);
+		config.startFrame = 1; config.roundId = 0x9A5A; config.peerCount = 3;
+		config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A5A);
+		config.matchConfig.peerCount = 3; config.matchConfig.players.push_back({3, 2, false, "Returner"});
+		if (!wire.StartHost(49743, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 1646;
+		host.m_LastCompletedSimulationTick = 1645;
+		host.m_LastQueuedTargetFrame = 1645;
+		host.m_PeersPlayedThisRound = {1, 2, 3};
+		// Peer 3 returns at 1663 and reports its landing as its next frame; peer 2 owes its input from 1646.
+		host.m_ReclaimTransactions[3] = NetGameSeatReclaim{3, 0, 1, 2, 1663, 6, 1663, std::nullopt};
+		host.m_Stats.peers[3].reportedNextFrame = 1663;
+		host.m_Stats.peers[2].reportedNextFrame = 1646;
+		std::string holdError;
+		if (!host.ProposePeerHold(2, 1000, &holdError, 0, "late_stream")) { *error = "the late seat's hold was refused: " + holdError; return false; }
+		uint64_t held = 0;
+		for (const auto& [revision, pending]: host.m_TimingDecisions)
+			if (pending.proposal.action == NetTimingAction::Hold && (pending.proposal.heldPeers & 0x2) != 0) held = pending.proposal.applyFrame;
+		if (held != 1646) {
+			*error = "the late seat's hold landed at " + std::to_string(held) + ", the other returner's landing, while the seat owes its input from 1646";
+			return false;
+		}
+		// A refusal is named once: asking again at the same frame says nothing new.
+		LoopbackTransport refusedWire;
+		NetLockstepCoordinator refused;
+		if (!refusedWire.StartHost(49744, error) || !refused.Start(refusedWire, config, error)) return false;
+		refused.m_State = NetLockstepState::Running;
+		refused.m_Stats.nextFrame = 1646;
+		refused.m_PeerLeaveFrames[2] = 1663;
+		std::string first, second;
+		const bool proposed = refused.ProposePeerHold(2, 1000, &first, 0, "late_stream") || refused.ProposePeerHold(2, 1001, &second, 0, "late_stream");
+		if (proposed || first.empty() || !second.empty()) {
+			*error = "a refused hold at one frame was " + std::string(proposed ? "taken" : first.empty() ? "never named" : "named again: " + second);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_hold_lands_at_the_first_frame_its_seat_owes" << std::endl;
+		return true;
+	}
+
 	bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error) {
 		for (uint16_t delay: {0, 6}) {
 			LoopbackTransport wire;
@@ -22926,6 +22975,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			rowsPassed = false;
 		};
 		row(&TestAReturnGapDoesNotStartTheHostsClock, "a_return_gap_does_not_start_the_hosts_clock");
+		row(&TestAHoldLandsAtTheFirstFrameItsSeatOwes, "a_hold_lands_at_the_first_frame_its_seat_owes");
 		row(&TestAHeldHostCanReachItsReclaimHorizon, "a_held_host_can_reach_its_reclaim_horizon");
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");

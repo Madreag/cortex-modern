@@ -5824,7 +5824,10 @@ namespace RTE {
 		const bool returned = back != m_ReclaimTransactions.end() && m_Stats.nextFrame >= back->second.activationFrame;
 		if (!IsRunning() || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || (peerId == GetHostPeerId() && !ownSeat) ||
 		    (!ownSeat && !IsKnownRemotePeer(peerId)) || (m_PeerLeaveFrames.contains(peerId) && !returned) || m_NextTimingRevision == UINT64_MAX) {
-			if (error) *error = "invalid held peer or authority";
+			// A refusal is named once per frame; asking again at the same frame is not a new decision.
+			const bool again = m_RefusedHoldFrames.contains(peerId) && m_RefusedHoldFrames.at(peerId) == m_Stats.nextFrame;
+			m_RefusedHoldFrames[peerId] = m_Stats.nextFrame;
+			if (error) *error = again ? std::string() : "invalid held peer or authority";
 			return false;
 		}
 		// The round has run its last tick: nothing simulates past it, so no seat is judged.
@@ -5855,8 +5858,13 @@ namespace RTE {
 		// A returning seat's reclaim gap carries none of its input, so the survivors commit through it without the seat: a hold starts after it.
 		if (const auto back = m_ReclaimTransactions.find(peerId); back != m_ReclaimTransactions.end() && timing.applyFrame >= back->second.activationFrame)
 			timing.applyFrame = std::max(timing.applyFrame, std::max(back->second.neutralThroughFrame, back->second.activationFrame + back->second.delayFrames) + 1);
+		// A returner still at its landing reports its landing frame, not input it accepted: it never moves another seat's hold.
+		const auto atLanding = [this](uint8_t peer) {
+			const auto landing = m_ReclaimTransactions.find(peer);
+			return landing != m_ReclaimTransactions.end() && m_Stats.peers[peer].reportedNextFrame <= landing->second.activationFrame;
+		};
 		for (uint8_t peer: m_RemotePeerIds) {
-			if (peer == peerId || IsPeerGoneAtFrame(peer, timing.applyFrame)) continue;
+			if (peer == peerId || IsPeerGoneAtFrame(peer, timing.applyFrame) || atLanding(peer)) continue;
 			timing.applyFrame = std::max(timing.applyFrame, m_Stats.peers[peer].reportedNextFrame);
 		}
 		timing.heldPeers = static_cast<uint8_t>(1U << (peerId - 1));
@@ -5869,7 +5877,7 @@ namespace RTE {
 		// already accepted input while the first proposal was in flight.
 		uint64_t acceptedHorizon = m_Stats.nextFrame;
 		for (uint8_t peer: m_RemotePeerIds) {
-			if (peer != peerId && !IsPeerGoneAtFrame(peer, timing.applyFrame))
+			if (peer != peerId && !IsPeerGoneAtFrame(peer, timing.applyFrame) && !atLanding(peer))
 				acceptedHorizon = std::max(acceptedHorizon, m_Stats.peers[peer].reportedNextFrame);
 		}
 		timing.applyFrame = std::max(timing.applyFrame, acceptedHorizon);
@@ -6214,7 +6222,7 @@ namespace RTE {
 			                 << " ticks/s against the fastest's " << fastest << "; the AI takes its seat" << std::endl;
 			std::string holdError;
 			if (ProposePeerHold(peer, nowMs, &holdError, 0, "capacity")) { slowHeld = true; m_SlowMachineHolds.insert(peer); }
-			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
+			else if (!holdError.empty()) DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 		}
 		if (slowHeld) return true;
 		// A seat that publishes nothing and feeds below the round's rate falls further behind every second, which no delay re-size
@@ -6227,7 +6235,7 @@ namespace RTE {
 			                 << " ticks/s against " << (1000.0 / m_Config.simTickMs) << "; the AI takes its seat" << std::endl;
 			std::string holdError;
 			if (ProposePeerHold(peer, nowMs, &holdError, 0, "capacity")) { slowHeld = true; m_SlowMachineHolds.insert(peer); }
-			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
+			else if (!holdError.empty()) DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 		}
 		if (slowHeld) return true;
 		// Each receiver spends its own runway on its own link.
@@ -6350,7 +6358,7 @@ namespace RTE {
 				}
 				std::string holdError;
 				if (ProposePeerHold(peer, nowMs, &holdError, 0, "late_stream")) { held = true; m_SlowMachineHolds.erase(peer); }
-				else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
+				else if (!holdError.empty()) DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 			}
 			return held;
 		}
@@ -6538,7 +6546,7 @@ namespace RTE {
 		if (m_Config.localPeerId == GetHostPeerId()) {
 			std::string holdError;
 			if (!ProposePeerHold(m_Config.localPeerId, m_TimingNowMs, &holdError, m_LastQueuedTargetFrame + 1, "own_seat")) {
-				DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(m_Config.localPeerId) << ": " << holdError << std::endl;
+				if (!holdError.empty()) DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(m_Config.localPeerId) << ": " << holdError << std::endl;
 				m_SelfHeld = false;
 			}
 			return;
@@ -7395,7 +7403,7 @@ namespace RTE {
 			                 << (ack.receivedMask & 0xFFU) << ": its machine cannot keep up); the AI takes its seat" << std::endl;
 			std::string holdError;
 			if (ProposePeerHold(ack.senderPeerId, m_TimingNowMs, &holdError, ack.highestContiguousFrame + 1, "quiet")) m_SlowMachineHolds.insert(ack.senderPeerId);
-			else DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(ack.senderPeerId) << ": " << holdError << std::endl;
+			else if (!holdError.empty()) DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(ack.senderPeerId) << ": " << holdError << std::endl;
 			return;
 		}
 		if (ack.receivedMask & NetLockstepCodec::c_FrameWindowCapabilityMask) {
@@ -9370,7 +9378,7 @@ namespace RTE {
 		          << " sim_window=" << NetLockstepPlane::OpenWindow() << std::endl;
 		std::string holdError;
 		if (!ProposePeerHold(local, nowMs, &holdError, 0, "own_seat")) {
-			DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(local) << ": " << holdError << std::endl;
+			if (!holdError.empty()) DiagnosticLine() << "[net-lockstep] hold refused peer=" << static_cast<int>(local) << ": " << holdError << std::endl;
 			return false;
 		}
 		m_OwnMissingFrame.reset();
