@@ -508,7 +508,7 @@ def void_abandoned(rows):
     return kept
 
 
-RELAUNCHED_HELD = re.compile(r'\[net-match\] held client: replaying the private committed tail')
+RELAUNCHED_HELD = re.compile(r'\[net-match\] held client: replaying the private committed tail|\[net-match\] rejoin phase Loading -> TailReplay')
 
 
 def adopt_restored_histories(live, ranges, logs):
@@ -526,6 +526,11 @@ def adopt_restored_histories(live, ranges, logs):
                 keyed = sorted(r['tick'] for r in rows if isinstance(r.get('tick'), int) and tuple(r.get(field) for field in report.HISTORY_FIELDS[:-1]) == prefix)
                 restored = [r for r in rows if r.get('history_branch') is None and r.get('phase') == 'live' and isinstance(r.get('tick'), int) and
                             r.get('session') == session and r.get('match') == match and r.get('source_round') == source]
+                replayed = any(r.get('phase') == 'catchup' and r.get('session') == session and r.get('match') == match for r in rows)
+                # A seat held from its round's start that only replayed the round never played it: the whole round is its away range.
+                if not keyed and not restored and replayed:
+                    away[(name, prefix)] = [(interval['first'], interval['last'])]
+                    continue
                 if not keyed or not restored: continue
                 # Each return starts a contiguous history at its own resume frame; the frames between them are away.
                 segments = []
