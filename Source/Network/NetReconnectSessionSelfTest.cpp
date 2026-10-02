@@ -3406,6 +3406,69 @@ namespace RTE {
 			return 0;
 		}
 
+		// The host's seat roster reaches every holder whole and in order; no peer derives one (SEAT-ROSTER.md 5).
+		int TestRosterRevisionsReachEveryHolder() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint first;
+			first.connection = 81;
+			ConfigureEndpoint(first, "roster-first", &unixNow);
+			wire.Add(&first);
+			if (!first.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the first join did not settle: " + error);
+			}
+			Endpoint second;
+			second.connection = 82;
+			ConfigureEndpoint(second, "roster-second", &unixNow);
+			wire.Add(&second);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!second.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the second join did not settle: " + error);
+			}
+			const auto agrees = [&wire](const Endpoint& peer) {
+				const NetRosterReplica& replica = peer.client.GetRosterReplica();
+				return replica.HasRoster() && HashRoster(replica.Roster()) == HashRoster(wire.host.GetRoster());
+			};
+			if (!agrees(first) || !agrees(second)) {
+				return Fail(std::string("a seated holder does not hold the host's roster: first=") + (first.client.GetRosterReplica().HasRoster() ? "stale" : "none") +
+				            " second=" + (second.client.GetRosterReplica().HasRoster() ? "stale" : "none"));
+			}
+			// A drop in the running match is a revision every other holder hears.
+			wire.host.SetLiveMatch(true);
+			wire.host.NotifyDisconnect(second.connection, 120);
+			second.connected = false;
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			const std::vector<NetRosterSeat>& seats = wire.host.GetRoster().seats;
+			const auto away = std::find_if(seats.begin(), seats.end(), [](const NetRosterSeat& seat) { return seat.owner != 0 && seat.link == NetSeatLink::Dropped; });
+			if (away == seats.end() || away->phase != NetSeatPhase::Held || away->holdCause != NetSeatHoldCause::LinkDrop) {
+				return Fail("the host's roster does not hold the dropped seat");
+			}
+			if (!agrees(first)) {
+				return Fail("the drop's revision did not reach the other holder");
+			}
+			// An older revision is history: the replica keeps the newer one.
+			NetSeatRoster older = wire.host.GetRoster();
+			older.revision = 1;
+			NetH4RosterRevision stale;
+			stale.roster = EncodeRoster(older);
+			first.client.HandleMessage(stale, wire.nowMs);
+			if (!agrees(first)) {
+				return Fail("an older revision replaced a newer one");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS roster_revisions_reach_every_holder revision=" << wire.host.GetRoster().revision
+			          << " held_seat=" << static_cast<int>(away->seatId) << std::endl;
+			return 0;
+		}
+
 		int TestAdmissionHoldIssuesResolutions() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -7874,6 +7937,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestAdmissionHoldIssuesResolutions(); result != 0) {
+			return result;
+		}
+		if (const int result = TestRosterRevisionsReachEveryHolder(); result != 0) {
 			return result;
 		}
 		if (const int result = TestCleanLeaverKeepsTheSeat(); result != 0) {

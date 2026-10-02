@@ -447,7 +447,8 @@ namespace RTE {
 			decoded.seats.push_back(seat);
 		}
 		if (at != bytes.size()) return fail("a seat roster with trailing bytes");
-		if (!decoded.Find(decoded.hostSeat)) return fail("a seat roster without its host's seat");
+		// A host that plays no seat of its own (a dedicated host) names seat 0.
+		if (decoded.hostSeat != 0 && !decoded.Find(decoded.hostSeat)) return fail("a seat roster without its host's seat");
 		roster = std::move(decoded);
 		return true;
 	}

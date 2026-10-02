@@ -459,6 +459,8 @@ namespace RTE {
 		bool IsSeatClosed(uint16_t stableSeat) const;
 		/// Every seat's admission status, in stable-seat order.
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
+		/// The host's seat roster: the one record of whether each seat's holder is away, why and since when.
+		const NetSeatRoster& GetRoster() const { return m_Roster; }
 		/// The seat table as the plane holds it now, in table order.
 		std::vector<NetH4Seat> GetSeatTable() const;
 		std::vector<uint8_t> ExportMigrationState() const;
@@ -595,6 +597,8 @@ namespace RTE {
 		/// Every change to a seat's hold goes through the roster's one transition function.
 		void ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice = false);
 		void ApplyStageEvent(NetRosterEventKind kind);
+		/// Sends the roster's current revision to every connected holder, or to one connection.
+		void SendRoster(NetPeerId only = c_InvalidNetPeerId);
 		/// A holder this plane seats or takes back is playing: the plane sees no image or catch-up of its own.
 		void SettleReturn(const SeatState& seat);
 		/// Seats a new holder in the roster: an open seat is admitted, a held one given to the applicant.
@@ -819,6 +823,8 @@ namespace RTE {
 
 		std::vector<NetH4Outbound> TakeOutbound();
 		const NetReconnectClientStats& GetStats() const { return m_Stats; }
+		/// The host's seat roster as this peer last heard it, revision by revision.
+		const NetRosterReplica& GetRosterReplica() const { return m_RosterReplica; }
 
 	private:
 		void SendRequest(NetPayload payload, uint64_t nowMs);
@@ -827,6 +833,7 @@ namespace RTE {
 		uint64_t UnixNowMs() const;
 
 		NetReconnectTicketStore* m_Store = nullptr;
+		NetRosterReplica m_RosterReplica;
 		NetH4Identity m_Identity;
 		std::string m_DisplayName = "Player";
 		std::string m_HostAddress;
