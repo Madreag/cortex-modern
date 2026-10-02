@@ -7232,6 +7232,58 @@ namespace RTE {
 		return true;
 	}
 
+	// SEAT-ROSTER S2/S3 on the client: a held rejoin that failed with its host still there asks that host again after the seat roster's
+	// backoff - armed in the service, never slept on the game thread - and stops at the roster's bound or at the host's final word.
+	bool TestAHeldRejoinAsksItsHostAgainOffTheGameThread(std::string* error) {
+		struct Case {
+			const char* name;
+			uint8_t failed;
+			bool hasReject;
+			NetRejectReason reason;
+			bool retry;
+			uint32_t delayMs;
+		};
+		const Case cases[] = {
+		    {"a first failure the host gave no reason for", 1, false, NetRejectReason::InternalError, true, 2000},
+		    {"the roster's backoff refusal", 2, true, NetRejectReason::HostNotAccepting, true, 4000},
+		    {"a third failure", 3, true, NetRejectReason::Timeout, false, 0},
+		    {"the seat given away", 1, true, NetRejectReason::SeatReassigned, false, 0},
+		    {"a ban", 1, true, NetRejectReason::ParticipantBanned, false, 0},
+		};
+		for (const Case& c: cases) {
+			const NetMatchService::HeldRejoinStep step = NetMatchService::NextHeldRejoinStep(c.failed, c.hasReject, c.reason, "the host's words");
+			if (step.retry != c.retry || step.delayMs != c.delayMs || (!step.retry && step.stop.empty())) {
+				*error = std::string("a held rejoin after ") + c.name + (step.retry ? " asks again in " + std::to_string(step.delayMs) + " ms" : " stops: '" + step.stop + "'");
+				return false;
+			}
+		}
+		// The service arms the retry and returns at once; the retry begins only when its backoff is over.
+		NetMatchService client;
+		client.m_IsHost = false;
+		std::string why;
+		const auto start = std::chrono::steady_clock::now();
+		const bool armed = client.BeginHeldRejoinOnNextHost(&why);
+		const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+		if (!armed || client.m_HeldRejoinRetryAtMs == 0 || elapsedMs > 100) {
+			*error = "a held rejoin that failed with its host still there was not asked again off the game thread: armed=" + std::to_string(armed) +
+			         " elapsed=" + std::to_string(elapsedMs) + "ms why='" + why + "'";
+			return false;
+		}
+		if (!client.PumpHeldRejoin(&why) || client.m_HeldRejoinRetryAtMs == 0) {
+			*error = "an armed held-rejoin retry began before its backoff was over";
+			return false;
+		}
+		(void)client.BeginHeldRejoinOnNextHost(&why);
+		why.clear();
+		if (client.BeginHeldRejoinOnNextHost(&why) || why.empty() || client.m_HeldRejoinRetryAtMs != 0) {
+			*error = "a held rejoin past the roster's bound was asked again: why='" + why + "'";
+			return false;
+		}
+		std::cout << "PASS a_held_rejoin_asks_its_host_again_off_the_game_thread cases=" << sizeof(cases) / sizeof(cases[0]) << " armed_in=" << elapsedMs
+		          << "ms stop='" << why << "'" << std::endl;
+		return true;
+	}
+
 	bool TestARematchLobbyDropReturnsThroughTheRejoin(std::string* error) {
 		struct Case {
 			const char* name;
@@ -15365,6 +15417,7 @@ namespace RTE {
 		if (!TestARematchKeepsAnAbsentPlayersSeatHeld(&error)) return fail(error);
 		if (!TestARematchLobbyDropReturnsThroughTheRejoin(&error)) return fail(error);
 		if (!TestAHeldRejoinAsksAnUnansweringHostAgain(&error)) return fail(error);
+		if (!TestAHeldRejoinAsksItsHostAgainOffTheGameThread(&error)) return fail(error);
 		if (!TestARoundStartsDelayCoversTheStartWork(&error)) return fail(error);
 		if (!TestARematchStartsWithoutTheEndedRoundsCatchUp(&error)) return fail(error);
 		if (!TestALobbyDropsAnAbandonedTransfersTail(&error)) return fail(error);

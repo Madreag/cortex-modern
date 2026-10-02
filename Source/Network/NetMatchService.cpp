@@ -10166,6 +10166,8 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_HeldRejoinDriving = true;
+			m_HeldRejoinFailedAttempts = 0;
+			m_HeldRejoinRetryAtMs = 0;
 		}
 		const bool started = BeginTicketRejoinOnRoute(error, liveRoute ? &*liveRoute : nullptr);
 		if (started) ScenarioRunner::SetWorldCatchUpPriorInputThrough(prior);
@@ -10184,6 +10186,8 @@ static std::string ResyncSaveName() {
 	void NetMatchService::EndHeldRejoinInNextRound() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_HeldRejoinDriving = false;
+		m_HeldRejoinFailedAttempts = 0;
+		m_HeldRejoinRetryAtMs = 0;
 		m_HeldRejoinRoutes.clear();
 		m_HeldRejoinPriorInput = 0;
 		// The rejoin is over: its phase, and the ceiling that phase keeps, end with it.
@@ -10210,27 +10214,55 @@ static std::string ResyncSaveName() {
 		return !lostDuringSetup && hasReject && reason == NetRejectReason::Timeout && rejectSummary == "client hello timeout";
 	}
 
+	NetMatchService::HeldRejoinStep NetMatchService::NextHeldRejoinStep(uint8_t failedAttempts, bool hasReject, NetRejectReason reason, const std::string& rejectText) {
+		HeldRejoinStep step;
+		// The host's final word on the seat ends the rejoin with that word.
+		const bool final = hasReject && (reason == NetRejectReason::SeatReassigned || reason == NetRejectReason::ParticipantRemoved || reason == NetRejectReason::ParticipantBanned ||
+		                                 reason == NetRejectReason::SeatReleased || reason == NetRejectReason::SessionEnded || reason == NetRejectReason::IdentityUnproven ||
+		                                 (reason >= NetRejectReason::ProtocolMismatch && reason <= NetRejectReason::UserdataModulesNotAllowed));
+		if (final) {
+			step.stop = rejectText.empty() ? "Could not rejoin - the host refused the seat" : rejectText;
+			return step;
+		}
+		if (failedAttempts >= c_RosterReturnAttempts) {
+			step.stop = "Could not rejoin - the host did not take the seat back after " + std::to_string(failedAttempts) + " tries";
+			return step;
+		}
+		step.retry = true;
+		step.delayMs = static_cast<uint32_t>(c_RosterReturnBackoffMs << (failedAttempts > 0 ? failedAttempts - 1 : 0));
+		return step;
+	}
+
 	bool NetMatchService::BeginHeldRejoinOnNextHost(std::string* error) {
-		uint32_t retryInMs = 0;
+		HeldRejoinStep step;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_IsHost) return false;
 			const bool lostDuringSetup = m_Runner && m_Runner->DidLoseHostDuringSetup();
-			if (!m_IsHost && m_Session && HeldRejoinRetriesTheHost(lostDuringSetup, m_Session->HasReject(), m_Session->HasReject() ? m_Session->GetRejectReason() : NetRejectReason::InternalError,
-			                                                       m_Session->GetRejectSummary())) {
-				m_HeldRejoinHostRetryMs = std::min<uint32_t>(2000, std::max<uint32_t>(250, m_HeldRejoinHostRetryMs * 2));
-				retryInMs = m_HeldRejoinHostRetryMs;
-				m_StatusText = "Could not reach the host - retrying";
-			} else {
-				// Only a host that is gone sends the seat on; a refusal from a live host is that host's answer.
-				const bool hostGone = !m_IsHost && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
+			const bool hasReject = m_Session && m_Session->HasReject();
+			const NetRejectReason reason = hasReject ? m_Session->GetRejectReason() : NetRejectReason::InternalError;
+			// A host that did not answer one dial is not gone; only a host that is gone sends the seat on.
+			const bool helloUnanswered = m_Session && HeldRejoinRetriesTheHost(lostDuringSetup, hasReject, reason, m_Session->GetRejectSummary());
+			const bool hostGone = !helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
+			if (hostGone) {
 				// A host that answered the round is over is not gone: the seat completes on what it holds.
-				if (!hostGone || NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
+				if (NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
+			} else {
+				step = NextHeldRejoinStep(++m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildRejectText() : std::string());
+				if (!step.retry) {
+					m_HeldRejoinRetryAtMs = 0;
+					m_StatusText = step.stop;
+					if (error) *error = step.stop;
+					return false;
+				}
+				m_HeldRejoinRetryAtMs = SteadyNowMs() + step.delayMs;
+				m_StatusText = "Could not rejoin - retrying";
 			}
 		}
-		if (retryInMs != 0) {
-			System::PrintDiagnosticLine("[net-match] held rejoin: the host did not answer; asking the host again in " + std::to_string(retryInMs) + " ms");
-			std::this_thread::sleep_for(std::chrono::milliseconds(retryInMs));
-			return BeginTicketRejoin(error);
+		if (step.retry) {
+			System::PrintDiagnosticLine("[net-match] held rejoin: attempt " + std::to_string(m_HeldRejoinFailedAttempts) + " failed with the host still there; asking it again in " +
+			                            std::to_string(step.delayMs) + " ms");
+			return true;
 		}
 		while (!m_HeldRejoinRoutes.empty()) {
 			const NetMatchServiceRequest route = m_HeldRejoinRoutes.front();
@@ -10239,6 +10271,17 @@ static std::string ResyncSaveName() {
 			if (RejoinSuccessorRoute(route, error)) return true;
 		}
 		return false;
+	}
+
+	bool NetMatchService::PumpHeldRejoin(std::string* error) {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_HeldRejoinRetryAtMs == 0) return false;
+			if (SteadyNowMs() < m_HeldRejoinRetryAtMs) return true;
+			m_HeldRejoinRetryAtMs = 0;
+		}
+		// An attempt that cannot even start fails as an attempt does: the wait reads the failure and asks for the next step.
+		return BeginTicketRejoin(error);
 	}
 
 	bool NetMatchService::RejoinSuccessorRoute(const NetMatchServiceRequest& route, std::string* error) {

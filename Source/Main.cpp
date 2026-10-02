@@ -6117,8 +6117,8 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 			}
 			g_NetMatchService.RequestStart();
 		}
-		const auto rematchWaitStart = std::chrono::steady_clock::now();
-		while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rematchWaitStart).count() < 60) {
+		// The service's own deadlines end a lobby that never starts; no wall clock here does.
+		for (;;) {
 			CrossReadyForCurrentConfig(crossReadyRevision);
 			if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
 				rematchReady = true;
@@ -6135,14 +6135,18 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 		System::PrintDiagnosticLine("[net-match] rematch lobby link lost: rejoining the host");
 		std::string rejoinError;
 		if (g_NetMatchService.BeginHeldRejoin(&rejoinError)) {
-			const auto rejoinStart = std::chrono::steady_clock::now();
-			while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rejoinStart).count() < 60) {
+			for (;;) {
 				CrossReadyForCurrentConfig(crossReadyRevision);
 				if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
 					rematchReady = true;
 					break;
 				}
-				if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) break;
+				if (g_NetMatchService.PumpHeldRejoin(&rejoinError)) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					continue;
+				}
+				// A failed attempt is asked again after the roster's backoff, until its bound or the host's final word.
+				if (g_NetMatchService.GetState() == NetMatchServiceState::Failed && !g_NetMatchService.BeginHeldRejoinOnNextHost(&rejoinError)) break;
 				std::this_thread::sleep_for(std::chrono::milliseconds(5));
 			}
 		} else {
@@ -6398,13 +6402,13 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 						resyncOk = false;
 						break;
 					}
+					// A held rejoin's next attempt is armed in the service and begins there once its backoff is over.
+					if (heldRejoin && g_NetMatchService.PumpHeldRejoin(&resyncError)) {
+						std::this_thread::sleep_for(std::chrono::milliseconds(5));
+						continue;
+					}
 					if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
 						resyncError = g_NetMatchService.GetErrorText();
-						resyncOk = false;
-						break;
-					}
-					if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count() > 60) {
-						resyncError = "timed out waiting for the resync round";
 						resyncOk = false;
 						break;
 					}
@@ -9522,8 +9526,6 @@ int RunNetMatchServiceE2E() {
 		if (e2eHost && crossOptionsApplied) {
 			g_NetMatchService.RequestStart();
 		}
-		const bool unlimitedWorld = e2eHost && s_netPersistentWorld && !s_netMatchTicksExplicit;
-		auto waitStart = std::chrono::steady_clock::now();
 		bool roundEndedOnTheWay = false;
 		while (true) {
 			PollSDLEvents();
@@ -9562,18 +9564,10 @@ int RunNetMatchServiceE2E() {
 					s_netMatchServiceE2EExitCode = 1;
 					break;
 				}
-				waitStart = std::chrono::steady_clock::now();
 				continue;
 			}
 			if (state == NetMatchServiceState::Failed) {
 				setupError = g_NetMatchService.GetErrorText();
-				s_netMatchServiceE2EExitCode = 1;
-				break;
-			}
-			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-				std::chrono::steady_clock::now() - waitStart).count());
-			if (!unlimitedWorld && nowMs > 60000) {
-				setupError = "timed out waiting for service launch";
 				s_netMatchServiceE2EExitCode = 1;
 				break;
 			}

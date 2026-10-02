@@ -671,6 +671,15 @@ namespace RTE {
 		/// A held rejoin whose host never answered its handshake asks that host again: a host that does not answer one dial is not shown
 		/// gone, and the peers that host nothing are never dialled for it.
 		static bool HeldRejoinRetriesTheHost(bool lostDuringSetup, bool hasReject, NetRejectReason reason, const std::string& rejectSummary);
+		/// A held rejoin's next step after an attempt failed with its host still there: ask that host again after the seat roster's
+		/// backoff, or stop and say why - a final answer (the seat given away, the player removed or banned, the session over) or the
+		/// roster's bound of failed returns reached.
+		struct HeldRejoinStep {
+			bool retry = false;
+			uint32_t delayMs = 0;
+			std::string stop;
+		};
+		static HeldRejoinStep NextHeldRejoinStep(uint8_t failedAttempts, bool hasReject, NetRejectReason reason, const std::string& rejectText);
 		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost,
 		                                            bool startNeverCame, bool heldAtStart);
 		/// Client: the last rematch setup lost its link to the host and the seat is owed its return to the round the host plays.
@@ -720,9 +729,13 @@ namespace RTE {
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
 		bool BeginHeldRejoin(std::string* error = nullptr);
-		/// Held client: its rejoin found the host gone, so it rejoins the next peer the match's successor order names.
-		/// @return Whether an attempt started; false when the failure was not the host's departure or no successor is left.
+		/// Held client: its rejoin failed. A host that is gone sends the seat to the next peer the match's successor order names; a host
+		/// still there is asked again after the seat roster's backoff, armed here and begun by PumpHeldRejoin, never slept on.
+		/// @return Whether an attempt started or is armed; false when the rejoin ends, the reason in the status text.
 		bool BeginHeldRejoinOnNextHost(std::string* error = nullptr);
+		/// Held client: begins an armed retry of its host once the backoff is over.
+		/// @return Whether a retry is armed or has just begun.
+		bool PumpHeldRejoin(std::string* error = nullptr);
 		/// How far every rejoin this host is serving has come: its admission, its phase, the image staged for
 		/// it, the transfer it has acknowledged and the tail it has consumed. The goodbye drain watches this
 		/// beside the round's own progress, because a rejoin commits no frame until it is back in the round.
@@ -1272,6 +1285,7 @@ namespace RTE {
 		friend bool TestAHealNamesACheckpointEveryPeerHolds(std::string* error);
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
 		friend bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error);
+		friend bool TestAHeldRejoinAsksItsHostAgainOffTheGameThread(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
 		friend bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);
@@ -1702,7 +1716,8 @@ namespace RTE {
 		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
-		uint32_t m_HeldRejoinHostRetryMs = 0; //!< The backoff before the next dial of a host that did not answer a held rejoin.
+		uint8_t m_HeldRejoinFailedAttempts = 0; //!< The attempts of this held rejoin that failed with its host still there.
+		uint64_t m_HeldRejoinRetryAtMs = 0;     //!< When the armed retry of the host begins; 0 when none is armed.
 		uint64_t m_HeldRejoinPriorInput = 0;
 		std::string m_HostEndReason; //!< The host's End Match reason while its round plays to the agreed end frame.
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
