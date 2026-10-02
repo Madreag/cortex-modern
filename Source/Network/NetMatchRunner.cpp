@@ -280,11 +280,9 @@ namespace RTE {
 		return true;
 	}
 
-	std::vector<uint8_t> NetMatchRunner::SettledRoundMembers(bool host, bool rematchRound, const std::vector<uint8_t>& formed, const NetMatchConfig& agreed) {
-		if (!rematchRound) return formed;
-		// The host's own lobby held a seat whose link dropped after the rematch formed; its start never waits for that seat.
-		if (host && agreed.activePeerIds.empty()) return formed;
-		return agreed.activePeerIds;
+	std::vector<uint8_t> NetMatchRunner::SettledRoundMembers(bool lobbyAgreed, const std::vector<uint8_t>& formed, const NetMatchConfig& agreed) {
+		// A seat whose link drops after the agreement stays a member and its start holds it, so every peer keeps one member set.
+		return lobbyAgreed ? agreed.activePeerIds : formed;
 	}
 
 	void NetMatchRunner::AdoptHostMigration(const NetHostMigrationResult& result, uint8_t localPeerId) {
@@ -461,7 +459,7 @@ namespace RTE {
 		}
 		// A rematch's members are the host's to name: the seats it starts held are the ones the agreed config leaves out.
 		const std::vector<uint8_t> formedMembers = m_ActivePeerIds;
-		m_ActivePeerIds = SettledRoundMembers(m_Config.host, m_RematchRound, m_ActivePeerIds, m_MatchConfig);
+		m_ActivePeerIds = SettledRoundMembers(m_UseLobbyProtocol, m_ActivePeerIds, m_MatchConfig);
 		{
 			const auto list = [](const std::vector<uint8_t>& peers) {
 				std::string text;

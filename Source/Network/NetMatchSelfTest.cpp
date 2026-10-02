@@ -7292,15 +7292,23 @@ namespace RTE {
 		// with the agreed members and the host with the formed ones, so the host's start waited for the held seats until it timed out.
 		NetMatchConfig agreed;
 		agreed.activePeerIds = {1, 3};
-		const std::vector<uint8_t> hostMembers = NetMatchRunner::SettledRoundMembers(true, true, {1, 2, 3, 4}, agreed);
-		const std::vector<uint8_t> clientMembers = NetMatchRunner::SettledRoundMembers(false, true, {}, agreed);
+		const std::vector<uint8_t> hostMembers = NetMatchRunner::SettledRoundMembers(true, {1, 2, 3, 4}, agreed);
+		const std::vector<uint8_t> clientMembers = NetMatchRunner::SettledRoundMembers(true, {}, agreed);
 		if (hostMembers != agreed.activePeerIds || clientMembers != agreed.activePeerIds) {
 			*error = "after the lobby held seats 2 and 4 the host's round waits for " + text(hostMembers) + " and the client's for " + text(clientMembers);
 			return false;
 		}
-		if (NetMatchRunner::SettledRoundMembers(true, false, {1, 2}, agreed) != std::vector<uint8_t>{1, 2} ||
-		    NetMatchRunner::SettledRoundMembers(true, true, {1, 2}, NetMatchConfig{}) != std::vector<uint8_t>{1, 2}) {
-			*error = "a first round or a rematch whose agreed config names no members took members it did not form";
+		// l4p-37: the host started a round with a member the agreed config and every client left out; every peer timed out. An agreed
+		// config that names no members means every seat, on the host as on each client, whatever the host formed before the lobby.
+		const NetMatchConfig everySeat;
+		const std::vector<uint8_t> hostAll = NetMatchRunner::SettledRoundMembers(true, {1, 2}, everySeat);
+		const std::vector<uint8_t> clientAll = NetMatchRunner::SettledRoundMembers(true, {}, everySeat);
+		if (hostAll != clientAll) {
+			*error = "one agreed config gave the host the members " + text(hostAll) + " and the client " + text(clientAll);
+			return false;
+		}
+		if (NetMatchRunner::SettledRoundMembers(false, {1, 2}, agreed) != std::vector<uint8_t>{1, 2}) {
+			*error = "a round no lobby agreed took members it did not form";
 			return false;
 		}
 		std::cout << "[net-match-selftest] PASS a_rematch_keeps_an_absent_players_seat_held" << std::endl;
