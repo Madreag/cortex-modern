@@ -1940,9 +1940,11 @@ namespace RTE {
 		for (SeatState& seat : m_Seats) {
 			if (seat.committed && seat.activeConnection == connection) {
 				if (m_MatchEnded) {
+					// A drop between rounds keeps the seat held into the next round, as a drop inside one does.
 					seat.activeConnection = c_InvalidNetPeerId;
 					seat.dropped = true;
-					seat.holdExpired = true;
+					seat.droppedAtMs = m_NowMs;
+					seat.holdExpired = false;
 					++m_Stats.seatsDropped;
 					return NetH4DisconnectOutcome::SeatDropped;
 				}
