@@ -7812,12 +7812,14 @@ void RunGameLoop() {
 			const long long crossCaptureStartUs = g_TimerMan.GetAbsoluteTime();
 			const long long crossCaptureWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			if (s_netFullStateEvery > 0) ScenarioRunner::SetLockstepAnnouncedCaptureEvery(s_netFullStateEvery);
+			// A peer still catching up takes the labelled samples its replay passes, so every peer compares the ticks around a return.
+			const bool catchingUp = ScenarioRunner::WorldCatchUpActive();
 			if (s_netFullStateEvery > 0 && !lockstepPausedTick && ScenarioRunner::IsLockstepControllerSyncActive() &&
-			    !ScenarioRunner::WorldCatchUpActive() && ScenarioRunner::GetLockstepAppliedFrame() == simTick && g_ActivityMan.ActivityRunning()) {
+			    ScenarioRunner::GetLockstepAppliedFrame() == simTick && g_ActivityMan.ActivityRunning()) {
 				static uint64_t s_fullStateSampledRound = 0;
 				const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 				const uint64_t effectiveStart = ScenarioRunner::GetLockstepEffectiveStartFrame();
-				const bool roundStart = round != s_fullStateSampledRound && effectiveStart > 0 && simTick >= effectiveStart;
+				const bool roundStart = !catchingUp && round != s_fullStateSampledRound && effectiveStart > 0 && simTick >= effectiveStart;
 				if (roundStart) s_fullStateSampledRound = round;
 				// A seat's reclaim frame is sampled on every peer alike, so its returner shares a sample even when the round ends first;
 				// the labelled capture is never coalesced behind a busy writer.
@@ -7830,7 +7832,7 @@ void RunGameLoop() {
 				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !landed && simTick > 60; ++peer)
 					landed = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 60) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 59);
 				if (landed && !reclaimStart) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "landed");
-				if ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
+				if (!catchingUp && ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0)) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
