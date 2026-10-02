@@ -793,6 +793,12 @@ namespace RTE {
 		m_RemoteNamesByPeer.erase(peerId);
 		m_RemotePingByPeer.erase(peerId);
 		m_RemotePlatformsByPeer.erase(peerId);
+		if (HoldsDroppedRematchSeat(peerId)) {
+			m_PeerStatePending = true;
+			m_StartRequested = m_Config.autoStart;
+			m_State = NetLobbyState::WaitingForConfigAck;
+			return;
+		}
 		// The seat is open again, so it carries the unseated name once more: a kicked or departed
 		// member's name on a seat nobody holds is a roster row that lies to every peer. Opening it is a
 		// live roster change, so it rides the republish a host option edit rides - a new revision the
@@ -814,6 +820,29 @@ namespace RTE {
 		m_PeerStatePending = true;
 		m_StartRequested = m_Config.autoStart;
 		m_State = NetLobbyState::WaitingForConfigAck;
+	}
+
+	bool NetLobbySession::HoldsDroppedRematchSeat(uint8_t peerId) {
+		// Only a rematch's seats are the round's players'; a seat the host closed (a kick or a ban) opens as before.
+		if (!m_Config.host || !m_Config.assignSeats) return false;
+		if (const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr) {
+			for (const NetH4SeatStatus& seat: plane->GetSeatStatuses())
+				if (seat.lockstepPeerId == peerId && seat.closed) return false;
+		}
+		NetMatchConfig held = m_Config.matchConfig;
+		std::vector<uint8_t> active = held.activePeerIds;
+		if (active.empty())
+			for (const NetMatchPlayerSlot& slot: held.players)
+				if (!slot.cpu && slot.peerId != 0 && std::find(active.begin(), active.end(), slot.peerId) == active.end()) active.push_back(slot.peerId);
+		if (std::find(active.begin(), active.end(), held.hostPeerId) == active.end()) active.push_back(held.hostPeerId);
+		std::erase(active, peerId);
+		std::sort(active.begin(), active.end());
+		if (active == held.activePeerIds) return true;
+		// The round starts that seat held by the AI and its player comes back through the rejoin; nobody waits for its endpoint.
+		held.activePeerIds = std::move(active);
+		++held.configRevision;
+		(void)RepublishMatchConfig(held);
+		return true;
 	}
 
 	void NetLobbySession::RejectRemote(NetPeerId transportPeerId, const std::string& reason) {
