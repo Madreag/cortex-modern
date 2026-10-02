@@ -1265,6 +1265,7 @@ namespace RTE {
 		friend bool TestAReturnerToldTheMatchIsOverGetsItsRecord(std::string* error);
 		friend bool TestACaughtUpSeatTakesItsRoundsRecordOnce(std::string* error);
 		friend bool TestARematchStartsWithoutTheEndedRoundsCatchUp(std::string* error);
+		friend bool TestANextRoundLandingEndsTheRejoinPhase(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
