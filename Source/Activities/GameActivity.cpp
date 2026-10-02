@@ -4010,6 +4010,11 @@ bool GameActivity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings)
 	return true;
 }
 
+bool GameActivity::AdoptNetLocalSeat(const NetMatchConfig& config, uint8_t localPeer) {
+	// Only this machine's menus are made for the seat it takes back; every seat's shared state stays the world's.
+	return Activity::AdoptNetLocalSeat(config, localPeer) && CreateNetLocalUI();
+}
+
 bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {
 	const char* enabled = std::getenv("CC_TEST_F21_INVENTORY");
 	if (!enabled || std::strcmp(enabled, "1") != 0) return false;

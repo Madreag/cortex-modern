@@ -62,6 +62,7 @@ namespace RTE {
 		bool CaptureNetLocalPlayerState(NetLocalPlayerState& out) const override;
 		bool RestoreNetLocalPlayerState(const NetLocalPlayerState& state) override;
 		bool ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings) override;
+		bool AdoptNetLocalSeat(const NetMatchConfig& config, uint8_t localPeer) override;
 
 		std::string SaveCheckpoint() const override;
 		void VisitCheckpointOwnedObjects(const std::function<void(const Entity*)>& visit) const;
