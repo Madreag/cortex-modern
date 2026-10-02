@@ -289,3 +289,34 @@ class AbandonedTicks(unittest.TestCase):
         other = [dict(live_row(t, 'c'), round=7) for t in range(5, 8)] + [dict(abandon_from=5, round=8)]
         self.assertEqual(len(cross_report.void_abandoned(other)), 3)
 
+class CausesDeadlinesStops(unittest.TestCase):
+    def test_a_hold_names_its_cause(self):
+        n = chr(10)
+        log = n.join(['[net-lockstep] start round=9 frame=1 local_peer=1',
+                      '[net-lockstep] propose hold peer=4 next_frame=118 ready=0 heard_through=117 accepted_through=117 last_heard_ms=1',
+                      '[net-match] hold peer=4 frame=118 AI in control',
+                      '[net-lockstep] propose hold peer=3 next_frame=50 ready=0 heard_through=60 cause=timing_ack',
+                      '[net-match] hold peer=3 frame=50 AI in control',
+                      '[net-match] hold peer=2 frame=70 AI in control'])
+        causes = cross_report.hold_causes(log)
+        # A late stream (the host heard nothing past the frame before) is the A1 design; another cause, or none, is not.
+        self.assertEqual(causes, {('9', 4, 118): 'late_stream', ('9', 3, 50): 'timing_ack'})
+        self.assertIn('late_stream', cross_report.DESIGN_CAUSES)
+        self.assertNotIn('timing_ack', cross_report.DESIGN_CAUSES)
+        self.assertIsNone(causes.get(('9', 2, 70)))
+
+    def test_a_recovery_deadline_runs_from_the_faults_end(self):
+        case = dict(id='lag', peer='mac', incarnation=0, deadline_ms=120000, outcomes=['first_controllable_input'], duration_ms=120000)
+        def judge(terminal_ms):
+            rows = [dict(id='lag', peer='mac', incarnation=0, phase='fault_applied', wall_ms=1000.0),
+                    dict(id='lag', peer='mac', incarnation=0, phase='first_controllable_input', wall_ms=1000.0 + terminal_ms)]
+            return cross_report.report.reduce_recoveries([case], rows, now_ms=10**9)[0]['passed']
+        self.assertTrue(judge(150000))
+        self.assertFalse(judge(250000))
+
+    def test_a_run_the_driver_stopped_is_not_judged(self):
+        stopped = cross_report.driver_stop([dict(kind='driver', reason='local scratch reached 4 GB; stopped without deletion')])
+        self.assertEqual(cross_report.attempt_label(dict(stopped=stopped, v1_passed=False)), 'STOPPED (local scratch reached 4 GB; stopped without deletion); NOT JUDGED')
+        # A peer that exited is a failure the run reports, not a stop.
+        self.assertIsNone(cross_report.driver_stop([dict(kind='driver', reason='Mac: owning payload exited 1; stop the other peers instead of continuing a reduced match')]))
+
