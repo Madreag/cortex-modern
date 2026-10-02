@@ -4449,6 +4449,12 @@ static std::string ResyncSaveName() {
 				continue;
 			}
 			if (open) continue;
+			// A seat the round started held carries the ticket's incarnation in the round already, so its return must be the next one.
+			if (const auto& known = m_Coordinator->GetConfig().peerIncarnations; known.contains(member)) {
+				const uint32_t returning = ImageReturnIncarnation(incarnation, known.at(member));
+				if (returning > incarnation) m_InPlaceIncarnationBumps[member] += returning - incarnation;
+				incarnation = returning;
+			}
 			// A returner that kept its world reports its state before anything else; one that says nothing else first takes the image.
 			m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
 			// A return already agreed is on its way; if it passes, the seat is held again and its player answered then.
@@ -10526,6 +10532,10 @@ static std::string ResyncSaveName() {
 			return false;
 		}
 		return true;
+	}
+
+	uint32_t NetMatchService::ImageReturnIncarnation(uint32_t ticket, uint32_t roundKnows) {
+		return std::max(ticket, roundKnows + 1);
 	}
 
 	void NetMatchService::ApplyHostActivityFallback(NetMatchServiceRequest& request) {
