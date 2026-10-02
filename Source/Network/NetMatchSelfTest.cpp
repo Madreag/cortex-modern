@@ -5820,6 +5820,8 @@ namespace RTE {
 		bool RematchAfterDropInRound(std::string& details, std::string* error) {
 			RematchFixture fixture;
 			if (!SetUpRematchFixture(fixture, "drop-in-round", 43160, 3, error)) return false;
+			// The default policy, the one V1 offers: the AI holds the dropped seat and nothing expires it (A12).
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) peer->config.matchConfig.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 			std::string step;
 			auto fail = [&](const std::string& what) {
 				*error = "rematch after a hard drop in round 1: " + what + (step.empty() ? "" : ": " + step);
@@ -5839,16 +5841,19 @@ namespace RTE {
 			    })) {
 				return fail("the drop never reached both rounds and the host's plane");
 			}
+			// Past the old window the seat is still held for its player: no resolution, the round plays on.
 			fixture.clock.skippedMs += NetReconnectHost::c_ProvisionalExpiryMs + 1000;
 			if (!PumpRematchUntil(fixture, 3000, [&] {
-				    return host.round->HeldSeatResolution(2) == NetLockstepHoldResolution::Expired && survivor->round->HeldSeatResolution(2) == NetLockstepHoldResolution::Expired;
+				    // The default policy hands the seat to the AI (Substituted); its player keeps it and nothing expires it.
+				    return host.round->HeldSeatResolution(2) != NetLockstepHoldResolution::Expired && survivor->round->HeldSeatResolution(2) != NetLockstepHoldResolution::Expired &&
+				           host.admission.GetStats().seatHoldsExpired == 0 && host.admission.IsSeatHeldForReclaim(2);
 			    })) {
 				std::string seats;
 				for (const NetH4SeatStatus& status: host.admission.GetSeatStatuses()) {
 					seats += " seat" + std::to_string(status.stableSeat) + "/peer" + std::to_string(status.lockstepPeerId) + (status.committed ? " committed" : "") +
 					         (status.dropped ? " dropped" : "") + (status.closed ? " closed" : "");
 				}
-				return fail("the dropped seat's hold was never resolved as expired (host round " + std::string(NetLockstepCoordinator::StateName(host.round->GetState())) +
+				return fail("the dropped seat's hold resolved without its player or the host (host round " + std::string(NetLockstepCoordinator::StateName(host.round->GetState())) +
 				            " resolution " + std::to_string(static_cast<int>(host.round->HeldSeatResolution(2))) + ", survivor round " +
 				            NetLockstepCoordinator::StateName(survivor->round->GetState()) + " resolution " + std::to_string(static_cast<int>(survivor->round->HeldSeatResolution(2))) +
 				            " " + survivor->round->GetStats().timeoutReason + "; plane dropped=" + std::to_string(host.admission.GetStats().seatsDropped) +
@@ -11787,6 +11792,7 @@ namespace RTE {
 			const uint16_t port = testCase.port;
 			RematchFixture fixture;
 			if (!SetUpRematchFixture(fixture, "service-return-to-lobby-" + std::to_string(port), port, peerCount, error)) return false;
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) peer->config.matchConfig.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 			std::string step;
 			auto fail = [&](const std::string& what) {
 				*error = std::string("service rematch roster, ") + testCase.name + ": " + what + (step.empty() ? "" : ": " + step);
@@ -11808,10 +11814,10 @@ namespace RTE {
 			    })) {
 				return fail("the drop never reached the survivor's round and the host's plane");
 			}
-			// The dropped seat is held for a reclaim; commits only resume once the hold runs out.
+			// The AI holds the dropped seat for its player; past the old window nothing has resolved it.
 			fixture.clock.skippedMs += NetReconnectHost::c_ProvisionalExpiryMs + 1000;
-			if (!PumpRematchUntil(fixture, 4000, [&] { return survivor->round->HeldSeatResolution(2) == NetLockstepHoldResolution::Expired; })) {
-				return fail("the dropped seat's hold never expired on the survivor's round");
+			if (!PumpRematchUntil(fixture, 4000, [&] { return survivor->round->HeldSeatResolution(2) != NetLockstepHoldResolution::Expired && host.admission.IsSeatHeldForReclaim(2); })) {
+				return fail("the dropped seat's hold resolved on the survivor's round without its player or the host");
 			}
 			if (!PlayRematchTicks(fixture, 2) || !FinishRematchRound(fixture, &step)) return fail("round 1 did not finish");
 			const uint64_t roundId = survivor->round->GetRoundId();
