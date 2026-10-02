@@ -279,6 +279,18 @@ class ScheduleKeyedOracles(unittest.TestCase):
         away = cross_report.held_away_ranges(live, rng, {'c': [log]})
         self.assertEqual(away, {('c', ('s', '5', 'initial', 1)): (7, 10)})
 
+    def test_a_seat_that_lost_its_host_and_rejoins_has_departed(self):
+        # l4p-27's Mac: under its own lag it lost the host at 727, rejoined from an image and was still replaying at the round's end.
+        live = {p: [live_row(t, p) for t in range(1, 11)] for p in ('a', 'b')}
+        live['c'] = [live_row(t, 'c') for t in range(1, 6)]
+        n = chr(10)
+        lost = n.join(['[net-match] recovery requested tick=5 catch_up=0 reason=PeerHeld:The host connection was lost - rejoining',
+                       '[net-match] rejoin phase Loading -> TailReplay', '[net-match-service-e2e] activity over at frame 10: no full-state sample follows'])
+        self.assertEqual(cross_report.held_away_ranges(live, HeldSeatAwayRange.RANGE, {'c': [lost]}), {('c', ('s', 'm', 'initial', 1)): (6, 10)})
+        # Any other recovery is no departure: the seat's missing keys stay unknown.
+        other = lost.replace('reason=PeerHeld', 'reason=Desync')
+        self.assertEqual(cross_report.held_away_ranges(live, HeldSeatAwayRange.RANGE, {'c': [other]}), {})
+
 
 class AbandonedTicks(unittest.TestCase):
     def test_the_engines_retraction_voids_the_rows_before_it(self):

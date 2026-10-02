@@ -428,6 +428,8 @@ def local_host_render(manifest, peers):
 
 
 HOLD_OF_SEAT = re.compile(r'\[net-lockstep\] hold of this seat at (\d+)')
+# A seat that lost its host with no survivor to take over rejoins it: it leaves its round after the last tick it applied.
+LOST_HOST_REJOIN = re.compile(r'\[net-match\] recovery requested tick=(\d+) catch_up=\d+ reason=PeerHeld')
 ROUND_START = re.compile(r'\[net-lockstep\] start round=(\d+) frame=')
 RETURNED_LIVE = re.compile(r'\[net-match\] rejoin phase TailReplay -> Active')
 ROUND_OVER = re.compile(r'\[net-match-service-e2e\] activity over at frame')
@@ -446,6 +448,7 @@ def held_away_ranges(live, ranges, logs):
             for line in text.splitlines():
                 if (found := ROUND_START.search(line)): current = found.group(1)
                 if (found := HOLD_OF_SEAT.search(line)): held = (current, int(found.group(1)))
+                elif (found := LOST_HOST_REJOIN.search(line)): held = (current, int(found.group(1)) + 1)
                 elif COMPLETED_HELD.search(line) or (held is not None and ROUND_OVER.search(line)):
                     # A round that ended while the seat was still held or replaying its way back is one it left at its hold.
                     if held is not None and held[0] is not None: by_round[held[0]] = held[1]
