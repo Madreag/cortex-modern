@@ -396,6 +396,29 @@ namespace RTE {
 		return out;
 	}
 
+	const std::array<std::string_view, 16>& SimChecksum::Subsystems() {
+		static const std::array<std::string_view, 16> names = {"actor_timers", "actors", "attachables", "carve_math", "controller", "controller_route", "funds", "items",
+		                                                        "lua_state", "particles", "rot_angle", "rot_angvel", "scene", "sim_rng", "terrain", "tick"};
+		return names;
+	}
+
+	const SimChecksum::Hash& SimChecksum::EmptyHash() {
+		static const Hash empty = [] {
+			Hash out{};
+			ChecksumHasher{}.finalize(out.data(), out.size());
+			return out;
+		}();
+		return empty;
+	}
+
+	std::map<std::string, SimChecksum::Hash> SimChecksum::CompleteSubsystems(const Result& result) {
+		std::map<std::string, Hash> complete(result.per_subsystem.begin(), result.per_subsystem.end());
+		for (const std::string_view name: Subsystems()) {
+			complete.try_emplace(std::string(name), EmptyHash());
+		}
+		return complete;
+	}
+
 	bool SimChecksum::IsActive() const {
 		return m_Impl->active;
 	}
@@ -490,6 +513,25 @@ namespace RTE {
 			passed = passed && shapePassed;
 			std::cout << Tag << (shapePassed ? " PASS" : " FAIL") << " row_blocks_hash_as_rows width=" << width << " height=" << height
 			          << " ticks_matched=" << matched << "/" << c_Ticks << " table_folds=" << folds << (folds > 0 ? "" : " (the table path never ran)") << std::endl;
+		}
+		{
+			// A world with no actors feeds no actor subsystems; its row still names every subsystem, the total unchanged.
+			SimChecksum empty;
+			empty.BeginTick(960);
+			const int dims[2] = {4, 4};
+			empty.Update("terrain", dims, sizeof(dims));
+			const Result result = empty.EndTick();
+			const std::map<std::string, Hash> complete = CompleteSubsystems(result);
+			std::string absent;
+			for (const std::string_view name: Subsystems()) {
+				if (!complete.contains(std::string(name))) absent += (absent.empty() ? "" : ",") + std::string(name);
+			}
+			const bool fedKept = complete.at("terrain") == result.per_subsystem.at("terrain") && complete.at("tick") == result.per_subsystem.at("tick");
+			const bool emptyValue = complete.contains("actors") && complete.at("actors") == EmptyHash() && EmptyHash() != result.per_subsystem.at("terrain");
+			const bool rowPassed = absent.empty() && fedKept && emptyValue && complete.size() == Subsystems().size() && result.per_subsystem.size() == 2;
+			passed = passed && rowPassed;
+			std::cout << Tag << (rowPassed ? " PASS" : " FAIL") << " empty_subsystems_keep_their_row_entry keys=" << complete.size() << "/" << Subsystems().size()
+			          << (absent.empty() ? "" : " missing=" + absent) << " total=" << HashHex(result.total).substr(0, 16) << std::endl;
 		}
 		std::cout << Tag << (passed ? " PASS" : " FAIL") << std::endl;
 		return passed;
