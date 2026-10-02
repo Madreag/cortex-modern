@@ -592,7 +592,7 @@ namespace RTE::MenuAutomation {
 			command == "dump_refresh_count" || command == "dump_enter_state" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
-			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
+			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" || command == "assert_combo_items" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
@@ -1087,6 +1087,20 @@ namespace RTE::MenuAutomation {
 				observation = target;
 				return true;
 			}
+			if (command == "assert_combo_items") {
+				// The items a combo offers, in order, separated by '|'.
+				std::string comboName, expected;
+				args >> std::quoted(comboName);
+				std::getline(args >> std::ws, expected);
+				auto* combo = dynamic_cast<GUIComboBox*>(manager->GetControl(comboName));
+				if (!combo) { observation = comboName + " missing"; return false; }
+				std::string items;
+				for (int i = 0; i < combo->GetCount(); ++i) {
+					if (const GUIListPanel::Item* entry = combo->GetItem(i)) items += (i == 0 ? "" : "|") + entry->m_Name;
+				}
+				observation = comboName + " items=\"" + items + "\"";
+				return items == expected;
+			}
 			if (command == "combo_drop" || command == "combo_select") {
 				std::string comboName;
 				args >> std::quoted(comboName);
@@ -1411,9 +1425,9 @@ namespace RTE::MenuAutomation {
 			same("hint_policy_substitute", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute), "Give the seat to the AI (host too) until they catch up");
 			same("hint_policy_pause", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Pause), "Pause for them (up to 20 s)");
 			same("hint_bound_substitute", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 3, tickMs),
-			     "A player late past 3 ticks (50 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.");
+			     "A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
 			same("hint_bound_one_tick", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 1, tickMs),
-			     "A player late past 1 tick (17 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.");
+			     "A player late past 1 tick (17 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
 			same("hint_bound_pause", NetSlowPlayerHint(NetSlowPlayerPolicy::Pause, 3, tickMs), "Everyone waits for a late player, host included, for up to 20 s.");
 			same("hint_auto_delay", NetAutoDelayText(3), "ping plus a 3-tick margin, raised live if inputs arrive late");
 			same("hint_autosave_range", NetAutosaveRangeHint(), "Every 60 s to 60 min, or off (default)");
