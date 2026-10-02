@@ -4395,9 +4395,11 @@ static std::string ResyncSaveName() {
 		return silenceBoundMs != 0 && hostSilentMs > silenceBoundMs;
 	}
 
-	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool heldSeats) {
+	NetMatchService::LoneElection NetMatchService::LoneElectionOutcome(bool hostAnnounced, bool heldSeats, bool liveMembersUnheard) {
 		// An announced leave is the host's decision; a lost host is absent, and a match with a held seat is never ended by that.
 		if (hostAnnounced) return LoneElection::EndMatch;
+		// Live members that went silent with the host say this peer lost its own link: it rejoins rather than host a match of its own.
+		if (liveMembersUnheard) return LoneElection::RejoinHost;
 		return heldSeats ? LoneElection::HostForHeldSeats : LoneElection::RejoinHost;
 	}
 
@@ -7115,7 +7117,16 @@ static std::string ResyncSaveName() {
 		const auto& result = m_Coordinator->GetMigrationResult();
 		// A handover is the survivors' election, and a held seat is a present player whose input the AI holds.
 		if (std::none_of(result.members.begin(), result.members.end(), [&](uint8_t peer) { return peer != m_LocalPeerId; })) {
-			switch (LoneElectionOutcome(m_HostSilenceAtElectionMs < c_HostAnnouncedSilenceMs, m_Coordinator->AnyHeldAISeat())) {
+			const NetMatchConfig& played = m_Coordinator->GetConfig().matchConfig;
+			bool liveMembersUnheard = false;
+			for (const NetMatchPlayerSlot& slot: played.players) {
+				const uint8_t peer = slot.peerId;
+				if (slot.cpu || peer == 0 || peer == m_LocalPeerId || peer == played.hostPeerId || peer == result.hostPeerId) continue;
+				if (!played.activePeerIds.empty() && std::find(played.activePeerIds.begin(), played.activePeerIds.end(), peer) == played.activePeerIds.end()) continue;
+				if (m_Coordinator->HasHeldAISeat(peer) || m_Coordinator->IsPeerGoneAtFrame(peer, result.boundary)) continue;
+				liveMembersUnheard = true;
+			}
+			switch (LoneElectionOutcome(m_HostSilenceAtElectionMs < c_HostAnnouncedSilenceMs, m_Coordinator->AnyHeldAISeat(), liveMembersUnheard)) {
 				case LoneElection::EndMatch:
 					System::PrintDiagnosticLine("[net-match] host left with no other survivor: the match is over for this seat");
 					ScenarioRunner::SetControllerReplayError("PeerLeft:The host left the match");

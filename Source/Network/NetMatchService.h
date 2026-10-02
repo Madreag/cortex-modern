@@ -966,7 +966,8 @@ namespace RTE {
 		enum class LoneElection { EndMatch, RejoinHost, HostForHeldSeats };
 		/// What a survivor that finds no other live member does: an announced leave ends its match, a lost host with a held
 		/// seat in the round is replaced by this peer so the held seats rejoin it, and a lost host with none is rejoined.
-		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool heldSeats);
+		/// liveMembersUnheard: the round had other live members, neither held nor gone, and none answered - this peer is the one cut off.
+		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool heldSeats, bool liveMembersUnheard);
 		/// Whether a held seat's host is gone: the host ended or timed out its link (the transport's verdict), or the seat heard nothing
 		/// at all from it for the silence bound. Its own transport stopping is not the host's doing, and a seat told to come back through
 		/// the image has a host that answered.
