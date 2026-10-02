@@ -99,6 +99,8 @@ namespace RTE {
 		float GetCommittedAudibility(const SoundContainer& container) const;
 		size_t GetCommittedAudibilityCount() const { return m_CommittedAudibility.size(); }
 		void ClearCommittedAudibility();
+		/// A lockstep round starts with no committed readings on every peer: its objects and ticks restart, so an earlier round's could share a key.
+		void BeginLockstepRound();
 		uint64_t GetCheckpointSoundContainerCursor() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_NextSoundContainerIdentity; }
 		void SetCheckpointSoundContainerCursor(uint64_t value) { std::lock_guard lock(m_CheckpointRegistryMutex); m_NextSoundContainerIdentity = value; }
 		CheckpointSoundRegistry CaptureCheckpointSoundRegistry() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_CheckpointSoundContainers; }
