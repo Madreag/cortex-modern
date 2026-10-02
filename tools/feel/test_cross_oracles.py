@@ -258,9 +258,12 @@ class ScheduleKeyedOracles(unittest.TestCase):
         # Only the scheduled hold phase is judged; a transfer-phase end the schedule never forced does not count against it.
         self.assertEqual(o['forced_ends']['status'],'PASS')
         self.assertEqual(o['rematches']['status'],'PASS')
-        self.assertEqual(o['autosaves']['status'],'FAIL')
+        # A ticket return restores nothing from the peer's archive, so the autosave item is not asked for.
+        self.assertEqual(o['autosaves']['status'],'NOT APPLICABLE')
         o=self.judge(hold, round_ended=True, forced_end_during_hold=False)
         self.assertEqual(o['forced_ends']['status'],'FAIL')
+        archive=[dict(id='crash',peer='edith',action='crash-restart',restore='archive')]
+        self.assertEqual(self.judge(archive, validated_autosave_archives=False)['autosaves']['status'],'FAIL')
 
 
     def test_a_round_that_ends_while_its_seat_replays_is_its_departure(self):
