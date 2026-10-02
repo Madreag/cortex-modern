@@ -7441,7 +7441,8 @@ void RunGameLoop() {
 				RetractAbandonedTickHashes();
 				if (liveHashTick) {
 					nlohmann::json subsystems = nlohmann::json::object();
-					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
+					// A subsystem with nothing to hash this tick (no actors left) still has its row entry, at the empty value.
+					for (const auto& [name, hash]: SimChecksum::CompleteSubsystems(tickResult)) subsystems[name] = SimChecksum::HashHex(hash);
 					nlohmann::json observation = s_crossContext.is_object() ? s_crossContext : nlohmann::json::object();
 					observation.update(nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
 					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
