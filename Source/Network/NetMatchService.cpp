@@ -1951,7 +1951,8 @@ static std::string ResyncSaveName() {
 				if (lostHost && departedHost && !m_IsHost) NoteHostEndedTheMatchLocked();
 				m_RematchReturnOwed = RematchLossReturnsThroughRejoin(m_IsHost, m_HostEndedTheMatch, error.starts_with("rematch roster"), m_Session && m_Session->IsReady(),
 				                                                      m_Session && m_Session->HasReject(), m_Session && m_Session->HasReject() ? m_Session->GetRejectReason() : NetRejectReason::InternalError,
-				                                                      m_Runner->DidLoseHostDuringSetup(), error == "timed out waiting for lockstep start");
+				                                                      m_Runner->DidLoseHostDuringSetup(), error == "timed out waiting for lockstep start",
+				                                                      error == NetMatchRunner::c_SeatStartsHeld);
 				m_ErrorText = lostHost ? "The host left the match" :
 				              missingPlayers ? "The other players left the match" :
 				              error.starts_with("rematch roster") ? "The match could not return to the lobby" : error;
@@ -10130,7 +10131,8 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost,
-	                                                      bool startNeverCame) {
+	                                                      bool startNeverCame, bool heldAtStart) {
+		if (!isHost && !hostEndedMatch && heldAtStart) return true;
 		// A start that never came on a link this side still reads ready is the host playing the round with this seat held.
 		if (isHost || hostEndedMatch || rosterRefused || (sessionReady && !startNeverCame) || !linkLost) return false;
 		// A link closed with no reason from the host, or lost in transport, is a drop: the host keeps the seat for its return.

@@ -7234,25 +7234,28 @@ namespace RTE {
 			const char* name;
 			bool isHost, hostEnded, rosterRefused, ready, hasReject;
 			NetRejectReason reason;
-			bool linkLost, startNeverCame, returns;
+			bool linkLost, startNeverCame, heldAtStart, returns;
 		};
 		const Case cases[] = {
-		    {"a link the transport dropped", false, false, false, false, true, NetRejectReason::InternalError, true, false, true},
-		    {"a link that timed out", false, false, false, false, true, NetRejectReason::Timeout, true, false, true},
-		    {"a link closed with no reason", false, false, false, false, false, NetRejectReason::InternalError, true, false, true},
+		    {"a link the transport dropped", false, false, false, false, true, NetRejectReason::InternalError, true, false, false, true},
+		    {"a link that timed out", false, false, false, false, true, NetRejectReason::Timeout, true, false, false, true},
+		    {"a link closed with no reason", false, false, false, false, false, NetRejectReason::InternalError, true, false, false, true},
 		    // l4p-19: the lobby failed its own state-transfer check; the session closed, but no transport lost anything.
-		    {"a lobby that failed its own protocol check", false, false, false, false, true, NetRejectReason::InternalError, false, false, false},
-		    {"the host's goodbye", false, false, false, false, true, NetRejectReason::SessionEnded, true, false, false},
-		    {"a match the host ended", false, true, false, false, true, NetRejectReason::InternalError, true, false, false},
-		    {"a roster the rematch refused", false, false, true, false, true, NetRejectReason::InternalError, true, false, false},
-		    {"a session still ready", false, false, false, true, false, NetRejectReason::InternalError, true, false, false},
+		    {"a lobby that failed its own protocol check", false, false, false, false, true, NetRejectReason::InternalError, false, false, false, false},
+		    {"the host's goodbye", false, false, false, false, true, NetRejectReason::SessionEnded, true, false, false, false},
+		    {"a match the host ended", false, true, false, false, true, NetRejectReason::InternalError, true, false, false, false},
+		    {"a roster the rematch refused", false, false, true, false, true, NetRejectReason::InternalError, true, false, false, false},
+		    {"a session still ready", false, false, false, true, false, NetRejectReason::InternalError, true, false, false, false},
 		    // l4p-33: the Mac's lobby link dropped on the host's side under its lag while its own session still read ready; the host
 		    // started the round with its seat held, its lockstep start timed out and it ended its match ('timed out waiting for lockstep start').
-		    {"a ready session whose round started without it", false, false, false, true, false, NetRejectReason::InternalError, true, true, true},
-		    {"the host itself", true, false, false, false, true, NetRejectReason::InternalError, true, false, false},
+		    {"a ready session whose round started without it", false, false, false, true, false, NetRejectReason::InternalError, true, true, false, true},
+		    {"the host itself", true, false, false, false, true, NetRejectReason::InternalError, true, false, false, false},
+		    // l4p-39: the Mac came back in the lobby with its seat still held by the agreed round; its process started as no member, waited for
+		    // a start that never came and ended its match.
+		    {"a seat the agreed round starts held", false, false, false, true, false, NetRejectReason::InternalError, false, false, true, true},
 		};
 		for (const Case& c: cases) {
-			if (NetMatchService::RematchLossReturnsThroughRejoin(c.isHost, c.hostEnded, c.rosterRefused, c.ready, c.hasReject, c.reason, c.linkLost, c.startNeverCame) != c.returns) {
+			if (NetMatchService::RematchLossReturnsThroughRejoin(c.isHost, c.hostEnded, c.rosterRefused, c.ready, c.hasReject, c.reason, c.linkLost, c.startNeverCame, c.heldAtStart) != c.returns) {
 				*error = std::string("a rematch lobby loss on ") + c.name + (c.returns ? " ended the match instead of returning the seat through the rejoin" : " sent the seat back through the rejoin");
 				return false;
 			}
