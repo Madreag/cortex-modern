@@ -597,6 +597,18 @@ def restart_spec(spec, progress):
     return next_spec
 
 
+def crash_due(fault, progress, in_lobby):
+    """A scheduled crash-restart is due at its budget tick; a lobby one only inside a rematch lobby, a round one only early in a
+    running round (its frame between round_frame_from and round_frame_to), so the relaunch can return inside that round."""
+    if progress.get('budget_tick', 0) < fault['tick']: return False
+    phase = fault.get('phase', 'play')
+    if phase == 'lobby': return in_lobby
+    if phase == 'round':
+        frame = progress.get('applied_frame', 0)
+        return not in_lobby and fault.get('round_frame_from', 300) <= frame <= fault.get('round_frame_to', 600)
+    return True
+
+
 def seal_evidence(own):
     """Compress only closed instance records; retain verified original-byte digests."""
     from feel.records import compress_closed_record
@@ -827,7 +839,7 @@ def run_payload(path):
                     # A lobby-phase drop waits for the rematch lobby, so the host loses the link where the round's seats are settled.
                     in_lobby = lobby_watches[peer].poll()
                     due = next((f for f in spec['faults'] if f['action'] == 'crash-restart' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
-                                and current.get('budget_tick', 0) >= f['tick'] and (f.get('phase') != 'lobby' or in_lobby)), None)
+                                and crash_due(f, current, in_lobby)), None)
                     leaving = next((f for f in spec['faults'] if f['action'] == 'announced-leave-rejoin' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
                                     and current.get('budget_tick', 0) >= f['tick']), None)
                     if due or (leaving and run.poll() is not None):
