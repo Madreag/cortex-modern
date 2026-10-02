@@ -486,7 +486,6 @@ namespace RTE {
 			uint32_t holderGeneration = 0;
 			uint32_t incarnation = 0;
 			NetPeerId activeConnection = c_InvalidNetPeerId;
-			bool closed = false;
 			bool saturated = false;
 			// The compare-and-swap value a pending substitution captures at approval. Anything that
 			// changes who may hold the seat moves it, so an approval that was overtaken cannot commit.
@@ -589,6 +588,8 @@ namespace RTE {
 		const NetRosterSeat* RosterSeatOf(const SeatState& seat) const;
 		/// A player holds the seat: its roster seat has an owner.
 		bool IsSeated(const SeatState& seat) const;
+		/// The host opened the seat from the first start on (kicked, banned or released): closed to its former player, open to an applicant.
+		bool IsHostOpened(const SeatState& seat) const;
 		/// The holder is away and the seat is held for it.
 		bool IsHolderAway(const SeatState& seat) const;
 		/// The holder left on purpose and the seat is held for it.
@@ -618,7 +619,8 @@ namespace RTE {
 		/// left has nothing to reclaim and the seat must be joinable again.
 		/// @param releasedBy Kicked for the host's removal, LinkDropped for a holder that left the first lobby.
 		void ReleaseSeat(SeatState& seat, NetRosterEventKind releasedBy = NetRosterEventKind::Kicked);
-		void CloseSeatWithoutHold(SeatState& seat);
+		/// @param removedBy Kicked or Banned: the roster's cause for the open seat.
+		void CloseSeatWithoutHold(SeatState& seat, NetRosterEventKind removedBy = NetRosterEventKind::Kicked);
 		void CancelHolderTransactions(uint16_t stableSeat, uint64_t nowMs);
 		/// Ends every transaction a removed link still had open, on every seat.
 		void DropRemovedTransactions(NetPeerId connection);

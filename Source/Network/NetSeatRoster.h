@@ -24,7 +24,8 @@ namespace RTE {
 	};
 
 	/// Why a seat is held, so the label a player reads names the cause.
-	enum class NetSeatHoldCause : uint8_t { None, Capacity, LateStream, TimingAck, Quiet, OwnSeat, Leave, LinkDrop, Crash, RejoinFailed, Released };
+	/// Released, Kicked and Banned mark a seat the host opened: closed to its former player, open to an applicant or a newcomer.
+	enum class NetSeatHoldCause : uint8_t { None, Capacity, LateStream, TimingAck, Quiet, OwnSeat, Leave, LinkDrop, Crash, RejoinFailed, Released, Kicked, Banned };
 
 	/// The transport's own word on the owner's link; nothing inferred.
 	enum class NetSeatLink : uint8_t { Connected, Dropped };
@@ -68,7 +69,7 @@ namespace RTE {
 	/// Every seat event; each goes through ApplyRosterEvent and nowhere else.
 	enum class NetRosterEventKind : uint8_t {
 		LinkDropped, ProcessRelaunched, Returned, Kicked, Banned, RoundEnded, RematchFormed, HostLinkLost, MemberSetProposed, TransferAborted,
-		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, Count
+		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, SeatReleased, Count
 	};
 
 	struct NetRosterEvent {

@@ -3406,6 +3406,76 @@ namespace RTE {
 			return 0;
 		}
 
+		// Ruling ppp on the plane: from the first start a kick opens the seat with its number kept - closed to its former player, open to an
+		// applicant, 'Open - AI in control (kicked)' - and a leave between rounds is a drop the player chose, the seat kept for it.
+		int TestHostOpenedSeatsFollowTheRoster() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint kicked;
+			kicked.connection = 121;
+			ConfigureEndpoint(kicked, "opened-kicked", &unixNow);
+			wire.Add(&kicked);
+			if (!kicked.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the first join did not settle: " + error);
+			}
+			Endpoint leaver;
+			leaver.connection = 122;
+			ConfigureEndpoint(leaver, "opened-leaver", &unixNow);
+			wire.Add(&leaver);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!leaver.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the second join did not settle: " + error);
+			}
+			const uint16_t kickedSeat = kicked.client.GetRecord().stableSeat;
+			const uint16_t leaverSeat = leaver.client.GetRecord().stableSeat;
+			wire.host.SetLiveMatch(true);
+			NetModerationSelection selected{};
+			for (const NetH4ModerationSeat& seat: wire.host.GetModerationView()) {
+				if (seat.stableSeat == kickedSeat) selected = NetSelectModerationSeat(seat);
+			}
+			NetParticipantRemovalIssue issued;
+			if (wire.host.RemoveParticipant(selected, NetParticipantRemovalAction::Kick, wire.nowMs, unixNow, 0x4831ULL, 1, 10, issued) != NetKickBanResult::Ok) {
+				return Fail("the host could not kick the played seat");
+			}
+			kicked.connected = false;
+			bool substitutable = false;
+			for (const NetH4ModerationSeat& seat: wire.host.GetModerationView()) {
+				if (seat.stableSeat == kickedSeat) substitutable = seat.substitutable;
+			}
+			const NetRosterSeat* opened = wire.host.GetRoster().Find(static_cast<uint8_t>(kickedSeat + 1));
+			if (!opened || opened->owner != 0 || opened->phase != NetSeatPhase::Held || RosterSeatLabel(*opened) != "Open - AI in control (kicked)" ||
+			    !wire.host.IsSeatClosed(kickedSeat) || !substitutable) {
+				return Fail(std::string("a kick in a played match did not open the seat with its number kept: ") + (opened ? RosterSeatLabel(*opened) : std::string("no seat")) +
+				            " closed=" + std::to_string(wire.host.IsSeatClosed(kickedSeat)) + " substitutable=" + std::to_string(substitutable));
+			}
+			// Between rounds a leave keeps the seat for its player, as a drop does.
+			wire.host.SetMatchEnded();
+			const uint32_t releasedBefore = wire.host.GetStats().seatsReleased;
+			if (!leaver.client.BeginLeave(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the leave between rounds did not settle: " + error);
+			}
+			bool heldForReclaim = false;
+			for (const NetH4ModerationSeat& seat: wire.host.GetModerationView()) {
+				if (seat.stableSeat == leaverSeat) heldForReclaim = seat.heldForReclaim && seat.leftByChoice;
+			}
+			const NetRosterSeat* held = wire.host.GetRoster().Find(static_cast<uint8_t>(leaverSeat + 1));
+			if (!held || held->owner == 0 || held->phase != NetSeatPhase::Held || held->holdCause != NetSeatHoldCause::Leave || !heldForReclaim ||
+			    wire.host.IsSeatClosed(leaverSeat) || wire.host.GetStats().seatsReleased != releasedBefore) {
+				return Fail(std::string("a leave between rounds did not keep the seat for its player: ") + (held ? RosterSeatLabel(*held) : std::string("no seat")) +
+				            " released=" + std::to_string(wire.host.GetStats().seatsReleased - releasedBefore));
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS host_opened_seats_follow_the_roster kicked='" << RosterSeatLabel(*opened) << "' leaver='"
+			          << RosterSeatLabel(*held) << "'" << std::endl;
+			return 0;
+		}
+
 		// The host's seat roster reaches every holder whole and in order; no peer derives one (SEAT-ROSTER.md 5).
 		int TestRosterRevisionsReachEveryHolder() {
 			ScriptedAuthCrypto crypto;
@@ -7955,6 +8025,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestRosterRevisionsReachEveryHolder(); result != 0) {
+			return result;
+		}
+		if (const int result = TestHostOpenedSeatsFollowTheRoster(); result != 0) {
 			return result;
 		}
 		if (const int result = TestCleanLeaverKeepsTheSeat(); result != 0) {
