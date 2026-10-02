@@ -23,6 +23,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
+#include <optional>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -620,6 +622,78 @@ namespace RTE {
 			return true;
 		}
 
+		// The published alpha speaks session protocol 3. Its hello, in its own envelope, reaches a host on this build, which tells it
+		// why it cannot join in that envelope - the fields the alpha renders as 'Network protocol differs (host N; yours 3)' - never a
+		// bare disconnect its player reads as a network fault.
+		bool TestThePublishedAlphaIsToldWhy(std::string* error) {
+			constexpr uint16_t c_AlphaProtocol = 3;
+			constexpr uint16_t port = 49751;
+			LoopbackTransport hostWire, alphaWire;
+			NetSession host;
+			if (!host.StartHost(hostWire, MakeConfig(port, 301, "Host"), error) || !alphaWire.Connect("loopback", port, error)) return false;
+			NetPeerId toHost = c_InvalidNetPeerId;
+			uint64_t now = 0;
+			const auto pump = [&]() {
+				host.Tick(now);
+				hostWire.AdvanceTimeMs(5);
+				alphaWire.AdvanceTimeMs(5);
+				now += 5;
+			};
+			for (int step = 0; step < 40 && toHost == c_InvalidNetPeerId; ++step) {
+				pump();
+				for (const NetTransportEvent& event: alphaWire.PollEvents())
+					if (event.type == NetTransportEventType::PeerConnected) toHost = event.peerId;
+			}
+			if (toHost == c_InvalidNetPeerId) {
+				*error = "the alpha's link never reached the host";
+				return false;
+			}
+			// The alpha's hello: this build's payload, whose layout version 3 shares, in a version-3 envelope.
+			NetClientHello hello;
+			hello.clientNonce = 0xA1FA;
+			hello.minProtocolVersion = c_AlphaProtocol;
+			hello.maxProtocolVersion = c_AlphaProtocol;
+			hello.controllerFrameVersion = ControllerFrame::c_Version;
+			hello.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			hello.displayName = "Alpha player";
+			hello.gameVersion = "7.0.0-test";
+			hello.buildId = "published-alpha";
+			std::vector<uint8_t> bytes;
+			if (!NetProtocol::Encode({1, 0, hello}, bytes) || bytes.size() < NetProtocol::c_HeaderBytes) {
+				*error = "the alpha's hello did not encode";
+				return false;
+			}
+			bytes[4] = static_cast<uint8_t>(c_AlphaProtocol & 0xFFU);
+			bytes[5] = static_cast<uint8_t>(c_AlphaProtocol >> 8);
+			if (!alphaWire.Send(toHost, NetTransportLane::ControlReliable, bytes, error)) return false;
+			std::optional<NetJoinRejected> told;
+			bool closed = false;
+			for (int step = 0; step < 40 && !told && !closed; ++step) {
+				pump();
+				for (const NetTransportEvent& event: alphaWire.PollEvents()) {
+					if (event.type == NetTransportEventType::PeerDisconnected) closed = true;
+					uint16_t version = 0;
+					if (event.type != NetTransportEventType::PacketReceived || !NetProtocol::PeekHeaderVersion(event.bytes.data(), event.bytes.size(), version) || version != c_AlphaProtocol) continue;
+					// The alpha reads its own envelope; this build reads the same payload once the envelope names its version.
+					std::vector<uint8_t> current = event.bytes;
+					current[4] = static_cast<uint8_t>(NetProtocol::c_Version & 0xFFU);
+					current[5] = static_cast<uint8_t>(NetProtocol::c_Version >> 8);
+					const NetDecodeResult decoded = NetProtocol::Decode(current);
+					if (const NetJoinRejected* rejected = decoded.ok ? std::get_if<NetJoinRejected>(&decoded.message.payload) : nullptr) told = *rejected;
+				}
+			}
+			const std::string hostVersion = std::to_string(NetProtocol::c_Version);
+			if (!told || told->rejectReason != NetRejectReason::ProtocolMismatch || told->mismatchKey != "protocol_version" || told->expected != hostVersion ||
+			    told->actual != std::to_string(c_AlphaProtocol) || host.GetStats().oldWireRejectionsSent != 1) {
+				*error = std::string("a player on the published alpha (protocol 3) was not told why in its own envelope: ") +
+				         (told ? "told " + std::string(NetProtocol::RejectReasonName(told->rejectReason)) + " host=" + told->expected + " yours=" + told->actual : std::string("nothing")) +
+				         " rejections_sent=" + std::to_string(host.GetStats().oldWireRejectionsSent) + " bare_disconnects=" + std::to_string(host.GetStats().oldWireDisconnects);
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS the_published_alpha_is_told_why host=" << told->expected << " yours=" << told->actual << std::endl;
+			return true;
+		}
+
 		bool TestAdvertisedVersionsRequireHeadless(std::string* error) {
 			struct Environment {
 				std::map<std::string, std::optional<std::string>> saved;
@@ -634,25 +708,35 @@ namespace RTE {
 					}
 				}
 			} environment;
-			for (bool protocol: {false, true}) {
+			// The published alpha speaks protocol 3: a player on it is told why in its own envelope, as one on 2 is.
+			struct Case {
+				bool protocol;
+				const char* advertised;
+				uint16_t port;
+			};
+			for (const Case& c: {Case{false, "fixture-other-build", 49747}, Case{true, "2", 49748}, Case{true, "3", 49749}}) {
+				const bool protocol = c.protocol;
 				const char* key = protocol ? "CC_TEST_NET_ADVERTISED_PROTOCOL" : "CC_TEST_NET_ADVERTISED_BUILD";
 				SDL_unsetenv_unsafe("CC_TEST_NET_ADVERTISED_BUILD"); SDL_unsetenv_unsafe("CC_TEST_NET_ADVERTISED_PROTOCOL");
-				SDL_setenv_unsafe(key, protocol ? "2" : "fixture-other-build", 1);
+				SDL_setenv_unsafe(key, c.advertised, 1);
 				SDL_setenv_unsafe("CCCP_HEADLESS", "0", 1);
 				LoopbackTransport hostWire, clientWire;
 				NetSession host, client;
 				std::string why;
-				const uint16_t port = protocol ? 49748 : 49747;
+				const uint16_t port = c.port;
 				if (host.StartHost(hostWire, MakeConfig(port, 301, "Host"), &why) || why.find("requires CCCP_HEADLESS=1") == std::string::npos) {
 					*error = "the advertised-version lever was accepted outside headless mode"; return false;
 				}
 				SDL_setenv_unsafe("CCCP_HEADLESS", "1", 1); SDL_unsetenv_unsafe(key);
 				if (!host.StartHost(hostWire, MakeConfig(port, 301, "Host"), error)) return false;
-				SDL_setenv_unsafe(key, protocol ? "2" : "fixture-other-build", 1);
+				SDL_setenv_unsafe(key, c.advertised, 1);
 				if (!client.StartClient(clientWire, "loopback", MakeConfig(port, 401, "Joiner"), error)) return false;
 				SDL_unsetenv_unsafe(key);
-				if (!DrivePair(hostWire, clientWire, host, client, [&] { return client.IsRejected(); }, error)) return false;
-				const std::string expected = protocol ? "Network protocol differs (host " + std::to_string(NetProtocol::c_Version) + "; yours 2)." :
+				if (!DrivePair(hostWire, clientWire, host, client, [&] { return client.IsRejected(); }, error)) {
+					*error = std::string("a peer advertising ") + c.advertised + " was never told why: " + *error;
+					return false;
+				}
+				const std::string expected = protocol ? "Network protocol differs (host " + std::to_string(NetProtocol::c_Version) + "; yours " + c.advertised + ")." :
 				    "Your build differs from the host's (host stage2-p2c-selftest; yours fixture-other-build).";
 				if (client.GetRejectReason() != (protocol ? NetRejectReason::ProtocolMismatch : NetRejectReason::BuildMismatch) ||
 				    client.BuildPlayerRefusalText() != expected || host.GetReadyPeerCount() != 0 || host.GetState() != NetSessionState::Listening) {
@@ -2184,6 +2268,7 @@ namespace RTE {
 		if (!TestReadyRequiresAcceptedConnection(&error)) return fail(error);
 		if (!TestHostWithNoRemoteSeatIsReady(&error)) return fail(error);
 		if (!TestAdvertisedVersionsRequireHeadless(&error)) return fail(error);
+		if (!TestThePublishedAlphaIsToldWhy(&error)) return fail(error);
 		if (!TestRejects(&error)) return fail(error);
 		if (!TestLockstepCodecAdmission(&error)) return fail(error);
 		if (!TestSessionFull(&error)) return fail(error);
