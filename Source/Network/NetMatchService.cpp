@@ -6287,8 +6287,11 @@ static std::string ResyncSaveName() {
 				ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return;
 			}
 			if (g_ActivityMan.GetActivity() && m_ActivateCatchUpLocalSeat && !m_ActivateCatchUpLocalSeat(*g_ActivityMan.GetActivity())) {
+				// A relaunched returner has no player state of its own; a seat held since its round began has no agreed binding either.
 				const auto binding = committed.playerBindings.find(m_LocalPeerId);
-				if (binding == committed.playerBindings.end() || !g_ActivityMan.GetActivity()->ApplyNetPlayerBindings(binding->second.bindings)) {
+				const auto roster = ScenarioRunner::GetLockstepMatchConfig();
+				if (!Activity::RestoreReturningLocalSeat(*g_ActivityMan.GetActivity(), binding != committed.playerBindings.end() ? &binding->second.bindings : nullptr,
+				                                         roster ? &*roster : nullptr, m_LocalPeerId)) {
 					ScenarioRunner::SetControllerReplayError("private catch-up could not restore the local seat"); return;
 				}
 			}

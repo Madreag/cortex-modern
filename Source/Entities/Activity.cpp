@@ -1742,6 +1742,26 @@ bool Activity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings) {
 	return true;
 }
 
+bool Activity::AdoptNetLocalSeat(const NetMatchConfig& config, uint8_t localPeer) {
+	MapLocalPlayers(config, localPeer);
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_LocalInputPlayers[player] == Players::NoPlayer || !IsSeatActive(player) || !IsHumanSeat(player)) continue;
+		// The donor's image shows this seat as one it only watched; its player takes it back through the ordinary unbound path.
+		if (m_ViewState[player] == ViewState::Observe) m_ViewState[player] = ViewState::Normal;
+		m_PlayerController[player].Reset();
+		m_PlayerController[player].Create(Controller::CIM_PLAYER, player);
+		m_PlayerController[player].SetTeam(m_Team[player]);
+	}
+	RefreshCheckpointActorIDs();
+	return true;
+}
+
+bool Activity::RestoreReturningLocalSeat(Activity& activity, const NetGamePlayerBindings* agreed, const NetMatchConfig* config, uint8_t localPeer) {
+	if (agreed) return activity.ApplyNetPlayerBindings(*agreed);
+	// A seat held since its round began has no agreed binding; a fresh binding would reset every seat's shared state.
+	return config && activity.AdoptNetLocalSeat(*config, localPeer);
+}
+
 bool Activity::RunNetLocalPlayerStateSelfTest() {
 	bool passed = true;
 	const auto check = [&](const char* name, bool value) {
@@ -1821,6 +1841,32 @@ bool Activity::RunNetLocalPlayerStateSelfTest() {
 		stageHostLinks();
 		check("relaunch_links_follow_seatless_bindings", fixture.Activity::ApplyNetPlayerBindings(NetGamePlayerBindings{}) && fixture.Activity::ResolveCheckpointReferences() &&
 			!fixture.m_Brain[0] && !fixture.m_ControlledActor[0] && !fixture.m_PlayerController[0].GetControlledActor());
+
+		// l4p-29: a relaunched player returning to a seat held since its round began has no player state of its own and the match never
+		// heard a binding for the seat ('private catch-up could not restore the local seat'); it takes the seat back as the committed world
+		// holds it, and the donor's seat keeps its own state.
+		GameActivity world;
+		world.m_SharedPlayerSeats = true;
+		world.m_SharedSeatsEngaged = true;
+		for (int player = Players::PlayerOne; player <= Players::PlayerTwo; ++player) {
+			world.m_IsActive[player] = true;
+			world.m_IsHuman[player] = true;
+			world.m_Team[player] = player;
+		}
+		world.m_ViewState[Players::PlayerTwo] = ViewState::Observe;
+		world.m_TeamFundsShare[Players::PlayerOne] = 0.25F;
+		world.m_FundsContribution[Players::PlayerOne] = 40.0F;
+		Actor donorActor;
+		if (donorActor.MovableObject::Create() < 0) throw std::runtime_error("the donor seat's actor could not be created");
+		world.m_ControlledActor[Players::PlayerOne] = &donorActor;
+		NetMatchConfig roster;
+		roster.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Returner"}};
+		const bool restored = RestoreReturningLocalSeat(world, nullptr, &roster, 2);
+		check("relaunched_returner_takes_its_held_seat", restored && world.m_LocalInputPlayers[Players::PlayerTwo] == Players::PlayerOne &&
+			world.m_PlayerScreen[Players::PlayerTwo] == 0 && world.m_ViewState[Players::PlayerTwo] == ViewState::Normal && !world.m_ControlledActor[Players::PlayerTwo] &&
+			world.m_LocalInputPlayers[Players::PlayerOne] == Players::NoPlayer);
+		check("relaunched_returner_leaves_the_donor_seat", world.m_TeamFundsShare[Players::PlayerOne] == 0.25F && world.m_FundsContribution[Players::PlayerOne] == 40.0F &&
+			world.m_Team[Players::PlayerOne] == 0 && world.m_IsActive[Players::PlayerOne] && world.m_ControlledActor[Players::PlayerOne] == &donorActor);
 	} catch (const std::exception& exception) { check(exception.what(), false); }
 	const bool presentation = RunPresentationViewSelfTest();
 	return passed && presentation;
