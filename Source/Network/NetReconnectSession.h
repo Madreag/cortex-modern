@@ -7,6 +7,7 @@
 #include "NetReconnectLedger.h"
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectTxCache.h"
+#include "NetSeatRoster.h"
 #include "NetTransport.h"
 
 #include <cstdint>
@@ -365,7 +366,7 @@ namespace RTE {
 		void SetSeatTable(std::vector<NetH4Seat> seats, NetMatchMode mode);
 		/// Live match: a ticketless join is denied outright in Phase A; in a lobby it may fill a
 		/// never-held seat.
-		void SetLiveMatch(bool live) { m_LiveMatch = live; if (live) m_MatchEnded = false; }
+		void SetLiveMatch(bool live);
 		/// A persistent world admits a fresh, ticketless joiner into a LIVE round: its seats are the
 		/// world's gameplay slots, freed by a clean leave under the next generation, never "used up".
 		void SetPersistentWorld(bool persistent) { m_PersistentWorld = persistent; }
@@ -486,11 +487,6 @@ namespace RTE {
 			bool committed = false;
 			bool closed = false;
 			bool saturated = false;
-			bool dropped = false;
-			uint64_t droppedAtMs = 0;
-			bool leftByChoice = false; //!< The holder left the running match on purpose; the seat is held for it like a drop.
-			uint64_t leftAtMs = 0;
-			bool holdExpired = false;
 			// The compare-and-swap value a pending substitution captures at approval. Anything that
 			// changes who may hold the seat moves it, so an approval that was overtaken cannot commit.
 			uint32_t seatGeneration = 1;
@@ -588,6 +584,23 @@ namespace RTE {
 		void Send(NetPeerId connection, NetPayload payload);
 		SeatState* FindSeat(uint16_t stableSeat);
 		const SeatState* FindSeat(uint16_t stableSeat) const;
+		/// The seat's entry in the roster, which holds whether its holder is away, why and since when.
+		const NetRosterSeat* RosterSeatOf(const SeatState& seat) const;
+		/// The holder is away and the seat is held for it.
+		bool IsHolderAway(const SeatState& seat) const;
+		/// The holder left on purpose and the seat is held for it.
+		bool HolderLeftByChoice(const SeatState& seat) const;
+		/// When the holder went away, on this plane's clock; 0 while it is here.
+		uint64_t HolderAwaySinceMs(const SeatState& seat) const;
+		/// Every change to a seat's hold goes through the roster's one transition function.
+		void ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice = false);
+		void ApplyStageEvent(NetRosterEventKind kind);
+		/// A holder this plane seats or takes back is playing: the plane sees no image or catch-up of its own.
+		void SettleReturn(const SeatState& seat);
+		/// Seats a new holder in the roster: an open seat is admitted, a held one given to the applicant.
+		void SeatHolder(const SeatState& seat);
+		/// Keeps one roster seat per plane seat, the existing ones as they are.
+		void RebuildRoster();
 		SeatState* FindFreeNeverHeldSeat();
 		/// A world's free gameplay slot: not the host's, not committed, not closed and not already being
 		/// offered. Unlike a match seat it may have been held before - a clean leave gives it back.
@@ -598,7 +611,8 @@ namespace RTE {
 		void RecordDrop(SeatState& seat, uint64_t frame);
 		/// Hands a seat back to the pool. Only in a lobby: nothing has been played, so the player who
 		/// left has nothing to reclaim and the seat must be joinable again.
-		void ReleaseSeat(SeatState& seat);
+		/// @param releasedBy Kicked for the host's removal, LinkDropped for a holder that left the first lobby.
+		void ReleaseSeat(SeatState& seat, NetRosterEventKind releasedBy = NetRosterEventKind::Kicked);
 		void CloseSeatWithoutHold(SeatState& seat);
 		void CancelHolderTransactions(uint16_t stableSeat, uint64_t nowMs);
 		/// Ends every transaction a removed link still had open, on every seat.
@@ -655,6 +669,7 @@ namespace RTE {
 		NetReconnectTxCache m_TxCache;
 		NetReconnectLedger m_Ledger;
 		std::vector<SeatState> m_Seats;
+		NetSeatRoster m_Roster; //!< Whether each seat's holder is away, why and since when; changed only through ApplyRosterEvent.
 		std::vector<Applicant> m_Applicants;
 		std::vector<Substitution> m_Substitutions;
 		std::vector<Provisional> m_Provisionals;

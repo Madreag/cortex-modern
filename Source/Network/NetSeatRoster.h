@@ -44,6 +44,7 @@ namespace RTE {
 		uint64_t returnAfterMs = 0;                            ///< A return is not offered again before this (the backoff).
 		uint64_t bindingRef = 0;                               ///< The committed world's brain/actor for the seat.
 		uint64_t givenAwayTicket = 0;                          ///< The ticket of the player the host gave this seat away from.
+		uint64_t heldSinceMs = 0;                              ///< When its owner went away, on the host's clock; the host's own, never sent.
 	};
 
 	/// Who holds which seat, in what phase: owned by the host's session plane and replicated by revision.
@@ -76,6 +77,7 @@ namespace RTE {
 		uint64_t ticket = 0;           ///< Returned: the ticket shown; Admitted / ApplicantAccepted: the ticket issued.
 		uint64_t nowMs = 0;            ///< The plane's clock, for the return's backoff.
 		bool withTraffic = false;      ///< LivenessPassed: the link carried authenticated traffic.
+		bool byChoice = false;         ///< LinkDropped: the owner left on purpose.
 		bool afterGrace = false;       ///< SlowMachine: the round is past its warm-up grace.
 		bool keptWorld = false;        ///< Returned: the owner's process kept the round's world.
 		bool quorum = false;           ///< HostLinkLost: every surviving member agrees the host's link is gone.

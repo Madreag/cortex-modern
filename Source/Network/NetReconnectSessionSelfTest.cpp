@@ -3279,21 +3279,15 @@ namespace RTE {
 			if (!wire.host.IsSeatHeldForReclaim(held)) {
 				return Fail("the hold ended inside the P2 window");
 			}
+			// Past the window the seat is still its player's: a hold ends only at the host's click (A12).
 			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
 			wire.host.Tick(wire.nowMs);
-			if (wire.host.IsSeatHeldForReclaim(held)) {
-				return Fail("the hold outlived the P2 window");
-			}
-			if (wire.host.GetStats().seatHoldsExpired != 1) {
-				return Fail("the closed window was not counted");
-			}
 			wire.host.Tick(wire.nowMs + 5000);
-			if (wire.host.GetStats().seatHoldsExpired != 1) {
-				return Fail("the closed window was counted more than once");
+			if (!wire.host.IsSeatHeldForReclaim(held) || wire.host.GetStats().seatHoldsExpired != 0) {
+				return Fail("the hold ended past the P2 window without the host's click");
 			}
 
-			// The narrowness this case exists for: a closed window ends the ROUND's wait, not the seat's
-			// ticket. The same holder still reclaims, and the seat is worth waiting for again.
+			// The same holder still reclaims, and the seat is worth waiting for again.
 			Endpoint returner;
 			returner.connection = 92;
 			ConfigureEndpoint(returner, "hold-return", &unixNow);
@@ -3440,11 +3434,11 @@ namespace RTE {
 			if (!wire.host.TakePendingHoldResolutions().empty()) {
 				return Fail("a drop queued a hold resolution before the admission clock expired");
 			}
+			// The window passes and nothing resolves the hold: only the player's return or the host's click does (A12).
 			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
 			wire.host.Tick(wire.nowMs);
-			const auto expired = wire.host.TakePendingHoldResolutions();
-			if (expired.size() != 1 || expired[0].lockstepPeerId != held || expired[0].resolution != NetHoldResolution::Expired) {
-				return Fail("Tick expiry did not queue Expired");
+			if (!wire.host.TakePendingHoldResolutions().empty()) {
+				return Fail("the hold resolved on its own past the window");
 			}
 
 			Endpoint returner;
@@ -3456,7 +3450,7 @@ namespace RTE {
 				return Fail("the reclaim did not settle: " + error);
 			}
 			if (returner.client.GetState() != NetH4ClientState::Joined) {
-				return Fail("the reclaim after expiry did not join");
+				return Fail("the reclaim after the window did not join");
 			}
 			const auto reclaimed = wire.host.TakePendingHoldResolutions();
 			if (reclaimed.size() != 1 || reclaimed[0].lockstepPeerId != held || reclaimed[0].resolution != NetHoldResolution::Reclaimed) {
@@ -4141,7 +4135,8 @@ namespace RTE {
 			wire.nowMs += NetReconnectHost::c_ProvisionalExpiryMs + 1;
 			if (wire.host.ApplyModeration(expires, NetModerationAction::Substitute, wire.nowMs) != NetH4ModerationResult::StaleSelection) return Fail("an expired applicant was accepted at click time");
 			const auto expired = wire.host.GetModerationView()[0];
-			if (!expired.dropped || expired.heldForReclaim || !expired.substitutable) return Fail("hold expiry altered seat ownership or substitution eligibility");
+			// Past the applicant's window the seat is still held for its player (A12) and still open to a substitution.
+			if (!expired.dropped || !expired.heldForReclaim || !expired.substitutable) return Fail("the window altered the held seat or its substitution eligibility");
 			wire.host.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
 			if (wire.host.GetModerationView()[0] != expired) return Fail("a seat-table refresh restarted an expired hold");
 			wire.host.EndHostedSession();
@@ -5869,36 +5864,12 @@ namespace RTE {
 			const uint64_t windowMs = NetReconnectHost::c_ProvisionalExpiryMs;
 			const uint64_t giveUpMs = windowMs * 3;
 
-			// One pump per 10 ms of elapsed time: the seat is held for its window and no longer.
-			const uint64_t singleMs = holdEndsAtMs(false, 1, 10, giveUpMs);
-			if (singleMs < windowMs || singleMs > windowMs + 20) {
-				return Fail("a singly-pumped seat hold did not last P2: " + std::to_string(singleMs) + " ms");
-			}
-			// Two pumps a tick is what the game loop and the lockstep wait actually do together; the
-			// window must not move at all.
-			const uint64_t doubleMs = holdEndsAtMs(false, 2, 10, giveUpMs);
-			if (doubleMs != singleMs) {
-				return Fail("double pumping moved the P2 window to " + std::to_string(doubleMs) + " ms");
-			}
-			// A stall pumps the plane hundreds of times inside a few milliseconds.
-			const uint64_t stalledMs = holdEndsAtMs(false, 200, 10, giveUpMs);
-			if (stalledMs != singleMs) {
-				return Fail("a stall moved the P2 window to " + std::to_string(stalledMs) + " ms");
-			}
-			// A pause pumps rarely over a long time; the window must not stretch either.
-			const uint64_t pausedMs = holdEndsAtMs(false, 1, 5000, giveUpMs);
-			if (pausedMs < windowMs || pausedMs > windowMs + 5000) {
-				return Fail("a pause stretched the P2 window to " + std::to_string(pausedMs) + " ms");
-			}
-
-			// The negative control: counting pumps is the defect, and it must still measure as one.
-			const uint64_t countedDoubleMs = holdEndsAtMs(true, 2, 10, giveUpMs);
-			if (countedDoubleMs >= windowMs) {
-				return Fail("the pump-counting control did not shorten the window, so this case proves nothing");
-			}
-			const uint64_t countedPausedMs = holdEndsAtMs(true, 1, 5000, giveUpMs);
-			if (countedPausedMs <= giveUpMs) {
-				return Fail("the pump-counting control expired a paused hold, so this case proves nothing");
+			// A held seat has no window (A12): under every pump discipline the seat is still held when the run gives up.
+			for (const auto& [pumps, stepMs]: {std::pair<uint32_t, uint64_t>{1, 10}, {2, 10}, {200, 10}, {1, 5000}}) {
+				const uint64_t endedMs = holdEndsAtMs(false, pumps, stepMs, giveUpMs);
+				if (endedMs <= giveUpMs) {
+					return Fail("a seat hold ended at " + std::to_string(endedMs) + " ms with " + std::to_string(pumps) + " pumps per " + std::to_string(stepMs) + " ms");
+				}
 			}
 
 			// The clock itself: an origin is not part of the answer, and it never runs backwards.
@@ -6020,29 +5991,18 @@ namespace RTE {
 			}
 			(void)lobbyStartedAtMs;
 
-			// Live match: the holder drops, and the hold is measured in elapsed service milliseconds.
+			// Live match: the holder drops and the seat stays held with no window (A12), however the composed clock runs.
 			admission.SetLiveMatch(true);
 			holderTransport.Stop();
-			const uint64_t droppedAtMs = serviceMs;
-			uint64_t releasedAtMs = 0;
-			for (uint64_t elapsed = 0; elapsed <= NetReconnectHost::c_ProvisionalExpiryMs * 3 && releasedAtMs == 0; elapsed += 10) {
+			for (uint64_t elapsed = 0; elapsed <= NetReconnectHost::c_ProvisionalExpiryMs * 3; elapsed += 10) {
 				for (const NetTransportEvent& event: hostTransport.PollEvents()) {
 					host.InjectEvent(event, serviceMs);
 				}
 				host.TickAdmissionPlane(serviceMs);
 				if (!admission.IsSeatHeldForReclaim(MakeSeatTable()[0].lockstepPeerId)) {
-					releasedAtMs = serviceMs;
+					return Fail("the dropped seat was released after " + std::to_string(elapsed) + " ms without the host's click");
 				}
 				step(10);
-			}
-			if (releasedAtMs == 0) {
-				return Fail("the dropped seat was never released");
-			}
-			const uint64_t heldMs = releasedAtMs - droppedAtMs;
-			if (heldMs < NetReconnectHost::c_ProvisionalExpiryMs || heldMs > NetReconnectHost::c_ProvisionalExpiryMs + 20) {
-				return Fail("the composed P2 seat hold was " + std::to_string(heldMs) + " ms against the pinned " +
-				            std::to_string(NetReconnectHost::c_ProvisionalExpiryMs) + ", the lobby round having inflated the session clock by " +
-				            std::to_string(inflationMs) + " ms");
 			}
 			if (inflationMs != 0) {
 				return Fail("the lobby round inflated the session clock by " + std::to_string(inflationMs) + " ms");

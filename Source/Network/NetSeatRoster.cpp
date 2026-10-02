@@ -91,18 +91,31 @@ namespace RTE {
 				if (!seat) return refuse("no such seat");
 				// A seat's own link says nothing about the host's: host loss is HostLinkLost with every survivor's agreement.
 				if (event.seat == next.hostSeat) return refuse("a link drop never replaces the host");
+				if (next.stage == NetRosterStage::Lobby) {
+					// Before the first start nothing is played and the lobby is still forming: a drop or a leave frees the seat.
+					if (seat->owner == 0) return keep("the seat is already open");
+					seat->owner = 0;
+					seat->ticket = 0;
+					seat->link = NetSeatLink::Dropped;
+					seat->holdCause = NetSeatHoldCause::None;
+					seat->failedReturns = 0;
+					seat->returnAfterMs = 0;
+					seat->heldSinceMs = 0;
+					return commit("the player left the lobby - the seat is open");
+				}
 				if (seat->link == NetSeatLink::Dropped && (seat->owner == 0 || IsAway(seat->phase))) return keep("the seat is already away");
 				seat->link = NetSeatLink::Dropped;
 				if (seat->owner == 0) return commit("the open seat's link closed");
+				seat->heldSinceMs = event.nowMs;
 				if (seat->phase == NetSeatPhase::RejoinImage || seat->phase == NetSeatPhase::RejoinCatchUp) {
 					FailReturn(*seat, event.nowMs);
 					return commit("Connection lost - the AI plays the seat until the player returns");
 				}
 				if (!IsAway(seat->phase)) {
 					seat->phase = NetSeatPhase::Held;
-					seat->holdCause = NetSeatHoldCause::LinkDrop;
+					seat->holdCause = event.byChoice ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
 				}
-				return commit("Connection lost - the AI plays the seat until the player returns");
+				return commit(event.byChoice ? "Left - the AI plays the seat until the player returns" : "Connection lost - the AI plays the seat until the player returns");
 			}
 			case NetRosterEventKind::ProcessRelaunched: {
 				if (!seat || seat->owner == 0) return refuse("the seat has no player");
@@ -124,6 +137,7 @@ namespace RTE {
 				++seat->incarnation;
 				seat->link = NetSeatLink::Connected;
 				seat->holdCause = NetSeatHoldCause::None;
+				seat->heldSinceMs = 0;
 				// A newer connection of a seat that plays the round takes over the play; any other return goes through its stage's path.
 				if (seat->phase != NetSeatPhase::Running || next.stage != NetRosterStage::Running) seat->phase = ReturnPhase(next.stage, event.keptWorld);
 				return commit(next.stage == NetRosterStage::Running ? "Rejoining - the AI plays the seat until the player is back" : "the player is back");
@@ -310,7 +324,8 @@ namespace RTE {
 			const NetRosterSeat& was = before.seats[i];
 			const NetRosterSeat& is = after.seats[i];
 			if (was.seatId != is.seatId) return fail("seat " + std::to_string(was.seatId) + " was renumbered");
-			const bool ownerMoves = kind == NetRosterEventKind::Kicked || kind == NetRosterEventKind::Banned || kind == NetRosterEventKind::Admitted || kind == NetRosterEventKind::ApplicantAccepted;
+			const bool ownerMoves = kind == NetRosterEventKind::Kicked || kind == NetRosterEventKind::Banned || kind == NetRosterEventKind::Admitted || kind == NetRosterEventKind::ApplicantAccepted ||
+			                        ((kind == NetRosterEventKind::LinkDropped || kind == NetRosterEventKind::LivenessPassed) && before.stage == NetRosterStage::Lobby);
 			if (was.owner != is.owner && !ownerMoves) return fail("seat " + std::to_string(was.seatId) + " changed owner on a " + NetRosterEventName(kind));
 			if (was.owner == is.owner && is.incarnation < was.incarnation) return fail("seat " + std::to_string(was.seatId) + " went back an incarnation");
 			if (is.owner != 0 && is.link == NetSeatLink::Dropped && !IsAway(is.phase))
@@ -532,7 +547,7 @@ namespace RTE {
 		/// The expected outcome of each cell for the subject seat: its next phase (L S R H I C E M Z G), '-' unchanged, 'X' refused, '.' unreachable.
 		/// Columns in c_Columns' order; rows 1-10 are the grid's rows.
 		constexpr std::array<const char*, 10> c_Expected{{
-			/*  1 LOBBY          */ "HZLHHXS.XXHX-HH-XX",
+			/*  1 LOBBY          */ "LZLHHXS.XXHX-LL-XX",
 			/*  2 STARTING       */ "HZSHHXX-XXXX-HH-XX",
 			/*  3 RUNNING        */ "HZRHHMX-GXXX-HHHXX",
 			/*  4 HELD           */ "-ZIHHEX--XXX----XI",
