@@ -12108,7 +12108,10 @@ namespace RTE {
 		});
 		// A host whose simulation stalls keeps its link talking and holds its own seat; only a host whose link stays silent past the
 		// host-loss bound is taken for gone, so a stall of milliseconds never starts an election.
-		const uint64_t lossSilenceMs = std::max<uint64_t>(std::max<uint64_t>(hostSilenceMs, c_HostLossSilenceMs), loneSurvivor ? c_LoneElectionConfirmMs : 0);
+		// A survivor's own lag delays everything it hears from the host: two of its round trips are never read as the host's silence.
+		uint64_t hostRttMs = 0;
+		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) hostRttMs = host->second.pingMs;
+		const uint64_t lossSilenceMs = std::max({hostSilenceMs, c_HostLossSilenceMs, loneSurvivor ? c_LoneElectionConfirmMs : 0, 2 * hostRttMs});
 		const uint64_t electionSilenceMs = m_Config.timeoutMs != 0 ? std::min<uint64_t>(m_Config.timeoutMs, lossSilenceMs) : lossSilenceMs;
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
 		const bool hostSilent = !hostBusy && electionSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= electionSilenceMs;
