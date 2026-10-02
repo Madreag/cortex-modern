@@ -899,6 +899,8 @@ namespace RTE {
 		static bool SeatHostScene(NetMatchServiceRequest& request, std::string* error = nullptr);
 		/// Empty picker: the request still names P4 Alpha Duel and Base.rte.
 		static void ApplyHostActivityFallback(NetMatchServiceRequest& request);
+		/// The incarnation a held seat's player returns through the image as: its ticket's, or past every one the round already knows for the seat.
+		static uint32_t ImageReturnIncarnation(uint32_t ticket, uint32_t roundKnows);
 		/// Fills the request's unset options from the saved settings, where a real host starts a match.
 		static void SeatSavedOptions(NetMatchServiceRequest& request);
 		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.

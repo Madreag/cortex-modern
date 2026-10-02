@@ -8185,6 +8185,21 @@ namespace RTE {
 		return true;
 	}
 
+	// l4p-44: a rematch started the Mac's seat held at incarnation 4 and its player returned through the image as 4, so the host
+	// refused every reclaim ('private reclaim requires a held incarnation') and moved the return on for the rest of the round.
+	bool TestAStartHeldSeatReturnsAsTheNextIncarnation(std::string* error) {
+		struct Row { uint32_t ticket, roundKnows, expected; const char* what; };
+		for (const Row& row: {Row{4, 4, 5, "a ticket the round already knows"}, Row{5, 4, 5, "a relaunched returner's newer ticket"}, Row{2, 4, 5, "a ticket older than the round's"}}) {
+			if (const uint32_t returning = NetMatchService::ImageReturnIncarnation(row.ticket, row.roundKnows); returning != row.expected) {
+				*error = std::string("a held seat's image return reuses an incarnation the round knows (") + row.what + "): ticket=" + std::to_string(row.ticket) +
+				         " round=" + std::to_string(row.roundKnows) + " returned=" + std::to_string(returning);
+				return false;
+			}
+		}
+		std::cout << "PASS a_start_held_seat_returns_as_the_next_incarnation" << std::endl;
+		return true;
+	}
+
 	// l4p-38: the host's session timed out a returner's catch-up link after 5001 ms of 'silence' while a catch-up report came over it every
 	// second. Lobby traffic on a link the session admitted is that link heard.
 	bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error) {
@@ -15280,6 +15295,7 @@ namespace RTE {
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestLobbyTrafficKeepsAHostLinkAlive(&error)) return fail(error);
 		if (!TestASeatKnockingWhileTheRoundFormsIsAnswered(&error)) return fail(error);
+		if (!TestAStartHeldSeatReturnsAsTheNextIncarnation(&error)) return fail(error);
 		if (!TestServiceKick(&error)) return fail(error);
 		if (!TestServiceKickRejoin(&error)) return fail(error);
 		if (!TestTheGoodbyeReachesAHandshakingReturner(&error)) return fail(error);
