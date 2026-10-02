@@ -896,8 +896,13 @@ def remote_commands(path, local_peer, first_tick=1, last_tick=TICKS, effective_s
         return commands, False
     launch = json.loads(launch_path.read_text(encoding='utf-8-sig'))
     verify = json.loads(verify_path.read_text(encoding='utf-8-sig'))
+    starts = {first_tick}
+    if type(effective_start) is int and effective_start >= 1:
+        starts.add(effective_start)
+    first = verify.get('first_frame')
     complete = (launch.get('exit_code') == 0 and launch.get('evidence_complete') is True and not launch.get('timed_out')
-                and verify.get('ok') is True and verify.get('first_frame') in {first_tick, effective_start} and verify.get('last_frame', 0) >= last_tick)
+                and verify.get('ok') is True and type(first) is int and first in starts
+                and type(verify.get('last_frame')) is int and verify['last_frame'] >= last_tick)
     return commands, complete
 
 
