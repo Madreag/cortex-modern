@@ -16,6 +16,7 @@ namespace RTE {
 
 	class AllegroScreen;
 	class AllegroBitmap;
+	class CheckpointWriter;
 	class GUIFont;
 	class Shader;
 	class RenderTarget;
@@ -378,9 +379,14 @@ namespace RTE {
 		bool RunPaletteCheckpointSelfTest();
 		std::string SaveNetLocalState() const;
 		bool LoadNetLocalState(std::string_view text, bool validateOnly = false);
+		/// Self-test of the frame checkpoint's scopes: which fonts this machine has loaded stays out of the shared state.
+		/// @return The failure seen, or empty when the scopes hold.
+		static std::string CheckpointPerPeerSelfTestMismatch();
 #pragma endregion
 
 	private:
+		/// Writes the small and large font slots, empty for a font this machine has not loaded.
+		static void WriteFontSlots(CheckpointWriter& writer, const std::array<const GUIFont*, 4>& fonts);
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_TwoPlayerVSplit, self.m_ScreenText, self.m_TextCentered, self.m_TextDuration, self.m_TextDurationTimer, self.m_TextBlinking, self.m_TextBlinkTimer, self.m_HUDDisabled, self.m_FlashScreenColor, self.m_FlashedLastFrame, self.m_FlashTimer);
 		}

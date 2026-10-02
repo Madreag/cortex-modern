@@ -2109,10 +2109,29 @@ std::string FrameMan::SaveCheckpoint() const {
 	writer.BeginPerPeer();
 	VisitCheckpoint(writer, *this);
 	writer.EndPerPeer();
-	for (const auto* font: m_SmallFonts) writer(CheckpointWriter::Native([font] { return font ? GUICheckpoint::SaveFont(*font) : std::string{}; }));
-	for (const auto* font: m_LargeFonts) writer(CheckpointWriter::Native([font] { return font ? GUICheckpoint::SaveFont(*font) : std::string{}; }));
+	WriteFontSlots(writer, {m_SmallFonts[0], m_SmallFonts[1], m_LargeFonts[0], m_LargeFonts[1]});
 	writer(CheckpointWriter::Native([&] { return SavePaletteCheckpoint(); }));
 	return writer.Text();
+}
+
+void FrameMan::WriteFontSlots(CheckpointWriter& writer, const std::array<const GUIFont*, 4>& fonts) {
+	// Which fonts exist is this machine's own: a draw path loads a font the first time it draws with it, and a script's text metrics are the same either way.
+	writer.BeginPerPeer();
+	for (const auto* font: fonts) writer(CheckpointWriter::Native([font] { return font ? GUICheckpoint::SaveFont(*font) : std::string{}; }));
+	writer.EndPerPeer();
+}
+
+std::string FrameMan::CheckpointPerPeerSelfTestMismatch() {
+	// The resync screen, the moderation panel and the performance overlay load the true-colour large font on first draw.
+	GUIFont drawn("FatFont32");
+	const auto capture = [](const GUIFont* large) {
+		return CheckpointWriter::CaptureNative([large] { CheckpointWriter writer("FrameManFonts"); WriteFontSlots(writer, {nullptr, nullptr, nullptr, large}); return writer.Text(); });
+	};
+	const CheckpointText unloaded = capture(nullptr);
+	const CheckpointText loaded = capture(&drawn);
+	if (unloaded.Text() == loaded.Text()) return "font_slot=not_archived";
+	if (unloaded.SharedText() != loaded.SharedText()) return "font_slot=shared";
+	return {};
 }
 
 std::string FrameMan::SaveNetLocalState() const {
