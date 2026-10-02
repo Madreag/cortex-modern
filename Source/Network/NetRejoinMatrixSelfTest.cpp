@@ -1047,18 +1047,18 @@ namespace RTE {
 				entry.state = peer == 2 || peer == 4 ? NetSeatPresenceState::Disconnected : NetSeatPresenceState::Present;
 				seats.seats.push_back(entry);
 			}
-			const std::vector<uint8_t> survivors = NetMatchRunner::DeriveRematchSurvivors(played, {}, {}, &seats, 1);
 			NetMatchConfig derived;
-			std::map<uint8_t, uint8_t> seatMap;
 			std::string deriveError;
-			if (!NetMatchConfigUtil::DeriveRematchConfig(played, survivors, derived, &seatMap, &deriveError)) {
+			if (!NetMatchConfigUtil::DeriveRematchConfig(played, derived, &deriveError)) {
 				*error = "the rematch config could not be derived: " + deriveError;
 				return false;
 			}
 			std::string kept;
-			for (const uint8_t peer: survivors) kept += (kept.empty() ? "" : ",") + std::to_string(peer);
-			bool renumbered = false;
-			for (const auto& [from, to]: seatMap) renumbered = renumbered || from != to;
+			bool renumbered = derived.players.size() != played.players.size();
+			for (size_t index = 0; index < derived.players.size(); ++index) {
+				kept += (kept.empty() ? "" : ",") + std::to_string(derived.players[index].peerId);
+				renumbered = renumbered || index >= played.players.size() || derived.players[index].peerId != played.players[index].peerId;
+			}
 			// The lobby holds the two dropped seats: the round starts with the members present and both seats held.
 			LoopbackTransport wire;
 			NetLockstepCoordinator host;

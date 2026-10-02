@@ -237,11 +237,7 @@ namespace RTE {
 		/// Rate-window keys currently held: seats plus the single shared unknown-sender budget.
 		size_t ChatRateWindowCount() const;
 
-		/// Host: re-seats the Ready peers on the ids a rematch roster gives them, so a roster that lost
-		/// a player is dense again. Keyed and valued by session-assigned id. Refuses rather than take an
-		/// id a peer that is still handshaking holds.
-		bool RenumberReadySeats(const std::map<uint8_t, uint8_t>& assignedIdBySeatedId, std::string* error = nullptr);
-		/// Client: takes the session-assigned id the rematch roster gives this peer.
+		/// Client: takes the session-assigned id the host's seat assignment gives this peer.
 		bool AdoptRematchPeerId(uint8_t assignedPeerId, std::string* error = nullptr);
 		void AdoptLobbyHostPeerId(uint8_t peerId) {
 			if (m_Role == NetSessionRole::Client && peerId != 0 && peerId <= NetMatchConfigUtil::c_MaxPeerCount)
