@@ -224,6 +224,17 @@ class ImageRejoinHistory(unittest.TestCase):
         self.assertTrue(result['passed'])
         self.assertEqual((result['equal_keys'], result['peers']['c']['away']), (20, 7))
 
+    def test_a_seat_held_from_its_rounds_start_that_only_replayed_it_was_away(self):
+        # l4p-31's EDITH: relaunched in the lobby, held from round 2's first frame, replayed it from an image and landed in round 3.
+        live = {p: [live_row(t, p) for t in range(1, 13)] for p in ('a', 'b')}
+        live['c'] = [dict(live_row(t, 'c'), history_branch=None, phase='catchup') for t in range(5, 13)]
+        compared, away = cross_report.adopt_restored_histories(live, self.RANGE, {'c': ['[net-match] rejoin phase Loading -> TailReplay']})
+        self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): [(1, 12)]})
+        self.assertTrue(cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)['passed'])
+        # Without the replay the seat's absence is not explained.
+        live['c'] = []
+        self.assertEqual(cross_report.adopt_restored_histories(live, self.RANGE, {'c': ['[net-match] rejoin phase Loading -> TailReplay']})[1], {})
+
     def test_records_without_a_relaunch_stay_unplaced(self):
         compared, away = cross_report.adopt_restored_histories(self.live(), self.RANGE, {'c': ['']})
         self.assertEqual(away, {})
