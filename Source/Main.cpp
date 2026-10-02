@@ -454,6 +454,12 @@ static bool CrossHistoryRestored(bool catchup, bool inPlace, uint64_t configured
 	return (catchup && !inPlace) || (configuredStart > 1 && !inPlaceReturns.contains(configuredStart)) || ticketRejoin || reexecuted;
 }
 
+// A relaunched process rejoins one round, the first it sees; every later round it starts from the round's first frame like the others.
+static bool CrossTicketRejoinRound(bool ticketRejoin, uint64_t round, uint64_t& firstRound) {
+	if (firstRound == 0) firstRound = round;
+	return ticketRejoin && round == firstRound;
+}
+
 static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, [[maybe_unused]] uint64_t nextFrameCursor, const std::set<uint64_t>& inPlaceReturns = {}) {
 	const bool started = configuredStart == 1 || (configuredStart > 1 && inPlaceReturns.contains(configuredStart));
 	return started && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
@@ -515,6 +521,13 @@ bool RTE::RunCrossInPlaceHistorySelfTest(std::string* error) {
 	    !CrossHistoryBranch(700, false, 701, returns).is_null() || !CrossHistoryBranch(671, true, 672, returns).is_null() ||
 	    !CrossHistoryBranch(671, false, 672, {}).is_null()) {
 		*error = "an image catch-up, a late start, a ticket rejoin or a re-executed tick keeps the initial history"; return false;
+	}
+	// l4p-31: EDITH's relaunch rejoined round 2 by ticket, then played rounds 3-6 from their first frames; all of them were recorded as restored.
+	uint64_t firstRound = 0;
+	const bool rejoined = CrossTicketRejoinRound(true, 1542469911966388394ull, firstRound), later = CrossTicketRejoinRound(true, 12545044123032358889ull, firstRound);
+	if (!rejoined || later || CrossTicketRejoinRound(false, 1542469911966388394ull, firstRound)) {
+		*error = std::string("a relaunched process's ticket rejoin marks ") + (later ? "a later round it played from its start" : "the wrong round") + " as restored";
+		return false;
 	}
 	std::cout << "[net-match-selftest] PASS in_place_catch_up_keeps_the_initial_history" << std::endl;
 	return true;
@@ -621,7 +634,9 @@ static void BeginCrossTick(uint64_t tick) {
 	auto& returns = inPlaceReturns[historyKey];
 	// The frame an in-place catch-up returns at is where this process starts its round again on its own world.
 	if (inPlace && ScenarioRunner::WorldCatchUpActivationTick() != 0) returns.insert(ScenarioRunner::WorldCatchUpActivationTick());
-	if (CrossHistoryRestored(catchup, inPlace, configuredStart, returns, s_crossTicketRejoin, round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
+	static uint64_t processFirstRound = 0;
+	const bool ticketRound = CrossTicketRejoinRound(s_crossTicketRejoin, round, processFirstRound);
+	if (CrossHistoryRestored(catchup, inPlace, configuredStart, returns, ticketRound, round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
 	priorHost = host; priorCatchup = catchup;
 	// The process's own names and the config's hash change rarely; each tick reads them from here.
 	static const std::string run = CrossEnvironment("CC_TEST_CROSS_RUN"), instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
