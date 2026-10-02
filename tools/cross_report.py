@@ -553,7 +553,8 @@ def adopt_restored_histories(live, ranges, logs):
                     if s[0]['tick'] > last + 1: gaps.append((last + 1, s[0]['tick'] - 1))
                     last = s[-1]['tick']
                 if gaps: away[(name, prefix)] = gaps
-            rows = [r for r in rows if not (r.get('history_branch') is None and r.get('phase') == 'catchup')]
+        # A catch-up replay runs before its seat lands, in the seat's away range (OR1), whether the seat relaunched or caught up in place.
+        rows = [r for r in rows if not (r.get('history_branch') is None and r.get('phase') == 'catchup')]
         adopted[name] = rows
     return adopted, away
 

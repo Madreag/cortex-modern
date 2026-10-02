@@ -240,6 +240,14 @@ class ImageRejoinHistory(unittest.TestCase):
         self.assertEqual(away, {})
         self.assertFalse(cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)['passed'])
 
+class CatchUpRows(unittest.TestCase):
+    def test_a_catch_up_replay_is_the_away_range_for_a_seat_that_never_relaunched(self):
+        # l4p-38: the Mac caught up in place; its unbranched replay rows were left in and read as unkeyed.
+        rows=[dict(history_branch=None,phase='catchup',tick=357),dict(history_branch='initial',phase='live',tick=358)]
+        adopted,away=cross_report.adopt_restored_histories({'mac':rows},[],{'mac':[]})
+        self.assertEqual([r['tick'] for r in adopted['mac']],[358])
+        self.assertEqual(away,{})
+
 class CrashHolds(unittest.TestCase):
     def test_a_hold_inside_a_crashed_seats_recovery_is_the_crash(self):
         hold=dict(scheduled_recovery_id='edith-round-drop',classification='other')
