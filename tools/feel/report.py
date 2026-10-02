@@ -247,7 +247,7 @@ def own_hold_windows(lines):
 
 def parse_fullstate(paths):
     samples, scopes, contexts, refusals, coalesced, holds = [], defaultdict(list), defaultdict(list), [], [], []
-    sample_pattern = re.compile(r'^\[fullstate(?:-(canonical|restored))?\] tick=(\d+) hash=([0-9a-f]{16}) sections=(\S+) round=(\d+)')
+    sample_pattern = re.compile(r'^\[fullstate(?:-(canonical|restored|reclaim|landed))?\] tick=(\d+) hash=([0-9a-f]{16}) sections=(\S+) round=(\d+)')
     # The engine's own record of a periodic sample its writer replaced before writing it (ActivityMan's per-series bound).
     coalesced_pattern = re.compile(r'^\[fullstate-coalesced\] tick=(\d+) replaced=(\d+) ')
     scope_pattern = re.compile(r'^\[fullstate-scope\] tick=(\d+) round=(\d+) label=(\S+) per_peer=(.*)$')
@@ -314,7 +314,7 @@ def compare_fullstate_histories(peers, expected):
             if not found and key[2]=='sample' and replaced[peer][key[1]]>0:
                 replaced[peer][key[1]]-=1
                 excused.append(dict(peer=peer,key=tuple(key)))
-            elif not found and key[2]=='sample' and any(round_id==key[0] and first<=key[1]<end for round_id,first,end in peers[peer].get('holds',[])):
+            elif not found and key[2] in ('sample','landed') and any(round_id==key[0] and first<=key[1]<end for round_id,first,end in peers[peer].get('holds',[])):
                 held.append(dict(peer=peer,key=tuple(key)))
             elif not found: missing.append(dict(peer=peer,key=key))
             values.extend((peer,sample) for sample in found)
