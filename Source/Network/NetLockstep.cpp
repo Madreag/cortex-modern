@@ -4680,6 +4680,20 @@ namespace RTE {
 		m_Stats.nextFrame = m_Stats.effectiveStartFrame;
 		for (const uint8_t peer: linksLostBeforeStart) {
 			m_StartupLinksLost.insert(peer);
+			// A seat with no link sends no start: the host's stand-in answers for it, so no peer's start gate waits on a held seat.
+			NetLockstepStart standIn;
+			standIn.sessionId = config.sessionId;
+			standIn.startFrame = config.startFrame;
+			standIn.inputDelayFrames = PeerInputDelay(peer);
+			standIn.controllerFrameVersion = ControllerFrame::c_Version;
+			standIn.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			standIn.localPeerId = peer;
+			standIn.peerCount = config.peerCount;
+			standIn.scenario = config.scenario;
+			standIn.ownershipPolicy = config.ownershipPolicy;
+			standIn.roundId = m_RoundId;
+			m_RemoteStarts[peer] = standIn;
+			m_RemoteStartsReceived.insert(peer);
 			DiagnosticLine() << "[net-lockstep] " << DescribePeer(peer) << " has no link at the start; the start holds its seat" << std::endl;
 		}
 
@@ -4688,7 +4702,9 @@ namespace RTE {
 			m_State = NetLockstepState::Running;
 			return true;
 		}
-		return SendStart(error);
+		if (!SendStart(error)) return false;
+		for (const uint8_t peer: linksLostBeforeStart) RelayToOtherRemotes({m_RemoteStarts.at(peer)}, peer);
+		return true;
 	}
 
 	bool NetLockstepCoordinator::SendStart(std::string* error, uint8_t onlyPeerId) {
