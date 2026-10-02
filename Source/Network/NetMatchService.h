@@ -1216,6 +1216,7 @@ namespace RTE {
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
+		friend bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestServiceKickRejoin(std::string* error);
 		friend bool TestStartingKickMarshals(std::string* error);
@@ -1598,6 +1599,7 @@ namespace RTE {
 		// (the whole lobby phase) m_Session is empty, but chat must already reach it.
 		NetSession* m_ChatSession = nullptr;
 		std::vector<NetTransportEvent> m_PendingSessionEvents; //!< Game-thread only: reconnect traffic the coordinator handed over.
+		std::vector<NetPeerId> m_PendingTrafficNotes; //!< Game-thread only: links whose lobby traffic the host's session counts as heard.
 		//!< Coordinator counters a resync would otherwise zero, accumulated at every teardown.
 		struct LockstepTotals {
 			uint64_t peerFramesWaived = 0;

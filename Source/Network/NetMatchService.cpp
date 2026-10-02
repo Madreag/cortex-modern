@@ -6533,6 +6533,9 @@ static std::string ResyncSaveName() {
 						m_PendingSessionEvents.push_back(event);
 					return;
 				}
+				// A link carrying lobby traffic - a returner's catch-up report each second - is alive to the host's session.
+				if (m_IsHost && (m_PendingTrafficNotes.empty() || m_PendingTrafficNotes.back() != event.peerId) && m_PendingTrafficNotes.size() < 256)
+					m_PendingTrafficNotes.push_back(event.peerId);
 				QueueLobbyEvent(event);
 			} else {
 				m_PendingSessionEvents.push_back(event);
@@ -7278,7 +7281,16 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::DrainPendingSessionEventsLocked(bool atTickBoundary) {
-		if (m_PendingSessionEvents.empty() || !m_Session) {
+		if (!m_Session) {
+			m_PendingTrafficNotes.clear();
+			return;
+		}
+		if (!m_PendingTrafficNotes.empty()) {
+			const uint64_t heardMs = AdmissionNowMs();
+			for (const NetPeerId peer: m_PendingTrafficNotes) m_Session->NotePeerTraffic(peer, heardMs);
+			m_PendingTrafficNotes.clear();
+		}
+		if (m_PendingSessionEvents.empty()) {
 			return;
 		}
 		std::vector<NetTransportEvent> events;
