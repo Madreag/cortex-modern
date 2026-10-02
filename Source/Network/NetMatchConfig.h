@@ -171,10 +171,9 @@ namespace RTE {
 		/// kicked reads this again, so no roster keeps a departed player's name on an open seat. A
 		/// persistent world's seats outlive their holders and read "Open"; a match's read their client id.
 		static std::string UnseatedSlotName(uint8_t peerId, bool persistentWorld);
-		/// The roster a rematch is played on: the peers still here keep their relative seat order and
-		/// close up onto ids 1..N. An intact roster maps to itself, config and hash unchanged.
-		/// @param outSeatMap Optional old lockstep peer id -> new lockstep peer id for every survivor.
-		static bool DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap = nullptr, std::string* error = nullptr);
+		/// The roster a rematch is played on: every seat of the round keeps its id and its player, never renumbered;
+		/// which seats start present is the host's to name in activePeerIds.
+		static bool DeriveRematchConfig(const NetMatchConfig& previous, NetMatchConfig& outConfig, std::string* error = nullptr);
 		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
 		/// Whether the text is a canonical lowercase 8-4-4-4-12 UUID, the only shape a world id may take.
 		static bool IsWorldId(const std::string& text);

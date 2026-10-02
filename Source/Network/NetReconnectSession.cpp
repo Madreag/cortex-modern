@@ -390,9 +390,6 @@ namespace RTE {
 		m_PendingReseats.clear();
 		m_PendingHoldResolutions.clear();
 		m_Ledger.Clear();
-		for (SeatState& seat : m_Seats) {
-			if (seat.dropped) seat.holdExpired = true;
-		}
 	}
 
 	NetAuthBytes16 NetReconnectHost::GetEpoch() const {

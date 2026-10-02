@@ -787,35 +787,10 @@ static std::string ResyncSaveName() {
 			}
 			if (m_IsHost)
 				(void)GetNetAuthCrypto().RandomBytes(m_MigrationKey.data(), m_MigrationKey.size());
-			// The round that just ended is the only thing that knows who left it; the next lobby is
-			// formed from the peers it still had. The host adds the peers its live session holds.
-			{
-				std::map<uint8_t, uint64_t> leaves;
-				std::set<uint8_t> refilled;
-				std::optional<NetLockstepSeatSnapshot> seats;
-				if (m_Coordinator) {
-					leaves = m_Coordinator->GetPeerLeaveFrames();
-					for (const auto& leave : leaves) {
-						const NetLockstepHoldResolution resolution = m_Coordinator->HeldSeatResolution(leave.first);
-						if (resolution == NetLockstepHoldResolution::Reclaimed || resolution == NetLockstepHoldResolution::Substituted) {
-							refilled.insert(leave.first);
-						}
-					}
-					seats = m_Coordinator->TakeSeatSnapshot();
-					if (!seats) {
-						seats = m_SeatPresence.GetSnapshot();
-					}
-					if (seats && seats->roundId != m_Coordinator->GetRoundId()) {
-						seats.reset(); // an earlier round's view
-					}
-				}
-				NetMatchConfig played = m_Runner->GetMatchConfig();
-				// A seat that took the end record on its way back never ran a round here: the host's config names the hub.
-				if (m_Coordinator && m_Coordinator->GetRoundId() != 0)
-					played.hostPeerId = m_Coordinator->GetHostPeerId();
-				m_Runner->SetRematchRoster(RematchSurvivorsFor(played, leaves, refilled, seats ? &*seats : nullptr, m_LocalPeerId, !m_IsHost && m_LeftRoundHeld));
-				m_LeftRoundHeld = false;
-			}
+			// The next round keeps every seat of this one. A client that left its round held holds no view of it - its rejoin
+			// replaced the round's config - so it takes the host's roster as offered.
+			m_Runner->SetRematchOwed(m_IsHost || !m_LeftRoundHeld);
+			m_LeftRoundHeld = false;
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
 			link = TakeTransportLinkLocked();
@@ -10192,12 +10167,6 @@ static std::string ResyncSaveName() {
 		if (isHost || hostEndedMatch || rosterRefused || (sessionReady && !startNeverCame) || !linkLost) return false;
 		// A link closed with no reason from the host, or lost in transport, is a drop: the host keeps the seat for its return.
 		return !hasReject || reason == NetRejectReason::InternalError || reason == NetRejectReason::Timeout;
-	}
-
-	std::vector<uint8_t> NetMatchService::RematchSurvivorsFor(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaves, const std::set<uint8_t>& refilled,
-	                                                         const NetLockstepSeatSnapshot* seats, uint8_t localPeerId, bool leftRoundHeld) {
-		if (leftRoundHeld) return {};
-		return NetMatchRunner::DeriveRematchSurvivors(played, leaves, refilled, seats, localPeerId);
 	}
 
 	bool NetMatchService::RematchReturnOwed() const {
