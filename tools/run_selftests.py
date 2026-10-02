@@ -39,6 +39,7 @@ SELFTESTS = [
     "net-reconnect-session",
     "net-world-join",
     "net-rejoin-matrix",
+    "net-roster",
     "camera-null-scene",
     "rotate-primitive",
     "sim-checksum",

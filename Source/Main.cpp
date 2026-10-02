@@ -118,6 +118,7 @@
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "NetRejoinMatrixSelfTest.h"
+#include "NetSeatRoster.h"
 #include "NetWorldJoinSelfTest.h"
 #ifdef CCCP_WITH_GNS
 #include <steam/isteamnetworkingutils.h>
@@ -10335,6 +10336,9 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-rejoin-matrix-selftest") {
 			return NetRejoinMatrixSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-roster-selftest") {
+			return NetSeatRosterSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-rejoin-grid-selftest") {
 			netRejoinGridSelfTest = true;
