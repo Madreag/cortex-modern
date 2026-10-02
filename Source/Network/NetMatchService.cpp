@@ -5197,7 +5197,9 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp) {
-		if (!coordinatorRunning || !catchUp.active) {
+		// A replay that handed the sim to its round is over even if that round stopped again in the same pass: from here the
+		// round's own record of holds and returns applies them, through the held seat's catch-up if it is held again.
+		if (!(coordinatorRunning || catchUp.handedToRound) || !catchUp.active) {
 			return false;
 		}
 		// The coordinator owns the wire and the pacing from the moment it runs. A catch-up left armed
@@ -6348,6 +6350,7 @@ static std::string ResyncSaveName() {
 				System::PrintDiagnosticLine(line.str());
 			}
 			m_InPlaceCatchUp = false;
+			m_WorldCatchUp.handedToRound = true;
 		}
 		if (m_Coordinator && m_Coordinator->IsRunning() && !m_WorldCatchUp.privateMatch) {
 			// The world's own coordinator takes the round from its replay at the activation, with the committed state it replayed to.
@@ -6384,6 +6387,7 @@ static std::string ResyncSaveName() {
 			          << " at=" << m_WorldCatchUp.activationTick << " input_horizon=" << m_Coordinator->GetStats().nextFrame;
 				System::PrintDiagnosticLine(line.str());
 			}
+			m_WorldCatchUp.handedToRound = true;
 		}
 		if (m_Coordinator && m_Coordinator->IsRunning()) {
 			m_Coordinator->DeferStopsToTickBoundary();
