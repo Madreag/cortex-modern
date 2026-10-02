@@ -21268,6 +21268,41 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// l4p-37: a seat the start holds sends no start, and the host and every client waited for one until each timed out. Its stand-in
+	// comes from the host, so every start gate is complete without it.
+	bool TestNoStartGateWaitsForAHeldSeat(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto hostConfig = MakeCoordinatorConfig(1, 3, 0x9A5C, 1, NetTransportLane::ControlReliable);
+		auto clientConfig = MakeCoordinatorConfig(3, 1, 0x9A5C, 1, NetTransportLane::ControlReliable);
+		for (NetLockstepConfig* config: {&hostConfig, &clientConfig}) {
+			config->startFrame = 1; config->roundId = 0x9A5C; config->peerCount = 3;
+			config->activePeerIds = {1, 2, 3};
+			config->substituteSlowPeers = true; config->requirePublishedStart = true; config->simTickMs = 1000.0 / 60.0;
+			config->timeoutMs = 30000;
+			config->peerInputDelayFrames = {{1, 1}, {2, 1}, {3, 1}};
+			config->matchConfig = NetMatchConfigUtil::MakeDefault(0x9A5C);
+			config->matchConfig.peerCount = 3; config->matchConfig.players.push_back({3, 2, false, "Present"});
+		}
+		hostConfig.relayToOtherPeers = true;
+		if (!hostWire.StartHost(49755, error) || !clientWire.Connect("loopback", 49755, error)) return false;
+		// The host reaches the client; the member on seat 2 has no link. The client reaches every seat through the host.
+		hostConfig.remoteTransportPeerIds = {{3, 1}};
+		clientConfig.remoteTransportPeerIds = {{1, 1}};
+		if (!host.Start(hostWire, hostConfig, error) || !client.Start(clientWire, clientConfig, error)) return false;
+		for (uint64_t now = 0; now < 300; ++now) {
+			hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+			host.Tick(now); client.Tick(now);
+		}
+		if (!host.HasReceivedAllRemoteStarts() || !client.HasReceivedAllRemoteStarts()) {
+			*error = std::string("a start gate waited for the held seat: host complete=") + std::to_string(host.HasReceivedAllRemoteStarts()) +
+			         " client complete=" + std::to_string(client.HasReceivedAllRemoteStarts());
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS no_start_gate_waits_for_a_held_seat" << std::endl;
+		return true;
+	}
+
 	bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error) {
 		for (uint16_t delay: {0, 6}) {
 			LoopbackTransport wire;
@@ -23016,6 +23051,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAReturnGapDoesNotStartTheHostsClock, "a_return_gap_does_not_start_the_hosts_clock");
 		row(&TestAHoldLandsAtTheFirstFrameItsSeatOwes, "a_hold_lands_at_the_first_frame_its_seat_owes");
 		row(&TestALinklessMemberIsHeldByTheStart, "a_linkless_member_is_held_by_the_start");
+		row(&TestNoStartGateWaitsForAHeldSeat, "no_start_gate_waits_for_a_held_seat");
 		row(&TestAHeldHostCanReachItsReclaimHorizon, "a_held_host_can_reach_its_reclaim_horizon");
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");
