@@ -179,6 +179,14 @@ def require_distinct_machines(preflights):
         raise RuntimeError('each declared box must resolve to a distinct real machine')
 
 
+def host_stall_spec(value):
+    """TICK:MS for the engine's per-round live stall: a positive tick and 1..20000 ms, as the engine accepts."""
+    tick, _, ms = value.partition(':')
+    if not (tick.isdigit() and ms.isdigit() and int(tick) > 0 and 0 < int(ms) <= 20000):
+        raise argparse.ArgumentTypeError('expected TICK:MS with a positive tick and 1..20000 ms')
+    return f'{int(tick)}:{int(ms)}'
+
+
 def make_plan(options):
     manifest = load_boxes(options.boxes, options.roster)
     boxes = {b['name']: b for b in manifest['boxes']}
@@ -221,6 +229,8 @@ def make_plan(options):
             flags += ['-memory-census-ticks', str(options.memory_census_ticks)]
         if peer['name'] == host:
             flags += ['-net-host', '-net-replay-out', own + '/match.ccreplay']
+            # The host's simulation stalls every round for the forced host-stall arm; its link and its plane stay live.
+            if getattr(options, 'host_stall', None): flags += ['-net-test-live-stall-each-round', options.host_stall]
             if options.scenario != 'match': flags += ['-net-autosave-seconds', '180']
         else:
             flags += ['-net-join-session', '<published-session-id>']
@@ -1148,6 +1158,7 @@ def parse_args(argv=None):
     parser.add_argument('--local-setting', action='append', type=setting_pair, default=[], metavar='KEY=VALUE',
                         help='seed windows-local after directory settings; repeatable, last value wins')
     parser.add_argument('--local-render-cap', type=render_cap_hz, metavar='HZ', help='windows-local render cap: 0 or 60')
+    parser.add_argument('--host-stall', type=host_stall_spec, metavar='TICK:MS', help="stall the host's simulation MS milliseconds at round tick TICK, every round")
     parser.add_argument('--scenario', choices=['match', 'soak', 'chaos', 'endurance'], default='match')
     parser.add_argument('--roster', choices=['three-way', 'four-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
     parser.add_argument('--scene', default='Grasslands')
