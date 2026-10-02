@@ -382,16 +382,16 @@ class ReportTests(unittest.TestCase):
         drawn = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(4)]
         self.assertFalse(report.previewed_responses([edge], drawn, timeline)[0]['pass_check'])
 
-    def test_an_edge_the_world_acted_on_is_judged_from_the_first_preview_after_it(self):
+    def test_an_unresolved_world_interaction_does_not_turn_a_late_response_green(self):
         edge = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1, changes=[dict(action='L_LEFT', held=True)])
         timeline = [dict(type='committed', tick=12, wall_ms=90, actors=[actor()])] + [dict(type='committed', tick=13 + n, wall_ms=150 + 17 * n, actors=[actor(vx=-1 - n)]) for n in range(4)]
         late = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(6)]
         self.assertFalse(report.previewed_responses([edge], late, timeline)[0]['pass_check'])
-        # A hit at tick 11 no preview drawn before it could know: judged from the first preview drawn from tick 11 (182 ms), due a frame later.
+        # The field name alone does not say which velocity component the hit changed.
         hit = dict(type='interaction', tick=11, uid=7, fields='vel,angvel', source='Dropship Hull Panel Gib A#9')
         row = report.previewed_responses([edge], late, timeline, [hit])[0]
-        self.assertEqual((row['previewed_ms'], row['interaction']['tick'], row['interaction']['source'], row['interaction']['judged_from_ms'], row['pass_check']),
-                         (84, 11, 'Dropship Hull Panel Gib A#9', 82, True))
+        self.assertEqual((row['previewed_ms'], row['judged'], row['pass_check']), (50, False, False))
+        self.assertEqual(row['interaction_evidence']['status'], 'UNJUDGED')
         # Past the committed response, or on another actor, it is not in the edge's window: judged as before.
         # Past the committed response, on another actor, a clone that fell short, or a hit that left the velocity alone: judged as before.
         for other in (dict(hit, tick=20), dict(hit, uid=8), dict(hit, source='clone'), dict(hit, fields='aim,view')):
