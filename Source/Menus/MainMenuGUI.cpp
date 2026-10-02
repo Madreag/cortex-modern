@@ -1689,8 +1689,8 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	}
 	if (m_HostNetSlowPolicyCombo) {
 		m_HostNetSlowPolicyCombo->ClearList();
+		// Only the default policy is offered: the others do not yet keep a dropped player's seat.
 		m_HostNetSlowPolicyCombo->AddItem(NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute));
-		m_HostNetSlowPolicyCombo->AddItem(NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Pause));
 	}
 	if (m_HostNetSlowBoundBox) {
 		m_HostNetSlowBoundBox->SetNumericOnly(true);
@@ -2067,7 +2067,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 
 	// Network page.
 	HostOptSelectComboIndex(m_HostNetPolicyCombo, m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed ? 1 : 0);
-	HostOptSelectComboIndex(m_HostNetSlowPolicyCombo, m_HostOptionsDraft.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? 1 : 0);
+	HostOptSelectComboIndex(m_HostNetSlowPolicyCombo, 0);
 	if (m_HostNetSlowBoundBox && !HostOptBoxFocused(m_HostNetSlowBoundBox)) m_HostNetSlowBoundBox->SetText(std::to_string(m_HostOptionsDraft.slowPlayerBoundTicks));
 	if (m_HostNetSlowPolicyHintLabel) {
 		m_HostNetSlowPolicyHintLabel->SetText(NetSlowPlayerHint(m_HostOptionsDraft.slowPlayerPolicy, m_HostOptionsDraft.slowPlayerBoundTicks, g_TimerMan.GetDeltaTimeMS()));
@@ -2391,7 +2391,7 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	if (m_HostNetPolicyCombo) {
 		m_HostOptionsDraft.delayPolicy = m_HostNetPolicyCombo->GetSelectedIndex() == 1 ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
 	}
-	if (m_HostNetSlowPolicyCombo) m_HostOptionsDraft.slowPlayerPolicy = m_HostNetSlowPolicyCombo->GetSelectedIndex() == 1 ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
+	m_HostOptionsDraft.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 	if (m_HostNetSlowBoundBox) m_HostOptionsDraft.slowPlayerBoundTicks = static_cast<uint16_t>(std::clamp<long>(std::strtol(m_HostNetSlowBoundBox->GetText().c_str(), nullptr, 10), 1, NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks));
 	if (m_HostNetRedundancyCombo) {
 		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
@@ -3063,7 +3063,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_HostNetSlowPolicyCombo) {
-		m_HostOptionsDraft.slowPlayerPolicy = m_HostNetSlowPolicyCombo->GetSelectedIndex() == 1 ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
+		m_HostOptionsDraft.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		return;
 	}
 	if (guiEventControl == m_HostNetRecalcButton) {

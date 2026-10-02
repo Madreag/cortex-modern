@@ -10341,7 +10341,8 @@ static std::string ResyncSaveName() {
 			// The rest of the host's saved session options ride the same config to every peer.
 			config.delayPolicy = request.delayPolicy.value_or(config.delayPolicy);
 			config.slowPlayerBoundTicks = request.slowPlayerBoundTicks.value_or(config.slowPlayerBoundTicks);
-			config.slowPlayerPolicy = request.slowPlayerPolicy.value_or(config.slowPlayerPolicy);
+			// Only the default policy is offered, whatever a saved preset carries: the others do not yet keep a dropped player's seat.
+			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
 			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);

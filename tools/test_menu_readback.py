@@ -213,8 +213,9 @@ HOST_OPTIONS = {"NetworkSlowPlayerBoundTicks": "7", "NetworkSlowPlayerPolicy": "
                 "NetworkPathHorizonTicks": "45"}
 CLIENT_OPTIONS = {"NetworkSlowPlayerBoundTicks": "3", "NetworkSlowPlayerPolicy": "Substitute", "NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1",
                   "NetworkPathHorizonTicks": "15"}
+# The host's saved Pause plays the default policy (1): V1 offers only it, whatever a setting saved.
 MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False, "path_horizon_ticks": 45,
-               "slow_player_bound_ticks": 7, "slow_player_policy": 2}
+               "slow_player_bound_ticks": 7, "slow_player_policy": 1}
 # A combo box draws its selected item left of the drop-down button, so its text budget is narrower than its rect.
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
@@ -766,7 +767,10 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label ComboHostNetRedundancy 6 ticks\n"
                  "assert_label TextHostNetSlowBound 3\n"
                  "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
-                 "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.\n"
+                 # V1 offers the default policy only; the hint says the others come back.
+                 "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
+                 "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+                 "assert_text_fits LabelHostNetSlowPolicyHint\n"
                  "activate ButtonHostOptApply\nwait 3\nassert_enabled ButtonHostOptApply 0\n"
                  "combo_select ComboHostNetRedundancy 7 ticks\nwait 3\n"
                  "set_text TextHostNetSlowBound 7\nwait 3\n"
@@ -775,12 +779,9 @@ def scripts(case, port, root, size="960x540"):
                  "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
                  "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 7 ticks\nassert_label TextHostNetSlowBound 7\n"
-                 "assert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.\n"
-                 "combo_select ComboHostNetSlowPolicy Pause for them (up to 20 s)\nwait 3\n"
-                 "assert_enabled TextHostNetSlowBound 0\n"
-                 "assert_label LabelHostNetSlowPolicyHint Everyone waits for a late player, host included, for up to 20 s.\ndump_host_options\n"
-                 "combo_select ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\nwait 3\n"
-                 "assert_enabled TextHostNetSlowBound 1\nassert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.\n"
+                 "assert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+                 "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
+                 "assert_enabled TextHostNetSlowBound 1\nassert_text_fits LabelHostNetSlowPolicyHint\n"
                  "dump_host_options\nexit\n")
     elif case == "landing":
         text = LANDING + "assert_label LabelMultiplayerNamePrompt Multiplayer name:\n"
@@ -1385,7 +1386,7 @@ def scripts(case, port, root, size="960x540"):
             text += checks(control, "CollectionBoxHostPageNetwork")
         text += "assert_label TextHostNetSlowBound 3\n"
         text += "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
-        text += "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.\n"
+        text += "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
         text += "assert_label LabelHostNetEffective Effective delay: ping plus a 3-tick margin, raised live if inputs arrive late, at least\n"
         text += checks("LabelHostNetEffective", "CollectionBoxHostPageNetwork")
         text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageNetwork")
@@ -2694,7 +2695,7 @@ def main():
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", choices=(*CASES, "all"), required=True)
-    parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080"), required=True)
+    parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080", "2560x1440", "3840x2160"), required=True)
     parser.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--port", type=int, required=True)
