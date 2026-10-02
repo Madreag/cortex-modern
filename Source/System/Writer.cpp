@@ -13,6 +13,7 @@
 #include <format>
 #include <iomanip>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <cstring>
 #include <sstream>
@@ -588,7 +589,19 @@ std::string CheckpointCache::Census() const {
 		for (const auto& [channel, entry]: channels) bytes += entry.text.OwnedBytes();
 	}
 	for (const CheckpointText& text: m_Retired) retiredBytes += text.OwnedBytes();
-	return std::format("entries={} entry_mb={} pixels={} retired={} retired_mb={}", entries, bytes >> 20, m_Pixels.size(), m_Retired.size(), retiredBytes >> 20);
+	// Which kind of owner holds the entries: per channel, and how many belong to a world object.
+	std::map<unsigned, size_t> perChannel;
+	size_t withObject = 0;
+	for (const auto& [owner, channels]: m_Entries) {
+		for (const auto& [channel, entry]: channels) {
+			++perChannel[channel];
+			if (entry.identity != 0) ++withObject;
+		}
+	}
+	std::string channelText;
+	for (const auto& [channel, count]: perChannel) channelText += std::format("{}{}:{}", channelText.empty() ? "" : ",", channel, count);
+	return std::format("entries={} entry_mb={} pixels={} retired={} retired_mb={} owners={} with_identity={} channels={}", entries, bytes >> 20, m_Pixels.size(), m_Retired.size(),
+	                   retiredBytes >> 20, m_Entries.size(), withObject, channelText.empty() ? "none" : channelText);
 }
 
 std::vector<CheckpointText> CheckpointCache::RetireUnused() {
