@@ -477,6 +477,21 @@ namespace RTE {
 		}
 		m_Roster = revision;
 		m_HasRoster = true;
+		m_Recent.emplace_back(revision.revision, HashRoster(revision));
+		if (m_Recent.size() > 64) m_Recent.erase(m_Recent.begin());
+		return true;
+	}
+
+	bool NetRosterReplica::AgreesAt(uint32_t revision, const std::array<uint8_t, 32>& hostHash, std::string* why) const {
+		const auto heard = std::find_if(m_Recent.begin(), m_Recent.end(), [revision](const auto& entry) { return entry.first == revision; });
+		if (heard == m_Recent.end()) {
+			if (why) *why = "this peer never heard seat roster revision " + std::to_string(revision) + " (it holds " + (m_HasRoster ? std::to_string(m_Roster.revision) : std::string("none")) + ")";
+			return false;
+		}
+		if (heard->second != hostHash) {
+			if (why) *why = "seat roster revision " + std::to_string(revision) + " differs from the host's";
+			return false;
+		}
 		return true;
 	}
 
@@ -756,6 +771,28 @@ namespace RTE {
 			NetSeatRoster rejected;
 			ok = ok && !DecodeRoster(bad, rejected, &error);
 			check("seq R5 the roster replicates whole, in order, refused by name when it differs", ok, "wire_bytes=" + std::to_string(wire.size()) + " error='" + error + "' why='" + why + "'");
+		}
+		{
+			// The start gate: the round is agreed on one revision; a peer that heard it hashed alike starts, any other is refused by name.
+			NetRosterReplica replica;
+			std::string why;
+			NetSeatRoster roster = RosterForRow(3);
+			std::array<uint8_t, 32> agreed{};
+			bool ok = true;
+			for (uint32_t revision = 4; revision <= 6; ++revision) {
+				roster.revision = revision;
+				ok = ok && replica.Apply(roster, &why);
+				if (revision == 5) agreed = HashRoster(roster);
+			}
+			const bool heard = replica.AgreesAt(5, agreed, &why);
+			NetSeatRoster moved = roster;
+			moved.revision = 5;
+			moved.seats[1].phase = NetSeatPhase::Held;
+			const bool differs = !replica.AgreesAt(5, HashRoster(moved), &why) && why == "seat roster revision 5 differs from the host's";
+			std::string unheardWhy;
+			const bool unheard = !replica.AgreesAt(9, agreed, &unheardWhy) && unheardWhy == "this peer never heard seat roster revision 9 (it holds 6)";
+			check("seq START the round starts only on the revision agreed, refused by name otherwise", ok && heard && differs && unheard,
+			      "heard=" + std::to_string(heard) + " why='" + why + "' unheard='" + unheardWhy + "'");
 		}
 		std::cout << tag << " totals pass=" << pass << " fail=" << fail << " na=" << unreachable << std::endl;
 		std::cout << tag << (fail == 0 ? " PASS" : " FAIL") << std::endl;

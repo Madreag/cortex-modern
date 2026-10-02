@@ -664,11 +664,13 @@ namespace RTE {
 					return false;
 				}
 				const size_t reservedOffset = NetLobbyProtocol::c_HeaderBytes + 16;
-				const size_t migrationOffset = windowBytes.size() - 8; // The timing options and the empty relay trail the migration block.
+				// The timing options, the empty relay and the seat roster's revision and hash trail the migration block.
+				const size_t trailing = 8 + 4 + 32;
+				const size_t migrationOffset = windowBytes.size() - trailing;
 				if (bytes.size() <= migrationOffset + 2 || bytes[reservedOffset] != (2 | 8 | 16) ||
 				    windowBytes[migrationOffset - 2] != 2 || windowBytes[migrationOffset - 1] != 0 ||
 					!std::equal(windowBytes.begin() + reservedOffset + 2, windowBytes.begin() + migrationOffset, bytes.begin() + reservedOffset + 2) ||
-					!std::equal(windowBytes.begin() + migrationOffset, windowBytes.end(), bytes.end() - 8) ||
+					!std::equal(windowBytes.begin() + migrationOffset, windowBytes.end(), bytes.end() - trailing) ||
 				    bytes[migrationOffset] != 1 || bytes[migrationOffset + 1] != 0) {
 					*error = "migration payload does not follow the redundancy U16 after the path horizon";
 					return false;
@@ -1483,8 +1485,9 @@ namespace RTE {
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{prefix}}, prefixBytes)) return false;
 			const size_t difficultyOffset = prefixBytes.size() + 20 + config.activityModule.size() + config.sceneModule.size();
 			const size_t horizonTail = config.pathHorizonTicks != 0 ? 2 : 0;
-			// The v6 tail is the timing options (four bytes with no active peers) and the empty relay (U16 length plus {}).
-			const size_t rulesEnd = bytes.size() - 8;
+			// The v8 tail is the timing options (four bytes with no active peers), the empty relay (U16 length plus {}) and the
+			// seat roster's revision (U32) and hash (32 bytes).
+			const size_t rulesEnd = bytes.size() - 8 - 4 - 32;
 			for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{difficultyOffset, 101}, {rulesEnd - 9 - horizonTail, 0}, {rulesEnd - 3 - horizonTail, 61}}) {
 				auto invalidWire = bytes;
 				invalidWire.at(offset) = value;
@@ -1846,7 +1849,9 @@ namespace RTE {
 			const size_t relaySize = windowed.version >= NetMatchConfigUtil::c_RelayLayoutVersion ? 2 + windowed.relay.ToJson().size() : 0;
 			// The timing options (bound, policy, an empty active-peer list) sit between the window and the relay.
 			const size_t timingSize = windowed.version >= NetMatchConfigUtil::c_TimingOptionsVersion ? 4 : 0;
-			const size_t redundancyOffset = plainSize - relaySize - timingSize;
+			// The seat roster's revision and hash trail the relay.
+			const size_t rosterSize = windowed.version >= NetMatchConfigUtil::c_SeatRosterVersion ? 4 + 32 : 0;
+			const size_t redundancyOffset = plainSize - relaySize - timingSize - rosterSize;
 			message.payload = NetLobbyMatchConfig{windowed};
 			std::vector<uint8_t> windowedBytes;
 			if (!NetLobbyProtocol::Encode(message, windowedBytes, &encodeError) || windowedBytes.size() != plainSize + 2 ||
@@ -4858,6 +4863,28 @@ namespace RTE {
 				*error = "the staged host options draft outlived the round that consumed it";
 				return false;
 			}
+			return true;
+		}
+
+		// One bump for the seat roster: a config from before it (v6 ordinary, v7 world) is refused by name, never misread at a field.
+		bool TestPreRosterConfigRefusedByName(std::string* error) {
+			for (const uint16_t version: {uint16_t{6}, uint16_t{7}}) {
+				NetMatchConfig old = MakeConfig();
+				old.version = NetMatchConfigUtil::c_Version;
+				std::vector<uint8_t> bytes;
+				if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{old}}, bytes)) {
+					*error = "the current config did not encode";
+					return false;
+				}
+				// The version is the config's first field, right after the lobby header.
+				bytes[NetLobbyProtocol::c_HeaderBytes] = static_cast<uint8_t>(version);
+				const auto decoded = NetLobbyProtocol::Decode(bytes);
+				if (decoded.ok || decoded.error.message != "unsupported match config version " + std::to_string(version)) {
+					*error = "a v" + std::to_string(version) + " config was not refused by name: '" + decoded.error.message + "'";
+					return false;
+				}
+			}
+			std::cout << "PASS pre_roster_config_refused_by_name versions=6,7 current=" << NetMatchConfigUtil::c_Version << "/" << NetMatchConfigUtil::c_PersistentWorldVersion << std::endl;
 			return true;
 		}
 
@@ -15184,6 +15211,7 @@ namespace RTE {
 		if (!TestRematchAfterHostDeparture(&error)) return fail(error);
 		if (!TestResyncFailureAfterHostDeparture(&error)) return fail(error);
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
+		if (!TestPreRosterConfigRefusedByName(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
 		if (!TestRematchProposalFits(&error)) return fail(error);
 		// The ICE lifecycle arms fail at the end, so one red arm cannot hide another.
