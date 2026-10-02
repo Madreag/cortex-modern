@@ -460,7 +460,17 @@ namespace RTE {
 			return false;
 		}
 		// A rematch's members are the host's to name: the seats it starts held are the ones the agreed config leaves out.
+		const std::vector<uint8_t> formedMembers = m_ActivePeerIds;
 		m_ActivePeerIds = SettledRoundMembers(m_Config.host, m_RematchRound, m_ActivePeerIds, m_MatchConfig);
+		{
+			const auto list = [](const std::vector<uint8_t>& peers) {
+				std::string text;
+				for (const uint8_t peer: peers) text += (text.empty() ? "" : ",") + std::to_string(peer);
+				return text.empty() ? std::string("all") : text;
+			};
+			DiagnosticLine() << "[net-match] round members=" << list(m_ActivePeerIds) << " formed=" << list(formedMembers) << " agreed=" << list(m_MatchConfig.activePeerIds)
+			          << " revision=" << m_MatchConfig.configRevision << " rematch=" << m_RematchRound << " resync=" << m_ResyncRound << std::endl;
+		}
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
 		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error)) {
