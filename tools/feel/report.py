@@ -754,6 +754,39 @@ def sustained_response(sequence, reference, moves, shows, runs=3):
     return None
 
 
+def interaction_evidence(interactions, log):
+    evidence = defaultdict(list)
+    for number, line in enumerate(log.splitlines(), 1):
+        match = re.match(r'\[preview-fidelity\] tick=(\d+) step=1 from=\d+ uid=(\d+) differing=\d+ first: (.*)', line)
+        if not match:
+            continue
+        pairs = {}
+        for field in ('vel', 'aim'):
+            values = re.findall(r'(?:^| ;; )' + field + r'=(\S+) \| ' + field + r'=(\S+)(?= ;; |$)', match[3])
+            if len(values) != 1:
+                continue
+            try:
+                values = [[float.fromhex(v) if '0x' in v.lower() else float(v) for v in part.split(',')]
+                          for part in values[0]]
+            except ValueError:
+                continue
+            if any(not math.isfinite(v) for part in values for v in part):
+                continue
+            if field == 'vel' and all(len(part) == 2 for part in values):
+                pairs['vx'] = [part[0] for part in values]
+            elif field == 'aim' and all(len(part) == 1 for part in values):
+                pairs['aim'] = [part[0] for part in values]
+        evidence[int(match[1]), int(match[2])].append(dict(line=number, pairs=pairs))
+    result = []
+    for record in interactions:
+        matches = evidence.get((record['tick'], record['uid']), [])
+        row = dict(record)
+        if len(matches) == 1:
+            row['fidelity'] = matches[0]
+        result.append(row)
+    return result
+
+
 def previewed_responses(inputs, frames, committed, interactions=()):
     """Each edge's previewed response against the committed response to that same edge.
 
@@ -761,8 +794,8 @@ def previewed_responses(inputs, frames, committed, interactions=()):
     what the player sees must answer no later than the committed response less the delay, plus one frame. One detector on both
     sides, each against its own state before the edge's frame, reading a change that holds for three records.
 
-    The world acting on the actor (a hit, a script) is not the player's input and no preview drawn before it lands can know it: an
-    edge whose response window holds such an interaction is judged on the previews drawn from it on, and its row names it."""
+    An interaction changes the deadline only when the committed response is delayed too and its first-step fidelity
+    comparison proves that it prevented the response in the component this edge judges."""
     acted = defaultdict(list)
     for record in interactions:
         # A clone that fell short of the actor is the preview's own fault and excuses nothing.
@@ -813,7 +846,24 @@ def previewed_responses(inputs, frames, committed, interactions=()):
                 judged_field = 'aim' if action == 'AIM_VECTOR' else 'vel'
                 touched = max((record for record in acted.get(uid, ()) if edge['tick'] < record['tick'] <= window_end and judged_field in record['fields'].split(',')),
                               key=lambda record: record['tick'], default=None)
-                if touched:
+                unresolved = False
+                if touched and truth and truth['tick'] >= touched['tick']:
+                    component = 'aim' if action == 'AIM_VECTOR' else 'vx'
+                    pair = touched.get('fidelity', {}).get('pairs', {}).get(component)
+                    at_hit = [actor for record, actor in kept[uid] if record['tick'] == touched['tick']]
+                    causal = False
+                    if pair and len(pair) == 2 and at_hit and all(actor.get(component) == pair[1] for actor in at_hit):
+                        predicted = dict(at_hit[0], **{component: pair[0]})
+                        causal = moves(predicted, before_kept[-1]) and not moves(at_hit[0], before_kept[-1])
+                    elif not pair or not at_hit:
+                        unresolved = True
+                    if not causal:
+                        row['interaction_evidence'] = dict(tick=touched['tick'], component=component,
+                            status='UNJUDGED' if unresolved else 'unrelated',
+                            reason='no component-specific first-step comparison at the interaction tick' if unresolved else
+                                   f'{component}: fidelity comparison does not show a blocked committed response')
+                        touched = None
+                if touched and truth:
                     after = [(frame, actor) for frame, actor in drawn[uid] if frame['tick'] >= touched['tick'] and frame['draw_begin_ms'] >= edge['wall_ms']]
                     seen = sustained_response([(frame, actor) for frame, actor in after if applied <= frame['tick'] + frame.get('preview_depth', 0) <= later_tick],
                                               before_drawn[-1], moves, lambda frame: frame['tick'] + frame.get('preview_depth', 0), runs)
@@ -830,6 +880,8 @@ def previewed_responses(inputs, frames, committed, interactions=()):
                     if row.get('interaction') and row['interaction']['judged_from_ms'] is not None:
                         row['budget_ms'] = max(row['budget_ms'], row['interaction']['judged_from_ms'] + SIM_MS)
                     row['pass_check'] = row['previewed_ms'] is not None and row['previewed_ms'] <= row['budget_ms']
+                    if unresolved and not row['pass_check']:
+                        row.update(judged=False, status='UNJUDGED', reason=row['interaction_evidence']['reason'])
             results.append(row)
     return results
 
@@ -1069,7 +1121,8 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     inputs = [row for row in rows if row['type'] == 'input' and first_tick <= row['tick'] <= ticks]
     previews = [row for row in rows if row['type'] == 'preview' and first_tick <= row['committed_tick'] <= ticks]
     committed = [row for row in rows if row['type'] == 'committed']
-    interactions = [row for row in rows if row['type'] == 'interaction']
+    interactions = interaction_evidence([row for row in rows if row['type'] == 'interaction'],
+        (run / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / peer / 'stdout.log').is_file() else '')
     all_iterations = [row for row in rows if row['type'] == 'iteration']
     iterations = [row for row in all_iterations if row['active'] and first_tick <= row['tick'] <= ticks]
     if not frames or not iterations:

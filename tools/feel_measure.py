@@ -651,7 +651,9 @@ def input_gates(run, peer):
         inputs = [row for row in rows if row.get('type') == 'input']
         frames = [row for row in rows if row.get('type') == 'frame' and row.get('active')]
         committed = [row for row in rows if row.get('type') == 'committed']
-        interactions = [row for row in rows if row.get('type') == 'interaction']
+        log = Path(run) / peer / 'stdout.log'
+        interactions = reducer.interaction_evidence([row for row in rows if row.get('type') == 'interaction'],
+            log.read_text(encoding='utf-8-sig', errors='replace') if log.is_file() else '')
         complete = (sum(row.get('type') == 'schema' and row.get('version') == 1 for row in rows) == 1
                     and any(row.get('type') == 'end' for row in rows) and bool(inputs) and bool(frames))
         carried = reducer.input_latencies(inputs, frames)
