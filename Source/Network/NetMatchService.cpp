@@ -4438,6 +4438,8 @@ static std::string ResyncSaveName() {
 			if (open && open->phase != NetWorldJoinPhase::Active) continue;
 			const uint8_t member = static_cast<uint8_t>(peer.assignedPeerId + 1);
 			if (!m_Coordinator->HasHeldAISeat(member)) continue;
+			// A returner told this round is over waits for the next round's start, which offers its seat again.
+			if (m_ToldMatchOver.contains(peer.transportPeerId)) continue;
 			const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
 			NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
 			if (seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != peer.transportPeerId) continue;
