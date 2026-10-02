@@ -50,6 +50,7 @@ sources += files(
 'NetSeatAuth.cpp',
 'NetSession.cpp',
 'NetRejoinMatrixSelfTest.cpp',
+'NetSeatRoster.cpp',
 'NetSessionSelfTest.cpp',
 'NetWorldJoin.cpp',
 'NetWorldJoinSelfTest.cpp',
