@@ -251,6 +251,9 @@ namespace RTE {
 		void SyncSessionPeers();
 		void RemoveRemote(NetPeerId transportPeerId);
 		void RemoveRemotePeer(uint8_t peerId);
+		/// Host, rematch: a member whose link dropped keeps its seat held - it leaves the round's active members, the config republished -
+		/// unless the host closed that seat (a kick or a ban). Returns whether the seat was held.
+		bool HoldsDroppedRematchSeat(uint8_t peerId);
 		void RejectRemote(NetPeerId transportPeerId, const std::string& reason);
 		void HandleStateChunk(const NetLobbyStateChunk& message);
 		void HandleSeatAssign(const NetLobbySeatAssign& message);
@@ -264,6 +267,7 @@ namespace RTE {
 
 		bool IsKnownRemote(uint8_t peerId) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
+		friend bool TestARematchLobbyHoldsADroppedSeat(std::string* error);
 		friend bool TestALobbyDropsAnAbandonedTransfersTail(std::string* error);
 		bool IsCommittedTransport(NetPeerId transportPeerId) const;
 		uint16_t OutgoingChunkIndex(uint8_t peerId) const;

@@ -10264,6 +10264,139 @@ namespace RTE {
 
 	// A kicked seat is an open seat: the roster the lobby publishes must stop naming the member the
 	// host removed, or the row shows a player holding a seat nobody sits in.
+	bool TestARematchLobbyHoldsADroppedSeat(std::string* error) {
+		const uint16_t port = 43251;
+		LoopbackTransport hostTransport;
+		LoopbackTransport clientTransport;
+		LoopbackTransport stayingTransport;
+		NetSession hostSession;
+		NetSession clientSession;
+		NetSession stayingSession;
+		// Three seats: the host, the member the kick removes, and one that stays to be re-acked.
+		NetMatchConfig matchConfig = MakeConfig();
+		matchConfig.peerCount = 3;
+		matchConfig.players[1].displayName = NetMatchConfigUtil::UnseatedSlotName(2, false);
+		matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, NetMatchConfigUtil::UnseatedSlotName(3, false)});
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.sessionId = matchConfig.sessionId;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 2;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 30000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "rematch-held-seat-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Joiner";
+		++clientConfig.localNonce;
+		NetSessionConfig stayingConfig = clientConfig;
+		stayingConfig.displayName = "Stayer";
+		++stayingConfig.localNonce;
+		if (!hostSession.StartHost(hostTransport, hostConfig, error) ||
+		    !clientSession.StartClient(clientTransport, "loopback", clientConfig, error) ||
+		    !stayingSession.StartClient(stayingTransport, "loopback", stayingConfig, error)) {
+			return false;
+		}
+		// One clock for the fixture: the lobby ticks the session on it too, so no leg ever sees time move back.
+		uint64_t now = 0;
+		for (; now <= 4000 && hostSession.GetReadyPeerCount() != 2; now += 10) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			stayingSession.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+			stayingTransport.AdvanceTimeMs(10);
+		}
+		if (hostSession.GetReadyPeerCount() != 2) {
+			*error = "the kicked-seat fixture seated " + std::to_string(hostSession.GetReadyPeerCount()) + " peers";
+			return false;
+		}
+		NetPeerId seated = c_InvalidNetPeerId;
+		uint8_t kickedPeerId = 0;
+		uint8_t stayingPeerId = 0;
+		for (const NetSessionPeerInfo& peer: hostSession.GetReadyPeers()) {
+			const uint8_t lockstepPeerId = static_cast<uint8_t>(peer.assignedPeerId + 1);
+			for (NetMatchPlayerSlot& slot: matchConfig.players) {
+				if (slot.peerId == lockstepPeerId) slot.displayName = peer.displayName;
+			}
+			if (peer.displayName == "Joiner") {
+				seated = peer.transportPeerId;
+				kickedPeerId = lockstepPeerId;
+			} else {
+				stayingPeerId = lockstepPeerId;
+			}
+		}
+		if (seated == c_InvalidNetPeerId || kickedPeerId == 0 || stayingPeerId == 0) {
+			*error = "the kicked-seat fixture could not tell its two joiners apart";
+			return false;
+		}
+
+		// The snapshot the lobby screen reads comes from the runner's own lobby, so the round runs on it.
+		NetMatchRunner runner;
+		NetLobbySession& hostLobby = runner.GetLobbySession();
+		NetLobbySessionConfig lobbyConfig;
+		lobbyConfig.host = true;
+		lobbyConfig.localPeerId = 1;
+		for (const NetSessionPeerInfo& peer: hostSession.GetReadyPeers()) {
+			lobbyConfig.remoteTransportPeerIds.emplace(static_cast<uint8_t>(peer.assignedPeerId + 1), peer.transportPeerId);
+		}
+		lobbyConfig.matchConfig = matchConfig;
+		lobbyConfig.session = &hostSession;
+		lobbyConfig.sessionNowMs = [&now]() { return now; };
+		lobbyConfig.displayName = "Host";
+		lobbyConfig.platform = "test";
+		lobbyConfig.autoStart = false;
+		lobbyConfig.assignSeats = true; // a rematch: the seats are the round's players'
+		if (!hostLobby.Start(hostTransport, lobbyConfig, error)) {
+			return false;
+		}
+		const auto slotName = [&hostLobby](uint8_t peerId) {
+			for (const NetMatchPlayerSlot& slot: hostLobby.GetMatchConfig().players) {
+				if (slot.peerId == peerId) return slot.displayName;
+			}
+			return std::string("no slot");
+		};
+		if (slotName(kickedPeerId) != "Joiner") {
+			*error = "the kicked-seat fixture never seated the joiner on slot " + std::to_string(kickedPeerId) +
+			         ": it reads '" + slotName(kickedPeerId) + "'";
+			return false;
+		}
+		// The peer that stays has acknowledged the roster it is sitting in; opening the other seat is a
+		// new revision, so this ack has to be cleared and asked for again.
+		NetLobbyConfigAck ack;
+		ack.peerId = stayingPeerId;
+		ack.accepted = true;
+		ack.matchConfigHash = hostLobby.GetMatchConfigHash();
+		hostLobby.HandleConfigAck(ack);
+		const uint64_t revisionBefore = hostLobby.GetMatchConfig().configRevision;
+		// l4p-25: the Mac's link dropped by heartbeat timeout in round 5's lobby, its seat was opened and the host waited for its
+		// handover endpoint forever ('waiting at WaitingForConfigAck ... config_sent=0'), so EDITH's 'timed out waiting for lobby start'.
+		hostSession.DisconnectReadyPeer(seated, NetRejectReason::Timeout, "heartbeat timeout");
+		for (const uint64_t until = now + 500; now <= until; now += 10) {
+			hostLobby.Tick(now);
+			clientSession.Tick(now);
+			stayingSession.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+			stayingTransport.AdvanceTimeMs(10);
+		}
+		const std::vector<uint8_t>& active = hostLobby.GetMatchConfig().activePeerIds;
+		const bool held = slotName(kickedPeerId) == "Joiner" && std::find(active.begin(), active.end(), kickedPeerId) == active.end() &&
+		                  std::find(active.begin(), active.end(), stayingPeerId) != active.end() && hostLobby.GetMatchConfig().configRevision == revisionBefore + 1;
+		if (!held) {
+			*error = "a rematch member whose link dropped had its seat named '" + slotName(kickedPeerId) + "' with " + std::to_string(active.size()) +
+			         " active members: the round waits for a player who is not there instead of starting the seat held";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_rematch_lobby_holds_a_dropped_seat" << std::endl;
+		return true;
+	}
+
 	bool TestKickedSeatReadsOpen(std::string* error) {
 		const uint16_t port = 43247;
 		LoopbackTransport hostTransport;
@@ -14953,6 +15086,7 @@ namespace RTE {
 		if (!TestManifestPrimingStopsOnRequest(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
 		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		std::string stopCancelError, endedAdmissionError, twoIceRoundsError;
 		if (!TestServiceIceRematchPlaysTwoRounds(&twoIceRoundsError)) std::cerr << "[net-match-selftest] FAIL: " << twoIceRoundsError << std::endl;
