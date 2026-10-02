@@ -621,6 +621,7 @@ def reduce_timing_case(run, reference=None):
         proof['held_client'] = compare_pair(run / 'host_trace.json', run / 'client_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
                                             client_away=held_client_away(client_log, client_live), window_only=True,
                                             client_rewinds=held_client_rewinds(client_log, client_live))
+        proof['pass'] &= proof['held_client']['pass']
     pairs = [(left, right) for index, left in enumerate(members) for right in members[index + 1:]]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
             for left, right in pairs}
