@@ -248,6 +248,15 @@ class CatchUpRows(unittest.TestCase):
         self.assertEqual([r['tick'] for r in adopted['mac']],[358])
         self.assertEqual(away,{})
 
+class HostStallHolds(unittest.TestCase):
+    def test_the_hosts_own_seat_held_in_the_forced_stall_is_the_stall(self):
+        # l4p-41: the host's seat held at tick 902 of each round under --host-stall 900:300 read as 'other'.
+        held=dict(peer=1,tick=902,classification='other')
+        self.assertEqual(cross_report.host_stall_hold(held,'900:300')['classification'],'scheduled-fault')
+        self.assertEqual(cross_report.host_stall_hold(held,None),{})
+        self.assertEqual(cross_report.host_stall_hold(dict(held,peer=2),'900:300'),{})
+        self.assertEqual(cross_report.host_stall_hold(dict(held,tick=2400),'900:300'),{})
+
 class CrashHolds(unittest.TestCase):
     def test_a_hold_inside_a_crashed_seats_recovery_is_the_crash(self):
         hold=dict(scheduled_recovery_id='edith-round-drop',classification='other')

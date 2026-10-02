@@ -283,6 +283,7 @@ def make_plan(options):
                              presentation_window='Last 16 sealed gzip chunks plus one active chunk, at most 136 MiB expanded; no tick-duration guarantee. Feel statistics cover retained rows only.'),
                 quiet_window=options.quiet_window, pathfinding='production asynchronous; no -tick-hashes override',
                 fullstate_every=options.fullstate_every,
+                host_stall=getattr(options, 'host_stall', None),
                 capture_rows_pending=[],
                 required_gates=['three_real_boxes', 'matching_content', 'same_commit', 'full_history', 'zero_desync',
                                 'zero_unscheduled_holds', 'native_completion', 'bounded_recovery'],
