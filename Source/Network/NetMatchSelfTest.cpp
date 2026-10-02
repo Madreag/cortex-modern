@@ -6278,8 +6278,9 @@ namespace RTE {
 			    {"a held seat deriving its own rematch", NetMatchRunner::DeriveRematchSurvivors(four, {{4, 40}}, {}, &fourDropped, 4), {1, 2, 3, 4}},
 			    {"a held seat whose link closed at the round's end", NetMatchRunner::DeriveRematchSurvivors(four, {{4, 40}}, {4}, &fourDropped), {1, 2, 3, 4}},
 			    {"a held seat its player left", NetMatchRunner::DeriveRematchSurvivors(four, {{2, 40}}, {2}, &twoLeft), {1, 3, 4}},
-			    // l4p-21's Mac: held from 561 and gone from round 4 on its record, its view still showed two seats' links closed.
-			    {"a client that left its round held", NetMatchService::RematchSurvivorsFor(four, {{3, 40}}, {}, &fourDropped, 2, true), {1, 2, 3, 4}},
+			    // l4p-21/22's Mac: gone from its round on the record while held, its rejoin had replaced the round's config with a
+			    // two-seat default, so any derivation of its own refused the host's four seats. It derives none and takes the host's.
+			    {"a client that left its round held", NetMatchService::RematchSurvivorsFor(four, {{3, 40}}, {}, &fourDropped, 2, true), {}},
 			    {"a client that played its round to the end", NetMatchService::RematchSurvivorsFor(four, {{3, 40}}, {}, &fourDropped, 2, false), {1, 2}},
 			};
 			for (const Survivors& survivors: survivorCases) {
