@@ -215,6 +215,14 @@ namespace RTE {
 		/// client derives the same). A roster seat that is not active starts the round held, its player returning through the rejoin.
 		static void RematchMembers(uint8_t hostPeerId, uint8_t peerCount, const std::vector<uint8_t>& readyPeerIds, const std::vector<uint8_t>& derivedSurvivors,
 		                           std::vector<uint8_t>& roster, std::vector<uint8_t>& active);
+		/// A round's active members once its lobby has started: a rematch's are the agreed config's, the host's too, because the lobby
+		/// holds a seat whose link drops after the rematch formed.
+		/// @param host Whether this peer hosts the round.
+		/// @param rematchRound Whether the round is a rematch.
+		/// @param formed The members the round was formed with.
+		/// @param agreed The config the lobby agreed.
+		/// @return The members the round's start waits for.
+		static std::vector<uint8_t> SettledRoundMembers(bool host, bool rematchRound, const std::vector<uint8_t>& formed, const NetMatchConfig& agreed);
 		/// The survivors to hand SetRematchRoster, from what its own round saw. The deriving peer (localPeerId) is in the lobby it derives
 		/// for, so its own seat survives even when the round ended with it held.
 		static std::vector<uint8_t> DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats, uint8_t localPeerId = 0);
