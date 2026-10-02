@@ -419,6 +419,9 @@ def local_host_render(manifest, peers):
 
 
 HOLD_OF_SEAT = re.compile(r'\[net-lockstep\] hold of this seat at (\d+)')
+ROUND_START = re.compile(r'\[net-lockstep\] start round=(\d+) frame=')
+RETURNED_LIVE = re.compile(r'\[net-match\] rejoin phase TailReplay -> Active')
+ROUND_OVER = re.compile(r'\[net-match-service-e2e\] activity over at frame')
 COMPLETED_HELD = re.compile(r'\[net-match\] completed_by_(?:end_record|next_round|host_goodbye)=1 held_from=\d+')
 
 
@@ -427,22 +430,41 @@ def held_away_ranges(live, ranges, logs):
     from the tick after it to the round's end is its away range, as an image rejoin's is. Any other missing key stays UNKNOWN."""
     away = {}
     for name, peer_rows in live.items():
-        # Each departure with the frame its hold began: ticks the seat ran from there were on a branch it then abandoned.
-        departures = []
+        # Each departure with the round and frame its hold began: ticks the seat ran from there were on a branch it then abandoned.
+        by_round, ordered = {}, []
         for text in logs.get(name, []):
-            held = None
+            held, current = None, None
             for line in text.splitlines():
-                if (found := HOLD_OF_SEAT.search(line)): held = int(found.group(1))
-                elif COMPLETED_HELD.search(line): departures.append(held); held = None
+                if (found := ROUND_START.search(line)): current = found.group(1)
+                if (found := HOLD_OF_SEAT.search(line)): held = (current, int(found.group(1)))
+                elif COMPLETED_HELD.search(line) or (held is not None and ROUND_OVER.search(line)):
+                    # A round that ended while the seat was still held or replaying its way back is one it left at its hold.
+                    if held is not None and held[0] is not None: by_round[held[0]] = held[1]
+                    else: ordered.append(held[1] if held else None)
+                    held = None
+                elif RETURNED_LIVE.search(line): held = None
         for interval in ranges:
-            if not departures: break
             prefix = tuple(interval[field] for field in report.HISTORY_FIELDS[:-1])
             ticks = sorted({r['tick'] for r in peer_rows if isinstance(r.get('tick'), int) and tuple(r.get(field) for field in report.HISTORY_FIELDS[:-1]) == prefix})
             if not ticks or ticks[0] != interval['first'] or ticks[-1] >= interval['last'] or len(ticks) != ticks[-1] - ticks[0] + 1: continue
-            held = departures.pop(0)
+            if str(interval['match']) in by_round: held = by_round[str(interval['match'])]
+            elif ordered: held = ordered.pop(0)
+            else: continue
             first = held if held is not None and ticks[0] < held <= ticks[-1] + 1 else ticks[-1] + 1
             away[(name, prefix)] = (first, interval['last'])
     return away
+
+
+def void_abandoned(rows):
+    """The engine's own retraction: an {abandon_from: N, round: R} record voids the rows of round R from N its seat wrote before it."""
+    kept = []
+    for r in rows:
+        if 'abandon_from' in r and r.get('session') is None:
+            first, retracted = r['abandon_from'], str(r.get('round'))
+            kept = [k for k in kept if not (str(k.get('round')) == retracted and isinstance(k.get('tick'), int) and k['tick'] >= first)]
+            continue
+        kept.append(r)
+    return kept
 
 
 RELAUNCHED_HELD = re.compile(r'\[net-match\] held client: replaying the private committed tail')
@@ -624,7 +646,7 @@ def build_report(root):
         smoke_ticks=manifest['ticks'] if manifest['scenario']=='match' else None,
         final_tick=peers[manifest['host']]['native_final_tick'])
     logs = {name: [''.join(line for _, line in read_log(root / fragment / 'engine/stdout.log')) for fragment in peer['fragments']] for name, peer in peers.items()}
-    compared, restored_away = adopt_restored_histories(live, ranges, logs)
+    compared, restored_away = adopt_restored_histories({name: void_abandoned(rows) for name, rows in live.items()}, ranges, logs)
     away = {**held_away_ranges(compared, ranges, logs), **restored_away}
     comparison = report.compare_histories(compared, ranges, REQUIRED_SUBSYSTEMS, away)
     comparison['away_ranges'] = [dict(peer=peer, prefix=list(prefix), first=first, last=last) for (peer, prefix), spans in away.items()
