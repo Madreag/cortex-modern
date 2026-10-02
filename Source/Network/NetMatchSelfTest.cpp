@@ -10393,6 +10393,15 @@ namespace RTE {
 			         " active members: the round waits for a player who is not there instead of starting the seat held";
 			return false;
 		}
+		// l4p-26: the held seat sends no handover endpoint, so the round's migration roster must stand on its members present, as a
+		// seat held from the rematch's start does - not wait for it, and not fail as "migration roster does not cover the match".
+		hostLobby.m_Config.enableMigration = true;
+		hostLobby.m_Config.matchConfig.successorOrder = {kickedPeerId, stayingPeerId};
+		const bool rosterReady = hostLobby.PrepareMigrationRoster();
+		if (!rosterReady || hostLobby.IsFailed()) {
+			*error = std::string("the rematch lobby with a held seat ") + (hostLobby.IsFailed() ? "failed: " + hostLobby.GetFailureReason() : std::string("waits for the held seat's endpoint"));
+			return false;
+		}
 		std::cout << "[net-match-selftest] PASS a_rematch_lobby_holds_a_dropped_seat" << std::endl;
 		return true;
 	}

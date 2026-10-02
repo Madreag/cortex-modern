@@ -1529,7 +1529,9 @@ namespace RTE {
 	bool NetLobbySession::PrepareMigrationRoster() {
 		if (m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld)
 			return false;
-		if (m_Config.activePeerCount != 0 && !m_Config.matchConfig.successorOrder.empty())
+		// A round that starts a seat held - named at its start or held when its player's link dropped in this lobby - keeps the
+		// roster it carried: the held seat sends no endpoint to wait for.
+		if ((m_Config.activePeerCount != 0 || !m_Config.matchConfig.activePeerIds.empty()) && !m_Config.matchConfig.successorOrder.empty())
 			return true;
 		// A seat the round starts held, its player away, has no endpoint to wait for and hosts nothing: the members present do.
 		const std::vector<uint8_t>& active = m_Config.matchConfig.activePeerIds;
