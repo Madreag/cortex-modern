@@ -21229,6 +21229,45 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A member whose link died after the lobby agreed has no transport when the relay host starts the round. Under the
+	// bounded wait the start holds its seat for the AI; refusing the start there ended the match for every player.
+	bool TestALinklessMemberIsHeldByTheStart(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A5B, 6, NetTransportLane::InputUnreliable);
+		config.startFrame = 1; config.roundId = 0x9A5B; config.peerCount = 3;
+		config.activePeerIds = {1, 2, 3};
+		config.remoteTransportPeerIds = {{3, 2}};
+		config.substituteSlowPeers = true; config.requirePublishedStart = true; config.simTickMs = 1000.0 / 60.0;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A5B);
+		config.matchConfig.peerCount = 3; config.matchConfig.players.push_back({3, 2, false, "Present"});
+		if (!wire.StartHost(49753, error)) return false;
+		std::string startError;
+		if (!host.Start(wire, config, &startError)) {
+			*error = "the relay host refused its start on a member with no link: " + startError;
+			return false;
+		}
+		if (host.GetState() != NetLockstepState::WaitingForStart || !host.m_StartupLinksLost.contains(2) || host.m_StartupLinksLost.contains(3)) {
+			*error = std::string("the start did not hold the member with no link: state=") + NetLockstepCoordinator::StateName(host.GetState()) +
+			         " held_2=" + std::to_string(host.m_StartupLinksLost.contains(2)) + " held_3=" + std::to_string(host.m_StartupLinksLost.contains(3));
+			return false;
+		}
+		// Without the bounded wait nothing holds the seat, so that start still refuses.
+		LoopbackTransport plainWire;
+		NetLockstepCoordinator plain;
+		auto unbounded = config;
+		unbounded.substituteSlowPeers = false;
+		if (!plainWire.StartHost(49754, error)) return false;
+		if (plain.Start(plainWire, unbounded, &startError)) {
+			*error = "a start without the bounded wait ran with a member it cannot reach";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_linkless_member_is_held_by_the_start" << std::endl;
+		return true;
+	}
+
 	bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error) {
 		for (uint16_t delay: {0, 6}) {
 			LoopbackTransport wire;
@@ -22976,6 +23015,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		};
 		row(&TestAReturnGapDoesNotStartTheHostsClock, "a_return_gap_does_not_start_the_hosts_clock");
 		row(&TestAHoldLandsAtTheFirstFrameItsSeatOwes, "a_hold_lands_at_the_first_frame_its_seat_owes");
+		row(&TestALinklessMemberIsHeldByTheStart, "a_linkless_member_is_held_by_the_start");
 		row(&TestAHeldHostCanReachItsReclaimHorizon, "a_held_host_can_reach_its_reclaim_horizon");
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");

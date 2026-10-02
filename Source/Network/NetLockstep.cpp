@@ -4533,9 +4533,16 @@ namespace RTE {
 			remoteTransports[authority] = link;
 		}
 		// A relay host forwards between clients, so it must reach every remote directly.
+		// Under the bounded wait a member whose link died after the lobby agreed is held by the start, as one lost while waiting for it.
+		std::set<uint8_t> linksLostBeforeStart;
 		if (config.relayToOtherPeers) {
+			const bool startHoldsLinkless = config.substituteSlowPeers && config.requirePublishedStart && config.localPeerId == authority;
 			for (uint8_t peerId : remotePeerIds) {
 				if (remoteTransports.find(peerId) == remoteTransports.end()) {
+					if (startHoldsLinkless) {
+						linksLostBeforeStart.insert(peerId);
+						continue;
+					}
 					if (error) *error = "lockstep relay host is missing a transport for peer " + std::to_string(peerId);
 					return false;
 				}
@@ -4671,6 +4678,10 @@ namespace RTE {
 		m_Stats.localPeerId = config.localPeerId;
 		m_Stats.remotePeerId = config.remotePeerId;
 		m_Stats.nextFrame = m_Stats.effectiveStartFrame;
+		for (const uint8_t peer: linksLostBeforeStart) {
+			m_StartupLinksLost.insert(peer);
+			DiagnosticLine() << "[net-lockstep] " << DescribePeer(peer) << " has no link at the start; the start holds its seat" << std::endl;
+		}
 
 		// With no remote there is no start to hand out and none to wait for: the round runs at once.
 		if (m_RemotePeerIds.empty()) {
