@@ -109,6 +109,13 @@ def judge_exit(record,peer,incarnation,faults,receipts):
                 actual=record.get('injected_termination','normal exit'),injection_proved=injected)
 
 
+def crash_hold(hold,crash_ids):
+    """A hold inside a crashed seat's own recovery is the scheduled crash's: a crashed process leaves no input timing to associate."""
+    if hold.get('scheduled_recovery_id') in crash_ids and hold.get('classification')=='other':
+        return dict(classification='scheduled-fault',reason='The held seat is the one the schedule crashed, inside its recovery from the crash to its first controllable input.')
+    return {}
+
+
 def scheduled_hold(hold,receipts,recoveries):
     for recovery in recoveries:
         if not recovery['passed']: continue
@@ -723,10 +730,12 @@ def build_report(root):
     clock = host_clock(host_rows)
     causes = hold_causes(''.join(line for fragment in peers[manifest['host']]['fragments'] for _, line in read_log(root / fragment / 'engine/stdout.log')))
     windows = fault_windows(manifest['faults'], fault_receipts, clock)
+    crash_ids = {f['id'] for f in manifest['faults'] if f['action']=='crash-restart'}
     for p in peers.values():
         for hold in p['holds']:
             hold['scheduled_recovery_id']=scheduled_hold(hold,fault_receipts,recoveries)
             hold.update(classify_hold(hold,events,peers))
+            hold.update(crash_hold(hold,crash_ids))
             if not hold['scheduled_recovery_id'] and (window := fault_window_hold(hold, windows, clock)):
                 hold.update(scheduled_recovery_id=window, classification='scheduled-fault',
                             reason='The held seat is the faulted one and the hold falls inside its scheduled fault window, on the host clock.')
