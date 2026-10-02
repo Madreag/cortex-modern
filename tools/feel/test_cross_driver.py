@@ -590,6 +590,18 @@ class CrossDriverTests(unittest.TestCase):
             self.assertFalse(failed['passed']); self.assertEqual(failed['comparison']['duplicates'],1)
 
 
+class RoundPhaseLever(unittest.TestCase):
+    def test_a_round_crash_fires_only_early_in_a_running_round(self):
+        fault = dict(tick=4000, action='crash-restart', phase='round')
+        due = lambda budget, frame, lobby: cross_peers.crash_due(fault, dict(budget_tick=budget, applied_frame=frame), lobby)
+        self.assertFalse(due(3999, 400, False))  # before its budget tick
+        self.assertTrue(due(4000, 400, False))   # early in a running round
+        self.assertFalse(due(4000, 900, False))  # too late in the round for the relaunch to come back inside it
+        self.assertFalse(due(4000, 400, True))   # a rematch lobby is not a running round
+        self.assertTrue(cross_peers.crash_due(dict(tick=10, action='crash-restart'), dict(budget_tick=10, applied_frame=5000), False))
+        self.assertTrue(cross_peers.crash_due(dict(tick=10, action='crash-restart', phase='lobby'), dict(budget_tick=10), True))
+
+
 class LobbyPhaseLever(unittest.TestCase):
     def test_the_lobby_watch_is_set_only_between_a_rounds_end_and_the_next_start(self):
         from feel.records import LobbyWatch
