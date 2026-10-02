@@ -1,5 +1,7 @@
 #include "NetSeatRoster.h"
 
+#include "NetIdentity.h"
+
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -356,6 +358,119 @@ namespace RTE {
 	}
 
 	namespace {
+		constexpr uint8_t c_RosterWireVersion = 1;
+		constexpr size_t c_RosterMaxSeats = 32;
+
+		void PutBytes(std::vector<uint8_t>& out, uint64_t value, int bytes) {
+			for (int i = 0; i < bytes; ++i) out.push_back(static_cast<uint8_t>(value >> (8 * i)));
+		}
+
+		bool TakeBytes(const std::vector<uint8_t>& in, size_t& at, int bytes, uint64_t& value) {
+			if (at + static_cast<size_t>(bytes) > in.size()) return false;
+			value = 0;
+			for (int i = 0; i < bytes; ++i) value |= static_cast<uint64_t>(in[at + i]) << (8 * i);
+			at += static_cast<size_t>(bytes);
+			return true;
+		}
+	} // namespace
+
+	std::vector<uint8_t> EncodeRoster(const NetSeatRoster& roster) {
+		std::vector<uint8_t> out;
+		PutBytes(out, c_RosterWireVersion, 1);
+		PutBytes(out, roster.matchId, 8);
+		PutBytes(out, roster.roundNo, 4);
+		PutBytes(out, roster.revision, 4);
+		PutBytes(out, static_cast<uint8_t>(roster.stage), 1);
+		PutBytes(out, roster.hostSeat, 1);
+		PutBytes(out, roster.migrationGen, 2);
+		PutBytes(out, std::min(roster.seats.size(), c_RosterMaxSeats), 1);
+		for (size_t i = 0; i < roster.seats.size() && i < c_RosterMaxSeats; ++i) {
+			const NetRosterSeat& seat = roster.seats[i];
+			PutBytes(out, seat.seatId, 1);
+			PutBytes(out, seat.owner, 8);
+			PutBytes(out, seat.incarnation, 2);
+			PutBytes(out, static_cast<uint8_t>(seat.phase), 1);
+			PutBytes(out, static_cast<uint8_t>(seat.holdCause), 1);
+			PutBytes(out, static_cast<uint8_t>(seat.link), 1);
+			PutBytes(out, seat.bindingRef, 8);
+		}
+		return out;
+	}
+
+	bool DecodeRoster(const std::vector<uint8_t>& bytes, NetSeatRoster& roster, std::string* error) {
+		const auto fail = [error](const std::string& why) {
+			if (error) *error = why;
+			return false;
+		};
+		size_t at = 0;
+		uint64_t version = 0, matchId = 0, roundNo = 0, revision = 0, stage = 0, hostSeat = 0, migrationGen = 0, count = 0;
+		if (!TakeBytes(bytes, at, 1, version) || version != c_RosterWireVersion) return fail("a seat roster of another version");
+		if (!TakeBytes(bytes, at, 8, matchId) || !TakeBytes(bytes, at, 4, roundNo) || !TakeBytes(bytes, at, 4, revision) || !TakeBytes(bytes, at, 1, stage) ||
+		    !TakeBytes(bytes, at, 1, hostSeat) || !TakeBytes(bytes, at, 2, migrationGen) || !TakeBytes(bytes, at, 1, count)) return fail("a short seat roster");
+		if (stage > static_cast<uint64_t>(NetRosterStage::Migrating) || count > c_RosterMaxSeats) return fail("a seat roster out of range");
+		NetSeatRoster decoded;
+		decoded.matchId = matchId;
+		decoded.roundNo = static_cast<uint32_t>(roundNo);
+		decoded.revision = static_cast<uint32_t>(revision);
+		decoded.stage = static_cast<NetRosterStage>(stage);
+		decoded.hostSeat = static_cast<uint8_t>(hostSeat);
+		decoded.migrationGen = static_cast<uint16_t>(migrationGen);
+		for (uint64_t i = 0; i < count; ++i) {
+			uint64_t seatId = 0, owner = 0, incarnation = 0, phase = 0, cause = 0, link = 0, bindingRef = 0;
+			if (!TakeBytes(bytes, at, 1, seatId) || !TakeBytes(bytes, at, 8, owner) || !TakeBytes(bytes, at, 2, incarnation) || !TakeBytes(bytes, at, 1, phase) ||
+			    !TakeBytes(bytes, at, 1, cause) || !TakeBytes(bytes, at, 1, link) || !TakeBytes(bytes, at, 8, bindingRef)) return fail("a short seat roster");
+			if (seatId == 0 || phase >= static_cast<uint64_t>(NetSeatPhase::Count) || cause > static_cast<uint64_t>(NetSeatHoldCause::Released) ||
+			    link > static_cast<uint64_t>(NetSeatLink::Dropped) || decoded.Find(static_cast<uint8_t>(seatId))) return fail("a seat roster with a bad seat");
+			NetRosterSeat seat;
+			seat.seatId = static_cast<uint8_t>(seatId);
+			seat.owner = owner;
+			seat.incarnation = static_cast<uint16_t>(incarnation);
+			seat.phase = static_cast<NetSeatPhase>(phase);
+			seat.holdCause = static_cast<NetSeatHoldCause>(cause);
+			seat.link = static_cast<NetSeatLink>(link);
+			seat.bindingRef = bindingRef;
+			decoded.seats.push_back(seat);
+		}
+		if (at != bytes.size()) return fail("a seat roster with trailing bytes");
+		if (!decoded.Find(decoded.hostSeat)) return fail("a seat roster without its host's seat");
+		roster = std::move(decoded);
+		return true;
+	}
+
+	std::array<uint8_t, 32> HashRoster(const NetSeatRoster& roster) {
+		std::vector<std::pair<std::string, std::string>> fields = {
+		    {"match", std::to_string(roster.matchId)}, {"round", std::to_string(roster.roundNo)}, {"revision", std::to_string(roster.revision)},
+		    {"stage", std::to_string(static_cast<int>(roster.stage))}, {"host", std::to_string(roster.hostSeat)}, {"migration", std::to_string(roster.migrationGen)}};
+		for (const NetRosterSeat& seat: roster.seats) {
+			fields.emplace_back("seat." + std::to_string(seat.seatId), std::to_string(seat.owner) + ":" + std::to_string(seat.incarnation) + ":" + NetSeatPhaseName(seat.phase) + ":" +
+			                                                                   std::to_string(static_cast<int>(seat.holdCause)) + ":" + std::to_string(static_cast<int>(seat.link)) + ":" +
+			                                                                   std::to_string(seat.bindingRef));
+		}
+		return NetIdentity::HashCanonicalText("cortex.seat-roster.v1", fields);
+	}
+
+	bool NetRosterReplica::Apply(const NetSeatRoster& revision, std::string* why) {
+		if (m_HasRoster && revision.matchId != m_Roster.matchId) {
+			if (why) *why = "a seat roster of another match";
+			return false;
+		}
+		// Every revision is whole, so a later one heals any it missed and an earlier one is history.
+		if (m_HasRoster && revision.revision <= m_Roster.revision) {
+			if (why) *why = "an older seat roster revision";
+			return false;
+		}
+		m_Roster = revision;
+		m_HasRoster = true;
+		return true;
+	}
+
+	bool NetRosterReplica::Agrees(const std::array<uint8_t, 32>& hostHash, std::string* why) const {
+		if (m_HasRoster && HashRoster(m_Roster) == hostHash) return true;
+		if (why) *why = m_HasRoster ? "the seat roster differs from the host's (revision " + std::to_string(m_Roster.revision) + ")" : "no seat roster from the host yet";
+		return false;
+	}
+
+	namespace {
 		/// The subject seat's phase and its round's stage for each grid row.
 		struct RowSetup { NetSeatPhase phase; NetRosterStage stage; NetSeatLink link; };
 
@@ -586,6 +701,45 @@ namespace RTE {
 			const NetRosterResult handed = ApplyRosterEvent(roster, changed);
 			check("seq HL4 a true host loss hands the round over", !handed.refused && handed.roster.hostSeat == 3 && handed.roster.migrationGen == 1 &&
 			      phaseOf(handed.roster, 2) == NetSeatPhase::Running && phaseOf(handed.roster, 1) == NetSeatPhase::Held, "reason='" + handed.reason + "'");
+		}
+		{
+			// Replication: a revision goes whole and without tickets, a peer takes only newer ones, and a copy that differs is refused by name.
+			NetSeatRoster host = RosterForRow(4);
+			host.revision = 7;
+			host.seats[1].givenAwayTicket = 0x6002;
+			const std::vector<uint8_t> wire = EncodeRoster(host);
+			NetSeatRoster copy;
+			std::string error, why;
+			bool ok = DecodeRoster(wire, copy, &error);
+			// A reconnect ticket is its seat's secret: no peer but the host ever holds it.
+			for (const NetRosterSeat& seat: host.seats) {
+				for (const uint64_t secret: {seat.ticket, seat.givenAwayTicket}) {
+					if (secret == 0) continue;
+					std::vector<uint8_t> needle;
+					PutBytes(needle, secret, 8);
+					ok = ok && std::search(wire.begin(), wire.end(), needle.begin(), needle.end()) == wire.end();
+				}
+			}
+			ok = ok && copy.revision == 7 && copy.seats.size() == host.seats.size() && HashRoster(copy) == HashRoster(host);
+			NetRosterReplica replica;
+			ok = ok && replica.Apply(copy, &why);
+			NetSeatRoster older = copy;
+			older.revision = 6;
+			ok = ok && !replica.Apply(older, &why) && why == "an older seat roster revision";
+			NetSeatRoster other = copy;
+			other.matchId = 99;
+			other.revision = 9;
+			ok = ok && !replica.Apply(other, &why) && why == "a seat roster of another match";
+			ok = ok && replica.Agrees(HashRoster(host), &why);
+			NetSeatRoster moved = host;
+			moved.seats[1].phase = NetSeatPhase::RejoinImage;
+			ok = ok && !replica.Agrees(HashRoster(moved), &why) && why.find("differs from the host's") != std::string::npos;
+			// The first seat's phase byte, past the header (22 bytes) and the seat's id, owner and incarnation.
+			std::vector<uint8_t> bad = wire;
+			bad[33] = 0xFF;
+			NetSeatRoster rejected;
+			ok = ok && !DecodeRoster(bad, rejected, &error);
+			check("seq R5 the roster replicates whole, in order, refused by name when it differs", ok, "wire_bytes=" + std::to_string(wire.size()) + " error='" + error + "' why='" + why + "'");
 		}
 		std::cout << tag << " totals pass=" << pass << " fail=" << fail << " na=" << unreachable << std::endl;
 		std::cout << tag << (fail == 0 ? " PASS" : " FAIL") << std::endl;
