@@ -411,7 +411,9 @@ namespace RTE {
 			Fail("state transfer bounds are invalid");
 			return;
 		}
-		m_OutgoingStateId = m_OutgoingStateId == 0 ? 0x50355354ULL ^ static_cast<uint32_t>(m_StateBytesToSend.size()) ^ (static_cast<uint64_t>(chunkCount) << 32) : m_OutgoingStateId + 1;
+		// The match's config revision leads a lobby's first id, so a lobby started for a later round never repeats or undercuts an id its peers took from the last.
+		m_OutgoingStateId = m_OutgoingStateId == 0 ? (m_Config.matchConfig.configRevision << 32) | (0x50355354U ^ static_cast<uint32_t>(m_StateBytesToSend.size()) ^ (static_cast<uint32_t>(chunkCount) << 16))
+		                                           : m_OutgoingStateId + 1;
 		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = chunkCount;
 		m_ChunkSendStall = 0;
