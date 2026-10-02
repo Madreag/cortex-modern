@@ -123,3 +123,54 @@ class AttemptOracles(unittest.TestCase):
 
 
 if __name__=='__main__': unittest.main()
+
+def live_row(tick, peer):
+    return dict(session='s', match='m', history_branch='initial', source_round=1, tick=tick, peer=peer, instance=peer, execution='one',
+                incarnation=0, phase='live', sim_gated='a'*64, subsystems={'controller': 'b'*64, 'sim_rng': 'c'*64})
+
+
+class HeldSeatAwayRange(unittest.TestCase):
+    RANGE = [dict(session='s', match='m', history_branch='initial', source_round=1, first=1, last=10, peers=['a', 'b', 'c'])]
+    LEFT = '[net-match] completed_by_next_round=1 held_from=6'
+
+    def judge(self, c_ticks, c_log):
+        live = {p: [live_row(t, p) for t in range(1, 11)] for p in ('a', 'b')}
+        live['c'] = [live_row(t, 'c') for t in c_ticks]
+        away = cross_report.held_away_ranges(live, self.RANGE, {'a': [''], 'b': [''], 'c': [c_log]})
+        return away, cross_report.report.compare_histories(live, self.RANGE, {'controller', 'sim_rng'}, away)
+
+    def test_a_held_seat_that_left_its_round_is_away_not_unknown(self):
+        away, result = self.judge(range(1, 7), self.LEFT)
+        self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): (7, 10)})
+        self.assertTrue(result['passed'])
+        self.assertEqual((result['unknown_keys'], result['equal_keys'], result['peers']['c']['away']), (0, 10, 4))
+
+    def test_a_present_seat_missing_keys_stays_unknown(self):
+        # No word from the seat that it left: the same missing tail is UNKNOWN.
+        away, result = self.judge(range(1, 7), '')
+        self.assertEqual(away, {})
+        self.assertFalse(result['passed'])
+        self.assertEqual(result['unknown_keys'], 4)
+        # A seat that left later still answers for a hole inside the round it played.
+        away, result = self.judge([1, 2, 4, 5, 6], self.LEFT)
+        self.assertEqual(away, {})
+        self.assertEqual(result['unknown_keys'], 5)
+
+class FaultWindowHolds(unittest.TestCase):
+    def test_a_hold_of_the_faulted_seat_inside_its_window_is_the_faults(self):
+        host = [dict(phase='live', round=7, tick=t, wall_ms=1000.0 + t * 16.7) for t in range(1, 2001)]
+        host += [dict(phase='live', round=8, tick=t, wall_ms=40000.0 + t * 16.7) for t in range(1, 2001)]
+        clock = cross_report.host_clock(host)
+        faults = [dict(id='mac-lag', peer='mac', action='lag', duration_ms=30000)]
+        receipts = [dict(id='mac-lag', applied=True, peer=2, round=7, applied_frame=700)]
+        windows = cross_report.fault_windows(faults, receipts, clock)
+        self.assertEqual([w['id'] for w in windows], ['mac-lag'])
+        # The faulted seat held in the next round, still inside the window: the fault's.
+        self.assertEqual(cross_report.fault_window_hold(dict(peer=2, round=8, tick=10), windows, clock), 'mac-lag')
+        # Another seat held at the same moment is its own.
+        self.assertIsNone(cross_report.fault_window_hold(dict(peer=4, round=8, tick=10), windows, clock))
+        # The faulted seat held after the window closed is its own.
+        self.assertIsNone(cross_report.fault_window_hold(dict(peer=2, round=8, tick=1900), windows, clock))
+        # A fault never applied opens no window.
+        self.assertEqual(cross_report.fault_windows(faults, [dict(receipts[0], applied=False)], clock), [])
+
