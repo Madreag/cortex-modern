@@ -802,7 +802,8 @@ static std::string ResyncSaveName() {
 				// A seat that took the end record on its way back never ran a round here: the host's config names the hub.
 				if (m_Coordinator && m_Coordinator->GetRoundId() != 0)
 					played.hostPeerId = m_Coordinator->GetHostPeerId();
-				m_Runner->SetRematchRoster(NetMatchRunner::DeriveRematchSurvivors(played, leaves, refilled, seats ? &*seats : nullptr, m_LocalPeerId));
+				m_Runner->SetRematchRoster(RematchSurvivorsFor(played, leaves, refilled, seats ? &*seats : nullptr, m_LocalPeerId, !m_IsHost && m_LeftRoundHeld));
+				m_LeftRoundHeld = false;
 			}
 			DrainPendingSessionEventsLocked(false);
 			AccumulateLockstepTotalsLocked();
@@ -909,6 +910,7 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_RoundEndRecord) return false;
 		record = *std::exchange(m_RoundEndRecord, std::nullopt);
+		m_LeftRoundHeld = true;
 		return true;
 	}
 
@@ -2083,6 +2085,7 @@ static std::string ResyncSaveName() {
 			m_Worker.join();
 		}
 		m_IdentityPending = false;
+		m_LeftRoundHeld = false;
 		SealPendingWorldSegmentAtEnd();
 		// A restart imports the seats as the round left them: a clean leave in its last seconds releases its seat there too.
 		PublishRestartAdmission();
@@ -10110,6 +10113,12 @@ static std::string ResyncSaveName() {
 		if (isHost || hostEndedMatch || rosterRefused || sessionReady || !linkLost) return false;
 		// A link closed with no reason from the host, or lost in transport, is a drop: the host keeps the seat for its return.
 		return !hasReject || reason == NetRejectReason::InternalError || reason == NetRejectReason::Timeout;
+	}
+
+	std::vector<uint8_t> NetMatchService::RematchSurvivorsFor(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaves, const std::set<uint8_t>& refilled,
+	                                                         const NetLockstepSeatSnapshot* seats, uint8_t localPeerId, bool leftRoundHeld) {
+		if (leftRoundHeld) return NetMatchRunner::DeriveRematchSurvivors(played, {}, {}, nullptr, localPeerId);
+		return NetMatchRunner::DeriveRematchSurvivors(played, leaves, refilled, seats, localPeerId);
 	}
 
 	bool NetMatchService::RematchReturnOwed() const {

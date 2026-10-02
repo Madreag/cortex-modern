@@ -669,6 +669,10 @@ namespace RTE {
 		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost);
 		/// Client: the last rematch setup lost its link to the host and the seat is owed its return to the round the host plays.
 		bool RematchReturnOwed() const;
+		/// The survivors a peer hands its rematch roster. A client that left its round held (it took the round's record) saw that round
+		/// only until its hold, so every seat the round played survives in its view; the host's roster still decides, and a real difference refuses.
+		static std::vector<uint8_t> RematchSurvivorsFor(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaves, const std::set<uint8_t>& refilled,
+		                                               const NetLockstepSeatSnapshot* seats, uint8_t localPeerId, bool leftRoundHeld);
 		void PreparePrivateRejoinCheckpoint();
 		/// Host: the lockstep state a returning seat's base carries beside its archive, read at the base's own tick.
 		bool ReadPrivateBaseLocked(uint64_t tick, NetWorldCheckpointImage& image, std::string* error);
@@ -1686,6 +1690,7 @@ namespace RTE {
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
 		bool m_LaunchedFreshRound = false; //!< The last launch handed up starts a lobby's fresh round.
 		bool m_RematchReturnOwed = false; //!< Client: the last rematch setup lost its link and the seat returns through the rejoin.
+		bool m_LeftRoundHeld = false; //!< Client: this round ended while the seat was held, on the record the host sent it.
 		uint32_t m_ReconnectRouteTurn = 0; //!< Alternates the reconnect prompt's attempts between the ticket's host and the successors.
 		uint8_t m_ElectionHostPeer = 0; //!< Client: the round's host as last seen before an election.
 		uint64_t m_HostSilenceAtElectionMs = UINT64_MAX; //!< Client: how long that host was quiet when its election began.
