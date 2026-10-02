@@ -194,7 +194,7 @@ def reduce_memory(samples, *, warmup_s, slope_bytes_per_minute, retained_bytes, 
 
 CENSUS_UPTIME = re.compile(r' uptime_ms=(\d+)')
 CENSUS_PROCESS = re.compile(r' (?:private|resident)_mb=(\d+)')
-CENSUS_INSTRUMENT = re.compile(r' cow: entries=\d+ entry_mb=(\d+) pixels=\d+ retired=\d+ retired_mb=(\d+)')
+CENSUS_INSTRUMENT = re.compile(r' cow: entries=\d+ entry_mb=(\d+) pixels=\d+ retired=\d+ retired_mb=(\d+)(?: last_image_mb=(\d+))?')
 
 
 def reduce_memory_census(text, *, warm_slope_mb_per_minute=10):
@@ -205,7 +205,7 @@ def reduce_memory_census(text, *, warm_slope_mb_per_minute=10):
         if not line.startswith('[mem-census] '): continue
         uptime, process, instrument = CENSUS_UPTIME.search(line), CENSUS_PROCESS.search(line), CENSUS_INSTRUMENT.search(line)
         if uptime and process and instrument:
-            rows.append((int(uptime[1]), int(process[1]), int(instrument[1]) + int(instrument[2])))
+            rows.append((int(uptime[1]), int(process[1]), int(instrument[1]) + int(instrument[2]) + int(instrument[3] or 0)))
     minutes = {}
     for uptime, process, instrument in rows: minutes[uptime // 60000] = (uptime, process, instrument)
     series = [dict(minute=minute, uptime_ms=uptime, process_mb=process, instrument_mb=instrument, net_mb=process - instrument)

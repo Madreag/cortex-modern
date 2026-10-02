@@ -328,6 +328,9 @@ class MemorySlope(unittest.TestCase):
         verdict = report.reduce_memory_census(self.census([(1, 3000, 100), (2, 3200, 300), (3, 3400, 500)]))
         self.assertEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['slopes_mb_per_minute'], [0.0, 0.0])
         self.assertEqual(report.reduce_memory_census('')['status'], 'NOT COVERED')
+        # The retained last image counts as the instrument's too.
+        kept = self.census([(1, 3000, 0), (2, 3300, 0)]).replace('retired_mb=0 movable', 'retired_mb=0 last_image_mb=300 movable', 1)
+        self.assertEqual(report.reduce_memory_census(kept)['series'][0]['instrument_mb'], 300)
 
 
 class CausesDeadlinesStops(unittest.TestCase):
