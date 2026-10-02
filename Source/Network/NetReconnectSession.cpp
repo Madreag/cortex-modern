@@ -39,7 +39,7 @@ namespace RTE {
 		using json = nlohmann::json;
 		json seats = json::array();
 		for (const auto& state: m_Seats) {
-			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", IsSeated(state)}, {"closed", state.closed}, {"dropped", IsHolderAway(state)}, {"left", HolderLeftByChoice(state)}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"display", state.holderName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs && state.retiredUntilMs != std::numeric_limits<uint64_t>::max() ? state.retiredUntilMs - m_NowMs : 0}, {"retired_kept", state.retiredGeneration != 0 && state.retiredUntilMs == std::numeric_limits<uint64_t>::max()}};
+			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", IsSeated(state)}, {"closed", IsHostOpened(state)}, {"dropped", IsHolderAway(state)}, {"left", HolderLeftByChoice(state)}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"display", state.holderName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs && state.retiredUntilMs != std::numeric_limits<uint64_t>::max() ? state.retiredUntilMs - m_NowMs : 0}, {"retired_kept", state.retiredGeneration != 0 && state.retiredUntilMs == std::numeric_limits<uint64_t>::max()}};
 			if (state.hasParticipantId) {
 				row["participant_id"] = state.participantId;
 			}
@@ -138,7 +138,7 @@ namespace RTE {
 				state->holderGeneration = row.at("holder").get<uint32_t>();
 				state->incarnation = row.at("incarnation").get<uint32_t>();
 				const bool rowCommitted = row.at("committed").get<bool>();
-				state->closed = row.at("closed").get<bool>();
+				const bool rowClosed = row.at("closed").get<bool>();
 				state->seatGeneration = row.at("generation").get<uint32_t>();
 				state->substituteName = row.at("name").get<std::string>();
 				state->holderName = row.value("display", state->substituteName);
@@ -156,7 +156,7 @@ namespace RTE {
 				if (rowCommitted && nextRegistry.GetActiveGeneration(seat) != state->holderGeneration)
 					return false;
 				if (const auto peer = transports.find(state->seat.lockstepPeerId); peer != transports.end()) {
-					if (!rowCommitted || state->closed)
+					if (!rowCommitted || rowClosed)
 						return false;
 					state->activeConnection = peer->second;
 					if (state->hasParticipantId)
@@ -174,6 +174,10 @@ namespace RTE {
 					held.phase = away ? NetSeatPhase::Held : NetSeatPhase::Running;
 					held.holdCause = !away ? NetSeatHoldCause::None : row.value("left", false) ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
 					held.heldSinceMs = away ? nowMs : 0;
+					if (!rowCommitted && rowClosed) {
+						held.phase = NetSeatPhase::Held;
+						held.holdCause = NetSeatHoldCause::Kicked;
+					}
 				}
 				if (row.contains("ledger")) {
 					const auto& ledger = row.at("ledger");
@@ -452,6 +456,12 @@ namespace RTE {
 		return held && held->owner != 0;
 	}
 
+	bool NetReconnectHost::IsHostOpened(const SeatState& seat) const {
+		const NetRosterSeat* held = RosterSeatOf(seat);
+		return held && held->owner == 0 &&
+		       (held->holdCause == NetSeatHoldCause::Kicked || held->holdCause == NetSeatHoldCause::Banned || held->holdCause == NetSeatHoldCause::Released);
+	}
+
 	bool NetReconnectHost::IsHolderAway(const SeatState& seat) const {
 		const NetRosterSeat* held = RosterSeatOf(seat);
 		return held && held->owner != 0 && held->link == NetSeatLink::Dropped;
@@ -586,7 +596,7 @@ namespace RTE {
 		NoteStateChanged();
 		for (SeatState& state : m_Seats) {
 			// The current host keeps its own seat out of admission offers.
-			if (state.seat.cpu || state.seat.local || IsSeated(state) || state.closed || state.holderGeneration != 0) {
+			if (state.seat.cpu || state.seat.local || IsSeated(state) || IsHostOpened(state) || state.holderGeneration != 0) {
 				continue;
 			}
 			const bool provisional = std::any_of(m_Provisionals.begin(), m_Provisionals.end(), [&state](const Provisional& pending) {
@@ -603,7 +613,7 @@ namespace RTE {
 		NoteStateChanged();
 		for (SeatState& state : m_Seats) {
 			// The host's own seat is never offered; a dropped holder's seat is still theirs to reclaim.
-			if (state.seat.cpu || state.seat.local || IsSeated(state) || state.closed || IsHolderAway(state)) {
+			if (state.seat.cpu || state.seat.local || IsSeated(state) || IsHostOpened(state) || IsHolderAway(state)) {
 				continue;
 			}
 			const bool provisional = std::any_of(m_Provisionals.begin(), m_Provisionals.end(), [&state](const Provisional& pending) {
@@ -915,7 +925,6 @@ namespace RTE {
 		seat->identity = pending->key.identity;
 		seat->holderName = pending->holderName;
 		seat->holderGeneration = pending->holderGeneration;
-		seat->closed = false;
 		seat->incarnation = 0;
 		seat->saturated = false;
 		SeatHolder(*seat);
@@ -974,7 +983,7 @@ namespace RTE {
 		SeatState* seat = FindSeat(message.stableSeat);
 		const bool superseded = seat != nullptr && m_Registry != nullptr && seat->retiredGeneration == message.holderGeneration &&
 		                        nowMs < seat->retiredUntilMs && m_Registry->HasRetiredGeneration(message.stableSeat, message.holderGeneration);
-		if (!superseded && (seat == nullptr || !IsSeated(*seat) || seat->closed || seat->saturated ||
+		if (!superseded && (seat == nullptr || !IsSeated(*seat) || IsHostOpened(*seat) || seat->saturated ||
 		                    seat->holderGeneration == 0 || seat->holderGeneration != message.holderGeneration ||
 		                    m_Registry == nullptr || m_Registry->GetActiveGeneration(message.stableSeat) != message.holderGeneration)) {
 			ChallengeSyntheticallyAndDeny(connection, message.txId, NetH4DenialReason::UnknownSeat, nowMs);
@@ -1015,7 +1024,7 @@ namespace RTE {
 				return;
 			}
 		} else if (const SeatState* committedSeat = FindSeat(message.stableSeat);
-		           committedSeat != nullptr && IsSeated(*committedSeat) && !committedSeat->closed &&
+		           committedSeat != nullptr && IsSeated(*committedSeat) && !IsHostOpened(*committedSeat) &&
 		           committedSeat->holderGeneration == message.holderGeneration) {
 			const NetH4TxKey key = MakeKey(NetMessageType::Reclaim, message.stableSeat, message.holderGeneration, committedSeat->identity);
 			if (const NetPayload* cached = FindCached(message.txId, key, nowMs)) {
@@ -1064,7 +1073,7 @@ namespace RTE {
 			return;
 		}
 		SeatState* seat = FindSeat(message.stableSeat);
-		if (seat == nullptr || !IsSeated(*seat) || seat->closed || m_Registry == nullptr ||
+		if (seat == nullptr || !IsSeated(*seat) || IsHostOpened(*seat) || m_Registry == nullptr ||
 		    !m_Registry->VerifySeatProof(message.stableSeat, message.holderGeneration, transcript, message.mac)) {
 			DenyUniformly(connection, message.txId, NetH4DenialReason::BadProof, nowMs);
 			return;
@@ -1118,9 +1127,9 @@ namespace RTE {
 		}
 		m_Admission.DropConnection(connection);
 		const bool liveLeave = m_LiveMatch && !m_MatchEnded;
-		// From the first start on a leave is a drop the player chose: the seat stays theirs and the AI plays it until they rejoin or the
-		// host gives it away (A12); a persistent world's seat between rounds goes back to the world.
-		const bool heldLeave = liveLeave || (m_LiveMatch && !m_PersistentWorld);
+		// From the first start on a leave is a drop the player chose, in a match and in a world: the seat stays theirs and the AI plays it
+		// until they rejoin or the host gives it away (A12); before the first start it frees the seat (ruling iii).
+		const bool heldLeave = m_Roster.stage != NetRosterStage::Lobby;
 		if (heldLeave) {
 			// The link may stay up at the leaver's menu, so the drop runs now.
 			seat->activeConnection = c_InvalidNetPeerId;
@@ -1128,9 +1137,6 @@ namespace RTE {
 			BumpSeatGeneration(*seat);
 			if (liveLeave) RecordDrop(*seat, m_LockstepFrame);
 			++m_Stats.seatsDropped;
-		} else if (m_LiveMatch) {
-			CloseSeatWithoutHold(*seat);
-			seat->closed = !m_PersistentWorld;
 		} else {
 			// A lobby leave takes nothing with it: the seat goes back in the pool so the next player -
 			// this one returning or somebody new - joins exactly as they did before H4 existed.
@@ -1141,7 +1147,7 @@ namespace RTE {
 		m_TxCache.Store(message.txId, key, ack, nowMs);
 		++m_Stats.seatsClosedByLeave;
 		if (dropAck && NetA7Journal::Enabled()) NetA7Journal::Session("leave_ack_suppressed", nowMs, {{"transaction", NetA7Journal::Hex(message.txId.data(), message.txId.size())},
-			{"stable_seat", message.stableSeat}, {"closed", seat->closed}, {"committed", IsSeated(*seat)}}, "NetReconnectHost::nowMs");
+			{"stable_seat", message.stableSeat}, {"closed", IsHostOpened(*seat)}, {"committed", IsSeated(*seat)}}, "NetReconnectHost::nowMs");
 		if (!dropAck) {
 			Send(connection, ack);
 		}
@@ -1212,12 +1218,11 @@ namespace RTE {
 		}
 	}
 
-	void NetReconnectHost::CloseSeatWithoutHold(SeatState& seat) {
+	void NetReconnectHost::CloseSeatWithoutHold(SeatState& seat, NetRosterEventKind removedBy) {
 		if (m_Registry != nullptr) {
 			m_Registry->RevokeSeat(seat.seat.stableSeat);
 		}
-		ApplySeatEvent(seat, NetRosterEventKind::Kicked);
-		seat.closed = true;
+		ApplySeatEvent(seat, removedBy);
 		seat.activeConnection = c_InvalidNetPeerId;
 		BumpSeatGeneration(seat);
 		seat.retiredGeneration = 0;
@@ -1318,10 +1323,10 @@ namespace RTE {
 		    selection.incarnation != seat->incarnation || selection.seatGeneration != seat->seatGeneration) {
 			return NetKickBanResult::StaleSelection;
 		}
-		if (!IsSeated(*seat) && !seat->closed && !IsHolderAway(*seat)) {
+		if (!IsSeated(*seat) && !IsHostOpened(*seat) && !IsHolderAway(*seat)) {
 			return NetKickBanResult::ActionUnavailable;
 		}
-		if (seat->closed) {
+		if (IsHostOpened(*seat)) {
 			return NetKickBanResult::ActionUnavailable;
 		}
 		issued.connection = seat->activeConnection;
@@ -1368,14 +1373,13 @@ namespace RTE {
 			m_Admission.DropConnection(issued.connection);
 		}
 		CancelHolderTransactions(seat->seat.stableSeat, nowMs);
-		if (m_LiveMatch || IsHolderAway(*seat)) {
-			// A seat that has been played owns actors and a reclaim window: it closes, and the hold it
-			// leaves is what keeps anyone else out of it.
-			CloseSeatWithoutHold(*seat);
+		const NetRosterEventKind removedBy = action == NetParticipantRemovalAction::Kick ? NetRosterEventKind::Kicked : NetRosterEventKind::Banned;
+		if (m_Roster.stage != NetRosterStage::Lobby || IsHolderAway(*seat)) {
+			// From the first start on the seat keeps its number and the AI plays it, closed to its former player and open to an applicant.
+			CloseSeatWithoutHold(*seat, removedBy);
 		} else {
-			// A lobby removal releases the seat without banning its holder.
-
-			ReleaseSeat(*seat);
+			// Before the first start a removal frees the seat for a newcomer.
+			ReleaseSeat(*seat, removedBy);
 		}
 		m_LastRemovalTx = issued.notice.txId;
 		m_HasRemovalTx = true;
@@ -1393,7 +1397,6 @@ namespace RTE {
 		seat.holderGeneration = 0;
 		seat.incarnation = 0;
 		seat.activeConnection = c_InvalidNetPeerId;
-		seat.closed = false;
 		seat.saturated = false;
 		seat.identity = {};
 		seat.holderName.clear();
@@ -1492,7 +1495,7 @@ namespace RTE {
 			return false;
 		}
 		// Either the holder dropped and has not come back, or it left cleanly and the seat sits empty.
-		return (IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId) || seat.closed;
+		return (IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId) || IsHostOpened(seat);
 	}
 
 	void NetReconnectHost::BumpSeatGeneration(SeatState& seat) {
@@ -1676,8 +1679,8 @@ namespace RTE {
 			entry.team = seat.seat.team;
 			entry.committed = IsSeated(seat);
 			entry.dropped = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId;
-			entry.closed = seat.closed;
-			entry.heldForReclaim = IsSeated(seat) && !seat.closed;
+			entry.closed = IsHostOpened(seat);
+			entry.heldForReclaim = IsSeated(seat) && !IsHostOpened(seat);
 			entry.substitutable = IsSeatSubstitutable(seat);
 			entry.substituting = std::any_of(m_Substitutions.begin(), m_Substitutions.end(), [&seat](const Substitution& pending) {
 				return pending.stableSeat == seat.seat.stableSeat;
@@ -1742,7 +1745,7 @@ namespace RTE {
 			fold(seat.incarnation);
 			fold(seat.seatGeneration);
 			fold(seat.activeConnection);
-			fold((seat.seat.cpu ? 1u : 0u) | (IsSeated(seat) ? 2u : 0u) | (seat.closed ? 4u : 0u) |
+			fold((seat.seat.cpu ? 1u : 0u) | (IsSeated(seat) ? 2u : 0u) | (IsHostOpened(seat) ? 4u : 0u) |
 			     (IsHolderAway(seat) ? 8u : 0u) | (IsSeatSubstitutable(seat) ? 32u : 0u));
 			fold(HolderAwaySinceMs(seat));
 			foldText(seat.substituteName);
@@ -1963,7 +1966,6 @@ namespace RTE {
 		}
 		seat->identity = pending->identity;
 		seat->holderGeneration = message.holderGeneration;
-		seat->closed = false;
 		seat->incarnation = 0;
 		seat->saturated = false;
 		SeatHolder(*seat);
@@ -2068,7 +2070,7 @@ namespace RTE {
 		}), m_PendingReclaims.end());
 		for (SeatState& seat : m_Seats) {
 			if (IsSeated(seat) && seat.activeConnection == connection) {
-				if (m_MatchEnded) {
+				if (!m_LiveMatch && m_Roster.stage != NetRosterStage::Lobby) {
 					// A drop between rounds keeps the seat held into the next round, as a drop inside one does.
 					seat.activeConnection = c_InvalidNetPeerId;
 					ApplySeatEvent(seat, NetRosterEventKind::LinkDropped);
@@ -2124,7 +2126,6 @@ namespace RTE {
 			seat.holderGeneration = 0;
 			seat.incarnation = 0;
 			seat.activeConnection = c_InvalidNetPeerId;
-			seat.closed = false;
 			seat.saturated = false;
 			seat.retiredGeneration = 0;
 			seat.retiredUntilMs = 0;
@@ -2206,7 +2207,7 @@ namespace RTE {
 	bool NetReconnectHost::IsSeatHeldForReclaim(uint8_t lockstepPeerId) const {
 		// The coordinator asks by the id it runs the sim on, so the answer is read off the same binding.
 		return std::any_of(m_Seats.begin(), m_Seats.end(), [&](const SeatState& seat) {
-			return SimIdentityOfSeat(seat.seat).peerId == lockstepPeerId && IsSeated(seat) && !seat.closed;
+			return SimIdentityOfSeat(seat.seat).peerId == lockstepPeerId && IsSeated(seat) && !IsHostOpened(seat);
 		});
 	}
 
@@ -2240,7 +2241,7 @@ namespace RTE {
 
 	bool NetReconnectHost::IsSeatClosed(uint16_t stableSeat) const {
 		const SeatState* seat = FindSeat(stableSeat);
-		return seat != nullptr && seat->closed;
+		return seat != nullptr && IsHostOpened(*seat);
 	}
 
 	std::vector<NetH4SeatStatus> NetReconnectHost::GetSeatStatuses() const {
@@ -2251,7 +2252,7 @@ namespace RTE {
 			status.stableSeat = seat.seat.stableSeat;
 			status.lockstepPeerId = seat.seat.lockstepPeerId;
 			status.committed = IsSeated(seat);
-			status.closed = seat.closed;
+			status.closed = IsHostOpened(seat);
 			status.dropped = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId;
 			status.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
 				return !pending.superseded && !pending.proofFinished && pending.stableSeat == seat.seat.stableSeat;

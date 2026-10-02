@@ -143,19 +143,34 @@ namespace RTE {
 				return commit(next.stage == NetRosterStage::Running ? "Rejoining - the AI plays the seat until the player is back" : "the player is back");
 			}
 			case NetRosterEventKind::Kicked:
-			case NetRosterEventKind::Banned: {
+			case NetRosterEventKind::Banned:
+			case NetRosterEventKind::SeatReleased: {
 				if (!seat || seat->owner == 0) return refuse("the seat is already open");
 				if (event.seat == next.hostSeat) return refuse("the host cannot remove its own seat");
 				if (next.stage == NetRosterStage::Migrating) return refuse("no host can remove a player until the new host hosts");
+				// A release opens a seat its player is away from; a player who plays the seat is kicked.
+				if (event.kind == NetRosterEventKind::SeatReleased && next.stage != NetRosterStage::Lobby && !IsAway(seat->phase))
+					return refuse("the host releases only a held seat");
 				if (event.kind == NetRosterEventKind::Banned && !IsBanned(next, seat->owner)) next.banned.push_back(seat->owner);
 				seat->owner = 0;
 				seat->ticket = 0;
+				seat->givenAwayTicket = 0;
 				seat->link = NetSeatLink::Dropped;
 				seat->failedReturns = 0;
 				seat->returnAfterMs = 0;
+				seat->heldSinceMs = 0;
+				if (next.stage == NetRosterStage::Lobby) {
+					// Before the first start nothing is played: the seat is free for a newcomer.
+					seat->phase = NetSeatPhase::Lobby;
+					seat->holdCause = NetSeatHoldCause::None;
+					return commit("The host removed the player - the seat is free");
+				}
+				// From the first start on the seat keeps its number and the AI plays it, open to an applicant or a newcomer.
 				seat->phase = NetSeatPhase::Held;
-				seat->holdCause = NetSeatHoldCause::Released;
-				return commit(event.kind == NetRosterEventKind::Banned ? "The host banned the player - the seat is open" : "The host removed the player - the seat is open");
+				seat->holdCause = event.kind == NetRosterEventKind::Banned ? NetSeatHoldCause::Banned :
+				                  event.kind == NetRosterEventKind::Kicked ? NetSeatHoldCause::Kicked : NetSeatHoldCause::Released;
+				return commit(event.kind == NetRosterEventKind::Banned ? "The host banned the player - the seat is open" :
+				              event.kind == NetRosterEventKind::Kicked ? "The host removed the player - the seat is open" : "The host released the seat - it is open");
 			}
 			case NetRosterEventKind::RoundEnded: {
 				if (next.stage != NetRosterStage::Running) return refuse("no round is running");
@@ -185,7 +200,7 @@ namespace RTE {
 						each.phase = NetSeatPhase::Starting;
 					} else if (each.phase != NetSeatPhase::Relaunching) {
 						each.phase = NetSeatPhase::Held;
-						if (each.holdCause == NetSeatHoldCause::None) each.holdCause = each.owner == 0 ? NetSeatHoldCause::Released : NetSeatHoldCause::LinkDrop;
+						if (each.holdCause == NetSeatHoldCause::None && each.owner != 0) each.holdCause = NetSeatHoldCause::LinkDrop;
 					}
 					each.failedReturns = 0;
 					each.returnAfterMs = 0;
@@ -324,7 +339,8 @@ namespace RTE {
 			const NetRosterSeat& was = before.seats[i];
 			const NetRosterSeat& is = after.seats[i];
 			if (was.seatId != is.seatId) return fail("seat " + std::to_string(was.seatId) + " was renumbered");
-			const bool ownerMoves = kind == NetRosterEventKind::Kicked || kind == NetRosterEventKind::Banned || kind == NetRosterEventKind::Admitted || kind == NetRosterEventKind::ApplicantAccepted ||
+			const bool ownerMoves = kind == NetRosterEventKind::Kicked || kind == NetRosterEventKind::Banned || kind == NetRosterEventKind::SeatReleased ||
+			                        kind == NetRosterEventKind::Admitted || kind == NetRosterEventKind::ApplicantAccepted ||
 			                        ((kind == NetRosterEventKind::LinkDropped || kind == NetRosterEventKind::LivenessPassed) && before.stage == NetRosterStage::Lobby);
 			if (was.owner != is.owner && !ownerMoves) return fail("seat " + std::to_string(was.seatId) + " changed owner on a " + NetRosterEventName(kind));
 			if (was.owner == is.owner && is.incarnation < was.incarnation) return fail("seat " + std::to_string(was.seatId) + " went back an incarnation");
@@ -347,12 +363,20 @@ namespace RTE {
 	const char* NetRosterEventName(NetRosterEventKind kind) {
 		static constexpr std::array<const char*, static_cast<size_t>(NetRosterEventKind::Count)> names{
 			"LinkDropped", "ProcessRelaunched", "Returned", "Kicked", "Banned", "RoundEnded", "RematchFormed", "HostLinkLost", "MemberSetProposed", "TransferAborted",
-			"LivenessPassed", "SlowMachine", "HostStalled", "Admitted", "ApplicantAccepted", "RoundStarted", "ImageLoaded", "CaughtUp", "HostResumed", "HostChanged"};
+			"LivenessPassed", "SlowMachine", "HostStalled", "Admitted", "ApplicantAccepted", "RoundStarted", "ImageLoaded", "CaughtUp", "HostResumed", "HostChanged",
+			"SeatReleased"};
 		return kind < NetRosterEventKind::Count ? names[static_cast<size_t>(kind)] : "?";
 	}
 
 	std::string RosterSeatLabel(const NetRosterSeat& seat) {
-		if (seat.owner == 0) return "Open";
+		if (seat.owner == 0) {
+			switch (seat.holdCause) {
+				case NetSeatHoldCause::Kicked: return "Open - AI in control (kicked)";
+				case NetSeatHoldCause::Banned: return "Open - AI in control (banned)";
+				case NetSeatHoldCause::Released: return "Open - AI in control (released)";
+				default: return "Open";
+			}
+		}
 		switch (seat.phase) {
 			case NetSeatPhase::Held:
 				switch (seat.holdCause) {
@@ -434,7 +458,7 @@ namespace RTE {
 			uint64_t seatId = 0, owner = 0, incarnation = 0, phase = 0, cause = 0, link = 0, bindingRef = 0;
 			if (!TakeBytes(bytes, at, 1, seatId) || !TakeBytes(bytes, at, 8, owner) || !TakeBytes(bytes, at, 2, incarnation) || !TakeBytes(bytes, at, 1, phase) ||
 			    !TakeBytes(bytes, at, 1, cause) || !TakeBytes(bytes, at, 1, link) || !TakeBytes(bytes, at, 8, bindingRef)) return fail("a short seat roster");
-			if (seatId == 0 || phase >= static_cast<uint64_t>(NetSeatPhase::Count) || cause > static_cast<uint64_t>(NetSeatHoldCause::Released) ||
+			if (seatId == 0 || phase >= static_cast<uint64_t>(NetSeatPhase::Count) || cause > static_cast<uint64_t>(NetSeatHoldCause::Banned) ||
 			    link > static_cast<uint64_t>(NetSeatLink::Dropped) || decoded.Find(static_cast<uint8_t>(seatId))) return fail("a seat roster with a bad seat");
 			NetRosterSeat seat;
 			seat.seatId = static_cast<uint8_t>(seatId);
@@ -552,27 +576,28 @@ namespace RTE {
 
 		/// The grid's columns as net-roster drives them.
 		struct Column { const char* id; NetRosterEventKind kind; const char* variant; };
-		constexpr std::array<Column, 18> c_Columns{{
+		constexpr std::array<Column, 19> c_Columns{{
 			{"a", NetRosterEventKind::LinkDropped, ""}, {"b", NetRosterEventKind::ProcessRelaunched, ""}, {"c", NetRosterEventKind::Returned, ""},
 			{"d", NetRosterEventKind::Kicked, ""}, {"d2", NetRosterEventKind::Banned, ""}, {"f", NetRosterEventKind::RoundEnded, ""},
 			{"g", NetRosterEventKind::RematchFormed, ""}, {"h", NetRosterEventKind::HostStalled, ""}, {"i", NetRosterEventKind::HostLinkLost, "quorum"},
 			{"i2", NetRosterEventKind::HostLinkLost, "one member"}, {"j", NetRosterEventKind::MemberSetProposed, "left out"}, {"k", NetRosterEventKind::TransferAborted, ""},
 			{"l", NetRosterEventKind::LivenessPassed, "traffic"}, {"l2", NetRosterEventKind::LivenessPassed, "silent"}, {"m", NetRosterEventKind::LinkDropped, "two at once"},
-			{"n", NetRosterEventKind::SlowMachine, "after the grace"}, {"o", NetRosterEventKind::Admitted, ""}, {"p", NetRosterEventKind::ApplicantAccepted, ""}}};
+			{"n", NetRosterEventKind::SlowMachine, "after the grace"}, {"o", NetRosterEventKind::Admitted, ""}, {"p", NetRosterEventKind::ApplicantAccepted, ""},
+			{"r", NetRosterEventKind::SeatReleased, ""}}};
 
 		/// The expected outcome of each cell for the subject seat: its next phase (L S R H I C E M Z G), '-' unchanged, 'X' refused, '.' unreachable.
 		/// Columns in c_Columns' order; rows 1-10 are the grid's rows.
 		constexpr std::array<const char*, 10> c_Expected{{
-			/*  1 LOBBY          */ "LZLHHXS.XXHX-LL-XX",
-			/*  2 STARTING       */ "HZSHHXX-XXXX-HH-XX",
-			/*  3 RUNNING        */ "HZRHHMX-GXXX-HHHXX",
-			/*  4 HELD           */ "-ZIHHEX--XXX----XI",
-			/*  5 REJOIN_IMAGE   */ "HZIHHMX-HXXH-HH-XX",
-			/*  6 REJOIN_CATCHUP */ "HZIHHMX-HXXX-HH-XX",
-			/*  7 ROUND_END      */ "-ZMHHXH.XX-X----XM",
-			/*  8 REMATCH_LOBBY  */ "HZMHHXS.XXHX-HH-XX",
-			/*  9 RELAUNCHING    */ "--IHH-X--XXX----XI",
-			/* 10 MIGRATING      */ "HZX...X.-X.X-HH.XX"}};
+			/*  1 LOBBY          */ "LZLLLXS.XXHX-LL-XXL",
+			/*  2 STARTING       */ "HZSHHXX-XXXX-HH-XXX",
+			/*  3 RUNNING        */ "HZRHHMX-GXXX-HHHXXX",
+			/*  4 HELD           */ "-ZIHHEX--XXX----XIH",
+			/*  5 REJOIN_IMAGE   */ "HZIHHMX-HXXH-HH-XXX",
+			/*  6 REJOIN_CATCHUP */ "HZIHHMX-HXXX-HH-XXX",
+			/*  7 ROUND_END      */ "-ZMHHXH.XX-X----XMH",
+			/*  8 REMATCH_LOBBY  */ "HZMHHXS.XXHX-HH-XXX",
+			/*  9 RELAUNCHING    */ "--IHH-X--XXX----XIH",
+			/* 10 MIGRATING      */ "HZX...X.-X.X-HH.XX."}};
 
 		char PhaseCode(NetSeatPhase phase) {
 			static constexpr const char* codes = "LSRHICEMZG";
@@ -771,6 +796,27 @@ namespace RTE {
 			NetSeatRoster rejected;
 			ok = ok && !DecodeRoster(bad, rejected, &error);
 			check("seq R5 the roster replicates whole, in order, refused by name when it differs", ok, "wire_bytes=" + std::to_string(wire.size()) + " error='" + error + "' why='" + why + "'");
+		}
+		{
+			// Ruling ppp: before the first start a removal frees the seat; from the first start a kick, a ban or a release opens it with its
+			// number kept and its cause named, and only a held seat is released.
+			NetSeatRoster lobby = RosterForRow(1);
+			NetRosterEvent kick; kick.kind = NetRosterEventKind::Kicked; kick.seat = 2;
+			const NetRosterResult freed = ApplyRosterEvent(lobby, kick);
+			const bool lobbyFrees = !freed.refused && freed.roster.Find(2)->owner == 0 && freed.roster.Find(2)->phase == NetSeatPhase::Lobby && RosterSeatLabel(*freed.roster.Find(2)) == "Open";
+			NetSeatRoster running = RosterForRow(3);
+			const NetRosterResult kickedOut = ApplyRosterEvent(running, kick);
+			NetRosterEvent ban = kick; ban.kind = NetRosterEventKind::Banned;
+			const NetRosterResult bannedOut = ApplyRosterEvent(running, ban);
+			NetRosterEvent release = kick; release.kind = NetRosterEventKind::SeatReleased;
+			const NetRosterResult playing = ApplyRosterEvent(running, release);
+			const NetRosterResult released = ApplyRosterEvent(RosterForRow(4), release);
+			const bool opens = RosterSeatLabel(*kickedOut.roster.Find(2)) == "Open - AI in control (kicked)" && kickedOut.roster.Find(2)->phase == NetSeatPhase::Held &&
+			                   RosterSeatLabel(*bannedOut.roster.Find(2)) == "Open - AI in control (banned)" && bannedOut.roster.banned.size() == 1 &&
+			                   playing.refused && playing.reason == "the host releases only a held seat" &&
+			                   !released.refused && RosterSeatLabel(*released.roster.Find(2)) == "Open - AI in control (released)";
+			check("seq OPEN the host frees a first-lobby seat and opens a later one with its number kept", lobbyFrees && opens,
+			      "lobby='" + RosterSeatLabel(*freed.roster.Find(2)) + "' kicked='" + RosterSeatLabel(*kickedOut.roster.Find(2)) + "' release_while_playing='" + playing.reason + "'");
 		}
 		{
 			// The start gate: the round is agreed on one revision; a peer that heard it hashed alike starts, any other is refused by name.
