@@ -944,11 +944,21 @@ static void CrossEndTargetObservation(uint64_t tick) {
 static void CrossEliminationAtCommittedTick(uint64_t tick) {
 	if (s_crossSchedule.empty() || !g_NetMatchService.IsHost() || ScenarioRunner::WorldCatchUpActive()) return;
 	static std::map<std::string, std::set<long>> issued;
+	// Why a forced end has not fired yet, named once its window closes unfired.
+	static std::map<std::string, std::string> heldBack;
+	static std::set<std::string> closed;
 	for (const auto& fault: s_crossSchedule) {
 		if (fault.at("action") != "brain-eliminate" || s_crossBudget < fault.at("tick").get<uint64_t>()) continue;
 		const std::string id = fault.at("id");
 		if (s_crossFired.contains(id)) continue;
-		if (s_crossBudget > fault.at("tick").get<uint64_t>() + fault.value("phase_window_ticks", uint64_t{6000})) continue;
+		if (s_crossBudget > fault.at("tick").get<uint64_t>() + fault.value("phase_window_ticks", uint64_t{6000})) {
+			if (issued[id].empty() && closed.insert(id).second) {
+				const std::string reason = heldBack.contains(id) ? heldBack.at(id) : "never evaluated";
+				System::PrintDiagnosticLine("[cross-end] " + id + " window closed unfired at budget " + std::to_string(s_crossBudget) + ": " + reason);
+				g_MetricsCollector.WriteObservation({{"type", "elimination_window_closed"}, {"id", id}, {"reason", reason}, {"budget_tick", s_crossBudget}});
+			}
+			continue;
+		}
 		const auto config = ScenarioRunner::GetLockstepMatchConfig();
 		if (!config) continue;
 		uint8_t targetPeer = 0;
@@ -960,11 +970,15 @@ static void CrossEliminationAtCommittedTick(uint64_t tick) {
 		const bool phaseSignalled = std::any_of(chats.begin(), chats.end(), [&](const auto& chat) {
 			return CrossEndSignalMatches(chat.text, chat.senderPeerId, targetPeer, id, config->sessionId, config->roundId, fault.value("target_incarnation", ~0u));
 		});
-		if (issued[id].empty() && !(phase == "hold" ? held : phaseSignalled)) continue;
-		if (issued[id].empty() && g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver()) continue;
+		if (issued[id].empty() && !(phase == "hold" ? held : phaseSignalled)) { heldBack[id] = "target " + std::to_string(targetPeer) + " not in its " + phase + " phase at tick " + std::to_string(tick); continue; }
+		if (issued[id].empty() && g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver()) { heldBack[id] = "activity over at tick " + std::to_string(tick); continue; }
 		const int survivor = fault.value("survivor_team", 0);
 		Actor* writer = g_MovableMan.GetFirstBrainActor(survivor);
-		if (!writer || !ScenarioRunner::IsLockstepAIWriteAuthorized(ScenarioRunner::GetLockstepLocalPeerId(), writer->GetTeam(), writer->GetUniqueID(), writer->GetUniqueID())) continue;
+		if (!writer) { heldBack[id] = "survivor team " + std::to_string(survivor) + " has no brain at tick " + std::to_string(tick); continue; }
+		if (!ScenarioRunner::IsLockstepAIWriteAuthorized(ScenarioRunner::GetLockstepLocalPeerId(), writer->GetTeam(), writer->GetUniqueID(), writer->GetUniqueID())) {
+			heldBack[id] = "this peer may not write for survivor team " + std::to_string(survivor) + " at tick " + std::to_string(tick);
+			continue;
+		}
 		unsigned enemies = 0;
 		for (int team = 0; team < Activity::MaxTeamCount; ++team) if (team != survivor) {
 			if (Actor* brain = g_MovableMan.GetFirstBrainActor(team)) {
