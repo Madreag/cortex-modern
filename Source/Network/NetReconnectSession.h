@@ -724,6 +724,8 @@ namespace RTE {
 	};
 
 	const char* NetReconnectClientStateName(NetH4ClientState state);
+	/// The seat roster's match: the hosted session's admission epoch, which every admitted peer holds in its ticket; 0 for none.
+	uint64_t NetRosterMatchIdOf(const NetAuthBytes16& epoch);
 
 	struct NetReconnectClientStats {
 		uint32_t requestsSent = 0;

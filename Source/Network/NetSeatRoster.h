@@ -116,8 +116,13 @@ namespace RTE {
 	/// A peer's copy of the host's roster: revisions are applied in order and never derived locally.
 	class NetRosterReplica {
 	public:
-		/// Takes a newer revision of this match's roster; says why when it does not.
+		/// Takes a newer revision of this match's roster - a later host generation, or a later revision of the same one; says why
+		/// when it does not. A new host's numbering starts this copy's history again.
 		bool Apply(const NetSeatRoster& revision, std::string* why);
+		/// Follows the hosted match named: a copy of another match's roster is dropped. 0 follows the first match heard.
+		void Attach(uint64_t matchId);
+		/// Drops every revision heard: a peer attaching to a hosted session starts its copy there.
+		void Reset(uint64_t matchId = 0);
 		/// Whether this copy is the one the host hashed; the reason names the difference for the refusal.
 		bool Agrees(const std::array<uint8_t, 32>& hostHash, std::string* why) const;
 		/// Whether the revision the host named is one this peer heard, hashed as the host hashed it; the reason names the refusal.
@@ -128,6 +133,7 @@ namespace RTE {
 	private:
 		NetSeatRoster m_Roster;
 		bool m_HasRoster = false;
+		uint64_t m_MatchId = 0; //!< The hosted match this copy follows; 0 until one is named or heard.
 		std::vector<std::pair<uint32_t, std::array<uint8_t, 32>>> m_Recent; //!< The last revisions' hashes, oldest first.
 	};
 

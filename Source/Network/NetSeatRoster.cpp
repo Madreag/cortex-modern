@@ -490,9 +490,19 @@ namespace RTE {
 	}
 
 	bool NetRosterReplica::Apply(const NetSeatRoster& revision, std::string* why) {
-		if (m_HasRoster && revision.matchId != m_Roster.matchId) {
+		if (m_MatchId != 0 && revision.matchId != m_MatchId) {
 			if (why) *why = "a seat roster of another match";
 			return false;
+		}
+		m_MatchId = revision.matchId;
+		if (m_HasRoster && revision.migrationGen < m_Roster.migrationGen) {
+			if (why) *why = "a seat roster of an earlier host";
+			return false;
+		}
+		// A new host numbers on from what it imported, so the old host's later revisions are not its to agree with.
+		if (m_HasRoster && revision.migrationGen > m_Roster.migrationGen) {
+			m_Recent.clear();
+			m_HasRoster = false;
 		}
 		// Every revision is whole, so a later one heals any it missed and an earlier one is history.
 		if (m_HasRoster && revision.revision <= m_Roster.revision) {
@@ -504,6 +514,17 @@ namespace RTE {
 		m_Recent.emplace_back(revision.revision, HashRoster(revision));
 		if (m_Recent.size() > 64) m_Recent.erase(m_Recent.begin());
 		return true;
+	}
+
+	void NetRosterReplica::Attach(uint64_t matchId) {
+		if (matchId != m_MatchId) Reset(matchId);
+	}
+
+	void NetRosterReplica::Reset(uint64_t matchId) {
+		m_Roster = {};
+		m_HasRoster = false;
+		m_Recent.clear();
+		m_MatchId = matchId;
 	}
 
 	bool NetRosterReplica::AgreesAt(uint32_t revision, const std::array<uint8_t, 32>& hostHash, std::string* why) const {
