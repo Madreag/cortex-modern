@@ -3934,6 +3934,10 @@ void AudioMan::ClearCommittedAudibility() {
 	m_ReportedAudibilityMisses.clear();
 }
 
+void AudioMan::BeginLockstepRound() {
+	ClearCommittedAudibility();
+}
+
 bool AudioMan::RunLogicalPlaybackSelfTest() {
 	bool passed = true;
 	const auto check = [&passed](const char* name, bool ok, const std::string& detail = std::string()) {
@@ -4185,6 +4189,13 @@ bool AudioMan::RunLogicalPlaybackSelfTest() {
 		check("committed_table_checkpoint", cleared && LoadCheckpoint(checkpoint) && GetCommittedAudibility(keyed) == 0.5F && GetCommittedAudibilityCount() == 1);
 		CommitSoundObservations(36600, {}, {});
 		check("committed_table_prunes_stale", GetCommittedAudibilityCount() == 0 && GetCommittedAudibility(keyed) == 0.0F);
+		// l4p-38: a reading from an earlier round, its frame past the new round's restarted ones, outlived its round and could be read by a
+		// later round's sound with the same key on one peer and not on another.
+		CommitSoundObservations(2000, {earlier}, {});
+		BeginLockstepRound();
+		CommitSoundObservations(10, {}, {});
+		check("committed_table_starts_each_round_empty", GetCommittedAudibilityCount() == 0 && GetCommittedAudibility(keyed) == 0.0F,
+		      std::to_string(GetCommittedAudibilityCount()) + " readings carried into the new round");
 		keyed.Stop();
 		ClearCommittedAudibility();
 	}

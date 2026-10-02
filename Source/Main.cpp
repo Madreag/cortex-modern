@@ -9118,6 +9118,8 @@ bool ConfigureNetMatchActivity(const NetMatchConfig& config, int localTeam, std:
 		}
 	}
 	ScenarioRunner::ApplyDeterministicConfig();
+	// Before any image of the round is applied: the image carries the round's own readings.
+	g_AudioMan.BeginLockstepRound();
 	g_ActivityMan.SetStartActivity(activity);
 	g_ActivityMan.SetRestartActivity(true);
 	return true;
