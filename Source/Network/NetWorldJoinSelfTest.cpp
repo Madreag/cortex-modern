@@ -7162,6 +7162,107 @@ namespace RTE {
 		return true;
 	}
 
+	// F53.2, the first path: a player who leaves between rounds keeps the seat - the seat roster holds it for its return, the leave's
+	// answer tells it so, and nothing is released (A12). The decision reads the roster's stage, never the plane's live-match flag.
+	bool TestALeaveBetweenRoundsKeepsTheSeat(std::string* error) {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x9A63);
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			*error = "the between-rounds leave row's registry did not arm";
+			return false;
+		}
+		NetReconnectHost host;
+		host.Configure(&registry, config.sessionId, identity);
+		host.SetSeatTable(NetH4BuildSeatTable(config), config.mode);
+		host.SetLiveMatch(false);
+		NetH4TicketOffer offer;
+		if (!CommitWorldSeat(host, identity, 61, "leaver", offer)) {
+			*error = "the between-rounds leave row could not seat its player";
+			return false;
+		}
+		host.SetLiveMatch(true);
+		host.SetMatchEnded();
+		const uint32_t releasedBefore = host.GetStats().seatsReleased;
+		NetH4LeaveRequest leave;
+		leave.txId.fill(0x63);
+		leave.epoch = offer.epoch;
+		leave.stableSeat = offer.stableSeat;
+		leave.holderGeneration = offer.holderGeneration;
+		host.HandleMessage(61, leave, 2000);
+		const NetH4LeaveAck* ack = nullptr;
+		const std::vector<NetH4Outbound> answered = host.TakeOutbound();
+		for (const NetH4Outbound& outbound: answered)
+			if (const auto* told = std::get_if<NetH4LeaveAck>(&outbound.payload)) ack = told;
+		const NetRosterSeat* seat = host.GetRoster().Find(static_cast<uint8_t>(offer.stableSeat + 1));
+		if (ack == nullptr || ack->seatClosed || !seat || seat->owner == 0 || seat->phase != NetSeatPhase::Held || seat->holdCause != NetSeatHoldCause::Leave ||
+		    host.GetStats().seatsReleased != releasedBefore || host.IsSeatClosed(offer.stableSeat)) {
+			*error = std::string("a leave between rounds did not keep the seat: ack=") + (ack ? (ack->seatClosed ? "closed" : "kept") : "none") + " roster=" +
+			         (seat ? RosterSeatLabel(*seat) : std::string("no seat")) + " released=" + std::to_string(host.GetStats().seatsReleased - releasedBefore);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_leave_between_rounds_keeps_the_seat roster='" << RosterSeatLabel(*seat) << "'" << std::endl;
+		return true;
+	}
+
+	// F53.2, the second path: a match resumed from disk opens its lobby on the seats it saved, nobody connected yet; a player who comes
+	// back and drops in that lobby keeps the seat, held by the roster, never released.
+	bool TestAResumedLobbyHoldsADroppedSeat(std::string* error) {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x9A64);
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			*error = "the resumed-lobby row's registry did not arm";
+			return false;
+		}
+		NetReconnectHost host;
+		host.Configure(&registry, config.sessionId, identity);
+		host.SetSeatTable(NetH4BuildSeatTable(config), config.mode);
+		host.SetLiveMatch(false);
+		NetH4TicketRecord hostTicket;
+		NetH4TicketOffer offer;
+		if (!host.EnsureLocalTicket(hostTicket) || !CommitWorldSeat(host, identity, 61, "player", offer)) {
+			*error = "the resumed-lobby row could not seat the host and its player";
+			return false;
+		}
+		host.SetLiveMatch(true);
+		// The match is saved, and resumed from disk: the host imports what it saved, nobody has reconnected, and its lobby opens.
+		const std::vector<uint8_t> saved = host.ExportMigrationState();
+		NetSeatAuthRegistry resumedRegistry;
+		NetReconnectHost resumed;
+		if (!resumed.ImportMigrationState(saved, resumedRegistry, config, config.hostPeerId, {}, 2000)) {
+			*error = "the resumed-lobby row could not import the saved plane";
+			return false;
+		}
+		resumed.SetLiveMatch(false);
+		const uint8_t seatId = static_cast<uint8_t>(offer.stableSeat + 1);
+		const NetRosterSeat* away = resumed.GetRoster().Find(seatId);
+		// Its player is owed the round's end and the next lobby: the seat is held for it, its owner kept.
+		if (resumed.GetRoster().stage != NetRosterStage::Ended || !away || away->owner == 0 || away->link != NetSeatLink::Dropped ||
+		    (away->phase != NetSeatPhase::RoundEnd && away->phase != NetSeatPhase::Held)) {
+			*error = "the resumed lobby does not hold the seat its player has not come back to: " + (away ? std::string(NetSeatPhaseName(away->phase)) : std::string("no seat"));
+			return false;
+		}
+		if (!ReclaimWorldSeat(resumed, identity, offer, 65, 3000) || resumed.GetRoster().Find(seatId)->link != NetSeatLink::Connected) {
+			*error = "the resumed lobby's player could not come back to its seat";
+			return false;
+		}
+		const uint32_t releasedBefore = resumed.GetStats().seatsReleased;
+		resumed.NotifyDisconnect(65, 0);
+		const NetRosterSeat* seat = resumed.GetRoster().Find(seatId);
+		if (!seat || seat->owner == 0 || seat->phase != NetSeatPhase::Held || resumed.GetStats().seatsReleased != releasedBefore || resumed.IsSeatClosed(offer.stableSeat)) {
+			*error = "a drop in a resumed match's lobby released the seat: roster=" + (seat ? RosterSeatLabel(*seat) : std::string("no seat")) +
+			         " released=" + std::to_string(resumed.GetStats().seatsReleased - releasedBefore);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_resumed_lobby_holds_a_dropped_seat roster='" << RosterSeatLabel(*seat) << "'" << std::endl;
+		return true;
+	}
+
 	// SEAT-ROSTER S2 at the service: a private return's phases come from the round - its image in moves the roster on, an abandoned
 	// transfer fails the return - and a failed return is begun again only after the roster's backoff and under its bound.
 	bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error) {
@@ -8374,6 +8475,8 @@ namespace RTE {
 			if (!TestAHealNamesACheckpointEveryPeerHolds(&error)) return Fail(error);
 			if (!TestAStuckPrivateImageIsRetakenOnceThenRefused(&error)) return Fail(error);
 			if (!TestAPrivateReturnFollowsTheRoundOnTheRoster(&error)) return Fail(error);
+			if (!TestALeaveBetweenRoundsKeepsTheSeat(&error)) return Fail(error);
+			if (!TestAResumedLobbyHoldsADroppedSeat(&error)) return Fail(error);
 			if (!TestCheckpointCommandCrossesTheWire(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);
