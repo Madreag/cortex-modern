@@ -116,6 +116,16 @@ def crash_hold(hold,crash_ids):
     return {}
 
 
+def host_stall_hold(hold,stall):
+    """A hold of the host's own seat (lockstep peer 1) inside the forced host stall's window is that stall's: the own-seat rule holding a slow host."""
+    if not stall or hold.get('peer')!=1 or hold.get('classification')!='other' or not isinstance(hold.get('tick'),int): return {}
+    tick,ms=(int(part) for part in stall.split(':'))
+    if tick<=hold['tick']<=tick+ms//16+60:
+        return dict(scheduled_recovery_id='host-stall',classification='scheduled-fault',
+                    reason="The host held its own seat while the schedule stalled its simulation: the own-seat rule holding a slow host, never an election.")
+    return {}
+
+
 def scheduled_hold(hold,receipts,recoveries):
     for recovery in recoveries:
         if not recovery['passed']: continue
@@ -737,6 +747,7 @@ def build_report(root):
             hold['scheduled_recovery_id']=scheduled_hold(hold,fault_receipts,recoveries)
             hold.update(classify_hold(hold,events,peers))
             hold.update(crash_hold(hold,crash_ids))
+            hold.update(host_stall_hold(hold,manifest.get('host_stall')))
             if not hold['scheduled_recovery_id'] and (window := fault_window_hold(hold, windows, clock)):
                 hold.update(scheduled_recovery_id=window, classification='scheduled-fault',
                             reason='The held seat is the faulted one and the hold falls inside its scheduled fault window, on the host clock.')
