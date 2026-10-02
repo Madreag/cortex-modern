@@ -21212,13 +21212,14 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			*error = "the late seat's hold landed at " + std::to_string(held) + ", the other returner's landing, while the seat owes its input from 1646";
 			return false;
 		}
-		// A refusal is named once: asking again at the same frame says nothing new.
+		// A refusal is named once: asking again at the same frame says nothing new. The seat is gone at the frame the round is on, so no
+		// hold has a boundary to move.
 		LoopbackTransport refusedWire;
 		NetLockstepCoordinator refused;
 		if (!refusedWire.StartHost(49744, error) || !refused.Start(refusedWire, config, error)) return false;
 		refused.m_State = NetLockstepState::Running;
 		refused.m_Stats.nextFrame = 1646;
-		refused.m_PeerLeaveFrames[2] = 1663;
+		refused.m_PeerLeaveFrames[2] = 1646;
 		std::string first, second;
 		const bool proposed = refused.ProposePeerHold(2, 1000, &first, 0, "late_stream") || refused.ProposePeerHold(2, 1001, &second, 0, "late_stream");
 		if (proposed || first.empty() || !second.empty()) {
@@ -21265,6 +21266,53 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return false;
 		}
 		std::cout << "[net-lockstep-selftest] PASS a_linkless_member_is_held_by_the_start" << std::endl;
+		return true;
+	}
+
+	// A seat held at a boundary past frames it still owes stopped the round on them, its hold refused because it was already held: past the
+	// bound the hold escalates to the first frame it owes on every peer, and the seat returns through its image.
+	bool TestARefusedHoldEscalatesToTheFirstOwedFrame(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A5D, 6, NetTransportLane::InputUnreliable);
+		config.startFrame = 1; config.roundId = 0x9A5D; config.peerCount = 3;
+		config.remoteTransportPeerIds = {{2, 1}, {3, 2}};
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 6}, {2, 6}, {3, 6}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A5D);
+		config.matchConfig.peerCount = 3; config.matchConfig.players.push_back({3, 2, false, "Survivor"});
+		if (!wire.StartHost(49756, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_Stats.nextFrame = 1646;
+		host.m_LastCompletedSimulationTick = 1645;
+		host.m_LastQueuedTargetFrame = 1645;
+		host.m_PeersPlayedThisRound = {1, 2, 3};
+		// Seat 2 is held from 1663 while it owes its input from 1646, and the round waits on it there.
+		host.m_PeerLeaveFrames[2] = 1663;
+		host.m_AiHeldSeats[2] = 1663;
+		host.m_DroppedSeats.insert(2);
+		host.m_Stats.peers[2].reportedNextFrame = 1646;
+		host.m_Stats.peers[3].reportedNextFrame = 1646;
+		std::string holdError;
+		if (!host.ProposePeerHold(2, 1000, &holdError, 0, "late_stream")) {
+			*error = "the hold of a seat owing frames before its boundary was refused: " + holdError;
+			return false;
+		}
+		const NetLockstepTiming* escalated = nullptr;
+		for (const auto& [revision, pending]: host.m_TimingDecisions)
+			if (pending.proposal.action == NetTimingAction::Hold && (pending.proposal.heldPeers & 0x2) != 0) escalated = &pending.proposal;
+		if (!escalated || escalated->applyFrame != 1646) {
+			*error = "the escalated hold landed at " + std::to_string(escalated ? escalated->applyFrame : 0) + " while the seat owes its input from 1646";
+			return false;
+		}
+		host.ApplyTiming(*escalated);
+		if (host.m_PeerLeaveFrames.at(2) != 1646 || host.m_AiHeldSeats.at(2) != 1646) {
+			*error = "applying the escalated hold left the seat's boundary at leave=" + std::to_string(host.m_PeerLeaveFrames.at(2)) +
+			         " held=" + std::to_string(host.m_AiHeldSeats.at(2));
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_refused_hold_escalates_to_the_first_owed_frame" << std::endl;
 		return true;
 	}
 
@@ -23052,6 +23100,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAHoldLandsAtTheFirstFrameItsSeatOwes, "a_hold_lands_at_the_first_frame_its_seat_owes");
 		row(&TestALinklessMemberIsHeldByTheStart, "a_linkless_member_is_held_by_the_start");
 		row(&TestNoStartGateWaitsForAHeldSeat, "no_start_gate_waits_for_a_held_seat");
+		row(&TestARefusedHoldEscalatesToTheFirstOwedFrame, "a_refused_hold_escalates_to_the_first_owed_frame");
 		row(&TestAHeldHostCanReachItsReclaimHorizon, "a_held_host_can_reach_its_reclaim_horizon");
 		row(&TestAnAnnouncedCaptureExcusesEverySeatForItsCost, "an_announced_capture_excuses_every_seat_for_its_cost");
 		row(&TestDelayTracksASteadySendersArrivalPhase, "delay_tracks_a_steady_senders_arrival_phase");

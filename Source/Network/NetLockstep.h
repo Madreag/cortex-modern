@@ -1374,6 +1374,7 @@ namespace RTE {
 		friend bool TestAReturnGapDoesNotStartTheHostsClock(std::string* error);
 		friend bool TestAHoldLandsAtTheFirstFrameItsSeatOwes(std::string* error);
 		friend bool TestALinklessMemberIsHeldByTheStart(std::string* error);
+		friend bool TestARefusedHoldEscalatesToTheFirstOwedFrame(std::string* error);
 		friend bool TestANeutralGapLeavesNoCommandsToResend(std::string* error);
 		friend bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error);
 		friend bool TestAnAnnouncedCaptureExcusesEverySeatForItsCost(std::string* error);
