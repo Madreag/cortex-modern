@@ -134,7 +134,7 @@ class RecoveryLedger:
     def __init__(self,path,peer,clock_domain,begin_ms,cases):
         self.path=Path(path); self.peer=peer; self.clock_domain=clock_domain
         self.begin_ms=begin_ms; self.cases={case['id']:case for case in cases}
-        self.starts={}; self.applied=set(); self.completed=set()
+        self.starts={}; self.applied=set(); self.completed=set(); self.resets=set()
 
     def write(self,id,incarnation,phase,lower,upper,native):
         record=dict(id=id,peer=self.peer,incarnation=incarnation,phase=phase,clock_domain=self.clock_domain,
@@ -153,6 +153,12 @@ class RecoveryLedger:
                 start['upper']=upper
                 self.applied.add(id)
                 self.write(id,incarnation,'fault_applied',start['lower'],start['upper'],row)
+                if row.get('action') in ('live-stall', 'draw-stall', 'late-script-stall') and 'completed_wall_ms' in row:
+                    self.fault_reset(id, incarnation, lower, upper, row)
+            elif row.get('type') == 'fault_reset' and row.get('send_recv_armed') is True:
+                self.fault_reset(id, incarnation, lower, upper, row)
+            elif row.get('type') == 'fault_effect' and row.get('effect_observed') and row.get('reset'):
+                self.fault_reset(id, incarnation, lower, upper, row)
             elif row.get('type')=='recovery':
                 phase=row.get('recovery_phase','unmapped')
                 self.write(id,incarnation,phase,lower,upper,row)
@@ -163,6 +169,12 @@ class RecoveryLedger:
         id=case['id']; self.starts[id]=dict(lower=lower,upper=upper,native=progress,incarnation=incarnation)
         self.applied.add(id)
         self.write(id,incarnation,'fault_applied',lower,upper,dict(action=case['action'] if 'action' in case else 'crash-restart',actual=progress,applied=True))
+        self.fault_reset(id, incarnation, lower, upper, dict(action=case.get('action', 'crash-restart'), process_terminated=True))
+
+    def fault_reset(self, id, incarnation, lower, upper, native):
+        if id in self.applied and id not in self.resets:
+            self.write(id, incarnation, 'fault_reset', lower, upper, native)
+            self.resets.add(id)
 
     def restart_inputs(self,incarnation):
         return {id:dict(engine_after_wall_ms=0,effect_finished=True,origin=self.starts[id]) for id in self.applied-self.completed
