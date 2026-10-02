@@ -19314,7 +19314,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			for (uint64_t frame = 6; frame <= 7; ++frame)
 				for (auto* peer: {&a, &b}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
 			// A survivor that took the host for gone has begun, or already finished, handing the round to a successor.
-			const auto lost = [&](const NetLockstepCoordinator& peer) { return peer.IsMigrating() || peer.GetHostPeerId() != 1; };
+			const auto lost = [&](const NetLockstepCoordinator& peer) { return peer.IsMigrating() || peer.GetHostPeerId() != 1 || peer.GetMigrationResult().generation != 0; };
 			// The host waits on its own frame 6 for 600 ms and ticks all along: the survivors wait with it and hear it.
 			const uint64_t waitFrom = now;
 			while (now - waitFrom < 600) step(true);
@@ -19327,15 +19327,20 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (!host.QueueLocalInput(6, {MakeFrame(101, 6)}, {}, error)) return false;
 			step(true);
 			const uint64_t silentFrom = now;
-			// Inside the slow-player bound nothing is judged: a spike the bound absorbs is not a death.
-			while (now - silentFrom < 45) step(false);
-			if (lost(a) || lost(b)) {
-				*error = "the survivors took the host for gone inside the slow-player bound: silent_ms=" + std::to_string(now - silentFrom);
+			// l4p-40: a live host's link quiet for 115-124 ms started an election and split the match. A host is held for a stall and
+			// taken for gone only when its link stays silent past the host-loss bound.
+			uint64_t takenAt = 0;
+			while (now - silentFrom < 900) {
+				step(false);
+				if (takenAt == 0 && (lost(a) || lost(b))) takenAt = now - silentFrom;
+			}
+			if (takenAt != 0) {
+				*error = "a host silent " + std::to_string(takenAt) + " ms, inside the host-loss bound, was taken for gone";
 				return false;
 			}
-			while (now - silentFrom < 400 && !lost(a)) step(false);
+			while (now - silentFrom < 2000 && !lost(a)) step(false);
 			if (!lost(a)) {
-				*error = "a host silent past its link, the bound and its jitter was not taken for gone within 400 ms: state=" + std::string(NetLockstepCoordinator::StateName(a.GetState())) +
+				*error = "a host silent past the host-loss bound was not taken for gone within 2000 ms: state=" + std::string(NetLockstepCoordinator::StateName(a.GetState())) +
 				         " next=" + std::to_string(a.GetStats().nextFrame);
 				return false;
 			}
