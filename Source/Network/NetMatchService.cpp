@@ -10117,7 +10117,7 @@ static std::string ResyncSaveName() {
 
 	std::vector<uint8_t> NetMatchService::RematchSurvivorsFor(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaves, const std::set<uint8_t>& refilled,
 	                                                         const NetLockstepSeatSnapshot* seats, uint8_t localPeerId, bool leftRoundHeld) {
-		if (leftRoundHeld) return NetMatchRunner::DeriveRematchSurvivors(played, {}, {}, nullptr, localPeerId);
+		if (leftRoundHeld) return {};
 		return NetMatchRunner::DeriveRematchSurvivors(played, leaves, refilled, seats, localPeerId);
 	}
 

@@ -669,8 +669,8 @@ namespace RTE {
 		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost);
 		/// Client: the last rematch setup lost its link to the host and the seat is owed its return to the round the host plays.
 		bool RematchReturnOwed() const;
-		/// The survivors a peer hands its rematch roster. A client that left its round held (it took the round's record) saw that round
-		/// only until its hold, so every seat the round played survives in its view; the host's roster still decides, and a real difference refuses.
+		/// The survivors a peer hands its rematch roster. A client that left its round held (it took the round's record) holds no view
+		/// of that round - its rejoin replaced the round's config - so it derives none and takes the host's roster.
 		static std::vector<uint8_t> RematchSurvivorsFor(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaves, const std::set<uint8_t>& refilled,
 		                                               const NetLockstepSeatSnapshot* seats, uint8_t localPeerId, bool leftRoundHeld);
 		void PreparePrivateRejoinCheckpoint();
