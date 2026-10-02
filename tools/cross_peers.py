@@ -867,6 +867,10 @@ def run_payload(path):
                             run.terminate(reason=f'scheduled crash {fault["id"]}')
                             recovery_ledgers[peer].external_start(fault,spec['incarnation'],crash_before,time.monotonic()*1000,current)
                         record = run.finish(); run.close()
+                        if leaving and record.get('exit_code') == 0:
+                            ended = time.monotonic() * 1000
+                            recovery_ledgers[peer].fault_reset(fault['id'], spec['incarnation'], observed_at, ended,
+                                dict(action='announced-leave-rejoin', process_exited=True, exit_code=record['exit_code']))
                         write_json(Path(spec['own']) / 'record.json', record)
                         retain_checkpoints(run, spec, final=True)
                         seal_evidence(spec['own'])

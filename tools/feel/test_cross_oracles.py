@@ -392,6 +392,7 @@ class CausesDeadlinesStops(unittest.TestCase):
         case = dict(id='lag', peer='mac', incarnation=0, deadline_ms=120000, outcomes=['first_controllable_input'], duration_ms=120000)
         def judge(terminal_ms):
             rows = [dict(id='lag', peer='mac', incarnation=0, phase='fault_applied', wall_ms=1000.0),
+                    dict(id='lag', peer='mac', incarnation=0, phase='fault_reset', wall_ms=121000.0),
                     dict(id='lag', peer='mac', incarnation=0, phase='first_controllable_input', wall_ms=1000.0 + terminal_ms)]
             return cross_report.report.reduce_recoveries([case], rows, now_ms=10**9)[0]['passed']
         self.assertTrue(judge(150000))
@@ -402,4 +403,3 @@ class CausesDeadlinesStops(unittest.TestCase):
         self.assertEqual(cross_report.attempt_label(dict(stopped=stopped, v1_passed=False)), 'STOPPED (local scratch reached 4 GB; stopped without deletion); NOT JUDGED')
         # A peer that exited is a failure the run reports, not a stop.
         self.assertIsNone(cross_report.driver_stop([dict(kind='driver', reason='Mac: owning payload exited 1; stop the other peers instead of continuing a reduced match')]))
-

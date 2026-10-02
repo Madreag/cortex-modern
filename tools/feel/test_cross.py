@@ -22,6 +22,7 @@ class CrossReducers(unittest.TestCase):
             ledger=records.RecoveryLedger(path,'a','payload:1',100,schedule)
             ledger.observe([dict(type='fault_begin',id='stall',fault_started_wall_ms=1e12),
                             dict(type='fault',id='stall',applied=True)],0,100,120)
+            ledger.observe([dict(type='fault_reset',id='stall',send_recv_armed=True)],0,100,120)
             ledger.observe([dict(type='recovery',id='stall',terminal=True,recovery_phase='first_controllable_input',recovery_wall_ms=8)],0,300,350)
             rows=[__import__('json').loads(line) for line in path.read_text().splitlines()]
             result=report.reduce_recoveries(schedule,rows,now_ms=350)[0]
@@ -136,7 +137,7 @@ class CrossReducers(unittest.TestCase):
         schedule=[dict(id='stall',peer='c',incarnation=0,duration_ms=600,deadline_ms=2000,
                        outcomes=['first_controllable_input'])]
         events=[dict(id='stall',peer='c',incarnation=0,phase=phase,wall_ms=stamp)
-                for phase,stamp in [('fault_applied',100),('first_controllable_input',1300)]]
+                for phase,stamp in [('fault_applied',100),('fault_reset',700),('first_controllable_input',1300)]]
         result=report.reduce_recoveries(schedule,events,now_ms=1500)[0]
         self.assertTrue(result['passed'])
         self.assertEqual(result['duration_ms'],1200)

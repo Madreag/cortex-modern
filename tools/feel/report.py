@@ -134,15 +134,35 @@ def reduce_recoveries(schedule, events, now_ms):
         duration = (terminal['wall_ms'] if terminal else now_ms) - start if start is not None else None
         start_upper=min((row.get('upper_wall_ms',row['wall_ms']) for row in starts),default=None)
         lower=max(0,terminal.get('lower_wall_ms',terminal['wall_ms'])-start_upper) if terminal and start_upper is not None else None
-        domains={row.get('clock_domain','legacy_native') for row in [*starts,*([terminal] if terminal else [])]}
-        # A seat cannot begin recovering before its scheduled fault ends: the deadline runs from the fault's end (ruling t).
-        after_end = duration - (case.get('duration_ms') or 0) if duration is not None else None
+        resets = [row for row in rows if row.get('incarnation') == case['incarnation'] and row['phase'] == 'fault_reset']
+        reset = resets[0] if len(resets) == 1 else None
+        domains={row.get('clock_domain','legacy_native') for row in [*starts,*resets,*([terminal] if terminal else [])]}
+        end_lower = reset.get('lower_wall_ms', reset['wall_ms']) if reset else None
+        end_upper = reset.get('upper_wall_ms', reset['wall_ms']) if reset else None
+        terminal_upper = terminal.get('upper_wall_ms', terminal['wall_ms']) if terminal else None
+        reset_valid = bool(reset and start is not None and start <= end_lower <= end_upper
+                           and reset.get('native', {}).get('send_recv_armed') is not False
+                           and (not terminal or rows.index(reset) < rows.index(terminal) and end_upper <= terminal_upper))
+        after_end = terminal_upper - end_lower if reset_valid and terminal else None
+        observed_duration = [max(0, end_lower - start_upper), end_upper - start] if reset_valid else None
+        requested = case.get('duration_ms')
+        consistent = observed_duration[0] <= requested <= observed_duration[1] if observed_duration and requested is not None else None
+        passed = bool(terminal and reset_valid and len(domains) == 1 and after_end is not None
+                      and 0 <= after_end <= case['deadline_ms'])
+        reason = (f'fault_reset receipts={len(resets)}' if not reset else
+                  'fault_reset identity, ordering or clock bounds are invalid' if not reset_valid else
+                  f'recovery clock domains differ: {sorted(domains)}' if len(domains) != 1 else
+                  'no declared terminal recovery receipt' if not terminal else
+                  f'recovery after observed fault end={after_end} ms; deadline={case["deadline_ms"]} ms')
         result=dict(case)
         result.update(phases=rows, scheduled_duration_ms=case.get('duration_ms'), duration_ms=duration,
                       duration_lower_ms=lower,duration_upper_ms=duration,clock_domains=sorted(domains),
                       recovery_after_fault_end_ms=after_end,
+                      fault_end_lower_ms=end_lower, fault_end_upper_ms=end_upper,
+                      observed_fault_duration_ms=observed_duration, requested_duration_consistent=consistent,
                       censored=terminal is None, outcome=terminal['phase'] if terminal else None,
-                      passed=terminal is not None and len(domains)==1 and 0 <= duration and after_end <= case['deadline_ms'])
+                      status='PASS' if passed else 'INCOMPLETE' if not reset or not terminal else 'FAIL', reason=reason,
+                      passed=passed)
         results.append(result)
     return results
 
