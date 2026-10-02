@@ -5778,6 +5778,16 @@ namespace RTE {
 				SetObservationEpoch(timing.applyFrame);
 			}
 		} else if (timing.action == NetTimingAction::Hold) {
+			// An escalated hold moves a seat's later boundary to the first frame it owes; no peer has committed a frame at or after it.
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if ((timing.heldPeers & (1U << (peer - 1))) == 0 || peer == GetHostPeerId() || m_ReclaimTransactions.contains(peer)) continue;
+				const auto left = m_PeerLeaveFrames.find(peer);
+				if (left == m_PeerLeaveFrames.end() || left->second <= timing.applyFrame) continue;
+				DiagnosticLine() << "[net-match] hold peer=" << static_cast<int>(peer) << " moved from frame=" << left->second << " to frame=" << timing.applyFrame
+				          << " (frames it owed before its boundary)" << std::endl;
+				left->second = timing.applyFrame;
+				if (const auto held = m_AiHeldSeats.find(peer); held != m_AiHeldSeats.end() && held->second > timing.applyFrame) held->second = timing.applyFrame;
+			}
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((timing.heldPeers & (1U << (peer - 1))) != 0) {
 				// A hold ends a return from its own frame on; the return's neutral gap still covers the frames before it that this peer
 				// has yet to commit or to apply, exactly as it did on the host that applied them before it held the seat again.
@@ -5849,8 +5859,12 @@ namespace RTE {
 		// simulation is behind its commits (a host held for its own): that seat is back, and holdable like any.
 		const auto back = m_ReclaimTransactions.find(peerId);
 		const bool returned = back != m_ReclaimTransactions.end() && m_Stats.nextFrame >= back->second.activationFrame;
+		// A seat whose agreed boundary lies past frames it still owes would stop the round on them: its hold moves to the first one.
+		const auto boundary = m_PeerLeaveFrames.find(peerId);
+		const bool escalates = boundary != m_PeerLeaveFrames.end() && !returned && !ownSeat && boundary->second > m_Stats.nextFrame &&
+		                       FirstFrameWithout(peerId) < boundary->second;
 		if (!IsRunning() || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || (peerId == GetHostPeerId() && !ownSeat) ||
-		    (!ownSeat && !IsKnownRemotePeer(peerId)) || (m_PeerLeaveFrames.contains(peerId) && !returned) || m_NextTimingRevision == UINT64_MAX) {
+		    (!ownSeat && !IsKnownRemotePeer(peerId)) || (m_PeerLeaveFrames.contains(peerId) && !returned && !escalates) || m_NextTimingRevision == UINT64_MAX) {
 			// A refusal is named once per frame; asking again at the same frame is not a new decision.
 			const bool again = m_RefusedHoldFrames.contains(peerId) && m_RefusedHoldFrames.at(peerId) == m_Stats.nextFrame;
 			m_RefusedHoldFrames[peerId] = m_Stats.nextFrame;
@@ -5909,6 +5923,9 @@ namespace RTE {
 		}
 		timing.applyFrame = std::max(timing.applyFrame, acceptedHorizon);
 		timing.cutoffFrame = timing.applyFrame;
+		if (escalates)
+			DiagnosticLine() << "[net-lockstep] hold of peer " << static_cast<int>(peerId) << " escalated from its boundary " << boundary->second << " to frame "
+			          << timing.applyFrame << ": the host cannot serve the frames it owes before it" << std::endl;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((timing.heldPeers & (1U << (peer - 1))) != 0) {
 			const auto incarnation = m_Config.peerIncarnations.find(peer);
 			timing.seatIncarnations[peer - 1] = incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second;
