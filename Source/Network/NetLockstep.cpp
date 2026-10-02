@@ -63,6 +63,8 @@ namespace RTE {
 		constexpr uint64_t c_StartRetransmitMs = 250;
 		// How long a survivor with nobody beside it hears nothing from the host before it takes the host for gone.
 		constexpr uint64_t c_LoneElectionConfirmMs = 1000;
+		// A host's link silent this long is gone: far past any hold bound, so a host that stalls is held, never replaced.
+		constexpr uint64_t c_HostLossSilenceMs = 1000;
 		// A round configured without an answer budget still bounds a capture park.
 		constexpr uint64_t c_DefaultCaptureParkBudgetMs = 500;
 		// A host playing to its round's agreed end stops waiting for it after this long at most.
@@ -3534,8 +3536,11 @@ namespace RTE {
 				NetHostMigrationMessage request;
 				if (!authenticated(event, request) || request.type != NetHostMigrationMessageType::RollCall || request.senderPeerId != request.successorPeerId)
 					continue;
-				// A peer that elected again is a generation or more ahead; a peer left behind joins the one it is shown.
-				if (!IsMigrating() && request.generation > m_MigrationGeneration) {
+				// A peer that elected again is a generation or more ahead; a peer left behind joins the one it is shown, but only on its own
+				// evidence that the host is gone: one member's timer never takes a host every other member still hears.
+				const bool hostLost = !m_RemoteTransports.contains(GetHostPeerId()) ||
+				    (nowMs >= m_AuthorityLastHeardMs && nowMs - m_AuthorityLastHeardMs >= c_HostLossSilenceMs);
+				if (!IsMigrating() && request.generation > m_MigrationGeneration && hostLost) {
 					const uint64_t previous = m_MigrationGeneration;
 					m_MigrationGeneration = request.generation - 1;
 					if (!BeginHostMigration(nowMs))
@@ -12101,7 +12106,10 @@ namespace RTE {
 		const bool loneSurvivor = std::none_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
 			return peer != GetHostPeerId() && !IsPeerGoneAtFrame(peer, m_Stats.nextFrame) && !IsSeatUnderAI(peer, m_Stats.nextFrame);
 		});
-		const uint64_t electionSilenceMs = loneSurvivor ? std::min<uint64_t>(m_Config.timeoutMs, std::max<uint64_t>(hostSilenceMs, c_LoneElectionConfirmMs)) : hostSilenceMs;
+		// A host whose simulation stalls keeps its link talking and holds its own seat; only a host whose link stays silent past the
+		// host-loss bound is taken for gone, so a stall of milliseconds never starts an election.
+		const uint64_t lossSilenceMs = std::max<uint64_t>(std::max<uint64_t>(hostSilenceMs, c_HostLossSilenceMs), loneSurvivor ? c_LoneElectionConfirmMs : 0);
+		const uint64_t electionSilenceMs = m_Config.timeoutMs != 0 ? std::min<uint64_t>(m_Config.timeoutMs, lossSilenceMs) : lossSilenceMs;
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
 		const bool hostSilent = !hostBusy && electionSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= electionSilenceMs;
 		// A host quiet after sending its end has closed the round, not died in it.
