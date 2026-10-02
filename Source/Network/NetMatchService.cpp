@@ -1768,12 +1768,16 @@ static std::string ResyncSaveName() {
 					local->input = g_UInputMan.SaveCheckpoint(); local->gui = GUIInput::SaveSharedCheckpoint(); local->frame = g_FrameMan.SaveNetLocalState();
 					if (g_ActivityMan.GetActivity()) local->valid = g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity);
 					return true;
-				}, [local, committed, pause](Activity& activity) {
+				}, [local, committed, pause, localPeer = m_LocalPeerId](Activity& activity) {
 					if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != committed->savedTick) return false;
 					if (local->valid) {
 						if (!activity.RestoreNetLocalPlayerState(local->activity) || !activity.Activity::ApplyNetPlayerBindings(NetGamePlayerBindings{})) return false;
 						local->prepared = true;
-					} else if (!activity.ApplyNetPlayerBindings(NetGamePlayerBindings{})) return false;
+					} else {
+						// A relaunched process has no player state of its own: its seats are the committed world's, mapped to this machine.
+						const auto roster = ScenarioRunner::GetLockstepMatchConfig();
+						if (roster ? !activity.AdoptNetLocalSeat(*roster, localPeer) : !activity.ApplyNetPlayerBindings(NetGamePlayerBindings{})) return false;
+					}
 					return g_UInputMan.LoadCheckpoint(local->input) && GUIInput::LoadSharedCheckpoint(local->gui) && g_FrameMan.LoadNetLocalState(local->frame) &&
 					    ScenarioRunner::RestoreCommittedCatchUpState(*committed) && ScenarioRunner::RestoreLockstepPauseState(pause, committed->savedTick);
 				})) return false;
