@@ -281,7 +281,8 @@ namespace RTE {
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)},
 			        {"slow_player_bound_ticks", config.slowPlayerBoundTicks}, {"slow_player_policy", static_cast<uint8_t>(config.slowPlayerPolicy)},
 			        {"active_peer_ids", config.activePeerIds},
-			        {"frame_redundancy_ticks", config.frameRedundancyTicks}};
+			        {"frame_redundancy_ticks", config.frameRedundancyTicks},
+			        {"seat_roster_revision", config.seatRosterRevision}, {"seat_roster_hash", NetIdentity::HashHex(config.seatRosterHash)}};
 		}
 
 		std::vector<std::pair<std::string, std::string>> RuleFields(const NetMatchConfig& config) {
@@ -312,6 +313,10 @@ namespace RTE {
 			}
 			if (config.pathHorizonTicks != 0) {
 				fields.emplace_back("path_horizon_ticks", std::to_string(config.pathHorizonTicks));
+			}
+			if (config.version >= NetMatchConfigUtil::c_SeatRosterVersion) {
+				fields.emplace_back("seat_roster_revision", std::to_string(config.seatRosterRevision));
+				fields.emplace_back("seat_roster_hash", NetIdentity::HashHex(config.seatRosterHash));
 			}
 			for (size_t i = 0; i < config.teamRules.size(); ++i) {
 				const std::string prefix = "team." + std::to_string(i) + ".";

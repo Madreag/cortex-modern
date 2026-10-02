@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -118,12 +119,15 @@ namespace RTE {
 		bool Apply(const NetSeatRoster& revision, std::string* why);
 		/// Whether this copy is the one the host hashed; the reason names the difference for the refusal.
 		bool Agrees(const std::array<uint8_t, 32>& hostHash, std::string* why) const;
+		/// Whether the revision the host named is one this peer heard, hashed as the host hashed it; the reason names the refusal.
+		bool AgreesAt(uint32_t revision, const std::array<uint8_t, 32>& hostHash, std::string* why) const;
 		const NetSeatRoster& Roster() const { return m_Roster; }
 		bool HasRoster() const { return m_HasRoster; }
 
 	private:
 		NetSeatRoster m_Roster;
 		bool m_HasRoster = false;
+		std::vector<std::pair<uint32_t, std::array<uint8_t, 32>>> m_Recent; //!< The last revisions' hashes, oldest first.
 	};
 
 	/// The net-roster self-test: drives every reachable cell of REJOIN-GRID.md through ApplyRosterEvent.

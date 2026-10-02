@@ -1254,6 +1254,9 @@ namespace RTE {
 			       static_cast<uint16_t>(type) >= static_cast<uint16_t>(NetMessageType::ClientHello) &&
 			       static_cast<uint16_t>(type) <= static_cast<uint16_t>(NetMessageType::Chat);
 		}
+		if (headerVersion == 4) {
+			return type != NetMessageType::RosterRevision;
+		}
 		return headerVersion == c_Version;
 	}
 
@@ -1381,7 +1384,7 @@ namespace RTE {
 	bool NetProtocol::CanEncodeAtVersion(uint16_t headerVersion) {
 		// v1 and v2 share every payload they had with this build, so an older peer can still be told,
 		// in its own envelope, why it was refused.
-		return headerVersion == c_Version || headerVersion == 1 || headerVersion == 2;
+		return headerVersion == c_Version || headerVersion == 1 || headerVersion == 2 || headerVersion == 4;
 	}
 
 	bool NetProtocol::PeekHeaderVersion(const uint8_t* data, size_t size, uint16_t& outVersion) {

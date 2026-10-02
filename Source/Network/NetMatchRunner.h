@@ -266,6 +266,7 @@ namespace RTE {
 		bool m_HostLostDuringSetup = false;
 		bool m_HostOptionsRefused = false;
 		bool m_RematchOwed = false; //!< Client: its last round ended into a rematch lobby; consumed by the next round.
+		std::string m_LastRosterStampRefusal; //!< Host: a refused roster republish, named once.
 		std::deque<NetTransportEvent> m_SessionTraffic; //!< Session traffic the coordinator owned the wire for, waiting for a reader.
 		uint32_t m_SessionTrafficDropped = 0; //!< Events past the queue's bound, named once.
 		NetMatchConfig m_RematchConfig;       //!< This peer's own derivation of the rematch roster.
