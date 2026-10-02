@@ -837,6 +837,8 @@ namespace RTE {
 		if (std::find(active.begin(), active.end(), held.hostPeerId) == active.end()) active.push_back(held.hostPeerId);
 		std::erase(active, peerId);
 		std::sort(active.begin(), active.end());
+		// The round's start waits for the members present, never for the held seat.
+		m_Config.activePeerCount = static_cast<uint8_t>(active.size());
 		if (active == held.activePeerIds) return true;
 		// The round starts that seat held by the AI and its player comes back through the rejoin; nobody waits for its endpoint.
 		held.activePeerIds = std::move(active);
