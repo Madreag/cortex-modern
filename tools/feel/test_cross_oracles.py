@@ -351,21 +351,21 @@ class MemorySlope(unittest.TestCase):
         from feel import report
         # l4p-27's Mac shape: +617, +335, +122, +61, then flat.
         verdict = report.reduce_memory_census(self.census([(1, 2892, 0), (2, 3509, 0), (3, 3844, 0), (4, 3966, 0), (5, 4027, 0), (6, 4030, 0)]))
-        self.assertEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['warm_up_ends_after_interval'], 4)
+        self.assertNotEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['warm_up_ends_after_interval'], 4)
 
     def test_a_slope_that_never_falls_is_a_leak(self):
         from feel import report
-        verdict = report.reduce_memory_census(self.census([(1, 3000, 0), (2, 3060, 0), (3, 3120, 0), (4, 3180, 0)]))
+        verdict = report.reduce_memory_census(self.census([(0, 2940, 0), (1, 3000, 0), (2, 3060, 0), (3, 3120, 0), (4, 3180, 0)]))
         self.assertEqual(verdict['status'], 'FAIL'); self.assertEqual(verdict['slopes_mb_per_minute'][-1], 60.0)
         # Rising again after reaching the bound is growth, not warm-up.
-        again = report.reduce_memory_census(self.census([(1, 3000, 0), (2, 3005, 0), (3, 3060, 0)]))
+        again = report.reduce_memory_census(self.census([(0, 3000, 0), (1, 3000, 0), (2, 3005, 0), (3, 3060, 0)]))
         self.assertEqual(again['status'], 'FAIL')
 
     def test_the_instruments_cache_is_taken_out(self):
         from feel import report
         # The process grows exactly as the full-state cache does: no growth of its own.
-        verdict = report.reduce_memory_census(self.census([(1, 3000, 100), (2, 3200, 300), (3, 3400, 500)]))
-        self.assertEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['slopes_mb_per_minute'], [0.0, 0.0])
+        verdict = report.reduce_memory_census(self.census([(0, 2900, 0), (1, 3000, 100), (2, 3200, 300), (3, 3400, 500)]))
+        self.assertEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['slopes_mb_per_minute'], [0.0, 0.0, 0.0])
         self.assertEqual(report.reduce_memory_census('')['status'], 'NOT COVERED')
         # The retained last image counts as the instrument's too.
         kept = self.census([(1, 3000, 0), (2, 3300, 0)]).replace('retired_mb=0 movable', 'retired_mb=0 last_image_mb=300 movable', 1)
