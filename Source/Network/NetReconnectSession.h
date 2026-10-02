@@ -486,7 +486,6 @@ namespace RTE {
 			uint32_t holderGeneration = 0;
 			uint32_t incarnation = 0;
 			NetPeerId activeConnection = c_InvalidNetPeerId;
-			bool committed = false;
 			bool closed = false;
 			bool saturated = false;
 			// The compare-and-swap value a pending substitution captures at approval. Anything that
@@ -588,6 +587,8 @@ namespace RTE {
 		const SeatState* FindSeat(uint16_t stableSeat) const;
 		/// The seat's entry in the roster, which holds whether its holder is away, why and since when.
 		const NetRosterSeat* RosterSeatOf(const SeatState& seat) const;
+		/// A player holds the seat: its roster seat has an owner.
+		bool IsSeated(const SeatState& seat) const;
 		/// The holder is away and the seat is held for it.
 		bool IsHolderAway(const SeatState& seat) const;
 		/// The holder left on purpose and the seat is held for it.
