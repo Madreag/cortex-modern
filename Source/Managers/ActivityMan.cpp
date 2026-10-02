@@ -1144,7 +1144,8 @@ bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std:
 	std::erase_if(m_FullStateTasks, [](const auto& task) { return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
 	m_FullStateLever = true;
 	// A labelled capture shares the tick of a scheduled one, so it dumps into a folder of its own under the run's.
-	if (label.empty()) m_FullStateDumpRoot = dumpDirectory;
+	// A process whose first capture is labelled (a returner sampling inside its catch-up) has no scheduled one to name the run's folder.
+	if (label.empty() || m_FullStateDumpRoot.empty()) m_FullStateDumpRoot = dumpDirectory;
 	m_FullStateDumpDirectory = label.empty() || m_FullStateDumpRoot.empty() ? m_FullStateDumpRoot : m_FullStateDumpRoot + "/" + label;
 	if (std::getenv("CC_TEST_CROSS_RECORDS") && !m_FullStateDumpRoot.empty()) {
 		static uint64_t capture = 0;
