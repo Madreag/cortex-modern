@@ -9522,7 +9522,8 @@ int RunNetMatchServiceE2E() {
 			g_NetMatchService.RequestStart();
 		}
 		const bool unlimitedWorld = e2eHost && s_netPersistentWorld && !s_netMatchTicksExplicit;
-		const auto waitStart = std::chrono::steady_clock::now();
+		auto waitStart = std::chrono::steady_clock::now();
+		bool roundEndedOnTheWay = false;
 		while (true) {
 			PollSDLEvents();
 			CrossRecoveryAtCommittedTick(0);
@@ -9547,6 +9548,21 @@ int RunNetMatchServiceE2E() {
 					s_netMatchServiceE2EExitCode = 1;
 					break;
 				}
+			}
+			// A seat whose round ended while it rejoined completes on the host's end record and takes its seat into the next round's lobby.
+			if (!e2eHost && state == NetMatchServiceState::Completed && !roundEndedOnTheWay) {
+				roundEndedOnTheWay = true;
+				System::PrintDiagnosticLine("[net-match-service-e2e] the round ended while this seat rejoined: joining the next round's lobby");
+				std::string lobbyError;
+				if (g_NetMatchService.ReturnToLobby(&lobbyError)) {
+					g_NetMatchService.SetReady();
+				} else if (!g_NetMatchService.RematchReturnOwed() || !g_NetMatchService.BeginHeldRejoin(&lobbyError)) {
+					setupError = "the round ended while this seat rejoined and its seat could not follow: " + lobbyError;
+					s_netMatchServiceE2EExitCode = 1;
+					break;
+				}
+				waitStart = std::chrono::steady_clock::now();
+				continue;
 			}
 			if (state == NetMatchServiceState::Failed) {
 				setupError = g_NetMatchService.GetErrorText();
