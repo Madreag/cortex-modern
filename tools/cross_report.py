@@ -434,6 +434,36 @@ def held_away_ranges(live, ranges, logs):
     return away
 
 
+RELAUNCHED_HELD = re.compile(r'\[net-match\] held client: replaying the private committed tail')
+
+
+def adopt_restored_histories(live, ranges, logs):
+    """A held seat that rejoined from an image starts its round again at the frame it resumes on (its configured start): from there
+    its live records are that round's own and are compared, as an image rejoin's are; the frames between its last record and that
+    frame are its away range. The image's catch-up replay before it carries no branch and is not compared here."""
+    adopted, away = {}, {}
+    for name, peer_rows in live.items():
+        relaunched = any(RELAUNCHED_HELD.search(text) for text in logs.get(name, []))
+        rows = peer_rows
+        if relaunched:
+            for interval in ranges:
+                prefix = tuple(interval[field] for field in report.HISTORY_FIELDS[:-1])
+                session, match, branch, source = prefix
+                keyed = sorted(r['tick'] for r in rows if isinstance(r.get('tick'), int) and tuple(r.get(field) for field in report.HISTORY_FIELDS[:-1]) == prefix)
+                restored = [r for r in rows if r.get('history_branch') is None and r.get('phase') == 'live' and isinstance(r.get('tick'), int) and
+                            r.get('session') == session and r.get('match') == match and r.get('source_round') == source]
+                if not keyed or not restored: continue
+                ticks = sorted(r['tick'] for r in restored)
+                start = ticks[0]
+                if start <= keyed[-1] or ticks != list(range(start, ticks[-1] + 1)) or any(r.get('configured_start_frame') != start for r in restored): continue
+                chosen = {id(r) for r in restored}
+                rows = [dict(r, history_branch=branch) if id(r) in chosen else r for r in rows]
+                if start > keyed[-1] + 1: away[(name, prefix)] = (keyed[-1] + 1, start - 1)
+            rows = [r for r in rows if not (r.get('history_branch') is None and r.get('phase') == 'catchup')]
+        adopted[name] = rows
+    return adopted, away
+
+
 def build_report(root):
     root = Path(root).resolve(); manifest = load(root / 'manifest.json', {})
     live, events, peers, findings, paths = {}, {}, {}, list(manifest.get('driver_findings', [])), {}
@@ -576,8 +606,9 @@ def build_report(root):
         smoke_ticks=manifest['ticks'] if manifest['scenario']=='match' else None,
         final_tick=peers[manifest['host']]['native_final_tick'])
     logs = {name: [''.join(line for _, line in read_log(root / fragment / 'engine/stdout.log')) for fragment in peer['fragments']] for name, peer in peers.items()}
-    away = held_away_ranges(live, ranges, logs)
-    comparison = report.compare_histories(live, ranges, REQUIRED_SUBSYSTEMS, away)
+    compared, restored_away = adopt_restored_histories(live, ranges, logs)
+    away = {**held_away_ranges(compared, ranges, logs), **restored_away}
+    comparison = report.compare_histories(compared, ranges, REQUIRED_SUBSYSTEMS, away)
     comparison['away_ranges'] = [dict(peer=peer, prefix=list(prefix), first=first, last=last) for (peer, prefix), (first, last) in away.items()]
     fullstate_documents={name:report.parse_fullstate([root/fragment/'engine/stdout.log' for fragment in peer['fragments']]) for name,peer in peers.items()}
     cadence=manifest.get('fullstate_every',0)
