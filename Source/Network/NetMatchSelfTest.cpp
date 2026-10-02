@@ -10496,8 +10496,9 @@ namespace RTE {
 
 	// A kicked seat is an open seat: the roster the lobby publishes must stop naming the member the
 	// host removed, or the row shows a player holding a seat nobody sits in.
-	bool TestARematchLobbyHoldsADroppedSeat(std::string* error) {
-		const uint16_t port = 43251;
+	// rematch=false is a resumed match's lobby: the roster holds its seats from the first start on just the same (A12).
+	bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch) {
+		const uint16_t port = rematch ? 43251 : 43253;
 		LoopbackTransport hostTransport;
 		LoopbackTransport clientTransport;
 		LoopbackTransport stayingTransport;
@@ -10529,6 +10530,36 @@ namespace RTE {
 		NetSessionConfig stayingConfig = clientConfig;
 		stayingConfig.displayName = "Stayer";
 		++stayingConfig.localNonce;
+		// The seats are the admission plane's, as the service hosts them: the joiners hold tickets, and a round has been played.
+		std::error_code code;
+		const std::filesystem::path tickets = std::filesystem::current_path() / "Userdata" / "rematch-held-seat-selftest";
+		std::filesystem::remove_all(tickets, code);
+		std::filesystem::create_directories(tickets, code);
+		const NetH4Identity planeIdentity = RematchIdentity();
+		NetSeatAuthRegistry registry;
+		NetReconnectHost admission;
+		if (code || !registry.BeginHostedSession()) {
+			*error = "the held-seat fixture could not prepare its admission plane";
+			return false;
+		}
+		admission.Configure(&registry, matchConfig.sessionId, planeIdentity);
+		admission.SetSeatTable(NetH4BuildSeatTable(matchConfig), matchConfig.mode);
+		admission.SetHostAddress("loopback");
+		admission.SetMatchConfigHash(NetMatchConfigUtil::HashConfig(matchConfig));
+		admission.SetLiveMatch(false);
+		hostSession.SetReconnectHost(&admission);
+		NetReconnectTicketStore clientStore, stayingStore;
+		NetReconnectClient clientTicket, stayingTicket;
+		clientStore.SetPath((tickets / "joiner.ticket").string());
+		stayingStore.SetPath((tickets / "stayer.ticket").string());
+		clientTicket.Configure(&clientStore, planeIdentity, "Joiner");
+		stayingTicket.Configure(&stayingStore, planeIdentity, "Stayer");
+		for (NetReconnectClient* ticket: {&clientTicket, &stayingTicket}) {
+			ticket->SetUnixClock(&RematchUnixClock, nullptr);
+			ticket->SetHostContext("loopback", NetHash32{});
+		}
+		clientSession.SetReconnectClient(&clientTicket);
+		stayingSession.SetReconnectClient(&stayingTicket);
 		if (!hostSession.StartHost(hostTransport, hostConfig, error) ||
 		    !clientSession.StartClient(clientTransport, "loopback", clientConfig, error) ||
 		    !stayingSession.StartClient(stayingTransport, "loopback", stayingConfig, error)) {
@@ -10544,10 +10575,22 @@ namespace RTE {
 			clientTransport.AdvanceTimeMs(10);
 			stayingTransport.AdvanceTimeMs(10);
 		}
-		if (hostSession.GetReadyPeerCount() != 2) {
-			*error = "the kicked-seat fixture seated " + std::to_string(hostSession.GetReadyPeerCount()) + " peers";
+		for (const uint64_t until = now + 2000; now <= until && (clientTicket.GetState() != NetH4ClientState::Joined || stayingTicket.GetState() != NetH4ClientState::Joined); now += 10) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			stayingSession.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+			stayingTransport.AdvanceTimeMs(10);
+		}
+		if (hostSession.GetReadyPeerCount() != 2 || clientTicket.GetState() != NetH4ClientState::Joined || stayingTicket.GetState() != NetH4ClientState::Joined) {
+			*error = "the kicked-seat fixture seated " + std::to_string(hostSession.GetReadyPeerCount()) + " peers, tickets " +
+			         NetReconnectClientStateName(clientTicket.GetState()) + "/" + NetReconnectClientStateName(stayingTicket.GetState());
 			return false;
 		}
+		// The round was played and ended: this is its rematch lobby.
+		admission.SetLiveMatch(true);
+		admission.SetMatchEnded();
 		NetPeerId seated = c_InvalidNetPeerId;
 		uint8_t kickedPeerId = 0;
 		uint8_t stayingPeerId = 0;
@@ -10583,7 +10626,7 @@ namespace RTE {
 		lobbyConfig.displayName = "Host";
 		lobbyConfig.platform = "test";
 		lobbyConfig.autoStart = false;
-		lobbyConfig.assignSeats = true; // a rematch: the seats are the round's players'
+		lobbyConfig.assignSeats = rematch; // a rematch assigns the seats; a resumed match's lobby does not
 		lobbyConfig.activePeerCount = 3; // the runner names the rematch's members
 		if (!hostLobby.Start(hostTransport, lobbyConfig, error)) {
 			return false;
@@ -10646,7 +10689,7 @@ namespace RTE {
 			*error = std::string("the rematch lobby with a held seat ") + (hostLobby.IsFailed() ? "failed: " + hostLobby.GetFailureReason() : std::string("waits for the held seat's endpoint"));
 			return false;
 		}
-		std::cout << "[net-match-selftest] PASS a_rematch_lobby_holds_a_dropped_seat" << std::endl;
+		std::cout << "[net-match-selftest] PASS " << (rematch ? "a_rematch_lobby_holds_a_dropped_seat" : "a_resumed_match_lobby_holds_a_dropped_seat") << std::endl;
 		return true;
 	}
 
@@ -15345,7 +15388,8 @@ namespace RTE {
 		if (!TestManifestPrimingStopsOnRequest(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
 		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error)) return fail(error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, true)) return fail(error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, false)) return fail("a resumed match's lobby: " + error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		std::string stopCancelError, endedAdmissionError, twoIceRoundsError;
 		if (!TestServiceIceRematchPlaysTwoRounds(&twoIceRoundsError)) std::cerr << "[net-match-selftest] FAIL: " << twoIceRoundsError << std::endl;

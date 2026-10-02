@@ -795,7 +795,7 @@ namespace RTE {
 		m_RemoteNamesByPeer.erase(peerId);
 		m_RemotePingByPeer.erase(peerId);
 		m_RemotePlatformsByPeer.erase(peerId);
-		if (HoldsDroppedRematchSeat(peerId)) {
+		if (RosterHoldsDroppedSeat(peerId)) {
 			m_PeerStatePending = true;
 			m_StartRequested = m_Config.autoStart;
 			m_State = NetLobbyState::WaitingForConfigAck;
@@ -824,13 +824,13 @@ namespace RTE {
 		m_State = NetLobbyState::WaitingForConfigAck;
 	}
 
-	bool NetLobbySession::HoldsDroppedRematchSeat(uint8_t peerId) {
-		// Only a rematch's seats are the round's players'; a seat the host closed (a kick or a ban) opens as before.
-		if (!m_Config.host || !m_Config.assignSeats) return false;
-		if (const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr) {
-			for (const NetH4SeatStatus& seat: plane->GetSeatStatuses())
-				if (seat.lockstepPeerId == peerId && seat.closed) return false;
-		}
+	bool NetLobbySession::RosterHoldsDroppedSeat(uint8_t peerId) {
+		// The seat roster decides: before the first start a member's seat frees, from it on a seat its player still owns is held, and a
+		// seat the host opened opens.
+		if (!m_Config.host) return false;
+		const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
+		const NetRosterSeat* seat = plane ? plane->RosterSeatOfPeer(peerId) : nullptr;
+		if (!seat || plane->GetRoster().stage == NetRosterStage::Lobby || seat->owner == 0) return false;
 		NetMatchConfig held = m_Config.matchConfig;
 		std::vector<uint8_t> active = held.activePeerIds;
 		if (active.empty())

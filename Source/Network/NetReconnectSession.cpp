@@ -2204,6 +2204,13 @@ namespace RTE {
 		m_TxCache.Expire(nowMs);
 	}
 
+	const NetRosterSeat* NetReconnectHost::RosterSeatOfPeer(uint8_t lockstepPeerId) const {
+		for (const SeatState& seat: m_Seats) {
+			if (SimIdentityOfSeat(seat.seat).peerId == lockstepPeerId) return RosterSeatOf(seat);
+		}
+		return nullptr;
+	}
+
 	bool NetReconnectHost::IsSeatHeldForReclaim(uint8_t lockstepPeerId) const {
 		// The coordinator asks by the id it runs the sim on, so the answer is read off the same binding.
 		return std::any_of(m_Seats.begin(), m_Seats.end(), [&](const SeatState& seat) {
