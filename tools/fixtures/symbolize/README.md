@@ -5,7 +5,10 @@
 DbgHelp and exercise the symbolizer CLI. They never execute the fixture.
 A separate negative test changes the PE's CodeView GUID and requires rejection.
 
-Rebuild with the x64 MSVC compiler and linker:
+Copy the source into a neutral build directory (for example `D:/mx/symcheck`)
+and rebuild there with the x64 MSVC compiler and linker. Inspect ASCII and UTF-16
+strings in both outputs before copying them here: no lane, route or model names
+may be embedded in the PE's PDB path or in the PDB's source/build paths.
 
 ```
 cl /nologo /c /Z7 /Od /GS- /Fosymbol_fixture.obj symbol_fixture.cpp
