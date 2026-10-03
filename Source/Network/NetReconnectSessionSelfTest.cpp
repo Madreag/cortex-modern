@@ -4945,6 +4945,96 @@ namespace RTE {
 			return 0;
 		}
 
+		// A host lost with applications pending hands them on: the successor answers none while the round changes host, then each
+		// applicant that asks again with its transaction keeps the place in line it had, and is answered once.
+		int TestApplicationsTravelInTheCapsule() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) return Fail(error);
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x137);
+			match.players = {{1, 0, false, "Host"}, {2, 1, false, "Successor"}, {3, 2, false, "Dropped"}};
+			match.peerCount = 3;
+			Wire wire;
+			if (!wire.registry.BeginHostedSession()) return Fail("the applicants' capsule fixture drew no epoch");
+			wire.host.Configure(&wire.registry, match.sessionId, MakeIdentity());
+			wire.host.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
+			wire.host.SetLiveMatch(false);
+			const auto wallClock = [](void* context) -> uint64_t { return 1'700'000'000'000ULL + static_cast<Wire*>(context)->nowMs; };
+			wire.host.SetUnixClock(wallClock, &wire);
+			NetH4TicketRecord hostTicket;
+			if (!wire.host.EnsureLocalTicket(hostTicket)) return Fail("the old host's own seat took no ticket");
+			Endpoint successor, dropped;
+			successor.connection = 171;
+			dropped.connection = 172;
+			ConfigureEndpoint(successor, "applicants-successor", &unixNow);
+			ConfigureEndpoint(dropped, "applicants-dropped", &unixNow);
+			for (Endpoint* peer: {&successor, &dropped}) {
+				wire.Add(peer);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!peer->client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) return Fail("a join did not settle: " + error);
+			}
+			const uint16_t heldSeat = dropped.client.GetRecord().stableSeat;
+			uint8_t successorPeer = 0;
+			for (const NetH4Seat& seat: wire.host.GetSeatTable())
+				if (seat.stableSeat == successor.client.GetRecord().stableSeat) successorPeer = seat.lockstepPeerId;
+			wire.host.SetLiveMatch(true);
+			if (!wire.Pump(&error)) return Fail(error);
+			wire.host.NotifyDisconnect(dropped.connection, 300);
+			wire.ClearDelivered();
+			// Two players apply for the held seat, the first a second before the second.
+			if (!wire.SendRaw(181, MakeApplicant(heldSeat, 0x40, "first"), &error)) return Fail(error);
+			wire.nowMs += 1000;
+			if (!wire.SendRaw(182, MakeApplicant(heldSeat, 0x41, "second"), &error)) return Fail(error);
+			wire.DrainHostOutbound();
+			if (wire.host.GetApplicantCount() != 2) return Fail("the fixture's two applications were not both on the old host's list");
+			const std::vector<uint8_t> state = wire.host.ExportMigrationState();
+			wire.nowMs += 5000;
+			NetMatchConfig successorMatch = match;
+			successorMatch.hostPeerId = successorPeer;
+			NetReconnectHost next;
+			next.SetUnixClock(wallClock, &wire);
+			NetSeatAuthRegistry nextRegistry;
+			if (successorPeer == 0 || !next.ImportMigrationState(state, nextRegistry, successorMatch, successorPeer, {}, wire.nowMs)) {
+				return Fail("the successor did not import the old host's plane");
+			}
+			if (next.GetCarriedApplicantCount() != 2 || next.GetApplicantCount() != 0) {
+				return Fail("the capsule carried " + std::to_string(next.GetCarriedApplicantCount()) + " of the old host's 2 pending applications");
+			}
+			const auto acksTo = [&next](NetPeerId connection) {
+				size_t acks = 0;
+				for (const NetH4Outbound& out: next.TakeOutbound())
+					if (out.connection == connection && std::holds_alternative<NetH4ApplicantAck>(out.payload)) ++acks;
+				return acks;
+			};
+			// While the round changes host nothing is answered: the second applicant's question waits for the new host.
+			next.SetMigrationHold(true, wire.nowMs);
+			(void)next.HandleMessage(192, MakeApplicant(heldSeat, 0x41, "second"), wire.nowMs);
+			const size_t answeredInMigration = acksTo(192);
+			next.SetMigrationHold(false, wire.nowMs);
+			const size_t answeredAfter = acksTo(192);
+			wire.nowMs += 10;
+			(void)next.HandleMessage(191, MakeApplicant(heldSeat, 0x40, "first"), wire.nowMs);
+			const size_t firstAnswered = acksTo(191);
+			(void)next.HandleMessage(191, MakeApplicant(heldSeat, 0x40, "first"), wire.nowMs + 10);
+			const size_t firstAnsweredAgain = acksTo(191);
+			std::vector<std::string> line;
+			for (const NetH4ModerationSeat& seat: next.GetModerationView())
+				if (seat.stableSeat == heldSeat)
+					for (const NetH4ApplicantView& applicant: seat.applicants) line.push_back(applicant.displayName);
+			const std::vector<std::string> inOrder{"first", "second"};
+			if (answeredInMigration != 0 || answeredAfter != 1 || firstAnswered != 1 || line != inOrder || next.GetApplicantCount() != 2 || next.GetCarriedApplicantCount() != 0) {
+				std::string names;
+				for (const std::string& name: line) names += (names.empty() ? "" : ",") + name;
+				return Fail("carried applications on the successor: answered " + std::to_string(answeredInMigration) + " while the host changed, " +
+				            std::to_string(answeredAfter) + " after it, the first applicant's question answered " + std::to_string(firstAnswered) + " time(s), the line read [" +
+				            names + "], " + std::to_string(next.GetCarriedApplicantCount()) + " still carried");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS applications_travel_in_the_capsule carried=2 line=first,second repeat_answers=" << firstAnsweredAgain << std::endl;
+			return 0;
+		}
+
 		int TestApplicantsAndBounds() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -8751,6 +8841,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestApplicantsAndBounds(); result != 0) {
+			return result;
+		}
+		if (const int result = TestApplicationsTravelInTheCapsule(); result != 0) {
 			return result;
 		}
 		if (const int result = TestSubstitutionTransaction(); result != 0) {

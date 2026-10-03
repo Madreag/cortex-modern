@@ -75,6 +75,14 @@ namespace RTE {
 		json rosterHost = json::array();
 		for (const NetRosterSeat& seat: m_Roster.seats)
 			rosterHost.push_back({seat.seatId, seat.ticket, seat.failedReturns, wallSeconds(seat.returnAfterMs), seat.givenAwayTicket, wallSeconds(seat.heldSinceMs)});
+		// Applications nobody answered go with the round; their applicants ask the new host again with the same transaction.
+		const auto wallMs = [&](uint64_t at) -> uint64_t { return at == 0 || unixNow + at < m_NowMs ? 0 : unixNow + at - m_NowMs; };
+		json applicants = json::array();
+		for (const Applicant& applicant: m_Applicants)
+			if (!applicant.approved)
+				applicants.push_back({applicant.stableSeat, std::vector<uint8_t>(applicant.txId.begin(), applicant.txId.end()), applicant.displayName, wallMs(applicant.appliedAtMs)});
+		for (const CarriedApplicant& carried: m_CarriedApplicants)
+			applicants.push_back({carried.stableSeat, std::vector<uint8_t>(carried.txId.begin(), carried.txId.end()), carried.displayName, wallMs(carried.appliedAtMs)});
 		json seats = json::array();
 		for (const auto& state: m_Seats) {
 			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", IsSeated(state)}, {"closed", IsHostOpened(state)}, {"dropped", IsHolderAway(state)}, {"left", HolderLeftByChoice(state)}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"display", state.holderName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs && state.retiredUntilMs != std::numeric_limits<uint64_t>::max() ? state.retiredUntilMs - m_NowMs : 0}, {"retired_kept", state.retiredGeneration != 0 && state.retiredUntilMs == std::numeric_limits<uint64_t>::max()}};
@@ -94,7 +102,7 @@ namespace RTE {
 				}
 			}
 		}
-		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"roster_bytes", EncodeRoster(m_Roster)}, {"roster_host", rosterHost}, {"roster_banned", m_Roster.banned}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"roster_bytes", EncodeRoster(m_Roster)}, {"roster_host", rosterHost}, {"roster_banned", m_Roster.banned}, {"applicants", applicants}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
 	}
 
 	int64_t NetReconnectHost::CountExportedOpenSeats(const std::vector<uint8_t>& bytes, uint8_t localPeerId) {
@@ -252,6 +260,20 @@ namespace RTE {
 				seat->heldSinceMs = onThisClock(row.at(5).get<uint64_t>());
 			}
 			next.m_Roster.banned = object.value("roster_banned", std::vector<uint64_t>{});
+			if (object.contains("applicants")) {
+				for (const auto& row: object.at("applicants")) {
+					const auto tx = row.at(1).get<std::vector<uint8_t>>();
+					if (tx.size() != NetAuthBytes16{}.size()) return false;
+					CarriedApplicant carried;
+					carried.stableSeat = row.at(0).get<uint16_t>();
+					std::copy(tx.begin(), tx.end(), carried.txId.begin());
+					carried.displayName = row.at(2).get<std::string>();
+					const uint64_t at = row.at(3).get<uint64_t>();
+					carried.appliedAtMs = at == 0 ? 0 : static_cast<uint64_t>(std::max<int64_t>(1, static_cast<int64_t>(nowMs) - (unixNow - static_cast<int64_t>(at))));
+					next.m_CarriedApplicants.push_back(std::move(carried));
+				}
+				next.m_CarriedApplicantsUntilMs = nowMs + c_ProvisionalExpiryMs;
+			}
 			const SeatState* own = nullptr;
 			for (const SeatState& state: next.m_Seats)
 				if (state.seat.local) own = &state;
@@ -1898,7 +1920,13 @@ namespace RTE {
 		applicant.displayName = message.displayName;
 		applicant.appliedAtMs = nowMs;
 		applicant.key = key;
-		m_Applicants.push_back(applicant);
+		// An application the lost host left pending keeps the place in line it had there.
+		if (const auto carried = std::find_if(m_CarriedApplicants.begin(), m_CarriedApplicants.end(), [&](const CarriedApplicant& entry) { return entry.txId == message.txId; });
+		    carried != m_CarriedApplicants.end()) {
+			if (carried->appliedAtMs != 0) applicant.appliedAtMs = carried->appliedAtMs;
+			m_CarriedApplicants.erase(carried);
+		}
+		m_Applicants.insert(std::upper_bound(m_Applicants.begin(), m_Applicants.end(), applicant.appliedAtMs, [](uint64_t at, const Applicant& entry) { return at < entry.appliedAtMs; }), applicant);
 		++m_Stats.applicantsRegistered;
 		DiagnosticLine() << "[net-reconnect] applicant " << (applicant.displayName.empty() ? "a player" : applicant.displayName)
 		          << " asked for seat " << stableSeat << std::endl;
@@ -2387,6 +2415,8 @@ namespace RTE {
 		m_NowMs = std::max(m_NowMs, nowMs);
 		if (m_MigrationHold)
 			return;
+		// A carried application nobody asked this host again for goes as an unanswered applicant does.
+		if (!m_CarriedApplicants.empty() && nowMs >= m_CarriedApplicantsUntilMs) m_CarriedApplicants.clear();
 		for (auto pending = m_Provisionals.begin(); pending != m_Provisionals.end();) {
 			if (nowMs >= pending->openedAtMs && nowMs - pending->openedAtMs > c_ProvisionalExpiryMs) {
 				if (m_Registry != nullptr) {
@@ -2759,7 +2789,12 @@ namespace RTE {
 	}
 
 	bool NetReconnectClient::BeginApplication(uint16_t stableSeat, uint64_t nowMs, std::string* error) {
-		if (!NetH4DrawTxId(m_TxId)) {
+		// The application a lost host left unanswered is asked of the new host as itself, so it keeps its place and is answered once.
+		if (m_CarriedApplication && (stableSeat == c_NetH4AnySubstitutableSeat || stableSeat == m_CarriedApplication->first)) {
+			stableSeat = m_CarriedApplication->first;
+			m_TxId = m_CarriedApplication->second;
+			m_CarriedApplication.reset();
+		} else if (!NetH4DrawTxId(m_TxId)) {
 			Fail("no crypto provider to draw a transaction id");
 			if (error) *error = m_Error;
 			return false;

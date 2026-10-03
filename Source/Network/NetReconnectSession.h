@@ -456,6 +456,8 @@ namespace RTE {
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t unixNowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued);
 		bool HasSubstitution(uint16_t stableSeat) const;
 		size_t GetApplicantCount() const { return m_Applicants.size(); }
+		/// Applications a lost host left pending that no applicant has asked this host again for yet.
+		size_t GetCarriedApplicantCount() const { return m_CarriedApplicants.size(); }
 
 		/// Which peer id, if any, currently holds the seat on which transport.
 		bool GetSeatHolder(uint16_t stableSeat, NetPeerId& connection, uint32_t& holderGeneration, uint32_t& incarnation) const;
@@ -724,6 +726,15 @@ namespace RTE {
 		void* m_UnixClockContext = nullptr;
 		uint64_t UnixNowMs() const;
 		std::vector<Applicant> m_Applicants;
+		/// An application a lost host left pending: the same application when its applicant asks this host again with its transaction.
+		struct CarriedApplicant {
+			uint16_t stableSeat = 0;
+			NetAuthBytes16 txId{};
+			std::string displayName;
+			uint64_t appliedAtMs = 0;
+		};
+		std::vector<CarriedApplicant> m_CarriedApplicants;
+		uint64_t m_CarriedApplicantsUntilMs = 0; //!< When the ones nobody asked again for are dropped, as an unanswered applicant expires.
 		std::vector<Substitution> m_Substitutions;
 		std::vector<Provisional> m_Provisionals;
 		std::vector<PendingReclaim> m_PendingReclaims;
@@ -830,6 +841,12 @@ namespace RTE {
 		/// Phase B: ask the host for a seat instead of joining one. A live match refuses an ordinary
 		/// join, so this is the only way in for a player the host has to approve by hand.
 		bool BeginApplication(uint16_t stableSeat, uint64_t nowMs, std::string* error = nullptr);
+		/// Whether this player waits on an application its host acknowledged and nobody has answered.
+		bool HasUnansweredApplication() const { return m_State == NetH4ClientState::Applied; }
+		/// Keeps that application for the next host: the next application for its seat asks again with its transaction.
+		void CarryApplicationToNextHost() {
+			if (HasUnansweredApplication()) m_CarriedApplication = std::make_pair(m_ApplySeat, m_TxId);
+		}
 		/// Makes BeginAdmission apply for a seat rather than join or reclaim. The UI (B2) and the gate
 		/// drivers set this; nothing on the wire does.
 		void SetApplyForSeat(bool enabled, uint16_t stableSeat);
@@ -916,6 +933,7 @@ namespace RTE {
 		uint64_t m_RequestOpenedMs = 0;
 		uint32_t m_Retransmits = 0;
 		NetAuthBytes16 m_TxId{};
+		std::optional<std::pair<uint16_t, NetAuthBytes16>> m_CarriedApplication; //!< An application a lost host left unanswered, for the next host.
 		NetH4TicketRecord m_Record;
 		bool m_HasRecord = false;
 		uint32_t m_Incarnation = 0;
