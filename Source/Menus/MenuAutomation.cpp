@@ -326,6 +326,7 @@ namespace RTE::MenuAutomation {
 	// for a few frames cannot slip between two scripted checks.
 	struct ShownLine {
 		std::string source, control, text;
+		bool caption = false; //!< A control's own caption - a button, a box, a tab, a choice - which repeats on every row it serves.
 	};
 	struct TextWatch {
 		std::string rule, state, control, text;
@@ -371,23 +372,44 @@ namespace RTE::MenuAutomation {
 	/// Every line of text the screen shows this frame, one entry per drawn line of each shown control and of the game's own screen message.
 	std::vector<ShownLine> ShownLines(GUIControlManager* menu) {
 		std::vector<ShownLine> lines;
-		const auto add = [&lines](const std::string& source, const std::string& control, const std::string& text) {
+		const auto add = [&lines](const std::string& source, const std::string& control, const std::string& text, bool caption = false) {
 			std::istringstream rows(text);
 			for (std::string row; std::getline(rows, row);) {
 				const auto start = row.find_first_not_of(" \t\r");
 				if (start == std::string::npos) continue;
-				lines.push_back({source, control, row.substr(start, row.find_last_not_of(" \t\r") - start + 1)});
+				lines.push_back({source, control, row.substr(start, row.find_last_not_of(" \t\r") - start + 1), caption});
 			}
 		};
 		for (const auto& [source, manager]: WatchedManagers(menu)) {
 			for (GUIControl* control: *manager->GetControlList()) {
 				std::string text;
-				if (Shown(control) && Text(control, text)) add(source, control->GetName(), text);
+				const bool caption = dynamic_cast<GUIButton*>(control) || dynamic_cast<GUICheckbox*>(control) || dynamic_cast<GUIRadioButton*>(control) ||
+				                     dynamic_cast<GUITab*>(control) || dynamic_cast<GUIComboBox*>(control);
+				if (Shown(control) && Text(control, text)) add(source, control->GetName(), text, caption);
 			}
 		}
 		if (g_ActivityMan.IsInActivity()) add("screen", "ScreenText", g_FrameMan.GetScreenText(0));
 		for (const auto& [source, text]: s_DrawnText) add("drawn", source, text);
 		return lines;
+	}
+
+	/// The first visible line shown twice at once, naming both controls; null when every line is shown once. What may repeat: chat
+	/// (players repeat themselves), a control's caption (a row's verb), one column's value on its rows (a control name differing only
+	/// by its row number), an open seat beside another, and a line with no letter in it.
+	Json DuplicateLine(const std::vector<ShownLine>& lines) {
+		const auto column = [](const std::string& control) { return control.substr(0, control.find_last_not_of("0123456789") + 1); };
+		std::map<std::string, std::vector<const ShownLine*>> seen;
+		for (const ShownLine& line: lines) {
+			if (line.caption || line.control.starts_with("LabelMatchChat") || line.control == "TextMatchChatInput" || line.text == "Open seat") continue;
+			if (std::none_of(line.text.begin(), line.text.end(), [](unsigned char c) { return std::isalpha(c) != 0; })) continue;
+			std::vector<const ShownLine*>& shown = seen[line.text];
+			for (const ShownLine* earlier: shown) {
+				const bool rows = earlier->control != line.control && column(earlier->control) == column(line.control) && column(line.control) != line.control;
+				if (!rows) return Json{{"text", line.text}, {"controls", {earlier->source + "/" + earlier->control, line.source + "/" + line.control}}};
+			}
+			shown.push_back(&line);
+		}
+		return nullptr;
 	}
 
 	bool WatchStateHolds(const std::string& state) {
@@ -533,15 +555,7 @@ namespace RTE::MenuAutomation {
 				if (!shown) detail = watch.control + " is not shown";
 				else if (watch.rule == "equals" && text != watch.text) detail = watch.control + " reads " + Json(text).dump();
 			} else if (watch.rule == "duplicates") {
-				std::map<std::string, std::string> seen;
-				for (const ShownLine& line: lines) {
-					if (line.source == "menu" || line.control.starts_with("LabelMatchChat") || line.control == "TextMatchChatInput") continue;
-					auto [entry, added] = seen.emplace(line.text, line.control);
-					if (!added && entry->second != line.control) {
-						detail = Json{{"text", line.text}, {"controls", {entry->second, line.control}}};
-						break;
-					}
-				}
+				detail = DuplicateLine(lines);
 			} else if (watch.rule == "rtt") {
 				if (const std::string contradiction = RttContradiction(menu); !contradiction.empty()) detail = contradiction;
 			} else if (watch.rule == "layout") {
@@ -1451,6 +1465,19 @@ namespace RTE::MenuAutomation {
 			check("hint_summary_policy", summary.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, summary);
 			check("hint_summary_delay", summary.find("\nInput delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n") != std::string::npos, summary);
 			check("hint_summary_no_rejoin", summary.find("rejoin") == std::string::npos, summary);
+		}
+		{
+			// A state line shown twice is caught wherever the two copies are; what a screen repeats by design is not.
+			const auto line = [](const char* source, const char* control, const char* text, bool caption = false) { return ShownLine{source, control, text, caption}; };
+			const Json acrossMenu = DuplicateLine({line("menu", "LobbyStatusLabel", "leaver: Held - AI in control"), line("overlay", "NetworkStatus", "leaver: Held - AI in control")});
+			check("duplicates_menu_and_overlay", !acrossMenu.is_null(), acrossMenu.dump());
+			const Json withinOne = DuplicateLine({line("network", "NetworkRoster", "leaver: Held - AI in control"), line("network", "NetworkRoster", "leaver: Held - AI in control")});
+			check("duplicates_within_one_control", !withinOne.is_null(), withinOne.dump());
+			const Json byDesign = DuplicateLine({line("network", "NetworkSeatDetail0", "Connected"), line("network", "NetworkSeatDetail1", "Connected"),
+			                                     line("network", "NetworkRoster", "Open seat"), line("network", "NetworkRoster", "Open seat"),
+			                                     line("network", "NetworkSeatKick0", "Kick", true), line("network", "NetworkSeatKick1", "Kick", true),
+			                                     line("menu", "LabelMatchChat0", "gg"), line("menu", "LabelMatchChat1", "gg"), line("overlay", "NetworkPing", "--"), line("overlay", "NetworkLoss", "--")});
+			check("duplicates_by_design_pass", byDesign.is_null(), byDesign.dump());
 		}
 		std::cout << "[menu-automation-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed;
