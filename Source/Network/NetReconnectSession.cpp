@@ -769,6 +769,9 @@ namespace RTE {
 			DiagnosticLine() << "[roster] refused " << NetRosterEventName(kind) << ": " << result.reason << std::endl;
 			return;
 		}
+		if (result.changed) {
+			DiagnosticLine() << "[roster] rev=" << result.roster.revision << " stage " << NetRosterEventName(kind) << ": " << result.reason << std::endl;
+		}
 		m_Roster = result.roster;
 		if (result.changed) SendRoster();
 	}
