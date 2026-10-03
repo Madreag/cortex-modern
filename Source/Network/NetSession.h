@@ -212,7 +212,10 @@ namespace RTE {
 		const NetParticipantId& GetLocalParticipantId() const { return m_LocalParticipantId; }
 		bool HasLocalParticipantId() const { return m_HasLocalParticipantId; }
 		/// The frame a seat drop is recorded against; the match runner keeps it current.
-		void SetLockstepFrame(uint64_t frame) { m_LockstepFrame = frame; }
+		void SetLockstepFrame(uint64_t frame) {
+			m_LockstepFrame = frame;
+			if (m_ReconnectHost) m_ReconnectHost->NoteLockstepFrame(frame);
+		}
 
 		/// Queues a chat line for the session's own pump thread to put on the wire, so the caller
 		/// (usually the UI) never touches peers, the transport or session state. Presentation only:
@@ -234,11 +237,7 @@ namespace RTE {
 		/// Rate-window keys currently held: seats plus the single shared unknown-sender budget.
 		size_t ChatRateWindowCount() const;
 
-		/// Host: re-seats the Ready peers on the ids a rematch roster gives them, so a roster that lost
-		/// a player is dense again. Keyed and valued by session-assigned id. Refuses rather than take an
-		/// id a peer that is still handshaking holds.
-		bool RenumberReadySeats(const std::map<uint8_t, uint8_t>& assignedIdBySeatedId, std::string* error = nullptr);
-		/// Client: takes the session-assigned id the rematch roster gives this peer.
+		/// Client: takes the session-assigned id the host's seat assignment gives this peer.
 		bool AdoptRematchPeerId(uint8_t assignedPeerId, std::string* error = nullptr);
 		void AdoptLobbyHostPeerId(uint8_t peerId) {
 			if (m_Role == NetSessionRole::Client && peerId != 0 && peerId <= NetMatchConfigUtil::c_MaxPeerCount)

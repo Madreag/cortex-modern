@@ -137,7 +137,7 @@
         1400,
         2600
       ],
-      "what": "the first client leaves and the world keeps its state, with the seat freed and no error",
+      "what": "the first client leaves and the world keeps its state, its seat held for it (the AI plays it) and no error",
       "assert": "world report between the two visits",
       "gate": "scenario-behavior"
     },
@@ -145,7 +145,7 @@
       "id": "pw-late-join",
       "peer": "client-late",
       "screen": "game",
-      "what": "the late joiner is given the world as the first client left it: terrain, actors and objectives all carried over, not a fresh scene",
+      "what": "the late joiner takes the free slot - not the held one - and is given the world as the first client left it: terrain, actors and objectives all carried over, not a fresh scene",
       "assert": "Native snapshot transfer and load evidence; the first recorded tick is the restored world tick, not a new zero-based client counter. Continued play remains subject to the peer result.",
       "service_state": "Running",
       "log_regex": [
@@ -159,7 +159,11 @@
       "peer": "client-late",
       "screen": "game",
       "what": "the late joiner's first frames show the same world the host's video shows at that tick",
-      "assert": "compare the two contact sheets at the same sim tick"
+      "assert": "compare the two contact sheets at the same sim tick",
+      "sim_ticks": [
+        1800,
+        2400
+      ]
     },
     {
       "id": "pw-fresh-world-flag",
@@ -167,6 +171,24 @@
       "assert": "launch.json carries -net-persistent-world and -net-world-fresh; frames show the fresh world",
       "peer": "world",
       "screen": "game",
+      "gate": "scenario-behavior"
+    },
+    {
+      "id": "pw-left-seat-held",
+      "peer": "world",
+      "screen": "game",
+      "sim_ticks": [
+        1400,
+        4200
+      ],
+      "what": "The first client's seat stays held for it after its leave while the late joiner plays in the free slot: the world never releases it.",
+      "assert": "world log: the first client's seat held, never released",
+      "log_regex": [
+        "\\[net-match\\] hold peer=2 frame=\\d+ AI in control"
+      ],
+      "forbidden_log_regex": [
+        "seat released peer=2"
+      ],
       "gate": "scenario-behavior"
     }
   ],

@@ -112,3 +112,5 @@ imgui.ini
 
 # Local verification reports and isolated game runtimes
 /reviews/
+# Packaged builds (tools/package_windows.py)
+/dist/

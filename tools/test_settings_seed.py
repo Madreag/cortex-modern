@@ -32,6 +32,11 @@ class SettingsSeedTest(unittest.TestCase):
     def test_posix_overrides_keep_an_empty_value_on_its_line(self):
         self.assertEqual(posix_test_runner.apply_settings_overrides(SEEDED, VALUES), EXPECTED)
 
+    def test_no_runner_opens_a_port_on_the_network_router(self):
+        # Every engine a driver launches starts with port mapping off; the port-map scenario turns it on for its fake gateway alone.
+        self.assertEqual(run_sim_test.RUNTIME_SETTINGS.get("NetworkPortMapEnable"), "0")
+        self.assertEqual(posix_test_runner.SETTINGS_OVERRIDES.get("NetworkPortMapEnable"), "0")
+
     def test_an_absent_property_is_appended_once(self):
         self.assertEqual(posix_test_runner.apply_settings_overrides("SettingsMan\n\tMuteMaster = 1\n", {"SkipIntro": "1"}),
                          "SettingsMan\n\tMuteMaster = 1\n\n\tSkipIntro = 1\n")

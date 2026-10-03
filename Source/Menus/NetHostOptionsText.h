@@ -23,7 +23,7 @@ namespace RTE {
 	inline std::string NetSlowPlayerHint(NetSlowPlayerPolicy policy, uint16_t boundTicks, double tickMs) {
 		if (policy == NetSlowPlayerPolicy::Pause) return "Everyone waits for a late player, host included, for up to 20 s.";
 		return "A player late past " + std::to_string(boundTicks) + (boundTicks == 1 ? " tick (" : " ticks (") + std::to_string(std::lround(boundTicks * tickMs)) +
-		       " ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.";
+		       " ms), host too, is held to the AI while others play on. Other policies return in a later version.";
 	}
 
 	/// How the automatic input delay is sized, in the words every delay readout uses.
@@ -34,6 +34,11 @@ namespace RTE {
 	/// The autosave interval row's range.
 	inline const char* NetAutosaveRangeHint() {
 		return "Every 60 s to 60 min, or off (default)";
+	}
+
+	/// What an autosave can cost the other players.
+	inline const char* NetAutosaveCostHint() {
+		return "Saving may cause a brief pause for other players on slower hosts";
 	}
 
 	/// What a match checkpoint is to the players.

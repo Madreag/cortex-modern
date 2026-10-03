@@ -119,6 +119,9 @@ namespace RTE {
 		CheckpointText CaptureLimbGroupInertia() const;
 
 		void AdoptPersistedUniqueID() override;
+
+		/// Applies the walk state a clone carries in its stash - the limb paths' traversal, the limb positions and inertia, the feet's travel residue.
+		void AdoptCarriedWalkState() override;
 		void DiscardPersistedSnapshotState() override;
 
 		/// Sets the jetpack for this ACrab. Ownership IS Transferred!

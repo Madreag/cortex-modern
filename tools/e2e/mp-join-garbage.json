@@ -268,7 +268,10 @@
       "log_regex": [
         "\\[net-match\\] bootstrap checkpoint=\\d+",
         "\\[uidprobe\\] update=\\d+ found=\\d+"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     }
   ]
 }

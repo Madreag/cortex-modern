@@ -24,6 +24,9 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
+# Cloudflare refuses urllib's default agent (403, error code 1010), so the relay request names the product.
+USER_AGENT = "cccp-session-directory/1"
+
 LOGGER = logging.getLogger("session_directory")
 
 MAX_ROWS = 4096
@@ -158,7 +161,7 @@ class TurnCredentialProvider:
             request = Request(
                 f"https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}/credentials/generate-ice-servers",
                 data=json.dumps({"ttl": ttl}).encode(),
-                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+                headers={"Authorization": "Bearer " + token, "Content-Type": "application/json", "User-Agent": USER_AGENT},
                 method="POST",
             )
             try:
@@ -428,13 +431,14 @@ class Session:
         self.install_key = ""
         self.ice_offer: Optional[dict[str, Any]] = None
         self.ice_generation = 0
+        self.ice_refused = False  # the host's last mint was refused by its relay backend
 
     def age_s(self, now: float) -> int:
         return max(0, int(now - self.created_at))
 
     def as_list_row(self, now: float) -> dict[str, Any]:
         row = {key: self.fields[key] for key in LIST_ROW_FIELDS}
-        for key in ("persistent_world", "world_id", "world_boot", "spectator_free", "spectator_max"):
+        for key in ("persistent_world", "world_id", "world_boot", "spectator_free", "spectator_max", "seats_held"):
             if key in self.fields:
                 row[key] = self.fields[key]
         row["session_id"] = self.session_id
@@ -447,9 +451,11 @@ class Session:
 class SessionDirectory:
     def __init__(
         self, expiry_s: float, heartbeat_s: float, queue_idle_s: float = QUEUE_IDLE_S,
-        turn_config: Optional[dict[str, Any]] = None,
+        turn_config: Optional[dict[str, Any]] = None, turn_max_ttl: int = TURN_MAX_TTL,
     ) -> None:
         self.expiry_s = expiry_s
+        # The longest relay credential this directory mints; a client asking for longer gets this much.
+        self.turn_max_ttl = max(TURN_MIN_TTL, min(TURN_MAX_TTL, int(turn_max_ttl)))
         self.heartbeat_s = heartbeat_s
         self.queue_idle_s = queue_idle_s
         self._lock = threading.RLock()
@@ -543,6 +549,8 @@ class SessionDirectory:
                 fields["spectator_free"] = require_int(data, "spectator_free", 0, 10**9)
             if "spectator_max" in data:
                 fields["spectator_max"] = require_int(data, "spectator_max", 0, 10**9)
+            if "seats_held" in data:
+                fields["seats_held"] = require_int(data, "seats_held", 0, 10**9)
             resume = data.get("resume_session_id")
             if resume is not None:
                 session_id = require_str(data, "resume_session_id")
@@ -588,7 +596,7 @@ class SessionDirectory:
         match_id = require_str_unbounded(data, "match_id")
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", match_id):
             raise FieldError("invalid_field", "match_id")
-        ttl = require_int(data, "ttl", TURN_MIN_TTL, TURN_MAX_TTL)
+        ttl = min(require_int(data, "ttl", TURN_MIN_TTL, TURN_MAX_TTL), self.turn_max_ttl)
         with self._lock:
             sess = self._get(session_id, now)
             if not sess:
@@ -609,13 +617,23 @@ class SessionDirectory:
                 raise FieldError("invalid_field", "iceServers") from None
             offer = {"match_id": match_id, "expires_at": wall + ttl, "iceServers": servers}
         else:
-            offer = self.turn_provider.mint(match_id, ttl, wall)
+            try:
+                offer = self.turn_provider.mint(match_id, ttl, wall)
+            except TurnError:
+                with self._lock:
+                    if self._sessions.get(session_id) is sess and generation == sess.ice_generation:
+                        sess.ice_refused = True
+                raise
         with self._lock:
             if self._sessions.get(session_id) is not sess or generation != sess.ice_generation:
                 raise TurnError(409, "relay_request_superseded")
             if offer["expires_at"] <= int(time.time()):
                 raise TurnError(503, "relay_credential_expired")
             sess.ice_offer = offer
+            sess.ice_refused = False
+            LOGGER.info('relay_offer_issued %s', json.dumps(dict(session_id=session_id, match_id=offer['match_id'],
+                provider='fixed' if 'iceServers' in data else self.turn_provider._config.get('backend', 'cloudflare'),
+                generation=generation, expires_at=offer['expires_at'], server_count=len(offer['iceServers'])), sort_keys=True))
             return offer
 
     def get_ice_servers(self, session_id: str, now: float) -> dict[str, Any]:
@@ -624,6 +642,9 @@ class SessionDirectory:
             if not sess:
                 raise KeyError(session_id)
             if not sess.ice_offer or sess.ice_offer["expires_at"] <= int(time.time()):
+                # A client must tell a relay that refused the host from a match that has none.
+                if sess.ice_refused:
+                    raise TurnError(502, "relay_provider_refused")
                 raise TurnError(404, "relay_offer_unavailable")
             return sess.ice_offer
 
@@ -637,6 +658,8 @@ class SessionDirectory:
         spectator_free = (
             require_int(data, "spectator_free", 0, 10**9) if "spectator_free" in data else None
         )
+        # A running match's seats held for players who are gone: a newcomer may apply to the host for one.
+        seats_held = require_int(data, "seats_held", 0, 10**9) if "seats_held" in data else None
         listen_addrs: Optional[list[str]] = None
         if "listen_addrs" in data:
             listen_addrs = require_listen_addrs(data)
@@ -663,6 +686,8 @@ class SessionDirectory:
             sess.fields["seats_free"] = seats_free
             if spectator_free is not None:
                 sess.fields["spectator_free"] = spectator_free
+            if seats_held is not None:
+                sess.fields["seats_held"] = seats_held
             if listen_addrs is not None:
                 sess.fields["listen_addrs"] = listen_addrs
             if state is not None:
@@ -893,7 +918,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--heartbeat-s", type=float, default=5)
     parser.add_argument("--log-file", type=Path, default=None)
     parser.add_argument("--turn-config", type=Path, default=None)
-    return parser.parse_args(argv)
+    parser.add_argument("--turn-max-ttl", type=int, default=TURN_MAX_TTL,
+                        help=f"the longest relay credential minted, {TURN_MIN_TTL}-{TURN_MAX_TTL} s")
+    args = parser.parse_args(argv)
+    if not TURN_MIN_TTL <= args.turn_max_ttl <= TURN_MAX_TTL:
+        parser.error(f"--turn-max-ttl must be {TURN_MIN_TTL}-{TURN_MAX_TTL}")
+    return args
 
 
 def check_tls_args(args: argparse.Namespace) -> None:
@@ -1224,6 +1254,7 @@ def spawn_server(
     log_file: Optional[Path] = None,
     queue_idle_s: float = QUEUE_IDLE_S,
     turn_config: Optional[dict[str, Any]] = None,
+    turn_max_ttl: int = TURN_MAX_TTL,
 ) -> RunningServer:
     configure_logging(log_file)
     if cert is None or key is None:
@@ -1232,7 +1263,7 @@ def spawn_server(
         cert = None
         key = None
     store = SessionDirectory(
-        expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config
+        expiry_s=expiry_s, heartbeat_s=heartbeat_s, queue_idle_s=queue_idle_s, turn_config=turn_config, turn_max_ttl=turn_max_ttl
     )
     store.start_pruner()
     httpd = build_httpd(bind, port, store, cert, key)
@@ -1268,6 +1299,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         key=args.key if use_tls else None,
         log_file=args.log_file,
         turn_config=turn_config,
+        turn_max_ttl=args.turn_max_ttl,
     )
     print(f"session_directory listening on {args.bind}:{server.port}", flush=True)
     try:

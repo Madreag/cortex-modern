@@ -467,40 +467,6 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetSession::RenumberReadySeats(const std::map<uint8_t, uint8_t>& assignedIdBySeatedId, std::string* error) {
-		if (m_Role != NetSessionRole::Host) {
-			if (error) *error = "only a hosted session re-seats a rematch roster";
-			return false;
-		}
-		std::vector<uint8_t> taken;
-		for (const auto& [seated, reseated] : assignedIdBySeatedId) {
-			if (reseated == 0 || reseated > m_Config.maxPeers || std::find(taken.begin(), taken.end(), reseated) != taken.end()) {
-				if (error) *error = "a rematch seat id is out of range or claimed twice";
-				return false;
-			}
-			taken.push_back(reseated);
-		}
-		for (const PeerState& peer : m_Peers) {
-			if (peer.state == NetSessionState::Ready) {
-				if (!assignedIdBySeatedId.contains(peer.assignedPeerId)) {
-					if (error) *error = "the rematch roster has no seat for a connected peer";
-					return false;
-				}
-			} else if (IsActive(peer.state) && std::find(taken.begin(), taken.end(), peer.assignedPeerId) != taken.end()) {
-				if (error) *error = "a peer that has not finished joining holds a rematch seat id";
-				return false;
-			}
-		}
-		for (PeerState& peer : m_Peers) {
-			if (peer.state == NetSessionState::Ready) {
-				peer.assignedPeerId = assignedIdBySeatedId.at(peer.assignedPeerId);
-			}
-		}
-		m_LocalPeerId = c_HostAssignedPeerId;
-		m_HostAssignedPeerId = c_HostAssignedPeerId;
-		return true;
-	}
-
 	bool NetSession::AdoptRematchPeerId(uint8_t assignedPeerId, std::string* error) {
 		if (m_Role != NetSessionRole::Client) {
 			if (error) *error = "only a joined session adopts a rematch seat id";
@@ -1680,6 +1646,7 @@ namespace RTE {
 			case NetRejectReason::Timeout: return "The connection timed out. Please try again.";
 			case NetRejectReason::SessionEnded: return "This session has ended.";
 			case NetRejectReason::SeatReassigned: return "The host gave your seat to another player.";
+			case NetRejectReason::SeatReleased: return "The host released your seat.";
 			case NetRejectReason::ParticipantRemoved:
 				if (m_Role == NetSessionRole::Host && !m_RefusedPlayerName.empty()) return m_RefusedPlayerName + " was removed from this session";
 				return "The host removed you from this session";
@@ -1736,7 +1703,7 @@ namespace RTE {
 	}
 
 	uint8_t NetSession::AllocatePendingAdmissionPeerId() const {
-		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr || !m_ReconnectHost->IsLiveMatch()) {
+		if (m_Role != NetSessionRole::Host || m_ReconnectHost == nullptr || !m_ReconnectHost->HoldsSeatsForReturn()) {
 			return 0;
 		}
 		for (uint16_t candidate = static_cast<uint16_t>(m_Config.maxPeers) + 1;
@@ -2059,6 +2026,7 @@ namespace RTE {
 				{"reseats_without_survivors", stats.reseatsWithoutSurvivors},
 				{"reseat_live_on_team_not_named", stats.reseatLiveOnTeamNotNamed},
 				{"reclaim_retransmits_dropped", stats.reclaimRetransmitsDropped},
+				{"answered_transactions_dropped", stats.answeredTransactionsDropped},
 				{"seat_holds_expired", stats.seatHoldsExpired},
 				{"seats_released_in_lobby", stats.seatsReleasedInLobby},
 				{"applicants_registered", stats.applicantsRegistered},

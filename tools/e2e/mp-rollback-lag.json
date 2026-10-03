@@ -886,7 +886,10 @@
       ],
       "forbidden_log_regex": [
         "admission refused .*match over"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "lag-200-item9a_wall_tps",
@@ -1004,7 +1007,10 @@
       ],
       "forbidden_log_regex": [
         "admission refused .*match over"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "lag-100-role-order",

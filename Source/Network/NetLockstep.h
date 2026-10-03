@@ -582,6 +582,9 @@ namespace RTE {
 		uint64_t acceptedThroughFrame = 0; //!< The newest tick of this sender's the round could consume.
 		uint64_t lastHeardMs = 0;
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
+		std::deque<std::pair<uint64_t, uint64_t>> arrivals; //!< When this peer's newest tick rose, and to which, over the last seconds.
+		std::deque<uint64_t> waitedFrames; //!< The frames of the last second this machine waited on this peer's input.
+		uint64_t slowSinceMs = 0; //!< Since when this peer has fed below the round's rate without a break; 0 while it has not.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
 		bool returnsInPlace = false; //!< This seat's return replays on its own state and connection: it starts its round before its reclaim frame.
@@ -647,6 +650,12 @@ namespace RTE {
 		double localComputeDebtMs = 0;
 		double localProductionLateMs = 0;
 		bool localMachineSlow = false;
+		double localCapacityTps = 0; //!< The ticks a second this machine's own recent ticks' median cost allows.
+		double localBehindTicks = 0; //!< How far this machine's own ticks trail the round's clock.
+		double localRunwayTicks = 0; //!< How far this machine's newest queued input runs ahead of the fastest other machine's tick.
+		double localOthersTps = 0; //!< The fastest other machine's ticks a second over the last second.
+		double localCostTps = 0; //!< How much faster the others run than this machine can: what it costs them.
+		double localRunwayFallTps = 0; //!< How fast the others pulled ahead of this machine over the last half second.
 		std::optional<uint32_t> measuredMissingFrameBase;
 		std::optional<uint32_t> measuredBlockingWaitBase;
 		uint32_t delayChangesProposed = 0;
@@ -717,6 +726,13 @@ namespace RTE {
 		static constexpr uint32_t c_InputAcceptedMask = 0x40000000U;
 		/// Asks the named sender (the low byte) to resend its ticks from highestContiguousFrame on the reliable lane; an older peer ignores it.
 		static constexpr uint32_t c_FrameResendRequestMask = 0x20000000U;
+		/// The sender goes quiet after highestContiguousFrame, the last frame it fed, for the reason in the low byte: the host holds
+		/// its seat from the next frame at once. An older peer ignores it and judges the silence at its bound.
+		static constexpr uint32_t c_QuietAnnouncementMask = 0x10000000U;
+		static constexpr uint8_t c_QuietSlowMachine = 1;
+		/// The sender publishes what it can run: its capacity in tenths of a tick a second in the low 16 bits, the median cost of its
+		/// last 15 ticks, measured at highestContiguousFrame. An older peer ignores it.
+		static constexpr uint32_t c_CapacityMask = 0x08000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 32;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
@@ -827,6 +843,8 @@ namespace RTE {
 		static void Forget(const NetLockstepCoordinator* coordinator);
 		/// How many plane ticks have run this process, for the harness.
 		static uint64_t Ticks();
+		/// The innermost window open on the simulation thread now, for a diagnostic line; "none" outside every window.
+		static const char* OpenWindow();
 		/// Arms the check that every access to the targeted coordinator inside an open window holds Lock(). Harness and self-test runs arm it.
 		static void ArmChecks(bool armed);
 		/// Whether the checks are armed.
@@ -857,6 +875,7 @@ namespace RTE {
 			const char* m_Name = nullptr;
 			uint64_t m_OpenedMs = 0;
 			uint64_t m_TicksAtOpen = 0;
+			const char* m_Enclosing = nullptr;
 		};
 		/// Keeps the plane from ticking for a stretch that reaches the coordinator through code that does not take the lock, such as the
 		/// match service, whatever windows open and close inside it; a tick in flight finishes first, and the plane may tick again once
@@ -885,6 +904,61 @@ namespace RTE {
 		NetLockstepPlaneGuard& operator=(const NetLockstepPlaneGuard&) = delete;
 	private:
 		std::lock_guard<std::recursive_mutex> m_Lock;
+	};
+
+	/// Tells a lockstep peer that it runs ahead of its inputs: most ticks of the last second were due by its clock before their inputs were
+	/// here. A spike waits once and then catches up on inputs already there; a peer standing at the input horizon, such as one back from a
+	/// catch-up or a host whose peer started late, waits on nearly every tick.
+	class NetPaceSlide {
+	public:
+		static constexpr uint32_t c_WindowTicks = 60; //!< The ticks judged: a second.
+		static constexpr uint32_t c_AheadTicks = 45; //!< Of them, those that waited for their inputs.
+
+		/// Notes that this tick was due before its inputs were here.
+		void NoteWaitAhead(uint64_t tick) { m_WaitedTick = tick; }
+
+		/// Notes a tick about to run.
+		/// @return Whether the clock should be held back now.
+		bool NoteTick(uint64_t tick) {
+			const bool ahead = m_WaitedTick == tick;
+			m_Window.push_back(ahead);
+			m_Ahead += ahead ? 1 : 0;
+			if (m_Window.size() > c_WindowTicks) {
+				m_Ahead -= m_Window.front() ? 1 : 0;
+				m_Window.pop_front();
+			}
+			if (m_Window.size() < c_WindowTicks || m_Ahead < c_AheadTicks) return false;
+			m_Window.clear();
+			m_Ahead = 0;
+			return true;
+		}
+
+		/// What a clock found standing at its input horizon does.
+		enum class Action { None, Slide };
+
+		/// Notes a tick about to run. The first time the clock stands at its input horizon it slides back once; standing
+		/// there again is the same cause - a slower peer - which a fast clock never slows for: the bounded wait holds that
+		/// peer's seat instead.
+		/// @param tick The tick about to run.
+		/// @return What to do before the tick runs.
+		Action NoteTickAt(uint64_t tick) {
+			if (!NoteTick(tick) || m_Slid) return Action::None;
+			m_Slid = true;
+			return Action::Slide;
+		}
+
+		void Reset() {
+			m_WaitedTick = UINT64_MAX;
+			m_Window.clear();
+			m_Ahead = 0;
+			m_Slid = false;
+		}
+
+	private:
+		uint64_t m_WaitedTick = UINT64_MAX;
+		std::deque<bool> m_Window;
+		uint32_t m_Ahead = 0;
+		bool m_Slid = false; //!< This clock slid once for standing at its horizon; the same cause never moves it again.
 	};
 
 // Every public coordinator method opens with this: inside an open window only a holder of the plane's lock may touch the coordinator.
@@ -997,7 +1071,9 @@ namespace RTE {
 		std::string DescribePendingTimingDecisions(uint64_t frame) const;
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
-		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
+		/// @param fromFrame The first frame the hold covers, when the seat named it; 0 for the first frame the host lacks its input.
+		/// cause names the rule that holds the seat, printed with the proposal so a reader can tell a design hold from an unexplained one.
+		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr, uint64_t fromFrame = 0, const char* cause = "unnamed");
 		/// trailFrames: how far the returner's replay trails the round at the round's pace; its first required frame comes that much later.
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
@@ -1018,11 +1094,15 @@ namespace RTE {
 		bool UsesBoundedWait() const { NET_PLANE_CHECK(); return m_Config.substituteSlowPeers; }
 		/// A copy of the agreed holds: a reader outside the plane's lock never keeps a reference into what a plane tick changes.
 		std::map<uint8_t, NetGameSeatHold> HeldTransactions() const { NET_PLANE_CHECK(); return m_HoldTransactions; }
+		std::map<uint8_t, NetGameSeatReclaim> ReclaimTransactions() const { NET_PLANE_CHECK(); return m_ReclaimTransactions; }
 		/// Moves each seat the round took back before a joining seat's first frame out of the held state its replayed tail ended on.
 		/// @param config The joining round's configuration; its holds, departures, incarnations and reclaims are updated.
 		/// @param reclaims The host's ReclaimAtFrame decisions the joining seat has received.
 		/// @param firstFrame The joining round's first frame.
 		static void AdoptReturnsBefore(NetLockstepConfig& config, const std::vector<NetLockstepTiming>& reclaims, uint64_t firstFrame);
+		/// Carries every other seat's agreed return whose neutral gap still runs at firstFrame into a round starting there, however far the
+		/// seat state was replayed; a later hold or leave of that seat in the config ended the return and wins.
+		static void AdoptOpenReturns(NetLockstepConfig& config, const std::map<uint8_t, NetGameSeatReclaim>& reclaims, uint64_t firstFrame);
 		bool HasAgreedSeatReclaim(uint8_t peer) const { NET_PLANE_CHECK(); return m_ReclaimTransactions.contains(peer); }
 		/// What a seat has waited SINCE it was last reclaimed: what the player is shown, while the
 		/// match record in GetStats()/BuildReportJson keeps the round's totals.
@@ -1075,11 +1155,17 @@ namespace RTE {
 		bool AnyHeldAISeat() const { NET_PLANE_CHECK(); return std::any_of(m_AiHeldSeats.begin(), m_AiHeldSeats.end(), [&](const auto& seat) { return !m_ReleasedAiSeats.contains(seat.first); }); }
 		/// Whether the seat's hold was ended by a kick, a ban, a release or a clean leave: its units stay with the AI and a return is a new join.
 		bool IsSeatReleased(uint8_t peerId) const { NET_PLANE_CHECK(); return m_ReleasedAiSeats.contains(peerId); }
+		/// Host: whether a held seat was held because its machine cannot keep up with the round.
+		bool IsHeldAsSlowMachine(uint8_t peerId) const { NET_PLANE_CHECK(); return m_SlowMachineHolds.contains(peerId) && HasHeldAISeat(peerId); }
 		/// A seat's reclaim or admission is agreed and its activation frame is still ahead.
 		bool HasPendingSeatActivation() const { NET_PLANE_CHECK(); for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (reclaim.activationFrame >= m_Stats.nextFrame) return true; return false; }
 		/// Host: the current capture park covers the frame or may still grow to cover it.
 		bool CaptureParkMayReach(uint64_t frame) const;
 		bool IsLocalSeatHeld() const { NET_PLANE_CHECK(); return m_LocalSeatHeld; }
+
+		/// Whether this machine judged itself unable to hold the round's rate and went quiet for the host's bound to hold its seat.
+		/// @return Whether it did.
+		bool IsSelfHeld() const { NET_PLANE_CHECK(); return m_SelfHeld; }
 		/// The peer whose AI drives the seats the AI holds at a frame: the host, or while the host's own seat is held, the first playing peer of its succession.
 		uint8_t AiAuthorityAt(uint64_t frame) const;
 		/// Who produces an actor's frames that its owner would: the owner, unless the owner is a host whose own seat the AI holds.
@@ -1094,6 +1180,9 @@ namespace RTE {
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
+		/// Delay a sender needs once its start work is published: its link's need plus the start work its machine did beyond ours,
+		/// since it begins the round that much later and stays that far behind until its stream shows the slack.
+		static uint32_t StartSkewDelayFrames(uint32_t linkFrames, uint64_t peerStartMs, uint64_t ownStartMs, double tickMs);
 		std::vector<uint8_t> ResumePeerIds() const;
 
 		NetLockstepState GetState() const { NET_PLANE_CHECK(); return m_State; }
@@ -1270,6 +1359,7 @@ namespace RTE {
 
 		friend bool TestDelayPaddingPassesAParkedFrame(std::string* error);
 		friend bool TestACaptureReportsToItsOwnPark(std::string* error);
+		friend bool TestAParkCoversTheBoxsSlowCaptures(std::string* error);
 		friend bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
@@ -1282,6 +1372,10 @@ namespace RTE {
 		friend bool TestAHostsOwnLateSeatIsHeldAndTakenBack(std::string* error);
 		friend bool TestAHostWithNoOtherPlayingSeatIsNotHeld(std::string* error);
 		friend bool TestAReturnGapDoesNotStartTheHostsClock(std::string* error);
+		friend bool TestAHoldLandsAtTheFirstFrameItsSeatOwes(std::string* error);
+		friend bool TestALinklessMemberIsHeldByTheStart(std::string* error);
+		friend bool TestARefusedHoldEscalatesToTheFirstOwedFrame(std::string* error);
+		friend bool TestAStartHeldSeatsReturnCompletes(std::string* error);
 		friend bool TestANeutralGapLeavesNoCommandsToResend(std::string* error);
 		friend bool TestAHeldHostCanReachItsReclaimHorizon(std::string* error);
 		friend bool TestAnAnnouncedCaptureExcusesEverySeatForItsCost(std::string* error);
@@ -1289,10 +1383,15 @@ namespace RTE {
 		friend bool TestAheadInputIsNotASimulationStall(std::string* error);
 		friend bool TestHeldHostMarkerPrecedesItsHold(std::string* error);
 		friend bool TestAReturnerDelayCoversItsTrail(std::string* error);
+		friend bool TestADecisionRepeatedPastItsFrameIsNotANewOne(std::string* error);
 		friend bool TestTheHostsRunwayPrecedesItsLateClock(std::string* error);
 		friend bool TestArrivalLeadIncludesTheFastestSurvivor(std::string* error);
 		friend bool TestHostStatusKeepsTheReceiversLinkMeasurement(std::string* error);
 		friend bool TestEachSurvivorsRunwayUsesItsOwnLink(std::string* error);
+		friend bool TestAHostInItsReclaimGapJudgesNoSeatLate(std::string* error);
+		friend bool TestAReturnRefusedBeforeItsStartStopsNobody(std::string* error);
+		friend bool TestAReadyFrameKeepsItsLocalInputForThePreview(std::string* error);
+		friend bool TestAFeedingSeatIsNotHeldForLateness(std::string* error);
 		friend bool TestAReturnRebuildsArrivalSlack(std::string* error);
 		friend bool TestReturnFramesBypassReliableLoss(std::string* error);
 		friend bool TestAHostNobodyWaitsOnKeepsItsSeat(std::string* error);
@@ -1322,6 +1421,8 @@ namespace RTE {
 		friend bool TestASeatIsNotLateForOurOwnDecision(std::string* error);
 		friend bool TestAFirstDelayChangeIsNotAMutualWait(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
+		friend bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
+		friend bool TestASeatKnockingWhileTheRoundFormsIsAnswered(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
 		friend bool TestAWorldAdmissionClearsAReleasedSeat(std::string* error);
@@ -1460,7 +1561,7 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
-		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false);
+		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false, bool cleanLeave = true);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
 		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
 		void ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay, const char* why = "released");
@@ -1526,8 +1627,45 @@ namespace RTE {
 		/// The delay a member's start must carry: its own, or in a round joined while running, the one in force at the start.
 		uint16_t MemberStartDelay(const NetLockstepStart& start) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
+		/// The first frame a seat's capacity is judged at: past its warm-up grace, with the judgement's window wholly after it.
+		uint64_t CapacityJudgedFrom(uint8_t peerId, uint64_t windowTicks) const { return EffectiveStartOf(peerId) + c_CapacityGraceTicks + windowTicks; }
 		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
 		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
+
+		/// The reason a held seat shows its own player: its machine, when its own ticks ran over the step, else its link.
+		/// @return The PeerHeld reason.
+		std::string LocalHoldReason() const;
+
+		/// Judges this machine against the round: behind it past the Slow player bound with its own capacity under the round's
+		/// rate, it goes quiet.
+		void JudgeOwnPace(uint64_t producedFrame, uint64_t nowUs, double localElapsedMs);
+
+		/// The fastest capacity another machine published, at most the round's rate; 0 when none has.
+		/// @param except A seat whose own capacity is not counted.
+		/// @param includeOwn Whether this machine's own capacity counts.
+		double FastestPublishedCapacity(uint8_t except, bool includeOwn) const;
+
+		/// Whether a capacity is slow against the fastest, past the tolerance for nearly equal machines.
+		static bool SlowAgainst(double capacity, double fastest);
+
+		/// Goes quiet: a client stops queueing input and announces it, a host holds its own seat through its plane.
+		void GoQuiet(uint64_t producedFrame);
+
+		/// The ticks a second this machine's own recent ticks allow; 0 before it has measured them.
+		/// @param capped Whether to cap it at the round's rate, which is all this machine can run the round at.
+		/// @param fewestTicks The fewest ticks the median may read, up to its full window.
+		double OwnCapacityTps(bool capped = true, size_t fewestTicks = c_OwnPaceTicks) const;
+
+		/// Whether a seat still feeding the round is a slow machine: this machine waited on it on 45 of the last 60 frames and its ticks
+		/// arrived slower than this machine can run, past the tolerance for nearly equal machines, over that second - no delay re-size
+		/// covers that. Notes this frame as waited on it.
+		/// @param peerId The seat.
+		/// @param frame The frame waited for.
+		/// @param nowMs The coordinator's clock.
+		/// @param rate Set to the seat's measured ticks a second.
+		/// @return Whether the seat is a slow machine.
+		bool FeedsBelowRoundRate(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* rate = nullptr);
+		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Whether the wait for every peer's published startup has used the round's answer budget.
 		bool StartupWaitExpired(uint64_t nowMs) const;
 		void TickStartupWait(uint64_t nowMs);
@@ -1548,8 +1686,10 @@ namespace RTE {
 		void PublishCapturePark(uint64_t startFrame);
 		void ApplyCapturePark(const NetLockstepTiming& timing);
 		uint64_t CaptureParkCapTicks() const;
-		/// What the next park's window is sized from: the middle of the last three parks' slowest captures.
+		/// What an announced capture is expected to cost: the middle of the last three parks' slowest captures.
 		double SteadyCaptureCostMs() const;
+		/// What the next park's window is sized from: the 90th percentile of the recent parks' slowest captures plus one tick.
+		double ParkCaptureCostMs() const;
 		void SendCaptureParkReport(uint64_t nowMs = 0);
 		void RetryLateStartReclaims();
 		void FlushDeferredParkTimings();
@@ -1570,6 +1710,7 @@ namespace RTE {
 			uint64_t proposedAtMs = 0;
 		};
 		std::map<uint64_t, TimingDecision> m_TimingDecisions;
+		std::map<uint64_t, NetLockstepTiming> m_SettledTimings; //!< The newest proposals this peer took and has since let go of, by revision.
 		/// Whether a decision is committed, applied everywhere it must be and behind the frame the round resumes from.
 		bool DecisionSettled(const TimingDecision& decision) const;
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
@@ -1582,6 +1723,7 @@ namespace RTE {
 		};
 		std::map<uint8_t, std::deque<ArrivalLead>> m_ArrivalLeads; //!< Per remote sender, the recent arrivals of its new input.
 		std::map<uint8_t, std::deque<uint32_t>> m_ArrivalLateness; //!< Per remote sender, how long its recent ticks landed after we first missed them.
+		std::set<uint8_t> m_StartSkewSized; //!< Host: senders whose delay this round already took their published start work.
 		static constexpr size_t c_ArrivalLatenessSamples = 64;
 		/// The decrease a live delay change may make without a wait at its frame: never more than the sender's inputs arrived early by, less the slow-player bound.
 		std::optional<uint16_t> SlackLimitedDecrease(uint8_t peerId, uint16_t proposed, uint16_t current, uint64_t nowMs);
@@ -1598,11 +1740,23 @@ namespace RTE {
 		uint64_t m_LastTimingStatusMs = UINT64_MAX;
 		uint64_t m_TimingNowMs = 0;
 		std::optional<uint64_t> m_ProductionBaseFrame;
+		static constexpr size_t c_OwnPaceTicks = 15; //!< The ticks whose cost this machine judges its own pace on.
+		static constexpr size_t c_FirstCapacityTicks = 3; //!< The fewest ticks whose median this machine publishes, until it has its full window.
+		static constexpr uint64_t c_CapacityGraceTicks = 180; //!< A seat's first ticks are its warm-up: no capacity hold reads them.
+		static constexpr uint32_t c_SlowReadings = 5; //!< The slow capacity readings in a row that make this machine go quiet.
+		uint64_t m_JudgeAfterFrame = 0; //!< A machine back from its own hold judges itself again from this frame.
+		std::map<uint8_t, double> m_PublishedCapacity; //!< What each machine this one talks to published it can run, in ticks a second.
+		uint64_t m_CapacityPublishedAt = 0; //!< The produced frame this machine last published its capacity at.
+		uint32_t m_SlowTicks = 0; //!< The consecutive ticks this machine's capacity has been slow against the fastest published one.
+		std::deque<double> m_TickCosts; //!< This machine's own recent ticks' cost, in ms.
+		std::deque<std::array<double, 3>> m_OthersTickSamples; //!< When (us), at which tick the fastest other machine stood, and this machine's own tick.
+		bool m_SelfHeld = false; //!< This machine judged itself unable to hold the round's rate: its seat sends nothing more.
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
 		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
-		std::set<uint8_t> m_ReleaseWhenHeld; //!< Host: clean leavers whose hold releases the seat as soon as it lands.
+		std::set<uint8_t> m_AnnouncedLeavers; //!< Host: clean leavers being held, whose closing links are not sent their hold.
+		std::set<uint8_t> m_SlowMachineHolds; //!< Host: seats whose latest hold was for a machine that cannot keep up.
 		std::map<uint8_t, std::pair<NetLockstepStop, NetPeerId>> m_PendingMemberEnds; //!< Host: members' own ends this round has not played past yet.
 		/// Host: takes each member's end this round has played past, and goes on, as that member's leave.
 		void TakeMemberEndsPlayedPast(uint64_t nowMs);
@@ -1653,6 +1807,7 @@ namespace RTE {
 		std::map<uint8_t, NetLockstepStart> m_RemoteStarts; //!< Each accepted start, re-sent when a peer repeats its own.
 		std::set<uint8_t> m_PeersPlayedThisRound; //!< Remotes whose frames this round took; they are not still forming it.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
+		std::map<uint8_t, uint64_t> m_RefusedHoldFrames; //!< The frame each seat's last refused hold was asked at, so a refusal is named once.
 		std::map<uint8_t, uint64_t> m_PeerFrameWaivers; //!< Fenced peers -> the first frame the round stopped requiring.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
 		std::set<uint8_t> m_DroppedSeats;   //!< Classic holds pause; bounded holds commit empty input from their agreed frame.
@@ -1766,6 +1921,7 @@ namespace RTE {
 		std::optional<uint64_t> m_LocalCaptureTick;
 		uint64_t m_LocalCaptureStartedMs = 0;
 		double m_LocalCaptureCostMs = 0;
+		bool m_LocalCaptureRunning = false; //!< This engine's synchronized capture has begun and not yet completed.
 		std::map<std::pair<uint8_t, uint64_t>, uint64_t> m_CaptureExcuseUntilMs;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
@@ -1826,6 +1982,10 @@ namespace RTE {
 		/// The lane a packet takes to one peer: frames ride the frame lane unless that peer is still catching up.
 		NetTransportLane LaneTo(uint8_t peerId, const NetLockstepPacket& packet, NetTransportLane lane) const;
 		void SendReturnFrameCopies(uint8_t peerId, const NetLockstepFrame& frame);
+		/// Sends one tick whole, its observations spelled out, so its receiver reads it whatever its tables hold.
+		bool SendIndependentCopy(NetPeerId link, const NetLockstepFrame& input, uint8_t senderPeerId, uint64_t roundId, NetTransportLane lane);
+		/// When a sender's next tick crosses an epoch, the ticks before it that a window can no longer carry go out once more, whole.
+		void RepeatTicksBeforeEpoch(uint8_t senderPeerId, uint64_t targetFrame);
 	};
 
 } // namespace RTE

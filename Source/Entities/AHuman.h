@@ -172,6 +172,9 @@ namespace RTE {
 
 		void AdoptPersistedUniqueID() override;
 
+		/// Applies the walk state a clone carries in its stash - the limb paths' traversal, the limb positions and inertia, the feet's travel residue.
+		void AdoptCarriedWalkState() override;
+
 		/// The live foot groups, for snapshot forensics.
 		const AtomGroup* GetFGFootGroup() const { return m_pFGFootGroup; }
 		const AtomGroup* GetBGFootGroup() const { return m_pBGFootGroup; }

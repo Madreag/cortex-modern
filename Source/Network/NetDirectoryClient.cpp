@@ -1,6 +1,7 @@
 #include "NetDirectoryClient.h"
 
 #include "NetHttpClient.h"
+#include "System.h"
 
 #include "nlohmann/json.hpp"
 
@@ -342,12 +343,14 @@ namespace RTE {
 		++m_IceReplies;
 		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 		NetRelayConfig offer;
+		m_IceRelayRefused = reply.statusCode == 502 && reply.body.find("\"relay_provider_refused\"") != std::string::npos;
 		if (reply.statusCode == 200 && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
 			m_IceServers = std::move(offer);
 			m_IceError.clear();
 		} else {
 			if (!m_IceServers.Usable(now)) m_IceServers = {};
-			m_IceError = reply.statusCode == 429 ? "Relay credential rate limit; retrying shortly" :
+			m_IceError = m_IceRelayRefused ? "The host's relay refused the credentials" :
+			             reply.statusCode == 429 ? "Relay credential rate limit; retrying shortly" :
 			             reply.statusCode == 403 ? "Relay credential request refused by the directory" :
 			             "Relay credentials unavailable or expired";
 		}
@@ -359,14 +362,14 @@ namespace RTE {
 		}
 		// Disabled means no URL was ever configured; the directory must be silent there.
 		if (state != State::Disabled) {
-			std::cout << "[net-directory] state: " << StateName(m_State) << " -> " << StateName(state) << std::endl;
+			System::PrintDiagnosticLine(std::string("[net-directory] state: ") + StateName(m_State) + " -> " + StateName(state));
 		}
 		m_State = state;
 	}
 
 	void NetDirectoryClient::NoteError(const std::string& error) {
 		m_LastError = error;
-		std::cout << "[net-directory] " << error << std::endl;
+		System::PrintDiagnosticLine("[net-directory] " + error);
 	}
 
 	void NetDirectoryClient::ScheduleRetry(uint64_t nowMs) {
@@ -422,7 +425,7 @@ namespace RTE {
 			m_ExpiresInS = response.expiresInS;
 			m_NextHeartbeatMs = nowMs + static_cast<uint64_t>(m_HeartbeatS) * 1000;
 			m_BackoffMs = 0;
-			std::cout << "[net-directory] registered session_id=" << m_SessionId << " heartbeat_s=" << m_HeartbeatS << std::endl;
+			System::PrintDiagnosticLine("[net-directory] registered session_id=" + m_SessionId + " heartbeat_s=" + std::to_string(m_HeartbeatS));
 			SetState(State::Registered);
 			if (!m_Listed) {
 				// The unlist beat the response: delete the row we just created.
@@ -606,6 +609,7 @@ namespace RTE {
 		heartbeat.token = m_Token;
 		heartbeat.peerCount = m_Row.peerCount;
 		heartbeat.seatsFree = m_Row.seatsFree;
+		heartbeat.seatsHeld = m_Row.seatsHeld;
 		heartbeat.state = m_Running ? "running" : "lobby";
 		if (m_Capable) {
 			// A capable service gets the desired visibility on each heartbeat and must echo it.
@@ -739,6 +743,7 @@ namespace RTE {
 			row.worldBoot = session.worldBoot;
 			row.state = session.state;
 			row.seatsFree = session.seatsFree;
+			row.seatsHeld = session.seatsHeld;
 			row.peerCount = session.peerCount;
 			row.spectatorFree = session.spectatorFree;
 			row.spectatorMax = session.spectatorMax;
@@ -746,7 +751,8 @@ namespace RTE {
 			const NetDirectoryLocalIdentity& ident = (session.persistentWorld && worldLocal != nullptr) ? *worldLocal : local;
 			if (!NetDirectoryCodec::IsJoinable(session, ident, &why)) {
 				row.reason = MapMismatchReason(why);
-			} else if (session.seatsFree == 0 && !session.persistentWorld) {
+			} else if (session.seatsFree == 0 && !session.persistentWorld && !(session.state == "running" && session.seatsHeld > 0)) {
+				// A running match that holds a seat is reached anyway: its host answers, and a newcomer may apply.
 				row.reason = "full";
 			} else if ((row.address.empty() || row.port == 0) && session.joinMode != "ice" && session.joinMode != "either") {
 				// An ICE row is reached through its session id, so it has no address to be refused for.

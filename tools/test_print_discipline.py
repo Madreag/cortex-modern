@@ -138,7 +138,15 @@ DISCIPLINED = (
     ("Source/Network/NetMatchService.cpp", "net-world"),
     ("Source/Network/NetLobbySession.cpp", "net-lobby"),
     ("Source/Network/NetLobbySession.cpp", "net-match"),
+    # Printed off the simulation thread: the port mapper's and the checkpoint saver's own threads, and the session thread.
+    ("Source/Network/NetPortMap.cpp", "net-port-map"),
+    ("Source/Network/NetDirectoryClient.cpp", "net-directory"),
+    ("Source/System/CheckpointImage.cpp", "autosave"),
 )
+# Every thread of the network layer (session, plane, transport callbacks, workers) prints only through the locked single-write
+# helpers. These two files' raw prints are their self-tests' verdict lines on the main thread.
+NETWORK_SELFTEST_HOSTS = ("ControllerFrame.cpp", "SimChecksum.cpp")
+RAW_STREAM = re.compile(r"std::(?:cout|cerr)\s*<<")
 FPRINTF_STDERR = re.compile(r'std::fprintf\(stderr,\s*"RTE ')
 WRITER = re.compile(r"void WriteWholeLine\(std::ostream& stream, const std::string& line\)")
 LOCKED_WRITE = re.compile(r"std::scoped_lock printLock\(PrintLock\(\)\);")
@@ -163,6 +171,28 @@ def hits(path: Path, pattern: re.Pattern) -> list:
     return found
 
 
+def roster_selftest_lines(text):
+    # Blank comments and C++ string/character literals, retaining offsets and newlines for the brace boundary.
+    tokens = r'//[^\n]*|/\*[\s\S]*?\*/|R"([^ ()\\\t\r\n]{0,16})\([\s\S]*?\)\1"|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''
+    code = re.sub(tokens, lambda match: ''.join('\n' if c == '\n' else ' ' for c in match[0]), text)
+    found = re.search(r'\bint\s+NetSeatRosterSelfTest::Run\s*\(\s*\)\s*\{', code)
+    if not found: return set()
+    depth, start = 1, found.end()-1
+    for end in range(start+1, len(code)):
+        depth += (code[end] == '{') - (code[end] == '}')
+        if depth == 0:
+            return set(range(text.count('\n', 0, start)+1, text.count('\n', 0, end)+2))
+    return set()
+
+
+def network_print_hits(path):
+    rows = hits(path, RAW_STREAM)
+    if path.name == 'NetSeatRoster.cpp' and path.is_file():
+        excluded = roster_selftest_lines(path.read_text(encoding='utf-8', errors='replace'))
+        rows = [row for row in rows if row['line'] not in excluded]
+    return rows
+
+
 def check(repo: Path, logs: list) -> dict:
     main, rte_error, system = repo / "Source/Main.cpp", repo / "Source/System/RTEError.cpp", repo / "Source/System/System.cpp"
     system_text = system.read_text(encoding="utf-8", errors="replace") if system.is_file() else ""
@@ -170,6 +200,9 @@ def check(repo: Path, logs: list) -> dict:
     rows = {}
     for name, tag in DISCIPLINED:
         rows.setdefault(f"{tag}_lines_are_one_write", []).extend(hits(repo / name, streamed(tag)))
+    network = [path for path in sorted((repo / "Source/Network").glob("*.cpp"))
+               if not path.name.endswith("SelfTest.cpp") and path.name not in NETWORK_SELFTEST_HOSTS]
+    rows["network_threads_print_whole_lines"] = [row for path in network for row in network_print_hits(path)]
     rows["rte_error_lines_use_the_print_lock"] = hits(rte_error, FPRINTF_STDERR)
     rows["menu_script_helper_present"] = [] if "void MenuScriptPrint(const std::string& line)" in main_text else \
         [{"file": str(main), "line": 0, "text": "MenuScriptPrint helper missing"}]

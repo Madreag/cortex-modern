@@ -364,6 +364,10 @@ namespace RTE {
 			}
 			if (config.version >= NetMatchConfigUtil::c_RelayLayoutVersion &&
 			    !AppendString(out, config.relay.ToJson(), 32768, "relay", error)) return false;
+			if (config.version >= NetMatchConfigUtil::c_SeatRosterVersion) {
+				AppendU32LE(out, config.seatRosterRevision);
+				AppendHash(out, config.seatRosterHash);
+			}
 			return true;
 		}
 
@@ -371,7 +375,7 @@ namespace RTE {
 			uint16_t reserved = 0;
 			uint8_t playerCount = 0;
 			if (!ReadOrTruncated(reader.ReadU16LE(out.version), reader, error, "config.version")) return false;
-			// Live ordinary/world configs use v6/v7 and share the timing layout; older layouts remain recording-only.
+			// Live ordinary/world configs use v8/v9 and share the timing layout; older layouts remain recording-only.
 			if (out.version == 0 || out.version > NetMatchConfigUtil::c_PersistentWorldVersion || (out.version < NetMatchConfigUtil::c_LiveMinVersion && !allowRecordedVersions)) {
 				SetError(error, NetLobbyErrorCode::UnsupportedVersion, reader.Offset() - 2, "unsupported match config version " + std::to_string(out.version));
 				return false;
@@ -546,6 +550,10 @@ namespace RTE {
 					return false;
 				}
 			}
+			out.seatRosterRevision = 0;
+			out.seatRosterHash = {};
+			if (out.version >= NetMatchConfigUtil::c_SeatRosterVersion &&
+			    !ReadOrTruncated(reader.ReadU32LE(out.seatRosterRevision) && reader.ReadHash(out.seatRosterHash), reader, error, "seat roster")) return false;
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
 				SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset(), validateError);

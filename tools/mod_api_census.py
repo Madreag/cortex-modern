@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 RE_CLASS_MACRO = re.compile(r'\b(Concrete|Abstract)TypeLuaClassDefinition\(\s*([A-Za-z_][\w:]*)\s*,\s*([A-Za-z_][\w:]*)\s*\)')
 RE_CLASS_RAW = re.compile(r'class_<\s*([A-Za-z_][\w:]*)\s*(?:,\s*([A-Za-z_][\w:]*))?\s*>\s*\(\s*"([^"]+)"')
@@ -160,7 +161,9 @@ def parse_luaman(repo, classes):
             lua_cls = next(iter(cpp_to_lua.values()), None) if len(cpp_to_lua) == 1 else 'LuaManager'
             globals_[m.group(1)] = lua_cls
             continue
-        cpp = expr[2:] if expr.startswith('g_') else expr
+        # The manager globals bind InstanceOrNull<X>() (nil before X is constructed), older builds &g_X; both name X.
+        instance = re.fullmatch(r'InstanceOrNull<\s*(\w+)\s*>\(\)', expr)
+        cpp = instance.group(1) if instance else expr[2:] if expr.startswith('g_') else expr
         globals_[m.group(1)] = cpp_to_lua.get(cpp, cpp)
     global_functions = set()
     for m in RE_REGISTER.finditer(src):
@@ -359,6 +362,18 @@ def self_test():
             failures.append(f'rows {sorted(rows)}; hidden {sorted(SELF_TEST_ROWS - rows)}, extra {sorted(rows - SELF_TEST_ROWS)}')
         if guarded != SELF_TEST_GUARDED:
             failures.append(f'guarded notes {sorted(guarded)}; expected {sorted(SELF_TEST_GUARDED)}')
+    # A manager global maps to its bound class whichever form LuaMan binds it with.
+    with tempfile.TemporaryDirectory() as repo:
+        for rel, text in (('Source/Lua/LuaBindingsManagers.cpp', 'luabind::class_<SceneMan>("SceneManager")\n\t.def("Bound", &SceneMan::Bound);\n'
+                                                                 'luabind::class_<TimerMan>("TimerManager")\n\t.def("Bound", &TimerMan::Bound);\n'),
+                          ('Source/Managers/LuaMan.cpp', 'luabind::globals(m_State)["SceneMan"] = InstanceOrNull<SceneMan>();\n'
+                                                         'luabind::globals(m_State)["TimerMan"] = &g_TimerMan;\n')):
+            os.makedirs(os.path.dirname(os.path.join(repo, rel)), exist_ok=True)
+            with open(os.path.join(repo, rel), 'w', encoding='utf-8', newline='\n') as f:
+                f.write(text)
+        globals_, _ = parse_luaman(repo, parse_bindings(repo)[0])
+        if globals_ != {'SceneMan': 'SceneManager', 'TimerMan': 'TimerManager'}:
+            failures.append(f'manager globals {globals_}; expected SceneMan -> SceneManager and TimerMan -> TimerManager')
     for failure in failures:
         print(f'[mod_api_census self-test] FAIL {failure}')
     print(f'[mod_api_census self-test] {"PASS" if not failures else "FAIL"} {len(failures)} failure(s)')
@@ -372,6 +387,7 @@ def main():
     ap.add_argument('--repo', default='.')
     ap.add_argument('--module', required=True, help='module dir relative to repo, e.g. Data/VoidWanderers.rte')
     ap.add_argument('--out', help='write JSON report here (default stdout)')
+    ap.add_argument('--verdict-out', type=Path, help='write a collection verdict with input hashes and counts')
     args = ap.parse_args()
 
     classes, global_functions = parse_bindings(args.repo)
@@ -393,13 +409,27 @@ def main():
         'unresolved_global_calls': [n for n in notes if n['kind'] == 'unresolved_global_call'],
         'guarded_optional_hooks': [n for n in notes if n['kind'] == 'guarded_optional_hook'],
     }
+    installed = (Path(args.repo) / args.module / 'Index.ini').is_file()
+    report.update(passed=installed and nfiles > 0 and not unique,
+                  reason='module not installed' if not installed else 'no Lua files scanned' if not nfiles else
+                         f'{len(unique)} registered API names missing' if unique else '')
     text = json.dumps(report, indent=2)
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, 'w') as f:
             f.write(text + '\n')
     print(text)
-    return 0
+    if args.verdict_out:
+        from verdict_artifact import write_verdict
+        args.verdict_out.parent.mkdir(parents=True, exist_ok=True)
+        log = args.verdict_out.with_suffix('.log'); log.write_text(text + '\n', encoding='utf-8')
+        inputs = [Path(__file__), Path(args.repo) / 'Source/Managers/LuaMan.cpp',
+                  *Path(args.repo).glob('Source/Lua/LuaBindings*.cpp'),
+                  *(Path(args.repo) / args.module).rglob('*.lua')]
+        write_verdict(args.verdict_out, passed=report['passed'],
+                      counts=dict(files_scanned=nfiles, missing=len(unique), unresolved=len(report['unresolved_global_calls'])),
+                      inputs=inputs, log=log, census=report)
+    return 0 if report['passed'] else 1
 
 
 if __name__ == '__main__':

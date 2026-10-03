@@ -51,6 +51,21 @@ namespace RTE {
 		virtual bool CaptureNetLocalPlayerState(NetLocalPlayerState& out) const;
 		virtual bool RestoreNetLocalPlayerState(const NetLocalPlayerState& state);
 		virtual bool ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings);
+
+		/// Maps this machine's seats from the round's roster onto the committed world, for a player returning with no state of its own.
+		/// Every shared seat fact and every other seat's state stays as the world holds it; a local seat with no actor starts unbound.
+		/// @param config The round's roster.
+		/// @param localPeer This machine's peer id.
+		/// @return Whether the seats were mapped.
+		virtual bool AdoptNetLocalSeat(const NetMatchConfig& config, uint8_t localPeer);
+
+		/// Restores a returning player's own seat: the agreed binding when the match has one, else the seat as the committed world holds it.
+		/// @param activity The restored activity.
+		/// @param agreed The seat's agreed binding, or nullptr when the match never heard one.
+		/// @param config The round's roster, or nullptr when there is none.
+		/// @param localPeer This machine's peer id.
+		/// @return Whether the seat was restored.
+		static bool RestoreReturningLocalSeat(Activity& activity, const NetGamePlayerBindings* agreed, const NetMatchConfig* config, uint8_t localPeer);
 		static bool RunNetLocalPlayerStateSelfTest();
 		static bool RunPresentationViewSelfTest();
 		SerializableOverrideMethods;

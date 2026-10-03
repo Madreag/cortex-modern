@@ -51,9 +51,11 @@ namespace RTE::NetPlayerPresentation {
 
 	inline std::string State(uint8_t peer, bool aiHeld, bool dropped, bool reclaiming) {
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
-		const bool left = Departed(peer);
-		const bool ai = aiHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame) ||
-		    (left && Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, frame));
+		const bool released = ScenarioRunner::IsLockstepSeatReleased(peer) || g_NetMatchService.GetSeatPresence().StateOf(peer) == NetSeatPresenceState::Left;
+		// A seat the AI plays for its player is held, however its player went; only the host's release makes it Left.
+		const bool held = !released && (aiHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame));
+		const bool left = !held && Departed(peer);
+		const bool ai = held || (left && (ScenarioRunner::IsLockstepSeatUnderAI(peer, frame) || (Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, frame))));
 		if (left) return ai ? "Left - AI in control" : "Left";
 		if (ai) return reclaiming ? "Held - AI in control - rejoining" : "Held - AI in control";
 		if (reclaiming) return "Rejoining";
@@ -66,6 +68,8 @@ namespace RTE::NetPlayerPresentation {
 	}
 
 	inline std::string Row(const NetLobbyMember& member) {
+		// A seat nobody holds is open: no remembered name, and nothing reads it as connected.
+		if (!member.connected && !member.cpu && !member.isLocal && !member.dropped && !member.reclaiming && !member.aiHeld && Placeholder(member.peerId, member.displayName)) return "Open seat";
 		std::string row = Name(member) + "  /  " + State(member);
 		// A seat that is gone has no live route to name.
 		if (!member.connectedRoute.empty() && member.connected && !Departed(member.peerId)) row += " / via " + member.connectedRoute;

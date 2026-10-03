@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <atomic>
 #include <mutex>
@@ -71,6 +72,19 @@ namespace RTE {
 		/// @param result A finalized tick result.
 		/// @return The sim-gated hash of all on-wire subsystems.
 		static Hash SimGatedHash(const Result& result);
+
+		/// Every subsystem a tick can feed, so a hash row names each one even on a tick that fed it nothing.
+		/// @return The subsystem names.
+		static const std::array<std::string_view, 16>& Subsystems();
+
+		/// The hash of a subsystem fed nothing this tick.
+		/// @return The empty subsystem's hash.
+		static const Hash& EmptyHash();
+
+		/// A result's subsystem hashes with every subsystem present, those fed nothing at the empty hash. The total is not touched.
+		/// @param result A finalized tick result.
+		/// @return Each subsystem's hash, name-sorted.
+		static std::map<std::string, Hash> CompleteSubsystems(const Result& result);
 
 		/// Whether a tick is currently being accumulated (between BeginTick and EndTick). Thread-safe.
 		bool IsActive() const;

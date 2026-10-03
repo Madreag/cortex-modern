@@ -26,6 +26,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <atomic>
 #include <bit>
@@ -127,6 +128,108 @@ namespace {
 		return lock;
 	}
 
+	// Standard output's text leaves the writing thread at once and reaches its file from one writer thread, in the order it was
+	// written, so a disk that stalls a write never stalls the simulation or the session plane. A fault line and the exit drain it.
+	class AsyncConsoleBuf final : public std::streambuf {
+	public:
+		explicit AsyncConsoleBuf(std::streambuf* target) : m_Target(target), m_Writer([this] { Run(); }) {}
+
+		// Writes what is queued; with tryOnly it gives up rather than wait on a writer or a queueing thread.
+		bool Drain(bool tryOnly) {
+			std::unique_lock<std::mutex> write(m_WriteLock, std::defer_lock);
+			std::unique_lock<std::mutex> lock(m_Lock, std::defer_lock);
+			if (!tryOnly) {
+				write.lock();
+				lock.lock();
+			} else if (!write.try_lock() || !lock.try_lock()) {
+				return false;
+			}
+			std::string batch;
+			batch.swap(m_Pending);
+			lock.unlock();
+			WriteBatch(batch);
+			return true;
+		}
+
+		void Stop() {
+			{
+				std::lock_guard<std::mutex> lock(m_Lock);
+				m_Stopping = true;
+			}
+			m_Wake.notify_one();
+			if (m_Writer.joinable()) m_Writer.join();
+			Drain(false);
+		}
+
+	protected:
+		std::streamsize xsputn(const char* text, std::streamsize count) override {
+			{
+				std::lock_guard<std::mutex> lock(m_Lock);
+				if (!m_Stopping) {
+					m_Pending.append(text, static_cast<size_t>(count));
+					m_Wake.notify_one();
+					return count;
+				}
+			}
+			// After the exit's drain, output goes out where it is written.
+			std::lock_guard<std::mutex> write(m_WriteLock);
+			const std::streamsize written = m_Target->sputn(text, count);
+			m_Target->pubsync();
+			return written;
+		}
+
+		int_type overflow(int_type c) override {
+			if (traits_type::eq_int_type(c, traits_type::eof())) return traits_type::not_eof(c);
+			const char ch = traits_type::to_char_type(c);
+			return xsputn(&ch, 1) == 1 ? c : traits_type::eof();
+		}
+
+		// A flush is the writer's: the text is already on its way.
+		int sync() override { return 0; }
+
+	private:
+		void WriteBatch(const std::string& batch) {
+			if (batch.empty()) return;
+			m_Target->sputn(batch.data(), static_cast<std::streamsize>(batch.size()));
+			m_Target->pubsync();
+		}
+
+		void Run() {
+			for (;;) {
+				{
+					std::unique_lock<std::mutex> lock(m_Lock);
+					m_Wake.wait(lock, [this] { return m_Stopping || !m_Pending.empty(); });
+					if (m_Stopping) return;
+				}
+				// Taken in the drain's order, so no batch is written before an older one.
+				std::lock_guard<std::mutex> write(m_WriteLock);
+				std::string batch;
+				{
+					std::lock_guard<std::mutex> lock(m_Lock);
+					batch.swap(m_Pending);
+				}
+				WriteBatch(batch);
+			}
+		}
+
+		std::streambuf* m_Target;
+		std::mutex m_Lock; //!< Guards the queue; held only to append or take it.
+		std::mutex m_WriteLock; //!< Held while a batch is taken and written, so batches reach the file in order.
+		std::condition_variable m_Wake;
+		std::string m_Pending;
+		bool m_Stopping = false;
+		std::thread m_Writer;
+	};
+
+	// Never destroyed: a thread still writing at exit finds it, writing straight through once the exit has drained it.
+	AsyncConsoleBuf* const s_AsyncConsole = [] {
+		static const std::ios_base::Init streams;
+		auto* console = new AsyncConsoleBuf(std::cout.rdbuf());
+		std::cout.rdbuf(console);
+		std::atexit([] { s_AsyncConsole->Stop(); });
+		return console;
+	}();
+
 	// The path the OS reports for the running image; argv[0] is the fallback when it cannot say.
 	std::filesystem::path ThisExecutablePath() {
 #ifdef _WIN32
@@ -181,6 +284,11 @@ namespace {
 		s_LastFaultDepthPath = 0;
 		std::unique_lock<std::mutex> printLock(PrintLock(), std::try_to_lock);
 		if (printLock.owns_lock()) {
+			if (&stream == &std::cout && s_AsyncConsole->Drain(true)) {
+				std::fwrite(whole.data(), 1, whole.size(), file);
+				std::fflush(file);
+				return;
+			}
 			stream.write(whole.data(), static_cast<std::streamsize>(whole.size()));
 			stream.flush();
 			return;
@@ -218,6 +326,18 @@ unsigned long System::GetProcessID() {
 #else
 	return static_cast<unsigned long>(getpid());
 #endif
+}
+
+const std::string& System::GetBuildVersion() {
+	static const std::string version = [] {
+		std::ifstream file(ThisExecutablePath().parent_path() / "VERSION.txt");
+		std::string line;
+		std::getline(file, line);
+		// Only a version's own characters reach the menu.
+		line.erase(std::remove_if(line.begin(), line.end(), [](unsigned char c) { return !(std::isalnum(c) || c == '.' || c == '-' || c == '+'); }), line.end());
+		return line.substr(0, 32);
+	}();
+	return version;
 }
 
 bool System::s_Quit = false;
@@ -784,6 +904,10 @@ const std::string& System::GetThisExeSha256() {
 		return hash.empty() ? std::string("unavailable") : hash;
 	}();
 	return digest;
+}
+
+void System::FlushConsole() {
+	s_AsyncConsole->Drain(true);
 }
 
 void System::PrintDiagnosticLine(const std::string& line) {

@@ -1,4 +1,5 @@
 #include "NetLobbySession.h"
+#include "DiagnosticLine.h"
 
 #include "NetIdentity.h"
 #include "NetLockstep.h"
@@ -410,7 +411,9 @@ namespace RTE {
 			Fail("state transfer bounds are invalid");
 			return;
 		}
-		m_OutgoingStateId = m_OutgoingStateId == 0 ? 0x50355354ULL ^ static_cast<uint32_t>(m_StateBytesToSend.size()) ^ (static_cast<uint64_t>(chunkCount) << 32) : m_OutgoingStateId + 1;
+		// The match's config revision leads a lobby's first id, so a lobby started for a later round never repeats or undercuts an id its peers took from the last.
+		m_OutgoingStateId = m_OutgoingStateId == 0 ? (m_Config.matchConfig.configRevision << 32) | (0x50355354U ^ static_cast<uint32_t>(m_StateBytesToSend.size()) ^ (static_cast<uint32_t>(chunkCount) << 16))
+		                                           : m_OutgoingStateId + 1;
 		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = chunkCount;
 		m_ChunkSendStall = 0;
@@ -536,6 +539,8 @@ namespace RTE {
 			return;
 		}
 		if (m_IncomingStateId != message.transferId) {
+			// Chunks ride an ordered reliable lane: a later chunk with no transfer open is the tail of one its round abandoned.
+			if (message.chunkIndex != 0 && m_IncomingStateId == 0) return;
 			if (message.chunkIndex != 0 || message.transferId <= m_LastIncomingStateId) {
 				Fail("state transfer does not start with a new first chunk");
 				return;
@@ -771,6 +776,22 @@ namespace RTE {
 		RemoveRemotePeer(peer->first);
 	}
 
+	namespace {
+		// A seat leaves the round's members: the agreed config names the rest (none named means every seat).
+		bool LeaveRoundMembers(NetMatchConfig& config, uint8_t peerId) {
+			std::vector<uint8_t> active = config.activePeerIds;
+			if (active.empty())
+				for (const NetMatchPlayerSlot& slot: config.players)
+					if (!slot.cpu && slot.peerId != 0 && std::find(active.begin(), active.end(), slot.peerId) == active.end()) active.push_back(slot.peerId);
+			if (std::find(active.begin(), active.end(), config.hostPeerId) == active.end()) active.push_back(config.hostPeerId);
+			std::erase(active, peerId);
+			std::sort(active.begin(), active.end());
+			if (active == config.activePeerIds) return false;
+			config.activePeerIds = std::move(active);
+			return true;
+		}
+	}
+
 	void NetLobbySession::RemoveRemotePeer(uint8_t peerId) {
 		m_LobbyUpConnections.erase(RemoteTransportOf(peerId));
 		std::erase_if(m_QueuedStateTransfers, [&](const auto& transfer) { return transfer.first == peerId; });
@@ -790,6 +811,12 @@ namespace RTE {
 		m_RemoteNamesByPeer.erase(peerId);
 		m_RemotePingByPeer.erase(peerId);
 		m_RemotePlatformsByPeer.erase(peerId);
+		if (RosterHoldsDroppedSeat(peerId)) {
+			m_PeerStatePending = true;
+			m_StartRequested = m_Config.autoStart;
+			m_State = NetLobbyState::WaitingForConfigAck;
+			return;
+		}
 		// The seat is open again, so it carries the unseated name once more: a kicked or departed
 		// member's name on a seat nobody holds is a roster row that lies to every peer. Opening it is a
 		// live roster change, so it rides the republish a host option edit rides - a new revision the
@@ -803,6 +830,8 @@ namespace RTE {
 				seatOpened = true;
 			}
 		}
+		// From the first start on the opened seat keeps its number and the AI plays it: nobody waits for it at the start.
+		if (RosterStartsSeatOpen(peerId) && LeaveRoundMembers(opened, peerId)) seatOpened = true;
 		if (seatOpened) {
 			++opened.configRevision;
 			// Only a round that is already closing refuses, and its roster is nobody's view by then.
@@ -811,6 +840,29 @@ namespace RTE {
 		m_PeerStatePending = true;
 		m_StartRequested = m_Config.autoStart;
 		m_State = NetLobbyState::WaitingForConfigAck;
+	}
+
+	bool NetLobbySession::RosterHoldsDroppedSeat(uint8_t peerId) {
+		// The seat roster decides: before the first start a member's seat frees, from it on a seat its player still owns is held, and a
+		// seat the host opened opens.
+		if (!m_Config.host) return false;
+		const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
+		const NetRosterSeat* seat = plane ? plane->RosterSeatOfPeer(peerId) : nullptr;
+		if (!seat || plane->GetRoster().stage == NetRosterStage::Lobby || seat->owner == 0) return false;
+		// The round starts that seat held by the AI and its player comes back through the rejoin; nobody waits for its endpoint.
+		NetMatchConfig held = m_Config.matchConfig;
+		if (LeaveRoundMembers(held, peerId)) {
+			++held.configRevision;
+			(void)RepublishMatchConfig(held);
+		}
+		return true;
+	}
+
+	bool NetLobbySession::RosterStartsSeatOpen(uint8_t peerId) const {
+		if (!m_Config.host) return false;
+		const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
+		const NetRosterSeat* seat = plane ? plane->RosterSeatOfPeer(peerId) : nullptr;
+		return seat && plane->GetRoster().stage != NetRosterStage::Lobby && seat->owner == 0;
 	}
 
 	void NetLobbySession::RejectRemote(NetPeerId transportPeerId, const std::string& reason) {
@@ -940,8 +992,17 @@ namespace RTE {
 		if (m_Config.matchConfig.persistentWorld) {
 			return !m_RemotePeerIds.empty() || !m_Config.matchConfig.dedicated;
 		}
-		if (m_Config.host && m_RemotePeerIds.size() + 1 != (m_Config.activePeerCount ? m_Config.activePeerCount : m_Config.matchConfig.peerCount)) {
-			return false;
+		if (m_Config.host) {
+			const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
+			if (plane && plane->GetRoster().stage == NetRosterStage::Starting) {
+				// A forming round waits on the seats its roster has at the start on a live link, never on a held or an opened one.
+				for (const uint8_t member: plane->StartMembers())
+					if (member != m_Config.matchConfig.hostPeerId && !IsKnownRemote(member)) return false;
+			} else if (const std::vector<uint8_t>& members = m_Config.matchConfig.activePeerIds;
+			           m_RemotePeerIds.size() + 1 != (members.empty() ? m_Config.matchConfig.peerCount : members.size())) {
+				// The first lobby fills every seat; with no round forming the agreed config names the members.
+				return false;
+			}
 		}
 		return !m_RemotePeerIds.empty() || !SeatsRemoteHuman();
 	}
@@ -1198,7 +1259,7 @@ namespace RTE {
 			line << " ready_sent=" << (m_ReadySent ? 1 : 0) << " local_ready=" << (m_LocalReady ? 1 : 0)
 			     << " seat_assigned=" << (m_SeatAssigned ? 1 : 0) << " starts_seen=" << m_Stats.startPacketsReceived;
 		}
-		std::cout << line.str() << std::endl;
+		DiagnosticLine() << line.str() << std::endl;
 	}
 
 	void NetLobbySession::SendStartIfReady() {
@@ -1475,7 +1536,7 @@ namespace RTE {
 
 	void NetLobbySession::TimeoutWaitingForStart() {
 		++m_Stats.timeouts;
-		if (m_Config.host && m_Config.enableMigration && m_Config.activePeerCount == 0) {
+		if (m_Config.host && m_Config.enableMigration && m_Config.matchConfig.activePeerIds.empty()) {
 			for (uint8_t peer = 1; peer <= m_Config.matchConfig.peerCount; ++peer) {
 				if (m_MigrationEndpoints.contains(peer)) {
 					continue;
@@ -1497,10 +1558,15 @@ namespace RTE {
 	bool NetLobbySession::PrepareMigrationRoster() {
 		if (m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld)
 			return false;
-		if (m_Config.activePeerCount != 0 && !m_Config.matchConfig.successorOrder.empty())
+		// A round that starts a seat held - named at its start or held when its player's link dropped in this lobby - keeps the
+		// roster it carried: the held seat sends no endpoint to wait for.
+		if (!m_Config.matchConfig.activePeerIds.empty() && !m_Config.matchConfig.successorOrder.empty())
 			return true;
+		// A seat the round starts held, its player away, has no endpoint to wait for and hosts nothing: the members present do.
+		const std::vector<uint8_t>& active = m_Config.matchConfig.activePeerIds;
+		const auto member = [&active](uint8_t peer) { return active.empty() || std::find(active.begin(), active.end(), peer) != active.end(); };
 		for (uint8_t peer = 1; peer <= m_Config.matchConfig.peerCount; ++peer)
-			if (!m_MigrationEndpoints.contains(peer))
+			if (member(peer) && !m_MigrationEndpoints.contains(peer))
 				return false;
 		NetMatchConfig next = m_Config.matchConfig;
 		next.migrationPeers.clear();
@@ -1509,7 +1575,7 @@ namespace RTE {
 				next.migrationPeers.push_back(endpoint);
 		if (next.successorOrder.empty())
 			for (uint8_t peer = 1; peer <= next.peerCount; ++peer)
-				if (peer != next.hostPeerId)
+				if (peer != next.hostPeerId && member(peer))
 					next.successorOrder.push_back(peer);
 		std::string error;
 		if (!NetMatchConfigUtil::ValidateLocalAlpha(next, &error)) {

@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "name": "mp-port-map-unanswered",
+  "port_base": 49469,
+  "size": "960x540",
+  "timeout_s": 120,
+  "title": "The host's router mapping line in the lobby when no router answers: under way, then no answer",
+  "capture_policy": "The routers are loopback fakes started beside the run (tools/net_port_map_fake.py), so no packet reaches a real router; every runner seeds NetworkPortMapEnable = 0 and only this scene's host turns the mapping on by its argv. The lobby line is read from the label the player sees.",
+  "requires_tokens": [
+    "PORTMAP_SILENT_GATEWAY",
+    "PORTMAP_DEAD_IGD"
+  ],
+  "runs": [
+    {
+      "name": "unanswered",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-port-map",
+            "on",
+            "-net-port-map-gateway",
+            "{PORTMAP_SILENT_GATEWAY}",
+            "-net-port-map-igd",
+            "{PORTMAP_DEAD_IGD}"
+          ],
+          "menu_script": "mp-port-map-unanswered.host.menu.txt",
+          "settings": {
+            "NetworkDisplayName": "Host"
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "port-map-pending",
+      "run": "unanswered",
+      "peer": "host",
+      "mark": "port-map-pending",
+      "screen": "MultiplayerScreen",
+      "what": "Right after the lobby opens, the router line says the mapping is under way.",
+      "events": [
+        "assert_label LabelLobbyPortMap \"Mapping the port\\.\\.\\.\" text=\"Mapping the port\\.\\.\\.\" PASS"
+      ]
+    },
+    {
+      "id": "port-map-unanswered",
+      "run": "unanswered",
+      "peer": "host",
+      "mark": "port-map-unanswered",
+      "screen": "MultiplayerScreen",
+      "what": "With no router answering, the line says so in the player's words.",
+      "events": [
+        "assert_label LabelLobbyPortMap \"No router mapping \\(no method answered\\)\" text=\"No router mapping \\(no method answered\\)\" PASS"
+      ]
+    }
+  ]
+}

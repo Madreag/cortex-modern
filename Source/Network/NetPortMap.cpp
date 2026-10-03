@@ -1,5 +1,6 @@
 #include "NetPortMap.h"
 #include "NetLanDiscovery.h"
+#include "System.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -40,10 +41,9 @@ namespace RTE {
 			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 		}
 
+		// The mapper runs on its own thread: its lines go out whole under the engine's print lock.
 		void Log(const std::string& line) {
-			static std::mutex s_LogMutex;
-			std::lock_guard<std::mutex> lock(s_LogMutex);
-			std::cout << "[net-port-map] " << line << std::endl;
+			System::PrintDiagnosticLine("[net-port-map] " + line);
 		}
 
 		void CloseSocket(SocketHandle socketHandle) {

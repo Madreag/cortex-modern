@@ -68,7 +68,7 @@ class OracleVacuity(unittest.TestCase):
                 save = dest / f"p5snap_p{number}.ccsave"
                 with zipfile.ZipFile(save, "w") as archive:
                     archive.writestr("Index.ini", "x")
-            with patch("phase_b.invoke", side_effect=run_pair_ok):
+            with patch("phase_b.invoke", side_effect=run_pair_ok), patch('phase_b.ROOT', root):
                 with self.assertRaisesRegex(RuntimeError, r"check_world\.py exited 1; comparison did not complete"):
                     pair_arms(root)
 

@@ -281,7 +281,8 @@ namespace RTE {
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)},
 			        {"slow_player_bound_ticks", config.slowPlayerBoundTicks}, {"slow_player_policy", static_cast<uint8_t>(config.slowPlayerPolicy)},
 			        {"active_peer_ids", config.activePeerIds},
-			        {"frame_redundancy_ticks", config.frameRedundancyTicks}};
+			        {"frame_redundancy_ticks", config.frameRedundancyTicks},
+			        {"seat_roster_revision", config.seatRosterRevision}, {"seat_roster_hash", NetIdentity::HashHex(config.seatRosterHash)}};
 		}
 
 		std::vector<std::pair<std::string, std::string>> RuleFields(const NetMatchConfig& config) {
@@ -312,6 +313,10 @@ namespace RTE {
 			}
 			if (config.pathHorizonTicks != 0) {
 				fields.emplace_back("path_horizon_ticks", std::to_string(config.pathHorizonTicks));
+			}
+			if (config.version >= NetMatchConfigUtil::c_SeatRosterVersion) {
+				fields.emplace_back("seat_roster_revision", std::to_string(config.seatRosterRevision));
+				fields.emplace_back("seat_roster_hash", NetIdentity::HashHex(config.seatRosterHash));
 			}
 			for (size_t i = 0; i < config.teamRules.size(); ++i) {
 				const std::string prefix = "team." + std::to_string(i) + ".";
@@ -349,87 +354,29 @@ namespace RTE {
 	void NetMatchConfigUtil::ApplySavedHostOptions(NetMatchConfig& config) {
 		config.delayPolicy = DelayPolicyFromSetting(g_SettingsMan.GetNetworkHostDelayPolicy());
 		config.slowPlayerBoundTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkSlowPlayerBoundTicks());
-		config.slowPlayerPolicy = g_SettingsMan.GetNetworkSlowPlayerPolicy() == SettingsMan::NetworkSlowPlayerPolicy::Pause ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
+		// Only the default policy is offered, whatever an older setting saved: the others do not yet keep a dropped player's seat.
+		config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
 		config.automaticRepair = g_SettingsMan.GetNetworkHostAutoRepair();
 		config.pathHorizonTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkPathHorizonTicks());
 	}
 
-	bool NetMatchConfigUtil::DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap, std::string* error) {
-		std::vector<uint8_t> survivors = survivingPeerIds;
-		std::sort(survivors.begin(), survivors.end());
-		survivors.erase(std::unique(survivors.begin(), survivors.end()), survivors.end());
+	bool NetMatchConfigUtil::DeriveRematchConfig(const NetMatchConfig& previous, NetMatchConfig& outConfig, std::string* error) {
 		if (previous.persistentWorld) {
 			if (error) *error = "a persistent world does not rematch";
 			return false;
 		}
-		if (survivors.empty() || survivors.size() > previous.peerCount) {
-			if (error) *error = "surviving peer count is out of range";
-			return false;
-		}
-		for (uint8_t peerId : survivors) {
-			if (peerId == 0 || peerId > previous.peerCount) {
-				if (error) *error = "a surviving peer id is outside the match config";
-				return false;
-			}
-		}
-		if (!std::binary_search(survivors.begin(), survivors.end(), previous.hostPeerId)) {
-			if (error) *error = "the host is not among the surviving peers";
-			return false;
-		}
 		const bool cpuOnly = previous.dedicated && std::all_of(previous.players.begin(), previous.players.end(), [](const auto& slot) { return slot.cpu; });
-		if (survivors.size() < c_MinPeerCount && !cpuOnly) {
+		if (previous.peerCount < c_MinPeerCount && !cpuOnly) {
 			if (error) *error = "not enough players for a rematch";
 			return false;
 		}
-		std::rotate(survivors.begin(), std::find(survivors.begin(), survivors.end(), previous.hostPeerId), std::find(survivors.begin(), survivors.end(), previous.hostPeerId) + 1);
-		std::map<uint8_t, uint8_t> seatMap;
-		for (size_t index = 0; index < survivors.size(); ++index) {
-			seatMap[survivors[index]] = static_cast<uint8_t>(index + 1);
-		}
+		// Every seat keeps its id and its player: one who left or dropped is held, one the host released is open; the host names who is present.
 		NetMatchConfig config = previous;
 		config.activePeerIds.clear();
-		config.peerCount = static_cast<uint8_t>(survivors.size());
-		config.hostPeerId = seatMap.at(previous.hostPeerId);
-		config.players.clear();
-		config.successorOrder.clear();
-		config.migrationPeers.clear();
-		if (survivors.size() > 1 && !previous.successorOrder.empty()) {
-			for (uint8_t peer: previous.successorOrder)
-				if (seatMap.contains(peer) && peer != previous.hostPeerId)
-					config.successorOrder.push_back(seatMap.at(peer));
-			for (uint8_t peer: survivors)
-				if (peer != previous.hostPeerId && std::find(config.successorOrder.begin(), config.successorOrder.end(), seatMap.at(peer)) == config.successorOrder.end())
-					config.successorOrder.push_back(seatMap.at(peer));
-			for (auto peer: previous.migrationPeers) {
-				if (!seatMap.contains(peer.peerId))
-					continue;
-				peer.peerId = seatMap.at(peer.peerId);
-				config.migrationPeers.push_back(std::move(peer));
-			}
-		}
-		for (const NetMatchPlayerSlot& slot : previous.players) {
-			NetMatchPlayerSlot seat = slot;
-			if (!slot.cpu) {
-				const auto moved = seatMap.find(slot.peerId);
-				if (moved == seatMap.end()) {
-					continue;
-				}
-				seat.peerId = moved->second;
-			}
-			config.players.push_back(seat);
-		}
-		if (!previous.peerInputDelayFrames.empty()) {
-			std::vector<uint16_t> delays(config.peerCount, previous.inputDelayFrames);
-			for (const auto& [was, now] : seatMap) {
-				delays[now - 1] = PeerInputDelay(previous, was);
-			}
-			config.peerInputDelayFrames = std::move(delays);
-		}
 		if (!ValidateLocalAlpha(config, error)) {
 			return false;
 		}
-		if (outSeatMap) *outSeatMap = std::move(seatMap);
 		outConfig = std::move(config);
 		return true;
 	}

@@ -88,7 +88,7 @@ namespace RTE {
 
 	// Inherited rules retain the existing activity/mode member names without duplicate values.
 	struct NetMatchConfig : NetMatchStandardRules {
-		uint16_t version = 6;
+		uint16_t version = 8; ///< NetMatchConfigUtil::c_Version: the seat roster's revision and hash ride from 8.
 		uint64_t sessionId = 0;
 		uint64_t roundId = 1;
 		uint64_t configRevision = 1;
@@ -123,6 +123,8 @@ namespace RTE {
 		std::vector<uint8_t> activePeerIds;
 		std::vector<NetMatchMigrationPeer> migrationPeers;
 		NetRelayConfig relay;
+		uint32_t seatRosterRevision = 0; ///< The host's seat roster revision this config was agreed on; 0 when the match has none.
+		NetHash32 seatRosterHash{};      ///< HashRoster of that revision: a peer whose copy differs is refused at the start by name.
 
 		bool operator==(const NetMatchConfig&) const = default;
 	};
@@ -132,12 +134,17 @@ namespace RTE {
 		static constexpr uint16_t c_MigrationVersion = 1;
 		static constexpr uint16_t c_MigrationConfigFlag = 16;
 		static constexpr size_t c_MaxMigrationAddresses = 8;
-		static constexpr uint16_t c_Version = 6;
-		static constexpr uint16_t c_LiveMinVersion = 6;
-		static constexpr uint16_t c_PersistentWorldVersion = 7;
+		static constexpr uint16_t c_Version = 8;
+		static constexpr uint16_t c_LiveMinVersion = 8;
+		static constexpr uint16_t c_PersistentWorldVersion = 9;
 		static constexpr uint16_t c_WorldLayoutVersion = 5;
 		static constexpr uint16_t c_RelayLayoutVersion = 6;
-		static constexpr bool CarriesWorldLayout(uint16_t version) { return version == c_WorldLayoutVersion || version >= c_PersistentWorldVersion; }
+		static constexpr uint16_t c_PreRosterWorldVersion = 7;
+		/// From here a config carries the seat roster's revision and hash: an ordinary match at 8, a world at 9.
+		static constexpr uint16_t c_SeatRosterVersion = 8;
+		static constexpr bool CarriesWorldLayout(uint16_t version) {
+			return version == c_WorldLayoutVersion || version == c_PreRosterWorldVersion || version == c_PersistentWorldVersion;
+		}
 		static constexpr uint16_t c_TimingOptionsVersion = 6;
 		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = 3;
 		static constexpr uint16_t c_MaxSlowPlayerBoundTicks = 120;
@@ -171,10 +178,9 @@ namespace RTE {
 		/// kicked reads this again, so no roster keeps a departed player's name on an open seat. A
 		/// persistent world's seats outlive their holders and read "Open"; a match's read their client id.
 		static std::string UnseatedSlotName(uint8_t peerId, bool persistentWorld);
-		/// The roster a rematch is played on: the peers still here keep their relative seat order and
-		/// close up onto ids 1..N. An intact roster maps to itself, config and hash unchanged.
-		/// @param outSeatMap Optional old lockstep peer id -> new lockstep peer id for every survivor.
-		static bool DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap = nullptr, std::string* error = nullptr);
+		/// The roster a rematch is played on: every seat of the round keeps its id and its player, never renumbered;
+		/// which seats start present is the host's to name in activePeerIds.
+		static bool DeriveRematchConfig(const NetMatchConfig& previous, NetMatchConfig& outConfig, std::string* error = nullptr);
 		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
 		/// Whether the text is a canonical lowercase 8-4-4-4-12 UUID, the only shape a world id may take.
 		static bool IsWorldId(const std::string& text);

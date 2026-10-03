@@ -53,15 +53,16 @@ focus TextHostNetSlowBound
 observe set_text TextHostNetSlowBound 4
 wait_ms 500
 observe assert_label TextHostNetSlowBound 4
-observe combo_select ComboHostNetSlowPolicy Pause for them (up to 20 s)
-wait_ms 500
-observe assert_label ComboHostNetSlowPolicy Pause for them
-observe combo_select ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up
+observe assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up
+observe assert_enabled TextHostNetSlowBound 1
+observe assert_label LabelHostNetSlowPolicyHint A player late past 4 ticks (67 ms), host too, is held to the AI while others play on. Other policies return in a later version.
 focus TextHostNetSlowBound
 observe set_text TextHostNetSlowBound 3
 wait_ms 500
 observe assert_label TextHostNetSlowBound 3
 observe assert_label ComboHostNetSlowPolicy Give the seat to the AI
+observe assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.
+observe assert_text_fits LabelHostNetSlowPolicyHint
 video_mark ui-visibility
 wait_ms 825
 observe assert_visible CollectionBoxHostPageNetwork 1
@@ -129,6 +130,10 @@ dump_lobby
 activate ButtonLobbyOptions
 wait_ms 660
 assert_substate HostOptions
+# A line the joiner types while this page is open is still on the host's screen.
+# The joiner chats about a second after this page opens; its row is blank while the page hides the band, so the wait is timed.
+wait_ms 3000
+text_watch start h15-scene-chat-under-page require substate:HostOptions And the joiner can answer on the same line
 video_mark ui-hosted-recovery
 activate TabHostPageRecovery
 wait_ms 700
@@ -166,6 +171,7 @@ dump_host_options
 observe activate ButtonHostSeatDlgClose
 wait_ms 495
 observe assert_visible HostSeatDialog 0
+text_watch close h15-scene-chat-under-page
 activate ButtonHostOptBack
 wait_ms 495
 assert_substate Lobby

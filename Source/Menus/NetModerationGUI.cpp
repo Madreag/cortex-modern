@@ -12,11 +12,14 @@
 #include "NetPlayerPresentation.h"
 #include "ScenarioRunner.h"
 #include "SettingsMan.h"
+#include "System.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "FrameRecorder.h"
 #include "UInputMan.h"
 #include "GUI.h"
+#include <chrono>
+#include <array>
 #include "GUIEvent.h"
 #include "GUIManager.h"
 #include "GUIInputWrapper.h"
@@ -39,8 +42,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -237,7 +244,11 @@ namespace {
 	bool ToastStillApplies(const ScenarioRunner::NetUiToastRecord& toast) {
 		if (toast.kind == "slow_machine") return ScenarioRunner::IsLockstepLocalMachineSlow();
 		if (toast.kind != "seat_held") return true;
-		if (toast.text.find("rejoining") != std::string::npos) return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing();
+		if (toast.text.find("rejoining") != std::string::npos) {
+			const uint8_t local = ScenarioRunner::GetLockstepLocalPeerId();
+			return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing() ||
+			    (local != 0 && ScenarioRunner::IsLockstepSeatUnderAI(local, ScenarioRunner::GetLockstepCompletedFrame()) && !ScenarioRunner::IsLockstepSeatReleased(local));
+		}
 		const uint8_t peer = toast.senderPeerId ? toast.senderPeerId : ScenarioRunner::GetLockstepLocalPeerId();
 		return ScenarioRunner::IsLockstepSeatUnderAI(peer, ScenarioRunner::GetLockstepCompletedFrame());
 	}
@@ -645,7 +656,8 @@ void NetModerationGUI::Refresh() {
 		if (!used) continue;
 		const auto& seat = m_Model.GetRow(row);
 		controls.name->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.view.displayName)), controls.name->GetWidth()), controls.name->GetWidth()));
-		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming));
+		const std::string cause = NetModerationUx::HoldCause(seat.view);
+		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming) + (cause.empty() ? "" : "  /  " + cause));
 		controls.applicant->SetText(DisplayName(seat.applicantText));
 		controls.applicant->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
 		for (size_t action = 0; action < controls.actions.size(); ++action) {
@@ -802,7 +814,13 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	}
 	char metrics[128];
 	std::snprintf(metrics, sizeof(metrics), "delay %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), m_MatchDelayFrames * g_TimerMan.GetDeltaTimeMS());
-	const auto ping = g_NetMatchService.GetMatchPingMs();
+	// The summary reads the links the per-player lines list - the widest a host has, a client's own to its host - so the
+	// two never disagree; a link not measured yet reads as unknown in both.
+	std::optional<uint32_t> ping;
+	for (const auto& member: snapshot.members) {
+		if (member.cpu || member.isLocal || member.pingMs == 0 || (!snapshot.isHost && member.peerId != snapshot.hostPeerId)) continue;
+		ping = std::max(ping.value_or(0), member.pingMs);
+	}
 	const bool hostLost = snapshot.statusText.starts_with("Host lost") || snapshot.serviceState == "HostLost" || snapshot.serviceState == "Migrating";
 	// Sim updates against wall time over the last second, so a stalled or paused match reads its true pace
 	static long long s_paceMarkUs = 0;
@@ -851,6 +869,50 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (menuLobby) LobbyMenuColumn(editor);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);
 	const int countNeed = font->CalculateWidth(countOnly) + 14;
+	// The box is laid out again only when an input it reads changes; otherwise the kept box and line are drawn as they were.
+	const auto layoutKey = [&](char mode, std::initializer_list<long long> geometry) {
+		char pace[32];
+		std::snprintf(pace, sizeof(pace), "%.1f", s_paceTps);
+		std::string key{mode};
+		for (const long long value: {static_cast<long long>(backbuffer->w), static_cast<long long>(backbuffer->h), static_cast<long long>(reinterpret_cast<intptr_t>(font)),
+		                             static_cast<long long>(m_Open), static_cast<long long>(g_SettingsMan.GetNetworkShowDiagnostics()), static_cast<long long>(menuLobby),
+		                             static_cast<long long>(hostLost), static_cast<long long>(resyncing), static_cast<long long>(placing), static_cast<long long>(placed),
+		                             static_cast<long long>(seats), static_cast<long long>(holdPause), static_cast<long long>(holdSeconds), static_cast<long long>(missingFrames),
+		                             static_cast<long long>(paused), static_cast<long long>((countdown + 59) / 60), static_cast<long long>(waiting),
+		                             hostLost || missingFrames ? currentWaitMs : 0LL, static_cast<long long>(m_MatchDelayFrames), static_cast<long long>(m_BaseDelayFrames),
+		                             ping ? static_cast<long long>(*ping) : -1LL, static_cast<long long>(snapshot.isHost), static_cast<long long>(snapshot.hostPeerId)}) {
+			key += ' ' + std::to_string(value);
+		}
+		for (const long long value: geometry) key += ' ' + std::to_string(value);
+		key += '|' + std::string(pace) + '|' + placementNames + '|' + holdName + '|' + snapshot.statusText + '|' + m_StatusProbeLine;
+		if (missingFrames) key += '|' + ScenarioRunner::GetLockstepMissingPeers();
+		for (const auto& member: snapshot.members) {
+			key += '|' + std::to_string(member.peerId) + ',' + member.displayName + ',' + std::to_string(member.team) + ',' + std::to_string(member.cpu) + ',' +
+			       std::to_string(member.isLocal) + ',' + std::to_string(member.ready) + ',' + std::to_string(member.connected) + ',' + std::to_string(member.pingMs) + ',' +
+			       std::to_string(member.inputDelayFrames) + ',' + std::to_string(member.waits) + ',' + std::to_string(member.longestWaitMs) + ',' +
+			       std::to_string(member.aiHeld) + ',' + std::to_string(member.dropped) + ',' + std::to_string(member.reclaiming) + ',' + member.connectedRoute + ',' +
+			       member.statusLine + ',' + NetPlayerPresentation::Name(member) + ',' + NetPlayerPresentation::State(member);
+		}
+		return key;
+	};
+	// Test lever: lay the box out every frame and name any frame whose kept key would have drawn a different text.
+	static const bool s_CheckStatusCache = [] { const char* value = std::getenv("CCCP_TEST_STATUS_CACHE_CHECK"); return value && std::string(value) == "1"; }();
+	const auto checkKept = [&](bool keyKept, const std::string& keptText) {
+		if (s_CheckStatusCache && keyKept && m_NetStatus->GetText() != keptText) {
+			System::PrintDiagnosticLine("[status-cache] stale tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " kept=\"" + keptText + "\" fresh=\"" + m_NetStatus->GetText() + "\"");
+		}
+	};
+	const auto drawKept = [&] {
+		const OverlayRect& kept = m_StatusLayoutRect;
+		m_NetStatusBox->SetVisible(true);
+		m_StatusRect = kept;
+		AllegroBitmap bitmap(backbuffer);
+		rectfill(backbuffer, kept.x, kept.y, kept.x + kept.width - 1, kept.y + kept.height - 1, makeacol32(20, 22, 27, 255));
+		rect(backbuffer, kept.x, kept.y, kept.x + kept.width - 1, kept.y + kept.height - 1, makeacol32(59, 65, 83, 255));
+		hline(backbuffer, kept.x + 1, kept.y + 1, kept.x + kept.width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
+		m_NetStatus->Draw(&bitmap, false);
+		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
+	};
 	if (backbuffer->h < c_CompactMaxHeight && (m_Open || !g_SettingsMan.GetNetworkShowDiagnostics())) {
 		// The short-screen layout is one line in the gap between the funds block and the controller icon;
 		// while the editor holds the world it takes the widest column-free gap, or the top band when none fits.
@@ -873,6 +935,13 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			}
 		}
 		const int maxTextWidth = std::max(0, freeRight - freeLeft - 14);
+		const std::string stripKey = layoutKey('c', {y, height, fullHeight, freeLeft, freeRight, topBand, maxTextWidth});
+		const bool stripKept = stripKey == m_StatusLayoutKey;
+		if (stripKept && !s_CheckStatusCache) {
+			drawKept();
+			return;
+		}
+		const std::string stripKeptText = s_CheckStatusCache ? m_NetStatus->GetText() : std::string();
 		const std::string pingText = !hostLost && ping ? std::to_string(*ping) : "--";
 		char tail[96];
 		std::snprintf(tail, sizeof(tail), " / delay %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
@@ -940,6 +1009,9 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
 		hline(backbuffer, x + 1, y + 1, x + width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
 		m_NetStatus->Draw(&bitmap, false);
+		checkKept(stripKept, stripKeptText);
+		m_StatusLayoutKey = stripKey;
+		m_StatusLayoutRect = m_StatusRect;
 		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 		return;
 	}
@@ -955,6 +1027,13 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		available = backbuffer->w;
 	}
 	const int maxPanelWidth = std::max(1, available - 2 * c_StatusBoxMargin);
+	const std::string panelKey = layoutKey('f', {freeLeft, freeRight, available, topBand, maxPanelWidth, editor.editing});
+	const bool panelKept = panelKey == m_StatusLayoutKey;
+	if (panelKept && !s_CheckStatusCache) {
+		drawKept();
+		return;
+	}
+	const std::string panelKeptText = s_CheckStatusCache ? m_NetStatus->GetText() : std::string();
 	m_NetStatusBox->SetVisible(true);
 	m_NetStatus->SetFont(font);
 	const auto compose = [&](int textWidth) {
@@ -973,7 +1052,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (g_SettingsMan.GetNetworkShowDiagnostics()) {
 			for (const auto& member: snapshot.members) {
 				if (member.cpu) continue;
-				composed += "\nP" + std::to_string(member.peerId) + ": Ping " + (hostLost && member.peerId == snapshot.hostPeerId ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
+				composed += "\nP" + std::to_string(member.peerId) + ": Ping " + ((hostLost && member.peerId == snapshot.hostPeerId) || member.pingMs == 0 ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
 				composed += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
 				if (member.reclaiming || member.aiHeld || !member.connected) composed += " / " + NetPlayerPresentation::State(member);
 			}
@@ -1040,6 +1119,9 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
 	hline(backbuffer, x + 1, y + 1, x + width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
 	m_NetStatus->Draw(&bitmap, false);
+	checkKept(panelKept, panelKeptText);
+	m_StatusLayoutKey = panelKey;
+	m_StatusLayoutRect = m_StatusRect;
 	RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 }
 
@@ -1360,8 +1442,13 @@ void NetModerationGUI::DrawMatchToasts() {
 	const auto queued = ScenarioRunner::GetVisibleNetUiToasts();
 	std::vector<ScenarioRunner::NetUiToastRecord> visible;
 	std::vector<size_t> indices;
+	std::vector<std::string> lines;
 	for (size_t index = 0; index < queued.size(); ++index) {
 		if (!ToastStillApplies(queued[index])) continue;
+		// A seat's toast reads its current state, so two events about one seat can read alike: the band shows that line once.
+		std::string line = ToastText(queued[index]);
+		if (std::find(lines.begin(), lines.end(), line) != lines.end()) continue;
+		lines.push_back(std::move(line));
 		visible.push_back(queued[index]);
 		indices.push_back(index);
 	}
@@ -1505,9 +1592,36 @@ void NetModerationGUI::GhostWatchTick() {
 	}
 }
 
+// Test lever CCCP_TEST_DRAW_PHASES: the overlay's own stages, their means every 600 frames.
+namespace {
+	struct OverlayPhases {
+		const bool armed = std::getenv("CCCP_TEST_DRAW_PHASES") != nullptr;
+		std::array<double, 5> totalUs{};
+		uint64_t frames = 0;
+		std::chrono::steady_clock::time_point lap;
+		void Begin() { if (armed) lap = std::chrono::steady_clock::now(); }
+		void Lap(size_t phase) {
+			if (!armed) return;
+			const auto now = std::chrono::steady_clock::now();
+			totalUs[phase] += std::chrono::duration<double, std::micro>(now - lap).count();
+			lap = now;
+		}
+		void End() {
+			if (!armed || ++frames < 600) return;
+			System::PrintDiagnosticLine("[overlay-phase] frames=600 mean_us: snapshot=" + std::to_string(totalUs[0] / 600) + " surfaces=" + std::to_string(totalUs[1] / 600) +
+			                            " status=" + std::to_string(totalUs[2] / 600) + " panel=" + std::to_string(totalUs[3] / 600) + " chat=" + std::to_string(totalUs[4] / 600));
+			totalUs = {};
+			frames = 0;
+		}
+	};
+	OverlayPhases s_OverlayPhases;
+}
+
 void NetModerationGUI::Draw() {
+	s_OverlayPhases.Begin();
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	NetPlayerPresentation::Remember(snapshot, g_SettingsMan.GetNetworkDisplayName());
+	s_OverlayPhases.Lap(0);
 	m_StatusRect = {};
 	m_ChatRect = {};
 	m_RosterRect = {};
@@ -1536,10 +1650,12 @@ void NetModerationGUI::Draw() {
 	}
 	// The lobby arm sits inside inMatch: the rematch lobby keeps the seats reading beside its own box.
 	if (menuLobby) DrawRoster(snapshot);
+	s_OverlayPhases.Lap(1);
 	if (inMatch && (menuLobby || MatchStatusWanted())) {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
 	}
+	s_OverlayPhases.Lap(2);
 	if (m_Open) {
 		uint64_t hash = std::hash<std::string>{}(snapshot.serviceState);
 		hash ^= std::hash<std::string>{}(snapshot.statusText) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
@@ -1566,6 +1682,7 @@ void NetModerationGUI::Draw() {
 		}
 		m_Controls->Draw();
 	}
+	s_OverlayPhases.Lap(3);
 	if (inMatch) {
 		DrawMatchChat(snapshot);
 	} else {
@@ -1578,6 +1695,8 @@ void NetModerationGUI::Draw() {
 	}
 	if (m_Open) m_Controls->DrawMouse();
 	t_simRNGOverride = previousRNG;
+	s_OverlayPhases.Lap(4);
+	s_OverlayPhases.End();
 }
 
 bool NetModerationGUI::AutomationModerate(const std::string& action, int stableSeat) {

@@ -22,6 +22,13 @@ void TimerMan::Clear() {
 	m_DeltaBuffer.clear();
 	m_SimUpdatesSinceDrawn = -1;
 	m_DrawnSimUpdate = false;
+	m_SimFrameBudget = 0;
+	m_SimFrameStart = 0;
+	m_LastSimUpdateStart = 0;
+	m_SimFrameBudgetSpent = false;
+	m_SimHold = 0;
+	m_OwedTicksKept = 0;
+	m_OwedCapTickCostMS = 0;
 	m_SimSpeed = 1.0F;
 	m_TimeScale = 1.0F;
 	m_SimPaused = false;
@@ -70,6 +77,7 @@ void TimerMan::ResetTime() {
 
 	m_RealTimeTicks = 0;
 	m_SimAccumulator = 0;
+	m_SimHold = 0;
 	m_SimTimeTicks = 0;
 	m_SimUpdateCount = 0;
 	m_SimUpdatesSinceDrawn = -1;
@@ -77,8 +85,24 @@ void TimerMan::ResetTime() {
 	m_TimeScale = 1.0F;
 }
 
+void TimerMan::BeginSimFrame(long long budgetTicks) {
+	m_SimFrameBudget = budgetTicks;
+	m_SimFrameStart = GetAbsoluteTime();
+	m_LastSimUpdateStart = 0;
+	m_SimFrameBudgetSpent = false;
+}
+
 void TimerMan::UpdateSim() {
 	if (TimeForSimUpdate()) {
+		// Owed ticks past the budget wait for the next frame; this one, expected to end past it, is drawn.
+		bool budgetSpent = false;
+		if (m_SimFrameBudget > 0) {
+			// The frame's previous update is the estimate for this one; the first update of a frame always runs.
+			const long long now = GetAbsoluteTime();
+			const long long previousCost = m_LastSimUpdateStart != 0 ? now - m_LastSimUpdateStart : 0;
+			m_LastSimUpdateStart = now;
+			budgetSpent = previousCost > 0 && now - m_SimFrameStart + previousCost >= m_SimFrameBudget;
+		}
 		// Transfer ticks from the accumulator to the sim time ticks. A free-running sim outpaces
 		// the accumulator, so never draw it below zero.
 		if (m_SimAccumulator >= m_DeltaTime) {
@@ -93,7 +117,8 @@ void TimerMan::UpdateSim() {
 		++m_SimUpdatesSinceDrawn;
 
 		// If after deducting the DeltaTime from the accumulator, there is not enough time for another DeltaTime, then flag this as the last sim update before the frame is drawn.
-		m_DrawnSimUpdate = !TimeForSimUpdate();
+		m_DrawnSimUpdate = !TimeForSimUpdate() || budgetSpent;
+		m_SimFrameBudgetSpent = budgetSpent && TimeForSimUpdate();
 	} else {
 		m_DrawnSimUpdate = true;
 	}
@@ -115,8 +140,13 @@ void TimerMan::Update() {
 
 	// If not paused, add the new time difference to the sim accumulator
 	if (!m_SimPaused) {
-		m_SimAccumulator += static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale);
-		m_PaceAccruedTicks += static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale);
+		long long accrued = static_cast<long long>(static_cast<float>(timeIncrease) * m_TimeScale);
+		// A held clock lets that much real time go by first.
+		const long long held = std::min(m_SimHold, accrued);
+		m_SimHold -= held;
+		accrued -= held;
+		m_SimAccumulator += accrued;
+		m_PaceAccruedTicks += accrued;
 	} else {
 		m_PacePausedLostTicks += timeIncrease;
 	}
@@ -124,7 +154,9 @@ void TimerMan::Update() {
 	float maxPossibleSimSpeed = GetDeltaTimeMS() / std::max(g_PerformanceMan.GetMSPSUAverage(), std::numeric_limits<float>::epsilon());
 
 	// Make sure we don't get runaway behind schedule
-	const long long trimCap = m_DeltaTime + static_cast<long long>(m_DeltaTime * maxPossibleSimSpeed);
+	// A lockstep machine keeps what it owes up to its floor, even when a spike (a capture, a busy core) inflates the estimate.
+	const float capSimSpeed = m_OwedCapTickCostMS > 0 ? GetDeltaTimeMS() / m_OwedCapTickCostMS : maxPossibleSimSpeed;
+	const long long trimCap = std::max(m_DeltaTime + static_cast<long long>(m_DeltaTime * capSimSpeed), m_DeltaTime * (1 + m_OwedTicksKept));
 	if (m_SimAccumulator > trimCap) {
 		m_PaceTrimmedTicks += m_SimAccumulator - trimCap;
 		m_SimAccumulator = trimCap;

@@ -37,10 +37,13 @@ namespace RTE {
 		GUIControl* GetControl(const std::string& name) const;
 		/// The panel's own control manager, for the script commands that read its rows.
 		GUIControlManager* AutomationManager() const { return m_Controls.get(); }
+		GUIControlManager* OverlayManager() const { return m_OverlayControls.get(); }
 		/// Clicks a named panel control the way its own manager's mouse would.
 		bool AutomationPostCommand(const std::string& name);
 		/// Reads a named label's text for a script assert.
 		bool AutomationLabelText(const std::string& name, std::string& text) const;
+		/// The seat rows the open panel lists, or zero while it is closed or shows the match options.
+		size_t AutomationSeatRowCount() const { return m_Open && !m_OptionsView ? std::min(m_Model.RowCount(), m_Seats.size()) : 0; }
 
 		/// The area an overlay element drew into on the last frame, in screen pixels.
 		struct OverlayRect {
@@ -219,6 +222,8 @@ namespace RTE {
 		bool m_ChatKeysHeld = false;
 		bool m_ChatDisabledKeys = false;
 		std::string m_StripText;
+		std::string m_StatusLayoutKey; //!< Every input the status box was last laid out from.
+		OverlayRect m_StatusLayoutRect; //!< Where that layout put the box.
 		mutable long long m_AutoShowUntilUs = 0;
 		uint16_t m_MatchDelayFrames = 0;
 		uint16_t m_BaseDelayFrames = 0;

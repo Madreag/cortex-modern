@@ -84,6 +84,18 @@ SAVER_DELAY_MS = 0
 CLIENT_SAVER_DELAY_MS = 0
 RETAINED_AUTOSAVES = 3  # The default of the NetworkAutosavesKept option (AutosaveStore::c_RetainedAutosaves), which
                         # these runs never set; the engine's own keep= value is held to it below.
+WORLD_AUTOSAVE_TICKS = 60  # -net-autosave-seconds 1 at the round's 60 ticks a second: the world arms' requested cadence.
+
+
+def resumed_round_ticks(host_log: str, round_ticks: int) -> int:
+    """How long the resumed world round runs so it rotates past its anchor at the writer pace the first boot measured.
+    Each capture waits for the previous writer, so a build whose writer outlasts the requested second (a sanitizer
+    build's) lands one checkpoint per writer pass; the round then runs that many passes. At the requested cadence the
+    arm's own length stands, and the rotation it asserts is the same either way."""
+    captured = sorted({int(row[0]) for row in CAPTURE.findall(host_log)})
+    gaps = sorted(later - earlier for earlier, later in zip(captured, captured[1:]))
+    pace = max(WORLD_AUTOSAVE_TICKS, gaps[len(gaps) // 2]) if gaps else WORLD_AUTOSAVE_TICKS
+    return max(round_ticks, (RETAINED_AUTOSAVES + 2) * pace)
 
 
 WORLD_IDENTITY = re.compile(r"^\[net-world\] identity (\S+) boot=(\d+) round=(\d+)$", re.MULTILINE)
@@ -666,7 +678,7 @@ def judge_retention(root: Path, ticks: int, records: dict) -> dict:
     return details
 
 
-def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False, client_stall: str = "") -> dict:
+def arm_anchor(repo: Path, root: Path, port: int, slow_peers: bool = False, client_stall: str = "") -> dict:
     """A heal names one rewind point for the whole match, and it survives later rotation.
 
     The perturbation is timed late on purpose: at the stock tick 50 the heal lands before the first
@@ -680,12 +692,12 @@ def arm_anchor(repo: Path, root: Path, port: int, pause_slow_peers: bool = False
         # The live perturbation fires on a multiple of 30 ticks; 720 keeps every scaled run's on a full-state sample tick.
         run_root, perturb_at = wait_root(root, scale, ticks), 720 * scale
         # The perturbation waits for both seats to be live; a peer the host holds (a sanitizer build's slow client) keeps it
-        # from landing, so such a build asks the host to pause for a slow peer instead.
+        # from landing, so such a build plays the default policy with the host's largest slow-player bound.
         run_pair(repo, run_root, port, ticks, 2,
                  {"host": ["-net-test-perturb-when-live", "-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
                            "-net-match-e2e-resync"],
                   "client": ["-net-match-e2e-resync", *stall_args(client_stall, scale)]},
-                 {"host": {"NetworkSlowPlayerPolicy": "Pause"}} if pause_slow_peers else None)
+                 {"host": {"NetworkSlowPlayerBoundTicks": "120"}} if slow_peers else None)
         evidence = forced_hold_evidence(run_root, client_stall, scale)
         return dict(judge_anchor(run_root, ticks, perturb_at), forced_hold=evidence)
     return wait_for_checkpoints(attempt, ANCHOR_TICKS)
@@ -1213,7 +1225,8 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
 
     # Boot two: the same install, no -net-resume-match. The world reopens on its own newest checkpoint.
     second.mkdir(parents=True, exist_ok=False)
-    resume_end = resume_tick + round_ticks
+    resumed_ticks = resumed_round_ticks(peer_log(first, "host"), round_ticks)
+    resume_end = resume_tick + resumed_ticks
     # Each peer counts its cap from its own first tick, so the resumed round is given the ticks it runs past the checkpoint.
     def drop_client_copy(who: str, runtime: Path) -> None:
         # The client lost its copy of the checkpoint the world resumes on, so it is streamed the host's archive.
@@ -1221,7 +1234,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             for leftover in (runtime / "Autosaves").glob(f"{world_id}-{resume_tick}.*"):
                 leftover.unlink()
 
-    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first, own_ticks=round_ticks,
+    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first, own_ticks=resumed_ticks,
                                after_carry=drop_client_copy if client_lacks_checkpoint else None)
     host_log = peer_log(second, "host")
     if client_lacks_checkpoint:
@@ -1261,7 +1274,9 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
 
     # The fresh flag: the same install and the same checkpoints, a NEW round from the scene.
     fresh.mkdir(parents=True, exist_ok=False)
-    fresh_records = _run_world_round(repo, fresh, port + 4, round_ticks, stall(0, {"host": ["-net-world-fresh"]}), carry=second)
+    # The fresh world rotates the previous boot out only once it has completed its own retained checkpoints: it runs as many
+    # writer passes as the resumed round did.
+    fresh_records = _run_world_round(repo, fresh, port + 4, resumed_ticks, stall(0, {"host": ["-net-world-fresh"]}), carry=second)
     fresh_log = peer_log(fresh, "host")
     assert not RESUMING.search(fresh_log), "a fresh world boot resumed a checkpoint anyway"
     fresh_identity = WORLD_IDENTITY.findall(fresh_log)
@@ -1275,7 +1290,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     for who in ("host", "client"):
         assert fresh_records[who].get("exit_code") == 0, (who, fresh_records[who].get("exit_code"))
         assert not fresh_records[who].get("timed_out"), who
-    fresh_compared = _compare_world_round(fresh, world_id, 0, round_ticks)
+    fresh_compared = _compare_world_round(fresh, world_id, 0, resumed_ticks)
     fresh_hold = forced_hold_evidence(fresh, client_stall)
     fresh_held = checkpoints(fresh, "host")
     old_rounds = {fields["RoundId"] for fields in held_two.values()}
@@ -1286,7 +1301,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
         assert re.search(rf"(?m)^WorldBoot = {boot_one + 2}$", fresh_manifest), \
             "retention kept the previous boot ahead of the fresh world's completed checkpoints"
     return {"world_id": world_id, "boot": boot_one, "resume_tick": resume_tick,
-            "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end,
+            "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end, "resumed_ticks": resumed_ticks,
             "kill_waited_on_return_s": records["_kill_waited_on_return_s"], "kill_waited_on_sample_s": records["_kill_waited_on_sample_s"],
             "kill_sample_wait_bound_s": records["_kill_sample_wait_bound_s"],
             "manifest_control_owners": side_state["control_owners"], "manifest_applied_sequences": side_state["applied_sequences"],
@@ -1448,6 +1463,14 @@ class CheckpointWaitTests(unittest.TestCase):
 
 
 class WorldRestartOracleTests(unittest.TestCase):
+    def test_the_resumed_round_is_sized_to_the_writer_pace(self):
+        # S4.win-asan-world-restart on 280: the ASan writer took 4.4 s a checkpoint, so 600 resumed ticks landed two past the anchor.
+        final = "".join(f"[autosave] tick={tick} capture_ms=9.0 bytes=1\n" for tick in (61, 121, 181, 241, 301))
+        self.assertEqual(resumed_round_ticks(final, 600), 600)
+        sanitizer = "".join(f"[autosave] tick={tick} capture_ms=160.0 bytes=1\n" for tick in (75, 351, 624))
+        self.assertEqual(resumed_round_ticks(sanitizer, 600), (RETAINED_AUTOSAVES + 2) * 276)
+        self.assertEqual(resumed_round_ticks("", 600), 600)
+
     def test_a_never_killed_world_names_the_capture_unit_and_the_returners_progress(self):
         # Ladder 12 rung 2 on 266 (S1.restore-all-1): the captures were read as seconds, and the reports that never came were not named.
         log = ("[autosave] tick=49 capture_ms=10.827 bytes=201235134\n[autosave] tick=93 capture_ms=5.451 bytes=201235124\n"
@@ -1742,8 +1765,8 @@ def main() -> int:
     parser.add_argument("--client-saver-delay-ms", type=int, default=0,
                         help="the client's archive writer alone pauses this long before each task, so a heal can come while the host's "
                         "newest checkpoint is still unpublished on the client")
-    parser.add_argument("--pause-slow-peers", action="store_true",
-                        help="anchor only: the host pauses for a slow peer instead of holding it, so a sanitizer build's heal lands")
+    parser.add_argument("--slow-peers", action="store_true",
+                        help="anchor only: the default policy with the host's largest slow-player bound (120 ticks), so a sanitizer build's slow client stays live and its heal lands")
     args = parser.parse_args()
     for lever in (args.client_stall, args.anchor_client_stall):
         if lever and not re.fullmatch(r'[1-9]\d*:[1-9]\d*', lever):
@@ -1768,7 +1791,7 @@ def main() -> int:
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"restore": lambda repo, root, port: arm_restore(repo, root, port, args.client_stall),
             "retention": lambda repo, root, port: arm_retention(repo, root, port, args.client_stall),
-            "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers, args.anchor_client_stall or args.client_stall),
+            "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.slow_peers, args.anchor_client_stall or args.client_stall),
             "resume": lambda repo, root, port: arm_resume(repo, root, port, args.client_stall),
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks,
                                                                         args.client_lacks_checkpoint, args.rejoin_from_first_capture,

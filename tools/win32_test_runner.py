@@ -26,6 +26,7 @@ from ctypes import wintypes as W
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -228,16 +229,29 @@ def box_runner_limits(environ=None, manifest=None, box=None, physical=None, syst
     environ = os.environ if environ is None else environ
     box = box or environ.get("COMPUTERNAME") or os.environ.get("COMPUTERNAME", "")
     manifest = Path(environ.get("CC_RUNNER_BOX_MANIFEST", BOX_MANIFEST) if manifest is None else manifest)
-    entry, manifest_note = {}, f"{manifest} absent"
+    entry, box_entry, manifest_note = {}, {}, f"{manifest} absent"
     try:
         document = json.loads(manifest.read_text(encoding="utf-8-sig"))
-        found = [b for b in document.get("boxes", []) if str(b.get("name", "")).casefold() == box.casefold()]
-        entry = (found[0].get("runner") or {}) if found else {}
+        found = [b for b in document.get("boxes", []) if str(b.get("hostname", "")).casefold() == box.casefold() and box]
+        if not found:
+            found = [b for b in document.get("boxes", []) if str(b.get("name", "")).casefold() == box.casefold()]
+        box_entry = found[0] if found else {}
+        entry = box_entry.get("runner") or {}
         manifest_note = f"{manifest} {'box ' + box if found else 'has no box ' + box}"
     except (OSError, ValueError, AttributeError) as error:
         if manifest.exists():
             manifest_note = f"{manifest} unreadable: {error}"
-    limits = {"box": box, "manifest": manifest_note}
+    limits = {"box": environ.get('CC_RUNNER_BOX_NAME') or box_entry.get('name') or box,
+              "hostname": box, "manifest": manifest_note}
+    if 'CC_RUNNER_MIN_FREE_GB' in environ:
+        floor, floor_source = float(environ['CC_RUNNER_MIN_FREE_GB']), 'env CC_RUNNER_MIN_FREE_GB'
+    elif 'min_free_gb' in box_entry:
+        floor, floor_source = float(box_entry['min_free_gb']), f'manifest {box}'
+    else:
+        floor, floor_source = 10.0, 'default (10 GiB)'
+    if not math.isfinite(floor) or floor <= 0:
+        raise ValueError(f'box {limits["box"]}: invalid free-memory floor {floor!r} GiB ({floor_source})')
+    limits.update(min_free_bytes=int(floor * 1024 ** 3), min_free_source=floor_source)
     if "CC_RUNNER_AFFINITY_MASK" in environ:
         mask, source = _mask_value(environ["CC_RUNNER_AFFINITY_MASK"]), "env CC_RUNNER_AFFINITY_MASK"
     elif "affinity_mask" in entry:
@@ -471,7 +485,7 @@ class IsolatedRun:
             str(Path(p) if Path(p).is_absolute() else self.out / p)
             for p in (evidence_expected or [])
         ]
-        self.before = input_desktop_name()
+        self.before = None
         self.name = "CortexTest_" + uuid.uuid4().hex
         extra = dict(env or {})
         self.env = dict(os.environ)
@@ -500,6 +514,15 @@ class IsolatedRun:
             "startup_checks": [],
             "evidence_expected": self.evidence_expected,
         }
+        try:
+            self.before = input_desktop_name()
+        except OSError as error:
+            reason = "no interactive desktop in this session: start engines through the box's session task"
+            self.record.update(exit_code=3, refusal=dict(code='no_interactive_desktop', reason=reason, os_error=str(error)))
+            self._check('interactive_desktop', False, reason)
+            self._save()
+            raise StartupCheckError(reason) from error
+        self.record['input_desktop_before'] = self.before
         self._save()
 
     def _check(self, name, ok, detail):
@@ -527,6 +550,11 @@ class IsolatedRun:
         game_runtime = exe.name.lower().startswith("cortex command")
         self.record["game_runtime_checks"] = game_runtime
         if game_runtime:
+            unpacked = (exe.parent / 'MANIFEST.json').is_file() and not (exe.parent / '.git').exists()
+            if unpacked:
+                self.record['package_unpacked'] = str(exe.parent.resolve())
+                self._check('package_single_player', not any(str(arg).startswith('-net') for arg in self.argv[1:]),
+                            'unpacked package smoke is single-player; network arguments are refused')
             if data.exists():
                 target = Path(os.path.realpath(data))
                 self._check(
@@ -592,7 +620,7 @@ class IsolatedRun:
             wait_while_user_fullscreen(self.record, self._save)
             self.desktop = check(create_desktop(self.name, None, None, 0, 0x01FF, None))
             self.job = check(create_job(None, None))
-            limits = box_runner_limits()
+            limits = box_runner_limits(environ=self.env)
             self.record["runner_limits"] = limits
             lim = EXT()
             # KILL_ON_JOB_CLOSE, plus a commit limit per engine: a runaway test process (one lockstep selftest

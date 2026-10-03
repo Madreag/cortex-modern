@@ -36,6 +36,9 @@ namespace RTE {
 		/// @return Absolute path to this executable.
 		static const std::string& GetThisExePathAndName() { return s_ThisExePathAndName; }
 
+		/// The multiplayer build's version: the first line of VERSION.txt beside the executable, empty when there is none.
+		static const std::string& GetBuildVersion();
+
 		/// The SHA-256 of this executable's own bytes. Every diagnostic that names the build shares this
 		/// one read: the file is hashed once, on the first call, and the digest is kept for the process.
 		/// @return Lowercase hex digest, or "unavailable" when the executable could not be read.
@@ -135,6 +138,10 @@ namespace RTE {
 		/// is not, because the thread that faulted may be the thread holding it.
 		/// @param line The complete line, without its terminator.
 		static void PrintFaultLine(const std::string& line);
+
+		/// Writes everything standard output has queued so far before returning, for a caller about to end the process without its exit.
+		/// Returns at once, writing nothing, when another thread is writing or queueing a line right now.
+		static void FlushConsole();
 
 		/// The console echo of an abort or assert, with the same fault-handler discipline.
 		/// @param stringToPrint The message, printed exactly as PrintToCLI prints it.

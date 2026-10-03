@@ -39,9 +39,12 @@ SUITES = (
     ("runner-feel-marker", ["test_win32_runner_feel_marker.py"]),
     ("runner-limits", ["test_win32_runner_limits.py"]),
     ("feel-engine-placement", ["test_feel_placement.py"]),
+    ("soak-judgement", ["test_soak_two_peer.py"]),
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
     ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),
     ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),
+    ("inventory-merge-defects", [str(INVENTORY / "merge_defects.py"), "--self-test"]),
+    ("inventory-acceptance-manifest", [str(INVENTORY / "acceptance_manifest.py"), "--self-test"]),
     ("acceptance-collection", [str(INVENTORY / "test_acceptance_collection.py")]),
 )
 # The cross driver's suite reads the Windows boxes' trees and ctypes.WinDLL; the other platforms run the cross peers, not this suite.
@@ -62,20 +65,38 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--timeout", type=float, default=600.0)
     parser.add_argument("--only", action="append", default=[], help="run just these suite names")
+    parser.add_argument('--out', type=Path, help='write the collection verdict JSON and its log')
     args = parser.parse_args()
     worst = 0
+    results, logs, inputs = [], [], [Path(__file__)]
     for name, argv in SUITES:
         if args.only and name not in args.only:
             continue
         script = Path(argv[0])
+        if argv[0] == '-m':
+            inputs += [args.repo / 'tools' / (name.replace('.', '/') + '.py') for name in argv[2:]]
+        else:
+            inputs.append(script if script.is_absolute() else args.repo / 'tools' / script)
         if name in WINDOWS_ONLY and sys.platform != "win32" or script.is_absolute() and not script.is_file():
-            print(f"[tools-suites] N/A {name}: {'Windows only' if name in WINDOWS_ONLY else f'{script} is absent on this box'}")
+            line = f"[tools-suites] N/A {name}: {'Windows only' if name in WINDOWS_ONLY else f'{script} is absent on this box'}"
+            print(line); logs.append(line)
+            results.append(dict(name=name, status='NOT APPLICABLE', reason=line))
             continue
         name, code, output = run(args.repo.resolve(), name, argv, args.timeout)
-        print(f"[tools-suites] {'PASS' if code == 0 else 'FAIL'} {name} exit={code}")
+        line = f"[tools-suites] {'PASS' if code == 0 else 'FAIL'} {name} exit={code}"
+        print(line); logs.extend([line, output])
+        results.append(dict(name=name, status='PASS' if code == 0 else 'FAIL', exit_code=code))
         if code != 0:
             print(output)
             worst = code
+    if args.out:
+        from verdict_artifact import write_verdict
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        log = args.out.with_suffix('.log'); log.write_text('\n'.join(logs) + '\n', encoding='utf-8')
+        counts = {key: sum(row['status'] == value for row in results) for key, value in
+                  (('passed', 'PASS'), ('failed', 'FAIL'), ('not_applicable', 'NOT APPLICABLE'))}
+        write_verdict(args.out, passed=bool(counts['passed']) and not counts['failed'], counts=counts,
+                      inputs=inputs, log=log, suites=results)
     return worst
 
 

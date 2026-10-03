@@ -24,16 +24,22 @@
 #include "ScenarioRunner.h"
 #include "SceneMan.h"
 #include "SettingsMan.h"
+#include "SimDumpTape.h"
+#include "System.h"
 #include "PageWriteFence.h"
 #include "TerrainLayerSnapshot.h"
 #include "TimerMan.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <functional>
+#include <iterator>
+#include <map>
 #include <unordered_set>
 
 namespace RTE {
@@ -42,6 +48,7 @@ namespace RTE {
 	std::vector<MovableObject*> LocalPrediction::s_TakenResidents;
 	LocalPrediction::Outcome LocalPrediction::s_LastOutcome;
 	bool LocalPrediction::s_Rendering = false;
+	int LocalPrediction::s_LastDepth = 0;
 	bool LocalPrediction::s_RenderScriptsWereFrozen = false;
 	int LocalPrediction::s_Override = -1;
 	int LocalPrediction::s_DepthOverride = 0;
@@ -50,12 +57,109 @@ namespace RTE {
 	uint64_t LocalPrediction::s_PreviewCount = 0;
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
 	double LocalPrediction::s_PreviewMs = 0.0;
+	// The harness's own records of each preview step, kept out of the preview's cost.
+	static double s_HarnessMs = 0.0;
+	// Previews that ran a clone's scripts frozen, and those run again because a script resumed a coroutine stand-in.
+	static uint64_t s_FrozenPreviews = 0;
+	static uint64_t s_CoroutineReruns = 0;
+	static bool s_RerunningFrozen = false;
+	// Test lever CCCP_TEST_PREVIEW_SHADOW_CHECK: each preview is made again with every held reference shadowed at the bind.
+	static bool s_CheckingShadows = false;
+	static uint64_t s_ShadowChecks = 0;
+	static uint64_t s_ShadowCheckDiffers = 0;
 	uint64_t LocalPrediction::s_ReusedFrames = 0;
 	double LocalPrediction::s_ReusedMs = 0.0;
 	std::array<double, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseMs{};
 	const std::array<const char*, LocalPrediction::PhaseCount> LocalPrediction::s_PhaseNames{"drop", "wait", "fence", "terrain_capture", "self_copies", "clone", "scripts_in", "links", "step", "discard", "terrain_restore", "restore", "scripts_out"};
 
 	// Gives the clone the MOIDs its original holds this frame, so its own rays and hits ignore the original.
+	// The preview's first step of each actor, as the sim dump writes it, keyed by the actor and the tick it predicts.
+	static const bool s_FidelityProbe = std::getenv("CCCP_TEST_PREVIEW_FIDELITY") != nullptr;
+	// Every step whose tick falls inside CCCP_TEST_PREVIEW_FIDELITY_WINDOW=<first>:<last> is compared too, not only the first.
+	static const std::pair<uint64_t, uint64_t> s_FidelityWindow = [] {
+		unsigned long long first = 0, last = 0;
+		const char* text = std::getenv("CCCP_TEST_PREVIEW_FIDELITY_WINDOW");
+		return text && std::sscanf(text, "%llu:%llu", &first, &last) == 2 ? std::pair<uint64_t, uint64_t>(first, last) : std::pair<uint64_t, uint64_t>(1, 0);
+	}();
+	struct FidelityStep {
+		int step;
+		SimDumpTape lines; //!< Recorded inside the preview, written out at the committed tick, so the preview's own time holds none of it.
+	};
+	static std::multimap<std::pair<long, uint64_t>, FidelityStep> s_FidelitySteps;
+	static uint64_t s_FidelityEqual = 0;
+	static uint64_t s_FidelityDiffering = 0;
+
+	void LocalPrediction::CompareFidelityAtTick(uint64_t tick) {
+		if (!s_FidelityProbe) return;
+		const bool inWindow = tick >= s_FidelityWindow.first && tick <= s_FidelityWindow.second;
+		for (auto it = s_FidelitySteps.begin(); it != s_FidelitySteps.end();) {
+			if (it->first.second > tick) {
+				++it;
+				continue;
+			}
+			if (it->first.second == tick) {
+				if (MovableObject* actor = g_MovableMan.FindObjectByUniqueID(it->first.first)) {
+					std::ostringstream committed;
+					g_MovableMan.DumpMOSimState(tick, "actor", actor, committed);
+					// Token by token; the clone's own identities (its UIDs and MOIDs) are not compared.
+					std::ostringstream previewedText;
+					it->second.lines.Replay(previewedText);
+					std::istringstream previewed(previewedText.str()), actual(committed.str());
+					std::vector<std::string> previewTokens{std::istream_iterator<std::string>(previewed), {}}, actualTokens{std::istream_iterator<std::string>(actual), {}};
+					std::vector<std::string> differing;
+					for (size_t i = 0; i < std::max(previewTokens.size(), actualTokens.size()); ++i) {
+						const std::string p = i < previewTokens.size() ? previewTokens[i] : "<none>", a = i < actualTokens.size() ? actualTokens[i] : "<none>";
+						if (p != a && p.rfind("moid=", 0) != 0 && p.rfind("uid=", 0) != 0) differing.push_back(p + " | " + a);
+					}
+					const int step = it->second.step;
+					if (step == 1) ++(differing.empty() ? s_FidelityEqual : s_FidelityDiffering);
+					// A first step from the committed state with the committed input differs where the world acted on the actor - a hit, damage, a
+					// script - or where the clone falls short of the actor; the record says which, and every field that differs.
+					if (step == 1 && !differing.empty()) {
+						std::vector<std::string> keys;
+						bool attachable = false;
+						for (size_t i = 0; i < std::max(previewTokens.size(), actualTokens.size()); ++i) {
+							const std::string p = i < previewTokens.size() ? previewTokens[i] : "<none>", a = i < actualTokens.size() ? actualTokens[i] : "<none>";
+							if (p == "att") attachable = true;
+							if (p == a || p.rfind("moid=", 0) == 0 || p.rfind("uid=", 0) == 0) continue;
+							// A token without a name is one of a list's values, such as the limb positions.
+							const size_t equals = p.find('=');
+							const std::string key = (attachable ? "att." : "") + (equals != std::string::npos ? p.substr(0, equals) : std::string("value"));
+							if (std::find(keys.begin(), keys.end(), key) == keys.end()) keys.push_back(key);
+						}
+						std::string fields;
+						for (const std::string& key: keys) fields += (fields.empty() ? "" : ",") + key;
+						std::string source;
+						const std::function<void(const MovableObject*)> hitBy = [&source, &hitBy](const MovableObject* body) {
+							if (!source.empty()) return;
+							if (const MovableObject* hitter = g_MovableMan.GetMOFromID(body->HitWhatMOID()); hitter && hitter->GetRootID() != body->GetRootID()) {
+								source = hitter->GetPresetName() + "#" + std::to_string(hitter->GetUniqueID());
+							} else if (const long particle = body->HitWhatParticleUniqueID(); particle != 0) {
+								source = "particle#" + std::to_string(particle);
+							} else if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(body)) {
+								for (const Attachable* part: rotating->GetAttachableList()) hitBy(part);
+							}
+						};
+						hitBy(actor);
+						const bool damaged = std::any_of(keys.begin(), keys.end(), [](const std::string& key) {
+							return key == "health" || key == "prevhealth" || key == "wounds" || key == "mass" || key == "awm" || key == "status" || key == "att.dmg";
+						});
+						FrameMan::FeelInteraction(tick, it->first.first, fields, source.empty() ? (damaged ? "damage" : "clone") : source);
+					}
+					if (!differing.empty() || inWindow) {
+						std::ostringstream line;
+						line << "[preview-fidelity] tick=" << tick << " step=" << step << " from=" << tick - static_cast<uint64_t>(step) << " uid=" << it->first.first << " differing=" << differing.size();
+						if (!differing.empty()) line << " first: ";
+						for (size_t i = 0; i < std::min<size_t>(differing.size(), 6); ++i) line << (i ? " ;; " : "") << differing[i];
+						System::PrintDiagnosticLine(line.str());
+					}
+				}
+			}
+			it = s_FidelitySteps.erase(it);
+		}
+		if (tick % 600 == 0) System::PrintDiagnosticLine("[preview-fidelity] tick=" + std::to_string(tick) + " equal=" + std::to_string(s_FidelityEqual) + " differing=" + std::to_string(s_FidelityDiffering));
+	}
+
 	static void AdoptMOIDs(Actor* clone, const Actor* original) {
 		const MOID rootMOID = original->GetID();
 		if (rootMOID == g_NoMOID || rootMOID <= 0) {
@@ -120,6 +224,7 @@ namespace RTE {
 		if (depth <= 0) {
 			return;
 		}
+		s_LastDepth = depth;
 		Activity* activity = g_ActivityMan.GetActivity();
 		std::vector<Preview> targets;
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -226,6 +331,9 @@ namespace RTE {
 			}
 		}
 		LuaMan::BeginPreviewScripts(clones, PreviewScriptSelfTest::SharedSlot(), cloned);
+		if (LuaMan::PreviewFrozenCount() > 0) {
+			++s_FrozenPreviews;
+		}
 		lap(6);
 		if (PreviewScriptSelfTest::StrideCounterRequested()) {
 			for (MovableObject* clone: clones) {
@@ -237,6 +345,8 @@ namespace RTE {
 			// Links into the world resolve to the overlay's shadows; links inside the clone stay inside it.
 			g_MovableMan.SetFaithfulLinkRoot(preview.clone);
 			preview.clone->ResolveFaithfulLinks();
+			// Copying a limb path ends its traversal: the clone walks on from the gait the actor is in, not from a fresh stride.
+			preview.clone->AdoptCarriedWalkState();
 			g_MovableMan.SetFaithfulLinkRoot(nullptr);
 			AdoptMOIDs(preview.clone, preview.original);
 		}
@@ -245,6 +355,7 @@ namespace RTE {
 
 		std::string error;
 		std::vector<ControllerFrame> frames;
+		double previewHarnessMs = 0.0;
 		for (int step = 1; step <= depth; ++step) {
 			g_TimerMan.AdvanceSimTickForPreview();
 			const uint64_t tick = static_cast<uint64_t>(simCount) + static_cast<uint64_t>(step);
@@ -283,12 +394,22 @@ namespace RTE {
 					std::cout << std::endl;
 				}
 				MovableMan::PostUpdateStage(clone);
+				// What the harness records of each step is its own cost, not the preview's: timed apart and kept out of the preview's.
+				const auto harnessStart = std::chrono::steady_clock::now();
 				FrameMan::FeelPreviewStep(clone, static_cast<uint64_t>(simCount), tick, feelStepBeginMS);
+				if (s_FidelityProbe && (step == 1 || (tick >= s_FidelityWindow.first && tick <= s_FidelityWindow.second))) {
+					SimDumpTape lines;
+					g_MovableMan.CaptureMOSimState(tick, "actor", clone, lines);
+					s_FidelitySteps.insert({{preview.original->GetUniqueID(), tick}, {step, std::move(lines)}});
+				}
+				previewHarnessMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - harnessStart).count();
 			}
 			g_MovableMan.HarvestSpeculativeSpawns();
 		}
 		Trace("stepped");
 		lap(8);
+		s_PhaseMs[8] -= previewHarnessMs;
+		s_HarnessMs += previewHarnessMs;
 
 		Outcome outcome;
 		for (const Preview& preview: targets) {
@@ -381,7 +502,47 @@ namespace RTE {
 		s_PreviewedTick = simCount;
 		++s_PreviewCount;
 		s_PreviewTicks += static_cast<uint64_t>(depth) * s_Previews.size();
-		s_PreviewMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		s_PreviewMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() - previewHarnessMs;
+		// A script resumed a coroutine its copy only stands in for, so this tick's preview runs again with the scripts frozen.
+		if (LuaMan::TakePreviewCoroutineResumed() && !s_RerunningFrozen) {
+			++s_CoroutineReruns;
+			Clear();
+			s_RerunningFrozen = true;
+			LuaMan::SetPreviewScriptsFrozen(true);
+			RunPreview();
+			LuaMan::SetPreviewScriptsFrozen(false);
+			s_RerunningFrozen = false;
+		}
+		static const bool s_ShadowCheck = std::getenv("CCCP_TEST_PREVIEW_SHADOW_CHECK") != nullptr;
+		if (s_ShadowCheck && !s_RerunningFrozen && !s_CheckingShadows && !s_Previews.empty()) {
+			const auto dumps = [simCount, depth]() {
+				std::vector<std::string> texts;
+				for (const Preview& preview: s_Previews) {
+					std::ostringstream text;
+					g_MovableMan.DumpMOSimState(static_cast<uint64_t>(simCount + depth), "actor", preview.clone, text);
+					std::istringstream tokens(text.str());
+					std::string kept;
+					for (std::string token; tokens >> token;) {
+						if (token.rfind("moid=", 0) != 0 && token.rfind("uid=", 0) != 0) kept += token + ' ';
+					}
+					texts.push_back(kept);
+				}
+				return texts;
+			};
+			const std::vector<std::string> lazy = dumps();
+			Clear();
+			s_CheckingShadows = true;
+			LuaMan::SetPreviewEagerShadows(true);
+			RunPreview();
+			LuaMan::SetPreviewEagerShadows(false);
+			s_CheckingShadows = false;
+			const std::vector<std::string> eager = dumps();
+			++s_ShadowChecks;
+			if (lazy != eager) {
+				++s_ShadowCheckDiffers;
+				std::cout << "[shadow-check] tick=" << simCount << " the preview with lazy shadows ends unlike the eager one" << std::endl;
+			}
+		}
 	}
 
 	void LocalPrediction::BeginRender() {
@@ -537,7 +698,11 @@ namespace RTE {
 			phases += (phase ? "," : "") + std::string(s_PhaseNames[phase]) + ":" + std::to_string(s_PhaseMs[phase] / static_cast<double>(s_PreviewCount));
 		}
 		return "previews=" + std::to_string(s_PreviewCount) + " actor_ticks=" + std::to_string(s_PreviewTicks) + " ms_total=" + std::to_string(s_PreviewMs) + " avg_ms=" + std::to_string(s_PreviewMs / static_cast<double>(s_PreviewCount)) +
+		       " harness_ms_total=" + std::to_string(s_HarnessMs) + " harness_avg_ms=" + std::to_string(s_HarnessMs / static_cast<double>(s_PreviewCount)) +
+		       " known_copy_avg_ms=" + std::to_string(MovableMan::KnownObjectsScope::CopyMs() / static_cast<double>(s_PreviewCount)) +
 		       " shadows=" + std::to_string(stats.shadows) + " taken=" + std::to_string(stats.taken) + " violations=" + std::to_string(stats.violations) + " preview_codec_fallback=" + std::to_string(LuaMan::PreviewCodecFallbackCount()) +
+		       " frozen_previews=" + std::to_string(s_FrozenPreviews) + " coroutine_reruns=" + std::to_string(s_CoroutineReruns) +
+		       " shadow_checks=" + std::to_string(s_ShadowChecks) + " shadow_check_differs=" + std::to_string(s_ShadowCheckDiffers) +
 		       " preview_ghosts_peak=" + std::to_string(g_MovableMan.GetPreviewGhostPeak()) +
 		       (events.empty() ? std::string() : " " + events) + " terrain_pages_written=" + std::to_string(PageWriteFence::GetFaultCount()) +
 		       " reused_frames=" + std::to_string(s_ReusedFrames) + " reuse_avg_us=" + std::to_string(s_ReusedFrames ? 1000.0 * s_ReusedMs / static_cast<double>(s_ReusedFrames) : 0.0) + " phase_avg_ms=" + phases + " window_avg_ms=" + LuaMan::DescribePreviewWindowCost();

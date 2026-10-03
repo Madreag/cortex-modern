@@ -1,5 +1,6 @@
 #include "GUI.h"
 #include "GUILabel.h"
+#include "GUIDrawRecord.h"
 
 using namespace RTE;
 
@@ -122,6 +123,8 @@ void GUILabel::Draw(GUIScreen* Screen) {
 }
 
 void GUILabel::Draw(GUIBitmap* Bitmap, bool overwiteFontColorAndKerning) {
+	// An overlay draws its labels straight onto its bitmap, outside any manager's pass; the record still has to see them.
+	RecordPanelDraw(static_cast<GUIPanel*>(this));
 	// Setup the clipping
 	Bitmap->AddClipRect(GetRect());
 

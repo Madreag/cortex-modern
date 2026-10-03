@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -170,10 +171,9 @@ namespace RTE {
 		uint8_t GetSnapshotProviderPeerId() const { return m_SnapshotProviderPeerId; }
 		bool DidLoseHostDuringSetup() const { return m_HostLostDuringSetup; }
 
-		/// Client: the peers ITS round still had when it ended. The next rematch derives this peer's own
-		/// roster from them and refuses a host proposal that does not fit it. A host derives its roster
-		/// from the live session instead, so it needs no list; a resync round keeps the roster it healed.
-		void SetRematchRoster(std::vector<uint8_t> survivingPeerIds) { m_RematchRoster = std::move(survivingPeerIds); }
+		/// Client: its round ended into a rematch lobby, so the next round is that rematch and the host's proposal must keep
+		/// every seat; a resync round keeps the roster it healed.
+		void SetRematchOwed(bool owed) { m_RematchOwed = owed; }
 
 		NetMatchRuntimeState GetState() const { return m_State; }
 		NetLobbySession& GetLobbySession() { return m_Lobby; }
@@ -211,11 +211,28 @@ namespace RTE {
 
 		std::string BuildReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator) const;
 
-		/// Client: the survivors to hand SetRematchRoster, from what its own round saw.
-		static std::vector<uint8_t> DeriveRematchSurvivors(const NetMatchConfig& played, const std::map<uint8_t, uint64_t>& leaveFrames, const std::set<uint8_t>& refilledPeerIds, const NetLockstepSeatSnapshot* seats);
-		/// Whether a host's rematch proposal is the roster this peer derived, less seats only the host knows are gone.
-		/// derivedLocalPeerId names this peer in its own derivation when the host reseated it; 0 means the same id.
-		static bool RematchRostersAgree(const NetMatchConfig& proposed, const NetMatchConfig& derived, uint8_t localPeerId, std::string* reason = nullptr, uint8_t derivedLocalPeerId = 0);
+		/// Host: a round's members, ascending: the host and each named peer of the round's seats. Every seat is kept; one not named
+		/// starts the round held, its player returning through the rejoin.
+		/// @param presentPeerIds The peers the round's start waits on: the seat roster's, or with no admission plane the ready links.
+		static std::vector<uint8_t> RematchMembers(uint8_t hostPeerId, uint8_t peerCount, const std::vector<uint8_t>& presentPeerIds);
+		/// A round's active members once its lobby has started: a lobby round's are the agreed config's on the host and every client
+		/// alike (none named means every seat), so no peer starts on a member set another does not hash.
+		/// @param lobbyAgreed Whether a lobby agreed the round's config.
+		/// @param formed The members the round was formed with.
+		/// @param agreed The config the lobby agreed.
+		/// @return The members the round's start waits for.
+		static std::vector<uint8_t> SettledRoundMembers(bool lobbyAgreed, const std::vector<uint8_t>& formed, const NetMatchConfig& agreed);
+		/// The setup error of a client whose seat the agreed round starts held: it takes the round through the held rejoin, not a start.
+		static constexpr const char* c_SeatStartsHeld = "this seat starts the round held";
+		/// From a round's formation its coordinator owns the wire: the session's traffic on it is queued here, in order and bounded,
+		/// until a reader takes it - the setup worker while it waits for the round, the service once it takes the round over.
+		void CarrySessionTraffic(NetLockstepCoordinator& coordinator);
+		/// Hands the queued session traffic to the session, oldest first.
+		void DeliverSessionTraffic(NetSession& session, uint64_t nowMs);
+		/// The queued session traffic, oldest first, for the reader that takes the round over.
+		std::vector<NetTransportEvent> TakeSessionTraffic();
+		/// Whether a host's rematch proposal keeps every seat of the round this peer derived with its id, team and kind.
+		static bool RematchKeepsEverySeat(const NetMatchConfig& proposed, const NetMatchConfig& derived, std::string* reason = nullptr);
 
 		static const char* StateName(NetMatchRuntimeState state);
 
@@ -224,14 +241,14 @@ namespace RTE {
 		bool AdoptStagedHostOptions(std::string* error);
 		/// Host: takes the seating wait from the published idle policy, so a live edit of it lands.
 		void SyncSeatingWaitToConfig();
-		/// Re-forms the roster the next round is played on and re-seats everything that depends on it.
-		bool PrepareRematchRoster(NetSession& session, const std::vector<uint8_t>& survivingPeerIds, std::string* error);
-		/// Client: the host's proposal must fit the roster this peer derived, on the seat it was admitted on.
-		bool VerifyRematchProposal(uint8_t localPeerId, std::string* error);
+		/// Forms the config the next round is played on: every seat kept, the host naming who is present.
+		bool PrepareRematchRoster(NetSession& session, std::string* error);
+		/// Client: the host's proposal must keep every seat of the round this peer played.
+		bool VerifyRematchProposal(std::string* error);
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
 		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error, std::vector<NetTransportEvent> pendingEvents = {});
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
-		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error);
+		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session = nullptr);
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
 		// Lockstep peer ids are 1-based and dense; the session assigns the host id 0 and clients 1.. .
@@ -249,9 +266,11 @@ namespace RTE {
 		bool m_ResyncRound = false;
 		bool m_HostLostDuringSetup = false;
 		bool m_HostOptionsRefused = false;
-		std::vector<uint8_t> m_RematchRoster; //!< Client: the peers its last round still had; consumed by the next rematch.
+		bool m_RematchOwed = false; //!< Client: its last round ended into a rematch lobby; consumed by the next round.
+		std::string m_LastRosterStampRefusal; //!< Host: a refused roster republish, named once.
+		std::deque<NetTransportEvent> m_SessionTraffic; //!< Session traffic the coordinator owned the wire for, waiting for a reader.
+		uint32_t m_SessionTrafficDropped = 0; //!< Events past the queue's bound, named once.
 		NetMatchConfig m_RematchConfig;       //!< This peer's own derivation of the rematch roster.
-		uint8_t m_RematchDerivedPeerId = 0;   //!< Client: its own seat in m_RematchConfig, before the host reseats it.
 		bool m_RematchRound = false;
 		uint8_t m_ActiveHostPeerId = 0;
 		uint8_t m_SnapshotProviderPeerId = 0;

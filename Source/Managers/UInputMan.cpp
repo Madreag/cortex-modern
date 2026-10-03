@@ -26,10 +26,17 @@
 #include "NetMatchService.h"
 
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <mutex>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 using namespace RTE;
@@ -38,6 +45,28 @@ std::vector<Gamepad> UInputMan::s_PrevJoystickStates(Players::MaxPlayerCount);
 std::vector<Gamepad> UInputMan::s_ChangedJoystickStates(Players::MaxPlayerCount);
 std::vector<Gamepad> UInputMan::s_ScriptedPadStates;
 std::vector<Gamepad> UInputMan::s_ChangedScriptedPadStates;
+
+namespace {
+	std::thread s_JoystickUpdater;
+	std::atomic<bool> s_JoystickUpdaterStop = false;
+	std::mutex s_JoystickUpdateMutex;
+	std::condition_variable s_JoystickUpdateWake;
+	uint64_t s_JoystickUpdatesAsked = 0; //!< Updates the frame loop asked for, guarded by s_JoystickUpdateMutex.
+	uint64_t s_JoystickUpdatesDone = 0; //!< The last ask an update that began after it answered, guarded by s_JoystickUpdateMutex.
+	// Read once per device: SDL_IsGamepad takes the joystick lock, which the updater holds through a device discovery.
+	std::unordered_map<SDL_JoystickID, bool> s_IsGamepad;
+
+	bool IsGamepadDevice(SDL_JoystickID joystickID) {
+		if (!s_JoystickUpdater.joinable()) {
+			return SDL_IsGamepad(joystickID);
+		}
+		auto known = s_IsGamepad.find(joystickID);
+		if (known == s_IsGamepad.end()) {
+			known = s_IsGamepad.emplace(joystickID, SDL_IsGamepad(joystickID)).first;
+		}
+		return known->second;
+	}
+} // namespace
 
 UInputMan::UInputMan() {
 	Clear();
@@ -99,7 +128,7 @@ int UInputMan::Initialize() {
 		if (IsScriptedPad(joysticks[index])) {
 			continue;
 		}
-		if (SDL_IsGamepad(joysticks[index])) {
+		if (IsGamepadDevice(joysticks[index])) {
 			SDL_Gamepad* controller = SDL_OpenGamepad(joysticks[index]);
 			if (!controller) {
 				g_ConsoleMan.PrintString("ERROR: Failed to connect gamepad " + std::to_string(index) + " " + std::string(SDL_GetError()));
@@ -320,6 +349,177 @@ void UInputMan::ForgetScriptedPad(SDL_JoystickID joystickID) {
 	}
 	s_ChangedScriptedPadStates.erase(s_ChangedScriptedPadStates.begin() + (pad - s_ScriptedPadStates.begin()));
 	s_ScriptedPadStates.erase(pad);
+}
+
+bool UInputMan::JoystickUpdaterEnabled() {
+#ifdef __APPLE__
+	// IOKit and GameController deliver device callbacks on the main run loop, so joysticks update there.
+	return false;
+#else
+	return true;
+#endif
+}
+
+void UInputMan::StartJoystickUpdater() {
+	if (!JoystickUpdaterEnabled() || s_JoystickUpdater.joinable()) {
+		return;
+	}
+	static const bool stopAtExit = std::atexit(StopJoystickUpdater) == 0;
+	(void)stopAtExit;
+	s_JoystickUpdaterStop = false;
+	const char* rescanText = std::getenv("CCCP_FORCE_HID_RESCAN_MS");
+	const uint64_t rescanMS = rescanText ? std::strtoull(rescanText, nullptr, 10) : 0;
+	s_JoystickUpdater = std::thread([rescanMS]() {
+		uint64_t nextRescan = rescanMS ? SDL_GetTicks() + rescanMS : 0;
+		bool spelledTrue = false;
+		int rescans = 0;
+		std::unique_lock<std::mutex> lock(s_JoystickUpdateMutex);
+		while (!s_JoystickUpdaterStop.load(std::memory_order_relaxed)) {
+			// Wakes for the frame loop's poll, and every millisecond for devices between polls.
+			s_JoystickUpdateWake.wait_for(lock, std::chrono::milliseconds(1), [] { return s_JoystickUpdaterStop.load() || s_JoystickUpdatesAsked != s_JoystickUpdatesDone; });
+			const uint64_t asked = s_JoystickUpdatesAsked;
+			lock.unlock();
+			const bool rescan = nextRescan != 0 && SDL_GetTicks() >= nextRescan;
+			if (rescan) {
+				// Test lever: any HIDAPI hint change makes the next update enumerate every HID device; "1" and "true" read the same.
+				spelledTrue = !spelledTrue;
+				SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS, spelledTrue ? "true" : "1");
+				nextRescan += rescanMS;
+			}
+			const uint64_t beginNS = SDL_GetTicksNS();
+			SDL_UpdateJoysticks();
+			if (rescan) {
+				System::PrintDiagnosticLine("[input] forced HID discovery " + std::to_string(++rescans) + " took " + std::to_string((SDL_GetTicksNS() - beginNS) / 1000) + " us on the joystick updater thread");
+			}
+			lock.lock();
+			s_JoystickUpdatesDone = asked;
+			s_JoystickUpdateWake.notify_all();
+		}
+	});
+}
+
+void UInputMan::SetJoystickUpdaterRunning(bool running) {
+	if (!JoystickUpdaterEnabled() || running == s_JoystickUpdater.joinable()) {
+		return;
+	}
+	// Each hand-over overlaps the two updaters rather than leave a gap; SDL_UpdateJoysticks takes the joystick lock.
+	if (running) {
+		StartJoystickUpdater();
+		SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, "0");
+	} else {
+		SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, "1");
+		StopJoystickUpdater();
+	}
+}
+
+void UInputMan::UpdateJoysticksBeforePoll() {
+	if (!s_JoystickUpdater.joinable()) {
+		return;
+	}
+	std::unique_lock<std::mutex> lock(s_JoystickUpdateMutex);
+	const uint64_t asked = ++s_JoystickUpdatesAsked;
+	s_JoystickUpdateWake.notify_all();
+	// A device discovery holds the update for hundreds of milliseconds: the frame goes on without it rather than stall.
+	s_JoystickUpdateWake.wait_for(lock, std::chrono::milliseconds(2), [asked] { return s_JoystickUpdatesDone >= asked; });
+}
+
+void UInputMan::StopJoystickUpdater() {
+	if (!s_JoystickUpdater.joinable()) {
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lock(s_JoystickUpdateMutex);
+		s_JoystickUpdaterStop = true;
+	}
+	s_JoystickUpdateWake.notify_all();
+	s_JoystickUpdater.join();
+}
+
+bool UInputMan::RunJoystickUpdaterSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const std::string& name, bool valid) {
+		passed = valid && passed;
+		std::cout << "[joystick-updater-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl;
+	};
+	// Polls only the event queue: where the updater owns joysticks, SDL_PollEvent updates none of them.
+	const auto arrives = [](auto matches) {
+		const Uint64 deadline = SDL_GetTicks() + 1000;
+		SDL_Event event;
+		while (SDL_GetTicks() < deadline) {
+			while (SDL_PollEvent(&event)) {
+				if (matches(event)) {
+					return true;
+				}
+			}
+			SDL_Delay(1);
+		}
+		return false;
+	};
+
+	// One pass per way joysticks update: SDL's own update in the frame loop (single player, as the game always had it), the
+	// updater thread a lockstep match runs, and that thread without the frame's ask (a press then lands a poll late).
+	constexpr int c_Presses = 60;
+	enum class Mode { FrameLoop, Updater, UpdaterUnasked };
+	const auto pass = [&](Mode mode, const char* label, bool* announced) -> std::string {
+		SetJoystickUpdaterRunning(mode != Mode::FrameLoop);
+		const bool updaterOwns = mode != Mode::FrameLoop && JoystickUpdaterEnabled();
+		if (mode != Mode::UpdaterUnasked) {
+			check(std::string(label) + (updaterOwns ? " the_frame_loop_updates_no_joystick" : " the_frame_loop_updates_joysticks"),
+			      SDL_GetHintBoolean(SDL_HINT_AUTO_UPDATE_JOYSTICKS, true) != updaterOwns);
+			check(std::string(label) + " the_updater_thread_runs_" + (updaterOwns ? "in_a_lockstep_match" : "never"), s_JoystickUpdater.joinable() == updaterOwns);
+		}
+		SDL_VirtualJoystickDesc desc;
+		SDL_INIT_INTERFACE(&desc);
+		desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+		desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+		desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+		desc.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+		desc.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
+		desc.name = "Joystick updater selftest pad";
+		const SDL_JoystickID pad = SDL_AttachVirtualJoystick(&desc);
+		const bool plugged = pad && arrives([pad](const SDL_Event& event) {
+			return (event.type == SDL_EVENT_JOYSTICK_ADDED || event.type == SDL_EVENT_GAMEPAD_ADDED) && event.jdevice.which == pad;
+		});
+		SDL_Joystick* opened = pad ? SDL_OpenJoystick(pad) : nullptr;
+		// Each press is set, then the frame polls at once: which polls read their press, per press.
+		std::string onTheirPoll;
+		for (int press = 0; opened && press < c_Presses; ++press) {
+			const bool down = press % 2 == 0;
+			SDL_SetJoystickVirtualButton(opened, SDL_GAMEPAD_BUTTON_SOUTH, down);
+			if (mode == Mode::Updater) {
+				UpdateJoysticksBeforePoll();
+			}
+			bool read = false;
+			SDL_Event event;
+			while (SDL_PollEvent(&event)) {
+				read = read || (event.type == (down ? SDL_EVENT_JOYSTICK_BUTTON_DOWN : SDL_EVENT_JOYSTICK_BUTTON_UP) && event.jbutton.which == pad);
+			}
+			onTheirPoll += read ? '1' : '0';
+			SDL_Delay(2);
+			while (SDL_PollEvent(&event)) {}
+		}
+		if (opened) {
+			SDL_CloseJoystick(opened);
+		}
+		const bool unplugged = pad && SDL_DetachVirtualJoystick(pad) && arrives([pad](const SDL_Event& event) {
+			return (event.type == SDL_EVENT_JOYSTICK_REMOVED || event.type == SDL_EVENT_GAMEPAD_REMOVED) && event.jdevice.which == pad;
+		});
+		*announced = plugged && unplugged;
+		std::cout << "[joystick-updater-selftest] " << label << " presses_read_on_their_poll=" << std::count(onTheirPoll.begin(), onTheirPoll.end(), '1') << "/" << c_Presses
+		          << " polls=" << onTheirPoll << " plugged=" << plugged << " unplugged=" << unplugged << std::endl;
+		return onTheirPoll;
+	};
+	bool frameLoopAnnounced = false, updaterAnnounced = false, unaskedAnnounced = false;
+	const std::string frameLoop = pass(Mode::FrameLoop, "frame_loop", &frameLoopAnnounced);
+	const std::string updater = pass(Mode::Updater, "updater", &updaterAnnounced);
+	const std::string unasked = pass(Mode::UpdaterUnasked, "updater_unasked", &unaskedAnnounced);
+	std::cout << "[joystick-updater-selftest] the_updater_alone_reads_them_on_the_same_polls=" << (unasked == frameLoop) << std::endl;
+	SetJoystickUpdaterRunning(false);
+	check("a_plugged_and_unplugged_pad_is_announced_the_same_both_ways", frameLoopAnnounced && updaterAnnounced);
+	check("every_press_is_read_on_the_same_poll_both_ways", frameLoop.size() == c_Presses && updater == frameLoop);
+	check("single_player_updates_joysticks_in_the_frame_loop_again", SDL_GetHintBoolean(SDL_HINT_AUTO_UPDATE_JOYSTICKS, true) && !s_JoystickUpdater.joinable());
+	std::cout << "[joystick-updater-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+	return passed;
 }
 
 bool UInputMan::IsScriptedPad(SDL_JoystickID joystickID) {
@@ -1259,9 +1459,9 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 		case SDL_EVENT_GAMEPAD_AXIS_MOTION:
 		case SDL_EVENT_JOYSTICK_AXIS_MOTION:
 			if (std::vector<Gamepad>::iterator device = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), inputEvent.type == SDL_EVENT_GAMEPAD_AXIS_MOTION ? inputEvent.gaxis.which : inputEvent.jaxis.which); device != s_PrevJoystickStates.end()) {
-				if (SDL_IsGamepad(device->m_JoystickID) && inputEvent.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
+				if (IsGamepadDevice(device->m_JoystickID) && inputEvent.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
 					UpdateJoystickAxis(device, inputEvent.gaxis.axis, inputEvent.gaxis.value);
-				} else if (!SDL_IsGamepad(device->m_JoystickID)) {
+				} else if (!IsGamepadDevice(device->m_JoystickID)) {
 					UpdateJoystickAxis(device, inputEvent.jaxis.axis, inputEvent.jaxis.value);
 				}
 			}
@@ -1277,7 +1477,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			if (std::vector<Gamepad>::iterator device = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), joystickEvent ? inputEvent.jbutton.which : inputEvent.gbutton.which); device != s_PrevJoystickStates.end()) {
 				int button = -1;
 				int down = false;
-				if (SDL_IsGamepad(device->m_JoystickID)) {
+				if (IsGamepadDevice(device->m_JoystickID)) {
 					if (inputEvent.type == SDL_EVENT_GAMEPAD_BUTTON_UP || inputEvent.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
 						button = inputEvent.gbutton.button;
 						down = inputEvent.gbutton.down;
@@ -1308,6 +1508,7 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 			if (std::vector<Gamepad>::iterator prevDevice = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), inputEvent.jdevice.which); prevDevice != s_PrevJoystickStates.end()) {
 				g_ConsoleMan.PrintString("INFO: Gamepad " + std::to_string(prevDevice - s_PrevJoystickStates.begin() + 1) + " disconnected!");
 				SDL_CloseGamepad(SDL_GetGamepadFromID(prevDevice->m_JoystickID));
+				s_IsGamepad.erase(prevDevice->m_JoystickID);
 				prevDevice->m_JoystickID = -1;
 				std::fill(prevDevice->m_Axis.begin(), prevDevice->m_Axis.end(), 0);
 				std::fill(prevDevice->m_Buttons.begin(), prevDevice->m_Buttons.end(), false);
@@ -1671,7 +1872,7 @@ void UInputMan::HandleGamepadHotPlug(SDL_JoystickID joystickID) {
 			return;
 		}
 		if (s_PrevJoystickStates[controllerIndex].m_JoystickID == -1) {
-			if (SDL_IsGamepad(joystickID)) {
+			if (IsGamepadDevice(joystickID)) {
 				SDL_Gamepad* gameController = SDL_OpenGamepad(joystickID);
 				if (!gameController) {
 					g_ConsoleMan.PrintString("ERROR: Failed to connect Gamepad!");
@@ -1698,7 +1899,7 @@ void UInputMan::HandleGamepadHotPlug(SDL_JoystickID joystickID) {
 	if (controller) {
 		int numAxis = 0;
 		int numButtons = 0;
-		if (SDL_IsGamepad(joystickID)) {
+		if (IsGamepadDevice(joystickID)) {
 			numAxis = SDL_GAMEPAD_AXIS_COUNT;
 			numButtons = SDL_GAMEPAD_BUTTON_COUNT;
 		} else {

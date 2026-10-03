@@ -17,6 +17,7 @@ import argparse
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
+import bisect
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 TOOLS = Path(__file__).resolve().parent
 if str(TOOLS) not in sys.path:
@@ -104,7 +106,16 @@ def file_evidence(path):
 def stamp():
     clock = subprocess.check_output(["date", "-u", "+%Y-%m-%dT%H:%M:%S"], text=True).strip()
     utc = datetime.strptime(clock, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-    return utc.astimezone(timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %H:%M:%S MST")
+    return utc.astimezone(timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %I:%M:%S %p MST")
+
+
+def parse_stamp(value):
+    for form in ('%Y-%m-%d %I:%M:%S %p MST', '%Y-%m-%d %H:%M:%S MST'):
+        try:
+            return datetime.strptime(value, form)
+        except ValueError:
+            pass
+    raise ValueError(f'invalid capture timestamp: {value}')
 
 
 def scratch_bytes(root):
@@ -178,6 +189,13 @@ def finish_run(scenario, run, captured, source, options):
 
 
 def source_evidence(repo):
+    package = Path(repo) / "MANIFEST.json"
+    if not (Path(repo) / ".git").exists() and package.is_file():
+        # An unpacked release package is no git tree: its manifest names the commit and tree it was built from.
+        manifest = json.loads(package.read_text(encoding="utf-8"))
+        return {"tip": manifest["source"]["commit"], "tree": manifest["source"]["tree"], "package": manifest["tag"],
+                "dirty": ["package built from a modified tree"] if manifest["source"]["dirty"] else [], "diff_sha256": None}
+
     def git(*args):
         return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
     return {"tip": git("rev-parse", "HEAD"), "dirty": git("status", "--porcelain").splitlines(),
@@ -200,6 +218,15 @@ def find_ffmpeg():
         if Path(candidate).is_file():
             return candidate
     return None
+
+
+def find_ffprobe(ffmpeg):
+    """The ffprobe installed beside the ffmpeg in use, which a shell without that directory on PATH still finds; else PATH."""
+    if ffmpeg and Path(ffmpeg).parent != Path("."):
+        sibling = Path(ffmpeg).with_name("ffprobe" + Path(ffmpeg).suffix)
+        if sibling.is_file():
+            return str(sibling)
+    return shutil.which("ffprobe")
 
 
 def load_scenario(name):
@@ -337,6 +364,104 @@ def bind_directory_session(staged_menu, session):
     return False
 
 
+def process_alive(pid):
+    """Whether a process with this id still runs; a pid that cannot be opened for that reason is gone."""
+    if sys.platform == "win32":
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return kernel.GetLastError() != 87  # ERROR_INVALID_PARAMETER: no such process
+        code = ctypes.c_ulong()
+        kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+PORT_CLAIMS = Path(os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp") / "e2e-video-ports"
+
+
+class PortClaim:
+    """A run's ports, claimed on this machine for its lifetime. Two captures of one scenario at once share its ports, and a
+    host of the second then answers to the first run's directory; a claim a live process holds refuses the second run."""
+
+    def __init__(self, ports):
+        self.ports = sorted({port for port in ports if port})
+        self.taken = []
+        self.guards = []
+        self.receipt = f'{os.getpid()} {uuid.uuid4().hex}\n'
+
+    def __enter__(self):
+        if self.taken:
+            return self
+        PORT_CLAIMS.mkdir(parents=True, exist_ok=True)
+        for port in self.ports:
+            path = PORT_CLAIMS / f"{port}.claim"
+            guard = os.open(PORT_CLAIMS / f'{port}.guard', os.O_CREAT | os.O_RDWR)
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    msvcrt.locking(guard, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(guard)
+                self.__exit__(None, None, None)
+                raise RuntimeError(f'port {port} is owned by another claim') from None
+            self.guards.append(guard)
+            for _ in range(2):
+                try:
+                    handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError:
+                    try:
+                        holder = int(path.read_text(encoding="utf-8").split()[0])
+                    except (OSError, ValueError, IndexError):
+                        self.__exit__(None, None, None)
+                        raise RuntimeError(f'port {port} has an incomplete ownership receipt') from None
+                    if holder <= 0 or process_alive(holder):
+                        self.__exit__(None, None, None)
+                        raise RuntimeError(f"port {port} is claimed by the live capture process {holder}")
+                    path.unlink(missing_ok=True)
+                    continue
+                try:
+                    data = self.receipt.encode()
+                    while data:
+                        written = os.write(handle, data)
+                        if written <= 0: raise OSError('claim receipt write made no progress')
+                        data = data[written:]
+                except OSError:
+                    self.__exit__(None, None, None)
+                    raise
+                finally:
+                    os.close(handle)
+                self.taken.append(path)
+                break
+            else:
+                self.__exit__(None, None, None)
+                raise RuntimeError(f"port {port} could not be claimed")
+        return self
+
+    def __exit__(self, *exc):
+        for path in self.taken:
+            try:
+                if path.read_text(encoding='utf-8') == self.receipt: path.unlink()
+            except OSError:
+                pass
+        self.taken = []
+        for guard in self.guards:
+            os.close(guard)
+        self.guards = []
+        return False
+
+
 def directory_port_for(scenario, run, base):
     """The run's session directory port: the scenario's place below the top of the driver's block, so a lane's own block
     carries it with the runs. None when the scenario serves no directory."""
@@ -358,9 +483,192 @@ def port_for(run_index, base):
     return port
 
 
+def parse_freezedetect(text):
+    """The still spans ffmpeg's freezedetect reports, in seconds of the video: (start, end); a span still open at the end runs to None."""
+    spans, start = [], None
+    for line in text.splitlines():
+        found = re.search(r"freeze_(start|end): ([0-9.]+)", line)
+        if not found:
+            continue
+        if found.group(1) == "start":
+            start = float(found.group(2))
+        elif start is not None:
+            spans.append((start, float(found.group(2))))
+            start = None
+    if start is not None:
+        spans.append((start, None))
+    return spans
+
+
+# The engine marks the moment the harness ends a round by its tick cap; the screen then holds its last picture while
+# the run drains its relay, lingers and writes its records, and no player ever sees a match end that way.
+CAPPED_STOP_EVENT = "capped stop"
+# The mark is stamped just after the last picture is presented; freezedetect starts the still at that picture.
+CAPPED_STOP_SLACK_S = 0.2
+
+
+def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None, named=None):
+    """The stills that fall while this screen's match runs: every saved frame over the span shows the game with the service Running.
+    A still over a menu, a load or a stopped service is not the match freezing; the one still that holds the harness's capped stop
+    is the run ending, recorded in `allowed` with its reason, and is not a freeze either."""
+    saved = [row for row in rows if row.get("saved", True) and "wall_ms" in row]
+    if not saved:
+        return []
+    origin, last = saved[0]["wall_ms"], saved[-1]["wall_ms"]
+    capped_s = (capped_stop_ms - origin) / 1000.0 if capped_stop_ms is not None else None
+    stills = []
+    for start, end in spans:
+        stop = end if end is not None else (last - origin) / 1000.0
+        if stop - start < minimum_s:
+            continue
+        inside = [row for row in saved if origin + start * 1000 <= row["wall_ms"] <= origin + stop * 1000]
+        if inside and all(row.get("screen") == "game" and row.get("service_state") == "Running" for row in inside):
+            still = {"start_s": round(start, 3), "end_s": round(stop, 3), "frames": [inside[0].get("frame"), inside[-1].get("frame")]}
+            if capped_s is not None and capped_s - CAPPED_STOP_SLACK_S <= start and capped_s <= stop:
+                if allowed is not None:
+                    allowed.append({**still, "reason": "the harness's capped stop at %.2f s" % capped_s})
+                continue
+            window = next((window for window in named or [] if window[0] <= origin + start * 1000 and origin + stop * 1000 <= window[1]), None)
+            if window:
+                if allowed is not None:
+                    allowed.append({**still, "reason": window[2]})
+                continue
+            stills.append(still)
+    return stills
+
+
+def named_still_windows(scenario, run_name, peer, video_dir):
+    """The scenario's still states for this peer as recorder-clock windows, each from its first mark to its closing mark."""
+    path = Path(video_dir) / "events.jsonl" if video_dir else None
+    if not path or not path.is_file():
+        return []
+    marks = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = event.get("message", "")
+        if message.startswith("video_mark ") and not message.endswith(" PASS"):
+            marks.setdefault(message.split(" ", 2)[1], event.get("wall_ms"))
+    windows = []
+    for spec in scenario.get("allowed_stills", []):
+        if spec.get("peer") != peer or spec.get("run", run_name) != run_name:
+            continue
+        begin, end = marks.get(spec["from_mark"]), marks.get(spec["to_mark"])
+        if begin is not None and end is not None and begin < end:
+            windows.append((begin, end, spec["reason"]))
+    return windows
+
+
+def capped_stop_ms(video_dir):
+    """The recorder's clock when the harness ended this round by its tick cap, or None."""
+    path = Path(video_dir) / "events.jsonl" if video_dir else None
+    if not path or not path.is_file():
+        return None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("message") == CAPPED_STOP_EVENT:
+            return event.get("wall_ms")
+    return None
+
+
+# A still is confirmed on the picture: a frozen one changes no pixel by more than this many levels between its ends, while
+# encoder noise stays far below it; this many such pixels is a picture that moved (a soldier walking on a 4K whole-map view).
+MOTION_LEVELS = 40
+MOTION_PIXELS = 1000
+
+
+def changed_pixels(ffmpeg, video, start_s, end_s):
+    """The pixels that changed by more than MOTION_LEVELS between the frames an encoded capture shows at two times."""
+    graph = (f"[0:v]select='gte(t\\,{start_s:.3f})',format=gray,setpts=N[a];[1:v]select='gte(t\\,{end_s:.3f})',format=gray,setpts=N[b];"
+             f"[a][b]blend=all_mode=difference,lutyuv=y='if(gt(val\\,{MOTION_LEVELS})\\,255\\,0)',signalstats,"
+             "metadata=print:key=lavfi.signalstats.YAVG")
+    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), "-i", str(video), "-filter_complex", graph,
+                             "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True, errors="replace", timeout=600)
+    if result.returncode != 0: return None
+    found = re.search(r"lavfi\.signalstats\.YAVG=([0-9.]+)", result.stderr)
+    size = re.search(r"Stream #0:0.*?, (\d+)x(\d+)", result.stderr)
+    if not found or not size:
+        return None
+    return round(float(found[1]) / 255 * int(size[1]) * int(size[2]))
+
+
+def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None, named=None):
+    """ffmpeg's freezedetect over one peer's encoded capture: a still picture over one second while the match runs. Each
+    span it calls still is confirmed on the picture; one whose ends differ in MOTION_PIXELS pixels moved and is kept as moved."""
+    if not ffmpeg or not video or not Path(video).is_file():
+        return None
+    result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-i", str(video), "-vf", "freezedetect=n=-60dB:d=1", "-map", "0:v:0", "-f", "null", "-"],
+                            capture_output=True, text=True, errors="replace", timeout=600)
+    if result.returncode != 0:
+        raise RuntimeError(f'ffmpeg still scan exited {result.returncode}: {result.stderr[-500:]}')
+    if len(rows) < 2: raise ValueError(f'still scan has {len(rows)} indexed frames')
+    stills = running_stills(parse_freezedetect(result.stderr), rows, capped_stop_ms=capped_stop_ms(video_dir), allowed=allowed, named=named)
+    for still in stills:
+        # The span's last picture shows a little before its end time; a span open to the end of the video stays a still.
+        if still.get("end_s") is not None and still["end_s"] - still["start_s"] > 0.1:
+            still["changed_pixels"] = changed_pixels(ffmpeg, video, still["start_s"], still["end_s"] - 0.05)
+    return stills
+
+
+def recording_health(video_dir, minimum_share=0.9, minimum_duration_s=None):
+    """The recorder's own account of a capture, judged against what it was given: of the frames the engine presented at the
+    capture rate (saved, failed to write, or turned away by a full queue), the share it saved, and the longest wait between two
+    saved frames that holds a frame it turned away. The engine's own presented rate is reported beside it, never judged here:
+    a box whose engines present fewer frames than the capture rate is a load fact of that box, and the scene's own bars judge it."""
+    manifest_path = Path(video_dir) / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rows = [row for row in read_index(video_dir) if "wall_ms" in row]
+    saved = [row["wall_ms"] for row in rows if row.get("saved", True)]
+    failed = [row["wall_ms"] for row in rows if not row.get("saved", True)]
+    # The engine indexes each slot its full queue turned away; a gap holding such slots is the recorder's, not the screen's.
+    dropped_path = Path(video_dir) / "dropped.jsonl"
+    drops = sorted(row["wall_ms"] for row in read_rows(dropped_path) if "wall_ms" in row) if dropped_path.is_file() else None
+    # The recording is the match's: what follows the harness's capped stop is the run ending, not a frame the recorder owed.
+    capped = capped_stop_ms(video_dir)
+    if capped is not None:
+        saved = [wall for wall in saved if wall <= capped]
+        failed = [wall for wall in failed if wall <= capped]
+        drops = [wall for wall in drops if wall <= capped] if drops is not None else None
+    fps = manifest.get("fps") or 0
+    span_s = (saved[-1] - saved[0]) / 1000.0 if len(saved) > 1 else 0.0
+    saved_fps = (len(saved) - 1) / span_s if span_s > 0 else 0.0
+    longest_gap_ms = max((later - earlier for earlier, later in zip(saved, saved[1:])), default=0)
+    turned_away = len(drops) if drops is not None else int(manifest.get("frames_dropped") or 0)
+    presented = len(saved) + len(failed) + turned_away
+    presented_fps = presented / span_s if span_s > 0 else 0.0
+    saved_share = len(saved) / presented if presented else 0.0
+    recorder_gap_ms = None
+    if drops is not None:
+        recorder_gap_ms = 0
+        for earlier, later in zip(saved, saved[1:]):
+            if later - earlier > recorder_gap_ms and bisect.bisect_right(drops, earlier) < bisect.bisect_left(drops, later):
+                recorder_gap_ms = later - earlier
+    # More than two slots in a row lost to the queue shows as a still of the recorder's own making.
+    gap_bar_ms = 3 * 1000 // fps if fps > 0 else 0
+    minimum_duration_s = max(manifest.get('minimum_duration_s', 0), minimum_duration_s or 0)
+    complete = len(saved) >= 2 and span_s > 0 and span_s >= minimum_duration_s
+    starved = not complete or fps <= 0 or presented == 0 or saved_share < minimum_share or (recorder_gap_ms is not None and recorder_gap_ms > gap_bar_ms)
+    return {"fps": fps, "frames_saved": manifest.get("frames_saved"), "frames_dropped": manifest.get("frames_dropped"),
+            "frames_rate_limited": manifest.get("frames_rate_limited"), "span_s": round(span_s, 3), "saved_fps": round(saved_fps, 2),
+            "presented_at_capture_rate": presented, "saved_share": round(saved_share, 4), "engine_presented_fps": round(presented_fps, 2),
+            "longest_gap_ms": longest_gap_ms, "recorder_gap_ms": recorder_gap_ms, "recorder_gap_bar_ms": gap_bar_ms, "starved": starved,
+            "complete": complete, "minimum_duration_s": minimum_duration_s}
+
+
 def read_index(video_dir):
     """The engine's per-frame index; a capture that never presented a frame leaves it empty."""
-    path = Path(video_dir) / "frames.jsonl"
+    return read_rows(Path(video_dir) / "frames.jsonl")
+
+
+def read_rows(path):
+    """One JSON object per line; a torn or missing file reads as what it holds."""
     rows = []
     if not path.is_file():
         return rows
@@ -495,8 +803,39 @@ def read_manifest(video_dir):
         return {}
 
 
+_ENCODER_CODEC = {}
+
+
+def encoder_codec(ffmpeg):
+    """The codec the engines stream into: the GPU's h264 encoder when this box offers one, libx264 otherwise; probed once."""
+    if ffmpeg not in _ENCODER_CODEC:
+        probe = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=320x240:d=0.2",
+                                "-c:v", "h264_nvenc", "-f", "null", "-"], capture_output=True, text=True) if ffmpeg else None
+        _ENCODER_CODEC[ffmpeg] = "h264_nvenc" if probe is not None and probe.returncode == 0 else "libx264"
+    return _ENCODER_CODEC[ffmpeg]
+
+
+def probe_video(ffmpeg, destination):
+    ffprobe = find_ffprobe(ffmpeg)
+    if not ffprobe:
+        return {}
+    check = subprocess.run([ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
+                            "stream=width,height,nb_read_frames,r_frame_rate:format=duration", "-of", "json", str(destination)],
+                           capture_output=True, text=True)
+    return json.loads(check.stdout) if check.returncode == 0 else {}
+
+
 def encode(ffmpeg, video_dir, fps, destination):
-    """One peer's frames to h264. Even dimensions are forced because yuv420p needs them."""
+    """One peer's frames to h264. Even dimensions are forced because yuv420p needs them. A capture the engine streamed into
+    its own encoder is taken as it is: one video frame per capture slot, the last picture held over a slot nothing filled."""
+    streamed = Path(video_dir) / "capture.mp4"
+    if streamed.is_file():
+        rows = [row for row in read_index(video_dir) if row.get("saved", True) and "video_frame" in row]
+        os.replace(streamed, destination)
+        manifest = read_manifest(video_dir) or {}
+        return {"encoded": Path(destination).is_file() and bool(rows), "timing": "engine-slots", "origin_wall_ms": rows[0]["wall_ms"] if rows else None,
+                "fps": fps, "ffprobe": probe_video(ffmpeg, destination), "encoder": manifest.get("encoder"),
+                "capture_duration_s": (rows[-1]["wall_ms"] - rows[0]["wall_ms"]) / 1000 + 1 / fps if rows else 0, "path": str(destination)}
     frames = Path(video_dir) / "frames"
     if not frames.is_dir() or not any(frames.glob("frame-*.png")):
         return {"encoded": False, "reason": f"no frames in {frames}"}
@@ -518,14 +857,7 @@ def encode(ffmpeg, video_dir, fps, destination):
                "-i", str(timeline), "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-r", str(fps), "-fps_mode", "cfr",
                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", str(destination)]
     result = subprocess.run(command, capture_output=True, text=True)
-    metadata = {}
-    ffprobe = shutil.which("ffprobe")
-    if result.returncode == 0 and ffprobe:
-        check = subprocess.run([ffprobe, "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries",
-                                "stream=width,height,nb_read_frames,r_frame_rate:format=duration", "-of", "json", str(destination)],
-                               capture_output=True, text=True)
-        if check.returncode == 0:
-            metadata = json.loads(check.stdout)
+    metadata = probe_video(ffmpeg, destination) if result.returncode == 0 else {}
     return {"encoded": result.returncode == 0 and Path(destination).is_file(), "timing": "wall-clock-cfr",
             "origin_wall_ms": rows[0]["wall_ms"], "fps": fps, "ffprobe": metadata,
             "capture_duration_s": (rows[-1]["wall_ms"] - rows[0]["wall_ms"]) / 1000 + 1 / fps,
@@ -533,12 +865,34 @@ def encode(ffmpeg, video_dir, fps, destination):
             "stderr": result.stderr[-2000:], "path": str(destination)}
 
 
-def contact_sheet(video_dir, rows, destination, every, ffmpeg):
+def extract_frames(ffmpeg, video, rows, frames):
+    """The picked rows' pictures out of a streamed capture's MP4, named as the PNG path would have named them."""
+    wanted = [row for row in rows if "video_frame" in row and not (frames / f"frame-{row['frame']:06d}.png").is_file()]
+    if not wanted or not ffmpeg or not Path(video).is_file():
+        return
+    frames.mkdir(parents=True, exist_ok=True)
+    select = "+".join(f"eq(n,{row['video_frame']})" for row in wanted)
+    scratch = frames / "extract"
+    scratch.mkdir(exist_ok=True)
+    subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-vf", f"select='{select}'",
+                    "-fps_mode", "passthrough", str(scratch / "pick-%06d.png")], capture_output=True, text=True)
+    for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1):
+        picture = scratch / f"pick-{index:06d}.png"
+        if picture.is_file():
+            os.replace(picture, frames / f"frame-{row['frame']:06d}.png")
+    for leftover in scratch.glob("*.png"):
+        leftover.unlink()
+    scratch.rmdir()
+
+
+def contact_sheet(video_dir, rows, destination, every, ffmpeg, video=None):
     """Every `every`-th frame tiled SHEET_COLUMNS wide, each thumbnail labelled with what it is."""
     frames = Path(video_dir) / "frames"
     picked = rows[::every] if rows else []
     if not picked:
         return {"written": False, "reason": "no frames to tile"}
+    if video:
+        extract_frames(ffmpeg, video, picked, frames)
     try:
         from PIL import Image, ImageDraw  # noqa: PLC0415
     except ImportError:
@@ -616,6 +970,157 @@ def probe_verdict(probe_dir, item):
         return {"probe": "fail", "reason": "Required probe result is unreadable"}
     return {"probe": "pass" if observed.get("pass") and observed.get("complete") else "fail",
             "complete": bool(observed.get("complete")), "path": str(result)}
+
+
+# The screen checks every scenario carries (A13): the engine judges each drawn frame from its arming to the process's end and logs
+# every distinct offence once, so one capture lists them all.
+SCREEN_WATCH_RULES = {
+    "layout": ("Every shown label's text fits its own rect, its rect sits inside its panel and the screen.", "layout always"),
+    "duplicates": ("No two shown overlay controls carry the same line at once (the status strip and a toast never stack one event).", "duplicates always"),
+    "held-reads-held": ("A seat kept for its player never reads 'Left' on another screen while it is held.", "forbid remote_held Left - AI in control"),
+    "own-hold-line": ("The held player's own screen says it is held from the hold's first frame to the frame its control returns.", "require local_held Held - AI in control"),
+    "rtt": ("NET STATUS's round-trip summary agrees with the per-player pings listed beside it.", "rtt always"),
+    "seat-rows": ("Every seat the open seats panel lists has its row drawn inside the panel.", "seat_rows panel_open"),
+}
+SCREEN_WATCHES = "".join(f"h15-{name} {spec}\n" for name, (_, spec) in SCREEN_WATCH_RULES.items())
+TEXT_WATCH_LINE = re.compile(r"^\[text-watch\] (armed|violation|summary) (.*)$", re.M)
+
+
+def screen_watch_results(peer_root):
+    """Each native armed watch and every summary; missing terminal coverage remains visible to review."""
+    log = Path(peer_root) / "stdout.log"
+    text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+    results = {}
+    for kind, body in TEXT_WATCH_LINE.findall(text):
+        if kind == "armed":
+            try:
+                armed = json.loads(body)
+            except json.JSONDecodeError:
+                armed = {'armed': 'invalid-armed-json'}
+            full = str(armed.get('armed', 'invalid-unnamed-watch'))
+            name = full[4:] if full.startswith('h15-') else full
+            row = results.setdefault(name, {'offences': [], 'summary': None, 'armed': armed, 'arms': 0, 'summaries': []})
+            row['arms'] += 1
+        elif kind == "violation":
+            name, _, rest = body.partition(" ")
+            name = name[4:] if name.startswith('h15-') else name
+            if name in results:
+                record = rest.partition(" ")[2]
+                try:
+                    results[name]["offences"].append(json.loads(record))
+                except json.JSONDecodeError:
+                    results[name]["offences"].append({"raw": record})
+        else:
+            try:
+                summary = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            name = str(summary.get("watch", ""))
+            name = name[4:] if name.startswith('h15-') else name
+            row = results.setdefault(name, {'offences': [], 'summary': None, 'armed': None, 'arms': 0, 'summaries': []})
+            summary['_arm'] = row['arms']
+            row['summary'] = summary
+            row['summaries'].append(summary)
+    return results or None
+
+
+def scene_termination_tick(peer):
+    record = peer.get('record') or {}
+    if not peer.get('expected_termination') or not str(record.get('injected_termination', '')).startswith('scenario drop'):
+        return None
+    path = Path(peer.get('video_dir') or Path(peer['root']) / 'video') / 'injected-drop.json'
+    try:
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    tick = (receipt.get('last_recorded_frame') or {}).get('sim_tick')
+    return tick if type(tick) is int and tick >= 0 else None
+
+
+def expected_screen_watches(peer):
+    names = set(SCREEN_WATCH_RULES)
+    root = Path(peer.get('stage') or Path(peer['root']).with_name(Path(peer['root']).name + '-stage'))
+    for leaf in ('menu.txt', 'screen-watches.txt', 'probe/probe.json'):
+        path = root / leaf
+        text = path.read_text(encoding='utf-8', errors='replace') if path.is_file() else ''
+        names.update(re.findall(r'\bh15-([\w-]+)\b', text))
+    return names
+
+
+def capture_evidence_items(scenario, capture, peer):
+    name = peer['peer']
+    declared = next((run for run in scenario.get('runs', []) if run.get('name') == capture['name']), scenario)
+    declared_peer = next((row for row in declared.get('peers', scenario.get('peers', [])) if row.get('name') == name), {})
+    minimum = peer.get('minimum_capture_s', declared_peer.get('minimum_capture_s', declared.get('minimum_capture_s', scenario.get('minimum_capture_s'))))
+    base = dict(run=capture['name'], peer=name, screen='any', frames=None, capture_frames=None, video_seconds=None,
+                video=peer.get('video'), contact_sheet=peer.get('contact_sheet'), state='checked')
+    def item(id, rule, error='', incomplete=False, **details):
+        return dict(base, id=id, what=rule, **{'assert': rule}, probe='incomplete' if incomplete else 'fail' if error else 'pass',
+                    **details, **(dict(finding=dict(class_='harness', reason=error, launch=None, errors=[])) if error else {}))
+    output = []
+    from feel.harness_cost import reduce_costs
+    cost = reduce_costs([Path(peer['root']) / 'stdout.log'])
+    output.append(item(f'harness-cost-{name}', cost['rule'], cost['reason'],
+                       incomplete=cost['status'] == 'INCOMPLETE', instrumentation=cost))
+    health, error = None, ''
+    try:
+        health = recording_health(peer['video_dir'], minimum_duration_s=minimum) if peer.get('video_dir') else None
+    except (OSError, ValueError, TypeError) as failed:
+        error = f'recording metadata: {type(failed).__name__}: {failed}'
+    if health is None: error = error or 'recorder manifest is absent'
+    elif not health['complete']: error = f'capture span={health["span_s"]} s, minimum={health["minimum_duration_s"]} s, saved frames={health["frames_saved"]}'
+    elif health['starved']: error = f'saved share={health["saved_share"]}, recorder gap={health["recorder_gap_ms"]} ms, gap bound={health["recorder_gap_bar_ms"]} ms'
+    output.append(item(f'recording-rate-{name}', 'Recorder evidence is complete, reaches its declared minimum and meets the existing saved-share/gap bars',
+                       error, incomplete=health is None or not health.get('complete', False), recording=health))
+    allowed, stills, error = [], None, ''
+    try:
+        stills = freeze_scan(find_ffmpeg(), peer.get('video'), read_index(peer['video_dir']) if peer.get('video_dir') else [],
+                             peer.get('video_dir'), allowed, named_still_windows(scenario, capture['name'], name, peer.get('video_dir')))
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as failed:
+        error = f'still scan: {type(failed).__name__}: {failed}'
+    if stills is None: error = error or 'still scan is absent: ffmpeg or encoded video unavailable'
+    moved = [still for still in stills or [] if (still.get('changed_pixels') or 0) >= MOTION_PIXELS]
+    failures = [still for still in stills or [] if still not in moved]
+    if failures: error = f'{len(failures)} running still(s), first at {failures[0]["start_s"]} s'
+    output.append(item(f'recording-stills-{name}', f'Checked decoder and no running still over 1 s; pixel bars={MOTION_LEVELS}/{MOTION_PIXELS}',
+                       error, incomplete=stills is None, stills=failures, moved_stills=moved, allowed_stills=allowed))
+    watches = screen_watch_results(peer['root']) or {}
+    killed = bool(peer.get('expected_termination'))
+    kill_tick = scene_termination_tick(peer)
+    for watch in sorted(expected_screen_watches(peer) | set(watches)):
+        result = watches.get(watch) or dict(offences=[], summary=None, armed=None, arms=0, summaries=[])
+        summaries = result.get('summaries', [])
+        offences = [row for row in result['offences'] if not (killed and kill_tick is not None
+                    and type(row.get('lockstep_frame')) is int and row['lockstep_frame'] > kill_tick)]
+        selected = []
+        for arm in range(1, result.get('arms', 0) + 1):
+            own = [row for row in summaries if row.get('_arm') == arm]
+            if killed:
+                own = [row for row in own if type(row.get('through_tick')) is int and kill_tick is not None
+                       and 0 <= row['through_tick'] <= kill_tick]
+                if own: selected.append(max(own, key=lambda row: row['through_tick']))
+            else:
+                final = [row for row in own if row.get('flush') != 'periodic']
+                if len(final) == 1: selected.append(final[0])
+        complete = bool(result.get('arms')) and len(selected) == result['arms']
+        if not complete: offences.append(dict(detail=f'watch {watch}: arms={result.get("arms", 0)}, summaries={len(summaries)}'))
+        for summary in selected:
+            if type(summary.get('frames')) is not int or summary['frames'] <= 0 or type(summary.get('violations')) is not int:
+                complete = False; offences.append(dict(detail=f'watch {watch}: invalid summary {summary}'))
+            elif summary['violations'] > 0: offences.append(dict(detail=f'watch {watch}: summary violations={summary["violations"]}'))
+            if watch.startswith('scene-') and summary.get('active_frames', 0) == 0:
+                offences.append(dict(detail='its state never held while it was armed'))
+        rule = SCREEN_WATCH_RULES.get(watch, (f'Every armed {watch} screen check has a terminal summary', ''))[0]
+        if killed:
+            rule += f' terminated by the scene at tick {kill_tick}' if kill_tick is not None else ' scene termination tick is unproved'
+        output.append(item(f'screen-{watch}-{name}', rule, json.dumps(offences[0]) if offences else '', incomplete=not complete,
+                           watch=dict(summary=selected[-1] if selected else None, summaries=summaries,
+                                      selected_summaries=selected, termination_tick=kill_tick, offences=offences[:40])))
+    for row in output:
+        if 'finding' in row: row['finding']['class'] = row['finding'].pop('class_')
+        if capture.get('interrupted'):
+            row.update(probe='incomplete', finding={'class': 'harness', 'reason': capture['interrupted'], 'launch': None, 'errors': []})
+    return output
 
 
 def menu_script_failures(peer_root):
@@ -801,6 +1306,36 @@ def report_toast_evidence(record, spec):
             "reason": "no toast " + "; ".join(missing) + " in " + str(report) if missing else None}
 
 
+# What decides an item without eyes: a log line, a numeric gate, a probe step or an engine record. Such an item is a LOG item,
+# judged by its probe alone; every other item names what the screen must show and is a PICTURE item for the reviewer.
+LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop", "drop_tick", "ownership_reclaim")
+
+
+def dropped_index_evidence(record, drop_tick):
+    """A killed peer's own recording: its index reaches the tick it was killed after, and no line but the last is torn."""
+    path = Path(record["video_dir"]) / "frames.jsonl" if record.get("video_dir") else None
+    lines = [line for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip()] if path and path.is_file() else []
+    torn = []
+    for number, line in enumerate(lines):
+        try:
+            json.loads(line)
+        except json.JSONDecodeError:
+            torn.append(number)
+    ticks = [row.get("sim_tick", 0) for row in record.get("index", []) if row.get("saved", True)]
+    reached = max(ticks, default=0)
+    passed = bool(ticks) and reached >= drop_tick and all(number == len(lines) - 1 for number in torn)
+    return {"pass": passed, "rows": len(lines), "torn_lines": torn, "last_sim_tick": reached, "drop_tick": drop_tick,
+            "reason": None if passed else f"the killed peer's index ends at tick {reached} (killed after {drop_tick}) with torn lines {torn}"}
+
+
+def item_kind(item):
+    """An item's own 'kind' when it names one, else what its evidence makes it."""
+    if item.get("kind") in ("log", "picture"):
+        return item["kind"]
+    # Evidence that names nothing (an empty step list) proves nothing.
+    return "log" if any(item.get(key) for key in LOG_EVIDENCE) else "picture"
+
+
 def item_evidence(record, item, port=None):
     rows = record["index"]
     events_path = Path(record["video_dir"]) / "events.jsonl"
@@ -864,6 +1399,11 @@ def item_evidence(record, item, port=None):
         evidence["probe"] = "pass" if evidence["resumed_play"]["pass"] else "fail"
         if not evidence["resumed_play"]["pass"]:
             evidence["reason"] = evidence["resumed_play"]["reason"]
+    if item.get("drop_tick") is not None:
+        evidence["dropped_index"] = dropped_index_evidence(record, int(item["drop_tick"]))
+        evidence["probe"] = "pass" if evidence["dropped_index"]["pass"] else "fail"
+        if not evidence["dropped_index"]["pass"]:
+            evidence["reason"] = evidence["dropped_index"]["reason"]
     if item.get("log_regex") or item.get("forbidden_log_regex"):
         assertions = log_assertions(record["root"], item.get("log_regex", []), item.get("forbidden_log_regex", []))
         passed = all(bool(value["matches"]) != value["forbidden"] for value in assertions)
@@ -898,6 +1438,13 @@ def item_evidence(record, item, port=None):
         passed = evidence["process_drop"]["pass"]
         if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
+    if 'ownership_reclaim' in item:
+        from e2e.ownership import reclaim_evidence
+        owned = reclaim_evidence(record['root'], item['ownership_reclaim'])
+        evidence['ownership_reclaim'] = owned
+        if not owned['passed'] or evidence.get('probe') in ('none', 'awaiting-review'):
+            evidence['probe'] = 'pass' if owned['passed'] else 'fail'
+        if not owned['passed']: evidence['reason'] = '; '.join(owned['errors'])
     if item.get("readback"):
         observed = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
         steps = {step["index"]: step.get("observed", {}) for step in observed.get("steps", [])}
@@ -956,12 +1503,17 @@ def review(scenario, capture, out):
                 indexed = {row["frame"]: row for row in record["index"]}
                 seconds = [(indexed[frame]["wall_ms"] - encode_result["origin_wall_ms"]) / 1000 for frame in found]
                 video_frames = [round(second * encode_result["fps"]) for second in seconds]
-            resolved = {**item, "peer": name, "run": capture["name"], "frames": video_frames,
+            elif video_frames and encode_result.get("timing") == "engine-slots":
+                # A streamed capture names each frame's place in its own video: one frame per capture slot.
+                indexed = {row["frame"]: row for row in record["index"]}
+                video_frames = [indexed[frame]["video_frame"] for frame in found if "video_frame" in indexed.get(frame, {})]
+                seconds = [frame / encode_result["fps"] for frame in video_frames]
+            resolved = {**item, "kind": item_kind(item), "peer": name, "run": capture["name"], "frames": video_frames,
                           "capture_frames": found, "video_seconds": seconds,
                           "video": record.get("video"), "contact_sheet": record.get("contact_sheet"),
                           "state": "captured" if video_frames else "no MP4 evidence",
                           **assertions}
-            if assertions.get('probe') == 'awaiting-review' and video_frames:
+            if assertions.get('probe') == 'awaiting-review' and video_frames and resolved["kind"] == "picture":
                 resolved['state'] = 'AWAITING REVIEW'
             if not video_frames or item.get("blocked_by") or assertions.get("probe") in (None, "none", "fail", "not-reached", "not-run"):
                 resolved["finding"] = {"class": (capture.get("stop_finding") or {}).get("class", "harness" if capture.get("interrupted") else "unclassified"), "reason": (capture.get("stop_finding") or {}).get("reason") or capture.get("interrupted") or item.get("blocked_by") or assertions.get("reason") or
@@ -986,6 +1538,12 @@ def review(scenario, capture, out):
                                   "launch": None, "errors": [row["line"] for row in dialogs[:3]]}} if dialogs else
                      {"finding": {"class": "harness", "reason": capture["interrupted"], "launch": None, "errors": []}}
                      if capture.get("interrupted") else {})})
+    # Enumerate the mandatory evidence before reading its results. Missing output remains a required row.
+    expected_evidence = []
+    for peer in capture['peers']:
+        expected_evidence += [f'recording-rate-{peer["peer"]}', f'recording-stills-{peer["peer"]}',
+                              *[f'screen-{name}-{peer["peer"]}' for name in sorted(expected_screen_watches(peer))]]
+        items.extend(capture_evidence_items(scenario, capture, peer))
     run_findings = []
     for peer in capture["peers"]:
         record = peer.get("record", {})
@@ -1025,7 +1583,7 @@ def review(scenario, capture, out):
                                      reason='Unplanned desync: ' + match[0], launch=peer.get('launch')))
     document = {"schema": 1, "scenario": scenario["name"], "title": scenario.get("title", ""),
                 "requires": scenario.get("requires", []),
-                "reviewer_reads": ["review.json", "<peer>-sheet.png", "<peer>.mp4"],
+                "reviewer_reads": ["review.json", "<peer>-sheet.png", "<peer>.mp4"], "expected_evidence": expected_evidence,
                 "peers": [{k: v for k, v in row.items() if k != "index"} for row in capture["peers"]],
                 "checklist": items,
                 "run_findings": run_findings,
@@ -1060,6 +1618,18 @@ def stage_peer(scenario, peer, root, tokens):
     if peer.get("menu_script"):
         path = Path(root) / "menu.txt"
         path.write_text(substitute(scenario_text(scenario, peer["menu_script"]), tokens), encoding="utf-8")
+    # Every peer's engine arms the shared screen watches from this file on its first drawn frame.
+    watches = Path(root) / "screen-watches.txt"
+    watches.write_text(SCREEN_WATCHES, encoding="utf-8")
+    environment["CCCP_TEST_SCREEN_WATCHES"] = str(watches)
+    if any('ownership_reclaim' in item and item.get('peer') == peer['name'] for item in scenario.get('checklist', [])):
+        environment.update(CC_TEST_CROSS_RECORDS=str(Path(tokens['VIDEO']).parent / 'events.jsonl'),
+                           CC_TEST_CROSS_INSTANCE=peer['name'], CC_TEST_CROSS_INCARNATION=str(peer.get('incarnation', 0)))
+    # Frames stream into one encoder process as they land (H11): no capture spools its pictures to disk first.
+    ffmpeg = find_ffmpeg()
+    if ffmpeg:
+        environment["CCCP_TEST_RECORD_ENCODER"] = str(ffmpeg)
+        environment["CCCP_TEST_RECORD_CODEC"] = encoder_codec(ffmpeg)
     environment.update(substitute(peer.get("env", {}), tokens))
     if environment["CCCP_HEADLESS"] != "1":
         raise ValueError("a scenario cannot override CCCP_HEADLESS=1")
@@ -1185,7 +1755,11 @@ def run_one(options, scenario, run, run_index, out):
             destination = Path(run_handle.cwd) / entry["to"]
             destination.parent.mkdir(parents=True, exist_ok=True)
             if "copy" in entry:
-                destination.write_bytes(staged_copy(Path(options.repo) / entry["copy"], entry.get("replace", [])))
+                source = Path(options.repo) / entry["copy"]
+                # An unpacked package carries the game alone: a harness fixture comes from the driver's own tree.
+                if not source.is_file() and (Path(options.repo) / "MANIFEST.json").is_file():
+                    source = TOOLS.parent / entry["copy"]
+                destination.write_bytes(staged_copy(source, entry.get("replace", [])))
             else:
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
@@ -1261,7 +1835,13 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
 
-    interrupted, stop_finding, footprint_peak = None, None, 0
+    def kill_after_seconds(name, seconds):
+        video = Path(shared[f'VIDEO_{name}'])
+        rows = read_index(video)
+        write_json(video / 'injected-drop.json', dict(requested_seconds=seconds, last_recorded_frame=rows[-1] if rows else None))
+        drop_peer(runs[name], f'scenario drop after {seconds} seconds')
+
+    interrupted, stop_finding, footprint = None, None, {"peak": 0}
     try:
         for peer in peers:
             name = peer["name"]
@@ -1293,7 +1873,7 @@ def run_one(options, scenario, run, run_index, out):
             # A scenario that drops a peer kills it through the runner, never by name or by PID.
             kill_after = float(peer.get("kill_after_s", 0) or 0)
             if kill_after:
-                timer = threading.Timer(kill_after, lambda handle=runs[name]: drop_peer(handle))
+                timer = threading.Timer(kill_after, kill_after_seconds, args=(name, kill_after))
                 timer.daemon = True
                 timer.start()
                 killers.append(timer)
@@ -1305,7 +1885,16 @@ def run_one(options, scenario, run, run_index, out):
                 watcher = threading.Thread(target=kill_when, args=(name, peer["kill_when"]), daemon=True)
                 watcher.start()
                 killers.append(watcher)
-        next_size_check, footprint_peak = time.monotonic(), 0
+        def measure_footprint():
+            # A full scratch takes seconds to walk; the loop below writes the probes' gameplay signal and never waits on it.
+            while True:
+                footprint["peak"] = note_footprint(options.scratch_root, footprint["peak"])
+                if stop_watchers.wait(10):
+                    return
+
+        measurer = threading.Thread(target=measure_footprint, daemon=True)
+        measurer.start()
+        killers.append(measurer)
         while any(thread.is_alive() for thread in threads):
             request = Path(out) / "stop-request.json"
             if request.is_file():
@@ -1327,9 +1916,6 @@ def run_one(options, scenario, run, run_index, out):
                     drop_peer(handle, "another scenario peer failed")
             for thread in threads:
                 thread.join(.1)
-            if time.monotonic() >= next_size_check:
-                footprint_peak = note_footprint(options.scratch_root, footprint_peak)
-                next_size_check = time.monotonic() + 10
     except (KeyboardInterrupt, Exception) as error:
         interrupted = f"{type(error).__name__}: {error}"
         for handle in runs.values():
@@ -1345,7 +1931,7 @@ def run_one(options, scenario, run, run_index, out):
             timer.join()
     for name, handle in runs.items():
         handle.close()
-    footprint_peak = note_footprint(options.scratch_root, footprint_peak)
+    footprint_peak = note_footprint(options.scratch_root, footprint["peak"])
 
     collected = []
     for peer in peers:
@@ -1358,7 +1944,7 @@ def run_one(options, scenario, run, run_index, out):
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
                           "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when")),
         "record": {k: records.get(name, {}).get(k) for k in
-                                     ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
+                                     ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256", 'exe_path', 'runner', 'package_unpacked',
                                       "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")},
                           "launch": str(peer_root / "launch.json"),
                           "error": records.get(name, {}).get("error"),
@@ -1383,7 +1969,7 @@ def render(capture_run, fps, every):
         video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
         peer["video"] = video.get("path") if video.get("encoded") else None
         peer["encode"] = video
-        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg)
+        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg, peer["video"])
         peer["contact_sheet"] = sheet.get("path") if sheet.get("written") else None
         peer["sheet"] = sheet
     capture_run["ffmpeg"] = ffmpeg
@@ -1412,9 +1998,63 @@ def review_only(options):
     return 0 if complete else 1
 
 
+def finalizer_roots(capture, out, allow_recorded_root=False):
+    """Validate every review destination before writes, rebasing a copied run only by explicit request."""
+    def contained(path):
+        path = Path(path)
+        if not path.resolve().is_relative_to(out):
+            raise ValueError(f'finalize recorded root/path leaves given root: {path}')
+        return path
+
+    def child(root, name):
+        if not isinstance(name, str) or name in ('', '.', '..') or Path(name).name != name:
+            raise ValueError(f'finalize recorded root has invalid child name: {name!r}')
+        return contained(root / name)
+
+    for leaf in ('capture.json', 'manifest.json', 'review.json'):
+        contained(out / leaf)
+    if capture.get('root') and Path(capture['root']).resolve() != out:
+        if not allow_recorded_root: raise ValueError(f'finalize recorded root differs from given root: {capture["root"]} != {out}')
+        capture['recorded_root'] = capture['root']; capture['root'] = str(out)
+    definitions = capture['scenario_definition'].get('runs') or [{'name': 'run0', 'peers': capture['scenario_definition'].get('peers', [])}]
+    for index, definition in enumerate(definitions):
+        root = child(out, definition.get('name', f'run{index}'))
+        contained(root / 'review.json')
+        for peer in definition.get('peers') or capture['scenario_definition'].get('peers', []):
+            child(root, peer['name'])
+    for run in capture['runs']:
+        root = child(out, run['name'])
+        old = Path(run.get('root') or root).absolute()
+        if old.resolve() != root.resolve():
+            if not allow_recorded_root:
+                raise ValueError(f'finalize recorded root differs from given root: {old} != {root}; use --allow-recorded-root to rebase the copy')
+            run['recorded_root'] = str(old)
+        run['root'] = str(root)
+        contained(root / 'review.json')
+        for peer in run.get('peers', []):
+            expected = child(root, peer['peer'])
+            for field in ('root', 'video_dir', 'probe_dir', 'launch', 'video', 'contact_sheet', 'stage'):
+                if not peer.get(field): continue
+                recorded = Path(peer[field]).absolute()
+                if recorded.is_relative_to(old):
+                    rebased = root / recorded.relative_to(old)
+                else:
+                    raise ValueError(f'finalize recorded root does not own {field}: {recorded}')
+                if recorded.resolve() != rebased.resolve() and not allow_recorded_root:
+                    raise ValueError(f'finalize recorded root differs for {field}: {recorded}')
+                peer[field] = str(contained(rebased))
+            if Path(peer.get('root', expected)).resolve() != expected.resolve():
+                raise ValueError(f'finalize recorded root differs for peer {peer["peer"]}')
+            for leaf in ('stdout.reclaim-samples.log', 'video/timeline.ffconcat', 'video/capture.mp4', 'video/frames', 'feel/raw.jsonl.gz'):
+                contained(expected / leaf)
+            contained(root / f'{peer["peer"]}.mp4')
+            contained(root / f'{peer["peer"]}-sheet.png')
+
+
 def finalize_only(options):
     out = options.finalize_only.resolve()
     capture = json.loads((out / "capture.json").read_text(encoding="utf-8"))
+    finalizer_roots(capture, out, getattr(options, 'allow_recorded_root', False))
     scenario = capture["scenario_definition"]
     existing = {run["name"]: run for run in capture["runs"]}
     prior_manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8")) if (out / "manifest.json").is_file() else {}
@@ -1440,7 +2080,7 @@ def finalize_only(options):
                                         "probe_dir": str(root / f"{peer_name}-stage" / "probe"), "launch": str(launch_path),
                                         "args": launch.get("argv"), "env": launch.get("env_set"),
                                         "expected_termination": bool(definition_peer.get("kill_after_s") or definition_peer.get("kill_at_tick") or definition_peer.get("kill_when"))})
-            peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
+            peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256", 'exe_path', 'runner', 'package_unpacked',
                               "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")}
             peer["manifest"] = read_manifest(video)
             peer["index"] = read_index(video)
@@ -1452,6 +2092,7 @@ def finalize_only(options):
         run["peers"] = peers
         recovered.append(run)
     capture["runs"] = recovered
+    finalizer_roots(capture, out)
     incomplete = len(recovered) != len(scenario.get("runs") or [None]) or any(run.get("interrupted") for run in recovered)
     if incomplete and not capture.get("interrupted"):
         capture["interrupted"] = "Finalized after the capture owner ended; unstarted runs remain findings"
@@ -1465,8 +2106,8 @@ def finalize_only(options):
             retire_transients(run)
             retained_footprint(run, budget, limit)
         review(scenario, run, Path(run["root"]))
-    start = datetime.strptime(capture["started"], "%Y-%m-%d %H:%M:%S MST")
-    end = datetime.strptime(capture["finalized"], "%Y-%m-%d %H:%M:%S MST")
+    start = parse_stamp(capture['started'])
+    end = parse_stamp(capture['finalized'])
     scenario_manifest(capture, out, prior_manifest.get("wall_seconds", (end - start).total_seconds()))
     aggregate_review(capture, out)
     for run in recovered:
@@ -1665,7 +2306,8 @@ def native_behavior(root, spec):
                 require(probe.get('pass') and probe.get('complete'), f'{peer}: seat-state probe incomplete')
                 dumps = []
                 for step in probe.get('steps', []):
-                    observation = step.get('observed', {}).get('menu_observation', '')
+                    # A failed step records no observation; it is read as none, not as a harness error.
+                    observation = (step.get('observed') or {}).get('menu_observation', '')
                     if isinstance(observation, str) and observation.startswith('{'):
                         observed = json.loads(observation)
                         if 'members' in observed: dumps.append(observed)
@@ -1726,6 +2368,15 @@ def native_behavior(root, spec):
 
 
 def feel_probes(run, capture, source):
+    if run.get('backdrop_refit_gate'):
+        from test_backdrop_refit import verdict
+        config = run['backdrop_refit_gate']
+        logs = [Path(capture['root']) / config[role] / 'stdout.log' for role in ('host', 'client')]
+        checked = verdict(*(path.read_text(encoding='utf-8', errors='replace') if path.is_file() else '' for path in logs))
+        result = dict(checked, status='PASS' if checked['pass'] else 'FAIL')
+        write_json(Path(capture['root']) / 'backdrop-refit.json', result)
+        for peer in capture['peers']:
+            peer.setdefault('gates', {})['backdrop-refit'] = result
     for key, name, check in (('round_hash_gate', 'all-round-hashes', compare_round_histories),
                              ('behavior_gate', 'scenario-behavior', native_behavior)):
         if run.get(key):
@@ -1758,10 +2409,10 @@ def feel_probes(run, capture, source):
             continue
         try:
             result[peer["peer"]] = item9a_gates(root, peer["peer"])
-            peer["gates"] = result[peer["peer"]]["pins"]
+            peer.setdefault('gates', {}).update(result[peer['peer']]['pins'])
         except Exception as error:
             result[peer["peer"]] = {"pass_check": False, "error": repr(error), "pins": {}}
-            peer["gates"] = {}
+            peer.setdefault('gates', {})
     # The gates average over a fixed tick window (feel_gate "ticks" ends it), so a round made longer to fit a
     # relaunch never dilutes them; the window each peer was measured over goes into review.json.
     capture["feel_window"] = {"end_tick": run["feel_gate"].get("ticks"),
@@ -1879,6 +2530,7 @@ def main():
     parser.add_argument("--sheet-every", type=int, default=15)
     parser.add_argument("--review-only", type=Path)
     parser.add_argument("--finalize-only", type=Path)
+    parser.add_argument('--allow-recorded-root', action='store_true', help='rebase copied capture paths to --finalize-only; all writes stay in that given root')
     parser.add_argument("--metadata-only", action="store_true")
     parser.add_argument("--scratch-root", type=Path)
     parser.add_argument("--scratch-limit-bytes", type=positive_bytes,
@@ -2006,10 +2658,22 @@ def main():
                 continue
             service = nullcontext({})
             directory_port = directory_port_for(scenario, run, options.port)
+            try:
+                claim = PortClaim([port_for(index, options.port), directory_port]).__enter__()
+            except RuntimeError as error:
+                root = out / name
+                root.mkdir(parents=True, exist_ok=False)
+                captured = {"name": name, "root": str(root), "size": options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE,
+                            "peers": [], "skip_finding": {"class": "harness", "reason": str(error)}}
+                capture["runs"].append(captured)
+                review(scenario, captured, root)
+                write_json(out / "capture.json", capture)
+                complete = False
+                continue
             if directory_port:
                 from e2e.directory import serve
-                service = serve(out / f"{name}-directory", directory_port, (PORT_LO, PORT_HI))
-            with service as tokens:
+                service = serve(out / f"{name}-directory", directory_port, (PORT_LO, PORT_HI), turn_config=run.get("directory_turn_config"))
+            with claim, service as tokens:
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
                 captured["services"] = {key: str(value) for key, value in tokens.items()}

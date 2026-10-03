@@ -1154,7 +1154,10 @@
         "\\[net-match\\] resync failed"
       ],
       "what": "The other held survivor rejoins the held survivor that hosts and plays on.",
-      "assert": "Native status text at the loss, the admission by the held host, the completed catch-up, no failed resync."
+      "assert": "Native status text at the loss, the admission by the held host, the completed catch-up, no failed resync.",
+      "ownership_reclaim": {
+        "native": true
+      }
     }
   ]
 }

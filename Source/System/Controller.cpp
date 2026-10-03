@@ -581,7 +581,8 @@ void Controller::GetInputFromPlayer() {
 		return;
 	}
 
-	FrameMan::FeelInputSample(m_ControlledActor, m_SeatPlayer);
+	// The script drives this machine's input slot, which is not the seat's number on a client.
+	FrameMan::FeelInputSample(m_ControlledActor, GetInputPlayer());
 	UpdatePlayerInput(lastControlStates);
 }
 

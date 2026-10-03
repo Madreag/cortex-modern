@@ -1,0 +1,279 @@
+{
+  "schema": 1,
+  "name": "mp-repair-cross-resolution",
+  "title": "A repair between a 1920x1080 host and a 960x540 client: the client draws the backdrops at its own scale after it",
+  "port_base": 49502,
+  "size": "1920x1080",
+  "timeout_s": 150,
+  "checklist": [
+    {
+      "id": "injected-before-host",
+      "run": "injected-desync",
+      "peer": "host",
+      "mark": "injected-before",
+      "screen": "game",
+      "sim_progress": 120,
+      "what": "Play advances before the host's one-shot RNG perturbation at tick 240.",
+      "assert": "The probe observes Running play from tick 60 through tick 210 before injection."
+    },
+    {
+      "id": "injected-repair-overlay-host",
+      "run": "injected-desync",
+      "peer": "host",
+      "screen": "ResyncOverlay",
+      "what": "The automatic repair displays Resyncing the match after the deliberately injected divergence.",
+      "assert": "Saved ResyncOverlay frames and native divergence/host-snapshot reload lines; no repair button is pressed.",
+      "log_regex": [
+        "sim state diverged at tick \\d+",
+        "\\[net-match\\] resync: reloading from the host snapshot"
+      ],
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed:"
+      ]
+    },
+    {
+      "id": "injected-repair-complete-host",
+      "run": "injected-desync",
+      "peer": "host",
+      "screen": "game",
+      "mark": "injected-repair-complete",
+      "what": "The healed match resumes and the visible toast names the frame restored from the host snapshot.",
+      "assert": "The native relaunch log and the visible Match resynced toast agree that repair completed.",
+      "log_regex": [
+        "\\[net-match\\] resync: match relaunched from the snapshot"
+      ],
+      "readback": [
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Match resynced (healed at frame "
+        }
+      ]
+    },
+    {
+      "id": "injected-play-resumed-host",
+      "run": "injected-desync",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        900,
+        null
+      ],
+      "what": "Both peers continue playing through tick 900 after the automatic repair.",
+      "assert": "The engine's own records after the completion: the relaunch line, the relaunched round's first frame, every tick committed from it through tick 900 in the trace, actors moving across them and alive in the match report.",
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed:",
+        "^ERROR:",
+        "RTE Aborted",
+        "Assertion failed"
+      ],
+      "resumed_play": {
+        "relaunch": "\\[net-match\\] resync: match relaunched from the snapshot",
+        "through_tick": 900,
+        "trace": "{peer}_trace.json",
+        "report": "{peer}-match.json"
+      }
+    },
+    {
+      "id": "injected-before-client",
+      "run": "injected-desync",
+      "peer": "client",
+      "mark": "injected-before",
+      "screen": "game",
+      "sim_progress": 120,
+      "what": "Play advances before the host's one-shot RNG perturbation at tick 240.",
+      "assert": "The probe observes Running play from tick 60 through tick 210 before injection."
+    },
+    {
+      "id": "injected-repair-overlay-client",
+      "run": "injected-desync",
+      "peer": "client",
+      "screen": "ResyncOverlay",
+      "what": "The automatic repair displays Resyncing the match after the deliberately injected divergence.",
+      "assert": "Saved ResyncOverlay frames and native divergence/host-snapshot reload lines; no repair button is pressed.",
+      "log_regex": [
+        "sim state diverged at tick \\d+",
+        "\\[net-match\\] resync: reloading from the host snapshot"
+      ],
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed:"
+      ]
+    },
+    {
+      "id": "injected-repair-complete-client",
+      "run": "injected-desync",
+      "peer": "client",
+      "screen": "game",
+      "mark": "injected-repair-complete",
+      "what": "The healed match resumes and the visible toast names the frame restored from the host snapshot.",
+      "assert": "The native relaunch log and the visible Match resynced toast agree that repair completed.",
+      "log_regex": [
+        "\\[net-match\\] resync: match relaunched from the snapshot"
+      ],
+      "readback": [
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Match resynced (healed at frame "
+        }
+      ]
+    },
+    {
+      "id": "injected-play-resumed-client",
+      "run": "injected-desync",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        900,
+        null
+      ],
+      "what": "Both peers continue playing through tick 900 after the automatic repair.",
+      "assert": "The engine's own records after the completion: the relaunch line, the relaunched round's first frame, every tick committed from it through tick 900 in the trace, actors moving across them and alive in the match report.",
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed:",
+        "^ERROR:",
+        "RTE Aborted",
+        "Assertion failed"
+      ],
+      "resumed_play": {
+        "relaunch": "\\[net-match\\] resync: match relaunched from the snapshot",
+        "through_tick": 900,
+        "trace": "{peer}_trace.json",
+        "report": "{peer}-match.json"
+      }
+    },
+    {
+      "id": "backdrop-refit",
+      "peer": "client",
+      "screen": "game",
+      "gate": "backdrop-refit",
+      "what": "After the repair every differently scaled backdrop has its own initial client fit.",
+      "assert": "Native restore and own-fit scale receipts agree."
+    }
+  ],
+  "runs": [
+    {
+      "name": "injected-desync",
+      "injected_desync": {
+        "peer": "host",
+        "tick": 240,
+        "repair_items": [
+          "injected-repair-overlay-host",
+          "injected-repair-complete-host",
+          "injected-play-resumed-host",
+          "injected-repair-overlay-client",
+          "injected-repair-complete-client",
+          "injected-play-resumed-client"
+        ]
+      },
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-max-ticks",
+            "1200",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-e2e-resync",
+            "-seed",
+            "42",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-host",
+            "-determinism-selftest-perturb",
+            "-determinism-selftest-perturb-tick",
+            "240"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "probe": "mp-rematch.injected.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Host"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-max-ticks",
+            "1200",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-e2e-resync",
+            "-seed",
+            "42",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "probe": "mp-rematch.injected.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "ResolutionX": 960,
+            "ResolutionY": 540
+          },
+          "start_delay_s": 3
+        }
+      ],
+      "size": "1920x1080"
+    }
+  ],
+  "backdrop_refit_gate": {
+    "host": "host",
+    "client": "client"
+  }
+}

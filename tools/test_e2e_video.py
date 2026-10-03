@@ -39,6 +39,176 @@ def row(results, name, ok, detail=""):
     return ok
 
 
+def check_freeze_stills(results):
+    text = "\n".join(["[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 2.5", "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 1.5",
+                      "[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 4", "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 9"])
+    spans = driver.parse_freezedetect(text)
+    ok = row(results, "stills/parsed", spans == [(2.5, 4.0), (9.0, None)], str(spans))
+    running = [{"frame": i, "saved": True, "wall_ms": 1000 + i * 100, "screen": "game", "service_state": "Running"} for i in range(120)]
+    ok &= row(results, "stills/running-still-fails", [still["start_s"] for still in driver.running_stills(spans, running)] == [2.5, 9.0])
+    menu = [dict(row, screen="MultiplayerScreen") if 20 <= row["frame"] <= 45 else row for row in running]
+    ok &= row(results, "stills/menu-still-passes", [still["start_s"] for still in driver.running_stills(spans, menu)] == [9.0])
+    ok &= row(results, "stills/short-still-passes", driver.running_stills([(1.0, 1.5)], running) == [])
+    # The still that holds the harness's capped stop is the run ending, named; one anywhere else still fails.
+    allowed = []
+    capped = driver.running_stills(spans, running, capped_stop_ms=1000 + 9050, allowed=allowed)
+    ok &= row(results, "stills/capped-stop-still-allowed", [still["start_s"] for still in capped] == [2.5] and
+              [still["start_s"] for still in allowed] == [9.0] and "capped stop" in allowed[0]["reason"])
+    named = []
+    inside = driver.running_stills(spans, running, allowed=named, named=[(1000 + 2000, 1000 + 4500, "the F6 panel over an idle world")])
+    ok &= row(results, "stills/named-state-still-allowed", [still["start_s"] for still in inside] == [9.0] and named and named[0]["reason"] == "the F6 panel over an idle world")
+    ok &= row(results, "stills/still-past-its-named-state-fails", [still["start_s"] for still in driver.running_stills(spans, running, named=[(1000 + 3000, 1000 + 4500, "late")])] == [2.5, 9.0])
+    ok &= row(results, "stills/only-pre-stop-still-fails", [still["start_s"] for still in driver.running_stills(spans, running, capped_stop_ms=1000 + 6000)] == [2.5])
+    return ok
+
+
+def check_recording_health(results, scratch):
+    def capture(name, spacing_ms, count=120):
+        video = scratch / name
+        video.mkdir(parents=True, exist_ok=True)
+        (video / "manifest.json").write_text(json.dumps({"fps": 30, "frames_saved": count, "frames_dropped": 0, "frames_rate_limited": 0}), encoding="utf-8")
+        (video / "frames.jsonl").write_text("".join(json.dumps({"frame": i, "saved": True, "wall_ms": 1000 + i * spacing_ms}) + "\n" for i in range(count)), encoding="utf-8")
+        return driver.recording_health(video)
+    full, slow = capture("recording-full", 33), capture("recording-starved", 100)
+    ok = row(results, "recording/full-rate-passes", full is not None and not full["starved"] and full["longest_gap_ms"] == 33)
+    # An engine that presented ten frames a second, all of them saved, is a slow box reported beside the bar, not a starved recorder.
+    ok &= row(results, "recording/slow-engine-is-reported-not-starved", slow is not None and not slow["starved"] and
+              9.9 < slow["saved_fps"] < 10.1 and 9.9 < slow["engine_presented_fps"] < 10.2 and slow["saved_share"] == 1.0)
+    # The recorder that turned away two of every three frames the engine presented is starved.
+    turned = scratch / "recording-starved"
+    (turned / "dropped.jsonl").write_text("".join(json.dumps({"wall_ms": 1000 + i * 100 + offset, "slot": 3 * i + offset // 33}) + "\n"
+                                                  for i in range(119) for offset in (33, 66)), encoding="utf-8")
+    starved = driver.recording_health(turned)
+    ok &= row(results, "recording/starved-capture-fails", starved["starved"] and starved["saved_share"] < 0.4)
+    ok &= row(results, "recording/no-manifest-is-not-judged", driver.recording_health(scratch / "recording-missing") is None)
+    # A full-rate capture whose one long gap holds slots the queue turned away is the recorder's still; the same gap with
+    # nothing dropped is a screen that presented nothing new.
+    video = scratch / "recording-full"
+    gapped = [1000 + i * 33 for i in range(60)] + [1000 + 59 * 33 + 400 + i * 33 for i in range(60)]
+    (video / "frames.jsonl").write_text("".join(json.dumps({"frame": i, "saved": True, "wall_ms": wall}) + "\n" for i, wall in enumerate(gapped)), encoding="utf-8")
+    (video / "dropped.jsonl").write_text(json.dumps({"wall_ms": 1000 + 59 * 33 + 200, "slot": 65}) + "\n", encoding="utf-8")
+    dropped = driver.recording_health(video)
+    ok &= row(results, "recording/recorder-gap-fails", dropped["recorder_gap_ms"] == 400 and dropped["starved"])
+    (video / "dropped.jsonl").write_text("", encoding="utf-8")
+    quiet = driver.recording_health(video)
+    ok &= row(results, "recording/screen-gap-is-not-the-recorders", quiet["recorder_gap_ms"] == 0 and quiet["longest_gap_ms"] == 400)
+    # The harness's capped stop ends the recording that is judged: a long tail after it is the run ending.
+    capped = scratch / "recording-capped"
+    capped.mkdir(parents=True, exist_ok=True)
+    walls = [1000 + i * 33 for i in range(120)] + [1000 + 119 * 33 + 11000]
+    (capped / "manifest.json").write_text(json.dumps({"fps": 30, "frames_saved": len(walls), "frames_dropped": 0, "frames_rate_limited": 0}), encoding="utf-8")
+    (capped / "frames.jsonl").write_text("".join(json.dumps({"frame": i, "saved": True, "wall_ms": wall}) + "\n" for i, wall in enumerate(walls)), encoding="utf-8")
+    (capped / "events.jsonl").write_text(json.dumps({"wall_ms": 1000 + 119 * 33 + 5, "message": "capped stop"}) + "\n", encoding="utf-8")
+    tail = driver.recording_health(capped)
+    ok &= row(results, "recording/capped-stop-tail-not-judged", not tail["starved"] and tail["longest_gap_ms"] == 33)
+    return ok
+
+
+def check_dropped_index(results, scratch):
+    video = scratch / "dropped-index"
+    video.mkdir(parents=True, exist_ok=True)
+    rows = [{"frame": i, "saved": True, "wall_ms": 1000 + i * 33, "sim_tick": 880 + i} for i in range(30)]
+    (video / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows) + '{"frame": 30, "sa', encoding="utf-8")
+    record = {"video_dir": str(video), "index": driver.read_index(video)}
+    kept = driver.dropped_index_evidence(record, 900)
+    ok = row(results, "dropped/index-kept-to-the-kill", kept["pass"] and kept["last_sim_tick"] == 909 and kept["torn_lines"] == [30])
+    short = driver.dropped_index_evidence(record, 950)
+    ok &= row(results, "dropped/index-short-of-the-kill-fails", not short["pass"])
+    ok &= row(results, "dropped/drop-tick-is-log-evidence", driver.item_kind({"id": "x", "drop_tick": 900}) == "log")
+    return ok
+
+
+def check_still_confirmation(results, scratch):
+    import subprocess
+    ffmpeg = driver.find_ffmpeg()
+    if not ffmpeg:
+        return row(results, "stills/confirmation-has-ffmpeg", False, "no ffmpeg")
+    folder = scratch / "still-confirmation"
+    folder.mkdir(parents=True, exist_ok=True)
+    frozen, moving = folder / "frozen.mp4", folder / "moving.mp4"
+    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x2a4a7a:s=1920x1080:d=2:r=30", "-pix_fmt", "yuv420p",
+                    str(frozen)], check=True)
+    subprocess.run([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x2a4a7a:s=1920x1080:d=2:r=30", "-f", "lavfi",
+                    "-i", "color=c=white:s=24x48:d=2:r=30", "-filter_complex", "[0][1]overlay=x='200+t*120':y=600", "-pix_fmt", "yuv420p",
+                    str(moving)], check=True)
+    still = driver.changed_pixels(ffmpeg, frozen, 0.2, 1.5)
+    moved = driver.changed_pixels(ffmpeg, moving, 0.2, 1.5)
+    ok = row(results, "stills/frozen-picture-stays-still", still is not None and still < driver.MOTION_PIXELS, f"changed={still}")
+    ok &= row(results, "stills/small-mover-is-confirmed-moved", moved is not None and moved >= driver.MOTION_PIXELS, f"changed={moved}")
+    unread = driver.changed_pixels(ffmpeg, folder / "absent.mp4", 0.2, 1.5)
+    ok &= row(results, "stills/unreadable-span-stays-still", unread is None, f"changed={unread}")
+    return ok
+
+
+def check_port_claims(results):
+    import subprocess as sub
+    holder = sub.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        driver.PORT_CLAIMS.mkdir(parents=True, exist_ok=True)
+        (driver.PORT_CLAIMS / "49399.claim").write_text(f"{holder.pid}\n", encoding="utf-8")
+        refused = False
+        try:
+            driver.PortClaim([49399]).__enter__()
+        except RuntimeError as error:
+            refused = "49399" in str(error)
+        ok = row(results, "ports/live-claim-refuses-a-second-run", refused)
+    finally:
+        holder.kill()
+        holder.wait()
+    with driver.PortClaim([49399, None]) as claim:
+        taken = [path.name for path in claim.taken]
+    ok &= row(results, "ports/stale-claim-is-taken-over-and-released", taken == ["49399.claim"] and not (driver.PORT_CLAIMS / "49399.claim").exists())
+    return ok
+
+
+def check_item_kinds(results):
+    ok = row(results, "kind/gate-is-log", driver.item_kind({"id": "x", "gate": "item9a_wall_tps", "screen": "game"}) == "log")
+    ok &= row(results, "kind/log-regex-is-log", driver.item_kind({"id": "x", "log_regex": ["a"]}) == "log")
+    ok &= row(results, "kind/screen-only-is-picture", driver.item_kind({"id": "x", "screen": "game", "what": "the panel shows"}) == "picture")
+    ok &= row(results, "kind/explicit-kind-wins", driver.item_kind({"id": "x", "log_regex": ["a"], "kind": "picture"}) == "picture")
+    return ok
+
+
+def check_streamed_capture(results, scratch):
+    video = scratch / "streamed" / "video"
+    video.mkdir(parents=True, exist_ok=True)
+    (video / "capture.mp4").write_bytes(b"not a real video")
+    rows = [{"frame": i, "video_frame": i * 2, "saved": True, "wall_ms": 1000 + i * 66, "screen": "game"} for i in range(5)]
+    (video / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    (video / "manifest.json").write_text(json.dumps({"fps": 30, "encoder": {"codec": "libx264", "video": "capture.mp4", "exit": 0}}), encoding="utf-8")
+    destination = scratch / "streamed" / "host.mp4"
+    taken = driver.encode(None, video, 30, destination)
+    ok = row(results, "stream/engine-video-taken", taken["encoded"] and taken["timing"] == "engine-slots" and destination.is_file() and not (video / "capture.mp4").exists())
+    ok &= row(results, "stream/encoder-recorded", taken["encoder"] == {"codec": "libx264", "video": "capture.mp4", "exit": 0} and taken["origin_wall_ms"] == 1000)
+    tokens = {"VIDEO": str(scratch / "streamed" / "stage-video"), "STAGE": str(scratch / "streamed" / "stage")}
+    (scratch / "streamed" / "stage").mkdir(exist_ok=True)
+    environment = driver.stage_peer({"name": "probe-scenario"}, {"name": "host"}, scratch / "streamed" / "stage", tokens)
+    ffmpeg = driver.find_ffmpeg()
+    ok &= row(results, "stream/every-peer-gets-the-encoder", (not ffmpeg) or (environment.get("CCCP_TEST_RECORD_ENCODER") == str(ffmpeg) and
+              environment.get("CCCP_TEST_RECORD_CODEC") in ("h264_nvenc", "libx264")))
+    return ok
+
+
+def check_screen_watches(results, scratch):
+    peer = scratch / "screen-watch-peer"
+    peer.mkdir(parents=True, exist_ok=True)
+    lines = ['[text-watch] armed {"armed": "h15-layout", "rule": "layout", "state": "always", "control": "", "text": ""}',
+             '[text-watch] armed {"armed": "h15-duplicates", "rule": "duplicates", "state": "always", "control": "", "text": ""}',
+             '[text-watch] armed {"armed": "private", "rule": "require", "state": "always", "control": "", "text": "x"}',
+             '[text-watch] violation h15-layout layout {"wall_ms": 5, "detail": {"control": "LabelFiles", "in_parent": false}, "shown": []}',
+             '[text-watch] violation h15-layout layout {"wall_ms": 6, "detail": {"control": "LabelTelemetry", "in_parent": false}, "shown": []}',
+             '[text-watch] violation private require {"wall_ms": 7, "detail": "no shown line carries the text", "shown": []}',
+             '[text-watch] summary {"watch": "h15-duplicates", "rule": "duplicates", "frames": 900, "active_frames": 900, "violations": 0}']
+    (peer / "stdout.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    watches = driver.screen_watch_results(peer)
+    ok = row(results, "screen/every-armed-watch", set(watches) == {"layout", "duplicates", "private"})
+    ok &= row(results, "screen/each-offence-listed", [o["detail"]["control"] for o in watches["layout"]["offences"]] == ["LabelFiles", "LabelTelemetry"])
+    ok &= row(results, "screen/clean-watch-has-summary", watches["duplicates"]["offences"] == [] and watches["duplicates"]["summary"]["frames"] == 900)
+    ok &= row(results, "screen/nothing-armed-is-not-judged", driver.screen_watch_results(scratch / "screen-watch-none") is None)
+    ok &= row(results, "screen/every-peer-arms-them", all(f"h15-{name} " in driver.SCREEN_WATCHES for name in driver.SCREEN_WATCH_RULES))
+    return ok
+
+
 def check_capture_binary(results, scratch):
     platform = sys.platform
     previous = os.environ.pop("CCCP_TEST_BINARY", None)
@@ -660,7 +830,7 @@ def check_review(results, scratch):
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))
     ok &= row(results, "review/failures-carried",
               document["failures"]["client"] == ["[menu-script] FAILED: assert_substate"])
-    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs"]
+    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-", "harness-cost-"))]
     ok &= row(results, "review/no-probe-is-named",
               all(item.get("probe") == "awaiting-review" for item in scenario_items))
     # The dialog row is written for every capture: a player would have had to answer each line it lists.
@@ -733,7 +903,7 @@ def check_interruption(results, scratch):
     manifest = driver.scenario_manifest(capture, out, 1)
     review = driver.aggregate_review(capture, out)
     ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
-    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs"]
+    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-", "harness-cost-"))]
     ok &= row(results, "interruption/unstarted-checklist-retained", len(started_items) == 2 and started_items[1]["run"] == "second")
     ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
     return ok
@@ -1020,7 +1190,7 @@ def check_finalizer(results, scratch):
     saved = json.loads((out / "capture.json").read_text())
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
-    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs"]
+    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-", "harness-cost-"))]
     ok &= row(results, "finalize/names-unstarted-run", len(finalized_items) == 2 and finalized_items[1]["run"] == "second")
     ok &= row(results, "finalize/manifest-retains-budget", manifest.get("scratch_limit_bytes") == 8_000_000_000 and
               manifest.get("scratch_root") == str(scratch))
@@ -1312,9 +1482,12 @@ def check_cross_transfer(results, scratch):
     peer = next(peer for peer in manifest['peers'] if peer['peer'] == 'client')
     item = next(item for item in review['checklist'] if item['peer'] == 'client')
     ok &= row(results, 'cross-transfer/original-media-path-retained', peer['video'].get('original_path') == originals['client'] + '/run0/client.mp4')
-    ok &= row(results, 'cross-transfer/review-media-and-auxiliary-paths', item['video'] == str(roots[1] / 'run0/client.mp4') and
-              item['identity_file']['path'] == str(roots[1] / 'run0/client-stage/probe/match-identity.json') and
-              item['trace']['path'] == str(roots[1] / 'run0/client_trace.json'))
+    # The merge names each transferred file under its half's resolved root (macOS /tmp is /private/tmp).
+    local = roots[1].resolve()
+    ok &= row(results, 'cross-transfer/review-media-and-auxiliary-paths', item['video'] == str(local / 'run0/client.mp4') and
+              item['identity_file']['path'] == str(local / 'run0/client-stage/probe/match-identity.json') and
+              item['trace']['path'] == str(local / 'run0/client_trace.json'),
+              f"video={item['video']} identity={item['identity_file']['path']} trace={item['trace']['path']} root={local}")
     ok &= row(results, 'cross-transfer/provenance-and-inputs-unchanged', bool(manifest.get('relocations')) and
               all(Path(path).read_bytes() == data for path, data in before.items()))
     ok &= row(results, 'cross-transfer/property-path-is-not-a-file', item['readback'][0]['path'] == ['control', 'visible'])
@@ -1857,6 +2030,14 @@ def main():
         ok &= check_item_screens_reachable(results, options.repo)
         ok &= check_e2e_host_end_completion(results, options.repo)
         ok &= check_capture_binary(results, scratch)
+        ok &= check_recording_health(results, scratch)
+        ok &= check_screen_watches(results, scratch)
+        ok &= check_streamed_capture(results, scratch)
+        ok &= check_item_kinds(results)
+        ok &= check_port_claims(results)
+        ok &= check_dropped_index(results, scratch)
+        ok &= check_still_confirmation(results, scratch)
+        ok &= check_freeze_stills(results)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_render_arm(results, scratch)
         ok &= check_module_requirements(results, scratch)

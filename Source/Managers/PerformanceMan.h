@@ -80,6 +80,10 @@ namespace RTE {
 		/// Gets the average of the MSPF reading buffer, calculated each frame.
 		/// @return The average value of the MSPF reading buffer.
 		float GetMSPFAverage() const { return m_MSPFAverage; }
+
+		/// Gets the average draw time of a frame, in milliseconds.
+		/// @return The average draw time.
+		float GetMSPDAverage() const { return m_MSPDAverage; }
 #pragma endregion
 
 #pragma region Performance Counter Handling
