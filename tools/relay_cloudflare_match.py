@@ -911,10 +911,15 @@ class Bridge:
                 f"python '{(self.payload / 'relay_cloudflare_match.py').as_posix()}' --bridge-edith {self.udp_bind} {self.tcp_port}"]
         self.remote = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        line = self.remote.stdout.readline() if self.remote.stdout else ''
-        found = re.search(r'bridge pid (\d+)', line)
+        found, seen = None, []
+        while self.remote.stdout and not found and len(seen) < 20:  # ssh's own warnings come first
+            line = self.remote.stdout.readline()
+            if not line:
+                break
+            seen.append(line)
+            found = re.search(r'bridge pid (\d+)', line)
         if not found:
-            raise RuntimeError(f'the EDITH end of the bridge did not start: {line[-200:]!r}')
+            raise RuntimeError(f'the EDITH end of the bridge did not start: {"".join(seen)[-300:]!r}')
         self.remote_pid = int(found[1])
 
     def close(self) -> None:
