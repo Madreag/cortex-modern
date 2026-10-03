@@ -4511,6 +4511,20 @@ namespace RTE {
 			return true;
 		}
 
+		// A peer reports its own writer, kept or missed, and the host frees that writer on either; only the host names a capture.
+		bool TestAPeerReportsItsOwnMissedCapture(std::string* error) {
+			const NetGameCheckpoint written{NetGameCheckpoint::Written, 7}, missed{NetGameCheckpoint::Missed, 7};
+			const NetGameCheckpoint capture{NetGameCheckpoint::Capture, 9}, manual{NetGameCheckpoint::ManualCapture, 9};
+			if (written.IsHostSchedule() || missed.IsHostSchedule() || !capture.IsHostSchedule() || !manual.IsHostSchedule()) {
+				*error = std::string("a client's report is refused as a schedule: written=") + (written.IsHostSchedule() ? "host-only" : "own") +
+				         " missed=" + (missed.IsHostSchedule() ? "host-only" : "own") + " capture=" + (capture.IsHostSchedule() ? "host-only" : "own") +
+				         " manual=" + (manual.IsHostSchedule() ? "host-only" : "own");
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_peer_reports_its_own_missed_capture written=own missed=own capture=host-only manual=host-only" << std::endl;
+			return true;
+		}
+
 		// A world publishes every seat as open, so the round names a seat by its player from the seat roster, never 'Open'.
 		bool TestAWorldSeatIsNamedByItsPlayer(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
@@ -23420,6 +23434,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAJoinerTakesTheHostsRoundStartAsAStraggler, "a_joiner_takes_the_hosts_round_start_as_a_straggler");
 		row(&TestAJoinerKeepsASeatHeldAfterItsStart, "a_joiner_keeps_a_seat_held_after_its_start");
 		row(&TestAWorldSeatIsNamedByItsPlayer, "a_world_seat_is_named_by_its_player");
+		row(&TestAPeerReportsItsOwnMissedCapture, "a_peer_reports_its_own_missed_capture");
 		row(&TestARemovedSeatEndsOnItsRemoval, "a_removed_seat_ends_on_its_removal");
 		row(&TestAHostKilledWithFourPlayersHandsOverOnAMajority, "a_host_killed_with_four_players_hands_over_on_a_majority");
 		row(&TestTheMostAdvancedSurvivorServesTheGather, "the_most_advanced_survivor_serves_the_gather");
