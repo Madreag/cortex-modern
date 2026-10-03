@@ -31,6 +31,7 @@ import stat
 import sys
 import tarfile
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -247,31 +248,47 @@ def views(data: bytes, depth: int = 0) -> Iterator[tuple[str, bytes, Any]]:
             mapped = (lambda start, end, base=base, back=back: None if back is None or back(start, end) is None
                       else (base + 2 * back(start, end)[0], base + 2 * back(start, end)[1]))
             yield f'hex@{base}/{form}', inner, mapped
+    # A file that is an archive and cannot be opened is unreadable; inside a decoded value the same magic is often chance
+    # (a tick hash decoded as hex), so there only what decodes is scanned, the rest staying covered by the raw view.
     if data[:2] == b'\x1f\x8b':
         try:
             inner = gzip.GzipFile(fileobj=io.BytesIO(data)).read(MAX_DECODED + 1)
         except (OSError, EOFError) as error:
-            raise ArchiveError(f'gzip unreadable: {type(error).__name__}') from error
-        for form, member, _ in views(inner, depth + 1):
+            if depth == 0:
+                raise ArchiveError(f'gzip unreadable: {type(error).__name__}') from error
+            inner = partial_gzip(data)
+        for form, member, _ in views(inner, depth + 1) if inner else ():
             yield f'gzip/{form}', member, None
     if data[:4] == b'PK\x03\x04' or (len(data) > 22 and zipfile.is_zipfile(io.BytesIO(data))):
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                for info in archive.infolist():
-                    for form, member, _ in views(archive.read(info), depth + 1):
-                        yield f'zip:{info.filename}/{form}', member, None
-        except (zipfile.BadZipFile, OSError, RuntimeError, EOFError) as error:
-            raise ArchiveError(f'zip unreadable: {type(error).__name__}') from error
+                members = [(info.filename, archive.read(info)) for info in archive.infolist()]
+        except (zipfile.BadZipFile, OSError, RuntimeError, EOFError, ValueError, NotImplementedError) as error:
+            if depth == 0:
+                raise ArchiveError(f'zip unreadable: {type(error).__name__}') from error
+            members = []
+        for name, content in members:
+            for form, member, _ in views(content, depth + 1):
+                yield f'zip:{name}/{form}', member, None
     if len(data) > 262 and data[257:262] == b'ustar':
         try:
             with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-                for info in archive.getmembers():
-                    if info.isfile():
-                        handle = archive.extractfile(info)
-                        for form, member, _ in views(handle.read() if handle else b'', depth + 1):
-                            yield f'tar:{info.name}/{form}', member, None
+                members = [(info.name, (archive.extractfile(info) or io.BytesIO()).read()) for info in archive.getmembers() if info.isfile()]
         except (tarfile.TarError, OSError, EOFError) as error:
-            raise ArchiveError(f'tar unreadable: {type(error).__name__}') from error
+            if depth == 0:
+                raise ArchiveError(f'tar unreadable: {type(error).__name__}') from error
+            members = []
+        for name, content in members:
+            for form, member, _ in views(content, depth + 1):
+                yield f'tar:{name}/{form}', member, None
+
+
+def partial_gzip(data: bytes) -> bytes:
+    """What a damaged gzip stream inside a decoded value still yields; nothing when its header is not gzip at all."""
+    try:
+        return zlib.decompressobj(31).decompress(data, MAX_DECODED + 1)
+    except zlib.error:
+        return b''
 
 
 class ArchiveError(Exception):

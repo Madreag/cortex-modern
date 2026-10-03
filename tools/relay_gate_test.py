@@ -97,6 +97,26 @@ class EncodedForms(unittest.TestCase):
         self.assertEqual(scanned.get('status', 'CLEAN' if scanned['clean'] else 'LEAKED'), 'INCOMPLETE')
         self.assertFalse(scanned['clean'])
 
+    def test_a_tick_hash_that_decodes_to_archive_magic_is_data_not_a_damaged_file(self):
+        # A live run's trace: one of its hashes decoded as hex starts with gzip's magic (EDITH, 2026-10-03 2:49 PM).
+        trace = plain({'ticks': [{'tick': 1, 'hash': '1f8b' + '7c' * 30}, {'tick': 2, 'hash': '504b0304' + '00' * 28}]})
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'host_trace.json').write_bytes(trace)
+            scanned = book().scan([folder])
+            shapes = relay_login_sweep.sweep([Path(folder)], set())
+        self.assertEqual(scanned['status'], 'CLEAN', scanned['incomplete'])
+        self.assertEqual(shapes['status'], 'CLEAN', shapes['incomplete'])
+
+    def test_a_damaged_archive_file_is_incomplete_and_one_inside_a_value_is_still_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'match.ccreplay.gz').write_bytes(gzip.compress(b'RPLY' + plain(LOGIN))[:-12])
+            self.assertEqual(book().scan([folder])['status'], 'INCOMPLETE')
+        with tempfile.TemporaryDirectory() as folder:
+            cut = gzip.compress(b'RPLY' + plain(LOGIN) + bytes(range(256)) * 4)[:-40]
+            (Path(folder) / 'capture.manifest').write_bytes(b'Payload = ' + cut.hex().encode() + b'\n')
+            scanned = book().scan([folder])
+        self.assertEqual(scanned['status'], 'LEAKED', scanned['incomplete'])
+
     def test_an_unlistable_directory_is_incomplete_never_clean(self):
         import relay_secrets
         with tempfile.TemporaryDirectory() as folder:
