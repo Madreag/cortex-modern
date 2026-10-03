@@ -396,6 +396,12 @@ namespace RTE::MenuAutomation {
 		return lines;
 	}
 
+	std::string ShownTextJson(GUIControlManager* menu) {
+		Json lines = Json::array();
+		for (const ShownLine& line: ShownLines(menu)) lines.push_back({{"source", line.source}, {"control", line.control}, {"text", line.text}});
+		return lines.dump();
+	}
+
 	/// The first visible line shown twice at once, naming both controls; null when every line is shown once. What may repeat: chat
 	/// (players repeat themselves), a control's caption (a row's verb), one column's value on its rows (a control name differing only
 	/// by its row number), an open seat beside another, and a line with no letter in it.

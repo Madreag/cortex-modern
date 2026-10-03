@@ -57,6 +57,9 @@ namespace {
 		size_t index = 0, gestureIndex = SIZE_MAX;
 		uint64_t renders = 0, stepRender = 0, stepMs = 0, simTick = 0, resultWrittenMs = 0;
 		Clock::time_point started;
+		Clock::time_point loadedAt; //!< The label dump's one clock: the script's load, which the activation and a round's reset never move.
+		uint64_t labelDumpMs = 0, labelWrittenMs = 0;
+		std::string labelBoundary;
 		std::filesystem::path directory;
 		Json script, result;
 		std::string hintAtLoad;
@@ -297,6 +300,38 @@ namespace {
 
 	void WriteResult();
 
+	/// A script's "label_dump": {"every_ms": N} writes every line the screen shows - the menus, the network panel and overlay, the
+	/// game's own screen message, the text drawn by hand - every N ms of this peer's clock (5000 by default) and at every change of
+	/// screen, service state or image transfer, from the script's load (before its activation) to its end: what a joiner reads while
+	/// a world's image comes, while it loads and while it catches up.
+	void LabelDump() {
+		const Json config = probe.script.value("label_dump", Json());
+		if (!config.is_object()) return;
+		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		const std::string screen = MenuScreen();
+		const bool catchingUp = ScenarioRunner::WorldCatchUpActive();
+		const std::string boundary = screen + '|' + snapshot.serviceState + '|' + (snapshot.transferTotalBytes != 0 ? "transfer" : "") + '|' + (catchingUp ? "catchup" : "");
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - probe.loadedAt).count());
+		const bool atBoundary = boundary != probe.labelBoundary;
+		if (!atBoundary && now < probe.labelDumpMs + config.value("every_ms", uint64_t{5000})) return;
+		probe.labelBoundary = boundary;
+		probe.labelDumpMs = now;
+		const uint64_t unixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		Json record = {{"at_ms", now}, {"unix_ms", unixMs}, {"why", atBoundary ? "boundary" : "cadence"}, {"screen", screen}, {"service", snapshot.serviceState},
+		    {"transfer", {{"received_bytes", snapshot.transferReceivedBytes}, {"total_bytes", snapshot.transferTotalBytes}}}, {"catching_up", catchingUp},
+		    {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"lockstep_frame", ScenarioRunner::HasLockstepCoordinator() ? ScenarioRunner::GetLockstepCompletedFrame() : 0},
+		    {"lines", Json::parse(MenuAutomation::ShownTextJson(MenuControls()))}};
+		if (!probe.result.contains("label_dumps")) probe.result["label_dumps"] = Json::array();
+		probe.result["label_dumps"].push_back(std::move(record));
+		System::PrintDiagnosticLine("[net-ui-probe] label dump at_ms=" + std::to_string(now) + " screen=" + screen + " service=" + snapshot.serviceState +
+		                            " transfer=" + std::to_string(snapshot.transferReceivedBytes) + "/" + std::to_string(snapshot.transferTotalBytes) + (atBoundary ? " boundary" : ""));
+		// A dump before the script's steps begin is the only record of what came before them, so it is written within a second.
+		if (now >= probe.labelWrittenMs + 1000) {
+			WriteResult();
+			probe.labelWrittenMs = now;
+		}
+	}
+
 	/// Completes a script whose round ended while finish_on_round_end was armed: the steps it had left are recorded as
 	/// skipped and the signals it named are written, so a peer waiting on them goes on.
 	void FinishOnRoundEnd(const Json& observed) {
@@ -333,7 +368,7 @@ namespace {
 		const char* path = std::getenv("CC_TEST_NET_UI_SCRIPT");
 		if (!path || !*path) return;
 		probe.enabled = true;
-		probe.started = Clock::now();
+		probe.started = probe.loadedAt = Clock::now();
 		const char* hint = SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
 		probe.hintAtLoadPresent = hint != nullptr;
 		probe.hintAtLoad = hint ? hint : "";
@@ -888,6 +923,7 @@ namespace {
 				Load();
 			}
 			if (!probe.enabled) return;
+			if (phase == Phase::Draw && !probe.done) LabelDump();
 			const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 			if (probe.script.value("repeat_rounds", false) && round > 0 && round != probe.round) {
 				probe.round = round; probe.index = 0; probe.done = false; probe.phaseArmed = false;
