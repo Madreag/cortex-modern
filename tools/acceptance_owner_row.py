@@ -17,6 +17,10 @@ def main(argv=None):
     parser.add_argument('--port')
     parser.add_argument('--scratch-root')
     parser.add_argument('--fullstate-every')
+    parser.add_argument('--host-box')
+    parser.add_argument('--client-box')
+    parser.add_argument('--inventory',type=Path)
+    parser.add_argument('--collection-root',type=Path)
     parser.add_argument('--dry-run', action='store_true')
     options = parser.parse_args(argv)
     scenario = options.repo/'tools/e2e'/f'{options.scenario}.json'
