@@ -603,7 +603,11 @@ namespace RTE {
 		/// The clones BeginPreviewScripts bound, until EndPreviewScripts.
 		static std::vector<const MovableObject*> PreviewRoots();
 		static bool IsPreviewEdgeHook(const std::string& functionName);
+		/// The per-tick hooks a preview clone runs where the world's tick runs them, so the clone keeps what they change.
+		static bool IsPreviewTickHook(const std::string& functionName);
 		static bool ShouldRunPreviewHook(const MovableObject* mo, const std::string& functionName);
+		/// Every still-registered object of a preview clone's tree that is bound to a script state, with that state.
+		static std::vector<std::pair<MovableObject*, LuaStateWrapper*>> PreviewBindingsUnder(const MovableObject* root);
 		static bool IsRunningPreviewHook() { return s_RunningPreviewHook; }
 		static void SetRunningPreviewHook(bool running) { s_RunningPreviewHook = running; }
 		struct PreviewHookScope {

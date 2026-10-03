@@ -371,7 +371,7 @@ namespace RTE {
 			for (Preview& preview: targets) {
 				Actor* clone = preview.clone;
 				const double feelStepBeginMS = FrameMan::FeelClockMS();
-				// The same stages in the same order as the world update: travel, pre-controller, wire, update, post.
+				// The same stages in the same order as the world update: travel, pre-controller, wire, threaded and synced scripts, update, post.
 				MovableMan::TravelStage(clone, true);
 				Trace("traveled");
 				MovableMan::PreControllerStage(clone);
@@ -385,6 +385,7 @@ namespace RTE {
 					}
 				}
 				Trace("applied");
+				MovableMan::PreviewScriptStage(clone);
 				MovableMan::UpdateStage(clone, true);
 				Trace("updated");
 				if (TraceEnabled()) {

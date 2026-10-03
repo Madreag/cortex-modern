@@ -7143,6 +7143,39 @@ void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
 	mo->ApplyImpulses();
 }
 
+void MovableMan::PreviewScriptStage(const MovableObject* root) {
+	auto bound = LuaMan::PreviewBindingsUnder(root);
+	if (bound.empty()) return;
+	LuaStateWrapper* const previousOverride = g_LuaMan.GetThreadLuaStateOverride();
+	LuaStateWrapper* const master = &g_LuaMan.GetMasterScriptState();
+	// A script may destroy an object of the tree, so each one is looked up again before it runs.
+	const auto live = [](MovableObject* mo, LuaStateWrapper* state) { return state->GetPendingRegisteredMOs().contains(mo); };
+	// Each state runs its objects in unique-ID order, as the world's pass does; the states share nothing.
+	std::stable_sort(bound.begin(), bound.end(), [](const auto& lhs, const auto& rhs) { return lhs.first->GetUniqueID() < rhs.first->GetUniqueID(); });
+	for (const auto& [mo, state]: bound) {
+		if (!live(mo, state)) continue;
+		g_LuaMan.SetThreadLuaStateOverride(state, state != master);
+		mo->RunScriptedFunctionInAppropriateScripts("ThreadedUpdate", false, false, {}, {}, {});
+	}
+	g_LuaMan.SetThreadLuaStateOverride(master);
+	for (const auto& [mo, state]: bound) {
+		if (state == master && live(mo, state)) mo->RunScriptedFunctionInAppropriateScripts("SyncedUpdate", false, false, {}, {}, {});
+	}
+	// A threaded object runs the SyncedUpdate it asked for, in the world's synced order.
+	std::vector<std::pair<SyncedUpdateEntry, LuaStateWrapper*>> requested;
+	for (const auto& [mo, state]: bound) {
+		if (state != master && live(mo, state) && mo->HasRequestedSyncedUpdate()) requested.push_back({{mo, mo->GetUniqueID(), mo->GetID(), mo->GetScriptRegistrationSerial()}, state});
+	}
+	std::sort(requested.begin(), requested.end(), [](const auto& lhs, const auto& rhs) { return SyncedUpdateEntryEarlier(lhs.first, rhs.first); });
+	for (const auto& [entry, state]: requested) {
+		if (!live(entry.object, state)) continue;
+		g_LuaMan.SetThreadLuaStateOverride(state);
+		entry.object->RunScriptedFunctionInAppropriateScripts("SyncedUpdate", false, false, {}, {}, {});
+		if (live(entry.object, state)) entry.object->ResetRequestedSyncedUpdateFlag();
+	}
+	g_LuaMan.SetThreadLuaStateOverride(previousOverride);
+}
+
 void MovableMan::PostUpdateStage(MovableObject* mo) {
 	static const uint64_t soundPhase = Hash("PostUpdate");
 	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);

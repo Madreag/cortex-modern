@@ -875,6 +875,8 @@ namespace RTE {
 		static void PreControllerStage(Actor* actor);
 		static void UpdateStage(MovableObject* mo, bool actor = false);
 		static void PostUpdateStage(MovableObject* mo);
+		/// A preview clone's tree runs its threaded and synced hooks where the world's tick runs everyone's: after the wire, before the update.
+		static void PreviewScriptStage(const MovableObject* root);
 		/// Applies one wire frame to an actor: its actor state, its controller and the apply tick.
 		static bool ApplyLockstepFrameToActor(Actor& actor, const ControllerFrame& frame, uint64_t simTick, std::string* error);
 

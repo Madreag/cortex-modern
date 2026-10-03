@@ -14043,11 +14043,26 @@ bool LuaMan::IsPreviewEdgeHook(const std::string& functionName) {
 	return functionName == "OnFire" || functionName == "OnStride" || functionName == "OnReload" || functionName == "OnAttach" || functionName == "OnDetach" || functionName == "OnCollideWithMO" || functionName == "OnCollideWithTerrain";
 }
 
+bool LuaMan::IsPreviewTickHook(const std::string& functionName) {
+	return functionName == "Update" || functionName == "ThreadedUpdate" || functionName == "SyncedUpdate";
+}
+
 bool LuaMan::ShouldRunPreviewHook(const MovableObject* mo, const std::string& functionName) {
-	if (!mo || !IsPreviewClone(mo) || !IsPreviewEdgeHook(functionName)) {
+	if (!mo || !IsPreviewClone(mo) || !(IsPreviewEdgeHook(functionName) || IsPreviewTickHook(functionName))) {
 		return false;
 	}
 	return s_PreviewSharedSlot || s_PreviewFrozenUIDs.count(mo->GetUniqueID()) == 0;
+}
+
+std::vector<std::pair<MovableObject*, LuaStateWrapper*>> LuaMan::PreviewBindingsUnder(const MovableObject* root) {
+	std::vector<std::pair<MovableObject*, LuaStateWrapper*>> bindings;
+	for (const auto& [uid, clone, state]: s_PreviewCloneBindings) {
+		// A destroyed clone left its state's sets, so the address alone answers before anything reads it.
+		if (state && state->GetPendingRegisteredMOs().contains(clone) && clone->GetRootParent() == root) {
+			bindings.emplace_back(clone, state);
+		}
+	}
+	return bindings;
 }
 
 std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
