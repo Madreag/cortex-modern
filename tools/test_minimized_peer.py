@@ -19,12 +19,36 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 from run_sim_test import make_run  # noqa: E402
 from feel.retained_resume import read_live_hashes
+from compare_sim_traces import CORE
 
 FROM_TICK, TO_TICK, TICKS = 600, 2400, 3000
 
 
 def live_rows(path: Path) -> dict[int, dict]:
-    return {row['tick']: row for row in read_live_hashes(path) if 'tick' in row}
+    rows = {}
+    for row in read_live_hashes(path):
+        if 'tick' not in row: continue
+        if row['tick'] in rows and rows[row['tick']] != row:
+            raise ValueError(f'{path.name}: conflicting tick {row["tick"]}')
+        rows[row['tick']] = row
+    return rows
+
+
+def hash_evidence(host, client, ticks):
+    expected = set(range(1, ticks+1))
+    missing = {name: sorted(expected - set(rows)) for name, rows in [('host', host), ('client', client)]}
+    schema = {name: [tick for tick, row in rows.items() if not isinstance(row.get('subsystems'), dict)
+                    or not CORE | {'controller'} <= row['subsystems'].keys()
+                    or any(row['subsystems'][key] is None for key in CORE | {'controller'})]
+              for name, rows in [('host', host), ('client', client)]}
+    shared = sorted(set(host) & set(client))
+    differing = [tick for tick in shared if host[tick].get('round') != client[tick].get('round')
+                 or host[tick].get('subsystems') != client[tick].get('subsystems')]
+    extra = sorted((set(host) | set(client)) - expected - {ticks+1})
+    same_keys = set(host) == set(client)
+    return dict(passed=bool(shared) and same_keys and not extra and not differing and not any(missing.values()) and not any(schema.values()),
+                shared_ticks=len(shared), differing_ticks=differing, missing_ticks=missing, invalid_schema_ticks=schema,
+                unexpected_ticks=extra, same_tick_keys=same_keys)
 
 
 def main() -> int:
@@ -65,10 +89,14 @@ def main() -> int:
         waits = [(int(tick), int(ms)) for tick, ms in re.findall(r"\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)", host_log)]
         result["details"]["host_waits_over_50"] = [(tick, ms) for tick, ms in waits if FROM_TICK <= tick <= TO_TICK + 60 and ms > 50]
         result["checks"]["host_never_waited"] = not result["details"]["host_waits_over_50"]
-        shared = sorted(set(host) & set(client))
-        differing = [tick for tick in shared if host[tick].get("subsystems") != client[tick].get("subsystems")]
-        result["details"]["shared_ticks"], result["details"]["differing_ticks"] = len(shared), differing[:5]
-        result["checks"]["hashes_equal"] = len(shared) >= TICKS - 10 and not differing
+        hashes = hash_evidence(host, client, TICKS)
+        result['details']['hashes'] = hashes
+        result['details']['shared_ticks'], result['details']['differing_ticks'] = hashes['shared_ticks'], hashes['differing_ticks'][:5]
+        result['checks']['hashes_equal'] = hashes['passed']
+        result['checks']['fullscreen_minimize'] = False
+        result['details']['fullscreen_minimize'] = dict(status='NOT COVERED',
+            reason='the private runner seeds Fullscreen=0; native fullscreen/minimized interval receipts are absent',
+            engineer_required='isolated true fullscreen minimize lever and continuous native window-state evidence for ticks 600..2400')
         result["checks"]["exits"] = all(row["exit"] == 0 for row in result["details"].values() if isinstance(row, dict) and "exit" in row)
     except Exception as error:  # every peer is closed and the verdict written whatever happened
         result["error"] = f"{type(error).__name__}: {error}"
