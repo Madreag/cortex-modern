@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 from copy import deepcopy
 import json
 import os
@@ -139,6 +140,8 @@ def validate_preflights(plan):
             raise ValueError(name+': remote task coordinator bytes differ')
         if plan.get('frozen_tools') and value.get('frozen_tools') != dict(commit=plan['frozen_tools']['commit'], frozen_files_modified=0):
             raise ValueError(name+': frozen NOTE 11 tool identity is missing or differs')
+        if plan.get('reservation_holders') and value.get('preflight_reservation', {}).get('borrowed') is not True:
+            raise ValueError(name+': native preflight did not hold its cross reservation')
     world.check_driver_preflights(plan, values)
     world.check_mod_preflights(plan, values)
 
@@ -171,9 +174,12 @@ def preflight_payload(path):
     validate_profile(box, PurePosixPath(box['scratch']).name, specs[0].get('acceptance_row'))
     if platform.node().casefold() != box['hostname'].casefold() or platform.node().casefold() == 'erol-pc':
         raise ValueError('payload is on the wrong physical host; no engine launched')
-    result = cross.preflight_payload(path)
+    from acceptance_box_lease import borrow
+    with borrow(box, Path(path).parent) as held:
+        result = cross.preflight_payload(path)
     receipt = Path(path).parent/'preflight.json'
     value = json.loads(receipt.read_text(encoding='utf-8'))
+    value['preflight_reservation'] = dict(borrowed=held)
     frozen = frozen_receipt(Path(__file__).resolve().parent.parent)
     if frozen is not None:
         world.preflight_driver(box, value)
@@ -209,13 +215,16 @@ def run_payload(path):
     if 'launch_floor_gib' in box:
         settings['CC_RUNNER_MIN_FREE_GB'] = str(box['launch_floor_gib'])
     previous, claim, shared_claim = {key: os.environ.get(key) for key in settings}, None, None
+    from acceptance_box_lease import borrow
+    lease_context = ExitStack()
     from acceptance_native_runtime import (run_payload as native_payload,
                                            acquire_shared_reservation, release_shared_reservation)
     try:
         os.environ.update(settings)
         launch_budget.install_memory_guard()
         frozen = frozen_receipt(Path(__file__).resolve().parent.parent)
-        if frozen is not None:
+        borrowed = lease_context.enter_context(borrow(box, Path(path).parent))
+        if frozen is not None and not borrowed:
             shared_claim = acquire_shared_reservation(box, Path(path).parent, 60)
         claim = cross.acquire_reservation(box, Path(path).parent, 60)
         write_json(Path(path).parent/'reservation.json', {key: value for key, value in claim['record'].items() if key != 'token'})
@@ -223,13 +232,71 @@ def run_payload(path):
     finally:
         if claim:
             released = cross.release_reservation(claim)
-            write_json(Path(path).parent/'reservation-released.json', dict(released=released))
+            write_json(Path(path).parent/'reservation-released.json', dict(released=released, borrowed=bool(claim.get('borrowed'))))
         if shared_claim is not None:
             released = release_shared_reservation(shared_claim)
             write_json(Path(path).parent/'shared-reservation-released.json', dict(released=released))
+        lease_context.close()
         for key, value in previous.items():
             if value is None: os.environ.pop(key, None)
             else: os.environ[key] = value
+
+
+def start_leases(plan, root, leases):
+    for box in plan['boxes']:
+        remote_root = box['scratch']+'/'+plan['run']
+        script = box['helpers']+'/tools/acceptance_box_lease.py'
+        bootstrap = ('import sys,runpy; from pathlib import Path; log=open(sys.argv[3],"x"); '
+                     'sys.stdout=log; sys.stderr=log; sys.dont_write_bytecode=True; '
+                     'script,payload=sys.argv[1:3]; sys.path.insert(0,str(Path(script).parent)); '
+                     'sys.argv=[script,"--hold",payload]; runpy.run_path(script,run_name="__main__")')
+        leases[box['name']] = subprocess.Popen(cross.remote_command(box, [box['python'], '-c', bootstrap,
+            script, remote_root+'/payload.json', remote_root+'/lease.log']), stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    deadline = time.monotonic()+180
+    while time.monotonic() < deadline:
+        ready = {}
+        for box in plan['boxes']:
+            native_root = box['scratch']+'/'+plan['run']
+            error = read_json(box, native_root+'/lease-error.json')
+            if error is not None:
+                raise RuntimeError(box['name']+': native reservation refused: '+str(error['error']))
+            if leases[box['name']].poll() is not None:
+                raise RuntimeError(box['name']+': reservation holder exited before preflight')
+            ready[box['name']] = read_json(box, native_root+'/lease-ready.json')
+        if all(ready.values()):
+            plan['reservation_holders'] = ready
+            write_json(root/'manifest.json', plan)
+            return
+        time.sleep(1)
+    raise TimeoutError('all native reservations were not obtained before preflight')
+
+
+def stop_leases(plan, root, leases):
+    errors = []
+    if not leases:
+        return errors
+    write_json(root/'lease-stop.json', dict(reason='owned attempt complete'))
+    for box in plan['boxes']:
+        if box['name'] not in leases: continue
+        try:
+            publish_new(box, root/'lease-stop.json', box['scratch']+'/'+plan['run']+'/lease-stop.json')
+        except Exception as error:
+            errors.append(box['name']+': reservation stop publication failed: '+str(error))
+    for box in plan['boxes']:
+        if box['name'] not in leases: continue
+        try:
+            _, failure = leases[box['name']].communicate(timeout=120)
+            own = root/'boxes'/box['name']
+            write_text(own/'lease-ssh-outcome.txt', f'exit_code={leases[box["name"]].returncode}\n'+failure.decode('utf-8',errors='replace'))
+            released = read_json(box, box['scratch']+'/'+plan['run']+'/lease-released.json')
+            write_json(own/'lease-released.json', released)
+            if box['name'] in plan.get('reservation_holders', {}) and (not released or released.get('released') is not True or
+                    (box['kind']=='posix-ssh' and released.get('shared_released') is not True)):
+                errors.append(box['name']+': native reservation did not release cleanly')
+        except Exception as error:
+            errors.append(box['name']+': native reservation cleanup failed: '+str(error))
+    return errors
 
 
 def stage(plan, root):
@@ -243,13 +310,24 @@ def stage(plan, root):
         own = root/'boxes'/box['name']; own.mkdir(parents=True)
         write_json(own/'payload.json', dict(box=box, specs=[spec for spec in plan['specs'] if spec['box'] == box['name']], pin=''))
         publish_new(box, own/'payload.json', remote_root+'/payload.json')
-        cross.command(cross.remote_command(box, [box['python'], box['helpers']+'/tools/acceptance_remote_tasks.py', '--preflight', remote_root+'/payload.json']), timeout=240)
-        world.fetch_preserved(box, remote_root, own/'preflight-fetch')
-        value = json.loads((own/'preflight-fetch/preflight.json').read_text(encoding='utf-8-sig'))
-        write_json(own/'preflight.json', value)
-        plan.setdefault('preflights', {})[box['name']] = value
-        write_json(root/'manifest.json', plan)
-    validate_preflights(plan)
+    leases = {}
+    try:
+        start_leases(plan, root, leases)
+        for box in plan['boxes']:
+            remote_root = box['scratch']+'/'+plan['run']
+            own = root/'boxes'/box['name']
+            cross.command(cross.remote_command(box, [box['python'], box['helpers']+'/tools/acceptance_remote_tasks.py', '--preflight', remote_root+'/payload.json']), timeout=240)
+            world.fetch_preserved(box, remote_root, own/'preflight-fetch')
+            value = json.loads((own/'preflight-fetch/preflight.json').read_text(encoding='utf-8-sig'))
+            write_json(own/'preflight.json', value)
+            plan.setdefault('preflights', {})[box['name']] = value
+            write_json(root/'manifest.json', plan)
+        validate_preflights(plan)
+        return leases
+    except BaseException:
+        failures = stop_leases(plan, root, leases)
+        write_json(root/'lease-cleanup.json', dict(errors=failures))
+        raise
 
 
 def preserve_before_launch(plan, root, evidence):
@@ -271,7 +349,7 @@ def preserve_before_launch(plan, root, evidence):
     write_json(destination/'before-run-proof.json', dict(run=plan['run'], files=index, engine_launches_before_copy=0))
 
 
-def launch(plan, root, evidence):
+def launch(plan, root, evidence, leases=None):
     validate_preflights(plan)
     if not world.public_directory_available(Path(__file__).resolve().parent.parent):
         raise RuntimeError('public directory is unavailable; a lane-owned fallback must be prepared before launch')
@@ -362,6 +440,8 @@ def launch(plan, root, evidence):
                 _, errors = processes[name].communicate(timeout=120)
                 write_text(root/'boxes'/name/'ssh-outcome.txt',
                            f'exit_code={processes[name].returncode}\n'+errors.decode('utf-8', errors='replace'))
+        plan['driver_findings'].extend(stop_leases(plan, root, leases or {}))
+        write_json(root/'manifest.json', plan)
         budget = ACTIVE_STORAGE.get()
         reserve = budget.reserve if budget is not None else 0
         try:
@@ -399,7 +479,7 @@ def main(argv=None):
         parser.error('output must be a fresh run inside the named scratch root')
     with storage_scope(owned, reserve=1024**2):
         if options.launch_staged:
-            plan = json.loads((options.out/'manifest.json').read_text(encoding='utf-8'))
+            raise ValueError('a fresh run with held native preflights is required; staged-only evidence remains retained')
         else:
             if not options.profiles or not options.template_boxes or not options.row or not options.source_sha:
                 parser.error('--profiles, --template-boxes, --row and --source-sha are required')
@@ -408,12 +488,19 @@ def main(argv=None):
             receipts = json.loads(options.mod_receipts.read_text(encoding='utf-8-sig')) if options.mod_receipts else None
             plan = make_plan(options, profiles, receipts)
             write_json(options.out/'manifest.json', plan)
-            stage(plan, options.out)
-        if options.stage_only:
-            preserve_before_launch(plan, options.out, options.evidence)
-            print('Four-box native preflights verified and small evidence copied; no engine launched')
-            return 0
-        return 0 if launch(plan, options.out, options.evidence)['passed'] else 1
+            leases = stage(plan, options.out)
+        try:
+            if options.stage_only:
+                preserve_before_launch(plan, options.out, options.evidence)
+                print('Four-box native preflights verified and small evidence copied; no engine launched')
+                return 0
+            return 0 if launch(plan, options.out, options.evidence, leases)['passed'] else 1
+        finally:
+            if not (options.out/'lease-stop.json').exists():
+                failures = stop_leases(plan, options.out, leases)
+                if failures:
+                    write_json(options.out/'lease-cleanup.json', dict(errors=failures))
+                    raise RuntimeError('native reservation cleanup failed')
 
 
 if __name__ == '__main__':

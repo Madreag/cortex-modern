@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 from copy import deepcopy
 import json
 import os
@@ -19,6 +20,7 @@ from acceptance_spectator import PEERS, SEATED, collect
 from acceptance_clock_brackets import PLACEMENT
 from acceptance_frozen_tools import helper_archive, receipt as frozen_receipt
 from acceptance_native_runtime import acquire_shared_reservation, release_shared_reservation
+from acceptance_box_lease import borrow
 import cross_peers as cross
 from edith.remote_box import RemoteBox, render_payload
 import world_mod_cross as world
@@ -62,7 +64,8 @@ def native_preflight(path):
     payload = json.loads(Path(path).read_text())
     box, plan = payload['box'], payload['plan']
     validate(box, plan['lane'], payload['peers'], native=True)
-    cross.preflight_payload(path)
+    with borrow(box, Path(path).parent) as held:
+        cross.preflight_payload(path)
     destination = Path(path).parent/'preflight.json'
     value = json.loads(destination.read_text())
     build = json.loads(Path(box['build_receipt']).read_text(encoding='utf-8-sig'))
@@ -74,7 +77,8 @@ def native_preflight(path):
     world.preflight_driver(box, value)
     frozen = frozen_receipt(Path(__file__).parent.parent)
     value.update(build=build, spectator_driver_sha256=sha256(Path(__file__)),
-                 frozen_tools=dict(commit=frozen['frozen_commit'],frozen_files_modified=0))
+                 frozen_tools=dict(commit=frozen['frozen_commit'],frozen_files_modified=0),
+                 preflight_reservation=dict(borrowed=held))
     write_json(destination, value)
     return 0
 
@@ -98,6 +102,8 @@ def check_preflights(plan):
             raise ValueError('frozen native tool identity differs')
         if value.get('spectator_driver_sha256') != plan['driver_sha256']:
             raise ValueError('spectator driver bytes differ')
+        if plan.get('reservation_holders') and value.get('preflight_reservation',{}).get('borrowed') is not True:
+            raise ValueError('spectator preflight lacks its physical reservation')
 
 
 def staged_probe(root, peer):
@@ -187,9 +193,11 @@ def run_payload(path, payload=None):
     previous = {key:os.environ.get(key) for key in settings}
     os.environ.update(settings)
     claim, shared_claim, runs, complete, errors = None, None, {}, {}, []
+    lease_context = ExitStack()
     try:
         frozen_receipt(Path(__file__).parent.parent)
-        shared_claim = acquire_shared_reservation(box, root, 60)
+        borrowed = lease_context.enter_context(borrow(box, root))
+        if not borrowed: shared_claim = acquire_shared_reservation(box, root, 60)
         claim = cross.acquire_reservation(box, root, 60)
         write_json(root/'reservation.json', {key:value for key,value in claim['record'].items() if key!='token'})
         caps = cross.read_capabilities(box, root)
@@ -247,8 +255,9 @@ def run_payload(path, payload=None):
                 if run.process:
                     run.close()
                 write_json(root/peer/'result.json',run.record)
-        if claim: write_json(root/'reservation-released.json',dict(released=cross.release_reservation(claim)))
+        if claim: write_json(root/'reservation-released.json',dict(released=cross.release_reservation(claim),borrowed=bool(claim.get('borrowed'))))
         if shared_claim: write_json(root/'shared-reservation-released.json',dict(released=release_shared_reservation(shared_claim)))
+        lease_context.close()
         for key,value in previous.items():
             if value is None: os.environ.pop(key,None)
             else: os.environ[key]=value
@@ -267,20 +276,29 @@ def stage(plan, root):
         peers=ROLES[box['name']]
         write_json(own/'payload.json',dict(box=box,plan=plan,peers=peers,specs=[dict(acceptance_row='spectator')]))
         remote.publish_new(box,own/'payload.json',remote_root+'/payload.json')
-        cross.command(cross.remote_command(box,[box['python'],box['helpers']+'/tools/acceptance_spectator_tasks.py','--preflight',remote_root+'/payload.json']),timeout=240)
-        world.fetch_preserved(box,remote_root,own/'preflight-fetch')
-        value=json.loads((own/'preflight-fetch/preflight.json').read_text())
-        write_json(own/'preflight.json',value)
-        plan.setdefault('preflights',{})[box['name']]=value
-        write_json(root/'spectator-remote.json',plan)
-    check_preflights(plan)
-    # The measured preflights travel in a separate immutable file; the original
-    # payload and its transferred hard-link candidate remain retained.
-    for box in plan['boxes']:
-        remote.publish_new(box,root/'spectator-remote.json',box['scratch']+'/'+plan['run']+'/verified-plan.json')
+    leases={}
+    try:
+        remote.start_leases(plan,root,leases)
+        for box in plan['boxes']:
+            remote_root=box['scratch']+'/'+plan['run']
+            own=root/'boxes'/box['name']
+            cross.command(cross.remote_command(box,[box['python'],box['helpers']+'/tools/acceptance_spectator_tasks.py','--preflight',remote_root+'/payload.json']),timeout=240)
+            world.fetch_preserved(box,remote_root,own/'preflight-fetch')
+            value=json.loads((own/'preflight-fetch/preflight.json').read_text())
+            write_json(own/'preflight.json',value)
+            plan.setdefault('preflights',{})[box['name']]=value
+            write_json(root/'spectator-remote.json',plan)
+        check_preflights(plan)
+        for box in plan['boxes']:
+            remote.publish_new(box,root/'spectator-remote.json',box['scratch']+'/'+plan['run']+'/verified-plan.json')
+        return leases
+    except BaseException:
+        failures=remote.stop_leases(plan,root,leases)
+        write_json(root/'lease-cleanup.json',dict(errors=failures))
+        raise
 
 
-def launch(plan, root, evidence):
+def launch(plan, root, evidence, leases=None):
     check_preflights(plan)
     cross.coordinator(plan)
     if not world.public_directory_available(Path(__file__).parent.parent):
@@ -424,7 +442,10 @@ def launch(plan, root, evidence):
                 else:
                     _,failure=processes[name].communicate(timeout=120)
                     write_text(root/'boxes'/name/'ssh-outcome.txt',f'exit_code={processes[name].returncode}\n'+failure.decode('utf-8',errors='replace'))
-                world.fetch_preserved(box,roots[name],root/'boxes'/name,compress_records=True,stream_transfer=True)
+            except Exception as error: errors.append(name+': final native collection: '+str(error))
+        errors.extend(remote.stop_leases(plan,root,leases or {}))
+        for name in started:
+            try: world.fetch_preserved(boxes[name],roots[name],root/'boxes'/name,compress_records=True,stream_transfer=True)
             except Exception as error: errors.append(name+': final native collection: '+str(error))
     result=collect(root)
     result['failures'].extend(errors); result['passed']=not result['failures']
@@ -450,9 +471,14 @@ def main(argv=None):
     with storage_scope(scratch,reserve=64*1024**2):
         options.out.mkdir(parents=True,exist_ok=False)
         plan=plan_for(options,json.loads(options.profiles.read_text(encoding='utf-8-sig')))
-        stage(plan,options.out)
-        if options.stage_only: return 0
-        return launch(plan,options.out,options.evidence)
+        leases=stage(plan,options.out)
+        try:
+            if options.stage_only: return 0
+            return launch(plan,options.out,options.evidence,leases)
+        finally:
+            if not (options.out/'lease-stop.json').exists():
+                failures=remote.stop_leases(plan,options.out,leases)
+                if failures: raise RuntimeError('spectator native reservation cleanup failed: '+str(failures))
 
 
 if __name__=='__main__': raise SystemExit(main())

@@ -106,6 +106,13 @@ class RemoteSafety(unittest.TestCase):
             acceptance_driver_sources={key:plan['driver_sources'][key] for key in world.DRIVER_FILES},
             acceptance_remote_driver_sha256=plan['driver_sources']['acceptance_remote_tasks.py']) for box in plan['boxes']}
         remote.validate_preflights(plan)
+        held=deepcopy(plan)
+        held['reservation_holders']={name:{} for name in remote.ALIASES}
+        for value in held['preflights'].values(): value['preflight_reservation']=dict(borrowed=True)
+        remote.validate_preflights(held)
+        held['preflights']['Mac']['preflight_reservation']['borrowed']=False
+        with self.assertRaisesRegex(ValueError,'did not hold'):
+            remote.validate_preflights(held)
         for field, value in (('machine_id','Z13'), ('hostname','EROL-PC'), ('content',{}),
                              ('build',dict(commit='b'*40,executable_sha256='e'*64)),
                              ('acceptance_remote_driver_sha256','b'*64), ('load',[{'Name':'ninja'}])):
