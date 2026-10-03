@@ -980,7 +980,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	bytes = image->imageBytes;
 	auto previousImage = cow.FinishImage(image);
 	if (fullStateOnly) {
-		// The periodic samples are one series; a labelled capture answers one save or restore and is never replaced.
+		// A round's periodic samples are one series, so a sample only ever stands in for an older one of its own round; a labelled
+		// capture answers one save or restore and is never replaced.
 		const AutosaveArchiveWriter::Submitted submitted = FullStateWriter().Submit([image, dump = m_FullStateDumpDirectory, round = m_FullStateRound, label = m_FullStateLabel, sceneCache, previousImage, retired = std::move(retired),
 		                                retiredLayers = std::move(retiredLayers)](bool replaced) mutable {
 			retired.clear();
@@ -1014,7 +1015,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				System::PrintDiagnosticLine(std::format("[fullstate] tick={} failed: {}", image->tick, error.what()));
 				return false;
 			}
-		}, m_FullStateLabel.empty() ? "sample" : "", tick);
+		}, m_FullStateLabel.empty() ? "sample/round-" + std::to_string(m_FullStateRound) : std::string(), tick);
 		task = submitted.verdict;
 		PrintCoalescedCapture("fullstate", tick, submitted);
 		return true;

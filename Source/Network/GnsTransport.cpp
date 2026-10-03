@@ -940,6 +940,21 @@ namespace RTE {
 			return detail.data();
 		}
 
+		NetFakeLinkEffects GetFakeLinkEffects() {
+			NetFakeLinkEffects total;
+			if (!m_Interface) return total;
+			std::vector<char> detail(16 * 1024, '\0');
+			for (const auto& [connection, peerId]: m_PeersByConnection) {
+				(void)peerId;
+				if (m_Interface->GetDetailedConnectionStatus(connection, detail.data(), static_cast<int>(detail.size())) != 0) continue;
+				const NetFakeLinkEffects one = GnsTransport::ParseFakeLinkEffects(detail.data());
+				total.jitterPackets += one.jitterPackets;
+				total.reorderedPackets += one.reorderedPackets;
+				total.duplicatedPackets += one.duplicatedPackets;
+			}
+			return total;
+		}
+
 		std::string GetLocalIdentity() {
 			SteamNetworkingIdentity identity;
 			if (!m_Interface || !m_Interface->GetIdentity(&identity)) {
@@ -1179,6 +1194,7 @@ namespace RTE {
 		bool ReceiveP2PSignal(const void*, int, ISteamNetworkingSignalingRecvContext*) { return false; }
 		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId) { return {}; }
 		std::string GetPeerDetailedStatus(NetPeerId) { return {}; }
+		NetFakeLinkEffects GetFakeLinkEffects() { return {}; }
 		std::string GetLocalIdentity() { return {}; }
 	};
 
@@ -1269,6 +1285,55 @@ namespace RTE {
 	std::string GnsTransport::GetPeerDetailedStatus(NetPeerId peerId) const {
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
 		return m_Impl->GetPeerDetailedStatus(peerId);
+	}
+
+	NetFakeLinkEffects GnsTransport::GetFakeLinkEffects() const {
+		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
+		return m_Impl->GetFakeLinkEffects();
+	}
+
+	NetFakeLinkEffects GnsTransport::ParseFakeLinkEffects(const std::string& status) {
+		NetFakeLinkEffects effects;
+		// The connection's own end prints first; the remote host's copy of its counters follows.
+		const size_t local = status.find("Lifetime stats:");
+		if (local == std::string::npos) return effects;
+		const size_t remote = status.find("received from remote host", local);
+		const std::string_view section = std::string_view(status).substr(local, remote == std::string::npos ? std::string::npos : remote - local);
+		// GNS groups thousands with commas.
+		const auto number = [&section](size_t& at) -> int64_t {
+			while (at < section.size() && section[at] == ' ') ++at;
+			int64_t value = 0;
+			for (; at < section.size() && ((section[at] >= '0' && section[at] <= '9') || section[at] == ','); ++at)
+				if (section[at] != ',') value = value * 10 + (section[at] - '0');
+			return value;
+		};
+		const auto counter = [&](std::string_view label) -> int64_t {
+			size_t at = section.find(label);
+			if (at == std::string_view::npos) return 0;
+			at += label.size();
+			return number(at);
+		};
+		effects.reorderedPackets = counter("OutOfOrder:");
+		effects.duplicatedPackets = counter("Duplicate :");
+		// The latency variance histogram's counts follow its header row: under 1 ms, then 1-2, 2-5, 5-10, 10-20 and over 20.
+		if (const size_t histogram = section.find("Latency variance histogram"); histogram != std::string_view::npos) {
+			const size_t header = section.find('\n', histogram);
+			const size_t counts = header == std::string_view::npos ? std::string_view::npos : section.find('\n', header + 1);
+			if (counts != std::string_view::npos) {
+				size_t at = counts + 1;
+				for (int bucket = 0; bucket < 6; ++bucket) {
+					const int64_t value = number(at);
+					if (bucket > 0) effects.jitterPackets += value;
+				}
+			}
+		}
+		return effects;
+	}
+
+	void GnsTransport::GetFakeLinkSettings(int& jitterMs, float& reorderPercent, float& duplicatePercent) {
+		jitterMs = s_SimulatedJitterMs;
+		reorderPercent = s_SimulatedReorderPercent;
+		duplicatePercent = s_SimulatedDuplicatePercent;
 	}
 
 	std::string GnsTransport::GetLocalIdentity() const {

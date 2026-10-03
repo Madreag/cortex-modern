@@ -1,6 +1,7 @@
 #pragma once
 
 #include "NetDirectoryClient.h"
+#include "GnsTransport.h"
 #include "NetLanDiscovery.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchReplay.h"

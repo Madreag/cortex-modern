@@ -10784,6 +10784,75 @@ namespace RTE {
 		return true;
 	}
 
+	// The fake link's effects are read from GNS's own receive counters on this end: out of order, duplicate, and every
+	// latency-variance bucket from 1 ms up - never the remote host's copy of them, never the settings.
+	bool TestFakeLinkEffectsAreReadFromTheLinksOwnCounters(std::string* error) {
+		const std::string status =
+		    "Connection\n"
+		    "    Lifetime stats:\n"
+		    "        Totals\n"
+		    "            Sent:      1,200 pkts         96,000 bytes\n"
+		    "            Recv w seq:      1,180 pkts\n"
+		    "            Dropped   :         12 pkts   1.00%\n"
+		    "            OutOfOrder:      1,034 pkts   8.70%\n"
+		    "            OOOFixed  :          0 pkts   0.00%\n"
+		    "            Duplicate :         57 pkts   4.80%\n"
+		    "        Latency variance histogram: (1180 total measurements)\n"
+		    "                  <1     1-2     2-5    5-10   10-20     >20\n"
+		    "                 400     300     200     150     100      30\n"
+		    "    Lifetime stats received from remote host 0.5s ago:\n"
+		    "            OutOfOrder:     99,999 pkts   9.00%\n"
+		    "            Duplicate :     99,999 pkts   9.00%\n";
+		const NetFakeLinkEffects effects = GnsTransport::ParseFakeLinkEffects(status);
+		if (effects.reorderedPackets != 1034 || effects.duplicatedPackets != 57 || effects.jitterPackets != 780) {
+			*error = "the fake link's effects read reordered=" + std::to_string(effects.reorderedPackets) + " duplicated=" + std::to_string(effects.duplicatedPackets) +
+			         " jitter=" + std::to_string(effects.jitterPackets) + " from a status that names 1034, 57 and 780";
+			return false;
+		}
+		if (const NetFakeLinkEffects none = GnsTransport::ParseFakeLinkEffects("No lifetime stats"); none.reorderedPackets || none.duplicatedPackets || none.jitterPackets) {
+			*error = "a status with no lifetime section read effects";
+			return false;
+		}
+		std::cout << "PASS fake_link_effects_read_from_the_links_own_counters reordered=1034 duplicated=57 jitter=780" << std::endl;
+		return true;
+	}
+
+	// A host's moderation state - held seats with causes, bans and tickets - reads as digests, and a capsule's roster carries it unchanged.
+	bool TestTheModerationStateCarriesThroughTheCapsule(std::string* error) {
+		NetSeatRoster roster;
+		roster.matchId = 0x51;
+		roster.hostSeat = 1;
+		for (uint8_t id = 1; id <= 3; ++id) {
+			NetRosterSeat seat;
+			seat.seatId = id;
+			seat.owner = 0x7000 + id;
+			seat.incarnation = id;
+			seat.phase = id == 2 ? NetSeatPhase::Held : NetSeatPhase::Running;
+			seat.holdCause = id == 2 ? NetSeatHoldCause::Leave : NetSeatHoldCause::None;
+			seat.link = id == 2 ? NetSeatLink::Dropped : NetSeatLink::Connected;
+			roster.seats.push_back(seat);
+		}
+		roster.banned = {0x9999};
+		const auto live = nlohmann::json::parse(NetMatchService::ModerationStateOf(roster));
+		NetSeatRoster carried;
+		std::string decodeError;
+		if (!DecodeRoster(EncodeRoster(roster), carried, &decodeError)) {
+			*error = "the roster did not cross the wire: " + decodeError;
+			return false;
+		}
+		carried.banned = roster.banned;
+		const auto after = nlohmann::json::parse(NetMatchService::ModerationStateOf(carried));
+		const bool shaped = live.at("held_seats").size() == 1 && live.at("held_seats")[0].at("seat") == 2 && live.at("held_seats")[0].at("cause") == "leave" &&
+		                    live.at("bans").size() == 1 && live.at("bans")[0].get<std::string>().size() == 64 && live.at("tickets").size() == 3 &&
+		                    live.at("tickets")[1].at("incarnation") == 2 && live.at("tickets")[1].at("identity_sha256").get<std::string>().size() == 64;
+		if (!shaped || live != after || live.dump().find("28673") != std::string::npos) {
+			*error = "the moderation state read " + live.dump() + " and after the capsule " + after.dump();
+			return false;
+		}
+		std::cout << "PASS the_moderation_state_carries_through_the_capsule held=1 bans=1 tickets=3" << std::endl;
+		return true;
+	}
+
 	bool TestKickedSeatReadsOpen(std::string* error) {
 		const uint16_t port = 43247;
 		LoopbackTransport hostTransport;
@@ -15336,6 +15405,8 @@ namespace RTE {
 		if (!TestResyncFailureAfterHostDeparture(&error)) return fail(error);
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestPreRosterConfigRefusedByName(&error)) return fail(error);
+		if (!TestFakeLinkEffectsAreReadFromTheLinksOwnCounters(&error)) return fail(error);
+		if (!TestTheModerationStateCarriesThroughTheCapsule(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
 		if (!TestRematchProposalFits(&error)) return fail(error);
 		// The ICE lifecycle arms fail at the end, so one red arm cannot hide another.

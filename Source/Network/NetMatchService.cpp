@@ -7180,6 +7180,16 @@ static std::string ResyncSaveName() {
 				return false;
 			m_MigrationKey = key;
 			m_MigrationAdmissionState = admission;
+			{
+				// What this capsule carries for moderation, read once: the roster whole and the host's ban list beside it.
+				const auto carried = nlohmann::json::from_cbor(admission, true, false);
+				NetSeatRoster roster;
+				std::string rosterError;
+				if (!carried.is_discarded() && carried.contains("roster_bytes") && DecodeRoster(carried.at("roster_bytes").get<std::vector<uint8_t>>(), roster, &rosterError)) {
+					roster.banned = carried.value("roster_banned", std::vector<uint64_t>{});
+					m_CarriedModerationState = ModerationStateOf(roster);
+				}
+			}
 			m_MigrationAuthority = authority;
 			m_MigrationMembers = members;
 			m_MigrationGeneration = body.at("generation").get<uint64_t>();

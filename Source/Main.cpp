@@ -700,6 +700,50 @@ static void BeginCrossTick(uint64_t tick) {
 		s_crossContext["seat_revision"] = view->revision;
 	}
 	g_MetricsCollector.BeginEventTick(s_crossContext);
+	// The moderation state a lost host hands over: every applied tick on the host, and once each handover on every survivor.
+	if (!catchup && authority.is_number_unsigned()) {
+		const uint64_t generation = authority.get<uint64_t>();
+		static uint64_t firstGeneration = UINT64_MAX, afterGeneration = UINT64_MAX;
+		if (firstGeneration == UINT64_MAX) firstGeneration = generation;
+		const auto emit = [&](const char* stage, const std::string& state) {
+			const auto parsed = nlohmann::json::parse(state, nullptr, false);
+			if (parsed.is_discarded()) return;
+			g_MetricsCollector.WriteObservation({{"type", "moderation_snapshot"}, {"stage", stage}, {"tick", tick}, {"host_peer", host}, {"authority_generation", generation}, {"state", parsed}});
+		};
+		if (host == ScenarioRunner::GetLockstepLocalPeerId()) emit("before", g_NetMatchService.GetModerationSnapshotState(false));
+		if (generation > firstGeneration && generation != afterGeneration) {
+			afterGeneration = generation;
+			emit("after", g_NetMatchService.GetModerationSnapshotState(true));
+		}
+	}
+	// This peer's seat comes back - a return, a held seat's reclaim, a stall's in-place catch-up, an applicant seated: the roster's committed
+	// owner, the actor it plays from this tick, and a recovery the fresh-input receipt answers, whether or not a schedule asked for one.
+	{
+		const uint8_t local = ScenarioRunner::GetLockstepLocalPeerId();
+		static bool wasAway = false;
+		static uint64_t awayRound = 0;
+		const bool away = local != 0 && (catchup || ScenarioRunner::IsLockstepSeatUnderAI(local, tick));
+		if (round != awayRound) { wasAway = false; awayRound = round; }
+		Activity* activity = g_ActivityMan.GetActivity();
+		const auto view = local != 0 ? g_NetMatchService.GetSeatView(local) : std::nullopt;
+		if (wasAway && !away && activity && view && view->seat.owner != 0) {
+			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+				const Actor* actor = activity->GetControlledActor(player);
+				if (!actor) continue;
+				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), actor->GetTeam(), false);
+				if (owner != local) continue;
+				g_MetricsCollector.WriteObservation({{"type", "ownership_reclaim"}, {"round", round}, {"peer", local}, {"stable_seat", view->stableSeat},
+				    {"actor", actor->GetUniqueID()}, {"owner_peer", owner}, {"ticket_incarnation", view->seat.incarnation},
+				    {"seat_incarnation", view->seat.incarnation}, {"activation_tick", tick}, {"tick", tick}, {"committed", true}});
+				const std::string id = "own-return-" + std::to_string(round) + "-" + std::to_string(tick);
+				s_crossRecoveryCases.push_back({{"id", id}, {"return_incarnation", incarnation}, {"deadline_ms", 60000}});
+				s_crossRecoveryStarts[id] = {{"effect_finished", true},
+				    {"engine_after_wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
+				break;
+			}
+		}
+		wasAway = away;
+	}
 	if (newRound) {
 		nlohmann::json roster = nlohmann::json::array();
 		for (const auto& slot: config->players) roster.push_back({{"peer", slot.peerId}, {"team", slot.team}, {"human", !slot.cpu}});
@@ -7872,7 +7916,8 @@ void RunGameLoop() {
 				bool landed = false;
 				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !landed && simTick > 60; ++peer)
 					landed = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 60) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 59);
-				if (landed && !reclaimStart) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "landed");
+				// A landed tick owes its sample even when another seat's gap opens on it; each label dumps into a folder of its own.
+				if (landed) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "landed");
 				if (!catchingUp && ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0)) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
