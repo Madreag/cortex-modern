@@ -104,8 +104,13 @@ namespace RTE {
 					return commit("the player left the lobby - the seat is open");
 				}
 				if (seat->link == NetSeatLink::Dropped && (seat->owner == 0 || IsAway(seat->phase))) return keep("the seat is already away");
+				const bool heldInPlace = seat->phase == NetSeatPhase::Held && seat->link == NetSeatLink::Connected && seat->owner != 0;
 				seat->link = NetSeatLink::Dropped;
 				if (seat->owner == 0) return commit("the open seat's link closed");
+				if (heldInPlace) {
+					seat->holdCause = event.byChoice ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
+					return commit(event.byChoice ? "Left - the AI plays the seat until the player returns" : "Connection lost - the AI plays the seat until the player returns");
+				}
 				seat->heldSinceMs = event.nowMs;
 				if (seat->phase == NetSeatPhase::RejoinImage || seat->phase == NetSeatPhase::RejoinCatchUp) {
 					FailReturn(*seat, event.nowMs);
@@ -242,6 +247,15 @@ namespace RTE {
 				dropped.kind = NetRosterEventKind::LinkDropped;
 				return ApplyRosterEvent(roster, dropped);
 			}
+			case NetRosterEventKind::HeldInPlace: {
+				// The round holds a playing seat whose link stays open - its input late, its player quiet - and the AI plays it.
+				if (!seat || seat->phase != NetSeatPhase::Running) return keep("only a playing seat is held by the round");
+				if (event.seat == next.hostSeat) return refuse("the host's own seat is held for its stall");
+				seat->phase = NetSeatPhase::Held;
+				seat->holdCause = event.cause == NetSeatHoldCause::None ? NetSeatHoldCause::LateStream : event.cause;
+				seat->heldSinceMs = event.nowMs;
+				return commit("The connection cannot keep up - the AI plays the seat");
+			}
 			case NetRosterEventKind::SlowMachine: {
 				if (!seat || seat->phase != NetSeatPhase::Running) return keep("only a playing seat is judged for its machine");
 				// A round's first seconds are warm-up on every machine; only a machine slow after them is held.
@@ -364,7 +378,7 @@ namespace RTE {
 		static constexpr std::array<const char*, static_cast<size_t>(NetRosterEventKind::Count)> names{
 			"LinkDropped", "ProcessRelaunched", "Returned", "Kicked", "Banned", "RoundEnded", "RematchFormed", "HostLinkLost", "MemberSetProposed", "TransferAborted",
 			"LivenessPassed", "SlowMachine", "HostStalled", "Admitted", "ApplicantAccepted", "RoundStarted", "ImageLoaded", "CaughtUp", "HostResumed", "HostChanged",
-			"SeatReleased"};
+			"SeatReleased", "HeldInPlace"};
 		return kind < NetRosterEventKind::Count ? names[static_cast<size_t>(kind)] : "?";
 	}
 
@@ -385,6 +399,9 @@ namespace RTE {
 					case NetSeatHoldCause::RejoinFailed: return "Held - AI in control (rejoin retrying)";
 					case NetSeatHoldCause::Crash: return "Held - AI in control (game restarting)";
 					case NetSeatHoldCause::Leave: return "Held - AI in control (left)";
+					case NetSeatHoldCause::LateStream: return "Held - AI in control (connection too slow)";
+					case NetSeatHoldCause::Quiet: return "Held - AI in control (no input)";
+					case NetSeatHoldCause::TimingAck: return "Held - AI in control (catching up)";
 					default: return "Held - AI in control (connection lost)";
 				}
 			case NetSeatPhase::RejoinImage:
@@ -597,28 +614,28 @@ namespace RTE {
 
 		/// The grid's columns as net-roster drives them.
 		struct Column { const char* id; NetRosterEventKind kind; const char* variant; };
-		constexpr std::array<Column, 19> c_Columns{{
+		constexpr std::array<Column, 20> c_Columns{{
 			{"a", NetRosterEventKind::LinkDropped, ""}, {"b", NetRosterEventKind::ProcessRelaunched, ""}, {"c", NetRosterEventKind::Returned, ""},
 			{"d", NetRosterEventKind::Kicked, ""}, {"d2", NetRosterEventKind::Banned, ""}, {"f", NetRosterEventKind::RoundEnded, ""},
 			{"g", NetRosterEventKind::RematchFormed, ""}, {"h", NetRosterEventKind::HostStalled, ""}, {"i", NetRosterEventKind::HostLinkLost, "quorum"},
 			{"i2", NetRosterEventKind::HostLinkLost, "one member"}, {"j", NetRosterEventKind::MemberSetProposed, "left out"}, {"k", NetRosterEventKind::TransferAborted, ""},
 			{"l", NetRosterEventKind::LivenessPassed, "traffic"}, {"l2", NetRosterEventKind::LivenessPassed, "silent"}, {"m", NetRosterEventKind::LinkDropped, "two at once"},
 			{"n", NetRosterEventKind::SlowMachine, "after the grace"}, {"o", NetRosterEventKind::Admitted, ""}, {"p", NetRosterEventKind::ApplicantAccepted, ""},
-			{"r", NetRosterEventKind::SeatReleased, ""}}};
+			{"r", NetRosterEventKind::SeatReleased, ""}, {"q", NetRosterEventKind::HeldInPlace, ""}}};
 
 		/// The expected outcome of each cell for the subject seat: its next phase (L S R H I C E M Z G), '-' unchanged, 'X' refused, '.' unreachable.
 		/// Columns in c_Columns' order; rows 1-10 are the grid's rows.
 		constexpr std::array<const char*, 10> c_Expected{{
-			/*  1 LOBBY          */ "LZLLLXS.XXHX-LL-XXL",
-			/*  2 STARTING       */ "HZSHHXX-XXXX-HH-XXX",
-			/*  3 RUNNING        */ "HZRHHMX-GXXX-HHHXXX",
-			/*  4 HELD           */ "-ZIHHEX--XXX----XIH",
-			/*  5 REJOIN_IMAGE   */ "HZIHHMX-HXXH-HH-XXX",
-			/*  6 REJOIN_CATCHUP */ "HZIHHMX-HXXH-HH-XXX",
-			/*  7 ROUND_END      */ "-ZMHHXH.XX-X----XMH",
-			/*  8 REMATCH_LOBBY  */ "HZMHHXS.XXHX-HH-XXX",
-			/*  9 RELAUNCHING    */ "--IHH-X--XXX----XIH",
-			/* 10 MIGRATING      */ "HZX...X.-X.X-HH.XX."}};
+			/*  1 LOBBY          */ "LZLLLXS.XXHX-LL-XXL-",
+			/*  2 STARTING       */ "HZSHHXX-XXXX-HH-XXX-",
+			/*  3 RUNNING        */ "HZRHHMX-GXXX-HHHXXXH",
+			/*  4 HELD           */ "-ZIHHEX--XXX----XIH-",
+			/*  5 REJOIN_IMAGE   */ "HZIHHMX-HXXH-HH-XXX-",
+			/*  6 REJOIN_CATCHUP */ "HZIHHMX-HXXH-HH-XXX-",
+			/*  7 ROUND_END      */ "-ZMHHXH.XX-X----XMH-",
+			/*  8 REMATCH_LOBBY  */ "HZMHHXS.XXHX-HH-XXX-",
+			/*  9 RELAUNCHING    */ "--IHH-X--XXX----XIH-",
+			/* 10 MIGRATING      */ "HZX...X.-X.X-HH.XX.."}};
 
 		char PhaseCode(NetSeatPhase phase) {
 			static constexpr const char* codes = "LSRHICEMZG";
@@ -838,6 +855,26 @@ namespace RTE {
 			                   !released.refused && RosterSeatLabel(*released.roster.Find(2)) == "Open - AI in control (released)";
 			check("seq OPEN the host frees a first-lobby seat and opens a later one with its number kept", lobbyFrees && opens,
 			      "lobby='" + RosterSeatLabel(*freed.roster.Find(2)) + "' kicked='" + RosterSeatLabel(*kickedOut.roster.Find(2)) + "' release_while_playing='" + playing.reason + "'");
+		}
+		{
+			// D54.6: the round holds a playing seat whose link stays open, with its cause; the seat returns in place, or its link closes
+			// and it is held for the lost connection.
+			NetSeatRoster running = RosterForRow(3);
+			NetRosterEvent late; late.kind = NetRosterEventKind::HeldInPlace; late.seat = 2; late.nowMs = 10000; late.cause = NetSeatHoldCause::LateStream;
+			const NetRosterResult held = ApplyRosterEvent(running, late);
+			NetRosterEvent back; back.kind = NetRosterEventKind::Returned; back.seat = 2; back.nowMs = 11000; back.keptWorld = true; back.ticket = held.roster.Find(2)->ticket;
+			const NetRosterResult returning = ApplyRosterEvent(held.roster, back);
+			NetRosterEvent played; played.kind = NetRosterEventKind::CaughtUp; played.seat = 2;
+			const NetRosterResult playing = ApplyRosterEvent(returning.roster, played);
+			NetRosterEvent lost; lost.kind = NetRosterEventKind::LinkDropped; lost.seat = 2; lost.nowMs = 12000;
+			const NetRosterResult closed = ApplyRosterEvent(held.roster, lost);
+			const NetRosterSeat& inPlace = *held.roster.Find(2);
+			const bool ok = inPlace.phase == NetSeatPhase::Held && inPlace.holdCause == NetSeatHoldCause::LateStream && inPlace.link == NetSeatLink::Connected &&
+			                RosterSeatLabel(inPlace) == "Held - AI in control (connection too slow)" && returning.roster.Find(2)->phase == NetSeatPhase::RejoinCatchUp &&
+			                playing.roster.Find(2)->phase == NetSeatPhase::Running && closed.roster.Find(2)->phase == NetSeatPhase::Held &&
+			                closed.roster.Find(2)->link == NetSeatLink::Dropped && closed.roster.Find(2)->holdCause == NetSeatHoldCause::LinkDrop;
+			check("seq IN PLACE the round holds a seat whose link stays open, which returns in place or is held for its lost link", ok,
+			      "held='" + RosterSeatLabel(inPlace) + "' back=" + NetSeatPhaseName(playing.roster.Find(2)->phase) + " lost='" + RosterSeatLabel(*closed.roster.Find(2)) + "'");
 		}
 		{
 			// The start gate: the round is agreed on one revision; a peer that heard it hashed alike starts, any other is refused by name.

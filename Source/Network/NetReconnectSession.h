@@ -210,6 +210,8 @@ namespace RTE {
 		bool dropped = false;
 		bool closed = false;
 		bool heldForReclaim = false;  //!< The original holder can still return.
+		bool held = false;            //!< Its player away and the AI playing it, by the roster.
+		NetSeatHoldCause holdCause = NetSeatHoldCause::None; //!< Why the roster holds it.
 		bool substitutable = false;   //!< A host action may reassign it right now.
 		bool substituting = false;    //!< An approval is in flight for it.
 		NetAuthBytes16 substitutionTransaction{};
@@ -272,7 +274,9 @@ namespace RTE {
 		uint8_t lockstepPeerId = 0;
 		bool committed = false;
 		bool closed = false;
-		bool dropped = false;      //!< Committed, but its holder's transport is gone.
+		bool dropped = false;      //!< Committed, but its holder's link is lost, by the roster.
+		bool held = false;         //!< Committed, its player away and the AI playing it, by the roster: lost, left or held by the round.
+		NetSeatHoldCause holdCause = NetSeatHoldCause::None; //!< Why the roster holds it.
 		bool reclaiming = false;   //!< A reclaim transaction for it is in flight.
 		bool substituting = false; //!< An approved substitute is persisting its ticket.
 		uint16_t applicants = 0;   //!< Players asking the host for this seat.
@@ -471,6 +475,13 @@ namespace RTE {
 		void NoteReturnWorldReady(uint8_t lockstepPeerId);
 		/// A returning seat plays the round again at a committed frame.
 		void NoteReturnCaughtUp(uint8_t lockstepPeerId);
+		/// The round holds a playing seat whose link stays open; Capacity is a machine too slow for the round.
+		void NoteSeatHeldInPlace(uint8_t lockstepPeerId, NetSeatHoldCause cause);
+		/// A seat the round held with its link open plays again: its player kept the world.
+		void NoteSeatPlaysAgain(uint8_t lockstepPeerId);
+		/// The lockstep peers whose seats the roster has playing, and those the round holds with their links open.
+		std::vector<uint8_t> PlayingPeers() const;
+		std::vector<uint8_t> HeldInPlacePeers() const;
 		/// A returning seat's transfer was abandoned: the AI keeps the seat and the return is offered again after the roster's backoff.
 		void NoteReturnAborted(uint8_t lockstepPeerId);
 		/// The lockstep peers whose seats are on their way back, through the image or the catch-up.
@@ -617,7 +628,9 @@ namespace RTE {
 		/// When the holder went away, on this plane's clock; 0 while it is here.
 		uint64_t HolderAwaySinceMs(const SeatState& seat) const;
 		/// Every change to a seat's hold goes through the roster's one transition function.
-		void ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice = false);
+		void ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice = false, bool keptWorld = false, NetSeatHoldCause cause = NetSeatHoldCause::None);
+		/// The roster holds the seat for its player: it has an owner who is away while the AI plays it.
+		bool RosterHoldsSeat(const SeatState& seat) const;
 		void ApplyStageEvent(NetRosterEventKind kind);
 		/// Sends the roster's current revision to every connected holder, or to one connection.
 		void SendRoster(NetPeerId only = c_InvalidNetPeerId);

@@ -517,14 +517,15 @@ namespace RTE {
 		return IsHolderAway(seat) ? held->heldSinceMs : 0;
 	}
 
-	void NetReconnectHost::ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice) {
+	void NetReconnectHost::ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice, bool keptWorld, NetSeatHoldCause cause) {
 		NetRosterEvent event;
 		event.kind = kind;
 		event.seat = RosterIdOf(seat.seat.stableSeat);
 		event.nowMs = m_NowMs;
 		event.byChoice = byChoice;
 		// A returner takes the round's image, except a seat whose holder never takes one.
-		event.keptWorld = seat.seat.local || seat.seat.lockstepPeerId >= c_WorldSpectatorLobbyPeerFirst;
+		event.keptWorld = keptWorld || seat.seat.local || seat.seat.lockstepPeerId >= c_WorldSpectatorLobbyPeerFirst;
+		event.cause = cause;
 		event.owner = RosterOwnerOf(seat);
 		event.ticket = NetRosterTicketIdOf(m_ConfiguredEpoch, seat.seat.stableSeat, seat.holderGeneration);
 		const NetRosterSeat* held = m_Roster.Find(event.seat);
@@ -615,6 +616,64 @@ namespace RTE {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
 		if (held && (held->phase == NetSeatPhase::RejoinImage || held->phase == NetSeatPhase::RejoinCatchUp)) ApplySeatEvent(*seat, NetRosterEventKind::TransferAborted);
+	}
+
+	bool NetReconnectHost::RosterHoldsSeat(const SeatState& seat) const {
+		const NetRosterSeat* held = RosterSeatOf(seat);
+		return held && held->owner != 0 && (held->phase == NetSeatPhase::Held || held->phase == NetSeatPhase::RoundEnd || held->phase == NetSeatPhase::Relaunching);
+	}
+
+	namespace {
+		bool IsInPlaceCause(NetSeatHoldCause cause) {
+			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck;
+		}
+	}
+
+	void NetReconnectHost::NoteSeatHeldInPlace(uint8_t lockstepPeerId, NetSeatHoldCause cause) {
+		const SeatState* seat = SeatOfPeer(lockstepPeerId);
+		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
+		if (!held || held->owner == 0 || held->phase != NetSeatPhase::Running || seat->seat.local) return;
+		if (cause == NetSeatHoldCause::Capacity) {
+			NetRosterEvent event;
+			event.kind = NetRosterEventKind::SlowMachine;
+			event.seat = RosterIdOf(seat->seat.stableSeat);
+			event.nowMs = m_NowMs;
+			event.afterGrace = true;
+			const NetRosterResult result = RTE::ApplyRosterEvent(m_Roster, event);
+			if (!result.refused && result.changed) {
+				DiagnosticLine() << "[roster] rev=" << result.roster.revision << " seat=" << static_cast<int>(event.seat) << " SlowMachine RUNNING->HELD: " << result.reason << std::endl;
+				m_Roster = result.roster;
+				SendRoster();
+			}
+			return;
+		}
+		ApplySeatEvent(*seat, NetRosterEventKind::HeldInPlace, false, false, cause);
+	}
+
+	void NetReconnectHost::NoteSeatPlaysAgain(uint8_t lockstepPeerId) {
+		const SeatState* seat = SeatOfPeer(lockstepPeerId);
+		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
+		if (!held || held->phase != NetSeatPhase::Held || held->link != NetSeatLink::Connected || !IsInPlaceCause(held->holdCause)) return;
+		ApplySeatEvent(*seat, NetRosterEventKind::Returned, false, true);
+		if (const NetRosterSeat* back = RosterSeatOf(*seat); back && back->phase == NetSeatPhase::RejoinCatchUp) ApplySeatEvent(*seat, NetRosterEventKind::CaughtUp);
+	}
+
+	std::vector<uint8_t> NetReconnectHost::PlayingPeers() const {
+		std::vector<uint8_t> playing;
+		for (const SeatState& seat: m_Seats) {
+			const NetRosterSeat* held = seat.seat.cpu || seat.seat.local ? nullptr : RosterSeatOf(seat);
+			if (held && held->owner != 0 && held->phase == NetSeatPhase::Running) playing.push_back(SimIdentityOfSeat(seat.seat).peerId);
+		}
+		return playing;
+	}
+
+	std::vector<uint8_t> NetReconnectHost::HeldInPlacePeers() const {
+		std::vector<uint8_t> held;
+		for (const SeatState& seat: m_Seats) {
+			const NetRosterSeat* row = seat.seat.cpu || seat.seat.local ? nullptr : RosterSeatOf(seat);
+			if (row && row->phase == NetSeatPhase::Held && row->link == NetSeatLink::Connected && IsInPlaceCause(row->holdCause)) held.push_back(SimIdentityOfSeat(seat.seat).peerId);
+		}
+		return held;
 	}
 
 	std::vector<uint8_t> NetReconnectHost::ReturningPeers() const {
@@ -1624,8 +1683,8 @@ namespace RTE {
 		if (!m_LiveMatch || seat.seat.cpu || seat.seat.local) {
 			return false;
 		}
-		// Either the holder dropped and has not come back, or it left cleanly and the seat sits empty.
-		return (IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId) || IsHostOpened(seat);
+		// The roster holds the seat for its away player - lost, left, or held by the round with its link open - or the host opened it.
+		return (IsSeated(seat) && RosterHoldsSeat(seat)) || IsHostOpened(seat);
 	}
 
 	void NetReconnectHost::BumpSeatGeneration(SeatState& seat) {
@@ -1808,7 +1867,9 @@ namespace RTE {
 			entry.cpu = seat.seat.cpu;
 			entry.team = seat.seat.team;
 			entry.committed = IsSeated(seat);
-			entry.dropped = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId;
+			entry.dropped = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && IsHolderAway(seat);
+			entry.held = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && RosterHoldsSeat(seat);
+			if (const NetRosterSeat* row = RosterSeatOf(seat)) entry.holdCause = row->holdCause;
 			entry.closed = IsHostOpened(seat);
 			entry.heldForReclaim = IsSeated(seat) && !IsHostOpened(seat);
 			entry.substitutable = IsSeatSubstitutable(seat);
@@ -1879,7 +1940,7 @@ namespace RTE {
 			     (IsHolderAway(seat) ? 8u : 0u) | (IsSeatSubstitutable(seat) ? 32u : 0u));
 			fold(HolderAwaySinceMs(seat));
 			foldText(seat.substituteName);
-			anyDropped = anyDropped || (IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId);
+			anyDropped = anyDropped || (IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && IsHolderAway(seat));
 		}
 		for (const Substitution& pending : m_Substitutions) {
 			fold(pending.stableSeat);
@@ -2094,6 +2155,7 @@ namespace RTE {
 			AbandonSubstitution(index, NetH4DenialReason::ProviderUnavailable, "the host could not install the substitution credential", nowMs);
 			return;
 		}
+		const NetPeerId outgoing = seat->activeConnection != connection ? seat->activeConnection : c_InvalidNetPeerId;
 		seat->identity = pending->identity;
 		seat->holderGeneration = message.holderGeneration;
 		seat->incarnation = 0;
@@ -2113,7 +2175,8 @@ namespace RTE {
 		const NetH4JoinCommitted committed{c_NetH4Version, message.txId, seat->seat.stableSeat, seat->holderGeneration, seat->incarnation, seat->seat.peerId};
 		m_TxCache.Store(message.txId, key, committed, nowMs);
 		++m_Stats.substitutionsCommitted;
-		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, c_InvalidNetPeerId, false, true});
+		if (outgoing != c_InvalidNetPeerId) Send(outgoing, NetJoinRejected{NetRejectReason::SeatReassigned, "The host gave your seat to another player", "seat_reassigned", "", ""});
+		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, outgoing, false, true});
 		seat->substituteName = pending->displayName;
 		seat->holderName = pending->displayName;
 		if (NetH4GetFault() == NetH4Fault::CommitDrop) {
@@ -2406,7 +2469,9 @@ namespace RTE {
 			status.lockstepPeerId = seat.seat.lockstepPeerId;
 			status.committed = IsSeated(seat);
 			status.closed = IsHostOpened(seat);
-			status.dropped = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId;
+			status.dropped = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && IsHolderAway(seat);
+			status.held = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && RosterHoldsSeat(seat);
+			if (const NetRosterSeat* row = RosterSeatOf(seat)) status.holdCause = row->holdCause;
 			status.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
 				return !pending.superseded && !pending.proofFinished && pending.stableSeat == seat.seat.stableSeat;
 			});

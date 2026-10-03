@@ -69,7 +69,7 @@ namespace RTE {
 	/// Every seat event; each goes through ApplyRosterEvent and nowhere else.
 	enum class NetRosterEventKind : uint8_t {
 		LinkDropped, ProcessRelaunched, Returned, Kicked, Banned, RoundEnded, RematchFormed, HostLinkLost, MemberSetProposed, TransferAborted,
-		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, SeatReleased, Count
+		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, SeatReleased, HeldInPlace, Count
 	};
 
 	struct NetRosterEvent {
@@ -79,6 +79,7 @@ namespace RTE {
 		uint64_t ticket = 0;           ///< Returned: the ticket shown; Admitted / ApplicantAccepted: the ticket issued.
 		uint64_t nowMs = 0;            ///< The plane's clock, for the return's backoff.
 		bool withTraffic = false;      ///< LivenessPassed: the link carried authenticated traffic.
+		NetSeatHoldCause cause = NetSeatHoldCause::None; ///< HeldInPlace: why the round holds the seat.
 		bool byChoice = false;         ///< LinkDropped: the owner left on purpose.
 		bool afterGrace = false;       ///< SlowMachine: the round is past its warm-up grace.
 		bool keptWorld = false;        ///< Returned: the owner's process kept the round's world.

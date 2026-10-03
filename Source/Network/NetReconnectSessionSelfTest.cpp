@@ -3476,6 +3476,63 @@ namespace RTE {
 			return 0;
 		}
 
+		// D54.6: a seat the round holds with its player's link open is the roster's held seat: a newcomer may apply for it and the host
+		// sees the application, exactly as for a seat whose link dropped; its player's return in place gives it back.
+		int TestANewcomerAppliesForASeatHeldInPlace() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint player;
+			player.connection = 181;
+			ConfigureEndpoint(player, "held-in-place", &unixNow);
+			wire.Add(&player);
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the player's join did not settle: " + error);
+			}
+			wire.host.SetLiveMatch(true);
+			const uint16_t stableSeat = player.client.GetRecord().stableSeat;
+			uint8_t peer = 0;
+			for (const NetH4Seat& seat: wire.host.GetSeatTable())
+				if (seat.stableSeat == stableSeat) peer = seat.lockstepPeerId;
+			// The round holds the seat: its input arrives too late, its link stays open.
+			wire.host.NoteSeatHeldInPlace(peer, NetSeatHoldCause::LateStream);
+			const auto statusOf = [&wire, stableSeat]() {
+				for (const NetH4SeatStatus& status: wire.host.GetSeatStatuses())
+					if (status.stableSeat == stableSeat) return status;
+				return NetH4SeatStatus{};
+			};
+			if (!statusOf().held || statusOf().dropped || statusOf().holdCause != NetSeatHoldCause::LateStream) {
+				return Fail("a seat the round holds with its link open is not the roster's held seat: held=" + std::to_string(statusOf().held) +
+				            " dropped=" + std::to_string(statusOf().dropped));
+			}
+			Endpoint newcomer;
+			newcomer.connection = 182;
+			ConfigureEndpoint(newcomer, "held-in-place-applicant", &unixNow);
+			wire.Add(&newcomer);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!newcomer.client.BeginApplication(stableSeat, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the application did not settle: " + error);
+			}
+			if (statusOf().applicants != 1 || newcomer.client.GetState() == NetH4ClientState::Denied) {
+				return Fail(std::string("a newcomer could not apply for a seat the round holds in place: applicants=") + std::to_string(statusOf().applicants) +
+				            " applicant=" + NetReconnectClientStateName(newcomer.client.GetState()));
+			}
+			// The player returns in place before the host decides: the seat is its own again.
+			wire.host.NoteSeatPlaysAgain(peer);
+			const NetRosterSeat* seat = wire.host.GetRoster().Find(static_cast<uint8_t>(stableSeat + 1));
+			if (!seat || seat->phase != NetSeatPhase::Running || statusOf().held) {
+				return Fail("a seat held in place did not come back when its player played again: " + (seat ? RosterSeatLabel(*seat) : std::string("no seat")));
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS a_newcomer_applies_for_a_seat_held_in_place applicants=" << statusOf().applicants << std::endl;
+			return 0;
+		}
+
 		// SEAT-ROSTER S2 and ruling mmm: a return's phases follow the round - the image, the catch-up, play - moved on only by the
 		// service's events; a return whose transfer is abandoned is the roster's to offer again after its backoff and under its bound,
 		// and a return inside the backoff is refused by the roster with its reason.
@@ -8388,6 +8445,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestStaleTicketRefusedThroughTheRoster(); result != 0) {
+			return result;
+		}
+		if (const int result = TestANewcomerAppliesForASeatHeldInPlace(); result != 0) {
 			return result;
 		}
 		if (const int result = TestCleanLeaverKeepsTheSeat(); result != 0) {

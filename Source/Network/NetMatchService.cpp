@@ -2541,7 +2541,7 @@ static std::string ResyncSaveName() {
 						if (NetH4SeatIsOpen(seat.lockstepPeerId, m_LocalPeerId, seat.committed, seat.closed)) {
 							++directorySeatsFree;
 						}
-						if (NetH4SeatIsHeld(seat.lockstepPeerId, m_LocalPeerId, seat.dropped, seat.closed)) {
+						if (NetH4SeatIsHeld(seat.lockstepPeerId, m_LocalPeerId, seat.held, seat.closed)) {
 							++directorySeatsHeld;
 						}
 					}
@@ -4551,6 +4551,12 @@ static std::string ResyncSaveName() {
 		// A returner is back when the round needs its seat's input at a committed frame and the AI no longer plays it.
 		for (const uint8_t peer: m_ReconnectHost.ReturningPeers())
 			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteReturnCaughtUp(peer);
+		// The round's own hold of a playing seat whose link stays open is the roster's too, and so is that seat's return in place.
+		for (const uint8_t peer: m_ReconnectHost.PlayingPeers())
+			if (m_Coordinator->HasHeldAISeat(peer) && m_Coordinator->IsSeatUnderAI(peer, next - 1))
+				m_ReconnectHost.NoteSeatHeldInPlace(peer, m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity : NetSeatHoldCause::LateStream);
+		for (const uint8_t peer: m_ReconnectHost.HeldInPlacePeers())
+			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteSeatPlaysAgain(peer);
 	}
 
 	bool NetMatchService::RosterOffersReturnLocked(uint8_t lockstepPeerId, NetPeerId holder) {
