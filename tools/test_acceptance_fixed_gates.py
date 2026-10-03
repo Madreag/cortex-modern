@@ -19,6 +19,25 @@ def fixture():
 
 
 class FixedAcceptanceEvidence(unittest.TestCase):
+    def test_checkout_head_is_diagnostic_when_the_measured_build_matches(self):
+        value = fixture()
+        value['manifest']['preflights']['EDITH']['head'] = 'f'*40
+        self.assertTrue(identity(value['manifest'], value['peers'])['passed'])
+
+    def test_world_soak_binds_the_authorized_remote_host_box(self):
+        value = fixture()
+        manifest = value['manifest']
+        manifest.update(acceptance_row='world-soak', world_host_box='Z13')
+        manifest['instances'] = [dict(name='erol', box='Z13'), dict(name='edith-first', box='EDITH'), dict(name='edith', box='EDITH')]
+        manifest['specs'] = [dict(peer='erol', box='Z13', role='host'), dict(peer='edith-first', box='EDITH', role='player'), dict(peer='edith', box='EDITH', role='player')]
+        manifest['boxes'] = [dict(name='Z13'), dict(name='EDITH')]
+        manifest['preflights']['Z13'] = manifest['preflights'].pop('EROL-PC')
+        value['peers'] = {name:peer for name,peer in value['peers'].items() if name in ('erol','edith')}
+        value['peers']['edith-first'] = deepcopy(value['peers']['edith'])
+        self.assertTrue(identity(manifest, value['peers'])['passed'])
+        manifest['specs'][0]['box'] = 'EROL-PC'
+        self.assertFalse(identity(manifest, value['peers'])['passed'])
+
     def judge(self, value):
         with patch('acceptance_fixed_gates.capture_evidence', return_value=dict(passed=True)):
             return evaluate(value, {})

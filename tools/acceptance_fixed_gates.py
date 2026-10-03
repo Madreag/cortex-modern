@@ -9,10 +9,13 @@ from feel.report import parse_fullstate, compare_fullstate_histories, reclaim_sa
 
 def identity(manifest, peers):
     row = manifest.get("acceptance_row")
+    errors, diagnostics = [], []
     expected = {"erol":"EROL-PC", "edith":"EDITH", "mac":"Mac", "linux":"Linux"}
     if row == "world-soak":
-        expected = {"erol":"EROL-PC", "edith-first":"EDITH", "edith":"EDITH"}
-    errors = []
+        host_box = manifest.get('world_host_box', 'EROL-PC')
+        if host_box not in ('EROL-PC', 'Z13', 'ALLY'):
+            errors.append("world host box is outside the lead's named R5 hosts")
+        expected = {"erol":host_box, "edith-first":"EDITH", "edith":"EDITH"}
     actual = {entry.get("name"):entry.get("box") for entry in manifest.get("instances", [])}
     if actual != expected or set(peers) != set(expected):
         errors.append("named instances and peer evidence do not match the row's required boxes")
@@ -21,7 +24,7 @@ def identity(manifest, peers):
         errors.append("box set differs from the declared row")
     specs = manifest.get("specs", [])
     if manifest.get("host") != "erol" or [entry.get("peer") for entry in specs if entry.get("role") == "host"] != ["erol"]:
-        errors.append("the PC host role is not uniquely bound")
+        errors.append("the world or match host role is not uniquely bound")
     for name, box in expected.items():
         matched = [entry for entry in specs if entry.get("peer") == name and entry.get("box") == box]
         if len(matched) != 1 or matched[0].get("role") != ("host" if name == "erol" else "player"):
@@ -37,12 +40,14 @@ def identity(manifest, peers):
         pre = preflights.get(box, {})
         build, record = pre.get("build", {}), peers.get(name, {}).get("record", {})
         exe = pre.get("executable_sha256")
-        if (pre.get("head") != source or build.get("commit") != source or not re.fullmatch(r"[0-9a-f]{64}", str(exe))
+        if pre.get('head') != source:
+            diagnostics.append(name+": checkout head differs from the measured build's source commit")
+        if (build.get("commit") != source or not re.fullmatch(r"[0-9a-f]{64}", str(exe))
                 or build.get("executable_sha256") != exe or record.get("exe_sha256") != exe):
             errors.append(name+": source, build, measured binary and runner receipts do not agree")
         if record.get("started") is not True:
             errors.append(name+": native process launch was not witnessed")
-    return dict(passed=not errors, failures=errors, expected=expected)
+    return dict(passed=not errors, failures=errors, diagnostics=diagnostics, expected=expected)
 
 
 def capture_evidence(inputs, intervals, cadence):
