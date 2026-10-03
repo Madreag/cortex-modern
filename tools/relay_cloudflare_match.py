@@ -99,7 +99,8 @@ REQUIRED = {
     'automatic': BASE + ('offer_fresh', 'direct_expected', 'provider_201', 'logins_revoked'),
     # The Fixed row's pair is typed into the menus, so the engine writes it down: found, blanked, dead by its TTL.
     'fixed': tuple(check for check in BASE if check != 'no_secret_in_files') + ('offer_fresh', 'endpoint', 'menu_entered',
-                                                                               'logins_short_lived', 'pair_blanked', 'pair_ttl'),
+                                                                               'logins_short_lived', 'pair_blanked', 'pair_ttl',
+                                                                               'menu_choice:client'),
     'a-automatic-fallback': BASE + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'panel:client'),
     'b-hotspot-host': BASE + ('offer_fresh', 'logins_revoked', 'tunnel:host', 'listing'),
     'c-four-players': tuple(check for check in BASE if check != 'holds') + ('offer_fresh', 'logins_revoked', 'tunnel:hotspot', 'seat_holds'),
@@ -1517,6 +1518,9 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         checks['logins_short_lived'] = facts.get('minted_at') is not None and 0 < expiry - facts['minted_at'] <= 900
     checks.update({name: value['passed'] for name, value in details.items()})
     required = REQUIRED.get(run['name'], BASE)
+    if 'no_secret_in_files' not in required:  # a pair typed into the menus is judged by pair_blanked instead
+        details['pair_on_disk'] = dict(passed=True, files=[(row['box'], row.get('hits_before')) for row in sanitize])
+        checks.pop('no_secret_in_files', None)
     for name in required:
         checks.setdefault(name, False)  # a required check the run did not produce is a failed check
     details.update({f'feel:{name}': feel_bars(timing, name) for name in judged})
