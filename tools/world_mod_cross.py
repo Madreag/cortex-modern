@@ -178,7 +178,7 @@ def preflight_mod(box, result):
         raise ValueError("base Data mod differs from the selected unchanged module")
     # The private runtime adds this exact copy to Data; every one of its files remains in the full content comparison.
     content.update(staged)
-    result.setdefault("modules", {})["VoidWanderers.rte/Index.ini"] = staged["VoidWanderers.rte/Index.ini"]
+    result.setdefault("modules", {}).update({name:digest for name,digest in staged.items() if name.endswith('/Index.ini')})
     result["acceptance_module"] = module
     result["acceptance_module_source"] = str(path)
 

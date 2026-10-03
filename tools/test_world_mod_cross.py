@@ -81,6 +81,15 @@ class Plans(unittest.TestCase):
     def test_flag_replacement_does_not_drop_adjacent_flag(self):
         self.assertEqual(flag(["-net-host", "-seed", "42"], "-net-host", False), ["-seed", "42"])
 
+    def test_external_module_preflight_includes_nested_indexes(self):
+        value = dict(files=[dict(path='Index.ini', sha256='a'*64),
+                            dict(path='Modules/Nested.rte/Index.ini', sha256='b'*64),
+                            dict(path='Modules/Nested.rte/Actors/Index.ini', sha256='c'*64)])
+        result = dict(content={'Base.rte/Index.ini':'d'*64}, modules={'Base.rte/Index.ini':'d'*64})
+        with patch('world_mod_cross.mod_manifest', return_value=value):
+            preflight_mod(dict(tree='/repo', module_source='/installed/VoidWanderers.rte'), result)
+        self.assertEqual(result['modules'], {key:sha for key,sha in result['content'].items() if key.endswith('/Index.ini')})
+
     def refusal_fixture(self, external_source=False):
         from acceptance_mod import manifest
         retained = os.environ.get('CC_ACCEPTANCE_TEST_ROOT')
