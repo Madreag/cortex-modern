@@ -56,7 +56,7 @@ class InventoryOracleEvidence(unittest.TestCase):
         self.assertTrue(result['hard_count'] or result.get('collection_complete') is False, result)
 
     def test_required_status_and_oversized_file_are_incomplete(self):
-        for value in ('MISS', 'INCOMPLETE', 'UNKNOWN', 'FAIL', 'NOT COVERED'):
+        for value in ('MISS', 'INCOMPLETE', 'UNKNOWN', 'FAIL', 'NOT COVERED', 'NOT APPLICABLE'):
             with self.subTest(status=value), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 (root / 'result.json').write_text(json.dumps(dict(passed=True, checks=dict(x=dict(required=True, status=value)))))
@@ -87,6 +87,15 @@ class InventoryOracleEvidence(unittest.TestCase):
     def test_merge_missing_collection_receipt_cannot_pass(self):
         result = merge_defects.merge([('required', dict(defects=[], observations=[]))], [])
         self.assertFalse(result['collection_complete'], result)
+
+    def test_metadata_subtree_cannot_hide_explicit_required_check(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'result.json').write_text(json.dumps(dict(passed=True, startup_checks=dict(
+                required=True, status='FAIL', reason='native startup receipt absent'))))
+            result = extract_defects.Extractor(root, True, None).run()
+            self.assertGreater(result['hard_count'], 0)
+            self.assertFalse(result['collection_complete'])
 
 
 if __name__ == '__main__':
