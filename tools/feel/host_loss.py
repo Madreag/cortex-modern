@@ -82,7 +82,7 @@ def scheduled_hold_classification(hold, host_loss):
 def host_loss_evidence(manifest, peers, events, live, terminations):
     faults = [f for f in manifest.get('faults', []) if f.get('action') == 'host-kill']
     if not faults:
-        return dict(status='NOT APPLICABLE', passed=False, reason='no host-kill was scheduled', ranges=[])
+        return dict(status='NOT APPLICABLE', passed=False, required=False, reason='no host-kill was scheduled', ranges=[])
     errors, ranges = [], []
     host = manifest.get('host')
     survivors = [p['name'] for p in manifest['instances'] if p['name'] != host]
