@@ -76,6 +76,7 @@ namespace RTE {
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 	bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error);
+	bool TestAReturnCopyKeepsTheCommittedObservations(std::string* error);
 	bool TestAReturnersRoundSkipsTheRoundsEarlierTicks(std::string* error);
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 	bool TestARoundsOwnEndIsNoHold(std::string* error);
@@ -20372,6 +20373,92 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	/// A returning seat reads the host's frames on the reliable lane until its tables hold what its replay spelled out, and one lost packet
 	/// stalls that lane for a retransmit, a long link's round trip, past the seat's own silence bound: the host talks to it on the frame lane
 	/// every tick while its frames ride the reliable lane, and only that long.
+	// A member admitted mid-round reads each relayed tick's window as standalone copies. A window entry the host read past - its
+	// observations already in the host's stream - carries none of them, and a copy built from it would commit the tick without
+	// them on the returner: the copy is made from the tick kept whole, and from nothing when none is kept.
+	bool TestAReturnCopyKeepsTheCommittedObservations(std::string* error) {
+		const uint16_t port = 48931;
+		LoopbackTransport hostT, returnerT, senderT;
+		if (!hostT.StartHost(port, error) || !returnerT.Connect("loopback", port, error) || !senderT.Connect("loopback", port, error)) return false;
+		const uint64_t round = 0x9A77;
+		auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+			NetLockstepConfig c;
+			c.sessionId = round; c.roundId = round; c.startFrame = 0; c.inputDelayFrames = 3; c.timeoutMs = 20000;
+			c.localPeerId = local; c.peerCount = 3; c.remoteTransportPeerIds = std::move(transports); c.relayToOtherPeers = relay;
+			c.frameLane = NetTransportLane::InputUnreliable; c.frameRedundancyTicks = 4; c.scenario = "LockstepSelfTest"; c.ownershipPolicy = "unique-id-split";
+			c.substituteSlowPeers = true; c.simTickMs = 1000.0 / 60.0;
+			return c;
+		};
+		NetLockstepCoordinator host, returner, sender;
+		if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true), error) || !returner.Start(returnerT, cfg(2, {{1, 1}}, false), error) ||
+		    !sender.Start(senderT, cfg(3, {{1, 1}}, false), error)) return false;
+		struct Peer { NetLockstepCoordinator* coordinator; LoopbackTransport* wire; int64_t uid; uint64_t simulated = 0, queued = 0; };
+		Peer peers[3] = {{&host, &hostT, 100}, {&returner, &returnerT, 200}, {&sender, &senderT, 300}};
+		uint64_t now = 0;
+		std::string queueError;
+		// Seat 3 reports sound readings on every tick.
+		const auto pump = [&](bool withReturner) {
+			for (Peer& peer: peers) {
+				if (!withReturner && &peer == &peers[1]) { peer.wire->AdvanceTimeMs(1); continue; }
+				for (; peer.queued <= peer.simulated + 6; ++peer.queued) {
+					const auto observations = &peer == &peers[2] ? MakeObservationSet(3, 2, peer.queued, 0.1F) : std::vector<NetSoundObservation>{};
+					if (!peer.coordinator->IsRunning() || !peer.coordinator->QueueLocalInput(peer.queued, {MakeFrame(peer.uid, peer.queued)}, {}, &queueError, observations)) break;
+				}
+				peer.wire->AdvanceTimeMs(1);
+				peer.coordinator->Tick(now);
+			}
+			NetLockstepReadyFrame ready;
+			for (size_t index = 0; index < 3; ++index) {
+				if (!withReturner && index == 1) continue;
+				while (peers[index].coordinator->PopReadyFrame(ready)) { (void)peers[index].coordinator->FinishSimulationTick(ready.frame); peers[index].simulated = ready.frame; }
+			}
+			++now;
+		};
+		while (now < 4000 && (peers[0].simulated < 60 || peers[1].simulated < 60 || peers[2].simulated < 60)) pump(true);
+		if (peers[0].simulated < 60) { *error = "the star never reached its steady state: host_frame=" + std::to_string(peers[0].simulated); return false; }
+		// Seat 2 is admitted mid-round: the host replays what it sent and relays the next ticks with their copies.
+		(void)returnerT.PollEvents();
+		const uint64_t replayFrom = peers[0].simulated - 4;
+		if (host.ReplaySentFramesTo(2, replayFrom) == 0) {
+			*error = "the host replayed nothing to the admitted seat from frame " + std::to_string(replayFrom) + " (last queued target " +
+			         std::to_string(host.m_LastQueuedTargetFrame) + ")";
+			return false;
+		}
+		for (const uint64_t until = now + 12; now < until;) pump(false);
+		size_t copies = 0, readPastKept = 0;
+		std::string stripped;
+		for (const NetTransportEvent& event: returnerT.PollEvents()) {
+			if (event.type != NetTransportEventType::PacketReceived) continue;
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(event.bytes, ControllerFrame::c_Version, nullptr);
+			const auto* chunk = decoded.ok ? std::get_if<NetLockstepRecoveryChunk>(&decoded.packet.payload) : nullptr;
+			NetLockstepFrame whole;
+			if (!chunk || chunk->senderPeerId != 3 || !NetLockstepCodec::DecodeRecoveryInput(chunk->bytes, whole)) continue;
+			++copies;
+			const auto kept = host.m_RelayedTickFrames.find(3);
+			const bool hostKeptIt = kept != host.m_RelayedTickFrames.end() && kept->second.contains(whole.targetFrame);
+			if (whole.observations.empty()) stripped += " " + std::to_string(whole.targetFrame);
+			else if (hostKeptIt && whole.observations == kept->second.at(whole.targetFrame).observations) ++readPastKept;
+		}
+		if (copies == 0 || !stripped.empty()) {
+			*error = "a returner's standalone copies of seat 3's ticks lost the observations the round committed: copies=" + std::to_string(copies) +
+			         " without observations at targets" + (stripped.empty() ? std::string(" none") : stripped);
+			return false;
+		}
+		// A read-past tick the host no longer keeps whole is not sent alone at all.
+		NetLockstepFrame readPast;
+		readPast.senderPeerId = 3;
+		readPast.roundId = round;
+		readPast.targetFrame = 1;
+		readPast.observationsReadPast = true;
+		readPast.frames = {MakeFrame(300, 1)};
+		if (host.SendIndependentCopy(host.m_RemoteTransports.at(2), readPast, 3, round, NetTransportLane::InputUnreliable)) {
+			*error = "a tick read past its observations, kept nowhere whole, went out as a standalone copy";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS return_copy_preserves_committed_observations copies=" << copies << " whole=" << readPastKept << std::endl;
+		return true;
+	}
+
 	bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error) {
 		LoopbackTransport wire, seat;
 		NetLockstepCoordinator host;
@@ -23179,6 +23266,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(&error) ||
 		    !TestAReturnerOnTheReliableLaneHearsItsHost(&error) ||
+		    !TestAReturnCopyKeepsTheCommittedObservations(&error) ||
 		    !TestAReturnersRoundSkipsTheRoundsEarlierTicks(&error) ||
 		    !TestAReturnedSeatThatLeavesAgainIsGone(&error) ||
 		    !TestARoundsOwnEndIsNoHold(&error) ||

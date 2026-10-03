@@ -11094,7 +11094,16 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::SendIndependentCopy(NetPeerId link, const NetLockstepFrame& input, uint8_t senderPeerId, uint64_t roundId, NetTransportLane lane) {
-		NetLockstepFrame independent = input;
+		// A window read past its observations cannot stand alone: only the tick kept whole can, and without it nothing is sent.
+		const NetLockstepFrame* whole = &input;
+		if (input.observationsReadPast) {
+			const auto sender = m_RelayedTickFrames.find(senderPeerId);
+			if (sender == m_RelayedTickFrames.end()) return false;
+			const auto tick = sender->second.find(input.targetFrame);
+			if (tick == sender->second.end()) return false;
+			whole = &tick->second;
+		}
+		NetLockstepFrame independent = *whole;
 		independent.senderPeerId = senderPeerId;
 		independent.roundId = roundId;
 		independent.priorWindow.clear();

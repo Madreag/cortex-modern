@@ -1360,6 +1360,7 @@ namespace RTE {
 		friend bool TestAParkCoversTheBoxsSlowCaptures(std::string* error);
 		friend bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+		friend bool TestAReturnCopyKeepsTheCommittedObservations(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 		friend bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error);
