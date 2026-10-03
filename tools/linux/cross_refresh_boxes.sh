@@ -11,6 +11,16 @@
 #   (default: EDITH's receipt commit) only labels the git diff in the log - the ship list comes from the file hashes.
 # Last line: 'REFRESH PASS ...' (exit 0) or 'REFRESH FAIL <box>: <reason>' (exit 1 EDITH, 2 Mac, 3 preflight, 4 EROL-PC/usage).
 set -u
+TASK_REPO=${CC_CROSS_PEERS_REPO:-D:/Projects/alias-walk}
+TASK_PLAN=0; TASK_PREVIOUS=
+for TASK_ARGUMENT in "$@"; do
+  [ "$TASK_PREVIOUS" != --repo ] || TASK_REPO=$TASK_ARGUMENT
+  [ "$TASK_ARGUMENT" != --plan ] || TASK_PLAN=1
+  TASK_PREVIOUS=$TASK_ARGUMENT
+done
+if [ "$TASK_PLAN" = 1 ]; then
+  exec python "$TASK_REPO/tools/acceptance_cross_refresh.py" "$@"
+fi
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 TIP=${1:-}; [ $# -gt 0 ] && shift
 PREV=""; if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then PREV=$1; shift; fi
