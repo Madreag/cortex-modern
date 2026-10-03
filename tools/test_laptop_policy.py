@@ -19,6 +19,17 @@ from test_inventory_oracle_evidence import run_split, run_stream
 
 
 class LaptopPolicy(unittest.TestCase):
+    def test_native_cost_cannot_borrow_another_peers_partition(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            a, b = root/'host.log', root/'client.log'
+            b.write_text(complete_cost_log(first=300, last=300, costs={'census': 45}))
+            for prefix in ('', complete_cost_log(first=300, last=300, costs={'census': 5, 'fullstate': 20})):
+                with self.subTest(prefix=bool(prefix)):
+                    a.write_text(prefix+'[mem-census] tick=300 census_us=cow:20000,atoms:20000\n')
+                    result = harness_cost.reduce_costs([a, b])
+                    self.assertFalse(result['instrument_valid'], result)
+
     def test_native_census_instant_cannot_be_understated_by_individual_parts(self):
         with tempfile.TemporaryDirectory() as folder:
             log = Path(folder)/'stdout.log'
