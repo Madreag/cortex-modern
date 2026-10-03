@@ -97,7 +97,9 @@ REQUIRED = {
     'cloudflare': BASE + ('offer_fresh', 'endpoint', 'relay_registrant', 'provider_201', 'logins_revoked'),
     'coturn': BASE + ('offer_fresh', 'endpoint', 'logins_short_lived'),
     'automatic': BASE + ('offer_fresh', 'direct_expected', 'provider_201', 'logins_revoked'),
-    'fixed': BASE + ('offer_fresh', 'endpoint', 'menu_entered', 'logins_short_lived', 'pair_ttl'),
+    # The Fixed row's pair is typed into the menus, so the engine writes it down: found, blanked, dead by its TTL.
+    'fixed': tuple(check for check in BASE if check != 'no_secret_in_files') + ('offer_fresh', 'endpoint', 'menu_entered',
+                                                                               'logins_short_lived', 'pair_blanked', 'pair_ttl'),
     'a-automatic-fallback': BASE + ('offer_fresh', 'endpoint', 'logins_revoked', 'tunnel:client', 'panel:client'),
     'b-hotspot-host': BASE + ('offer_fresh', 'logins_revoked', 'tunnel:host', 'listing'),
     'c-four-players': tuple(check for check in BASE if check != 'holds') + ('offer_fresh', 'logins_revoked', 'tunnel:hotspot', 'seat_holds'),
@@ -1079,7 +1081,8 @@ def sanitize_box(box, root: Path, book, payload: Path) -> dict:
         try:
             done = subprocess.run(['ssh', '-o', 'BatchMode=yes', box.alias,
                                    f"python '{(payload / 'relay_secrets.py').as_posix()}' sweep --root '{root.as_posix()}' --digests "
-                                   f"'{digests.as_posix()}' --scrub --out '{receipt_path.as_posix()}'; $code = $LASTEXITCODE; "
+                                   f"'{digests.as_posix()}' --scrub --public-repo '{box.tree}' --out '{receipt_path.as_posix()}'; "
+                                   f"$code = $LASTEXITCODE; "
                                    f"Remove-Item -LiteralPath '{digests.as_posix()}' -Force; exit $code"],
                                   capture_output=True, text=True, timeout=1800, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             exit_code = done.returncode
@@ -1099,9 +1102,16 @@ def sanitize_box(box, root: Path, book, payload: Path) -> dict:
             digests.unlink()
 
 
+def published_check():
+    from relay_secrets import repository_public
+    return repository_public(HERE.parent)
+
+
 def sanitize_local(root: Path, book) -> dict:
-    first = book.scan([root], scrub=True)
-    verify = book.scan([root])
+    from relay_secrets import sweep
+    public = published_check()
+    first = sweep([root], book.finder(), scrub=True, public=public)
+    verify = sweep([root], book.finder(), public=public)
     write_json(root / 'secret-scan.json', dict(sweep=first, verify=verify))
     return dict(box='here', status=verify['status'], files=verify['files_scanned'], hits_before=len(first['files_with_secrets']),
                 hits_after=len(verify['files_with_secrets']), incomplete=verify['incomplete'],
@@ -1480,7 +1490,8 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         if peer.get('panel_probe'):
             details[f'panel:{peer["name"]}'] = panel_verdict(read_json(root / f'{peer["name"]}-panel' / 'net-ui-result.json') or None)
         if peer.get('menu_choice'):
-            details[f'menu_choice:{peer["name"]}'] = menu_choice(logs.get(peer['name'], ''), peer['menu_choice'], session)
+            details[f'menu_choice:{peer["name"]}'] = (menu_choice(logs.get(peer['name'], ''), peer['menu_choice'], session) if session
+                                                       else dict(passed=False, reasons=['no session to bind the choice to']))
     if run.get('holds_allowed'):
         summary = ((reports.get('host') or {}).get('last_match') or {}).get('peers') or []
         named = [dict(row, name=next((peer['name'] for peer in run['peers'] if display_name(run, peer) == row.get('name')), row.get('name')))
@@ -1498,7 +1509,9 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         listed = (read_json(root / f'{joiner}-listed.json') or {}).get('session_id') == session
         details['listing'] = listing_evidence(directory_lines, session, listed)
     if facts.get('fixed_pair'):
-        details['menu_entered'] = menu_choice(logs.get('host', ''), 'Relay only', session)
+        details['menu_entered'] = (menu_choice(logs.get('host', ''), 'Relay only', session) if session
+                                   else dict(passed=False, reasons=['no session to bind the choice to']))
+        checks['pair_blanked'] = bool(sanitize) and all(row['status'] == 'CLEAN' and row.get('hits_after') == 0 for row in sanitize)
         details['pair_ttl'] = facts.get('pair_ttl') or dict(passed=False, reasons=['the pair was never asked after its TTL'])
         expiry = int(facts['fixed_pair'][0].split(':', 1)[0])
         checks['logins_short_lived'] = facts.get('minted_at') is not None and 0 < expiry - facts['minted_at'] <= 900
@@ -1616,6 +1629,8 @@ def remote_peers(spec_path: str) -> int:
                         menu.write_text(menu.read_text(encoding='utf-8').replace('{DIRECTORY_SESSION}', row['session_id']), encoding='utf-8')
                 run = edith_cross.prepare_peer(h, spec)
                 run.start()
+                if spec.get('menu_script') and menu.is_file():
+                    forget_menu(menu, root / spec['peer'] / 'stdout.log', run)
                 if spec.get('tailscale_down'):
                     receipt.append(dict(tailscale(['status']), step='engine-started', peer=spec['peer']))
                 print(f'{stamp()} {spec["peer"]} started (pid {run.record.get("pid")})', flush=True)
@@ -1648,6 +1663,20 @@ def remote_peers(spec_path: str) -> int:
     except Exception as error:
         print(f'{stamp()} records not compressed: {type(error).__name__}', flush=True)
     return 0 if all(value == 0 for value in results.values()) and len(results) == len(specs) else 1
+
+
+def forget_menu(menu: Path, log: Path, run, budget_s: float = 90) -> None:
+    """Overwrites a menu script once its engine has loaded it (a Fixed row's pair sits in it only that long)."""
+    deadline = time.monotonic() + budget_s
+    while time.monotonic() < deadline and run.poll() is None:
+        try:
+            if '[menu-script] loaded' in log.read_text(encoding='utf-8', errors='replace'):
+                break
+        except OSError:
+            pass
+        time.sleep(0.5)
+    menu.write_text('# the menu script was removed once its engine had loaded it\n', encoding='utf-8')
+    print(f'{stamp()} {menu.name} removed after the engine loaded it', flush=True)
 
 
 def evidence_list(root: Path, out: Path) -> int:
@@ -1845,7 +1874,8 @@ def main(argv=None) -> int:
     selected = dict(scenario, runs=[run for run in scenario['runs'] if not options.run or run['name'] in options.run],
                     checklist=[item for item in scenario['checklist'] if not options.run or item['run'] in options.run])
     document = review(selected, verdicts, out)
-    scan = book.scan([out])
+    from relay_secrets import sweep
+    scan = sweep([out], book.finder(), public=published_check())
     write_json(out / 'secret-scan.json', scan)
     status = exit_status(document, verdicts, scan)
     say(f'{scenario["name"]}: {document["verdict"]} {document["counts"]} final sweep {scan["status"]} ({scan["files_scanned"]} files) exit={status}')
