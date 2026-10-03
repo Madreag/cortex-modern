@@ -2472,21 +2472,13 @@ namespace RTE {
 		return true;
 	}
 
-	uint16_t NetReconnectHost::StableSeatOfConnection(NetPeerId connection) const {
-		if (connection == c_InvalidNetPeerId) {
-			return 0;
-		}
-		for (const SeatState& seat: m_Seats) {
-			if (seat.activeConnection == connection && seat.seat.stableSeat != 0) {
-				return seat.seat.stableSeat;
-			}
-		}
-		for (const Provisional& pending: m_Provisionals) {
-			if (pending.connection == connection && pending.stableSeat != 0) {
-				return pending.stableSeat;
-			}
-		}
-		return 0;
+	std::optional<uint16_t> NetReconnectHost::StableSeatOfConnection(NetPeerId connection) const {
+		if (connection == c_InvalidNetPeerId) return std::nullopt;
+		for (const SeatState& seat: m_Seats)
+			if (seat.activeConnection == connection) return seat.seat.stableSeat;
+		for (const Provisional& pending: m_Provisionals)
+			if (pending.connection == connection) return pending.stableSeat;
+		return std::nullopt;
 	}
 
 	bool NetReconnectHost::IsSeatClosed(uint16_t stableSeat) const {

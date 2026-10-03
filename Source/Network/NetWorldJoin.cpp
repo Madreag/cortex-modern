@@ -1283,10 +1283,7 @@ namespace RTE {
 	}
 
 	const NetWorldSlot* NetWorldMembership::SlotOfSeat(uint16_t stableSeat) const {
-		if (stableSeat == 0) {
-			return nullptr;
-		}
-		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [&](const NetWorldSlot& slot) { return slot.stableSeat == stableSeat; });
+		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [&](const NetWorldSlot& slot) { return slot.seated && slot.stableSeat == stableSeat; });
 		return found == m_Slots.end() ? nullptr : &*found;
 	}
 
@@ -1302,6 +1299,7 @@ namespace RTE {
 		}
 		slot->held = true;
 		slot->stableSeat = stableSeat;
+		slot->seated = true;
 		slot->holderName = holderName;
 		++m_Revision;
 		return true;
@@ -1313,7 +1311,7 @@ namespace RTE {
 			if (error) *error = "peer " + std::to_string(static_cast<int>(peerId)) + " is not a world slot";
 			return false;
 		}
-		if (slot->stableSeat != stableSeat || stableSeat == 0) {
+		if (!slot->seated || slot->stableSeat != stableSeat) {
 			if (error) *error = "world slot " + std::to_string(static_cast<int>(peerId)) + " is not that seat's";
 			return false;
 		}
@@ -1418,7 +1416,7 @@ namespace RTE {
 		json slots = json::array();
 		for (const NetWorldSlot& slot: m_Slots) {
 			slots.push_back({{"peer_id", static_cast<int>(slot.peerId)}, {"team", static_cast<int>(slot.team)},
-			                 {"generation", slot.generation}, {"stable_seat", slot.stableSeat},
+			                 {"generation", slot.generation}, {"stable_seat", slot.stableSeat}, {"seated", slot.seated},
 			                 {"held", slot.held}, {"reclaim_hold", slot.reclaimHold},
 			                 {"brain_missing_since", slot.brainMissingSince}, {"holder", slot.holderName}});
 		}

@@ -4882,7 +4882,57 @@ namespace RTE {
 		return config;
 	}
 
-	// Seat 0 is the admission plane's "no seat", so a dedicated world may not put a joinable seat there.
+	// D54.5: stable seat 0 - an ordinary match's original host's seat - is a seat like any other after a handover: the original host
+	// relaunches, reclaims it from the successor with its own ticket, the successor names that connection's seat 0 (never "none"),
+	// and its private return takes that seat's own slot, never a watcher's.
+	int TestTheOriginalHostReturnsToSeatZeroAfterAHandover() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x5A30ULL);
+		match.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Successor"}, NetMatchPlayerSlot{3, 2, false, "Third"}};
+		match.peerCount = 3;
+		NetSeatAuthRegistry oldRegistry, nextRegistry;
+		if (!oldRegistry.BeginHostedSession()) return Fail("original-host-return: the registry did not arm");
+		NetReconnectHost oldHost;
+		oldHost.Configure(&oldRegistry, match.sessionId, identity);
+		oldHost.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
+		NetH4TicketRecord own;
+		if (!oldHost.EnsureLocalTicket(own) || own.stableSeat != 0) return Fail("original-host-return: the original host's own seat took no seat-0 ticket");
+		NetH4TicketOffer successorOffer;
+		if (!CommitWorldSeat(oldHost, identity, 72, "successor", successorOffer)) return Fail("original-host-return: the successor could not join the old host");
+		oldHost.SetLiveMatch(true);
+		const std::vector<uint8_t> state = oldHost.ExportMigrationState();
+		NetMatchConfig successorMatch = match;
+		successorMatch.hostPeerId = 2;
+		NetReconnectHost successor;
+		if (!successor.ImportMigrationState(state, nextRegistry, successorMatch, 2, {}, 1000)) return Fail("original-host-return: the successor did not import the old host's plane");
+		NetH4TicketOffer ticket;
+		ticket.epoch = own.epoch;
+		ticket.stableSeat = own.stableSeat;
+		ticket.holderGeneration = own.holderGeneration;
+		ticket.credential = own.credential;
+		if (!ReclaimWorldSeat(successor, identity, ticket, 71, 1200)) return Fail("original-host-return: the successor refused the original host's own ticket");
+		const std::optional<uint16_t> named = successor.StableSeatOfConnection(71);
+		if (!named || *named != 0 || successor.StableSeatOfConnection(79)) {
+			return Fail(std::string("original-host-return: the successor reads the original host's connection as ") + (named ? "seat " + std::to_string(*named) : std::string("holding no seat")) +
+			            (successor.StableSeatOfConnection(79) ? " and an unknown connection as a seat" : ""));
+		}
+		NetWorldJoinHost world;
+		std::string error;
+		if (!world.ConfigureMatchRejoins(successorMatch, 1, 1000.0 / 60.0, &error) || !world.BeginRejoin(71, *named, 1, 2, "original host", 1200, &error)) {
+			return Fail("original-host-return: the private return of seat 0 was refused: " + error);
+		}
+		const NetWorldJoinSession* session = world.FindSession(71);
+		if (!session || session->spectator || session->assignedPeerId != 1 || session->stableSeat != 0) {
+			return Fail("original-host-return: seat 0's private return did not take its own slot: " +
+			            (session ? std::string(session->spectator ? "a watcher" : "slot " + std::to_string(session->assignedPeerId)) : std::string("no session")));
+		}
+		std::cout << "[net-world-join-selftest] PASS the_original_host_returns_to_seat_zero_after_a_handover seat=" << *named << " slot=" << static_cast<int>(session->assignedPeerId) << std::endl;
+		return 0;
+	}
+
+	// Seat 0 is the admission plane's "no seat" in a world, so a dedicated world may not put a joinable seat there.
 	int TestDedicatedWorldFirstSeatCanBeNamed() {
 		ScriptedAuthCrypto crypto;
 		ScopedTestCrypto scope(&crypto);
@@ -4927,10 +4977,10 @@ namespace RTE {
 			            std::to_string(static_cast<int>(table.front().stableSeat)));
 		}
 		// This is the read the world's pump makes before it may begin a bootstrap for the connection.
-		const uint16_t named = admission.StableSeatOfConnection(61);
+		const std::optional<uint16_t> named = admission.StableSeatOfConnection(61);
 		if (named != offer.stableSeat) {
 			return Fail("world-first-seat-unnamable: the first joiner's connection reads seat " +
-			            std::to_string(static_cast<int>(named)) + " while it holds seat " +
+			            (named ? std::to_string(static_cast<int>(*named)) : std::string("none")) + " while it holds seat " +
 			            std::to_string(static_cast<int>(offer.stableSeat)) + ", so its join can never begin");
 		}
 		return 0;
@@ -8400,6 +8450,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestWorldAdmitsItsConfiguredWatcher(); result != 0) {
+			return result;
+		}
+		if (const int result = TestTheOriginalHostReturnsToSeatZeroAfterAHandover(); result != 0) {
 			return result;
 		}
 		if (const int result = TestDedicatedWorldFirstSeatCanBeNamed(); result != 0) {

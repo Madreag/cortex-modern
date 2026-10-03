@@ -988,8 +988,8 @@ static std::string ResyncSaveName() {
 			uint8_t seat = 0;
 			for (const auto& [peerId, transport]: m_Coordinator->RemoteTransports()) if (transport == peer.transportPeerId) seat = peerId;
 			if (seat == 0) {
-				const uint16_t stable = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
-				for (const auto& held: m_ReconnectHost.GetSeatStatuses()) if (stable != 0 && held.stableSeat == stable) seat = held.lockstepPeerId;
+				const std::optional<uint16_t> stable = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+				for (const auto& held: m_ReconnectHost.GetSeatStatuses()) if (stable && held.stableSeat == *stable) seat = held.lockstepPeerId;
 			}
 			if (!EndedRoundOwesGoodbye(m_Coordinator->UsesTransportPeer(peer.transportPeerId), seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame))) continue;
 			if (seat != 0 && EndedRoundAwaitsFinalTail(m_WorldJoin.FindSession(peer.transportPeerId) != nullptr, m_Coordinator->IsSeatUnderAI(seat, lastFrame),
@@ -4424,9 +4424,9 @@ static std::string ResyncSaveName() {
 			if (!m_Coordinator->HasHeldAISeat(member)) continue;
 			// A returner told this round is over waits for the next round's start, which offers its seat again.
 			if (m_ToldMatchOver.contains(peer.transportPeerId)) continue;
-			const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+			const std::optional<uint16_t> seat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
 			NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
-			if (seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != peer.transportPeerId) continue;
+			if (!seat || !m_ReconnectHost.GetSeatHolder(*seat, holder, generation, incarnation) || holder != peer.transportPeerId) continue;
 			if (const auto bumps = m_InPlaceIncarnationBumps.find(member); bumps != m_InPlaceIncarnationBumps.end()) incarnation += bumps->second;
 			// The held seat's own connection stays up: its player catches up in place on it, so its reports must reach the round.
 			// A relaunched returner is a new incarnation and rejoins through the image.
@@ -4447,7 +4447,7 @@ static std::string ResyncSaveName() {
 			if (!m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(member) || m_Coordinator->HasAgreedSeatReclaim(member)) continue;
 			if (!RosterOffersReturnLocked(member, holder)) continue;
 			std::string error;
-			if (!m_WorldJoin.BeginRejoin(holder, seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
+			if (!m_WorldJoin.BeginRejoin(holder, *seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
 			{
 				std::ostringstream line;
 				line << "[net-match] private rejoin peer=" << static_cast<int>(member) << " incarnation=" << incarnation;
@@ -4717,10 +4717,11 @@ static std::string ResyncSaveName() {
 			if (m_WorldJoin.FindSession(peer.transportPeerId) != nullptr) {
 				continue;
 			}
-			const uint16_t stableSeat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
-			if (stableSeat == 0) {
+			const std::optional<uint16_t> seated = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+			if (!seated) {
 				continue;
 			}
+			const uint16_t stableSeat = *seated;
 			if (m_WorldJoin.RefusalOf(peer.transportPeerId) != NetWorldJoinRefusal::None) {
 				continue;
 			}
@@ -5979,9 +5980,9 @@ static std::string ResyncSaveName() {
 			m_WorldJoin.CancelJoin(stale, "the seat was held again after its return");
 			System::PrintDiagnosticLine("[net-match] held seat peer=" + std::to_string(member) + " was held again after its return; its next catch-up replaces the last");
 		}
-		const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(connection);
+		const std::optional<uint16_t> seat = m_ReconnectHost.StableSeatOfConnection(connection);
 		NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
-		if (hold == heldSeats.end() || seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != connection) return;
+		if (hold == heldSeats.end() || !seat || !m_ReconnectHost.GetSeatHolder(*seat, holder, generation, incarnation) || holder != connection) return;
 		const uint64_t heldThrough = report.value;
 		std::string error;
 		// A seat held before this host took the round over replayed the lost host's frames, which are the round's own up to the handover.
@@ -5995,7 +5996,7 @@ static std::string ResyncSaveName() {
 		// A return a lost host agreed and this round passed still spent its incarnation on every peer.
 		const auto& known = m_Coordinator->GetConfig().peerIncarnations;
 		const uint32_t returning = std::max(hold->second.seatIncarnation, known.contains(member) ? known.at(member) : 0U) + 1;
-		if (error.empty() && m_WorldJoin.BeginInPlaceRejoin(connection, seat, member, returning, link->displayName, nowMs, heldThrough, &error)) {
+		if (error.empty() && m_WorldJoin.BeginInPlaceRejoin(connection, *seat, member, returning, link->displayName, nowMs, heldThrough, &error)) {
 			m_InPlaceIncarnationBumps[member] = returning > incarnation ? returning - incarnation : 0;
 			m_Coordinator->NoteInPlaceReturn(member);
 			(void)m_Runner->GetLobbySession().BindWorldTransferRemote(member, connection, nullptr);

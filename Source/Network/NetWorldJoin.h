@@ -310,6 +310,7 @@ namespace RTE {
 		int8_t team = -1;          //!< The team the host assigns in the configured order.
 		uint32_t generation = 0;   //!< Advanced on every clean leave, so a returner is a new holder.
 		uint16_t stableSeat = 0;   //!< The admission seat bound to the slot while it is held.
+		bool seated = false;       //!< A seat has been bound to the slot; seat 0 is a seat, an ordinary match's original host's.
 		bool held = false;
 		bool reclaimHold = false; //!< Its holder dropped: only that holder may take it back.
 		uint64_t brainMissingSince = 0; //!< The committed frame its brain went; 0 while one lives.
