@@ -104,7 +104,7 @@ def configure_plan(plan, row, mod_receipts=None):
         plan["soak"] = configuration(max(3660, (plan["ticks"]-1)//60))
         plan["ticks"] = plan["soak"]["ticks"]
     elif row == "world-join":
-        plan["ticks"] = max(3601, plan["ticks"])
+        plan["ticks"] = max(12001, plan["ticks"])
     else:
         plan["ticks"] = 1201
         if mod_receipts is None:
@@ -137,9 +137,10 @@ def configure_plan(plan, row, mod_receipts=None):
                             ("-net-match-service-scene", spec["scene"]), ("-net-match-service-scene-module", spec["scene_module"]),
                             ("-net-fullstate-hash-every", 60), ("-net-fullstate-dump", False),
                             ("-net-cross-rematches", False), ("-net-cross-host-options", False),
-                            ("-net-autosave-seconds", 60 if row == "world-soak" else 0),
-                            ("-memory-census-ticks", 3600 if row == "world-soak" else 60)):
+                            ("-net-autosave-seconds", 60 if row == "world-soak" else 0)):
             flags = flag(flags, name, value)
+        if row == 'world-soak':
+            flags = flag(flags, '-memory-census-ticks', 3600)
         if world and spec["role"] == "host":
             flags = flag(flag(flags, "-net-persistent-world"), "-net-world-fresh")
         if not world:
@@ -415,7 +416,7 @@ def publish_control(path, value):
 
 
 def observe_soak(spec, run, now):
-    if spec.get("acceptance_row") != "world-soak":
+    if not is_row(spec):
         return
     tick = latest_tick(Path(spec["own"])/"live.jsonl")
     if tick is not None:
@@ -431,7 +432,7 @@ def observe_soak(spec, run, now):
                      host_tick=tick, host_elapsed_s=now-spec['_soak_clock'] if '_soak_clock' in spec else None,
                      payload_monotonic_s=now, source='native live record and directory registration'))
         spec['_control_next'] = now+1
-    if tick is None:
+    if spec.get('acceptance_row') != 'world-soak' or tick is None:
         return
     elapsed = now-spec["_soak_clock"]
     seen = spec.setdefault("_journal_minutes", [])
