@@ -2782,9 +2782,10 @@ def main():
               "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port,
               "cases": [{key: value for key, value in row.items() if key != 'captures'} |
                         {'capture_checks': capture_checks(row.get('captures',[]))} for row in rows]}
-    (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    captures = retain_capture_detail(options.out, dict(captures=[image for row in rows for image in row.get('captures', [])]))
+    captures = [image for row in rows for image in row.get('captures', [])]
     (options.out / "captures.json").write_text(json.dumps(captures, indent=2) + "\n", encoding="utf-8")
+    result['captures_ref'] = dict(path='captures.json', sha256=sha(options.out/'captures.json'), count=len(captures))
+    (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(f"[menu-readback] {verdict} {options.out / 'result.json'}" + (f" (unavailable here: {'; '.join(refused)})" if refused else ""))
     return 0 if passed else 3 if verdict == "UNAVAILABLE" else 1
 

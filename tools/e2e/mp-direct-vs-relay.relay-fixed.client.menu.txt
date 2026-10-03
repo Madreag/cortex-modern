@@ -9,6 +9,9 @@ wait_ms 900
 combo_select ComboNetworkConnection Relay only
 wait_ms 600
 assert_label ComboNetworkConnection Relay only
+set_text TextNetworkRelayAddress {TURN_SERVER}
+set_text TextNetworkRelayUser {TURN_USER}
+set_text TextNetworkRelayPass {TURN_PASS}
 wait_ms 600
 post_command ButtonBackToMainMenu
 wait_ms 900

@@ -53,7 +53,7 @@ TURN = {'here': 'turn:192.168.50.122:3479?transport=udp', 'edith': 'turn:68.3.16
 CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json')
 TURN_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
 BOX_LOG = Path('D:/mx/inventory-confirming-2-20260926/steps.log')
-SECRET_KEYS = ('NetworkTurnPass', 'NetworkPlayerTurnPass')
+SECRET_KEYS = ('NetworkTurnUser', 'NetworkTurnPass', 'NetworkPlayerTurnUser', 'NetworkPlayerTurnPass')
 # The Linux box (BOXES.md): the lane's directory there, its clone of the tree at the tip and that tree's gcc build.
 LINUX_SSH = '3090'
 LINUX_LANE = f'/home/erol/cortex-workers/{LANE}'
@@ -147,7 +147,7 @@ def prepare_peer(h, spec):
 
 
 def redact(h, run, spec, spec_path=None):
-    """The TURN password leaves the runtime and the spec once the engine has read it."""
+    """Both TURN login fields leave the private runtime and spec once the engine has read them."""
     secrets = {key: 'redacted' for key in SECRET_KEYS if key in spec['settings']}
     if not secrets:
         return

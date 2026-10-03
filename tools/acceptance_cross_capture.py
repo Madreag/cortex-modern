@@ -71,7 +71,7 @@ def run(options):
     script_path = out/'client-stream.zsh'; script_path.write_text(script, encoding='utf-8', newline='\n')
     ssh(f'test ! -e {q(client_lane)} && mkdir -p {q(client_lane + "/evidence")}')
     scp(script_path, f'Erol-Mac:{client_lane}/stream.zsh')
-    launched = ssh(f'/opt/homebrew/bin/python3 {q(client_repo + "/tools/macos/acceptance_launch.py")} '
+    launched = ssh(f'env CC_ACCEPTANCE_BOX_OWNER={q(source+":"+options.root.name)} /opt/homebrew/bin/python3 {q(client_repo + "/tools/macos/acceptance_launch.py")} '
         f'--lane {q(client_lane)} --source-sha {q(source)} --collection-id {q(cid)} --label-suffix s6 '
         f'--stream-sha256 {hashlib.sha256(script_path.read_bytes()).hexdigest()}')
     write(out/'mac-launch.json', json.loads(launched))

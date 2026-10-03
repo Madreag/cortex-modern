@@ -362,6 +362,8 @@ def lane_script_desktop_uses(commands: Sequence[str] | None = None) -> list[str]
 def hop_far_side(state_path: str) -> int:
     """The ssh side of the hop: start the engine from the spec on stdin, record its pid and exit code."""
     spec = json.loads(sys.stdin.read())
+    from acceptance_posix_guard import assert_available
+    assert_available(spec['env'])
     state = Path(state_path)
     proc = subprocess.Popen(spec["argv"], cwd=spec["cwd"], env=spec["env"], stdin=subprocess.DEVNULL, start_new_session=True)
     record: dict[str, Any] = {"engine_pid": proc.pid, "far_side_pid": os.getpid(), "started_utc": utc_now()}
@@ -670,6 +672,8 @@ class IsolatedRun:
 
     def start(self) -> IsolatedRun:
         try:
+            from acceptance_posix_guard import assert_available
+            assert_available(self.env)
             if self.do_startup_checks:
                 self._startup_checks()
             before = self._hash_settings()

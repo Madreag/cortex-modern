@@ -79,6 +79,60 @@
             "NetworkMatchStatusMode": "Always",
             "NetworkHostDelayPolicy": "Fixed",
             "NetworkInputDelayFrames": "4",
+            "NetworkHostRelayMode": "Directory",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}",
+            "NetworkConnectionMode": "RelayOnly"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "menu_script": "mp-direct-vs-relay.relay.client.menu.txt",
+          "input_script": "ui-surfaces.input.txt",
+          "probe": "mp-direct-vs-relay.relay.client.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkIceEnable": "1",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkHostRelayMode": "Directory",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}",
+            "NetworkConnectionMode": "RelayOnly"
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark relay-mp-lobby-host",
+            "timeout_s": 90,
+            "directory_listed": true
+          }
+        }
+      ],
+      "directory_turn_config_path": "D:/mx/coturn-20260920/turn-config-cloudflare.json"
+    },
+    {
+      "name": "relay-fixed",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "menu_script": "mp-direct-vs-relay.relay-fixed.host.menu.txt",
+          "input_script": "ui-surfaces.input.txt",
+          "probe": "mp-direct-vs-relay.relay.host.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkIceEnable": "1",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkHostDelayPolicy": "Fixed",
+            "NetworkInputDelayFrames": "4",
             "NetworkTurnServers": "{TURN_SERVER}",
             "NetworkTurnUser": "{TURN_USER}",
             "NetworkTurnPass": "{TURN_PASS}",
@@ -93,7 +147,7 @@
             "-input-script",
             "{INPUT_SCRIPT}"
           ],
-          "menu_script": "mp-direct-vs-relay.relay.client.menu.txt",
+          "menu_script": "mp-direct-vs-relay.relay-fixed.client.menu.txt",
           "input_script": "ui-surfaces.input.txt",
           "probe": "mp-direct-vs-relay.relay.client.probe.json",
           "settings": {
@@ -522,7 +576,222 @@
         }
       ],
       "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
+    },
+    {
+      "id": "relay-fixed-connection-host",
+      "run": "relay-fixed",
+      "peer": "host",
+      "mark": "relay-connection-host",
+      "screen": "SettingsScreen",
+      "what": "The player selects Connection = Relay only on the Network Connection page.",
+      "events": [
+        "assert_label ComboNetworkConnection.*Relay only.*PASS"
+      ]
+    },
+    {
+      "id": "relay-fixed-route-host",
+      "run": "relay-fixed",
+      "peer": "host",
+      "mark": "relay-mp-play-host",
+      "screen": "game",
+      "what": "The diagnostics overlay names the actual connected relay route while both players act.",
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via relay"
+        }
+      ],
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*relay",
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
+    },
+    {
+      "id": "relay-fixed-candidate-host",
+      "run": "relay-fixed",
+      "peer": "host",
+      "mark": "relay-mp-play-host",
+      "screen": "game",
+      "what": "The playing view is backed by a selected relay ICE candidate and an allowed transport route.",
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*relay",
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via relay"
+        }
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
+    },
+    {
+      "id": "relay-fixed-connection-client",
+      "run": "relay-fixed",
+      "peer": "client",
+      "mark": "relay-connection-client",
+      "screen": "SettingsScreen",
+      "what": "The player selects Connection = Relay only on the Network Connection page.",
+      "events": [
+        "assert_label ComboNetworkConnection.*Relay only.*PASS"
+      ]
+    },
+    {
+      "id": "relay-fixed-route-client",
+      "run": "relay-fixed",
+      "peer": "client",
+      "mark": "relay-mp-play-client",
+      "screen": "game",
+      "what": "The diagnostics overlay names the actual connected relay route while both players act.",
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via relay"
+        }
+      ],
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*relay",
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
+    },
+    {
+      "id": "relay-fixed-candidate-client",
+      "run": "relay-fixed",
+      "peer": "client",
+      "mark": "relay-mp-play-client",
+      "screen": "game",
+      "what": "The playing view is backed by a selected relay ICE candidate and an allowed transport route.",
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*relay",
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via relay"
+        }
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
+    },
+    {
+      "id": "relay-cloudflare-offer",
+      "run": "relay",
+      "peer": "host",
+      "directory_relay_offer": "cloudflare",
+      "mark": "relay-mp-play-host",
+      "screen": "game",
+      "what": "relay_offer_issued provider=cloudflare for this session",
+      "log_regex": [
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ]
     }
   ],
-  "directory_port": 49478
+  "directory_port": 49478,
+  "relay_secret_scan": true
 }

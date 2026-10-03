@@ -21,11 +21,11 @@ from test_acceptance_resume3 import acceptance_render as render
 
 
 class AcceptanceDispatch(unittest.TestCase):
-    def test_cloudflare_owner_adapter_keeps_the_declared_remote_peer_roles(self):
+    def test_cloudflare_driver_keeps_the_declared_remote_peer_roles(self):
         row=next(row for row in built()['plan']['rows'] if row['id']=='gap.mp-relay-cloudflare')
-        self.assertIn('--host-box',row['argv'])
-        self.assertEqual(row['argv'][row['argv'].index('--host-box')+1],'ALLY')
-        self.assertEqual(row['argv'][row['argv'].index('--client-box')+1],'EDITH')
+        self.assertIn('{REPO}/tools/relay_cloudflare_match.py',row['argv'])
+        self.assertEqual(row['engine_boxes'],{'ALLY':1,'EDITH':1})
+        self.assertEqual({ref['box'] for ref in row['identities']},{'ALLY','EDITH'})
 
     def test_four_k_rows_start_before_remote_capture_work_to_keep_one_short_window(self):
         import acceptance_sections as sections
@@ -36,6 +36,7 @@ class AcceptanceDispatch(unittest.TestCase):
             options=SimpleNamespace(root=root,repo=REPO,inventory=INVENTORY,section=4,dry_run=False,asan_repo='D:/z13-asan')
             with patch.object(sections.subprocess,'run',side_effect=lambda *a,**k:(events.append('split') or SimpleNamespace(returncode=0))), \
                  patch.object(collection,'Share',return_value=Mock()), \
+                 patch.object(collection,'wait_for_window',return_value={'state':'READY'}), \
                  patch.object(collection,'run',side_effect=lambda share,cid,*args:(events.append(cid) or 0)), \
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(sections.run_section(options),0)
