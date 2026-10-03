@@ -46,6 +46,12 @@ class NativeReceipts(unittest.TestCase):
         self.assertEqual(result["timing"][0]["max_wait_ms"], 51)
         self.assertAlmostEqual(result["timing"][0]["elapsed_ms"], 1000)
 
+    def test_wait_on_first_required_tick_is_not_trimmed(self):
+        path = self.write("a.jsonl", self.base)
+        result = peer_receipt("pc", path, "[net-frame-wait] frame=1 wait_ms=51\n", dict(exit_code=0), 1, 61)
+        self.assertEqual(result["timing"][0]["max_wait_ms"], 51)
+        self.assertEqual(result["timing"][0]["wait_ms"], 51)
+
     def test_malformed_receipt_fails(self):
         with self.assertRaises(ValueError): tagged_receipts('[transfer] {bad}', 'transfer')
 

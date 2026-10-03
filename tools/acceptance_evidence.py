@@ -91,7 +91,7 @@ def peer_receipt(box, live_path, log, record, first, last):
         high = min(low+60, last)
         times = [observed.get(tick, []) for tick in range(low, high+1)]
         complete = all(len(value) == 1 and type(value[0]) in (int, float) for value in times)
-        interval_waits = [ms for tick, ms in waits if low < tick <= high]
+        interval_waits = [ms for tick, ms in waits if low < tick <= high or tick == low == first]
         windows.append(dict(first=low, last=high, samples=sum(bool(value) for value in times),
                             elapsed_ms=times[-1][0]-times[0][0] if complete else None,
                             wait_ms=sum(interval_waits) if log else None,
