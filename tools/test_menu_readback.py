@@ -2657,6 +2657,22 @@ def run_case(options, case, root, failing=None):
     return result
 
 
+def capture_checks(value):
+    """Prune raw control payloads while preserving every verdict and its scope ancestors."""
+    if isinstance(value,list):
+        return [kept for child in value if (kept:=capture_checks(child))]
+    if not isinstance(value,dict):
+        return None
+    fields={'pass','passed','ok','status','verdict','required','reason','error','not_applicable','total','failed'}
+    result={}
+    for key,child in value.items():
+        if key in fields or key.endswith('_pass'):
+            result[key]=child
+        elif isinstance(child,(dict,list)) and (kept:=capture_checks(child)):
+            result[key]=kept
+    return result
+
+
 def retain_capture_detail(root, result):
     """Keep every raw control snapshot in a hashed sidecar; verdicts retain their measured checks."""
     path = Path(root)/'capture-detail.jsonl'
@@ -2664,7 +2680,8 @@ def retain_capture_detail(root, result):
         for capture in result.get('captures', []):
             stream.write(json.dumps(capture) + '\n')
     return {key: value for key, value in result.items() if key != 'captures'} | {
-        'capture_detail': dict(path=path.name, sha256=sha(path), count=len(result.get('captures', [])))}
+        'capture_detail': dict(path=path.name, sha256=sha(path), count=len(result.get('captures', []))),
+        'capture_checks': capture_checks(result.get('captures',[]))}
 
 
 def self_test():
@@ -2763,7 +2780,8 @@ def main():
     passed, verdict, refused = summarize(rows)
     result = {"pass": passed, "verdict": verdict, "unavailable": refused, "driver_sha256": sha(__file__), "declared_cases": selected,
               "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port,
-              "cases": [{key: value for key, value in row.items() if key != 'captures'} for row in rows]}
+              "cases": [{key: value for key, value in row.items() if key != 'captures'} |
+                        {'capture_checks': capture_checks(row.get('captures',[]))} for row in rows]}
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     captures = retain_capture_detail(options.out, dict(captures=[image for row in rows for image in row.get('captures', [])]))
     (options.out / "captures.json").write_text(json.dumps(captures, indent=2) + "\n", encoding="utf-8")

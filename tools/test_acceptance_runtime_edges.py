@@ -14,6 +14,12 @@ from test_inventory_oracle_evidence import extract_defects, run_split
 
 
 class AcceptanceRuntimeEdges(unittest.TestCase):
+    def test_compact_readback_keeps_a_required_native_capture_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            native=dict(**{'pass':True},captures=[dict(controls=[],checks=dict(required=True,passed=False,reason='native capture failed'))])
+            compact=readback.retain_capture_detail(Path(folder),native)
+            self.assertFalse(extract_defects.file_verdict(compact,'result.json'))
+
     def test_shipped_inventory_suites_are_used_on_the_native_box(self):
         import importlib.util
         import os

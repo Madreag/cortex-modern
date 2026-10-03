@@ -47,8 +47,10 @@ class LaptopPolicy(unittest.TestCase):
             box.runner = dict(affinity_mask='none', engine_memory_gb=5)
             env = run_split.runner_environment(box)
             env['CC_RUNNER_BOX_MANIFEST'] = str(root/'absent-manifest.json')
+            # This integration launches only Python's `pass`; it must not wait for the user's fullscreen game.
             with patch.object(launch_budget, 'MARKER', root/'absent-marker'), \
                  patch.object(launch_budget, 'CROSS_GUARD', root/'absent-cross'), \
+                 patch.dict(os.environ, CC_RUNNER_IGNORE_FULLSCREEN='1'), \
                  patch.object(launch_budget, 'free_memory_bytes', return_value=7*GIB):
                 launch_budget.install_memory_guard()
                 result = runner.run([sys.executable, '-c', 'pass'], root, root/'python', env=env, startup_checks=False)
