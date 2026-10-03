@@ -5803,6 +5803,14 @@ namespace RTE {
 				return fail("round 1 setup failed");
 			}
 			if (!PlayRematchTicks(fixture, 8)) return fail("round 1 never committed");
+			// D54.3: a client's first round starts only on the seat roster the host stamped into its config, as every later one does.
+			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+				const uint32_t stamped = fixture.Host().runner.GetMatchConfig().seatRosterRevision;
+				if (!peer->host && (stamped == 0 || peer->runner.GetRosterAgreedRevision() != stamped)) {
+					return fail("lockstep peer " + std::to_string(peer->LockstepId()) + "'s first round started without checking the host's seat roster revision " +
+					            std::to_string(stamped) + " (checked " + std::to_string(peer->runner.GetRosterAgreedRevision()) + ")");
+				}
+			}
 			std::map<RematchPeer*, uint16_t> roundOneSeats;
 			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
 				if (peer->host) continue;
@@ -5842,7 +5850,8 @@ namespace RTE {
 			if (!PlayRematchTicks(fixture, 8) || !CheckRematchStableSeats(fixture, roundOneSeats, details, &step)) {
 				return fail("after the second rematch");
 			}
-			std::cout << "PASS rematch_stable_seats_two_leaves peer_count=4 present=1,4 host=seat0" << details << " (round-1 lockstep 4)" << std::endl;
+			std::cout << "PASS rematch_stable_seats_two_leaves peer_count=4 present=1,4 host=seat0" << details << " (round-1 lockstep 4; first round's roster checked at revision "
+			          << fixture.Host().runner.GetMatchConfig().seatRosterRevision << ")" << std::endl;
 			StopRematchFixture(fixture);
 			return true;
 		}

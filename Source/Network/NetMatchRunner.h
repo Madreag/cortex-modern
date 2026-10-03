@@ -194,6 +194,8 @@ namespace RTE {
 		/// How many of the joiner's own updates the start has cost so far.
 		uint32_t GetWorldJoinStartTicks() const { return m_WorldJoinStartTicks; }
 		const NetMatchConfig& GetMatchConfig() const { return m_MatchConfig; }
+		/// The seat roster revision this peer's round started on, checked against its own copy; 0 for a host or before a checked start.
+		uint32_t GetRosterAgreedRevision() const { return m_RosterAgreedRevision; }
 		void SetRelayOffer(const NetRelayConfig& offer) {
 			m_MatchConfig.relay = offer;
 			m_Config.matchConfig.relay = offer;
@@ -246,6 +248,9 @@ namespace RTE {
 		/// Client: the host's proposal must keep every seat of the round this peer played.
 		bool VerifyRematchProposal(std::string* error);
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
+		/// A round starts only on the seat roster the host agreed it on: a peer that heard another is refused by name.
+		bool AgreeOnSeatRoster(NetSession& session, std::string* error);
+		uint32_t m_RosterAgreedRevision = 0;
 		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error, std::vector<NetTransportEvent> pendingEvents = {});
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session = nullptr);

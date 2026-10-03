@@ -130,6 +130,9 @@ namespace RTE {
 			if (config.postLobbySettleMs > 0) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(config.postLobbySettleMs));
 			}
+			if (!AgreeOnSeatRoster(session, error)) {
+				return false;
+			}
 		}
 
 		if (m_WorldJoinImage) {
@@ -142,6 +145,22 @@ namespace RTE {
 			return false;
 		}
 		m_State = NetMatchRuntimeState::Running;
+		return true;
+	}
+
+	bool NetMatchRunner::AgreeOnSeatRoster(NetSession& session, std::string* error) {
+		m_RosterAgreedRevision = 0;
+		if (m_Config.host || m_MatchConfig.version < NetMatchConfigUtil::c_SeatRosterVersion || m_MatchConfig.seatRosterRevision == 0) return true;
+		const NetReconnectClient* reconnect = session.GetReconnectClient();
+		if (!reconnect) return true;
+		std::string why;
+		if (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why)) {
+			SetFailed("the round's seat roster was refused: " + why);
+			if (error) *error = m_SetupError;
+			return false;
+		}
+		m_RosterAgreedRevision = m_MatchConfig.seatRosterRevision;
+		DiagnosticLine() << "[net-match] seat roster revision " << m_MatchConfig.seatRosterRevision << " agreed" << std::endl;
 		return true;
 	}
 
@@ -335,16 +354,8 @@ namespace RTE {
 		if (!VerifyRematchProposal(error)) {
 			return false;
 		}
-		// The round starts only on the seat roster the host agreed it on: a peer that heard another is refused by name.
-		if (!m_Config.host && m_MatchConfig.version >= NetMatchConfigUtil::c_SeatRosterVersion && m_MatchConfig.seatRosterRevision != 0) {
-			std::string why;
-			if (const NetReconnectClient* reconnect = session.GetReconnectClient();
-			    reconnect && !reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why)) {
-				SetFailed("the round's seat roster was refused: " + why);
-				if (error) *error = m_SetupError;
-				return false;
-			}
-			if (session.GetReconnectClient()) DiagnosticLine() << "[net-match] seat roster revision " << m_MatchConfig.seatRosterRevision << " agreed" << std::endl;
+		if (!AgreeOnSeatRoster(session, error)) {
+			return false;
 		}
 		// A rematch's members are the host's to name: the seats it starts held are the ones the agreed config leaves out.
 		const std::vector<uint8_t> formedMembers = m_ActivePeerIds;
