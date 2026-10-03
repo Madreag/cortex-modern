@@ -74,6 +74,10 @@ class RemoteSafety(unittest.TestCase):
         self.assertEqual(plan['driver_commit'], frozen['coordinator_commit'])
         self.assertIn('source_worktree_observed', plan)
 
+    def test_remote_host_keeps_the_standard_cross_workload(self):
+        plan=remote.make_plan(options('mod-match'),profiles(),mods())
+        self.assertEqual(next(spec for spec in plan['specs'] if spec['role']=='host')['initial_skill'],50)
+
     def test_profile_cannot_substitute_local_box_runner_floor_or_unowned_helpers(self):
         for field, value in (('name','EROL-PC'), ('kind','windows-local'), ('runner','bare-exe'),
                              ('hostname',''), ('helpers','D:/mx/other/helpers'), ('peers_per_box',2),

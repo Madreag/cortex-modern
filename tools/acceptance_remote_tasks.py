@@ -82,7 +82,7 @@ def make_plan(options, profiles, mod_receipts=None):
         updated = rebase(spec)
         spec.clear(); spec.update(updated)
         spec.update(box=box['name'], repo=box['tree'], executable=box['executable'],
-                    task_control=True, under_load_by_design=False, initial_skill=100,
+                    task_control=True, under_load_by_design=False,
                     module_source=box.get('module_source', box['tree']+'/Data/VoidWanderers.rte'))
         spec['port_block'] = [box['ports'][0], box['ports'][0]+4]
         spec['flags'] = world.flag(spec['flags'], '-net-port', spec['port_block'][0])
