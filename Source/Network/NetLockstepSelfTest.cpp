@@ -3769,6 +3769,7 @@ namespace RTE {
 			std::vector<uint64_t> queued, simulated;
 			std::vector<bool> live;
 			std::vector<std::map<uint64_t, uint64_t>> folds; // frame -> the frame's committed membership, as each peer applied it.
+			bool keepalives = false; // every client's session talks on its link every 50 ms, whatever its round is doing.
 			std::vector<uint64_t> rewinds;
 			uint64_t now = 0;
 
@@ -3846,6 +3847,12 @@ namespace RTE {
 				if (!r.live[i] || !peer.IsRunning() || peer.IsMigrating()) continue;
 				for (; r.queued[i] <= r.simulated[i] + 6; ++r.queued[i])
 					if (!peer.QueueLocalInput(r.queued[i], {}, {}, &ignored)) break;
+			}
+			if (r.keepalives && r.now % 50 == 0) {
+				std::vector<uint8_t> heartbeat;
+				if (NetProtocol::Encode({static_cast<uint32_t>(r.now), 0, NetHeartbeat{r.now, 0, 3}}, heartbeat, nullptr))
+					for (uint8_t i = 1; i < r.count; ++i)
+						if (r.live[i]) (void)r.wires[i]->Send(1, NetTransportLane::ControlReliable, heartbeat);
 			}
 			for (uint8_t i = 0; i < r.count; ++i)
 				if (r.live[i]) r.peers[i]->Tick(r.now);
@@ -4015,11 +4022,72 @@ namespace RTE {
 				return r.Peer(2).IsRunning() && !r.Peer(2).IsMigrating() && r.Peer(2).GetHostPeerId() == 2 && r.simulated[1] >= splitAt + 30 && r.simulated[0] >= splitAt + 30;
 			};
 			if (!PumpQuorumRig(r, 12000, settled) || r.Peer(2).GetMigrationResult().generation != 1 || !r.Peer(1).IsRunning() || r.Peer(1).GetHostPeerId() != 1 ||
-			    !r.Peer(1).IsSeatUnderAI(2, r.simulated[0])) {
-				*error = "the survivor of a two-player split did not host alone beside the held host:" + r.Report();
+			    !r.Peer(1).IsSeatUnderAI(2, r.simulated[0]) || !r.Peer(1).IsHostProvisional()) {
+				*error = "the survivor of a two-player split did not host alone beside the held, provisional host: provisional=" + std::to_string(r.Peer(1).IsHostProvisional()) + r.Report();
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS a_two_player_split_survivor_hosts_alone generation=" << r.Peer(2).GetMigrationResult().generation << " survivor_played_to=" << r.simulated[1] << std::endl;
+			return true;
+		}
+
+		// R6 (3) on the round: the host is cut off from the other three; they are three of four connected seats and hand the match on,
+		// while the host, one of four, keeps simulating as a provisional host.
+		bool TestAnIsolatedHostIsProvisionalWhileTheMajorityMigrates(std::string* error) {
+			QuorumRig r;
+			if (!StartQuorumRig(r, 4, 47150, error)) return false;
+			if (!PumpQuorumRig(r, 4000, [&r] { for (uint8_t i = 0; i < 4; ++i) if (r.simulated[i] < 20) return false; return true; })) {
+				*error = "the four-player round never ran twenty frames:" + r.Report();
+				return false;
+			}
+			const uint64_t splitAt = r.simulated[0];
+			r.partition->Split({1}, {2, 3, 4});
+			const auto settled = [&r, splitAt] {
+				for (uint8_t peer = 2; peer <= 4; ++peer)
+					if (!r.Peer(peer).IsRunning() || r.Peer(peer).IsMigrating() || r.Peer(peer).GetHostPeerId() != 2) return false;
+				return r.Peer(1).IsHostProvisional() && r.simulated[0] >= splitAt + 60;
+			};
+			if (!PumpQuorumRig(r, 12000, settled)) {
+				*error = "an isolated host was not left provisional beside the majority's handover: reach " + std::to_string(r.Peer(1).GetHostReach().votes) + " of " +
+				         std::to_string(r.Peer(1).GetHostReach().seats) + r.Report();
+				return false;
+			}
+			if (r.Peer(1).GetHostReach().votes != 1 || r.Peer(1).GetHostReach().seats != 4 || !r.Peer(1).IsRunning()) {
+				*error = "the isolated host counted its reach wrongly: " + std::to_string(r.Peer(1).GetHostReach().votes) + " of " + std::to_string(r.Peer(1).GetHostReach().seats) + r.Report();
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS an_isolated_host_is_provisional_while_the_majority_migrates reach=1/4 survivors_host=" << static_cast<int>(r.Peer(2).GetHostPeerId())
+			          << " host_played_to=" << r.simulated[0] << std::endl;
+			return true;
+		}
+
+		// R6 (4) on the round: the host stops hearing two of four players for longer than the loss bound - its play is provisional - and
+		// becomes real again the moment it hears them (their seats held meanwhile, their sessions still talking on their links); a host
+		// that keeps three of four never is provisional.
+		bool TestAHostIsProvisionalUntilItHearsAMajority(std::string* error) {
+			QuorumRig r;
+			r.keepalives = true;
+			if (!StartQuorumRig(r, 4, 47170, error)) return false;
+			if (!PumpQuorumRig(r, 4000, [&r] { for (uint8_t i = 0; i < 4; ++i) if (r.simulated[i] < 20) return false; return true; })) {
+				*error = "the four-player round never ran twenty frames:" + r.Report();
+				return false;
+			}
+			r.partition->deaf.insert({4, 1});
+			(void)PumpQuorumRig(r, 2500, [] { return false; });
+			if (r.Peer(1).IsHostProvisional() || r.Peer(1).GetHostReach().votes != 3 || r.Peer(1).GetHostReach().seats != 4) {
+				*error = "a host that hears three of four players went provisional: " + std::to_string(r.Peer(1).GetHostReach().votes) + " of " + std::to_string(r.Peer(1).GetHostReach().seats) + r.Report();
+				return false;
+			}
+			r.partition->deaf.insert({3, 1});
+			if (!PumpQuorumRig(r, 4000, [&r] { return r.Peer(1).IsHostProvisional(); })) {
+				*error = "a host that hears two of four players was not provisional:" + r.Report();
+				return false;
+			}
+			r.partition->deaf.clear();
+			if (!PumpQuorumRig(r, 4000, [&r] { return !r.Peer(1).IsHostProvisional(); })) {
+				*error = "a host that hears its players again stayed provisional: " + std::to_string(r.Peer(1).GetHostReach().votes) + " of " + std::to_string(r.Peer(1).GetHostReach().seats) + r.Report();
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_host_is_provisional_until_it_hears_a_majority three_of_four=real two_of_four=provisional healed=real" << std::endl;
 			return true;
 		}
 
@@ -23515,6 +23583,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestATwoTwoSplitMigratesNobody, "a_two_two_split_migrates_nobody");
 		row(&TestATwoPlayerSplitSurvivorHostsAlone, "a_two_player_split_survivor_hosts_alone");
 		row(&TestALateVoterResyncsAfterTheMajorityCloses, "a_late_voter_resyncs_after_the_majority_closes");
+		row(&TestAnIsolatedHostIsProvisionalWhileTheMajorityMigrates, "an_isolated_host_is_provisional_while_the_majority_migrates");
+		row(&TestAHostIsProvisionalUntilItHearsAMajority, "a_host_is_provisional_until_it_hears_a_majority");
 		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;

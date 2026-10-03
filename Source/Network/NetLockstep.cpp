@@ -3548,6 +3548,44 @@ namespace RTE {
 		DiagnosticLine() << "[net-match] no handover quorum: " << m_Stats.timeoutReason << std::endl;
 	}
 
+	void NetLockstepCoordinator::UpdateHostReach(uint64_t nowMs) {
+		uint32_t lost = 0;
+		uint64_t firstHeld = UINT64_MAX;
+		if (m_Config.localPeerId == GetHostPeerId() && IsRunning()) {
+			for (uint8_t peer = 1; peer <= m_Config.peerCount && peer <= 32; ++peer) {
+				// A clean leaver said it was going: its closed link loses this host nothing.
+				if (peer == m_Config.localPeerId || m_AnnouncedLeavers.contains(peer)) continue;
+				const auto frames = m_PeerLastHeardMs.find(peer);
+				const auto link = m_PeerLinkHeardMs.find(peer);
+				const uint64_t heard = std::max(frames != m_PeerLastHeardMs.end() ? frames->second : 0, link != m_PeerLinkHeardMs.end() ? link->second : 0);
+				// A seat never heard this round is in its start work: the start gate answers for it.
+				if (heard == 0) continue;
+				const auto stats = m_Stats.peers.find(peer);
+				const uint64_t rtt = stats != m_Stats.peers.end() ? stats->second.pingMs : 0;
+				const bool closed = !m_RemoteTransports.contains(peer) && !m_HeldPeerLinks.contains(peer);
+				if (!NetHostLinkLost(closed, nowMs >= heard ? nowMs - heard : 0, rtt)) continue;
+				lost |= 1u << (peer - 1);
+				const auto held = m_AiHeldSeats.find(peer);
+				const auto left = m_PeerLeaveFrames.find(peer);
+				firstHeld = std::min(firstHeld, held != m_AiHeldSeats.end() ? held->second : left != m_PeerLeaveFrames.end() ? left->second : m_Stats.nextFrame);
+			}
+		}
+		if (lost == 0) {
+			m_HostLossFrame = UINT64_MAX;
+			m_HostReach = {};
+			m_HostProvisional = false;
+			return;
+		}
+		if (m_HostLossFrame == UINT64_MAX) m_HostLossFrame = firstHeld > m_Config.startFrame ? firstHeld - 1 : m_Config.startFrame;
+		// The round's connected seats before the loss are the count; a seat held earlier for its own reasons has no part in it.
+		const uint32_t connected = ConnectedSeatsAt(m_HostLossFrame);
+		m_HostReach = {static_cast<size_t>(std::popcount(connected & ~lost)), static_cast<size_t>(std::popcount(connected))};
+		const bool provisional = 2 * m_HostReach.votes <= m_HostReach.seats;
+		if (provisional != m_HostProvisional)
+			DiagnosticLine() << "[net-match] host " << (provisional ? "provisional" : "real again") << ": reaches " << m_HostReach.votes << " of " << m_HostReach.seats << " players" << std::endl;
+		m_HostProvisional = provisional;
+	}
+
 	bool NetLockstepCoordinator::IsLostMigrationSuccessor(uint8_t peerId) const {
 		return std::find(m_MigrationLostSuccessors.begin(), m_MigrationLostSuccessors.end(), peerId) != m_MigrationLostSuccessors.end();
 	}
@@ -4206,6 +4244,7 @@ namespace RTE {
 		m_Stats.configuredStartFrame = m_Config.startFrame;
 		m_Stats.effectiveStartFrame = m_Config.startFrame;
 		m_PeerEffectiveStart.clear();
+		m_PeerLinkHeardMs.clear();
 		for (uint8_t peer: m_Config.activePeerIds) {
 			m_PeerEffectiveStart[peer] = m_Config.startFrame;
 			m_PeerLastHeardMs[peer] = nowMs;
@@ -8880,6 +8919,7 @@ namespace RTE {
 		FlushRecoveryInputs(nowMs);
 		DropUnreachablePeers(nowMs);
 		AdjudicateSilentPeers(nowMs);
+		UpdateHostReach(nowMs);
 		RetryLateStartReclaims();
 		SendCaptureParkReport(nowMs);
 		if (m_Config.localPeerId == GetHostPeerId() && m_CaptureParkAwaitingReports && m_SynchronizedCaptureStartFrame != UINT64_MAX) {
@@ -10393,6 +10433,12 @@ namespace RTE {
 			m_PlaneHeldTransports.insert(event.peerId);
 			m_PlaneHeldSinceMs.emplace(event.peerId, nowMs);
 			return;
+		}
+		if (event.type == NetTransportEventType::PacketReceived && m_Config.localPeerId == GetHostPeerId()) {
+			for (const auto& [peer, transport]: m_RemoteTransports)
+				if (transport == event.peerId) m_PeerLinkHeardMs[peer] = nowMs;
+			for (const auto& [peer, held]: m_HeldPeerLinks)
+				if (held.first == event.peerId) m_PeerLinkHeardMs[peer] = nowMs;
 		}
 		if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {
 			HandleMigrationEvent(event, nowMs);

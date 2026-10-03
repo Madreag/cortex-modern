@@ -1187,6 +1187,11 @@ namespace RTE {
 		bool IsLocalSeatHeld() const { NET_PLANE_CHECK(); return m_LocalSeatHeld; }
 		/// Whether the host the last handover replaced sent its leave record: its departure was its own decision, never read from a silence.
 		bool MigrationHostAnnouncedLeave() const { NET_PLANE_CHECK(); return m_MigrationHostAnnounced; }
+		/// Host: whether it reaches fewer than a strict majority of the seats its round had connected when its links began to go - its play
+		/// then is provisional: the others may hand the match on without it.
+		bool IsHostProvisional() const { NET_PLANE_CHECK(); return m_HostProvisional; }
+		/// Host: the seats it reaches and the connected seats it counts them against, while a link is lost.
+		NetHostMigrationReach GetHostReach() const { NET_PLANE_CHECK(); return m_HostReach; }
 
 		/// Whether this machine judged itself unable to hold the round's rate and went quiet for the host's bound to hold its seat.
 		/// @return Whether it did.
@@ -1935,6 +1940,13 @@ namespace RTE {
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
 		uint8_t m_HostLeaveRecordFrom = 0; //!< Client: the host whose leave record this round heard.
 		bool m_MigrationHostAnnounced = false; //!< The host this handover replaces sent its leave record.
+		std::map<uint8_t, uint64_t> m_PeerLinkHeardMs; //!< Host: when anything last arrived on each seat's link, a held seat's kept link's included.
+		uint64_t m_HostLossFrame = UINT64_MAX; //!< Host: the last frame before its first lost seat was held, while a link is lost.
+		NetHostMigrationReach m_HostReach; //!< Host: its reach against the seats connected at m_HostLossFrame.
+		bool m_HostProvisional = false; //!< Host: it reaches no majority of those seats.
+		/// Host: counts the seats it still hears against the seats its round had connected before they went; the same bound and the
+		/// same count the survivors use, so the two sides never both carry the match.
+		void UpdateHostReach(uint64_t nowMs);
 		uint64_t m_AgreedEndDeadlineMs = 0; //!< When a host playing to its agreed end stops waiting for it.
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
 		uint64_t m_WaitingFrame = 0;
