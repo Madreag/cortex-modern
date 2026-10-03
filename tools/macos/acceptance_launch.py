@@ -7,6 +7,7 @@ from pathlib import Path
 import plistlib
 import re
 import subprocess
+import sys
 
 
 def main(argv=None):
@@ -17,6 +18,9 @@ def main(argv=None):
     parser.add_argument('--stream-sha256', required=True)
     parser.add_argument('--label-suffix', default='')
     options = parser.parse_args(argv)
+    sys.path[:0]=[str(Path(__file__).resolve().parent),str(Path(__file__).resolve().parent.parent)]
+    from acceptance_posix_guard import assert_available
+    assert_available()
     lane = options.lane.resolve(); stream = lane/'stream.zsh'
     if hashlib.sha256(stream.read_bytes()).hexdigest() != options.stream_sha256:
         raise ValueError('shipped Mac stream hash differs from the declared tree file')
@@ -29,6 +33,8 @@ def main(argv=None):
         KeepAlive=False, ProcessType='Background', StandardOutPath=str(lane/'job.out'), StandardErrorPath=str(lane/'job.err'),
         EnvironmentVariables=dict(SHA=options.source_sha, ACCEPTANCE_COLLECTION=options.collection_id, LANE=str(lane),
                                   CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1'))
+    if os.environ.get('CC_ACCEPTANCE_BOX_OWNER'):
+        data['EnvironmentVariables']['CC_ACCEPTANCE_BOX_OWNER']=os.environ['CC_ACCEPTANCE_BOX_OWNER']
     with agent.open('xb') as output: plistlib.dump(data, output)
     session = f'gui/{os.getuid()}'
     subprocess.run(['/bin/launchctl', 'bootstrap', session, str(agent)], check=True)

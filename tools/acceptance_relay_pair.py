@@ -27,13 +27,20 @@ def declared(options, mode):
 
 
 def run(options, mode, repo):
+    if getattr(options,'backends',None):
+        from acceptance_relay_matrix import run as run_matrix
+        return run_matrix(options,mode,repo)
     declaration = declared(options,mode)
     if getattr(options,'dry_run',False):
         print(json.dumps(declaration)); return 0
     import edith_cross as cross
     import test_directory_ice_join as directory
     from turn_relay_rows import read_login
-    user,password = read_login(getattr(options,'login_conf',Path('D:/mx/coturn-20260920/turnserver-fixed.conf')))
+    from acceptance_relay_policy import CredentialBook, scan_retained
+    book=getattr(options,'credential_book',None) or CredentialBook()
+    user,password = getattr(options,'login_override',None) or read_login(getattr(options,'login_conf',Path('D:/mx/coturn-20260920/turnserver-fixed.conf')))
+    book.add('TURN username',user);book.add('TURN password',password)
+    cloudflare=getattr(options,'backend','coturn')=='cloudflare'
     root = options.out.resolve(); root.mkdir(parents=True,exist_ok=False)
     write(root/'plan.json',declaration)
     turn = options.turn if options.turn.startswith(('turn:','turns:')) else 'turn:'+options.turn+'?transport=udp'
@@ -55,8 +62,15 @@ def run(options, mode, repo):
         match = root/'pair'; match.mkdir()
         h = cross.harness(Path(repo)/'tools')
         cross.looped_input(h,match/'input.txt',ticks)
-        cert,key,pin = cross.make_cert(match)
-        service = directory.start_service(match,directory_port,cert,key)
+        service_context=None
+        if cloudflare:
+            from e2e.directory import serve
+            service_context=serve(match/'directory',directory_port,(49400,49499),
+                                  turn_config=options.directory_backend,secret_book=book)
+            tokens=service_context.__enter__();pin=tokens['DIRECTORY_PIN'];service=None
+        else:
+            cert,key,pin = cross.make_cert(match)
+            service = directory.start_service(match,directory_port,cert,key)
         tasks = {}
         try:
             pair.directory_tunnel(directory_port)
@@ -74,7 +88,7 @@ def run(options, mode, repo):
                 peer_root = root/'peers'/role/'match'
                 settings=dict(SessionDirectoryUrl=f'127.0.0.1:{directory_port}',SessionDirectoryCertSha256=pin,
                     SessionDirectoryInstallKey='acceptance-'+pair.cid+'-'+role,NetworkIceEnable='1',
-                    NetworkStunServers='',NetworkConnectionMode='RelayOnly',NetworkHostRelayMode='Fixed',
+                    NetworkStunServers='',NetworkConnectionMode='RelayOnly',NetworkHostRelayMode='Directory' if cloudflare else 'Fixed',
                     NetworkTurnServers=turn,NetworkPlayerTurnServers=turn)
                 spec=cross.match_spec(role,peer_root,game_port,
                     ['-net-host','-net-ice','on'] if role=='host' else ['-net-join-session',session,'-net-ice','on'],
@@ -85,7 +99,7 @@ def run(options, mode, repo):
                     spec['flags'] += ['-net-rendezvous-log',str(options.rendezvous_log)]
                 spec['input_files']={'input.txt':(match/'input.txt').read_text()}
                 task,done=pair.launch(role,root/'peers'/role,'relay-peer',spec,
-                    dict(settings=dict(NetworkTurnUser=user,NetworkTurnPass=password,NetworkPlayerTurnUser=user,NetworkPlayerTurnPass=password)),
+                    dict(settings={} if cloudflare else dict(NetworkTurnUser=user,NetworkTurnPass=password,NetworkPlayerTurnUser=user,NetworkPlayerTurnPass=password)),
                     timeout=timeout)
                 tasks[role]=(task,done)
             for role,(task,done) in tasks.items():
@@ -100,8 +114,9 @@ def run(options, mode, repo):
                     target=match/path.name
                     if path.is_dir(): shutil.copytree(path,target,dirs_exist_ok=False)
                     else: shutil.copy2(path,target)
+            if cloudflare: shutil.copy2(match/'directory/service.log',match/'service.log')
             verdict=cross.analyze_match(h,match,dict(name='acceptance-relay-pair',started=cross.stamp(),finished=cross.stamp(),
-                direction='host-ally',path='relay',ticks=ticks,port=game_port,machines={'host':'ALLY','client':'EDITH'},
+                direction='host-ally',path='directory-relay' if cloudflare else 'relay',ticks=ticks,port=game_port,machines={'host':'ALLY','client':'EDITH'},
                 soak=False,source_sha=pair.source,local_peer='host',feel_records=False,instrumentation='lean',
                 driver_box='EROL-PC',session_id=session,remote_state='both terminal receipts retained',note=None))
             checks['pair']=dict(required=True,passed=verdict['passed'],product='pair/verdict.json')
@@ -111,7 +126,12 @@ def run(options, mode, repo):
                 checks['fullstate']=dict(required=True,**fullstate)
             passed=all(check.get('passed') is True for check in checks.values())
         finally:
-            service.terminate();service.wait(timeout=10)
+            if service_context is not None: service_context.__exit__(None,None,None)
+            else: service.terminate();service.wait(timeout=10)
+    scan=scan_retained(root,book)
+    checks['no_logins_in_kept_files']=dict(required=True,passed=scan['passed'],receipt='secret-scan.json')
+    passed=passed and scan['passed']
     result=dict(passed=passed,checks=checks,driver_box='EROL-PC',engine_boxes=declaration['engine_boxes'])
     write(root/'result.json',result)
+    write(root/'secret-scan.json',scan_retained(root,book,previous=scan))
     return 0 if passed else 1

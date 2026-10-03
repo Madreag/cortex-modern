@@ -1,6 +1,7 @@
 """Acceptance box roles and section variants; no engines or remote calls."""
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,6 +18,8 @@ def built(proof=None, marker=None):
     boxes, document = copy.deepcopy(boxes), copy.deepcopy(document)
     laptop = next(box for box in boxes if box.name == 'Z13')
     laptop.timing_proof = proof or {}
+    if proof is not None:
+        laptop.build_receipt = dict(date='2026-10-03',commit='a'*40,executable_sha256='b'*64)
     for entry in document['boxes']:
         if entry['name'] == 'Z13':
             if proof is not None:
@@ -45,10 +48,10 @@ class AcceptanceBoxRoles(unittest.TestCase):
     def test_d01_four_box_roster_and_rotations_use_z13(self):
         plan = built()['plan']
         for row in plan['rows']:
-            if row.get('roster') == 'four-way':
+            if row.get('roster') == 'four-way' and not row.get('window_required'):
                 self.assertEqual(set(row['boxes']), {'Z13', 'EDITH', 'Mac', 'Linux'}, row['id'])
         self.assertEqual(set(plan['matrix']['hosts']), {'z13', 'edith', 'mac', 'linux'})
-        self.assertFalse(any(row.get('host') == 'erol' for row in plan['rows']))
+        self.assertFalse(any(row.get('host') == 'erol' and not row.get('window_required') for row in plan['rows']))
 
     def test_d02_marker_token_selects_the_section_variant(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -56,7 +59,7 @@ class AcceptanceBoxRoles(unittest.TestCase):
             marker.write_text(json.dumps(dict(token='USER-AT-DESK')))
             held = built(marker=marker)['plan']
             self.assertEqual(held.get('window', {}).get('variant'), 'WITHOUT')
-            marker.write_text(json.dumps(dict(token='named-window')))
+            marker.write_text(json.dumps(dict(token='named-window',pid=os.getpid(),stream_root=str(Path(folder)/'lane'))))
             free = built(marker=marker)['plan']
             self.assertEqual(free.get('window', {}).get('variant'), 'WITH')
             self.assertEqual(held['window']['reason'], 'deferred to the EROL-PC window')

@@ -41,8 +41,11 @@ def cross_manifest(repo, inventory, root, mac_lane, linux_lane, *, prepare=False
     boxes, _ = split.load_manifest(Path(inventory)/'boxes.json')
     by_name={box.name:split.execution_box(box) for box in boxes}
     document=collection.read(Path(repo)/'tools/cross_peers/boxes.json')
+    local_game=copy.deepcopy(next(box for box in document['boxes'] if box['kind']=='windows-local'))
     document=copy.deepcopy(document)
     document['driver']=dict(name='EROL-PC',kind='coordinator',directory_port=49918)
+    current_schedule=collection.read(Path(root)/'split-plan.json') if (Path(root)/'split-plan.json').is_file() else {}
+    guard_owner=current_schedule.get('source_sha','')+':'+Path(root).name
     if prepare:
         schedule=collection.read(Path(root)/'split-plan.json')
         for name in ('Z13','EDITH'):
@@ -62,9 +65,19 @@ def cross_manifest(repo, inventory, root, mac_lane, linux_lane, *, prepare=False
             box.update(tree=lane+'/repo',executable=lane+'/repo/build-gcc/CortexCommand',scratch=lane+'/cross/{lane}',
                        build_receipt=lane+'/evidence/build.json')
             box['guard_file']=lane+'/exit.txt' if box['name']=='Mac' else '/home/erol/cortex-workers/opus-run-cross-linux-20260928/BOX-FREE-FOR-CROSS'
+            box.setdefault('environment',{}).update(CC_ACCEPTANCE_BOX_OWNER=guard_owner,
+                                                    CC_ACCEPTANCE_CROSS_READY=box['guard_file'])
     for peer in document['instances']:
         if peer['box']=='EROL-PC': peer.update(name='z13',box='Z13')
     collection.write(Path(root)/'cross-boxes.json',document)
+    window=copy.deepcopy(document);window.pop('driver',None)
+    local_game.update(tree=str(Path(repo).resolve()),executable=str(Path(repo).resolve()/'Cortex Command.exe'),
+                      scratch=f'D:/mx/{Path(root).name}-cross/{{lane}}')
+    local_game.pop('guard_file',None)
+    window['boxes']=[local_game if box['name']=='Z13' else box for box in window['boxes']]
+    for peer in window['instances']:
+        if peer['box']=='Z13':peer.update(box='EROL-PC',name='erol')
+    collection.write(Path(root)/'cross-boxes-window.json',window)
     return document
 
 
@@ -81,6 +94,8 @@ def run_section(options):
     if str(options.section) not in schedule.get('section_receipts',{}):
         collection.start_section(options.root,options.section,inventory_root=options.inventory)
         schedule=collection.read(options.root/'split-plan.json')
+    if collection.wait_for_window(options.root,options.section)['state']!='READY':
+        return 3
     codes=[]
     def owned(spec):
         share=collection.Share(options.root,spec['share'],options.inventory)

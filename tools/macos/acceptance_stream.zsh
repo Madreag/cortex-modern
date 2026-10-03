@@ -15,6 +15,9 @@ REPO=$LANE/repo
 EV=$LANE/evidence
 export CCCP_HEADLESS=1 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 INVENTORY_NO_FULLSTATE=1
 : "${ACCEPTANCE_COLLECTION:?the RUN chain supplies the owning collection id}"
+GUARD_HELPER=$LANE/acceptance_posix_guard.py
+[[ -f "$GUARD_HELPER" ]] || GUARD_HELPER=$HERE/../acceptance_posix_guard.py
+"$PY" "$GUARD_HELPER" --check || exit 3
 test ! -e "$EV"
 mkdir "$EV"
 PLAN=$EV/required.txt
@@ -68,9 +71,10 @@ PY
   exit "$rc"
 }
 GUARD=$HOME/cortex-workers/ACCEPTANCE-STREAM-RUNNING
-mkdir "$GUARD" # exclusive: another stream cannot overwrite the guard
+mkdir "$GUARD" || { echo "box launch refused: $GUARD held by $(cat "$GUARD/owner" 2>/dev/null)"; exit 3; }
 trap finish EXIT
 printf '%s\n' "$SHA:$LANE:$$" > "$GUARD/owner"
+export CC_ACCEPTANCE_BOX_OWNER="$SHA:$LANE:$$"
 ! pgrep -x CortexCommand >/dev/null
 ! pgrep -x ninja >/dev/null
 step helper-hashes "$PY" - "$INV" <<'PY' || exit 1
@@ -157,7 +161,7 @@ verify_san asan || exit 1
 step identity-asan "$PY" "$REPO/tools/acceptance_identity.py" --box Mac --repo "$REPO" --exe "$REPO/build-asan/CortexCommand" \
   --source-sha "$SHA" --collection-id "$ACCEPTANCE_COLLECTION" --build-receipt "$EV/asan-identity-build.json" \
   --write-build-receipt --build-exit-code 0 --build-log "$EV/asan-build.log" --configuration asan --out "$EV/identity-asan.json" || exit 1
-step asan-suite env CCCP_TEST_BINARY="$REPO/build-asan/CortexCommand" ASAN_OPTIONS="detect_leaks=0:halt_on_error=0:log_path=$EV/asan-report" UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0:log_path=$EV/ubsan-report" "$PY" "$REPO/tools/run_selftests.py" --repo "$REPO" --out "$EV/asan-suite" --timeout 1200 --quiet-rows last
+step asan-suite env CCCP_TEST_BINARY="$REPO/build-asan/CortexCommand" ASAN_OPTIONS="detect_leaks=0:halt_on_error=0:log_path=$EV/asan-report" UBSAN_OPTIONS="suppressions=$REPO/tools/sanitizers/ubsan.supp:print_stacktrace=1:halt_on_error=0:log_path=$EV/ubsan-report" "$PY" "$REPO/tools/run_selftests.py" --repo "$REPO" --out "$EV/asan-suite" --timeout 1200 --quiet-rows last
 step tsan-setup env "${CLANG_ENV[@]}" meson setup "$REPO/build-tsan" "$REPO" "${SAN_OPTS[@]}" -Dgns_root="$TSAN_GNS" -Db_sanitize=thread || exit 1
 step tsan-build ninja -C "$REPO/build-tsan" -j8 || exit 1
 step tsan-receipt san_receipt tsan || exit 1

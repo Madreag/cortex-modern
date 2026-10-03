@@ -100,10 +100,14 @@ EOF
 
 test ! -e "$LANE/exit.txt" || fail 'the stream already has an exit receipt; use a new lane'
 GUARD=$HOME/cortex-workers/ACCEPTANCE-STREAM-RUNNING
+GUARD_HELPER=$LANE/acceptance_posix_guard.py
+[ -f "$GUARD_HELPER" ] || GUARD_HELPER=$HERE/../acceptance_posix_guard.py
+"$PY" "$GUARD_HELPER" --check || exit 3
 trap finish_collection EXIT
 if [ -n "${ACCEPTANCE_COLLECTION:-}" ]; then
-  mkdir "$GUARD" || fail 'another acceptance stream owns the box'
+  mkdir "$GUARD" || fail "box launch refused: $GUARD held by $(cat "$GUARD/owner" 2>/dev/null)"
   printf '%s\n' "$SHA:$LANE:$$" > "$GUARD/owner"
+  export CC_ACCEPTANCE_BOX_OWNER="$SHA:$LANE:$$"
 fi
 say "start lane=$LANE branch=$BRANCH sha=$SHA steps=[$STEPS]"
 { echo "date=$(stamp)"; uname -a; lsb_release -ds; echo "threads=$(nproc)"; free -g | head -2; $PY --version
