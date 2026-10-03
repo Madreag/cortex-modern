@@ -7886,8 +7886,10 @@ void RunGameLoop() {
 					s_harnessTickUs.push_back(static_cast<double>(harnessNs) / 1000.0);
 					if (s_harnessTickUs.size() == 600) {
 						std::sort(s_harnessTickUs.begin(), s_harnessTickUs.end());
-						System::PrintDiagnosticLine(std::format("[harness-cost] tick={} window=600 tick_end_us p50={:.0f} p95={:.0f} max={:.0f}", simTick, s_harnessTickUs[300],
-						                                        s_harnessTickUs[570], s_harnessTickUs.back()));
+						// Whole microseconds cut down, never rounded up: a summary must not read above the frame records it summarises.
+						const auto us = [](double value) { return static_cast<long long>(value); };
+						System::PrintDiagnosticLine(std::format("[harness-cost] tick={} window=600 tick_end_us p50={} p95={} max={}", simTick, us(s_harnessTickUs[300]),
+						                                        us(s_harnessTickUs[570]), us(s_harnessTickUs.back())));
 						s_harnessTickUs.clear();
 					}
 				}
