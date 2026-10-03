@@ -29,6 +29,7 @@
 #include "PageWriteFence.h"
 #include "TerrainLayerSnapshot.h"
 #include "TimerMan.h"
+#include "HarnessCost.h"
 
 #include <algorithm>
 #include <chrono>
@@ -91,6 +92,11 @@ namespace RTE {
 
 	void LocalPrediction::CompareFidelityAtTick(uint64_t tick) {
 		if (!s_FidelityProbe) return;
+		const HarnessCost::SimulationSpan span;
+		struct Charge {
+			const HarnessCost::SimulationSpan& span;
+			~Charge() { HarnessCost::Charge(HarnessCost::PreviewFidelity, span.Stop()); }
+		} charge{span};
 		const bool inWindow = tick >= s_FidelityWindow.first && tick <= s_FidelityWindow.second;
 		for (auto it = s_FidelitySteps.begin(); it != s_FidelitySteps.end();) {
 			if (it->first.second > tick) {
@@ -395,14 +401,16 @@ namespace RTE {
 				}
 				MovableMan::PostUpdateStage(clone);
 				// What the harness records of each step is its own cost, not the preview's: timed apart and kept out of the preview's.
-				const auto harnessStart = std::chrono::steady_clock::now();
+				const HarnessCost::SimulationSpan harnessSpan;
 				FrameMan::FeelPreviewStep(clone, static_cast<uint64_t>(simCount), tick, feelStepBeginMS);
 				if (s_FidelityProbe && (step == 1 || (tick >= s_FidelityWindow.first && tick <= s_FidelityWindow.second))) {
 					SimDumpTape lines;
 					g_MovableMan.CaptureMOSimState(tick, "actor", clone, lines);
 					s_FidelitySteps.insert({{preview.original->GetUniqueID(), tick}, {step, std::move(lines)}});
 				}
-				previewHarnessMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - harnessStart).count();
+				const int64_t harnessNs = harnessSpan.Stop();
+				HarnessCost::Charge(HarnessCost::PreviewFidelity, harnessNs);
+				previewHarnessMs += static_cast<double>(harnessNs) / 1e6;
 			}
 			g_MovableMan.HarvestSpeculativeSpawns();
 		}

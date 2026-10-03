@@ -143,6 +143,7 @@
 #include "MetricsCollector.h"
 #include "AsyncLineWriter.h"
 #include "StallStackSampler.h"
+#include "HarnessCost.h"
 #include "ContractAudit.h"
 
 #include "RenderTarget.h"
@@ -3899,13 +3900,12 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 	if (!s_out.IsOpen() || simTick < s_from || simTick > s_to) {
 		return;
 	}
-	const long long startUs = g_TimerMan.GetAbsoluteTime();
+	const HarnessCost::SimulationSpan span;
 	auto tape = std::make_shared<SimDumpTape>();
 	g_MovableMan.CaptureSimState(simTick, *tape);
 	// What the dump costs the simulation thread, so a harness cost is never read as the engine's own.
 	static uint64_t s_ticks = 0, s_over2 = 0, s_over50 = 0, s_maxTick = 0;
 	static double s_totalMs = 0, s_maxMs = 0;
-	const double ms = static_cast<double>(g_TimerMan.GetAbsoluteTime() - startUs) / 1000.0;
 	// Test lever: the simulation also writes the text itself, and the writer compares it with the tape's.
 	static const bool s_compare = std::getenv("CCCP_TEST_SIM_DUMP_COMPARE") != nullptr;
 	std::shared_ptr<const std::string> inlineText;
@@ -3914,7 +3914,16 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 		g_MovableMan.DumpSimState(simTick, text);
 		inlineText = std::make_shared<const std::string>(std::move(text).str());
 	}
+	const int64_t simulationNs = span.Stop();
+	HarnessCost::Charge(HarnessCost::SimDump, simulationNs);
+	const double ms = static_cast<double>(simulationNs) / 1e6;
 	s_out.WriteMade([tape, inlineText, simTick, last = s_to]() {
+		// The writer's own work is the dump's too, charged to the frame it ends in.
+		const auto began = std::chrono::steady_clock::now();
+		struct Charge {
+			std::chrono::steady_clock::time_point began;
+			~Charge() { HarnessCost::Charge(HarnessCost::SimDump, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began).count()); }
+		} charge{began};
 		std::ostringstream text;
 		tape->Replay(text);
 		std::string made = std::move(text).str();
@@ -3941,6 +3950,60 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 		     << " over_2ms=" << s_over2 << " over_50ms=" << s_over50;
 		System::PrintDiagnosticLine(line.str());
 	}
+}
+
+// The instruments' cost receipts: one scope per process, round and unbroken run of simulated frames, naming every instrument's
+// state, and inside it one line per frame with what each running instrument cost that frame.
+namespace {
+	struct HarnessCostScope {
+		bool open = false;
+		uint64_t round = 0, first = 0, last = 0;
+		uint32_t segment = 0;
+	};
+	std::mutex s_harnessCostMutex;
+	HarnessCostScope s_harnessCostScope;
+
+	void CloseHarnessCostScopeLocked() {
+		if (!s_harnessCostScope.open) return;
+		s_harnessCostScope.open = false;
+		static const unsigned long incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
+		nlohmann::json instruments = nlohmann::json::object();
+		for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument)
+			instruments[HarnessCost::c_Names[instrument]] = HarnessCost::Enabled(static_cast<HarnessCost::Instrument>(instrument));
+		System::PrintDiagnosticLine("[harness-cost-scope] " + nlohmann::json{{"version", 1}, {"process", System::GetProcessID()}, {"incarnation", incarnation},
+		    {"round", s_harnessCostScope.round}, {"segment", s_harnessCostScope.segment}, {"first_frame", s_harnessCostScope.first},
+		    {"last_frame", s_harnessCostScope.last}, {"instruments", instruments}}.dump());
+	}
+}
+
+static void WriteHarnessCostFrame(uint64_t frame) {
+	if (!HarnessCost::AnyEnabled()) return;
+	std::lock_guard<std::mutex> lock(s_harnessCostMutex);
+	static const unsigned long incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
+	static std::map<uint64_t, uint32_t> s_segments;
+	const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+	HarnessCostScope& scope = s_harnessCostScope;
+	// A tick that simulated no new frame leaves its costs to the frame that follows.
+	if (scope.open && scope.round == round && frame == scope.last) return;
+	if (scope.open && (scope.round != round || frame != scope.last + 1)) CloseHarnessCostScopeLocked();
+	if (!scope.open) {
+		static const bool s_flushAtExit = [] {
+			std::atexit([] {
+				std::lock_guard<std::mutex> exitLock(s_harnessCostMutex);
+				CloseHarnessCostScopeLocked();
+			});
+			return true;
+		}();
+		(void)s_flushAtExit;
+		scope = {true, round, frame, frame, s_segments[round]++};
+	}
+	scope.last = frame;
+	const auto charged = HarnessCost::TakeFrame();
+	nlohmann::json costs = nlohmann::json::object();
+	for (size_t instrument = 0; instrument < HarnessCost::InstrumentCount; ++instrument)
+		if (HarnessCost::Enabled(static_cast<HarnessCost::Instrument>(instrument))) costs[HarnessCost::c_Names[instrument]] = static_cast<double>(charged[instrument]) / 1e6;
+	System::PrintDiagnosticLine("[harness-cost-frame] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
+	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", costs}}.dump());
 }
 
 // CC_TERRAIN_DUMP=<tick> saves the material and FG color bitmaps beside the -out trace at that tick
@@ -7674,7 +7737,7 @@ void RunGameLoop() {
 			}
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (hashThisTick) {
-				const auto harnessStart = std::chrono::steady_clock::now();
+				const HarnessCost::SimulationSpan harnessSpan;
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
 				// archive below writes the same deques, so both have to read one instant.
 				g_MovableMan.FeedTickEndChecksum();
@@ -7694,7 +7757,9 @@ void RunGameLoop() {
 					LiveTickHashStream().Write(observation.dump());
 					// The harness's own tick-end cost on this machine, beside the capacity it publishes: the share of a slow seat that is the harness's.
 					static std::vector<double> s_harnessTickUs;
-					s_harnessTickUs.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - harnessStart).count());
+					const int64_t harnessNs = harnessSpan.Stop();
+					HarnessCost::Charge(HarnessCost::TickEnd, harnessNs);
+					s_harnessTickUs.push_back(static_cast<double>(harnessNs) / 1000.0);
 					if (s_harnessTickUs.size() == 600) {
 						std::sort(s_harnessTickUs.begin(), s_harnessTickUs.end());
 						System::PrintDiagnosticLine(std::format("[harness-cost] tick={} window=600 tick_end_us p50={:.0f} p95={:.0f} max={:.0f}", simTick, s_harnessTickUs[300],
@@ -7758,10 +7823,12 @@ void RunGameLoop() {
 				// The census's counts are read on the sim thread and each part's cost goes on its line; the census worker sums the process heaps and prints it.
 				std::string costs;
 				const auto timed = [&costs](const char* name, const auto& part) {
-					const auto begin = std::chrono::steady_clock::now();
+					const HarnessCost::SimulationSpan span;
 					std::ostringstream text;
 					text << part();
-					costs += std::string(costs.empty() ? "" : ",") + name + ":" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count());
+					const int64_t ns = span.Stop();
+					HarnessCost::Charge(HarnessCost::Census, ns);
+					costs += std::string(costs.empty() ? "" : ",") + name + ":" + std::to_string(ns / 1000);
 					return text.str();
 				};
 				const std::string lua = timed("lua", [] { return g_LuaMan.GetTotalHeapBytes(); });
@@ -7781,8 +7848,11 @@ void RunGameLoop() {
 				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
 				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << pace;
 				CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
+					// The worker's whole job is the census's cost too, charged to the frame it ends in.
+					const auto began = std::chrono::steady_clock::now();
 					const std::string heap = ProcessHeapCensus(costs);
 					System::PrintDiagnosticLine("[mem-census] tick=" + std::to_string(simTick) + heap + rest + " census_us=" + costs);
+					HarnessCost::Charge(HarnessCost::Census, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began).count());
 				});
 			}
 			if (s_scriptedLeaveDue) {
@@ -8014,6 +8084,7 @@ void RunGameLoop() {
 			TelemetryBundle::CaptureAtTickBoundary();
 			const long long crossCaptureUs = g_TimerMan.GetAbsoluteTime() - crossCaptureStartUs;
 			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;
+			WriteHarnessCostFrame(static_cast<uint64_t>(simTick));
 			// The watches' running totals, so a peer a scene kills has reported what it judged.
 			if (simTick % 600 == 0) MenuAutomation::ReportWatches();
 
@@ -10673,6 +10744,20 @@ int main(int argc, char** argv) {
 	const bool mainArgsValid = HandleMainArgs(argc, argv);
 	// Only a menu script or the UI probe reads what the renderer drew.
 	SetPanelDrawRecording(!s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0'));
+	// The instruments this process runs, from the levers it was launched with: every frame's cost receipt names each one's measured cost.
+	{
+		const auto armed = [](const char* name) { const char* value = std::getenv(name); return value && *value; };
+		unsigned long long dumpFrom = 0, dumpTo = 0;
+		const char* dump = std::getenv("CC_SIM_DUMP");
+		HarnessCost::SetEnabled(HarnessCost::SimDump, dump && std::sscanf(dump, "%llu:%llu", &dumpFrom, &dumpTo) == 2 && dumpTo >= dumpFrom);
+		HarnessCost::SetEnabled(HarnessCost::TickEnd, !s_netLiveTickHashPath.empty());
+		HarnessCost::SetEnabled(HarnessCost::FullState, s_netFullStateEvery != 0);
+		HarnessCost::SetEnabled(HarnessCost::Census, s_memoryCensusTicks != 0);
+		// Every preview records its steps for the harness, so the record's cost runs wherever previews do.
+		HarnessCost::SetEnabled(HarnessCost::PreviewFidelity, armed("CCCP_TEST_PREVIEW_FIDELITY") || LocalPrediction::IsEnabled());
+		HarnessCost::SetEnabled(HarnessCost::ScreenWatches, armed("CCCP_TEST_SCREEN_WATCHES") || !s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0'));
+		HarnessCost::SetEnabled(HarnessCost::Recorder, !s_recordVideoDirectory.empty());
+	}
 	if (CaptureSentinel::Enabled()) CaptureSentinel::Enable();
 	if (s_netDedicated && !s_netMatchServiceE2E) {
 		s_netWorldDaemon = true;

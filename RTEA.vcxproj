@@ -964,6 +964,7 @@
     <ClInclude Include="Source\System\SimDumpTape.h" />
     <ClInclude Include="Source\System\DiagnosticLine.h" />
     <ClInclude Include="Source\System\StallStackSampler.h" />
+    <ClInclude Include="Source\System\HarnessCost.h" />
     <ClInclude Include="Source\System\FrameRecorder.h" />
     <ClInclude Include="Source\System\RotatePrimitiveSelfTest.h" />
     <ClInclude Include="Source\System\FloatText.h" />

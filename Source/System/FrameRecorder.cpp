@@ -258,6 +258,8 @@ namespace RTE {
 		}
 		m_StagingSlot = m_Admitted - 1;
 		lock.unlock();
+		// From here to EndFrame the frame is read back on this thread: the recorder's cost to the frame it runs in.
+		m_ReadbackSpan.emplace();
 		m_Staging.resize(bytes);
 		m_StagingHeld = true;
 		return m_Staging.data();
@@ -266,6 +268,10 @@ namespace RTE {
 	void FrameRecorder::EndFrame(const FrameMeta& meta) {
 		if (!m_StagingHeld) return;
 		m_StagingHeld = false;
+		if (m_ReadbackSpan) {
+			HarnessCost::Charge(HarnessCost::Recorder, m_ReadbackSpan->Stop());
+			m_ReadbackSpan.reset();
+		}
 		QueuedFrame frame;
 		frame.pixels = std::move(m_Staging);
 		frame.meta = meta;
@@ -294,7 +300,9 @@ namespace RTE {
 				m_Queue.pop_front();
 			}
 			WritePendingDrops();
+			const auto written = std::chrono::steady_clock::now();
 			std::string row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
+			HarnessCost::Charge(HarnessCost::Recorder, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - written).count());
 			frame.pixels.clear();
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);

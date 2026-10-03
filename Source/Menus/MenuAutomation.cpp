@@ -39,6 +39,7 @@
 #include "WindowMan.h"
 #include "RTEError.h"
 #include "System.h"
+#include "HarnessCost.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -532,16 +533,17 @@ namespace RTE::MenuAutomation {
 		bool linesRead = false;
 		for (auto& [name, watch]: s_Watches) {
 			++watch.frames;
-			const auto judged = std::chrono::steady_clock::now();
 			struct Cost {
 				TextWatch& watch;
-				std::chrono::steady_clock::time_point began;
+				HarnessCost::SimulationSpan span;
 				~Cost() {
-					const int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count();
+					const int64_t ns = span.Stop();
+					HarnessCost::Charge(HarnessCost::ScreenWatches, ns);
+					const int64_t us = ns / 1000;
 					watch.costUs += us;
 					watch.worstUs = std::max(watch.worstUs, us);
 				}
-			} cost{watch, judged};
+			} cost{watch, {}};
 			if (!WatchStateHolds(watch.state)) continue;
 			++watch.active;
 			if (!linesRead && watch.rule != "layout" && watch.rule != "rtt" && watch.rule != "seat_rows") {

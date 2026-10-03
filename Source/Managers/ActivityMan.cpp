@@ -70,6 +70,7 @@
 #include <SDL3_image/SDL_image.h>
 
 #include "lua.hpp"
+#include "HarnessCost.h"
 
 #include <algorithm>
 #include <array>
@@ -732,7 +733,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	if (!scene || !activity || activity->GetActivityState() == Activity::Over) return false;
 	// Every layer of the image comes off the terrain, and a scene mid-load has none yet.
 	if (!scene->GetTerrain()) throw std::runtime_error("scene has no terrain");
-	const auto freezeStart = std::chrono::steady_clock::now();
+	const HarnessCost::SimulationSpan freezeSpan;
 	CaptureTrace::Begin(tick);
 	struct TraceEnd {
 		~TraceEnd() { CaptureTrace::End(); }
@@ -974,7 +975,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	}
 	image->dirtyBytes = dirtyBytes;
 	image->dirtyRatio = image->imageBytes ? static_cast<double>(dirtyBytes) / static_cast<double>(image->imageBytes) : 0;
-	image->freezeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - freezeStart).count();
+	const int64_t freezeNs = freezeSpan.Stop();
+	image->freezeUs = freezeNs / 1000;
+	// The full-state oracle's own freeze is an instrument's cost; an autosave's is the product's.
+	if (fullStateOnly) HarnessCost::Charge(HarnessCost::FullState, freezeNs);
 	simSpan.reset();
 	CaptureTrace::End();
 	bytes = image->imageBytes;
@@ -1003,8 +1007,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 					if (scope != CheckpointScope::Shared) perPeer += (perPeer.empty() ? "" : ",") + name;
 				});
 				System::PrintDiagnosticLine(std::format("[fullstate-scope] tick={} round={} label={} per_peer={}", image->tick, round, label.empty() ? "sample" : label, perPeer));
+				const int64_t hashNs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+				HarnessCost::Charge(HarnessCost::FullState, hashNs);
 				System::PrintDiagnosticLine(std::format("[fullstate-cost] tick={} freeze_us={} hash_us={} image_bytes={}", image->tick, image->freezeUs,
-				    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), image->imageBytes));
+				    hashNs / 1000, image->imageBytes));
 				// The task outlives its run in the verdict's shared state; the image need not.
 				image.reset();
 				return true;

@@ -11,8 +11,11 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <optional>
 #include <utility>
 #include <vector>
+
+#include "HarnessCost.h"
 
 namespace RTE {
 
@@ -124,6 +127,7 @@ namespace RTE {
 		std::vector<unsigned char> m_Staging;
 		bool m_StagingHeld = false;
 		std::size_t m_StagingSlot = 0;
+		std::optional<HarnessCost::SimulationSpan> m_ReadbackSpan; //!< The read back of the staged frame, measured until it is queued.
 
 		// The encoder a harness names (CCCP_TEST_RECORD_ENCODER, its codec in CCCP_TEST_RECORD_CODEC); writer thread only.
 		std::string m_EncoderPath;
