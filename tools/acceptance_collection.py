@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import uuid
+import time
 
 from verdict_artifact import sha256
 
@@ -67,15 +68,14 @@ def start_section(root, section, *, marker=None, inventory_root=None, optional_b
         raise ValueError('section has no collection start')
     window = run_split.window_variant(marker)
     capabilities = {}
-    ref = root/'capabilities/edith-readback.json'
-    if any(row.get('blocked_reason') for row in rows):
+    for name in sorted({row.get('blocked_capability','EDITH.readback') for row in rows if row.get('blocked_reason')}):
+        declared=reader.CAPABILITIES[name];ref=root/declared['path']
         try:
             proof = read(ref)
-            passed = (proof.get('pass') is True and proof.get('box') == 'EDITH' and proof.get('engine_row') == 'A57.2'
-                      and proof.get('source_sha') == schedule['source_sha'] and proof.get('exe_sha256') == schedule.get('exe_sha256'))
-            capabilities['EDITH.readback'] = dict(passed=passed, reference=dict(path='capabilities/edith-readback.json', sha256=sha256(ref)))
+            passed=reader.capability_passes(name,proof,schedule['source_sha'],schedule.get('exe_sha256'))
+            capabilities[name] = dict(passed=passed, reference=dict(path=declared['path'], sha256=sha256(ref)))
         except (OSError, ValueError):
-            capabilities['EDITH.readback'] = dict(passed=False)
+            capabilities[name] = dict(passed=False)
     if optional_boxes is None:
         optional_boxes = {}
         if inventory_root is not None:
@@ -87,7 +87,7 @@ def start_section(root, section, *, marker=None, inventory_root=None, optional_b
         reason = ''
         if row.get('window_required') and window['variant'] == 'WITHOUT':
             reason = run_split.WINDOW_REASON
-        elif row.get('blocked_reason') and not capabilities.get('EDITH.readback', {}).get('passed'):
+        elif row.get('blocked_reason') and not capabilities.get(row.get('blocked_capability','EDITH.readback'), {}).get('passed'):
             reason = row['blocked_reason']
         else:
             absent = sorted(box for box in reader.execution_boxes(row) if optional_boxes.get(box) is False)
@@ -100,6 +100,39 @@ def start_section(root, section, *, marker=None, inventory_root=None, optional_b
     schedule.setdefault('section_receipts', {})[str(section)] = dict(path=f'sections/{section}.json', sha256=sha256(path))
     write(root/'split-plan.json', schedule)
     return document
+
+
+def wait_for_window(root, section, *, marker=None, timeout=None, sleep_fn=None, now_fn=None):
+    """Retry a reservation without changing this section's already frozen WITH/WITHOUT choice."""
+    import run_split
+    root=Path(root);schedule=read(root/'split-plan.json');plan=read(root/'acceptance-plan.json')
+    reference=schedule['section_receipts'][str(section)];choice=read(root/reference['path'])
+    if sha256(root/reference['path'])!=reference['sha256']:raise ValueError('section choice changed before its reservation wait')
+    windows=[row for row in plan['rows'] if row.get('section')==section and row.get('window_required')]
+    if choice['window']['variant']!='WITH' or not windows:return dict(state='READY',waits=0)
+    budget=timeout if timeout is not None else sum(row['minutes']['cap']*60 for row in windows)
+    clock=now_fn or time.time;sleep=sleep_fn or time.sleep
+    path=root/'sections'/f'{section}-window-wait.json'
+    prior=read(path) if path.is_file() else {}
+    if prior and (prior.get('collection_id')!=schedule['collection_id'] or prior.get('source_sha')!=schedule['source_sha']):
+        raise ValueError('prior reservation wait belongs to another collection')
+    budget=prior.get('budget_s',budget)
+    started=prior.get('started_epoch',clock());waits=prior.get('waits',0)
+    while True:
+        current=run_split.window_variant(marker)
+        occupied=current.get('occupied',False) or current['variant']!='WITH'
+        remaining=budget-(clock()-started)
+        state='AWAITING' if occupied else 'READY'
+        receipt=dict(state=state,collection_id=schedule['collection_id'],source_sha=schedule['source_sha'],section=section,
+                     started_epoch=started,waits=waits,budget_s=budget,marker=current,
+                     reason='waiting for the EROL-PC reservation to clear' if occupied else '',updated=run_split.stamp())
+        write(path,receipt)
+        schedule.setdefault('window_wait_receipts',{})[str(section)]=dict(path=path.relative_to(root).as_posix(),sha256=sha256(path))
+        write(root/'split-plan.json',schedule)
+        if not occupied or remaining<=0:return receipt
+        seconds=min(45*60,remaining)
+        print(f'{run_split.stamp()} section {section}: WAIT for EROL-PC reservation; retry in {seconds:g} s',flush=True)
+        sleep(seconds);waits+=1
 
 
 class Share:
@@ -296,14 +329,13 @@ def resolved_commands(spec, root, repo, here, exe_sha256=''):
 
 def run(share, command_id, repo, here):
     spec = share.rows[command_id]
+    if spec.get('window_required'):
+        wait_for_window(share.root,spec['section'])
+        share.schedule=read(share.root/'split-plan.json')
     choice = share.reader.section_choice(spec, share.schedule, share.reader.Evidence(share.root))
     if choice and choice['reason']:
         share.defer(command_id)
         return 3
-    if spec.get('window_required'):
-        import run_split
-        if run_split.window_variant()['variant'] != 'WITH':
-            raise ValueError(f'{command_id}: EROL-PC window was withdrawn before launch')
     commands = resolved_commands(spec, share.root, repo, here, share.schedule.get('exe_sha256', ''))
     share.begin(command_id, commands)
     log = share.receipt_dir(command_id)/'driver-stdout.log'

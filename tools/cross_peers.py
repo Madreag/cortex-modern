@@ -416,6 +416,8 @@ def owns_reservation(box):
 
 def acquire_reservation(box,root,timeout):
     marker=Path(box['exclusive_marker']); deadline=time.monotonic()+timeout; previous=os.environ.get('CCCP_FEEL_MATRIX_RUN')
+    if owns_reservation(box):
+        return dict(marker=str(marker),record=json.loads(marker.read_text(encoding='utf-8')),previous=previous,borrowed=True)
     while time.monotonic()<deadline:
         if marker.exists() or box_load(): time.sleep(.5); continue
         token=secrets.token_hex(24)
@@ -433,6 +435,7 @@ def acquire_reservation(box,root,timeout):
 
 
 def release_reservation(claim):
+    if claim.get('borrowed'):return False
     marker=Path(claim['marker']); removed=False
     try:
         value=json.loads(marker.read_text(encoding='utf-8'))
@@ -445,6 +448,9 @@ def release_reservation(claim):
 
 
 def assert_box_guard(box):
+    if box['kind']=='posix-ssh':
+        from acceptance_posix_guard import assert_available
+        assert_available({**os.environ,**box.get('environment',{})},required_free=box.get('guard_file'))
     if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists() and not owns_reservation(box):
         raise RuntimeError(f'{box["name"]} launch guard active: exclusive measurement reservation {box["exclusive_marker"]}')
     if box.get('guard_file') and not Path(box['guard_file']).is_file():

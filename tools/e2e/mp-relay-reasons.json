@@ -42,11 +42,7 @@
           }
         }
       ],
-      "directory_turn_config": {
-        "backend": "cloudflare",
-        "turn_key_id": "cccp-cf3-refusal-probe",
-        "api_token": "cccp-cf3-not-a-token"
-      }
+      "directory_turn_config_fixture": "cloudflare-refused"
     },
     {
       "name": "none",
@@ -133,5 +129,6 @@
         "setup failed: No relay is configured for this match - switch Connection to Automatic or Direct only"
       ]
     }
-  ]
+  ],
+  "relay_secret_scan": true
 }
