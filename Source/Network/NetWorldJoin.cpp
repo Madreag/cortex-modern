@@ -1838,7 +1838,7 @@ namespace RTE {
 
 	bool NetWorldJoinHost::BeginFinalTail(NetPeerId connection, uint64_t finalFrame) {
 		auto* session = Find(connection);
-		if (!session || session->phase != NetWorldJoinPhase::CatchingUp || finalFrame < session->snapshotTick) return false;
+		if (!session || !StreamsTail(*session) || finalFrame < session->snapshotTick) return false;
 		if (session->finalTailFrame) return *session->finalTailFrame == finalFrame;
 		const uint64_t through = std::max(session->snapshotTick, session->acknowledgedThrough);
 		if (through < finalFrame && (!m_Tail.Covers(through + 1) || !m_Tail.Covers(finalFrame))) return false;
@@ -1856,7 +1856,7 @@ namespace RTE {
 
 	bool NetWorldJoinHost::NextTailChunk(NetPeerId connection, std::vector<uint8_t>& chunk) {
 		auto* session = Find(connection);
-		if (!session || session->phase != NetWorldJoinPhase::CatchingUp) return false;
+		if (!session || !StreamsTail(*session)) return false;
 		if (session->finalTailFrame && session->deliveredThrough >= *session->finalTailFrame) return false;
 		if (session->pendingTail.empty()) {
 			std::vector<std::vector<uint8_t>> frames;
@@ -1877,7 +1877,7 @@ namespace RTE {
 		packed.clear();
 		if (large) *large = false;
 		NetWorldJoinSession* session = Find(connection);
-		if (!session || session->phase != NetWorldJoinPhase::CatchingUp) return false;
+		if (!session || !StreamsTail(*session)) return false;
 		const auto pack = [&](const std::vector<std::vector<uint8_t>>& frames) {
 			for (const std::vector<uint8_t>& frame: frames) {
 				AppendU32LE(packed, static_cast<uint32_t>(frame.size()));
@@ -2020,7 +2020,7 @@ namespace RTE {
 			if (error) *error = "no world bootstrap for that connection";
 			return false;
 		}
-		if (session->phase != NetWorldJoinPhase::CatchingUp) {
+		if (!StreamsTail(*session)) {
 			if (error) *error = "that bootstrap is not catching up";
 			return false;
 		}
@@ -2049,6 +2049,19 @@ namespace RTE {
 			session->wallCatchUpMs += elapsedMs;
 		}
 		m_Metrics.NoteCatchUp(ticksReplayed, elapsedMs);
+		// A watcher never joins the round: it replays the committed tail for as long as it watches, and only one inside the lead
+		// can be promoted into a freed seat with an activation it reaches in time.
+		if (session->spectator) {
+			const bool watching = appliedThrough + c_NetWorldActivationLeadFrames >= nowFrame;
+			if (watching != (session->phase == NetWorldJoinPhase::Spectating)) {
+				session->phase = watching ? NetWorldJoinPhase::Spectating : NetWorldJoinPhase::CatchingUp;
+				std::ostringstream line;
+				line << "[net-world] watcher connection=" << connection << (watching ? " watching" : " catching up") << " applied=" << appliedThrough << " horizon=" << nowFrame;
+				System::PrintDiagnosticLine(line.str());
+			}
+			session->catchUpGate = watching ? "watching" : "outside-lead";
+			return true;
+		}
 		// A returning seat is activated only once it has shown it replays faster than the round plays, or that it has kept the
 		// round's pace at the head of the tail, where the tail's own arrival is what paces it.
 		const bool provesHeadroom = IsPrivateMatch() || session->returnsToHeldSeat;
@@ -2170,29 +2183,6 @@ namespace RTE {
 		return found == m_Sessions.end() ? nullptr : &*found;
 	}
 
-	bool NetWorldJoinHost::ScheduleSpectatorActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error) {
-		if (outActivationTick) *outActivationTick = 0;
-		NetWorldJoinSession* session = Find(connection);
-		if (session == nullptr || !session->spectator) {
-			if (error) *error = "that connection is not a spectator bootstrap";
-			return false;
-		}
-		if (session->activationTick != 0) {
-			if (outActivationTick) *outActivationTick = session->activationTick;
-			return true;
-		}
-		// A spectator with no image on the way has nothing to stream from, and announcing E would take
-		// it out of the phase its transfer is retried in.
-		if (!session->transferStarted || session->snapshotTick == 0) {
-			if (error) *error = "the spectator has no image transfer yet";
-			return false;
-		}
-		session->phase = NetWorldJoinPhase::CatchingUp;
-		session->activationTick = ChooseActivationTick(nowFrame);
-		if (outActivationTick) *outActivationTick = session->activationTick;
-		return true;
-	}
-
 	const NetWorldJoinSession* NetWorldJoinHost::SlowActivation(uint64_t nowFrame) const {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
 			// A joiner already waiting at E-1 is slow too once the round passed an E it never agreed.
@@ -2258,7 +2248,7 @@ namespace RTE {
 			if (error) *error = "that bootstrap has no activation due at frame " + std::to_string(atFrame);
 			return false;
 		}
-		session->phase = session->spectator ? NetWorldJoinPhase::Spectating : NetWorldJoinPhase::Active;
+		session->phase = NetWorldJoinPhase::Active;
 		++m_ActivationsCommitted;
 		return true;
 	}
@@ -2344,7 +2334,7 @@ namespace RTE {
 	uint64_t NetWorldJoinHost::OldestNeededFrame() const {
 		uint64_t oldest = 0;
 		for (const NetWorldJoinSession& session: m_Sessions) {
-			if (session.phase != NetWorldJoinPhase::CatchingUp && session.phase != NetWorldJoinPhase::SnapshotTransfer) {
+			if (!StreamsTail(session) && session.phase != NetWorldJoinPhase::SnapshotTransfer) {
 				continue;
 			}
 			const uint64_t needed = session.acknowledgedThrough + 1;

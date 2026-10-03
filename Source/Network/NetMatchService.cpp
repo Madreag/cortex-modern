@@ -4396,7 +4396,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::SendWorldJoinTailTo(NetLobbySession& lobby, NetWorldJoinHost& host, const NetWorldJoinSession& session) {
-		if (session.phase != NetWorldJoinPhase::CatchingUp) {
+		if (!StreamsTail(session)) {
 			return;
 		}
 		const uint8_t lobbyPeer = WorldJoinLobbyPeer(session);
@@ -4927,7 +4927,7 @@ static std::string ResyncSaveName() {
 					}
 				}
 			}
-			if (session.phase == NetWorldJoinPhase::CatchingUp && m_Runner) {
+			if (StreamsTail(session) && m_Runner) {
 				SendWorldJoinTailTo(m_Runner->GetLobbySession(), m_WorldJoin, session);
 			}
 		}
@@ -4944,14 +4944,6 @@ static std::string ResyncSaveName() {
 			m_Runner->GetLobbySession().PumpOutgoingChunks();
 		}
 		const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
-		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
-			if (session.spectator && session.activationTick == 0) {
-				uint64_t spectatorActivation = 0;
-				if (m_WorldJoin.ScheduleSpectatorActivation(session.connection, nowFrame, &spectatorActivation, nullptr) && spectatorActivation != 0) {
-					m_Coordinator->SetObservationEpoch(spectatorActivation);
-				}
-			}
-		}
 		while (const NetWorldJoinSession* slow = m_WorldJoin.SlowActivation(g_TimerMan.GetSimUpdateCount())) {
 			uint64_t later = 0;
 			const uint64_t previous = slow->activationTick;
@@ -5031,10 +5023,6 @@ static std::string ResyncSaveName() {
 		DriveWorldSeatRespawns(nowFrame);
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
 			if (session.phase != NetWorldJoinPhase::CatchingUp || session.activationTick == 0) continue;
-			if (session.spectator) {
-				if (session.acknowledgedThrough + 1 >= session.activationTick) m_WorldJoin.CompleteActivation(session.connection, session.activationTick, nullptr);
-				continue;
-			}
 			if (!session.activationProposed && session.acknowledgedActivation == session.activationTick && session.acknowledgedThrough + 6 >= g_TimerMan.GetSimUpdateCount()) {
 				NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
 				if (!m_ReconnectHost.GetSeatHolder(session.stableSeat, holder, generation, incarnation) || holder != session.connection) continue;

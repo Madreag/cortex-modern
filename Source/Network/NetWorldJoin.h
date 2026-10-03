@@ -420,6 +420,11 @@ namespace RTE {
 		return std::min<size_t>(config.worldMaxSpectators, c_WorldSpectatorLobbyCap);
 	}
 
+	/// A joiner replaying toward its activation, or a watcher replaying for as long as it watches.
+	inline bool StreamsTail(const NetWorldJoinSession& session) {
+		return session.phase == NetWorldJoinPhase::CatchingUp || (session.spectator && session.phase == NetWorldJoinPhase::Spectating);
+	}
+
 	inline uint8_t WorldJoinLobbyPeer(const NetWorldJoinSession& session) {
 		if (session.assignedPeerId != 0) {
 			return session.assignedPeerId;
@@ -664,8 +669,6 @@ namespace RTE {
 		/// ahead of it, so a member is a peer of the round before the frames it owes go out.
 		void NoteSentInputThrough(uint64_t lastQueuedTarget) { m_SentInputThrough = lastQueuedTarget; }
 		uint64_t SentInputThrough() const { return m_SentInputThrough; }
-		/// Announces E for an overflow spectator (no Controller, no Admit).
-		bool ScheduleSpectatorActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
 		/// Announces a later E once. A second miss is a CancelJoin.
 		bool ReannounceActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
 		/// Marks the bootstrap active once its transition has been committed.

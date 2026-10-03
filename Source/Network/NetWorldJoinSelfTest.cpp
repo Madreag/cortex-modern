@@ -216,6 +216,18 @@ namespace RTE {
 			}
 		};
 
+		// A watcher reaches its stream as the host walks it there: its image delivered, then its replay inside the lead.
+		bool StreamWatcher(NetWorldJoinHost& host, NetPeerId connection, uint64_t nowFrame, std::string* error) {
+			uint64_t announced = 0;
+			if (!host.NoteTransferComplete(connection, 32, error) || !host.NoteCatchUpProgress(connection, nowFrame - 1, 1, 1, nowFrame, &announced, error)) return false;
+			const NetWorldJoinSession* session = host.FindSession(connection);
+			if (announced != 0 || session == nullptr || session->phase != NetWorldJoinPhase::Spectating) {
+				if (error) *error = "the watcher reads " + std::string(session ? NetWorldJoinPhaseName(session->phase) : "gone") + " with E " + std::to_string(announced);
+				return false;
+			}
+			return true;
+		}
+
 		// A private directory for a row's own files; removed with them.
 		struct ResumeScratchDirectory {
 			std::filesystem::path path;
@@ -1605,12 +1617,13 @@ namespace RTE {
 				return Fail("the overflow connection did not become a spectator");
 			}
 			uint64_t announced = 0;
-			if (host.ScheduleSpectatorActivation(8, 100, &announced, &error)) {
-				return Fail("spectator-activation-before-its-image: E " + std::to_string(announced) + " was announced with no transfer started");
+			if (host.NoteCatchUpProgress(8, 40, 1, 1, 100, &announced, &error) || announced != 0) {
+				return Fail("spectator-activation-before-its-image: E " + std::to_string(announced) + " was announced with no image delivered");
 			}
 			if (host.FindSession(8)->phase != NetWorldJoinPhase::SnapshotTransfer) {
 				return Fail("spectator-activation-before-its-image: the spectator left the phase its transfer is retried in");
 			}
+			error.clear();
 			NetWorldCheckpointImage image;
 			image.worldId = c_WorldId;
 			image.boot = 1;
@@ -1623,8 +1636,23 @@ namespace RTE {
 			if (!host.NoteTransferStarted(8, 0x22, 2, 0)) {
 				return Fail("spectator transfer start refused");
 			}
-			if (!host.ScheduleSpectatorActivation(8, 100, &announced, &error) || announced != 100 + c_NetWorldActivationLeadFrames) {
-				return Fail("spectator-activation-before-its-image: E was not announced once the image was on the way: " + error);
+			// Its image arriving is not its replay reaching the round: a watcher a lead or more behind keeps catching up.
+			if (!host.NoteTransferComplete(8, 8, &error) || !host.NoteCatchUpProgress(8, 40, 1, 1, 200, &announced, &error) || announced != 0 ||
+			    host.FindSession(8)->phase != NetWorldJoinPhase::CatchingUp) {
+				return Fail("watcher-watching-outside-the-lead: the watcher replaying at 40 with the round at 200 reads " + std::string(NetWorldJoinPhaseName(host.FindSession(8)->phase)) +
+				            " with E " + std::to_string(announced) + (error.empty() ? "" : ": " + error));
+			}
+			// Inside the lead it watches: the tail streams on and no activation is handed to it, so it never joins the round.
+			const NetWorldJoinSession* watcher = host.FindSession(8);
+			if (!host.NoteCatchUpProgress(8, 150, 110, 1000, 200, &announced, &error) || announced != 0 || watcher->activationTick != 0 ||
+			    watcher->phase != NetWorldJoinPhase::Spectating || !StreamsTail(*watcher)) {
+				return Fail("watcher-handed-an-activation: the watcher inside the lead at 150 of 200 reads " + std::string(NetWorldJoinPhaseName(watcher->phase)) + " with E " +
+				            std::to_string(announced) + ", activation " + std::to_string(watcher->activationTick) + (error.empty() ? "" : ": " + error));
+			}
+			// One that falls a lead behind again is no watcher a freed seat can take.
+			if (!host.NoteCatchUpProgress(8, 151, 1, 1000, 300, &announced, &error) || watcher->phase != NetWorldJoinPhase::CatchingUp || !StreamsTail(*watcher)) {
+				return Fail("watcher-behind-still-promotable: the watcher at 151 with the round at 300 reads " + std::string(NetWorldJoinPhaseName(watcher->phase)) +
+				            (error.empty() ? "" : ": " + error));
 			}
 			return 0;
 		}
@@ -4643,9 +4671,7 @@ namespace RTE {
 		    !world.CompleteActivation(51, memberE - 1, &error)) {
 			return Fail("clean-leave-released-the-wrong-seat: alice never reached Active (" + error + ")");
 		}
-		uint64_t watcherE = 0;
-		if (!world.ScheduleSpectatorActivation(52, memberE, &watcherE, &error) || watcherE == 0 ||
-		    !world.CompleteActivation(52, watcherE, &error)) {
+		if (!StreamWatcher(world, 52, memberE, &error)) {
 			return Fail("clean-leave-released-the-wrong-seat: bob never reached his stream (" + error + ")");
 		}
 		NetMatchService::WorldCleanLeave leave;
@@ -4731,9 +4757,7 @@ namespace RTE {
 		    !world.CompleteActivation(61, aliceE - 1, &error)) {
 			return Fail("reclaim-hold-missed-the-slot: alice never reached Active (" + error + ")");
 		}
-		uint64_t daveWatchE = 0;
-		if (!world.ScheduleSpectatorActivation(63, aliceE, &daveWatchE, &error) || daveWatchE == 0 ||
-		    !world.CompleteActivation(63, daveWatchE, &error)) {
+		if (!StreamWatcher(world, 63, aliceE, &error)) {
 			return Fail("reclaim-hold-missed-the-slot: dave never reached his stream (" + error + ")");
 		}
 		// The host releases alice's slot and dave is promoted onto it, keeping his own H4 seat. A leave keeps the slot its
@@ -4743,10 +4767,11 @@ namespace RTE {
 			return Fail("reclaim-hold-missed-the-slot: the host's release did not free a slot (" + error + ")");
 		}
 		world.CancelJoin(61, "slot released");
-		world.NoteSentInputThrough(daveWatchE + 40);
+		const uint64_t watching = aliceE + c_NetWorldActivationLeadFrames;
+		world.NoteSentInputThrough(watching + 40);
 		uint64_t promotedAt = 0;
 		NetPeerId promoted = c_InvalidNetPeerId;
-		if (!world.PromoteWaitingSpectator(daveWatchE + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
+		if (!world.PromoteWaitingSpectator(watching + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
 		    !world.NoteCatchUpProgress(63, promotedAt - 1, 1, 1, promotedAt - 1, nullptr, &error) ||
 		    !world.CompleteActivation(63, promotedAt - 1, &error)) {
 			return Fail("reclaim-hold-missed-the-slot: dave was not promoted into the freed slot (" + error + ")");
@@ -4890,9 +4915,7 @@ namespace RTE {
 		    !world.CompleteActivation(61, aliceE - 1, &error)) {
 			return Fail("promoted-drop-named-the-seats-id: alice never reached Active (" + error + ")");
 		}
-		uint64_t daveWatchE = 0;
-		if (!world.ScheduleSpectatorActivation(63, aliceE, &daveWatchE, &error) || daveWatchE == 0 ||
-		    !world.CompleteActivation(63, daveWatchE, &error)) {
+		if (!StreamWatcher(world, 63, aliceE, &error)) {
 			return Fail("promoted-drop-named-the-seats-id: dave never reached his stream (" + error + ")");
 		}
 		// The host releases alice's slot and dave is promoted onto it, keeping his own H4 seat. A leave keeps the slot its
@@ -4902,10 +4925,11 @@ namespace RTE {
 			return Fail("promoted-drop-named-the-seats-id: the host's release did not free a slot (" + error + ")");
 		}
 		world.CancelJoin(61, "slot released");
-		world.NoteSentInputThrough(daveWatchE + 40);
+		const uint64_t watching = aliceE + c_NetWorldActivationLeadFrames;
+		world.NoteSentInputThrough(watching + 40);
 		uint64_t promotedAt = 0;
 		NetPeerId promoted = c_InvalidNetPeerId;
-		if (!world.PromoteWaitingSpectator(daveWatchE + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
+		if (!world.PromoteWaitingSpectator(watching + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
 		    !world.NoteCatchUpProgress(63, promotedAt - 1, 1, 1, promotedAt - 1, nullptr, &error) ||
 		    !world.CompleteActivation(63, promotedAt - 1, &error)) {
 			return Fail("promoted-drop-named-the-seats-id: dave was not promoted into the freed slot (" + error + ")");
@@ -5242,7 +5266,7 @@ namespace RTE {
 		return 0;
 	}
 
-	// A watcher and a member due at one frame: streaming the watcher leaves the member due, not skipped.
+	// A watcher streaming beside a member due at E is never due itself: the walk finds the member.
 	int TestDueSpectatorLeavesTheMemberDue() {
 		NetWorldJoinHost host;
 		std::string error;
@@ -5273,47 +5297,31 @@ namespace RTE {
 			return Fail("due-walk-skipped-the-member: the fixture did not open one watcher and one member");
 		}
 		const uint64_t nowFrame = 440;
-		uint64_t watcherE = 0;
 		uint64_t memberE = 0;
-		if (!host.NoteTransferStarted(71, 7, 1, 400) || !host.ScheduleSpectatorActivation(71, nowFrame, &watcherE, &error) ||
-		    !host.NoteTransferComplete(72, 32, &error) || !host.NoteCatchUpProgress(72, 400, 1, 1, nowFrame, &memberE, &error)) {
-			return Fail("due-walk-skipped-the-member: the fixture could not announce both activations (" + error + ")");
-		}
-		if (watcherE == 0 || watcherE != memberE) {
-			return Fail("due-walk-skipped-the-member: the fixture announced " + std::to_string(watcherE) + " and " +
-			            std::to_string(memberE) + " instead of one frame");
+		if (!host.NoteTransferStarted(71, 7, 1, 400) || !StreamWatcher(host, 71, nowFrame, &error) ||
+		    !host.NoteTransferComplete(72, 32, &error) || !host.NoteCatchUpProgress(72, 400, 1, 1, nowFrame, &memberE, &error) || memberE == 0) {
+			return Fail("due-walk-skipped-the-member: the fixture could not stream the watcher and announce the member (" + error + ")");
 		}
 		if (!host.NoteCatchUpProgress(72, memberE - 1, 1, 1, memberE - 1, nullptr, &error)) {
 			return Fail("due-walk-skipped-the-member: the member never applied through E-1 (" + error + ")");
 		}
-		// One pump reads one frame: the walk the service runs over it must reach both.
-		const uint64_t nextFrame = watcherE - 1;
-		const NetWorldJoinSession* first = host.DueActivation(nextFrame);
-		if (first == nullptr || first->connection != 71) {
-			return Fail("due-walk-skipped-the-member: the watcher is not the first due bootstrap of the pump");
+		// One pump reads one frame: the walk finds the member, never the watcher streaming beside it.
+		const uint64_t nextFrame = memberE - 1;
+		const NetWorldJoinSession* due = host.DueActivation(nextFrame);
+		if (due == nullptr || due->connection != 72) {
+			return Fail("due-walk-skipped-the-member: the due bootstrap at frame " + std::to_string(nextFrame) + " is " +
+			            (due ? "connection " + std::to_string(due->connection) : std::string("none")));
 		}
-		const NetWorldActivationPlan watcherPlan = PlanWorldActivation(*first, nextFrame, false);
-		if (watcherPlan.admit) {
-			return Fail("due-walk-skipped-the-member: a watcher's plan admitted it to a seat");
-		}
-		if (!host.CompleteActivation(first->connection, watcherPlan.firstRequired, &error)) {
-			return Fail("due-walk-skipped-the-member: the watcher's stream was refused (" + error + ")");
-		}
-		const NetWorldJoinSession* second = host.DueActivation(nextFrame);
-		if (second == nullptr || second->connection != 72) {
-			return Fail("due-walk-skipped-the-member: the member is not due behind the streamed watcher at frame " +
-			            std::to_string(nextFrame));
-		}
-		const NetWorldActivationPlan memberPlan = PlanWorldActivation(*second, nextFrame, false);
+		const NetWorldActivationPlan memberPlan = PlanWorldActivation(*due, nextFrame, false);
 		if (!memberPlan.admit || memberPlan.firstRequired != memberE) {
 			return Fail(std::string("due-walk-skipped-the-member: the member's plan reads admit ") +
 			            (memberPlan.admit ? "true" : "false") + " at frame " + std::to_string(memberPlan.firstRequired));
 		}
-		if (!host.CompleteActivation(second->connection, memberPlan.firstRequired - 1, &error)) {
+		if (!host.CompleteActivation(due->connection, memberPlan.firstRequired - 1, &error)) {
 			return Fail("due-walk-skipped-the-member: the member's activation was refused (" + error + ")");
 		}
-		if (host.DueActivation(nextFrame) != nullptr || host.LateActivation(nextFrame) != nullptr) {
-			return Fail("due-walk-skipped-the-member: a bootstrap is still due after the pump walked both");
+		if (host.DueActivation(nextFrame) != nullptr || host.LateActivation(nextFrame) != nullptr || host.FindSession(71)->phase != NetWorldJoinPhase::Spectating) {
+			return Fail("due-walk-skipped-the-member: a bootstrap is still due after the pump, or the watcher stopped streaming");
 		}
 		return 0;
 	}
@@ -5447,11 +5455,7 @@ namespace RTE {
 		}
 		for (const NetPeerId connection: {43, 44}) {
 			(void)host.NoteTransferStarted(connection, 7, 1, 400);
-			uint64_t announced = 0;
-			if (!host.ScheduleSpectatorActivation(connection, 500, &announced, &error) || announced == 0) {
-				return Fail("promotion-never-happened: a watcher was announced no E (" + error + ")");
-			}
-			if (!host.CompleteActivation(connection, announced, &error)) {
+			if (!StreamWatcher(host, connection, 500, &error)) {
 				return Fail("promotion-never-happened: a watcher never reached its stream (" + error + ")");
 			}
 		}
@@ -5672,8 +5676,7 @@ namespace RTE {
 			return Fail("expired-hold-never-promoted: the fixture could not fill the world (" + error + ")");
 		}
 		(void)expiring.NoteTransferStarted(63, 7, 1, 100);
-		uint64_t announced = 0;
-		if (!expiring.ScheduleSpectatorActivation(63, 200, &announced, &error) || !expiring.CompleteActivation(63, announced, &error)) {
+		if (!StreamWatcher(expiring, 63, 200, &error)) {
 			return Fail("expired-hold-never-promoted: the watcher never reached its stream (" + error + ")");
 		}
 		expiring.CancelJoin(61, "connection lost");
