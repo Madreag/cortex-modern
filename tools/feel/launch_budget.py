@@ -9,9 +9,6 @@ import runpy
 import sys
 from contextlib import contextmanager
 
-MIN_FREE_BYTES = 10 * 1024 ** 3
-
-
 MARKER = Path('D:/mx/FEEL-MATRIX-RUNNING')
 CROSS_GUARD = Path('D:/mx/BOX-FREE-FOR-CROSS')
 
@@ -58,11 +55,14 @@ def install_memory_guard():
         # The cross driver claims the marker before its own local launch; only a process without it is kept off the reserved box.
         if CROSS_GUARD.exists() and not holds_marker():
             refuse('engine launch refused: the box is reserved for the cross match')
+        limits = win32_test_runner.box_runner_limits(environ=getattr(run, 'env', os.environ))
+        required, box = limits['min_free_bytes'], limits['box']
         free = free_memory_bytes()
-        if free < MIN_FREE_BYTES:
-            refuse(f'engine launch refused: {free} free bytes, requires {MIN_FREE_BYTES}', free_bytes=free, required_bytes=MIN_FREE_BYTES)
+        if free < required:
+            refuse(f'engine launch refused on {box}: {free} free bytes, requires {required}',
+                   box=box, free_bytes=free, required_bytes=required, source=limits['min_free_source'])
         result = original(run)
-        run.record['launch_budget'] = dict(free_bytes=free, required_bytes=MIN_FREE_BYTES)
+        run.record['launch_budget'] = dict(box=box, free_bytes=free, required_bytes=required, source=limits['min_free_source'])
         run._save()
         return result
     start._memory_guard = True
