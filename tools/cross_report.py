@@ -12,7 +12,7 @@ import re
 import subprocess
 
 from feel import report
-from feel.records import open_record, record_path, presentation_records
+from feel.records import open_record, record_path, presentation_records, retract_private_history
 from compare_sim_traces import CORE
 
 HERE = Path(__file__).resolve().parent
@@ -550,7 +550,8 @@ def held_away_ranges(live, ranges, logs):
     for name, peer_rows in live.items():
         # Each departure with the round and frame its hold began: ticks the seat ran from there were on a branch it then abandoned.
         by_round, ordered = {}, []
-        for text in logs.get(name, []):
+        for entry in logs.get(name, []):
+            text = entry['text'] if isinstance(entry, dict) else entry
             held, current = None, None
             for line in text.splitlines():
                 if (found := ROUND_START.search(line)): current = found.group(1)
@@ -643,18 +644,43 @@ def design_hold(hold, receipts):
 
 
 def void_abandoned(rows):
-    """The engine's own retraction: an {abandon_from: N, round: R} record voids the rows of round R from N its seat wrote before it."""
-    kept = []
-    for r in rows:
-        if 'abandon_from' in r and r.get('session') is None:
-            first, retracted = r['abandon_from'], str(r.get('round'))
-            kept = [k for k in kept if not (str(k.get('round')) == retracted and isinstance(k.get('tick'), int) and k['tick'] >= first)]
-            continue
-        kept.append(r)
-    return kept
+    return retract_private_history(rows)
 
 
 RELAUNCHED_HELD = re.compile(r'\[net-match\] held client: replaying the private committed tail|\[net-match\] rejoin phase Loading -> TailReplay')
+
+
+def held_from_round_start(interval, peer_rows, fragments):
+    matching = [row for row in peer_rows if all(row.get(key) == interval[key] for key in ('session', 'match', 'source_round'))]
+    incarnations = {row.get('incarnation') for row in matching}
+    if len(incarnations) != 1 or None in incarnations:
+        return False
+    incarnation = next(iter(incarnations))
+    for entry in fragments:
+        if isinstance(entry, str):
+            if len(fragments) != 1 or {row.get('incarnation') for row in peer_rows} != {incarnation}:
+                continue
+            entry = dict(text=entry, incarnation=incarnation)
+        if entry.get('incarnation') != incarnation:
+            continue
+        current, local, held, returned = None, None, False, False
+        for line in entry['text'].splitlines():
+            if found := ROUND_START.search(line):
+                current = found[1]
+                local_match = re.search(r' local_peer=(\d+)', line)
+                local = int(local_match[1]) if local_match else None
+            elif current == str(interval['match']):
+                if found := HOLD_OF_SEAT.search(line):
+                    held |= int(found[1]) <= interval['first']
+                elif RETURNED_LIVE.search(line) or '[net-match] private catch-up complete frame=' in line:
+                    returned = True
+                elif found := report.SEAT_RECLAIMED.search(line):
+                    returned |= local is not None and int(found[1]) == local
+                elif found := re.search(r'\[net-match\] non-participation first=(\d+) last=(\d+) incarnation=(\d+)', line):
+                    held |= int(found[1]) <= interval['first'] and int(found[2]) >= interval['last'] and int(found[3]) == incarnation
+        if held and not returned:
+            return True
+    return False
 
 
 def adopt_restored_histories(live, ranges, logs):
@@ -663,8 +689,16 @@ def adopt_restored_histories(live, ranges, logs):
     frame are its away range. The image's catch-up replay before it carries no branch and is not compared here."""
     adopted, away = {}, {}
     for name, peer_rows in live.items():
-        relaunched = any(RELAUNCHED_HELD.search(text) for text in logs.get(name, []))
+        relaunched = any(RELAUNCHED_HELD.search(entry['text'] if isinstance(entry, dict) else entry) for entry in logs.get(name, []))
         rows = peer_rows
+        contradictions = []
+        for interval in ranges:
+            if not held_from_round_start(interval, peer_rows, logs.get(name, [])):
+                continue
+            visible = [row for row in peer_rows if all(row.get(key) == interval[key] for key in ('session', 'match', 'source_round'))
+                       and (row.get('phase') == 'live' or row.get('player_visible') is True)]
+            if visible:
+                contradictions.append(dict(type='invalid_history', error=f"{name}: hold from round start contradicts live/visible tick {visible[0].get('tick')}"))
         if relaunched:
             for interval in ranges:
                 prefix = tuple(interval[field] for field in report.HISTORY_FIELDS[:-1])
@@ -673,8 +707,9 @@ def adopt_restored_histories(live, ranges, logs):
                 restored = [r for r in rows if r.get('history_branch') is None and r.get('phase') == 'live' and isinstance(r.get('tick'), int) and
                             r.get('session') == session and r.get('match') == match and r.get('source_round') == source]
                 replayed = any(r.get('phase') == 'catchup' and r.get('session') == session and r.get('match') == match for r in rows)
+                nonparticipant = held_from_round_start(interval, peer_rows, logs.get(name, []))
                 # A seat held from its round's start that only replayed the round never played it: the whole round is its away range.
-                if not keyed and not restored and replayed:
+                if not keyed and not restored and replayed and nonparticipant:
                     away[(name, prefix)] = [(interval['first'], interval['last'])]
                     continue
                 if not keyed or not restored: continue
@@ -693,7 +728,7 @@ def adopt_restored_histories(live, ranges, logs):
                 if gaps: away[(name, prefix)] = gaps
         # A catch-up replay runs before its seat lands, in the seat's away range (OR1), whether the seat relaunched or caught up in place.
         rows = [r for r in rows if not (r.get('history_branch') is None and r.get('phase') == 'catchup')]
-        adopted[name] = rows
+        adopted[name] = rows + contradictions
     return adopted, away
 
 
@@ -857,8 +892,16 @@ def build_report(root):
         [r for r in events.get(manifest['host'],[]) if r.get('type')=='match_boundary'], peers,
         smoke_ticks=manifest['ticks'] if manifest['scenario']=='match' else None,
         final_tick=peers[manifest['host']]['native_final_tick'])
-    logs = {name: [''.join(line for _, line in read_log(root / fragment / 'engine/stdout.log')) for fragment in peer['fragments']] for name, peer in peers.items()}
-    compared, restored_away = adopt_restored_histories({name: void_abandoned(rows) for name, rows in live.items()}, ranges, logs)
+    logs = {name: [dict(text=''.join(line for _, line in read_log(root / fragment / 'engine/stdout.log')),
+                       incarnation=int(Path(fragment).name.split('-')[-1]), path=fragment) for fragment in peer['fragments']] for name, peer in peers.items()}
+    retained = {}
+    for name, records in live.items():
+        try:
+            retained[name] = void_abandoned(records)
+        except ValueError as error:
+            findings.append(dict(peer=name, kind='history', reason=str(error)))
+            retained[name] = [row for row in records if 'abandon_from' not in row]
+    compared, restored_away = adopt_restored_histories(retained, ranges, logs)
     away = {**held_away_ranges(compared, ranges, logs), **restored_away}
     comparison = report.compare_histories(compared, ranges, REQUIRED_SUBSYSTEMS, away)
     comparison['away_ranges'] = [dict(peer=peer, prefix=list(prefix), first=first, last=last) for (peer, prefix), spans in away.items()

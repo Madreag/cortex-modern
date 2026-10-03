@@ -18,19 +18,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 from run_sim_test import make_run  # noqa: E402
+from feel.retained_resume import read_live_hashes
 
 FROM_TICK, TO_TICK, TICKS = 600, 2400, 3000
 
 
 def live_rows(path: Path) -> dict[int, dict]:
-    rows = {}
-    for line in path.read_text(encoding="utf-8").splitlines() if path.is_file() else []:
-        row = json.loads(line) if line.strip() else {}
-        if "abandon_from" in row:
-            rows = {tick: value for tick, value in rows.items() if tick < row["abandon_from"]}
-        elif "tick" in row:
-            rows[row["tick"]] = row
-    return rows
+    return {row['tick']: row for row in read_live_hashes(path) if 'tick' in row}
 
 
 def main() -> int:

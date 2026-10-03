@@ -28,6 +28,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from run_sim_test import make_run
 from compare_sim_traces import compare_fullstate
+from feel.records import retract_private_history
 
 # The private port range: a lane takes its own block inside it so two lanes never share a listener.
 PRIVATE_PORTS = (49152, 65535)
@@ -39,18 +40,7 @@ def read_live_hashes(path: Path) -> list[dict]:
     """The stream's ticks in order; an abandon_from line drops the ticks a held seat ran off the round before its hold arrived."""
     if not path.is_file():
         return []
-    rows: list[dict] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if "abandon_from" in row:
-            # A round-tagged abandon drops only that round's ticks: a rematch's earlier round keeps its own.
-            rows = [kept for kept in rows if kept["tick"] < row["abandon_from"]
-                    or ("round" in row and kept.get("round") != row["round"])]
-        else:
-            rows.append(row)
-    return rows
+    return retract_private_history([json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()], str(path))
 
 
 def split_passes(lines: list[dict]) -> list[list[dict]]:

@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 import re
-from .records import open_record, record_path
+from .records import open_record, record_path, private_history_row
 
 TICKS = 1200
 SIM_MS = 1000 / 60
@@ -52,7 +52,8 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
             missing += ['scalar:'+field for field in (*HISTORY_FIELDS,'instance','execution','incarnation')
                         if field in row and not isinstance(row[field],(int,str))]
             if missing:
-                invalid.append(dict(peer=peer, line=row.get('_line', number), missing=missing))
+                invalid.append(dict(peer=peer, line=row.get('_line', number), missing=missing,
+                                    reason=row.get('error') or f'missing or invalid fields: {missing}'))
                 continue
             key = tuple(row[field] for field in HISTORY_FIELDS)
             identity = (row['instance'], row['execution'], row['incarnation'], *key)
@@ -61,10 +62,10 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
             seen.add(identity)
             signature = {'sim_gated': row.get('sim_gated'), **{name: value for name, value in row['subsystems'].items()
                                                               if name != 'controller_route'}}
-            observations[key].append((signature, row.get('_line', number), row.get('_path')))
+            observations[key].append((signature, row.get('_line', number), row.get('_path'), private_history_row(row)))
         indexed[peer] = observations
     counts = {peer: dict(expected=0, present=0, missing=0) for peer in peers}
-    equal, unknown, unequal, expected_keys = 0, 0, 0, set()
+    equal, unknown, unequal, not_comparable, expected_keys = 0, 0, 0, 0, set()
     strips = []
     for interval in ranges:
         if interval['first'] > interval['last'] or len(set(interval['peers'])) < 3:
@@ -80,13 +81,17 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
                 skipped = away.get((peer, prefix))
                 spans = skipped if isinstance(skipped, list) else [skipped] if skipped else []
                 if any(low <= tick <= high for low, high in spans):
+                    for _, line, path, private in indexed.get(peer, {}).get(key, []):
+                        if not private:
+                            invalid.append(dict(peer=peer, line=line, path=path, key=dict(zip(HISTORY_FIELDS, key)),
+                                                reason='away exclusion overlaps a non-private recorded tick', missing=[]))
                     counts.setdefault(peer, dict(expected=0, present=0, missing=0)).setdefault('away', 0)
                     counts[peer]['away'] += 1
                     continue
                 counts.setdefault(peer, dict(expected=0, present=0, missing=0))['expected'] += 1
                 found = indexed.get(peer, {}).get(key, [])
                 counts[peer]['present' if found else 'missing'] += 1
-                values.extend((peer, signature, line, path) for signature, line, path in found)
+                values.extend((peer, signature, line, path) for signature, line, path, _ in found)
                 if not found:
                     absent.append(peer)
             differs = False
@@ -104,15 +109,17 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
                                 first_value=reference.get(section), value=signature.get(section))
             unequal += differs
             unknown += bool(absent)
-            equal += not differs and not absent
-            status = 'UNEQUAL' if differs else 'UNKNOWN' if absent else 'EQUAL'
+            comparable = len({peer for peer, *_ in values}) >= 2
+            not_comparable += not comparable
+            equal += comparable and not differs and not absent
+            status = 'UNEQUAL' if differs else 'NOT COMPARABLE' if not comparable else 'UNKNOWN' if absent else 'EQUAL'
             if strips and strips[-1]['status'] == status and strips[-1]['prefix'] == list(prefix) and strips[-1]['last'] + 1 == tick:
                 strips[-1]['last'] = tick
             else:
                 strips.append(dict(prefix=list(prefix), first=tick, last=tick, status=status))
     unexpected = sum(key not in expected_keys for observations in indexed.values() for key in observations)
-    return dict(passed=bool(expected_keys) and not (unknown or unequal or invalid or duplicates),
-                equal_keys=equal, unknown_keys=unknown, unequal_keys=unequal, duplicates=duplicates,
+    return dict(passed=bool(expected_keys) and not (unknown or unequal or invalid or duplicates or unexpected or not_comparable),
+                equal_keys=equal, unknown_keys=unknown, unequal_keys=unequal, not_comparable_keys=not_comparable, duplicates=duplicates,
                 unexpected_keys=unexpected, invalid=invalid[:100], invalid_count=len(invalid),
                 peers=counts, first_difference=first_difference, strips=strips,
                 scope='sim_gated and hashed tick-end subsystems; controller_route is per-peer')

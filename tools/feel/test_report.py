@@ -83,10 +83,10 @@ class ReportTests(unittest.TestCase):
         from feel.retained_resume import compare_live_hashes
         with TemporaryDirectory() as folder:
             host, client = Path(folder) / 'host.jsonl', Path(folder) / 'client.jsonl'
-            rows = [dict(tick=tick, sim_gated=str(tick), subsystems={'controller': str(tick)}) for tick in range(1, 21)]
+            rows = [dict(round=1, tick=tick, sim_gated=str(tick), subsystems={'controller': str(tick)}) for tick in range(1, 21)]
             host.write_text('\n'.join(map(json.dumps, rows)), encoding='utf-8')
-            offround = [dict(row, sim_gated='held') for row in rows[9:12]]
-            held = rows[:9] + offround + [dict(abandon_from=10)] + rows[9:]
+            offround = [dict(row, sim_gated='held', phase='private', player_visible=False) for row in rows[9:12]]
+            held = rows[:9] + offround + [dict(abandon_from=10, round=1)] + rows[9:]
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             compared = compare_live_hashes(host, client, 1)
             self.assertEqual(sum(row['compared_ticks'] for row in compared), 20)
@@ -111,7 +111,7 @@ class ReportTests(unittest.TestCase):
                    '[net-match] recovery requested tick=12 catch_up=0 reason=tick 12 lockstep stopped: PeerHeld:Your seat is held by the AI.\n'
                    '[net-match] bootstrap checkpoint=14 local_peer=2\n')
             live = root / 'client-live.jsonl'
-            live.write_text(json.dumps({'abandon_from': 10, 'round': 1}) + '\n', encoding='utf-8')
+            live.write_text(json.dumps({'abandon_from': 10, 'round': 1, 'private': True, 'player_visible': False}) + '\n', encoding='utf-8')
             self.assertEqual(feel_measure.held_client_away(log, live), ((10, 14),))
             # Without its abandon record the gap starts at the hold, never at the recovery's ask.
             self.assertEqual(feel_measure.held_client_away(log), ((10, 14),))
@@ -136,7 +136,7 @@ class ReportTests(unittest.TestCase):
             second = [dict(round=2, tick=tick, sim_gated=f'b{tick}', subsystems={'controller': f'b{tick}'}) for tick in range(1, 21)]
             host.write_text('\n'.join(map(json.dumps, first + second)), encoding='utf-8')
             # Round 2's hold abandons 15-17, which the client ran off the round; round 1's 15-17 stay compared.
-            offround = [dict(row, sim_gated='held') for row in second[14:17]]
+            offround = [dict(row, sim_gated='held', phase='private', player_visible=False) for row in second[14:17]]
             held = first + second[:14] + offround + [dict(abandon_from=15, round=2)]
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             compared = compare_live_hashes(host, client, 1)

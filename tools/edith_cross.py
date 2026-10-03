@@ -805,17 +805,8 @@ def peer_log(root, peer):
 
 
 def live_ticks(path):
-    """The ticks a peer's live stream holds: an {"abandon_from": N} record (an image rejoin) voids the rows from N it wrote before."""
-    ticks = set()
-    for line in Path(path).read_text(encoding='utf-8').splitlines() if Path(path).is_file() else []:
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if 'abandon_from' in row:
-            ticks = {tick for tick in ticks if tick < row['abandon_from']}
-        elif 'tick' in row:
-            ticks.add(row['tick'])
-    return ticks
+    from feel.retained_resume import read_live_hashes
+    return {row['tick'] for row in read_live_hashes(Path(path)) if 'tick' in row}
 
 
 def read_json(path):

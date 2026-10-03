@@ -421,8 +421,10 @@ def held_client_images(log, live=None):
     the tick its recovery was asked at."""
     abandons = []
     if live is not None and Path(live).is_file():
-        for line in Path(live).read_text(encoding='utf-8').splitlines():
-            row = json.loads(line) if line.strip() else {}
+        from feel.records import retract_private_history
+        rows = [json.loads(line) for line in Path(live).read_text(encoding='utf-8').splitlines() if line.strip()]
+        retract_private_history(rows, str(live))
+        for row in rows:
             if 'abandon_from' in row:
                 abandons.append(int(row['abandon_from']))
     images, held, stop = [], None, None
