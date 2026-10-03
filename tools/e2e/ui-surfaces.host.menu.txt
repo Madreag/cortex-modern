@@ -53,15 +53,16 @@ focus TextHostNetSlowBound
 observe set_text TextHostNetSlowBound 4
 wait_ms 500
 observe assert_label TextHostNetSlowBound 4
-observe combo_select ComboHostNetSlowPolicy Pause for them (up to 20 s)
-wait_ms 500
-observe assert_label ComboHostNetSlowPolicy Pause for them
-observe combo_select ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up
+observe assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up
+observe assert_enabled TextHostNetSlowBound 1
+observe assert_label LabelHostNetSlowPolicyHint A player late past 4 ticks (67 ms), host too, is held to the AI while others play on. Other policies return in a later version.
 focus TextHostNetSlowBound
 observe set_text TextHostNetSlowBound 3
 wait_ms 500
 observe assert_label TextHostNetSlowBound 3
 observe assert_label ComboHostNetSlowPolicy Give the seat to the AI
+observe assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.
+observe assert_text_fits LabelHostNetSlowPolicyHint
 video_mark ui-visibility
 wait_ms 825
 observe assert_visible CollectionBoxHostPageNetwork 1
