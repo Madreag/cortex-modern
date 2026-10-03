@@ -4026,7 +4026,14 @@ namespace RTE {
 				*error = "the survivor of a two-player split did not host alone beside the held, provisional host: provisional=" + std::to_string(r.Peer(1).IsHostProvisional()) + r.Report();
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS a_two_player_split_survivor_hosts_alone generation=" << r.Peer(2).GetMigrationResult().generation << " survivor_played_to=" << r.simulated[1] << std::endl;
+			// The split heals: the survivor's generation wins, and the old host stops to rejoin it.
+			r.partition->cut.clear();
+			if (!PumpQuorumRig(r, 6000, [&r] { return r.Peer(1).IsStopped(); }) || r.Peer(1).SupersedingPeer() != 2 || !r.Peer(2).IsRunning()) {
+				*error = "the survivor's generation did not win when the two-player split healed: superseded by " + std::to_string(r.Peer(1).SupersedingPeer()) + r.Report();
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_two_player_split_survivor_hosts_alone generation=" << r.Peer(2).GetMigrationResult().generation << " survivor_played_to=" << r.simulated[1]
+			          << " superseded_by=" << static_cast<int>(r.Peer(1).SupersedingPeer()) << std::endl;
 			return true;
 		}
 
@@ -4051,12 +4058,31 @@ namespace RTE {
 				         std::to_string(r.Peer(1).GetHostReach().seats) + r.Report();
 				return false;
 			}
-			if (r.Peer(1).GetHostReach().votes != 1 || r.Peer(1).GetHostReach().seats != 4 || !r.Peer(1).IsRunning()) {
+			if (r.Peer(1).GetHostReach().votes != 1 || r.Peer(1).GetHostReach().seats != 4 || !r.Peer(1).IsRunning() || r.Peer(1).SupersedingPeer() != 0) {
 				*error = "the isolated host counted its reach wrongly: " + std::to_string(r.Peer(1).GetHostReach().votes) + " of " + std::to_string(r.Peer(1).GetHostReach().seats) + r.Report();
 				return false;
 			}
+			// The provisional host's own screen says so, in the ruled words.
+			ScenarioRunner::SetLockstepCoordinator(&r.Peer(1));
+			const auto shown = ScenarioRunner::GetVisibleNetUiToasts();
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			const bool banner = std::any_of(shown.begin(), shown.end(), [](const ScenarioRunner::NetUiToastRecord& row) {
+				return row.kind == "host_provisional" &&
+				       row.text == "Connection to the other players lost - reconnecting. If they continue without you, you rejoin them as a player and your play since the loss will not count";
+			});
+			if (!banner) {
+				*error = "the provisional host's screen did not say its play is provisional";
+				return false;
+			}
+			// The split heals: the old host asks the successors, learns the match went on, and stops to rejoin it as a player.
+			r.partition->cut.clear();
+			if (!PumpQuorumRig(r, 6000, [&r] { return r.Peer(1).IsStopped(); }) || r.Peer(1).SupersedingPeer() != 2 ||
+			    r.Peer(1).GetStats().timeoutReason != "PeerHeld:The match went on under another host - rejoining it as a player") {
+				*error = "the healed old host did not learn the match went on under its successor: superseded by " + std::to_string(r.Peer(1).SupersedingPeer()) + r.Report();
+				return false;
+			}
 			std::cout << "[net-lockstep-selftest] PASS an_isolated_host_is_provisional_while_the_majority_migrates reach=1/4 survivors_host=" << static_cast<int>(r.Peer(2).GetHostPeerId())
-			          << " host_played_to=" << r.simulated[0] << std::endl;
+			          << " host_played_to=" << r.simulated[0] << " superseded_by=" << static_cast<int>(r.Peer(1).SupersedingPeer()) << std::endl;
 			return true;
 		}
 

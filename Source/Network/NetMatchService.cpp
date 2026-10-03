@@ -2076,15 +2076,20 @@ static std::string ResyncSaveName() {
 		m_IdentityPending = false;
 		m_LeftRoundHeld = false;
 		SealPendingWorldSegmentAtEnd();
+		// A host whose match went on under a successor writes nothing of its own play and leaves the listing to that successor.
+		const bool superseded = m_IsHost && m_Coordinator && m_Coordinator->SupersedingPeer() != 0;
 		// A restart imports the seats as the round left them: a clean leave in its last seconds releases its seat there too.
-		PublishRestartAdmission();
+		if (!superseded) PublishRestartAdmission();
 		// A clean stop of a world leaves the tick it stopped on, before anything is torn down.
 		WriteFinalWorldCheckpoint();
 		RunCleanLeave();
 		// The round is over here too: an admission file with no checkpoint left behind it goes now.
 		SweepRestartAdmission();
 		m_LanDiscovery.Stop();
-		m_Directory.Shutdown(); // the DELETE goes out before the row would expire
+		if (superseded)
+			m_Directory.AbandonLease();
+		else
+			m_Directory.Shutdown(); // the DELETE goes out before the row would expire
 		ReleaseHostPortMap();   // the router mapping goes out with the listing
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
@@ -2643,7 +2648,8 @@ static std::string ResyncSaveName() {
 			// The mapping goes out with a retracted listing or the end of hosting, and nothing is left pending after it.
 			if (s_PortMapRequested && !mappingKept) ReleaseHostPortMap();
 		}
-		m_Directory.Update(nowMs);
+		// A provisional host refreshes no listing: the match may have gone on under the next generation.
+		if (!m_IsHost || !m_Coordinator || !m_Coordinator->IsHostProvisional()) m_Directory.Update(nowMs);
 		UpdateRelayOffer(nowMs);
 		{
 			// The worker cannot touch the directory client, so what it needs is published here.
@@ -3495,12 +3501,23 @@ static std::string ResyncSaveName() {
 			m_ScheduledCaptures.erase(m_ScheduledCaptures.begin(), m_ScheduledCaptures.upper_bound(input.tick));
 			output.capture = true;
 		}
+		// A provisional host's play may never be the match's: it takes no capture, and reports the one it was named as missed.
+		if (output.capture && input.hostProvisional) {
+			output.capture = false;
+			m_ManualCaptures.erase(m_ManualCaptures.begin(), m_ManualCaptures.upper_bound(input.tick));
+			output.send.push_back({0, NetGameCheckpoint::Missed, input.tick});
+			if (m_IsHost && input.localPeer != 0) m_CaptureWriters.erase(input.localPeer);
+		}
 		if (output.capture && !m_ManualCaptures.empty() && *m_ManualCaptures.begin() <= input.tick) {
 			m_ManualCaptures.erase(m_ManualCaptures.begin(), m_ManualCaptures.upper_bound(input.tick));
 			output.manual = true;
 		}
 		if (!m_IsHost) return output;
 		bool ask = input.manualRequested;
+		if (ask && input.hostProvisional) {
+			output.manualRefused = true;
+			ask = false;
+		}
 		// A capture whose tick passed without reaching the stream rode a frame the round never played (the host's own, while its seat
 		// was held): no writer takes it, so the schedule names the next one instead of waiting on it for the rest of the round.
 		if (m_OpenCaptureTick != 0 && !m_OpenCaptureApplied && input.tick > m_OpenCaptureTick) {
@@ -3535,7 +3552,7 @@ static std::string ResyncSaveName() {
 		// A park commits empty frames, so an activation inside one would never be stamped: nothing is named until it lands.
 		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
 		// reaches a writer and the schedule would wait on it for the rest of the round.
-		if (input.activationPending || input.startupPending || input.ownSeatHeld) return output;
+		if (input.activationPending || input.startupPending || input.ownSeatHeld || input.hostProvisional) return output;
 		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
 		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
 		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
@@ -3647,8 +3664,13 @@ static std::string ResyncSaveName() {
 			const auto& start = m_Coordinator->GetAgreedStartRecord();
 			input.startupPending = start && tick < start->agreedFirstFrame;
 			input.manualRequested = m_ManualSaveAsked.exchange(false);
+			input.hostProvisional = m_Coordinator->IsHostProvisional();
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
+		if (output.manualRefused) {
+			ScenarioRunner::PushNetUiToast("match_save", "Match not saved: the connection to the other players is lost");
+			m_ManualSaveWaitShown = false;
+		}
 		if (output.manualPending) {
 			m_ManualSaveAsked = true;
 			if (!m_ManualSaveWaitShown) ScenarioRunner::PushNetUiToast("match_save", "Saving at the next safe tick");
@@ -10153,7 +10175,19 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::BeginHeldRejoin(std::string* error) {
 		const uint64_t prior = m_Coordinator ? m_Coordinator->SentInputThrough() : 0;
-		const auto liveRoute = m_LastJoinRoute;
+		auto liveRoute = m_LastJoinRoute;
+		// A host whose match went on under a successor returns to that successor as a player, with its own seat's ticket.
+		if (m_Coordinator && m_Coordinator->SupersedingPeer() != 0) {
+			const NetMatchConfig& config = m_Coordinator->GetConfig().matchConfig;
+			const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& candidate) { return candidate.peerId == m_Coordinator->SupersedingPeer(); });
+			if (endpoint != config.migrationPeers.end() && endpoint->listenPort != 0 && !endpoint->listenAddrs.empty()) {
+				NetMatchServiceRequest route;
+				route.host = false;
+				route.address = endpoint->listenAddrs.front();
+				route.port = endpoint->listenPort;
+				liveRoute = route;
+			}
+		}
 		// The match published who hosts it next; a seat that finds its host gone asks them in that order.
 		m_HeldRejoinRoutes.clear();
 		m_ReconnectRouteTurn = 0;

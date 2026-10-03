@@ -461,6 +461,7 @@ namespace RTE {
 			bool startupPending = false; //!< Host: the round's agreed first frame is still ahead.
 			bool ownSeatHeld = false; //!< Host: its own seat is held, so what it sends rides no frame the round plays.
 			bool manualRequested = false; //!< Host: the host asked to save the match and no capture has taken the ask yet.
+			bool hostProvisional = false; //!< Host: it reaches no majority, so its play may not be the match's and nothing is written.
 		};
 		struct AutosaveTickOutput {
 			bool capture = false; //!< This peer captures at this tick.
@@ -470,6 +471,7 @@ namespace RTE {
 			bool manualSaved = false; //!< Host: every writer of the capture it asked for has reported.
 			size_t manualReported = 0; //!< Host: how many writers reported that capture.
 			size_t manualWriters = 0; //!< Host: how many writers it named for it.
+			bool manualRefused = false; //!< Host: the ask came while its play was provisional; nothing is saved.
 		};
 		/// The checkpoint schedule at one tick boundary, with the capture and the stream left to the caller.
 		/// Every peer captures at each tick the host names; the host names the next one only once every
@@ -1275,6 +1277,7 @@ namespace RTE {
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
 		friend bool TestALostCaptureIsNamedAgain(std::string* error);
 		friend bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error);
+		friend bool TestAProvisionalHostWritesNothing(std::string* error);
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);

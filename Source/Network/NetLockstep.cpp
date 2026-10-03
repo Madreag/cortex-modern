@@ -3584,6 +3584,57 @@ namespace RTE {
 		if (provisional != m_HostProvisional)
 			DiagnosticLine() << "[net-match] host " << (provisional ? "provisional" : "real again") << ": reaches " << m_HostReach.votes << " of " << m_HostReach.seats << " players" << std::endl;
 		m_HostProvisional = provisional;
+		ProbeSuccessors(nowMs);
+	}
+
+	void NetLockstepCoordinator::ProbeSuccessors(uint64_t nowMs) {
+		const auto& order = m_Config.matchConfig.successorOrder;
+		if (!m_HostProvisional || !m_Config.migrationTransportFactory || order.empty() ||
+		    std::all_of(m_Config.migrationKey.begin(), m_Config.migrationKey.end(), [](uint8_t value) { return value == 0; })) {
+			m_SuccessorProbe.reset();
+			return;
+		}
+		if (m_SuccessorProbe) {
+			for (const NetTransportEvent& event: m_SuccessorProbe->PollEvents()) {
+				std::vector<uint8_t> bytes;
+				// The probe asks about the next generation by name: only a host that carries it answers.
+				NetHostMigrationMessage hello = MigrationMessage(NetHostMigrationMessageType::Hello);
+				hello.generation = m_MigrationGeneration + 1;
+				hello.successorPeerId = m_SuccessorProbePeer;
+				if (event.type == NetTransportEventType::PeerConnected && NetHostMigrationCodec::Encode(hello, m_Config.migrationKey, bytes)) {
+					(void)m_SuccessorProbe->Send(event.peerId, NetTransportLane::ControlReliable, bytes);
+					continue;
+				}
+				NetHostMigrationMessage answer;
+				if (event.type != NetTransportEventType::PacketReceived || !NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, answer) ||
+				    answer.sessionId != m_Config.sessionId || answer.generation <= m_MigrationGeneration ||
+				    (answer.type != NetHostMigrationMessageType::Rejoin && answer.type != NetHostMigrationMessageType::RollCall))
+					continue;
+				// The match went on under that successor: this host's play since the loss is not the match's, and it returns as a player.
+				m_SupersedingPeer = answer.senderPeerId;
+				m_SuccessorProbe.reset();
+				m_HostProvisional = false;
+				m_State = NetLockstepState::Stopped;
+				m_Stats.timeoutReason = "PeerHeld:The match went on under another host - rejoining it as a player";
+				DiagnosticLine() << "[net-match] superseded: peer " << static_cast<int>(answer.senderPeerId) << " hosts generation " << answer.generation
+				                 << " (this host's is " << m_MigrationGeneration << ")" << std::endl;
+				return;
+			}
+		}
+		if (nowMs < m_SuccessorProbeAtMs) return;
+		m_SuccessorProbeAtMs = nowMs + 1000;
+		for (size_t tried = 0; tried < order.size(); ++tried) {
+			const uint8_t peer = order[m_SuccessorProbeTurn++ % order.size()];
+			if (peer == m_Config.localPeerId) continue;
+			const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& entry) { return entry.peerId == peer; });
+			if (endpoint == m_Config.matchConfig.migrationPeers.end() || endpoint->listenPort == 0) continue;
+			m_SuccessorProbe = m_Config.migrationTransportFactory();
+			m_SuccessorProbePeer = peer;
+			size_t nextAddress = 0;
+			std::string address;
+			if (m_SuccessorProbe && ConnectMigrationEndpoint(*m_SuccessorProbe, *endpoint, nextAddress, address)) return;
+			m_SuccessorProbe.reset();
+		}
 	}
 
 	bool NetLockstepCoordinator::IsLostMigrationSuccessor(uint8_t peerId) const {
@@ -4562,6 +4613,8 @@ namespace RTE {
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
 		NET_PLANE_CHECK();
 		m_HostLeaveRecordFrom = 0;
+		m_SuccessorProbe.reset();
+		m_SupersedingPeer = 0;
 		if ((config.adaptiveInputDelay || config.substituteSlowPeers) &&
 		    (!std::isfinite(config.simTickMs) || config.simTickMs <= 0 || config.peerCount > NetMatchConfigUtil::c_MaxPeerCount || config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks)) {
 			if (error) *error = "invalid simulation tick or slow player bound";

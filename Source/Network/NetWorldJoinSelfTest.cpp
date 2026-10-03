@@ -6681,6 +6681,51 @@ namespace RTE {
 		return true;
 	}
 
+	// R6 (eeee): a provisional host's play may never be the match's: a capture named before the loss is skipped and reported missed,
+	// nothing new is named and a save asked for is refused while it lasts, and the schedule names captures again once a majority is back.
+	bool TestAProvisionalHostWritesNothing(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-000000000000000e";
+		service.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::vector<uint64_t> named, taken, missed;
+		bool refused = false;
+		for (uint64_t tick = 1; tick <= 700; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+			if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+			input.writers = {1}; input.lead = 5; input.localPeer = 1;
+			const bool provisional = tick >= 120 && tick < 400;
+			input.hostProvisional = provisional;
+			input.manualRequested = tick == 200;
+			const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+			refused = refused || output.manualRefused;
+			if (output.capture) {
+				taken.push_back(tick);
+				stream[tick + 4].push_back({1, NetGameCheckpoint::Written, tick});
+			}
+			for (NetMatchService::CheckpointNote note: output.send) {
+				note.sender = 1;
+				if (note.kind == NetGameCheckpoint::Capture) named.push_back(note.tick);
+				if (note.kind == NetGameCheckpoint::Missed) missed.push_back(note.tick);
+				stream[tick + 4].push_back(note);
+			}
+		}
+		const auto inside = [](uint64_t tick) { return tick >= 120 && tick < 400; };
+		const bool wroteInside = std::any_of(taken.begin(), taken.end(), inside);
+		const bool namedInside = std::any_of(named.begin(), named.end(), [](uint64_t tick) { return tick >= 125 && tick < 400; });
+		const bool namedAfter = std::any_of(named.begin(), named.end(), [](uint64_t tick) { return tick >= 400; });
+		if (wroteInside || namedInside || !refused || !namedAfter) {
+			*error = "a-provisional-host-writes-nothing: captures taken while provisional=" + std::to_string(wroteInside) + " named while provisional=" + std::to_string(namedInside) +
+			         " save refused=" + std::to_string(refused) + " named after=" + std::to_string(namedAfter) + " (named " + std::to_string(named.size()) + ", missed " + std::to_string(missed.size()) + ")";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_provisional_host_writes_nothing named=" << named.size() << " taken=" << taken.size() << " missed=" << missed.size() << std::endl;
+		return true;
+	}
+
 	// The host's seat is held while its writer finishes a capture: its own report rides no frame the round plays, and the schedule
 	// still names the next capture once the other writer has reported, instead of waiting on the host for the rest of the round.
 	bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error) {
@@ -8521,6 +8566,7 @@ namespace RTE {
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestALostCaptureIsNamedAgain(&error)) return Fail(error);
 			if (!TestAHostsLostOwnReportDoesNotStopTheSchedule(&error)) return Fail(error);
+			if (!TestAProvisionalHostWritesNothing(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);

@@ -1192,6 +1192,8 @@ namespace RTE {
 		bool IsHostProvisional() const { NET_PLANE_CHECK(); return m_HostProvisional; }
 		/// Host: the seats it reaches and the connected seats it counts them against, while a link is lost.
 		NetHostMigrationReach GetHostReach() const { NET_PLANE_CHECK(); return m_HostReach; }
+		/// Host: the successor that answered this provisional host from a later generation - the match went on there; 0 while none has.
+		uint8_t SupersedingPeer() const { NET_PLANE_CHECK(); return m_SupersedingPeer; }
 
 		/// Whether this machine judged itself unable to hold the round's rate and went quiet for the host's bound to hold its seat.
 		/// @return Whether it did.
@@ -1944,6 +1946,14 @@ namespace RTE {
 		uint64_t m_HostLossFrame = UINT64_MAX; //!< Host: the last frame before its first lost seat was held, while a link is lost.
 		NetHostMigrationReach m_HostReach; //!< Host: its reach against the seats connected at m_HostLossFrame.
 		bool m_HostProvisional = false; //!< Host: it reaches no majority of those seats.
+		std::unique_ptr<INetTransport> m_SuccessorProbe; //!< Host: while provisional, the link it asks one successor on.
+		size_t m_SuccessorProbeTurn = 0; //!< Host: which successor in the order the probe asks next.
+		uint8_t m_SuccessorProbePeer = 0; //!< Host: the successor the probe asks now.
+		uint64_t m_SuccessorProbeAtMs = 0; //!< Host: when the probe moves to the next successor.
+		uint8_t m_SupersedingPeer = 0; //!< Host: the successor that answered from a later generation.
+		/// Host: while provisional, asks each successor in the match's order in turn, once a second, whether it hosts the match at a later
+		/// generation; the first that does ends this host's provisional match.
+		void ProbeSuccessors(uint64_t nowMs);
 		/// Host: counts the seats it still hears against the seats its round had connected before they went; the same bound and the
 		/// same count the survivors use, so the two sides never both carry the match.
 		void UpdateHostReach(uint64_t nowMs);
