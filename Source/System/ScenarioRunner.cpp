@@ -860,6 +860,22 @@ namespace RTE {
 		return std::exchange(s_AbandonedTicksFrom, 0);
 	}
 
+	namespace {
+		std::mutex s_HarnessReceiptsMutex;
+		std::map<std::string, std::string> s_HarnessReceipts;
+	}
+
+	void ScenarioRunner::NoteHarnessReceipt(const std::string& name, const std::string& json) {
+		std::lock_guard<std::mutex> lock(s_HarnessReceiptsMutex);
+		s_HarnessReceipts[name] = json;
+	}
+
+	std::string ScenarioRunner::GetHarnessReceipt(const std::string& name) {
+		std::lock_guard<std::mutex> lock(s_HarnessReceiptsMutex);
+		const auto found = s_HarnessReceipts.find(name);
+		return found == s_HarnessReceipts.end() ? std::string() : found->second;
+	}
+
 	std::string ScenarioRunner::MemoryCensus() {
 		NetLockstepPlaneGuard plane;
 		std::ostringstream line;

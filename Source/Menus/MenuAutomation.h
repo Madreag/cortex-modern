@@ -32,6 +32,8 @@ namespace RTE {
 		/// Logs each armed watch's cumulative frame and offence counts through the current sim tick: "periodic" while the
 		/// scene runs, "kill" when the scene announces it drops this peer, "final" once at shutdown.
 		void ReportWatches(const char* flush = "final");
+		/// Sets where a probe's dumps are written: beside the probe that drives this process.
+		void SetArtifactDirectory(const std::string& directory);
 		bool RunSelfTest();
 		/// Finishes queued readback files before the image library shuts down.
 		bool FinishReadbacks();

@@ -741,9 +741,11 @@ static void BeginCrossTick(uint64_t tick) {
 				if (!actor) continue;
 				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), actor->GetTeam(), false);
 				if (owner != local) continue;
-				g_MetricsCollector.WriteObservation({{"type", "ownership_reclaim"}, {"round", round}, {"peer", local}, {"stable_seat", view->stableSeat},
+				const nlohmann::json reclaim = {{"type", "ownership_reclaim"}, {"round", round}, {"peer", local}, {"stable_seat", view->stableSeat},
 				    {"actor", actor->GetUniqueID()}, {"owner_peer", owner}, {"ticket_incarnation", view->seat.incarnation},
-				    {"seat_incarnation", view->seat.incarnation}, {"activation_tick", tick}, {"tick", tick}, {"committed", true}});
+				    {"seat_incarnation", view->seat.incarnation}, {"activation_tick", tick}, {"tick", tick}, {"committed", true}};
+				g_MetricsCollector.WriteObservation(reclaim);
+				ScenarioRunner::NoteHarnessReceipt("ownership_reclaim", reclaim.dump());
 				const std::string id = "own-return-" + std::to_string(round) + "-" + std::to_string(tick);
 				s_crossRecoveryCases.push_back({{"id", id}, {"return_incarnation", incarnation}, {"deadline_ms", 60000}});
 				s_crossRecoveryStarts[id] = {{"effect_finished", true},
@@ -914,9 +916,12 @@ static void CrossRecoveryAtCommittedTick(uint64_t tick, bool paused = false) {
 			const auto sample = g_MetricsCollector.ProducedControllerFor(round, tick, actor->GetUniqueID());
 			if (!controller || !MetricsCollector::IsFreshControllerRecovery(sample, round, tick, actor->GetUniqueID(),
 			        controller->GetWireApplyTick(), controllable, held, catchup, start.value("engine_after_wall_ms", 0.0))) continue;
-			g_MetricsCollector.WriteObservation({{"type", "recovery"}, {"id", id}, {"recovery_phase", "first_controllable_input"},
+			const nlohmann::json first = {{"type", "recovery"}, {"id", id}, {"recovery_phase", "first_controllable_input"},
 			    {"terminal", true}, {"deadline_ms", recovery.at("deadline_ms")}, {"input", sample}, {"wire_tick", controller->GetWireApplyTick()},
-			    {"controllable", controllable}, {"held", held}, {"catchup", catchup}, {"actor", actor->GetUniqueID()}, {"player", player}});
+			    {"controllable", controllable}, {"held", held}, {"catchup", catchup}, {"actor", actor->GetUniqueID()}, {"player", player}, {"tick", tick},
+			    {"seat_incarnation", s_crossContext.is_object() ? s_crossContext.value("seat_incarnation", nlohmann::json(nullptr)) : nlohmann::json(nullptr)}};
+			g_MetricsCollector.WriteObservation(first);
+			ScenarioRunner::NoteHarnessReceipt("first_controllable_input", first.dump());
 			s_crossRecoveryDone.insert(id);
 			break;
 		}
@@ -7134,6 +7139,14 @@ void RunGameLoop() {
 					    {"incarnation", std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"))}, {"cost_us", s_testSimCostUs}, {"first_tick", s_window.firstTick},
 					    {"last_tick", s_window.lastTick}, {"start_ms", s_window.startMs}, {"end_ms", s_window.endMs}}.dump();
 				};
+				// The same window for a probe's dump: the world_spectator_cost_window a scripted watcher's crawl is proven by.
+				const auto keep = [] {
+					const std::string instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
+					ScenarioRunner::NoteHarnessReceipt("world_spectator_cost_window", nlohmann::json{{"receipt", "world_spectator_cost_window"},
+					    {"process", instance.empty() ? nlohmann::json(System::GetProcessID()) : nlohmann::json(instance)}, {"pid", System::GetProcessID()},
+					    {"sim_cost_us", s_testSimCostUs}, {"first_tick", s_window.firstTick}, {"last_tick", s_window.lastTick}, {"start_ms", s_window.startMs},
+					    {"end_ms", s_window.endMs}, {"closed", s_window.closed}}.dump());
+				};
 				if (tick >= s_fromTick && (s_untilTick == 0 || tick < s_untilTick)) {
 					if (!s_window.open) {
 						s_window.open = true;
@@ -7151,9 +7164,11 @@ void RunGameLoop() {
 					for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testSimCostUs; g_TimerMan.GetAbsoluteTime() < until;) {}
 					s_window.lastTick = tick;
 					s_window.endMs = steadyMs();
+					keep();
 				} else if (s_window.open && !s_window.closed) {
 					s_window.closed = true;
 					System::PrintDiagnosticLine(receipt("window_closed"));
+					keep();
 				}
 			};
 			if (s_testSimCostUs > 0 && s_testSimCostOutside) spendTestSimCost();
@@ -7767,6 +7782,12 @@ void RunGameLoop() {
 					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
 					    {"subsystems", std::move(subsystems)}});
 					LiveTickHashStream().Write(observation.dump());
+					// The first tick this process recorded in each round: where its comparable history begins, for a probe's dump.
+					static uint64_t s_firstLiveRound = 0;
+					if (const uint64_t round = ScenarioRunner::GetLockstepRoundId(); round != s_firstLiveRound) {
+						s_firstLiveRound = round;
+						ScenarioRunner::NoteHarnessReceipt("first_live_tick", nlohmann::json{{"round", round}, {"tick", simTick}}.dump());
+					}
 					// The harness's own tick-end cost on this machine, beside the capacity it publishes: the share of a slow seat that is the harness's.
 					static std::vector<double> s_harnessTickUs;
 					const int64_t harnessNs = harnessSpan.Stop();

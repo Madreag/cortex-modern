@@ -29,6 +29,7 @@
 #include "GameActivity.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
+#include "NetWorldJoin.h"
 #include "NetIdentity.h"
 #include "ScenarioRunner.h"
 #include "PresetMan.h"
@@ -70,6 +71,7 @@
 
 namespace RTE::MenuAutomation {
 	using Json = nlohmann::json;
+	std::string s_ArtifactDirectory; //!< Where a probe's dumps are written, beside the probe.
 	using Rect = std::array<int, 4>;
 	class ReadbackWriter {
 		struct Dump {
@@ -604,6 +606,8 @@ namespace RTE::MenuAutomation {
 		s_DrawnText.clear();
 	}
 
+	void SetArtifactDirectory(const std::string& directory) { s_ArtifactDirectory = directory; }
+
 	void ReportWatches(const char* flush) {
 		const long long throughTick = g_TimerMan.GetSimUpdateCount();
 		for (const auto& [name, watch]: s_Watches) {
@@ -623,7 +627,7 @@ namespace RTE::MenuAutomation {
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
-			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert" ||
+			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "dump_world_ownership" || command == "fire_assert" ||
 			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input" || command == "open_local_pause" || command == "meta_command";
 	}
 	Json PanelCoverage(GUIControl* control) {
@@ -711,6 +715,71 @@ namespace RTE::MenuAutomation {
 			observation = Json{{"members", members}, {"private_catch_up", ScenarioRunner::WorldCatchUpActive()},
 				{"resyncing", g_NetMatchService.IsMatchResyncing()}, {"slow_notice", ScenarioRunner::IsLockstepLocalMachineSlow()}}.dump();
 			return true;
+		}
+		if (command == "dump_world_ownership") {
+			// Who holds which world seat at a probe's mark, from the roster, the world's slots and this process's own receipts: written
+			// beside the probe as <mark>.ownership.json, never from a requested seat or a scripted expectation.
+			std::string mark;
+			args >> mark;
+			const bool named = !mark.empty() && mark.size() <= 100 && std::all_of(mark.begin(), mark.end(), [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_'; });
+			if (s_ArtifactDirectory.empty() || !named) return false;
+			const Json facts = Json::parse(g_NetMatchService.GetWorldOwnershipFacts(), nullptr, false);
+			if (!facts.is_object()) return false;
+			const auto receipt = [](const char* name) {
+				const std::string text = ScenarioRunner::GetHarnessReceipt(name);
+				const Json value = text.empty() ? Json(nullptr) : Json::parse(text, nullptr, false);
+				return value.is_object() ? value : Json(nullptr);
+			};
+			// A watcher replays under its authority's round, so its own id is the service's.
+			const uint8_t serviceLocal = facts.value("local_peer", static_cast<uint8_t>(0));
+			const uint8_t local = serviceLocal != 0 ? serviceLocal : ScenarioRunner::GetLockstepLocalPeerId();
+			const Json seat = facts.value("seat_of_peer", Json::object()).value(std::to_string(local), Json(nullptr));
+			const Json ticketIncarnation = facts.value("ticket_incarnation", Json(nullptr));
+			const Json firstLive = receipt("first_live_tick");
+			const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
+			const char* instance = std::getenv("CC_TEST_CROSS_INSTANCE");
+			Json dump = {{"schema", 1}, {"mark", mark}, {"process", instance && *instance ? Json(instance) : Json(System::GetProcessID())}, {"pid", System::GetProcessID()},
+			    {"round", ScenarioRunner::GetLockstepRoundId()}, {"local_peer", local}, {"sim_tick", g_TimerMan.GetSimUpdateCount()}, {"lockstep_frame", frame},
+			    {"configuration", facts.value("configuration", Json::object())}, {"seated_first_tick", firstLive.is_object() ? firstLive.value("tick", Json(nullptr)) : Json(nullptr)}};
+			Json ownership = {{"seat", seat}, {"local_peer", local}, {"ticket_incarnation", ticketIncarnation}};
+			if (Activity* activity = g_ActivityMan.GetActivity()) {
+				for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+					const Actor* actor = activity->GetControlledActor(player);
+					if (!actor || ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), actor->GetTeam(), false) != local) continue;
+					ownership["actor"] = actor->GetUniqueID();
+					break;
+				}
+			}
+			dump["ownership"] = ownership;
+			// A watcher plays on a lobby id above every seat's and watches the ticks it replayed; a seat plays its round's.
+			const bool watcher = local >= c_WorldSpectatorLobbyPeerFirst;
+			const Json replayed = facts.value("replayed", Json(nullptr));
+			dump["watch"] = {{"role", watcher ? "Spectator" : "Seated"}, {"image_received", facts.value("image_received", false)},
+			    {"first", watcher && replayed.is_object() ? replayed.value("first", Json(nullptr)) : firstLive.is_object() ? firstLive.value("tick", Json(nullptr)) : Json(nullptr)},
+			    {"last", watcher && replayed.is_object() ? replayed.value("last", Json(nullptr)) : Json(frame)}};
+			if (const Json window = receipt("world_spectator_cost_window"); window.is_object()) dump["sim_cost"] = window;
+			if (facts.value("is_host", false)) {
+				if (facts.contains("promotion")) dump["promotion"] = facts["promotion"];
+				if (facts.contains("release")) dump["release"] = facts["release"];
+			} else if (const Json reclaim = receipt("ownership_reclaim"); reclaim.is_object()) {
+				// A promoted watcher's own side: the seat its slot is, the actor it plays from its activation, and its first fresh input.
+				Json promotion = {{"seat", seat}, {"freed_seat", seat}, {"actor", reclaim.value("actor", Json(nullptr))}, {"ticket_incarnation", ticketIncarnation},
+				    {"activation_tick", reclaim.value("activation_tick", Json(nullptr))}};
+				if (const Json first = receipt("first_controllable_input"); first.is_object()) {
+					const Json input = first.value("input", Json::object());
+					promotion["input_tick"] = first.value("wire_tick", Json(nullptr));
+					promotion["input_created_tick"] = input.value("produced_tick", Json(nullptr));
+					promotion["applied_actor"] = input.value("actor", Json(nullptr));
+					promotion["applied_seat"] = facts.value("seat_of_peer", Json::object()).value(std::to_string(local), Json(nullptr));
+					promotion["applied_incarnation"] = first.value("seat_incarnation", Json(nullptr));
+					promotion["applied_input"] = input;
+				}
+				dump["promotion"] = promotion;
+			}
+			std::ofstream output(std::filesystem::path(s_ArtifactDirectory) / (mark + ".ownership.json"));
+			output << dump.dump(2) << '\n';
+			observation = dump.dump();
+			return static_cast<bool>(output);
 		}
 		if (command == "fire_assert") {
 			if (!FireAssertAllowed()) return false;

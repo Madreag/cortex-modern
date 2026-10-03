@@ -212,6 +212,7 @@ namespace {
 			}
 		}
 		observed["local_actor_alive"] = localActorAlive;
+		observed["local_peer"] = snapshot.localPeerId;
 		// The setup editor a lockstep match holds in, so a script can drive and read this peer's own seats.
 		auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 		observed["editing"] = game && game->GetActivityState() == Activity::Editing;
@@ -337,6 +338,7 @@ namespace {
 		probe.hintAtLoadPresent = hint != nullptr;
 		probe.hintAtLoad = hint ? hint : "";
 		probe.directory = std::filesystem::absolute(path).parent_path();
+		MenuAutomation::SetArtifactDirectory(probe.directory.string());
 		probe.result = {{"schema", 1}, {"pass", false}, {"complete", false}, {"steps", Json::array()}, {"pid", System::GetProcessID()}};
 		Require(!std::filesystem::exists(probe.directory / "net-ui-result.json"), "probe result already exists");
 		probe.resultStarted = true;
@@ -474,7 +476,7 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("lockstep_frame_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open") || step.contains("chat_entry_open"), "wait has no predicate");
+			    step.contains("picker_open") || step.contains("chat_entry_open") || step.contains("local_peer_at_most"), "wait has no predicate");
 			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;
 			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
 			if (step.contains("picker_open")) {
@@ -497,6 +499,8 @@ namespace {
 			}
 			if (step.contains("service") && observed["service"] != step["service"]) return false;
 			if (step.contains("sim_at_least") && observed["sim_frame"].get<long long>() < step["sim_at_least"].get<long long>()) return false;
+			// A watcher plays a seat once its own id is a seat's.
+			if (step.contains("local_peer_at_most") && (observed["local_peer"].get<int>() == 0 || observed["local_peer"].get<int>() > step["local_peer_at_most"].get<int>())) return false;
 			if (step.contains("lockstep_frame_at_least") && observed["lockstep_frame"].get<uint64_t>() < step["lockstep_frame_at_least"].get<uint64_t>()) return false;
 			if (step.contains("renders") && probe.renders - probe.stepRender < step["renders"].get<uint64_t>()) return false;
 			if (step.contains("elapsed_ms") && NowMs() - probe.stepMs < step["elapsed_ms"].get<uint64_t>()) return false;
