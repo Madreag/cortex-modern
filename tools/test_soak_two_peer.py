@@ -57,12 +57,21 @@ class SoakJudgement(unittest.TestCase):
         self.assertFalse(result["pass"])
         self.assertTrue(all(window["gated"] and not window["passed"] for window in result["pace_windows"]["host"]))
 
-    def test_an_engine_whose_sim_does_not_fit_is_reported_not_gated(self) -> None:
+    def test_slow_simulation_without_relative_evidence_is_incomplete(self) -> None:
         for peer, peer_id in (("host", 1), ("client", 2)):
             write_peer(self.root, peer, peer_id, 1000 / 57.3, 17.5, TICKS + 1)
         result = soak.acceptance_history(self.root, TICKS)
-        self.assertTrue(result["pass"], result["errors"])
-        self.assertTrue(all(not window["gated"] for window in result["pace_windows"]["host"]))
+        self.assertFalse(result["pass"])
+        self.assertTrue(all(window["gated"] and not window['passed'] for window in result["pace_windows"]["host"]))
+
+    def test_a_uniformly_heavy_round_needs_both_native_capacity_receipts(self) -> None:
+        for peer, peer_id in (("host", 1), ("client", 2)):
+            write_peer(self.root, peer, peer_id, 1000 / 50, 20, TICKS + 1)
+            (self.root / f'{peer}_report.json').write_text(json.dumps(dict(service=dict(local_peer_id=peer_id),
+                pace=dict(sim_ms_per_tick=20), lockstep=dict(round_id=ROUND, local_capacity_tps=50, sim_tick_ms=1000/60))))
+        self.assertTrue(soak.acceptance_history(self.root, TICKS)['pass'])
+        (self.root / 'client_report.json').write_text('{}')
+        self.assertFalse(soak.acceptance_history(self.root, TICKS)['pass'])
 
     def test_an_injected_stall_is_its_own_seats_away_time(self) -> None:
         # The client stalls 1.5 s at tick 1000 (the soak's own fault) and is held at 1004 until 1100.
@@ -112,13 +121,25 @@ class SoakJudgement(unittest.TestCase):
         write_peer(self.root, "host", 1, 1000 / 60, 17.5, TICKS + 1, slow)
         write_peer(self.root, "client", 2, 1000 / 60, 8.0, TICKS + 1)
         excused, kept = soak.excused_return_holds(self.root, [row])
-        self.assertEqual((len(excused), len(kept)), (1, 0))
+        self.assertEqual((len(excused), len(kept)), (0, 1), 'the log supplies no relative capacity or waiting receipt')
         write_peer(self.root, "host", 1, 1000 / 60, 8.7, TICKS + 1, slow)
         excused, kept = soak.excused_return_holds(self.root, [row])
         self.assertEqual((len(excused), len(kept)), (0, 1), "an engine whose sim fits is not a slow machine")
         write_peer(self.root, "host", 1, 1000 / 60, 17.5, TICKS + 1)
         excused, kept = soak.excused_return_holds(self.root, [row])
         self.assertEqual((len(excused), len(kept)), (0, 1), "a hold the engine did not call a slow machine's stays a defect")
+
+    def test_a_return_hold_needs_the_hosts_published_capacity_receipt(self) -> None:
+        row = dict(round=ROUND, held_peer=2, hold_tick=1325, returned_peer=2, return_tick=1234)
+        log = ("[net-lockstep] slow machine peer 2 at frame 1323: it runs 40 ticks/s against the fastest's 60; the AI takes its seat\n"
+               "[net-lockstep] propose hold peer=2 next_frame=1323 cause=capacity\n"
+               "[net-match] hold peer=2 frame=1325 AI in control\n")
+        write_peer(self.root, 'host', 1, 1000/60, 8, TICKS+1, log)
+        write_peer(self.root, 'client', 2, 25, 25, TICKS+1)
+        excused, kept = soak.excused_return_holds(self.root, [row])
+        self.assertEqual((len(excused), len(kept)), (1, 0))
+        write_peer(self.root, 'host', 1, 1000/60, 8, TICKS+1, log.replace('40 ticks/s', '60 ticks/s'))
+        self.assertEqual(len(soak.excused_return_holds(self.root, [row])[1]), 1)
 
 
 if __name__ == "__main__":
