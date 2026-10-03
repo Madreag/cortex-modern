@@ -109,6 +109,9 @@ namespace RTE {
 			offer["authority_generation"] = image.authorityGeneration;
 			offer["authority_peer_id"] = image.authorityPeerId;
 			offer["departed_peers"] = image.departedPeers;
+		} else if (!image.sideState.empty()) {
+			// A world's image names the lockstep state of its tick, which its joiner starts on.
+			offer["side_state"] = image.sideState;
 		}
 		return offer.dump();
 	}

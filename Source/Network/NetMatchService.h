@@ -1789,6 +1789,7 @@ namespace RTE {
 		std::atomic<bool> m_ManualSaveFailed = false; //!< Host: its last ask was not saved.
 		std::atomic<int64_t> m_LastMatchSaveTime = 0; //!< When this peer's writer last archived a checkpoint of this match.
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
+		std::map<uint64_t, std::string> m_WorldImageSideStates; //!< A world host's lockstep state at each capture tick, until that capture's image is published.
 		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
 		bool m_LastJoinTargetPersistentWorld = false;

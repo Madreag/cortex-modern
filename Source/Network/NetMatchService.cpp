@@ -1792,6 +1792,16 @@ static std::string ResyncSaveName() {
 					m_CatchUpTransport = std::move(transport);
 					m_CatchUpCoordinator = std::move(replay);
 					ScenarioRunner::SetLockstepCoordinator(m_CatchUpCoordinator.get());
+					// The image's own lockstep state: the handoffs a hold made before its tick are not in the tail that follows it.
+					if (!m_WorldCatchUp.sideState.empty()) {
+						committed = std::make_shared<NetResyncState>();
+						std::vector<uint8_t> metadata, placeholder;
+						if (!ResumeBytes(m_WorldCatchUp.sideState, metadata) || !NetResyncCodec::Decode(metadata, config.sessionId, m_WorldCatchUp.snapshotTick + 1, *committed, placeholder, error) ||
+						    placeholder != std::vector<uint8_t>{0}) {
+							if (error && error->empty()) *error = "the world image's lockstep state does not decode";
+							return false;
+						}
+					}
 				}
 			}
 			const uint64_t stagingBeganMs = SteadyNowMs();
@@ -1813,7 +1823,12 @@ static std::string ResyncSaveName() {
 			m_AdmissionClock.NotePark(SteadyNowMs() - stagingBeganMs, SteadyNowMs());
 			NotePumpParkedLocked();
 			m_WorldCatchUp.tail.clear();
-			if (committed) {
+			if (committed && !m_WorldCatchUp.privateMatch) {
+				// Restored where the load lands, as a private match's is; the world's seats come from its own roster.
+				if (!g_ActivityMan.SetPendingCheckpointCallbacks([] { return true; }, [committed](Activity&) {
+					return static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) == committed->savedTick && ScenarioRunner::RestoreCommittedCatchUpState(*committed);
+				})) return false;
+			} else if (committed) {
 				struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; bool valid = false, prepared = false; };
 				const auto local = std::make_shared<LocalState>();
 				const auto pause = m_WorldCatchUp.pauseState;
@@ -3986,6 +4001,20 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_MatchConfig.persistentWorld) {
 			System::PrintDiagnosticLine(std::format("[autosave] agreed match={} tick={} state={}", m_AutosaveMatchId, tick,
 			                                       nlohmann::json(AutosaveStore::RenderSideState(m_AutosaveIdentity.sideState)).dump()));
+			// A world joiner starts on this tick's lockstep state too: a hold's handoffs before the image are not in its tail.
+			NetResyncState state;
+			std::vector<uint8_t> side;
+			std::string error;
+			if (ScenarioRunner::CaptureNetResyncState(tick, state, &error)) {
+				state.pendingInputs.clear(); state.pendingCommands.clear(); state.pendingPlayerBindings.clear(); state.admittedReseats.clear();
+				if (NetResyncCodec::Encode(state, {0}, side, &error)) {
+					std::lock_guard<std::mutex> lock(m_Mutex);
+					m_WorldImageSideStates[tick] = ResumeHex(side);
+					// Captures that never publish do not pile up.
+					while (m_WorldImageSideStates.size() > 8) m_WorldImageSideStates.erase(m_WorldImageSideStates.begin());
+				}
+			}
+			if (side.empty()) System::PrintDiagnosticLine(std::format("[net-world] no lockstep state for the image at tick {}: {}", tick, error));
 		}
 		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 	}
@@ -4071,10 +4100,15 @@ static std::string ResyncSaveName() {
 		if (!entry || entry->tick <= m_WorldJoin.Image().tick) {
 			return;
 		}
-		const NetWorldCheckpointImage image = WorldImageFromAutosave(*entry, m_WorldIdentity, m_MatchConfig,
-		                                                            m_WorldJoin.Membership().Revision(), g_ActivityMan.LastAutosaveCaptureMs());
+		NetWorldCheckpointImage image = WorldImageFromAutosave(*entry, m_WorldIdentity, m_MatchConfig,
+		                                                      m_WorldJoin.Membership().Revision(), g_ActivityMan.LastAutosaveCaptureMs());
 		if (!image.IsValid()) {
 			return;
+		}
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (const auto side = m_WorldImageSideStates.find(image.tick); side != m_WorldImageSideStates.end()) image.sideState = side->second;
+			m_WorldImageSideStates.erase(m_WorldImageSideStates.begin(), m_WorldImageSideStates.upper_bound(image.tick));
 		}
 		// The buffer the writer produced is shared, not copied: every bootstrap ships these bytes.
 		m_WorldJoinImageDigest = image.digest;
@@ -5202,7 +5236,11 @@ static std::string ResyncSaveName() {
 		m_WorldCatchUp.active = true;
 		m_WorldCatchUp.privateMatch = image.privateSessionId != 0;
 		// A world image carries no roster of its own; the restore maps this machine's seats from the adopted one.
-		if (!m_WorldCatchUp.privateMatch) m_WorldCatchUp.checkpointConfig = adopted;
+		if (!m_WorldCatchUp.privateMatch) {
+			m_WorldCatchUp.checkpointConfig = adopted;
+			// Its lockstep state at the image's tick, when its host named one.
+			m_WorldCatchUp.sideState = image.sideState;
+		}
 		m_WorldCatchUp.roundId = image.round;
 		m_WorldCatchUp.authorityGeneration = image.authorityGeneration;
 		m_WorldCatchUp.authorityPeerId = image.authorityPeerId;
