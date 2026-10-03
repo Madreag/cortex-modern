@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "name": "mp-relay-hotspot",
+  "cross_machine": true,
+  "driver": "tools/relay_cloudflare_match.py",
+  "title": "The Ally on a phone hotspot (carrier NAT): Automatic falls back to Cloudflare with no player action, the hotspot box hosts, four players never feel it, an expiring login renews live, a relayed host is lost, and Relay only is chosen by hand",
+  "approval": "Runs only after the user approves the hotspot session (brief of 2026-10-03). The levers, the verdicts and the operator checklist are built; no row has run.",
+  "operator_preamble": [
+    "1. Plug the Ally into its charger and keep it plugged in for the whole session.",
+    "2. Turn on the phone's hotspot. Start with LTE: in the phone's mobile settings turn 5G off (LTE only); the 5G pass repeats every row with 5G on.",
+    "3. On the Ally, open the Wi-Fi list and join the phone's hotspot. Leave the home Wi-Fi saved but not connected.",
+    "4. Leave Tailscale running on the Ally (Run unattended on). The rows reach the Ally only through it; an Automatic row turns it off for its match and back on after.",
+    "5. Say 'go LTE' (and later 'go 5G') to the lead; nothing runs before that."
+  ],
+  "aliases": {"ally": "ally-ts"},
+  "runs": [
+    {
+      "name": "a-automatic-fallback",
+      "relay": "automatic",
+      "provider": "cloudflare",
+      "directory": "public",
+      "host_relay_mode": "Directory",
+      "expect_routes": {"client": "relay"},
+      "timeout_s": 600,
+      "peers": [
+        {"name": "host", "box": "z13", "connection": "Automatic"},
+        {"name": "client", "box": "ally", "connection": "Automatic", "hotspot": true, "tailscale_down": true,
+         "panel_probe": "mp-relay-hotspot.panel.probe.json", "panel_route": "via relay"}
+      ]
+    },
+    {
+      "name": "b-hotspot-host",
+      "relay": "automatic",
+      "provider": "cloudflare",
+      "directory": "public",
+      "host_relay_mode": "Directory",
+      "timeout_s": 600,
+      "peers": [
+        {"name": "host", "box": "ally", "connection": "Automatic", "hotspot": true, "tailscale_down": true},
+        {"name": "client", "box": "edith", "connection": "Automatic"}
+      ]
+    },
+    {
+      "name": "c-four-players",
+      "relay": "automatic",
+      "provider": "cloudflare",
+      "directory": "public",
+      "host_relay_mode": "Directory",
+      "timeout_s": 600,
+      "timing_peers": ["host", "client", "client2"],
+      "holds_allowed": ["hotspot"],
+      "peers": [
+        {"name": "host", "box": "z13", "connection": "Automatic"},
+        {"name": "client", "box": "edith", "connection": "Automatic"},
+        {"name": "client2", "box": "z13", "connection": "Automatic"},
+        {"name": "hotspot", "box": "ally", "connection": "Automatic", "hotspot": true, "tailscale_down": true}
+      ]
+    },
+    {
+      "name": "d-credential-expiry",
+      "relay": "cloudflare",
+      "directory": "lane",
+      "host_relay_mode": "Directory",
+      "relay_ttl_cap": 300,
+      "ticks": 24000,
+      "timeout_s": 900,
+      "peers": [
+        {"name": "host", "box": "edith", "connection": "RelayOnly"},
+        {"name": "client", "box": "ally", "connection": "RelayOnly", "hotspot": true}
+      ]
+    },
+    {
+      "name": "e-migration-relayed",
+      "relay": "cloudflare",
+      "directory": "lane",
+      "host_relay_mode": "Directory",
+      "ticks": 1801,
+      "kill_host_at_tick": 600,
+      "timeout_s": 600,
+      "peers": [
+        {"name": "host", "box": "z13", "connection": "RelayOnly"},
+        {"name": "client", "box": "edith", "connection": "RelayOnly"},
+        {"name": "client2", "box": "ally", "connection": "RelayOnly", "hotspot": true}
+      ]
+    },
+    {
+      "name": "f-relay-by-hand",
+      "relay": "cloudflare",
+      "directory": "lane",
+      "host_relay_mode": "Directory",
+      "timeout_s": 600,
+      "peers": [
+        {"name": "host", "box": "edith", "connection": "Automatic"},
+        {"name": "client", "box": "ally", "connection": "Automatic", "judged_connection": "RelayOnly", "hotspot": true,
+         "menu_script": "mp-relay-hotspot.relay-by-hand.menu.txt", "menu_choice": "Relay only"}
+      ]
+    }
+  ],
+  "checklist": [
+    {"id": "a-tunnel", "run": "a-automatic-fallback", "peer": "client", "check": "tunnel:client", "what": "Tailscale was down on the Ally from before its engine started until after it ended, and back up after."},
+    {"id": "a-fallback", "run": "a-automatic-fallback", "peer": "client", "check": "route:client", "what": "On the hotspot the Ally's Automatic connection took the relay route with no player action."},
+    {"id": "a-offer", "run": "a-automatic-fallback", "check": "offer", "what": "The public directory issued a Cloudflare relay for this session and the Ally's report names a relayed connection at a Cloudflare address."},
+    {"id": "a-panel", "run": "a-automatic-fallback", "peer": "client", "check": "panel:client", "what": "The Ally's connection panel says 'via relay' during the match."},
+    {"id": "a-hashes", "run": "a-automatic-fallback", "check": "hashes_equal", "what": "The live hashes agree on every compared frame."},
+    {"id": "a-feel", "run": "a-automatic-fallback", "check": "feel_gates", "what": "Both peers hold the feel driver's gates."},
+    {"id": "a-secrets", "run": "a-automatic-fallback", "check": "no_secret_in_files", "what": "No file of the run holds a login."},
+    {"id": "b-tunnel", "run": "b-hotspot-host", "peer": "host", "check": "tunnel:host", "what": "Tailscale was down on the hosting Ally for its whole match."},
+    {"id": "b-listed", "run": "b-hotspot-host", "check": "listing", "what": "The hotspot host was listed by the public directory and given a Cloudflare relay for its session."},
+    {"id": "b-joined", "run": "b-hotspot-host", "check": "hashes_equal", "what": "EDITH joined the hotspot host's match and both agree on every compared frame."},
+    {"id": "b-routes", "run": "b-hotspot-host", "peer": "client", "check": "route:client", "what": "The joiner's transport recorded the route it took to the hotspot host."},
+    {"id": "b-feel", "run": "b-hotspot-host", "check": "feel_gates", "what": "Both peers hold the feel driver's gates."},
+    {"id": "c-tunnel", "run": "c-four-players", "peer": "hotspot", "check": "tunnel:hotspot", "what": "Tailscale was down on the hotspot Ally for its whole match."},
+    {"id": "c-survivors-feel", "run": "c-four-players", "check": "feel_gates", "what": "The three home and EDITH players hold the feel driver's gates: none of them feels the hotspot player."},
+    {"id": "c-holds", "run": "c-four-players", "check": "seat_holds", "what": "No seat but the hotspot's was held."},
+    {"id": "c-hashes", "run": "c-four-players", "check": "hashes_equal", "what": "All four agree on every compared frame."},
+    {"id": "d-renewal", "run": "d-credential-expiry", "check": "renewal", "what": "The five-minute relay login was renewed on the live connection of both relayed peers, every mint answered 201."},
+    {"id": "d-no-drop", "run": "d-credential-expiry", "check": "exits", "what": "Neither engine dropped across the login's expiry."},
+    {"id": "d-hashes", "run": "d-credential-expiry", "check": "hashes_equal", "what": "Both agree on every compared frame across the renewal."},
+    {"id": "d-holds", "run": "d-credential-expiry", "check": "holds", "what": "No seat was held across the renewal."},
+    {"id": "d-route-client", "run": "d-credential-expiry", "peer": "client", "check": "route:client", "what": "The hotspot Ally stayed on the relay route."},
+    {"id": "e-successor", "run": "e-migration-relayed", "check": "migration", "what": "After the relayed host is lost both survivors name one successor, boundary and round."},
+    {"id": "e-hashes", "run": "e-migration-relayed", "check": "hashes_equal", "what": "The survivors agree on every compared frame after the loss."},
+    {"id": "e-route-hotspot", "run": "e-migration-relayed", "peer": "client2", "check": "route:client2", "what": "The hotspot survivor is relayed through Cloudflare."},
+    {"id": "e-exits", "run": "e-migration-relayed", "check": "exits", "what": "The host ends with the scenario's drop, the survivors end clean."},
+    {"id": "f-chosen", "run": "f-relay-by-hand", "peer": "client", "check": "menu_choice:client", "what": "The player chose Connection = Relay only on the Network Connection page."},
+    {"id": "f-route", "run": "f-relay-by-hand", "peer": "client", "check": "route:client", "what": "The Ally's transport then took only the relay route."},
+    {"id": "f-address", "run": "f-relay-by-hand", "peer": "client", "check": "address:client", "what": "Every candidate the Ally sent was a relay candidate at a Cloudflare address."},
+    {"id": "f-hashes", "run": "f-relay-by-hand", "check": "hashes_equal", "what": "Both agree on every compared frame."}
+  ]
+}

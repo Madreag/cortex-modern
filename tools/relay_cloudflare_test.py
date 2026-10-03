@@ -231,5 +231,119 @@ class SecretScan(unittest.TestCase):
         self.assertEqual(scan['files_scanned'], 0)
 
 
+def tunnel_rows(**changes):
+    rows = [dict(step='before', backend_state='Running'), dict(step='down', exit_code=0, backend_state='Stopped'),
+            dict(step='engine-started', peer='client', backend_state='Stopped'), dict(step='engine-ended', peer='client', backend_state='Stopped'),
+            dict(step='up', exit_code=0, backend_state='Running')]
+    for index, change in changes.items():
+        rows[int(index[1:])].update(change)
+    return rows
+
+
+class HotspotRows(unittest.TestCase):
+    """C4: the six hotspot rows' verdicts, each red on its own defect before any hotspot run exists."""
+
+    def match(self):
+        import relay_cloudflare_match as match
+        return match
+
+    def test_the_tunnel_receipt_passes_only_when_tailscale_was_down_for_the_whole_match(self):
+        judge = self.match().tunnel_receipt
+        self.assertTrue(judge(tunnel_rows())['passed'], judge(tunnel_rows())['reasons'])
+        for name, rows in {'up while the engine ran': tunnel_rows(s2={'backend_state': 'Running'}),
+                           'up when the engine ended': tunnel_rows(s3={'backend_state': 'Running'}),
+                           'the down command failed': tunnel_rows(s1={'exit_code': 1}),
+                           'never brought back up': tunnel_rows()[:4],
+                           'came back without its login': tunnel_rows(s4={'backend_state': 'NeedsLogin'}),
+                           'the engine started before the toggle': [tunnel_rows()[0], tunnel_rows()[2], tunnel_rows()[1], *tunnel_rows()[3:]],
+                           'no engine row at all': [tunnel_rows()[0], tunnel_rows()[1], tunnel_rows()[4]]}.items():
+            with self.subTest(name):
+                self.assertFalse(judge(rows)['passed'])
+
+    def test_a_automatic_fallback_needs_the_relay_on_the_hotspot_peer_with_no_player_action(self):
+        session = 'session-one'
+        run = cloudflare_run(mode='automatic', provider='cloudflare', expect_routes={'client': 'relay'}, signals=[],
+                             connection={'host': 'Automatic', 'client': 'Automatic'},
+                             logs={'host': receipts(session), 'client': receipts(session)})
+        verdict = self.match().judge_relay(run)
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        run['logs']['client'] = receipts(session, route='direct')
+        run['logs']['host'] = receipts(session, route='direct')
+        run['client_connection'] = {'relayed': False, 'remote_address': '24.251.145.96:5000'}
+        verdict = self.match().judge_relay(run)
+        self.assertFalse(verdict['passed'])
+        self.assertTrue(any('fallback' in reason for reason in verdict['reasons']), verdict['reasons'])
+
+    def test_a_the_connection_panel_must_say_the_route(self):
+        panel = self.match().panel_verdict
+        self.assertTrue(panel({'pass': True, 'complete': True})['passed'])
+        for result in ({'pass': False, 'complete': True}, {'pass': True, 'complete': False}, {}, None):
+            with self.subTest(result=result):
+                self.assertFalse(panel(result)['passed'])
+
+    def test_b_the_hotspot_host_is_listed_and_given_a_cloudflare_relay(self):
+        listing = self.match().listing_evidence
+        lines = ['2026-10-03 INFO 1.2.3.4 "POST /v1/sessions HTTP/1.1" 200 -',
+                 'INFO register session_id=session-one name=relayproof-b',
+                 'INFO relay_offer_issued ' + json.dumps(dict(session_id='session-one', match_id='session-one:1', provider='cloudflare',
+                                                              generation=1, expires_at=2000, server_count=2))]
+        self.assertTrue(listing(lines, 'session-one', listed=True)['passed'])
+        self.assertFalse(listing(lines, 'session-one', listed=False)['passed'])
+        self.assertFalse(listing(lines[:2], 'session-one', listed=True)['passed'])
+        self.assertFalse(listing(lines, 'session-two', listed=True)['passed'])
+
+    def test_c_four_players_only_the_hotspot_seat_may_be_held(self):
+        holds = self.match().seat_holds
+        peers = [dict(name='host', holds=0), dict(name='client', holds=0), dict(name='client2', holds=0), dict(name='hotspot', holds=2)]
+        self.assertTrue(holds(peers, allowed={'hotspot'})['passed'])
+        peers[1]['holds'] = 1
+        self.assertFalse(holds(peers, allowed={'hotspot'})['passed'])
+        self.assertFalse(holds([dict(name='host', holds=0)], allowed={'hotspot'}, expected={'host', 'client', 'client2', 'hotspot'})['passed'])
+
+    def test_d_an_expiring_credential_is_renewed_on_the_live_connection(self):
+        renewal = self.match().renewal_evidence
+        renewed = '[net-relay] relay login renewed on 1 live connection(s)'
+        logs = {'host': renewed, 'client': renewed}
+        calls = [dict(status=201), dict(status=201)]
+        self.assertTrue(renewal(logs, calls, ['host', 'client'])['passed'])
+        self.assertFalse(renewal({'host': renewed, 'client': ''}, calls, ['host', 'client'])['passed'])
+        self.assertFalse(renewal(logs, calls[:1], ['host', 'client'])['passed'])
+        self.assertFalse(renewal(logs, [dict(status=201), dict(status=403, provider_error_code='1010')], ['host', 'client'])['passed'])
+
+    def test_e_the_survivors_name_one_successor_after_the_relayed_host_is_lost(self):
+        migration = self.match().migration_declarations
+        line = '[net-match] Host left - Client is now hosting; boundary=640 round=1'
+        self.assertEqual(migration({'client': line, 'client2': line}, ['client', 'client2'])['boundary'], 640)
+        self.assertTrue(migration({'client': line, 'client2': line}, ['client', 'client2'])['passed'])
+        other = '[net-match] Host left - Client2 is now hosting; boundary=640 round=1'
+        self.assertFalse(migration({'client': line, 'client2': other}, ['client', 'client2'])['passed'])
+        self.assertFalse(migration({'client': line, 'client2': ''}, ['client', 'client2'])['passed'])
+        self.assertFalse(migration({'client': line + '\n' + line, 'client2': line}, ['client', 'client2'])['passed'])
+
+    def test_f_relay_only_chosen_by_hand_is_read_from_the_menu_script(self):
+        chosen = self.match().menu_choice
+        log = '[menu-script] combo_select ComboNetworkConnection Relay only\n[menu-script] assert_label ComboNetworkConnection "Relay only" text="Relay only" PASS'
+        self.assertTrue(chosen(log, 'Relay only')['passed'])
+        self.assertFalse(chosen(log.replace('PASS', 'FAIL'), 'Relay only')['passed'])
+        self.assertFalse(chosen('', 'Relay only')['passed'])
+
+    def test_every_hotspot_row_is_declared_with_its_lever(self):
+        scenario = json.loads((Path(__file__).resolve().parent / 'e2e/mp-relay-hotspot.json').read_text(encoding='utf-8'))
+        runs = {run['name'][0]: run for run in scenario['runs']}
+        self.assertEqual(sorted(runs), list('abcdef'))
+        self.assertTrue(any(peer.get('tailscale_down') for peer in runs['a']['peers']))
+        self.assertEqual(runs['a']['expect_routes'], {'client': 'relay'})
+        self.assertEqual(next(peer for peer in runs['b']['peers'] if peer['name'] == 'host')['box'], 'ally')
+        self.assertEqual(len(runs['c']['peers']), 4)
+        self.assertLessEqual(runs['d']['relay_ttl_cap'], 600)
+        self.assertGreater(runs['d']['ticks'] / 60, runs['d']['relay_ttl_cap'])
+        self.assertTrue(runs['e']['kill_host_at_tick'])
+        self.assertTrue(any(peer.get('menu_script') for peer in runs['f']['peers']))
+        for run in scenario['runs']:
+            for peer in run['peers']:
+                if peer['box'] == 'ally':
+                    self.assertTrue(peer.get('hotspot'), run['name'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "timeout_ms": 600000,
+  "steps": [
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay",
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "assert_control",
+      "control": "LabelNetMatchStatus",
+      "equals": {
+        "visible": true
+      },
+      "text_contains": "{PANEL_ROUTE}"
+    },
+    {
+      "op": "menu",
+      "command": "assert_net_label LabelNetMatchStatus {PANEL_ROUTE}"
+    },
+    {
+      "op": "finish_on_round_end",
+      "signals": [
+        "done"
+      ]
+    }
+  ]
+}

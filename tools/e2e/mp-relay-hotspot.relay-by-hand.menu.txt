@@ -1,0 +1,14 @@
+# The hotspot player chooses Connection = Relay only by hand on the Network Connection page, then returns to the main menu.
+wait_ms 1800
+activate ButtonMainToOptions
+wait_ms 600
+select_settings_page Network
+wait_ms 450
+select_settings_page Network:Connection
+wait_ms 900
+combo_select ComboNetworkConnection Relay only
+wait_ms 600
+assert_label ComboNetworkConnection Relay only
+post_command ButtonBackToMainMenu
+wait_ms 900
+assert_screen MainScreen
