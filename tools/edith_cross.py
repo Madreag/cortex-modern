@@ -408,7 +408,10 @@ def soak_verdict(root, ticks):
     that follows an autosave by at most 300 ticks (H7c)."""
     sys.path.insert(0, str(HERE))
     import soak_two_peer as soak
-    history = soak.acceptance_history(Path(root), ticks)
+    try:
+        history = soak.acceptance_history(Path(root), ticks)
+    except ValueError as error:
+        history = dict(pass_=False, **{'pass': False}, errors=[f'{root}: FAIL: {error}'], pace_windows={})
     holds = {peer: soak.return_hold_violations((Path(root) / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
              for peer in ('host', 'client')}
     kept = {peer: soak.excused_return_holds(Path(root), rows)[1] for peer, rows in holds.items()}
@@ -913,11 +916,15 @@ def analyze_match(h, root, meta):
     except Exception as error:  # a pair that never matched still gets its verdict line
         result = dict(name=meta['name'], peers={}, proof={}, off_wire_pass=False, reduction_error=f'{type(error).__name__}: {error}')
     write_json(root / 'feel-report.json', result)
-    peers = {}
+    peers, receipt_failures = {}, []
     for peer in ('host', 'client'):
         log = peer_log(root, peer)
         live = root / f'{peer}-live.jsonl'
-        ticks = live_ticks(live)
+        try:
+            ticks = live_ticks(live)
+        except ValueError as error:
+            ticks = []
+            receipt_failures.append(dict(peer=peer, status='FAIL', receipt=str(live), reason=str(error)))
         waits = [(int(frame), int(ms)) for frame, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)]
         metrics = result.get('peers', {}).get(peer, {}).get('metrics', {})
         report = read_json(root / f'{peer}_report.json')
@@ -950,10 +957,10 @@ def analyze_match(h, root, meta):
     timing_pass = all(result.get('peers', {}).get(peer, {}).get('pass_check') is True for peer in required_timing)
     relay = relay_evidence(root, meta)
     builds = pair_build_evidence(root, meta, records)
-    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass and relay['passed'] and builds['passed'])
+    passed = bool(not receipt_failures and complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass and relay['passed'] and builds['passed'])
     verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds, hold_judgement=hold_judgement,
                    trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest,
-                   soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing, relay=relay, builds=builds)
+                   receipt_failures=receipt_failures, soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing, relay=relay, builds=builds)
     write_json(root / 'verdict.json', verdict)
     cell = lambda key, fmt='{}': '/'.join('-' if peers[peer][key] is None else fmt.format(peers[peer][key]) for peer in ('host', 'client'))
     route = next((line for peer in (meta['local_peer'], 'host', 'client') for line in peers[peer]['route'] if 'selected' in line or 'RouteAllowed' in line), None)

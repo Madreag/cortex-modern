@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_sim_test import make_run  # noqa: E402
 from feel.launch_budget import install_memory_guard  # noqa: E402
 from compare_sim_traces import compare_fullstate  # noqa: E402
-from feel.retained_resume import compare_live_hashes, read_live_hashes, PER_PEER_SUBSYSTEMS  # noqa: E402
+from feel.retained_resume import compare_live_hashes_or_fail as compare_live_hashes, read_live_hashes, PER_PEER_SUBSYSTEMS  # noqa: E402
 from feel.report import own_hold_windows  # noqa: E402
 from compare_sim_traces import CORE  # noqa: E402
 from feel_measure import input_pattern, private_settings, stage_baseline  # noqa: E402
@@ -195,10 +195,17 @@ def excused_return_holds(root: Path, rows: list[dict]) -> tuple[list[dict], list
 
 
 def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict:
-    records = {peer: read_live_hashes(root / f"{peer}-live.jsonl") for peer in ("host", "client")}
+    errors, records = [], {}
+    for peer in ('host', 'client'):
+        path = root / f'{peer}-live.jsonl'
+        try:
+            records[peer] = read_live_hashes(path)
+        except ValueError as error:
+            records[peer] = []
+            errors.append(f'{path}: FAIL: {error}')
     natives = {peer: json.loads((root / f'{peer}_report.json').read_text(encoding='utf-8-sig'))
                if (root / f'{peer}_report.json').is_file() else {} for peer in records}
-    errors, indexed, windows, paces = [], {}, {}, {}
+    indexed, windows, paces = {}, {}, {}
     rounds = {row.get("round") for rows in records.values() for row in rows}
     if None in rounds or len(rounds) != expected_rounds:
         errors.append("round coverage differs from the declared workload")
@@ -366,6 +373,75 @@ def pace_across_own_seat_hold(root: Path) -> dict | None:
     return summary
 
 
+def analyze_soak(root, options, ticks, plan, samples, records, elapsed):
+    """Write a complete reduction even when one retained history receipt is invalid."""
+    live = compare_live_hashes(root / "host-live.jsonl", root / "client-live.jsonl", 1)
+    hashes_equal = bool(live) and all(row["compared_ticks"] > 0 and row["mismatched_ticks"] == 0
+                                      and row["mismatched_applied_input_ticks"] == 0 for row in live)
+    fullstate = compare_fullstate(root / "host" / "stdout.log", root / "client" / "stdout.log") if options.fullstate_every else None
+    holds = count(root / "host" / "stdout.log", "[net-match] hold peer=")
+    rejoins = count(root / "client" / "stdout.log", "[net-match] private catch-up complete")
+    # Every round's own stall ends in an in-place catch-up, the rematches' rounds included.
+    rounds = 1 + (max(1, options.rematches) if options.rematch else 0)
+    acceptance = acceptance_history(root, options.end_round_tick or ticks, rounds)
+    each_round = count(root / "client" / "stdout.log", "[net-test] live stall frame=", " round_index=")
+    in_place = count(root / "client" / "stdout.log", "[net-match] private catch-up complete", " in_place=1")
+    # The host is never killed here, so a client that names a new host has split the match in two.
+    split = count(root / "client" / "stdout.log", "[net-match] Host left - ")
+    autosaves = count(root / "host" / "stdout.log", "[autosave] tick=", "capture_ms=")
+    # The cadence is in simulation seconds, so what is owed follows the ticks the host reached, not the wall clock.
+    reached = max((row["last_tick"] for row in live), default=0)
+    owed = int(reached // (TICKS_PER_SECOND * options.autosave_seconds)) - 1
+    minutes_sampled = sum(1 for row in samples if row.get("host") and row.get("client"))
+    exits = {peer: {"exit_code": record.get("exit_code"), "timed_out": record.get("timed_out")} for peer, record in records.items()}
+    checks = {"exits": all(row["exit_code"] == 0 and not row["timed_out"] for row in exits.values()),
+              "hashes_equal": hashes_equal, "fullstate": fullstate is None or bool(fullstate.get("passed")),
+              "holds": holds >= options.holds, "rejoins": rejoins >= options.holds, "no_split_brain": split == 0,
+              "autosaves": autosaves >= max(0, owed), "memory_sampled": minutes_sampled >= int(options.minutes),
+              "complete_history_and_pace": acceptance['pass']}
+    hold_judgement = soak_hold_judgement(root, plan['injections'])
+    checks['paired_fault_recovery_and_survivor_waits'] = hold_judgement['passed']
+    return_holds = {peer: return_hold_violations((root / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
+                    for peer in ('host', 'client')}
+    excused_holds = {peer: excused_return_holds(root, rows) for peer, rows in return_holds.items()}
+    checks['no_hold_after_return'] = not any(kept for _, kept in excused_holds.values())
+    if options.host_stall:
+        checks['host_stalls_fired'] = count(root / 'host/stdout.log', '[net-test] live stall frame=') == len(options.host_stall)
+        checks['host_returned'] = count(root / 'host/stdout.log', '[net-match] seat-reclaimed peer=1') >= len(options.host_stall)
+    if options.stall_each_round:
+        checks["each_round_caught_up"] = each_round >= rounds and in_place >= rounds
+    first = next((row for row in samples if row.get("host") and row.get("client")), None)
+    last = next((row for row in reversed(samples) if row.get("host") and row.get("client")), None)
+    growth = {peer: {"first": first[peer]["working_set"], "last": last[peer]["working_set"],
+                     "peak": max(row[peer]["working_set"] for row in samples if row.get(peer))}
+              for peer in ("host", "client")} if first and last else None
+    # Growth is read from minute 10, past the match's warm-up, to the last sample; the census names the records behind it.
+    settled = next((row for row in samples if row.get("host") and row.get("client") and row["elapsed_s"] >= 600), None)
+    from_minute_10 = {peer: {"minute_10": settled[peer]["working_set"], "last": last[peer]["working_set"],
+                             "percent": round(100.0 * (last[peer]["working_set"] - settled[peer]["working_set"]) / settled[peer]["working_set"], 1)}
+                      for peer in ("host", "client")} if settled and last and settled is not last else None
+    census = {peer: census_growth(root / peer / "stdout.log", TICKS_PER_SECOND * 600) for peer in ("host", "client")}
+    # A capture the writer could not take yet replaces the one still waiting; each replacement is one line.
+    coalesced = {peer: count(root / peer / "stdout.log", "[fullstate-coalesced] ") + count(root / peer / "stdout.log", "[autosave-coalesced] ")
+                 for peer in ("host", "client")}
+    private_mb = {peer: census_private(root / peer / "stdout.log") for peer in ("host", "client")}
+    clean_ticks = {peer: terrain_event_ticks(root, peer, "clean") for peer in ("host", "client")} if options.terrain_events else None
+    result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
+              "holds_after_returns": {peer: kept for peer, (_, kept) in excused_holds.items()},
+              "holds_after_returns_excused": {peer: excused for peer, (excused, _) in excused_holds.items()},
+              "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
+              "autosaves_published": autosaves, "autosaves_owed": owed,
+              "each_round_stalls": each_round, "in_place_catch_ups": in_place, "rounds": rounds,
+              "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
+              "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
+              "clean_ticks": clean_ticks, "pace_across_own_seat_hold": pace_across_own_seat_hold(root),
+              "plan": plan, "acceptance_history": acceptance, "hold_judgement": hold_judgement}
+    (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
+    print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "
+          f"autosaves={autosaves}/{owed} samples={len(samples)} holds_after_returns={sum(len(kept) for _, kept in excused_holds.values())} -> {root / 'result.json'}", flush=True)
+    return 0 if result["pass"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -441,7 +517,7 @@ def main(argv: list[str] | None = None) -> int:
     stalls = [ticks * (index + 1) // (options.holds + 1) for index in range(options.holds)]
     script = root / "input.txt"
     input_pattern(script)
-    plan = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "repo": str(repo), "ticks": ticks, "minutes": options.minutes,
+    plan = {"started": time.strftime("%Y-%m-%d %I:%M:%S %p"), "repo": str(repo), "ticks": ticks, "minutes": options.minutes,
             "autosave_seconds": options.autosave_seconds, "stalls": [f"{tick}:{options.stall_ms}" for tick in stalls],
             "host_stalls": options.host_stall,
             "port": options.port, "fullstate_every": options.fullstate_every, "sample_seconds": options.sample_seconds,
@@ -554,71 +630,7 @@ def main(argv: list[str] | None = None) -> int:
         for peer, run in runs.items():
             records.setdefault(peer, run.record)
     elapsed = time.monotonic() - started
-    live = compare_live_hashes(root / "host-live.jsonl", root / "client-live.jsonl", 1)
-    hashes_equal = bool(live) and all(row["compared_ticks"] > 0 and row["mismatched_ticks"] == 0
-                                      and row["mismatched_applied_input_ticks"] == 0 for row in live)
-    fullstate = compare_fullstate(root / "host" / "stdout.log", root / "client" / "stdout.log") if options.fullstate_every else None
-    holds = count(root / "host" / "stdout.log", "[net-match] hold peer=")
-    rejoins = count(root / "client" / "stdout.log", "[net-match] private catch-up complete")
-    # Every round's own stall ends in an in-place catch-up, the rematches' rounds included.
-    rounds = 1 + (max(1, options.rematches) if options.rematch else 0)
-    acceptance = acceptance_history(root, options.end_round_tick or ticks, rounds)
-    each_round = count(root / "client" / "stdout.log", "[net-test] live stall frame=", " round_index=")
-    in_place = count(root / "client" / "stdout.log", "[net-match] private catch-up complete", " in_place=1")
-    # The host is never killed here, so a client that names a new host has split the match in two.
-    split = count(root / "client" / "stdout.log", "[net-match] Host left - ")
-    autosaves = count(root / "host" / "stdout.log", "[autosave] tick=", "capture_ms=")
-    # The cadence is in simulation seconds, so what is owed follows the ticks the host reached, not the wall clock.
-    reached = max((row["last_tick"] for row in live), default=0)
-    owed = int(reached // (TICKS_PER_SECOND * options.autosave_seconds)) - 1
-    minutes_sampled = sum(1 for row in samples if row.get("host") and row.get("client"))
-    exits = {peer: {"exit_code": record.get("exit_code"), "timed_out": record.get("timed_out")} for peer, record in records.items()}
-    checks = {"exits": all(row["exit_code"] == 0 and not row["timed_out"] for row in exits.values()),
-              "hashes_equal": hashes_equal, "fullstate": fullstate is None or bool(fullstate.get("passed")),
-              "holds": holds >= options.holds, "rejoins": rejoins >= options.holds, "no_split_brain": split == 0,
-              "autosaves": autosaves >= max(0, owed), "memory_sampled": minutes_sampled >= int(options.minutes),
-              "complete_history_and_pace": acceptance['pass']}
-    hold_judgement = soak_hold_judgement(root, plan['injections'])
-    checks['paired_fault_recovery_and_survivor_waits'] = hold_judgement['passed']
-    return_holds = {peer: return_hold_violations((root / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
-                    for peer in ('host', 'client')}
-    excused_holds = {peer: excused_return_holds(root, rows) for peer, rows in return_holds.items()}
-    checks['no_hold_after_return'] = not any(kept for _, kept in excused_holds.values())
-    if options.host_stall:
-        checks['host_stalls_fired'] = count(root / 'host/stdout.log', '[net-test] live stall frame=') == len(options.host_stall)
-        checks['host_returned'] = count(root / 'host/stdout.log', '[net-match] seat-reclaimed peer=1') >= len(options.host_stall)
-    if options.stall_each_round:
-        checks["each_round_caught_up"] = each_round >= rounds and in_place >= rounds
-    first = next((row for row in samples if row.get("host") and row.get("client")), None)
-    last = next((row for row in reversed(samples) if row.get("host") and row.get("client")), None)
-    growth = {peer: {"first": first[peer]["working_set"], "last": last[peer]["working_set"],
-                     "peak": max(row[peer]["working_set"] for row in samples if row.get(peer))}
-              for peer in ("host", "client")} if first and last else None
-    # Growth is read from minute 10, past the match's warm-up, to the last sample; the census names the records behind it.
-    settled = next((row for row in samples if row.get("host") and row.get("client") and row["elapsed_s"] >= 600), None)
-    from_minute_10 = {peer: {"minute_10": settled[peer]["working_set"], "last": last[peer]["working_set"],
-                             "percent": round(100.0 * (last[peer]["working_set"] - settled[peer]["working_set"]) / settled[peer]["working_set"], 1)}
-                      for peer in ("host", "client")} if settled and last and settled is not last else None
-    census = {peer: census_growth(root / peer / "stdout.log", TICKS_PER_SECOND * 600) for peer in ("host", "client")}
-    # A capture the writer could not take yet replaces the one still waiting; each replacement is one line.
-    coalesced = {peer: count(root / peer / "stdout.log", "[fullstate-coalesced] ") + count(root / peer / "stdout.log", "[autosave-coalesced] ")
-                 for peer in ("host", "client")}
-    private_mb = {peer: census_private(root / peer / "stdout.log") for peer in ("host", "client")}
-    clean_ticks = {peer: terrain_event_ticks(root, peer, "clean") for peer in ("host", "client")} if options.terrain_events else None
-    result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
-              "holds_after_returns": {peer: kept for peer, (_, kept) in excused_holds.items()},
-              "holds_after_returns_excused": {peer: excused for peer, (excused, _) in excused_holds.items()},
-              "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
-              "autosaves_published": autosaves, "autosaves_owed": owed,
-              "each_round_stalls": each_round, "in_place_catch_ups": in_place, "rounds": rounds,
-              "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
-              "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
-              "clean_ticks": clean_ticks, "pace_across_own_seat_hold": pace_across_own_seat_hold(root),
-              "plan": plan, "acceptance_history": acceptance, "hold_judgement": hold_judgement}
-    (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
-    print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "
-          f"autosaves={autosaves}/{owed} samples={len(samples)} holds_after_returns={sum(len(kept) for _, kept in excused_holds.values())} -> {root / 'result.json'}", flush=True)
-    return 0 if result["pass"] else 1
+    return analyze_soak(root, options, ticks, plan, samples, records, elapsed)
 
 
 if __name__ == "__main__":

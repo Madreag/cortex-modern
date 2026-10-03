@@ -52,6 +52,16 @@ def split_passes(lines: list[dict]) -> list[list[dict]]:
     return passes
 
 
+def compare_live_hashes_or_fail(host_path, client_path, first_tick):
+    """Retain an invalid receipt as a failed comparison item so other arms can be judged."""
+    try:
+        return compare_live_hashes(host_path, client_path, first_tick)
+    except ValueError as error:
+        return [dict(status='FAIL', reason=f'{host_path}; {client_path}: {error}',
+                     compared_ticks=0, mismatched_ticks=0, mismatched_applied_input_ticks=0,
+                     first_tick=None, last_tick=0)]
+
+
 # Which seat drives an actor on THIS machine is routing, not simulation: the owner's seat is CIM_PLAYER with its
 # player number on its own machine and CIM_NETWORK/NoPlayer on every other one, so "controller_route" is per-peer by
 # construction and can never match across peers. The input those seats APPLY is the "controller" subsystem and is

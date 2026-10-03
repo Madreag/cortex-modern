@@ -51,7 +51,8 @@ class SoakOracleEvidence(unittest.TestCase):
             root = Path(folder)
             (root / 'host').mkdir()
             (root / 'host/stdout.log').write_text(complete_cost_log())
-            (root / 'manifest.json').write_text(json.dumps(dict(ticks=1200)))
+            (root / 'manifest.json').write_text(json.dumps(dict(ticks=1200, heavy_scene_levers={
+                peer: dict(lever='CCCP_TEST_SIM_COST_US', cost_us=20000, from_tick=1) for peer in ('host', 'client')})))
             native = dict(pace=dict(sim_ms_per_tick=20), lockstep=dict(round_id=7, local_capacity_tps=50,
                 sim_tick_ms=1000/60, next_frame=1201, missing_frame_stalls=0, steady_missing_frame_stalls=0))
             for peer in ('host', 'client'):

@@ -167,8 +167,15 @@ def schedule_for(options, peers, boxes):
             host = next(p['name'] for p in peers if p['name'] == options.host or p['box'] == options.host)
             if fault['peer'] != host or options.scenario != 'match':
                 raise ValueError('host-kill requires the declared host in the HL4 match arm')
-            if any(other is not fault for other in faults):
-                raise ValueError('HL4 has additional scheduled faults without a combined migration oracle')
+            preparation = [other for other in faults if other is not fault]
+            silence = [other for other in preparation if other['action'] == 'silence']
+            bans = [other for other in preparation if other['action'] == 'moderation-ban']
+            if preparation and not (len(preparation) == 2 and len(silence) == len(bans) == 1
+                    and silence[0]['peer'] != host and bans[0]['peer'] == host
+                    and bans[0].get('target_peer') in names - {host, silence[0]['peer']}
+                    and all(other['tick'] < fault['tick'] for other in preparation)
+                    and all(type(silence[0].get(key)) is int and silence[0][key] > 0 for key in ('duration_ms', 'duration_ticks'))):
+                raise ValueError('HL4 permits only one non-host silence and one host moderation-ban of a different seat before host-kill')
         incarnation = fault.get('incarnation', incarnations[fault['peer']])
         restarting = fault['action'] in ('announced-leave-rejoin', 'crash-restart')
         fault.update(id=fault.get('id', f'fault-{number}'), incarnation=incarnation,
@@ -260,11 +267,11 @@ def make_plan(options):
             specs[-1]['settings'] = dict(options.local_setting)
             if options.local_render_cap is not None:
                 specs[-1]['render_cap'] = options.local_render_cap
-        specs[-1]['recoveries']=[f for f in specs[-1]['faults'] if f['action'] not in ('brain-eliminate', 'host-kill')]
+        specs[-1]['recoveries']=[f for f in specs[-1]['faults'] if f['action'] not in ('brain-eliminate', 'host-kill', 'silence', 'moderation-ban')]
         specs[-1]['forced_ends']=[f for f in faults if f['action']=='brain-eliminate']
         if specs[-1]['barriers']:
             specs[-1]['env']['CC_TEST_CROSS_CAPTURE_BARRIER'] = own+'/barriers.json'
-    return dict(version=1, run=stem, lane=LANE, mac_guard=MAC_GUARD, started=dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST'),
+    return dict(version=1, run=stem, lane=LANE, mac_guard=MAC_GUARD, started=dt.datetime.now(MST).strftime('%Y-%m-%d %I:%M:%S %p MST'),
                 driver_commit=command(['git','-C',HERE.parent,'rev-parse','HEAD']).strip(),
                 driver_tracked_changes=command(['git','-C',HERE.parent,'status','--porcelain','--untracked-files=no']).splitlines(),
                 driver_sources={str(path.relative_to(HERE)):digest_file(path) for path in
@@ -532,7 +539,8 @@ def prepare_instance(spec, pin, box, runtime=None):
         rows += [f'player=0 {start} {end} {direction} FIRE AIM=0.9,-0.1',
                  f'player=0 {start+180} {min(start+210, spec["ticks"])} WEAPON_RELOAD'] if start+210 <= spec['ticks'] else [f'player=0 {start} {end} FIRE AIM=-0.9,-0.1']
     (own / 'input.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8')
-    write_json(own / 'faults.json', [f for f in spec['faults'] if f['incarnation'] == spec['incarnation'] and f['action'] != 'host-kill'])
+    write_json(own / 'faults.json', [dict(f, action='outage', declared_action='silence') if f['action'] == 'silence' else f
+                                  for f in spec['faults'] if f['incarnation'] == spec['incarnation'] and f['action'] != 'host-kill'])
     write_json(own / 'recoveries.json',dict(cases=spec.get('recoveries',spec['faults']),starts=spec.get('recovery_starts',{}),forced_ends=spec.get('forced_ends',[])))
     write_json(own / 'barriers.json',spec.get('barriers',[]))
     teams = dict(human_teams=[0,0,1], cpu_teams=[2]) if spec['roster'] in ('mixed','allies') else \
