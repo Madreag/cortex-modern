@@ -322,8 +322,8 @@
     {
       "id": "fx-secrets",
       "run": "fixed",
-      "check": "no_secret_in_files",
-      "what": "No file of the run holds the pair once the sweep has run."
+      "check": "pair_blanked",
+      "what": "The pair the menus typed was found only where the engine wrote it on EDITH, blanked there, and no file holds it after the sweep; it is dead by its TTL besides."
     },
     {
       "id": "au-identities",
