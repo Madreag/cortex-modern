@@ -10934,6 +10934,8 @@ int main(int argc, char** argv) {
 	}
 
 	g_PresetMan.LoadAllDataModules();
+	// The device icons are presets, so they load once the modules have, before any path that can draw a menu.
+	if (!System::IsInExternalModuleValidationMode()) g_UInputMan.LoadDeviceIcons();
 	SpendPreMatchHistory(s_preMatchHistoryObjects);
 	PlayPreMatchActivity(s_preMatchActivity);
 	// The modules are loaded and will not change under this process: read them once here, off the game
@@ -11089,9 +11091,6 @@ int main(int argc, char** argv) {
 	int scenarioExitCode = 0;
 
 	if (!System::IsInExternalModuleValidationMode()) {
-		// Load the different input device icons. This can't be done during UInputMan::Create() because the icon presets don't exist so we need to do this after modules are loaded.
-		g_UInputMan.LoadDeviceIcons();
-
 		if (g_ConsoleMan.LoadWarningsExist()) {
 			g_ConsoleMan.PrintString("WARNING: Encountered non-fatal errors during module loading!\nSee \"LogLoadingWarning.txt\" for information.");
 			g_ConsoleMan.SaveLoadWarningLog("LogLoadingWarning.txt");
