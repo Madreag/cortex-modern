@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "timeout_ms": 480000,
+  "timeout_ms": 180000,
   "steps": [
     {
       "op": "menu",

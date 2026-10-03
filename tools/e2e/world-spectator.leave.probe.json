@@ -1,8 +1,12 @@
 {
   "schema": 1,
-  "timeout_ms": 480000,
+  "timeout_ms": 180000,
   "activate_phase": "Running",
   "steps": [
+    {
+      "op": "menu",
+      "command": "dump_world_ownership initial-seat"
+    },
     {
       "op": "wait_file",
       "path": "{PROBE_DIR_spectator}/crawl-complete.json"
