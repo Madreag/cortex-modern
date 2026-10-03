@@ -531,7 +531,7 @@ def retain_checkpoints(run, spec, *, final=False):
 
 
 def prepare_instance(spec, pin, box, runtime=None):
-    from run_sim_test import make_run, seed_settings
+    from run_sim_test import make_run, seed_settings, RUNTIME_SETTINGS
     if box['kind'] != 'windows-local' and (spec.get('settings') or 'render_cap' in spec):
         raise ValueError('local settings and render cap require a windows-local instance')
     cap = render_cap_hz(spec.get('render_cap', 60))
@@ -570,6 +570,14 @@ def prepare_instance(spec, pin, box, runtime=None):
     if fresh_acceptance and spec['acceptance_row'].startswith('mod-'):
         runtime = acceptance_cross.prepare_mod_runtime(spec)
     run = make_run(Path(spec['repo']), spec['flags'], own / 'engine', timeout=spec['timeout'], env=spec['env'], runtime=runtime)
+    if fresh_acceptance and runtime is not None:
+        # A fresh private mod overlay was seeded by prepare_mod_runtime. The
+        # retained-runtime runner records only its path, so carry those actual
+        # defaults before the measurement settings update their receipt.
+        receipt_path = Path(run.out) / 'runtime.json'
+        receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+        receipt.setdefault('settings_overrides', dict(RUNTIME_SETTINGS))
+        write_json(receipt_path, receipt)
     if fresh_acceptance or runtime is None:
         if acceptance_cross.is_row(spec):
             acceptance_cross.stage_activity(run, spec)
@@ -821,7 +829,10 @@ def run_payload(path):
             if spec['role'] != 'host':
                 session_path = root / spec.get('session_leaf', 'session.json')
                 deadline = time.monotonic() + spec.get('session_wait_s', 180)
-                while not session_path.is_file() and time.monotonic() < deadline: time.sleep(.2)
+                while not session_path.is_file() and time.monotonic() < deadline:
+                    if (root/'stop.json').is_file():
+                        raise RuntimeError('coordinator cancelled while waiting for the published session')
+                    time.sleep(.2)
                 if not session_path.is_file(): raise RuntimeError('session directory publication deadline')
                 session = json.loads(session_path.read_text(encoding='utf-8'))['session']
                 spec['flags'] = [session if flag == '<published-session-id>' else flag for flag in spec['flags']]
