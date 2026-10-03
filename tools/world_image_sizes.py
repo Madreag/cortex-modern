@@ -64,6 +64,24 @@ def image_measurement(scene, archive, client_log, expected_digest=None):
                 received_bytes=totals[0], ratio=totals[0]/size, compresses=totals[0] < size)
 
 
+def offered_archive(host_log, runtime):
+    decoder = json.JSONDecoder()
+    offers = [decoder.raw_decode(host_log[mark.end():])[0] for mark in re.finditer(r"\[net-world\] offer ", host_log)]
+    unique = {(offer['tick'], offer['digest'], offer['path'], offer['bytes']) for offer in offers}
+    if len(unique) != 1:
+        raise ValueError('scene run did not publish one identifiable checkpoint')
+    tick, digest, name, size = next(iter(unique))
+    path = Path(name)
+    if not path.is_absolute():
+        path = Path(runtime)/path
+    path = path.resolve()
+    if not path.is_relative_to(Path(runtime).resolve()):
+        raise ValueError('offered archive leaves the private runtime')
+    if not path.is_file() or path.stat().st_size != size:
+        raise ValueError('offered archive bytes differ from the retained file')
+    return path, digest, tick
+
+
 def markdown(scenes, measurements):
     identities = [(r["module"], r["name"]) for r in scenes]
     indexed = {(r["module"], r["name"]): r for r in measurements}
@@ -71,23 +89,24 @@ def markdown(scenes, measurements):
         raise ValueError("duplicate or unoffered scene measurement")
     lines = ["# Persistent-world image sizes", "",
              "Method: the native lobby's Persistent World activity table names the scenes. Each measurement uses the task-designated Final release build, one retained checkpoint archive, its SHA-256, and the joiner's native StateChunk completion receipt. Archive size and received size are measured independently. No sanitizer run or inferred stream size is substituted.", "",
-             "| World scene | Module | Archive bytes | Received StateChunk bytes | Stream / archive | Compresses |", "|---|---|---:|---:|---:|---|"]
+             "| World scene | Module | Archive bytes | Received StateChunk bytes | Stream / archive | Compresses | Join outcome |", "|---|---|---:|---:|---:|---|---|"]
     for identity in identities:
         row = indexed.get(identity)
         name = identity[1].replace("|", "\\|")
-        if row is None:
-            lines.append(f"| {name} | {identity[0]} | NOT RUN | NOT RUN | — | UNPROVEN |")
+        if row is None or not row.get('archive_bytes') or not row.get('received_bytes'):
+            lines.append(f"| {name} | {identity[0]} | NOT MEASURED | NOT MEASURED | — | UNPROVEN | {'FAILED' if row else 'NOT RUN'} |")
         else:
-            lines.append(f"| {name} | {identity[0]} | {row['archive_bytes']} | {row['received_bytes']} | {row['ratio']:.6f} | {'yes' if row['compresses'] else 'no'} |")
-    complete = len(indexed) == len(identities) and bool(identities)
+            outcome = 'PASS' if row.get('engine_run_passed') else 'FAILED AFTER TRANSFER' if row.get('engine_run_passed') is False else 'not evaluated'
+            lines.append(f"| {name} | {identity[0]} | {row['archive_bytes']} | {row['received_bytes']} | {row['ratio']:.6f} | {'yes' if row['compresses'] else 'no'} | {outcome} |")
+    complete = len(indexed) == len(identities) and bool(identities) and all(r.get('archive_bytes',0)>0 and r.get('received_bytes',0)>0 for r in measurements)
     lines += ["", "Complete: "+("yes" if complete else "no"), "",
-              "Transfer label dumps are retained separately at five-second intervals; missing dumps remain an open progress-line evidence requirement.", ""]
+              "Join outcomes remain separate: a post-transfer engine failure does not erase measured bytes and does not become a passing join. Transfer label dumps are required separately at five-second intervals; missing dumps remain an open progress-line evidence requirement.", ""]
     return "\n".join(lines), complete
 
 
 def collect_scene(repo, scene, out, port, scratch, timeout=600):
     out.mkdir(parents=True, exist_ok=False)
-    common = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
+    common = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "3", "-net-match-humans", "2",
               "-net-match-service-preset", "Persistent World", "-net-match-service-module", "Base.rte",
               "-net-match-service-scene", scene["name"], "-net-match-service-scene-module", scene["module"],
               "-net-match-auto-delay", "-net-autosave-seconds", "0", "-net-match-ticks", "2400", "-max-ticks", "2400"]
@@ -102,9 +121,22 @@ def collect_scene(repo, scene, out, port, scratch, timeout=600):
             deadline = time.monotonic()+timeout
             while time.monotonic() < deadline:
                 text = (out/"host/stdout.log").read_text(encoding="utf-8", errors="replace")
-                if "[net-lockstep] start round=" in text:
+                if "[net-lobby] waiting at " in text:
                     break
                 if host.poll() is not None:
+                    raise RuntimeError("world host ended before opening its lobby")
+                check_storage(scratch)
+                time.sleep(.2)
+            else:
+                raise RuntimeError("world lobby did not open before hang guard")
+            bootstrap = private_run(repo, common+["-net-join", "127.0.0.1", "-net-match-report", str(out/"bootstrap-report.json")], out/"bootstrap", timeout)
+            handles.append(bootstrap)
+            bootstrap.start()
+            while time.monotonic() < deadline:
+                text = (out/"host/stdout.log").read_text(encoding="utf-8", errors="replace")
+                if "[net-lockstep] start round=" in text:
+                    break
+                if host.poll() is not None or bootstrap.poll() is not None:
                     raise RuntimeError("world host ended before its first round")
                 check_storage(scratch)
                 time.sleep(.2)
@@ -122,15 +154,21 @@ def collect_scene(repo, scene, out, port, scratch, timeout=600):
                 time.sleep(.2)
             records = [handle.finish() for handle in handles]
             result["records"] = records
-            if any(r.get("exit_code") != 0 for r in records):
-                raise RuntimeError("scene measurement engine failed")
+            result['executable_sha256'] = records[0].get('exe_sha256')
+            if len({record.get('exe_sha256') for record in records}) != 1:
+                raise RuntimeError('the scene peers ran different release binaries')
+            result['engine_run_passed'] = all(r.get('exit_code') == 0 and not r.get('timed_out') for r in records)
             log = (out/"client/stdout.log").read_text(encoding="utf-8", errors="replace")
-            archives = list((out/"client/runtime/Userdata/UserSavedGames.rte").glob("p5join_recv_*.ccsave"))
-            if len(archives) != 1:
-                raise ValueError("join did not retain a unique checkpoint archive")
-            result.update(image_measurement(scene, archives[0], log), passed=True)
+            host_log = (out/'host/stdout.log').read_text(encoding='utf-8', errors='replace')
+            archive, digest, tick = offered_archive(host_log, host.cwd)
+            result.update(image_measurement(scene, archive, log, digest), capture_tick=tick, capture_count=1,
+                          size_complete=True, passed=result['engine_run_passed'])
+            if not result['engine_run_passed']:
+                result['engine_failure'] = 'engine failed after receiving the measured image; see retained native logs'
         finally:
             for handle in handles:
+                if handle.process and handle.poll() is not None:
+                    handle.finish()
                 handle.close()
             write_json(out/"measurement.json", result)
     return result
@@ -149,6 +187,8 @@ def main():
     measure.add_argument("--scratch", type=Path, required=True)
     measure.add_argument("--port", type=int, required=True)
     measure.add_argument("--scene-index", type=int, action="append", help="measure these lobby-list indices; the table still lists every scene")
+    measure.add_argument('--start-index', type=int, default=0)
+    measure.add_argument('--exe-sha256', help='refuse the next scene if the release binary changes')
     args = parser.parse_args()
     if args.command == "list":
         result = enumerate_scenes(args.repo.resolve(), args.out.resolve())
@@ -160,13 +200,16 @@ def main():
     args.out.mkdir(parents=True, exist_ok=False)
     measurements = []
     for index, scene in enumerate(scenes):
-        if args.scene_index is not None and index not in args.scene_index:
+        if index < args.start_index or args.scene_index is not None and index not in args.scene_index:
             continue
+        if args.exe_sha256 and file_sha256(engine_executable(args.repo)) != args.exe_sha256:
+            raise RuntimeError('release binary changed; scene measurements paused without deleting evidence')
         check_storage(args.scratch)
         measurements.append(collect_scene(args.repo.resolve(), scene, args.out/f"scene-{index:02d}", args.port, args.scratch))
         table, complete = markdown(scenes, measurements)
         (args.out/"image-sizes.md").write_text(table, encoding="utf-8")
-    return 0 if complete else 1
+        print(f"scene {index+1}/{len(scenes)}: {scene['name']}; bytes measured; join {'PASS' if measurements[-1]['passed'] else 'FAIL'}", flush=True)
+    return 0 if complete and all(row.get('passed') for row in measurements) else 1
 
 
 if __name__ == "__main__":
