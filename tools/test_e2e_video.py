@@ -58,7 +58,7 @@ def check_freeze_stills(results):
     inside = driver.running_stills(spans, running, allowed=named, named=[(1000 + 2000, 1000 + 4500, "the F6 panel over an idle world")])
     ok &= row(results, "stills/named-state-still-allowed", [still["start_s"] for still in inside] == [9.0] and named and named[0]["reason"] == "the F6 panel over an idle world")
     ok &= row(results, "stills/still-past-its-named-state-fails", [still["start_s"] for still in driver.running_stills(spans, running, named=[(1000 + 3000, 1000 + 4500, "late")])] == [2.5, 9.0])
-    ok &= row(results, "stills/capped-stop-elsewhere-fails", [still["start_s"] for still in driver.running_stills(spans, running, capped_stop_ms=1000 + 6000)] == [2.5, 9.0])
+    ok &= row(results, "stills/only-pre-stop-still-fails", [still["start_s"] for still in driver.running_stills(spans, running, capped_stop_ms=1000 + 6000)] == [2.5])
     return ok
 
 
@@ -201,7 +201,7 @@ def check_screen_watches(results, scratch):
              '[text-watch] summary {"watch": "h15-duplicates", "rule": "duplicates", "frames": 900, "active_frames": 900, "violations": 0}']
     (peer / "stdout.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
     watches = driver.screen_watch_results(peer)
-    ok = row(results, "screen/armed-watches-only", set(watches) == {"layout", "duplicates"})
+    ok = row(results, "screen/every-armed-watch", set(watches) == {"layout", "duplicates", "private"})
     ok &= row(results, "screen/each-offence-listed", [o["detail"]["control"] for o in watches["layout"]["offences"]] == ["LabelFiles", "LabelTelemetry"])
     ok &= row(results, "screen/clean-watch-has-summary", watches["duplicates"]["offences"] == [] and watches["duplicates"]["summary"]["frames"] == 900)
     ok &= row(results, "screen/nothing-armed-is-not-judged", driver.screen_watch_results(scratch / "screen-watch-none") is None)
