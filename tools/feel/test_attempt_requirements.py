@@ -6,13 +6,18 @@ import cross_report
 
 
 def attempt():
-    manifest = dict(scenario='soak', ticks=72000, fullstate_every=600,
+    names = dict(erol='EROL-PC', edith='EDITH', mac='Mac', linux='Linux')
+    manifest = dict(scenario='soak', acceptance_row=18, source_sha='a'*40, host='erol', ticks=72000, fullstate_every=600,
+                    boxes=[dict(name=box) for box in names.values()], instances=[dict(name=name, box=box) for name, box in names.items()],
+                    specs=[dict(peer=name, box=box, role='host' if name == 'erol' else 'player') for name, box in names.items()],
+                    preflights={box: dict(head='a'*40, machine_id=box, executable_sha256='b'*64,
+                        build=dict(commit='a'*40, executable_sha256='b'*64)) for box in names.values()},
                     capture_rows_pending=[], faults=[dict(id='stall', action='live-stall', peer='mac')])
     checks = dict.fromkeys((*cross_report.CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits',
                            'no_engine_findings', 'box_pace', 'bounded_recovery', 'faults_applied',
                            'native_fault_effects', 'quiet_feel', 'unique_gameplay_budget',
                            'coverage_minima', 'memory_bounds', 'acceptance_roster', 'build_receipts'), True)
-    peers = {name: dict(feel_gated=True, feel_pass=True,
+    peers = {name: dict(feel_gated=True, feel_pass=True, record=dict(exe_sha256='b'*64),
                        memory_by_incarnation={'0': dict(passed=True, sizes={'private': {}}, missing_samples=0)},
                        memory_census={'0': dict(status='PASS', warm_slope_bound=10)})
              for name in ('erol', 'edith', 'mac', 'linux')}
@@ -53,7 +58,7 @@ class AttemptRequirements(unittest.TestCase):
                     args[1][key] = False
                     self.assertFalse(cross_report.judge_attempt(*args)['v1_passed'])
         args = attempt()
-        args[0]['specs'] = [dict(flags=['-net-cross-rematches', '4096'])]
+        args[0]['specs'][0]['flags'] = ['-net-cross-rematches', '4096']
         args[1]['round_ended'] = False
         self.assertEqual(cross_report.judge_attempt(*args)['oracles']['rematches']['status'], 'FAIL')
 

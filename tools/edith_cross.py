@@ -135,6 +135,8 @@ def prepare_peer(h, spec):
     run_out = Path(spec['root']) / spec['peer']
     run = h.run.make_run(Path(spec['repo']), spec['flags'], run_out, timeout=spec['timeout'], env=spec['env'],
                          expected=[Path(path) for path in spec['expected']])
+    write_json(Path(spec['root']) / f'{spec["peer"]}-build.json', dict(
+        source_sha=command_source_sha(spec['repo']), build=read_json(Path(spec['repo']) / 'tools/cross_peers/build.json')))
     h.feel.private_settings(run, spec['cap'])
     if spec.get('record'):
         (run_out / 'feel').mkdir()
@@ -783,7 +785,7 @@ def run_match(h, options, index, login):
         say(f'{name}: SOAK {"PASS" if verdict["passed"] else "FAIL"} {json.dumps(verdict["checks"])} autosaves={verdict["autosaves"]} '
             f'client_holds_after_autosaves={verdict["client_holds_after_autosaves"]}')
     return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path, ticks=match_ticks(options),
-                                       port=port, machines=machines, soak=options.soak,
+                                       port=port, machines=machines, soak=options.soak, source_sha=command_source_sha(options.repo),
                                        local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note,
                                        feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load))
 
@@ -878,6 +880,23 @@ def relay_evidence(root, meta):
     return dict(passed=not errors, required=True, session_id=session, peers=routes, offers=offers, reason='; '.join(errors))
 
 
+def command_source_sha(repo):
+    return run(['git', '-C', str(repo), 'rev-parse', 'HEAD']).strip()
+
+
+def pair_build_evidence(root, meta, records):
+    errors = []
+    tip = meta.get('source_sha')
+    if not isinstance(tip, str) or not re.fullmatch(r'[0-9a-f]{40}', tip): errors.append(f'source_sha={tip!r}')
+    for peer, record in records.items():
+        observed = read_json(root / f'{peer}-build.json')
+        build = observed.get('build') or {}
+        sha = record.get('exe_sha256')
+        if observed.get('source_sha') != tip or build.get('commit') != tip or not sha or build.get('executable_sha256') != sha:
+            errors.append(f'{peer}: source={observed.get("source_sha")!r}, build={build.get("commit")!r}, runner hash={sha!r}, build hash={build.get("executable_sha256")!r}')
+    return dict(passed=not errors, reason='; '.join(errors), source_sha=tip)
+
+
 def analyze_match(h, root, meta):
     records = {peer: read_json(root / f'{peer}-record.json') for peer in ('host', 'client')}
     complete = all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values())
@@ -930,10 +949,11 @@ def analyze_match(h, root, meta):
     required_timing = ['host'] if is_soak and holds_pass and targets == {'client'} else ['host', 'client']
     timing_pass = all(result.get('peers', {}).get(peer, {}).get('pass_check') is True for peer in required_timing)
     relay = relay_evidence(root, meta)
-    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass and relay['passed'])
+    builds = pair_build_evidence(root, meta, records)
+    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass and relay['passed'] and builds['passed'])
     verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds, hold_judgement=hold_judgement,
                    trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest,
-                   soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing, relay=relay)
+                   soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing, relay=relay, builds=builds)
     write_json(root / 'verdict.json', verdict)
     cell = lambda key, fmt='{}': '/'.join('-' if peers[peer][key] is None else fmt.format(peers[peer][key]) for peer in ('host', 'client'))
     route = next((line for peer in (meta['local_peer'], 'host', 'client') for line in peers[peer]['route'] if 'selected' in line or 'RouteAllowed' in line), None)

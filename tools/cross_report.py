@@ -57,7 +57,47 @@ def completed_workload(instances, events, ticks):
                 configured_ticks=ticks, observed_budget_ticks=observed)
 
 
+def acceptance_identity(manifest, peers):
+    errors, build_errors = [], []
+    expected = {'erol': 'EROL-PC', 'edith': 'EDITH', 'mac': 'Mac', 'linux': 'Linux'}
+    instances = manifest.get('instances', [])
+    boxes = {row.get('name') for row in manifest.get('boxes', [])}
+    actual = {row.get('name'): row.get('box') for row in instances}
+    row_id = {'match': 17, 'soak': 18, 'chaos': 19}.get(manifest.get('scenario'))
+    if manifest.get('acceptance_row') != row_id or row_id is None:
+        errors.append(f'acceptance_row={manifest.get("acceptance_row")!r}, scenario={manifest.get("scenario")!r}')
+    for peer, box in expected.items():
+        if actual.get(peer) != box or box not in boxes or peer not in peers:
+            errors.append(f'{peer}: instance box={actual.get(peer)!r}, box present={box in boxes}, peer evidence={peer in peers}')
+    host = manifest.get('host')
+    specs = manifest.get('specs', [])
+    hosts = [row.get('peer') for row in specs if row.get('role') == 'host']
+    if host not in actual or hosts != [host]: errors.append(f'host={host!r}, host role receipts={hosts}')
+    for instance in instances:
+        own = [spec for spec in specs if spec.get('peer') == instance.get('name') and spec.get('box') == instance.get('box')]
+        role = 'host' if instance.get('name') == host else instance.get('seat', 'player')
+        if len(own) != 1 or own[0].get('role') != role:
+            errors.append(f'{instance.get("name")}: role records={own}, declared role={role}')
+    tip = manifest.get('source_sha')
+    if not isinstance(tip, str) or not re.fullmatch(r'[0-9a-f]{40}', tip): build_errors.append(f'source_sha={tip!r}')
+    preflights = manifest.get('preflights', {})
+    machine_ids = [preflights.get(box, {}).get('machine_id') for box in boxes]
+    if not all(machine_ids) or len(set(machine_ids)) != len(boxes): errors.append(f'machine identities={machine_ids}')
+    for instance in instances:
+        name, box = instance.get('name'), instance.get('box')
+        pre = preflights.get(box, {})
+        build = pre.get('build') or {}
+        exe = pre.get('executable_sha256')
+        if pre.get('head') != tip or build.get('commit') != tip or not isinstance(exe, str) or not re.fullmatch(r'[0-9a-f]{64}', exe) or build.get('executable_sha256') != exe:
+            build_errors.append(f'{name}: preflight head={pre.get("head")!r}, build commit={build.get("commit")!r}, build hash={build.get("executable_sha256")!r}, measured hash={exe!r}')
+        record = peers.get(name, {}).get('record', {})
+        if not exe or record.get('exe_sha256') != exe: build_errors.append(f'{name}: runner hash={record.get("exe_sha256")!r}, preflight hash={exe!r}')
+    return dict(roster_passed=not errors, builds_passed=bool(instances) and not build_errors, roster_errors=errors, build_errors=build_errors)
+
+
 def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
+    identity = acceptance_identity(manifest, peers)
+    checks = dict(checks, acceptance_roster=identity['roster_passed'], build_receipts=identity['builds_passed'])
     core=all(checks.get(name,False) for name in CORE_CHECKS)
     engine_red=not checks.get('zero_unscheduled_holds',False) and bool(checks.get('only_capture_induced_holds')) and all(checks.get(name,False) for name in CORE_CHECKS if name not in ('full_history','zero_unscheduled_holds'))
     def oracle(*names, rule='', detail=''):
@@ -71,6 +111,7 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     ungated = [name for name, peer in peers.items() if not peer.get('feel_gated')]
     feel_detail = '; '.join(f'{name}: {peers[name].get("feel_status", "no quiet timing evidence")}' for name in ungated)
     oracles=dict(
+        acceptance_identity=oracle('acceptance_roster', 'build_receipts', detail='; '.join(identity['roster_errors'] + identity['build_errors'])),
         preflight=dict(oracle('preflight_complete', detail='; '.join(mixed_builds),
             rule='Every incarnation runs the executable its preflight and build receipt identify.'), reasons=list(mixed_builds)),
         live_hashes=oracle('full_history', 'zero_desync', rule='Every declared comparable key is equal; unknown evidence cannot pass.'),
@@ -112,7 +153,7 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         oracles['autosaves'] = oracle('validated_autosave_archives', rule='Requested archives are present and valid; a requested restore also proves sealed admission.') if saves else \
             dict(status='NOT APPLICABLE', reason='The schedule requests neither autosaves nor an archive restore; a ticket return uses the host image.')
         asked = [name for name in ('forced_ends', 'rematches', 'autosaves') if oracles[name]['status'] != 'NOT APPLICABLE']
-    required = (*CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings', 'box_pace',
+    required = (*CORE_CHECKS, 'acceptance_roster', 'build_receipts', 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings', 'box_pace',
                 'quiet_feel', 'unique_gameplay_budget', 'coverage_minima', 'memory_bounds')
     if manifest['scenario'] != 'match':
         required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
@@ -751,7 +792,7 @@ def build_report(root):
         expected=manifest.get('preflights',{}).get(spec['box'],{}).get('executable_sha256')
         for fragment in fragments:
             runner=load(fragment/'record.json',{}) or load(fragment/'engine/launch.json',{})
-            if runner and (not expected or runner.get('exe_sha256')!=expected):
+            if not expected or runner.get('exe_sha256')!=expected:
                 mixed_builds.append(f'{spec["box"]}: {name} incarnation {int(fragment.name.split("-")[-1])} ran executable sha256 '
                                     f'{runner.get("exe_sha256")} but the preflight hashed {expected}')
         live[name] = [row for fragment in fragments for row in source_rows(fragment/'live.jsonl',root)]

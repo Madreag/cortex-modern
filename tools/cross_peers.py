@@ -265,7 +265,8 @@ def make_plan(options):
                 driver_sources={str(path.relative_to(HERE)):digest_file(path) for path in
                     (HERE/'cross_peers.py',HERE/'cross_report.py',HERE/'feel/report.py',HERE/'feel/records.py')},
                 boxes=manifest['boxes'], instances=peers, specs=specs, host=host, ticks=options.ticks,
-                scenario=options.scenario, roster=options.roster, scene=options.scene, seed=options.seed,
+                scenario=options.scenario, acceptance_row={'match': 17, 'soak': 18, 'chaos': 19}[options.scenario],
+                roster=options.roster, scene=options.scene, seed=options.seed,
                 chaos_seed=options.chaos_seed if options.scenario == 'chaos' else None,
                 seed_scope='choices only; transport and OS timing are not reproduced', faults=faults,
                 capture_barriers=barriers,
@@ -1017,6 +1018,7 @@ def run_plan(plan, root):
                 preflights[box['name']] = json.loads((local_box / 'preflight.json').read_text())
             payloads[box['name']] = (payload, local_payload, box_root)
         reference = preflights[local['name']]
+        plan['source_sha'] = reference['head']
         require_distinct_machines(preflights)
         for box in boxes.values():
             value = preflights[box['name']]

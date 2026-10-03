@@ -82,6 +82,7 @@ class AcceptanceTests(unittest.TestCase):
         for scenario in ('soak', 'chaos'):
             manifest, checks, peers, matrix, recoveries = attempt()
             manifest['scenario'] = scenario
+            manifest['acceptance_row'] = {'soak': 18, 'chaos': 19}[scenario]
             checks.update(validated_autosave_archives=False, forced_end_during_transfer=False)
             verdict = cross_report.judge_attempt(manifest, checks, peers, matrix, recoveries)
             self.assertTrue(verdict.get('v1_passed', all(checks.values())))
@@ -137,7 +138,8 @@ class AcceptanceTests(unittest.TestCase):
             root = Path(temporary)
             for peer in ('host', 'client'):
                 (root / peer).mkdir()
-                (root / peer / 'stdout.log').write_text('')
+                (root / peer / 'stdout.log').write_text(''.join(
+                    f'[mem-census] tick={tick} private_mb=1 pace: wall_tps=60 sim_ms_per_tick=8\n' for tick in (3600, 7200)))
                 records = [dict(round=7, tick=tick, wall_ms=tick * 1000 / 60,
                                 sim_gated=str(tick), subsystems={key: str(tick) for key in soak.CORE | {'controller'}})
                            for tick in range(1, 7202)]

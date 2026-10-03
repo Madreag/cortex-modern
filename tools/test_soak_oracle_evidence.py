@@ -37,8 +37,9 @@ def analyzed_pair(root, *, timing=True):
     for name in ('host', 'client'):
         (root / name).mkdir()
         (root / f'{name}-record.json').write_text(json.dumps(dict(exit_code=0, evidence_complete=True, exe_sha256='a' * 64)))
+        (root / f'{name}-build.json').write_text(json.dumps(dict(source_sha='b'*40, build=dict(commit='b'*40, executable_sha256='a'*64))))
         (root / name / 'stdout.log').write_text('[net-route] RouteAllowed route=direct allowed=1\n')
-    meta = dict(name='unit', path='direct', feel_records=False, machines=dict(host='EROL-PC', client='EDITH'), local_peer='host')
+    meta = dict(name='unit', path='direct', source_sha='b'*40, feel_records=False, machines=dict(host='EROL-PC', client='EDITH'), local_peer='host')
     return harness, meta
 
 
