@@ -66,6 +66,7 @@ namespace RTE {
 	bool NetLobbySession::Start(INetTransport& transport, const NetLobbySessionConfig& config, std::string* error) {
 		m_RoundEndedRecord.reset();
 		m_EventsAfterRoundEnded.clear();
+		m_RoundEventsAfterStart.clear();
 		m_InputDelaySamples.clear();
 		m_TimingClockMs = 0;
 		if (config.localPeerId == 0) {
@@ -206,11 +207,19 @@ namespace RTE {
 			}
 			SyncSessionPeers();
 		}
-		for (const NetTransportEvent& event : events) {
+		for (size_t index = 0; index < events.size(); ++index) {
 			if (IsTerminal(m_State)) {
+				// The host sends the round's first packets right behind its Start: one read can carry both, and the round waits on them.
+				if (m_State == NetLobbyState::Started) {
+					for (; index < events.size(); ++index) {
+						NetTransportEvent& event = events[index];
+						if (event.type == NetTransportEventType::PacketReceived && (NetLockstepCodec::LooksLikePacket(event.bytes) || NetHostMigrationCodec::LooksLikePacket(event.bytes)))
+							m_RoundEventsAfterStart.push_back(std::move(event));
+					}
+				}
 				return;
 			}
-			HandleEvent(event, nowMs);
+			HandleEvent(events[index], nowMs);
 		}
 		if (IsTerminal(m_State)) {
 			return;

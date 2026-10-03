@@ -2029,6 +2029,74 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyKeepsTheRoundsPacketsBehindItsStart(std::string* error) {
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+			NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43151, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession hostLobby;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.startFrame = 77;
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			// The client reads nothing after the host starts, so the host's Start and its round's first packet arrive in one read.
+			for (uint64_t now = 0; now <= 1000; now += 10) {
+				hostLobby.Tick(now);
+				if (hostLobby.IsStarted()) break;
+				clientLobby.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			if (!hostLobby.IsStarted() || clientLobby.IsStarted()) {
+				*error = "lobby keeps the round's packets: the host's lobby did not start ahead of the client's (host=" + std::string(NetLobbySession::StateName(hostLobby.GetState())) +
+				         " client=" + NetLobbySession::StateName(clientLobby.GetState()) + ")";
+				return false;
+			}
+			NetLockstepStart start;
+			start.sessionId = 1;
+			start.startFrame = 77;
+			start.controllerFrameVersion = ControllerFrame::c_Version;
+			start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			start.localPeerId = 1;
+			start.peerCount = 2;
+			start.scenario = "LobbySelfTest";
+			start.ownershipPolicy = "unique-id-split";
+			std::vector<uint8_t> roundStart;
+			if (!NetLockstepCodec::Encode({start}, roundStart) || !hostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, roundStart)) {
+				*error = "lobby keeps the round's packets: the host's round start could not be sent";
+				return false;
+			}
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+			clientLobby.Tick(1010);
+			if (!clientLobby.IsStarted()) {
+				*error = "lobby keeps the round's packets: the client's lobby did not start on the host's Start (" + std::string(NetLobbySession::StateName(clientLobby.GetState())) + ")";
+				return false;
+			}
+			const std::vector<NetTransportEvent> kept = clientLobby.TakeRoundEventsAfterStart();
+			if (std::none_of(kept.begin(), kept.end(), [&](const NetTransportEvent& event) { return event.bytes == roundStart; })) {
+				*error = "lobby keeps the round's packets: the client's lobby dropped the round start that arrived behind its own Start (" + std::to_string(kept.size()) +
+				         " packets kept, " + std::to_string(clientLobby.GetStats().ignoredSessionPackets) + " ignored)";
+				return false;
+			}
+			if (!clientLobby.TakeRoundEventsAfterStart().empty()) {
+				*error = "lobby keeps the round's packets: the kept packets were handed over twice";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestLobbyRelayAdoption(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetPeerId hostPeer = c_InvalidNetPeerId, clientPeer = c_InvalidNetPeerId;
@@ -15654,6 +15722,7 @@ namespace RTE {
 		if (!TestMalformedLobbyPayloads(&error)) return fail(error);
 		if (!TestLobbyCodecDedicatedFlag(&error)) return fail(error);
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
+		if (!TestLobbyKeepsTheRoundsPacketsBehindItsStart(&error)) return fail(error);
 		if (!TestLobbyRelayAdoption(&error)) return fail(error);
 		if (!TestLiveReportDumpsSurviveBadBytes(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);

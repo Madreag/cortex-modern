@@ -818,6 +818,11 @@ namespace RTE {
 			SetFailed(error ? *error : "lockstep start failed");
 			return false;
 		}
+		// What the lobby read behind its Start is this round's: a host that goes straight into a long load answers no repeat.
+		if (m_UseLobbyProtocol) {
+			const uint64_t nowMs = NetLockstepNowMs();
+			for (const NetTransportEvent& event: m_Lobby.TakeRoundEventsAfterStart()) coordinator.InjectEvent(event, nowMs);
+		}
 		return true;
 	}
 

@@ -187,6 +187,8 @@ namespace RTE {
 		/// The end record of a round that ended while this seat was held or rejoining; the events after it belong to the next lobby.
 		const std::optional<uint64_t>& GetRoundEndedRecord() const { return m_RoundEndedRecord; }
 		std::vector<NetTransportEvent> TakeEventsAfterRoundEnded() { return std::exchange(m_EventsAfterRoundEnded, {}); }
+		/// The round's own packets that arrived behind the Start in the read that started this lobby; the round reads them first.
+		std::vector<NetTransportEvent> TakeRoundEventsAfterStart() { return std::exchange(m_RoundEventsAfterStart, {}); }
 		/// The committed tail bytes received so far. With a round, only that round's are taken: the others are dropped and each
 		/// dropped round is listed with its byte count.
 		std::vector<uint8_t> TakePendingTailBytes(std::optional<uint64_t> round = std::nullopt, std::vector<std::pair<uint64_t, size_t>>* dropped = nullptr);
@@ -338,6 +340,7 @@ namespace RTE {
 		std::deque<WorldJoinReport> m_WorldJoinReports;
 		std::optional<uint64_t> m_RoundEndedRecord;
 		std::vector<NetTransportEvent> m_EventsAfterRoundEnded;
+		std::vector<NetTransportEvent> m_RoundEventsAfterStart;
 		std::deque<std::pair<uint64_t, std::vector<uint8_t>>> m_PendingTail; //!< Received tail bytes, one run per round in arrival order.
 		std::deque<std::pair<uint64_t, std::vector<uint8_t>>> m_PendingTailDatagrams; //!< Received tail datagrams with their rounds.
 		NetLobbyStats m_Stats;
