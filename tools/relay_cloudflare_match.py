@@ -233,6 +233,21 @@ def judge_relay(run: dict) -> dict:
                 direct_as_expected=all(route == 'direct' for route in routes.values()) if mode == 'automatic' else None)
 
 
+FEEL_BARS = ('item9a_wall_tps', 'item9a_net_wait', 'item9a_steady_stalls', 'item9a_missing_frame_stalls', 'item9a_longest_wait',
+             'item9a_confirmed_horizon_lag')
+
+
+def feel_bars(timing: dict, peer: str) -> dict:
+    """The feel driver's own measured pins for one peer (its thresholds, unchanged): every one present and PASS. The pins this
+    match cannot measure are listed with their reasons: the harness-cost receipt no current engine prints, and the input
+    pins of the feel recorder a lean match does not run."""
+    pins = (timing.get('peers', {}).get(peer) or {}).get('pins', {})
+    failed = {name: (pins.get(name) or {}).get('status', 'MISS') for name in FEEL_BARS if (pins.get(name) or {}).get('status') != 'PASS'}
+    unmeasured = {name: str(pin.get('reason', ''))[:160] for name, pin in pins.items() if name not in FEEL_BARS and pin.get('status') == 'MISS'}
+    return dict(passed=not failed, failed=failed, values={name: (pins.get(name) or {}).get('value') for name in FEEL_BARS},
+                unmeasured=unmeasured, pass_check=(timing.get('peers', {}).get(peer) or {}).get('pass_check'))
+
+
 def transport_rtts(log: str) -> list[dict]:
     return [dict(peer=int(peer), rtt_ms=int(rtt), delay_frames=int(frames)) for peer, rtt, frames in
             re.findall(r'\[net-match\] auto input delay: peer (\d+) rtt (\d+)ms -> (\d+) frames', log)]
@@ -419,8 +434,8 @@ class Directory:
     def __init__(self, root: Path, port: int, backend: dict | None, ttl_cap: int, book) -> None:
         from session_directory import session_directory as module
         from edith_cross import make_cert
-        self.module, self.book = module, book
-        self.signals, self.provider_calls, self.offers = [], [], []
+        self.module, self.book, self.backend = module, book, backend
+        self.signals, self.provider_calls, self.offers, self.minted, self.revokes = [], [], [], [], []
         self.cert, key, self.pin = make_cert(root)
         self.handlers = set(module.LOGGER.handlers)
         real = self.real_urlopen = module.urlopen
@@ -444,6 +459,7 @@ class Directory:
         def minted(*args, **kwargs):
             offer = mint(*args, **kwargs)
             book.add_offer(offer)
+            self.minted += [server['username'] for server in offer.get('iceServers', []) if server.get('username')]
             return offer
 
         def posted(session_id, data, now):
@@ -470,8 +486,21 @@ class Directory:
             return list(self.server.store._sessions)
 
     def stop(self) -> None:
-        """Stops the server and detaches this run's log file and provider hook, so the next run logs to its own root."""
+        """Stops the server, revokes every Cloudflare login it minted (a test login never outlives its run, wherever an
+        engine may have written it) and detaches this run's log file and provider hook, so the next run logs to its own root."""
         self.server.stop()
+        if self.backend and self.backend.get('backend', 'cloudflare') == 'cloudflare':
+            for username in dict.fromkeys(self.minted):
+                request = urllib.request.Request(
+                    f'https://rtc.live.cloudflare.com/v1/turn/keys/{self.backend["turn_key_id"]}/credentials/{username}/revoke', data=b'',
+                    method='POST', headers={'Authorization': 'Bearer ' + self.backend['api_token'], 'User-Agent': self.module.USER_AGENT})
+                try:
+                    with self.real_urlopen(request, timeout=15) as response:
+                        self.revokes.append(response.status)
+                except HTTPError as error:
+                    self.revokes.append(error.code)
+                except OSError:
+                    self.revokes.append(0)
         self.module.urlopen = self.real_urlopen
         for handler in set(self.module.LOGGER.handlers) - self.handlers:
             self.module.LOGGER.removeHandler(handler)
@@ -688,6 +717,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict[str, Box], ticks: 
     return judge_run(h, scenario, run, root, dict(started=started, finished=stamp(), states=states, identities=identities, legs=legs,
                      ports=ports, sessions=sessions, signals=directory.signals if directory else [],
                      offers_seen=directory.offers if directory else None, provider_calls=directory.provider_calls if directory else [],
+                     revokes=directory.revokes if directory else [], boxes=used,
                      public=public, ticks=ticks), book)
 
 
@@ -795,6 +825,15 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     rtts = transport_rtts(host_log)
     scan = book.scan([root])
     write_json(root / 'secret-scan.json', scan)
+    if scan['files_with_secrets']:
+        # A login an engine wrote down is already revoked (Directory.stop); its bytes are blanked here and on its box too.
+        import relay_scrub
+        leaked = [Path(row['path']) for row in scan['files_with_secrets']]
+        write_json(root / 'scrub-local.json', relay_scrub.scrub(leaked))
+        for box in facts.get('boxes', []):
+            box.remote.scp_to(HERE / 'relay_scrub.py', Path('D:/mx') / LANE / 'payload' / 'relay_scrub.py')
+            box.remote.ssh(f"python '{Path('D:/mx') / LANE / 'payload' / 'relay_scrub.py'}' " + ' '.join(f"'{path.as_posix()}'" for path in leaked)
+                           + f" --no-revoke --out '{(root / f'{box.name}-scrub.json').as_posix()}'", timeout=120, check=False)
     judged = run.get('timing_peers') or names
     checks = {
         'identities': all(value['status'] == 'PASS' for value in facts['identities'].values()),
@@ -804,13 +843,15 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         'hashes_equal': bool(live) and mismatched == 0 and all(value >= ticks - 1 - int(run.get('kill_host_at_tick') or 0) for value in compared.values())
                         and trace_pass is not False,
         'holds': all(peers[name]['holds'] == 0 for name in judged),
-        'feel_gates': all(peers[name]['timing_pass'] is True for name in judged),
+        'feel_bars': all(feel_bars(timing, name)['passed'] for name in judged),
         'relay': relay['passed'],
         'rtt_recorded': bool(rtts),
         'no_secret_in_files': scan['clean'],
     }
     if run['relay'] in ('cloudflare',) and facts['provider_calls']:
         checks['provider_201'] = all(call['status'] == 201 for call in facts['provider_calls'])
+    if facts.get('revokes'):
+        checks['logins_revoked'] = all(status == 204 for status in facts['revokes'])
     # The hotspot rows' own levers (C4).
     details = {}
     for peer in run['peers']:
@@ -840,9 +881,10 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
     registry = [registrant(address) for address in relay_addresses] if run['relay'] == 'cloudflare' else []
     if registry:
         checks['relay_registrant'] = all(row.get('cloudflare') for row in registry)
+    details.update({f'feel:{name}': feel_bars(timing, name) for name in judged})
     verdict = dict(name=run['name'], scenario=scenario['name'], relay=run['relay'], root=str(root), passed=all(checks.values()), checks=checks, details=details, registry=registry,
                    session_id=session, peers=peers, relay_evidence=relay, rtt=rtts, delay_changes=delay_changes(host_log),
-                   compared_ticks=compared, desyncs=mismatched, builds=builds, provider_calls=facts['provider_calls'],
+                   compared_ticks=compared, desyncs=mismatched, builds=builds, provider_calls=facts['provider_calls'], revokes=facts.get('revokes'),
                    stun_legs=facts['legs'], ports=facts['ports'], states=facts['states'], started=facts['started'], finished=facts['finished'],
                    secret_scan=dict(clean=scan['clean'], secrets=scan['secrets'], kinds=scan['kinds'], files_scanned=scan['files_scanned'],
                                     files_with_secrets=scan['files_with_secrets']))
@@ -940,12 +982,15 @@ def remote_peers(spec_path: str) -> int:
             write_json(root / f'{specs[0]["box"]}-tailscale.json', receipt)
         document['peers'] = [redacted(spec) for spec in specs]
         write_json(spec_path, document)
-    h.records.compress_case_records(root)
-    from relay_secrets import walk_files
-    skipped = ('.exe', '.dll', '.pdb', '.png', '.mp4')
-    files = [path.relative_to(root).as_posix() for path in walk_files(root)
-             if not path.name.lower().endswith(skipped) and path.stat().st_size <= 8 << 20 and not path.name.endswith('.tar')]
-    (root / f'{specs[0]["box"]}-evidence.txt').write_text('\n'.join(files) + '\n', encoding='utf-8')
+        # The evidence list is written whatever happened above, so a failed payload's own log and records come back too.
+        try:
+            h.records.compress_case_records(root)
+        finally:
+            from relay_secrets import walk_files
+            skipped = ('.exe', '.dll', '.pdb', '.png', '.mp4', '.tar')
+            files = [path.relative_to(root).as_posix() for path in walk_files(root)
+                     if not path.name.lower().endswith(skipped) and path.stat().st_size <= 8 << 20]
+            (root / f'{specs[0]["box"]}-evidence.txt').write_text('\n'.join(files) + '\n', encoding='utf-8')
     return 0 if all(value == 0 for value in results.values()) and len(results) == len(specs) else 1
 
 

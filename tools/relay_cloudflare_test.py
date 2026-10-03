@@ -396,5 +396,93 @@ class OracleCorrections(unittest.TestCase):
         self.assertFalse(match.judge_relay(cloudflare_run(client_connection=found_direct))['passed'])
 
 
+class LeakScrub(unittest.TestCase):
+    """A relay login an engine wrote into a file (the host's replay carried one on 2026-10-03) is found, revoked with the
+    provider and blanked in place; nothing prints the login."""
+
+    def test_a_login_inside_a_binary_file_is_revoked_and_blanked(self):
+        import tempfile
+        import relay_scrub as scrub
+        blob = (b'\x00\x01RPLY' + json.dumps({'iceServers': SERVERS}).encode() + b'\x00tail')
+        revoked = []
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'match.ccreplay'
+            path.write_bytes(blob)
+            result = scrub.scrub([path], revoke=lambda username: revoked.append(username) or 204)
+            after = path.read_bytes()
+        self.assertEqual(revoked, ['unit-minted-username'])
+        self.assertEqual(len(after), len(blob))
+        for secret in (b'unit-minted-username', b'unit-minted-credential'):
+            self.assertNotIn(secret, after)
+        self.assertEqual(result['files'][0]['logins'], 1)
+        self.assertEqual(result['revokes'], [204])
+        self.assertNotIn('unit-minted', json.dumps(result))
+
+    def test_a_file_without_a_login_is_left_byte_for_byte(self):
+        import tempfile
+        import relay_scrub as scrub
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'clean.ccreplay'
+            path.write_bytes(b'\x00\x01 no login here')
+            result = scrub.scrub([path], revoke=lambda username: 204)
+            self.assertEqual(path.read_bytes(), b'\x00\x01 no login here')
+        self.assertEqual(result['files'][0]['logins'], 0)
+
+    def test_the_driver_revokes_every_login_it_minted(self):
+        import tempfile
+        import relay_cloudflare_match as match
+        from relay_secrets import SecretBook
+        calls = []
+
+        def fake(request, *args, **kwargs):
+            calls.append((request.get_method(), request.full_url.rsplit('/', 3)[-3:], request.get_header('User-agent')))
+            if request.full_url.endswith('generate-ice-servers'):
+                return answer()
+            response = mock.MagicMock()
+            response.__enter__.return_value = response
+            response.status = 204
+            return response
+        fields = dict(name='unit', activity='t', scene='t', mode='pvp', peer_count=2, seats_free=1, game_version='1', build_id='a',
+                      network_protocol_version=1, lockstep_codec_version=1, controller_frame_version=1, match_config_hash='a' * 64,
+                      session_identity_hash='b' * 64, module_manifest_hash='c' * 64, listen_port=41010, listen_addrs=['127.0.0.1'],
+                      join_mode='ice')
+        with tempfile.TemporaryDirectory() as folder, mock.patch('sys.stderr', io.StringIO()), mock.patch.object(directory, 'urlopen', fake):
+            run = match.Directory(Path(folder), 0, CONFIG, 600, SecretBook())
+            store = run.server.store
+            row = store.register(fields, '127.0.0.1', 10, '0123456789abcdef')
+            store.mint_ice_servers(row['session_id'], dict(token=row['token'], match_id='m:1', ttl=600), '0123456789abcdef', 11)
+            run.stop()
+        self.assertEqual(run.revokes, [204])
+        self.assertEqual(calls[-1][0], 'POST')
+        self.assertEqual(calls[-1][1][-1], 'revoke')
+        self.assertTrue(str(calls[-1][2]).startswith('cccp-session-directory/'))
+
+
+class FeelBars(unittest.TestCase):
+    """The feel numbers a relay row is judged by: the feel driver's six measured pins, its own thresholds, every one PASS."""
+
+    def timing(self, **changes):
+        pins = {name: {'status': 'PASS', 'value': 0} for name in ('item9a_wall_tps', 'item9a_net_wait', 'item9a_steady_stalls',
+                                                                  'item9a_missing_frame_stalls', 'item9a_longest_wait',
+                                                                  'item9a_confirmed_horizon_lag')}
+        pins['item9a_harness_cost'] = {'status': 'MISS', 'value': None, 'reason': 'missing cost coverage: [sim_dump]'}
+        pins['input_carried'] = {'status': 'MISS', 'value': None, 'reason': 'raw.jsonl: FileNotFoundError'}
+        pins.update(changes)
+        return {'peers': {'host': {'pins': pins, 'pass_check': False}}}
+
+    def test_the_six_measured_pins_decide_and_the_unmeasurable_ones_are_listed(self):
+        import relay_cloudflare_match as match
+        verdict = match.feel_bars(self.timing(), 'host')
+        self.assertTrue(verdict['passed'], verdict)
+        self.assertEqual(sorted(verdict['unmeasured']), ['input_carried', 'item9a_harness_cost'])
+        self.assertIs(verdict['pass_check'], False)
+
+    def test_a_failed_or_missing_measured_pin_fails(self):
+        import relay_cloudflare_match as match
+        self.assertFalse(match.feel_bars(self.timing(item9a_wall_tps={'status': 'FAIL', 'value': 41.2}), 'host')['passed'])
+        self.assertFalse(match.feel_bars(self.timing(item9a_longest_wait={'status': 'MISS', 'value': None}), 'host')['passed'])
+        self.assertFalse(match.feel_bars({'peers': {}}, 'host')['passed'])
+
+
 if __name__ == '__main__':
     unittest.main()
