@@ -20,6 +20,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <time.h>
 #endif
 
 namespace RTE {
@@ -130,6 +132,21 @@ namespace RTE {
 	};
 
 	namespace {
+		/// The processor time the calling thread has used, in nanoseconds: what its work took from the machine, without the time
+		/// it spent blocked on a pipe or a disk.
+		int64_t ThreadCpuNanoseconds() {
+#ifdef _WIN32
+			FILETIME created, exited, kernel, user;
+			if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0;
+			const auto ticks = [](const FILETIME& time) { return (static_cast<int64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime; };
+			return (ticks(kernel) + ticks(user)) * 100;
+#else
+			timespec now{};
+			if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) return 0;
+			return static_cast<int64_t>(now.tv_sec) * 1000000000 + now.tv_nsec;
+#endif
+		}
+
 		std::string FrameLeaf(std::size_t index) {
 			std::ostringstream name;
 			name << "frame-" << std::setw(6) << std::setfill('0') << index << ".png";
@@ -303,9 +320,10 @@ namespace RTE {
 				m_Queue.pop_front();
 			}
 			WritePendingDrops();
-			const auto written = std::chrono::steady_clock::now();
+			// The writer's processor time is the recorder's cost: a write blocked on the encoder's pipe or the disk takes nothing from a frame.
+			const int64_t cpuBefore = ThreadCpuNanoseconds();
 			std::string row = m_EncoderPath.empty() ? WriteFrame(frame) : EncodeFrame(frame);
-			HarnessCost::Charge(HarnessCost::Recorder, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - written).count());
+			HarnessCost::Charge(HarnessCost::Recorder, ThreadCpuNanoseconds() - cpuBefore);
 			frame.pixels.clear();
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
