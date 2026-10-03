@@ -3639,21 +3639,18 @@ namespace RTE {
 		return 0;
 	}
 
-	/// A survivor that finds no other live member never ends the match because its host was lost: with a held seat in the
-	/// round it hosts the match so that seat rejoins it, with none it rejoins the host; only the host's announced leave ends it.
+	/// A survivor that published a handover alone never ends the match because its host was lost: its quorum (the two-seat
+	/// exception, or every other connected seat gone or held) lets it host; only the host's leave record ends it.
 	int TestALoneSurvivorWithAHeldSeatHostsTheMatch() {
 		using Outcome = NetMatchService::LoneElection;
-		if (NetMatchService::LoneElectionOutcome(false, true, false) != Outcome::HostForHeldSeats) {
-			return Fail("lone-survivor-ended-a-held-match: a lost host with a held seat in the round did not hand the match to the survivor");
+		if (NetMatchService::LoneElectionOutcome(false, false) != Outcome::HostAlone) {
+			return Fail("lone-survivor-left-a-two-player-match: the survivor of a lost host did not host the match it carries alone");
 		}
-		if (NetMatchService::LoneElectionOutcome(false, false, false) != Outcome::RejoinHost) {
-			return Fail("lone-survivor-took-an-unheld-match: a lost host with no held seat was not rejoined");
-		}
-		if (NetMatchService::LoneElectionOutcome(true, true, false) != Outcome::EndMatch || NetMatchService::LoneElectionOutcome(true, false, false) != Outcome::EndMatch) {
-			return Fail("lone-survivor-overruled-the-host: the host's announced leave did not end the match");
+		if (NetMatchService::LoneElectionOutcome(true, false) != Outcome::EndMatch) {
+			return Fail("lone-survivor-overruled-the-host: the host's leave record did not end the match");
 		}
 		// l4p-34: the Mac, cut off by its own lag, heard neither the host nor Linux and, with EDITH's seat held, took the match over.
-		if (NetMatchService::LoneElectionOutcome(false, true, true) != Outcome::RejoinHost) {
+		if (NetMatchService::LoneElectionOutcome(false, true) != Outcome::RejoinHost) {
 			return Fail("lone-survivor-split-the-match: a peer that heard no live member and no host hosted a match of its own instead of rejoining");
 		}
 		std::cout << "[net-world-join-selftest] PASS a_lone_survivor_with_a_held_seat_hosts_the_match" << std::endl;
@@ -3714,33 +3711,37 @@ namespace RTE {
 		return 0;
 	}
 
-	/// Only the host's link decides a held seat's host is gone: the link lost by the host's end or its silence, or no word from the host
-	/// for the silence bound. The seat's own transport stopping is its own fault, and a host that told it to take the image answered.
+	/// Only the host's link decides a held seat's host is gone: the link lost by the host's end, or no word from the host past the
+	/// host-loss bound - one second plus two of the seat's round trips, the round's own reading. The seat's own transport stopping is
+	/// its own fault, and a host that told it to take the image answered.
 	int TestAHeldSeatJudgesItsHostByTheLinkAlone() {
-		struct Case { const char* name; bool linkLost; bool hasReject; NetRejectReason reason; bool ownStop; bool imageRejoin; uint64_t silentMs; bool gone; };
+		struct Case { const char* name; bool linkLost; bool hasReject; NetRejectReason reason; bool ownStop; bool imageRejoin; uint64_t silentMs; uint64_t rttMs; bool gone; };
 		const Case cases[] = {
-			{"own-transport-stopped", true, true, NetRejectReason::InternalError, true, false, 0, false},
-			{"host-connection-dropped", true, true, NetRejectReason::InternalError, false, false, 0, true},
-			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, false, 0, true},
-			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, false, 0, true},
-			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, false, 0, true},
-			{"told-to-take-the-image", true, true, NetRejectReason::HostNotAccepting, false, true, 0, false},
-			{"host-silent-past-the-round-timeout", false, false, NetRejectReason::InternalError, false, false, 21000, true},
-			{"tail-stalled-with-the-link-up", false, false, NetRejectReason::InternalError, false, false, 3500, false},
+			{"own-transport-stopped", true, true, NetRejectReason::InternalError, true, false, 0, 0, false},
+			{"host-connection-dropped", true, true, NetRejectReason::InternalError, false, false, 0, 0, true},
+			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, false, 0, 0, true},
+			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, false, 0, 0, true},
+			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, false, 0, 0, true},
+			{"told-to-take-the-image", true, true, NetRejectReason::HostNotAccepting, false, true, 0, 0, false},
+			{"host-silent-past-the-loss-bound", false, false, NetRejectReason::InternalError, false, false, 1200, 100, true},
+			{"host-stalled-900ms", false, false, NetRejectReason::InternalError, false, false, 900, 0, false},
+			{"lagged-link-inside-its-bound", false, false, NetRejectReason::InternalError, false, false, 1300, 200, false},
 		};
 		for (const Case& test: cases) {
-			if (NetMatchService::HeldSeatHostIsGone(test.linkLost, test.hasReject, test.reason, test.ownStop, test.imageRejoin, test.silentMs, 20000) != test.gone) {
+			if (NetMatchService::HeldSeatHostIsGone(test.linkLost, test.hasReject, test.reason, test.ownStop, test.imageRejoin, test.silentMs, test.rttMs) != test.gone) {
 				return Fail(std::string("held-seat-host-verdict-") + test.name + ": the held seat judged its host " + (test.gone ? "alive" : "gone"));
 			}
 		}
-		// Two held seats that last heard their host at the same moment judge it gone together: a seat whose own link sends nothing
-		// learns of the loss no later than the link's own timeout, as a busy one does.
-		const uint64_t bound = NetMatchService::HeldSeatSilenceBoundMs();
-		if (bound > c_NetLinkTimeoutMs || !NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, c_NetLinkTimeoutMs + 1, bound) ||
-		    NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, c_NetLinkTimeoutMs / 2, bound)) {
-			return Fail("held-seat-host-verdict-silent-past-the-link-timeout: bound=" + std::to_string(bound) + "ms against the link's " + std::to_string(c_NetLinkTimeoutMs) + "ms");
-		}
-		std::cout << "[net-world-join-selftest] PASS a_held_seat_judges_its_host_by_the_link_alone" << std::endl;
+		// The held seat and the round read one predicate: the same silence and round trip give the same verdict on both paths.
+		for (const uint64_t rtt: {0ULL, 40ULL, 200ULL, 401ULL})
+			for (const uint64_t silent: {0ULL, 999ULL, 1000ULL, 1079ULL, 1080ULL, 1399ULL, 1400ULL, 1801ULL, 1802ULL, 4000ULL}) {
+				const bool held = NetMatchService::HeldSeatHostIsGone(false, false, NetRejectReason::InternalError, false, false, silent, rtt);
+				if (held != NetHostLinkLost(false, silent, rtt) || held != (silent >= 1000 + 2 * rtt)) {
+					return Fail("held-seat-host-verdict-shared-bound: silent=" + std::to_string(silent) + "ms rtt=" + std::to_string(rtt) + "ms held seat=" + std::to_string(held) +
+					            " round=" + std::to_string(NetHostLinkLost(false, silent, rtt)));
+				}
+			}
+		std::cout << "[net-world-join-selftest] PASS a_held_seat_judges_its_host_by_the_link_alone bound_ms=" << NetHostLossBoundMs(0) << "+2rtt" << std::endl;
 		return 0;
 	}
 

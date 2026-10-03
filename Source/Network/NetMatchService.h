@@ -984,18 +984,15 @@ namespace RTE {
 		void AnswerStalledReturnersLocked(uint64_t nowMs);
 		bool PrivateReturnerInFlightLocked() const;
 	public:
-		enum class LoneElection { EndMatch, RejoinHost, HostForHeldSeats };
-		/// What a survivor that finds no other live member does: an announced leave ends its match, a lost host with a held
-		/// seat in the round is replaced by this peer so the held seats rejoin it, and a lost host with none is rejoined.
+		enum class LoneElection { EndMatch, RejoinHost, HostAlone };
+		/// What a survivor that published a handover alone does: the host's leave record ends its match; otherwise its quorum (the
+		/// two-seat exception, or every other connected seat gone or held) lets it host, and the held seats rejoin it.
 		/// liveMembersUnheard: the round had other live members, neither held nor gone, and none answered - this peer is the one cut off.
-		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool heldSeats, bool liveMembersUnheard);
+		static LoneElection LoneElectionOutcome(bool hostAnnounced, bool liveMembersUnheard);
 		/// Whether a held seat's host is gone: the host ended or timed out its link (the transport's verdict), or the seat heard nothing
-		/// at all from it for the silence bound. Its own transport stopping is not the host's doing, and a seat told to come back through
-		/// the image has a host that answered.
-		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t silenceBoundMs);
-		/// The silence bound of a seat catching up in place: its host acks or feeds it every tick, so the link's own timeout, counted from
-		/// the host's last word, lands on every held seat together however busy each seat's own link is.
-		static uint64_t HeldSeatSilenceBoundMs() { return c_NetLinkTimeoutMs; }
+		/// at all from it past the host-loss bound for its round trip (NetHostLinkLost, the round's own reading). Its own transport
+		/// stopping is not the host's doing, and a seat told to come back through the image has a host that answered.
+		static bool HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t hostRttMs);
 		/// Where a held seat's catch-up goes when its host is gone, from the match's successor order, the peers it can dial in that
 		/// order and the seats it knows are held. Returns the peers to dial; empty when this seat hosts the match itself.
 		static std::vector<uint8_t> HeldSuccessionRoutes(const std::vector<uint8_t>& successorOrder, uint8_t lostHost, uint8_t localPeer,
@@ -1043,6 +1040,9 @@ namespace RTE {
 		std::set<uint8_t> HeldSurvivorsLocked() const;
 		/// Held client, host gone: keeps only the routes its catch-up moves to; returns whether this seat hosts the match itself.
 		bool HeldSeatHostsLocked();
+		/// The human seats of the round: a held seat hosts alone only when it and the lost host are all of them.
+		size_t HumanSeatCountLocked() const;
+		std::string m_HeldUnreachableText; //!< Held client: why it waits for its host instead of hosting, for the screen.
 		/// Held client: opens the match's published listener for the held seats that may dial this one.
 		bool OpenHeldListenerLocked();
 		/// Held client moving to a successor: sends it the lost host's frames this seat replayed, then a record of no bytes that ends them.
@@ -1725,10 +1725,6 @@ namespace RTE {
 		bool m_RematchReturnOwed = false; //!< Client: the last rematch setup lost its link and the seat returns through the rejoin.
 		bool m_LeftRoundHeld = false; //!< Client: this round ended while the seat was held, on the record the host sent it.
 		uint32_t m_ReconnectRouteTurn = 0; //!< Alternates the reconnect prompt's attempts between the ticket's host and the successors.
-		uint8_t m_ElectionHostPeer = 0; //!< Client: the round's host as last seen before an election.
-		uint64_t m_HostSilenceAtElectionMs = UINT64_MAX; //!< Client: how long that host was quiet when its election began.
-		/// A host heard this close to its election announced its leave; a lost one is silent for the host-silence bound (500 ms or more).
-		static constexpr uint64_t c_HostAnnouncedSilenceMs = 250;
 		bool m_RejoinOfRunningMatch = false; //!< Client: this service is rejoining the match it was playing, so its seat committed frames.
 		bool m_HostEndedTheMatch = false; //!< Client: the host left a match this seat finished; it lands and nothing reconnects.
 		/// Client: the host ended the match by leaving it; the ticket goes and no reconnect is offered or driven.

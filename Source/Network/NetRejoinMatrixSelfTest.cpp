@@ -165,7 +165,7 @@ namespace RTE {
 						set("legal: the survivors leave to the landing with 'The host left the match'", "R1-392ii");
 						x.notWalked = "no in-process lever fails a migration short of losing every successor";
 						break;
-					case Event::SuccessorLost: set("subhost=3", "DESIGN-MIGRATION"); break;
+					case Event::SuccessorLost: set("sub=unreachable subhost=1", "R6-sss"); break;
 					case Event::MigrationBegin: set("sub=run subhost=2", "DESIGN-MIGRATION"); break;
 					case Event::HostLost: set("sub=run subhost=2", "R1-392ii"); break;
 					case Event::HostGoodbye:
@@ -608,7 +608,10 @@ namespace RTE {
 				return false;
 			}
 			if (key == "holds") return value == "0" ? o.holds == 0 : value == ">0" ? o.holds > 0 : false;
-			if (key == "sub") return value == "run" ? o.sub == "run" : value == "over" ? o.sub == "stopped:Complete" : value == "ended" ? o.sub != "run" && o.sub != "migrating" : false;
+			if (key == "sub") {
+				if (value == "unreachable") return o.sub == "stopped:PeerHeld";
+				return value == "run" ? o.sub == "run" : value == "over" ? o.sub == "stopped:Complete" : value == "ended" ? o.sub != "run" && o.sub != "migrating" : false;
+			}
 			if (key == "subhost") return std::to_string(o.subHost) == value;
 			if (key == "api") return value == "ok" ? o.api == "ok" : value == "refused" ? o.api.rfind("refused", 0) == 0 : false;
 			return false;

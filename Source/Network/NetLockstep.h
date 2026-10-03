@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -487,12 +488,34 @@ namespace RTE {
 		std::vector<uint8_t> members;
 		std::vector<uint8_t> bytes;
 		std::vector<NetLockstepTiming> futureDelays;
+		uint32_t connectedMask = 0; ///< Answer: the seats the voter's committed round has connected at its applied frame, the host's among them; roll call and abort: the roster the vote is counted against.
 	};
+
+	/// The host is lost when its link closes or stays silent for this long plus two of the listener's round trips to it.
+	constexpr uint64_t c_NetHostLossSilenceMs = 1000;
+	/// One reading of host loss for every path that judges it: the round's own check, the roll call and a held seat's catch-up.
+	inline uint64_t NetHostLossBoundMs(uint64_t rttMs) { return c_NetHostLossSilenceMs + 2 * rttMs; }
+	inline bool NetHostLinkLost(bool linkClosed, uint64_t silentMs, uint64_t rttMs) { return linkClosed || silentMs >= NetHostLossBoundMs(rttMs); }
+
+	/// How far a handover's vote has come: the seats that voted for it and the connected seats it needs a strict majority of.
+	struct NetHostMigrationReach {
+		size_t votes = 0;
+		size_t seats = 0;
+	};
+
+	/// The vote a roster mask gives: only a voter whose seat is connected in it counts.
+	inline NetHostMigrationReach NetMigrationReachOf(const std::vector<uint8_t>& voters, uint32_t connectedMask) {
+		NetHostMigrationReach reach;
+		reach.seats = static_cast<size_t>(std::popcount(connectedMask));
+		for (const uint8_t peer: voters)
+			if (peer >= 1 && peer <= 32 && (connectedMask & (1u << (peer - 1))) != 0) ++reach.votes;
+		return reach;
+	}
 
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 2;
+		static constexpr uint16_t c_Version = 3;
 		static constexpr size_t c_ChunkBytes = 48 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_HistoryFrames = 2 * 240;
@@ -1130,8 +1153,6 @@ namespace RTE {
 		void NoteAnnouncedCapture(uint64_t tick);
 		/// Client: the host was heard now; the gap since it was last heard is its talk jitter.
 		void NoteAuthorityHeard(uint64_t nowMs);
-		/// Whether the frame waited on is one the host produces only after a capture every peer announced.
-		bool HostBusyWithAnnouncedCapture(uint64_t frame) const;
 		/// The announced capture tick whose aftermath covers a frame, if any.
 		std::optional<uint64_t> AnnouncedCaptureCovering(uint64_t frame, uint8_t peerId = 0) const;
 		std::map<uint8_t, NetPeerId> RemoteTransports() const { NET_PLANE_CHECK(); return m_RemoteTransports; }
@@ -1164,6 +1185,8 @@ namespace RTE {
 		/// Host: the current capture park covers the frame or may still grow to cover it.
 		bool CaptureParkMayReach(uint64_t frame) const;
 		bool IsLocalSeatHeld() const { NET_PLANE_CHECK(); return m_LocalSeatHeld; }
+		/// Whether the host the last handover replaced sent its leave record: its departure was its own decision, never read from a silence.
+		bool MigrationHostAnnouncedLeave() const { NET_PLANE_CHECK(); return m_MigrationHostAnnounced; }
 
 		/// Whether this machine judged itself unable to hold the round's rate and went quiet for the host's bound to hold its seat.
 		/// @return Whether it did.
@@ -1237,6 +1260,8 @@ namespace RTE {
 		}
 		/// A transport fault starts agreement without choosing a simulation departure.
 		bool BeginHostMigration(uint64_t nowMs);
+		/// The handover's vote as this peer last saw it: the successor's own tally, or the one its roll call told a voter.
+		NetHostMigrationReach GetMigrationReach() const { NET_PLANE_CHECK(); return m_MigrationReach; }
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);
 		/// Whether the host's end of the round is here: its Complete stop waits on this peer's ticks, or this peer ran its last frame.
 		bool HostEndOfRoundReached() const;
@@ -1439,6 +1464,12 @@ namespace RTE {
 		bool ContactMigrationSuccessor(uint64_t nowMs);
 		bool RestartHostMigrationAfterSuccessorLoss(uint64_t nowMs);
 		bool IsLostMigrationSuccessor(uint8_t peerId) const;
+		/// The seats connected at a committed frame - neither gone nor held by the AI - the host's among them, one bit per peer.
+		uint32_t ConnectedSeatsAt(uint64_t frame) const;
+		/// The successor's quorum: a strict majority of the most advanced voter's connected seats voted, or the one survivor of two.
+		bool MigrationQuorum(NetHostMigrationReach& reach);
+		/// A side without the quorum hosts nothing: its seat is held by whoever hosts, and it returns later.
+		void StopHostUnreachable();
 		uint64_t MigrationStepBudgetMs() const;
 		/// How long a survivor waits on its dial to the successor before it dials the next entry.
 		uint64_t MigrationDialPatienceMs() const { return IsMigrationIceEndpoint(m_MigrationAddress) ? c_MigrationIceDialMs : 250; }
@@ -1482,6 +1513,8 @@ namespace RTE {
 		bool m_MigrationAuthoritySeen = false;
 		//!< Successors this peer gave up on; a later election in this handover chain must not dial them again.
 		std::vector<uint8_t> m_MigrationLostSuccessors;
+		NetHostMigrationReach m_MigrationReach; //!< The handover's vote as this peer last saw it.
+		uint32_t m_MigrationQuorumMask = 0; //!< Successor: the connected seats of the most advanced voter's roster.
 		NetHostMigrationResult m_MigrationResult;
 		std::set<uint8_t> m_MigrationExpected;
 		std::map<uint8_t, NetHostMigrationMessage> m_MigrationAnswers;
@@ -1900,14 +1933,13 @@ namespace RTE {
 		bool m_CaptureParkFinalized = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
+		uint8_t m_HostLeaveRecordFrom = 0; //!< Client: the host whose leave record this round heard.
+		bool m_MigrationHostAnnounced = false; //!< The host this handover replaces sent its leave record.
 		uint64_t m_AgreedEndDeadlineMs = 0; //!< When a host playing to its agreed end stops waiting for it.
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;
 		uint64_t m_AuthorityLastHeardMs = 0;
-		std::deque<uint32_t> m_AuthorityGaps; //!< Client: the recent gaps between the host's packets while it played.
-		static constexpr size_t c_AuthorityGapSamples = 256;
-		uint32_t m_AuthorityLongestGapMs = 0; //!< Client: the longest gap the host left while it played this round.
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
 		std::map<uint8_t, std::pair<NetPeerId, uint64_t>> m_HeldPeerLinks; //!< Host: each held seat's link it still talks on, and when the hold took it.
 		uint64_t m_LastHeldLinkMs = 0; //!< Host: when it last told its held seats it is alive.

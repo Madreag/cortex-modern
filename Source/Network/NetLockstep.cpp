@@ -10,6 +10,7 @@
 #include "DiagnosticLine.h"
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -61,10 +62,6 @@ namespace RTE {
 
 	namespace {
 		constexpr uint64_t c_StartRetransmitMs = 250;
-		// How long a survivor with nobody beside it hears nothing from the host before it takes the host for gone.
-		constexpr uint64_t c_LoneElectionConfirmMs = 1000;
-		// A host's link silent this long is gone: far past any hold bound, so a host that stalls is held, never replaced.
-		constexpr uint64_t c_HostLossSilenceMs = 1000;
 		// A round configured without an answer budget still bounds a capture park.
 		constexpr uint64_t c_DefaultCaptureParkBudgetMs = 500;
 		// A host playing to its round's agreed end stops waiting for it after this long at most.
@@ -3080,6 +3077,7 @@ namespace RTE {
 			if (!NetLockstepCodec::Encode({decision}, encoded) || encoded.size() > 256) return false;
 			AppendU16LE(bytes, static_cast<uint16_t>(encoded.size())); bytes.insert(bytes.end(), encoded.begin(), encoded.end());
 		}
+		AppendU32LE(bytes, message.connectedMask);
 		uint8_t mac[32]{};
 		if (!GetNetAuthCrypto().HmacSha256(key.data(), key.size(), bytes.data(), bytes.size(), mac)) {
 			bytes.clear();
@@ -3130,7 +3128,7 @@ namespace RTE {
 			if (!decision || decision->action != NetTimingAction::Delay || decision->phase != NetTimingPhase::Commit || decision->sessionId != decoded.sessionId) return false;
 			decoded.futureDelays.push_back(*decision);
 		}
-		if (!reader.AtEnd()) return false;
+		if (!reader.ReadU32LE(decoded.connectedMask) || !reader.AtEnd()) return false;
 		decoded.type = static_cast<NetHostMigrationMessageType>(type);
 		message = std::move(decoded);
 		return true;
@@ -3284,6 +3282,14 @@ namespace RTE {
 			message.completeFrom = UINT64_MAX;
 		message.boundary = m_MigrationBoundary;
 		message.members = m_MigrationResult.members;
+		// The voter's roster as its committed round leaves it: a departure or a hold already agreed for the next frame takes the vote.
+		if (type == NetHostMigrationMessageType::Answer) message.connectedMask = ConnectedSeatsAt(message.appliedFrame + 1);
+		// A roll call and an abort tell each voter who has voted against which roster, so a side without the quorum knows its reach.
+		if (type == NetHostMigrationMessageType::RollCall || type == NetHostMigrationMessageType::Abort) {
+			message.members.clear();
+			for (const auto& [peer, answer]: m_MigrationAnswers) message.members.push_back(peer);
+			message.connectedMask = m_MigrationQuorumMask;
+		}
 		if (type == NetHostMigrationMessageType::Plan || type == NetHostMigrationMessageType::Commit) message.futureDelays = m_MigrationFutureDelays;
 		if (type == NetHostMigrationMessageType::Answer || type == NetHostMigrationMessageType::Ready) {
 			for (const auto& decision: m_MigrationFutureDelays) if (decision.applyFrame > message.appliedFrame) message.futureDelays.push_back(decision);
@@ -3344,6 +3350,9 @@ namespace RTE {
 		m_MigrationOutbox.clear();
 		m_MigrationFrameQueue.clear();
 		m_MigrationResult = {};
+		m_MigrationHostAnnounced = m_HostLeaveRecordFrom != 0 && m_HostLeaveRecordFrom == GetHostPeerId();
+		m_MigrationReach = {};
+		m_MigrationQuorumMask = 0;
 		m_MigrationNeedsResync = false;
 		m_MigrationCommitQueued = false;
 		m_MigrationEarlyInputs.clear();
@@ -3429,7 +3438,9 @@ namespace RTE {
 		                                                   IsLostMigrationSuccessor(order[m_MigrationCandidateIndex])))
 			++m_MigrationCandidateIndex;
 		if (m_MigrationCandidateIndex == order.size()) {
-			FailHostMigration("no surviving successor");
+			// No successor answers: this side reaches nobody, so it hosts nothing and returns later.
+			m_MigrationReach = NetMigrationReachOf({m_Config.localPeerId}, ConnectedSeatsAt(GetResumeFrame()));
+			StopHostUnreachable();
 			return false;
 		}
 		if (m_MigrationSuccessor != order[m_MigrationCandidateIndex]) {
@@ -3496,6 +3507,47 @@ namespace RTE {
 		return true;
 	}
 
+	uint32_t NetLockstepCoordinator::ConnectedSeatsAt(uint64_t frame) const {
+		uint32_t mask = 0;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount && peer <= 32; ++peer)
+			if (!IsPeerGoneAtFrame(peer, frame) && !IsSeatUnderAI(peer, frame) && !(peer == GetHostPeerId() && peer == m_HostLeaveRecordFrom)) mask |= 1u << (peer - 1);
+		return mask;
+	}
+
+	bool NetLockstepCoordinator::MigrationQuorum(NetHostMigrationReach& reach) {
+		// The most advanced voter's committed round is the roster every survivor that reached it agrees on; the others hold older forms of it.
+		uint64_t mostAdvanced = 0;
+		uint32_t connected = 0;
+		bool any = false;
+		for (const auto& [peer, answer]: m_MigrationAnswers)
+			if (!any || answer.appliedFrame > mostAdvanced) {
+				mostAdvanced = answer.appliedFrame;
+				connected = answer.connectedMask;
+				any = true;
+			}
+		// A seat the round already held, or that left, has no vote whatever roster it carries: it returns through its reclaim.
+		std::vector<uint8_t> voters;
+		for (const auto& [peer, answer]: m_MigrationAnswers) voters.push_back(peer);
+		reach = NetMigrationReachOf(voters, connected);
+		m_MigrationQuorumMask = connected;
+		// Two connected seats are the host and one survivor: that survivor carries the match alone.
+		return reach.votes > 0 && (reach.seats <= 2 || 2 * reach.votes > reach.seats);
+	}
+
+	void NetLockstepCoordinator::StopHostUnreachable() {
+		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
+		if (hosting) {
+			for (const auto& [peer, transport]: m_MigrationPeers)
+				(void)SendMigration(transport, MigrationMessage(NetHostMigrationMessageType::Abort));
+		}
+		m_MigrationPhase = NetHostMigrationPhase::Failed;
+		m_State = NetLockstepState::Stopped;
+		const NetHostMigrationReach reach = m_MigrationReach;
+		m_Stats.timeoutReason = "PeerHeld:The host is unreachable - " + std::to_string(std::max<size_t>(reach.votes, 1)) + " of " +
+		                        std::to_string(std::max<size_t>(reach.seats, std::max<size_t>(reach.votes, 1))) + " players reachable";
+		DiagnosticLine() << "[net-match] no handover quorum: " << m_Stats.timeoutReason << std::endl;
+	}
+
 	bool NetLockstepCoordinator::IsLostMigrationSuccessor(uint8_t peerId) const {
 		return std::find(m_MigrationLostSuccessors.begin(), m_MigrationLostSuccessors.end(), peerId) != m_MigrationLostSuccessors.end();
 	}
@@ -3538,8 +3590,9 @@ namespace RTE {
 					continue;
 				// A peer that elected again is a generation or more ahead; a peer left behind joins the one it is shown, but only on its own
 				// evidence that the host is gone: one member's timer never takes a host every other member still hears.
-				const bool hostLost = !m_RemoteTransports.contains(GetHostPeerId()) ||
-				    (nowMs >= m_AuthorityLastHeardMs && nowMs - m_AuthorityLastHeardMs >= c_HostLossSilenceMs);
+				uint64_t hostRttMs = 0;
+				if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) hostRttMs = host->second.pingMs;
+				const bool hostLost = NetHostLinkLost(!m_RemoteTransports.contains(GetHostPeerId()), nowMs >= m_AuthorityLastHeardMs ? nowMs - m_AuthorityLastHeardMs : 0, hostRttMs);
 				if (!IsMigrating() && request.generation > m_MigrationGeneration && hostLost) {
 					const uint64_t previous = m_MigrationGeneration;
 					m_MigrationGeneration = request.generation - 1;
@@ -3777,11 +3830,13 @@ namespace RTE {
 			case NetHostMigrationMessageType::RollCall:
 				if (!hosting && m_MigrationPhase == NetHostMigrationPhase::Contacting) {
 					m_MigrationAuthoritySeen = true;
+					m_MigrationReach = NetMigrationReachOf(message.members, message.connectedMask);
 					(void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::Answer));
 				}
 				break;
 			case NetHostMigrationMessageType::Answer:
-				if (hosting && m_MigrationExpected.contains(message.senderPeerId) && m_MigrationPhase == NetHostMigrationPhase::Contacting && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs <= MigrationStepBudgetMs() && message.appliedFrame != UINT64_MAX) {
+				if (hosting && m_MigrationExpected.contains(message.senderPeerId) && m_MigrationPhase == NetHostMigrationPhase::Contacting && nowMs >= m_MigrationSinceMs &&
+				    (nowMs - m_MigrationSinceMs <= MigrationStepBudgetMs() || !MigrationQuorum(m_MigrationReach)) && message.appliedFrame != UINT64_MAX) {
 					m_MigrationAnswers[message.senderPeerId] = message;
 					m_MigrationPeers[message.senderPeerId] = event.peerId;
 				} else if (hosting && m_MigrationAnswers.contains(message.senderPeerId) && !m_MigrationCommitQueued && message.appliedFrame > m_MigrationBoundary && message.appliedFrame != UINT64_MAX) {
@@ -3900,7 +3955,11 @@ namespace RTE {
 				}
 				break;
 			case NetHostMigrationMessageType::Abort:
-				if (!hosting)
+				// A successor that gave up before its plan found no majority: this side waits for its host as a held seat.
+				if (!hosting && m_MigrationPhase == NetHostMigrationPhase::Contacting) {
+					if (message.connectedMask != 0) m_MigrationReach = NetMigrationReachOf(message.members, message.connectedMask);
+					StopHostUnreachable();
+				} else if (!hosting)
 					FailHostMigration("successor found no recoverable boundary");
 				break;
 		}
@@ -3948,16 +4007,21 @@ namespace RTE {
 		const bool expired = nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= budget;
 		if (m_MigrationPhase == NetHostMigrationPhase::Contacting) {
 			if (!hosting && m_MigrationAuthoritySeen && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs >= 3 * budget) {
-				FailHostMigration("the successor did not publish a handover plan");
+				// The successor found no quorum: the host may be alive and this side the one cut off.
+				StopHostUnreachable();
 				return;
 			}
 			if (hosting) {
-				// The closed roster excludes every unanswered seat at the published resume frame.
-				if (expired) {
+				// The handover goes ahead only on a strict majority of the connected seats; a successor without one hosts nothing.
+				const bool quorum = MigrationQuorum(m_MigrationReach);
+				if (quorum && expired) {
+					// The closed roster excludes every unanswered seat at the published resume frame.
 					std::erase_if(m_MigrationExpected, [&](uint8_t peer) { return !m_MigrationAnswers.contains(peer); });
 				}
-				if (m_MigrationAnswers.size() == m_MigrationExpected.size()) {
+				if (quorum && m_MigrationAnswers.size() == m_MigrationExpected.size()) {
 					PublishMigrationPlan(nowMs);
+				} else if (!quorum && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs >= 3 * budget) {
+					StopHostUnreachable();
 				}
 			} else if (expired && !m_MigrationAuthoritySeen && !HoldsLiveMigrationCandidate(nowMs, budget)) {
 				const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_MigrationSuccessor; });
@@ -4023,11 +4087,14 @@ namespace RTE {
 			FailHostMigration("a surviving peer did not finish boundary recovery");
 		}
 		if (IsMigrating() && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= 3 * budget) {
-			if (std::find(m_MigrationResult.members.begin(), m_MigrationResult.members.end(), m_Config.localPeerId) != m_MigrationResult.members.end())
+			const bool member = std::find(m_MigrationResult.members.begin(), m_MigrationResult.members.end(), m_Config.localPeerId) != m_MigrationResult.members.end();
+			if (hosting) {
 				FailHostMigration("handover publication timed out");
-			// An excluded peer is owed the commit's rejoin and nothing else answers for it.
-			else if (m_MigrationPhase == NetHostMigrationPhase::WaitingForReady && !RestartHostMigrationAfterSuccessorLoss(nowMs))
-				FailHostMigration("the successor was lost before the handover commit");
+			} else if ((member || m_MigrationPhase == NetHostMigrationPhase::WaitingForReady) && !RestartHostMigrationAfterSuccessorLoss(nowMs) && IsMigrating()) {
+				// An excluded peer is owed the commit's rejoin and a member its commit; with no successor left to elect, both wait.
+				m_MigrationReach = NetMigrationReachOf({m_Config.localPeerId}, ConnectedSeatsAt(GetResumeFrame()));
+				StopHostUnreachable();
+			}
 		}
 	}
 
@@ -4157,10 +4224,8 @@ namespace RTE {
 		m_WaitStartMs = nowMs;
 		m_AuthorityLastHeardMs = nowMs;
 		// The new host is in its start work until its first frame of the handed-over round, as a host is at a round's own start:
-		// only its link's close or the round's timeout ends that wait. Its predecessor's talk gaps say nothing of it.
+		// only its link's close or the round's timeout ends that wait.
 		if (m_MigrationSuccessor != m_Config.localPeerId) m_PeersPlayedThisRound.erase(m_MigrationSuccessor);
-		m_AuthorityGaps.clear();
-		m_AuthorityLongestGapMs = 0;
 		if (NeedsMigrationSnapshot()) {
 			std::string error;
 			if (!QueueInputAtTarget(m_Config.startFrame, {}, {}, &error, {}))
@@ -4457,6 +4522,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
 		NET_PLANE_CHECK();
+		m_HostLeaveRecordFrom = 0;
 		if ((config.adaptiveInputDelay || config.substituteSlowPeers) &&
 		    (!std::isfinite(config.simTickMs) || config.simTickMs <= 0 || config.peerCount > NetMatchConfigUtil::c_MaxPeerCount || config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks)) {
 			if (error) *error = "invalid simulation tick or slow player bound";
@@ -4935,8 +5001,6 @@ namespace RTE {
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitStartMs = 0;
 		m_AuthorityLastHeardMs = 0;
-		m_AuthorityGaps.clear();
-		m_AuthorityLongestGapMs = 0;
 		m_LastStallFrame = UINT64_MAX;
 		m_RemoteFrames.clear();
 		m_RemoteCommands.clear();
@@ -5441,16 +5505,6 @@ namespace RTE {
 
 	void NetLockstepCoordinator::NoteAuthorityHeard(uint64_t nowMs) {
 		NET_PLANE_CHECK();
-		// The gaps a live host leaves between its packets are its jitter as a talker: a loaded host that stalls for a frame now and then
-		// is read against the longest of its recent ones, never as gone inside them. Its start work and announced captures are busy
-		// spans the silence check excuses anyway, so they are not its jitter.
-		if (m_AuthorityLastHeardMs != 0 && nowMs > m_AuthorityLastHeardMs && IsRunning() && m_PeersPlayedThisRound.contains(GetHostPeerId()) &&
-		    !HostBusyWithAnnouncedCapture(m_Stats.nextFrame)) {
-			const uint32_t gap = static_cast<uint32_t>(std::min<uint64_t>(nowMs - m_AuthorityLastHeardMs, UINT32_MAX));
-			m_AuthorityGaps.push_back(gap);
-			while (m_AuthorityGaps.size() > c_AuthorityGapSamples) m_AuthorityGaps.pop_front();
-			m_AuthorityLongestGapMs = std::max(m_AuthorityLongestGapMs, gap);
-		}
 		m_AuthorityLastHeardMs = std::max(m_AuthorityLastHeardMs, nowMs);
 	}
 
@@ -5458,11 +5512,6 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		m_AnnouncedCaptureTicks.insert(tick);
 		while (m_AnnouncedCaptureTicks.size() > 64) m_AnnouncedCaptureTicks.erase(m_AnnouncedCaptureTicks.begin());
-	}
-
-	bool NetLockstepCoordinator::HostBusyWithAnnouncedCapture(uint64_t frame) const {
-		NET_PLANE_CHECK();
-		return AnnouncedCaptureCovering(frame).has_value() && m_TimingNowMs <= m_AuthorityLastHeardMs + static_cast<uint64_t>(std::ceil(SteadyCaptureCostMs()));
 	}
 
 	std::optional<uint64_t> NetLockstepCoordinator::AnnouncedCaptureCovering(uint64_t frame, uint8_t peerId) const {
@@ -11153,6 +11202,7 @@ namespace RTE {
 		const bool otherSurvivor = std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
 			return peer != GetHostPeerId() && !IsPeerGoneAtFrame(peer, m_Stats.nextFrame) && !m_AiHeldSeats.contains(peer);
 		});
+		if (stop.senderPeerId == GetHostPeerId() && IsRoundAuthority(stop.senderPeerId, fromTransport) && stop.reason == NetLockstepStopReason::PeerLeft) m_HostLeaveRecordFrom = stop.senderPeerId;
 		if (stop.senderPeerId == GetHostPeerId() && IsRoundAuthority(stop.senderPeerId, fromTransport) && stop.reason == NetLockstepStopReason::PeerLeft && otherSurvivor &&
 		    BeginHostMigration(nowMs))
 			return;
@@ -12085,43 +12135,26 @@ namespace RTE {
 			m_Stats.lastMissingPeers = DescribeMissingPeers();
 		}
 		const uint64_t lastAuthorityTraffic = std::max(m_WaitStartMs, m_AuthorityLastHeardMs);
-		const uint64_t silenceBoundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		// One reading and one threshold: the slow-player bound plus the jitter of the host's link, as its link reports it and as the gaps
-		// between its packets show it. A live host talks every tick whatever its simulation is doing, so only its link can go quiet.
-		uint64_t jitterMs = 0;
-		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) jitterMs = host->second.jitterMs;
-		if (const auto estimate = m_DelayEstimators.find(GetHostPeerId()); estimate != m_DelayEstimators.end()) jitterMs = std::max<uint64_t>(jitterMs, estimate->second.JitterMs());
-		// A host that has stalled this long for its own work once this round will again: the longest gap it left is its jitter too.
-		jitterMs = std::max<uint64_t>(jitterMs, m_AuthorityLongestGapMs);
-		for (const uint32_t gap: m_AuthorityGaps) jitterMs = std::max<uint64_t>(jitterMs, gap);
-		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, silenceBoundMs + jitterMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs)));
 		// A host still in its start work (no frame from it yet this round) or in a capture park it announced is busy, not gone:
 		// only its link's close or the round's timeout ends that wait.
 		const bool captureWindow = AnnouncedCaptureCovering(m_Stats.nextFrame).has_value() ||
 		    (m_SynchronizedCaptureStartFrame != UINT64_MAX && m_Stats.nextFrame >= m_SynchronizedCaptureStartFrame && m_Stats.nextFrame <= m_SynchronizedCaptureEndFrame + 1);
 		const bool hostBusy = !m_PeersPlayedThisRound.contains(GetHostPeerId()) ||
 		    (captureWindow && nowMs < lastAuthorityTraffic + static_cast<uint64_t>(std::ceil(SteadyCaptureCostMs())));
-		// A survivor with no other playing peer beside it has nobody to confirm the host's death: a loss burst on its own link must not
-		// make it host a second match beside a live one, so it hears nothing for a confirmation window first.
-		const bool loneSurvivor = std::none_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
-			return peer != GetHostPeerId() && !IsPeerGoneAtFrame(peer, m_Stats.nextFrame) && !IsSeatUnderAI(peer, m_Stats.nextFrame);
-		});
 		// A host whose simulation stalls keeps its link talking and holds its own seat; only a host whose link stays silent past the
-		// host-loss bound is taken for gone, so a stall of milliseconds never starts an election.
-		// A survivor's own lag delays everything it hears from the host: two of its round trips are never read as the host's silence.
+		// host-loss bound - its own second plus two of this survivor's round trips to it - is taken for gone.
 		uint64_t hostRttMs = 0;
 		if (const auto host = m_Stats.peers.find(GetHostPeerId()); host != m_Stats.peers.end()) hostRttMs = host->second.pingMs;
-		const uint64_t lossSilenceMs = std::max({hostSilenceMs, c_HostLossSilenceMs, loneSurvivor ? c_LoneElectionConfirmMs : 0, 2 * hostRttMs});
-		const uint64_t electionSilenceMs = m_Config.timeoutMs != 0 ? std::min<uint64_t>(m_Config.timeoutMs, lossSilenceMs) : lossSilenceMs;
 		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
-		const bool hostSilent = !hostBusy && electionSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= electionSilenceMs;
+		const uint64_t hostQuietMs = nowMs >= lastAuthorityTraffic ? nowMs - lastAuthorityTraffic : 0;
+		const bool hostSilent = !hostBusy && m_Stats.nextFrame <= m_FinalFrame && NetHostLinkLost(false, hostQuietMs, hostRttMs);
 		// A host quiet after sending its end has closed the round, not died in it.
 		if (hostSilent && m_PendingCompleteStop) {
 			CompleteAtHostClose();
 			return;
 		}
-		if (hostSilent) DiagnosticLine() << "[net-lockstep] host silent " << (nowMs - lastAuthorityTraffic) << "ms against " << electionSilenceMs << "ms (bound " << silenceBoundMs
-		                          << " jitter " << jitterMs << " lone " << loneSurvivor << ") heard=" << m_AuthorityLastHeardMs << " wait_start=" << m_WaitStartMs << " next=" << m_Stats.nextFrame << std::endl;
+		if (hostSilent) DiagnosticLine() << "[net-lockstep] host silent " << hostQuietMs << "ms against " << NetHostLossBoundMs(hostRttMs) << "ms (rtt " << hostRttMs
+		                          << ") heard=" << m_AuthorityLastHeardMs << " wait_start=" << m_WaitStartMs << " next=" << m_Stats.nextFrame << std::endl;
 		if (hostSilent && BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();
@@ -12186,7 +12219,7 @@ namespace RTE {
 		CENSUS(m_ResendFrames); CENSUS(m_RecoveryOutgoing); CENSUS(m_LocalInputHistory); CENSUS(m_LocalChecksums); CENSUS(m_RemoteChecksums);
 		CENSUS(m_ReadyFrames); CENSUS(m_ReadyHistory); CENSUS(m_RelayedTicks); CENSUS(m_RelayedTickFrames); CENSUS(m_RelayBacklog);
 		CENSUS(m_ObservationEpochs); CENSUS(m_HostAcceptedLocalFrames); CENSUS(m_MigrationHistory); CENSUS(m_MigrationIncoming);
-		CENSUS(m_PreStartFrames); CENSUS(m_ArrivalLeads); CENSUS(m_ArrivalLateness); CENSUS(m_TimingOutgoing); CENSUS(m_AuthorityGaps);
+		CENSUS(m_PreStartFrames); CENSUS(m_ArrivalLeads); CENSUS(m_ArrivalLateness); CENSUS(m_TimingOutgoing);
 		CENSUS(m_ParkCaptureHistoryMs); CENSUS(m_DropReasonsNamed); CENSUS(m_PlaneDeferredEvents); CENSUS(m_InstalledResyncTargets);
 		CENSUS(m_ResyncPrimeInputs); CENSUS(m_RetiredReclaimGaps); CENSUS(m_PreStartTiming);
 #undef CENSUS
