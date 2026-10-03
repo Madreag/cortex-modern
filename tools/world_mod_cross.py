@@ -9,7 +9,7 @@ import argparse
 from copy import deepcopy
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
@@ -465,16 +465,25 @@ def extract_preserved(archive, local, compress_records=False):
     from contextlib import nullcontext
     local = Path(local)
     local.mkdir(parents=True, exist_ok=True)
-    count, receipts = 0, []
+    count, receipts, copied = 0, [], {}
     with (nullcontext(archive) if isinstance(archive, tarfile.TarFile) else tarfile.open(archive)) as stream:
         for member in stream:
             path = local/member.name
-            if member.issym() or member.islnk() or not path.resolve().is_relative_to(local.resolve()):
+            if member.issym() or not path.resolve().is_relative_to(local.resolve()):
                 raise ValueError("remote evidence contains an unsafe path")
-            if not member.isfile():
+            if not member.isfile() and not member.islnk():
                 continue
+            key = str(PurePosixPath(member.name))
+            if key in copied: raise ValueError('remote archive repeats a file path')
             path.parent.mkdir(parents=True, exist_ok=True)
-            data = stream.extractfile(member)
+            if member.islnk():
+                target = PurePosixPath(member.linkname)
+                if target.is_absolute() or '..' in target.parts or str(target) not in copied:
+                    raise ValueError('remote evidence hard link must name an earlier archived file')
+                original, was_packed, source_size = copied[str(target)]
+                data = gzip.open(original, 'rb') if was_packed else original.open('rb')
+            else:
+                data, source_size = stream.extractfile(member), member.size
             # Coordinator preflight/payload copies already exist; fetched copies remain separate.
             if path.exists():
                 path = path.with_name(path.name+".remote")
@@ -490,7 +499,7 @@ def extract_preserved(archive, local, compress_records=False):
                 with gzip.open(path, 'rb') as decoded:
                     for chunk in iter(lambda: decoded.read(1024**2), b''):
                         restored.update(chunk); restored_size += len(chunk)
-                if size != member.size or restored_size != size or restored.digest() != digest.digest():
+                if size != source_size or restored_size != size or restored.digest() != digest.digest():
                     raise ValueError('compressed evidence copy differs from its retained archive')
                 receipts.append(dict(source=member.name, retained=str(path.relative_to(local)),
                                      original_bytes=size, original_sha256=digest.hexdigest(),
@@ -499,6 +508,8 @@ def extract_preserved(archive, local, compress_records=False):
                 with retained_open(path) as output:
                     for chunk in iter(lambda: data.read(1024**2), b""):
                         output.write(chunk)
+            data.close()
+            copied[key] = (path, packed, source_size)
             count += 1
     if compress_records:
         write_json(local/'fetch-compression.json', dict(files=receipts, removed_files=0,
