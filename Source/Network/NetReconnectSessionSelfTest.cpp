@@ -3782,6 +3782,112 @@ namespace RTE {
 			return 0;
 		}
 
+		// D54.4: the migration capsule carries the old host's roster whole - a seat the round held in place for a slow machine stays held
+		// on the successor with its cause, a dropped seat keeps the moment it was held, every incarnation and ticket stays - and the
+		// successor takes the round over as its next revision under the next generation.
+		int TestAMigrationCarriesTheRosterWhole() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x136);
+			match.players = {{1, 0, false, "Host"}, {2, 1, false, "Successor"}, {3, 2, false, "Slow"}, {4, 3, false, "Dropped"}};
+			match.peerCount = 4;
+			Wire wire;
+			if (!wire.registry.BeginHostedSession()) {
+				return Fail("the migration fixture's registry drew no epoch");
+			}
+			wire.host.Configure(&wire.registry, match.sessionId, MakeIdentity());
+			wire.host.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
+			wire.host.SetLiveMatch(false);
+			const auto wallClock = [](void* context) -> uint64_t { return 1'700'000'000'000ULL + static_cast<Wire*>(context)->nowMs; };
+			wire.host.SetUnixClock(wallClock, &wire);
+			NetH4TicketRecord hostTicket;
+			if (!wire.host.EnsureLocalTicket(hostTicket)) {
+				return Fail("the old host's own seat took no ticket");
+			}
+			Endpoint successor, slow, dropped;
+			successor.connection = 161;
+			slow.connection = 162;
+			dropped.connection = 163;
+			ConfigureEndpoint(successor, "carried-successor", &unixNow);
+			ConfigureEndpoint(slow, "carried-slow", &unixNow);
+			ConfigureEndpoint(dropped, "carried-dropped", &unixNow);
+			for (Endpoint* peer: {&successor, &slow, &dropped}) {
+				wire.Add(peer);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				if (!peer->client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+					return Fail("a join did not settle: " + error);
+				}
+			}
+			const auto lockstepOf = [&wire](const Endpoint& peer) {
+				for (const NetH4Seat& seat: wire.host.GetSeatTable())
+					if (seat.stableSeat == peer.client.GetRecord().stableSeat) return seat.lockstepPeerId;
+				return uint8_t{0};
+			};
+			const uint8_t successorPeer = lockstepOf(successor), slowPeer = lockstepOf(slow), droppedPeer = lockstepOf(dropped);
+			wire.host.SetLiveMatch(true);
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			// The round holds the slow machine's seat with its link open, and the dropped player's link closes.
+			wire.host.NoteSeatHeldInPlace(slowPeer, NetSeatHoldCause::Capacity);
+			wire.nowMs += 5000;
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			wire.host.NotifyDisconnect(dropped.connection, 300);
+			const NetSeatRoster old = wire.host.GetRoster();
+			const NetRosterSeat* oldDropped = wire.host.RosterSeatOfPeer(droppedPeer);
+			const NetRosterSeat* oldSlow = wire.host.RosterSeatOfPeer(slowPeer);
+			if (!oldDropped || !oldSlow || oldDropped->phase != NetSeatPhase::Held || oldSlow->phase != NetSeatPhase::Held || oldSlow->holdCause != NetSeatHoldCause::Capacity) {
+				return Fail("the fixture did not hold the slow and the dropped seats on the old host");
+			}
+			const uint64_t droppedSince = oldDropped->heldSinceMs;
+			const std::vector<uint8_t> state = wire.host.ExportMigrationState();
+			wire.nowMs += 60000;
+			NetMatchConfig successorMatch = match;
+			successorMatch.hostPeerId = successorPeer;
+			NetReconnectHost next;
+			next.SetUnixClock(wallClock, &wire);
+			NetSeatAuthRegistry nextRegistry;
+			// The slow seat followed the successor; the dropped one did not.
+			if (!next.ImportMigrationState(state, nextRegistry, successorMatch, successorPeer, {{slowPeer, slow.connection}}, wire.nowMs)) {
+				return Fail("the successor did not import the old host's plane");
+			}
+			const NetSeatRoster& hosted = next.GetRoster();
+			const NetRosterSeat* slowSeat = next.RosterSeatOfPeer(slowPeer);
+			const NetRosterSeat* droppedSeat = next.RosterSeatOfPeer(droppedPeer);
+			const NetRosterSeat* lostHost = old.Find(old.hostSeat) ? hosted.Find(old.hostSeat) : nullptr;
+			const NetRosterSeat* successorSeat = next.RosterSeatOfPeer(successorPeer);
+			const auto describe = [](const NetRosterSeat* seat) { return seat ? RosterSeatLabel(*seat) + " since " + std::to_string(seat->heldSinceMs) : std::string("no seat"); };
+			if (!slowSeat || slowSeat->phase != NetSeatPhase::Held || slowSeat->holdCause != NetSeatHoldCause::Capacity || slowSeat->link != NetSeatLink::Connected) {
+				return Fail("the successor let the slow machine's seat play again: " + describe(slowSeat));
+			}
+			// The times cross machines in whole wall-clock seconds.
+			if (!droppedSeat || droppedSeat->phase != NetSeatPhase::Held || droppedSeat->holdCause != NetSeatHoldCause::LinkDrop || droppedSeat->heldSinceMs > droppedSince ||
+			    droppedSince - droppedSeat->heldSinceMs >= 1000) {
+				return Fail("the successor forgot when the dropped seat was held: " + describe(droppedSeat) + " (held since " + std::to_string(droppedSince) + " on the old host)");
+			}
+			if (!lostHost || lostHost->phase != NetSeatPhase::Held || lostHost->holdCause != NetSeatHoldCause::LinkDrop || !successorSeat || successorSeat->phase != NetSeatPhase::Running ||
+			    hosted.hostSeat != successorSeat->seatId || hosted.migrationGen != old.migrationGen + 1 || hosted.revision <= old.revision || hosted.stage != NetRosterStage::Running) {
+				return Fail("the successor did not take the round over from the carried roster: host " + describe(lostHost) + ", successor " + describe(successorSeat) + ", generation " +
+				            std::to_string(old.migrationGen) + " -> " + std::to_string(hosted.migrationGen) + ", revision " + std::to_string(old.revision) + " -> " + std::to_string(hosted.revision));
+			}
+			for (const NetRosterSeat& before: old.seats) {
+				const NetRosterSeat* after = hosted.Find(before.seatId);
+				if (!after || after->incarnation != before.incarnation || after->ticket != before.ticket || after->owner != before.owner) {
+					return Fail("seat " + std::to_string(before.seatId) + " lost its incarnation, ticket or owner across the handover");
+				}
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS a_migration_carries_the_roster_whole slow='" << RosterSeatLabel(*slowSeat) << "' dropped_since=" << droppedSeat->heldSinceMs
+			          << " generation=" << hosted.migrationGen << " revision=" << old.revision << "->" << hosted.revision << std::endl;
+			return 0;
+		}
+
 		// Ruling qqq: a successor numbers its roster on from the old host's and takes the round over as its next revision under the next
 		// host generation; a survivor takes that revision and every later one, and a rematch under the successor starts on it.
 		int TestRosterNumbersOnAcrossAMigration() {
@@ -8436,6 +8542,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestRosterCopyFollowsANewHostedSession(); result != 0) {
+			return result;
+		}
+		if (const int result = TestAMigrationCarriesTheRosterWhole(); result != 0) {
 			return result;
 		}
 		if (const int result = TestRosterNumbersOnAcrossAMigration(); result != 0) {

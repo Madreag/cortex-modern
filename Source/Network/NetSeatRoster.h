@@ -83,7 +83,7 @@ namespace RTE {
 		bool byChoice = false;         ///< LinkDropped: the owner left on purpose.
 		bool afterGrace = false;       ///< SlowMachine: the round is past its warm-up grace.
 		bool keptWorld = false;        ///< Returned: the owner's process kept the round's world.
-		bool quorum = false;           ///< HostLinkLost: every surviving member agrees the host's link is gone.
+		bool quorum = false;           ///< HostLinkLost: a strict majority of the connected seats agree the host's link is gone.
 		std::vector<uint8_t> members;  ///< MemberSetProposed: the members the host proposes to start.
 	};
 

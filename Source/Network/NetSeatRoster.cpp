@@ -278,7 +278,7 @@ namespace RTE {
 				return commit("the host's seat plays again");
 			}
 			case NetRosterEventKind::HostLinkLost: {
-				if (!event.quorum) return refuse("the host is still the host: its loss needs every surviving member's agreement");
+				if (!event.quorum) return refuse("the host is still the host: its loss needs a majority of the connected seats");
 				if (next.stage == NetRosterStage::Migrating) return keep("the round is already changing host");
 				if (next.stage != NetRosterStage::Running) return refuse("no committed round to carry: the match ends with 'The host left the match'");
 				next.stage = NetRosterStage::Migrating;

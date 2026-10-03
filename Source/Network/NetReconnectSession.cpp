@@ -14,6 +14,7 @@
 
 #include <limits>
 #include <algorithm>
+#include <chrono>
 #include <set>
 #include <iostream>
 #include <utility>
@@ -54,10 +55,27 @@ namespace RTE {
 		}
 	} // namespace
 
+	void NetReconnectHost::SetUnixClock(uint64_t (*clock)(void*), void* context) {
+		m_UnixClock = clock;
+		m_UnixClockContext = context;
+	}
+
+	uint64_t NetReconnectHost::UnixNowMs() const {
+		if (m_UnixClock) return m_UnixClock(m_UnixClockContext);
+		return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+	}
+
 	std::vector<uint8_t> NetReconnectHost::ExportMigrationState() const {
 		if (!m_Registry || !m_Registry->IsActive())
 			return {};
 		using json = nlohmann::json;
+		// The roster's host-side part, which no replica sees: each seat's ticket, its return backoff, a ticket the seat was given away
+		// from and when its player went - the times in wall-clock seconds, so the machine that imports them reads them on its own clock.
+		const uint64_t unixNow = UnixNowMs();
+		const auto wallSeconds = [&](uint64_t at) -> uint64_t { return at == 0 || unixNow + at < m_NowMs ? 0 : (unixNow + at - m_NowMs) / 1000; };
+		json rosterHost = json::array();
+		for (const NetRosterSeat& seat: m_Roster.seats)
+			rosterHost.push_back({seat.seatId, seat.ticket, seat.failedReturns, wallSeconds(seat.returnAfterMs), seat.givenAwayTicket, wallSeconds(seat.heldSinceMs)});
 		json seats = json::array();
 		for (const auto& state: m_Seats) {
 			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", IsSeated(state)}, {"closed", IsHostOpened(state)}, {"dropped", IsHolderAway(state)}, {"left", HolderLeftByChoice(state)}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"display", state.holderName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs && state.retiredUntilMs != std::numeric_limits<uint64_t>::max() ? state.retiredUntilMs - m_NowMs : 0}, {"retired_kept", state.retiredGeneration != 0 && state.retiredUntilMs == std::numeric_limits<uint64_t>::max()}};
@@ -77,7 +95,7 @@ namespace RTE {
 				}
 			}
 		}
-		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"roster", {m_Roster.revision, m_Roster.roundNo, m_Roster.migrationGen, m_Roster.hostSeat}}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"roster_bytes", EncodeRoster(m_Roster)}, {"roster_host", rosterHost}, {"roster_banned", m_Roster.banned}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
 	}
 
 	int64_t NetReconnectHost::CountExportedOpenSeats(const std::vector<uint8_t>& bytes, uint8_t localPeerId) {
@@ -183,23 +201,6 @@ namespace RTE {
 					if (state->hasParticipantId)
 						next.BindParticipantId(peer->second, state->participantId);
 				}
-				// The roster carried whole: the round changes host, and a holder that has not reconnected is away.
-				next.RebuildRoster();
-				next.m_Roster.stage = NetRosterStage::Migrating;
-				for (NetRosterSeat& held: next.m_Roster.seats) {
-					if (held.seatId != RosterIdOf(seat)) continue;
-					held.owner = rowCommitted ? next.RosterOwnerOf(*state) : 0;
-					held.ticket = rowCommitted ? NetRosterTicketIdOf(next.m_ConfiguredEpoch, seat, state->holderGeneration) : 0;
-					const bool away = rowCommitted && !state->seat.local && transports.find(state->seat.lockstepPeerId) == transports.end();
-					held.link = held.owner != 0 && !away ? NetSeatLink::Connected : NetSeatLink::Dropped;
-					held.phase = away ? NetSeatPhase::Held : NetSeatPhase::Migrating;
-					held.holdCause = !away ? NetSeatHoldCause::None : row.value("left", false) ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
-					held.heldSinceMs = away ? nowMs : 0;
-					if (!rowCommitted && rowClosed) {
-						held.phase = NetSeatPhase::Held;
-						held.holdCause = NetSeatHoldCause::Kicked;
-					}
-				}
 				if (row.contains("ledger")) {
 					const auto& ledger = row.at("ledger");
 					next.m_Ledger.RecordDrop(seat, ledger.at(0).get<uint8_t>(), ledger.at(1).get<int32_t>(), ledger.at(2).get<uint64_t>(), ledger.at(3).get<std::vector<int64_t>>());
@@ -228,16 +229,49 @@ namespace RTE {
 					return false;
 			}
 			if (object.contains("removed")) next.m_RemovedParticipants = object.at("removed").get<std::set<NetAuthBytes32>>();
-			// The roster numbers on from the old host's; taking the round over is its next revision, under the next host generation.
-			if (object.contains("roster")) {
-				const auto& roster = object.at("roster");
-				next.m_Roster.revision = roster.at(0).get<uint32_t>();
-				next.m_Roster.roundNo = roster.at(1).get<uint32_t>();
-				next.m_Roster.migrationGen = roster.at(2).get<uint16_t>();
-				next.m_Roster.hostSeat = roster.at(3).get<uint8_t>();
+			// The roster carried whole numbers on from the old host's: its host link is lost on the survivors' majority, a member that has
+			// not followed the successor is away, and taking the round over is its next revision under the next host generation.
+			NetSeatRoster carried;
+			std::string rosterError;
+			if (!object.contains("roster_bytes") || !DecodeRoster(object.at("roster_bytes").get<std::vector<uint8_t>>(), carried, &rosterError) || carried.seats.size() != next.m_Seats.size())
+				return false;
+			next.m_Roster = std::move(carried);
+			next.m_UnixClock = m_UnixClock;
+			next.m_UnixClockContext = m_UnixClockContext;
+			const int64_t unixNow = static_cast<int64_t>(next.UnixNowMs());
+			const auto onThisClock = [&](uint64_t wallSeconds) -> uint64_t {
+				return wallSeconds == 0 ? 0 : static_cast<uint64_t>(std::max<int64_t>(1, static_cast<int64_t>(nowMs) - (unixNow - static_cast<int64_t>(wallSeconds * 1000))));
+			};
+			if (!object.contains("roster_host") || !object.at("roster_host").is_array()) return false;
+			for (const auto& row: object.at("roster_host")) {
+				NetRosterSeat* seat = next.m_Roster.Find(row.at(0).get<uint8_t>());
+				if (!seat) return false;
+				seat->ticket = row.at(1).get<uint64_t>();
+				seat->failedReturns = row.at(2).get<uint8_t>();
+				seat->returnAfterMs = onThisClock(row.at(3).get<uint64_t>());
+				seat->givenAwayTicket = row.at(4).get<uint64_t>();
+				seat->heldSinceMs = onThisClock(row.at(5).get<uint64_t>());
 			}
+			next.m_Roster.banned = object.value("roster_banned", std::vector<uint64_t>{});
+			const SeatState* own = nullptr;
 			for (const SeatState& state: next.m_Seats)
-				if (state.seat.local) next.ApplySeatEvent(state, NetRosterEventKind::HostChanged);
+				if (state.seat.local) own = &state;
+			const uint8_t lostHostSeat = next.m_Roster.hostSeat;
+			const bool handover = own && RosterIdOf(own->seat.stableSeat) != lostHostSeat;
+			if (handover) {
+				NetRosterEvent lost;
+				lost.kind = NetRosterEventKind::HostLinkLost;
+				lost.quorum = true;
+				lost.nowMs = nowMs;
+				const NetRosterResult result = RTE::ApplyRosterEvent(next.m_Roster, lost);
+				if (!result.refused) next.m_Roster = result.roster;
+			}
+			for (const SeatState& state: next.m_Seats) {
+				const NetRosterSeat* held = next.RosterSeatOf(state);
+				if (!held || state.seat.local || held->seatId == lostHostSeat || held->owner == 0 || held->link != NetSeatLink::Connected) continue;
+				if (!transports.contains(state.seat.lockstepPeerId)) next.ApplySeatEvent(state, NetRosterEventKind::LinkDropped);
+			}
+			if (handover) next.ApplySeatEvent(*own, NetRosterEventKind::HostChanged);
 			if (next.m_Roster.stage == NetRosterStage::Migrating) {
 				// A plane whose own seat holds no player cannot take the round over as a member: it carries it on unchanged.
 				next.m_Roster.stage = NetRosterStage::Running;
