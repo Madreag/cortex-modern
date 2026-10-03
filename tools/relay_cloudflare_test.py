@@ -345,5 +345,35 @@ class HotspotRows(unittest.TestCase):
                     self.assertTrue(peer.get('hotspot'), run['name'])
 
 
+class DirectoryPerRun(unittest.TestCase):
+    """Two runs in one driver process: each run's offer receipt lands in its own service.log (a run's verdict reads only
+    its own root, so a receipt logged into the previous run's file reads as 'no offer issued')."""
+
+    def test_each_run_logs_its_offer_receipt_to_its_own_root(self):
+        import tempfile
+        import relay_cloudflare_match as match
+        from relay_secrets import SecretBook
+        fields = dict(name='unit', activity='t', scene='t', mode='pvp', peer_count=2, seats_free=1, game_version='1', build_id='a',
+                      network_protocol_version=1, lockstep_codec_version=1, controller_frame_version=1, match_config_hash='a' * 64,
+                      session_identity_hash='b' * 64, module_manifest_hash='c' * 64, listen_port=41010, listen_addrs=['127.0.0.1'],
+                      join_mode='ice')
+        fixed = [dict(urls=['turn:relay.example:3478?transport=udp'], username='unit-fixed-user', credential='unit-fixed-pass')]
+        with tempfile.TemporaryDirectory() as folder:
+            counts = []
+            for index in range(2):
+                root = Path(folder) / f'run{index}'
+                root.mkdir()
+                with mock.patch('sys.stderr', io.StringIO()):
+                    run = match.Directory(root, 0, None, 86400, SecretBook())
+                    store = run.server.store
+                    row = store.register(fields, '127.0.0.1', 10, '0123456789abcdef')
+                    store.mint_ice_servers(row['session_id'], dict(token=row['token'], match_id='m:1', ttl=600, iceServers=fixed),
+                                           '0123456789abcdef', 11)
+                    run.stop()
+                log = root / 'service.log'
+                counts.append(log.read_text(encoding='utf-8').count('relay_offer_issued') if log.is_file() else 0)
+        self.assertEqual(counts, [1, 1])
+
+
 if __name__ == '__main__':
     unittest.main()

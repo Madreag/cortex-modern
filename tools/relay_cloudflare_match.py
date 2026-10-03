@@ -400,7 +400,8 @@ class Directory:
         self.module, self.book = module, book
         self.signals, self.provider_calls, self.offers = [], [], []
         self.cert, key, self.pin = make_cert(root)
-        real = module.urlopen
+        self.handlers = set(module.LOGGER.handlers)
+        real = self.real_urlopen = module.urlopen
 
         def urlopen(request, *args, **kwargs):
             try:
@@ -447,7 +448,12 @@ class Directory:
             return list(self.server.store._sessions)
 
     def stop(self) -> None:
+        """Stops the server and detaches this run's log file and provider hook, so the next run logs to its own root."""
         self.server.stop()
+        self.module.urlopen = self.real_urlopen
+        for handler in set(self.module.LOGGER.handlers) - self.handlers:
+            self.module.LOGGER.removeHandler(handler)
+            handler.close()
 
 
 class Tunnel:
