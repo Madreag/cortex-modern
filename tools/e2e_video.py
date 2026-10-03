@@ -1944,7 +1944,7 @@ def run_one(options, scenario, run, run_index, out):
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
                           "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when")),
         "record": {k: records.get(name, {}).get(k) for k in
-                                     ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
+                                     ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256", 'exe_path', 'runner', 'package_unpacked',
                                       "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")},
                           "launch": str(peer_root / "launch.json"),
                           "error": records.get(name, {}).get("error"),
@@ -2080,7 +2080,7 @@ def finalize_only(options):
                                         "probe_dir": str(root / f"{peer_name}-stage" / "probe"), "launch": str(launch_path),
                                         "args": launch.get("argv"), "env": launch.get("env_set"),
                                         "expected_termination": bool(definition_peer.get("kill_after_s") or definition_peer.get("kill_at_tick") or definition_peer.get("kill_when"))})
-            peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
+            peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256", 'exe_path', 'runner', 'package_unpacked',
                               "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")}
             peer["manifest"] = read_manifest(video)
             peer["index"] = read_index(video)

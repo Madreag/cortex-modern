@@ -527,6 +527,11 @@ class IsolatedRun:
         game_runtime = exe.name.lower().startswith("cortex command")
         self.record["game_runtime_checks"] = game_runtime
         if game_runtime:
+            unpacked = (exe.parent / 'MANIFEST.json').is_file() and not (exe.parent / '.git').exists()
+            if unpacked:
+                self.record['package_unpacked'] = str(exe.parent.resolve())
+                self._check('package_single_player', not any(str(arg).startswith('-net') for arg in self.argv[1:]),
+                            'unpacked package smoke is single-player; network arguments are refused')
             if data.exists():
                 target = Path(os.path.realpath(data))
                 self._check(

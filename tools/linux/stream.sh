@@ -6,14 +6,13 @@
 #   one GPU row (a menu readback case) on the :0 session;
 #   S4b  the clang TSan build and its suite; S4 the clang ASan+UBSan build and its suite without leak checks (the Mac's
 #   configuration); S4L the same binary's suite with LeakSanitizer on, where a leaking row exits 23 and is red for it;
-#   a red sanitizer row runs once more alone after both suites (both runs kept), as the inventory reruns a red suite,
-#   unless its only failure is the sanitizer's report exit (66 TSan, 23 LSan): those reports are the finding and repeat.
+#   every product failure is retained; no sanitizer failure is replaced by an unproved quiet rerun.
 # The load-sensitive legs (S5, S1) run alone; the TSan suite runs in three shards beside the ASan build and suite, whose
 # wall-clock budgets a sanitizer build reports instead of judging.
 # Usage, from a lane directory holding this script, run_official13.py, sanitizer_digest.py and inventory/ (a copy of
 # lead-tools/inventory):
 #   SHA=<full sha> [STEPS="repo gcc s5 libcxx s1 readback tsan asan rerun defects"] nohup bash stream.sh > job.out 2>&1 &
-# A step that runs again replaces its evidence; builds are incremental. exit.txt is written at the end.
+# A repeated evidence path is refused. exit.txt is written at the end; no retained evidence is removed.
 set -u
 : "${SHA:?set SHA to the full tip sha}"
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -57,12 +56,36 @@ LSAN_ENV=(CCCP_TEST_BINARY=$ASAN_BIN $UBSAN_ENV
   ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0:symbolize=1:external_symbolizer_path=$SYMBOLIZER)
 
 mkdir -p $EV
-stamp() { TZ=America/Phoenix date '+%Y-%m-%d %H:%M:%S MST'; }
+stamp() { TZ=America/Phoenix date '+%Y-%m-%d %I:%M:%S %p MST'; }
 say() { echo "[$(stamp)] $*" | tee -a $EV/steps.log; }
-fail() { say "FAIL: $*"; echo 1 > $LANE/exit.txt; exit 1; }
+fail() { say "FAIL: $*"; exit 1; }
 want() { case " $STEPS " in *" $1 "*) return 0;; esac; return 1; }
-# rm never follows the runtime/Data symlinks the runner leaves inside a run directory.
-fresh() { rm -rf "${1:?}"; mkdir -p "$1"; }
+fresh() { test ! -e "${1:?}" || fail "evidence already exists: $1"; mkdir -p "$1"; }
+receipt() {
+  [ -n "${ACCEPTANCE_COLLECTION:-}" ] || return 0
+  "$PY" "$REPO/tools/acceptance_collection.py" "$@" --root "$LANE" --share-root "$LANE" --share X.linux \
+    --inventory "$INV" --plan "$LANE/acceptance-plan.json" --schedule "$LANE/split-plan.json"
+}
+row() {
+  local id=$1 log=$2; shift 2
+  receipt begin --id "$id" --argv-json "$("$PY" -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" || return 1
+  "$@" > "$log" 2>&1; local rc=$?
+  receipt finish --id "$id" --exit-code "$rc" --log "$log" || rc=1
+  return "$rc"
+}
+finish_collection() {
+  local rc=$?
+  trap - EXIT
+  for pid in "${TSAN_PIDS[@]:-}"; do [ -z "$pid" ] || wait "$pid"; done
+  if [ -f "$LANE/S1root/S1/progress.json" ]; then receipt import-progress --progress "$LANE/S1root/S1/progress.json"; fi
+  # The RUN chain adds the declared tools/endgame rows after this stream; its final collect closes the full share.
+  if [ -f "$REPO/tools/acceptance_collection.py" ]; then receipt collect; fi
+  if [ -n "${ACCEPTANCE_COLLECTION:-}" ] && [ "$(cat "$GUARD/owner" 2>/dev/null)" = "$SHA:$LANE:$$" ]; then
+    rm "$GUARD/owner"; rmdir "$GUARD"
+  fi
+  echo "$rc" > "$LANE/exit.txt"
+  exit "$rc"
+}
 suite_line() { $PY - "$1" <<'EOF'
 import json, sys
 try:
@@ -74,7 +97,13 @@ print(f"{d.get('passed')}/{d.get('total')} complete={d.get('complete')} sanitize
 EOF
 }
 
-rm -f $LANE/exit.txt
+test ! -e "$LANE/exit.txt" || fail 'the stream already has an exit receipt; use a new lane'
+GUARD=$HOME/cortex-workers/ACCEPTANCE-STREAM-RUNNING
+trap finish_collection EXIT
+if [ -n "${ACCEPTANCE_COLLECTION:-}" ]; then
+  mkdir "$GUARD" || fail 'another acceptance stream owns the box'
+  printf '%s\n' "$SHA:$LANE:$$" > "$GUARD/owner"
+fi
 say "start lane=$LANE branch=$BRANCH sha=$SHA steps=[$STEPS]"
 { echo "date=$(stamp)"; uname -a; lsb_release -ds; echo "threads=$(nproc)"; free -g | head -2; $PY --version
   gcc --version | head -1; clang --version | head -1; meson --version; ninja --version; rr --version; df -h $HOME | tail -1
@@ -106,14 +135,20 @@ if want gcc; then
   [ $RC -eq 0 ] && [ -f $GCC_BIN ] || fail "gcc build red (engine-gcc-tail.txt)"
 fi
 
+if [ -n "${ACCEPTANCE_COLLECTION:-}" ]; then
+  "$PY" "$REPO/tools/acceptance_identity.py" --box Linux --repo "$REPO" --exe "$GCC_BIN" --source-sha "$SHA" \
+    --collection-id "$ACCEPTANCE_COLLECTION" --build-receipt "$EV/build.json" --write-build-receipt \
+    --build-exit-code "$(cat "$EV/gcc-build-exit.txt")" --build-log "$EV/engine-gcc-build.log" --out "$EV/identity.json" || fail 'native identity'
+fi
+
 if want s5; then
   [ -f $GCC_BIN ] || fail "s5: no gcc binary"
   fresh $EV/S5
   say "s5 suite start"
-  CCCP_TEST_BINARY=$GCC_BIN $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S5/suite --timeout 600 --quiet-rows last > $EV/S5/suite-stdout.log 2>&1; RC=$?
+  row linux.selftests "$EV/S5/suite-stdout.log" env CCCP_TEST_BINARY=$GCC_BIN $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S5/suite --timeout 600 --quiet-rows last; RC=$?
   echo $RC > $EV/S5/suite-exit.txt
   say "s5 suite exit=$RC $(suite_line $EV/S5/suite/result.json)"
-  $PY -u $HERE/run_official13.py --repo $REPO --binary $GCC_BIN --out $EV/S5/official13 --head $SHA > $EV/S5/official13-stdout.log 2>&1; RC=$?
+  row linux.official13 "$EV/S5/official13-stdout.log" $PY -u $HERE/run_official13.py --repo $REPO --binary $GCC_BIN --out $EV/S5/official13 --head $SHA; RC=$?
   echo $RC > $EV/S5/official13-exit.txt
   say "s5 official13 exit=$RC $(suite_line $EV/S5/official13/result.json)"
 fi
@@ -122,7 +157,7 @@ if want libcxx; then
   fresh $EV/libcxx
   printf '#include <vector>\nint main() { return std::vector<int>{1}.size() == 1 ? 0 : 1; }\n' > $EV/libcxx/probe.cpp
   clang++ -stdlib=libc++ $EV/libcxx/probe.cpp -o $EV/libcxx/probe > $EV/libcxx/probe.log 2>&1; PRC=$?
-  rm -rf "${REPO:?}/build-libcxx"
+  test ! -e "$REPO/build-libcxx" || fail 'libcxx build already exists; use a new lane'
   ( CC=clang CXX=clang++ CXXFLAGS=-stdlib=libc++ LDFLAGS=-stdlib=libc++ meson setup $REPO/build-libcxx $REPO "${GCC_OPTS[@]}" ) > $EV/libcxx/setup.log 2>&1; SRC=$?
   BRC=not-run
   if [ $SRC -eq 0 ]; then
@@ -139,24 +174,19 @@ if want s1; then
   if [ ! -f $INV/run_stream.py ]; then
     say "s1 unavailable: no inventory copy at $INV"; echo unavailable > $EV/s1-exit.txt
   else
-    # This copy hashes <repo>/Cortex Command.exe; a POSIX engine is CCCP_TEST_BINARY, as the Mac's copy reads it.
-    $PY - $INV/run_stream.py > $EV/s1-patch.txt 2>&1 <<'EOF'
-import pathlib, sys
-path = pathlib.Path(sys.argv[1])
-text = path.read_text()
-old = '    return sha256_file(repo / "Cortex Command.exe").lower()\n'
-new = ('    env = os.environ.get("CCCP_TEST_BINARY")\n'
-       '    return sha256_file(Path(env) if env else repo / "Cortex Command.exe").lower()\n')
-if text.count(old) == 1:
-    path.write_text(text.replace(old, new))
-    print("exe_sha patched to read CCCP_TEST_BINARY")
-else:
-    print(f"exe_sha not patched: {text.count(old)} matches of the Windows-only line")
-EOF
     fresh $LANE/S1root
-    say "s1 start ($(cat $EV/s1-patch.txt))"
+    say "s1 start (native POSIX executable selection)"
     S1SHA=$(sha256sum $GCC_BIN | cut -c1-64)
-    ( cd $INV && CCCP_TEST_BINARY=$GCC_BIN $PY run_stream.py S1 --repo $REPO --out $LANE/S1root --exe $S1SHA --confirming ) > $EV/s1-stream.log 2>&1; RC=$?
+    S1_IDS=()
+    if [ -n "${ACCEPTANCE_COLLECTION:-}" ]; then
+      mapfile -t S1_IDS < <("$PY" -c 'import json,sys; p=json.load(open(sys.argv[1])); print("\n".join(r["id"] for r in p["rows"] if r["share"]=="X.linux" and r["id"].startswith("S1.")))' "$LANE/acceptance-plan.json")
+    else
+      "$PY" "$INV/run_stream.py" S1 --repo "$REPO" --out "$LANE/S1root" --exe "$S1SHA" --confirming --plan-json > "$EV/S1-plan.json"
+      mapfile -t S1_IDS < <("$PY" -c 'import json,sys; print("\n".join(r["id"] for r in json.load(open(sys.argv[1])) if r["id"] not in {"S1.turn-hold","S1.turn-renew","S1.relay-compare"}))' "$EV/S1-plan.json")
+    fi
+    [ "${#S1_IDS[@]}" -gt 0 ] || fail 'no declared Linux S1 commands'
+    ( cd "$INV" && CCCP_TEST_BINARY="$GCC_BIN" "$PY" run_stream.py S1 --repo "$REPO" --out "$LANE/S1root" --exe "$S1SHA" --confirming \
+      --only "${S1_IDS[@]}" --box Linux --collection-id "${ACCEPTANCE_COLLECTION:-standalone}" --build-receipt "$EV/build.json" ) > "$EV/s1-stream.log" 2>&1; RC=$?
     echo $RC > $EV/s1-exit.txt
     cp $LANE/S1root/S1/DEFECTS.json $EV/S1-DEFECTS.json 2>/dev/null; cp $LANE/S1root/S1/progress.json $EV/S1-progress.json 2>/dev/null
     say "s1 exit=$RC $($PY -c "import json; d=json.load(open('$EV/S1-DEFECTS.json')); print('defects', d['defect_count'], 'hard', d['hard_count'])" 2>&1 | tail -1)"
@@ -167,7 +197,7 @@ if want readback; then
   [ -f $GCC_BIN ] || fail "readback: no gcc binary"
   fresh $EV/readback
   say "readback start (DISPLAY=$DISPLAY)"
-  CCCP_TEST_BINARY=$GCC_BIN $PY -u $REPO/tools/test_menu_readback.py --repo $REPO --out $EV/readback/run --case landing --size 640x360 --port 48530 > $EV/readback/driver-stdout.log 2>&1; RC=$?
+  row linux.readback "$EV/readback/driver-stdout.log" env CCCP_TEST_BINARY=$GCC_BIN $PY -u $REPO/tools/test_menu_readback.py --repo $REPO --out $EV/readback/run --case landing --size 640x360 --port 48530; RC=$?
   echo $RC > $EV/readback/exit.txt
   say "readback landing 640x360 exit=$RC: $(tail -1 $EV/readback/driver-stdout.log | cut -c1-200)"
 fi
@@ -187,13 +217,18 @@ if want tsan; then
   echo $RC > $EV/tsan-build-exit.txt; tail -30 $EV/engine-tsan-build.log > $EV/engine-tsan-tail.txt
   say "tsan build exit=$RC"
   if [ $RC -eq 0 ] && [ -f $TSAN_BIN ]; then
+    if [ -n "${ACCEPTANCE_COLLECTION:-}" ]; then
+      "$PY" "$REPO/tools/acceptance_identity.py" --box Linux --repo "$REPO" --exe "$TSAN_BIN" --source-sha "$SHA" \
+        --collection-id "$ACCEPTANCE_COLLECTION" --build-receipt "$EV/tsan-build.json" --write-build-receipt --configuration tsan \
+        --build-exit-code "$RC" --build-log "$EV/engine-tsan-build.log" --out "$EV/identity-tsan.json" || fail 'TSan identity'
+    fi
     fresh $EV/S4b
     SHARD_C=$($PY -c "import sys; sys.path.insert(0, '$REPO/tools'); import run_selftests as r; print(' '.join(n for n in r.SELFTESTS if n not in '$TSAN_SHARD_A $TSAN_SHARD_B'.split()))")
     for shard in a b c; do
       case $shard in a) rows=$TSAN_SHARD_A;; b) rows=$TSAN_SHARD_B;; c) rows=$SHARD_C;; esac
       only=(); for r in $rows; do only+=(--only $r); done
       echo "$rows" > $EV/S4b/shard-$shard-rows.txt
-      env "${TSAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4b/suite-$shard --timeout 3600 "${only[@]}" > $EV/S4b/suite-$shard-stdout.log 2>&1 &
+      row "linux.tsan-suite-$shard" "$EV/S4b/suite-$shard-stdout.log" env "${TSAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4b/suite-$shard --timeout 3600 "${only[@]}" &
       TSAN_PIDS+=($!)
     done
     echo "${TSAN_PIDS[*]}" > $EV/S4b/pids.txt
@@ -208,7 +243,7 @@ if want asan; then
   [ -e $LANE/deps/gns-turnfix ] || ln -s $DEPS/gns-turnfix $LANE/deps/gns-turnfix
   if [ ! -f $LANE/deps/gns-turnfix-ubsan/lib/libGameNetworkingSockets_s.a ]; then
     ( set -e
-      W=$LANE/deps/gns-ubsan-work; rm -rf "${W:?}"; mkdir -p $W
+      W=$LANE/deps/gns-ubsan-work; test ! -e "$W"; mkdir -p $W
       git clone -q --no-checkout $GNS_SRC $W/src
       git -C $W/src checkout -q $GNS_COMMIT
       git -C $W/src apply $REPO/external/patches/gns-turn-lifetime.patch
@@ -216,7 +251,6 @@ if want asan; then
       cmake --build $W/build -j 8
       cmake --install $W/build
       nm -C $LANE/deps/gns-turnfix-ubsan/lib/libGameNetworkingSockets_s.a | grep -q "typeinfo for SteamNetworkingSocketsLib::CSteamNetworkingSockets"
-      rm -rf "${W:?}"
     ) > $EV/gns-ubsan.log 2>&1 && say "gns ubsan prefix built" || say "gns ubsan prefix FAILED (gns-ubsan.log)"
   fi
   if [ ! -f $REPO/build-asan/build.ninja ]; then
@@ -227,14 +261,19 @@ if want asan; then
   echo $RC > $EV/asan-build-exit.txt; tail -30 $EV/engine-asan-build.log > $EV/engine-asan-tail.txt
   say "asan build exit=$RC gns-turnfix-ubsan includes=$(grep -c 'gns-turnfix-ubsan/include' $REPO/build-asan/compile_commands.json 2>/dev/null)"
   if [ $RC -eq 0 ] && [ -f $ASAN_BIN ]; then
+    if [ -n "${ACCEPTANCE_COLLECTION:-}" ]; then
+      "$PY" "$REPO/tools/acceptance_identity.py" --box Linux --repo "$REPO" --exe "$ASAN_BIN" --source-sha "$SHA" \
+        --collection-id "$ACCEPTANCE_COLLECTION" --build-receipt "$EV/asan-build.json" --write-build-receipt --configuration asan \
+        --build-exit-code "$RC" --build-log "$EV/engine-asan-build.log" --out "$EV/identity-asan.json" || fail 'ASan identity'
+    fi
     fresh $EV/S4
     say "asan suite start (detect_leaks=0)"
-    env "${ASAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4/suite --timeout 2400 --quiet-rows last > $EV/S4/suite-stdout.log 2>&1; RC=$?
+    row linux.asan-suite "$EV/S4/suite-stdout.log" env "${ASAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4/suite --timeout 2400 --quiet-rows last; RC=$?
     echo $RC > $EV/S4/suite-exit.txt
     say "asan suite exit=$RC $(suite_line $EV/S4/suite/result.json)"
     fresh $EV/S4L
     say "lsan suite start (detect_leaks=1)"
-    env "${LSAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4L/suite --timeout 2400 --quiet-rows last > $EV/S4L/suite-stdout.log 2>&1; RC=$?
+    row linux.lsan-suite "$EV/S4L/suite-stdout.log" env "${LSAN_ENV[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/S4L/suite --timeout 2400 --quiet-rows last; RC=$?
     echo $RC > $EV/S4L/suite-exit.txt
     say "lsan suite exit=$RC $(suite_line $EV/S4L/suite/result.json)"
   fi
@@ -246,30 +285,7 @@ if [ ${#TSAN_PIDS[@]} -gt 0 ]; then
 fi
 
 if want rerun; then
-  # The TSan shards may belong to an earlier run of this script, so they are waited on by their recorded pids.
-  for pid in $(cat $EV/S4b/pids.txt 2>/dev/null); do while kill -0 $pid 2>/dev/null; do sleep 30; done; done
-  for leg in S4b S4; do
-    [ -d $EV/$leg ] || continue
-    # A load-sensitive row has had its quiet rerun inside the suite already.
-    red=$($PY - $EV/$leg <<'EOF'
-import json, pathlib, sys
-rows = []
-for path in sorted(pathlib.Path(sys.argv[1]).glob("suite*/result.json")):
-    for name, row in json.loads(path.read_text()).get("results", {}).items():
-        report_exit = row.get("reason") in ("exit_code=66", "exit_code=23") and not row.get("fatal")
-        if not row.get("pass") and not row.get("load_sensitive") and not report_exit and name not in rows:
-            rows.append(name)
-print(" ".join(rows))
-EOF
-)
-    [ -n "$red" ] || { say "rerun $leg: no red row"; continue; }
-    only=(); for r in $red; do only+=(--only $r); done
-    rm -rf "${EV:?}/${leg:?}/rerun"
-    if [ $leg = S4b ]; then envs=("${TSAN_ENV[@]}"); budget=3600; else envs=("${ASAN_ENV[@]}"); budget=2400; fi
-    say "rerun $leg alone: $red"
-    env "${envs[@]}" $PY -u $REPO/tools/run_selftests.py --repo $REPO --out $EV/$leg/rerun --timeout $budget "${only[@]}" > $EV/$leg/rerun-stdout.log 2>&1
-    say "rerun $leg: $(suite_line $EV/$leg/rerun/result.json)"
-  done
+  say 'product failures retained; no rerun without a recorded pre-launch HARNESS cause'
 fi
 
 if want defects; then
@@ -287,6 +303,5 @@ if want defects; then
 fi
 
 du -sh $LANE $REPO > $EV/disk.txt 2>&1
-echo 0 > $LANE/exit.txt
 say "DONE steps=[$STEPS]"
 exit 0

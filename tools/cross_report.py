@@ -64,6 +64,9 @@ def completed_workload(instances, events, ticks):
 def acceptance_identity(manifest, peers):
     errors, build_errors, diagnostics = [], [], []
     expected = {'erol': 'EROL-PC', 'edith': 'EDITH', 'mac': 'Mac', 'linux': 'Linux'}
+    # G-READER-1819: the declared three-way/mixed acceptance rows bind their three named boxes.
+    if manifest.get('scenario') in ('soak', 'chaos') and manifest.get('roster') in ('three-way', 'mixed'):
+        expected.pop('linux')
     instances = manifest.get('instances', [])
     boxes = {row.get('name') for row in manifest.get('boxes', [])}
     actual = {row.get('name'): row.get('box') for row in instances}
