@@ -541,6 +541,45 @@ def return_hold_violations(log):
             if 0 < tick - back <= 100]
 
 
+def impairment_evidence(run, manifest):
+    run = Path(run)
+    members = tuple(manifest.get('per_peer_lag_ms') or ('host', 'client'))
+    effects, changes, errors, paths = {}, {}, [], []
+    for peer in members:
+        path = run / peer / 'stdout.log'; paths.append(path)
+        log = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
+        current, local, rounds, committed, receipts = None, None, {}, set(), []
+        for line in log.splitlines():
+            if found := re.match(r'\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+)', line):
+                current, local = int(found[1]), int(found[2]); rounds[current] = local
+            if found := re.match(r'\[net-match\] delay change peer=(\d+) frame=(\d+) delay=(\d+) revision=(\d+)', line):
+                seat, tick, delay, revision = map(int, found.groups())
+                if current is not None and 1 < tick <= manifest.get('ticks', TICKS): committed.add((current, seat, tick, delay, revision))
+            if line.startswith('[net-fake-link] '):
+                try:
+                    row = json.loads(line.split(' ', 1)[1])
+                except ValueError:
+                    errors.append(f'{peer}: invalid net-fake-link JSON'); continue
+                if isinstance(row, dict) and row.get('round') == current and row.get('peer') == local:
+                    receipts.append(row)
+                else: errors.append(f'{peer}: unbound net-fake-link receipt')
+        requests = dict(jitter_ms=(manifest.get('per_peer_jitter_ms') or {}).get(peer, manifest.get('jitter_ms', 0)),
+                        reorder_percent=manifest.get('reorder_percent', 0), dup_percent=manifest.get('dup_percent', 0))
+        for key, counter in (('jitter_ms', 'jitter_packets'), ('reorder_percent', 'reordered_packets'), ('dup_percent', 'duplicated_packets')):
+            if not requests[key]: continue
+            if not rounds: errors.append(f'{peer}: no native round for requested {key}={requests[key]}')
+            for round_id in rounds:
+                bound = [row for row in receipts if row['round'] == round_id and row.get(key) == requests[key]]
+                if not any(type(row.get(counter)) is int and row[counter] > 0 for row in bound):
+                    errors.append(f'{peer} round {round_id}: no positive {counter} at {key}={requests[key]}')
+        effects[peer] = receipts; changes[peer] = committed
+    reference = next(iter(changes.values()), set())
+    if not reference or any(value != reference for value in changes.values()):
+        errors.append(f'live delay-change receipts differ or are absent: { {peer: sorted(value) for peer, value in changes.items()} }')
+    return dict(passed=not errors, reason='; '.join(errors), effects=effects,
+                changes={peer: sorted(value) for peer, value in changes.items()}, evidence=paths)
+
+
 def item9a_gates(run, peer='host', rows=None):
     run = Path(run)
     raw = record_path(run / peer / 'feel/raw.jsonl')
@@ -625,6 +664,10 @@ def item9a_gates(run, peer='host', rows=None):
         'item9a_confirmed_horizon_lag': pin(horizon_lag_ms, '<= 50 ms behind the steady confirmed-tick clock, including recovery',
             horizon_lag_ms is not None and horizon_lag_ms <= 50, evidence),
     }
+    if any(manifest.get(key) for key in ('jitter_ms', 'reorder_percent', 'dup_percent')):
+        impairment = impairment_evidence(run, manifest)
+        pins['item9a_impairment_effects_and_resize'] = pin(impairment, 'requested packet effects and identical live delay changes on every peer',
+                                                        impairment['passed'], impairment['evidence'])
     if manifest.get('loss_percent'):
         loss_log = run / 'client/stdout.log'
         armed = re.findall(r'\[net-transport-loss\] percent=(\S+) send_recv_armed=(\d+) round=(\d+)', loss_log.read_text(encoding='utf-8-sig', errors='replace')) if loss_log.is_file() else []
