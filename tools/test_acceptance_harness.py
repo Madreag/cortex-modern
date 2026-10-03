@@ -78,13 +78,15 @@ class AcceptanceTests(unittest.TestCase):
         self.assertFalse(cross_report.judge_attempt(manifest, checks, {}, [], []).get('v1_passed', True))
 
     def test_f12_unrelated_placeholder_does_not_decide_v1(self):
+        from feel.test_attempt_requirements import attempt
         for scenario in ('soak', 'chaos'):
-            manifest, checks = self.cross_case(scenario)
+            manifest, checks, peers, matrix, recoveries = attempt()
+            manifest['scenario'] = scenario
             checks.update(validated_autosave_archives=False, forced_end_during_transfer=False)
-            verdict = cross_report.judge_attempt(manifest, checks, {}, [], [])
+            verdict = cross_report.judge_attempt(manifest, checks, peers, matrix, recoveries)
             self.assertTrue(verdict.get('v1_passed', all(checks.values())))
             checks['bounded_recovery'] = False
-            verdict = cross_report.judge_attempt(manifest, checks, {}, [], [])
+            verdict = cross_report.judge_attempt(manifest, checks, peers, matrix, recoveries)
             self.assertFalse(verdict.get('v1_passed', all(checks.values())))
 
     def test_f12_a_box_below_the_rounds_rate_fails_v1(self):

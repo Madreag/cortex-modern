@@ -561,8 +561,9 @@ class CrossDriverTests(unittest.TestCase):
                     f'[fullstate] tick={t} hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round=1\n'
                     f'[fullstate-scope] tick={t} round=1 label=sample per_peer=camera\n' for t in (1,600,1200)))
             complete = cross_report.build_report(root)
-            self.assertTrue(complete['diagnostic_passed'])
-            self.assertTrue(complete['v1_passed'])
+            self.assertTrue(complete['core_passed'])
+            self.assertTrue(complete['checks']['shared_fullstate'])
+            self.assertFalse(complete['v1_passed'])
             own=cross_report.peer_root(root,plan,plan['specs'][-1]); name=plan['specs'][-1]['peer']
             record=json.loads((own/'record.json').read_text())
             (own/'record.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))
@@ -584,7 +585,7 @@ class CrossDriverTests(unittest.TestCase):
             (later/'engine/launch.json').write_text(json.dumps(record))
             self.assertTrue(cross_report.build_report(root)['checks']['preflight_complete'])
             (later/'engine/launch.json').unlink(); (later/'engine').rmdir(); later.rmdir()
-            self.assertTrue(cross_report.build_report(root)['passed'])
+            self.assertTrue(cross_report.build_report(root)['core_passed'])
             log=own/'engine/stdout.log'; saved=log.read_bytes(); log.unlink()
             missing=cross_report.build_report(root)
             self.assertFalse(missing['checks']['hold_evidence_complete'])
