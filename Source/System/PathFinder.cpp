@@ -2032,19 +2032,22 @@ int PathFinder::RunHorizonGridSelfTest() {
 	peerB.TestSetHorizonWorkerLate(true);
 	peerB.TestHoldPathingRequest();
 	peerA.QueueHorizonDelta(10, 4, wall, blocked);
+	// The late worker's 50 ms start at its queue, so the commit's own wait is 50 ms less whatever ran in between.
+	const auto lateQueued = std::chrono::steady_clock::now();
 	peerB.QueueHorizonDelta(10, 4, wall, blocked);
 	peerA.TestApplyLiveUpdate(wall, blocked);
 	peerB.TestApplyLiveUpdate(wall, blocked);
 	peerA.CommitHorizonThrough(14);
 	peerB.CommitHorizonThrough(14);
+	const int64_t lateSpanUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - lateQueued).count();
 	const auto sharedA = pathCost(peerA, true);
 	const auto sharedB = pathCost(peerB, true);
 	const auto liveA = pathCost(peerA, false);
 	const auto liveB = pathCost(peerB, false);
 	peerB.TestReleasePathingRequest();
 	peerB.TestSetHorizonWorkerLate(false);
-	if (peerB.LastHorizonWaitUs() < 50000) {
-		std::cout << Tag << " FAIL late worker wait_us=" << peerB.LastHorizonWaitUs() << std::endl;
+	if (peerB.LastHorizonWaitUs() <= 0 || lateSpanUs < 50000) {
+		std::cout << Tag << " FAIL late worker wait_us=" << peerB.LastHorizonWaitUs() << " queue_to_commit_us=" << lateSpanUs << std::endl;
 		return 1;
 	}
 	if (sharedA != sharedB) {
