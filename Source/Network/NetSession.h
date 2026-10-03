@@ -436,6 +436,7 @@ namespace RTE {
 		std::vector<std::pair<NetParticipantId, NetAuthBytes16>> m_SpentIdentityChallenges;
 		uint64_t m_LockstepFrame = 0;
 		std::vector<PeerState> m_Peers;
+		std::map<NetPeerId, std::vector<NetH4RosterRevision>> m_UnsentRosterRevisions; //!< Host: revisions a full send queue refused, per link.
 
 		// Chat state lives behind its own lock: the UI enqueues and drains, the session's own pump
 		// thread is the only side that sends, relays or stamps a line.

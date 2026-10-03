@@ -120,6 +120,8 @@ namespace RTE {
 		/// Takes a newer revision of this match's roster - a later host generation, or a later revision of the same one; says why
 		/// when it does not. A new host's numbering starts this copy's history again.
 		bool Apply(const NetSeatRoster& revision, std::string* why);
+		/// Keeps an older revision of the host generation it follows as history it can agree on, the roster it holds unchanged.
+		bool ApplyPast(const NetSeatRoster& revision);
 		/// Follows the hosted match named: a copy of another match's roster is dropped. 0 follows the first match heard.
 		void Attach(uint64_t matchId);
 		/// Drops every revision heard: a peer attaching to a hosted session starts its copy there.

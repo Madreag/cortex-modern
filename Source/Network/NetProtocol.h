@@ -68,6 +68,7 @@ namespace RTE {
 		ParticipantChallenge = 28,
 		ParticipantProof = 29,
 		RosterRevision = 30,
+		RosterRevisionRequest = 31,
 	};
 
 	enum class NetRejectReason : uint16_t {
@@ -368,6 +369,14 @@ namespace RTE {
 		bool operator==(const NetH4RosterRevision&) const = default;
 	};
 
+	/// A peer whose agreed config names a seat roster revision it never heard asks the host for that one by number.
+	struct NetH4RosterRevisionRequest {
+		uint16_t h4Version = c_NetH4Version;
+		uint32_t revision = 0;
+
+		bool operator==(const NetH4RosterRevisionRequest&) const = default;
+	};
+
 	/// Phase B: asking the host for a seat whose holder is gone. An applicant is inert - it holds no
 	/// peer id, no team, no snapshot and no authority until the host approves it and the commit lands.
 	struct NetH4Applicant {
@@ -530,7 +539,8 @@ namespace RTE {
 		NetParticipantRemoval,
 		NetParticipantChallenge,
 		NetParticipantProof,
-		NetH4RosterRevision>;
+		NetH4RosterRevision,
+		NetH4RosterRevisionRequest>;
 
 	struct NetMessage {
 		uint32_t sequence = 0;

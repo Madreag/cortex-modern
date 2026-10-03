@@ -581,6 +581,11 @@ namespace RTE {
 		NetH4RosterRevision revision;
 		revision.roster = EncodeRoster(m_Roster);
 		if (revision.roster.empty()) return;
+		// A peer whose config names a revision it never heard asks for it: the recent ones stay to answer it.
+		if (m_RosterHistory.empty() || m_RosterHistory.back().first != m_Roster.revision) {
+			m_RosterHistory.emplace_back(m_Roster.revision, revision.roster);
+			if (m_RosterHistory.size() > 64) m_RosterHistory.erase(m_RosterHistory.begin());
+		}
 		for (const SeatState& seat: m_Seats) {
 			if (seat.seat.local || seat.activeConnection == c_InvalidNetPeerId) continue;
 			if (only != c_InvalidNetPeerId && seat.activeConnection != only) continue;
@@ -964,6 +969,17 @@ namespace RTE {
 
 	bool NetReconnectHost::HandleMessage(NetPeerId connection, const NetPayload& payload, uint64_t nowMs) {
 		m_NowMs = std::max(m_NowMs, nowMs);
+		if (const auto* request = std::get_if<NetH4RosterRevisionRequest>(&payload)) {
+			const auto kept = std::find_if(m_RosterHistory.begin(), m_RosterHistory.end(), [&](const auto& entry) { return entry.first == request->revision; });
+			if (kept != m_RosterHistory.end()) {
+				NetH4RosterRevision answer;
+				answer.roster = kept->second;
+				Send(connection, answer);
+			} else {
+				DiagnosticLine() << "[roster] a peer asked for revision " << request->revision << ", which this host no longer keeps" << std::endl;
+			}
+			return true;
+		}
 		if (m_MigrationHold && (std::holds_alternative<NetH4NewJoin>(payload) || std::holds_alternative<NetH4TicketStoredAck>(payload) || std::holds_alternative<NetH4Reclaim>(payload) ||
 		                        std::holds_alternative<NetH4Proof>(payload) || std::holds_alternative<NetH4LeaveRequest>(payload) || std::holds_alternative<NetH4Applicant>(payload) || std::holds_alternative<NetH4SubstitutionAck>(payload))) {
 			const auto repeated = std::find_if(m_MigrationHeldMessages.begin(), m_MigrationHeldMessages.end(), [&](const auto& held) { return held.first == connection && held.second == payload; });
@@ -2777,12 +2793,19 @@ namespace RTE {
 		return true;
 	}
 
+	void NetReconnectClient::RequestRosterRevision(uint32_t revision) {
+		if (revision == 0) return;
+		m_Outbound.push_back({c_InvalidNetPeerId, NetH4RosterRevisionRequest{c_NetH4Version, revision}});
+	}
+
 	bool NetReconnectClient::HandleMessage(const NetPayload& payload, uint64_t nowMs) {
 		if (const auto* revision = std::get_if<NetH4RosterRevision>(&payload)) {
 			NetSeatRoster roster;
 			std::string why;
 			if (m_HasRecord) m_RosterReplica.Attach(NetRosterMatchIdOf(m_Record.epoch));
-			if (!DecodeRoster(revision->roster, roster, &why) || !m_RosterReplica.Apply(roster, &why)) {
+			if (!DecodeRoster(revision->roster, roster, &why)) {
+				DiagnosticLine() << "[roster] this peer refused a revision: " << why << std::endl;
+			} else if (!m_RosterReplica.Apply(roster, &why) && !m_RosterReplica.ApplyPast(roster)) {
 				DiagnosticLine() << "[roster] this peer refused a revision: " << why << std::endl;
 			}
 			return true;

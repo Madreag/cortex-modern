@@ -637,6 +637,7 @@ namespace RTE {
 		void ApplyStageEvent(NetRosterEventKind kind);
 		/// Sends the roster's current revision to every connected holder, or to one connection.
 		void SendRoster(NetPeerId only = c_InvalidNetPeerId);
+		std::vector<std::pair<uint32_t, std::vector<uint8_t>>> m_RosterHistory; //!< The revisions this host published, oldest first, bounded.
 		/// A seat whose holder never takes the round's image - the host's own, a watcher's - is back the moment it is seated.
 		void SettleReturn(const SeatState& seat);
 		/// The roster's owner for the seat's holder: the player's proven identity, or with none proven its ticket.
@@ -880,6 +881,8 @@ namespace RTE {
 		const NetReconnectClientStats& GetStats() const { return m_Stats; }
 		/// The host's seat roster as this peer last heard it, revision by revision.
 		const NetRosterReplica& GetRosterReplica() const { return m_RosterReplica; }
+		/// Asks the host for the seat roster revision a config names that this peer never heard.
+		void RequestRosterRevision(uint32_t revision);
 
 	private:
 		void SendRequest(NetPayload payload, uint64_t nowMs);

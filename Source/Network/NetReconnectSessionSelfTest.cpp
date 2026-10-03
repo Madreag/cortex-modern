@@ -3982,6 +3982,121 @@ namespace RTE {
 			return 0;
 		}
 
+		// D54.7: a seat roster revision the host's send queue refused is sent again once the link takes it, so the peer agrees on it.
+		int TestARefusedRosterRevisionIsSentAgain() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const uint16_t port = 42107;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSession client;
+			NetSeatAuthRegistry registry;
+			registry.BeginHostedSession();
+			NetReconnectHost admission;
+			admission.Configure(&registry, 0x5000000000000000ULL + port, MakeIdentity());
+			admission.SetSeatTable(MakeSeatTable(), NetMatchMode::PvPSkirmish);
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("refused-roster"));
+			NetReconnectClient reconnect;
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			reconnect.Configure(&store, MakeIdentity(), "Player");
+			reconnect.SetUnixClock(&FixedUnixClock, &unixNow);
+			host.SetReconnectHost(&admission);
+			client.SetReconnectClient(&reconnect);
+			if (!host.StartHost(hostTransport, MakeSessionConfig(port, 101, "Host"), &error) ||
+			    !client.StartClient(clientTransport, "loopback", MakeSessionConfig(port, 202, "Player"), &error)) {
+				return Fail("could not start the wired pair: " + error);
+			}
+			uint64_t nowMs = 0;
+			const auto drive = [&](uint64_t untilMs) {
+				for (; nowMs <= untilMs; nowMs += 10) {
+					host.Tick(nowMs);
+					client.Tick(nowMs);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+			};
+			drive(600);
+			if (!host.IsReady() || !client.IsReady() || reconnect.GetState() != NetH4ClientState::Joined || host.GetReadyPeers().empty()) {
+				return Fail("the wired pair did not reach the ready state");
+			}
+			// The link's send queue is full: the round's start is a revision the host cannot send.
+			LoopbackTransportConfig full;
+			full.refuseSendsToPeer = host.GetReadyPeers().front().transportPeerId;
+			hostTransport.SetFaultConfig(full);
+			admission.SetLiveMatch(true);
+			const uint32_t started = admission.GetRoster().revision;
+			drive(nowMs + 200);
+			if (reconnect.GetRosterReplica().HasRoster() && reconnect.GetRosterReplica().Roster().revision >= started) {
+				return Fail("the fixture's full send queue let the revision through");
+			}
+			hostTransport.SetFaultConfig({});
+			drive(nowMs + 300);
+			std::string why;
+			if (!reconnect.GetRosterReplica().AgreesAt(started, HashRoster(admission.GetRoster()), &why)) {
+				return Fail("a roster revision the full send queue refused was lost: " + why);
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS a_refused_roster_revision_is_sent_again revision=" << started << std::endl;
+			return 0;
+		}
+
+		// D54.7: a peer whose config names a revision it never heard asks for it by number, and the host answers from what it published.
+		int TestAMissedRosterRevisionIsAskedFor() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint player;
+			player.connection = 191;
+			ConfigureEndpoint(player, "missed-revision", &unixNow);
+			wire.Add(&player);
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the join did not settle: " + error);
+			}
+			// The player misses the round's start, which its config names; it hears the revision after it.
+			player.connected = false;
+			wire.host.SetLiveMatch(true);
+			const uint32_t named = wire.host.GetRoster().revision;
+			const auto namedHash = HashRoster(wire.host.GetRoster());
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			player.connected = true;
+			Endpoint other;
+			other.connection = 192;
+			ConfigureEndpoint(other, "missed-revision-other", &unixNow);
+			wire.Add(&other);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			wire.host.SetLiveMatch(false);
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			std::string why;
+			if (player.client.GetRosterReplica().AgreesAt(named, namedHash, &why) || !player.client.GetRosterReplica().HasRoster() ||
+			    player.client.GetRosterReplica().Roster().revision <= named) {
+				return Fail("the fixture did not make the player miss revision " + std::to_string(named) + " and hear a later one");
+			}
+			player.client.RequestRosterRevision(named);
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			if (!player.client.GetRosterReplica().AgreesAt(named, namedHash, &why)) {
+				return Fail("a peer that asked for the revision its config names still cannot agree on it: " + why);
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS a_missed_roster_revision_is_asked_for revision=" << named << " holds=" << player.client.GetRosterReplica().Roster().revision << std::endl;
+			return 0;
+		}
+
 		// The host's seat roster reaches every holder whole and in order; no peer derives one (SEAT-ROSTER.md 5).
 		int TestRosterRevisionsReachEveryHolder() {
 			ScriptedAuthCrypto crypto;
@@ -8533,6 +8648,12 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestAdmissionHoldIssuesResolutions(); result != 0) {
+			return result;
+		}
+		if (const int result = TestARefusedRosterRevisionIsSentAgain(); result != 0) {
+			return result;
+		}
+		if (const int result = TestAMissedRosterRevisionIsAskedFor(); result != 0) {
 			return result;
 		}
 		if (const int result = TestRosterRevisionsReachEveryHolder(); result != 0) {

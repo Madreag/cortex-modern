@@ -251,6 +251,7 @@ namespace RTE {
 		/// A round starts only on the seat roster the host agreed it on: a peer that heard another is refused by name.
 		bool AgreeOnSeatRoster(NetSession& session, std::string* error);
 		uint32_t m_RosterAgreedRevision = 0;
+		static constexpr uint64_t c_RosterRevisionWaitMs = 2000; //!< How long a start waits for the revision it asked the host for.
 		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error, std::vector<NetTransportEvent> pendingEvents = {});
 		bool StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error);
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session = nullptr);

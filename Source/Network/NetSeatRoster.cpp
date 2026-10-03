@@ -533,6 +533,14 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetRosterReplica::ApplyPast(const NetSeatRoster& revision) {
+		if (!m_HasRoster || revision.matchId != m_MatchId || revision.migrationGen != m_Roster.migrationGen || revision.revision >= m_Roster.revision) return false;
+		if (std::any_of(m_Recent.begin(), m_Recent.end(), [&](const auto& entry) { return entry.first == revision.revision; })) return true;
+		m_Recent.emplace_back(revision.revision, HashRoster(revision));
+		if (m_Recent.size() > 64) m_Recent.erase(m_Recent.begin());
+		return true;
+	}
+
 	void NetRosterReplica::Attach(uint64_t matchId) {
 		if (matchId != m_MatchId) Reset(matchId);
 	}

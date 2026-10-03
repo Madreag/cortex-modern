@@ -665,6 +665,16 @@ namespace RTE {
 			return true;
 		}
 
+		bool EncodePayload(const NetH4RosterRevisionRequest& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			if (payload.revision == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "a roster revision request names no revision");
+				return false;
+			}
+			AppendU16LE(out, payload.h4Version);
+			AppendU32LE(out, payload.revision);
+			return true;
+		}
+
 		bool EncodePayload(const NetParticipantProof& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
 			if (payload.version != c_NetParticipantIdentityVersion) {
 				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "participant identity version is unsupported");
@@ -1185,6 +1195,17 @@ namespace RTE {
 			return true;
 		}
 
+		bool DecodePayload(ByteReader& reader, NetH4RosterRevisionRequest& payload, NetProtocolError* error) {
+			if (!ReadH4Version(reader, payload.h4Version, error) || !ReadOrTruncated(reader.ReadU32LE(payload.revision), reader, error, "revision")) {
+				return false;
+			}
+			if (payload.revision == 0) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset(), "a roster revision request names no revision");
+				return false;
+			}
+			return true;
+		}
+
 		bool DecodePayload(ByteReader& reader, NetH4RosterRevision& payload, NetProtocolError* error) {
 			uint16_t size = 0;
 			if (!ReadH4Version(reader, payload.h4Version, error) || !ReadOrTruncated(reader.ReadU16LE(size), reader, error, "roster_size")) {
@@ -1234,6 +1255,7 @@ namespace RTE {
 			case NetMessageType::SubstitutionAck:
 			case NetMessageType::ParticipantRemoval:
 			case NetMessageType::RosterRevision:
+			case NetMessageType::RosterRevisionRequest:
 				return true;
 			default:
 				return false;
@@ -1256,7 +1278,7 @@ namespace RTE {
 		}
 		// 3 is the published alpha's and 4 differs from it only in a reject reason it may carry; 5 adds the roster revision.
 		if (headerVersion == 3 || headerVersion == 4) {
-			return type != NetMessageType::RosterRevision;
+			return type != NetMessageType::RosterRevision && type != NetMessageType::RosterRevisionRequest;
 		}
 		return headerVersion == c_Version;
 	}
@@ -1293,6 +1315,7 @@ namespace RTE {
 			[](const NetParticipantChallenge&) { return NetMessageType::ParticipantChallenge; },
 			[](const NetParticipantProof&) { return NetMessageType::ParticipantProof; },
 			[](const NetH4RosterRevision&) { return NetMessageType::RosterRevision; },
+			[](const NetH4RosterRevisionRequest&) { return NetMessageType::RosterRevisionRequest; },
 		}, payload);
 	}
 
@@ -1730,6 +1753,12 @@ namespace RTE {
 			}
 			case NetMessageType::RosterRevision: {
 				NetH4RosterRevision value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::RosterRevisionRequest: {
+				NetH4RosterRevisionRequest value;
 				decoded = DecodePayload(payloadReader, value, &payloadError);
 				payload = value;
 				break;

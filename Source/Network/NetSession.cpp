@@ -971,7 +971,21 @@ namespace RTE {
 
 	void NetSession::FlushReconnectOutbound() {
 		if (m_ReconnectHost) {
+			// A seat roster revision a full send queue refused is the one a peer's config may name: it goes again, in order, first.
+			for (auto unsent = m_UnsentRosterRevisions.begin(); unsent != m_UnsentRosterRevisions.end();) {
+				auto& queue = unsent->second;
+				while (!queue.empty() && FindPeer(unsent->first) && Send(unsent->first, queue.front())) queue.erase(queue.begin());
+				unsent = queue.empty() || !FindPeer(unsent->first) ? m_UnsentRosterRevisions.erase(unsent) : std::next(unsent);
+			}
 			for (NetH4Outbound& outbound : m_ReconnectHost->TakeOutbound()) {
+				if (const auto* revision = std::get_if<NetH4RosterRevision>(&outbound.payload)) {
+					auto& queue = m_UnsentRosterRevisions[outbound.connection];
+					if (!queue.empty() || !Send(outbound.connection, outbound.payload)) {
+						if (queue.size() < 16) queue.push_back(*revision);
+					}
+					if (queue.empty()) m_UnsentRosterRevisions.erase(outbound.connection);
+					continue;
+				}
 				Send(outbound.connection, std::move(outbound.payload));
 			}
 			for (const NetH4Commit& commit : m_ReconnectHost->TakeCommits()) {

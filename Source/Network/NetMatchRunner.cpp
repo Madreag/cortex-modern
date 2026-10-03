@@ -151,9 +151,18 @@ namespace RTE {
 	bool NetMatchRunner::AgreeOnSeatRoster(NetSession& session, std::string* error) {
 		m_RosterAgreedRevision = 0;
 		if (m_Config.host || m_MatchConfig.version < NetMatchConfigUtil::c_SeatRosterVersion || m_MatchConfig.seatRosterRevision == 0) return true;
-		const NetReconnectClient* reconnect = session.GetReconnectClient();
+		NetReconnectClient* reconnect = session.GetReconnectClient();
 		if (!reconnect) return true;
 		std::string why;
+		if (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why)) {
+			// A revision this peer never heard - a full send queue lost it - is asked for by number; the host answers from what it published.
+			reconnect->RequestRosterRevision(m_MatchConfig.seatRosterRevision);
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(c_RosterRevisionWaitMs);
+			while (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why) && std::chrono::steady_clock::now() < deadline) {
+				session.Tick(m_Config.nowMs ? m_Config.nowMs() : 0);
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			}
+		}
 		if (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why)) {
 			SetFailed("the round's seat roster was refused: " + why);
 			if (error) *error = m_SetupError;
