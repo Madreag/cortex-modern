@@ -46,10 +46,11 @@ def analyzed_pair(root, *, timing=True):
 class SoakOracleEvidence(unittest.TestCase):
     def test_timing_uses_complete_native_capacity_of_a_uniformly_heavy_round(self):
         from feel.report import item9a_gates
+        from feel.test_harness_cost import complete_cost_log
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / 'host').mkdir()
-            (root / 'host/stdout.log').write_text('')
+            (root / 'host/stdout.log').write_text(complete_cost_log())
             (root / 'manifest.json').write_text(json.dumps(dict(ticks=1200)))
             native = dict(pace=dict(sim_ms_per_tick=20), lockstep=dict(round_id=7, local_capacity_tps=50,
                 sim_tick_ms=1000/60, next_frame=1201, missing_frame_stalls=0, steady_missing_frame_stalls=0))
