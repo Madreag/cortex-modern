@@ -1,6 +1,7 @@
 """Collection proofs for laptop planning and census attribution; no engines."""
 import contextlib
 import io
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,20 @@ from test_inventory_oracle_evidence import run_split
 
 
 class LaptopCollection(unittest.TestCase):
+    def test_laptop_identity_names_and_hostnames_are_known(self):
+        import acceptance_identity
+        for value, expected in (('Z13', 'Z13'), ('EROL-TABLET', 'Z13'), ('ALLY', 'ALLY'), ('EROL-ALLY7', 'ALLY')):
+            try:
+                actual = reader.canonical_box(value)
+            except ValueError as error:
+                self.fail(f'laptop identity refused: {error}')
+            self.assertEqual(actual, expected)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); exe = root/'unit-never-run.exe'; exe.write_bytes(b'not executable')
+            receipt = root/'build.json'
+            receipt.write_text(json.dumps(dict(commit='a'*40, executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest())))
+            self.assertEqual(acceptance_identity.identity('Z13', root, exe, receipt, 'a'*40)['status'], 'PASS')
+
     def test_optional_variant_survives_into_the_acceptance_manifest(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); plan, requirements = fixture(root)
