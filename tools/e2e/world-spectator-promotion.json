@@ -89,7 +89,7 @@
         "-input-script",
         "{INPUT_SCRIPT}",
         "-net-live-tick-hashes",
-        "{OUT}/seated-two-live.jsonl"
+        "{OUT}/seated-three-live.jsonl"
       ],
       "menu_script": "world-spectator.seated.menu.txt",
       "input_script": "play-input.txt",
