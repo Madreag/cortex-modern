@@ -891,6 +891,11 @@ void GameActivity::SetupPlayers() {
 int GameActivity::Start() {
 	// Set the split screen config before the Scene (and it SceneLayers, specifially) are loaded
 	uint8_t humanCount = GetLocalHumanCount();
+	// Test lever: one screen whatever the local human count, as each peer of a match draws, for a like-for-like draw measurement.
+	static const bool s_testSingleScreen = std::getenv("CCCP_TEST_SINGLE_SCREEN") != nullptr;
+	if (s_testSingleScreen) {
+		humanCount = std::min<uint8_t>(humanCount, 1);
+	}
 	// Depending on the resolution aspect ratio, split first horizontally (if wide screen)
 	if (((float)g_WindowMan.GetResX() / (float)g_WindowMan.GetResY()) >= 1.6)
 		g_FrameMan.ResetSplitScreens(humanCount > 1, humanCount > 2);
@@ -4003,6 +4008,11 @@ bool GameActivity::ApplyNetPlayerBindings(const NetGamePlayerBindings& bindings)
 	if (!CreateNetLocalUI()) return false;
 	RefreshCheckpointMarkedActorIDs();
 	return true;
+}
+
+bool GameActivity::AdoptNetLocalSeat(const NetMatchConfig& config, uint8_t localPeer) {
+	// Only this machine's menus are made for the seat it takes back; every seat's shared state stays the world's.
+	return Activity::AdoptNetLocalSeat(config, localPeer) && CreateNetLocalUI();
 }
 
 bool GameActivity::RunNetInventoryRelaunchProbe(std::string_view phase) {

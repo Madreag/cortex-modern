@@ -7,6 +7,7 @@
 #include "NetModerationGUI.h"
 #include "NetHostOptionsText.h"
 #include "NetPlayerPresentation.h"
+#include "ActivityMan.h"
 
 #include "GUI.h"
 #include "GUIDrawRecord.h"
@@ -45,6 +46,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <chrono>
+#include <cstdlib>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
@@ -53,6 +57,8 @@
 #include <iostream>
 #include <iterator>
 #include <list>
+#include <map>
+#include <set>
 #include <mutex>
 #include <sstream>
 #include <string_view>
@@ -315,16 +321,282 @@ namespace RTE::MenuAutomation {
 		font->SetKerning(savedKerning);
 		return fits;
 	}
+
+	// A watch judges what the screen shows on every drawn frame between its start and its assert, so a line that is wrong
+	// for a few frames cannot slip between two scripted checks.
+	struct ShownLine {
+		std::string source, control, text;
+	};
+	struct TextWatch {
+		std::string rule, state, control, text;
+		uint64_t frames = 0, active = 0, violations = 0;
+		int64_t costUs = 0, worstUs = 0; //!< What judging this watch has cost the frames it ran on.
+		Json first;
+		std::set<std::string> offenders; //!< Each distinct offence is logged once, so one run lists them all.
+	};
+	std::map<std::string, TextWatch> s_Watches;
+	std::vector<std::pair<std::string, std::string>> s_DrawnText; //!< This frame's font-drawn lines, cleared once judged.
+
+	void NoteDrawnText(const std::string& source, const std::string& text) {
+		if (!s_Watches.empty()) s_DrawnText.emplace_back(source, text);
+	}
+
+	double s_FrameSpanMs = c_DrawWindowSeconds * 1000;
+	std::chrono::steady_clock::time_point s_LastEvaluated;
+
+	/// Drawn during the frame being judged: since the previous frame's evaluation.
+	bool Shown(GUIControl* control) {
+		if (!Visible(control)) return false;
+		const double age = PanelDrawAgeMs(control->GetPanel());
+		return age >= 0 && age <= s_FrameSpanMs;
+	}
+
+	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagers(GUIControlManager* menu) {
+		std::vector<std::pair<std::string, GUIControlManager*>> managers;
+		if (menu) managers.emplace_back("menu", menu);
+		if (auto* panel = g_MenuMan.GetNetworkPanel()) {
+			if (panel->AutomationManager() && panel->AutomationManager() != menu) managers.emplace_back("network", panel->AutomationManager());
+			if (panel->OverlayManager()) managers.emplace_back("overlay", panel->OverlayManager());
+		}
+		return managers;
+	}
+
+	GUIControl* WatchedControl(GUIControlManager* menu, const std::string& name) {
+		for (const auto& [source, manager]: WatchedManagers(menu)) {
+			if (GUIControl* control = manager->GetControl(name)) return control;
+		}
+		return nullptr;
+	}
+
+	/// Every line of text the screen shows this frame, one entry per drawn line of each shown control and of the game's own screen message.
+	std::vector<ShownLine> ShownLines(GUIControlManager* menu) {
+		std::vector<ShownLine> lines;
+		const auto add = [&lines](const std::string& source, const std::string& control, const std::string& text) {
+			std::istringstream rows(text);
+			for (std::string row; std::getline(rows, row);) {
+				const auto start = row.find_first_not_of(" \t\r");
+				if (start == std::string::npos) continue;
+				lines.push_back({source, control, row.substr(start, row.find_last_not_of(" \t\r") - start + 1)});
+			}
+		};
+		for (const auto& [source, manager]: WatchedManagers(menu)) {
+			for (GUIControl* control: *manager->GetControlList()) {
+				std::string text;
+				if (Shown(control) && Text(control, text)) add(source, control->GetName(), text);
+			}
+		}
+		if (g_ActivityMan.IsInActivity()) add("screen", "ScreenText", g_FrameMan.GetScreenText(0));
+		for (const auto& [source, text]: s_DrawnText) add("drawn", source, text);
+		return lines;
+	}
+
+	bool WatchStateHolds(const std::string& state) {
+		if (state == "always") return true;
+		if (state == "panel_open") return g_MenuMan.IsNetworkPanelOpen();
+		if (state.starts_with("substate:")) {
+			return g_MenuMan.IsMainMenuInteractive() && g_MenuMan.GetMainMenu() && g_MenuMan.GetMainMenu()->AutomationMultiplayerSubScreen() == state.substr(9);
+		}
+		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		if (state == "running") return snapshot.serviceState == "Running";
+		if (state == "local_held" || state == "remote_held") {
+			const bool local = state == "local_held";
+			// A catch-up alone is no hold: a host serves one and a late joiner runs one with nobody's seat held. This peer's
+			// own return is the catch-up or resync that follows the hold its host told it of.
+			const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
+			if (local && !snapshot.isHost && (ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing())) {
+				const auto& log = ScenarioRunner::GetNetUiToastLog();
+				if (std::any_of(log.begin(), log.end(), [](const auto& toast) { return toast.kind == "seat_held" && toast.senderPeerId == 0; })) return true;
+			}
+			for (const auto& member: snapshot.members) {
+				if (member.cpu || (member.peerId == snapshot.localPeerId) != local || ScenarioRunner::IsLockstepSeatReleased(member.peerId)) continue;
+				if (member.aiHeld || member.reclaiming || ScenarioRunner::IsLockstepSeatUnderAI(member.peerId, frame)) return true;
+			}
+			return false;
+		}
+		return false;
+	}
+
+	/// The panel's round-trip summary against the per-player pings it lists beside it: the summary reads the widest link a host has, or a client's link to its host.
+	std::string RttContradiction(GUIControlManager* menu) {
+		GUIControl* status = WatchedControl(menu, "LabelNetMatchStatus");
+		std::string text;
+		if (!status || !Shown(status) || !Text(status, text)) return "";
+		const auto summary = text.find("\nRTT ");
+		if (summary == std::string::npos) return "";
+		const std::string rest = text.substr(summary + 5);
+		if (!std::isdigit(static_cast<unsigned char>(rest[0]))) return "";
+		const int shown = std::atoi(rest.c_str());
+		const bool host = rest.find(" ms / max peer") == rest.find(" ms");
+		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		int expected = -1;
+		std::istringstream rows(text);
+		for (std::string row; std::getline(rows, row);) {
+			if (row.size() < 4 || row[0] != 'P' || row.find(": Ping ") == std::string::npos) continue;
+			const int peer = std::atoi(row.c_str() + 1);
+			const std::string value = row.substr(row.find(": Ping ") + 7);
+			if (!std::isdigit(static_cast<unsigned char>(value[0])) || peer == snapshot.localPeerId) continue;
+			const int ping = std::atoi(value.c_str());
+			if (host) expected = std::max(expected, ping);
+			else if (peer == snapshot.hostPeerId) expected = ping;
+		}
+		if (expected < 0 || expected == shown) return "";
+		return "summary RTT " + std::to_string(shown) + " ms against " + std::to_string(expected) + " ms listed";
+	}
+
+	/// Each shown control whose text runs out of its own rect, out of the panel it sits in or off the screen.
+	Json LayoutOffenders(GUIControlManager* menu) {
+		Json offenders = Json::array();
+		BITMAP* screen = g_FrameMan.GetBackBuffer32();
+		const Rect screenRect{0, 0, screen ? screen->w : 0, screen ? screen->h : 0};
+		for (const auto& [source, manager]: WatchedManagers(menu)) {
+			for (GUIControl* control: *manager->GetControlList()) {
+				std::string text;
+				if (!Shown(control) || !Text(control, text) || text.empty()) continue;
+				Rect rect = Rectangle(control->GetPanel());
+				std::string fit;
+				// A label that scrolls its overflow shows the whole text by design; only its placement is judged.
+				auto* label = dynamic_cast<GUILabel*>(control);
+				const bool scrolls = label && (label->GetHorizontalOverflowScroll() || label->GetVerticalOverflowScroll());
+				const bool fits = scrolls || TextFits(manager, control, fit);
+				if (label) {
+					// A label is judged where its text lands, which its alignment places inside a rect that may be larger.
+					const int width = std::min(label->GetTextWidth(), rect[2]), height = label->GetTextHeight();
+					const int h = label->GetHAlignment(), v = label->GetVAlignment();
+					rect[0] += h == GUIFont::Centre ? (rect[2] - width) / 2 : h == GUIFont::Right ? rect[2] - width : 0;
+					rect[1] += v == GUIFont::Middle ? (rect[3] - height) / 2 : v == GUIFont::Bottom ? rect[3] - height : 0;
+					rect[2] = std::max(1, width);
+					rect[3] = std::max(1, height);
+				}
+				GUIPanel* parent = control->GetPanel()->GetParentPanel();
+				const bool inParent = !parent || Inside(rect, Rectangle(parent));
+				const bool onScreen = Inside(rect, screenRect);
+				if (fits && inParent && onScreen) continue;
+				offenders.push_back({{"source", source}, {"control", control->GetName()}, {"text", text.substr(0, 80)}, {"rect", rect},
+				    {"parent", parent ? Json(Rectangle(parent)) : Json(nullptr)}, {"fits", fits}, {"in_parent", inParent}, {"on_screen", onScreen}, {"fit", fit}});
+			}
+		}
+		return offenders;
+	}
+
+	void EvaluateWatches(GUIControlManager* menu) {
+		// A harness arms the same watches on every peer, scripted or not: one 'start' line per watch, read on the first drawn frame.
+		static bool leverRead = false;
+		if (!leverRead) {
+			leverRead = true;
+			if (const char* path = std::getenv("CCCP_TEST_SCREEN_WATCHES"); path && *path) {
+				std::ifstream lines(path);
+				for (std::string line; std::getline(lines, line);) {
+					if (line.empty() || line[0] == '#') continue;
+					std::istringstream args("start " + line);
+					std::string observation;
+					if (!Execute(nullptr, "", "text_watch", args, observation)) System::PrintDiagnosticErrorLine("[text-watch] refused: " + line + " " + observation);
+				}
+			}
+		}
+		if (s_Watches.empty()) return;
+		const auto now = std::chrono::steady_clock::now();
+		const double span = s_LastEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 : std::chrono::duration<double, std::milli>(now - s_LastEvaluated).count();
+		s_FrameSpanMs = std::clamp(span + 1.0, 1.0, c_DrawWindowSeconds * 1000);
+		s_LastEvaluated = now;
+		std::vector<ShownLine> lines;
+		bool linesRead = false;
+		for (auto& [name, watch]: s_Watches) {
+			++watch.frames;
+			const auto judged = std::chrono::steady_clock::now();
+			struct Cost {
+				TextWatch& watch;
+				std::chrono::steady_clock::time_point began;
+				~Cost() {
+					const int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count();
+					watch.costUs += us;
+					watch.worstUs = std::max(watch.worstUs, us);
+				}
+			} cost{watch, judged};
+			if (!WatchStateHolds(watch.state)) continue;
+			++watch.active;
+			if (!linesRead && watch.rule != "layout" && watch.rule != "rtt" && watch.rule != "seat_rows") {
+				lines = ShownLines(menu);
+				linesRead = true;
+			}
+			const auto carries = [&lines](const std::string& text) {
+				return std::any_of(lines.begin(), lines.end(), [&text](const ShownLine& line) { return line.text.find(text) != std::string::npos; });
+			};
+			Json detail;
+			if (watch.rule == "require" && !carries(watch.text)) {
+				detail = "no shown line carries the text";
+			} else if (watch.rule == "forbid" && carries(watch.text)) {
+				detail = "a shown line carries the text";
+			} else if (watch.rule == "equals" || watch.rule == "shown") {
+				GUIControl* control = WatchedControl(menu, watch.control);
+				std::string text;
+				const bool shown = control && Shown(control) && Text(control, text);
+				if (!shown) detail = watch.control + " is not shown";
+				else if (watch.rule == "equals" && text != watch.text) detail = watch.control + " reads " + Json(text).dump();
+			} else if (watch.rule == "duplicates") {
+				std::map<std::string, std::string> seen;
+				for (const ShownLine& line: lines) {
+					if (line.source == "menu" || line.control.starts_with("LabelMatchChat") || line.control == "TextMatchChatInput") continue;
+					auto [entry, added] = seen.emplace(line.text, line.control);
+					if (!added && entry->second != line.control) {
+						detail = Json{{"text", line.text}, {"controls", {entry->second, line.control}}};
+						break;
+					}
+				}
+			} else if (watch.rule == "rtt") {
+				if (const std::string contradiction = RttContradiction(menu); !contradiction.empty()) detail = contradiction;
+			} else if (watch.rule == "layout") {
+				if (Json offenders = LayoutOffenders(menu); !offenders.empty()) detail = offenders;
+			} else if (watch.rule == "seat_rows") {
+				auto* panel = g_MenuMan.GetNetworkPanel();
+				GUIControl* box = panel ? panel->GetControl("NetworkSeats") : nullptr;
+				Json missing = Json::array();
+				for (size_t row = 0; box && row < panel->AutomationSeatRowCount(); ++row) {
+					const std::string name = "NetworkSeatName" + std::to_string(row);
+					GUIControl* label = panel->GetControl(name);
+					const bool shown = label && Shown(label);
+					const Rect rect = label ? Rectangle(label->GetPanel()) : Rect{};
+					if (shown && Inside(rect, Rectangle(box->GetPanel()))) continue;
+					missing.push_back({{"control", name}, {"shown", shown}, {"rect", rect}, {"panel", Rectangle(box->GetPanel())}});
+				}
+				if (!missing.empty()) detail = missing;
+			}
+			if (detail.is_null()) continue;
+			Json shown = Json::array();
+			if (watch.violations++ == 0) {
+				if (!linesRead && watch.rule != "layout") lines = ShownLines(menu), linesRead = true;
+				for (size_t index = 0; index < lines.size() && index < 24; ++index) shown.push_back(lines[index].source + "/" + lines[index].control + ": " + lines[index].text);
+			}
+			const Json cases = detail.is_array() ? detail : Json::array({detail});
+			for (const Json& offence: cases) {
+				const std::string key = offence.is_object() && offence.contains("control") ? offence["control"].get<std::string>() :
+				    offence.is_object() && offence.contains("text") ? offence["text"].get<std::string>() : watch.rule;
+				if (watch.offenders.size() >= 40 || !watch.offenders.insert(key).second) continue;
+				const Json record = {{"wall_ms", FrameRecorder::SteadyNowMS()}, {"sim_frame", g_TimerMan.GetSimUpdateCount()},
+				    {"lockstep_frame", ScenarioRunner::GetLockstepCompletedFrame()}, {"detail", offence}, {"shown", shown}};
+				if (watch.first.is_null()) watch.first = record;
+				System::PrintDiagnosticLine("[text-watch] violation " + name + " " + watch.rule + " " + record.dump());
+			}
+		}
+		s_DrawnText.clear();
+	}
+
+	void ReportWatches() {
+		for (const auto& [name, watch]: s_Watches) {
+			System::PrintDiagnosticLine("[text-watch] summary " + Json{{"watch", name}, {"rule", watch.rule}, {"state", watch.state}, {"frames", watch.frames},
+			    {"active_frames", watch.active}, {"violations", watch.violations}, {"offences", watch.offenders.size()}, {"cost_us", watch.costUs}, {"worst_us", watch.worstUs}}.dump());
+		}
+	}
+
 	bool Handles(const std::string& command) {
 		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_inside_screen" || command == "assert_text_fits" || command == "assert_no_overlap" ||
 			command == "dump_refresh_count" || command == "dump_enter_state" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
-			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
+			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" || command == "assert_combo_items" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
-			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "assert_list_rows" ||
+			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert" ||
 			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input" || command == "open_local_pause" || command == "meta_command";
 	}
@@ -509,6 +781,41 @@ namespace RTE::MenuAutomation {
 				{"inside_screen", inside}, {"clear_of_seats", clearOfSeats}, {"rows", rows}, {"expected_rows", expectedRows},
 				{"single", single}, {"ghost_band", ghostRun < 0 ? Json(nullptr) : Json{{"x", ghost.x}, {"y", ghost.y}, {"run", ghostRun}}}}.dump();
 			return inside && clearOfSeats && (expectedRows < 0 || rows == expectedRows) && ghostRun < 0;
+		}
+		if (command == "text_watch") {
+			std::string mode, name;
+			args >> mode >> name;
+			if (name.empty()) return false;
+			if (mode == "start") {
+				TextWatch watch;
+				args >> watch.rule >> watch.state;
+				if (watch.rule == "equals" || watch.rule == "shown") args >> watch.control;
+				std::getline(args >> std::ws, watch.text);
+				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals";
+				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "seat_rows";
+				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "shown") && watch.control.empty())) {
+					observation = "unknown or incomplete watch";
+					return false;
+				}
+				observation = Json{{"armed", name}, {"rule", watch.rule}, {"state", watch.state}, {"control", watch.control}, {"text", watch.text}}.dump();
+				System::PrintDiagnosticLine("[text-watch] armed " + observation);
+				s_Watches[name] = std::move(watch);
+				return true;
+			}
+			// An assert fails the script on an offence; a close ends the window and leaves the verdict to the review that reads the log.
+			if (mode == "assert" || mode == "close") {
+				const auto found = s_Watches.find(name);
+				if (found == s_Watches.end()) { observation = name + " was never armed"; return false; }
+				const TextWatch watch = std::move(found->second);
+				s_Watches.erase(found);
+				observation = Json{{"watch", name}, {"rule", watch.rule}, {"state", watch.state}, {"text", watch.text}, {"frames", watch.frames},
+				    {"active_frames", watch.active}, {"violations", watch.violations}, {"offences", watch.offenders.size()}}.dump();
+				System::PrintDiagnosticLine("[text-watch] summary " + observation);
+				// A watch whose state never held judged nothing.
+				return mode == "close" || (watch.active > 0 && watch.violations == 0);
+			}
+			observation = Json{{"mode", mode}}.dump();
+			return false;
 		}
 		if (command == "ghost_watch") {
 			auto* panel = g_MenuMan.GetNetworkPanel();
@@ -779,6 +1086,20 @@ namespace RTE::MenuAutomation {
 				g_UInputMan.SetAbsoluteMousePosition(Vector(r[0] + r[2] / 2, r[1] + r[3] / 2) * g_WindowMan.GetResMultiplier());
 				observation = target;
 				return true;
+			}
+			if (command == "assert_combo_items") {
+				// The items a combo offers, in order, separated by '|'.
+				std::string comboName, expected;
+				args >> std::quoted(comboName);
+				std::getline(args >> std::ws, expected);
+				auto* combo = dynamic_cast<GUIComboBox*>(manager->GetControl(comboName));
+				if (!combo) { observation = comboName + " missing"; return false; }
+				std::string items;
+				for (int i = 0; i < combo->GetCount(); ++i) {
+					if (const GUIListPanel::Item* entry = combo->GetItem(i)) items += (i == 0 ? "" : "|") + entry->m_Name;
+				}
+				observation = comboName + " items=\"" + items + "\"";
+				return items == expected;
 			}
 			if (command == "combo_drop" || command == "combo_select") {
 				std::string comboName;
@@ -1104,13 +1425,14 @@ namespace RTE::MenuAutomation {
 			same("hint_policy_substitute", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute), "Give the seat to the AI (host too) until they catch up");
 			same("hint_policy_pause", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Pause), "Pause for them (up to 20 s)");
 			same("hint_bound_substitute", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 3, tickMs),
-			     "A player late past 3 ticks (50 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.");
+			     "A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
 			same("hint_bound_one_tick", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 1, tickMs),
-			     "A player late past 1 tick (17 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.");
+			     "A player late past 1 tick (17 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
 			same("hint_bound_pause", NetSlowPlayerHint(NetSlowPlayerPolicy::Pause, 3, tickMs), "Everyone waits for a late player, host included, for up to 20 s.");
 			same("hint_auto_delay", NetAutoDelayText(3), "ping plus a 3-tick margin, raised live if inputs arrive late");
 			same("hint_autosave_range", NetAutosaveRangeHint(), "Every 60 s to 60 min, or off (default)");
 			same("hint_autosave_note", NetAutosaveNote(), "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.");
+			same("hint_autosave_cost", NetAutosaveCostHint(), "Saving may cause a brief pause for other players on slower hosts");
 			same("hint_connection_automatic", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::Automatic), "Direct first: lowest latency; relay adds a round trip if direct fails.");
 			same("hint_connection_direct", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::DirectOnly), "Direct only: lowest latency; fails when routers block a direct route.");
 			same("hint_connection_relay", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::RelayOnly), "Relay only: every packet uses the relay and adds its round trip.");

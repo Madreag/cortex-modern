@@ -55,7 +55,6 @@ namespace RTE {
 		// lockstep id and the client says nothing until it has adopted the one meant for it.
 		bool assignSeats = false;
 		bool enableMigration = false;
-		uint8_t activePeerCount = 0;
 		uint8_t snapshotProviderPeerId = 0;
 		uint16_t migrationListenPort = 0;
 		std::vector<std::string> migrationListenAddrs;
@@ -251,6 +250,11 @@ namespace RTE {
 		void SyncSessionPeers();
 		void RemoveRemote(NetPeerId transportPeerId);
 		void RemoveRemotePeer(uint8_t peerId);
+		/// Host: whether the seat roster keeps a dropped member's seat for it; if so it leaves the round's active members, the config
+		/// republished, and the round starts it held.
+		bool RosterHoldsDroppedSeat(uint8_t peerId);
+		/// Host: whether a departed member's seat is one the host opened after the first start: it keeps its number and the AI plays it.
+		bool RosterStartsSeatOpen(uint8_t peerId) const;
 		void RejectRemote(NetPeerId transportPeerId, const std::string& reason);
 		void HandleStateChunk(const NetLobbyStateChunk& message);
 		void HandleSeatAssign(const NetLobbySeatAssign& message);
@@ -264,6 +268,9 @@ namespace RTE {
 
 		bool IsKnownRemote(uint8_t peerId) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
+		friend bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick);
+		friend bool TestALobbyDropsAnAbandonedTransfersTail(std::string* error);
+		friend bool TestALaterLobbysTransferIsNewToItsPeers(std::string* error);
 		bool IsCommittedTransport(NetPeerId transportPeerId) const;
 		uint16_t OutgoingChunkIndex(uint8_t peerId) const;
 		/// Whether the round seats a human on a peer other than this host's own.

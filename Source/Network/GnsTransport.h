@@ -80,6 +80,11 @@ namespace RTE {
 
 		/// Test harness: adds a simulated round-trip lag (ms) to every connection made after the call.
 		static void SetSimulatedLagMs(int lagMs);
+		/// Test harness: the jitter every connection adds on top of the simulated lag, as a cross fault's jitter_ms does.
+		static void SetSimulatedJitterMs(int jitterMs);
+		/// Test harness: the share of every connection's packets reordered (20 ms late) and duplicated (up to 20 ms after), each way.
+		static void SetSimulatedReorderPercent(float percent);
+		static void SetSimulatedDuplicatePercent(float percent);
 
 		/// Diagnostics: prints GNS's own rendezvous and ICE spew at this debug level (0 = off).
 		static void SetRendezvousLogLevel(int level);

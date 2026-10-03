@@ -1,4 +1,5 @@
 #include "NetReconnectUx.h"
+#include "DiagnosticLine.h"
 
 #include "NetMatchService.h"
 
@@ -63,6 +64,13 @@ namespace RTE {
 		m_State = m_Attempts >= c_MaxAttempts || (nowMs >= m_DroppedAtMs && nowMs - m_DroppedAtMs > c_ResumeWindowMs)
 		              ? NetReconnectUxState::GaveUp
 		              : NetReconnectUxState::Waiting;
+	}
+
+	void NetReconnectUx::NoteRefused(std::string reason) {
+		m_Reason = std::move(reason);
+		m_State = NetReconnectUxState::Refused;
+		DismissOffer();
+		StopWatchingForHostReturn();
 	}
 
 	void NetReconnectUx::Cancel(uint64_t nowMs) {
@@ -180,6 +188,7 @@ namespace RTE {
 			case NetReconnectUxState::Reconnected: return "Reconnected.";
 			case NetReconnectUxState::GaveUp: return "Could not reconnect" + tail + ". Retry to try again.";
 			case NetReconnectUxState::Cancelled: return "Reconnecting cancelled. Retry to try again.";
+			case NetReconnectUxState::Refused: return m_Reason;
 			case NetReconnectUxState::Connected:
 			case NetReconnectUxState::Idle: break;
 		}
@@ -218,11 +227,23 @@ namespace RTE {
 		return "unknown";
 	}
 
+	std::string NetModerationUx::HoldCause(const NetH4ModerationSeat& seat) {
+		const auto ago = [](uint64_t ms) {
+			const uint64_t seconds = ms / 1000;
+			return seconds < 60 ? std::to_string(seconds) + " s ago" : std::to_string(seconds / 60) + " min ago";
+		};
+		if (seat.closed) return {};
+		if (seat.leftByChoice) return "Left " + ago(seat.leftForMs);
+		if (seat.slowMachine) return "Machine too slow";
+		if (seat.dropped) return "Connection lost " + ago(seat.droppedForMs);
+		return {};
+	}
+
 	std::string NetModerationUx::DescribeSeat(const NetH4ModerationSeat& seat) {
 		std::string text = "Seat " + std::to_string(seat.stableSeat) + " - " +
 		                   (seat.displayName.empty() ? "peer " + std::to_string(seat.lockstepPeerId) : seat.displayName);
-		if (seat.dropped) {
-			text += " - dropped " + std::to_string(seat.droppedForMs / 1000) + "s ago";
+		if (const std::string cause = HoldCause(seat); !cause.empty()) {
+			text += " - " + cause;
 		} else if (seat.closed) {
 			text += " - left";
 		}
@@ -236,7 +257,7 @@ namespace RTE {
 	void NetModerationUx::Refresh(const std::vector<NetH4ModerationSeat>& seats) {
 		m_Rows.clear();
 		for (const NetH4ModerationSeat& seat: seats) {
-			if (seat.cpu || (!seat.substitutable && !seat.substituting && !seat.dropped)) {
+			if (seat.cpu || (!seat.substitutable && !seat.substituting && !seat.dropped && !seat.slowMachine)) {
 				continue;
 			}
 			Row row;
@@ -325,7 +346,7 @@ namespace RTE {
 		m_StatusText = result == NetH4ModerationResult::Ok
 		                   ? "Seat " + std::to_string(row.stableSeat) + ": " + name + " accepted."
 		                   : "Seat " + std::to_string(row.stableSeat) + ": " + name + " refused - " + NetH4ModerationResultName(result) + ".";
-		std::cout << "[net-moderation] " << name << " seat=" << row.stableSeat
+		DiagnosticLine() << "[net-moderation] " << name << " seat=" << row.stableSeat
 		          << " applicant=" << static_cast<int>(row.applicant) << " result=" << NetH4ModerationResultName(result) << std::endl;
 		return result;
 	}
@@ -432,6 +453,7 @@ namespace RTE {
 			case NetReconnectUxState::Reconnected: return "Reconnected";
 			case NetReconnectUxState::GaveUp: return "GaveUp";
 			case NetReconnectUxState::Cancelled: return "Cancelled";
+			case NetReconnectUxState::Refused: return "Refused";
 		}
 		return "Unknown";
 	}

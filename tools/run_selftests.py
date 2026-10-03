@@ -39,6 +39,7 @@ SELFTESTS = [
     "net-reconnect-session",
     "net-world-join",
     "net-rejoin-matrix",
+    "net-roster",
     "camera-null-scene",
     "rotate-primitive",
     "sim-checksum",
@@ -62,10 +63,11 @@ SELFTESTS = [
     "headless-render-cap",
     "preview-invariance",
     "preview-binding-exhaustive",
+    "joystick-updater",
 ]
 # Rows whose verdict carries a wall-clock window, so a loaded box can fail them without a defect. They run last, one at
-# a time, after every other row has finished (the quiet tail); a red one runs once more alone once the box has no other
-# engine, and that quiet result decides the row with the loaded one recorded beside it. A row of SELFTESTS always runs
+# a time, after every other row has finished (the quiet tail). A measured product failure remains red. The collection
+# owner may retry a recorded pre-launch HARNESS block under its existing policy. A row of SELFTESTS always runs
 # in the tail; the others join it with --quiet-rows, and --quiet-rows only runs the tail alone. Their budgets never move.
 LOAD_SENSITIVE = {
     # runner stalled state transfer amid session keepalives; the snapshot-load keepalive's 300 ms window.
@@ -73,7 +75,7 @@ LOAD_SENSITIVE = {
     # threaded_synced_update_pass_timing: 1,024 registered MOs, 150 us added per pass.
     "script-graph": ["-script-graph-selftest"],
 }
-# How long a red tail row waits for other engines to leave the box before its quiet run starts anyway.
+# Existing standalone quiet-box helper budget; it does not authorize replacing a product failure.
 QUIET_WAIT_S = 300
 # The wall-clock budget checks inside those rows. A sanitizer build instruments every access, so its timings measure
 # the instrumentation: there the budget lines are reported, not judged, and every other check still decides the row.
@@ -330,18 +332,12 @@ def run_row(options, make_run, name, case, sanitizer):
 
 
 def run_tail_row(options, make_run, name, out, sanitizer):
-    """A load-sensitive row: a red first run is run once more alone, and the quiet run decides it."""
+    """Retain the measured product result; the collection owner handles proved pre-launch HARNESS retries."""
     case = out / f"{name}-selftest"
     box = box_state()
     first = run_row(options, make_run, name, case, sanitizer)
     first["box"] = box
-    if first["pass"]:
-        return first
-    quiet_case = out / f"{name}-selftest-quiet"
-    box = wait_for_quiet_box()
-    second = run_row(options, make_run, name, quiet_case, sanitizer)
-    second["box"] = box
-    return {**second, "quiet_rerun": True, "attempts": [attempt_summary(first, case), attempt_summary(second, quiet_case)]}
+    return first
 
 
 def plan_rows(quiet_rows=None, only=()):
@@ -375,7 +371,7 @@ def self_test():
     real_row, real_wait = run_row, wait_for_quiet_box
     try:
         wait_for_quiet_box = lambda *args, **kwargs: {"engines": [], "quiet": True, "waited_s": 0.0}
-        for outcomes, verdict in (([False, True], True), ([False, False], False), ([True], True)):
+        for outcomes, verdict in (([False, True], False), ([False, False], False), ([True], True)):
             calls = []
 
             def stub(options, make_run, name, case, sanitizer, outcomes=outcomes, calls=calls):
@@ -388,12 +384,8 @@ def self_test():
             with tempfile.TemporaryDirectory() as scratch:
                 scored = run_tail_row(None, None, "net-match", Path(scratch), None)
             attempts = scored.get("attempts", [])
-            if len(outcomes) == 1:
-                ok = scored["pass"] and len(calls) == 1 and not attempts
-            else:
-                ok = (scored["pass"] is verdict and len(calls) == 2 and calls[1].name == "net-match-selftest-quiet" and
-                      [row["pass"] for row in attempts] == outcomes and "under load" in attempts[0]["reason"] and attempts[1]["box"]["quiet"])
-            expect(ok, f"first {outcomes[0]}, rerun {outcomes[1:] or 'none'}: row {verdict}, both attempts recorded")
+            ok = scored['pass'] is verdict and len(calls) == 1 and not attempts
+            expect(ok, f'first product result {outcomes[0]} retained; no rerun without a recorded HARNESS cause')
     finally:
         run_row, wait_for_quiet_box = real_row, real_wait
     print(f"[run-selftests-selftest] {'PASS' if not failures else 'FAIL'}", flush=True)
@@ -421,7 +413,7 @@ def main():
     parser.add_argument("--quiet-rows", nargs="?", const="last", choices=("last", "only"),
                         help="also run every load-sensitive row in the quiet tail (only: the tail alone)")
     parser.add_argument("--only", action="append", default=[], metavar="ROW",
-                        help="run just this row (repeatable); a load-sensitive row keeps its quiet rerun")
+                        help="run just this row (repeatable); product failures remain failures")
     parser.add_argument("--self-test", action="store_true", help="the runner's own rows; no engine")
     options = parser.parse_args()
 

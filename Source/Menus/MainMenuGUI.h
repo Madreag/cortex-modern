@@ -340,6 +340,7 @@ namespace RTE {
 		// The lobby's chat is built in code so the panel can grow for it without touching the skin file.
 		std::array<GUILabel*, 8> m_MultiplayerLobbyChatLabels;
 		GUITextBox* m_MultiplayerLobbyChatInput;
+		GUILabel* m_MultiplayerLobbyVersionLabel; //!< The build's version line under the chat entry, as the main menu shows it.
 		std::deque<std::string> m_MultiplayerLobbyChatLines; //!< Newest at the back; the labels show the last eight.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
 		// §9.2/9.3's host options panel: six pages over the lobby, or the host-setup draft of the next one.
@@ -350,6 +351,9 @@ namespace RTE {
 		std::array<GUICollectionBox*, c_HostOptionsPageCount> m_HostOptionsPages{};
 		int m_HostOptionsPage = 0;
 		GUILabel* m_HostOptionsStatusLabel = nullptr;
+		GUILabel* m_PageChatNotice = nullptr; //!< The newest lobby chat line, drawn above a host page that hides the lobby's chat band.
+		/// Moves the chat the service received into the lobby's lines, whichever sub-screen is showing.
+		void TakeLobbyChat(const NetLobbySnapshot& snapshot);
 		GUIComboBox* m_HostSeatPlayersCombo = nullptr;
 		GUILabel* m_HostSeatCapacityHint = nullptr;
 		static constexpr int c_HostSeatRows = 7; //!< c_MaxPlayers: four human seats plus three CPUs.

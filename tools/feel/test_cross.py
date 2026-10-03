@@ -22,6 +22,7 @@ class CrossReducers(unittest.TestCase):
             ledger=records.RecoveryLedger(path,'a','payload:1',100,schedule)
             ledger.observe([dict(type='fault_begin',id='stall',fault_started_wall_ms=1e12),
                             dict(type='fault',id='stall',applied=True)],0,100,120)
+            ledger.observe([dict(type='fault_reset',id='stall',send_recv_armed=True)],0,100,120)
             ledger.observe([dict(type='recovery',id='stall',terminal=True,recovery_phase='first_controllable_input',recovery_wall_ms=8)],0,300,350)
             rows=[__import__('json').loads(line) for line in path.read_text().splitlines()]
             result=report.reduce_recoveries(schedule,rows,now_ms=350)[0]
@@ -42,6 +43,33 @@ class CrossReducers(unittest.TestCase):
             self.assertIn('crash',restart)
             self.assertEqual(restart['crash']['engine_after_wall_ms'],0)
             self.assertTrue(restart['crash']['effect_finished'])
+    def test_the_soaks_announced_leave_rejoins_and_its_return_is_faulted(self):
+        import sys
+        from types import SimpleNamespace
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import cross_peers, cross_report
+        peers = [dict(name='erol', box='EROL-PC'), dict(name='edith', box='EDITH'), dict(name='mac', box='Mac')]
+        boxes = {'EROL-PC': dict(kind='windows-local'), 'EDITH': dict(kind='windows-task'), 'Mac': dict(kind='posix-ssh')}
+        options = SimpleNamespace(schedule=None, scenario='soak', host='erol', recovery_deadline_ms=120000, ticks=72000, chaos_seed=1, chaos_faults=0)
+        faults = cross_peers.schedule_for(options, peers, boxes)
+        leave = next(f for f in faults if f['action'] == 'announced-leave-rejoin')
+        # A clean leaver keeps its seat: its return reclaims it and plays on, and the catch-up fault meets that returned incarnation.
+        self.assertEqual((leave['outcomes'], leave['incarnation'], leave['return_incarnation']), (['first_controllable_input', 'match_over_goodbye'], 0, 1))
+        catchup = [f for f in faults if f.get('recovery_id') == leave['id']]
+        self.assertEqual([(f['phase'], f['target_peer'], f['target_incarnation']) for f in catchup], [('catch_up', 'mac', 1)])
+        # A refused return is a failed exit: no outcome excuses it.
+        refused = dict(started=True, exit_code=1, timed_out=False)
+        self.assertFalse(cross_report.judge_exit(refused, 'mac', 1, faults, [])['passed'])
+    def test_a_fault_on_an_incarnation_that_never_plays_is_named_and_fails(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import cross_report
+        faults = [dict(id='mac-ack-drop', peer='mac', incarnation=1), dict(id='mac-loss', peer='mac', incarnation=1), dict(id='edith-stall', peer='edith', incarnation=0)]
+        # Only the stall on a playing incarnation left a receipt: the two aimed at an incarnation that never joined are named.
+        receipts = [dict(type='fault', id='edith-stall', applied=True)]
+        self.assertEqual(cross_report.unapplied_faults(faults, receipts), ['mac-ack-drop', 'mac-loss'])
+        receipts += [dict(type='fault', id='mac-ack-drop', applied=True), dict(type='fault', id='mac-loss', applied=True)]
+        self.assertEqual(cross_report.unapplied_faults(faults, receipts), [])
     def histories(self):
         return {p: [sample(t, p) for t in range(1, 5)] for p in ('a', 'b', 'c')}
 
@@ -109,7 +137,7 @@ class CrossReducers(unittest.TestCase):
         schedule=[dict(id='stall',peer='c',incarnation=0,duration_ms=600,deadline_ms=2000,
                        outcomes=['first_controllable_input'])]
         events=[dict(id='stall',peer='c',incarnation=0,phase=phase,wall_ms=stamp)
-                for phase,stamp in [('fault_applied',100),('first_controllable_input',1300)]]
+                for phase,stamp in [('fault_applied',100),('fault_reset',700),('first_controllable_input',1300)]]
         result=report.reduce_recoveries(schedule,events,now_ms=1500)[0]
         self.assertTrue(result['passed'])
         self.assertEqual(result['duration_ms'],1200)

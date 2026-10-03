@@ -66,6 +66,7 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <sstream>
 #include <vector>
 #include <deque>
 #include <memory>
@@ -401,6 +402,11 @@ void FrameMan::FeelPreviewStep(const Actor* actor, uint64_t committedTick, uint6
 	FeelEvents(beginMS, endMS);
 }
 
+void FrameMan::FeelInteraction(uint64_t tick, long uid, const std::string& fields, const std::string& source) {
+	if (!FeelRecordingEnabled()) return;
+	FeelWrite({{"type", "interaction"}, {"tick", tick}, {"uid", uid}, {"fields", fields}, {"source", source}});
+}
+
 void FrameMan::FeelBeginIteration() {
 	if (!FeelRecordingEnabled()) return;
 	s_Feel.iterationActive = g_ActivityMan.ActivityRunning();
@@ -429,9 +435,7 @@ bool FrameMan::FeelBeginDraw() {
 	s_Feel.drawBeginMS = FeelNowMS();
 	s_Feel.frame = {{"type", "frame"}, {"frame", s_Feel.frameNumber + 1}, {"tick", g_TimerMan.GetSimUpdateCount()},
 	    {"draw_begin_ms", s_Feel.drawBeginMS}, {"cap_hz", s_Feel.capHz}, {"active", s_Feel.iterationActive},
-	    {"alpha", g_TimerMan.GetSimUpdateProportion()}, {"actors", FeelLocalActors()}};
-	const int delay = LocalPrediction::GetDepthOverride() > 0 ? LocalPrediction::GetDepthOverride() : ScenarioRunner::GetLockstepLocalInputDelay();
-	s_Feel.frame["preview_depth"] = LocalPrediction::IsRendering() ? std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks())) : 0;
+	    {"alpha", g_TimerMan.GetSimUpdateProportion()}, {"committed_actors", FeelLocalActors()}};
 	s_Feel.frame["scene_width"] = g_SceneMan.GetSceneWidth();
 	s_Feel.frame["scene_height"] = g_SceneMan.GetSceneHeight();
 	s_Feel.frame["wraps_x"] = g_SceneMan.SceneWrapsX();
@@ -454,6 +458,9 @@ void FrameMan::FeelAfterPresent() {
 	if (!FeelRecordingEnabled()) return;
 	const double now = FeelNowMS();
 	++s_Feel.frameNumber;
+	// What the frame showed: inside the render window the controlled actors are the preview clones the player saw.
+	s_Feel.frame["actors"] = FeelLocalActors();
+	s_Feel.frame["preview_depth"] = LocalPrediction::IsRendering() ? LocalPrediction::GetLastDepth() : 0;
 	s_Feel.frame["present_begin_ms"] = s_Feel.presentBeginMS;
 	s_Feel.frame["present_end_ms"] = now;
 	s_Feel.frame["draw_ms"] = s_Feel.presentBeginMS - s_Feel.drawBeginMS;
@@ -1601,9 +1608,55 @@ void FrameMan::UpdateScreenOffsetForSplitScreen(int playerScreen, Vector& screen
 	}
 }
 
+namespace {
+	// Test lever CCCP_TEST_DRAW_PHASES: the stages of FrameMan::Draw, each screen's summed, every 600 frames.
+	struct SceneDrawPhases {
+		static constexpr const char* c_Names[] = {"setup", "view_update", "scene_draw", "primitives", "text_flash_blit", "after_screens"};
+		static constexpr size_t c_Count = std::size(c_Names);
+		const bool armed = std::getenv("CCCP_TEST_DRAW_PHASES") != nullptr;
+		std::array<std::vector<float>, c_Count> samples;
+		std::array<long long, c_Count> frame{};
+		long long lapUs = 0;
+		int screens = 0;
+		void Begin() {
+			if (!armed) return;
+			frame.fill(0);
+			lapUs = g_TimerMan.GetAbsoluteTime();
+		}
+		void Lap(size_t stage) {
+			if (!armed) return;
+			const long long now = g_TimerMan.GetAbsoluteTime();
+			frame[stage] += now - lapUs;
+			lapUs = now;
+		}
+		void End(int screenCount) {
+			if (!armed) return;
+			Lap(c_Count - 1);
+			screens = screenCount;
+			for (size_t i = 0; i < c_Count; ++i) samples[i].push_back(static_cast<float>(frame[i]));
+			if (samples[0].size() < 600) return;
+			std::ostringstream line;
+			line << "[draw-scene-phase] frames=600 screens=" << screens << " us(mean/p50/p99):";
+			for (size_t i = 0; i < c_Count; ++i) {
+				std::vector<float>& values = samples[i];
+				double total = 0;
+				for (float value: values) total += value;
+				std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+				const float median = values[values.size() / 2];
+				std::nth_element(values.begin(), values.begin() + values.size() * 99 / 100, values.end());
+				line << " " << c_Names[i] << "=" << total / values.size() << "/" << median << "/" << values[values.size() * 99 / 100];
+				values.clear();
+			}
+			System::PrintDiagnosticLine(line.str());
+		}
+	};
+	SceneDrawPhases s_SceneDrawPhases;
+} // namespace
+
 void FrameMan::Draw() {
 	ZoneScopedN("Draw");
 	TracyGpuZone("FrameMan::Draw");
+	s_SceneDrawPhases.Begin();
 
 	// rlSetShader(rlGetShaderIdDefault(), rlGetShaderLocsDefault());
 	Shader backgroundShader;
@@ -1626,6 +1679,7 @@ void FrameMan::Draw() {
 	std::list<Box> screenRelativeGlowBoxes;
 
 	const Activity* pActivity = g_ActivityMan.GetActivity();
+	s_SceneDrawPhases.Lap(0);
 
 	for (int playerScreen = 0; playerScreen < screenCount; ++playerScreen) {
 		screenRelativeEffects.clear();
@@ -1653,6 +1707,7 @@ void FrameMan::Draw() {
 		// Update the scene view to line up with a specific screen and then draw it onto the intermediate screen
 		g_CameraMan.Update(playerScreen);
 		g_SceneMan.Update(playerScreen);
+		s_SceneDrawPhases.Lap(1);
 
 		Vector targetPos = g_CameraMan.GetRenderOffset(playerScreen);
 
@@ -1667,8 +1722,10 @@ void FrameMan::Draw() {
 
 		// Draw the scene
 		g_SceneMan.Draw(drawScreen, drawScreenGUI, targetPos);
+		s_SceneDrawPhases.Lap(2);
 
 		g_PrimitiveMan.DrawPrimitives(playerScreen, drawScreenGUI, targetPos);
+		s_SceneDrawPhases.Lap(3);
 
 		// Get only the scene-relative post effects that affect this player's screen
 		if (pActivity) {
@@ -1702,6 +1759,7 @@ void FrameMan::Draw() {
 			m_BackBuffer->End();
 		}
 		g_PostProcessMan.AdjustEffectsPosToPlayerScreen(playerScreen, drawScreen, screenOffset, screenRelativeEffects, screenRelativeGlowBoxes);
+		s_SceneDrawPhases.Lap(4);
 	}
 
 	// Clears the pixels that have been revealed from the unseen layers
@@ -1741,6 +1799,7 @@ void FrameMan::Draw() {
 	// Draw scene seam
 	vline(m_BackBuffer8.get(), 0, 0, g_SceneMan.GetSceneHeight(), 5);
 #endif
+	s_SceneDrawPhases.End(screenCount);
 }
 
 FrameMan::ScreenTextLayout FrameMan::GetScreenTextLayout(int playerScreen, bool decorated) {
@@ -2050,10 +2109,29 @@ std::string FrameMan::SaveCheckpoint() const {
 	writer.BeginPerPeer();
 	VisitCheckpoint(writer, *this);
 	writer.EndPerPeer();
-	for (const auto* font: m_SmallFonts) writer(CheckpointWriter::Native([font] { return font ? GUICheckpoint::SaveFont(*font) : std::string{}; }));
-	for (const auto* font: m_LargeFonts) writer(CheckpointWriter::Native([font] { return font ? GUICheckpoint::SaveFont(*font) : std::string{}; }));
+	WriteFontSlots(writer, {m_SmallFonts[0], m_SmallFonts[1], m_LargeFonts[0], m_LargeFonts[1]});
 	writer(CheckpointWriter::Native([&] { return SavePaletteCheckpoint(); }));
 	return writer.Text();
+}
+
+void FrameMan::WriteFontSlots(CheckpointWriter& writer, const std::array<const GUIFont*, 4>& fonts) {
+	// Which fonts exist is this machine's own: a draw path loads a font the first time it draws with it, and a script's text metrics are the same either way.
+	writer.BeginPerPeer();
+	for (const auto* font: fonts) writer(CheckpointWriter::Native([font] { return font ? GUICheckpoint::SaveFont(*font) : std::string{}; }));
+	writer.EndPerPeer();
+}
+
+std::string FrameMan::CheckpointPerPeerSelfTestMismatch() {
+	// The resync screen, the moderation panel and the performance overlay load the true-colour large font on first draw.
+	GUIFont drawn("FatFont32");
+	const auto capture = [](const GUIFont* large) {
+		return CheckpointWriter::CaptureNative([large] { CheckpointWriter writer("FrameManFonts"); WriteFontSlots(writer, {nullptr, nullptr, nullptr, large}); return writer.Text(); });
+	};
+	const CheckpointText unloaded = capture(nullptr);
+	const CheckpointText loaded = capture(&drawn);
+	if (unloaded.Text() == loaded.Text()) return "font_slot=not_archived";
+	if (unloaded.SharedText() != loaded.SharedText()) return "font_slot=shared";
+	return {};
 }
 
 std::string FrameMan::SaveNetLocalState() const {

@@ -1,4 +1,5 @@
 #include "GnsTransport.h"
+#include "DiagnosticLine.h"
 #include "SettingsMan.h"
 #include "System.h"
 
@@ -165,6 +166,9 @@ namespace RTE {
 		}
 
 		int s_SimulatedLagMs = 0;
+		int s_SimulatedJitterMs = 0;
+		float s_SimulatedReorderPercent = 0;
+		float s_SimulatedDuplicatePercent = 0;
 		int s_RendezvousLogLevel = 0;
 		static constexpr size_t c_MaxHeldBytesBeforeAnnounce = 256 * 1024;
 
@@ -214,13 +218,32 @@ namespace RTE {
 			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, s_RendezvousLogLevel);
 		}
 
-		// Test harness: splits the requested RTT across the send/recv legs of every connection.
+		// Test harness: splits the requested RTT across the send/recv legs of every connection, and adds its jitter.
 		void ApplySimulatedLag() {
-			if (s_SimulatedLagMs <= 0) {
-				return;
+			if (s_SimulatedLagMs > 0) {
+				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, s_SimulatedLagMs / 2);
+				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, s_SimulatedLagMs - s_SimulatedLagMs / 2);
 			}
-			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, s_SimulatedLagMs / 2);
-			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, s_SimulatedLagMs - s_SimulatedLagMs / 2);
+			if (s_SimulatedJitterMs > 0) {
+				// The mapping a cross fault's jitter_ms gets: half on average, the whole at worst, on every packet.
+				const float jitter = static_cast<float>(s_SimulatedJitterMs);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Avg, jitter / 2);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Avg, jitter / 2);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Max, jitter);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Max, jitter);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, 100.0F);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Recv_Pct, 100.0F);
+			}
+			if (s_SimulatedReorderPercent > 0) {
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketReorder_Send, s_SimulatedReorderPercent);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketReorder_Recv, s_SimulatedReorderPercent);
+				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketReorder_Time, 20);
+			}
+			if (s_SimulatedDuplicatePercent > 0) {
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketDup_Send, s_SimulatedDuplicatePercent);
+				SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketDup_Recv, s_SimulatedDuplicatePercent);
+				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketDup_TimeMax, 20);
+			}
 		}
 	}
 
@@ -427,7 +450,7 @@ namespace RTE {
 			// GNS reports nothing for a close we made ourselves, and forgetting the handle means its own
 			// later callback finds no peer either. A peer leaving must look the same to us however it
 			// went, or state keyed on the connection - a held seat, most of all - is never cleaned up.
-			std::cout << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
+			DiagnosticLine() << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
 		}
 
@@ -601,8 +624,8 @@ namespace RTE {
 			const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
 			const bool allowed = GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
 			if (m_RouteLogged.insert(connection).second) {
-				std::cout << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
-				std::cout << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection << std::endl;
+				DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
+				DiagnosticLine() << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection << std::endl;
 			}
 			return allowed;
 		}
@@ -725,7 +748,7 @@ namespace RTE {
 
 			const NetPeerId peerId = peerIt->second;
 			ForgetConnection(connection);
-			std::cout << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
+			DiagnosticLine() << "[net-transport] closed peer=" << peerId << " reason=" << reason << std::endl;
 			m_PendingEvents.push_back({NetTransportEventType::PeerDisconnected, peerId, NetTransportLane::ControlReliable, {}, reason});
 		}
 
@@ -984,7 +1007,7 @@ namespace RTE {
 				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnUserList.c_str()) &&
 				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
 			}
-			if (renewed > 0) std::cout << "[net-relay] relay login renewed on " << renewed << " live connection(s)" << std::endl;
+			if (renewed > 0) DiagnosticLine() << "[net-relay] relay login renewed on " << renewed << " live connection(s)" << std::endl;
 		}
 
 		static std::vector<SteamNetworkingConfigValue_t> P2PConnectionConfigs(const GnsP2PConfig& config) {
@@ -1299,6 +1322,36 @@ namespace RTE {
 		s_SimulatedLagMs = lagMs;
 #else
 		(void)lagMs;
+#endif
+	}
+
+	void GnsTransport::SetSimulatedReorderPercent(float percent) {
+#ifdef CCCP_WITH_GNS
+		// A harness lever: only a headless run reorders its packets.
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		s_SimulatedReorderPercent = headless && std::string_view(headless) == "1" && percent >= 0 && percent <= 100 ? percent : 0;
+#else
+		(void)percent;
+#endif
+	}
+
+	void GnsTransport::SetSimulatedDuplicatePercent(float percent) {
+#ifdef CCCP_WITH_GNS
+		// A harness lever: only a headless run duplicates its packets.
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		s_SimulatedDuplicatePercent = headless && std::string_view(headless) == "1" && percent >= 0 && percent <= 100 ? percent : 0;
+#else
+		(void)percent;
+#endif
+	}
+
+	void GnsTransport::SetSimulatedJitterMs(int jitterMs) {
+#ifdef CCCP_WITH_GNS
+		// A harness lever: only a headless run jitters its links, within a cross fault's range.
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		s_SimulatedJitterMs = headless && std::string_view(headless) == "1" && jitterMs >= 0 && jitterMs <= 10000 ? jitterMs : 0;
+#else
+		(void)jitterMs;
 #endif
 	}
 

@@ -1,5 +1,6 @@
 #include "NetModerationGUIProbe.h"
 
+#include "Actor.h"
 #include "ActivityMan.h"
 #include "CameraMan.h"
 #include "Controller.h"
@@ -13,6 +14,7 @@
 #include "MainMenuGUI.h"
 #include "PauseMenuGUI.h"
 #include "MenuMan.h"
+#include "MenuAutomation.h"
 #include "Scene.h"
 #include "SceneMan.h"
 #include "NetLobbySnapshot.h"
@@ -199,6 +201,17 @@ namespace {
 			    {"applicants", seat.applicants.size()}, {"actions_available", seat.actionsAvailable},
 			    {"holder_generation", seat.holderGeneration}, {"seat_generation", seat.seatGeneration}});
 		}
+		// This peer's own player plays on only while its controlled actor is there and alive.
+		bool localActorAlive = false;
+		if (Activity* activity = g_ActivityMan.GetActivity()) {
+			for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+				if (!activity->IsLocalHumanSeat(player)) continue;
+				const Actor* actor = activity->GetControlledActor(player);
+				localActorAlive = actor && !actor->IsDead();
+				break;
+			}
+		}
+		observed["local_actor_alive"] = localActorAlive;
 		// The setup editor a lockstep match holds in, so a script can drive and read this peer's own seats.
 		auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 		observed["editing"] = game && game->GetActivityState() == Activity::Editing;
@@ -305,7 +318,10 @@ namespace {
 	}
 
 	void WriteResult() {
-		const std::string name = probe.script.value("repeat_rounds", false) ? "net-ui-result.round" + std::to_string(probe.round) + ".json" : "net-ui-result.json";
+		const bool repeat = probe.script.value("repeat_rounds", false);
+		// A probe that repeats per round reports per round: before its first round it has only a failure to report.
+		if (repeat && probe.round == 0 && !probe.result.contains("error")) return;
+		const std::string name = repeat ? "net-ui-result.round" + std::to_string(probe.round) + ".json" : "net-ui-result.json";
 		std::ofstream output(probe.directory / name);
 		output << probe.result.dump(2) << '\n';
 		Require(static_cast<bool>(output), "cannot write probe result");
@@ -1010,8 +1026,14 @@ bool RunCrossScopeSelfTest(std::string* error) {
 }
 
 void BeforePoll() { Process(Phase::Poll); }
-void AfterDraw() { Process(Phase::Draw); }
-void AfterMenuDraw() { Process(Phase::Draw, true); }
+void AfterDraw() {
+	MenuAutomation::EvaluateWatches(MenuControls());
+	Process(Phase::Draw);
+}
+void AfterMenuDraw() {
+	MenuAutomation::EvaluateWatches(MenuControls());
+	Process(Phase::Draw, true);
+}
 
 void OnSimTick(uint64_t simUpdateCount) {
 	if (!probe.enabled || probe.done) return;

@@ -904,6 +904,9 @@ namespace RTE {
 		/// Adopts saved identity for the actor, its attachable tree, and its inventory.
 		void AdoptPersistedUniqueID() override;
 		void ResolveFaithfulLinks() override;
+
+		/// Applies the walk state a faithful clone carries in its stash, which the copy of its limb paths does not keep; nothing for an actor that does not walk.
+		virtual void AdoptCarriedWalkState() {}
 		void RemapExternalLinks(const std::function<MovableObject*(MovableObject*)>& map) override;
 		MovableObject* FindPartByUniqueID(long uid) override;
 		void DiscardPersistedSnapshotState() override;

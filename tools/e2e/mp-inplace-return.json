@@ -311,7 +311,10 @@
         "resync failed",
         "lockstep stopped",
         "desync at frame"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "rtt200-survivor-plays-on",
@@ -365,7 +368,10 @@
         "resync failed",
         "lockstep stopped",
         "desync at frame"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "rtt100-survivor-plays-on",

@@ -42,6 +42,7 @@ namespace RTE {
 	struct NetGameDeliverCargo;
 	struct LuaPathCallbackContext;
 	class MovableObject;
+	class SimDumpTape;
 	class ACraft;
 	class GameActivity;
 	class Actor;
@@ -322,6 +323,8 @@ namespace RTE {
 			~KnownObjectsScope();
 			KnownObjectsScope(const KnownObjectsScope&) = delete;
 			KnownObjectsScope& operator=(const KnownObjectsScope&) = delete;
+			/// The time every scope of this process has spent copying the registry, in milliseconds.
+			static double CopyMs();
 		private:
 			/// Copies the known objects the first time anything asks; a change since the scope opened stops it being asked.
 			void Copy() const;
@@ -409,6 +412,10 @@ namespace RTE {
 		void BeginSpeculation();
 		bool IsResident(const MovableObject* mo) const { return ResidentKind(mo) != 0; }
 		MovableObject* ViewIfSpeculating(MovableObject* found) const;
+		/// The shadow a resident already has in the overlay, or null; never makes one.
+		MovableObject* ExistingShadowOf(const MovableObject* resident) const;
+		/// Called with each shadow the overlay makes, once it is made.
+		void SetShadowMadeHook(void (*hook)(MovableObject* resident, MovableObject* shadow)) { m_ShadowMadeHook = hook; }
 		/// Ends the overlay: its unowned shadows and spawns are deleted, the rosters and flags go back.
 		/// @param takenResidents Receives the residents whose shadows were taken out of the overlay's world.
 		void EndSpeculation(std::vector<MovableObject*>* takenResidents = nullptr);
@@ -975,6 +982,25 @@ namespace RTE {
 		/// @param out The stream to append to.
 		void DumpSimState(uint64_t tick, std::ostream& out) const;
 
+		/// Writes one MO's line of the sim dump, and its attachables' lines, as DumpSimState writes them.
+		/// @param tick The sim tick to label the lines with.
+		/// @param kind The MO's list, as the dump names it.
+		/// @param mo The MO.
+		/// @param out The stream to append to.
+		void DumpMOSimState(uint64_t tick, const char* kind, MovableObject* mo, std::ostream& out) const;
+
+		/// Records the sim dump's values for one tick, for another thread to write: the text is DumpSimState's.
+		/// @param tick The sim tick to label the lines with.
+		/// @param tape The tape to record into.
+		void CaptureSimState(uint64_t tick, SimDumpTape& tape) const;
+
+		/// Records one MO's lines of the sim dump, for DumpMOSimState's text later.
+		/// @param tick The sim tick to label the lines with.
+		/// @param kind The MO's list, as the dump names it.
+		/// @param mo The MO.
+		/// @param tape The tape to record into.
+		void CaptureMOSimState(uint64_t tick, const char* kind, MovableObject* mo, SimDumpTape& tape) const;
+
 		/// Runs one paused lockstep tick: exchanges an empty controller frame and applies only the
 		/// game commands it carries, so an unpause can arrive while the sim holds still.
 		/// @return Whether the exchange succeeded; a failure sets the controller replay error.
@@ -1126,6 +1152,7 @@ namespace RTE {
 		std::unordered_set<const MovableObject*> m_RenderHidden;
 		std::unordered_set<const MovableObject*> m_RenderSubstitutes;
 		MovableObject* m_LinkRoot = nullptr;
+		void (*m_ShadowMadeHook)(MovableObject* resident, MovableObject* shadow) = nullptr;
 
 		MovableObject* LookupMOID(MOID whichID) const;
 		int ResidentKind(const MovableObject* mo) const;
@@ -1241,6 +1268,12 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		/// The sim dump's lines for one tick, into a stream or a tape.
+		template <class Out> void DumpSimLines(uint64_t tick, Out& out) const;
+
+		/// One MO's line of the sim dump and its attachables' lines, into a stream or a tape.
+		template <class Out> void DumpMOLines(uint64_t tick, const char* kind, MovableObject* mo, Out& out) const;
+
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_SplashRatio, self.m_MaxDroppedItems, self.m_SettlingEnabled, self.m_MOSubtractionEnabled,

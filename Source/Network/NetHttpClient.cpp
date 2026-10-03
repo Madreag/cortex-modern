@@ -1,4 +1,5 @@
 #include "NetHttpClient.h"
+#include "System.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -469,7 +470,7 @@ namespace RTE {
 				// callback may still be live, so the state and the flag it points at are
 				// leaked rather than freed.
 				async->cancelRequested = new std::atomic<bool>(async->cancelRequested->load());
-				std::cerr << "[net-http] request state leaked: HANDLE_CLOSING never arrived" << std::endl;
+				System::PrintDiagnosticErrorLine("[net-http] request state leaked: HANDLE_CLOSING never arrived");
 			}
 			Finish(result);
 		};

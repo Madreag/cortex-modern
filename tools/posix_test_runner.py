@@ -55,6 +55,8 @@ SETTINGS_OVERRIDES = {
     "ResolutionY": "540",
     "UseMultiDisplays": "0",
     "LaunchIntoActivity": "0",
+    # No unattended engine asks a router of this network for a mapping.
+    "NetworkPortMapEnable": "0",
 }
 
 DEFAULT_SETTINGS = """SettingsMan

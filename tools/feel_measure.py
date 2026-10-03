@@ -16,7 +16,7 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json
-from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes
+from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes_or_fail as compare_live_hashes
 from feel.records import compress_case_records, record_path
 from run_sim_test import make_run, engine_executable
 from feel.launch_budget import install_memory_guard, exclusive_matrix
@@ -33,11 +33,17 @@ BYTE_LIMIT = 5_000_000_000
 MATRIX_BYTE_LIMIT = 10_000_000_000
 # Every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off. Set by --fullstate-every.
 FULLSTATE_EVERY = 0
+# --pin-alike: two engines on one box each get their own half of the runner's cores at the same priority.
+PIN_ALIKE = False
+# --pin-swapped (with --pin-alike): the halves trade places, the method's own control for which half a ratio reads.
+PIN_SWAPPED = False
+# --sp-one-screen: the single-player arms draw one screen, as each match peer does (CCCP_TEST_SINGLE_SCREEN).
+SP_ONE_SCREEN = False
 LAG_ARMS = tuple(f'{lag}ms-{cap}' for lag in (100, 200) for cap in ('60hz', 'uncapped'))
 
 
 def stamp():
-    return datetime.now(MST).strftime('%Y-%m-%d %H:%M MST')
+    return datetime.now(MST).strftime('%Y-%m-%d %I:%M %p MST')
 
 
 def scratch_bytes(root, limit=BYTE_LIMIT):
@@ -133,6 +139,14 @@ TIMING_CASES = (
     ('200ms-loss5-silent600', 200, 5, 600),
 )
 
+# Jittery links on both peers (the user, 2026-09-30: 'add jitter to V1'): judged by the same item9a bars as the loss arms.
+JITTER_CASES = (
+    ('100ms-jitter40-loss5', 100, 5, None, 40),
+    ('200ms-jitter60-loss5', 200, 5, None, 60),
+    # Reordered and duplicated packets on both peers (RD1, the user 2026-10-01): the reliable lanes should make it a no-op.
+    ('100ms-reorder10-dup5', 100, 0, None, 0, 10, 5),
+)
+
 AUTOSAVE_CASES = (
     ('autosave-100ms', 100, 1),
     ('autosave-200ms', 200, 1),
@@ -165,12 +179,12 @@ def cpu_ranges(cpus):
     return ','.join(f'{first}-{last}' for first, last in spans)
 
 
-def engine_placements(peers, basis=None):
+def engine_placements(peers, basis=None, alike=False, swapped=False):
     """Three engines on one box each get their own cores and the host a third of them at above-normal priority: a
     real match runs one engine per machine, so a host starved by its neighbours is the harness's limit, not the round's.
     Whole SMT pairs, the host's third rounded up, all inside the runner's job mask (a job with an affinity limit keeps
     its processes inside it); a box with no mask splits every whole pair of the machine."""
-    if len(peers) != 3 or sys.platform != 'win32':
+    if (len(peers) not in (1, 2) if alike else len(peers) != 3) or sys.platform != 'win32':
         return {}
     mask = (basis or runner_cpu_basis())['mask']
     cpus = [cpu for cpu in range(mask.bit_length()) if mask >> cpu & 1] if mask else list(range(2 * ((os.cpu_count() or 0) // 2)))
@@ -180,8 +194,14 @@ def engine_placements(peers, basis=None):
             units[-1].append(cpu)
         else:
             units.append([cpu])
-    if len(units) < 3:
+    if len(units) < len(peers):
         return {}
+    if alike:
+        # Engines measured against each other: the same number of cores each, neither above the other; a lone engine takes the first half.
+        half = len(units) // 2
+        halves = [[cpu for unit in units[:half] for cpu in unit], [cpu for unit in units[half:2 * half] for cpu in unit]]
+        placed = dict(zip(peers, halves[::-1] if swapped else halves))
+        return {peer: dict(mask=sum(1 << cpu for cpu in placed[peer]), logical=cpu_ranges(placed[peer]), priority='normal') for peer in peers}
     host_units = -(-len(units) // 3)
     client_units = -(-(len(units) - host_units) // 2)
     spans = dict(host=units[:host_units], client=units[host_units:host_units + client_units], survivor=units[host_units + client_units:])
@@ -258,9 +278,13 @@ def case_peers(sp=False, silent_tick=None):
 DRY_RUN_PLAN = None
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False):
+# A slower machine's sim cost on one peer from a tick on, as PEER:MICROSECONDS:FROM_TICK (the slow-machine proofs).
+PEER_SIM_COST = {}
+
+
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True, jitter_ms=0, reorder_percent=0, dup_percent=0):
     if DRY_RUN_PLAN is not None:
-        DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, loss_percent=loss_percent, silent_tick=silent_tick,
+        DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, jitter_ms=jitter_ms, local_prediction=prediction, loss_percent=loss_percent, silent_tick=silent_tick,
                                  autosave_seconds=autosave_seconds, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
         return None
     out = root / name
@@ -270,7 +294,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     lua_states = {'host': host_lua_states, 'client': client_lua_states}
     pre_match_history = {'host': host_pre_match_history, 'client': client_pre_match_history}
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('autosave service e2e' if autosave_seconds else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop')),
-                    ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
+                    ticks=final_tick, lag_ms=lag, jitter_ms=jitter_ms, reorder_percent=reorder_percent, dup_percent=dup_percent, cap_hz=cap, instrumentation=record, port=None if sp else port, local_prediction=prediction,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     live_stalls=live_stalls, autosave_seconds=autosave_seconds, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
@@ -278,9 +302,13 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                     lua_states_note='retired: the engine fixes the count at build time')
     write_json(out / 'manifest.json', manifest)
     peers = ['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)
+    manifest['heavy_scene_levers'] = {peer: dict(lever='CCCP_TEST_SIM_COST_US', cost_us=PEER_SIM_COST[peer][0],
+                                               from_tick=PEER_SIM_COST[peer][1]) for peer in peers if peer in PEER_SIM_COST}
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
-    basis = runner_cpu_basis() if len(peers) == 3 and sys.platform == 'win32' else None
-    placements = engine_placements(peers, basis)
+    # The jitter rides with the lag: the peer that carries the link's delay jitters both of its directions, as a cross fault does.
+    manifest['per_peer_jitter_ms'] = {peer: jitter_ms if manifest['per_peer_lag_ms'][peer] else 0 for peer in peers}
+    basis = runner_cpu_basis() if (len(peers) == 3 or PIN_ALIKE and len(peers) in (1, 2)) and sys.platform == 'win32' else None
+    placements = engine_placements(peers, basis, alike=PIN_ALIKE and len(peers) in (1, 2), swapped=PIN_SWAPPED)
     manifest['engine_placement'] = {}
     if basis:
         manifest['engine_placement_basis'] = dict(runner_affinity_mask=basis['runner_affinity_mask'], source=basis['source'],
@@ -308,17 +336,31 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                           '-net-match-humans', str(len(peers)), '-net-match-peers', str(len(peers)), '-net-match-cpu-slots', '0',
                           '-net-match-service-preset', 'Determinism FeelBaseline',
                           '-net-match-service-module', 'UserScenes.rte',
-                          '-net-match-auto-delay', '-net-fake-lag', str(manifest['per_peer_lag_ms'][peer]), '-net-local-prediction', 'on',
+                          '-net-match-auto-delay', '-net-fake-lag', str(manifest['per_peer_lag_ms'][peer]), '-net-local-prediction', 'on' if prediction else 'off',
                           '-net-reconnect-ticket', str(out / f'{peer}.ticket'),
                           '-net-match-report', str(out / f'{peer}_report.json')]
                 if autosave_seconds is not None and peer == 'host':
                     flags += ['-net-autosave-seconds', str(autosave_seconds)]
+                if manifest['per_peer_jitter_ms'][peer]:
+                    flags += ['-net-fake-jitter', str(manifest['per_peer_jitter_ms'][peer])]
+                if reorder_percent:
+                    flags += ['-net-fake-reorder', str(reorder_percent)]
+                if dup_percent:
+                    flags += ['-net-fake-dup', str(dup_percent)]
                 if FULLSTATE_EVERY:
                     flags += ['-net-fullstate-hash-every', str(FULLSTATE_EVERY)]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
-            environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{final_tick}', PYTHONDONTWRITEBYTECODE='1')
+            # The stall sampler stays armed; its perturbation needs measured cost coverage in the instrumentation verdict.
+            # The preview's first step is compared with the committed actor, so the records name each tick the world acted on it.
+            environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{final_tick}', PYTHONDONTWRITEBYTECODE='1',
+                               CCCP_STALL_STACK_MS=os.environ.get('CCCP_STALL_STACK_MS', '80'), CCCP_TEST_PREVIEW_FIDELITY='1')
             if peer == 'client' and loss_percent:
                 environment['CC_TEST_GNS_LOSS_PERCENT'] = str(loss_percent)
+            if sp and SP_ONE_SCREEN:
+                environment['CCCP_TEST_SINGLE_SCREEN'] = '1'
+            if peer in PEER_SIM_COST:
+                cost_us, from_tick = PEER_SIM_COST[peer]
+                environment.update(CCCP_TEST_SIM_COST_US=str(cost_us), CCCP_TEST_SIM_COST_FROM_TICK=str(from_tick))
             # A live stall holds the client's seat in any form; the three-peer form without one freezes a frame instead.
             if peer == 'client' and live_stalls:
                 for tick, duration in live_stalls:
@@ -375,23 +417,40 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     return out
 
 
-def held_client_away(log):
-    """The ticks a held client never simulated: from the tick its seat was held at through the image it rejoined on."""
-    ranges = []
-    for stop, image in re.findall(r'\[net-match\] recovery requested tick=(\d+) [^\n]*PeerHeld:[^\n]*\n(?:[^\n]*\n)*?\[net-match\] bootstrap checkpoint=(\d+) ', log):
-        if int(image) >= int(stop):
-            ranges.append((int(stop), int(image)))
-    return tuple(ranges)
+def held_client_images(log, live=None):
+    """Each image a held client rejoined on, as (first tick it did not keep, image tick). The first tick is the live stream's
+    abandon record when the client wrote one (it voids its own rows from there), else the tick its seat was held at, else
+    the tick its recovery was asked at."""
+    abandons = []
+    if live is not None and Path(live).is_file():
+        from feel.records import retract_private_history
+        rows = [json.loads(line) for line in Path(live).read_text(encoding='utf-8').splitlines() if line.strip()]
+        retract_private_history(rows, str(live))
+        for row in rows:
+            if 'abandon_from' in row:
+                abandons.append(int(row['abandon_from']))
+    images, held, stop = [], None, None
+    for line in log.splitlines():
+        if (match := re.match(r'\[net-lockstep\] hold of this seat at (\d+) ', line)):
+            held = int(match.group(1))
+        elif (match := re.match(r'\[net-match\] recovery requested tick=(\d+) .*PeerHeld:', line)):
+            asked = int(match.group(1))
+            stop = abandons.pop(0) if abandons else held if held is not None and held <= asked else asked
+        elif stop is not None and (match := re.match(r'\[net-match\] bootstrap checkpoint=(\d+) ', line)):
+            images.append((stop, int(match.group(1))))
+            stop = None
+    return images
 
 
-def held_client_rewinds(log):
+def held_client_away(log, live=None):
+    """The ticks a held client never kept: from the first tick it did not keep through the image it rejoined on."""
+    return tuple((stop, image) for stop, image in held_client_images(log, live) if image >= stop)
+
+
+def held_client_rewinds(log, live=None):
     """The images a held client replayed from that were older than the tick it stopped at: it simulates the ticks
     between them twice, and both readings are compared."""
-    images = []
-    for stop, image in re.findall(r'\[net-match\] recovery requested tick=(\d+) [^\n]*PeerHeld:[^\n]*\n(?:[^\n]*\n)*?\[net-match\] bootstrap checkpoint=(\d+) ', log):
-        if int(image) < int(stop):
-            images.append(int(image))
-    return tuple(images)
+    return tuple(image for stop, image in held_client_images(log, live) if image < stop)
 
 
 def fullstate_proof(run, pairs):
@@ -428,9 +487,15 @@ def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False, client_a
     try:
         left = [shared(row) for row in json.loads(first.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']]
         right = [shared(row) for row in json.loads(second.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']]
-        exact_coverage = [row['tick'] for row in left] == [row['tick'] for row in right] == list(range(1, expected_ticks + 1))
-        result['all_tick_hashes_identical'] = exact_coverage and left == right
-        result['first_full_row_difference'] = next((a['tick'] for a, b in zip(left, right) if a != b), None)
+        if window_only:
+            left = [row for row in left if row['tick'] <= expected_ticks]
+            right = [row for row in right if row['tick'] <= expected_ticks]
+        # The second peer's rows are the first's without the ticks it never kept, each identical.
+        away = {tick for low, high in client_away for tick in range(low, high + 1)}
+        kept = [row for row in left if row['tick'] not in away]
+        exact_coverage = [row['tick'] for row in left] == list(range(1, expected_ticks + 1)) and [row['tick'] for row in kept] == [row['tick'] for row in right]
+        result['all_tick_hashes_identical'] = exact_coverage and kept == right
+        result['first_full_row_difference'] = next((a['tick'] for a, b in zip(kept, right) if a != b), None)
     except (OSError, ValueError, KeyError, IndexError) as error:
         result.update(all_tick_hashes_identical=False, error=str(error))
     result['pass'] = bool(ok and result['all_tick_hashes_identical'])
@@ -535,23 +600,42 @@ def timing_peer(run, peer):
         return unreduced_peer_report(run, peer, reason)
 
 
+def retained_pair_proof(run, peer, ticks, window_only=None):
+    path = run / f'{peer}-live.jsonl'
+    log_path = run / peer / 'stdout.log'
+    log = log_path.read_text(encoding='utf-8-sig', errors='replace') if log_path.is_file() else ''
+    try:
+        images = held_client_images(log, path)
+        return compare_pair(run / 'host_trace.json', run / f'{peer}_trace.json', ticks, cross_peer=True,
+                            client_away=tuple((stop, image) for stop, image in images if image >= stop),
+                            window_only=bool(images) if window_only is None else window_only,
+                            client_rewinds=tuple(image for stop, image in images if image < stop))
+    except ValueError as error:
+        return dict(status='FAIL', **{'pass': False}, reason=f'{path}: {error}')
+
+
 def reduce_timing_case(run, reference=None):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
     members = tuple(manifest.get('per_peer_lag_ms') or (('host', 'client', 'survivor') if silent else ('host', 'client')))
-    peers = {peer: timing_peer(run, peer) for peer in members if peer != 'client'}
+    # Every impairment arm judges the affected client as well as the survivors.
+    impaired = any(manifest.get(key) for key in ('jitter_ms', 'reorder_percent', 'dup_percent'))
+    peers = {peer: timing_peer(run, peer) for peer in members if peer != 'client' or impaired}
     comparison_peer = next((peer for peer in peers if peer != 'host'), 'client')
     if reference is not None:
         for value in peers.values():
             apply_tps_call(value, reference)
-    proof = compare_pair(run / 'host_trace.json', run / f'{comparison_peer}_trace.json', manifest.get('ticks', TICKS), cross_peer=True)
+    input_measurements = {peer: input_gates(run, peer) for peer in members}
+    for peer, measured in peers.items():
+        measured.setdefault('pins', {}).update(input_measurements[peer])
+    # A peer that rejoined from an image is compared on every tick it kept: the ticks it voided up to the image are skipped, and
+    # as it counts its cap from the image only the planned window is compared.
+    proof = retained_pair_proof(run, comparison_peer, manifest.get('ticks', TICKS))
     if silent:
         # The held client's own ticks are compared too: before its hold and from the image it rejoined on.
-        client_log = (run / 'client/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / 'client/stdout.log').is_file() else ''
         # A rejoined client runs its own cap from its image, so only the planned window is compared.
-        proof['held_client'] = compare_pair(run / 'host_trace.json', run / 'client_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
-                                            client_away=held_client_away(client_log), window_only=True,
-                                            client_rewinds=held_client_rewinds(client_log))
+        proof['held_client'] = retained_pair_proof(run, 'client', manifest.get('ticks', TICKS), window_only=True)
+        proof['pass'] &= proof['held_client']['pass']
     pairs = [(left, right) for index, left in enumerate(members) for right in members[index + 1:]]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
             for left, right in pairs}
@@ -565,7 +649,34 @@ def reduce_timing_case(run, reference=None):
     write_json(run / 'hash-proof.json', proof)
     return dict(name=run.name, peers=peers, measurement_complete=manifest['launches_complete'] and all(value['measurement_complete'] for value in peers.values()),
                 launches_complete=manifest['launches_complete'], engine_placement=manifest.get('engine_placement') or {},
-                proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
+                proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()),
+                input_peers={peer: dict(pins=pins) for peer, pins in input_measurements.items()})
+
+
+def input_gates(run, peer):
+    """The recorded local response is required even in a timing arm."""
+    from feel import report as reducer
+    path = record_path(Path(run) / peer / 'feel/raw.jsonl')
+    try:
+        rows = list(reducer.read_jsonl(path))
+        inputs = [row for row in rows if row.get('type') == 'input']
+        frames = [row for row in rows if row.get('type') == 'frame' and row.get('active')]
+        committed = [row for row in rows if row.get('type') == 'committed']
+        log = Path(run) / peer / 'stdout.log'
+        interactions = reducer.interaction_evidence([row for row in rows if row.get('type') == 'interaction'],
+            log.read_text(encoding='utf-8-sig', errors='replace') if log.is_file() else '')
+        complete = (sum(row.get('type') == 'schema' and row.get('version') == 1 for row in rows) == 1
+                    and any(row.get('type') == 'end' for row in rows) and bool(inputs) and bool(frames))
+        carried = reducer.input_latencies(inputs, frames)
+        responses = reducer.previewed_responses(inputs, frames, committed, interactions)
+        response_value, response_passed = reducer.response_verdict(responses)
+        return dict(input_carried=reducer.pin(carried if complete else None,
+                        'every recorded input is carried within two frames', bool(carried) and all(row['carried_pass'] for row in carried), [path]),
+                    input_response=reducer.pin(response_value if complete else None,
+                        'every required input responds by its committed-reference deadline', response_passed, [path]))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return {name: dict(status='MISS', value=None, reason=f'{path}: {type(error).__name__}: {error}')
+                for name in ('input_carried', 'input_response')}
 
 
 def item9a_evidence_complete(report):
@@ -578,15 +689,17 @@ def item9a_evidence_complete(report):
         names = [name for name in pins if name.startswith('item9a_')]
         if pins.get('item9a_missing_frame_stalls', {}).get('value') is None:
             return False
-        if not names or any(pin.get('status') == 'MISS' for name, pin in pins.items() if name.startswith('item9a_')):
+        if not names or any(pin.get('status') == 'MISS' for name, pin in pins.items()
+                            if name.startswith('item9a_') and pin.get('required', True)):
             return False
     return True
 
 
 def failure_reasons(report):
-    reasons = [f'{peer}.{name}: {pin.get("status", "MISS")} value={pin.get("value")!r}; {pin.get("rule", "no rule recorded")}'
+    reasons = [f'{peer}.{name}: {pin.get("status", "MISS")} value={pin.get("value")!r}; {pin.get("reason", "")}'
                for peer, measured in report.get('peers', {}).items() for name, pin in measured.get('pins', {}).items()
-               if name.startswith('item9a_') and pin.get('status') != 'PASS']
+               if (name.startswith('item9a_') or name in ('input_carried', 'input_response'))
+               and pin.get('required', True) and pin.get('status') != 'PASS']
     for field in ('launches_complete', 'off_wire_pass'):
         if report.get(field) is False:
             reasons.append(f'{field}=false; see {report.get("name", "case")}/feel-report.json')
@@ -597,12 +710,38 @@ def failure_reasons(report):
     return reasons
 
 
+def product_predicate(case):
+    peers = case.get('peers') or {}
+    reasons = failure_reasons(case)
+    for field in ('launches_complete', 'off_wire_pass'):
+        if case.get(field) is not True and not any(reason.startswith(field + '=') for reason in reasons):
+            reasons.append(f'{field}={case.get(field)!r}')
+    if not peers:
+        reasons.append('no judged peers were reported')
+    for peer, measured in peers.items():
+        pins = measured.get('pins') or {}
+        required = [value for name, value in pins.items() if name.startswith('item9a_') and value.get('required', True)]
+        if not required:
+            reasons.append(f'{peer}: no required item9a pins were reported')
+        if pins.get('item9a_missing_frame_stalls', {}).get('value') is None:
+            reasons.append(f'{peer}.item9a_missing_frame_stalls: missing counter')
+    input_peers = case.get('input_peers', peers)
+    if not input_peers:
+        reasons.append('no local input measurements were reported')
+    for peer, measured in input_peers.items():
+        pins = measured.get('pins') or {}
+        control_for = measured.get('timing_control_for')
+        input_pins = (peers.get(control_for) or {}).get('pins', {}) if control_for else pins
+        for name in ('input_carried', 'input_response'):
+            if input_pins.get(name, {}).get('status') != 'PASS':
+                reason = f'{peer}.{name}: {input_pins.get(name, {}).get("status", "MISS")} value={input_pins.get(name, {}).get("value")!r}'
+                if not any(r.startswith(f'{peer}.{name}:') for r in reasons):
+                    reasons.append(reason)
+    return dict(passed=not reasons, reasons=reasons)
+
+
 def write_case_gates(root, results):
-    cases = {row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False) and row.get('off_wire_pass', True)
-                                    and row.get('launches_complete', False)
-                                    and all(pin['status'] == 'PASS' for peer in row.get('peers', {}).values() for name, pin in peer['pins'].items()
-                                            if name.startswith('item9a_') and pin.get('required', True)), reasons=failure_reasons(row))
-             for row in results}
+    cases = {row['name']: product_predicate(row) for row in results}
     for case in cases.values():
         if not case['passed'] and not case['reasons']:
             case['reasons'] = ['the case has no complete passing set of item9a measurements']
@@ -665,6 +804,7 @@ def analyze(root, stock=None):
                     if stock[cap_name]['steady_wall_tps'] < 59.5 or reference['steady_wall_tps'] >= 59.5:
                         reference = stock[cap_name]
                 apply_tps_call(timing, reference)
+                timing['timing_control_for'] = peer
                 peers[peer + '_off'] = timing
             proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json', cross_peer=True),
                      'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json', cross_peer=True),
@@ -699,10 +839,17 @@ def analyze(root, stock=None):
             report['measurement_complete'] &= not report['missing_raw_files']
             report['item9a_pass'] = all(value['status'] == 'PASS' for measured in peers.values()
                                        for name, value in measured['pins'].items() if name.startswith('item9a_'))
+            # The same match with the preview off: the input pins must fail there, or they do not measure the preview.
+            nopred = root / (name + '-nopred')
+            if nopred.is_dir():
+                off_peers = {peer: reduce_or_fail(nopred, peer, baselines[cap_name]) for peer in ('host', 'client')}
+                report['prediction_off'] = {peer: {pin_name: value['pins'].get(pin_name) for pin_name in ('input_carried', 'input_response')}
+                                            for peer, value in off_peers.items()}
+                write_json(nopred / 'feel-report.json', off_peers)
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
             results.append(report)
-    for name, _, _, _ in () if subset else TIMING_CASES:
+    for name, *_ in () if subset else TIMING_CASES + JITTER_CASES:
         run = root / name
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
@@ -725,7 +872,7 @@ def analyze(root, stock=None):
     for report in results:
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
         failures = sum(row['status'] == 'FAIL' for peer in report['peers'].values() for row in peer['pins'].values())
-        link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
+        link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + JITTER_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {failures} FAIL, {misses} MISS; [{report["name"]}]({link}) |')
     lines += ['', 'Item 9a requires 59.5 TPS, zero steady blocking waits, less than one percent waiting,',
               'and a 50 ms maximum wait and confirmed-horizon lag. The single-player rate is diagnostic.',
@@ -799,12 +946,22 @@ def parse_args(argv=None):
     parser.add_argument('--client-lua-states', type=int, default=4, help='retired: the build fixes the Lua state count')
     parser.add_argument('--host-pre-match-history', type=int, default=0, help='objects the host runtime spends before the match')
     parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
-    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES] + [name for name, *_ in TIMING_CASES],
+    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES] + [name for name, *_ in TIMING_CASES + JITTER_CASES],
                         help='run only the selected autosave or timing arms, without baselines or the full matrix')
     parser.add_argument('--lag-arms', nargs='+', choices=LAG_ARMS,
                         help='run only these lag arms (each on and off) and the single-player baselines of their caps')
+    parser.add_argument('--prediction-off-arms', nargs='+', choices=LAG_ARMS, default=[],
+                        help='with --lag-arms: also run these arms recorded with local prediction off (the input pins\' RED)')
+    parser.add_argument('--peer-sim-cost', action='append', default=[], metavar='PEER:US:FROM_TICK',
+                        help="a slower machine's added sim cost on one peer from a tick on (the slow-machine proofs)")
     parser.add_argument('--dry-run', action='store_true',
                         help='print every arm this command would launch with its port and peers; launch nothing, write nothing')
+    parser.add_argument('--sp-one-screen', action='store_true',
+                        help='the single-player arms draw one screen of the same activity, as each match peer does, instead of a split screen')
+    parser.add_argument('--pin-alike', action='store_true',
+                        help="two engines each get their own half of the runner's cores at the same priority, so neither reads the other's share")
+    parser.add_argument('--pin-swapped', action='store_true',
+                        help='with --pin-alike, the host and a lone engine take the second half and the client the first')
     parser.add_argument('--fullstate-every', type=int, default=0,
                         help='every N committed ticks each match peer hashes its whole capture (-net-fullstate-hash-every); 0 is off')
     return parser, parser.parse_args(argv)
@@ -812,9 +969,10 @@ def parse_args(argv=None):
 
 def launch_timing_arm(root, index, case, port_base, script, exe_hash, timeout, counts):
     """One loss or silent-seat arm, launched the same way by the full matrix and by --cases."""
-    name, lag, loss, silent = case
+    name, lag, loss, silent = case[:4]
     return launch_case(root, name, lag, 60, True, port_base + 8 + index % 2, script, exe_hash, timeout,
-                       loss_percent=loss, silent_tick=silent, **counts)
+                       loss_percent=loss, silent_tick=silent, jitter_ms=case[4] if len(case) > 4 else 0,
+                       reorder_percent=case[5] if len(case) > 5 else 0, dup_percent=case[6] if len(case) > 6 else 0, **counts)
 
 
 def launch_autosave_arm(root, index, case, port_base, script, exe_hash, timeout, counts):
@@ -837,6 +995,9 @@ def dry_run_plan(launch_all):
 
 def main(argv=None):
     parser, args = parse_args(argv)
+    for spec in args.peer_sim_cost:
+        peer, cost_us, from_tick = spec.split(':')
+        PEER_SIM_COST[peer] = (int(cost_us), int(from_tick))
     if args.repo.resolve() != REPO.resolve():
         parser.error('--repo must name the tree containing this driver')
     if args.matrix and (args.cases or args.lag_arms):
@@ -849,8 +1010,13 @@ def main(argv=None):
         parser.error('--host-lua-states and --client-lua-states must be positive')
     if args.fullstate_every < 0:
         parser.error('--fullstate-every must be 0 or positive')
-    global FULLSTATE_EVERY
+    global FULLSTATE_EVERY, PIN_ALIKE, PIN_SWAPPED, SP_ONE_SCREEN
+    if args.pin_swapped and not args.pin_alike:
+        parser.error('--pin-swapped needs --pin-alike')
     FULLSTATE_EVERY = args.fullstate_every
+    PIN_ALIKE = args.pin_alike
+    PIN_SWAPPED = args.pin_swapped
+    SP_ONE_SCREEN = args.sp_one_screen
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
@@ -860,8 +1026,8 @@ def main(argv=None):
                   host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
     if args.cases:
         selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES) if case[0] in args.cases] + \
-                   [(index, case) for index, case in enumerate(TIMING_CASES) if case[0] in args.cases]
-        launch_selected = lambda script, exe_hash: [(launch_timing_arm if len(case) == 4 else launch_autosave_arm)(root, index, case, args.port, script, exe_hash, args.timeout, counts)
+                   [(index, case) for index, case in enumerate(TIMING_CASES + JITTER_CASES) if case[0] in args.cases]
+        launch_selected = lambda script, exe_hash: [(launch_autosave_arm if len(case) == 3 else launch_timing_arm)(root, index, case, args.port, script, exe_hash, args.timeout, counts)
                                                     for index, case in selected]
         if args.dry_run:
             print(json.dumps(dict(path='--cases', arms=dry_run_plan(lambda: launch_selected(root / 'input.txt', None))), indent=2), flush=True)
@@ -908,6 +1074,10 @@ def main(argv=None):
                 for offset, enabled in enumerate((True, False)):
                     launch_case(root, f'{arm}-' + ('on' if enabled else 'off'), lag, 60 if cap_name == '60hz' else 0, enabled, args.port + 2 * index + offset,
                                 script, exe_hash, args.timeout, **counts)
+                if arm in args.prediction_off_arms:
+                    # The arms run one at a time, so the on arm's port is free again.
+                    launch_case(root, f'{arm}-nopred', lag, 60 if cap_name == '60hz' else 0, True, args.port + 2 * index,
+                                script, exe_hash, args.timeout, prediction=False, **counts)
             return
         for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
             launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe_hash, args.timeout, sp=True, **counts)
@@ -921,7 +1091,7 @@ def main(argv=None):
                     name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
                     launch_case(root, name, lag, cap, enabled, port, script, exe_hash, args.timeout, **counts)
                     port += 1
-        for index, case in enumerate(TIMING_CASES):
+        for index, case in enumerate(TIMING_CASES + JITTER_CASES):
             launch_timing_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
         for index, case in enumerate(AUTOSAVE_CASES + AUTOSAVE_THREE_CASES):
             launch_autosave_arm(root, index, case, args.port, script, exe_hash, args.timeout, counts)
@@ -943,7 +1113,7 @@ def main(argv=None):
                     lag_arms=args.lag_arms,
                     arms=[f'baseline-{cap}-on' for cap in ('60hz', 'uncapped')] +
                          [f'{lag}ms-{cap}-{state}' for lag in (100, 200) for cap in ('60hz', 'uncapped') for state in ('on', 'off')] +
-                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES],
+                         [name for name, *_ in TIMING_CASES + JITTER_CASES] + [name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES],
                     lua_states={'host': args.host_lua_states, 'client': args.client_lua_states},
                     pre_match_history={'host': args.host_pre_match_history, 'client': args.client_pre_match_history})
         write_json(root / 'matrix-plan.json', plan)
@@ -971,14 +1141,15 @@ def main(argv=None):
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
     case_launches = {path.parent.name: json.loads(path.read_text(encoding='utf-8'))['launches_complete']
                      for path in sorted(root.glob('*/manifest.json'))}
-    complete = bool(case_launches) and all(case_launches.values()) and all(item9a_evidence_complete(row) for row in results)
+    case_gates = write_case_gates(root, results)
+    complete = bool(case_launches) and all(case_launches.values()) and case_gates['passed']
     item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
                   for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
-    reasons = {row['name']: failure_reasons(row) for row in results}
-    write_case_gates(root, results)
+    reasons = {name: case['reasons'] for name, case in case_gates['cases'].items()}
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
-    completion = dict(finished=stamp(), measurement_complete=complete, presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
+    completion = dict(finished=stamp(), measurement_complete=complete, product_pass=complete,
+                      presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
                       launches_complete=bool(case_launches) and all(case_launches.values()),
                       case_launches=case_launches, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
                       scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates, failure_reasons=reasons)
@@ -986,7 +1157,7 @@ def main(argv=None):
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')
     print(json.dumps(completion, indent=2), flush=True)
-    return 0 if complete and item9a_pass is not False and (gate_pass or skip_gates) else 1
+    return 0 if complete and (gate_pass or skip_gates) else 1
 
 
 if __name__ == '__main__':

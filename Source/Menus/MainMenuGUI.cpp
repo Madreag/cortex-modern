@@ -19,6 +19,7 @@
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "System.h"
+#include "NetProtocol.h"
 #include "ScenarioRunner.h"
 #include "TelemetryBundle.h"
 
@@ -59,6 +60,12 @@
 using namespace RTE;
 
 static constexpr std::string_view c_DirectoryFallbackHint = "the session directory is not reachable: LAN games and a typed address still work";
+
+// The game's version, then the multiplayer build's own version and the network protocol it speaks.
+static std::string VersionLine() {
+	const std::string& build = System::GetBuildVersion();
+	return "v" + c_GameVersion.str() + (build.empty() ? std::string() : ", multiplayer " + build + " (protocol " + std::to_string(NetProtocol::c_Version) + ")");
+}
 
 static std::string PlayerFacingStatus(const std::string& text) {
 	const bool wireReason = text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos;
@@ -109,6 +116,26 @@ static std::string FitDiscoveredGameRow(const NetDirectoryClient::GameRow& row, 
 }
 
 // Windows-1252 for one Unicode codepoint; 0xA0-0xFF match Latin-1.
+/// Sets a path on one line of the label; one that does not fit keeps its root and as many of its last folders as fit, the middle elided.
+static void SetFittedPath(GUILabel* label, const std::string& prefix, const std::filesystem::path& path) {
+	const std::string full = path.generic_string();
+	label->SetText(prefix + full);
+	if (label->GetTextWidth() <= label->GetWidth()) return;
+	std::vector<std::string> parts;
+	for (size_t start = 0; start <= full.size();) {
+		const size_t end = std::min(full.find('/', start), full.size());
+		if (end > start) parts.push_back(full.substr(start, end - start));
+		start = end + 1;
+	}
+	for (size_t kept = parts.size() > 1 ? parts.size() - 1 : 1; kept > 0; --kept) {
+		std::string tail;
+		for (size_t index = parts.size() - kept; index < parts.size(); ++index) tail += "/" + parts[index];
+		label->SetText(prefix + (parts.size() > kept ? parts.front() + "/..." : std::string()) + tail);
+		if (label->GetTextWidth() <= label->GetWidth()) return;
+	}
+	label->SetText(prefix + ".../" + parts.back());
+}
+
 static bool Cp1252FromCodepoint(int codepoint, char& out) {
 	if (codepoint < 0) {
 		return false;
@@ -311,6 +338,7 @@ void MainMenuGUI::Clear() {
 	m_PortMapSerialShown = 0;
 	m_MultiplayerLobbyChatLabels.fill(nullptr);
 	m_MultiplayerLobbyChatInput = nullptr;
+	m_MultiplayerLobbyVersionLabel = nullptr;
 	m_MultiplayerLobbyChatLines.clear();
 
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
@@ -390,7 +418,7 @@ void MainMenuGUI::CreateMainScreen() {
 	}
 
 	m_VersionLabel = dynamic_cast<GUILabel*>(m_MainMenuScreenGUIControlManager->GetControl("VersionLabel"));
-	m_VersionLabel->SetText("Community Project\nv" + c_GameVersion.str());
+	m_VersionLabel->SetText("Community Project\n" + VersionLine());
 	m_VersionLabel->SetPositionAbs(10, g_WindowMan.GetResY() - m_VersionLabel->GetTextHeight() - 5);
 }
 
@@ -498,6 +526,13 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	}
 	m_LastMatchSummaryLabel->SetHorizontalOverflowScroll(true);
 	m_LastMatchSummaryLabel->ActivateDeactivateOverflowScroll(true);
+	m_PageChatNotice = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->AddControl("LabelPageChatNotice", "LABEL", nullptr, 0, 0, 545, 12));
+	if (m_PageChatNotice) {
+		if (chatFont) m_PageChatNotice->SetFont(chatFont);
+		m_PageChatNotice->SetHAlignment(GUIFont::Left);
+		m_PageChatNotice->SetVAlignment(GUIFont::Middle);
+		m_PageChatNotice->SetVisible(false);
+	}
 	for (size_t row = 0; row < m_MultiplayerLobbyChatLabels.size(); ++row) {
 		m_MultiplayerLobbyChatLabels[row] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->AddControl(
 		    "LabelLobbyChat" + std::to_string(row), "LABEL", m_MultiplayerLobbyPanel, 8, 0, 284, 10));
@@ -513,6 +548,14 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 		if (chatFont) m_MultiplayerLobbyChatInput->SetFont(chatFont);
 		m_MultiplayerLobbyChatInput->SetMaxTextLength(static_cast<int>(NetProtocol::c_MaxShortTextBytes));
 		m_MultiplayerLobbyChatInput->SetVisible(false);
+	}
+	m_MultiplayerLobbyVersionLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->AddControl(
+	    "LabelLobbyVersion", "LABEL", m_MultiplayerLobbyPanel, 8, 0, 284, 10));
+	if (m_MultiplayerLobbyVersionLabel) {
+		if (chatFont) m_MultiplayerLobbyVersionLabel->SetFont(chatFont);
+		m_MultiplayerLobbyVersionLabel->SetVAlignment(GUIFont::Middle);
+		m_MultiplayerLobbyVersionLabel->SetText(VersionLine());
+		m_MultiplayerLobbyVersionLabel->SetVisible(false);
 	}
 
 	m_MultiplayerModerationSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelModerationSummary"));
@@ -1470,6 +1513,12 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostOptionsPages[i] = dynamic_cast<GUICollectionBox*>(get(pageNames[i]));
 	}
 	m_HostOptionsStatusLabel = dynamic_cast<GUILabel*>(get("LabelHostOptStatus"));
+	// Two lines beside the buttons; a longer status scrolls through them rather than run out of the panel.
+	if (m_HostOptionsStatusLabel) {
+		m_HostOptionsStatusLabel->SetVAlignment(GUIFont::Top);
+		m_HostOptionsStatusLabel->SetVerticalOverflowScroll(true);
+		m_HostOptionsStatusLabel->ActivateDeactivateOverflowScroll(true);
+	}
 	m_HostSeatPlayersCombo = dynamic_cast<GUIComboBox*>(get("ComboHostSeatPlayers"));
 	m_HostSeatCapacityHint = dynamic_cast<GUILabel*>(get("LabelHostSeatCapacityHint"));
 	for (int row = 0; row < c_HostSeatRows; ++row) {
@@ -1538,6 +1587,10 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	if (auto* autosaveNote = dynamic_cast<GUILabel*>(get("LabelHostRecAutosaveNote"))) {
 		autosaveNote->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 		autosaveNote->SetText(NetAutosaveNote());
+	}
+	if (auto* autosaveCost = dynamic_cast<GUILabel*>(get("LabelHostRecAutosaveCost"))) {
+		autosaveCost->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+		autosaveCost->SetText(NetAutosaveCostHint());
 	}
 	if (m_HostNetIceHintLabel) {
 		m_HostNetIceHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
@@ -1636,8 +1689,8 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	}
 	if (m_HostNetSlowPolicyCombo) {
 		m_HostNetSlowPolicyCombo->ClearList();
+		// Only the default policy is offered: the others do not yet keep a dropped player's seat.
 		m_HostNetSlowPolicyCombo->AddItem(NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute));
-		m_HostNetSlowPolicyCombo->AddItem(NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Pause));
 	}
 	if (m_HostNetSlowBoundBox) {
 		m_HostNetSlowBoundBox->SetNumericOnly(true);
@@ -2014,7 +2067,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 
 	// Network page.
 	HostOptSelectComboIndex(m_HostNetPolicyCombo, m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed ? 1 : 0);
-	HostOptSelectComboIndex(m_HostNetSlowPolicyCombo, m_HostOptionsDraft.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? 1 : 0);
+	HostOptSelectComboIndex(m_HostNetSlowPolicyCombo, 0);
 	if (m_HostNetSlowBoundBox && !HostOptBoxFocused(m_HostNetSlowBoundBox)) m_HostNetSlowBoundBox->SetText(std::to_string(m_HostOptionsDraft.slowPlayerBoundTicks));
 	if (m_HostNetSlowPolicyHintLabel) {
 		m_HostNetSlowPolicyHintLabel->SetText(NetSlowPlayerHint(m_HostOptionsDraft.slowPlayerPolicy, m_HostOptionsDraft.slowPlayerBoundTicks, g_TimerMan.GetDeltaTimeMS()));
@@ -2185,12 +2238,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	}
 
 	// Files page: local paths, local retention, and the local status-widget preference.
-	if (m_HostFilesSavePathLabel) {
-		m_HostFilesSavePathLabel->SetText("Autosaves: " + (std::filesystem::path(System::GetWorkingDirectory()) / "Autosaves").generic_string());
-	}
-	if (m_HostFilesDiagPathLabel) {
-		m_HostFilesDiagPathLabel->SetText("Diagnostics: " + (std::filesystem::path(System::GetWorkingDirectory()) / "Telemetry").generic_string());
-	}
+	if (m_HostFilesSavePathLabel) SetFittedPath(m_HostFilesSavePathLabel, "Autosaves: ", std::filesystem::path(System::GetWorkingDirectory()) / "Autosaves");
+	if (m_HostFilesDiagPathLabel) SetFittedPath(m_HostFilesDiagPathLabel, "Diagnostics: ", std::filesystem::path(System::GetWorkingDirectory()) / "Telemetry");
 	HostOptSelectComboIndex(m_HostFilesWidgetCombo, static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
 	HostOptSetEditable(m_HostFilesWidgetCombo, true); // local preference, editable on every peer
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostFilesSaveDiagButton], true);
@@ -2342,7 +2391,7 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	if (m_HostNetPolicyCombo) {
 		m_HostOptionsDraft.delayPolicy = m_HostNetPolicyCombo->GetSelectedIndex() == 1 ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
 	}
-	if (m_HostNetSlowPolicyCombo) m_HostOptionsDraft.slowPlayerPolicy = m_HostNetSlowPolicyCombo->GetSelectedIndex() == 1 ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
+	m_HostOptionsDraft.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 	if (m_HostNetSlowBoundBox) m_HostOptionsDraft.slowPlayerBoundTicks = static_cast<uint16_t>(std::clamp<long>(std::strtol(m_HostNetSlowBoundBox->GetText().c_str(), nullptr, 10), 1, NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks));
 	if (m_HostNetRedundancyCombo) {
 		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
@@ -3014,7 +3063,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_HostNetSlowPolicyCombo) {
-		m_HostOptionsDraft.slowPlayerPolicy = m_HostNetSlowPolicyCombo->GetSelectedIndex() == 1 ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
+		m_HostOptionsDraft.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		return;
 	}
 	if (guiEventControl == m_HostNetRecalcButton) {
@@ -3332,7 +3381,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// One persistent line, never a toast: the status while recovering, otherwise whatever the startup
 	// scan of the recovery record found - including precisely why it cannot be used. No record is the
 	// absence of an offer, not a verdict: it stays silent until the player asks to rejoin.
-	const std::string status = recovering ? reconnect.GetStatusText()
+	const std::string status = recovering || reconnect.IsRefused() ? reconnect.GetStatusText()
 	                                      : (reconnect.GetOffer() == NetReconnectOffer::Missing ? std::string() : reconnect.GetOfferText());
 	if (status != m_ReconnectStatusShown) {
 		// A recovery in progress owns the line. What the scan of the record found does not: it clears
@@ -3397,6 +3446,27 @@ void MainMenuGUI::LayoutMultiplayerFooter(int width, int y) {
 	diagnostics->SetPositionRel(left + back->GetWidth() + 8, y);
 }
 
+void MainMenuGUI::TakeLobbyChat(const NetLobbySnapshot& snapshot) {
+	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
+		std::string name = entry.senderName;
+		if (name.empty()) {
+			for (const NetLobbyMember& member : snapshot.members) {
+				if (member.peerId == entry.senderPeerId + 1) {
+					name = member.displayName;
+					break;
+				}
+			}
+		}
+		if (name.empty()) {
+			name = "Player " + std::to_string(entry.senderPeerId + 1);
+		}
+		m_MultiplayerLobbyChatLines.push_back(std::string(entry.scope == c_NetChatScopeTeam ? "  [team] " : "") + name + ": " + entry.text);
+		while (m_MultiplayerLobbyChatLines.size() > m_MultiplayerLobbyChatLabels.size()) {
+			m_MultiplayerLobbyChatLines.pop_front();
+		}
+	}
+}
+
 void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
 	NetPlayerPresentation::Remember(snapshot, m_MultiplayerNameTextBox ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
 	const bool savingDiagnostics = TelemetryBundle::IsBusy();
@@ -3423,6 +3493,25 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	RefreshReconnectControls();
 	if (moderating) {
 		RefreshModerationControls(snapshot);
+	}
+	// A host page hides the lobby's chat band, so a line that lands while it is open is shown above the page instead.
+	const bool pageHidesChat = m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && g_NetMatchService.GetState() != NetMatchServiceState::Idle;
+	if (pageHidesChat) TakeLobbyChat(snapshot);
+	if (m_PageChatNotice) {
+		const bool notice = pageHidesChat && !m_MultiplayerLobbyChatLines.empty();
+		m_PageChatNotice->SetVisible(notice);
+		if (notice) {
+			const int x = m_HostOptionsPanel->GetXPos(), width = m_HostOptionsPanel->GetWidth();
+			m_PageChatNotice->SetPositionAbs(x, std::max(0, m_HostOptionsPanel->GetYPos() - m_PageChatNotice->GetHeight() - 2));
+			if (m_PageChatNotice->GetWidth() != width) m_PageChatNotice->Resize(width, m_PageChatNotice->GetHeight());
+			std::string line = "Chat - " + m_MultiplayerLobbyChatLines.back();
+			m_PageChatNotice->SetText(line);
+			// One line: the newest message's end gives way to an ellipsis before the notice wraps.
+			while (m_PageChatNotice->GetTextWidth() > width - 4 && line.size() > 8) {
+				line.pop_back();
+				m_PageChatNotice->SetText(line + "...");
+			}
+		}
 	}
 	if (!lobby) {
 		for (GUILabel* label : m_MultiplayerLobbyChatLabels) {
@@ -3457,10 +3546,30 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		int contentWidth = 300;
 		int contentHeight = 250;
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup && m_MultiplayerLanGamesLabel) {
+			// The address shows whole (a session id is wider than an IP): the page widens until the field holds it, the field
+			// keeping the page's right margin. Measured as the skin draws a text box: its font, kerning and both margins.
+			int addressWidth = 0;
+			if (GUISkin* skin = m_SubMenuScreenGUIControlManager->GetSkin()) {
+				std::string fontName;
+				int margin = 3, kerning = 0;
+				if (skin->GetValue("TextBox", "Font", &fontName)) {
+					if (GUIFont* font = skin->GetFont(fontName)) {
+						skin->GetValue("TextBox", "WidthMargin", &margin);
+						skin->GetValue("TextBox", "FontKerning", &kerning);
+						const int savedKerning = font->GetKerning();
+						font->SetKerning(kerning);
+						addressWidth = font->CalculateWidth(m_MultiplayerJoinAddressTextBox->GetText()) + 2 * margin + 2;
+						font->SetKerning(savedKerning);
+					}
+				}
+			}
+			// The field starts 110 px in and ends 24 px short of a 300 px page; a page widened by d moves it d/2 right.
+			const int addressPageWidth = 2 * (std::max(166, addressWidth) - 16);
 			// The directory hint is one line. A small viewport scrolls it instead of clipping away the fallback.
-			const int desiredWidth = std::max(300, m_MultiplayerLanGamesLabel->GetTextWidth() + 24);
+			const int desiredWidth = std::max({300, m_MultiplayerLanGamesLabel->GetTextWidth() + 24, addressPageWidth});
 			contentWidth = std::min(desiredWidth, m_RootBoxMaxWidth - 12);
 			FitMultiplayerPanelWidth(m_MultiplayerJoinPanel, m_MultiplayerLanGamesLabel, contentWidth);
+			m_MultiplayerJoinAddressTextBox->Resize(contentWidth - 24 - m_MultiplayerJoinAddressTextBox->GetRelXPos(), m_MultiplayerJoinAddressTextBox->GetHeight());
 			const bool scroll = desiredWidth > contentWidth;
 			m_MultiplayerLanGamesLabel->SetHorizontalOverflowScroll(scroll);
 			m_MultiplayerLanGamesLabel->ActivateDeactivateOverflowScroll(scroll);
@@ -3545,7 +3654,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const NetLobbyMember& member = *visibleMembers[i];
 		// The seat line is the verbose form of the seat mark; the row keeps whichever fits.
 		const std::string seatMark = std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming));
-		const auto buildTail = [&member, &snapshot](const std::string& seat, bool withMetrics = true) {
+		const bool open = isOpenSeat(member);
+		const auto buildTail = [&member, &snapshot, open](const std::string& seat, bool withMetrics = true) {
+			// An open seat has no player to be ready or to measure: it names its team and nothing else.
+			if (open) return " - Team " + std::to_string(member.team + 1);
 			std::string tail = member.isLocal ? " (you)" : "";
 			tail += " - Team " + std::to_string(member.team + 1);
 			tail += member.peerId == snapshot.hostPeerId ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
@@ -3553,8 +3665,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			if (!member.cpu && withMetrics) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
 			return tail;
 		};
-		// An open seat wears its unseated name, never the remembered name of the player who held it.
-		lobbyRowName[i] = isOpenSeat(member) ? member.displayName
+		// An open seat reads open, never as a player who is not ready, nor by the remembered name of the one who held it.
+		lobbyRowName[i] = open ? std::string("Open seat")
 		                                     : LobbyRowName(member, m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty()
 		                                                            ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
 		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
@@ -3685,8 +3797,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// a time - before any of them do.
 	const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
 	const int fixedExtra = statusExtra + portMapHeight + summaryHeight;
-	const int panelCap = g_WindowMan.GetResY() - 24; // the Back button's band sits under the panel
-	const int inputBlock = 25;                     // textbox 13 px + a bottom margin matching its sides
+	const int panelCap = g_WindowMan.GetResY() - backReserve; // the Back button's band sits under the panel
+	const int inputBlock = 37;                     // textbox 13 px, the 10 px version line 2 px under it, a bottom margin matching its sides
 	// The Leave/Seats row ends at rel 240; the first chat row keeps a 4px gap under it and the
 	// error block must not reach into that band.
 	const int c_LobbyChatTop = 261;
@@ -3718,24 +3830,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 
 	// The newest chatRows lines, oldest on top; the entry box takes Enter for All, Ctrl+Enter for
 	// Team. Team lines indent two cells as well as carrying their [team] mark.
-	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
-		std::string name = entry.senderName;
-		if (name.empty()) {
-			for (const NetLobbyMember& member : snapshot.members) {
-				if (member.peerId == entry.senderPeerId + 1) {
-					name = member.displayName;
-					break;
-				}
-			}
-		}
-		if (name.empty()) {
-			name = "Player " + std::to_string(entry.senderPeerId + 1);
-		}
-		m_MultiplayerLobbyChatLines.push_back(std::string(entry.scope == c_NetChatScopeTeam ? "  [team] " : "") + name + ": " + entry.text);
-		while (m_MultiplayerLobbyChatLines.size() > m_MultiplayerLobbyChatLabels.size()) {
-			m_MultiplayerLobbyChatLines.pop_front();
-		}
-	}
+	TakeLobbyChat(snapshot);
 	// Lines sit bottom-aligned above the input: the newest line is always the lowest drawn row.
 	const size_t chatOffset = m_MultiplayerLobbyChatLines.size() > static_cast<size_t>(chatRows)
 	                              ? m_MultiplayerLobbyChatLines.size() - chatRows : 0;
@@ -3762,6 +3857,18 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			m_MultiplayerLobbyChatInput->Resize(chatW, 13);
 		}
 		m_MultiplayerLobbyChatInput->SetVisible(true);
+	}
+	if (m_MultiplayerLobbyVersionLabel) {
+		m_MultiplayerLobbyVersionLabel->SetPositionRel(chatX, chatTop + chatRows * 10 + 15);
+		if (m_MultiplayerLobbyVersionLabel->GetWidth() != chatW) {
+			m_MultiplayerLobbyVersionLabel->Resize(chatW, 10);
+		}
+		// FontSmall, the font the line was given.
+		GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont;
+		const bool wide = font && font->CalculateWidth(m_MultiplayerLobbyVersionLabel->GetText()) > chatW;
+		m_MultiplayerLobbyVersionLabel->SetHorizontalOverflowScroll(wide);
+		m_MultiplayerLobbyVersionLabel->ActivateDeactivateOverflowScroll(wide);
+		m_MultiplayerLobbyVersionLabel->SetVisible(true);
 	}
 
 	if (m_MultiplayerLobbyPanel->GetHeight() != contentHeight) {

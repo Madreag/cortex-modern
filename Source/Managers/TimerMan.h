@@ -5,6 +5,7 @@
 
 #include "Singleton.h"
 
+#include <algorithm>
 #include <deque>
 #include <chrono>
 
@@ -119,6 +120,33 @@ namespace RTE {
 		/// If negative, it means no sim updates have happened, and a same frame will be drawn again.
 		/// @return The number of pure sim updates that have happened since the last drawn.
 		int SimUpdatesSinceDrawn() const { return m_SimUpdatesSinceDrawn; }
+
+		/// Starts a frame's sim updates. With a budget, the update that would run past it is the drawn one, so a machine
+		/// with owed ticks presents between them instead of freezing one frame on all of them.
+		/// @param budgetTicks Wall time the frame's sim updates may take before one is drawn; 0 for no limit.
+		void BeginSimFrame(long long budgetTicks);
+
+		/// Tells whether the sim update just run was drawn because the frame's budget ran out.
+		/// @return Whether the frame's budget ended its sim updates.
+		bool SimFrameBudgetSpent() const { return m_SimFrameBudgetSpent; }
+
+		/// Drops the time the sim owes past the update about to run and holds its clock back a number of fixed ticks, so a lockstep peer
+		/// running ahead of its inputs gives them room to land before it needs them.
+		/// @param ticks The fixed ticks of real time that go by before the sim accrues time again.
+		/// Sets how many ticks this clock keeps owing, past the one due, instead of dropping them: a lockstep machine that
+		/// cannot present every tick runs what it owes back to back and presents less often.
+		/// @param ticks The owed ticks kept, 0 for the sim's own estimate alone.
+		void SetOwedTicksKept(int ticks) { m_OwedTicksKept = ticks; }
+
+		/// Sets the cost a tick is taken to have when capping what this clock owes: a lockstep round passes the median of its recent
+		/// ticks, which one spike (a capture, a first-tick load) does not move.
+		/// @param ms The tick cost in milliseconds, 0 for the sim's own estimate.
+		void SetOwedCapTickCostMS(float ms) { m_OwedCapTickCostMS = ms; }
+
+		void HoldSimTicks(int ticks) {
+			m_SimAccumulator = std::min(m_SimAccumulator, m_DeltaTime);
+			m_SimHold += static_cast<long long>(std::max(0, ticks)) * m_DeltaTime;
+		}
 
 		/// Gets the simulation speed over real time.
 		/// @return The value of the simulation speed over real time.
@@ -259,6 +287,13 @@ namespace RTE {
 
 		int m_SimUpdatesSinceDrawn; //!< How many sim updates have been done since the last drawn one.
 		bool m_DrawnSimUpdate; //!< Tells whether the current simulation update will be drawn in a frame.
+		long long m_SimFrameBudget; //!< Wall time this frame's sim updates may take before one is drawn; 0 for no limit.
+		long long m_SimFrameStart; //!< When this frame's sim updates began.
+		long long m_LastSimUpdateStart; //!< When the latest sim update of this frame began, or 0 before one.
+		bool m_SimFrameBudgetSpent; //!< The frame's budget ended its sim updates at the drawn one.
+		long long m_SimHold; //!< Real time still to go by before the sim accrues time again.
+		int m_OwedTicksKept; //!< Owed ticks kept past the one due, whatever the sim's cost estimate says it can run.
+		float m_OwedCapTickCostMS; //!< The tick cost that caps what this clock owes, 0 for the sim's own estimate.
 
 		float m_SimSpeed; //!< The simulation speed over real time.
 		float m_TimeScale; //!< The relationship between the real world actual time and the simulation time. A value of 2.0 means simulation runs twice as fast as normal, as perceived by a player.

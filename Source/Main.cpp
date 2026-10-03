@@ -86,6 +86,9 @@
 #include "MenuAutomation.h"
 #ifdef __APPLE__
 #include "AppleApplication.h"
+#include <mach/mach.h>
+#elif defined(__linux__)
+#include <unistd.h>
 #endif
 
 #include "ControllerFrame.h"
@@ -115,6 +118,7 @@
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "NetRejoinMatrixSelfTest.h"
+#include "NetSeatRoster.h"
 #include "NetWorldJoinSelfTest.h"
 #ifdef CCCP_WITH_GNS
 #include <steam/isteamnetworkingutils.h>
@@ -127,6 +131,7 @@
 #include "AIWriteScript.h"
 #include "FaultInjection.h"
 #include "LocalPrediction.h"
+#include "SimDumpTape.h"
 #include "LocalPredictionHudSelfTest.h"
 #include "OwnedMovableObjects.h"
 #include "PreviewEventLedger.h"
@@ -177,13 +182,17 @@
 #include <iostream>
 #include <iomanip>
 #include <random>
+#include <condition_variable>
 #include <deque>
+#include <functional>
+#include <mutex>
 #include <array>
 #include <list>
 #include <map>
 #include <optional>
 #include <sstream>
 #include <set>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -238,24 +247,38 @@ static void RetractAbandonedTickHashes() {
 }
 
 static uint64_t s_memoryCensusTicks = 0; //!< Every this many ticks one line names what each record holds; 0 = never.
-static bool s_memoryCensusHistogram = false; //!< The census also walks the process heap and names the block sizes holding the most.
+static bool s_memoryCensusHistogram = false; //!< The census also sums the process heaps, walks the default one and names the block sizes holding the most.
 static size_t s_memoryCensusProbeSize = 0; //!< Blocks of this size have their first bytes printed, so a leaked object can be named.
 
-// Private bytes, and what the process heaps hold allocated and committed, for the memory census.
-static std::string ProcessHeapCensus() {
+// Private bytes, and what the process heaps hold allocated and committed, for the memory census; costs gets each part's microseconds.
+static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 #ifdef _WIN32
+	auto lapStart = std::chrono::steady_clock::now();
+	const auto lap = [&costs, &lapStart](const char* name) {
+		const auto now = std::chrono::steady_clock::now();
+		costs += std::string(",") + name + ":" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(now - lapStart).count());
+		lapStart = now;
+	};
 	PROCESS_MEMORY_COUNTERS_EX counters{};
 	K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters));
-	HANDLE heaps[256];
-	const DWORD count = std::min<DWORD>(GetProcessHeaps(256, heaps), 256);
-	unsigned long long allocated = 0, committed = 0;
-	for (DWORD index = 0; index < count; ++index) {
-		HEAP_SUMMARY summary{};
-		summary.cb = sizeof(summary);
-		if (HeapSummary(heaps[index], 0, &summary)) {
-			allocated += summary.cbAllocated;
-			committed += summary.cbCommitted;
+	lap("heap_counters");
+	// Summing a heap holds its lock for as long as the heap is large, and every thread that allocates waits on it, the simulation's
+	// included: the heaps are summed only with the census's heap walk.
+	std::string heapFigures;
+	if (s_memoryCensusHistogram) {
+		HANDLE heaps[256];
+		const DWORD count = std::min<DWORD>(GetProcessHeaps(256, heaps), 256);
+		unsigned long long allocated = 0, committed = 0;
+		for (DWORD index = 0; index < count; ++index) {
+			HEAP_SUMMARY summary{};
+			summary.cb = sizeof(summary);
+			if (HeapSummary(heaps[index], 0, &summary)) {
+				allocated += summary.cbAllocated;
+				committed += summary.cbCommitted;
+			}
 		}
+		heapFigures = std::format(" heaps={} heap_allocated_mb={} heap_committed_mb={}", count, allocated >> 20, committed >> 20);
+		lap("heap_summary");
 	}
 	DWORD handles = 0;
 	GetProcessHandleCount(GetCurrentProcess(), &handles);
@@ -268,6 +291,7 @@ static std::string ProcessHeapCensus() {
 		}
 		CloseHandle(snapshot);
 	}
+	lap("heap_threads");
 	std::string histogram;
 	if (s_memoryCensusHistogram) {
 		// Busy blocks by exact size below 64 KB, larger ones by power of two; the walk allocates nothing while the heap is locked.
@@ -322,11 +346,74 @@ static std::string ProcessHeapCensus() {
 		histogram += " heap_top=";
 		for (size_t index = 0; index < std::min<size_t>(top.size(), 12); ++index) histogram += (index ? "," : "") + top[index].second;
 	}
-	return std::format(" private_mb={} heaps={} heap_allocated_mb={} heap_committed_mb={} threads={} handles={}{}", counters.PrivateUsage >> 20, count, allocated >> 20, committed >> 20, threads, handles, histogram);
+	return std::format(" private_mb={}{} threads={} handles={}{}", counters.PrivateUsage >> 20, heapFigures, threads, handles, histogram);
+#elif defined(__APPLE__)
+	mach_task_basic_info_data_t info{};
+	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+	if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) return {};
+	return std::format(" resident_mb={}", info.resident_size >> 20);
+#elif defined(__linux__)
+	unsigned long long pages = 0, resident = 0;
+	std::ifstream statm("/proc/self/statm");
+	if (!(statm >> pages >> resident)) return {};
+	return std::format(" resident_mb={}", (resident * static_cast<unsigned long long>(sysconf(_SC_PAGESIZE))) >> 20);
 #else
 	return {};
 #endif
 }
+
+// The memory census's process figures are summed here, off the simulation thread: on a large heap they cost hundreds of milliseconds.
+class CensusWorker {
+public:
+	static CensusWorker& Get() {
+		static CensusWorker worker;
+		return worker;
+	}
+
+	void Post(std::function<void()> job) {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_Jobs.push_back(std::move(job));
+		}
+		m_Wake.notify_one();
+	}
+
+	~CensusWorker() {
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_Stopping = true;
+		}
+		m_Wake.notify_one();
+		m_Thread.join();
+	}
+
+private:
+	CensusWorker() :
+	    m_Thread([this] { Run(); }) {}
+
+	// Every posted line is printed before the worker stops.
+	void Run() {
+		for (;;) {
+			std::function<void()> job;
+			{
+				std::unique_lock<std::mutex> lock(m_Mutex);
+				m_Wake.wait(lock, [this] { return m_Stopping || !m_Jobs.empty(); });
+				if (m_Jobs.empty()) {
+					return;
+				}
+				job = std::move(m_Jobs.front());
+				m_Jobs.pop_front();
+			}
+			job();
+		}
+	}
+
+	std::mutex m_Mutex;
+	std::condition_variable m_Wake;
+	std::deque<std::function<void()>> m_Jobs;
+	bool m_Stopping = false;
+	std::thread m_Thread;
+};
 // Test lever: every N committed lockstep ticks each peer hashes its whole capture; 0 is off.
 static uint32_t s_netFullStateEvery = 0;
 static std::string s_netFullStateDump;
@@ -369,9 +456,24 @@ static bool CrossHistoryRestored(bool catchup, bool inPlace, uint64_t configured
 	return (catchup && !inPlace) || (configuredStart > 1 && !inPlaceReturns.contains(configuredStart)) || ticketRejoin || reexecuted;
 }
 
+// A relaunched process rejoins one round, the first it sees; every later round it starts from the round's first frame like the others.
+static bool CrossTicketRejoinRound(bool ticketRejoin, uint64_t round, uint64_t& firstRound) {
+	if (firstRound == 0) firstRound = round;
+	return ticketRejoin && round == firstRound;
+}
+
 static nlohmann::json CrossHistoryBranch(uint64_t configuredStart, bool restored, [[maybe_unused]] uint64_t nextFrameCursor, const std::set<uint64_t>& inPlaceReturns = {}) {
 	const bool started = configuredStart == 1 || (configuredStart > 1 && inPlaceReturns.contains(configuredStart));
 	return started && !restored ? nlohmann::json("initial") : nlohmann::json(nullptr);
+}
+
+// A restored or re-run history is the round's own: a catch-up replay or a re-execution runs its committed ticks, and a restored
+// process runs them live from the frame it lands on, so each such row carries the round's branch.
+static nlohmann::json CrossLandedBranch(const nlohmann::json& branch, bool catchup, std::string_view phase, uint64_t configuredStart, uint64_t tick) {
+	if (!branch.is_null()) return branch;
+	const bool replayed = catchup || phase == "catchup" || phase == "reexecution";
+	const bool landed = phase == "live" && configuredStart != 0 && tick >= configuredStart;
+	return replayed || landed ? nlohmann::json("initial") : branch;
 }
 
 static uint64_t CrossRecordRound(uint64_t nativeRound, [[maybe_unused]] uint64_t sourceRound) { return nativeRound; }
@@ -413,6 +515,14 @@ bool RTE::RunCrossHistoryRecordSelfTest(std::string* error) {
 	    !CrossHistoryBranch(1, true, 601).is_null() || !CrossHistoryBranch(0, false, 601).is_null()) {
 		*error = "a next-frame cursor is mistaken for a checkpoint, or unknown restoration is mapped as initial"; return false;
 	}
+	// l4p-38: a restored history's catch-up rows and its live rows after the landing carried no branch, so none of them was compared.
+	if (CrossLandedBranch(nullptr, false, "live", 1663, 1700) != "initial" || CrossLandedBranch(nullptr, true, "catchup", 0, 400) != "initial" ||
+	    CrossLandedBranch(nullptr, false, "reexecution", 357, 400) != "initial") {
+		*error = "a row a restored or re-run history wrote carries no branch"; return false;
+	}
+	if (!CrossLandedBranch(nullptr, false, "live", 1663, 1600).is_null() || !CrossLandedBranch(nullptr, false, "live", 0, 400).is_null()) {
+		*error = "a live row before its process's start took the round's branch"; return false;
+	}
 	std::cout << "[net-match-selftest] PASS initial_history_uses_configured_start_not_the_next_frame_cursor" << std::endl;
 	return true;
 }
@@ -430,6 +540,13 @@ bool RTE::RunCrossInPlaceHistorySelfTest(std::string* error) {
 	    !CrossHistoryBranch(700, false, 701, returns).is_null() || !CrossHistoryBranch(671, true, 672, returns).is_null() ||
 	    !CrossHistoryBranch(671, false, 672, {}).is_null()) {
 		*error = "an image catch-up, a late start, a ticket rejoin or a re-executed tick keeps the initial history"; return false;
+	}
+	// l4p-31: EDITH's relaunch rejoined round 2 by ticket, then played rounds 3-6 from their first frames; all of them were recorded as restored.
+	uint64_t firstRound = 0;
+	const bool rejoined = CrossTicketRejoinRound(true, 1542469911966388394ull, firstRound), later = CrossTicketRejoinRound(true, 12545044123032358889ull, firstRound);
+	if (!rejoined || later || CrossTicketRejoinRound(false, 1542469911966388394ull, firstRound)) {
+		*error = std::string("a relaunched process's ticket rejoin marks ") + (later ? "a later round it played from its start" : "the wrong round") + " as restored";
+		return false;
 	}
 	std::cout << "[net-match-selftest] PASS in_place_catch_up_keeps_the_initial_history" << std::endl;
 	return true;
@@ -536,7 +653,9 @@ static void BeginCrossTick(uint64_t tick) {
 	auto& returns = inPlaceReturns[historyKey];
 	// The frame an in-place catch-up returns at is where this process starts its round again on its own world.
 	if (inPlace && ScenarioRunner::WorldCatchUpActivationTick() != 0) returns.insert(ScenarioRunner::WorldCatchUpActivationTick());
-	if (CrossHistoryRestored(catchup, inPlace, configuredStart, returns, s_crossTicketRejoin, round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
+	static uint64_t processFirstRound = 0;
+	const bool ticketRound = CrossTicketRejoinRound(s_crossTicketRejoin, round, processFirstRound);
+	if (CrossHistoryRestored(catchup, inPlace, configuredStart, returns, ticketRound, round == previousRound && tick <= previousTick)) unmappedHistories.insert(historyKey);
 	priorHost = host; priorCatchup = catchup;
 	// The process's own names and the config's hash change rarely; each tick reads them from here.
 	static const std::string run = CrossEnvironment("CC_TEST_CROSS_RUN"), instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
@@ -549,6 +668,7 @@ static void BeginCrossTick(uint64_t tick) {
 		hashedConfig = key;
 		configHash = NetMatchConfigUtil::StoredConfigHash(*config);
 	}
+	const char* tickPhase = CrossTickPhase(catchup, tick, s_crossLastCommitted.contains(round) ? s_crossLastCommitted.at(round) : 0, execution);
 	s_crossContext = {{"run", run}, {"instance", instance},
 	    {"process", System::GetProcessID()}, {"execution", executionBase + std::to_string(execution)},
 	    {"incarnation", incarnation}, {"seat_incarnation", nullptr},
@@ -556,11 +676,11 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"authority_generation_source", "service.runner.lockstep; refreshed on round/host/catch-up transition"},
 	    {"session", std::to_string(config->sessionId)}, {"match", std::to_string(CrossRecordRound(round, config->roundId))},
 	    {"round", round}, {"source_round", config->roundId}, {"tick", tick}, {"peer", ScenarioRunner::GetLockstepLocalPeerId()},
-	    {"history_branch", CrossHistoryBranch(configuredStart, unmappedHistories.contains(historyKey), ScenarioRunner::GetLockstepResumeFrame(), returns)},
+	    {"history_branch", CrossLandedBranch(CrossHistoryBranch(configuredStart, unmappedHistories.contains(historyKey), ScenarioRunner::GetLockstepResumeFrame(), returns), catchup, tickPhase, configuredStart, tick)},
 	    {"configured_start_frame", catchup ? nlohmann::json(nullptr) : nlohmann::json(configuredStart)},
 	    {"checkpoint_digest", nullptr}, {"config_revision", config->configRevision},
 	    {"config_hash", configHash}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
-	    {"phase", CrossTickPhase(catchup, tick, s_crossLastCommitted.contains(round) ? s_crossLastCommitted.at(round) : 0, execution)}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
+	    {"phase", tickPhase}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
 	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
 	if (const auto& snapshot = g_NetMatchService.GetSeatPresence().GetSnapshot()) {
 		for (const auto& seat: snapshot->seats) if (seat.peerId == ScenarioRunner::GetLockstepLocalPeerId()) {
@@ -844,11 +964,21 @@ static void CrossEndTargetObservation(uint64_t tick) {
 static void CrossEliminationAtCommittedTick(uint64_t tick) {
 	if (s_crossSchedule.empty() || !g_NetMatchService.IsHost() || ScenarioRunner::WorldCatchUpActive()) return;
 	static std::map<std::string, std::set<long>> issued;
+	// Why a forced end has not fired yet, named once its window closes unfired.
+	static std::map<std::string, std::string> heldBack;
+	static std::set<std::string> closed;
 	for (const auto& fault: s_crossSchedule) {
 		if (fault.at("action") != "brain-eliminate" || s_crossBudget < fault.at("tick").get<uint64_t>()) continue;
 		const std::string id = fault.at("id");
 		if (s_crossFired.contains(id)) continue;
-		if (s_crossBudget > fault.at("tick").get<uint64_t>() + fault.value("phase_window_ticks", uint64_t{6000})) continue;
+		if (s_crossBudget > fault.at("tick").get<uint64_t>() + fault.value("phase_window_ticks", uint64_t{6000})) {
+			if (issued[id].empty() && closed.insert(id).second) {
+				const std::string reason = heldBack.contains(id) ? heldBack.at(id) : "never evaluated";
+				System::PrintDiagnosticLine("[cross-end] " + id + " window closed unfired at budget " + std::to_string(s_crossBudget) + ": " + reason);
+				g_MetricsCollector.WriteObservation({{"type", "elimination_window_closed"}, {"id", id}, {"reason", reason}, {"budget_tick", s_crossBudget}});
+			}
+			continue;
+		}
 		const auto config = ScenarioRunner::GetLockstepMatchConfig();
 		if (!config) continue;
 		uint8_t targetPeer = 0;
@@ -860,11 +990,15 @@ static void CrossEliminationAtCommittedTick(uint64_t tick) {
 		const bool phaseSignalled = std::any_of(chats.begin(), chats.end(), [&](const auto& chat) {
 			return CrossEndSignalMatches(chat.text, chat.senderPeerId, targetPeer, id, config->sessionId, config->roundId, fault.value("target_incarnation", ~0u));
 		});
-		if (issued[id].empty() && !(phase == "hold" ? held : phaseSignalled)) continue;
-		if (issued[id].empty() && g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver()) continue;
+		if (issued[id].empty() && !(phase == "hold" ? held : phaseSignalled)) { heldBack[id] = "target " + std::to_string(targetPeer) + " not in its " + phase + " phase at tick " + std::to_string(tick); continue; }
+		if (issued[id].empty() && g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver()) { heldBack[id] = "activity over at tick " + std::to_string(tick); continue; }
 		const int survivor = fault.value("survivor_team", 0);
 		Actor* writer = g_MovableMan.GetFirstBrainActor(survivor);
-		if (!writer || !ScenarioRunner::IsLockstepAIWriteAuthorized(ScenarioRunner::GetLockstepLocalPeerId(), writer->GetTeam(), writer->GetUniqueID(), writer->GetUniqueID())) continue;
+		if (!writer) { heldBack[id] = "survivor team " + std::to_string(survivor) + " has no brain at tick " + std::to_string(tick); continue; }
+		if (!ScenarioRunner::IsLockstepAIWriteAuthorized(ScenarioRunner::GetLockstepLocalPeerId(), writer->GetTeam(), writer->GetUniqueID(), writer->GetUniqueID())) {
+			heldBack[id] = "this peer may not write for survivor team " + std::to_string(survivor) + " at tick " + std::to_string(tick);
+			continue;
+		}
 		unsigned enemies = 0;
 		for (int team = 0; team < Activity::MaxTeamCount; ++team) if (team != survivor) {
 			if (Actor* brain = g_MovableMan.GetFirstBrainActor(team)) {
@@ -1128,19 +1262,23 @@ static uint64_t s_paceIterations = 0;
 static uint64_t s_paceSimTicks = 0;
 static long long s_paceSimUs = 0;
 static std::atomic<float> s_paceExecutionAverageMs{0.0F};
+static std::deque<float> s_paceTickCostsMs; //!< The paced round's recent tick costs, whose median caps what the clock owes.
 static long long s_paceUpdateUs = 0;
 static long long s_paceDrawUs = 0;
+static long long s_paceTrailingUs = 0; //!< Time since the round's last simulated tick, which the round did not run.
 static long long s_pacePreviewUs = 0; //!< The draw's share spent in the local prediction preview.
 static long long s_paceInterfaceUs = 0; //!< The draw's share spent on input, the menus and the activity's render update.
 static uint64_t s_paceFramesDrawn = 0; //!< Frames the presentation cap let through.
+static uint64_t s_paceFramesShed = 0; //!< Frames a paced round skipped because it still owed ticks.
+static long long s_paceLastPresentUs = 0; //!< When the paced round last drew a frame.
 static long long s_paceFrameDrawUs = 0; //!< Time spent drawing and presenting those frames.
 static long long s_paceMaxDrawUs = 0; //!< The longest single iteration's draw since the previous census line.
 
 // The loop pace since the previous memory census line, with the draw split where it spends its time.
 static std::string PaceCensusSinceLast() {
-	struct Mark { uint64_t iterations = 0, ticks = 0; long long simUs = 0, updateUs = 0, drawUs = 0, previewUs = 0, interfaceUs = 0, waitUs = 0, trimmedTicks = 0; uint64_t previews = 0, framesDrawn = 0; long long frameDrawUs = 0; };
+	struct Mark { uint64_t iterations = 0, ticks = 0; long long simUs = 0, updateUs = 0, drawUs = 0, previewUs = 0, interfaceUs = 0, waitUs = 0, trimmedTicks = 0; uint64_t previews = 0, framesDrawn = 0; long long frameDrawUs = 0; uint64_t framesShed = 0; };
 	static Mark last;
-	const Mark now{s_paceIterations, s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs, s_pacePreviewUs, s_paceInterfaceUs, ScenarioRunner::GetLockstepWaitUs(), g_TimerMan.GetPaceTrimmedTicks(), LocalPrediction::GetPreviewCount(), s_paceFramesDrawn, s_paceFrameDrawUs};
+	const Mark now{s_paceIterations, s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs, s_pacePreviewUs, s_paceInterfaceUs, ScenarioRunner::GetLockstepWaitUs(), g_TimerMan.GetPaceTrimmedTicks(), LocalPrediction::GetPreviewCount(), s_paceFramesDrawn, s_paceFrameDrawUs, s_paceFramesShed};
 	// A new round restarts the counters.
 	if (now.iterations < last.iterations || now.ticks < last.ticks) last = Mark{};
 	const double ticks = static_cast<double>(std::max<uint64_t>(1, now.ticks - last.ticks));
@@ -1157,6 +1295,7 @@ static std::string PaceCensusSinceLast() {
 	    << " net_wait_ms=" << (now.waitUs - last.waitUs) / 1000 << " previews=" << now.previews - last.previews
 	    << " trimmed_ms=" << static_cast<double>(now.trimmedTicks - last.trimmedTicks) * 1000.0 / static_cast<double>(g_TimerMan.GetTicksPerSecond())
 	    << " mspsu_average=" << g_PerformanceMan.GetMSPSUAverage() << " frames_drawn=" << now.framesDrawn - last.framesDrawn
+	    << " frames_shed=" << now.framesShed - last.framesShed
 	    << " ms_per_frame_drawn=" << static_cast<double>(now.frameDrawUs - last.frameDrawUs) / 1000.0 / static_cast<double>(std::max<uint64_t>(1, now.framesDrawn - last.framesDrawn))
 	    << " max_iteration_draw_ms=" << static_cast<double>(s_paceMaxDrawUs) / 1000.0 << " preview_phase_ms=" << LocalPrediction::DescribePhasesSinceLastCall();
 	s_paceMaxDrawUs = 0;
@@ -1521,6 +1660,7 @@ int ShutDown(int exitCode) {
 	NetIdentity::StopManifestPriming();
 	// The writer holds frames the run has already presented, so it drains while SDL is still up.
 	FrameRecorder::Instance().Finish();
+	MenuAutomation::ReportWatches();
 	if (!MenuAutomation::FinishReadbacks()) {
 		System::PrintDiagnosticErrorLine("[menu-readback] queued snapshot write failed");
 		exitCode = EXIT_FAILURE;
@@ -1574,6 +1714,7 @@ int ShutDown(int exitCode) {
 	}
 	if (!TelemetryBundle::Flush()) exitCode = EXIT_FAILURE;
 	g_ConsoleMan.SaveAllText("LogConsole.txt");
+	UInputMan::StopJoystickUpdater();
 	DestroyManagers();
 	TelemetryBundle::Finish();
 	allegro_exit();
@@ -2471,6 +2612,18 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			GnsTransport::SetSimulatedLagMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
 			continue;
 		}
+		if (!lastArg && currentArg == "-net-fake-jitter") {
+			GnsTransport::SetSimulatedJitterMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
+			continue;
+		}
+		if (!lastArg && currentArg == "-net-fake-reorder") {
+			GnsTransport::SetSimulatedReorderPercent(std::strtof(argValue[++i], nullptr));
+			continue;
+		}
+		if (!lastArg && currentArg == "-net-fake-dup") {
+			GnsTransport::SetSimulatedDuplicatePercent(std::strtof(argValue[++i], nullptr));
+			continue;
+		}
 		if (!lastArg && currentArg == "-net-rendezvous-log") {
 			GnsTransport::SetRendezvousLogLevel(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
 			continue;
@@ -2954,6 +3107,9 @@ static bool RunFrameRecorderSelfTest() {
 /// </summary>
 void PollSDLEvents() {
 	NetModerationGUIProbe::BeforePoll();
+	// A device discovery can block for hundreds of milliseconds, so a lockstep match runs it on the joystick updater thread.
+	UInputMan::SetJoystickUpdaterRunning(ScenarioRunner::HasLockstepCoordinator());
+	UInputMan::UpdateJoysticksBeforePoll();
 	SDL_Event sdlEvent;
 	while (SDL_PollEvent(&sdlEvent)) {
 		switch (sdlEvent.type) {
@@ -3613,7 +3769,7 @@ static std::string NetMatchEndReason(const Activity* activity) {
 static void DumpSimStateIfArmed(uint64_t simTick) {
 	static uint64_t s_from = 1;
 	static uint64_t s_to = 0;
-	// Every tick's dump goes to the disk from a writer thread; the simulation only formats it.
+	// Every tick's dump is written and formatted by a writer thread; the simulation only records its values.
 	static AsyncLineWriter s_out;
 	static bool s_checked = false;
 	if (!s_checked) {
@@ -3632,9 +3788,48 @@ static void DumpSimStateIfArmed(uint64_t simTick) {
 	if (!s_out.IsOpen() || simTick < s_from || simTick > s_to) {
 		return;
 	}
-	std::ostringstream text;
-	g_MovableMan.DumpSimState(simTick, text);
-	s_out.WriteBlock(std::move(text).str());
+	const long long startUs = g_TimerMan.GetAbsoluteTime();
+	auto tape = std::make_shared<SimDumpTape>();
+	g_MovableMan.CaptureSimState(simTick, *tape);
+	// What the dump costs the simulation thread, so a harness cost is never read as the engine's own.
+	static uint64_t s_ticks = 0, s_over2 = 0, s_over50 = 0, s_maxTick = 0;
+	static double s_totalMs = 0, s_maxMs = 0;
+	const double ms = static_cast<double>(g_TimerMan.GetAbsoluteTime() - startUs) / 1000.0;
+	// Test lever: the simulation also writes the text itself, and the writer compares it with the tape's.
+	static const bool s_compare = std::getenv("CCCP_TEST_SIM_DUMP_COMPARE") != nullptr;
+	std::shared_ptr<const std::string> inlineText;
+	if (s_compare) {
+		std::ostringstream text;
+		g_MovableMan.DumpSimState(simTick, text);
+		inlineText = std::make_shared<const std::string>(std::move(text).str());
+	}
+	s_out.WriteMade([tape, inlineText, simTick, last = s_to]() {
+		std::ostringstream text;
+		tape->Replay(text);
+		std::string made = std::move(text).str();
+		if (inlineText) {
+			static uint64_t s_compared = 0, s_mismatched = 0;
+			++s_compared;
+			if (made != *inlineText && ++s_mismatched <= 3) System::PrintDiagnosticLine("[sim-dump] tape mismatch tick=" + std::to_string(simTick));
+			if (simTick == last) System::PrintDiagnosticLine("[sim-dump] tape compared=" + std::to_string(s_compared) + " mismatched=" + std::to_string(s_mismatched));
+		}
+		return made;
+	});
+	++s_ticks;
+	s_totalMs += ms;
+	s_over2 += ms > 2 ? 1 : 0;
+	s_over50 += ms > 50 ? 1 : 0;
+	if (ms > s_maxMs) {
+		s_maxMs = ms;
+		s_maxTick = simTick;
+	}
+	if (ms > 50) System::PrintDiagnosticLine("[sim-dump] slow tick=" + std::to_string(simTick) + " ms=" + std::to_string(ms));
+	if (s_ticks % 600 == 0 || simTick == s_to) {
+		std::ostringstream line;
+		line << "[sim-dump] ticks=" << s_ticks << " mean_ms=" << s_totalMs / static_cast<double>(s_ticks) << " max_ms=" << s_maxMs << " max_tick=" << s_maxTick
+		     << " over_2ms=" << s_over2 << " over_50ms=" << s_over50;
+		System::PrintDiagnosticLine(line.str());
+	}
 }
 
 // CC_TERRAIN_DUMP=<tick> saves the material and FG color bitmaps beside the -out trace at that tick
@@ -4042,15 +4237,49 @@ static void PollStallEventsForCapture() {
 	PollSDLEvents();
 }
 
+// Test lever CCCP_TEST_DRAW_PHASES: each stage of the frame's draw, its mean, median and 99th percentile, once every 600 frames.
+struct DrawPhases {
+	static constexpr const char* c_Names[] = {"previews_in", "scene", "net_ui", "toasts", "post", "pause_menu"};
+	static constexpr size_t c_Count = std::size(c_Names);
+	const bool armed = std::getenv("CCCP_TEST_DRAW_PHASES") != nullptr;
+	std::array<std::vector<float>, c_Count> samples;
+	long long lapUs = 0;
+	void Begin() { if (armed) lapUs = g_TimerMan.GetAbsoluteTime(); }
+	void Lap(size_t phase) {
+		if (!armed) return;
+		const long long now = g_TimerMan.GetAbsoluteTime();
+		samples[phase].push_back(static_cast<float>(now - lapUs));
+		lapUs = now;
+		if (phase + 1 == c_Count && samples[phase].size() == 600) {
+			std::ostringstream line;
+			line << "[draw-phase] frames=600 us(mean/p50/p99):";
+			for (size_t i = 0; i < c_Count; ++i) {
+				std::vector<float>& values = samples[i];
+				double total = 0;
+				for (float value: values) total += value;
+				std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+				const float median = values[values.size() / 2];
+				std::nth_element(values.begin(), values.begin() + values.size() * 99 / 100, values.end());
+				line << " " << c_Names[i] << "=" << total / values.size() << "/" << median << "/" << values[values.size() * 99 / 100];
+				values.clear();
+			}
+			System::PrintDiagnosticLine(line.str());
+		}
+	}
+};
+static DrawPhases s_drawPhases;
+
 static void DrawFrameWithPreviews() {
 	if (!FrameMan::FeelBeginDraw()) return;
 	const long long drawBeganUs = g_TimerMan.GetAbsoluteTime();
+	s_drawPhases.Begin();
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	g_SceneMan.SetRenderDrawContext(true);
 	LocalPredictionHudSelfTest::SampleBeforeRender();
 	LocalPrediction::BeginRender();
 	LocalPredictionHudSelfTest::SampleDuringRender();
+	s_drawPhases.Lap(0);
 	std::array<bool, c_MaxScreenCount> hudDisabled;
 	const bool localPause = g_MenuMan.IsLocalPauseMenuOpen();
 	for (int screen = 0; screen < c_MaxScreenCount; ++screen) {
@@ -4061,15 +4290,26 @@ static void DrawFrameWithPreviews() {
 		NetLockstepPlane::Window sceneDraw("scene draw");
 		g_FrameMan.Draw();
 	}
+	s_drawPhases.Lap(1);
+	// Test lever: a slower machine's draw cost, spent inside the frame's draw on this one.
+	static const long long s_testDrawCostUs = [] { const char* text = std::getenv("CCCP_TEST_DRAW_COST_US"); return text ? std::atoll(text) : 0LL; }();
+	if (s_testDrawCostUs > 0) {
+		for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testDrawCostUs; g_TimerMan.GetAbsoluteTime() < until;) {}
+	}
 	for (int screen = 0; screen < c_MaxScreenCount; ++screen) g_FrameMan.SetHudDisabled(hudDisabled[screen], screen);
 	LocalPredictionHudSelfTest::SampleAfterDraw();
 	{
 		// The overlays read the match service, which reaches the round without the plane's lock.
 		NetLockstepPlane::Gap plane("overlay draw");
+		s_drawPhases.Begin();
 		g_MenuMan.DrawNetworkUI();
+		s_drawPhases.Lap(2);
 		ScenarioRunner::DrawNetUiToasts();
+		s_drawPhases.Lap(3);
 		g_WindowMan.DrawPostProcessBuffer();
+		s_drawPhases.Lap(4);
 		g_MenuMan.DrawLocalPauseMenu();
+		s_drawPhases.Lap(5);
 	}
 	FrameMan::FeelBeforePresent();
 	{
@@ -4160,7 +4400,9 @@ static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	const int centerX = g_WindowMan.GetResX() / 2;
 	const int centerY = g_WindowMan.GetResY() / 2;
-	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, heldRejoin ? "Held - AI in control - rejoining..." : "Resyncing the match...", GUIFont::Centre);
+	const std::string resyncTitle = heldRejoin ? "Held - AI in control - rejoining..." : "Resyncing the match...";
+	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
+	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
 	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]", GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
@@ -5699,7 +5941,10 @@ static bool NetMatchActivityHasWinner(const Activity* activity) {
 
 static bool E2ERematchesLeft() {
 	const auto& args = ScenarioRunner::GetArgs();
-	return s_netMatchServiceE2ERematches < static_cast<int>(std::max<uint32_t>(args.selftestRematch ? 1 : 0, args.selftestRematches));
+	// The cross driver's rematch budget counts here as it does for a round that ends in play, so a seat whose round ended while it caught up follows the match.
+	const int rematches = s_crossRematches ? static_cast<int>(s_crossRematches)
+	                                       : static_cast<int>(std::max<uint32_t>(args.selftestRematch ? 1 : 0, args.selftestRematches));
+	return s_netMatchServiceE2ERematches < rematches;
 }
 
 static bool IsE2ERematchReady() {
@@ -5782,67 +6027,25 @@ static bool CrossDrawLobbySurface(std::string* error) {
 	return true;
 }
 
-// The e2e rematch ride-through: the finished round's result is logged, the live session reconvenes in the lobby and the next
-// round launches; false with the e2e error set when any step fails.
-static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
+// The e2e round boundary: the finished round's count and result.
+static void NoteNetMatchE2ERoundOver(const std::string& result) {
 	++s_netMatchServiceE2ERematches;
 	if (s_crossRematches) {
 		g_MetricsCollector.WriteObservation({{"type", "match_boundary"}, {"result", result},
 		    {"final_tick", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())}, {"rematch", s_netMatchServiceE2ERematches}, {"budget_tick", s_crossBudget}});
 	}
-	{
-		std::ostringstream line;
-		line << "[net-match-service-e2e] rematch: match " << s_netMatchServiceE2ERematches << " over (" << result << "), returning to lobby";
-		System::PrintDiagnosticLine(line.str());
-	}
-	if (!finished) {
-		g_NetMatchService.FinishMatch(result);
-		g_ActivityMan.EndActivity();
-		g_ActivityMan.SetInActivity(false);
-	}
-	std::string rematchError;
-	// The cross driver draws and checks the post-match lobby first; its offered lobby may already have returned the session.
-	if (!CrossDrawLobbySurface(&rematchError) ||
-	    ((!s_crossRematches || g_NetMatchService.GetState() == NetMatchServiceState::Completed) && !g_NetMatchService.ReturnToLobby(&rematchError))) {
-		s_netMatchServiceE2EError = "rematch return-to-lobby failed: " + rematchError;
-		s_netMatchServiceE2EExitCode = 1;
-		System::SetQuit(true);
-		return false;
-	}
-	g_NetMatchService.SetReady();
-	// The peer that hosts the match now asks for the next one: after a migration that is the successor.
-	if (g_NetMatchService.IsHost() || s_netDedicated) {
-		if (!CrossHostOptions(s_netMatchServiceE2ERematches, &rematchError)) {
-			s_netMatchServiceE2EError = "rematch host options: " + rematchError;
-			s_netMatchServiceE2EExitCode = 1;
-			System::SetQuit(true);
-			return false;
-		}
-		g_NetMatchService.RequestStart();
-	}
-	std::string rematchPreset;
-	bool rematchReady = false;
-	uint64_t crossReadyRevision = UINT64_MAX;
-	const auto rematchWaitStart = std::chrono::steady_clock::now();
-	while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rematchWaitStart).count() < 60) {
-		CrossReadyForCurrentConfig(crossReadyRevision);
-		if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
-			rematchReady = true;
-			break;
-		}
-		if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
-			break;
-		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(5));
-	}
-	std::string rematchConfigureError;
-	if (!rematchReady) {
-		s_netMatchServiceE2EError = "rematch launch failed: " + g_NetMatchService.GetErrorText();
-		s_netMatchServiceE2EExitCode = 1;
-		System::SetQuit(true);
-		return false;
-	} else if (!ConfigureNetMatchServiceE2EActivity(rematchPreset, &rematchConfigureError)) {
-		s_netMatchServiceE2EError = "rematch configure failed: " + rematchConfigureError;
+	std::ostringstream line;
+	line << "[net-match-service-e2e] rematch: match " << s_netMatchServiceE2ERematches << " over (" << result << "), returning to lobby";
+	System::PrintDiagnosticLine(line.str());
+}
+
+// Builds and starts the round the lobby launched; false with the e2e error set when any step fails.
+static bool LaunchNetMatchE2ERound(const std::string& preset) {
+	// A seat returning to a round the host already plays loads that round's image instead of building a fresh one.
+	const bool fresh = g_NetMatchService.LaunchedFreshRound();
+	std::string configureError;
+	if (!(fresh ? ConfigureNetMatchServiceE2EActivity(preset, &configureError) : StageResyncedMatchActivity(&configureError))) {
+		s_netMatchServiceE2EError = "rematch configure failed: " + configureError;
 		s_netMatchServiceE2EExitCode = 1;
 		System::SetQuit(true);
 		return false;
@@ -5857,6 +6060,14 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 		System::SetQuit(true);
 		return false;
 	}
+	if (!fresh) {
+		System::PrintDiagnosticLine("[net-match] held client: replaying the private committed tail");
+		g_NetMatchService.NoteResyncRelaunched();
+		const uint64_t lockstepResume = ScenarioRunner::HasLockstepCoordinator() ? ScenarioRunner::GetLockstepResumeFrame() : 0;
+		s_netMatchE2ETicks.OnResyncRelaunch(lockstepResume > 0 ? lockstepResume : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1);
+		s_netMatchE2EEditorTicks = 0;
+		return true;
+	}
 	{
 		std::ostringstream line;
 		line << "[net-match-service-e2e] rematch: round " << (s_netMatchServiceE2ERematches + 1) << " launching";
@@ -5866,6 +6077,85 @@ static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
 	s_netMatchE2ETicks.OnNewMatch();
 	s_netMatchE2EOwedSampleFrame = 0;
 	return true;
+}
+
+// The e2e rematch ride-through: the finished round's result is logged, the live session reconvenes in the lobby and the next
+// round launches; false with the e2e error set when any step fails.
+static bool RunNetMatchE2ERematch(const std::string& result, bool finished) {
+	NoteNetMatchE2ERoundOver(result);
+	if (!finished) {
+		g_NetMatchService.FinishMatch(result);
+		g_ActivityMan.EndActivity();
+		g_ActivityMan.SetInActivity(false);
+	}
+	std::string rematchError;
+	// The cross driver draws and checks the post-match lobby first; its offered lobby may already have returned the session.
+	bool lobbyLost = false;
+	if (!CrossDrawLobbySurface(&rematchError) ||
+	    ((!s_crossRematches || g_NetMatchService.GetState() == NetMatchServiceState::Completed) && !g_NetMatchService.ReturnToLobby(&rematchError))) {
+		// A seat whose link the host closed or lost keeps its place: it returns through its ticket below.
+		lobbyLost = g_NetMatchService.RematchReturnOwed();
+		if (!lobbyLost) {
+			s_netMatchServiceE2EError = "rematch return-to-lobby failed: " + rematchError;
+			s_netMatchServiceE2EExitCode = 1;
+			System::SetQuit(true);
+			return false;
+		}
+	}
+	std::string rematchPreset;
+	bool rematchReady = false;
+	uint64_t crossReadyRevision = UINT64_MAX;
+	if (!lobbyLost) {
+		g_NetMatchService.SetReady();
+		// The peer that hosts the match now asks for the next one: after a migration that is the successor.
+		if (g_NetMatchService.IsHost() || s_netDedicated) {
+			if (!CrossHostOptions(s_netMatchServiceE2ERematches, &rematchError)) {
+				s_netMatchServiceE2EError = "rematch host options: " + rematchError;
+				s_netMatchServiceE2EExitCode = 1;
+				System::SetQuit(true);
+				return false;
+			}
+			g_NetMatchService.RequestStart();
+		}
+		const auto rematchWaitStart = std::chrono::steady_clock::now();
+		while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rematchWaitStart).count() < 60) {
+			CrossReadyForCurrentConfig(crossReadyRevision);
+			if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
+				rematchReady = true;
+				break;
+			}
+			if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) {
+				break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+	}
+	if (!rematchReady && g_NetMatchService.RematchReturnOwed()) {
+		// The link to the host closed in the lobby: the host plays the round with this seat held, and the seat returns to it.
+		System::PrintDiagnosticLine("[net-match] rematch lobby link lost: rejoining the host");
+		std::string rejoinError;
+		if (g_NetMatchService.BeginHeldRejoin(&rejoinError)) {
+			const auto rejoinStart = std::chrono::steady_clock::now();
+			while (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - rejoinStart).count() < 60) {
+				CrossReadyForCurrentConfig(crossReadyRevision);
+				if (g_NetMatchService.ConsumeReadyToLaunch(rematchPreset)) {
+					rematchReady = true;
+					break;
+				}
+				if (g_NetMatchService.GetState() == NetMatchServiceState::Failed) break;
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			}
+		} else {
+			System::PrintDiagnosticLine("[net-match] rematch return could not start: " + rejoinError);
+		}
+	}
+	if (!rematchReady) {
+		s_netMatchServiceE2EError = "rematch launch failed: " + g_NetMatchService.GetErrorText();
+		s_netMatchServiceE2EExitCode = 1;
+		System::SetQuit(true);
+		return false;
+	}
+	return LaunchNetMatchE2ERound(rematchPreset);
 }
 
 /// Whether a controller stop carries a Complete stop, as the finish path passes it or as the poll and the controller path prefix it ("tick N lockstep stopped: Complete:...").
@@ -6091,9 +6381,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			if (heldRejoin) {
 				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
+			std::string launchPreset;
 			for (bool attempt = resyncOk; attempt;) {
 				attempt = false;
-				std::string launchPreset;
 				const auto resyncWaitStart = std::chrono::steady_clock::now();
 				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
 					// The round ended while this seat was on its way back: the host's end record is the result, and the session stays.
@@ -6129,6 +6419,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					}
 				}
 			}
+			// The held round ended while this seat was on its way back and the host's next round took it in: it plays that round.
+			const bool landedInNextRound = resyncOk && heldRejoin && g_NetMatchService.LaunchedFreshRound();
+			if (landedInNextRound) resyncOk = false;
 			if (resyncOk) {
 				resyncOk = StageResyncedMatchActivity(&resyncError);
 			}
@@ -6166,6 +6459,27 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					s_netMatchE2ETicks.OnResyncRelaunch(resumeFrame);
 					// The relaunch restarts the editor phase, so its budget restarts.
 					s_netMatchE2EEditorTicks = 0;
+				}
+			} else if (landedInNextRound) {
+				RetractAbandonedTickHashes();
+				System::PrintDiagnosticLine("[net-match] completed_by_next_round=1 held_from=" + std::to_string(s_netMatchHeldFromTick));
+				g_ConsoleMan.PrintString("NETWORK: The round ended while you were rejoining - the next round starts");
+				g_NetMatchService.EndHeldRejoinInNextRound();
+				g_ActivityMan.EndActivity();
+				g_ActivityMan.SetInActivity(false);
+				ScenarioRunner::ClearControllerReplayError();
+				ScenarioRunner::ClearNetUiToasts();
+				if (s_netMatchServiceE2E) {
+					NoteNetMatchE2ERoundOver("Match over");
+					(void)LaunchNetMatchE2ERound(launchPreset);
+				} else {
+					std::string launchError;
+					g_TimerMan.PauseSim(true);
+					if (!ConfigureNetMatchServiceE2EActivity(launchPreset, &launchError) || !g_ActivityMan.RestartActivity()) {
+						g_ConsoleMan.PrintString("NETWORK: The next round could not start: " + launchError);
+						g_NetMatchService.ReportRuntimeError("next round launch failed: " + launchError);
+						returnToMenuAfterNetworkEnd = true;
+					}
 				}
 			} else if (endedByRecord) {
 				// The round ended while this seat was held or rejoining: it shows the host's result and stays for the rematch.
@@ -6495,16 +6809,20 @@ void RunGameLoop() {
 			s_paceSimTicks = 0;
 			s_paceSimUs = 0;
 			s_paceExecutionAverageMs.store(0.0F, std::memory_order_relaxed);
+			s_paceTickCostsMs.clear();
 			s_paceUpdateUs = 0;
 			s_paceDrawUs = 0;
+			s_paceTrailingUs = 0;
 			s_pacePreviewUs = 0;
 			s_paceInterfaceUs = 0;
 			s_paceFramesDrawn = 0;
+			s_paceFramesShed = 0;
 			s_paceFrameDrawUs = 0;
 			ScenarioRunner::ResetLockstepWaitUs();
 			g_TimerMan.ResetPaceCounters();
 		}
 		s_pacePrevActive = paceActiveAtIterStart;
+		const uint64_t paceTicksAtIterStart = s_paceSimTicks;
 
 		// A free-running lockstep match takes one tick per iteration, so the preview and the polls still run per tick.
 		const bool freeRunLockstep = ScenarioRunner::GetArgs().freeRunSim && ScenarioRunner::IsLockstepControllerSyncActive();
@@ -6517,8 +6835,40 @@ void RunGameLoop() {
 		ScenarioRunner::BeginWorldCatchUpFrame();
 		CrossEndTargetObservation(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
+		// A lockstep peer with owed ticks presents at least once per tick length while it catches up, the round's first ticks
+		// included (the round starts inside this frame's first poll); a world joiner keeps its own ceiling.
+		// A paced round sheds frames, never ticks: it keeps up to a second of what it owes, runs it back to back and presents
+		// at least 15 times a second. One whose frames fit spreads a catch-up burst over frames a tick apart.
+		const bool pacedRound = ScenarioRunner::HasLockstepCoordinator() && !freeRunLockstep && !ScenarioRunner::WorldCatchUpActive();
+		const bool shedsFrames = pacedRound && g_PerformanceMan.GetMSPFAverage() > g_TimerMan.GetDeltaTimeMS();
+		constexpr double c_FloorFrameMs = 1000.0 / 15.0;
+		constexpr double c_OwedKeptMs = 1000.0;
+		g_TimerMan.SetOwedTicksKept(pacedRound ? static_cast<int>(c_OwedKeptMs / g_TimerMan.GetDeltaTimeMS()) : 0);
+		// A paced round caps what it owes by the median of its last 15 ticks, so a capture or a first-tick load cannot drop owed time.
+		float owedCapTickCostMs = 0;
+		if (pacedRound && !s_paceTickCostsMs.empty()) {
+			std::vector<float> costs(s_paceTickCostsMs.begin(), s_paceTickCostsMs.end());
+			std::nth_element(costs.begin(), costs.begin() + costs.size() / 2, costs.end());
+			owedCapTickCostMs = costs[costs.size() / 2];
+		}
+		g_TimerMan.SetOwedCapTickCostMS(owedCapTickCostMs);
+		g_TimerMan.BeginSimFrame(!pacedRound ? 0 : !shedsFrames ? g_TimerMan.GetDeltaTimeTicks() :
+		                         std::max(g_TimerMan.GetDeltaTimeTicks(), static_cast<long long>((c_FloorFrameMs - g_PerformanceMan.GetMSPDAverage()) * 1000.0)));
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (true) {
+			if (g_TimerMan.SimFrameBudgetSpent()) {
+				break;
+			}
+			// A joiner launched from the menu restores its base before asking for the tick after it, as a launch at the loop's start does:
+			// the counter still reads the round this process left, whose next tick the catch-up never grants.
+			if (ScenarioRunner::WorldCatchUpActive() && !g_ActivityMan.IsInActivity() && g_ActivityMan.ActivitySetToRestart()) {
+				g_TimerMan.PauseSim(false);
+				g_LoadingScreen.DrawLoadingSplash();
+				g_WindowMan.UploadFrame();
+				if (!g_ActivityMan.RestartActivity() && !HandleFailedActivityLaunch()) return;
+				g_NetMatchService.PreparePrivateRejoinCheckpoint();
+				break;
+			}
 			const uint64_t nextSimTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
 			if (ScenarioRunner::WorldCatchUpActive()) {
 				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick)) {
@@ -6550,6 +6900,19 @@ void RunGameLoop() {
 			g_PerformanceMan.NewPerformanceSample();
 			if (!measureLockstepCost) g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
+			// Test lever: a slower machine's sim cost, spent inside the tick on this one - in the simulation's update, where a slower
+			// machine spends it; CCCP_TEST_SIM_COST_OUTSIDE_WINDOW spends it before the update instead, where the plane cannot tick.
+			static const long long s_testSimCostUs = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_US"); return text ? std::atoll(text) : 0LL; }();
+			static const bool s_testSimCostOutside = std::getenv("CCCP_TEST_SIM_COST_OUTSIDE_WINDOW") != nullptr;
+			const auto spendTestSimCost = [] {
+				static const long long s_fromTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_FROM_TICK"); return text ? std::atoll(text) : 0LL; }();
+				static const long long s_untilTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_UNTIL_TICK"); return text ? std::atoll(text) : 0LL; }();
+				const long long tick = g_TimerMan.GetSimUpdateCount();
+				if (tick >= s_fromTick && (s_untilTick == 0 || tick < s_untilTick)) {
+					for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testSimCostUs; g_TimerMan.GetAbsoluteTime() < until;) {}
+				}
+			};
+			if (s_testSimCostUs > 0 && s_testSimCostOutside) spendTestSimCost();
 			g_AudioMan.RetireFinishedSimulationSounds();
 			const bool watchLedgerExpiry = s_eventLedgerPressTick > 0;
 			const uint64_t expiredBefore = watchLedgerExpiry ? PreviewEventLedger::GetCounters().expired : 0;
@@ -6710,7 +7073,7 @@ void RunGameLoop() {
 			if (!lockstepPausedTick) {
 				{
 					// The scripts' own housekeeping reads the round only through guarded calls, as the update below does.
-					NetLockstepPlane::Window planeWindow;
+					NetLockstepPlane::Window planeWindow("lua update");
 					g_LuaMan.Update();
 				}
 
@@ -7044,7 +7407,8 @@ void RunGameLoop() {
 					static const uint64_t soundPhase = Hash("Tick");
 					SoundSimulationScope simulationSounds(0, soundPhase);
 					// A long update is this machine's own: the plane commits for the round meanwhile, and the update reads the coordinator only through guarded calls.
-					NetLockstepPlane::Window planeWindow;
+					NetLockstepPlane::Window planeWindow("activity update");
+					if (s_testSimCostUs > 0 && !s_testSimCostOutside) spendTestSimCost();
 					g_ActivityMan.Update();
 
 					if (g_SceneMan.GetScene()) {
@@ -7067,7 +7431,7 @@ void RunGameLoop() {
 
 			if (!lockstepPausedTick) {
 				// A long late script is this machine's own like the update's: the plane commits for the round meanwhile.
-				NetLockstepPlane::Window planeWindow;
+				NetLockstepPlane::Window planeWindow("late scripts");
 				if (s_lateScriptStallMs > 0 && !s_lateScriptStallFired && g_TimerMan.GetSimUpdateCount() >= s_lateScriptStallTick) {
 					// A late global script that runs long: the main thread is inside the tick's scripts, not waiting on the round.
 					s_lateScriptStallFired = true;
@@ -7083,6 +7447,7 @@ void RunGameLoop() {
 			}
 
 			DumpSimStateIfArmed(simTick);
+			LocalPrediction::CompareFidelityAtTick(simTick);
 			NoteE2eSwitchOwnerLog(simTick);
 			TickProbeIfArmed(simTick);
 			LocalPredictionInvarianceOnTick(simTick);
@@ -7136,6 +7501,7 @@ void RunGameLoop() {
 			}
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (hashThisTick) {
+				const auto harnessStart = std::chrono::steady_clock::now();
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
 				// archive below writes the same deques, so both have to read one instant.
 				g_MovableMan.FeedTickEndChecksum();
@@ -7144,7 +7510,8 @@ void RunGameLoop() {
 				RetractAbandonedTickHashes();
 				if (liveHashTick) {
 					nlohmann::json subsystems = nlohmann::json::object();
-					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
+					// A subsystem with nothing to hash this tick (no actors left) still has its row entry, at the empty value.
+					for (const auto& [name, hash]: SimChecksum::CompleteSubsystems(tickResult)) subsystems[name] = SimChecksum::HashHex(hash);
 					nlohmann::json observation = s_crossContext.is_object() ? s_crossContext : nlohmann::json::object();
 					observation.update(nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
 					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
@@ -7152,6 +7519,15 @@ void RunGameLoop() {
 					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
 					    {"subsystems", std::move(subsystems)}});
 					LiveTickHashStream().Write(observation.dump());
+					// The harness's own tick-end cost on this machine, beside the capacity it publishes: the share of a slow seat that is the harness's.
+					static std::vector<double> s_harnessTickUs;
+					s_harnessTickUs.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - harnessStart).count());
+					if (s_harnessTickUs.size() == 600) {
+						std::sort(s_harnessTickUs.begin(), s_harnessTickUs.end());
+						System::PrintDiagnosticLine(std::format("[harness-cost] tick={} window=600 tick_end_us p50={:.0f} p95={:.0f} max={:.0f}", simTick, s_harnessTickUs[300],
+						                                        s_harnessTickUs[570], s_harnessTickUs.back()));
+						s_harnessTickUs.clear();
+					}
 				}
 				if (a7HashTick && ScenarioRunner::GetLockstepAppliedFrame() == simTick) {
 					const uint64_t round = ScenarioRunner::GetLockstepRoundId();
@@ -7189,13 +7565,52 @@ void RunGameLoop() {
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
+			// Test lever CCCP_TEST_MINIMIZE_TICKS=<from>:<to>: the window is minimized at the first tick and restored at the second.
+			static const std::pair<uint64_t, uint64_t> s_minimizeTicks = [] {
+				unsigned long long from = 0, to = 0;
+				const char* text = std::getenv("CCCP_TEST_MINIMIZE_TICKS");
+				return text && std::sscanf(text, "%llu:%llu", &from, &to) == 2 && to > from ? std::pair<uint64_t, uint64_t>(from, to) : std::pair<uint64_t, uint64_t>(0, 0);
+			}();
+			if (s_minimizeTicks.second != 0 && g_WindowMan.GetWindow()) {
+				const uint64_t tick = static_cast<uint64_t>(simTick);
+				if (tick == s_minimizeTicks.first) SDL_MinimizeWindow(g_WindowMan.GetWindow());
+				if (tick == s_minimizeTicks.second) SDL_RestoreWindow(g_WindowMan.GetWindow());
+				if (tick == s_minimizeTicks.first || tick == s_minimizeTicks.first + 60 || tick == s_minimizeTicks.second || tick == s_minimizeTicks.second + 60) {
+					const SDL_WindowFlags flags = SDL_GetWindowFlags(g_WindowMan.GetWindow());
+					System::PrintDiagnosticLine("[selftest] window tick=" + std::to_string(tick) + " minimized=" + std::to_string((flags & SDL_WINDOW_MINIMIZED) != 0) +
+					                            " hidden=" + std::to_string((flags & SDL_WINDOW_HIDDEN) != 0));
+				}
+			}
 			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) {
-				std::ostringstream line;
-				line << "[mem-census] tick=" << simTick << ProcessHeapCensus() << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << g_LuaMan.GetTotalHeapBytes()
-				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << CheckpointCow::Get().Cache().Census()
-				     << " movable: " << g_MovableMan.Census() << ' ' << Atom::SampledConstructionStacks() << " audio: " << g_AudioMan.Census() << ' ' << ScenarioRunner::MemoryCensus() << ' ' << g_ConsoleMan.LogCensus()
-				     << PaceCensusSinceLast();
-				System::PrintDiagnosticLine(line.str());
+				// The census's counts are read on the sim thread and each part's cost goes on its line; the census worker sums the process heaps and prints it.
+				std::string costs;
+				const auto timed = [&costs](const char* name, const auto& part) {
+					const auto begin = std::chrono::steady_clock::now();
+					std::ostringstream text;
+					text << part();
+					costs += std::string(costs.empty() ? "" : ",") + name + ":" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count());
+					return text.str();
+				};
+				const std::string lua = timed("lua", [] { return g_LuaMan.GetTotalHeapBytes(); });
+				// The capture keeps its last image for the next one to share; that image is the full-state instrument's own memory.
+				const std::string cow = timed("cow", [] { return CheckpointCow::Get().Cache().Census() + " last_image_mb=" + std::to_string(CheckpointCow::Get().LastImageBytes() >> 20); });
+				const std::string movable = timed("movable", [] { return g_MovableMan.Census(); });
+				const std::string atoms = timed("atoms", [] { return Atom::SampledConstructionStacks(); });
+				const std::string audio = timed("audio", [] { return g_AudioMan.Census(); });
+				const std::string runner = timed("runner", [] { return ScenarioRunner::MemoryCensus(); });
+				const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
+				const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
+				std::ostringstream rest;
+				// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
+				static const auto s_censusEpoch = std::chrono::steady_clock::now();
+				rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_censusEpoch).count();
+				rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
+				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
+				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << pace;
+				CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
+					const std::string heap = ProcessHeapCensus(costs);
+					System::PrintDiagnosticLine("[mem-census] tick=" + std::to_string(simTick) + heap + rest + " census_us=" + costs);
+				});
 			}
 			if (s_scriptedLeaveDue) {
 				s_scriptedLeaveDue = false;
@@ -7398,12 +7813,14 @@ void RunGameLoop() {
 			const long long crossCaptureStartUs = g_TimerMan.GetAbsoluteTime();
 			const long long crossCaptureWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			if (s_netFullStateEvery > 0) ScenarioRunner::SetLockstepAnnouncedCaptureEvery(s_netFullStateEvery);
+			// A peer still catching up takes the labelled samples its replay passes, so every peer compares the ticks around a return.
+			const bool catchingUp = ScenarioRunner::WorldCatchUpActive();
 			if (s_netFullStateEvery > 0 && !lockstepPausedTick && ScenarioRunner::IsLockstepControllerSyncActive() &&
-			    !ScenarioRunner::WorldCatchUpActive() && ScenarioRunner::GetLockstepAppliedFrame() == simTick && g_ActivityMan.ActivityRunning()) {
+			    ScenarioRunner::GetLockstepAppliedFrame() == simTick && g_ActivityMan.ActivityRunning()) {
 				static uint64_t s_fullStateSampledRound = 0;
 				const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 				const uint64_t effectiveStart = ScenarioRunner::GetLockstepEffectiveStartFrame();
-				const bool roundStart = round != s_fullStateSampledRound && effectiveStart > 0 && simTick >= effectiveStart;
+				const bool roundStart = !catchingUp && round != s_fullStateSampledRound && effectiveStart > 0 && simTick >= effectiveStart;
 				if (roundStart) s_fullStateSampledRound = round;
 				// A seat's reclaim frame is sampled on every peer alike, so its returner shares a sample even when the round ends first;
 				// the labelled capture is never coalesced behind a busy writer.
@@ -7411,7 +7828,12 @@ void RunGameLoop() {
 				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !reclaimStart && simTick > 0; ++peer)
 					reclaimStart = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 1);
 				if (reclaimStart) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "reclaim");
-				if ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
+				// Sixty ticks after a returner's reclaim gap closes it plays live on every peer, so that tick is sampled too.
+				bool landed = false;
+				for (uint8_t peer = 1; peer <= NetLockstepCodec::c_MaxPeerCount && !landed && simTick > 60; ++peer)
+					landed = ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 60) && !ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick - 59);
+				if (landed && !reclaimStart) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump, "landed");
+				if (!catchingUp && ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0)) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
@@ -7421,8 +7843,11 @@ void RunGameLoop() {
 
 			// The paced round estimates execution cost without counting its idle interval.
 			if (measureLockstepCost) {
-				g_PerformanceMan.UpdateMSPSU(static_cast<float>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)) / 1000.0F);
+				const float tickCostMs = static_cast<float>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)) / 1000.0F;
+				g_PerformanceMan.UpdateMSPSU(tickCostMs);
 				s_paceExecutionAverageMs.store(g_PerformanceMan.GetMSPSUAverage(), std::memory_order_relaxed);
+				s_paceTickCostsMs.push_back(tickCostMs);
+				if (s_paceTickCostsMs.size() > 15) s_paceTickCostsMs.pop_front();
 			}
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
 			if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::NoteWorldCatchUpTickCost(simTick, static_cast<uint64_t>(std::max(0LL, g_TimerMan.GetAbsoluteTime() - paceTickStartUs)), static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()));
@@ -7789,6 +8214,7 @@ void RunGameLoop() {
 					}
 					// Hand over what we still owe BEFORE the goodbye, so a client one input-delay
 					// behind can finish its own last tick instead of losing the round to our exit.
+					FrameRecorder::Instance().RecordEvent("capped stop");
 					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 					g_NetMatchService.Complete("menu mp trace complete");
 					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
@@ -7927,6 +8353,8 @@ void RunGameLoop() {
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
 						// socket open before quitting drops it.
 						if (!s_netMatchE2ECompletedMs) {
+							// The screen holds its last picture while the harness drains, lingers and writes its records.
+							FrameRecorder::Instance().RecordEvent("capped stop");
 							(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 							g_NetMatchService.Complete("e2e complete");
 							s_netMatchE2ECompletedMs = SteadyMilliseconds();
@@ -8081,6 +8509,9 @@ void RunGameLoop() {
 				break;
 			}
 		}
+		// The frame's budget ran out with ticks still due: the round is behind its schedule, not waiting on a peer.
+		const bool ticksOwed = pacedRound && g_TimerMan.SimFrameBudgetSpent();
+		g_TimerMan.BeginSimFrame(0);
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);
@@ -8128,8 +8559,11 @@ void RunGameLoop() {
 		std::optional<NetLockstepPlane::Window> drawWindow;
 		drawWindow.emplace("frame draw");
 		FrameMan::FeelBeforePreview();
+		// Behind its schedule, a paced round skips this frame's preview and draw so the owed ticks run first, down to the floor.
+		const bool shedFrame = ticksOwed && !NetMatchScreenshotDue() &&
+		                       g_TimerMan.GetAbsoluteTime() - s_paceLastPresentUs < static_cast<long long>(c_FloorFrameMs * 1000.0);
 		const long long previewStartTime = g_TimerMan.GetAbsoluteTime();
-		LocalPrediction::RunPreview();
+		if (!shedFrame) LocalPrediction::RunPreview();
 		const long long interfaceStartTime = g_TimerMan.GetAbsoluteTime();
 
 		{
@@ -8148,8 +8582,12 @@ void RunGameLoop() {
 			t_simRNGOverride = prevSimRNG;
 		}
 		const long long frameDrawStartTime = g_TimerMan.GetAbsoluteTime();
-		if (!freeRunLockstep || NetMatchScreenshotDue()) {
+		if (shedFrame) {
+			++s_paceFramesShed;
+		} else if (!freeRunLockstep || NetMatchScreenshotDue()) {
+			const uint64_t framesBefore = s_paceFramesDrawn;
 			DrawFrameWithPreviews();
+			if (s_paceFramesDrawn != framesBefore) s_paceLastPresentUs = g_TimerMan.GetAbsoluteTime();
 		}
 		drawWindow.reset();
 
@@ -8165,6 +8603,8 @@ void RunGameLoop() {
 			++s_paceIterations;
 			s_paceUpdateUs += updateTotalTime;
 			s_paceDrawUs += drawTotalTime;
+			// A run that ends while this machine waits on a frame past its last tick ran no round in that wait.
+			s_paceTrailingUs = s_paceSimTicks != paceTicksAtIterStart ? 0 : s_paceTrailingUs + updateTotalTime + drawTotalTime;
 			s_pacePreviewUs += interfaceStartTime - previewStartTime;
 			s_paceInterfaceUs += frameDrawStartTime - interfaceStartTime;
 			s_paceMaxDrawUs = std::max(s_paceMaxDrawUs, drawTotalTime);
@@ -8559,13 +8999,14 @@ std::string BuildDesyncCheckJson() {
 // dt's intended rate", sim_ms_per_tick is the full-tick compute cost (and, in playback, the
 // rollback re-sim cost — playback runs no AI).
 std::string BuildLoopPaceJson() {
-	const long long wallUs = s_paceUpdateUs + s_paceDrawUs;
+	const long long wallUs = s_paceUpdateUs + s_paceDrawUs - s_paceTrailingUs;
 	std::ostringstream out;
 	out.imbue(std::locale::classic());
 	out << "{";
 	out << "\"iterations\":" << s_paceIterations << ",";
 	out << "\"sim_ticks\":" << s_paceSimTicks << ",";
 	out << "\"wall_ms\":" << wallUs / 1000 << ",";
+	out << "\"trailing_ms\":" << s_paceTrailingUs / 1000 << ",";
 	out << "\"sim_ms\":" << s_paceSimUs / 1000 << ",";
 	out << "\"draw_ms\":" << s_paceDrawUs / 1000 << ",";
 	out << "\"wall_tps\":" << (wallUs > 0 ? static_cast<double>(s_paceSimTicks) * 1000000.0 / static_cast<double>(wallUs) : 0.0) << ",";
@@ -8692,6 +9133,8 @@ bool ConfigureNetMatchActivity(const NetMatchConfig& config, int localTeam, std:
 		}
 	}
 	ScenarioRunner::ApplyDeterministicConfig();
+	// Before any image of the round is applied: the image carries the round's own readings.
+	g_AudioMan.BeginLockstepRound();
 	g_ActivityMan.SetStartActivity(activity);
 	g_ActivityMan.SetRestartActivity(true);
 	return true;
@@ -9080,7 +9523,8 @@ int RunNetMatchServiceE2E() {
 			g_NetMatchService.RequestStart();
 		}
 		const bool unlimitedWorld = e2eHost && s_netPersistentWorld && !s_netMatchTicksExplicit;
-		const auto waitStart = std::chrono::steady_clock::now();
+		auto waitStart = std::chrono::steady_clock::now();
+		bool roundEndedOnTheWay = false;
 		while (true) {
 			PollSDLEvents();
 			CrossRecoveryAtCommittedTick(0);
@@ -9105,6 +9549,21 @@ int RunNetMatchServiceE2E() {
 					s_netMatchServiceE2EExitCode = 1;
 					break;
 				}
+			}
+			// A seat whose round ended while it rejoined completes on the host's end record and takes its seat into the next round's lobby.
+			if (!e2eHost && state == NetMatchServiceState::Completed && !roundEndedOnTheWay) {
+				roundEndedOnTheWay = true;
+				System::PrintDiagnosticLine("[net-match-service-e2e] the round ended while this seat rejoined: joining the next round's lobby");
+				std::string lobbyError;
+				if (g_NetMatchService.ReturnToLobby(&lobbyError)) {
+					g_NetMatchService.SetReady();
+				} else if (!g_NetMatchService.RematchReturnOwed() || !g_NetMatchService.BeginHeldRejoin(&lobbyError)) {
+					setupError = "the round ended while this seat rejoined and its seat could not follow: " + lobbyError;
+					s_netMatchServiceE2EExitCode = 1;
+					break;
+				}
+				waitStart = std::chrono::steady_clock::now();
+				continue;
 			}
 			if (state == NetMatchServiceState::Failed) {
 				setupError = g_NetMatchService.GetErrorText();
@@ -9780,6 +10239,7 @@ int RunNetPortMapProbe() {
 /// </summary>
 int main(int argc, char** argv) {
 	bool netMatchSelfTest = false;
+	bool netRejoinGridSelfTest = false;
 	bool netMatchLobbyLifecycleSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
@@ -9876,6 +10336,12 @@ int main(int argc, char** argv) {
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-rejoin-matrix-selftest") {
 			return NetRejoinMatrixSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-roster-selftest") {
+			return NetSeatRosterSelfTest::Run();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-rejoin-grid-selftest") {
+			netRejoinGridSelfTest = true;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-world-join-selftest") {
 			return NetWorldJoinSelfTest::Run();
@@ -9999,6 +10465,14 @@ int main(int argc, char** argv) {
 	loadpng_init();
 
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMEPAD );
+	for (int i = 1; i < argc; ++i) {
+		if (argv[i] != nullptr && std::string(argv[i]) == "-joystick-updater-selftest") {
+			const bool passed = UInputMan::RunJoystickUpdaterSelfTest();
+			UInputMan::StopJoystickUpdater();
+			SDL_Quit();
+			return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+	}
 
 	SDL_SetHint(SDL_HINT_MOUSE_AUTO_CAPTURE, "0");
 	SDL_SetHint("SDL_ALLOW_TOPMOST", "0");
@@ -10121,6 +10595,12 @@ int main(int argc, char** argv) {
 	// thread, so the multiplayer landing and Create Lobby do not each walk every module on their frame.
 	NetIdentity::PrimeManifest();
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
+	if (netRejoinGridSelfTest) {
+		NetMatchService::Destruct();
+		const int result = NetRejoinMatrixSelfTest::RunGrid();
+		NetMatchService::Construct();
+		return ShutDown(result);
+	}
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
 		const int result = netMatchLobbyLifecycleSelfTest ? NetMatchSelfTest::RunLobbyLifecycle() : NetMatchSelfTest::Run();

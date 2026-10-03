@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -47,7 +48,16 @@ namespace RTE {
 		void WriteBlock(std::string text) {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
-				m_Queue.push_back(std::move(text));
+				m_Queue.push_back({std::move(text), nullptr});
+			}
+			m_Wake.notify_one();
+		}
+
+		/// Queues text the writer thread makes when its turn comes, in order with the rest.
+		void WriteMade(std::function<std::string()> make) {
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_Queue.push_back({std::string(), std::move(make)});
 			}
 			m_Wake.notify_one();
 		}
@@ -78,13 +88,13 @@ namespace RTE {
 			std::unique_lock<std::mutex> lock(m_Mutex);
 			while (true) {
 				m_Wake.wait(lock, [this] { return m_Stopping || !m_Queue.empty(); });
-				std::deque<std::string> batch;
+				std::deque<Entry> batch;
 				batch.swap(m_Queue);
 				m_Queued += batch.size();
 				const bool stopping = m_Stopping;
 				lock.unlock();
-				for (const std::string& text: batch) {
-					m_Out << text;
+				for (const Entry& entry: batch) {
+					m_Out << (entry.make ? entry.make() : entry.text);
 				}
 				m_Out.flush();
 				lock.lock();
@@ -101,7 +111,12 @@ namespace RTE {
 		std::mutex m_Mutex;
 		std::condition_variable m_Wake;
 		std::condition_variable m_Drained;
-		std::deque<std::string> m_Queue;
+		/// Text to write, or what makes it on the writer thread.
+		struct Entry {
+			std::string text;
+			std::function<std::string()> make;
+		};
+		std::deque<Entry> m_Queue;
 		unsigned long long m_Queued = 0; //!< Lines taken off the queue by the writer.
 		unsigned long long m_Written = 0; //!< Lines the writer has flushed.
 		bool m_Stopping = false;

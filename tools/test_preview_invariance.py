@@ -59,6 +59,14 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=300)
     options = parser.parse_args()
     scored = run_case(options.repo, options.out, options.timeout)
+    from verdict_artifact import write_verdict
+    log = options.out / 'stdout.log'
+    if not log.is_file(): log.write_text('runner produced no stdout log\n', encoding='utf-8')
+    write_verdict(options.out / 'result.json', passed=scored['pass'],
+                  counts=dict(expected_cases=EXPECTED_CASES, reported_summaries=len(scored['verdicts']),
+                              passed_runs=int(scored['pass']), failed_runs=int(not scored['pass'])),
+                  inputs=[Path(__file__), *(options.repo / 'tools/fixtures' / leaf for leaf in FIXTURES)],
+                  log=log, score=scored)
     print(json.dumps(scored, indent=2))
     return 0 if scored["pass"] else 1
 

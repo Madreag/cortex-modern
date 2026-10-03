@@ -23,6 +23,7 @@ namespace RTE {
 		ApplicantBoundReached = 7,
 		SubstitutionSuperseded = 8,
 		SeatReassigned = 9,
+		SeatReleased = 10,
 	};
 
 	const char* NetH4DenialReasonName(NetH4DenialReason reason);
@@ -90,6 +91,10 @@ namespace RTE {
 		/// Collects the denials whose release time has arrived, oldest first.
 		std::vector<NetH4Denial> ReleaseDueDenials(uint64_t nowMs);
 
+		/// Whether this transaction on this connection was already answered with a released denial inside a challenge's
+		/// lifetime. A transaction is answered once: a proof or a Reclaim of it that arrives later is the same attempt.
+		bool WasAnswered(NetPeerId connection, const NetAuthBytes16& txId, uint64_t nowMs) const;
+
 		/// Drops the connection's challenges, its pending denial and its rate-limit state.
 		void DropConnection(NetPeerId connection);
 
@@ -117,6 +122,7 @@ namespace RTE {
 
 		std::vector<NetH4ChallengeRecord> m_Challenges;
 		std::vector<NetH4Denial> m_Denials;
+		std::vector<NetH4Denial> m_Answered; //!< Released denials, kept for a challenge's lifetime.
 		std::vector<ConnectionState> m_Connections;
 		uint64_t m_IntervalStartMs = 0;
 		uint32_t m_IntervalAttempts = 0;

@@ -4,6 +4,7 @@
 #include "ContentFile.h"
 #include "Writer.h"
 #include "Scene.h"
+#include "System.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
 #include "Atom.h"
@@ -21,6 +22,7 @@
 #include "TimerMan.h"
 #include "SceneMan.h"
 #include "ActivityMan.h"
+#include "FrameMan.h"
 
 #include "lua.hpp"
 
@@ -408,26 +410,27 @@ void CheckpointCow::PublishLog(const CheckpointImage& image, int64_t workerUs) c
 		rootsRewritten = image.graphRootsRewritten;
 	}
 	p99 = Percentile99(std::move(samples));
-	std::cout << std::format("[autosave] tick={} freeze_us={} worker_us={} image_bytes={} dirty_ratio={:.6f} p99_freeze_us={}\n",
-	                         tick, freezeUs, workerUs, imageBytes, dirtyRatio, p99);
+	// The saver thread writes these: each line goes out whole under the engine's print lock.
+	System::PrintDiagnosticLine(std::format("[autosave] tick={} freeze_us={} worker_us={} image_bytes={} dirty_ratio={:.6f} p99_freeze_us={}",
+	                                        tick, freezeUs, workerUs, imageBytes, dirtyRatio, p99));
 	// Where the freeze went, and how much of it the shadows and the graph index saved.
-	std::cout << std::format("[autosave] tick={} layers_us={} activity_us={} graph_us={} scene_us={} structure_us={} scene_runtime_us={} globals_us={}\n",
-	                         tick, records[0], records[1], records[2], records[3], records[4], records[5], records[6]);
-	std::cout << std::format("[autosave] tick={} shadows_reused={} shadows_captured={} graph_roots={} graph_tables={} graph_dirty_roots={} graph_dirty_tables={} graph_unknown_table={} graph_note_us={} graph_reused={} paused_writes={}\n",
-	                         tick, reused, captured, graph.roots, graph.tables, before.dirtyRoots, before.dirtyTables,
-	                         before.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0, LuaCheckpointPausedWrites());
+	System::PrintDiagnosticLine(std::format("[autosave] tick={} layers_us={} activity_us={} graph_us={} scene_us={} structure_us={} scene_runtime_us={} globals_us={}",
+	                                        tick, records[0], records[1], records[2], records[3], records[4], records[5], records[6]));
+	System::PrintDiagnosticLine(std::format("[autosave] tick={} shadows_reused={} shadows_captured={} graph_roots={} graph_tables={} graph_dirty_roots={} graph_dirty_tables={} graph_unknown_table={} graph_note_us={} graph_reused={} paused_writes={}",
+	                                        tick, reused, captured, graph.roots, graph.tables, before.dirtyRoots, before.dirtyTables,
+	                                        before.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0, LuaCheckpointPausedWrites()));
 	// The walk is the freeze's share and the text the worker's; the counter is the archive's numbering.
 	// A root barred from reuse reached an upvalue cell or a coroutine, which no barrier watches.
-	std::cout << std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={} graph_values={} graph_dirty_values={} graph_uncacheable_roots={}\n",
-	                         tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial,
-	                         graph.values, before.dirtyValues, graph.uncacheableRoots) << std::flush;
+	System::PrintDiagnosticLine(std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={} graph_values={} graph_dirty_values={} graph_uncacheable_roots={}",
+	                                        tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial,
+	                                        graph.values, before.dirtyValues, graph.uncacheableRoots));
 	if (!luaReused) {
 		for (const auto& part: graph.walkParts) {
-			std::cout << std::format("[autosave] tick={} graph_vm={} graph_part={} graph_root={} graph_part_us={} graph_chunk_reused={} graph_unwatched=",
-			                         tick, part.state, part.part, part.root, part.elapsedUs, part.reused ? 1 : 0)
-			          << std::quoted(part.unwatched) << '\n';
+			std::ostringstream unwatched;
+			unwatched << std::quoted(part.unwatched);
+			System::PrintDiagnosticLine(std::format("[autosave] tick={} graph_vm={} graph_part={} graph_root={} graph_part_us={} graph_chunk_reused={} graph_unwatched={}",
+			                                        tick, part.state, part.part, part.root, part.elapsedUs, part.reused ? 1 : 0, unwatched.str()));
 		}
-		std::cout << std::flush;
 	}
 }
 
@@ -1091,6 +1094,12 @@ bool RTE::RunCheckpointImageSelfTest() {
 		} else {
 			pass("peek_reuses_the_shadow_when_the_stamp_matches", "stamp 12");
 		}
+		// The memory census names which channel and how many owners hold the cache's entries.
+		if (const std::string census = cache.Census(); census.find("owners=1 ") == std::string::npos || census.find("channels=1:1") == std::string::npos) {
+			fail("census_names_the_entries_owners_and_channels", census);
+		} else {
+			pass("census_names_the_entries_owners_and_channels", census);
+		}
 
 		// One walk spans every state: a state that rewrote all of its roots must not drop the tables
 		// another state kept by reusing its chunk.
@@ -1265,6 +1274,8 @@ bool RTE::RunCheckpointImageSelfTest() {
 			else fail("the_last_drawn_screen_is_per_peer", mismatch);
 			if (const std::string mismatch = ActivityMan::CheckpointPerPeerSelfTestMismatch(); mismatch.empty()) pass("the_pause_menu_skip_is_per_peer", "archived, left out of the shared state, in-activity kept");
 			else fail("the_pause_menu_skip_is_per_peer", mismatch);
+			if (const std::string mismatch = FrameMan::CheckpointPerPeerSelfTestMismatch(); mismatch.empty()) pass("a_font_loaded_by_drawing_is_per_peer", "archived, left out of the shared state");
+			else fail("a_font_loaded_by_drawing_is_per_peer", mismatch);
 		}
 		// A capture's bitmap index is kept while the loaded bitmaps' version holds, so every way that changes them moves it.
 		{

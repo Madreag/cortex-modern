@@ -11,6 +11,36 @@ import zipfile
 import zlib
 
 
+def private_history_row(row):
+    return row.get('phase') in ('catchup', 'private') and row.get('player_visible') is False
+
+
+def retract_private_history(rows, source=None):
+    kept = []
+    for marker in rows:
+        if 'abandon_from' not in marker:
+            kept.append(marker)
+            continue
+        first, round_id = marker.get('abandon_from'), marker.get('round')
+        if type(first) is not int or first < 1 or type(round_id) not in (int, str) or not str(round_id):
+            raise ValueError(f'invalid abandon receipt: first={first!r}, round={round_id!r}')
+        path = marker.get('_path') or source
+        identity = {key: marker[key] for key in ('instance', 'execution', 'incarnation') if key in marker}
+        if not path and not identity:
+            raise ValueError(f'abandon receipt at {first} has no process identity')
+        affected = [row for row in kept if str(row.get('round')) == str(round_id) and type(row.get('tick')) is int and row['tick'] >= first
+                    and (not path or (row.get('_path') or source) == path) and all(row.get(key) == value for key, value in identity.items())]
+        unsafe = [row for row in affected if not private_history_row(row)]
+        if unsafe:
+            raise ValueError(f'abandon receipt round={round_id} from={first} retracts non-private tick={unsafe[0]["tick"]} '
+                             f'phase={unsafe[0].get("phase")!r} player_visible={unsafe[0].get("player_visible")!r}')
+        if not affected and not (marker.get('private') is True and marker.get('player_visible') is False):
+            raise ValueError(f'abandon receipt round={round_id} from={first} has no private-history evidence')
+        identities = {id(row) for row in affected}
+        kept = [row for row in kept if id(row) not in identities]
+    return kept
+
+
 def retire_diagnostic(path, own, kind):
     path=Path(path); own=Path(own).resolve()
     if path.is_symlink() or not path.resolve().is_relative_to(own): raise ValueError('diagnostic leaves its owning instance')
@@ -30,7 +60,7 @@ class DiagnosticWindow:
         path=Path(path)
         if path in self.completed:return
         self.completed.append(path)
-        while len(self.completed)>self.captures:
+        while self.captures is not None and len(self.completed)>self.captures:
             old=self.completed.pop(0)
             for part in sorted(old.glob('*.txt.gz')):retire_diagnostic(part,self.own,'fullstate dump; native hashes and scope retained')
 
@@ -74,6 +104,26 @@ def presentation_records(index):
     if previous!=document['total_lines']: raise ValueError('presentation retained count differs')
 
 
+class LobbyWatch:
+    """Whether an engine is in a rematch lobby: from its 'returning to lobby' line until its next round starts."""
+    ENTERED=re.compile(r'\[net-match-service-e2e\] rematch: match \d+ over .*returning to lobby')
+    LEFT=re.compile(r'\[net-lockstep\] start round=\d+ frame=')
+
+    def __init__(self,path):
+        self.path=Path(path); self.offset=0; self.pending=b''; self.in_lobby=False
+
+    def poll(self):
+        if not self.path.is_file(): return self.in_lobby
+        with self.path.open('rb') as stream:
+            stream.seek(self.offset); block=stream.read(1024*1024); self.offset=stream.tell()
+        lines=(self.pending+block).split(b'\n'); self.pending=lines.pop()
+        for raw in lines:
+            text=raw.decode('utf-8',errors='replace')
+            if self.ENTERED.search(text): self.in_lobby=True
+            elif self.LEFT.search(text): self.in_lobby=False
+        return self.in_lobby
+
+
 class NativeFaultEffects:
     """H4 substitution effects are distinct from installing a fault selector."""
     def __init__(self,path,cases,incarnation):
@@ -114,7 +164,7 @@ class RecoveryLedger:
     def __init__(self,path,peer,clock_domain,begin_ms,cases):
         self.path=Path(path); self.peer=peer; self.clock_domain=clock_domain
         self.begin_ms=begin_ms; self.cases={case['id']:case for case in cases}
-        self.starts={}; self.applied=set(); self.completed=set()
+        self.starts={}; self.applied=set(); self.completed=set(); self.resets=set()
 
     def write(self,id,incarnation,phase,lower,upper,native):
         record=dict(id=id,peer=self.peer,incarnation=incarnation,phase=phase,clock_domain=self.clock_domain,
@@ -133,6 +183,12 @@ class RecoveryLedger:
                 start['upper']=upper
                 self.applied.add(id)
                 self.write(id,incarnation,'fault_applied',start['lower'],start['upper'],row)
+                if row.get('action') in ('live-stall', 'draw-stall', 'late-script-stall') and 'completed_wall_ms' in row:
+                    self.fault_reset(id, incarnation, lower, upper, row)
+            elif row.get('type') == 'fault_reset' and row.get('send_recv_armed') is True:
+                self.fault_reset(id, incarnation, lower, upper, row)
+            elif row.get('type') == 'fault_effect' and row.get('effect_observed') and row.get('reset'):
+                self.fault_reset(id, incarnation, lower, upper, row)
             elif row.get('type')=='recovery':
                 phase=row.get('recovery_phase','unmapped')
                 self.write(id,incarnation,phase,lower,upper,row)
@@ -143,6 +199,12 @@ class RecoveryLedger:
         id=case['id']; self.starts[id]=dict(lower=lower,upper=upper,native=progress,incarnation=incarnation)
         self.applied.add(id)
         self.write(id,incarnation,'fault_applied',lower,upper,dict(action=case['action'] if 'action' in case else 'crash-restart',actual=progress,applied=True))
+        self.fault_reset(id, incarnation, lower, upper, dict(action=case.get('action', 'crash-restart'), process_terminated=True))
+
+    def fault_reset(self, id, incarnation, lower, upper, native):
+        if id in self.applied and id not in self.resets:
+            self.write(id, incarnation, 'fault_reset', lower, upper, native)
+            self.resets.add(id)
 
     def restart_inputs(self,incarnation):
         return {id:dict(engine_after_wall_ms=0,effect_finished=True,origin=self.starts[id]) for id in self.applied-self.completed
@@ -282,6 +344,8 @@ def compress_closed_record(path, root):
     path, root = Path(path), Path(root).resolve()
     if path.is_symlink() or not path.resolve().is_relative_to(root):
         raise ValueError('record leaves its owning instance')
+    # Both sides resolved: a root reached through a linked directory (macOS /tmp is /private/tmp) names the same files.
+    path = path.resolve()
     size_before = path.stat().st_size
     destination = path.with_name(path.name + '.gz')
     temporary = path.with_name(path.name + '.gz.partial')
@@ -313,12 +377,12 @@ class CaptureSealer:
     every section file. Repeated keys with several queued paths are ambiguous;
     those captures remain raw until the owning process exits.
     """
-    def __init__(self, own):
+    def __init__(self, own, captures=2):
         self.announced_own=Path(os.path.abspath(own))
         self.own=Path(own).resolve()
         self.log=self.own/'engine/stdout.log'
         self.offset=0; self.pending=b''; self.contexts={}; self.sealed=set()
-        self.window=DiagnosticWindow(self.own)
+        self.window=DiagnosticWindow(self.own, captures=captures)
 
     def poll(self):
         self.window.poll_pngs()

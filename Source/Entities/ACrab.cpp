@@ -450,6 +450,14 @@ std::vector<long long> ACrab::GetRBGFootResidue() const { return m_pRBGFootGroup
 
 void ACrab::AdoptPersistedUniqueID() {
 	Actor::AdoptPersistedUniqueID();
+	AdoptCarriedWalkState();
+	if (!m_PersistedACrabRuntime.empty()) {
+		if (!LoadACrabRuntime(m_PersistedACrabRuntime)) throw std::runtime_error("could not restore ACrab runtime checkpoint");
+		m_PersistedACrabRuntime.clear();
+	}
+}
+
+void ACrab::AdoptCarriedWalkState() {
 	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
 		if (!residue.empty()) {
 			if (group) {
@@ -477,10 +485,6 @@ void ACrab::AdoptPersistedUniqueID() {
 	m_PersistedLimbGroupPositions.clear();
 	ApplyPackedLimbInertia(m_PersistedLimbGroupInertia, {m_pLFGFootGroup, m_pLBGFootGroup, m_pRFGFootGroup, m_pRBGFootGroup});
 	m_PersistedLimbGroupInertia.clear();
-	if (!m_PersistedACrabRuntime.empty()) {
-		if (!LoadACrabRuntime(m_PersistedACrabRuntime)) throw std::runtime_error("could not restore ACrab runtime checkpoint");
-		m_PersistedACrabRuntime.clear();
-	}
 }
 
 void ACrab::DiscardPersistedSnapshotState() {

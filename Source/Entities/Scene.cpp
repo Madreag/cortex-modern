@@ -243,6 +243,8 @@ bool Scene::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly, bool
 		destroy_bitmap(m_pPreviewBitmap); m_pPreviewBitmap = bitmap;
 		if (!terrain.Capture() || !terrain.LoadMetadata(metadata) || !terrain.Restore()) return false;
 		m_HorizonTerrainBoxes.clear();
+		// The image's backdrops were fit to the saver's screen; this machine draws them at its own, as a scene load does.
+		for (SLBackground* layer: m_BackLayerList) layer->RefitToThisScreen();
 		return true;
 	} catch (const std::exception&) { return false; }
 }

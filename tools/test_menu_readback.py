@@ -65,6 +65,7 @@ NETWORK_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetwo
                 "LabelMatchStatusWidget", "ComboMatchStatusWidget")
 NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
 MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which the hint states.
+LOBBY_PORT_MAP_ROW = 14  # MainMenuGUI's port-map row: the host alone maps its router port, so only its lobby carries it.
 # The saved preferences a case starts from, and what the page must have written when it ends.
 NETWORK_SEED = {"NetworkDisplayName": "ScoutLead", "NetworkHostDelayPolicy": "Auto",
                 "NetworkHostIdleWaitMinutes": "10", "NetworkHostAutoRepair": "1", "NetworkInputDelayFrames": "0",
@@ -212,8 +213,9 @@ HOST_OPTIONS = {"NetworkSlowPlayerBoundTicks": "7", "NetworkSlowPlayerPolicy": "
                 "NetworkPathHorizonTicks": "45"}
 CLIENT_OPTIONS = {"NetworkSlowPlayerBoundTicks": "3", "NetworkSlowPlayerPolicy": "Substitute", "NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1",
                   "NetworkPathHorizonTicks": "15"}
+# The host's saved Pause plays the default policy (1): V1 offers only it, whatever a setting saved.
 MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False, "path_horizon_ticks": 45,
-               "slow_player_bound_ticks": 7, "slow_player_policy": 2}
+               "slow_player_bound_ticks": 7, "slow_player_policy": 1}
 # A combo box draws its selected item left of the drop-down button, so its text budget is narrower than its rect.
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
@@ -242,6 +244,14 @@ INPUT_SCRIPT = "# the probe opens the match pause menu with a real key edge\n"
 def sha(path):
     with Path(path).open("rb") as stream:
         return file_sha256(stream)
+
+
+def version_line():
+    """The line the main menu and the lobby show: the game's version, VERSION.txt's and the network protocol's, read from this tree."""
+    tree = Path(__file__).resolve().parents[1]
+    game = re.search(r'c_VersionString = "([^"]+)"', (tree / "Source/System/GameVersion.h").read_text(encoding="utf-8"))[1]
+    protocol = re.search(r"c_Version = (\d+);", (tree / "Source/Network/NetProtocol.h").read_text(encoding="utf-8"))[1]
+    return f"v{game}, multiplayer {(tree / 'VERSION.txt').read_text(encoding='utf-8').strip()} (protocol {protocol})"
 
 
 def checks(control, parent):
@@ -757,7 +767,10 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label ComboHostNetRedundancy 6 ticks\n"
                  "assert_label TextHostNetSlowBound 3\n"
                  "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
-                 "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.\n"
+                 # V1 offers the default policy only; the hint says the others come back.
+                 "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
+                 "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+                 "assert_text_fits LabelHostNetSlowPolicyHint\n"
                  "activate ButtonHostOptApply\nwait 3\nassert_enabled ButtonHostOptApply 0\n"
                  "combo_select ComboHostNetRedundancy 7 ticks\nwait 3\n"
                  "set_text TextHostNetSlowBound 7\nwait 3\n"
@@ -766,12 +779,9 @@ def scripts(case, port, root, size="960x540"):
                  "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
                  "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 7 ticks\nassert_label TextHostNetSlowBound 7\n"
-                 "assert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.\n"
-                 "combo_select ComboHostNetSlowPolicy Pause for them (up to 20 s)\nwait 3\n"
-                 "assert_enabled TextHostNetSlowBound 0\n"
-                 "assert_label LabelHostNetSlowPolicyHint Everyone waits for a late player, host included, for up to 20 s.\ndump_host_options\n"
-                 "combo_select ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\nwait 3\n"
-                 "assert_enabled TextHostNetSlowBound 1\nassert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.\n"
+                 "assert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+                 "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
+                 "assert_enabled TextHostNetSlowBound 1\nassert_text_fits LabelHostNetSlowPolicyHint\n"
                  "dump_host_options\nexit\n")
     elif case == "landing":
         text = LANDING + "assert_label LabelMultiplayerNamePrompt Multiplayer name:\n"
@@ -1288,6 +1298,9 @@ def scripts(case, port, root, size="960x540"):
         text += "assert_enabled ButtonMultiplayerModerate 0\n"
         text += "dump_host_options\n"
         text += checks("LabelLobbyPlayersHeader", "MultiplayerLobbyPanel")
+        # The lobby shows the main menu's version line inside its panel, under the chat entry.
+        text += checks("LabelLobbyVersion", "MultiplayerLobbyPanel")
+        text += f"assert_label LabelLobbyVersion {version_line()}\nassert_no_overlap LabelLobbyVersion TextLobbyChat\n"
         text += "assert_enabled ButtonMultiplayerStart 0\n"
         # H01-H35: the six host-options pages behind the lobby's Options button. Each tab shows its
         # own collection box, every visited control answers the fit checks, and the dump rows land
@@ -1373,7 +1386,7 @@ def scripts(case, port, root, size="960x540"):
             text += checks(control, "CollectionBoxHostPageNetwork")
         text += "assert_label TextHostNetSlowBound 3\n"
         text += "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
-        text += "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host included, is held to the AI while the others keep playing, and returns in place once caught up.\n"
+        text += "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
         text += "assert_label LabelHostNetEffective Effective delay: ping plus a 3-tick margin, raised live if inputs arrive late, at least\n"
         text += checks("LabelHostNetEffective", "CollectionBoxHostPageNetwork")
         text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageNetwork")
@@ -1407,6 +1420,8 @@ def scripts(case, port, root, size="960x540"):
         text += checks("LabelHostRecAutosaveHint", "CollectionBoxHostPageRecovery")
         text += checks("LabelHostRecAutosaveNote", "CollectionBoxHostPageRecovery")
         text += "assert_label LabelHostRecAutosaveNote Every player takes each checkpoint at the same tick; a player who rejoins starts from one.\n"
+        text += checks("LabelHostRecAutosaveCost", "CollectionBoxHostPageRecovery")
+        text += "assert_label LabelHostRecAutosaveCost Saving may cause a brief pause for other players on slower hosts\n"
         text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
                  "assert_enabled TextHostRecAutosaveInterval 1\n"
                  # Switching autosave on from off starts at the shortest cadence, not the off zero.
@@ -2590,7 +2605,8 @@ def run_case(options, case, root, failing=None):
             result["mode_cycle"] = modes
             # The two header rows carry the friendly mode label, and both peers' panels are the
             # same rectangle for the same lobby state - no peer's own status text widens its panel.
-            panels = {}
+            # The host's port-map row is the host's own line, and its height is the only one a panel may add.
+            panels, port_map_rows = {}, {}
             for who in ("host", "client"):
                 matches = [image for image in images if image["peer"] == who
                            and any(c["name"] == "LabelLobbyMatchMode" for c in image["controls"])]
@@ -2605,8 +2621,17 @@ def run_case(options, case, root, failing=None):
                 for name in ("LabelLobbyMatch", "LabelLobbyMatchMode", "LabelLobbyPlayersHeader"):
                     assert controls[name]["text_fits"] is True, (who, name, controls[name])
                 panels[who] = controls["MultiplayerLobbyPanel"]["rect"]
-            assert panels["host"] == panels["client"], panels
+                port_map_rows[who] = bool(controls.get("LabelLobbyPortMap", {}).get("visible"))
+            host_panel, client_panel = panels["host"], panels["client"]
+            assert not port_map_rows["client"], port_map_rows
+            if port_map_rows["host"]:
+                assert [host_panel[0], host_panel[2]] == [client_panel[0], client_panel[2]], panels
+                assert 0 <= host_panel[3] - client_panel[3] <= LOBBY_PORT_MAP_ROW, panels
+                assert abs(2 * host_panel[1] + host_panel[3] - 2 * client_panel[1] - client_panel[3]) <= 1, panels
+            else:
+                assert host_panel == client_panel, panels
             result["lobby_panel_rects"] = panels
+            result["lobby_port_map_rows"] = port_map_rows
             result["key_committed"] = {"preset": preset, "scene": key_scene, "combo": picked_scene}
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
@@ -2670,7 +2695,7 @@ def main():
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", choices=(*CASES, "all"), required=True)
-    parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080"), required=True)
+    parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080", "2560x1440", "3840x2160"), required=True)
     parser.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--port", type=int, required=True)

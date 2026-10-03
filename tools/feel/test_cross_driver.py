@@ -126,6 +126,17 @@ class CrossDriverTests(unittest.TestCase):
                 self.assertEqual(restarted['settings'], local['settings'])
                 self.assertEqual(restarted['render_cap'], 0)
 
+    def test_host_stall_reaches_only_the_host(self):
+        plan = self.plan('--host', 'erol', '--roster', 'four-way', '--host-stall', '900:200')
+        for spec in plan['specs']:
+            stalled = '-net-test-live-stall-each-round' in spec['flags']
+            self.assertEqual(stalled, spec['role'] == 'host', spec['peer'])
+            if stalled: self.assertEqual(spec['flags'][spec['flags'].index('-net-test-live-stall-each-round') + 1], '900:200')
+        for bad in ('0:200', '900:0', '900:25000', 'x'):
+            with self.subTest(bad=bad), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    cross_peers.parse_args(['--lane', 'test-lane', '--host-stall', bad, '--dry-run'])
+
     def test_local_render_cap_refuses_values_the_engine_refuses(self):
         for cap in ('0', '60'):
             self.assertEqual(self.plan('--local-render-cap', cap)['specs'][0]['render_cap'], int(cap))
@@ -550,8 +561,9 @@ class CrossDriverTests(unittest.TestCase):
                     f'[fullstate] tick={t} hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round=1\n'
                     f'[fullstate-scope] tick={t} round=1 label=sample per_peer=camera\n' for t in (1,600,1200)))
             complete = cross_report.build_report(root)
-            self.assertTrue(complete['diagnostic_passed'])
-            self.assertTrue(complete['v1_passed'])
+            self.assertTrue(complete['core_passed'])
+            self.assertTrue(complete['checks']['shared_fullstate'])
+            self.assertFalse(complete['v1_passed'])
             own=cross_report.peer_root(root,plan,plan['specs'][-1]); name=plan['specs'][-1]['peer']
             record=json.loads((own/'record.json').read_text())
             (own/'record.json').write_text(json.dumps(dict(record,exe_sha256='d'*64)))
@@ -573,7 +585,7 @@ class CrossDriverTests(unittest.TestCase):
             (later/'engine/launch.json').write_text(json.dumps(record))
             self.assertTrue(cross_report.build_report(root)['checks']['preflight_complete'])
             (later/'engine/launch.json').unlink(); (later/'engine').rmdir(); later.rmdir()
-            self.assertTrue(cross_report.build_report(root)['passed'])
+            self.assertTrue(cross_report.build_report(root)['core_passed'])
             log=own/'engine/stdout.log'; saved=log.read_bytes(); log.unlink()
             missing=cross_report.build_report(root)
             self.assertFalse(missing['checks']['hold_evidence_complete'])
@@ -588,6 +600,34 @@ class CrossDriverTests(unittest.TestCase):
             with (own/'live.jsonl').open('a') as stream: stream.write(json.dumps(live[-1])+'\n')
             failed=cross_report.build_report(root)
             self.assertFalse(failed['passed']); self.assertEqual(failed['comparison']['duplicates'],1)
+
+
+class RoundPhaseLever(unittest.TestCase):
+    def test_a_round_crash_fires_only_early_in_a_running_round(self):
+        fault = dict(tick=4000, action='crash-restart', phase='round')
+        due = lambda budget, frame, lobby: cross_peers.crash_due(fault, dict(budget_tick=budget, applied_frame=frame), lobby)
+        self.assertFalse(due(3999, 400, False))  # before its budget tick
+        self.assertTrue(due(4000, 400, False))   # early in a running round
+        self.assertFalse(due(4000, 900, False))  # too late in the round for the relaunch to come back inside it
+        self.assertFalse(due(4000, 400, True))   # a rematch lobby is not a running round
+        self.assertTrue(cross_peers.crash_due(dict(tick=10, action='crash-restart'), dict(budget_tick=10, applied_frame=5000), False))
+        self.assertTrue(cross_peers.crash_due(dict(tick=10, action='crash-restart', phase='lobby'), dict(budget_tick=10), True))
+
+
+class LobbyPhaseLever(unittest.TestCase):
+    def test_the_lobby_watch_is_set_only_between_a_rounds_end_and_the_next_start(self):
+        from feel.records import LobbyWatch
+        with tempfile.TemporaryDirectory() as temporary:
+            log=Path(temporary)/'stdout.log'; n=chr(10)
+            log.write_text('[net-lockstep] start round=7 frame=1 local_peer=2'+n+'[net-match] rejoin phase Connecting -> ImagePending'+n
+                           +'[net-lobby] waiting at WaitingForReady role=client'+n)
+            watch=LobbyWatch(log)
+            self.assertFalse(watch.poll())  # a mid-round rejoin's lobby lines are not the rematch lobby
+            with log.open('a') as out: out.write('[net-match-service-e2e] rematch: match 1 over (Victory!), returning to lobby'+n)
+            self.assertTrue(watch.poll())
+            self.assertTrue(watch.poll())
+            with log.open('a') as out: out.write('[net-lockstep] start round=8 frame=1 local_peer=2'+n)
+            self.assertFalse(watch.poll())
 
 
 if __name__ == '__main__': unittest.main()

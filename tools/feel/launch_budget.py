@@ -9,9 +9,6 @@ import runpy
 import sys
 from contextlib import contextmanager
 
-MIN_FREE_BYTES = 10 * 1024 ** 3
-
-
 MARKER = Path('D:/mx/FEEL-MATRIX-RUNNING')
 CROSS_GUARD = Path('D:/mx/BOX-FREE-FOR-CROSS')
 
@@ -29,6 +26,17 @@ def free_memory_bytes():
     return status.available
 
 
+def holds_marker():
+    """Whether this process holds the box: the feel marker carries the token in its environment."""
+    token = os.environ.get('CCCP_FEEL_MATRIX_RUN')
+    if not token or not MARKER.is_file():
+        return False
+    try:
+        return json.loads(MARKER.read_text(encoding='utf-8')).get('token') == token
+    except (OSError, ValueError):
+        return False
+
+
 def install_memory_guard():
     if sys.platform != 'win32':
         return
@@ -44,13 +52,17 @@ def install_memory_guard():
         marker = MARKER
         if marker.is_file() and json.loads(marker.read_text(encoding='utf-8')).get('token') != os.environ.get('CCCP_FEEL_MATRIX_RUN'):
             refuse('engine launch refused: another lane owns the feel matrix marker', marker=str(marker))
-        if CROSS_GUARD.exists():
+        # The cross driver claims the marker before its own local launch; only a process without it is kept off the reserved box.
+        if CROSS_GUARD.exists() and not holds_marker():
             refuse('engine launch refused: the box is reserved for the cross match')
+        limits = win32_test_runner.box_runner_limits(environ=getattr(run, 'env', os.environ))
+        required, box = limits['min_free_bytes'], limits['box']
         free = free_memory_bytes()
-        if free < MIN_FREE_BYTES:
-            refuse(f'engine launch refused: {free} free bytes, requires {MIN_FREE_BYTES}', free_bytes=free, required_bytes=MIN_FREE_BYTES)
+        if free < required:
+            refuse(f'engine launch refused on {box}: {free} free bytes, requires {required}',
+                   box=box, free_bytes=free, required_bytes=required, source=limits['min_free_source'])
         result = original(run)
-        run.record['launch_budget'] = dict(free_bytes=free, required_bytes=MIN_FREE_BYTES)
+        run.record['launch_budget'] = dict(box=box, free_bytes=free, required_bytes=required, source=limits['min_free_source'])
         run._save()
         return result
     start._memory_guard = True
@@ -61,7 +73,7 @@ def install_memory_guard():
 def exclusive_matrix():
     marker = MARKER
     token = f'{os.getpid()}-netcode-feel'
-    if CROSS_GUARD.exists():
+    if CROSS_GUARD.exists() and not holds_marker():
         raise RuntimeError('the box is reserved for the cross match')
     # A caller that already holds the box (its token in the environment) runs the matrix inside its own reservation,
     # which stays for that caller to release.

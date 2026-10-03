@@ -156,7 +156,7 @@ namespace RTE {
 			if (!RoundTrip({12, 0, emptyDiagnostics}, error)) {
 				return false;
 			}
-			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::IdentityUnproven); ++raw) {
+			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::SeatReleased); ++raw) {
 				const NetRejectReason reason = static_cast<NetRejectReason>(raw);
 				if (std::string(NetProtocol::RejectReasonName(reason)) == "Unknown") {
 					*error = "reject reason " + std::to_string(raw) + " has no name";
@@ -168,7 +168,7 @@ namespace RTE {
 				}
 			}
 			std::vector<uint8_t> beyond;
-			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::IdentityUnproven) + 1U), "refused", "key", "", ""}}, beyond, error)) {
+			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::SeatReleased) + 1U), "refused", "key", "", ""}}, beyond, error)) {
 				return false;
 			}
 			if (!ExpectDecodeError(beyond, NetProtocolErrorCode::InvalidValue, error)) {
@@ -188,7 +188,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x03, 0x00,
+				0x05, 0x00,
 				0x18, 0x00,
 				0x07, 0x00,
 				0x00, 0x00,
@@ -309,7 +309,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expected = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x03, 0x00,
+				0x05, 0x00,
 				0x18, 0x00,
 				0x10, 0x00,
 				0x00, 0x00,
@@ -335,7 +335,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedAck = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x03, 0x00,
+				0x05, 0x00,
 				0x18, 0x00,
 				0x13, 0x00,
 				0x00, 0x00,
@@ -358,7 +358,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedSubstitution = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x03, 0x00,
+				0x05, 0x00,
 				0x18, 0x00,
 				0x17, 0x00,
 				0x00, 0x00,
@@ -399,7 +399,7 @@ namespace RTE {
 			// An oversized admission message is refused on the header, before any field is parsed.
 			mutated.assign(NetProtocol::c_HeaderBytes + NetProtocol::c_MaxH4PayloadBytes + 1U, 0);
 			mutated[0] = 0x43; mutated[1] = 0x43; mutated[2] = 0x4E; mutated[3] = 0x32;
-			mutated[4] = 0x03;
+			mutated[4] = static_cast<uint8_t>(NetProtocol::c_Version & 0xFFU);
 			mutated[5] = 0x00;
 			mutated[6] = 0x18;
 			mutated[8] = static_cast<uint8_t>(NetMessageType::Reclaim);

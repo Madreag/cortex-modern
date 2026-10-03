@@ -1144,7 +1144,8 @@ bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std:
 	std::erase_if(m_FullStateTasks, [](const auto& task) { return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
 	m_FullStateLever = true;
 	// A labelled capture shares the tick of a scheduled one, so it dumps into a folder of its own under the run's.
-	if (label.empty()) m_FullStateDumpRoot = dumpDirectory;
+	// A process whose first capture is labelled (a returner sampling inside its catch-up) has no scheduled one to name the run's folder.
+	if (label.empty() || m_FullStateDumpRoot.empty()) m_FullStateDumpRoot = dumpDirectory;
 	m_FullStateDumpDirectory = label.empty() || m_FullStateDumpRoot.empty() ? m_FullStateDumpRoot : m_FullStateDumpRoot + "/" + label;
 	if (std::getenv("CC_TEST_CROSS_RECORDS") && !m_FullStateDumpRoot.empty()) {
 		static uint64_t capture = 0;
@@ -1155,6 +1156,13 @@ bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std:
 	}
 	m_FullStateRound = round;
 	m_FullStateLabel = label;
+	// The collector visits one script state a tick, so a capture's own answers outlive the next capture when the lever samples
+	// faster than that round; walked again they answer in turn, and the walk doubles each sample until the copy cannot be mapped.
+	if (label.empty()) {
+		const uint64_t collectorRound = g_LuaMan.GetThreadedScriptStates().size() + 1;
+		if (m_FullStateLastTick != 0 && tick > m_FullStateLastTick && tick - m_FullStateLastTick < collectorRound) g_LuaMan.CollectGarbageForCheckpoint();
+		m_FullStateLastTick = tick;
+	}
 	std::shared_future<bool> task;
 	size_t bytes = 0;
 	const auto captureStart = std::chrono::steady_clock::now();

@@ -496,6 +496,14 @@ std::vector<long long> AHuman::GetBGFootResidue() const { return m_pBGFootGroup 
 void AHuman::AdoptPersistedUniqueID() {
 	Actor::AdoptPersistedUniqueID();
 	m_PersistedSharpAimRevertTimerAnchor.Apply(m_SharpAimRevertTimer);
+	AdoptCarriedWalkState();
+	if (!m_PersistedAHumanRuntime.empty()) {
+		if (!LoadAHumanRuntime(m_PersistedAHumanRuntime)) throw std::runtime_error("could not restore AHuman runtime checkpoint");
+		m_PersistedAHumanRuntime.clear();
+	}
+}
+
+void AHuman::AdoptCarriedWalkState() {
 	auto applyResidue = [](AtomGroup* group, std::vector<long long>& residue) {
 		if (!residue.empty()) {
 			if (group) {
@@ -541,10 +549,6 @@ void AHuman::AdoptPersistedUniqueID() {
 		m_WalkAngle[BGROUND] = Matrix(walkAngleBG);
 		m_WalkPathOffset = pathOffset;
 		m_PersistedWalkState.clear();
-	}
-	if (!m_PersistedAHumanRuntime.empty()) {
-		if (!LoadAHumanRuntime(m_PersistedAHumanRuntime)) throw std::runtime_error("could not restore AHuman runtime checkpoint");
-		m_PersistedAHumanRuntime.clear();
 	}
 }
 

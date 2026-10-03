@@ -83,10 +83,10 @@ class ReportTests(unittest.TestCase):
         from feel.retained_resume import compare_live_hashes
         with TemporaryDirectory() as folder:
             host, client = Path(folder) / 'host.jsonl', Path(folder) / 'client.jsonl'
-            rows = [dict(tick=tick, sim_gated=str(tick), subsystems={'controller': str(tick)}) for tick in range(1, 21)]
+            rows = [dict(round=1, tick=tick, sim_gated=str(tick), subsystems={'controller': str(tick)}) for tick in range(1, 21)]
             host.write_text('\n'.join(map(json.dumps, rows)), encoding='utf-8')
-            offround = [dict(row, sim_gated='held') for row in rows[9:12]]
-            held = rows[:9] + offround + [dict(abandon_from=10)] + rows[9:]
+            offround = [dict(row, sim_gated='held', phase='private', player_visible=False) for row in rows[9:12]]
+            held = rows[:9] + offround + [dict(abandon_from=10, round=1)] + rows[9:]
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             compared = compare_live_hashes(host, client, 1)
             self.assertEqual(sum(row['compared_ticks'] for row in compared), 20)
@@ -95,6 +95,37 @@ class ReportTests(unittest.TestCase):
             held[3] = dict(held[3], sim_gated='different')
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
+
+    def test_an_image_rejoin_is_compared_on_every_tick_it_kept(self):
+        import feel_measure
+        from compare_sim_traces import CORE
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            # The client is held at 10, asks its recovery at 12, loads the host's image of 14 and counts its cap from there.
+            rows = {tick: {'tick': tick, 'total': f'{tick:064x}', 'subsystems': dict.fromkeys(CORE | {'controller'}, f'{tick:064x}')} for tick in range(1, 22)}
+            (root / 'host.json').write_text(json.dumps({'runs': [{'tick_hashes': [rows[tick] for tick in range(1, 21)]}]}), encoding='utf-8')
+            client = [rows[tick] for tick in list(range(1, 10)) + list(range(15, 22))]
+            (root / 'client.json').write_text(json.dumps({'runs': [{'tick_hashes': client}]}), encoding='utf-8')
+            log = ('[net-lockstep] hold of this seat at 27 revision=1\n[net-match] held client: catching up in place from frame 26\n'
+                   '[net-lockstep] hold of this seat at 10 revision=2\n[net-match] held client: no in-place catch-up (sim at 11, held from 10)\n'
+                   '[net-match] recovery requested tick=12 catch_up=0 reason=tick 12 lockstep stopped: PeerHeld:Your seat is held by the AI.\n'
+                   '[net-match] bootstrap checkpoint=14 local_peer=2\n')
+            live = root / 'client-live.jsonl'
+            live.write_text(json.dumps({'abandon_from': 10, 'round': 1, 'private': True, 'player_visible': False}) + '\n', encoding='utf-8')
+            self.assertEqual(feel_measure.held_client_away(log, live), ((10, 14),))
+            # Without its abandon record the gap starts at the hold, never at the recovery's ask.
+            self.assertEqual(feel_measure.held_client_away(log), ((10, 14),))
+            proof = feel_measure.compare_pair(root / 'host.json', root / 'client.json', 20, cross_peer=True,
+                                              client_away=feel_measure.held_client_away(log, live), window_only=True)
+            self.assertTrue(proof['pass'], proof)
+            self.assertEqual(proof['existing_comparator']['compared_ticks'], 15)
+            # The gap from the recovery's ask leaves two voided ticks unexplained.
+            self.assertFalse(feel_measure.compare_pair(root / 'host.json', root / 'client.json', 20, cross_peer=True, client_away=((12, 14),), window_only=True)['pass'])
+            # A kept tick that differs still fails.
+            client[3] = dict(client[3], subsystems=dict(client[3]['subsystems'], actors='f' * 64))
+            (root / 'client.json').write_text(json.dumps({'runs': [{'tick_hashes': client}]}), encoding='utf-8')
+            self.assertFalse(feel_measure.compare_pair(root / 'host.json', root / 'client.json', 20, cross_peer=True,
+                                                       client_away=((10, 14),), window_only=True)['pass'])
 
     def test_a_rematch_compares_each_round_with_its_own_round(self):
         from tempfile import TemporaryDirectory
@@ -105,7 +136,7 @@ class ReportTests(unittest.TestCase):
             second = [dict(round=2, tick=tick, sim_gated=f'b{tick}', subsystems={'controller': f'b{tick}'}) for tick in range(1, 21)]
             host.write_text('\n'.join(map(json.dumps, first + second)), encoding='utf-8')
             # Round 2's hold abandons 15-17, which the client ran off the round; round 1's 15-17 stay compared.
-            offround = [dict(row, sim_gated='held') for row in second[14:17]]
+            offround = [dict(row, sim_gated='held', phase='private', player_visible=False) for row in second[14:17]]
             held = first + second[:14] + offround + [dict(abandon_from=15, round=2)]
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             compared = compare_live_hashes(host, client, 1)
@@ -117,13 +148,16 @@ class ReportTests(unittest.TestCase):
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             self.assertEqual(sum(row['mismatched_ticks'] for row in compare_live_hashes(host, client, 1)), 1)
 
-    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False, dropped=False):
+    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False, dropped=False, beyond=None):
         from tempfile import TemporaryDirectory
+        from feel.test_harness_cost import complete_cost_log
+        import re
         with TemporaryDirectory() as folder:
             run = Path(folder)
             (run / 'host').mkdir()
             (run / 'manifest.json').write_text(json.dumps(dict(silent_tick=600 if silent else None, ticks=final_tick)), encoding='utf-8')
-            (run / 'host/stdout.log').write_text(waits, encoding='utf-8')
+            dump_peak = max([float(v) for v in re.findall(r'\[sim-dump\].*?(?:max_ms|\bms)=([0-9.eE+-]+)', waits)], default=0)
+            (run / 'host/stdout.log').write_text(complete_cost_log(last=final_tick, costs={'sim_dump': dump_peak}) + waits, encoding='utf-8')
             if silent:
                 (run / 'survivor').mkdir()
                 (run / 'survivor/stdout.log').write_text(survivor_log, encoding='utf-8')
@@ -138,6 +172,8 @@ class ReportTests(unittest.TestCase):
             rows = [dict(type='committed', tick=300, wall_ms=5000)]
             if complete:
                 rows.append(dict(type='committed', tick=final_tick, wall_ms=5000 + wall_ms))
+            if beyond is not None:
+                rows.append(dict(type='committed', tick=final_tick + 1, wall_ms=5000 + beyond))
             if live_clock:
                 (run / 'host-live.jsonl').write_text('\n'.join(json.dumps(dict(tick=tick, wall_ms=5000 + (tick-300)*wall_ms/(final_tick-300)))
                     for tick in range(300, final_tick+1)), encoding='utf-8')
@@ -149,6 +185,16 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(self.item9a(waits='[net-frame-wait] frame=600 wait_ms=51')['pins']['item9a_longest_wait']['status'], 'FAIL')
         waits = '\n'.join(f'[net-frame-wait] frame={tick} wait_ms=50' for tick in (600, 700, 800))
         self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'FAIL')
+
+    def test_item9a_harness_dump_cost_over_one_frame_fails_the_arm(self):
+        self.assertEqual(self.item9a()['pins']['item9a_harness_cost']['status'], 'PASS')
+        cheap = '[sim-dump] ticks=600 mean_ms=0.8 max_ms=49.9 max_tick=410 over_2ms=3 over_50ms=0'
+        self.assertEqual(self.item9a(waits=cheap)['pins']['item9a_harness_cost']['status'], 'PASS')
+        slow = cheap + '\n[sim-dump] slow tick=1465 ms=359.2'
+        measured = self.item9a(waits=slow)
+        self.assertEqual(measured['pins']['item9a_harness_cost']['status'], 'FAIL')
+        self.assertEqual(measured['pins']['item9a_harness_cost']['value'], 359.2)
+        self.assertFalse(measured['pass_check'])
 
     def test_single_player_reference_never_relaxes_the_feel_gate(self):
         reference = dict(steady_wall_tps=55, evidence='single-player.jsonl')
@@ -177,8 +223,13 @@ class ReportTests(unittest.TestCase):
     def test_one_spike_allows_only_one_bounded_wait(self):
         measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=40', silent=True)
         self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'PASS')
+        # Adjacent frames are one wait to the player; their sum is bounded like a single wait.
         measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=20\n[net-frame-wait] frame=621 wait_ms=20', silent=True)
+        self.assertEqual((measured['pins']['item9a_spike_waits']['status'], measured['pins']['item9a_spike_waits']['value']), ('PASS', 1))
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=30\n[net-frame-wait] frame=621 wait_ms=30', silent=True)
         self.assertEqual(measured['pins']['item9a_spike_waits']['status'], 'FAIL')
+        measured = self.item9a(waits='[net-frame-wait] frame=620 wait_ms=20\n[net-frame-wait] frame=630 wait_ms=20', silent=True)
+        self.assertEqual((measured['pins']['item9a_spike_waits']['status'], measured['pins']['item9a_spike_waits']['value']), ('FAIL', 2))
 
     def test_a_dropped_returners_hold_is_not_the_spikes_wait(self):
         waits = ('[net-match] hold peer=2 frame=639 AI in control\n[net-frame-wait] frame=639 wait_ms=1\n'
@@ -228,6 +279,14 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(measured['metrics']['last_tick'], 1200)
         self.assertAlmostEqual(measured['metrics']['steady_wall_tps'], 900000/17000)
         self.assertEqual(measured['pins']['item9a_wall_tps']['status'], 'FAIL')
+
+    def test_item9a_measures_through_a_skipped_final_tick_it_ran_past(self):
+        # The 4K lag-100 host on 280: a render iteration ran 1200 and 1201 and recorded only 1201, and every host pin read null.
+        measured = self.item9a(complete=False, beyond=15000 * 901 / 900)
+        self.assertAlmostEqual(measured['pins']['item9a_wall_tps']['value'], 60.0)
+        self.assertTrue(measured['pass_check'])
+        self.assertEqual(self.item9a(complete=False, beyond=16000)['pins']['item9a_wall_tps']['status'], 'FAIL')
+        self.assertEqual(self.item9a(complete=False)['pins']['item9a_wall_tps']['status'], 'MISS')
 
     def test_item9a_confirmed_horizon_lag_cannot_hide_behind_average_rate(self):
         self.assertEqual(self.item9a(wall_ms=15050)['pins']['item9a_confirmed_horizon_lag']['status'], 'PASS')
@@ -299,6 +358,81 @@ class ReportTests(unittest.TestCase):
         later['changes'][0]['held'] = False
         frames = [frame(1, 95, actor()), frame(2, 220, actor(vx=-1, left=True))]
         self.assertIsNone(report.input_latencies([first, later], frames)[0]['ms'])
+
+    def test_the_drawn_controller_carries_an_edge_within_two_frames(self):
+        edge = dict(_line=1, tick=10, wall_ms=100, player=0, actor=actor(), last_presented_frame=1,
+                    changes=[dict(action='L_LEFT', held=True)])
+        previewed = [frame(1, 95, actor()), frame(2, 115, actor(left=True))]
+        value = report.input_latencies([edge], previewed)[0]
+        self.assertEqual((value['carried_frames'], value['carried_ms'], value['carried_pass']), (1, 15, True))
+        # Without the preview the drawn actor holds the committed state, the input delay later.
+        committed = [frame(1, 95, actor())] + [frame(number, 95 + 17 * (number - 1), actor(left=number >= 8)) for number in range(2, 10)]
+        value = report.input_latencies([edge], committed)[0]
+        self.assertEqual((value['carried_frames'], value['carried_pass']), (7, False))
+
+    def test_the_previewed_response_is_judged_against_the_committed_response_to_the_same_edge(self):
+        edge = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1,
+                    changes=[dict(action='L_LEFT', held=True)])
+        def committed(tick, wall, vx):
+            return dict(type='committed', tick=tick, wall_ms=wall, actors=[actor(vx=vx)])
+        timeline = [committed(12, 90, 0)] + [committed(13 + n, 150 + 17 * n, -1 - n) for n in range(4)]
+        previewed = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 115 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(4)]
+        row = report.previewed_responses([edge], previewed, timeline)[0]
+        # Committed at 150 ms, visible at the next frame (66) with a 3-tick delay: the player must see it by 66 - 50 + 16.7 ms; the
+        # preview shows it at 15.
+        self.assertEqual((row['previewed_ms'], row['committed_ms'], row['judged'], row['pass_check']), (15, 66, True, True))
+        # Without the preview the drawn actor is the committed one, the delay later: the pin fails by it.
+        drawn = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(4)]
+        self.assertFalse(report.previewed_responses([edge], drawn, timeline)[0]['pass_check'])
+
+    def test_an_unresolved_world_interaction_does_not_turn_a_late_response_green(self):
+        edge = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1, changes=[dict(action='L_LEFT', held=True)])
+        timeline = [dict(type='committed', tick=12, wall_ms=90, actors=[actor()])] + [dict(type='committed', tick=13 + n, wall_ms=150 + 17 * n, actors=[actor(vx=-1 - n)]) for n in range(4)]
+        late = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(6)]
+        self.assertFalse(report.previewed_responses([edge], late, timeline)[0]['pass_check'])
+        # The field name alone does not say which velocity component the hit changed.
+        hit = dict(type='interaction', tick=11, uid=7, fields='vel,angvel', source='Dropship Hull Panel Gib A#9')
+        row = report.previewed_responses([edge], late, timeline, [hit])[0]
+        self.assertEqual((row['previewed_ms'], row['judged'], row['pass_check']), (50, False, False))
+        self.assertEqual(row['interaction_evidence']['status'], 'UNJUDGED')
+        # Past the committed response, or on another actor, it is not in the edge's window: judged as before.
+        # Past the committed response, on another actor, a clone that fell short, or a hit that left the velocity alone: judged as before.
+        for other in (dict(hit, tick=20), dict(hit, uid=8), dict(hit, source='clone'), dict(hit, fields='aim,view')):
+            row = report.previewed_responses([edge], late, timeline, [other])[0]
+            self.assertEqual(('interaction' in row, row['pass_check']), (False, False))
+
+    def test_a_held_edge_the_committed_timeline_lost_fails_the_response_pin(self):
+        press = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1, changes=[dict(action='L_LEFT', held=True)])
+        release = dict(_line=2, tick=30, wall_ms=433, delay=3, actor=actor(), last_presented_frame=20, changes=[dict(action='L_LEFT', held=False)])
+        def committed(tick, wall, vx):
+            return dict(type='committed', tick=tick, wall_ms=wall, actors=[actor(vx=vx)])
+        # Both edges held twenty ticks and more: the press answers from tick 13, the release from tick 33.
+        timeline = ([committed(12, 90, 0)] + [committed(13 + n, 150 + 17 * n, -1 - n) for n in range(19)] +
+                    [committed(33 + n, 490 + 17 * n, -19 + 4 * (n + 1)) for n in range(4)])
+        drawn = ([frame(1, 95, actor(), tick=8)] + [frame(2 + n, 115 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(19)] +
+                 [frame(21 + n, 450 + 17 * n, actor(vx=-19 + 4 * (n + 1)), tick=29 + n) for n in range(4)])
+        rows = report.previewed_responses([press, release], drawn, timeline)
+        self.assertEqual([row['required'] for row in rows], [True, True])
+        # The release is held to the script's end: still required, and the row is plain JSON.
+        self.assertEqual([row['held_ticks'] for row in rows], [20, None])
+        json.dumps(rows, allow_nan=False)
+        # The committed records of the release are lost: it is not judged, and the pin fails naming it.
+        lost = report.previewed_responses([press, release], drawn, [record for record in timeline if record['tick'] < 30])
+        self.assertEqual([row['judged'] for row in lost], [True, False])
+        value, passed = report.response_verdict(lost)
+        self.assertFalse(passed)
+        self.assertEqual(value['unjudged_required'], ['L_LEFT-@30'])
+        # A flick shorter than three ticks may stay unjudged.
+        flick = [dict(row, required=False) if not row['judged'] else row for row in lost]
+        self.assertTrue(report.response_verdict(flick)[1])
+
+    def test_a_one_frame_wobble_is_not_a_response(self):
+        edge = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1,
+                    changes=[dict(action='L_LEFT', held=True)])
+        timeline = [dict(type='committed', tick=12, wall_ms=90, actors=[actor()])] +                    [dict(type='committed', tick=13 + n, wall_ms=150 + 17 * n, actors=[actor(vx=-1 - n)]) for n in range(4)]
+        wobble = ([frame(1, 95, actor(), tick=8), frame(2, 115, actor(vx=-0.02), tick=9), frame(3, 132, actor(vx=0.1), tick=10)] + [frame(4 + n, 149 + 17 * n, actor(vx=-1 - n), tick=11 + n) for n in range(3)])
+        row = report.previewed_responses([edge], wobble, timeline)[0]
+        self.assertEqual(row['previewed_ms'], 49)
 
     def test_draw_percentile_is_nearest_rank_and_boundary_is_not_relaxed(self):
         values = report.distribution([1] * 99 + [51])
@@ -499,6 +633,42 @@ class ReportTests(unittest.TestCase):
             result = report.firing_records([press], [shot], [], Path('stdout'))[0]
         self.assertEqual(result['audio_ms_upper'], 10)
         self.assertFalse(result['once'])
+
+    def test_a_recording_from_the_rounds_effective_start_is_complete(self):
+        # Every F4 lag arm's replay starts at the effective start (28 at 100 ms): the frames before it carry no input.
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'replay-inspect').mkdir()
+            (root / 'replay-inspect/stdout.log').write_text('', encoding='utf-8')
+            (root / 'replay-inspect/launch.json').write_text(json.dumps(dict(exit_code=0, evidence_complete=True, timed_out=False)), encoding='utf-8')
+            (root / 'replay-report.json').write_text(json.dumps(dict(ok=True, first_frame=28, last_frame=1201)), encoding='utf-8')
+            self.assertFalse(report.remote_commands(root / 'replay-inspect/stdout.log', 1, 1, 1200)[1])
+            self.assertTrue(report.remote_commands(root / 'replay-inspect/stdout.log', 1, 1, 1200, 28)[1])
+            self.assertFalse(report.remote_commands(root / 'replay-inspect/stdout.log', 1, 1, 1200, 27)[1])
+
+    def test_the_final_tick_is_not_an_expected_capture(self):
+        # Every F4 arm and the single-player baseline saved 19 captures, 60-1140: tick 1200 ends the round and is never presented.
+        expected = list(report.default_capture_ticks(1200))
+        self.assertEqual((expected[0], expected[-1], len(expected)), (60, 1140, 19))
+        self.assertIn(1200, report.default_capture_ticks(1260))
+
+    def test_the_shot_is_on_time_at_the_first_preview_that_reaches_the_committed_shot(self):
+        # The trigger reads the press at 10 + 4 and the gun fires the tick after, as in single player.
+        press = dict(_line=1, tick=10, wall_ms=100, delay=4, actor=dict(uid=7), changes=[dict(action='FIRE', held=True)])
+        committed = [dict(tick=tick, actors=[dict(uid=7, fired=tick == 15)]) for tick in range(10, 20)]
+        log = '[preview-event] voice committed=11 tick=15 uid=8 previewed=1 asset=0 preset=2 seq=0 preset_name="gun" path=fire.flac\n'
+        on_time = dict(_line=4, committed_tick=11, target_tick=15, wall_lower_ms=110, wall_upper_ms=118,
+                       actor=dict(uid=7, gun_uid=8, fired=True))
+        late = dict(on_time, committed_tick=13, _line=6)
+        with patch.object(Path, 'read_text', return_value=log):
+            shown = report.firing_records([press], [on_time], [], Path('stdout'), committed)[0]
+            missed = report.firing_records([press], [late], [], Path('stdout'), committed)[0]
+            unknown = report.firing_records([press], [on_time], [], Path('stdout'))[0]
+        self.assertTrue(shown['preview_tick'])
+        self.assertEqual(shown['fire_tick'], 15)
+        self.assertFalse(missed['preview_tick'])
+        self.assertFalse(unknown['preview_tick'])
 
 
 class EarlyDecidedArmTest(unittest.TestCase):

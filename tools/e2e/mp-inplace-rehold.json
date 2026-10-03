@@ -205,7 +205,10 @@
         "lockstep stopped",
         "desync at frame"
       ],
-      "gate": "scenario-behavior"
+      "gate": "scenario-behavior",
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "rehold-200-survivor-plays-on",

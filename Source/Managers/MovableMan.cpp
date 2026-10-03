@@ -4,6 +4,7 @@
 #include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
+#include "SimDumpTape.h"
 #include "NetA7Journal.h"
 #include "PrimitiveMan.h"
 #include <chrono>
@@ -1590,7 +1591,8 @@ static uint64_t ScriptSetHash(const MovableObject& mo) {
 }
 
 // Snapshot forensics: one line per attachable and wound, recursively, so limb-level state is diffable.
-static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::ostream& out) {
+template <class Out>
+static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, Out& out) {
 	auto dumpNode = [&](const char* kind, const Attachable* node) {
 		const HDFirearm* parentFirearm = dynamic_cast<const HDFirearm*>(parent);
 		const AEmitter* parentEmitter = dynamic_cast<const AEmitter*>(parent);
@@ -1649,172 +1651,193 @@ static void DumpAttachableTree(uint64_t tick, const MOSRotating* parent, std::os
 	}
 }
 
+template <class Out>
+void MovableMan::DumpMOLines(uint64_t tick, const char* kind, MovableObject* mo, Out& out) const {
+	out << tick << " " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName()
+	    << " pos=" << std::hexfloat << mo->GetPos().m_X << "," << mo->GetPos().m_Y
+	    << " prev=" << mo->GetPrevPos().m_X << "," << mo->GetPrevPos().m_Y
+	    << " vel=" << mo->GetVel().m_X << "," << mo->GetVel().m_Y
+	    << " angvel=" << mo->GetAngularVel()
+	    << std::defaultfloat << " moid=" << mo->GetID() << "/" << mo->GetRootID();
+	if (mo->HasAnyScripts()) {
+		out << " scr=" << std::hex << ScriptSetHash(*mo) << std::dec;
+	}
+	out << std::hexfloat << " mass=" << mo->GetMass();
+	{
+		auto fnv = [](uint64_t h, uint32_t v) { return (h ^ v) * 1099511628211ULL; };
+		uint64_t forceHash = 1469598103934665603ULL;
+		for (const auto& [force, offset]: mo->GetForces()) {
+			forceHash = fnv(fnv(fnv(fnv(forceHash, std::bit_cast<uint32_t>(force.m_X)), std::bit_cast<uint32_t>(force.m_Y)), std::bit_cast<uint32_t>(offset.m_X)), std::bit_cast<uint32_t>(offset.m_Y));
+		}
+		uint64_t impulseHash = 1469598103934665603ULL;
+		for (const auto& [impulse, offset]: mo->GetImpulses()) {
+			impulseHash = fnv(fnv(fnv(fnv(impulseHash, std::bit_cast<uint32_t>(impulse.m_X)), std::bit_cast<uint32_t>(impulse.m_Y)), std::bit_cast<uint32_t>(offset.m_X)), std::bit_cast<uint32_t>(offset.m_Y));
+		}
+		out << std::defaultfloat << " frc=" << mo->GetForces().size() << ":" << std::hex << forceHash << " imps=" << std::dec << mo->GetImpulses().size() << ":" << std::hex << impulseHash << std::dec << std::hexfloat;
+		if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
+			if (const AtomGroup* group = const_cast<MOSRotating*>(rotating)->GetAtomGroup()) {
+				out << " moi=" << group->GetStoredMomentOfInertia() << "/" << group->GetStoredOwnerMass();
+				// The root group's atoms in list order: offsets and subgroup ids drive collision and are not visible elsewhere.
+				uint64_t atomHash = 1469598103934665603ULL;
+				int atomIndex = 0;
+				for (const Atom* atom: group->GetAtomList()) {
+					atomHash = fnv(fnv(fnv(atomHash, std::bit_cast<uint32_t>(atom->GetOffset().m_X)), std::bit_cast<uint32_t>(atom->GetOffset().m_Y)), static_cast<uint32_t>(atom->GetSubID()));
+					if (SceneMan::IsTrackedUID(mo->GetUniqueID())) {
+						SceneMan::TraceTerrainEvent("atom", std::bit_cast<int32_t>(atom->GetOffset().m_X), std::bit_cast<int32_t>(atom->GetOffset().m_Y), static_cast<int32_t>(atom->GetSubID()), atomIndex, static_cast<int>(mo->GetUniqueID()));
+					}
+					++atomIndex;
+				}
+				out << std::defaultfloat << " atoms=" << group->GetAtomCount() << ":" << std::hex << atomHash << std::dec << std::hexfloat;
+			}
+		}
+	}
+	out
+	    << " rest=" << mo->GetRestTimerElapsedSimMS() << std::defaultfloat
+	    << " osc=" << mo->GetVelOscillations() << " settle=" << mo->ToSettle() << std::hexfloat
+	    << " pvel=" << mo->GetPrevVel().m_X << "," << mo->GetPrevVel().m_Y << std::defaultfloat << " wdmg=" << mo->GetApplyWoundDamageOnCollision() << mo->GetApplyWoundBurstDamageOnCollision() << std::hexfloat
+	    << " air=" << mo->GetAirResistance() << "/" << mo->GetAirThreshold() << "/" << mo->GetGlobalAccScalar();
+	if (const PEmitter* emitter = dynamic_cast<const PEmitter*>(mo)) {
+		out << std::defaultfloat << " pem=" << emitter->IsEmitting() << "/" << emitter->GetEmitCount() << "/" << emitter->IsSetToBurst() << "/" << emitter->WasEmitting() << std::hexfloat << "/" << emitter->GetThrottle() << "/" << emitter->GetBurstTimerElapsedSimMS() << "/" << emitter->GetLastEmitTimerElapsedSimMS();
+		for (double accumulator: emitter->GetEmissionAccumulators()) {
+			out << "/" << accumulator;
+		}
+		for (const auto& [startElapsed, stopElapsed]: emitter->GetEmissionTimerElapsed()) {
+			out << "/" << startElapsed << ":" << stopElapsed;
+		}
+	}
+	if (const MOSprite* sprite = dynamic_cast<const MOSprite*>(mo)) {
+		out << " rot=" << sprite->GetRotAngle();
+	}
+	if (Actor* actor = dynamic_cast<Actor*>(mo)) {
+		Controller* controller = actor->GetController();
+		uint64_t states = 0;
+		for (int s = 0; s < ControlState::CONTROLSTATECOUNT && s < 64; ++s) {
+			if (controller->IsState(static_cast<ControlState>(s))) {
+				states |= 1ULL << s;
+			}
+		}
+		out << std::defaultfloat << " awm=" << std::hexfloat << actor->GetAttachableAndWoundMassForSave() << " inv=" << actor->GetInventoryMass() << " gold=" << actor->GetGoldCarried() << " base=" << actor->MovableObject::GetMass() << std::defaultfloat << " ninv=" << actor->GetInventorySize() << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus()) << " team=" << actor->GetTeam() << " aimode=" << static_cast<int>(actor->GetAIMode()) << " wp=" << actor->GetWaypointsSize() << " health=" << std::hexfloat << actor->GetHealth() << " aim=" << actor->GetAimAngle(false) << std::defaultfloat << " flip=" << actor->IsHFlipped();
+		if (const PieMenu* pieMenu = actor->GetPieMenu()) {
+			out << " pie=" << pieMenu->DescribeInteractionState();
+		}
+		out << " inv=[";
+		for (const MovableObject* inventoryItem: *actor->GetInventory()) {
+			out << inventoryItem->GetUniqueID() << ":" << inventoryItem->GetPresetName() << ";";
+		}
+		out << "]";
+		out << " mstate=" << static_cast<int>(actor->GetMovementState()) << " goldpicked=" << actor->GetGoldPicked() << std::hexfloat
+		    << " atmr=" << actor->GetLastSecondTimerElapsedSimMS() << "/" << actor->GetStableRecoverTimerElapsedSimMS() << "/" << actor->GetHeartBeatTimerElapsedSimMS() << "/" << actor->GetNewControlTimerElapsedSimMS() << "/" << actor->GetDeathTimerElapsedSimMS()
+		    << " recent=" << actor->GetRecentMovement().m_X << "," << actor->GetRecentMovement().m_Y << " view=" << actor->GetViewPointRaw().m_X << "," << actor->GetViewPointRaw().m_Y
+		    << " prevhealth=" << actor->GetPrevHealth();
+		// The alarm point is the owner's AI perception, per machine like the walk paths; peer compares skip it.
+		out << " alarm=" << actor->GetAlarmTimerElapsedSimMS() << "@" << actor->GetLastAlarmPosRaw().m_X << "," << actor->GetLastAlarmPosRaw().m_Y << std::defaultfloat;
+		if (!ScenarioRunner::GetArgs().testScript.empty()) {
+			LuaStateWrapper* state = actor->GetLuaState();
+			const long create = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testCreate", -1.0)) : -1;
+			const long update = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testUpdate", -1.0)) : -1;
+			const long carried = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testCarried", -1.0)) : -1;
+			out << " script=" << create << "/" << update << "/" << static_cast<long>(actor->GetNumberValue("TestUpdates")) << "/" << carried;
+			std::vector<std::pair<std::string, double>> numberValues(actor->GetNumberValueMap().begin(), actor->GetNumberValueMap().end());
+			std::sort(numberValues.begin(), numberValues.end());
+			out << " nv=[" << std::hexfloat;
+			for (const auto& [name, value]: numberValues) {
+				out << name << ":" << value << ";";
+			}
+			out << std::defaultfloat << "]";
+		}
+		if (const ADoor* door = dynamic_cast<const ADoor*>(mo)) {
+			out << " door=" << static_cast<int>(door->GetDoorState());
+		}
+		if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
+			out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS() << std::hexfloat << " hatchms=" << craft->GetHatchTimerElapsedSimMS() << " exitms=" << craft->GetExitTimerElapsedSimMS();
+			if (const ACDropShip* dropShip = dynamic_cast<const ACDropShip*>(craft)) {
+				out << " lateral=" << dropShip->GetLateralControl();
+			}
+			out << " ctmr=" << craft->GetFlippedTimerElapsedSimMS() << "/" << craft->GetCrashTimerElapsedSimMS() << "/" << craft->GetNetworkDeliveryTimerElapsedSimMS() << std::defaultfloat << " netdel=" << craft->IsNetworkDelivery() << " exit=" << craft->GetCurrentExitIndex() << "/" << craft->GetExitLinePhase();
+			for (long uid: craft->GetExitIncomingMOUniqueIDs()) {
+				out << "/" << uid;
+			}
+		}
+		if (const MovableObject* moToNotHit = mo->GetWhichMOToNotHit(); moToNotHit && const_cast<MovableMan*>(this)->FindObjectByUniqueID(mo->GetMOToNotHitUID()) == moToNotHit) {
+			out << std::defaultfloat << " nothit=" << mo->GetMOToNotHitUID() << std::hexfloat << ":" << mo->GetMOIgnoreTimerElapsedSimMS() << "/" << mo->GetMOIgnoreTimerLimitMS() << std::defaultfloat;
+		}
+		if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
+			out << " imp=" << std::hexfloat << rotating->GetTravelImpulse().GetMagnitude() << std::defaultfloat << " wounds=" << rotating->GetWoundCount();
+		}
+		if (const AHuman* human = dynamic_cast<const AHuman*>(mo)) {
+			if (const AEJetpack* jetpack = human->GetJetpack()) {
+				out << " jet=" << std::hexfloat << jetpack->GetJetTimeLeft() << " bonus=" << jetpack->GetJetThrustBonusMultiplier() << std::defaultfloat << " emit=" << jetpack->IsEmitting();
+			}
+			out << " hstate=" << static_cast<int>(human->GetProneState()) << "/" << static_cast<int>(human->GetUpperBodyState()) << "/" << human->IsArmClimbing(0) << human->IsArmClimbing(1) << "/" << human->IsAiming() << "/" << human->StrideFrame() << human->GetStrideStart()
+			    << std::hexfloat << " htmr=" << human->GetProneTimerElapsedSimMS() << "/" << human->GetStrideTimerElapsedSimMS() << "/" << human->GetThrowTimerElapsedSimMS() << " crouch=" << human->GetCrouchAmount() << "/" << human->GetCrouchAmountOverride() << std::defaultfloat;
+			const HeldDevice* fgItem = const_cast<AHuman*>(human)->GetEquippedItem();
+			const HeldDevice* bgItem = const_cast<AHuman*>(human)->GetEquippedBGItem();
+			out << " fg=" << (fgItem ? fgItem->GetUniqueID() : 0) << " bg=" << (bgItem ? bgItem->GetUniqueID() : 0);
+			out << " offhandwait=" << (human->IsWaitingToReloadOffhand() ? 1 : 0);
+			if (const HDFirearm* gun = dynamic_cast<const HDFirearm*>(fgItem)) {
+				out << " gun=" << gun->GetPresetName() << " rounds=" << gun->GetRoundInMagCount() << " reloading=" << gun->IsReloading() << "/" << gun->DoneReloading() << std::hexfloat << " reloadms=" << gun->GetReloadTimerElapsedSimMS() << "/" << gun->GetReloadTimerLimitMS() << std::defaultfloat << " fire=" << gun->FiredFrame() << gun->FiredLastFrame();
+				out << " gate[" << gun->DescribeFireGate() << "]";
+			}
+			out << " limbs=" << human->GetLimbGroupPositions();
+			// Snapshot forensics: the walk paths, the foot groups and the identity the MO-hit layer sees.
+			auto fnv = [](uint64_t h, uint32_t v) { return (h ^ v) * 1099511628211ULL; };
+			uint64_t pathHash = 1469598103934665603ULL;
+			for (const std::string& state: human->GetLimbPathStates(true)) {
+				for (unsigned char c: state) {
+					pathHash = fnv(pathHash, c);
+				}
+				pathHash = fnv(pathHash, 0x7Cu);
+			}
+			uint64_t feetHash = 1469598103934665603ULL;
+			for (const AtomGroup* group: {human->GetFGFootGroup(), human->GetBGFootGroup()}) {
+				if (!group) {
+					feetHash = fnv(feetHash, 0xFFFFFFFFu);
+					continue;
+				}
+				for (const Atom* atom: group->GetAtomList()) {
+					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(atom->GetOffset().m_X));
+					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(atom->GetOffset().m_Y));
+				}
+				feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetRawLimbPos().m_X));
+				feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetRawLimbPos().m_Y));
+				feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetStoredMomentOfInertia()));
+				feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetStoredOwnerMass()));
+				for (const MOID ignored: group->GetIgnoreMOIDs()) {
+					feetHash = fnv(feetHash, static_cast<uint32_t>(ignored));
+				}
+				feetHash = fnv(feetHash, static_cast<uint32_t>(group->GetAtomCount()));
+			}
+			out << " paths=" << std::hex << pathHash << " feet=" << feetHash << std::dec;
+		}
+	}
+	out << std::defaultfloat << "\n";
+	if (const MOSRotating* tree = dynamic_cast<const MOSRotating*>(mo)) {
+		DumpAttachableTree(tick, tree, out);
+	}
+}
+
+void MovableMan::DumpMOSimState(uint64_t tick, const char* kind, MovableObject* mo, std::ostream& out) const {
+	DumpMOLines(tick, kind, mo, out);
+}
+
 void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
+	DumpSimLines(tick, out);
+	out.flush();
+}
+
+void MovableMan::CaptureSimState(uint64_t tick, SimDumpTape& tape) const {
+	DumpSimLines(tick, tape);
+}
+
+void MovableMan::CaptureMOSimState(uint64_t tick, const char* kind, MovableObject* mo, SimDumpTape& tape) const {
+	DumpMOLines(tick, kind, mo, tape);
+}
+
+template <class Out>
+void MovableMan::DumpSimLines(uint64_t tick, Out& out) const {
 	// The queued MOID draw renumbers m_MOID on the pool while this reads it; join it so one dump holds one tick's numbering.
 	g_MovableMan.CompleteQueuedMOIDDrawings();
-	auto dumpMO = [&](const char* kind, MovableObject* mo) {
-		out << tick << " " << kind << " uid=" << mo->GetUniqueID() << " " << mo->GetPresetName()
-		    << " pos=" << std::hexfloat << mo->GetPos().m_X << "," << mo->GetPos().m_Y
-		    << " prev=" << mo->GetPrevPos().m_X << "," << mo->GetPrevPos().m_Y
-		    << " vel=" << mo->GetVel().m_X << "," << mo->GetVel().m_Y
-		    << " angvel=" << mo->GetAngularVel()
-		    << std::defaultfloat << " moid=" << mo->GetID() << "/" << mo->GetRootID();
-		if (mo->HasAnyScripts()) {
-			out << " scr=" << std::hex << ScriptSetHash(*mo) << std::dec;
-		}
-		out << std::hexfloat << " mass=" << mo->GetMass();
-		{
-			auto fnv = [](uint64_t h, uint32_t v) { return (h ^ v) * 1099511628211ULL; };
-			uint64_t forceHash = 1469598103934665603ULL;
-			for (const auto& [force, offset]: mo->GetForces()) {
-				forceHash = fnv(fnv(fnv(fnv(forceHash, std::bit_cast<uint32_t>(force.m_X)), std::bit_cast<uint32_t>(force.m_Y)), std::bit_cast<uint32_t>(offset.m_X)), std::bit_cast<uint32_t>(offset.m_Y));
-			}
-			uint64_t impulseHash = 1469598103934665603ULL;
-			for (const auto& [impulse, offset]: mo->GetImpulses()) {
-				impulseHash = fnv(fnv(fnv(fnv(impulseHash, std::bit_cast<uint32_t>(impulse.m_X)), std::bit_cast<uint32_t>(impulse.m_Y)), std::bit_cast<uint32_t>(offset.m_X)), std::bit_cast<uint32_t>(offset.m_Y));
-			}
-			out << std::defaultfloat << " frc=" << mo->GetForces().size() << ":" << std::hex << forceHash << " imps=" << std::dec << mo->GetImpulses().size() << ":" << std::hex << impulseHash << std::dec << std::hexfloat;
-			if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
-				if (const AtomGroup* group = const_cast<MOSRotating*>(rotating)->GetAtomGroup()) {
-					out << " moi=" << group->GetStoredMomentOfInertia() << "/" << group->GetStoredOwnerMass();
-					// The root group's atoms in list order: offsets and subgroup ids drive collision and are not visible elsewhere.
-					uint64_t atomHash = 1469598103934665603ULL;
-					int atomIndex = 0;
-					for (const Atom* atom: group->GetAtomList()) {
-						atomHash = fnv(fnv(fnv(atomHash, std::bit_cast<uint32_t>(atom->GetOffset().m_X)), std::bit_cast<uint32_t>(atom->GetOffset().m_Y)), static_cast<uint32_t>(atom->GetSubID()));
-						if (SceneMan::IsTrackedUID(mo->GetUniqueID())) {
-							SceneMan::TraceTerrainEvent("atom", std::bit_cast<int32_t>(atom->GetOffset().m_X), std::bit_cast<int32_t>(atom->GetOffset().m_Y), static_cast<int32_t>(atom->GetSubID()), atomIndex, static_cast<int>(mo->GetUniqueID()));
-						}
-						++atomIndex;
-					}
-					out << std::defaultfloat << " atoms=" << group->GetAtomCount() << ":" << std::hex << atomHash << std::dec << std::hexfloat;
-				}
-			}
-		}
-		out
-		    << " rest=" << mo->GetRestTimerElapsedSimMS() << std::defaultfloat
-		    << " osc=" << mo->GetVelOscillations() << " settle=" << mo->ToSettle() << std::hexfloat
-		    << " pvel=" << mo->GetPrevVel().m_X << "," << mo->GetPrevVel().m_Y << std::defaultfloat << " wdmg=" << mo->GetApplyWoundDamageOnCollision() << mo->GetApplyWoundBurstDamageOnCollision() << std::hexfloat
-		    << " air=" << mo->GetAirResistance() << "/" << mo->GetAirThreshold() << "/" << mo->GetGlobalAccScalar();
-		if (const PEmitter* emitter = dynamic_cast<const PEmitter*>(mo)) {
-			out << std::defaultfloat << " pem=" << emitter->IsEmitting() << "/" << emitter->GetEmitCount() << "/" << emitter->IsSetToBurst() << "/" << emitter->WasEmitting() << std::hexfloat << "/" << emitter->GetThrottle() << "/" << emitter->GetBurstTimerElapsedSimMS() << "/" << emitter->GetLastEmitTimerElapsedSimMS();
-			for (double accumulator: emitter->GetEmissionAccumulators()) {
-				out << "/" << accumulator;
-			}
-			for (const auto& [startElapsed, stopElapsed]: emitter->GetEmissionTimerElapsed()) {
-				out << "/" << startElapsed << ":" << stopElapsed;
-			}
-		}
-		if (const MOSprite* sprite = dynamic_cast<const MOSprite*>(mo)) {
-			out << " rot=" << sprite->GetRotAngle();
-		}
-		if (Actor* actor = dynamic_cast<Actor*>(mo)) {
-			Controller* controller = actor->GetController();
-			uint64_t states = 0;
-			for (int s = 0; s < ControlState::CONTROLSTATECOUNT && s < 64; ++s) {
-				if (controller->IsState(static_cast<ControlState>(s))) {
-					states |= 1ULL << s;
-				}
-			}
-			out << std::defaultfloat << " awm=" << std::hexfloat << actor->GetAttachableAndWoundMassForSave() << " inv=" << actor->GetInventoryMass() << " gold=" << actor->GetGoldCarried() << " base=" << actor->MovableObject::GetMass() << std::defaultfloat << " ninv=" << actor->GetInventorySize() << " ctrl=0x" << std::hex << states << std::dec << " mode=" << static_cast<int>(controller->GetInputMode()) << " dis=" << controller->IsDisabled() << " status=" << static_cast<int>(actor->GetStatus()) << " team=" << actor->GetTeam() << " aimode=" << static_cast<int>(actor->GetAIMode()) << " wp=" << actor->GetWaypointsSize() << " health=" << std::hexfloat << actor->GetHealth() << " aim=" << actor->GetAimAngle(false) << std::defaultfloat << " flip=" << actor->IsHFlipped();
-			if (const PieMenu* pieMenu = actor->GetPieMenu()) {
-				out << " pie=" << pieMenu->DescribeInteractionState();
-			}
-			out << " inv=[";
-			for (const MovableObject* inventoryItem: *actor->GetInventory()) {
-				out << inventoryItem->GetUniqueID() << ":" << inventoryItem->GetPresetName() << ";";
-			}
-			out << "]";
-			out << " mstate=" << static_cast<int>(actor->GetMovementState()) << " goldpicked=" << actor->GetGoldPicked() << std::hexfloat
-			    << " atmr=" << actor->GetLastSecondTimerElapsedSimMS() << "/" << actor->GetStableRecoverTimerElapsedSimMS() << "/" << actor->GetHeartBeatTimerElapsedSimMS() << "/" << actor->GetNewControlTimerElapsedSimMS() << "/" << actor->GetDeathTimerElapsedSimMS()
-			    << " recent=" << actor->GetRecentMovement().m_X << "," << actor->GetRecentMovement().m_Y << " view=" << actor->GetViewPointRaw().m_X << "," << actor->GetViewPointRaw().m_Y
-			    << " prevhealth=" << actor->GetPrevHealth();
-			// The alarm point is the owner's AI perception, per machine like the walk paths; peer compares skip it.
-			out << " alarm=" << actor->GetAlarmTimerElapsedSimMS() << "@" << actor->GetLastAlarmPosRaw().m_X << "," << actor->GetLastAlarmPosRaw().m_Y << std::defaultfloat;
-			if (!ScenarioRunner::GetArgs().testScript.empty()) {
-				LuaStateWrapper* state = actor->GetLuaState();
-				const long create = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testCreate", -1.0)) : -1;
-				const long update = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testUpdate", -1.0)) : -1;
-				const long carried = state ? static_cast<long>(state->GetScriptObjectNumberField(actor->GetUniqueID(), "testCarried", -1.0)) : -1;
-				out << " script=" << create << "/" << update << "/" << static_cast<long>(actor->GetNumberValue("TestUpdates")) << "/" << carried;
-				std::vector<std::pair<std::string, double>> numberValues(actor->GetNumberValueMap().begin(), actor->GetNumberValueMap().end());
-				std::sort(numberValues.begin(), numberValues.end());
-				out << " nv=[" << std::hexfloat;
-				for (const auto& [name, value]: numberValues) {
-					out << name << ":" << value << ";";
-				}
-				out << std::defaultfloat << "]";
-			}
-			if (const ADoor* door = dynamic_cast<const ADoor*>(mo)) {
-				out << " door=" << static_cast<int>(door->GetDoorState());
-			}
-			if (const ACraft* craft = dynamic_cast<const ACraft*>(mo)) {
-				out << " hatch=" << static_cast<int>(craft->GetHatchState()) << " deathms=" << craft->GetDeathTimerElapsedSimMS() << std::hexfloat << " hatchms=" << craft->GetHatchTimerElapsedSimMS() << " exitms=" << craft->GetExitTimerElapsedSimMS();
-				if (const ACDropShip* dropShip = dynamic_cast<const ACDropShip*>(craft)) {
-					out << " lateral=" << dropShip->GetLateralControl();
-				}
-				out << " ctmr=" << craft->GetFlippedTimerElapsedSimMS() << "/" << craft->GetCrashTimerElapsedSimMS() << "/" << craft->GetNetworkDeliveryTimerElapsedSimMS() << std::defaultfloat << " netdel=" << craft->IsNetworkDelivery() << " exit=" << craft->GetCurrentExitIndex() << "/" << craft->GetExitLinePhase();
-				for (long uid: craft->GetExitIncomingMOUniqueIDs()) {
-					out << "/" << uid;
-				}
-			}
-			if (const MovableObject* moToNotHit = mo->GetWhichMOToNotHit(); moToNotHit && const_cast<MovableMan*>(this)->FindObjectByUniqueID(mo->GetMOToNotHitUID()) == moToNotHit) {
-				out << std::defaultfloat << " nothit=" << mo->GetMOToNotHitUID() << std::hexfloat << ":" << mo->GetMOIgnoreTimerElapsedSimMS() << "/" << mo->GetMOIgnoreTimerLimitMS() << std::defaultfloat;
-			}
-			if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
-				out << " imp=" << std::hexfloat << rotating->GetTravelImpulse().GetMagnitude() << std::defaultfloat << " wounds=" << rotating->GetWoundCount();
-			}
-			if (const AHuman* human = dynamic_cast<const AHuman*>(mo)) {
-				if (const AEJetpack* jetpack = human->GetJetpack()) {
-					out << " jet=" << std::hexfloat << jetpack->GetJetTimeLeft() << " bonus=" << jetpack->GetJetThrustBonusMultiplier() << std::defaultfloat << " emit=" << jetpack->IsEmitting();
-				}
-				out << " hstate=" << static_cast<int>(human->GetProneState()) << "/" << static_cast<int>(human->GetUpperBodyState()) << "/" << human->IsArmClimbing(0) << human->IsArmClimbing(1) << "/" << human->IsAiming() << "/" << human->StrideFrame() << human->GetStrideStart()
-				    << std::hexfloat << " htmr=" << human->GetProneTimerElapsedSimMS() << "/" << human->GetStrideTimerElapsedSimMS() << "/" << human->GetThrowTimerElapsedSimMS() << " crouch=" << human->GetCrouchAmount() << "/" << human->GetCrouchAmountOverride() << std::defaultfloat;
-				const HeldDevice* fgItem = const_cast<AHuman*>(human)->GetEquippedItem();
-				const HeldDevice* bgItem = const_cast<AHuman*>(human)->GetEquippedBGItem();
-				out << " fg=" << (fgItem ? fgItem->GetUniqueID() : 0) << " bg=" << (bgItem ? bgItem->GetUniqueID() : 0);
-				out << " offhandwait=" << (human->IsWaitingToReloadOffhand() ? 1 : 0);
-				if (const HDFirearm* gun = dynamic_cast<const HDFirearm*>(fgItem)) {
-					out << " gun=" << gun->GetPresetName() << " rounds=" << gun->GetRoundInMagCount() << " reloading=" << gun->IsReloading() << "/" << gun->DoneReloading() << std::hexfloat << " reloadms=" << gun->GetReloadTimerElapsedSimMS() << "/" << gun->GetReloadTimerLimitMS() << std::defaultfloat << " fire=" << gun->FiredFrame() << gun->FiredLastFrame();
-					out << " gate[" << gun->DescribeFireGate() << "]";
-				}
-				out << " limbs=" << human->GetLimbGroupPositions();
-				// Snapshot forensics: the walk paths, the foot groups and the identity the MO-hit layer sees.
-				auto fnv = [](uint64_t h, uint32_t v) { return (h ^ v) * 1099511628211ULL; };
-				uint64_t pathHash = 1469598103934665603ULL;
-				for (const std::string& state: human->GetLimbPathStates(true)) {
-					for (unsigned char c: state) {
-						pathHash = fnv(pathHash, c);
-					}
-					pathHash = fnv(pathHash, 0x7Cu);
-				}
-				uint64_t feetHash = 1469598103934665603ULL;
-				for (const AtomGroup* group: {human->GetFGFootGroup(), human->GetBGFootGroup()}) {
-					if (!group) {
-						feetHash = fnv(feetHash, 0xFFFFFFFFu);
-						continue;
-					}
-					for (const Atom* atom: group->GetAtomList()) {
-						feetHash = fnv(feetHash, std::bit_cast<uint32_t>(atom->GetOffset().m_X));
-						feetHash = fnv(feetHash, std::bit_cast<uint32_t>(atom->GetOffset().m_Y));
-					}
-					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetRawLimbPos().m_X));
-					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetRawLimbPos().m_Y));
-					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetStoredMomentOfInertia()));
-					feetHash = fnv(feetHash, std::bit_cast<uint32_t>(group->GetStoredOwnerMass()));
-					for (const MOID ignored: group->GetIgnoreMOIDs()) {
-						feetHash = fnv(feetHash, static_cast<uint32_t>(ignored));
-					}
-					feetHash = fnv(feetHash, static_cast<uint32_t>(group->GetAtomCount()));
-				}
-				out << " paths=" << std::hex << pathHash << " feet=" << feetHash << std::dec;
-			}
-		}
-		out << std::defaultfloat << "\n";
-		if (const MOSRotating* tree = dynamic_cast<const MOSRotating*>(mo)) {
-			DumpAttachableTree(tick, tree, out);
-		}
-	};
+	const auto dumpMO = [&](const char* kind, MovableObject* mo) { DumpMOLines(tick, kind, mo, out); };
 	if (const Activity* activity = g_ActivityMan.GetActivity()) {
 		out << tick << " activity state=" << static_cast<int>(activity->GetActivityState());
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
@@ -1831,7 +1854,6 @@ void MovableMan::DumpSimState(uint64_t tick, std::ostream& out) const {
 	for (MovableObject* particle: m_Particles) {
 		dumpMO("particle", particle);
 	}
-	out.flush();
 }
 
 int64_t MovableMan::GetFirstCraftUniqueID(int team) const {
@@ -2715,8 +2737,15 @@ MovableMan::KnownObjectsScope::KnownObjectsScope() {
 	m_Previous = manager.m_KnownObjectsScope.exchange(this);
 }
 
+static std::atomic<double> s_KnownObjectsCopyMs{0.0};
+
+double MovableMan::KnownObjectsScope::CopyMs() {
+	return s_KnownObjectsCopyMs.load();
+}
+
 void MovableMan::KnownObjectsScope::Copy() const {
 	std::call_once(m_Copied, [this] {
+		const auto copyStart = std::chrono::steady_clock::now();
 		CaptureSentinel::NoteCreation("known-objects index", this);
 		MovableMan& manager = g_MovableMan;
 		{
@@ -2726,6 +2755,7 @@ void MovableMan::KnownObjectsScope::Copy() const {
 		}
 		m_ByAddress.assign(m_ByIdentity.begin(), m_ByIdentity.end());
 		std::sort(m_ByAddress.begin(), m_ByAddress.end());
+		s_KnownObjectsCopyMs = s_KnownObjectsCopyMs.load() + std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - copyStart).count();
 	});
 }
 
@@ -3536,7 +3566,15 @@ MovableObject* MovableMan::ShadowOf(MovableObject* resident) {
 	m_LinkRoot = shadow;
 	shadow->ResolveFaithfulLinks();
 	m_LinkRoot = previousRoot;
+	if (m_ShadowMadeHook) {
+		m_ShadowMadeHook(resident, shadow);
+	}
 	return shadow;
+}
+
+MovableObject* MovableMan::ExistingShadowOf(const MovableObject* resident) const {
+	const auto existing = m_Speculation.shadows.find(resident);
+	return existing != m_Speculation.shadows.end() ? existing->second.object : nullptr;
 }
 
 MovableObject* MovableMan::SpeculativeView(MovableObject* found) {

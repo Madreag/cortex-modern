@@ -34,7 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / 'edith'))
 from remote_box import SSH_NOISE, WINDOWS_TAR, RemoteBox  # noqa: E402  (shipped beside this file on EDITH)
 
 HERE = Path(__file__).resolve().parent
-LANE = 'opus-edith-cross-20260926'
+# The calling lane's own scratch root, the same absolute path on both boxes.
+LANE = os.environ.get('CC_EDITH_CROSS_LANE', 'opus-edith-cross-20260926')
 SCRATCH = Path('D:/mx') / LANE  # the same absolute path on both boxes
 PAYLOAD = SCRATCH / 'payload'
 SESSION1_SCRIPT = 'D:/mx/session1/run.ps1'
@@ -48,9 +49,19 @@ ADDRESS = {'here': '68.3.162.151', 'edith': '24.251.145.96'}
 MACHINE = {'here': 'EROL-PC', 'edith': 'EDITH'}
 # The TURN URL each side can reach; EDITH reaches this site only through its public address.
 TURN = {'here': 'turn:192.168.50.122:3479?transport=udp', 'edith': 'turn:68.3.162.151:3479?transport=udp'}
+# The Cloudflare key stays in this file on this box: only its path is passed, to the run's own directory.
+CLOUDFLARE_TURN_CONFIG = Path('D:/mx/coturn-20260920/turn-config-cloudflare.json')
 TURN_CONF = Path('D:/mx/coturn-20260920/turnserver-fixed.conf')
 BOX_LOG = Path('D:/mx/inventory-confirming-2-20260926/steps.log')
 SECRET_KEYS = ('NetworkTurnPass', 'NetworkPlayerTurnPass')
+# The Linux box (BOXES.md): the lane's directory there, its clone of the tree at the tip and that tree's gcc build.
+LINUX_SSH = '3090'
+LINUX_LANE = f'/home/erol/cortex-workers/{LANE}'
+LINUX_REPO = f'{LINUX_LANE}/repo'
+LINUX_BINARY = f'{LINUX_REPO}/build-gcc/CortexCommand'
+# The soak (tools/soak_two_peer.py's defaults): an autosave a minute on the host, three 1.5 s stalls of the client, the memory
+# census every minute and the full-state hash every second.
+SOAK_AUTOSAVE_S, SOAK_HOLDS, SOAK_STALL_MS, SOAK_CENSUS_TICKS, SOAK_FULLSTATE_EVERY = 60, 3, 1500, 3600, 60
 MATCH_TICKS = 1200
 TICK_MS = 1000 / 60
 SCRATCH_LIMIT = 4_000_000_000
@@ -124,6 +135,8 @@ def prepare_peer(h, spec):
     run_out = Path(spec['root']) / spec['peer']
     run = h.run.make_run(Path(spec['repo']), spec['flags'], run_out, timeout=spec['timeout'], env=spec['env'],
                          expected=[Path(path) for path in spec['expected']])
+    write_json(Path(spec['root']) / f'{spec["peer"]}-build.json', dict(
+        source_sha=command_source_sha(spec['repo']), build=read_json(Path(spec['repo']) / 'tools/cross_peers/build.json')))
     h.feel.private_settings(run, spec['cap'])
     if spec.get('record'):
         (run_out / 'feel').mkdir()
@@ -168,7 +181,8 @@ def remote_peer(spec_path):
         write_json(root / 'tick-budget.json', budget)
         print(f'{stamp()} tick budget {json.dumps(budget)}', flush=True)
     h.records.compress_case_records(root)
-    print(f'{stamp()} scratch bytes {h.feel.scratch_bytes(SCRATCH, SCRATCH_LIMIT * 10)}', flush=True)
+    lane_root = next((parent for parent in Path(root).parents if parent.name == LANE), Path(root).parents[-3])
+    print(f'{stamp()} scratch bytes {h.feel.scratch_bytes(lane_root, SCRATCH_LIMIT * 10)}', flush=True)
     return 0 if record.get('exit_code') == 0 else 1
 
 
@@ -252,9 +266,9 @@ def remote_mkdir(path):
     box().mkdir(path)
 
 
-def exe_hashes(repo):
+def exe_hashes(repo, remote_repo=None):
     local = hashlib.sha256((Path(repo) / 'Cortex Command.exe').read_bytes()).hexdigest()
-    return local, box().sha256(Path(repo) / 'Cortex Command.exe')
+    return local, box().sha256(Path(remote_repo or repo) / 'Cortex Command.exe')
 
 
 def ship_driver():
@@ -289,6 +303,135 @@ def start_session1(root, spec, label):
     write_json(local_spec, redacted)
     box().start_task(local_script)
     say(f'{label}: {spec["peer"]} started on EDITH through {TASK}')
+
+
+def soak_stalls(ticks):
+    return [ticks * (index + 1) // (SOAK_HOLDS + 1) for index in range(SOAK_HOLDS)]
+
+
+def soak_flags(peer, ticks):
+    """What the soak adds to a match peer: soak_two_peer's census, full-state hashing, the host's autosaves, the client's stalls."""
+    flags = ['-memory-census-ticks', str(SOAK_CENSUS_TICKS), '-net-fullstate-hash-every', str(SOAK_FULLSTATE_EVERY)]
+    if peer == 'host':
+        return flags + ['-net-autosave-seconds', str(SOAK_AUTOSAVE_S)]
+    return flags + [part for tick in soak_stalls(ticks) for part in ('-net-test-live-stall', f'{tick}:{SOAK_STALL_MS}')]
+
+
+class LinuxPeer:
+    """A match peer on the Linux box: its spec with this box's run root mapped to the lane's there, this file's remote-peer path
+    run over ssh (the POSIX runner, the tree's gcc build), its files fetched back here when it ends."""
+
+    def __init__(self, spec, local_root, log_path):
+        self.local_root = Path(local_root)
+        self.remote_root = f'{LINUX_LANE}/runs/{self.local_root.parent.name}/{self.local_root.name}'
+        local = str(self.local_root)
+
+        def posix(value):
+            return value.replace(local, self.remote_root).replace('\\', '/') if isinstance(value, str) and local in value else value
+        self.spec = dict(spec, root=self.remote_root, repo=LINUX_REPO, flags=[posix(flag) for flag in spec['flags']],
+                         expected=[posix(path) for path in spec['expected']], env=dict(spec['env'], CCCP_TEST_BINARY=LINUX_BINARY))
+        self.peer, self.record, self.log_path, self.process = spec['peer'], {}, Path(log_path), None
+        if DRY_RUN:
+            say(f'dry-run: Linux {self.peer} under {self.remote_root}: ' + ' '.join(self.spec['flags']))
+            return
+        spec_path = self.local_root / f'{self.peer}-spec.linux.json'
+        write_json(spec_path, self.spec)
+        remote_spec = f'{self.remote_root}/{self.peer}-spec.json'
+        payload = f'{LINUX_LANE}/payload'
+        run([*SSH_LINUX, f'mkdir -p {self.remote_root} {payload}/edith'])
+        for source, target in ((spec_path, remote_spec), (self.local_root / 'input.txt', f'{self.remote_root}/input.txt'),
+                               (self.local_root / 'input-schedule.json', f'{self.remote_root}/input-schedule.json'),
+                               (Path(__file__), f'{payload}/edith_cross.py'), (HERE / 'edith/remote_box.py', f'{payload}/edith/remote_box.py')):
+            run(['scp', '-q', '-o', 'BatchMode=yes', str(source), f'{LINUX_SSH}:{target}'])
+        command = (f'cd {LINUX_REPO} && export CCCP_HEADLESS=1 PYTHONDONTWRITEBYTECODE=1 CCCP_TEST_BINARY={LINUX_BINARY} '
+                   f'CC_EDITH_CROSS_LANE={LANE} DISPLAY=${{DISPLAY:-:0}} && python3 {payload}/edith_cross.py --remote-peer {remote_spec}')
+        self.process = subprocess.Popen([*SSH_LINUX, command], stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'),
+                                        stderr=subprocess.STDOUT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        say(f'{self.peer} started on the Linux box (ssh pid {self.process.pid})')
+
+    def poll(self):
+        return self.process.poll() if self.process else 0
+
+    def finish(self):
+        return self.process.wait() if self.process else 0
+
+    def close(self):
+        if not self.process:
+            return
+        if self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=30)
+        # The tar stream only; its runtime is a link into the tree, so it never travels.
+        with subprocess.Popen([*SSH_LINUX, f'tar -C {self.remote_root} --exclude=./{self.peer}/runtime -cf - .'],
+                              stdout=subprocess.PIPE, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as source:
+            subprocess.run([WINDOWS_TAR, '-xf', '-', '-C', str(self.local_root)], stdin=source.stdout, check=False,
+                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        record = self.local_root / f'{self.peer}-record.json'
+        self.record = json.loads(record.read_text(encoding='utf-8')) if record.is_file() else {}
+
+
+SSH_LINUX = ['ssh', '-o', 'BatchMode=yes', LINUX_SSH]
+
+
+def run(argv):
+    result = subprocess.run(argv, capture_output=True, text=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    if result.returncode != 0:
+        raise RuntimeError(f'{argv[0]} failed ({result.returncode}): {SSH_NOISE.sub("", result.stderr)[-300:]}')
+    return result.stdout
+
+
+class LinuxTunnel:
+    """ssh -R: the Linux box's 127.0.0.1:<the directory port> reaches the directory on this box's loopback (signalling only)."""
+
+    def __init__(self, log_path):
+        self.log_path, self.process = Path(log_path), None
+
+    def open(self):
+        argv = ['ssh', '-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'BatchMode=yes', '-R',
+                f'127.0.0.1:{DIRECTORY_PORT}:127.0.0.1:{DIRECTORY_PORT}', LINUX_SSH]
+        self.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=self.log_path.open('w'), stderr=subprocess.STDOUT,
+                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        time.sleep(4)
+        probe = run([*SSH_LINUX, f"python3 -c \"import socket; s=socket.socket(); s.settimeout(3); print('open' if s.connect_ex(('127.0.0.1', {DIRECTORY_PORT})) == 0 else 'closed')\""]).strip()
+        if self.process.poll() is not None or probe != 'open':
+            raise RuntimeError(f'the ssh -R tunnel did not open on the Linux box (probe {probe}); see {self.log_path}')
+
+    def close(self):
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=10)
+
+
+def soak_verdict(root, ticks):
+    """soak_two_peer's own judgement of the fetched pair: history and pace per engine (through pace_verdict), holds after returns
+    (excused only for a slow machine whose sim does not fit), autosaves owed and published, and every own-seat hold of the client
+    that follows an autosave by at most 300 ticks (H7c)."""
+    sys.path.insert(0, str(HERE))
+    import soak_two_peer as soak
+    try:
+        history = soak.acceptance_history(Path(root), ticks)
+    except ValueError as error:
+        history = dict(pass_=False, **{'pass': False}, errors=[f'{root}: FAIL: {error}'], pace_windows={})
+    holds = {peer: soak.return_hold_violations((Path(root) / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
+             for peer in ('host', 'client')}
+    kept = {peer: soak.excused_return_holds(Path(root), rows)[1] for peer, rows in holds.items()}
+    host_log = (Path(root) / 'host/stdout.log').read_text(encoding='utf-8', errors='replace')
+    client_log = (Path(root) / 'client/stdout.log').read_text(encoding='utf-8', errors='replace')
+    autosaves = sum(line.startswith('[autosave] tick=') and 'capture_ms=' in line for line in host_log.splitlines())
+    owed = int(ticks // (60 * SOAK_AUTOSAVE_S)) - 1
+    saves = [int(match) for match in re.findall(r'^\[autosave\] tick=(\d+)', host_log, re.M)]
+    own_holds = [int(match) for match in re.findall(r'hold of this seat at (\d+)', client_log)]
+    after_saves = [tick for tick in own_holds if any(0 <= tick - save <= 300 for save in saves)]
+    pace = {peer: dict(windows=len(rows), failed=[(row['first'], round(row['wall_tps'] or 0, 2), row.get('sim_ms_per_tick')) for row in rows if not row['passed']])
+            for peer, rows in history['pace_windows'].items()}
+    injections = soak.stall_plan(soak_stalls(ticks), SOAK_STALL_MS)
+    hold_judgement = soak.soak_hold_judgement(Path(root), injections)
+    checks = dict(complete_history_and_pace=history['pass'], no_hold_after_return=not any(kept.values()), autosaves=autosaves >= max(0, owed),
+                  paired_fault_recovery_and_survivor_waits=hold_judgement['passed'],
+                  no_hold_after_autosave=not after_saves)
+    return dict(passed=all(checks.values()), checks=checks, errors_not_pace=[e for e in history['errors'] if 'pace window' not in e], pace=pace,
+                holds_after_returns=kept, autosaves=f'{autosaves}/{owed}', client_own_holds=own_holds, client_holds_after_autosaves=after_saves,
+                stalls=injections, hold_judgement=hold_judgement)
 
 
 def wait_done(root, budget_s):
@@ -492,13 +635,17 @@ def turn_login():
     raise RuntimeError(f'{TURN_CONF} has no user=<name>:<password> line')
 
 
-def network_settings(path, side, pin, login):
+def network_settings(path, side, pin, login, peer='host'):
     if path == 'ip':
         return {'NetworkIceEnable': '0'}
     rendezvous = {'SessionDirectoryUrl': f'127.0.0.1:{DIRECTORY_PORT if side == "here" else EDITH_TCP[DIRECTORY_PORT]}', 'SessionDirectoryCertSha256': pin,
                   'SessionDirectoryInstallKey': f'edith-cross-{side}-install'}
     if path == 'direct':
         return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
+    if path == 'directory-relay':
+        # The host asks the directory for the relay; the client may take only the relay it was handed.
+        return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkHostRelayMode': 'Directory',
+                'NetworkConnectionMode': 'Automatic' if peer == 'host' else 'RelayOnly'}
     user, secret = login
     return {**rendezvous, 'NetworkIceEnable': '1', 'NetworkStunServers': '', 'NetworkConnectionMode': 'RelayOnly',
             'NetworkHostRelayMode': 'Fixed', 'NetworkTurnServers': TURN[side], 'NetworkTurnUser': user, 'NetworkTurnPass': secret,
@@ -552,12 +699,13 @@ def run_match(h, options, index, login):
     sides = {'host': host_side, 'client': 'edith' if host_side == 'here' else 'here'}
     local_peer = 'host' if host_side == 'here' else 'client'
     remote_peer_name = 'client' if local_peer == 'host' else 'host'
-    say(f'{name}: host={MACHINE[sides["host"]]} client={MACHINE[sides["client"]]} path={options.path} port={port} {stamp()}')
+    machines = {peer: 'LINUX-3090' if peer == 'client' and options.client_box == 'linux' else MACHINE[side] for peer, side in sides.items()}
+    say(f'{name}: host={machines["host"]} client={machines["client"]} path={options.path} port={port} {stamp()}')
     if DRY_RUN:
         root = options.out / name
     else:
         root.mkdir(parents=True, exist_ok=False)
-        h.feel.input_pattern(root / 'input.txt')
+        looped_input(h, root / 'input.txt', match_ticks(options))
     remote_mkdir(root)
     if not DRY_RUN:
         scp_to(root / 'input.txt', root / 'input.txt')
@@ -570,7 +718,9 @@ def run_match(h, options, index, login):
             say(f'dry-run: session directory on 127.0.0.1:{DIRECTORY_PORT} with a fresh certificate under {root}')
         else:
             cert, key, pin = make_cert(root)
-            service = directory.start_service(root, DIRECTORY_PORT, cert, key)
+            service = directory.start_service(root, DIRECTORY_PORT, cert, key,
+                                              ('--turn-config', str(options.turn_config), '--turn-max-ttl', str(options.relay_ttl))
+                                              if options.path == 'directory-relay' else ())
 
     def role(peer, session_id=None):
         ice = ['-net-ice', 'off' if options.path == 'ip' else 'on']
@@ -581,9 +731,13 @@ def run_match(h, options, index, login):
         return ['-net-join-session', session_id or '<session id>', *ice]
 
     def spec(peer, session_id=None):
-        return match_spec(peer, root, port, role(peer, session_id), network_settings(options.path, sides[peer], pin, login),
-                          repo=options.repo, timeout=options.timeout, record=options.feel_records,
+        made = match_spec(peer, root, port, role(peer, session_id), network_settings(options.path, sides[peer], pin, login, peer),
+                          repo=options.remote_repo or options.repo if sides[peer] == 'edith' else options.repo,
+                          ticks=match_ticks(options), timeout=match_timeout(options), record=options.feel_records,
                           lean=options.instrumentation == 'lean')
+        if options.soak:
+            made['flags'] += soak_flags(peer, match_ticks(options))
+        return made
 
     load = {} if DRY_RUN else wait_quiet(options.quiet_wait)
     started, local, local_record, session_id, note = stamp(), None, {}, None, None
@@ -607,15 +761,16 @@ def run_match(h, options, index, login):
             else:
                 time.sleep(0 if DRY_RUN else 20)
             if not note:
-                local = launch_local(h, spec('client', session_id))
+                local = LinuxPeer(spec('client', session_id), root, root / 'client-linux.log') if options.client_box == 'linux' else launch_local(h, spec('client', session_id))
         if local is not None and not DRY_RUN and not note:
             local.finish()
-        remote_state = wait_done(root, options.timeout + 300) if not (note and local_peer == 'host') else 'not started'
+        remote_state = wait_done(root, match_timeout(options) + 300) if not (note and local_peer == 'host') else 'not started'
     finally:
         if local is not None and not DRY_RUN:
             local.close()
             local_spec = spec(local_peer, session_id)
-            redact(h, local, local_spec)
+            if not isinstance(local, LinuxPeer):
+                redact(h, local, local_spec)
             local_record = local.record
             write_json(root / f'{local_peer}-record.json', local_record)
             write_json(root / f'{local_peer}-spec.json', dict(local_spec, settings={key: ('redacted' if key in SECRET_KEYS else value)
@@ -627,8 +782,13 @@ def run_match(h, options, index, login):
         return dict(name=name, dry_run=True)
     if remote_state != 'not started':
         fetch(root, [f'{remote_peer_name}*', 'session1*'], [f'{remote_peer_name}/runtime'])
-    return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path,
-                                       port=port, machines={peer: MACHINE[side] for peer, side in sides.items()},
+    if options.soak:
+        verdict = soak_verdict(root, match_ticks(options))
+        write_json(root / 'soak-verdict.json', verdict)
+        say(f'{name}: SOAK {"PASS" if verdict["passed"] else "FAIL"} {json.dumps(verdict["checks"])} autosaves={verdict["autosaves"]} '
+            f'client_holds_after_autosaves={verdict["client_holds_after_autosaves"]}')
+    return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path, ticks=match_ticks(options),
+                                       port=port, machines=machines, soak=options.soak, source_sha=command_source_sha(options.repo),
                                        local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note,
                                        feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load))
 
@@ -650,6 +810,11 @@ def launch_local(h, spec):
 def peer_log(root, peer):
     path = Path(root) / peer / 'stdout.log'
     return path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
+
+
+def live_ticks(path):
+    from feel.retained_resume import read_live_hashes
+    return {row['tick'] for row in read_live_hashes(Path(path)) if 'tick' in row}
 
 
 def read_json(path):
@@ -681,10 +846,64 @@ ROUTE = re.compile(r'\[net-ice\][^\n]*(?:selected|candidate|fail|timeout|retryin
                    r'|[^\n]*(?:ProblemDetectedLocally|ClosedByPeer|ConnectionState|connect(?:ion)? (?:failed|timed out|refused))[^\n]*', re.I)
 
 
+def relay_evidence(root, meta):
+    if meta.get('path') not in ('relay', 'directory-relay'):
+        return dict(passed=True, required=False, reason='')
+    session = meta.get('session_id')
+    required = ('client',) if meta['path'] == 'directory-relay' else ('host', 'client')
+    routes, errors = {}, []
+    for peer in required:
+        current, selected, accepted, wrong = None, set(), [], []
+        for line in peer_log(root, peer).splitlines():
+            if found := re.search(r'\[net-ice\] (?:host )?session (\S+)', line):
+                current = found[1]
+                selected.clear()
+            if found := re.search(r'\[net-ice\] selected candidate=\S+ connection=(\d+)', line):
+                if current == session and session: selected.add(found[1])
+            if found := re.search(r'\[net-route\] RouteAllowed route=(\w+) allowed=(\d+) connection=(\d+)', line):
+                if current != session or not session: continue
+                if found[1] == 'relay' and found[2] == '1' and found[3] in selected: accepted.append(line)
+                elif found[2] == '1': wrong.append(line)
+        routes[peer] = dict(selected_relay=accepted, wrong_allowed_route=wrong)
+        if not accepted or wrong: errors.append(f'{peer}: selected relay receipts={len(accepted)}, other allowed routes={wrong}')
+    offers = []
+    path = root / 'service.log'
+    for line in path.read_text(encoding='utf-8-sig', errors='replace').splitlines() if path.is_file() else []:
+        if 'relay_offer_issued ' not in line: continue
+        try:
+            row = json.loads(line.split('relay_offer_issued ', 1)[1])
+        except ValueError:
+            errors.append('invalid relay_offer_issued JSON'); continue
+        provider = row.get('provider')
+        expected = {'cloudflare', 'coturn'} if meta['path'] == 'directory-relay' else {'fixed'}
+        if row.get('session_id') == session and session and provider in expected and row.get('match_id') and all(
+                type(row.get(key)) is int and row[key] > 0 for key in ('generation', 'expires_at', 'server_count')):
+            offers.append(row)
+    if not offers: errors.append(f'no issued provider offer for session {session!r}')
+    return dict(passed=not errors, required=True, session_id=session, peers=routes, offers=offers, reason='; '.join(errors))
+
+
+def command_source_sha(repo):
+    return run(['git', '-C', str(repo), 'rev-parse', 'HEAD']).strip()
+
+
+def pair_build_evidence(root, meta, records):
+    errors = []
+    tip = meta.get('source_sha')
+    if not isinstance(tip, str) or not re.fullmatch(r'[0-9a-f]{40}', tip): errors.append(f'source_sha={tip!r}')
+    for peer, record in records.items():
+        observed = read_json(root / f'{peer}-build.json')
+        build = observed.get('build') or {}
+        sha = record.get('exe_sha256')
+        if observed.get('source_sha') != tip or build.get('commit') != tip or not sha or build.get('executable_sha256') != sha:
+            errors.append(f'{peer}: source={observed.get("source_sha")!r}, build={build.get("commit")!r}, runner hash={sha!r}, build hash={build.get("executable_sha256")!r}')
+    return dict(passed=not errors, reason='; '.join(errors), source_sha=tip)
+
+
 def analyze_match(h, root, meta):
     records = {peer: read_json(root / f'{peer}-record.json') for peer in ('host', 'client')}
     complete = all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values())
-    manifest = dict(meta, mode='two-machine service e2e, EROL-PC <-> EDITH over the internet', ticks=MATCH_TICKS, lag_ms=0, cap_hz=60,
+    manifest = dict(meta, mode='two-machine service e2e, EROL-PC <-> EDITH over the internet', ticks=meta.get('ticks', MATCH_TICKS), lag_ms=0, cap_hz=60,
                     instrumentation=meta['feel_records'], loss_percent=0, silent_tick=None, live_stalls=None, autosave_seconds=None,
                     per_peer_lag_ms={'host': 0, 'client': 0}, launches_complete=complete,
                     exe={peer: row.get('exe_sha256') for peer, row in records.items()})
@@ -697,11 +916,15 @@ def analyze_match(h, root, meta):
     except Exception as error:  # a pair that never matched still gets its verdict line
         result = dict(name=meta['name'], peers={}, proof={}, off_wire_pass=False, reduction_error=f'{type(error).__name__}: {error}')
     write_json(root / 'feel-report.json', result)
-    peers = {}
+    peers, receipt_failures = {}, []
     for peer in ('host', 'client'):
         log = peer_log(root, peer)
         live = root / f'{peer}-live.jsonl'
-        ticks = {json.loads(line)['tick'] for line in live.read_text(encoding='utf-8').splitlines() if line.strip()} if live.is_file() else set()
+        try:
+            ticks = live_ticks(live)
+        except ValueError as error:
+            ticks = []
+            receipt_failures.append(dict(peer=peer, status='FAIL', receipt=str(live), reason=str(error)))
         waits = [(int(frame), int(ms)) for frame, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log)]
         metrics = result.get('peers', {}).get(peer, {}).get('metrics', {})
         report = read_json(root / f'{peer}_report.json')
@@ -719,22 +942,48 @@ def analyze_match(h, root, meta):
     compared = sum(row['compared_ticks'] for row in passes)
     mismatched = sum(row['mismatched_ticks'] + row['mismatched_applied_input_ticks'] for row in passes)
     holds = sum(row['holds'] for row in peers.values())
-    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds == 0)
-    verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds,
-                   trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest)
+    # A soak plans its holds: they are judged by its own rules, every other run by holds == 0.
+    soak_plan = read_json(root / 'soak-verdict.json')
+    hold_judgement = None
+    is_soak = bool(meta.get('soak') or (root / 'soak-verdict.json').is_file())
+    if is_soak:
+        import soak_two_peer
+        hold_judgement = soak_two_peer.soak_hold_judgement(root, soak_plan.get('stalls', []))
+    holds_pass = hold_judgement['passed'] if hold_judgement else holds == 0
+    soak_pass = soak_plan.get('passed') is True if is_soak else True
+    # The only seat removed from this run-wide timing window is the declared, proved injected target.
+    targets = {row['peer'] for row in (hold_judgement or {}).get('injection_plan', [])}
+    required_timing = ['host'] if is_soak and holds_pass and targets == {'client'} else ['host', 'client']
+    timing_pass = all(result.get('peers', {}).get(peer, {}).get('pass_check') is True for peer in required_timing)
+    relay = relay_evidence(root, meta)
+    builds = pair_build_evidence(root, meta, records)
+    passed = bool(not receipt_failures and complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass and relay['passed'] and builds['passed'])
+    verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds, hold_judgement=hold_judgement,
+                   trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest,
+                   receipt_failures=receipt_failures, soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing, relay=relay, builds=builds)
     write_json(root / 'verdict.json', verdict)
     cell = lambda key, fmt='{}': '/'.join('-' if peers[peer][key] is None else fmt.format(peers[peer][key]) for peer in ('host', 'client'))
     route = next((line for peer in (meta['local_peer'], 'host', 'client') for line in peers[peer]['route'] if 'selected' in line or 'RouteAllowed' in line), None)
     route = route or next((f'{peer}: {line}' for peer in ('client', 'host') for line in peers[peer]['route']), None)
     say(f'RUN {meta["name"]} {"PASS" if passed else "FAIL"} host@{peers["host"]["machine"]} {peers["host"]["live_ticks"]}/{mismatched} '
         f'client@{peers["client"]["machine"]} {peers["client"]["live_ticks"]}/{mismatched} compared={compared} desyncs={mismatched} '
-        f'holds={holds} exits={cell("exit_code")} waits>50ms={cell("waits_over_50")} (steady {cell("steady_waits_over_50")}) '
+        f'holds={holds}' + (f' (planned {len(hold_judgement["planned"])}, explained {len(hold_judgement["explained"])}, unexplained {len(hold_judgement["unexplained"])})' if hold_judgement else '') +
+        f' exits={cell("exit_code")} waits>50ms={cell("waits_over_50")} (steady {cell("steady_waits_over_50")}) '
         f'longest_ms={cell("longest_steady_wait_ms", "{:.0f}")} waiting%={cell("waiting_percent", "{:.2f}")} tps={cell("wall_tps", "{:.1f}")} '
         f'sim_ms/tick={cell("sim_ms_per_tick", "{:.2f}")} delays={cell("input_delays")} route={route or meta.get("note") or "none logged"}')
     return verdict
 
 
 # --- the soak -------------------------------------------------------------------------------------------------------
+
+def match_ticks(options):
+    return int(round(options.match_minutes * 60 * 60)) if options.match_minutes else MATCH_TICKS
+
+
+def match_timeout(options):
+    # A longer match keeps the per-engine margin the 1200-tick arm has over its own length.
+    return max(options.timeout, match_ticks(options) // 60 + 400) if options.match_minutes else options.timeout
+
 
 def looped_input(h, path, ticks):
     """The feel driver's 1200-tick input pattern repeated to the soak's length."""
@@ -778,19 +1027,28 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--scenario', choices=sorted(SCENARIOS), help='; '.join(f'{key}: {value}' for key, value in SCENARIOS.items()))
     parser.add_argument('--direction', choices=['host-here', 'host-edith'], default='host-here')
-    parser.add_argument('--path', choices=['direct', 'relay', 'ip'], default='direct')
+    parser.add_argument('--path', choices=['direct', 'relay', 'directory-relay', 'ip'], default='direct')
+    parser.add_argument('--relay-ttl', type=int, default=86400,
+                        help="the longest relay credential the run's directory mints (300-86400 s; a short one renews mid-match)")
+    parser.add_argument('--turn-config', type=Path, default=CLOUDFLARE_TURN_CONFIG,
+                        help="the directory-relay path's backend file (its path only is passed; default the Cloudflare key file)")
     parser.add_argument('--runs', type=int, default=1)
     parser.add_argument('--relay-bridge', action='store_true',
                         help='relay only: EDITH reaches the TURN server through a UDP-over-ssh bridge (its loopback UDP, an ssh -R '
                              'TCP stream, UDP from this box), for a TURN server with no public forward')
     parser.add_argument('--out', type=Path, help=f'a fresh directory under {SCRATCH} (the same path is used on EDITH)')
     parser.add_argument('--minutes', type=float, default=10, help='sp-soak length')
+    parser.add_argument('--client-box', choices=['here', 'linux'], default='here',
+                        help='with --direction host-edith: the client runs on this box or on the Linux box (EDITH then runs one engine alone)')
+    parser.add_argument('--soak', action='store_true', help="the soak's autosaves, client stalls, census and full-state hashing, judged as soak_two_peer judges")
+    parser.add_argument('--match-minutes', type=float, help='mp-host-join length in minutes, the feel inputs looped (default: the 1200-tick arm)')
     parser.add_argument('--timeout', type=int, default=420, help='each match engine (seconds)')
     parser.add_argument('--instrumentation', choices=['lean', 'matrix'], default='lean',
                         help='lean: tick hashes, live hashes and the match report (the relay compare); matrix: plus the '
                              'per-tick sim dump and the controller dump (the feel matrix arms)')
     parser.add_argument('--feel-records', action='store_true', help='add -feel-measure to both match peers (the matrix -on arms)')
     parser.add_argument('--repo', type=Path, default=REPO, help='the engine tree on both boxes (its executable must match)')
+    parser.add_argument('--remote-repo', type=Path, help="EDITH's engine tree when it is not --repo's path (a firewall-ruled tree holding the same executable)")
     parser.add_argument('--quiet-wait', type=int, default=1200, help='seconds to wait for other builds on this box to end')
     parser.add_argument('--box-wait', type=int, default=2700, help='seconds to wait while the inventory feel matrix holds this box')
     parser.add_argument('--dry-run', action='store_true', help='print the launches, copies and ssh commands instead of running them')
@@ -800,6 +1058,8 @@ def parse_args(argv=None):
     parser.add_argument('--bridge-bind', default='', help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
     if options.remote_peer is None and not options.bridge_edith and options.reanalyze is None:
+        if options.client_box == 'linux' and options.direction != 'host-edith':
+            parser.error('--client-box linux runs the client there: the host is on EDITH (--direction host-edith)')
         if options.relay_bridge and options.path != 'relay':
             parser.error('--relay-bridge needs --path relay')
         if not options.scenario or not options.out:
@@ -828,7 +1088,7 @@ def main(argv=None):
     if not DRY_RUN:
         if options.out.exists() and options.scenario == 'sp-soak':
             parser.error(f'{options.out} exists; every run takes a fresh --out')
-        local, remote = exe_hashes(options.repo)
+        local, remote = exe_hashes(options.repo, options.remote_repo)
         say(f'executable here {local[:16]} on EDITH {remote[:16]}')
         if local != remote:
             say('REFUSED: the executables differ; refresh EDITH per EDITH_SSH_RUNBOOK.md section 7')
@@ -843,6 +1103,7 @@ def main(argv=None):
     login = turn_login() if options.path == 'relay' else None
     label = f'{options.direction}-{path_label(options)}'
     tunnel = Tunnel(options.out.resolve() / f'tunnel-{label}.log', options.relay_bridge) if options.path != 'ip' else None
+    linux_tunnel = LinuxTunnel(options.out.resolve() / f'tunnel-linux-{label}.log') if options.client_box == 'linux' and options.path != 'ip' else None
     bridge = None
     verdicts = []
     try:
@@ -850,6 +1111,8 @@ def main(argv=None):
             options.out.mkdir(parents=True, exist_ok=True)
         if tunnel:
             tunnel.open()
+        if linux_tunnel and not DRY_RUN:
+            linux_tunnel.open()
         if options.relay_bridge:
             lan = '192.168.3.55' if DRY_RUN else ssh('(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address.IPAddress').strip()
             TURN['edith'] = f'turn:{lan}:{BRIDGE_UDP}?transport=udp'
@@ -870,6 +1133,8 @@ def main(argv=None):
             bridge.close()
         if tunnel:
             tunnel.close()
+        if linux_tunnel:
+            linux_tunnel.close()
     if DRY_RUN:
         return 0
     passed = sum(bool(row.get('passed')) for row in verdicts)

@@ -10,9 +10,26 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import hashlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from run_sim_test import make_run
+
+
+def version_ui_checks(manifest, source_sha):
+    """Read the generated capture's own Linux menu assertions, bound to this source and file hashes."""
+    checks = dict(version_ui_identity=manifest.get('platform') == 'linux' and manifest.get('source_sha') == source_sha,
+                  version_ui_generation=manifest.get('generator_exit_code') == 0)
+    capture = manifest.get('capture') or {}
+    capture_path = Path(capture.get('path') or '')
+    checks['version_ui_capture'] = capture_path.is_file() and hashlib.sha256(capture_path.read_bytes()).hexdigest() == capture.get('sha256')
+    for kind in ('build', 'protocol'):
+        for who in ('host', 'joiner'):
+            path = Path((manifest.get(kind) or {}).get(who) or '')
+            valid = path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == manifest.get('input_sha256', {}).get(str(path))
+            text = path.read_text(errors='replace') if valid else ''
+            checks[f'{kind}_{who}_ui'] = bool(re.search(r'(?m)^\[menu-script\] assert_(?:net_label|error)\b[^\n]*\b' + kind + r'\b[^\n]*\bPASS\s*$', text, re.I))
+    return checks
 
 
 def main():
@@ -47,12 +64,13 @@ def main():
     other_checks = {name: ok for name, ok in mod_result.get("checks", {}).items() if not name.endswith("_line_structure")}
     result["checks"]["mod_ui"] = (len(result["mod_ui"]) == 4 and all(result["mod_ui"].values())
                                         and bool(other_checks) and all(other_checks.values()))
-    version_ui = json.loads(args.version_ui.read_text()) if args.version_ui else {}
-    for kind in ("build", "protocol"):
-        for who in ("host", "joiner"):
-            path = Path(version_ui[kind][who]) if kind in version_ui and who in version_ui[kind] else None
-            text = path.read_text(errors="replace") if path and path.is_file() else ""
-            result["checks"][f"{kind}_{who}_ui"] = bool(re.search(r"assert_(?:label|error).*" + kind + r".*PASS", text, re.I))
+    try:
+        version_ui = json.loads(args.version_ui.read_text()) if args.version_ui else {}
+    except (OSError, ValueError) as error:
+        version_ui = {}
+        result['input_error'] = f'version UI input: {type(error).__name__}: {error}'
+    source = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    result['checks'].update(version_ui_checks(version_ui, source))
     if not args.version_ui:
         result["handoff"] = {"row": 512, "owner": "Thread A", "source": "Source/Network/NetSession.cpp:1661",
                              "reason": "Build/protocol rejection UI still needs real mismatched-peer menu captures; source-only checks do not count.",

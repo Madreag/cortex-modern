@@ -70,6 +70,7 @@ namespace RTE {
 			int64_t worldBoot = 0;
 			std::string state; //!< "lobby" | "running", as the directory publishes it.
 			int64_t seatsFree = 0;
+			int64_t seatsHeld = 0; //!< Seats a running match holds for players who are gone.
 			int64_t peerCount = 0;
 			int64_t spectatorFree = 0;
 			int64_t spectatorMax = 0;
@@ -104,6 +105,8 @@ namespace RTE {
 		uint64_t IceReplies() const { return m_IceReplies; }
 		const NetRelayConfig& IceServers() const { return m_IceServers; }
 		const std::string& IceError() const { return m_IceError; }
+		/// The directory said the host's relay backend refused the host's last request (not that the match has no relay).
+		bool IceRelayRefused() const { return m_IceRelayRefused; }
 
 		/// Host: keep the row registered. The first call after Idle registers; the row passed on
 		/// each call carries the live peer_count/seats_free for the next heartbeat. `listed`
@@ -217,7 +220,7 @@ namespace RTE {
 		std::unique_ptr<Transport> m_Request;
 		std::unique_ptr<Transport> m_IceRequest;
 		NetRelayConfig m_IceServers;
-		std::string m_IceError;
+		std::string m_IceError; bool m_IceRelayRefused = false;
 		uint64_t m_IceReplies = 0;
 		RequestKind m_RequestKind = RequestKind::None;
 

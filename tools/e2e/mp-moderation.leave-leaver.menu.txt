@@ -1,0 +1,14 @@
+# The leaver: its leave keeps its seat until the host gives it away. A newcomer applies for it and the host accepts,
+# so the leaver's Rejoin Match is answered that the host gave its seat to another player.
+wait_label ButtonMultiplayerReconnect Rejoin Match
+video_mark leaver-rejoin-offer
+wait_ms 30000
+activate ButtonMultiplayerReconnect
+wait_error The host gave your seat to another player
+video_mark leaver-seat-given
+assert_error The host gave your seat to another player
+# The answer is final: no Retry in the line and no Rejoin button.
+assert_label_absent LabelMultiplayerLandingStatus Retry
+assert_visible ButtonMultiplayerReconnect 0
+wait_ms 2000
+exit

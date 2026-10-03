@@ -34,6 +34,7 @@ MODULE = "Extra.rte"
 OVERFLOW_MODULES = [f"More{i}.rte" for i in range(1, 9)]
 WIRE_DOT = " · "
 DISPLAY_SEP = "; "
+# The refusal's technical tail ("(module_manifest_hash: a vs b)"); a player's landing text never carries it.
 HASH_SUFFIX = re.compile(r" \([a-z_0-9]+: \S+ vs \S+\)$")
 
 
@@ -58,7 +59,7 @@ def stage_module(run, dir_name, friendly, game_ver, version=None):
 
 
 def expected_label(install=None, others=()):
-    """The exact landing text FormatModuleMismatchStatus produces, minus the hash suffix values."""
+    """The exact landing text the player reads: FormatModuleMismatchStatus over the plain player refusal."""
     lines = [PREFIX]
     if install:
         lines.append("Install: " + ", ".join(install))
@@ -188,14 +189,10 @@ def main():
 
             lines = text.split("\n") if text is not None else []
             want = expected_label(spec["install"], spec["others"])
-            tail = lines[-1][len(want[-1]):] if lines and lines[-1].startswith(want[-1]) else None
             details[phase]["joiner_label_lines"] = lines
             details[phase]["expected_lines"] = want
-            checks[f"{phase}_line_structure"] = (len(lines) == len(want)
-                                                 and lines[0] == PREFIX
-                                                 and all(lines[i] == want[i] for i in range(1, len(want) - 1))
-                                                 and tail is not None
-                                                 and bool(HASH_SUFFIX.fullmatch(tail)))
+            # Since the refusals became plain player messages the landing reads exactly the named lines, with no hash tail.
+            checks[f"{phase}_line_structure"] = lines == want and not any(HASH_SUFFIX.search(line) for line in lines)
             if spec["install"] and spec["others"]:
                 checks[f"{phase}_install_line"] = len(lines) > 1 and lines[1] == want[1]
             if len(spec["others"]) > 1:

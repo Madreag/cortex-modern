@@ -169,6 +169,53 @@ class DirectoryTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 14)
 
+    def test_a_refused_mint_is_told_to_the_fetching_client(self) -> None:
+        store = session_directory.SessionDirectory(300, 5, turn_config={"backend": "cloudflare", "turn_key_id": "key-id", "api_token": "backend-token"})
+        row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
+        with self.assertRaises(session_directory.TurnError) as none:
+            store.get_ice_servers(row["session_id"], 11)
+        self.assertEqual((none.exception.status, none.exception.body["error"]), (404, "relay_offer_unavailable"))
+        data = {"token": row["token"], "match_id": "match:1", "ttl": 600}
+        with mock.patch.object(session_directory, "urlopen", side_effect=OSError("backend-token")):
+            with self.assertRaises(session_directory.TurnError):
+                store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 11)
+        with self.assertRaises(session_directory.TurnError) as refused:
+            store.get_ice_servers(row["session_id"], 12)
+        self.assertEqual((refused.exception.status, refused.exception.body["error"]), (502, "relay_provider_refused"))
+        self.assertNotIn("backend-token", json.dumps(refused.exception.body))
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 201
+        response.read.return_value = json.dumps({"iceServers": [{"urls": ["turn:turn.cloudflare.com:3478?transport=udp"],
+                                                                 "username": "u", "credential": "c"}]}).encode()
+        with mock.patch.object(session_directory, "urlopen", return_value=response):
+            store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 13)
+        self.assertEqual(store.get_ice_servers(row["session_id"], 14)["iceServers"][0]["username"], "u")
+
+    def test_turn_max_ttl_caps_the_minted_lifetime(self) -> None:
+        store = session_directory.SessionDirectory(300, 5, turn_config={
+            "backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"],
+        }, turn_max_ttl=300)
+        row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            offer = store.mint_ice_servers(row["session_id"], {"token": row["token"], "match_id": "match:1", "ttl": 86400}, INSTALL_KEY, 11)
+        self.assertEqual(offer["expires_at"], 1300)
+        self.assertTrue(offer["iceServers"][0]["username"].startswith("1300:"))
+        self.assertEqual(session_directory.SessionDirectory(300, 5).turn_max_ttl, session_directory.TURN_MAX_TTL)
+        with self.assertRaises(SystemExit):
+            session_directory.parse_args(["--turn-max-ttl", "299"])
+
+    def test_main_hands_the_ttl_cap_to_its_server(self) -> None:
+        seen = {}
+
+        def spawn(**kwargs):
+            seen.update(kwargs)
+            raise SystemExit(0)
+        with mock.patch.object(session_directory, "spawn_server", side_effect=spawn):
+            with self.assertRaises(SystemExit):
+                session_directory.main(["--insecure-http", "--port", "0", "--turn-max-ttl", "300"])
+        self.assertEqual(seen.get("turn_max_ttl"), 300)
+
     def test_fixed_offer_and_secret_refusal(self) -> None:
         store = session_directory.SessionDirectory(300, 5)
         row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
@@ -196,6 +243,8 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://rtc.live.cloudflare.com/v1/turn/keys/key-id/credentials/generate-ice-servers")
         self.assertEqual(json.loads(request.data), {"ttl": 900})
         self.assertEqual(request.get_header("Authorization"), "Bearer backend-token")
+        # The request urlopen receives names the product, never urllib's default agent Cloudflare refuses.
+        self.assertEqual(request.get_header("User-agent"), "cccp-session-directory/1")
         self.assertEqual(offer["expires_at"], 1900)
         self.assertEqual(offer["iceServers"][1]["credential"], "temporary-password")
         self.assertNotIn("backend-token", json.dumps(offer))
@@ -1834,6 +1883,28 @@ class DirectoryTests(unittest.TestCase):
         status, listed = self.list_sessions()
         rows = {row["session_id"]: row for row in listed["sessions"]}
         self.assertNotIn("spectator_free", rows[plain["session_id"]])
+
+    def test_running_row_lists_the_seats_it_holds(self) -> None:
+        self.start()
+        status, first = self.register(name="held")
+        self.assertEqual(status, 200, first)
+        status, listed = self.list_sessions()
+        self.assertNotIn("seats_held", listed["sessions"][0])
+        # A running match whose player dropped is full, but a newcomer may apply for the held seat.
+        status, ok = self.beat(first["session_id"], first["token"], seats_free=0, seats_held=1, state="running")
+        self.assertEqual(status, 200, ok)
+        status, listed = self.list_sessions()
+        row = listed["sessions"][0]
+        self.assertEqual((row.get("state"), row.get("seats_free"), row.get("seats_held")), ("running", 0, 1), row)
+        # A beat that names none leaves the count alone; a reclaim's beat clears it.
+        status, ok = self.beat(first["session_id"], first["token"], seats_free=0)
+        status, listed = self.list_sessions()
+        self.assertEqual(listed["sessions"][0].get("seats_held"), 1, listed)
+        status, ok = self.beat(first["session_id"], first["token"], seats_free=0, seats_held=0)
+        status, listed = self.list_sessions()
+        self.assertEqual(listed["sessions"][0].get("seats_held"), 0, listed)
+        status, err = self.beat(first["session_id"], first["token"], seats_held=-1)
+        self.assertEqual((status, err), (400, {"error": "invalid_field", "field": "seats_held"}), err)
 
     def test_world_row_refuses_a_negative_spectator_count(self) -> None:
         self.start()

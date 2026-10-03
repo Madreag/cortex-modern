@@ -1,69 +1,10 @@
 {
   "schema": 1,
   "name": "mp-moderation",
-  "title": "Three real lobby peers: Kick, Ban, the ban list and refused readmission",
+  "title": "Kick, ban, the ban list and refused readmission; a left seat held for its player until the host gives it to an applicant",
   "port_base": 49466,
   "size": "960x540",
-  "timeout_s": 180,
-  "peers": [
-    {
-      "name": "host",
-      "args": [
-        "-net-reconnect-ticket",
-        "{OUT}/host.ticket"
-      ],
-      "menu_script": "mp-moderation.host.menu.txt",
-      "observe_after_failure": true,
-      "settings": {
-        "NetworkDisplayName": "Host",
-        "NetworkIceEnable": "0",
-        "NetworkAutoReconnect": "0",
-        "NetworkOfferStoredRejoin": "1"
-      }
-    },
-    {
-      "name": "clienta",
-      "args": [
-        "-net-reconnect-ticket",
-        "{OUT}/clienta.ticket"
-      ],
-      "menu_script": "mp-moderation.clienta.menu.txt",
-      "observe_after_failure": true,
-      "settings": {
-        "NetworkDisplayName": "ClientA",
-        "NetworkIceEnable": "0",
-        "NetworkAutoReconnect": "0",
-        "NetworkOfferStoredRejoin": "1"
-      },
-      "start_when": {
-        "peer": "host",
-        "event": "video_mark moderation-host-listening",
-        "timeout_s": 90
-      },
-      "probe": "mp-moderation.clienta.probe.json"
-    },
-    {
-      "name": "clientb",
-      "args": [
-        "-net-reconnect-ticket",
-        "{OUT}/clientb.ticket"
-      ],
-      "menu_script": "mp-moderation.clientb.menu.txt",
-      "observe_after_failure": true,
-      "settings": {
-        "NetworkDisplayName": "ClientB",
-        "NetworkIceEnable": "0",
-        "NetworkAutoReconnect": "0",
-        "NetworkOfferStoredRejoin": "1"
-      },
-      "start_when": {
-        "peer": "clienta",
-        "event": "video_mark moderation-clienta-seated",
-        "timeout_s": 90
-      },
-      "probe": "mp-moderation.clientb.probe.json"
-    }
-  ],
+  "timeout_s": 240,
   "checklist": [
     {
       "id": "moderation-three-seats",
@@ -75,7 +16,8 @@
         "assert_label LabelLobbyPlayer0.*Host \\(you\\).*PASS",
         "assert_label LabelLobbyPlayer1.*ClientA.*PASS",
         "assert_label LabelLobbyPlayer2.*ClientB.*PASS"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-kick",
@@ -86,7 +28,8 @@
       "events": [
         "assert_label LabelHostSeatDlgName.*ClientA.*PASS",
         "activate ButtonHostSeatDlgKick ok=1"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-kick-roster",
@@ -97,7 +40,8 @@
       "events": [
         "assert_label LabelLobbyPlayer1.*Client 2.*PASS",
         "assert_label LabelLobbyPlayer2.*ClientB.*PASS"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-clienta-removed",
@@ -107,7 +51,8 @@
       "what": "ClientA sees the host removal reason on Landing.",
       "events": [
         "assert_status .*The host removed you from this session.*PASS"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-ban",
@@ -118,7 +63,8 @@
       "events": [
         "assert_label LabelHostSeatDlgName.*ClientB.*PASS",
         "activate ButtonHostSeatDlgBan ok=1"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-ban-list",
@@ -129,7 +75,8 @@
       "events": [
         "assert_label LabelHostBannedList.*ClientB.*PASS",
         "assert_label LabelHostBannedList.*session.*PASS"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-clientb-removed",
@@ -139,7 +86,8 @@
       "what": "ClientB sees the ban removal reason on Landing.",
       "events": [
         "assert_status .*The host banned you from this session.*PASS"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-clientb-rejoin",
@@ -150,7 +98,8 @@
       "events": [
         "activate ButtonMultiplayerJoinGame ok=1",
         "activate ButtonMultiplayerConnect ok=1"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-clientb-refused",
@@ -160,7 +109,8 @@
       "what": "ClientB is refused and Landing reads The host banned you from this session, without internal admission details.",
       "events": [
         "assert_label LabelMultiplayerLandingStatus.*The host banned you from this session.*PASS"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-final-roster",
@@ -171,7 +121,8 @@
       "events": [
         "assert_label LabelLobbyPlayer1.*Client 2.*PASS",
         "assert_label LabelLobbyPlayer2.*Client 3.*PASS"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-ban-reject-wire",
@@ -181,7 +132,8 @@
       "what": "The on-screen refused rejoin carries the protocol ban reason in its log.",
       "log_regex": [
         "^\\[net-(?:session|auth|reconnect|match)\\].*ParticipantBanned"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-host-open-seats",
@@ -192,7 +144,8 @@
       "events": [
         "(?s)assert_label LabelMultiplayerStatus.*Waiting for 2 players to join.*PASS",
         "assert_label LabelMultiplayerError.*ClientB was refused: banned from this session.*PASS"
-      ]
+      ],
+      "run": "kick-ban"
     },
     {
       "id": "moderation-host-named-refusal",
@@ -202,6 +155,393 @@
       "what": "The host notice identifies ClientB as the banned participant whose rejoin was refused.",
       "events": [
         "assert_label LabelMultiplayerError.*ClientB was refused: banned from this session.*PASS"
+      ],
+      "run": "kick-ban"
+    },
+    {
+      "id": "leave-held-cause",
+      "run": "leave-apply",
+      "peer": "host",
+      "screen": "game",
+      "mark": "host-seats-after-leave",
+      "what": "After the leave the host's Seats panel holds the seat for its player and names why: Held - AI in control / Left N s ago.",
+      "probe_steps": [
+        4,
+        5
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Held - AI in control"
+        },
+        {
+          "step": 5,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Left "
+        }
+      ]
+    },
+    {
+      "id": "leave-host-accepts",
+      "run": "leave-apply",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        3600
+      ],
+      "what": "A newcomer applies for the held seat and the host accepts it in the Seats panel.",
+      "log_regex": [
+        "\\[net-moderation\\] substitute seat=1 applicant=\\d+ result=Ok"
+      ],
+      "probe_steps": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "readback": [
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "newcomer"
+        },
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Seat 1"
+        },
+        {
+          "step": 10,
+          "path": [
+            "control",
+            "enabled"
+          ],
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "leave-newcomer-plays",
+      "run": "leave-apply",
+      "peer": "newcomer",
+      "screen": "game",
+      "mark": "newcomer-seated",
+      "what": "The newcomer plays in the seat the host gave it.",
+      "probe_steps": [
+        2
+      ],
+      "ownership_reclaim": {
+        "seat": 1
+      }
+    },
+    {
+      "id": "leave-leaver-told",
+      "run": "leave-apply",
+      "peer": "leaver",
+      "screen": "MultiplayerScreen",
+      "mark": "leaver-seat-given",
+      "what": "The leaver's Rejoin Match is answered: The host gave your seat to another player.",
+      "events": [
+        "assert_error.*The host gave your seat to another player.*PASS"
+      ],
+      "log_regex": [
+        "\\[menu-script\\] error:The host gave your seat to another player -> OK"
+      ]
+    },
+    {
+      "id": "leave-leaver-final",
+      "run": "leave-apply",
+      "peer": "leaver",
+      "screen": "MultiplayerScreen",
+      "mark": "leaver-seat-given",
+      "what": "The refusal is final: the landing line carries no Retry and the Rejoin button is gone.",
+      "events": [
+        "assert_label_absent LabelMultiplayerLandingStatus \"Retry\".*PASS",
+        "assert_visible.*ButtonMultiplayerReconnect.*PASS"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "name": "kick-ban",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-reconnect-ticket",
+            "{OUT}/host.ticket"
+          ],
+          "menu_script": "mp-moderation.host.menu.txt",
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkIceEnable": "0",
+            "NetworkAutoReconnect": "0",
+            "NetworkOfferStoredRejoin": "1"
+          }
+        },
+        {
+          "name": "clienta",
+          "args": [
+            "-net-reconnect-ticket",
+            "{OUT}/clienta.ticket"
+          ],
+          "menu_script": "mp-moderation.clienta.menu.txt",
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkDisplayName": "ClientA",
+            "NetworkIceEnable": "0",
+            "NetworkAutoReconnect": "0",
+            "NetworkOfferStoredRejoin": "1"
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark moderation-host-listening",
+            "timeout_s": 90
+          },
+          "probe": "mp-moderation.clienta.probe.json"
+        },
+        {
+          "name": "clientb",
+          "args": [
+            "-net-reconnect-ticket",
+            "{OUT}/clientb.ticket"
+          ],
+          "menu_script": "mp-moderation.clientb.menu.txt",
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkDisplayName": "ClientB",
+            "NetworkIceEnable": "0",
+            "NetworkAutoReconnect": "0",
+            "NetworkOfferStoredRejoin": "1"
+          },
+          "start_when": {
+            "peer": "clienta",
+            "event": "video_mark moderation-clienta-seated",
+            "timeout_s": 90
+          },
+          "probe": "mp-moderation.clientb.probe.json"
+        }
+      ]
+    },
+    {
+      "name": "leave-apply",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-humans",
+            "2",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "3600",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
+          ],
+          "input_script": "move-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0,
+          "probe": "mp-moderation.leave-host.probe.json",
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 6000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
+        },
+        {
+          "name": "leaver",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-humans",
+            "2",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "3600",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/leaver-match.json",
+            "-out",
+            "{OUT}/leaver_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "leaver",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-e2e-leave",
+            "-net-match-e2e-leave-tick",
+            "600",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
+          ],
+          "input_script": "move-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "menu_script": "mp-moderation.leave-leaver.menu.txt",
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 6000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
+        },
+        {
+          "name": "newcomer",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-humans",
+            "2",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "3600",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/newcomer-match.json",
+            "-out",
+            "{OUT}/newcomer_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "newcomer",
+            "-net-join",
+            "127.0.0.1",
+            "-net-h4-apply",
+            "1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
+          ],
+          "input_script": "move-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_when": {
+            "peer": "leaver",
+            "event": "video_mark leaver-rejoin-offer",
+            "timeout_s": 90
+          },
+          "probe": "mp-moderation.leave-newcomer.probe.json",
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 6000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
+        }
       ]
     }
   ]

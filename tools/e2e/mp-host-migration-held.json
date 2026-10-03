@@ -250,7 +250,10 @@
       "log_regex": [
         "\\[net-match\\] held client: the host is gone; the catch-up moves to the successor at ",
         "\\[net-match\\] private catch-up complete frame=\\d+ in_place=1"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "migration-held-survivor-clientc",
