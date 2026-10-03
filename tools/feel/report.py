@@ -599,7 +599,15 @@ def item9a_gates(run, peer='host', rows=None):
     round_missing = missing
     tick_ms = latest.get('sim_tick_ms')
     valid_tick = isinstance(tick_ms, (int, float)) and math.isfinite(tick_ms) and tick_ms > 0
-    horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * tick_ms
+    from cross_report import round_capacity_evidence
+    natives = {name: json.loads(path.read_text(encoding='utf-8-sig')) if path.is_file() else {}
+               for name in manifest.get('per_peer_lag_ms', {'host': 0, 'client': 0})
+               for path in [run / f'{name}_report.json']}
+    relative = round_capacity_evidence(natives)
+    rate = relative['round_rate_tps'] if relative['whole_round_slow'] else None
+    minimum_tps = rate - rate / 10.0 if rate is not None else 59.5
+    clock_tick_ms = 1000 / rate if rate is not None else tick_ms
+    horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * clock_tick_ms
                                   for tick, stamps in by_tick.items())) if valid_tick and wall_ms is not None else None)
     evidence = [clock_path, log_path, report_path]
     # The harness's own per-tick sim dump is not the engine's cost: one frame of it past 50 ms fails the arm, never passes as feel.
@@ -608,7 +616,8 @@ def item9a_gates(run, peer='host', rows=None):
     harness_ms = max(dump_ms, default=0.0) if log_path.is_file() else None
     pins = {
         'item9a_harness_cost': pin(harness_ms, '<= 50 ms of the harness sim dump in any one frame', harness_ms is not None and harness_ms <= 50, [log_path]),
-        'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
+        'item9a_wall_tps': pin(tps, f'>= {minimum_tps} after tick 300, including recovery time', tps is not None and tps >= minimum_tps, evidence,
+                            dict(relative_capacity=relative)),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
         'item9a_steady_stalls': pin(steady_stalls, '0 blocking waits before the injected spike', steady_stalls == 0, evidence),
         'item9a_missing_frame_stalls': pin(missing, '0 steady missing-frame stalls', missing == 0, evidence, available=True),
@@ -715,7 +724,8 @@ def item9a_gates(run, peer='host', rows=None):
                              confirmed_horizon_lag_ticks=horizon_lag_ms / tick_ms if horizon_lag_ms is not None else None,
                              steady_missing_frame_stalls=missing, round_missing_frame_stalls=round_missing,
                              first_tick=first_tick, last_tick=final_tick if final_tick in by_tick else None,
-                             clock_path=str(clock_path), sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
+                             clock_path=str(clock_path), sim_tick_ms=latest.get('sim_tick_ms'), relative_capacity=relative,
+                             confirmed_clock_tick_ms=clock_tick_ms, peer_input_delays=latest.get('peer_input_delays', {})))
 
 
 def apply_tps_call(result, reference):

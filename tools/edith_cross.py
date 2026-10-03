@@ -419,11 +419,14 @@ def soak_verdict(root, ticks):
     after_saves = [tick for tick in own_holds if any(0 <= tick - save <= 300 for save in saves)]
     pace = {peer: dict(windows=len(rows), failed=[(row['first'], round(row['wall_tps'] or 0, 2), row.get('sim_ms_per_tick')) for row in rows if not row['passed']])
             for peer, rows in history['pace_windows'].items()}
+    injections = soak.stall_plan(soak_stalls(ticks), SOAK_STALL_MS)
+    hold_judgement = soak.soak_hold_judgement(Path(root), injections)
     checks = dict(complete_history_and_pace=history['pass'], no_hold_after_return=not any(kept.values()), autosaves=autosaves >= max(0, owed),
+                  paired_fault_recovery_and_survivor_waits=hold_judgement['passed'],
                   no_hold_after_autosave=not after_saves)
     return dict(passed=all(checks.values()), checks=checks, errors_not_pace=[e for e in history['errors'] if 'pace window' not in e], pace=pace,
                 holds_after_returns=kept, autosaves=f'{autosaves}/{owed}', client_own_holds=own_holds, client_holds_after_autosaves=after_saves,
-                stalls=soak_stalls(ticks))
+                stalls=injections, hold_judgement=hold_judgement)
 
 
 def wait_done(root, budget_s):
@@ -780,7 +783,7 @@ def run_match(h, options, index, login):
         say(f'{name}: SOAK {"PASS" if verdict["passed"] else "FAIL"} {json.dumps(verdict["checks"])} autosaves={verdict["autosaves"]} '
             f'client_holds_after_autosaves={verdict["client_holds_after_autosaves"]}')
     return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path, ticks=match_ticks(options),
-                                       port=port, machines=machines,
+                                       port=port, machines=machines, soak=options.soak,
                                        local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note,
                                        feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load))
 
@@ -879,13 +882,20 @@ def analyze_match(h, root, meta):
     # A soak plans its holds: they are judged by its own rules, every other run by holds == 0.
     soak_plan = read_json(root / 'soak-verdict.json')
     hold_judgement = None
-    if soak_plan:
+    is_soak = bool(meta.get('soak') or (root / 'soak-verdict.json').is_file())
+    if is_soak:
         import soak_two_peer
         hold_judgement = soak_two_peer.soak_hold_judgement(root, soak_plan.get('stalls', []))
     holds_pass = hold_judgement['passed'] if hold_judgement else holds == 0
-    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass)
+    soak_pass = soak_plan.get('passed') is True if is_soak else True
+    # The only seat removed from this run-wide timing window is the declared, proved injected target.
+    targets = {row['peer'] for row in (hold_judgement or {}).get('injection_plan', [])}
+    required_timing = ['host'] if is_soak and holds_pass and targets == {'client'} else ['host', 'client']
+    timing_pass = all(result.get('peers', {}).get(peer, {}).get('pass_check') is True for peer in required_timing)
+    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass)
     verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds, hold_judgement=hold_judgement,
-                   trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest)
+                   trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest,
+                   soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing)
     write_json(root / 'verdict.json', verdict)
     cell = lambda key, fmt='{}': '/'.join('-' if peers[peer][key] is None else fmt.format(peers[peer][key]) for peer in ('host', 'client'))
     route = next((line for peer in (meta['local_peer'], 'host', 'client') for line in peers[peer]['route'] if 'selected' in line or 'RouteAllowed' in line), None)

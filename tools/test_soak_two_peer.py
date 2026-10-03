@@ -96,14 +96,21 @@ class SoakJudgement(unittest.TestCase):
 
         def host(extra: str = "") -> None:
             (self.root / "host" / "stdout.log").write_text(
+                "[net-lockstep] start round=7 frame=1 local_peer=1 peers=2\n"
                 "[net-match] hold peer=2 frame=1005 AI in control\n" + extra + "[net-match] hold peer=2 frame=2500 AI in control\n", encoding="utf-8")
-        (self.root / "client" / "stdout.log").write_text("[net-match] bootstrap checkpoint=2620 local_peer=2\n", encoding="utf-8")
+        (self.root / "client" / "stdout.log").write_text(
+            "[net-lockstep] start round=7 frame=1 local_peer=2 peers=2\n"
+            "[net-test] live stall frame=1000 ms=1500\n"
+            "[net-match] seat-reclaimed peer=2 frame=1100 live_actors=2\n"
+            "[net-match] private catch-up complete frame=2620 in_place=1\n", encoding="utf-8")
+        from test_soak_oracle_evidence import control
+        (self.root / 'client/events.jsonl').write_text('\n'.join(json.dumps(control(tick)) for tick in (1101, 2621)))
         # The planned stall's hold is planned; the other has no named cause.
         host()
         judged = soak.soak_hold_judgement(self.root, [1000])
         self.assertEqual((judged["planned"], judged["passed"]), ([1005], False))
         self.assertFalse(judged["unexplained"][0]["cause"])
-        # A lost frame named at that tick, the image followed, no survivor waited: explained.
+        # A lost frame named at that tick, followed by own activation and fresh applied input.
         host("[lockstep-recv] asked peer 2 to resend frame=2500 of peer 2 after 51 ms; highest heard=2499\n")
         self.assertTrue(soak.soak_hold_judgement(self.root, [1000])["passed"])
         # The same hold the survivor felt is a defect.
