@@ -15,7 +15,7 @@ import zipfile
 
 CONFIG = 'D:/mx/coturn-20260920/turn-config-cloudflare.json'
 LOGIN_REASON = "the engine's relay selftests print the TURN username through GNS verbose output (engine row A63.1)"
-SAFE_LOGIN = dict(path='capabilities/relay-safe-login.json', engine_row='A63.1', box='ALLY|EDITH')
+SAFE_LOGIN = dict(path='capabilities/relay-safe-login.json', engine_row='A63.1', boxes=['ALLY','EDITH'])
 ITEM_15 = 'relay = Cloudflare through the directory\'s mint (primary), our coturn as the fixed-pair alternative'
 LOGIN_FIELD = re.compile(rb'"(username|credential)"\s*:\s*"((?:\\.|[^"\\])+)"')
 GNS_USER = re.compile(rb"long-term credentials for user ['\"]([^'\"\r\n]+)")
@@ -120,7 +120,7 @@ def directory_config(run, root, book):
 
 def safe_login_proof(proof, source, executable):
     return (proof.get('pass') is True and proof.get('engine_row')=='A63.1'
-            and proof.get('box')=='ALLY|EDITH' and proof.get('source_sha')==source
+            and proof.get('box') in SAFE_LOGIN['boxes'] and proof.get('source_sha')==source
             and proof.get('exe_sha256')==executable and proof.get('sanitizer_zero_logins') is True)
 
 
