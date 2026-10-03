@@ -3689,6 +3689,10 @@ static std::string ResyncSaveName() {
 			std::string error;
 			record(frame);
 			if (m_WorldJoin.IsConfigured() && !m_WorldJoin.Tail().Append(frame, &error) && m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "committed catch-up history: " + error;
+			// A world's host keeps the round's history past its memory on disk too, so a slow joiner's tail is never evicted under it.
+			if (m_IsHost && m_WorldJoin.IsConfigured() && !m_WorldJoin.IsPrivateMatch() && !m_WorldJoin.Tail().HasJournal() && m_WorldJoin.Tail().Count() != 0) {
+				m_WorldJoin.Tail().EnableJournal(g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/world_history_" + std::to_string(System::GetProcessID()) + "_" + std::to_string(round) + ".ccsave.inputs");
+			}
 		} else if (m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "the completed tick has no committed catch-up input";
 		if (tick % 60 == 0) PruneReturnHistory(tick);
 	}
@@ -3697,7 +3701,10 @@ static std::string ResyncSaveName() {
 		// A returner arriving now is served the published base, unless it would take a new one.
 		std::optional<uint64_t> served;
 		const NetWorldCheckpointImage& image = m_WorldJoin.Image();
-		if (image.IsValid()) {
+		if (image.IsValid() && !m_WorldJoin.IsPrivateMatch()) {
+			// A world's joiner starts from the published image while its tail is still in memory; an older one waits for the capture its join asks for.
+			if (m_WorldJoin.Tail().Count() != 0 && image.tick + 1 >= m_WorldJoin.Tail().FirstFrame()) served = image.tick;
+		} else if (image.IsValid()) {
 			const bool fresh = m_PrivateImageTakenMs != 0 && nowMs - m_PrivateImageTakenMs < c_PrivateImageMinIntervalMs;
 			if (!m_PrivateImageRecapture && (fresh || !PrivateBaseRefreshDue(true, 0, image.tick, SteadyCaptureMs(m_PrivateCaptureCosts)))) served = image.tick;
 		}
@@ -3721,7 +3728,7 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::PruneReturnHistory(uint64_t tick) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (!m_Coordinator || !m_WorldJoin.IsPrivateMatch() || !m_WorldJoin.Tail().HasJournal()) return;
+		if (!m_Coordinator || !m_WorldJoin.IsConfigured() || !m_WorldJoin.Tail().HasJournal()) return;
 		NetLockstepPlaneGuard plane;
 		const uint64_t floor = ReturnHistoryFloorLocked(tick, SteadyNowMs());
 		m_WorldJoin.Tail().PruneJournalBefore(floor);
