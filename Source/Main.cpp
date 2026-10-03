@@ -3311,6 +3311,68 @@ static bool RunFrameRecorderSelfTest() {
 		}
 	}
 
+#ifndef _WIN32
+	// The encoder starts behind a shell here: every argument reaches it whole, and one that stops reading fails the
+	// recorder's writes instead of ending the process.
+	{
+		const char* savedEncoder = std::getenv("CCCP_TEST_RECORD_ENCODER");
+		const std::optional<std::string> restoreEncoder = savedEncoder ? std::optional<std::string>(savedEncoder) : std::nullopt;
+		const auto encodeWith = [&](const std::string& name, const std::string& body, int side, nlohmann::json& parsed) {
+			const std::filesystem::path directory = scratch / name;
+			const std::filesystem::path script = scratch / (name + ".sh");
+			if (!std::filesystem::create_directory(directory, code) || code) return false;
+			{
+				std::ofstream out(script);
+				out << "#!/bin/sh\n" << body << "\n";
+			}
+			std::filesystem::permissions(script, std::filesystem::perms::owner_all, code);
+			setenv("CCCP_TEST_RECORD_ENCODER", script.c_str(), 1);
+			FrameRecorder recorder;
+			const bool started = recorder.Start(directory.string(), 5, &error);
+			const std::size_t sideBytes = static_cast<std::size_t>(side) * side * 3;
+			for (int index = 0; started && index < 10; ++index) {
+				FrameRecorder::FrameMeta meta;
+				meta.wallMS = index * 100;
+				meta.simTick = static_cast<unsigned long long>(index);
+				meta.screen = "game";
+				meta.width = side;
+				meta.height = side;
+				if (unsigned char* pixels = recorder.BeginFrame(meta.wallMS, sideBytes)) {
+					std::fill(pixels, pixels + sideBytes, static_cast<unsigned char>(index * 20));
+					recorder.EndFrame(meta);
+				}
+			}
+			recorder.Finish();
+			if (restoreEncoder) {
+				setenv("CCCP_TEST_RECORD_ENCODER", restoreEncoder->c_str(), 1);
+			} else {
+				unsetenv("CCCP_TEST_RECORD_ENCODER");
+			}
+			return started && manifestOf(directory, parsed);
+		};
+		const std::string reader = (scratch / "reader").string();
+		nlohmann::json encoded;
+		if (!encodeWith("reader", "for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done > '" + reader + "/args.txt'\ncat > '" + reader + "/frames.raw'", 4, encoded)) {
+			return FrameRecorderSelfTestFail("the encoder recording did not start or left no manifest: " + error);
+		}
+		std::ifstream argsIn(scratch / "reader" / "args.txt");
+		bool padWhole = false;
+		for (std::string argument; std::getline(argsIn, argument);) padWhole |= argument == "pad=ceil(iw/2)*2:ceil(ih/2)*2";
+		std::error_code sizeCode;
+		const auto rawBytes = std::filesystem::file_size(scratch / "reader" / "frames.raw", sizeCode);
+		if (!padWhole || sizeCode || rawBytes != 5 * 4 * 4 * 3 || encoded.value("frames_saved", -1) != 5 || encoded.value("write_failures", -1) != 0) {
+			return FrameRecorderSelfTestFail("the shell split the encoder's arguments or the frames never reached it: pad_whole=" + std::to_string(padWhole) +
+			                                 " raw_bytes=" + std::to_string(sizeCode ? -1 : static_cast<long long>(rawBytes)) + " manifest=" + encoded.dump());
+		}
+		nlohmann::json stopped;
+		if (!encodeWith("stopped", "exit 0", 128, stopped)) return FrameRecorderSelfTestFail("the stopped encoder's recording left no manifest: " + error);
+		const bool named = stopped.contains("encoder") && stopped["encoder"].is_object() && stopped["encoder"].value("error", std::string()) == "the encoder stopped reading";
+		if (stopped.value("write_failures", -1) < 1 || !named) {
+			return FrameRecorderSelfTestFail("an encoder that stopped reading was not reported: " + stopped.dump());
+		}
+	}
+#endif
+
 	std::filesystem::remove_all(scratch, code);
 	{
 		std::ostringstream line;

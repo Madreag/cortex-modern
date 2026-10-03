@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -63,6 +64,8 @@ namespace RTE {
 			m_Process = process.hProcess;
 			return true;
 #else
+			// An encoder that stops reading fails the next write instead of ending the process.
+			std::signal(SIGPIPE, SIG_IGN);
 			m_Pipe = popen((command + " 2>\"" + logPath + "\"").c_str(), "w");
 			if (!m_Pipe) {
 				error = "popen failed";
@@ -352,7 +355,7 @@ namespace RTE {
 			const std::string preset = m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
 			const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f rawvideo -pix_fmt rgb24 -s " +
 			    std::to_string(m_EncodedWidth) + "x" + std::to_string(m_EncodedHeight) + " -framerate " + std::to_string(m_Fps) +
-			    " -i - -vf pad=ceil(iw/2)*2:ceil(ih/2)*2 -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
+			    " -i - -vf \"pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
 			    (std::filesystem::path(m_Directory) / "capture.mp4").string() + "\"";
 			auto encoder = std::make_unique<EncoderPipe>();
 			if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) m_Encoder = std::move(encoder);
