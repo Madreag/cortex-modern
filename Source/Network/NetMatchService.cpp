@@ -6463,6 +6463,22 @@ static std::string ResyncSaveName() {
 				}
 				m_Runner->ConfigurePrivateJoin(live);
 			}
+			if (!m_WorldCatchUp.privateMatch && !m_Runner->IsWorldJoinLockstepStarting() && m_CatchUpCoordinator) {
+				// The seats the replayed tail holds at the activation stay held in the joiner's live round: it never waits on their input.
+				std::map<uint8_t, NetGameSeatHold> holds;
+				for (const auto& [peer, hold]: m_CatchUpCoordinator->HeldTransactions())
+					if (peer != m_LocalPeerId && hold.cutoffFrame <= m_WorldCatchUp.activationTick) holds[peer] = hold;
+				std::map<uint8_t, uint64_t> leaves;
+				for (const auto& [peer, frame]: m_CatchUpCoordinator->GetPeerLeaveFrames())
+					if (peer != m_LocalPeerId && !holds.contains(peer) && frame <= m_WorldCatchUp.activationTick) leaves[peer] = frame;
+				std::ostringstream line;
+				line << "[net-match] world round from the catch-up at " << m_WorldCatchUp.activationTick << ": held";
+				for (const auto& [peer, hold]: holds) line << ' ' << static_cast<int>(peer) << '@' << hold.cutoffFrame;
+				line << " left";
+				for (const auto& [peer, frame]: leaves) line << ' ' << static_cast<int>(peer) << '@' << frame;
+				System::PrintDiagnosticLine(line.str());
+				m_Runner->ConfigureWorldJoinSeats(std::move(holds), std::move(leaves));
+			}
 			if (!m_Runner->IsWorldJoinLockstepStarting())
 				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error);
 			else {

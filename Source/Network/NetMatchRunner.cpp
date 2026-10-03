@@ -352,6 +352,8 @@ namespace RTE {
 
 	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream, std::vector<NetTransportEvent> pendingLobbyEvents) {
 		m_PrivateJoinConfig.reset();
+		m_WorldJoinHolds.clear();
+		m_WorldJoinLeaves.clear();
 		m_WorldJoinStarting = false;
 		m_HostLostDuringSetup = false;
 		m_HostOptionsRefused = false;
@@ -804,6 +806,11 @@ namespace RTE {
 			lockstepConfig.activePeerIds.clear();
 			for (uint8_t peer = 1; peer <= lockstepConfig.peerCount; ++peer)
 				if (peer == lockstepConfig.localPeerId || !lockstepConfig.initialPeerLeaves.contains(peer)) lockstepConfig.activePeerIds.push_back(peer);
+		}
+		// A world joiner never waits on a seat the round already holds: its tail's holds and departures are its round's from the start.
+		if (m_WorldJoinStarting && !m_PrivateJoinConfig) {
+			for (const auto& [peer, hold]: m_WorldJoinHolds) lockstepConfig.initialSeatHolds[peer] = hold;
+			for (const auto& [peer, frame]: m_WorldJoinLeaves) if (!lockstepConfig.initialSeatHolds.contains(peer)) lockstepConfig.initialPeerLeaves.emplace(peer, frame);
 		}
 		// A seat knocking to come back while the round forms is the session's traffic, never dropped for want of a reader.
 		CarrySessionTraffic(coordinator);

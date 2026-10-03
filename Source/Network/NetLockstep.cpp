@@ -10755,7 +10755,13 @@ namespace RTE {
 			}
 			m_PeerAdmissions[start.localPeerId] = {start.startFrame, start.inputDelayFrames};
 			m_PeerEffectiveStart[start.localPeerId] = std::max(m_Config.startFrame, start.startFrame + start.inputDelayFrames);
-			m_PeerLeaveFrames.erase(start.localPeerId);
+			// A seat held after this start stays held: the start is how it came in, the hold is where it is now.
+			if (const auto left = m_PeerLeaveFrames.find(start.localPeerId); left != m_PeerLeaveFrames.end() && left->second > start.startFrame) {
+				DiagnosticLine() << "[net-lockstep] start of peer " << static_cast<int>(start.localPeerId) << " at " << start.startFrame << " predates its hold at " << left->second
+				          << "; the seat stays held" << std::endl;
+			} else {
+				m_PeerLeaveFrames.erase(start.localPeerId);
+			}
 			m_RemoteStartsReceived.erase(start.localPeerId);
 			m_RemoteStarts.erase(start.localPeerId);
 			if (!IsKnownRemotePeer(start.localPeerId)) { m_RemotePeerIds.push_back(start.localPeerId); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }

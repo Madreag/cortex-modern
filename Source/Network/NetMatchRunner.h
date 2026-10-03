@@ -185,6 +185,11 @@ namespace RTE {
 		/// inside: the handshake finishes over the pumps that follow.
 		/// @return Whether the coordinator is already running.
 		void ConfigurePrivateJoin(const NetLockstepConfig& config) { m_PrivateJoinConfig = config; m_MatchConfig = config.matchConfig; m_ActiveHostPeerId = config.authorityPeerId; }
+		/// A world joiner's live round starts with the seats its replayed tail holds at the activation held, and the members it lost gone.
+		void ConfigureWorldJoinSeats(std::map<uint8_t, NetGameSeatHold> holds, std::map<uint8_t, uint64_t> leaves) {
+			m_WorldJoinHolds = std::move(holds);
+			m_WorldJoinLeaves = std::move(leaves);
+		}
 		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error = nullptr);
 		/// One tick of a starting joiner's handshake. Returns whether the coordinator is running; a
 		/// false with an error set is the start giving up.
@@ -274,6 +279,8 @@ namespace RTE {
 		NetMatchConfig m_MatchConfig;
 		NetHash32 m_MatchConfigHash{};
 		std::optional<NetLockstepConfig> m_PrivateJoinConfig;
+		std::map<uint8_t, NetGameSeatHold> m_WorldJoinHolds; //!< A world joiner's live round: the seats held at its activation.
+		std::map<uint8_t, uint64_t> m_WorldJoinLeaves;        //!< And the members gone by it.
 		bool m_UseLobbyProtocol = false;
 		bool m_ResyncRound = false;
 		bool m_HostLostDuringSetup = false;
