@@ -140,6 +140,35 @@ class AcceptanceRows(unittest.TestCase):
             sample["instrument_bytes"] = growth
         self.assert_rejected("world-soak", data, "census.pc")
 
+    def test_soak_raw_memory_uses_the_merged_slope_and_retained_rules(self):
+        data = good('world-soak')
+        data['census']['pc'][3]['process_bytes'] += 200*1024**2
+        result = judge('world-soak', data)
+        self.assertTrue(result['passed'], result['failures'])
+        self.assertEqual(result['memory']['pc']['sizes']['private']['retained_bytes'], 0)
+        self.assertLess(result['memory']['pc']['sizes']['private']['slope_bytes_per_minute'], 0)
+
+    def test_soak_native_clock_drift_and_final_partial_minute_use_sample_slots(self):
+        data = good('world-soak')
+        data['soak']['elapsed_s'] += 20
+        for samples in data['census'].values():
+            for minute, sample in enumerate(samples):
+                sample['uptime_ms'] += minute*5
+        result = judge('world-soak', data)
+        self.assertTrue(result['passed'], result['failures'])
+
+    def test_soak_progress_labels_are_scoped_to_r3_and_r4(self):
+        data = good('world-soak')
+        data['transfer'] = dict(received_bytes=34567)
+        self.assertTrue(judge('world-soak', data)['passed'])
+        data['transfer']['received_bytes'] = 0
+        self.assert_rejected('world-soak', data, 'transfer')
+        for row in ('world-join', 'image-sizes'):
+            data = good(row)
+            transfer = data['transfer'] if row == 'world-join' else data['scenes'][0]['transfer']
+            transfer['labels'] = []
+            self.assert_rejected(row, data, 'progress label')
+
     def test_absent_receipts_are_not_green(self):
         for row in ROWS:
             with self.subTest(row=row):

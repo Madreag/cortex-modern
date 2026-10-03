@@ -106,7 +106,7 @@ def transfer_gate(check, value, prefix="transfer"):
                           for r in labels), prefix, "label text dump missing")
 
 
-def join_gate(check, facts, boxes=True):
+def join_gate(check, facts, boxes=True, progress=True):
     join = facts.get("join", {})
     check.require(join.get("peer") == "edith", "join", "internet late joiner is not EDITH")
     check.require(number(join.get("host_tick")) and join["host_tick"] >= 1200, "join", "join starts before 1200 host frames")
@@ -129,7 +129,11 @@ def join_gate(check, facts, boxes=True):
     seated = [name for name in peers if name != join.get("peer")]
     peer_gate(check, peers, seated, timing=True)
     peer_gate(check, peers, ["edith"])
-    transfer_gate(check, facts.get("transfer", {}))
+    if progress:
+        transfer_gate(check, facts.get("transfer", {}))
+    else:
+        value = facts.get('transfer', {}).get('received_bytes')
+        check.require(type(value) is int and value > 0, 'transfer', 'StateChunk byte total missing')
 
 
 def census_gate(check, rows, prefix, duration):
@@ -138,19 +142,20 @@ def census_gate(check, rows, prefix, duration):
     if not check.require(valid, prefix, "memory census missing or invalid"):
         return {}
     times = [r["uptime_ms"] for r in rows]
-    check.require(all(0 < b-a <= 60000 for a, b in zip(times, times[1:])), prefix, "minute census gaps or duplicate clocks")
-    check.require(times[0] <= 60000 and times[-1] >= duration*1000, prefix, "census does not cover the whole run")
-    warm = [r for r in rows if r["uptime_ms"] >= 120000]
-    if not check.require(len(warm) >= 2, prefix, "post-warmup samples missing"):
-        return {}
-    intervals = [(b["process_bytes"]-a["process_bytes"])*60000/(b["uptime_ms"]-a["uptime_ms"])
-                 for a, b in zip(warm, warm[1:]) if b["uptime_ms"] > a["uptime_ms"]]
-    growth = max(r["process_bytes"] for r in warm)-warm[0]["process_bytes"]
-    check.require(bool(intervals) and max(intervals) <= 8*MIB, prefix, "raw process slope exceeds 8 MiB/min")
-    check.require(growth <= 128*MIB, prefix, "raw retained growth exceeds 128 MiB")
-    return dict(max_slope_bytes_per_minute=max(intervals) if intervals else None,
-                retained_growth_bytes=growth, slope_bound=8*MIB, retained_bound=128*MIB,
-                warmup_s=120, instrument_subtraction=False)
+    check.require(all(b > a for a, b in zip(times, times[1:])), prefix, "reversed or duplicate native clocks")
+    from feel.report import reduce_memory
+    # Use the merged oracle's minute slots, fitted slope and last-minus-first
+    # retention. The separate fixed harness also requires its native census rule.
+    bounded = reduce_memory([dict(elapsed_s=r['uptime_ms']/1000, private=r['process_bytes']) for r in rows],
+                            warmup_s=120, slope_bytes_per_minute=8*MIB, retained_bytes=128*MIB,
+                            sample_seconds=60, elapsed_s=duration)
+    check.require(not bounded['missing_samples'], prefix, 'minute census samples are missing')
+    check.require(bool(bounded['sizes']), prefix, 'post-warmup samples missing')
+    for value in bounded['sizes'].values():
+        check.require(number(value['slope_bytes_per_minute']) and value['slope_bytes_per_minute'] <= 8*MIB,
+                      prefix, 'raw process slope exceeds 8 MiB/min')
+        check.require(value['retained_bytes'] <= 128*MIB, prefix, 'raw retained growth exceeds 128 MiB')
+    return {**bounded, 'instrument_subtraction': False}
 
 
 def judge(row, facts):
@@ -240,7 +245,7 @@ def judge(row, facts):
                       activation < promotion["input_created_tick"] <= promotion["input_tick"] and
                       bool(promotion.get("applied_input")), "promotion", "no fresh controllable input after promotion")
     elif row in ("world-join", "world-soak"):
-        join_gate(check, facts, boxes=row == "world-join")
+        join_gate(check, facts, boxes=row == "world-join", progress=row == "world-join")
         if row == "world-soak":
             soak = facts.get("soak", {})
             duration, late = soak.get("elapsed_s"), soak.get("late_join_elapsed_s")

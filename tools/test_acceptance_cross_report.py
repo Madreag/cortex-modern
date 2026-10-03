@@ -43,6 +43,26 @@ class CrossReceiptReport(unittest.TestCase):
         self.assertTrue(result['nat_to_nat'])
         self.assertTrue(result['stun'])
 
+    def test_soak_transfer_uses_one_native_receipt_without_r6_clock_labels(self):
+        line = '[net-match] state transfer complete: 123 bytes\n'
+        for log, expected in ((line, 123), ('', None), (line+line, None)):
+            with self.subTest(log=log):
+                root = self.run_root()
+                names = ('erol', 'edith-first', 'edith')
+                manifest = dict(acceptance_row='world-soak', ticks=219601, preflights={},
+                                driver_findings=[], soak={},
+                                boxes=[dict(name=n, kind='windows-local') for n in names],
+                                specs=[dict(peer=n, box=n, own=str(root/n/'incarnation-0'), root=str(root)) for n in names])
+                (root/'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+                own = root/'edith/incarnation-0'
+                (own/'engine').mkdir(parents=True)
+                (own/'engine/stdout.log').write_text(log, encoding='utf-8')
+                result = build_report(root)
+                facts = json.loads((root/'acceptance-facts.json').read_text(encoding='utf-8'))
+                self.assertEqual(facts['transfer'].get('received_bytes'), expected)
+                transfer_failures = [value for value in result['failures'] if value.startswith('transfer:')]
+                self.assertEqual(bool(transfer_failures), expected is None)
+
     def test_unrelated_or_refused_routes_do_not_prove_nat_join(self):
         host = '[net-ice] selected candidate=srflx connection=100\n[net-route] RouteAllowed route=direct allowed=1 connection=100\n'
         candidate = '[net-ice] selected candidate=srflx connection=200\n'

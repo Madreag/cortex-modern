@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from acceptance_evidence import fullstate_hashes, live_hashes, peer_receipt, rows
+from acceptance_mod import sha256
 from acceptance_rows import judge
 from acceptance_runtime import write_json
 from world_soak import census_receipts
@@ -105,6 +106,12 @@ def build_report(root):
     from cross_report import peer_root
     root = Path(root)
     manifest = load(root/"manifest.json", {})
+    write_json(root/'report-sources.json', dict(
+        input_manifest_sha256=sha256(root/'manifest.json'),
+        runtime_driver_sources=manifest.get('driver_sources', {}),
+        report_sources={name: sha256(Path(__file__).parent/name) for name in
+                        ('acceptance_cross_report.py', 'acceptance_rows.py', 'acceptance_evidence.py',
+                         'acceptance_fixed_gates.py', 'world_soak.py', 'cross_report.py', 'feel/report.py')}))
     row = manifest["acceptance_row"]
     specs = {("pc" if spec["peer"] == "erol" else spec["peer"]): spec for spec in manifest["specs"]}
     paths = {name: peer_root(root, manifest, spec) for name, spec in specs.items()}
@@ -133,11 +140,19 @@ def build_report(root):
                              directory=manifest.get("directory_mode"), public_directory_down=manifest.get("public_directory_down"),
                              own_certificate=manifest.get("own_certificate"),
                              **native_route_evidence(logs.get("pc", ""), logs.get("edith", "")))
-        facts["transfer"] = load(paths.get("edith", root)/"acceptance-transfer.json", {})
         totals = [int(value) for value in re.findall(r'(?m)^\[net-match\] state transfer complete: (\d+) bytes\s*$', logs.get('edith', ''))]
-        received = facts['transfer'].get('received_bytes')
-        if len(totals) != 1 or type(received) is not int or totals[0] != received:
-            failures.append('transfer: native StateChunk receipt missing, repeated, or differs from clocked byte count')
+        if row == 'world-soak':
+            # R6's clocked label evidence belongs to R3/R4. R5 still owes a
+            # completed native StateChunk transfer, activation and equal hashes.
+            facts['transfer'] = dict(received_bytes=totals[0] if len(totals) == 1 else None,
+                                     native_receipt_count=len(totals))
+            if len(totals) != 1:
+                failures.append('transfer: native StateChunk receipt missing or repeated')
+        else:
+            facts["transfer"] = load(paths.get("edith", root)/"acceptance-transfer.json", {})
+            received = facts['transfer'].get('received_bytes')
+            if len(totals) != 1 or type(received) is not int or totals[0] != received:
+                failures.append('transfer: native StateChunk receipt missing, repeated, or differs from clocked byte count')
     elif row == "mod-refusal":
         comparing.remove("linux")
     for name in comparing:
