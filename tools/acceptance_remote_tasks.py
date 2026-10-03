@@ -16,7 +16,8 @@ import world_mod_cross as world
 from acceptance_mod import sha256
 from acceptance_runtime import ACTIVE_STORAGE, check_storage, storage_scope, write_json, write_text
 from edith.remote_box import RemoteBox, render_payload
-from world_soak_tasks import helper_archive, read_json as read_windows_json
+from world_soak_tasks import read_json as read_windows_json
+from acceptance_frozen_tools import driver_git_context, helper_archive, receipt as frozen_receipt
 
 ROWS = ('mod-match', 'mod-refusal', 'world-join')
 ALIASES = {'Z13': 'z13', 'EDITH': 'edith', 'Mac': 'Erol-Mac', 'Linux': '3090'}
@@ -52,7 +53,8 @@ def validate_profile(box, lane, row='mod-match'):
             raise ValueError('named Windows memory floor changed')
     else:
         shared = str(PurePosixPath(root).parent/'ACCEPTANCE-STREAM-RUNNING')
-        if box['exclusive_marker'] != shared:
+        layered = box.get('acceptance_marker') == shared and box['exclusive_marker'] == root+'/FEEL-MATRIX-RUNNING'
+        if box['exclusive_marker'] != shared and not layered:
             raise ValueError('POSIX payload must reserve the shared acceptance stream marker')
 
 
@@ -66,7 +68,8 @@ def make_plan(options, profiles, mod_receipts=None):
                              '--mac-guard', by_name['Mac'].get('guard_file', by_name['Mac']['exclusive_marker']), '--roster', 'four-way',
                              '--out', str(options.out), '--ticks', '12001' if options.row == 'world-join' else '1201',
                              '--timeout', '900', '--quiet-window'])
-    plan = world.configure_plan(cross.make_plan(base), options.row, mod_receipts)
+    with driver_git_context(Path(__file__).resolve().parent.parent) as frozen:
+        plan = world.configure_plan(cross.make_plan(base), options.row, mod_receipts)
     for spec in plan['specs']:
         box = by_name[PEERS[spec['peer']]]
         old_root, new_root = spec['root'], box['scratch']+'/'+plan['run']
@@ -92,6 +95,14 @@ def make_plan(options, profiles, mod_receipts=None):
                 source_sha=options.source_sha, expected_source_sha=options.source_sha,
                 coordinator_only=dict(box='EROL-PC', engine_instances=0),
                 authorization='LEAD-NOTES NOTE 8 / RESUME 3')
+    if frozen is not None:
+        if any(box['kind'] == 'posix-ssh' and not box.get('acceptance_marker') for box in plan['boxes']):
+            raise ValueError('frozen POSIX tools require their shared directory-owner reservation')
+        plan.update(driver=dict(kind='coordinator', directory_port=49148),
+                    frozen_tools=dict(commit=frozen['frozen_commit'], export=frozen['frozen_export'],
+                                      coordinator_commit=frozen['coordinator_commit'], frozen_files_modified=0),
+                    authorization='LEAD-NOTES NOTE 11 / RESUME 3')
+        cross.coordinator(plan)
     plan['driver_sources']['acceptance_remote_tasks.py'] = sha256(Path(__file__))
     return plan
 
@@ -123,6 +134,8 @@ def validate_preflights(plan):
             raise ValueError(name+': another build or engine is active')
         if value.get('acceptance_remote_driver_sha256') != plan['driver_sources']['acceptance_remote_tasks.py']:
             raise ValueError(name+': remote task coordinator bytes differ')
+        if plan.get('frozen_tools') and value.get('frozen_tools') != dict(commit=plan['frozen_tools']['commit'], frozen_files_modified=0):
+            raise ValueError(name+': frozen NOTE 11 tool identity is missing or differs')
     world.check_driver_preflights(plan, values)
     world.check_mod_preflights(plan, values)
 
@@ -158,6 +171,12 @@ def preflight_payload(path):
     result = cross.preflight_payload(path)
     receipt = Path(path).parent/'preflight.json'
     value = json.loads(receipt.read_text(encoding='utf-8'))
+    frozen = frozen_receipt(Path(__file__).resolve().parent.parent)
+    if frozen is not None:
+        world.preflight_driver(box, value)
+        if specs[0]['acceptance_row'] in ('mod-match', 'mod-refusal'):
+            world.preflight_mod(box, value)
+        value['frozen_tools'] = dict(commit=frozen['frozen_commit'], frozen_files_modified=0)
     if box.get('build_receipt'):
         source = Path(box['build_receipt'])
         build = json.loads(source.read_text(encoding='utf-8-sig'))
@@ -186,17 +205,25 @@ def run_payload(path):
     settings = dict(CC_RUNNER_BOX_NAME=box['name'])
     if 'launch_floor_gib' in box:
         settings['CC_RUNNER_MIN_FREE_GB'] = str(box['launch_floor_gib'])
-    previous, claim = {key: os.environ.get(key) for key in settings}, None
+    previous, claim, shared_claim = {key: os.environ.get(key) for key in settings}, None, None
+    from acceptance_native_runtime import (run_payload as native_payload,
+                                           acquire_shared_reservation, release_shared_reservation)
     try:
         os.environ.update(settings)
         launch_budget.install_memory_guard()
+        frozen = frozen_receipt(Path(__file__).resolve().parent.parent)
+        if frozen is not None:
+            shared_claim = acquire_shared_reservation(box, Path(path).parent, 60)
         claim = cross.acquire_reservation(box, Path(path).parent, 60)
         write_json(Path(path).parent/'reservation.json', {key: value for key, value in claim['record'].items() if key != 'token'})
-        return cross.run_payload(path)
+        return native_payload(path)
     finally:
         if claim:
             released = cross.release_reservation(claim)
             write_json(Path(path).parent/'reservation-released.json', dict(released=released))
+        if shared_claim is not None:
+            released = release_shared_reservation(shared_claim)
+            write_json(Path(path).parent/'shared-reservation-released.json', dict(released=released))
         for key, value in previous.items():
             if value is None: os.environ.pop(key, None)
             else: os.environ[key] = value

@@ -8,6 +8,7 @@ from unittest.mock import patch
 import world_mod_cross as world
 from test_world_mod_cross import baseline, mods
 import acceptance_remote_tasks as remote
+import acceptance_native_runtime as native_runtime
 
 
 def profiles(row=None):
@@ -111,6 +112,15 @@ class RemoteSafety(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'shared acceptance stream marker'):
                 remote.validate_profile(box, 'test')
 
+    def test_frozen_posix_profiles_require_both_reservations(self):
+        for box in profiles()[2:]:
+            shared = box['exclusive_marker']
+            box.update(exclusive_marker=box['scratch']+'/FEEL-MATRIX-RUNNING', acceptance_marker=shared)
+            remote.validate_profile(box, 'test')
+            box['acceptance_marker'] = box['scratch']+'/private-stream'
+            with self.assertRaisesRegex(ValueError, 'shared acceptance stream marker'):
+                remote.validate_profile(box, 'test')
+
     def test_note8_rows_cannot_use_acceptance_or_engineer_development_files(self):
         for name, tree in [('Z13','D:/Projects/z13-build'), ('Z13','D:/Projects/z13-dev-build'),
                            ('EDITH','D:/Projects/inventory-build')]:
@@ -134,7 +144,7 @@ class RemoteSafety(unittest.TestCase):
         before = dict(os.environ)
         with patch.object(Path,'read_text',return_value=json.dumps(payload)), \
              patch.object(remote.platform,'node',return_value='EROL-TABLET'), \
-             patch.object(remote.cross,'run_payload',side_effect=RuntimeError('native failure')), \
+             patch.object(native_runtime,'run_payload',side_effect=RuntimeError('native failure')), \
              patch.object(remote.cross,'acquire_reservation',return_value=claim), \
              patch.object(remote.cross,'release_reservation',return_value=True) as release, \
              patch.object(launch_budget,'install_memory_guard'), patch.object(remote,'write_json'):

@@ -25,7 +25,8 @@ ROWS = ("mod-match", "mod-refusal", "world-join", "world-soak")
 DRIVER_FILES = ("cross_peers.py", "cross_report.py", "e2e_video.py", "feel/report.py", "feel/records.py", "world_mod_cross.py",
                 "world_soak.py", "world_soak_tasks.py", "acceptance_rows.py", "acceptance_evidence.py", "acceptance_cross_report.py", "acceptance_fixed_gates.py", "acceptance_mod.py",
                 "acceptance_runtime.py", "acceptance_box_mods.py", "run_sim_test.py", "win32_test_runner.py", "posix_test_runner.py",
-                "feel_measure.py", "feel/harness_cost.py", "feel/host_loss.py", "e2e/ownership.py", "edith/remote_box.py")
+                "feel_measure.py", "feel/harness_cost.py", "feel/host_loss.py", "e2e/ownership.py", "edith/remote_box.py",
+                "acceptance_native_runtime.py", "acceptance_frozen_tools.py", "acceptance_remote_tasks.py")
 
 
 def named_row(arguments):
