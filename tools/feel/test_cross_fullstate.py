@@ -58,14 +58,21 @@ class FullStateTests(unittest.TestCase):
         self.assertFalse(result['passed']); self.assertEqual(result['differences'][0]['sections'],['scene'])
 
     def peer(self,ticks,coalesced=()):
-        """One peer's log: a sample for each (round, tick) and a coalesced line for each (tick, replaced)."""
+        """Every submitted capture has its own context, including the one replaced before writing."""
         lines=[]
-        for tick,replaced in coalesced:
-            lines.append(f'[fullstate-coalesced] tick={tick} replaced={replaced} writing=0 waiting_bound=1')
-        for round_id,tick in ticks:
-            lines += [f'[fullstate-context] tick={tick} round={round_id} label=sample path=/run/capture-{tick}/sample',
-                      f'[fullstate] tick={tick} hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round={round_id}',
-                      f'[fullstate-scope] tick={tick} round={round_id} label=sample per_peer=graph.1']
+        submissions = set(ticks)
+        replacements = {}
+        for tick, replaced in coalesced:
+            round_id = next((r for r, t in reversed(ticks) if t <= tick), 1)
+            submissions.update(((round_id, tick), (round_id, replaced)))
+            replacements[round_id, tick] = replaced
+        for capture, (round_id, tick) in enumerate(sorted(submissions), 1):
+            lines.append(f'[fullstate-context] tick={tick} round={round_id} label=sample path=/run/process-1/round-{round_id}/capture-{capture}/sample')
+            if (round_id, tick) in replacements:
+                lines.append(f'[fullstate-coalesced] tick={tick} replaced={replacements[round_id, tick]} writing=0 waiting_bound=1')
+            if (round_id, tick) in ticks:
+                lines += [f'[fullstate] tick={tick} hash=0123456789abcdef sections=header:0123456789abcdef,scene:0123456789abcdef round={round_id}',
+                          f'[fullstate-scope] tick={tick} round={round_id} label=sample per_peer=graph.1']
         with tempfile.TemporaryDirectory() as temporary:
             path=Path(temporary)/'stdout.log'
             path.write_text('\n'.join(lines)+'\n')

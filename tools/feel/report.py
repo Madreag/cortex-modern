@@ -283,6 +283,7 @@ def own_hold_windows(lines):
 
 def parse_fullstate(paths):
     samples, scopes, contexts, refusals, coalesced, holds = [], defaultdict(list), defaultdict(list), [], [], []
+    announcements, reclaims = [], []
     sample_pattern = re.compile(r'^\[fullstate(?:-(canonical|restored|reclaim|landed))?\] tick=(\d+) hash=([0-9a-f]{16}) sections=(\S+) round=(\d+)')
     # The engine's own record of a periodic sample its writer replaced before writing it (ActivityMan's per-series bound).
     coalesced_pattern = re.compile(r'^\[fullstate-coalesced\] tick=(\d+) replaced=(\d+) ')
@@ -291,17 +292,26 @@ def parse_fullstate(paths):
     for path in paths:
         path=Path(path)
         if not path.is_file(): continue
-        seat_lines=[]
+        seat_lines=[]; round_id=None
         with path.open(encoding='utf-8-sig',errors='replace') as stream:
             for number,line in enumerate(stream,1):
+                if match := re.match(r'^\[net-lockstep\] start round=(\d+) ', line):
+                    round_id = int(match[1])
+                if match := re.match(r'^\[net-lockstep\] return of peer (\d+) at (\d+) delay=(\d+) neutral_through=(\d+) revision=(\d+) incarnation=(\d+)', line):
+                    reclaims.append(dict(round=round_id, peer=int(match[1]), frame=int(match[2]), delay=int(match[3]),
+                        neutral_through=int(match[4]), revision=int(match[5]), incarnation=int(match[6]), log=str(path), line=number))
                 if line.startswith(('[net-lockstep] start round=','[net-lockstep] hold of this seat at ','[net-match] seat-reclaimed ')):
                     seat_lines.append(line.strip())
                 if match:=context_pattern.match(line.strip()):
                     key=(int(match[2]),int(match[1]),match[3])
-                    contexts[key].append(dict(path=match[4],log=str(path),line=number))
+                    identity = re.search(r'(?:^|/)process-([^/]+)/round-(\d+)/capture-([^/]+)/([^/]+)$', match[4].replace('\\', '/'))
+                    context = dict(path=match[4], log=str(path), line=number, key=key,
+                                   capture_identity=(str(path), *identity.groups()) if identity and int(identity[2]) == key[0] else None)
+                    contexts[str(path), key].append(context)
+                    announcements.append(context)
                 elif match:=scope_pattern.match(line.strip()):
                     key=(int(match[2]),int(match[1]),match[3])
-                    scopes[key].append(dict(per_peer=match[4].split(',') if match[4] else [],log=str(path),line=number))
+                    scopes[str(path), key].append(dict(per_peer=match[4].split(',') if match[4] else [],log=str(path),line=number))
                 elif match:=coalesced_pattern.match(line.strip()):
                     coalesced.append(dict(tick=int(match[1]),replaced=int(match[2]),log=str(path),line=number))
                 elif match:=sample_pattern.match(line.strip()):
@@ -313,13 +323,58 @@ def parse_fullstate(paths):
                 elif line.startswith('[fullstate-refusal] '):
                     refusals.append(dict(log=str(path),line=number,text=line.strip()))
         holds.extend(own_hold_windows(seat_lines))
+    replaced_identities = set()
+    for receipt in coalesced:
+        preceding = [row for row in announcements if row['log'] == receipt['log'] and row['line'] < receipt['line']]
+        current = preceding[-1] if preceding else None
+        identity = current.get('capture_identity') if current else None
+        processes = {row['capture_identity'][1] for row in announcements
+                     if row['log'] == receipt['log'] and row.get('capture_identity')}
+        targets = [row for row in preceding if identity and row.get('capture_identity') and
+                   row['capture_identity'][0:2] == identity[0:2] and row['capture_identity'] not in replaced_identities
+                   and row['line'] < current['line'] and row['key'][1:] == (receipt['replaced'], 'sample')]
+        valid = bool(current and current['key'][1:] == (receipt['tick'], 'sample') and identity
+                     and processes == {identity[1]} and len(targets) == 1)
+        receipt['valid'] = valid
+        if valid:
+            target = targets[0]
+            receipt.update(round=target['key'][0], process=target['capture_identity'][1],
+                           capture_identity=target['capture_identity'], context=target,
+                           replacement_capture_identity=identity)
+            replaced_identities.add(target['capture_identity'])
+        else:
+            receipt['reason'] = f'coalesce tick={receipt["tick"]} replaced={receipt["replaced"]}: replacement context or unique owned capture identity is absent'
     ordinal=Counter()
     for sample in samples:
-        key=sample['key']; index=ordinal[key]; ordinal[key]+=1
+        key=(sample['log'], sample['key']); index=ordinal[key]; ordinal[key]+=1
+        kept_contexts = [row for row in contexts[key] if row.get('capture_identity') not in replaced_identities]
         sample['scope']=scopes[key][index] if index<len(scopes[key]) else None
-        sample['context']=contexts[key][index] if index<len(contexts[key]) else None
+        sample['context']=kept_contexts[index] if index<len(kept_contexts) else None
         sample['scope_valid']=sample['scope'] is not None and 'header' in sample['sections'] and not (set(sample['sections']) & set(sample['scope']['per_peer']))
-    return dict(samples=samples,refusals=refusals,coalesced=coalesced,holds=holds)
+    return dict(samples=samples,refusals=refusals,coalesced=coalesced,holds=holds,reclaims=reclaims)
+
+
+def reclaim_sample_obligations(documents, ranges):
+    agreements = defaultdict(list)
+    invalid = []
+    for peer, document in documents.items():
+        for row in document.get('reclaims', []):
+            if row.get('round') is None:
+                invalid.append(dict(observer=peer, reason='reclaim receipt has no round', **row))
+                continue
+            agreements[row['round'], row['peer'], row['revision'], row['incarnation']].append(dict(observer=peer, **row))
+    expected = set()
+    for identity, rows in agreements.items():
+        values = {(row['frame'], row['delay'], row['neutral_through']) for row in rows}
+        if len(values) != 1:
+            invalid.append(dict(identity=identity, reason=f'reclaim agreement differs: {sorted(values)}', receipts=rows))
+            continue
+        frame, delay, neutral = next(iter(values))
+        gap_end = max(neutral, frame + delay)
+        for tick, label in ((frame, 'reclaim'), (gap_end + 60, 'landed')):
+            if any(str(interval['match']) == str(identity[0]) and interval['first'] <= tick <= interval['last'] for interval in ranges):
+                expected.add((identity[0], tick, label))
+    return dict(expected=sorted(expected), invalid=invalid, receipts=[row for rows in agreements.values() for row in rows])
 
 
 def compare_fullstate_histories(peers, expected):
@@ -329,7 +384,10 @@ def compare_fullstate_histories(peers, expected):
     compared across the peers that wrote the key, and at least one key must be written by every peer."""
     missing, differences, bad_scope, restored, excused, held = [], [], [], [], [], []
     indexed={}
-    replaced={peer:Counter(row['replaced'] for row in document.get('coalesced',[])) for peer,document in peers.items()}
+    invalid_coalesces = [dict(peer=peer, **row) for peer, document in peers.items() for row in document.get('coalesced', [])
+                        if not row.get('valid') or not row.get('capture_identity') or not row.get('context')]
+    replaced={peer:Counter((row.get('round'), row['replaced']) for row in document.get('coalesced',[])
+                            if row.get('valid') and row.get('capture_identity') and row.get('context')) for peer,document in peers.items()}
     for peer,document in peers.items():
         indexed[peer]=defaultdict(list)
         for sample in document['samples']:
@@ -347,8 +405,8 @@ def compare_fullstate_histories(peers, expected):
         values=[]
         for peer in peers:
             found=indexed[peer].get(tuple(key),[])
-            if not found and key[2]=='sample' and replaced[peer][key[1]]>0:
-                replaced[peer][key[1]]-=1
+            if not found and key[2]=='sample' and replaced[peer][tuple(key[:2])]>0:
+                replaced[peer][tuple(key[:2])]-=1
                 excused.append(dict(peer=peer,key=tuple(key)))
             elif not found and key[2] in ('sample','landed') and any(round_id==key[0] and first<=key[1]<end for round_id,first,end in peers[peer].get('holds',[])):
                 held.append(dict(peer=peer,key=tuple(key)))
@@ -364,12 +422,13 @@ def compare_fullstate_histories(peers, expected):
                     differences.append(dict(key=key,first_peer=first_peer,peer=peer,sections=differing or ['combined_hash'],
                                             first_log=first['log'],first_line=first['line'],log=sample['log'],line=sample['line']))
     refused=[dict(peer=peer,**row) for peer,document in peers.items() for row in document['refusals']]
-    return dict(passed=bool(expected) and compared>0 and not (missing or differences or bad_scope or refused) and all(r['equal'] for r in restored),
+    return dict(passed=bool(expected) and compared>0 and not (missing or differences or bad_scope or refused or invalid_coalesces) and all(r['equal'] for r in restored),
                 expected_samples_per_peer=len(expected),compared_samples=compared,
                 coalesced={peer:sum(row['peer']==peer for row in excused) for peer in peers},coalesced_samples=excused,
                 held={peer:sum(row['peer']==peer for row in held) for peer in peers},held_samples=held,
                 missing=missing,differences=differences,scope_failures=bad_scope,
-                refusals=refused,restores=restored,scope='Shared sections only; PerPeer exclusions remain explicit and need behavioral oracles')
+                refusals=refused,restores=restored,invalid_coalesces=invalid_coalesces,
+                scope='Shared sections only; PerPeer exclusions remain explicit and need behavioral oracles')
 KILLALL = re.compile(r'killall sparing team \d+ at tick (\d+)')
 SCENARIO_EARLY = re.compile(r'\[scenario\] \S+ passed=no ticks=(\d+)')
 
