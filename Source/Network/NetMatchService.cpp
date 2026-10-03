@@ -3680,6 +3680,42 @@ static std::string ResyncSaveName() {
 			record(frame);
 			if (m_WorldJoin.IsConfigured() && !m_WorldJoin.Tail().Append(frame, &error) && m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "committed catch-up history: " + error;
 		} else if (m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "the completed tick has no committed catch-up input";
+		if (tick % 60 == 0) PruneReturnHistory(tick);
+	}
+
+	uint64_t NetMatchService::ReturnHistoryFloorLocked(uint64_t tick, uint64_t nowMs) const {
+		// A returner arriving now is served the published base, unless it would take a new one.
+		std::optional<uint64_t> served;
+		const NetWorldCheckpointImage& image = m_WorldJoin.Image();
+		if (image.IsValid()) {
+			const bool fresh = m_PrivateImageTakenMs != 0 && nowMs - m_PrivateImageTakenMs < c_PrivateImageMinIntervalMs;
+			if (!m_PrivateImageRecapture && (fresh || !PrivateBaseRefreshDue(true, 0, image.tick, SteadyCaptureMs(m_PrivateCaptureCosts)))) served = image.tick;
+		}
+		return ReturnHistoryFloor(tick, served, m_WorldJoin.Sessions(), m_Coordinator->HeldTransactions(), m_Coordinator->GetConfig().simTickMs);
+	}
+
+	uint64_t NetMatchService::ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
+	                                             const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs) {
+		uint64_t floor = tick + 1;
+		if (servedBaseTick) floor = std::min(floor, *servedBaseTick + 1);
+		// Every return under way reads the tail on from the last frame it applied.
+		for (const NetWorldJoinSession& session: sessions)
+			if (session.phase != NetWorldJoinPhase::Active && session.snapshotTick != 0) floor = std::min(floor, session.acknowledgedThrough + 1);
+		// A held seat may come back holding its own state from just before its hold, while catching up in place still beats an image.
+		const auto window = static_cast<uint64_t>(std::ceil(c_InPlaceReturnWindowMs / (tickMs > 0.0 ? tickMs : 1000.0 / 60.0)));
+		const uint64_t skew = NetLockstepCodec::c_MaxFutureFrameSkew;
+		for (const auto& [peer, hold]: holds)
+			if (tick < hold.cutoffFrame + window) floor = std::min(floor, hold.cutoffFrame > skew ? hold.cutoffFrame - skew : 1);
+		return floor;
+	}
+
+	void NetMatchService::PruneReturnHistory(uint64_t tick) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_Coordinator || !m_WorldJoin.IsPrivateMatch() || !m_WorldJoin.Tail().HasJournal()) return;
+		NetLockstepPlaneGuard plane;
+		const uint64_t floor = ReturnHistoryFloorLocked(tick, SteadyNowMs());
+		m_WorldJoin.Tail().PruneJournalBefore(floor);
+		m_Coordinator->SetReturnHistoryFloor(floor);
 	}
 
 	bool NetMatchService::CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label) {

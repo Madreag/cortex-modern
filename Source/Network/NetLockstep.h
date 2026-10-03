@@ -1018,6 +1018,8 @@ namespace RTE {
 		uint64_t GetResumeFrame() const { NET_PLANE_CHECK(); return m_LastCompletedSimulationTick ? *m_LastCompletedSimulationTick + 1 : m_Config.startFrame; }
 		/// Whether this peer has simulated any frame of the round.
 		bool HasCompletedSimulationTick() const { NET_PLANE_CHECK(); return m_LastCompletedSimulationTick.has_value(); }
+		/// The oldest frame a returning seat may still be served from: older hold and return decisions are in every base it can get.
+		void SetReturnHistoryFloor(uint64_t frame) { NET_PLANE_CHECK(); m_ReturnHistoryFloor = frame; }
 		bool FinishSimulationTick(uint64_t completedTick);
 		/// Waives the parked tick's frames for every peer it still needs whose transport the admission
 		/// plane has fenced or forgotten, so the tick commits and the pending stop fires at its boundary.
@@ -1361,6 +1363,8 @@ namespace RTE {
 		friend bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestAReturnCopyKeepsTheCommittedObservations(std::string* error);
+		friend bool TestOldSeatTransitionsAreLetGo(std::string* error);
+		friend bool TestOldHoldDecisionsGoBelowTheReturnFloor(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 		friend bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error);
@@ -1920,6 +1924,10 @@ namespace RTE {
 		void UpdateHostReach(uint64_t nowMs);
 		uint64_t m_AgreedEndDeadlineMs = 0; //!< When a host playing to its agreed end stops waiting for it.
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
+		uint64_t m_ReturnHistoryFloor = 0; //!< Host: the oldest frame a returning seat may still be served from.
+		static constexpr uint64_t c_SeatTransitionHistoryFrames = 3600; //!< How far behind this peer's simulation the seat transitions reach.
+		/// Drops the seat transitions no query reaches any more, the newest at the cut standing for the ones before it.
+		void PruneSeatTransitions(uint64_t completedTick);
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;
 		uint64_t m_AuthorityLastHeardMs = 0;

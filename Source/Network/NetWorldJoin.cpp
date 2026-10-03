@@ -14,9 +14,11 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <sstream>
@@ -880,8 +882,16 @@ namespace RTE {
 		struct Job {
 			uint64_t frame = 0, maxBytes = 0;
 			size_t maxRecords = 0;
+			bool prune = false; //!< Drops the segments wholly before frame.
 			std::vector<uint8_t> bytes;
 			std::shared_ptr<std::promise<ReadResult>> result;
+		};
+		// One file of consecutive frames; the oldest go a whole file at a time.
+		struct Segment {
+			uint64_t first = 0, endOffset = 0;
+			std::string path;
+			std::unique_ptr<std::fstream> stream;
+			std::vector<std::pair<uint64_t, uint32_t>> records; //!< Offset and size of each frame from first on.
 		};
 		std::string path;
 		std::mutex mutex;
@@ -898,8 +908,12 @@ namespace RTE {
 			{ std::lock_guard lock(mutex); stopping = true; }
 			changed.notify_one();
 			if (worker.joinable()) worker.join();
-			std::error_code ignored;
-			std::filesystem::remove(path, ignored);
+		}
+		void Prune(uint64_t before) {
+			std::lock_guard lock(mutex);
+			Job job; job.frame = before; job.prune = true;
+			jobs.push_back(std::move(job));
+			changed.notify_one();
 		}
 		bool Append(uint64_t frame, const std::vector<uint8_t>& bytes) {
 			std::lock_guard lock(mutex);
@@ -934,12 +948,15 @@ namespace RTE {
 			return out.size();
 		}
 		void Run() {
+			std::deque<Segment> segments;
+			uint64_t opened = 0;
+			const auto close = [](Segment& segment) {
+				segment.stream.reset();
+				std::error_code ignored;
+				std::filesystem::remove(segment.path, ignored);
+			};
 			try {
 				std::filesystem::create_directories(std::filesystem::path(path).parent_path());
-				std::fstream stream(path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
-				if (!stream) { failed = true; return; }
-				std::map<uint64_t, std::pair<uint64_t, uint32_t>> index;
-				uint64_t endOffset = 0;
 				while (true) {
 					Job job;
 					{
@@ -948,29 +965,50 @@ namespace RTE {
 						if (stopping) break;
 						job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size();
 					}
-					if (!job.result) {
-						stream.clear(); stream.seekp(static_cast<std::streamoff>(endOffset));
-						stream.write(reinterpret_cast<const char*>(job.bytes.data()), static_cast<std::streamsize>(job.bytes.size()));
-						if (!stream) { failed = true; return; }
-						index[job.frame] = {endOffset, static_cast<uint32_t>(job.bytes.size())};
-						endOffset += job.bytes.size();
+					if (job.prune) {
+						// The segment being written stays: frames only ever join the newest one.
+						while (segments.size() > 1 && segments.front().first + segments.front().records.size() <= job.frame) {
+							close(segments.front());
+							segments.pop_front();
+						}
+					} else if (!job.result) {
+						if (segments.empty() || segments.back().records.size() >= c_JournalSegmentFrames) {
+							Segment segment;
+							segment.first = job.frame;
+							segment.path = opened == 0 ? path : path + "." + std::to_string(opened);
+							++opened;
+							segment.stream = std::make_unique<std::fstream>(segment.path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+							if (!*segment.stream) { failed = true; break; }
+							segments.push_back(std::move(segment));
+						}
+						Segment& segment = segments.back();
+						segment.stream->clear(); segment.stream->seekp(static_cast<std::streamoff>(segment.endOffset));
+						segment.stream->write(reinterpret_cast<const char*>(job.bytes.data()), static_cast<std::streamsize>(job.bytes.size()));
+						if (!*segment.stream) { failed = true; break; }
+						segment.records.emplace_back(segment.endOffset, static_cast<uint32_t>(job.bytes.size()));
+						segment.endOffset += job.bytes.size();
 					} else {
 						ReadResult result;
 						uint64_t total = 0, expected = job.frame;
-						stream.flush();
-						for (auto record = index.lower_bound(job.frame); record != index.end(); ++record) {
-							const auto [offset, size] = record->second;
-							if (record->first != expected || result.records.size() >= job.maxRecords || (total != 0 && total + size > job.maxBytes)) break;
-							std::vector<uint8_t> bytes(size);
-							stream.clear(); stream.seekg(static_cast<std::streamoff>(offset));
-							stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
-							if (!stream) { failed = true; result = {}; break; }
-							result.records.push_back(std::move(bytes)); total += size; result.last = record->first; ++expected;
+						for (Segment& segment: segments) {
+							if (expected < segment.first || expected >= segment.first + segment.records.size()) continue;
+							segment.stream->flush();
+							for (; expected < segment.first + segment.records.size(); ++expected) {
+								const auto [offset, size] = segment.records[expected - segment.first];
+								if (result.records.size() >= job.maxRecords || (total != 0 && total + size > job.maxBytes)) break;
+								std::vector<uint8_t> bytes(size);
+								segment.stream->clear(); segment.stream->seekg(static_cast<std::streamoff>(offset));
+								segment.stream->read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
+								if (!*segment.stream) { failed = true; result = {}; break; }
+								result.records.push_back(std::move(bytes)); total += size; result.last = expected;
+							}
+							if (failed || expected < segment.first + segment.records.size()) break;
 						}
 						job.result->set_value(std::move(result));
 					}
 				}
 			} catch (...) { failed = true; }
+			for (Segment& segment: segments) close(segment);
 		}
 	};
 
@@ -978,7 +1016,7 @@ namespace RTE {
 		m_Journal = std::make_shared<Journal>(path);
 		for (const auto& record: m_Records) {
 			if (!m_Journal->Append(record.frame, record.bytes)) break;
-			if (m_JournalFirst == 0) m_JournalFirst = record.frame;
+			if (m_JournalFirst == 0) m_JournalBase = m_JournalFirst = record.frame;
 			m_JournalLast = record.frame;
 		}
 	}
@@ -1012,7 +1050,7 @@ namespace RTE {
 			return false;
 		}
 		if (m_Journal && m_Journal->Append(frame.targetFrame, record.bytes)) {
-			if (m_JournalFirst == 0) m_JournalFirst = frame.targetFrame;
+			if (m_JournalFirst == 0) m_JournalBase = m_JournalFirst = frame.targetFrame;
 			m_JournalLast = frame.targetFrame;
 		}
 		m_Bytes += record.bytes.size();
@@ -1069,6 +1107,16 @@ namespace RTE {
 		}
 	}
 
+	void NetWorldFrameLog::PruneJournalBefore(uint64_t frame) {
+		if (!m_Journal || m_JournalFirst == 0 || frame <= m_JournalFirst) return;
+		// The file being written stays, so the first frame left is the first of the oldest file the floor keeps.
+		const auto fileStart = [this](uint64_t at) { return m_JournalBase + (at - m_JournalBase) / c_JournalSegmentFrames * c_JournalSegmentFrames; };
+		const uint64_t first = std::min(fileStart(frame), fileStart(m_JournalLast));
+		if (first <= m_JournalFirst) return;
+		m_JournalFirst = first;
+		m_Journal->Prune(first);
+	}
+
 	bool NetWorldFrameLog::AdoptRecords(const NetWorldFrameLog& other) {
 		if (!m_Records.empty()) return false;
 		if (m_Round != 0 && std::any_of(other.m_Records.begin(), other.m_Records.end(), [this](const Record& record) { return record.round != m_Round; })) return false;
@@ -1080,7 +1128,7 @@ namespace RTE {
 
 	void NetWorldFrameLog::Clear() {
 		m_Journal.reset();
-		m_JournalFirst = m_JournalLast = 0;
+		m_JournalBase = m_JournalFirst = m_JournalLast = 0;
 		m_Records.clear();
 		m_Bytes = 0;
 		m_Evicted = 0;

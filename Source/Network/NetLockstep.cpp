@@ -7072,7 +7072,8 @@ namespace RTE {
 		const bool heldSeatMayReturn = host && !m_AiHeldSeats.empty();
 		std::erase_if(m_TimingDecisions, [&](const auto& entry) {
 			const auto& decision = entry.second;
-			if (heldSeatMayReturn && (decision.proposal.phase == NetTimingPhase::HoldAtFrame || decision.proposal.phase == NetTimingPhase::ReclaimAtFrame)) return false;
+			if (heldSeatMayReturn && (decision.proposal.phase == NetTimingPhase::HoldAtFrame || decision.proposal.phase == NetTimingPhase::ReclaimAtFrame) &&
+			    decision.proposal.applyFrame >= m_ReturnHistoryFloor) return false;
 			if (!DecisionSettled(decision)) return false;
 			m_SettledTimings[entry.first] = decision.proposal;
 			return true;
@@ -9013,6 +9014,7 @@ namespace RTE {
 		FlushTimingOutgoing();
 		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
 		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
+		if (completedTick % 60 == 0) PruneSeatTransitions(completedTick);
 		if (IsRunning() && !m_Playback && IsSynchronizedCapturePark(completedTick)) {
 			m_ParkFrameSimulated = completedTick;
 			m_ParkFrameSimulatedMs = m_TimingNowMs != 0 ? m_TimingNowMs : NetLockstepNowMs();
@@ -9538,6 +9540,16 @@ namespace RTE {
 			return false;
 		}
 		return FirstAliveHumanPeerForTeam(team, frame) == 0 && !IsRunning() && !IsHoldingSeatForReclaim();
+	}
+
+	void NetLockstepCoordinator::PruneSeatTransitions(uint64_t completedTick) {
+		if (completedTick <= c_SeatTransitionHistoryFrames) return;
+		const uint64_t cut = completedTick - c_SeatTransitionHistoryFrames;
+		for (auto& [peer, seat]: m_SeatTransitions) {
+			auto newest = seat.upper_bound(cut);
+			if (newest == seat.begin()) continue;
+			seat.erase(seat.begin(), std::prev(newest));
+		}
 	}
 
 	std::optional<NetLockstepCoordinator::SeatTransition> NetLockstepCoordinator::SeatStateBeforeNewest(uint8_t peer, uint64_t frame) const {

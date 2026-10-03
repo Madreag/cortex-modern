@@ -212,6 +212,7 @@ namespace RTE {
 	public:
 		static constexpr size_t c_DefaultMaxFrames = 3600;              //!< A minute of 60 Hz ticks.
 		static constexpr uint64_t c_DefaultMaxBytes = 32ULL * 1024 * 1024;
+		static constexpr size_t c_JournalSegmentFrames = 3600;          //!< The journal's frames per file; the oldest go a file at a time.
 
 		/// The frames a peer's record of its round keeps: the slow-player bound, the delay margin and one capture interval of frames.
 		static size_t RingFrames(uint32_t boundTicks, uint32_t delayMarginFrames, uint64_t captureIntervalMs, double tickMs);
@@ -238,6 +239,8 @@ namespace RTE {
 		size_t CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* lastCopied = nullptr) const;
 		/// Forgets everything at or before the frame every live bootstrap has applied.
 		void DropThrough(uint64_t frame);
+		/// Lets the journal go below the oldest frame anyone may still be served from, a whole file at a time.
+		void PruneJournalBefore(uint64_t frame);
 		/// Takes another log's records as this empty log's own, bounded as this log is. False when this log already holds a record
 		/// or one of them belongs to another round than this log's.
 		bool AdoptRecords(const NetWorldFrameLog& other);
@@ -253,7 +256,7 @@ namespace RTE {
 		void Trim();
 		struct Journal;
 		std::shared_ptr<Journal> m_Journal;
-		uint64_t m_JournalFirst = 0, m_JournalLast = 0;
+		uint64_t m_JournalBase = 0, m_JournalFirst = 0, m_JournalLast = 0; //!< Base: its first file's first frame, where every file boundary is counted from.
 
 		std::deque<Record> m_Records;
 		size_t m_MaxFrames = c_DefaultMaxFrames;

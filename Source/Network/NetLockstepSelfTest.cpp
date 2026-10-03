@@ -77,6 +77,8 @@ namespace RTE {
 	bool TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(std::string* error);
 	bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error);
 	bool TestAReturnCopyKeepsTheCommittedObservations(std::string* error);
+	bool TestOldSeatTransitionsAreLetGo(std::string* error);
+	bool TestOldHoldDecisionsGoBelowTheReturnFloor(std::string* error);
 	bool TestAReturnersRoundSkipsTheRoundsEarlierTicks(std::string* error);
 	bool TestAReturnedSeatThatLeavesAgainIsGone(std::string* error);
 	bool TestARoundsOwnEndIsNoHold(std::string* error);
@@ -20459,6 +20461,67 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A long round keeps its seat transitions only as far back as its simulation can still ask: the newest at the cut stands for the
+	// ones before it, and every frame the simulation still reads answers as it did.
+	bool TestOldSeatTransitionsAreLetGo(std::string* error) {
+		using Transition = NetLockstepCoordinator::SeatTransition;
+		NetLockstepCoordinator coordinator;
+		coordinator.NoteSeatTransition(2, 100, Transition::Held);
+		coordinator.NoteSeatTransition(2, 200, Transition::Back);
+		coordinator.NoteSeatTransition(2, 5000, Transition::Held);
+		coordinator.NoteSeatTransition(3, 300, Transition::Left);
+		const auto readings = [&] {
+			return std::vector<int>{static_cast<int>(coordinator.SeatStateBeforeNewest(2, 4500).value_or(Transition::Left)), coordinator.IsSeatHoldGap(2, 5001) ? 1 : 0,
+			                        coordinator.SeatStateBeforeNewest(3, 4500).has_value() ? 1 : 0};
+		};
+		const std::vector<int> before = readings();
+		coordinator.PruneSeatTransitions(8000);
+		size_t kept = 0;
+		for (const auto& [peer, seat]: coordinator.m_SeatTransitions) kept += seat.size();
+		if (kept != 3 || coordinator.m_SeatTransitions[2].contains(100) || readings() != before) {
+			*error = "a round's seat transitions from far behind its simulation stayed or changed a reading: " + std::to_string(kept) + " kept of 4, the hold at 100 " +
+			         (coordinator.m_SeatTransitions[2].contains(100) ? "kept" : "gone");
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS old_seat_transitions_are_let_go kept=" << kept << " cut=" << 8000 - NetLockstepCoordinator::c_SeatTransitionHistoryFrames << std::endl;
+		return true;
+	}
+
+	// While a seat is held the host keeps the hold and return decisions a returner's start is answered with, but only those a returner can
+	// still be served across: an older one is in every base it can get.
+	bool TestOldHoldDecisionsGoBelowTheReturnFloor(std::string* error) {
+		LoopbackTransport wire, seat;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A31, 4, NetTransportLane::InputUnreliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 61; config.timeoutMs = 5000;
+		config.remoteTransportPeerIds = {{2, 1}};
+		if (!wire.StartHost(48937, error) || !seat.Connect("loopback", 48937, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_AiHeldSeats[2] = 4500;
+		host.m_LastCompletedSimulationTick = 6000;
+		const auto decide = [&](uint64_t revision, NetTimingPhase phase, uint64_t applyFrame) {
+			NetLockstepTiming proposal;
+			proposal.revision = revision; proposal.phase = phase; proposal.applyFrame = applyFrame; proposal.peerId = 2; proposal.requiredPeers = 0x01;
+			host.m_TimingDecisions[revision] = {proposal, 0x03, true, 0};
+		};
+		decide(1001, NetTimingPhase::HoldAtFrame, 100);
+		decide(1002, NetTimingPhase::ReclaimAtFrame, 200);
+		decide(1003, NetTimingPhase::HoldAtFrame, 4500);
+		host.TickTiming(10);
+		const bool keptWhileHeld = host.m_TimingDecisions.contains(1001) && host.m_TimingDecisions.contains(1002) && host.m_TimingDecisions.contains(1003);
+		host.SetReturnHistoryFloor(4000);
+		host.TickTiming(600);
+		const bool letGo = !host.m_TimingDecisions.contains(1001) && !host.m_TimingDecisions.contains(1002) && host.m_SettledTimings.contains(1001) && host.m_SettledTimings.contains(1002);
+		if (!keptWhileHeld || !letGo || !host.m_TimingDecisions.contains(1003)) {
+			*error = std::string("the host's hold and return decisions while a seat is held: ") + (keptWhileHeld ? "kept" : "dropped") +
+			         " with no floor, and below a return floor of 4000 the decisions at 100 and 200 " + (letGo ? "let go" : "stayed") +
+			         ", the hold at 4500 " + (host.m_TimingDecisions.contains(1003) ? "kept" : "dropped");
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS old_hold_decisions_go_below_the_return_floor kept=1 settled=2" << std::endl;
+		return true;
+	}
+
 	bool TestAReturnerOnTheReliableLaneHearsItsHost(std::string* error) {
 		LoopbackTransport wire, seat;
 		NetLockstepCoordinator host;
@@ -23267,6 +23330,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAHeldSeatHearsItsHostUntilItsCatchUpOpens(&error) ||
 		    !TestAReturnerOnTheReliableLaneHearsItsHost(&error) ||
 		    !TestAReturnCopyKeepsTheCommittedObservations(&error) ||
+		    !TestOldSeatTransitionsAreLetGo(&error) ||
+		    !TestOldHoldDecisionsGoBelowTheReturnFloor(&error) ||
 		    !TestAReturnersRoundSkipsTheRoundsEarlierTicks(&error) ||
 		    !TestAReturnedSeatThatLeavesAgainIsGone(&error) ||
 		    !TestARoundsOwnEndIsNoHold(&error) ||

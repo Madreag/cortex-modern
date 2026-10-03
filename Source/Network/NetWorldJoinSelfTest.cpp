@@ -3426,6 +3426,83 @@ namespace RTE {
 		return 0;
 	}
 
+	// A long round's journal keeps a file of frames at a time back to the oldest frame anyone may still be served from: what the floor
+	// keeps reads back exactly, the files below it go, and the end of the round leaves none.
+	int TestCommittedTailJournalPrunes() {
+		ResumeScratchDirectory scratch;
+		const auto path = scratch.path / "committed.inputs";
+		const auto files = [&] {
+			size_t count = 0;
+			for (const auto& entry: std::filesystem::directory_iterator(scratch.path))
+				if (entry.path().filename().string().starts_with("committed.inputs")) ++count;
+			return count;
+		};
+		NetWorldFrameLog log;
+		log.Configure(2, 1024 * 1024);
+		log.EnableJournal(path.string());
+		std::string error;
+		const uint64_t perFile = NetWorldFrameLog::c_JournalSegmentFrames;
+		for (uint64_t tick = 1; tick <= 3 * perFile; ++tick) if (!log.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+		const auto settle = [&](auto&& done) {
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+			while (!done() && std::chrono::steady_clock::now() < deadline && !log.JournalFailed()) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			return done();
+		};
+		if (!settle([&] { return files() == 3; })) return Fail("the journal wrote " + std::to_string(files()) + " files for three files of frames");
+		const uint64_t firstKept = 2 * perFile + 1;
+		log.PruneJournalBefore(firstKept + 99);
+		if (log.FirstServableFrame() != firstKept || log.Covers(firstKept - 1) || !log.Covers(firstKept) || !settle([&] { return files() == 1; }))
+			return Fail("below a floor of " + std::to_string(firstKept + 99) + " the journal still serves from " + std::to_string(log.FirstServableFrame()) + " and keeps " +
+			            std::to_string(files()) + " of 3 files");
+		std::vector<std::vector<uint8_t>> records;
+		if (!settle([&] { return log.CopyFrom(firstKept, 8, 1024 * 1024, records) != 0; }) || records.size() != 8) return Fail("the kept file did not read back its frames");
+		for (size_t index = 0; index < records.size(); ++index) {
+			NetLockstepFrame frame;
+			if (!DecodeCommittedJoinFrame(records[index], frame, &error) || frame != MakeCommittedFrame(firstKept + index)) return Fail("a kept frame differs from the committed one: " + error);
+		}
+		log.Clear();
+		if (!settle([&] { return files() == 0; })) return Fail("the ended round left " + std::to_string(files()) + " journal files");
+		std::cout << "[net-world-join-selftest] PASS committed_tail_journal_prunes files=3->1 first_servable=" << firstKept << std::endl;
+		return 0;
+	}
+
+	// The oldest frame a returner arriving now may be served from: the base it would get, each return under way, each recent hold.
+	int TestTheReturnHistoryFloor() {
+		const double tickMs = 1000.0 / 60.0;
+		std::vector<NetWorldJoinSession> sessions;
+		std::map<uint8_t, NetGameSeatHold> holds;
+		const auto floor = [&](uint64_t tick, std::optional<uint64_t> base) { return NetMatchService::ReturnHistoryFloor(tick, base, sessions, holds, tickMs); };
+		std::vector<std::string> wrong;
+		const auto expect = [&](const char* what, uint64_t got, uint64_t want) {
+			if (got != want) wrong.push_back(std::string(what) + " " + std::to_string(got) + " not " + std::to_string(want));
+		};
+		expect("nothing to serve", floor(50000, std::nullopt), 50001);
+		expect("a served base", floor(50000, 30000), 30001);
+		NetWorldJoinSession returning;
+		returning.phase = NetWorldJoinPhase::CatchingUp;
+		returning.snapshotTick = 30000;
+		returning.acknowledgedThrough = 41000;
+		NetWorldJoinSession waiting;
+		waiting.phase = NetWorldJoinPhase::Authenticating;
+		NetWorldJoinSession active = returning;
+		active.phase = NetWorldJoinPhase::Active;
+		active.acknowledgedThrough = 100;
+		sessions = {returning, waiting, active};
+		expect("a return under way", floor(50000, std::nullopt), 41001);
+		sessions.clear();
+		holds[2].cutoffFrame = 49000;
+		expect("a recent hold", floor(50000, std::nullopt), 49000 - NetLockstepCodec::c_MaxFutureFrameSkew);
+		const auto window = static_cast<uint64_t>(std::ceil(NetMatchService::c_InPlaceReturnWindowMs / tickMs));
+		expect("a hold past the in-place window", floor(49000 + window, std::nullopt), 49000 + window + 1);
+		if (!wrong.empty()) {
+			std::string joined;
+			for (const std::string& line: wrong) joined += (joined.empty() ? "" : "; ") + line;
+			return Fail("the return history floor read " + joined);
+		}
+		std::cout << "[net-world-join-selftest] PASS the_return_history_floor in_place_window_frames=" << window << std::endl;
+		return 0;
+	}
+
 	int TestPrivateNeutralPrelude() {
 		LoopbackTransport transport;
 		NetLockstepCoordinator coordinator;
@@ -8548,6 +8625,8 @@ namespace RTE {
 		if (const int result = TestAnEarlierRoundsTailChunkIsDropped(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
+		if (const int result = TestCommittedTailJournalPrunes(); result != 0) return result;
+		if (const int result = TestTheReturnHistoryFloor(); result != 0) return result;
 		if (const int result = TestEveryPeersRecordServesTheHostsTail(); result != 0) return result;
 		{
 			std::string error;

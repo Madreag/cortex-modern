@@ -443,6 +443,8 @@ namespace RTE {
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		/// A completed tick's committed frame joins the catch-up history a returner replays; a paused tick's too.
 		void AppendCommittedJoinFrame(uint64_t tick);
+		/// Lets the round's return history go below the oldest frame a returner may still be served from.
+		void PruneReturnHistory(uint64_t tick);
 		void AutosaveAtTickBoundary(uint64_t tick);
 		bool CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory, const std::string& label = "");
 		/// One entry of the checkpoint schedule on the committed stream.
@@ -834,6 +836,11 @@ namespace RTE {
 		/// Ends the joiner's catch-up the moment its own coordinator runs: the round owns the wire and
 		/// the pacing from there. Returns whether this call released it.
 		static bool ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp);
+		static constexpr double c_InPlaceReturnWindowMs = 300000.0; //!< How long after its hold a seat may still come back holding its own state.
+		/// The oldest frame a returner arriving now could be served from, from its parts: the base it would get (none when it would take a new
+		/// one), the returns under way and the holds.
+		static uint64_t ReturnHistoryFloor(uint64_t tick, std::optional<uint64_t> servedBaseTick, const std::vector<NetWorldJoinSession>& sessions,
+		                                   const std::map<uint8_t, NetGameSeatHold>& holds, double tickMs);
 		static bool ReadCommittedJoinFrame(const NetLockstepCoordinator& coordinator, uint64_t tick, NetLockstepReadyFrame& ready);
 		/// The image one finished archive describes. An entry the writer has not filled yields an
 		/// image that is not valid, so nothing is published for it.
@@ -1831,6 +1838,8 @@ namespace RTE {
 		std::deque<double> m_PrivateCaptureCosts; //!< Host: the last three capture costs past the round's first, which the refresh rule reads.
 		bool m_PrivateCaptureCold = false; //!< Host: the capture in flight is the round's first, whose one-time warm-up is not the steady cost.
 		static constexpr uint64_t c_PrivateImageMinIntervalMs = 10000; //!< The shortest wall gap between two captures.
+		/// The oldest frame a returner arriving now could be served from: the base it would get, every return under way, every recent hold.
+		uint64_t ReturnHistoryFloorLocked(uint64_t tick, uint64_t nowMs) const;
 		static constexpr uint64_t c_PrivateImageWaitMs = 20000; //!< How long a returning seat waits on one capture's writer.
 		bool m_PrivateImageRecapture = false; //!< Host: the next pass takes a fresh base; the stuck writer was abandoned.
 		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.
