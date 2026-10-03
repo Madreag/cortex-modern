@@ -220,6 +220,10 @@ namespace RTE {
 
 		// Test harness: splits the requested RTT across the send/recv legs of every connection, and adds its jitter.
 		void ApplySimulatedLag() {
+			// A headless harness run's packets carry their send spacing, which plain UDP leaves out, so the receiving end's own
+			// latency-variance histogram measures the jitter its link meets.
+			static const bool s_HarnessRun = [] { const char* headless = std::getenv("CCCP_HEADLESS"); return headless && std::string_view(headless) == "1"; }();
+			if (s_HarnessRun) SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, 1);
 			if (s_SimulatedLagMs > 0) {
 				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, s_SimulatedLagMs / 2);
 				SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, s_SimulatedLagMs - s_SimulatedLagMs / 2);
