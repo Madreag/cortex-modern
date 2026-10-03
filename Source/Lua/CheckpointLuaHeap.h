@@ -45,6 +45,16 @@ namespace RTE::CheckpointLua {
 
 	class HeapOwner;
 
+	/// What one freeze's page copy cost, as it landed: its pages and bytes, the copy's own time, the copy buffer it had
+	/// to map fresh (every page of that is a first-touch fault), and how long after the freeze began the copy landed.
+	struct CopyReceipt {
+		uint64_t generation = 0; // 0: no copy landed since the last one taken.
+		size_t pages = 0;
+		int64_t copyUs = 0;
+		size_t freshBytes = 0;
+		int64_t landedUs = 0;
+	};
+
 	// The VM's memory at one freeze: a page table over copies, shared with the freezes before it for
 	// every page nothing wrote in between. Addresses identify the source VM; only the copies are read.
 	class Snapshot {
@@ -248,9 +258,12 @@ namespace RTE::CheckpointLua {
 			data->serial = G(m_State)->objserial;
 			data->base = m_Base;
 			data->committed = m_Committed;
-			auto copy = [this, data] {
+			auto copy = [this, data, started] {
 				try {
+					m_FreshBytes = 0;
 					CopyWrittenPages(*data);
+					std::lock_guard lock(m_CopyMutex);
+					m_LandedCopy = {++m_LandedGeneration, data->copied.load(std::memory_order_relaxed), data->copyUs.load(std::memory_order_relaxed), m_FreshBytes, MicrosecondsSince(started)};
 				} catch (...) {
 					// The kernel's bits may be spent already, so the next freeze copies every page again.
 					m_CopyEverything = true;
@@ -304,6 +317,12 @@ namespace RTE::CheckpointLua {
 		/// Microseconds any thread has spent waiting at a gate for a copy, summed over every heap.
 		static int64_t GateWaitMicroseconds() { return GateWaitUs().load(std::memory_order_relaxed); }
 
+		/// The receipt of the copy that landed last, once; call it after the gate.
+		CopyReceipt TakeCopyReceipt() {
+			std::lock_guard lock(m_CopyMutex);
+			return std::exchange(m_LandedCopy, {});
+		}
+
 	private:
 		static constexpr size_t c_ReserveBytes = size_t(1) << 32; // Address space only; committed as the VM grows.
 		static constexpr size_t c_CommitStep = size_t(1) << 20;
@@ -352,6 +371,9 @@ namespace RTE::CheckpointLua {
 		uint64_t m_CopyGeneration = 0;
 		std::atomic<bool> m_CopyPending{false};
 		bool m_CopyEverything = false;
+		size_t m_FreshBytes = 0; // The copy task's own: what its buffers mapped fresh.
+		uint64_t m_LandedGeneration = 0;
+		CopyReceipt m_LandedCopy; // Under m_CopyMutex.
 		static std::atomic<int64_t>& GateWaitUs() {
 			static std::atomic<int64_t> waited{0};
 			return waited;
@@ -392,6 +414,7 @@ namespace RTE::CheckpointLua {
 				slab->capacity = pooled ? pages + pages / 4 : pages;
 				slab->pages = static_cast<Snapshot::Page*>(MapPages(slab->capacity * Snapshot::c_PageBytes));
 				if (!slab->pages) throw std::runtime_error("could not map a Lua heap copy");
+				m_FreshBytes += slab->capacity * Snapshot::c_PageBytes;
 				CopyBytes(false).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 			}
 			m_LiveSlabs.fetch_add(1, std::memory_order_relaxed);

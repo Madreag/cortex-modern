@@ -7486,6 +7486,10 @@ void LuaStateWrapper::WaitFrozenCopy() {
 	if (m_CheckpointHeap) m_CheckpointHeap->WaitCopy();
 }
 
+CheckpointLua::CopyReceipt LuaStateWrapper::TakeFrozenCopyReceipt() {
+	return m_CheckpointHeap ? m_CheckpointHeap->TakeCopyReceipt() : CheckpointLua::CopyReceipt{};
+}
+
 void LuaStateWrapper::Destroy() {
 	ReportPreviewBarrierStats();
 	if (!m_State) {
@@ -12272,10 +12276,31 @@ void LuaMan::Update() {
 	m_MasterScriptState.WaitFrozenCopy();
 	for (LuaStateWrapper& luaState: m_ScriptStates) luaState.WaitFrozenCopy();
 	static int64_t reportedGateWaitUs = 0;
-	if (const int64_t gateWaitUs = CheckpointLua::HeapOwner::GateWaitMicroseconds(); gateWaitUs != reportedGateWaitUs) {
+	const int64_t gateWaitUs = CheckpointLua::HeapOwner::GateWaitMicroseconds();
+	if (gateWaitUs != reportedGateWaitUs) {
 		System::PrintDiagnosticLine(std::format("[autosave-gate] tick={} waited_us={}\n", g_TimerMan.GetSimUpdateCount(), gateWaitUs - reportedGateWaitUs));
-		reportedGateWaitUs = gateWaitUs;
 	}
+	// What the last capture's page copies cost, once they have all landed: the gate's wait is their tail past the tick's start.
+	size_t copiedStates = 0, copiedPages = 0, freshBytes = 0;
+	int64_t copyUsSum = 0, copyUsMax = 0, landedUsMax = 0;
+	const auto addReceipt = [&](LuaStateWrapper& state) {
+		const CheckpointLua::CopyReceipt receipt = state.TakeFrozenCopyReceipt();
+		if (receipt.generation == 0) return;
+		++copiedStates;
+		copiedPages += receipt.pages;
+		freshBytes += receipt.freshBytes;
+		copyUsSum += receipt.copyUs;
+		copyUsMax = std::max(copyUsMax, receipt.copyUs);
+		landedUsMax = std::max(landedUsMax, receipt.landedUs);
+	};
+	addReceipt(m_MasterScriptState);
+	for (LuaStateWrapper& luaState: m_ScriptStates) addReceipt(luaState);
+	if (copiedStates != 0) {
+		System::PrintDiagnosticLine(std::format("[heap-copy] tick={} states={} pages={} bytes={} copy_us_sum={} copy_us_max={} landed_after_freeze_us_max={} fresh_mapped_bytes={} gate_waited_us={}\n",
+		    g_TimerMan.GetSimUpdateCount(), copiedStates, copiedPages, copiedPages * CheckpointLua::Snapshot::c_PageBytes, copyUsSum, copyUsMax, landedUsMax, freshBytes,
+		    gateWaitUs - reportedGateWaitUs));
+	}
+	reportedGateWaitUs = gateWaitUs;
 
 	m_MasterScriptState.Update();
 	for (LuaStateWrapper& luaState: m_ScriptStates) {

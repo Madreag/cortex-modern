@@ -22,7 +22,7 @@
 struct lua_State;
 
 namespace RTE {
-	namespace CheckpointLua { class HeapOwner; class NativeCache; }
+	namespace CheckpointLua { class HeapOwner; class NativeCache; struct CopyReceipt; }
 
 	/// What one frozen script graph capture cost on the simulation thread, summed over the states.
 	struct FrozenCaptureStats {
@@ -275,6 +275,8 @@ namespace RTE {
 		bool FrozenCaptureAvailable() const { return !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed); }
 		/// Blocks until the last frozen capture's page copy has landed; the VM may write its heap again after this.
 		void WaitFrozenCopy();
+		/// What that copy cost, once, after the gate; generation 0 when no copy landed since the last call.
+		CheckpointLua::CopyReceipt TakeFrozenCopyReceipt();
 		/// Captures every state off a frozen image, the states side by side; false when any state could not freeze.
 		/// whileWaiting runs on the calling thread once the master state is captured, while the pool captures the rest.
 		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting = {});
