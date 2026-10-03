@@ -218,7 +218,9 @@ namespace RTE {
 
 	void FrameRecorder::RecordEvent(const std::string& message) {
 		if (!m_Enabled) return;
-		m_Events << nlohmann::json({{"wall_ms", SteadyNowMS()}, {"message", message}}).dump() << '\n' << std::flush;
+		const std::string row = nlohmann::json({{"wall_ms", SteadyNowMS()}, {"message", message}}).dump();
+		std::lock_guard<std::mutex> lock(m_EventsMutex);
+		if (m_Events.is_open()) m_Events << row << '\n' << std::flush;
 	}
 
 	// Called with the lock held; the pacer is the render thread's alone.
@@ -435,7 +437,10 @@ namespace RTE {
 		WriteManifest();
 		m_Index.close();
 		m_DroppedIndex.close();
-		m_Events.close();
+		{
+			std::lock_guard<std::mutex> lock(m_EventsMutex);
+			m_Events.close();
+		}
 		m_Enabled = false;
 	}
 

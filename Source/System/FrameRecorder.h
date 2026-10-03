@@ -106,6 +106,7 @@ namespace RTE {
 		std::ofstream m_Index;
 		std::ofstream m_DroppedIndex; //!< One row per frame slot the full queue turned away, written by the writer thread.
 		std::ofstream m_Events;
+		std::mutex m_EventsMutex; //!< The event index has one owner at a time: the menu thread and every writer thread log to it.
 
 		long long m_StartedWallMS = 0;
 		long long m_EndedWallMS = 0;

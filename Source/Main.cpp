@@ -3146,6 +3146,34 @@ static bool RunFrameRecorderSelfTest() {
 	if (refuser.Start(paced.string(), 30, &error)) return FrameRecorderSelfTestFail("a non-empty directory was accepted");
 	if (error.find(paced.string()) == std::string::npos) return FrameRecorderSelfTestFail("the refusal does not name the directory: " + error);
 
+	// Every thread that logs an event - the menu's and each writer's - leaves whole lines, all of them, in the event index.
+	const std::filesystem::path logged = scratch / "events";
+	if (!std::filesystem::create_directory(logged, code) || code) return FrameRecorderSelfTestFail("could not create " + logged.string());
+	{
+		FrameRecorder eventRecorder;
+		if (!eventRecorder.Start(logged.string(), 5, &error)) return FrameRecorderSelfTestFail("the event recorder refused to start: " + error);
+		constexpr int c_Threads = 8;
+		constexpr int c_PerThread = 2000;
+		std::vector<std::thread> loggers;
+		for (int thread = 0; thread < c_Threads; ++thread) {
+			loggers.emplace_back([&eventRecorder, thread] {
+				for (int event = 0; event < c_PerThread; ++event) eventRecorder.RecordEvent("thread " + std::to_string(thread) + " event " + std::to_string(event) + " " + std::string(64, 'x'));
+			});
+		}
+		for (std::thread& logger: loggers) logger.join();
+		eventRecorder.Finish();
+		std::ifstream events(logged / "events.jsonl");
+		std::size_t whole = 0, torn = 0;
+		for (std::string line; std::getline(events, line);) {
+			const nlohmann::json parsed = nlohmann::json::parse(line, nullptr, false);
+			(parsed.is_discarded() || !parsed.contains("message") ? torn : whole) += 1;
+		}
+		if (whole != static_cast<std::size_t>(c_Threads * c_PerThread) || torn != 0) {
+			return FrameRecorderSelfTestFail("events logged from " + std::to_string(c_Threads) + " threads at once left " + std::to_string(whole) + " whole lines of " +
+			                                 std::to_string(c_Threads * c_PerThread) + " and " + std::to_string(torn) + " torn");
+		}
+	}
+
 	std::filesystem::remove_all(scratch, code);
 	{
 		std::ostringstream line;
