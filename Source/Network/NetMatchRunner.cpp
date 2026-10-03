@@ -181,8 +181,11 @@ namespace RTE {
 		NetReconnectClient* reconnect = session.GetReconnectClient();
 		if (!reconnect) return true;
 		std::string why;
+		const auto asked = std::chrono::steady_clock::now();
+		bool waited = false;
 		if (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why)) {
 			// A revision this peer never heard - a full send queue lost it - is asked for by number; the host answers from what it published.
+			waited = true;
 			reconnect->RequestRosterRevision(m_MatchConfig.seatRosterRevision);
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(c_RosterRevisionWaitMs);
 			while (!reconnect->GetRosterReplica().AgreesAt(m_MatchConfig.seatRosterRevision, m_MatchConfig.seatRosterHash, &why) && std::chrono::steady_clock::now() < deadline) {
@@ -196,7 +199,9 @@ namespace RTE {
 			return false;
 		}
 		m_RosterAgreedRevision = m_MatchConfig.seatRosterRevision;
-		DiagnosticLine() << "[net-match] seat roster revision " << m_MatchConfig.seatRosterRevision << " agreed" << std::endl;
+		DiagnosticLine() << "[net-match] seat roster revision " << m_MatchConfig.seatRosterRevision << " agreed"
+		                 << (waited ? " after asking for it, " + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - asked).count()) + " ms" : std::string())
+		                 << std::endl;
 		return true;
 	}
 
