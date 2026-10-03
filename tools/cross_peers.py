@@ -885,7 +885,8 @@ def run_payload(path):
                     if not spec.get('preserve_evidence'):
                         readers[peer].compress_consumed()
                     acceptance_cross.observe_soak(spec, run, now)
-                    capture_sealers[peer].poll()
+                    if not spec.get('preserve_evidence'):
+                        capture_sealers[peer].poll()
                     if effects := effect_readers[peer].poll(observed_at):
                         effect_rows[peer]+=effects
                         write_json(Path(spec['own'])/'h4-effects.json',effect_rows[peer])
@@ -927,7 +928,8 @@ def run_payload(path):
                                 raise RuntimeError(f'{peer}: host termination was not observed')
                             write_json(Path(spec['own']) / 'record.json', record)
                             retain_checkpoints(run, spec, final=True)
-                            seal_evidence(spec['own'])
+                            if not spec.get('preserve_evidence'):
+                                seal_evidence(spec['own'])
                             completed.add(peer)
                             continue
                         if leaving and record.get('exit_code') == 0:
@@ -936,7 +938,8 @@ def run_payload(path):
                                 dict(action='announced-leave-rejoin', process_exited=True, exit_code=record['exit_code']))
                         write_json(Path(spec['own']) / 'record.json', record)
                         retain_checkpoints(run, spec, final=True)
-                        seal_evidence(spec['own'])
+                        if not spec.get('preserve_evidence'):
+                            seal_evidence(spec['own'])
                         new_spec = restart_spec(spec, current)
                         new_spec['recovery_starts']=recovery_ledgers[peer].restart_inputs(new_spec['incarnation'])
                         render = new_spec['flags'].index('-feel-render-settings') + 1

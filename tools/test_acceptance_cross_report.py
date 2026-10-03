@@ -4,10 +4,15 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from acceptance_cross_report import build_report, native_prerequisites
+from acceptance_cross_report import build_report, native_prerequisites, refusal_log_excerpt
 
 
 class CrossReceiptReport(unittest.TestCase):
+    def test_refusal_report_does_not_copy_connection_details(self):
+        text = '[net-session] admission refused reason=ModuleManifestMismatch endpoint=fixture-private-endpoint\n'
+        self.assertEqual(refusal_log_excerpt(text), 'ModuleManifestMismatch')
+        self.assertEqual(refusal_log_excerpt('[net-session] admission accepted'), '')
+
     def native(self):
         native = dict(exit_code=0, setup_error="", runtime_error="",
                       desync_check=dict(mismatches=0, compares=40, compare_margin=1),

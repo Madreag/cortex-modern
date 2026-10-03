@@ -40,6 +40,11 @@ def native_labels(own):
     return "\n".join(texts)
 
 
+def refusal_log_excerpt(text):
+    """Only the native refusal name belongs in the report; the full log stays retained."""
+    return "\n".join(re.findall(r"\bModuleManifestMismatch\b", text))
+
+
 ENGINE_FINDING = re.compile(
     r"RTE Assert|FATAL:|EXCEPTION_ACCESS_VIOLATION|Runtime Error due to unhandled exception|Rejected .*command|"
     r"\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|"
@@ -146,7 +151,8 @@ def build_report(root):
         try: joined = any(r.get("phase") == "live" for r in rows(documents["linux"]))
         except FileNotFoundError: joined = False
         facts["refusal"] = dict(**mutation, joiner="linux", altered_box="linux", restored=restored.get("tree_sha256"),
-                                log_text=logs["linux"], landing_text=native_labels(own), joined=joined,
+                                log_text=refusal_log_excerpt(logs["linux"]), log_evidence=str(own/"engine/stdout.log"),
+                                landing_text=native_labels(own), joined=joined,
                                 refusal_tick=load(root/"late-join-released.json", {}).get("host_tick"),
                                 survivors=["pc", "edith", "mac"])
     if row == "world-soak":
