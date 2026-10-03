@@ -549,6 +549,8 @@ def peer_settings(run: dict, peer: dict, port: int, pin: str, login: tuple[str, 
                 'NetworkDisplayName': display_name(run, peer)}
     if peer['name'] == 'host':
         settings['NetworkHostRelayMode'] = run['host_relay_mode']
+        if not run.get('record_replay', True):
+            settings['NetworkRecordReplays'] = '0'
         if run['host_relay_mode'] == 'Fixed':
             user, secret = login
             settings.update(NetworkTurnServers=','.join(run.get('relay_urls') or COTURN_URLS), NetworkTurnUser=user, NetworkTurnPass=secret)
@@ -566,8 +568,8 @@ def build_specs(h, run: dict, root: Path, ports: dict, boxes: dict[str, Box], pi
     humans = str(len(run['peers']))
     for peer in run['peers']:
         box = boxes[peer['box']]
-        role = (['-net-host', '-net-replay-out', str(root / 'match.ccreplay'), '-net-ice', 'on'] if peer['name'] == 'host'
-                else ['-net-join-session', '{SESSION}', '-net-ice', 'on'])
+        recording = ['-net-replay-out', str(root / 'match.ccreplay')] if run.get('record_replay', True) else []
+        role = (['-net-host', *recording, '-net-ice', 'on'] if peer['name'] == 'host' else ['-net-join-session', '{SESSION}', '-net-ice', 'on'])
         spec = match_spec(peer['name'], root, ports[peer['name']], role, peer_settings(run, peer, ports['directory'], pin, login),
                           repo=box.tree, ticks=ticks, timeout=run.get('timeout_s', 420))
         flags = spec['flags']
@@ -1092,6 +1094,9 @@ def main(argv=None) -> int:
     parser.add_argument('--alias', action='append', default=[], metavar='BOX=SSH', help="reach a box through another ssh alias (a laptop's tailnet name)")
     parser.add_argument('--ticks', type=int, default=MATCH_TICKS)
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--no-replay', action='store_true',
+                        help="diagnostic: the host records no replay (no -net-replay-out, NetworkRecordReplays off), to tell the replay's "
+                             "copy of a relay login from any other file an engine writes")
     parser.add_argument('--table', type=Path, nargs='+')
     parser.add_argument('--remote-peers')
     options = parser.parse_args(argv)
@@ -1124,6 +1129,8 @@ def main(argv=None) -> int:
         if options.run and run['name'] not in options.run:
             continue
         resolved = resolve_run(scenario, run, placement)
+        if options.no_replay:
+            resolved['record_replay'] = False
         try:
             verdicts.append(run_one(scenario, resolved, out, boxes, options.ticks, book))
         except Exception as error:
