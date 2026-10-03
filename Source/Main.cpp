@@ -3146,6 +3146,36 @@ static bool RunFrameRecorderSelfTest() {
 	if (refuser.Start(paced.string(), 30, &error)) return FrameRecorderSelfTestFail("a non-empty directory was accepted");
 	if (error.find(paced.string()) == std::string::npos) return FrameRecorderSelfTestFail("the refusal does not name the directory: " + error);
 
+	// A line writer behind a stalled disk holds its bound, drops the rest and says so in its own file, in order.
+	{
+		const std::filesystem::path bounded = scratch / "bounded.txt";
+		AsyncLineWriter writer(4, size_t{1} << 20);
+		if (!writer.Open(bounded.string())) return FrameRecorderSelfTestFail("the bounded writer could not open " + bounded.string());
+		std::promise<void> released;
+		std::shared_future<void> release = released.get_future().share();
+		std::promise<void> entered;
+		std::future<void> stalled = entered.get_future();
+		writer.WriteMade([release, &entered] { entered.set_value(); release.wait(); return std::string("stalled\n"); });
+		stalled.wait();
+		for (int line = 0; line < 10; ++line) writer.Write("line " + std::to_string(line));
+		const unsigned long long dropped = writer.Dropped();
+		released.set_value();
+		// The writer takes what waited, and the report of what it dropped, before anything newer queues.
+		writer.Flush();
+		writer.Write("after");
+		writer.Flush();
+		writer.Close();
+		std::ifstream in(bounded);
+		std::vector<std::string> lines;
+		for (std::string line; std::getline(in, line);) lines.push_back(line);
+		const std::vector<std::string> expected = {"stalled", "line 0", "line 1", "line 2", "line 3", "[async-writer] dropped 6 entries (42 bytes) while the disk fell behind", "after"};
+		if (dropped != 6 || lines != expected) {
+			std::string seen;
+			for (const std::string& line: lines) seen += "|" + line;
+			return FrameRecorderSelfTestFail("a line writer behind a stalled disk dropped " + std::to_string(dropped) + " and wrote " + seen);
+		}
+	}
+
 	// Every thread that logs an event - the menu's and each writer's - leaves whole lines, all of them, in the event index.
 	const std::filesystem::path logged = scratch / "events";
 	if (!std::filesystem::create_directory(logged, code) || code) return FrameRecorderSelfTestFail("could not create " + logged.string());

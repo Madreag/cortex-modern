@@ -906,7 +906,11 @@ bool RTEError::RunAssertPolicySelfTest() {
 	          << " worker_assert_reaches_dialog pending=" << pendingBefore << " boxes=" << boxesBefore
 	          << " after_dispatch pending=" << pendingAfter << " boxes=" << boxesAfter << std::endl;
 
-	const bool passed = dialogLeftUnfired && workerFired && ignoreAllFired && dispatched;
+	std::string consoleError;
+	const bool consoleBounded = System::RunConsoleQueueSelfTest(&consoleError);
+	if (!consoleBounded) std::cout << "[rteerror-selftest] FAIL console_queue_is_bounded " << consoleError << std::endl;
+
+	const bool passed = dialogLeftUnfired && workerFired && ignoreAllFired && dispatched && consoleBounded;
 	std::cout << "[rteerror-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
 }
