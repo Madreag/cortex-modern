@@ -92,7 +92,15 @@ def main():
     parser.add_argument('--rendezvous-log', type=int, default=0)
     parser.add_argument('--fullstate-every', type=int, default=0,
                         help='every N committed ticks each peer hashes its whole capture; a differing pair fails the run; 0 is off')
+    parser.add_argument('--host-box')
+    parser.add_argument('--client-box')
+    parser.add_argument('--inventory', type=Path)
+    parser.add_argument('--collection-root', type=Path)
+    parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
+    if args.host_box or args.client_box:
+        from acceptance_relay_pair import run
+        return run(args,'compare',Path(__file__).resolve().parents[2])
     if args.fullstate_every < 0:
         parser.error('--fullstate-every must be 0 or positive')
     if not all(49470 <= value <= 49499 for value in (args.port, args.game_port)):

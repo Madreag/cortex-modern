@@ -21,6 +21,7 @@ class MatrixPredicate(unittest.TestCase):
             root = Path(folder)
             (root / 'one').mkdir()
             (root / 'one/manifest.json').write_text(json.dumps(dict(launches_complete=True)))
+            (root / 'matrix-plan.json').write_text(json.dumps(dict(arms=['one'], matrix_group='all')))
             with patch.object(feel_measure, 'analyze', return_value=[result]), contextlib.redirect_stdout(io.StringIO()):
                 code = feel_measure.main(['--out', folder, '--analyze-only', '--skip-gates',
                                           '--port', '49700', '--port-block', '49700-49709'])

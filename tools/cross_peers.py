@@ -140,9 +140,10 @@ def schedule_for(options, peers, boxes):
     elif options.scenario == 'match':
         faults = []
     else:
-        remote_windows = next((p['name'] for p in peers if boxes[p['box']]['kind'] == 'windows-task'), peers[1]['name'])
-        posix = next((p['name'] for p in peers if boxes[p['box']]['kind'] == 'posix-ssh'), peers[-1]['name'])
         host=next(p['name'] for p in peers if p['name']==options.host or p['box']==options.host)
+        clients = [peer for peer in peers if peer['name'] != host]
+        remote_windows = next((p['name'] for p in clients if boxes[p['box']]['kind'] == 'windows-task'), clients[0]['name'])
+        posix = next((p['name'] for p in clients if boxes[p['box']]['kind'] == 'posix-ssh'), clients[-1]['name'])
         faults = [dict(id='edith-live-stall',tick=7200, peer=remote_windows, action='live-stall', duration_ms=600),
                   dict(id='mac-announced-rejoin',tick=14400, peer=posix, action='announced-leave-rejoin'),
                   dict(id='edith-crash-restart',tick=21600, peer=remote_windows, action='crash-restart'),
@@ -258,7 +259,8 @@ def make_plan(options):
                  'CC_TEST_CROSS_RECOVERIES': own + '/recoveries.json',
                  'CC_TEST_CROSS_BOT': own + '/bot.json', 'CC_TEST_CROSS_EVENT_RAW_LIMIT': str(64*1024**3)}, timeout=options.timeout, ticks=options.ticks,
             settings={}, roster=options.roster, scene=options.scene,
-            initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
+            # D1 changes the former EROL-PC host to Z13, preserving that host's workload settings.
+            initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' and hosts[0]['box'] != 'Z13' else 50,
             faults=[f for f in faults if f['peer'] == peer['name']], barriers=[b for b in barriers if b['peer']==peer['name']]))
         if getattr(options, 'keep_fullstate_sections', ''):
             specs[-1]['keep_fullstate_sections'] = [name for name in options.keep_fullstate_sections.split(',') if name]
@@ -276,7 +278,7 @@ def make_plan(options):
                 driver_tracked_changes=command(['git','-C',HERE.parent,'status','--porcelain','--untracked-files=no']).splitlines(),
                 driver_sources={str(path.relative_to(HERE)):digest_file(path) for path in
                     (HERE/'cross_peers.py',HERE/'cross_report.py',HERE/'feel/report.py',HERE/'feel/records.py')},
-                boxes=manifest['boxes'], instances=peers, specs=specs, host=host, ticks=options.ticks,
+                boxes=manifest['boxes'], driver=manifest.get('driver'), instances=peers, specs=specs, host=host, ticks=options.ticks,
                 scenario=options.scenario, acceptance_row={'match': 17, 'soak': 18, 'chaos': 19}[options.scenario],
                 acceptance_arm=getattr(options, 'acceptance_arm', None),
                 roster=options.roster, scene=options.scene, seed=options.seed,
@@ -306,9 +308,24 @@ def make_plan(options):
                              'peer_counts': 'NOT COVERED until netcode row 13 lands'})
 
 
+def coordinator(plan):
+    driver = plan.get('driver')
+    if driver:
+        if (driver.get('kind') != 'coordinator' or type(driver.get('directory_port')) is not int
+                or not 1 <= driver['directory_port'] <= 65535):
+            raise ValueError('the driver needs kind=coordinator and a valid directory_port')
+        if any(box['kind'] == 'windows-local' for box in plan['boxes']):
+            raise ValueError('a driver-only declaration cannot include a local game peer')
+        return driver
+    local = [box for box in plan['boxes'] if box['kind'] == 'windows-local']
+    if len(local) != 1:
+        raise ValueError('declare a separate coordinator when no game peer is windows-local')
+    return local[0]
+
+
 def dry_run(plan):
     print(json.dumps(plan, indent=2))
-    local = next(box for box in plan['boxes'] if box['kind'] == 'windows-local')
+    local = coordinator(plan)
     for box in plan['boxes']:
         root = str(PurePosixPath(box['scratch']) / plan['run'])
         if box['kind'] != 'windows-local':
@@ -448,7 +465,7 @@ def preflight_payload(path):
     repo = Path(box['tree'])
     content = content_manifest(repo)
     head = command(['git', '-C', repo, 'rev-parse', 'HEAD'], check=False).strip()
-    stamp_path = repo / 'tools/cross_peers/build.json'
+    stamp_path = Path(box.get('build_receipt') or repo / 'tools/cross_peers/build.json')
     build = json.loads(stamp_path.read_text(encoding='utf-8')) if stamp_path.is_file() else {}
     if sys.platform == 'win32':
         identity = command(['pwsh','-NoProfile','-Command','(Get-CimInstance Win32_ComputerSystemProduct).UUID']).strip()
@@ -1032,15 +1049,17 @@ def run_plan(plan, root):
     root.mkdir(parents=True, exist_ok=False)
     write_json(root / 'manifest.json', plan)
     boxes = {box['name']: box for box in plan['boxes']}
-    locals_ = [box for box in boxes.values() if box['kind'] == 'windows-local']
-    if len(locals_) != 1: raise ValueError('one coordinator box must be windows-local')
-    local = locals_[0]
+    local = coordinator(plan)
+    local_peer = next((box for box in boxes.values() if box['kind'] == 'windows-local'), None)
     service, processes, tunnels, handles, preflights, payloads = None, {}, [], [], {}, {}
     findings, launched = [], set()
     claim=None
     try:
-        claim=acquire_reservation(local,root,plan['deadlines'].get('reservation_s',plan['deadlines']['launch_s']))
-        plan['reservation']=dict(claim['record'],policy='One scenario; marker absent and no local Cortex Command process before atomic claim.')
+        if local_peer:
+            claim=acquire_reservation(local_peer,root,plan['deadlines'].get('reservation_s',plan['deadlines']['launch_s']))
+            plan['reservation']=dict(claim['record'],policy='One scenario; marker absent and no local Cortex Command process before atomic claim.')
+        else:
+            plan['driver_role'] = dict(box=local['name'], game_peer=False)
         write_json(root/'manifest.json',plan)
         for box in boxes.values():
             box_root = str(PurePosixPath(box['scratch']) / plan['run'])
@@ -1062,8 +1081,9 @@ def run_plan(plan, root):
                 command(['scp', '-q', f'{box["ssh"]}:{box_root}/preflight.json', str(local_box / 'preflight.json')], timeout=120)
                 preflights[box['name']] = json.loads((local_box / 'preflight.json').read_text())
             payloads[box['name']] = (payload, local_payload, box_root)
-        reference = preflights[local['name']]
-        plan['source_sha'] = reference['head']
+        reference_box = local_peer or next(box for box in boxes.values() if box['kind'].startswith('windows'))
+        reference = preflights[reference_box['name']]
+        plan['source_sha'] = plan['driver_commit']
         require_distinct_machines(preflights)
         for box in boxes.values():
             value = preflights[box['name']]
@@ -1071,8 +1091,8 @@ def run_plan(plan, root):
                 raise RuntimeError(f'{box["name"]}: content/module/fixture manifests differ before launch')
             if box['kind'].startswith('windows') and value['executable_sha256'] != reference['executable_sha256']:
                 raise RuntimeError(f'{box["name"]}: Windows executable hash differs')
-            if value['build'].get('commit') != reference['head'] or value['build'].get('executable_sha256') != value['executable_sha256']:
-                raise RuntimeError(f'{box["name"]}: no build receipt tying this executable to {reference["head"]}')
+            if value['build'].get('commit') != plan['source_sha'] or value['build'].get('executable_sha256') != value['executable_sha256']:
+                raise RuntimeError(f'{box["name"]}: no build receipt tying this executable to {plan["source_sha"]}')
         plan['preflights'] = preflights
         cert, key, pin = edith_cross.make_cert(root)
         service = directory.start_service(root, local['directory_port'], cert, key)
@@ -1138,7 +1158,7 @@ def run_plan(plan, root):
             if box['kind']!='windows-local': stage_remote(box,root/'session.json',payloads[box['name']][2]+'/session.json')
         deadline, finished = time.monotonic()+max(s['timeout'] for s in plan['specs'])+60, set()
         while time.monotonic() < deadline and len(finished) < len(boxes):
-            if not owns_reservation(local): raise RuntimeError('this run lost its box reservation')
+            if claim and not owns_reservation(local_peer): raise RuntimeError('this run lost its box reservation')
             for box in boxes.values():
                 if box['name'] in finished: continue
                 done = root / 'done.json' if box['kind'] == 'windows-local' else payloads[box['name']][2] + '/done.json'
