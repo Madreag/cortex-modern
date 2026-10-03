@@ -259,7 +259,8 @@ def make_plan(options):
                  'CC_TEST_CROSS_RECOVERIES': own + '/recoveries.json',
                  'CC_TEST_CROSS_BOT': own + '/bot.json', 'CC_TEST_CROSS_EVENT_RAW_LIMIT': str(64*1024**3)}, timeout=options.timeout, ticks=options.ticks,
             settings={}, roster=options.roster, scene=options.scene,
-            initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' else 50,
+            # D1 changes the former EROL-PC host to Z13, preserving that host's workload settings.
+            initial_skill=100 if boxes[hosts[0]['box']]['kind'] == 'windows-task' and hosts[0]['box'] != 'Z13' else 50,
             faults=[f for f in faults if f['peer'] == peer['name']], barriers=[b for b in barriers if b['peer']==peer['name']]))
         if getattr(options, 'keep_fullstate_sections', ''):
             specs[-1]['keep_fullstate_sections'] = [name for name in options.keep_fullstate_sections.split(',') if name]

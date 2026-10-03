@@ -20,6 +20,17 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 class AcceptanceSections(unittest.TestCase):
+    def test_z13_replacement_preserves_the_former_hosts_workload_settings(self):
+        import acceptance_sections
+        from test_inventory_oracle_evidence import INVENTORY
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            acceptance_sections.cross_manifest(REPO,INVENTORY,root,'/unit/mac','/unit/linux')
+            options=cross_peers.parse_args(['--boxes',str(root/'cross-boxes.json'),'--host','z13','--scenario','match',
+                '--roster','four-way','--out',str(root/'unit'),'--lane','unit','--mac-guard',str(root/'guard'),'--dry-run'])
+            plan=cross_peers.make_plan(options)
+            self.assertEqual({spec['initial_skill'] for spec in plan['specs']},{50})
+
     def test_cross_preflight_uses_the_completed_streams_native_build_receipt(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);exe=root/'engine';exe.write_bytes(b'never executed')
