@@ -117,18 +117,22 @@ class TaskSoak(unittest.TestCase):
         payload.write_text(json.dumps(dict(box=box, specs=[dict(peer='erol', acceptance_row='world-soak')])))
         claim=dict(record=dict(pid=123, token='fixture-token'))
         from feel import launch_budget
-        previous=launch_budget.MIN_FREE_BYTES
+        keys=('CC_RUNNER_BOX_NAME','CC_RUNNER_MIN_FREE_GB')
+        previous={key:os.environ.get(key) for key in keys}
         calls=[]
         def run(path):
             self.assertEqual(path,payload)
-            self.assertEqual(launch_budget.MIN_FREE_BYTES,int(6.5*1024**3))
+            from win32_test_runner import box_runner_limits
+            limits=box_runner_limits(environ=os.environ,manifest=self.root/'missing-manifest.json')
+            self.assertEqual(limits['box'],'Z13')
+            self.assertEqual(limits['min_free_bytes'],int(6.5*1024**3))
             calls.append('run'); return 7
         with patch.object(tasks.cross,'acquire_reservation', side_effect=lambda *args: calls.append('claim') or claim), \
              patch.object(tasks.cross,'run_payload', side_effect=run), \
              patch.object(tasks.cross,'release_reservation', side_effect=lambda value: calls.append('release') or True):
             self.assertEqual(tasks.run_payload(payload),7)
         self.assertEqual(calls,['claim','run','release'])
-        self.assertEqual(launch_budget.MIN_FREE_BYTES,previous)
+        self.assertEqual({key:os.environ.get(key) for key in keys},previous)
         self.assertNotIn('token',json.loads((self.root/'reservation.json').read_text()))
 
     @unittest.skipUnless(sys.platform == 'win32', 'native Windows file sharing regression')
@@ -191,6 +195,12 @@ class TaskSoak(unittest.TestCase):
         receipt=json.loads((target/'fetch-compression.json').read_text())
         self.assertEqual(len(receipt['files']),3)
         self.assertEqual(receipt['removed_files'],0)
+        streamed=self.root/'streamed'
+        with tarfile.open(fileobj=io.BytesIO(before),mode='r|gz') as stream:
+            self.assertEqual(world.extract_preserved(stream,streamed,compress_records=True),len(native))
+        for name,data in native.items():
+            with open_record(streamed/name,'rb') as stream: self.assertEqual(stream.read(),data)
+        self.assertEqual(list(streamed.glob('*.tar*')),[])
 
 
 if __name__ == '__main__':

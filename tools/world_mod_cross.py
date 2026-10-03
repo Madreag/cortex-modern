@@ -461,11 +461,12 @@ def extract_preserved(archive, local, compress_records=False):
     import gzip
     import hashlib
     import tarfile
+    from contextlib import nullcontext
     local = Path(local)
     local.mkdir(parents=True, exist_ok=True)
     count, receipts = 0, []
-    with tarfile.open(archive) as stream:
-        for member in stream.getmembers():
+    with (nullcontext(archive) if isinstance(archive, tarfile.TarFile) else tarfile.open(archive)) as stream:
+        for member in stream:
             path = local/member.name
             if member.issym() or member.islnk() or not path.resolve().is_relative_to(local.resolve()):
                 raise ValueError("remote evidence contains an unsafe path")
@@ -504,8 +505,10 @@ def extract_preserved(archive, local, compress_records=False):
     return count
 
 
-def fetch_preserved(box, root, local, compress_records=False):
+def fetch_preserved(box, root, local, compress_records=False, stream_transfer=False):
     import subprocess
+    import gzip
+    import tarfile
     from acceptance_box_mods import shell_command
     name = "edith" if box["kind"] == "windows-task" else "mac" if box["ssh"] == "Erol-Mac" else "linux"
     target = {**box, "name": name}
@@ -514,12 +517,33 @@ def fetch_preserved(box, root, local, compress_records=False):
     args = [*prefix, "-czf" if compress_records else "-cf", "-", "-C", root, *("--exclude="+p for p in exclusions), "."]
     local = Path(local)
     local.mkdir(parents=True, exist_ok=True)
-    archive = local/('evidence-preserved.tar.gz' if compress_records else 'evidence-preserved.tar')
-    with archive.open("xb") as sink:
-        subprocess.run(["ssh", "-o", "BatchMode=yes", box["ssh"], shell_command(target, args)],
-                       stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.PIPE, check=True, timeout=1800,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    count = extract_preserved(archive, local, compress_records)
+    command = ["ssh", "-o", "BatchMode=yes", box["ssh"], shell_command(target, args)]
+    if stream_transfer:
+        if not compress_records:
+            raise ValueError('streamed hour evidence requires lossless compressed record copies')
+        # The transport envelope is never a local file. Every member is retained,
+        # verified, and counted; all original files remain on the remote box.
+        with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)) as process:
+            try:
+                with gzip.GzipFile(fileobj=process.stdout, mode='rb') as decoded:
+                    with tarfile.open(fileobj=decoded, mode='r|') as archive:
+                        count = extract_preserved(archive, local, compress_records=True)
+                    # Drain through the gzip footer so its CRC and length are checked.
+                    while decoded.read(1024**2):
+                        pass
+            finally:
+                process.stdout.close()
+                errors = process.stderr.read()
+                code = process.wait(timeout=1800)
+            if code:
+                raise subprocess.CalledProcessError(code, command, stderr=errors)
+    else:
+        archive = local/('evidence-preserved.tar.gz' if compress_records else 'evidence-preserved.tar')
+        with archive.open("xb") as sink:
+            subprocess.run(command, stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.PIPE, check=True, timeout=1800,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        count = extract_preserved(archive, local, compress_records)
     count_code = ("import os,sys; from pathlib import Path; n=0\n"
                   "for root,dirs,files in os.walk(sys.argv[1],followlinks=False):\n"
                   " dirs[:]=[d for d in dirs if d not in ('runtime','private-runtime') and not Path(root,d).is_symlink()]\n"
@@ -530,7 +554,8 @@ def fetch_preserved(box, root, local, compress_records=False):
                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if int(done.stdout.strip()) != count:
         raise ValueError("remote evidence count differs after tar fetch")
-    write_json(local/"fetch-count.json", dict(remote_files=count, local_files=count, removed_files=0))
+    write_json(local/"fetch-count.json", dict(remote_files=count, local_files=count, removed_files=0,
+               transport='tar-gzip-stream' if stream_transfer else 'retained-tar'))
 
 
 def phase_b_ready(path):

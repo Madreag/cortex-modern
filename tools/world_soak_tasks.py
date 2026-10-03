@@ -169,15 +169,20 @@ def run_payload(path):
     if {spec.get('peer') for spec in specs} != expected or any(spec.get('acceptance_row') != 'world-soak' for spec in specs):
         raise ValueError('task payload differs from the authorized R5 process roster')
     from feel import launch_budget
-    previous_floor, claim = launch_budget.MIN_FREE_BYTES, None
+    settings = dict(CC_RUNNER_BOX_NAME=box['name'], CC_RUNNER_MIN_FREE_GB=str(box['launch_floor_gib']))
+    previous, claim = {key:os.environ.get(key) for key in settings}, None
     try:
-        launch_budget.MIN_FREE_BYTES = int(box['launch_floor_gib']*1024**3)
+        os.environ.update(settings)
         launch_budget.install_memory_guard()
         claim = cross.acquire_reservation(box, Path(path).parent, 60)
         cross.write_json(Path(path).parent/'reservation.json', {key:value for key,value in claim['record'].items() if key != 'token'})
         return cross.run_payload(path)
     finally:
-        launch_budget.MIN_FREE_BYTES = previous_floor
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         if claim:
             released = cross.release_reservation(claim)
             cross.write_json(Path(path).parent/'reservation-released.json', dict(released=released))
@@ -252,7 +257,8 @@ def launch(plan, root):
             outcome = remotes[name].wait_done(remote_roots[name]+'/task.done', 120, slice_cap_s=30)
             (root/'boxes'/name/'task-outcome.txt').write_text(outcome+'\n', encoding='utf-8')
         for name in started:
-            world.fetch_preserved(by_name[name], remote_roots[name], root/'boxes'/name, compress_records=True)
+            world.fetch_preserved(by_name[name], remote_roots[name], root/'boxes'/name,
+                                  compress_records=True, stream_transfer=True)
     from acceptance_cross_report import build_report
     return build_report(root)
 
