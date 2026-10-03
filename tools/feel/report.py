@@ -31,7 +31,7 @@ def declared_history_ranges(host_rows, boundaries, peers, *, smoke_ticks=None, f
     return ranges, missing
 
 
-def compare_histories(peers, ranges, required_subsystems, away=None):
+def compare_histories(peers, ranges, required_subsystems, away=None, *, minimum_peers=3):
     """Compare every observation, preserving disagreement in earlier executions. away maps (peer, history prefix) to the
     inclusive ticks that seat never simulated there (it left the round held); those keys are not expected of it."""
     away = away or {}
@@ -68,8 +68,8 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
     equal, unknown, unequal, not_comparable, expected_keys = 0, 0, 0, 0, set()
     strips = []
     for interval in ranges:
-        if interval['first'] > interval['last'] or len(set(interval['peers'])) < 3:
-            raise ValueError('a comparable interval needs at least three distinct peers and a nonempty range')
+        if minimum_peers not in (2, 3) or interval['first'] > interval['last'] or len(set(interval['peers'])) < minimum_peers:
+            raise ValueError(f'a comparable interval needs at least {minimum_peers} distinct peers and a nonempty range')
         prefix = tuple(interval[field] for field in HISTORY_FIELDS[:-1])
         for tick in range(interval['first'], interval['last'] + 1):
             key = (*prefix, tick)
@@ -636,18 +636,21 @@ def item9a_gates(run, peer='host', rows=None):
     measured = [value['steady_missing_frame_stalls'] for value in rounds if value.get('steady_missing_frame_stalls') is not None]
     missing = sum(measured) if measured else None
     round_missing = missing
-    tick_ms = latest.get('sim_tick_ms')
-    valid_tick = isinstance(tick_ms, (int, float)) and math.isfinite(tick_ms) and tick_ms > 0
     from cross_report import round_capacity_evidence
     natives = {name: json.loads(path.read_text(encoding='utf-8-sig')) if path.is_file() else {}
                for name in manifest.get('per_peer_lag_ms', {'host': 0, 'client': 0})
                for path in [run / f'{name}_report.json']}
     relative = round_capacity_evidence(natives)
-    rate = relative['round_rate_tps'] if relative['whole_round_slow'] else None
+    heavy = manifest.get('heavy_scene_levers') or {}
+    whole_heavy = bool(natives) and all(name in heavy and heavy[name].get('lever') == 'CCCP_TEST_SIM_COST_US'
+        and type(heavy[name].get('cost_us')) is int and heavy[name]['cost_us'] > 0
+        and type(heavy[name].get('from_tick')) is int and heavy[name]['from_tick'] <= 300 for name in natives)
+    # Ruling X3 (P2/rrr): relative TPS and horizon apply only to a declared heavy-scene lever on every peer.
+    rate = relative['round_rate_tps'] if whole_heavy and relative['whole_round_slow'] else None
     minimum_tps = rate - rate / 10.0 if rate is not None else 59.5
-    clock_tick_ms = 1000 / rate if rate is not None else tick_ms
+    clock_tick_ms = 1000 / rate if rate is not None else 1000 / 60
     horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * clock_tick_ms
-                                  for tick, stamps in by_tick.items())) if valid_tick and wall_ms is not None else None)
+                                  for tick, stamps in by_tick.items())) if wall_ms is not None else None)
     evidence = [clock_path, log_path, report_path]
     from .harness_cost import reduce_costs
     harness = reduce_costs([log_path], first_frame=first_tick, last_frame=final_tick)
@@ -657,7 +660,7 @@ def item9a_gates(run, peer='host', rows=None):
     pins = {
         'item9a_harness_cost': cost_pin,
         'item9a_wall_tps': pin(tps, f'>= {minimum_tps} after tick 300, including recovery time', tps is not None and tps >= minimum_tps, evidence,
-                            dict(relative_capacity=relative)),
+                            dict(relative_capacity=relative, whole_heavy=whole_heavy, heavy_scene_levers=heavy)),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
         'item9a_steady_stalls': pin(steady_stalls, '0 blocking waits before the injected spike', steady_stalls == 0, evidence),
         'item9a_missing_frame_stalls': pin(missing, '0 steady missing-frame stalls', missing == 0, evidence, available=True),
@@ -767,7 +770,7 @@ def item9a_gates(run, peer='host', rows=None):
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
                              confirmed_horizon_lag_ms=horizon_lag_ms,
-                             confirmed_horizon_lag_ticks=horizon_lag_ms / tick_ms if horizon_lag_ms is not None else None,
+                           confirmed_horizon_lag_ticks=horizon_lag_ms / clock_tick_ms if horizon_lag_ms is not None else None,
                              steady_missing_frame_stalls=missing, round_missing_frame_stalls=round_missing,
                              first_tick=first_tick, last_tick=final_tick if final_tick in by_tick else None,
                              clock_path=str(clock_path), sim_tick_ms=latest.get('sim_tick_ms'), relative_capacity=relative,
