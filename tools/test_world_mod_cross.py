@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from world_mod_cross import configure_plan, flag, late_join_due, stage_activity, restore_activity, prepare_mod_runtime, retain_native_screens
+from world_mod_cross import configure_plan, flag, late_join_due, stage_activity, restore_activity, prepare_mod_runtime, retain_native_screens, named_row, is_row, check_driver_preflights, check_mod_preflights
 
 
 def baseline():
@@ -23,6 +23,17 @@ def mods():
 
 
 class Plans(unittest.TestCase):
+    def test_numbered_acceptance_rows_keep_the_standard_driver(self):
+        self.assertFalse(named_row(['--acceptance-row', '17']))
+        self.assertFalse(named_row(['--acceptance-row=18']))
+        self.assertTrue(named_row(['--acceptance-row=mod-match']))
+        self.assertTrue(named_row(['--acceptance-row', 'world-join']))
+        for row in (17, 18, 19):
+            plan = dict(acceptance_row=row)
+            self.assertFalse(is_row(plan))
+            check_driver_preflights(plan, {})
+            check_mod_preflights(plan, {})
+
     def test_mod_is_four_box_and_not_a_fixture_activity(self):
         old = baseline()
         result = configure_plan(old, "mod-match", mods())

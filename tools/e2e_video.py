@@ -175,7 +175,8 @@ def finish_run(scenario, run, captured, source, options):
     """A run's verdict first, whatever its footprint; then its transients are retired and the retained set is measured."""
     feel_probes({**scenario, **run}, captured, source)
     render(captured, options.fps, options.sheet_every)
-    retire_transients(captured)
+    if not scenario.get('preserve_evidence'):
+        retire_transients(captured)
     retained_footprint(captured, options.scratch_root, options.scratch_limit_bytes)
     return review(scenario, captured, Path(captured["root"]))
 
@@ -2149,6 +2150,10 @@ def hold_frame_waits(text):
 
 
 def native_behavior(root, spec):
+    if spec.get('kind') == 'acceptance-spectator':
+        from acceptance_spectator import collect
+        result = collect(root)
+        return dict(status='PASS' if result['passed'] else 'FAIL', errors=result['failures'], evidence=result)
     from feel.retained_resume import read_live_hashes, PER_PEER_SUBSYSTEMS
     errors, details = [], {}
     def require(condition, reason):
@@ -2394,7 +2399,8 @@ def migration_probes(config, capture):
 
 
 def requirement_findings(repo, scenario):
-    findings = []
+    from acceptance_spectator import requirements
+    findings = [{'class':'engine', 'reason':reason} for reason in requirements(repo, scenario)]
     for name in scenario.get("requires", []):
         path = Path(repo) / "Data" / name
         if not path.is_dir():

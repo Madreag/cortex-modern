@@ -367,6 +367,10 @@ def pace_across_own_seat_hold(root: Path) -> dict | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if '--world-acceptance' in arguments:
+        from world_soak import main as world_main
+        return world_main([arg for arg in arguments if arg != '--world-acceptance'])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)

@@ -19,6 +19,7 @@ import time
 import copy
 import platform
 import secrets
+import world_mod_cross as acceptance_cross
 
 HERE = Path(__file__).resolve().parent
 # The lane that owns this run's scratch on every box: --lane or CC_CROSS_PEERS_LANE, never a default. The manifest
@@ -460,6 +461,10 @@ def preflight_payload(path):
                   modules={p: h for p, h in content.items() if p.endswith('/Index.ini')},
                   fixture={name: digest_file(repo / 'tools/feel' / name) for name in ('CrossCombat.lua', 'CrossCombat.ini')},
                   load=box_load(), scratch_bytes=scratch_bytes(box['scratch']))
+    if any(acceptance_cross.is_row(s) for s in payload['specs']):
+        acceptance_cross.preflight_driver(box, result)
+    if any(s.get('acceptance_row') in ('mod-match', 'mod-refusal') for s in payload['specs']):
+        acceptance_cross.preflight_mod(box, result)
     write_json(Path(path).parent / 'preflight.json', result)
     print(f'preflight {box["name"]} files={len(content)} exe={result["executable_sha256"][:16]}')
     return 0
@@ -494,6 +499,8 @@ def sample_memory(run):
 
 
 def retain_checkpoints(run, spec, *, final=False):
+    if acceptance_cross.is_row(spec):
+        return
     from feel.records import inspect_checkpoint
     import shutil
     own = Path(spec['own']); retained = own / 'archives'
@@ -524,6 +531,8 @@ def prepare_instance(spec, pin, box, runtime=None):
                 'SessionDirectoryInstallKey': f'cross-{spec["peer"]}-install', 'NetworkIceEnable': '1',
                 'NetworkConnectionMode': 'DirectOnly', 'NetworkHostRelayMode': 'Off'}
     settings.update(spec.get('settings', {}))
+    if acceptance_cross.is_row(spec):
+        settings = acceptance_cross.directory_settings(spec, settings)
     own = Path(spec['own']); own.mkdir(parents=True, exist_ok=False)
     rows = []
     for start in range(1, spec['ticks'] + 1, 240):
@@ -548,9 +557,15 @@ def prepare_instance(spec, pin, box, runtime=None):
         configure_posix_box(box)
         os.environ['CCCP_TEST_BINARY'] = spec['executable']
         os.environ['CCCP_POSIX_HOP'] = 'ssh' if sys.platform=='darwin' else 'off'
+    fresh_acceptance = runtime is None and acceptance_cross.is_row(spec)
+    if fresh_acceptance and spec['acceptance_row'].startswith('mod-'):
+        runtime = acceptance_cross.prepare_mod_runtime(spec)
     run = make_run(Path(spec['repo']), spec['flags'], own / 'engine', timeout=spec['timeout'], env=spec['env'], runtime=runtime)
-    if runtime is None:
-        stage_combat(run, spec)
+    if fresh_acceptance or runtime is None:
+        if acceptance_cross.is_row(spec):
+            acceptance_cross.stage_activity(run, spec)
+        else:
+            stage_combat(run, spec)
     else:
         (own / 'engine/feel').mkdir(exist_ok=True)
     seed_settings(run, settings)
@@ -793,10 +808,10 @@ def run_payload(path):
             raise RuntimeError(f'admission refused by build capability: requested {requested} peers, limit {capabilities["peer_limit"]}; Main clamps its legacy argument, so the driver refuses to silently shrink the roster')
         write_json(root/'launch-ready.json',dict(box=box['name'],runner_pid=os.getpid(),capabilities=capabilities))
         wait_for_payload_release(root,360)
-        for spec in payload['specs']:
+        def launch_spec(spec):
             if spec['role'] != 'host':
-                session_path = root / 'session.json'
-                deadline = time.monotonic() + 180
+                session_path = root / spec.get('session_leaf', 'session.json')
+                deadline = time.monotonic() + spec.get('session_wait_s', 180)
                 while not session_path.is_file() and time.monotonic() < deadline: time.sleep(.2)
                 if not session_path.is_file(): raise RuntimeError('session directory publication deadline')
                 session = json.loads(session_path.read_text(encoding='utf-8'))['session']
@@ -808,7 +823,7 @@ def run_payload(path):
             run.start(); started[spec['peer']] = time.monotonic()
             refuse_mixed_build(preflight, box, spec, run)
             readers[spec['peer']] = Tail(Path(spec['own']) / 'events.jsonl')
-            capture_sealers[spec['peer']] = CaptureSealer(spec['own'], captures=None if spec.get('keep_fullstate_sections') else 2)
+            capture_sealers[spec['peer']] = CaptureSealer(spec['own'], captures=None if spec.get('preserve_evidence') or spec.get('keep_fullstate_sections') else 2)
             lobby_watches[spec['peer']] = LobbyWatch(Path(spec['own'])/'engine/stdout.log')
             effect_readers[spec['peer']]=NativeFaultEffects(Path(spec['own'])/'engine/stdout.log',spec['faults'],spec['incarnation'])
             effect_rows[spec['peer']]=[]
@@ -817,9 +832,14 @@ def run_payload(path):
             clean_reads[spec['peer']]=before_launch
             write_json(Path(spec['own']) / 'instance.json', spec)
             write_json(Path(spec['own']) / 'started.json', dict(peer=spec['peer'], incarnation=0, engine_pid=engine_pid(run)))
+        for spec in payload['specs']:
+            if not spec.get('defer_until_session'):
+                launch_spec(spec)
+        payload_deadline = time.monotonic()+max(s['timeout'] for s in specifications.values())+90
         with (root / 'samples.jsonl').open('w', encoding='utf-8') as samples:
-            while len(completed) < len(runs):
+            while len(completed) < len(specifications):
                 now = time.monotonic()
+                if now > payload_deadline: raise TimeoutError('payload hang guard expired, including any unreleased late join')
                 if (root / 'stop.json').is_file(): raise RuntimeError('coordinator cancelled this box payload')
                 if box.get('exclusive_marker') and Path(box['exclusive_marker']).exists() and not owns_reservation(box):
                     raise RuntimeError(f'{box["name"]}: exclusive measurement reservation appeared during this payload')
@@ -829,8 +849,8 @@ def run_payload(path):
                     load = box_load(own_pids)
                     all_sampled = True
                     for spec in specifications.values():
-                        peer = spec['peer']; run = runs[peer]
-                        if peer in completed: continue
+                        peer = spec['peer']; run = runs.get(peer)
+                        if run is None or peer in completed: continue
                         measured = sample_memory(run)
                         all_sampled &= bool(measured and engine_pid(run))
                         row = dict(peer=peer, incarnation=spec['incarnation'], execution=f'process-{spec["incarnation"]}', engine_pid=engine_pid(run),
@@ -841,7 +861,11 @@ def run_payload(path):
                     next_sample = now + (60 if all_sampled else 1)
                     assert_box_guard({**box, 'kind': 'windows-task'} if box['kind'] == 'windows-local' else box)
                 for spec in list(specifications.values()):
-                    peer = spec['peer']; run = runs[peer]
+                    peer = spec['peer']
+                    if peer not in runs:
+                        if not (root / spec.get('session_leaf', 'session.json')).is_file(): continue
+                        launch_spec(spec)
+                    run = runs[peer]
                     if peer in completed: continue
                     read_began=time.monotonic()*1000
                     observed_rows=readers[peer].read()
@@ -858,7 +882,9 @@ def run_payload(path):
                     if readers[peer].drained: clean_reads[peer]=read_began
                     for observed in observed_rows:
                         if observed.get('type') == 'progress': progress[peer] = observed
-                    readers[peer].compress_consumed()
+                    if not spec.get('preserve_evidence'):
+                        readers[peer].compress_consumed()
+                    acceptance_cross.observe_soak(spec, run, now)
                     capture_sealers[peer].poll()
                     if effects := effect_readers[peer].poll(observed_at):
                         effect_rows[peer]+=effects
@@ -936,7 +962,7 @@ def run_payload(path):
                             recovery_ledgers[peer].observe(tail_rows,spec['incarnation'],clean_reads[peer],observed_at)
                             if readers[peer].drained or not tail_rows: break
                         write_json(Path(spec['own']) / 'record.json', record)
-                        if record.get('exit_code') != 0 or record.get('timed_out'): verdict = 1
+                        if (record.get('exit_code') != 0 or record.get('timed_out')) and not acceptance_cross.expected_refusal(spec, record): verdict = 1
                 time.sleep(.05)
     except Exception as error:
         verdict = 1
@@ -948,7 +974,10 @@ def run_payload(path):
             write_json(Path(specifications[peer]['own']) / 'record.json', run.record)
             try:
                 retain_checkpoints(run, specifications[peer], final=True)
-                seal_evidence(specifications[peer]['own'])
+                acceptance_cross.restore_activity(specifications[peer])
+                acceptance_cross.retain_native_screens(specifications[peer], run)
+                if not specifications[peer].get('preserve_evidence'):
+                    seal_evidence(specifications[peer]['own'])
             except Exception as error:
                 verdict = 1
                 write_json(root / 'seal-error.json', dict(peer=peer, error=str(error)))
@@ -1065,18 +1094,27 @@ def run_plan(plan, root):
             if value['build'].get('commit') != reference['head'] or value['build'].get('executable_sha256') != value['executable_sha256']:
                 raise RuntimeError(f'{box["name"]}: no build receipt tying this executable to {reference["head"]}')
         plan['preflights'] = preflights
-        cert, key, pin = edith_cross.make_cert(root)
-        service = directory.start_service(root, local['directory_port'], cert, key)
-        for box in boxes.values():
-            if box['kind'] == 'windows-local': continue
-            handle = (root / f'tunnel-{box["name"]}.log').open('w', encoding='utf-8'); handles.append(handle)
-            proc = subprocess.Popen(['ssh', '-N', '-o', 'ExitOnForwardFailure=yes', '-R',
-                f'127.0.0.1:{box["directory_port"]}:127.0.0.1:{local["directory_port"]}', box['ssh']],
-                stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
-                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            tunnels.append(proc)
-        time.sleep(1)
-        if any(p.poll() is not None for p in tunnels): raise RuntimeError('directory tunnel failed')
+        acceptance_cross.check_driver_preflights(plan, preflights)
+        acceptance_cross.check_mod_preflights(plan, preflights)
+        public = acceptance_cross.is_row(plan) and acceptance_cross.public_directory_available(local['tree'])
+        if public:
+            pin = ''
+        else:
+            if acceptance_cross.is_row(plan):
+                plan.update(directory_mode='loopback-fallback', public_directory_down=True, own_certificate=True)
+                for spec in plan['specs']: spec['directory_mode'] = 'loopback-fallback'
+            cert, key, pin = edith_cross.make_cert(root)
+            service = directory.start_service(root, local['directory_port'], cert, key)
+            for box in boxes.values():
+                if box['kind'] == 'windows-local': continue
+                handle = (root / f'tunnel-{box["name"]}.log').open('w', encoding='utf-8'); handles.append(handle)
+                proc = subprocess.Popen(['ssh', '-N', '-o', 'ExitOnForwardFailure=yes', '-R',
+                    f'127.0.0.1:{box["directory_port"]}:127.0.0.1:{local["directory_port"]}', box['ssh']],
+                    stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                tunnels.append(proc)
+            time.sleep(1)
+            if any(p.poll() is not None for p in tunnels): raise RuntimeError('directory tunnel failed')
         host_box = next(s['box'] for s in plan['specs'] if s['peer'] == plan['host'])
         # The task payload claims EDITH first and waits for publication if it is a client.
         ordered = sorted(boxes.values(), key=lambda b: 0 if b['kind']=='windows-task' else 1 if b['name']==host_box else 2)
@@ -1099,8 +1137,12 @@ def run_plan(plan, root):
                     for field, value in dict(PYTHON=box['python'], DRIVER=box['tree'] + '/tools/cross_peers.py', ROOT=box_root).items():
                         script = script.replace('{{' + field + '}}', str(value))
                     local_script = root / f'cross-session-{box["name"]}.ps1'; local_script.write_text(script, encoding='utf-8')
-                    stage_remote(box, local_script, box['task_script'])
-                    command(['ssh', box['ssh'], f'Start-ScheduledTask -TaskName {box["runner"]}'])
+                    if acceptance_cross.is_row(plan):
+                        from edith.remote_box import RemoteBox
+                        RemoteBox(box['ssh'], task=box['runner'], session_script=box['task_script']).start_task(local_script, budget_s=1)
+                    else:
+                        stage_remote(box, local_script, box['task_script'])
+                        command(['ssh', box['ssh'], f'Start-ScheduledTask -TaskName {box["runner"]}'])
                     launched.add(box['name'])
                     ownership_deadline = time.monotonic()+30
                     while not remote_exists(box, box_root+'/payload-owned.json') and time.monotonic()<ownership_deadline:
@@ -1119,16 +1161,29 @@ def run_plan(plan, root):
         release_ready_payloads(boxes,payloads,root,processes,plan['deadlines']['payload_ready_s'])
         deadline,session=time.monotonic()+plan['deadlines']['session_publication_s'],None
         while time.monotonic()<deadline:
-            rows=directory.list_sessions(local['directory_port'])
-            if len(rows)==1: session=rows[0]['session_id']; break
+            if public:
+                session = acceptance_cross.published_session(plan)
+                if session: break
+            else:
+                rows=directory.list_sessions(local['directory_port'])
+                if len(rows)==1: session=rows[0]['session_id']; break
             if host_box in processes and processes[host_box].poll() is not None: break
             time.sleep(.5)
         if not session: raise RuntimeError('host published no session before the declared publication deadline')
         write_json(root/'session.json',dict(session=session)); plan['session']=session
         for box in boxes.values():
             if box['kind']!='windows-local': stage_remote(box,root/'session.json',payloads[box['name']][2]+'/session.json')
+        acceptance_clock, late_released = {}, False
         deadline, finished = time.monotonic()+max(s['timeout'] for s in plan['specs'])+60, set()
         while time.monotonic() < deadline and len(finished) < len(boxes):
+            if not late_released and acceptance_cross.late_join_due(plan, acceptance_clock):
+                late = plan['late_join']
+                spec = next(s for s in plan['specs'] if s['peer']==late['peer'])
+                target = boxes[spec['box']]
+                stage_remote(target,root/'session.json',payloads[target['name']][2]+'/session-late.json')
+                host_spec = next(s for s in plan['specs'] if s['peer']==plan['host'])
+                write_json(root/'late-join-released.json',dict(peer=late['peer'],host_tick=acceptance_cross.latest_tick(Path(host_spec['own'])/'live.jsonl'),host_elapsed_s=time.monotonic()-acceptance_clock['host_started']))
+                late_released = True
             if not owns_reservation(local): raise RuntimeError('this run lost its box reservation')
             for box in boxes.values():
                 if box['name'] in finished: continue
@@ -1176,7 +1231,11 @@ def run_plan(plan, root):
             if not released: findings.append(dict(kind='reservation',reason='reservation token was absent or replaced; no foreign marker removed'))
         for box in boxes.values():
             if box['kind'] == 'windows-local' or box['name'] not in payloads: continue
-            try: fetch_box(box, payloads[box['name']][2], root / 'boxes' / box['name'])
+            try:
+                if plan.get('preserve_evidence'):
+                    acceptance_cross.fetch_preserved(box, payloads[box['name']][2], root / 'boxes' / box['name'])
+                else:
+                    fetch_box(box, payloads[box['name']][2], root / 'boxes' / box['name'])
             except Exception as error: findings.append(dict(kind='fetch', box=box['name'], reason=str(error)))
         for proc in tunnels:
             proc.terminate(); proc.wait(timeout=10)
@@ -1239,6 +1298,9 @@ def parse_args(argv=None):
 
 
 def main(argv=None):
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if acceptance_cross.named_row(arguments):
+        return acceptance_cross.main(arguments)
     options = parse_args(argv)
     if options.selftest_launch_guard:
         if not options.out.resolve().is_relative_to(SCRATCH.resolve()): raise ValueError('self-test output must stay inside lane scratch')

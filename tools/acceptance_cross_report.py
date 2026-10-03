@@ -131,7 +131,7 @@ def build_report(root):
                 adopted = [r for r in rows(own/"events.jsonl") if r.get("type") == "adopted_config"]
             except (OSError, ValueError):
                 adopted = []
-            if not specs[name].get("module_refusal") and not any(r.get("config", {}).get("activity_preset") == "Void Wanderers" and r.get("config", {}).get("activity_module") == "VoidWanderers.rte" for r in adopted):
+            if not specs[name].get("module_refusal") and (not adopted or not all(r.get("config", {}).get("activity_preset") == "Void Wanderers" and r.get("config", {}).get("rules", {}).get("activity_module") == "VoidWanderers.rte" for r in adopted)):
                 failures.append(f"{name}: native mod activity identity missing")
     if row == "mod-refusal":
         own = paths["linux"]
@@ -170,6 +170,14 @@ def build_report(root):
         result = judge(row, facts)
     except (KeyError, TypeError, ValueError) as error:
         result = dict(row=row, passed=False, failures=["incomplete native receipts: "+str(error)])
+    try:
+        from cross_report import build_report as collect_fixed
+        from acceptance_fixed_gates import evaluate
+        fixed = evaluate(collect_fixed(root, acceptance_inputs=True), facts)
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        fixed = dict(passed=False, failures=["fixed harness collection incomplete: "+str(error)])
+    write_json(root/"fixed-harness-result.json", fixed)
+    failures.extend(fixed["failures"])
     result["failures"].extend(failures)
     result["passed"] = not result["failures"]
     result["v1_passed"] = result["passed"]

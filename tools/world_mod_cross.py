@@ -23,7 +23,20 @@ from acceptance_runtime import write_json
 
 ROWS = ("mod-match", "mod-refusal", "world-join", "world-soak")
 DRIVER_FILES = ("cross_peers.py", "cross_report.py", "e2e_video.py", "feel/report.py", "feel/records.py", "world_mod_cross.py",
-                "world_soak.py", "acceptance_rows.py", "acceptance_evidence.py", "acceptance_cross_report.py", "acceptance_mod.py")
+                "world_soak.py", "acceptance_rows.py", "acceptance_evidence.py", "acceptance_cross_report.py", "acceptance_fixed_gates.py", "acceptance_mod.py")
+
+
+def named_row(arguments):
+    for index, argument in enumerate(arguments):
+        if argument == '--acceptance-row' and index+1 < len(arguments):
+            return arguments[index+1] in ROWS
+        if argument.startswith('--acceptance-row='):
+            return argument.partition('=')[2] in ROWS
+    return False
+
+
+def is_row(document):
+    return document.get('acceptance_row') in ROWS
 
 
 def flag(arguments, name, value=None):
@@ -156,7 +169,7 @@ def preflight_driver(box, result):
 
 
 def check_driver_preflights(plan, preflights):
-    if not plan.get('acceptance_row'):
+    if not is_row(plan):
         return
     expected = {name: plan['driver_sources'][name] for name in DRIVER_FILES}
     if any(value.get('acceptance_driver_sources') != expected for value in preflights.values()):
@@ -164,7 +177,7 @@ def check_driver_preflights(plan, preflights):
 
 
 def check_mod_preflights(plan, preflights):
-    if not plan.get("acceptance_row", "").startswith("mod-"):
+    if plan.get("acceptance_row") not in ("mod-match", "mod-refusal"):
         return
     values = {}
     for spec in plan["specs"]:
@@ -343,7 +356,7 @@ def restore_activity(spec):
 
 def retain_native_screens(spec, run):
     """Keep native label dumps outside the runtime excluded from remote evidence transfer."""
-    if not spec.get("acceptance_row"):
+    if not is_row(spec):
         return
     own, index = Path(spec["own"]), []
     destination = own/"native-screens"
@@ -463,7 +476,7 @@ def main(argv=None):
         print(json.dumps(plan, indent=2))
         print('DRY RUN: public directory first; fallback only after an outage; no engines or listeners started')
         return 0
-    if "acceptance_row" not in Path(cross_peers.__file__).read_text(encoding="utf-8"):
+    if not hasattr(cross_peers, "acceptance_cross"):
         raise RuntimeError("Phase B cross-driver integration has not landed; no engine launched")
     return cross_peers.run_plan(plan, options.out)
 
