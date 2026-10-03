@@ -68,7 +68,7 @@ def sweep_box(alias: str, root: str, book: SecretBook, scrub: bool, public_repo:
                 return dict(box=alias, root=root, status='INCOMPLETE', error=f'scp exit {copied.returncode}')
     try:
         done = ssh(alias, f"python '{tool}' sweep --root '{root}' --digests '{digests}' {'--scrub ' if scrub else ''}"
-                          f"{f'--public-repo {chr(39)}{public_repo}{chr(39)} ' if public_repo else ''}--out '{out}'")
+                          f"{f'--public-repo {chr(39)}{public_repo}{chr(39)} ' if public_repo else ''}--out '{out}'", timeout=4 * 3600)
     finally:
         ssh(alias, f"Remove-Item -LiteralPath '{digests}' -Force -ErrorAction SilentlyContinue")
     line = next((text for text in reversed(done.stdout.splitlines()) if text.startswith('{')), '{}')
