@@ -101,6 +101,59 @@ namespace RTE {
 			std::cout << "[net-match-selftest] PASS capture_and_writer_barriers_are_selected_releasable_and_bounded" << std::endl;
 			return true;
 		}
+		bool TestTickHashTraceIsBoundedAndLossless(std::string* error) {
+			// A long run's trace costs a fixed window of memory; the report still carries every record, and a retraction past the window cuts at the right tick.
+			constexpr uint64_t recorded = 12000, kept = 5000, rerecorded = 1000;
+			constexpr size_t subsystems = 18, memoryBound = 256 * 1024;
+			const auto result = [](uint64_t tick, uint8_t pass) {
+				SimChecksum::Result r;
+				r.tick = tick;
+				for (size_t byte = 0; byte < 8; ++byte) r.total[byte] = static_cast<uint8_t>(tick >> (8 * byte));
+				r.total[31] = pass;
+				for (size_t sub = 0; sub < subsystems; ++sub) {
+					SimChecksum::Hash hash{};
+					hash[0] = static_cast<uint8_t>(sub);
+					for (size_t byte = 0; byte < 8; ++byte) hash[1 + byte] = static_cast<uint8_t>((tick * 31 + sub) >> (8 * byte));
+					hash[31] = pass;
+					r.per_subsystem["s" + std::to_string(sub)] = hash;
+				}
+				return r;
+			};
+			g_MetricsCollector.BeginRun("tick-hash-trace-selftest", 1);
+			g_MetricsCollector.SetRecordTickHashes(true);
+			for (uint64_t tick = 1; tick <= recorded; ++tick) g_MetricsCollector.RecordTickHash(result(tick, 1), tick % 97 == 0);
+			const size_t memory = g_MetricsCollector.InstrumentationBytes();
+			const size_t recordedCount = g_MetricsCollector.GetTickHashCount();
+			g_MetricsCollector.RetractTickHashesFrom(kept + 1);
+			const size_t keptCount = g_MetricsCollector.GetTickHashCount();
+			for (uint64_t tick = kept + 1; tick <= kept + rerecorded; ++tick) g_MetricsCollector.RecordTickHash(result(tick, 2), false);
+			const std::filesystem::path path = "Userdata/tick-hash-trace-selftest.json";
+			const bool written = g_MetricsCollector.WriteReport(path.string());
+			g_MetricsCollector.Destroy();
+			size_t reported = 0, wrong = 0;
+			uint64_t firstWrong = 0;
+			if (written) {
+				std::ifstream input(path);
+				const nlohmann::json report = nlohmann::json::parse(input, nullptr, false);
+				const nlohmann::json hashes = report.is_discarded() || !report.contains("runs") || report["runs"].empty() ? nlohmann::json::array() : report["runs"][0].value("tick_hashes", nlohmann::json::array());
+				reported = hashes.size();
+				for (size_t index = 0; index < hashes.size(); ++index) {
+					const uint64_t tick = index + 1;
+					const SimChecksum::Result expected = result(tick, tick <= kept ? 1 : 2);
+					const nlohmann::json& record = hashes[index];
+					bool same = record.value("tick", uint64_t{0}) == tick && record.value("total", "") == SimChecksum::HashHex(expected.total) &&
+					    record.value("paused", false) == (tick <= kept && tick % 97 == 0) && record.contains("subsystems") && record["subsystems"].size() == subsystems;
+					for (const auto& [name, hash]: expected.per_subsystem) same = same && record["subsystems"].value(name, "") == SimChecksum::HashHex(hash);
+					if (!same && wrong++ == 0) firstWrong = tick;
+				}
+			}
+			std::filesystem::remove(path);
+			const bool pass = written && recordedCount == recorded && keptCount == kept && reported == kept + rerecorded && wrong == 0 && memory <= memoryBound;
+			std::cout << "[net-match-selftest] " << (pass ? "PASS" : "FAIL") << " tick_hash_trace_is_bounded_and_lossless recorded=" << recordedCount << " memory_bytes=" << memory
+			          << " bound=" << memoryBound << " kept_after_retraction=" << keptCount << " reported=" << reported << " wrong=" << wrong << " first_wrong_tick=" << firstWrong << std::endl;
+			if (!pass) *error = memory > memoryBound ? "the trace held " + std::to_string(memory) + " bytes in memory for " + std::to_string(recordedCount) + " records" : "the trace's report lost or changed records";
+			return pass;
+		}
 		bool TestCrossRecordKinds(std::string* error) {
 			const std::vector<std::string> kinds{"round_fired", "reload_completed", "thrown_release", "device_pickup", "door_open_completed",
 			    "door_close_completed", "gold_deposited", "wound_damage", "dying", "dead", "wound_added", "gibbed", "craft_refund",
@@ -15462,6 +15515,7 @@ namespace RTE {
 		row(&TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay, "a_rejoin_walks_its_phases_and_the_goodbye_ends_its_tail_replay");
 		row(&TestTheHostSavesTheMatchWhenAsked, "the_host_saves_the_match_when_asked");
 		row(&TestAManualSaveKeepsTheIntervalAndWaitsForASafeTick, "a_manual_save_keeps_the_interval_and_waits_for_a_safe_tick");
+		row(&TestTickHashTraceIsBoundedAndLossless, "tick_hash_trace_is_bounded_and_lossless");
 		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);

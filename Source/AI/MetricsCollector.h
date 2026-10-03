@@ -6,6 +6,9 @@
 #include <chrono>
 #include <atomic>
 #include <cstdint>
+#include <deque>
+#include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -99,8 +102,8 @@ namespace RTE {
 		/// Per-tick hash trace recording for the determinism CI check.
 		///
 		/// When enabled, every call to `RecordTickHash` appends the tick number, the
-		/// `total` hash (hex), and each subsystem hash (hex, sorted by subsystem name) into
-		/// `m_TickHashes`. The trace is then emitted in the JSON report under `tick_hashes`.
+		/// `total` hash, and each subsystem hash to the run's trace file. The trace is then
+		/// emitted in the JSON report under `tick_hashes` (hex, sorted by subsystem name).
 		/// `cccp-determinism-check` parses those traces from N runs and diffs them tick-by-tick
 		/// to surface non-determinism. Disabled by default — only the ScenarioRunner `-tick-hashes`
 		/// flag (or an explicit call to `SetRecordTickHashes(true)`) turns it on so normal runs
@@ -123,12 +126,13 @@ namespace RTE {
 		/// Drops the records of the ticks from this one on: a held seat ran them off the round before it learned of its hold.
 		void RetractTickHashesFrom(uint64_t tick) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			std::erase_if(m_TickHashes, [tick](const TickHashRecord& record) { return record.tick >= tick; });
+			if (TraceOnFileLocked()) RetractTraceLocked(tick);
+			else std::erase_if(m_TickHashes, [tick](const TickHashRecord& record) { return record.tick >= tick; });
 		}
 
 		size_t GetTickHashCount() const {
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			return m_TickHashes.size();
+			return TraceOnFileLocked() ? static_cast<size_t>(m_Trace.count) : m_TickHashes.size();
 		}
 
 		/// True if a run is currently active (between BeginRun and EndRun).
@@ -153,8 +157,8 @@ namespace RTE {
 		/// Write the run report as a JSON file at the given path. Returns true on success.
 		bool WriteReport(const std::string& path) const;
 
-		/// One per-tick hash record, kept as the raw hashes: a whole match's trace stays in memory until the report, so
-		/// each subsystem is named by its index in the run's name table and written out by name, sorted, at the report.
+		/// One per-tick hash record, kept as the raw hashes: each subsystem is named by its index in the run's name table and
+		/// written out by name, sorted, at the report.
 		struct TickHashRecord {
 			uint64_t                                            tick = 0;
 			bool                                                paused = false;
@@ -207,14 +211,39 @@ namespace RTE {
 
 		// Per-tick hash trace. See SetRecordTickHashes/RecordTickHash above.
 		bool                                          m_RecordTickHashes = false;
-		std::vector<TickHashRecord>                   m_TickHashes;
+		std::vector<TickHashRecord>                   m_TickHashes; //!< Only when the trace's file could not be opened.
 		std::vector<std::string>                      m_SubsystemNames;
 		std::unordered_map<std::string, uint16_t>     m_SubsystemIndex;
+
+		/// The run's trace, written to a file as it is recorded: memory keeps the newest records' places for a retraction and
+		/// one place in every c_TraceSparseEvery for a deeper one, so a long run's trace costs memory it does not grow.
+		struct TraceFile {
+			std::string path;
+			std::unique_ptr<std::fstream> stream;
+			uint64_t bytes = 0;
+			uint64_t count = 0;
+			std::deque<std::pair<uint64_t, uint64_t>> tail; //!< The newest records' ticks and offsets.
+			std::vector<std::pair<uint64_t, uint64_t>> sparse; //!< The first record of every c_TraceSparseEvery: its tick and offset.
+			bool reposition = false; //!< A retraction moved the end back; the next record is written there.
+			bool failed = false;
+		};
+		static constexpr size_t c_TraceTail = 4096;
+		static constexpr uint64_t c_TraceSparseEvery = 4096;
+		TraceFile m_Trace;
+
+		bool TraceOnFileLocked() const { return m_Trace.stream != nullptr; }
+		void OpenTraceLocked();
+		void CloseTraceLocked();
+		void AppendTraceLocked(const TickHashRecord& record);
+		/// Reads every record the file holds in order, one at a time.
+		void ForEachTraceRecordLocked(const std::function<void(const TickHashRecord&)>& visit) const;
+		void RetractTraceLocked(uint64_t tick);
 
 		AggregatedRun CurrentRunLocked(bool withTickHashes) const;
 		/// Writes the report, streaming each run's trace; the first run's may be the collector's own, read in place.
 		static bool WriteRuns(const std::string& path, const std::vector<AggregatedRun>& runs, const std::string& suiteVersion,
-		                      const std::vector<TickHashRecord>* firstRunHashes, const std::vector<std::string>* firstRunNames);
+		                      const std::function<void(const std::function<void(const TickHashRecord&)>&)>* firstRunTrace, uint64_t firstRunCount,
+		                      const std::vector<std::string>* firstRunNames);
 		std::map<std::string, std::string>            m_SimConfig;
 	};
 

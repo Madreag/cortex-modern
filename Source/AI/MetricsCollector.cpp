@@ -411,7 +411,7 @@ namespace RTE {
 
 	size_t MetricsCollector::InstrumentationBytes() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		size_t bytes = m_TickHashes.capacity() * sizeof(TickHashRecord);
+		size_t bytes = m_TickHashes.capacity() * sizeof(TickHashRecord) + (m_Trace.tail.size() + m_Trace.sparse.capacity()) * sizeof(std::pair<uint64_t, uint64_t>);
 		for (const auto& record: m_TickHashes) bytes += record.subsystems.capacity() * sizeof(decltype(record.subsystems)::value_type);
 		return bytes;
 	}
@@ -502,6 +502,122 @@ namespace RTE {
 	MetricsCollector::MetricsCollector() = default;
 	MetricsCollector::~MetricsCollector() = default;
 
+	void MetricsCollector::OpenTraceLocked() {
+		CloseTraceLocked();
+		m_Trace = {};
+		static uint64_t s_TraceSerial = 0;
+		std::error_code ignored;
+		const std::filesystem::path directory = std::filesystem::temp_directory_path(ignored);
+		m_Trace.path = (directory / ("cc-tick-hashes-" + std::to_string(System::GetProcessID()) + "-" + std::to_string(++s_TraceSerial) + ".bin")).string();
+		auto stream = std::make_unique<std::fstream>(m_Trace.path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+		if (!*stream) {
+			// The trace stays whole in memory rather than lost; the run says so once.
+			m_Trace.failed = true;
+			std::cerr << "[metrics] the tick-hash trace could not open " << m_Trace.path << "; it is kept in memory" << std::endl;
+			return;
+		}
+		m_Trace.stream = std::move(stream);
+	}
+
+	void MetricsCollector::CloseTraceLocked() {
+		if (!m_Trace.stream) return;
+		m_Trace.stream.reset();
+		std::error_code ignored;
+		std::filesystem::remove(m_Trace.path, ignored);
+	}
+
+	namespace {
+		template<typename T> void PutTraceValue(std::string& out, const T& value) { out.append(reinterpret_cast<const char*>(&value), sizeof(value)); }
+		template<typename T> bool GetTraceValue(std::istream& in, T& value) { return static_cast<bool>(in.read(reinterpret_cast<char*>(&value), sizeof(value))); }
+	}
+
+	void MetricsCollector::AppendTraceLocked(const TickHashRecord& record) {
+		std::string bytes;
+		bytes.reserve(43 + record.subsystems.size() * 34);
+		PutTraceValue(bytes, record.tick);
+		PutTraceValue(bytes, static_cast<uint8_t>(record.paused ? 1 : 0));
+		PutTraceValue(bytes, record.total);
+		PutTraceValue(bytes, static_cast<uint16_t>(record.subsystems.size()));
+		for (const auto& [slot, hash]: record.subsystems) {
+			PutTraceValue(bytes, slot);
+			PutTraceValue(bytes, hash);
+		}
+		const uint64_t offset = m_Trace.bytes;
+		if (m_Trace.reposition) {
+			m_Trace.stream->seekp(static_cast<std::streamoff>(offset));
+			m_Trace.reposition = false;
+		}
+		m_Trace.stream->write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+		if (!*m_Trace.stream) {
+			// A disk that refuses the trace ends the file's part of it loudly; what it recorded so far stays readable.
+			std::cerr << "[metrics] the tick-hash trace could not write tick " << record.tick << " to " << m_Trace.path << std::endl;
+			m_Trace.stream->clear();
+			return;
+		}
+		if (m_Trace.count % c_TraceSparseEvery == 0) m_Trace.sparse.emplace_back(record.tick, offset);
+		m_Trace.bytes += bytes.size();
+		++m_Trace.count;
+		m_Trace.tail.emplace_back(record.tick, offset);
+		if (m_Trace.tail.size() > c_TraceTail) m_Trace.tail.pop_front();
+	}
+
+	void MetricsCollector::ForEachTraceRecordLocked(const std::function<void(const TickHashRecord&)>& visit) const {
+		if (!m_Trace.stream) return;
+		m_Trace.stream->flush();
+		std::ifstream in(m_Trace.path, std::ios::binary);
+		TickHashRecord record;
+		for (uint64_t read = 0; read < m_Trace.count; ++read) {
+			uint8_t paused = 0;
+			uint16_t count = 0;
+			if (!GetTraceValue(in, record.tick) || !GetTraceValue(in, paused) || !GetTraceValue(in, record.total) || !GetTraceValue(in, count)) {
+				std::cerr << "[metrics] the tick-hash trace " << m_Trace.path << " ends after " << read << " of " << m_Trace.count << " records" << std::endl;
+				return;
+			}
+			record.paused = paused != 0;
+			record.subsystems.resize(count);
+			for (auto& [slot, hash]: record.subsystems) {
+				if (!GetTraceValue(in, slot) || !GetTraceValue(in, hash)) {
+					std::cerr << "[metrics] the tick-hash trace " << m_Trace.path << " ends inside record " << read << std::endl;
+					return;
+				}
+			}
+			visit(record);
+		}
+	}
+
+	void MetricsCollector::RetractTraceLocked(uint64_t tick) {
+		uint64_t end = m_Trace.bytes;
+		while (m_Trace.count > 0) {
+			if (m_Trace.tail.empty()) {
+				// Past the window kept in memory: the records from the last kept place on are read back to find the cut.
+				while (!m_Trace.sparse.empty() && m_Trace.sparse.back().second >= end) m_Trace.sparse.pop_back();
+				const uint64_t from = m_Trace.sparse.empty() ? 0 : m_Trace.sparse.back().second;
+				uint64_t first = m_Trace.sparse.empty() ? 0 : (m_Trace.sparse.size() - 1) * c_TraceSparseEvery;
+				m_Trace.stream->flush();
+				std::ifstream in(m_Trace.path, std::ios::binary);
+				in.seekg(static_cast<std::streamoff>(from));
+				for (uint64_t offset = from; offset < end && first < m_Trace.count; ++first) {
+					uint64_t recordTick = 0;
+					uint8_t paused = 0;
+					SimChecksum::Hash total{};
+					uint16_t count = 0;
+					if (!GetTraceValue(in, recordTick) || !GetTraceValue(in, paused) || !GetTraceValue(in, total) || !GetTraceValue(in, count)) break;
+					in.seekg(static_cast<std::streamoff>(count) * 34, std::ios::cur);
+					m_Trace.tail.emplace_back(recordTick, offset);
+					offset += 43 + static_cast<uint64_t>(count) * 34;
+				}
+				if (m_Trace.tail.empty()) break;
+			}
+			if (m_Trace.tail.back().first < tick) break;
+			end = m_Trace.tail.back().second;
+			m_Trace.tail.pop_back();
+			--m_Trace.count;
+		}
+		while (!m_Trace.sparse.empty() && m_Trace.sparse.back().second >= end) m_Trace.sparse.pop_back();
+		m_Trace.reposition |= end != m_Trace.bytes;
+		m_Trace.bytes = end;
+	}
+
 	void MetricsCollector::Destroy() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_Scenario.clear();
@@ -512,6 +628,8 @@ namespace RTE {
 		m_Strings.clear();
 		m_FinalTotalHashHex.clear();
 		m_TickHashes.clear();
+		CloseTraceLocked();
+		m_Trace = {};
 		m_SubsystemNames.clear();
 		m_SubsystemIndex.clear();
 		m_HostRun = false;
@@ -538,6 +656,9 @@ namespace RTE {
 		m_Strings.clear();
 		m_FinalTotalHashHex.clear();
 		m_TickHashes.clear();
+		CloseTraceLocked();
+		m_Trace = {};
+		if (armTickHashes) OpenTraceLocked();
 		m_SubsystemNames.clear();
 		m_SubsystemIndex.clear();
 		m_HostRun = false;
@@ -592,7 +713,9 @@ namespace RTE {
 		// Cap the trace at the -max-ticks budget — the sim loop checks the cap per frame
 		// but its inner fixed-step loop overshoots by a load-dependent tick batch, which
 		// would otherwise make per-run trace lengths non-uniform across the determinism check.
-		if (uint64_t cap = ScenarioRunner::GetArgs().maxTicks; cap > 0 && m_TickHashes.size() >= cap) {
+		// A trace armed after its run began opens its file at its first record.
+		if (!m_Trace.stream && !m_Trace.failed && m_TickHashes.empty()) OpenTraceLocked();
+		if (uint64_t cap = ScenarioRunner::GetArgs().maxTicks; cap > 0 && (TraceOnFileLocked() ? m_Trace.count : m_TickHashes.size()) >= cap) {
 			return;
 		}
 		TickHashRecord rec;
@@ -607,7 +730,8 @@ namespace RTE {
 			}
 			rec.subsystems.emplace_back(slot->second, hash);
 		}
-		m_TickHashes.push_back(std::move(rec));
+		if (TraceOnFileLocked()) AppendTraceLocked(rec);
+		else m_TickHashes.push_back(std::move(rec));
 	}
 
 	MetricsCollector::AggregatedRun MetricsCollector::GetCurrentRun(bool withTickHashes) const {
@@ -630,9 +754,10 @@ namespace RTE {
 		r.numeric = m_Numeric;
 		r.stringValues = m_Strings;
 		r.finalTotalHashHex = m_FinalTotalHashHex;
-		r.tickHashCount = m_TickHashes.size();
+		r.tickHashCount = TraceOnFileLocked() ? static_cast<size_t>(m_Trace.count) : m_TickHashes.size();
 		if (withTickHashes) {
 			r.tickHashes = m_TickHashes;
+			ForEachTraceRecordLocked([&r](const TickHashRecord& record) { r.tickHashes.push_back(record); });
 			r.subsystemNames = m_SubsystemNames;
 		}
 		r.simConfig = m_SimConfig;
@@ -643,17 +768,22 @@ namespace RTE {
 		// The trace is written in place under the lock: a copy of a long match's trace is the allocation that fails.
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		std::vector<AggregatedRun> single{CurrentRunLocked(false)};
-		return WriteRuns(path, single, "M0", &m_TickHashes, &m_SubsystemNames);
+		const std::function<void(const std::function<void(const TickHashRecord&)>&)> trace = [this](const std::function<void(const TickHashRecord&)>& visit) {
+			if (TraceOnFileLocked()) ForEachTraceRecordLocked(visit);
+			else for (const TickHashRecord& record: m_TickHashes) visit(record);
+		};
+		return WriteRuns(path, single, "M0", &trace, TraceOnFileLocked() ? m_Trace.count : m_TickHashes.size(), &m_SubsystemNames);
 	}
 
 	bool MetricsCollector::WriteAggregatedReport(const std::string& path,
 	                                             const std::vector<AggregatedRun>& runs,
 	                                             const std::string& suiteVersion) {
-		return WriteRuns(path, runs, suiteVersion, nullptr, nullptr);
+		return WriteRuns(path, runs, suiteVersion, nullptr, 0, nullptr);
 	}
 
 	bool MetricsCollector::WriteRuns(const std::string& path, const std::vector<AggregatedRun>& runs, const std::string& suiteVersion,
-	                                 const std::vector<TickHashRecord>* firstRunHashes, const std::vector<std::string>* firstRunNames) {
+	                                 const std::function<void(const std::function<void(const TickHashRecord&)>&)>* firstRunTrace, uint64_t firstRunCount,
+	                                 const std::vector<std::string>* firstRunNames) {
 		// The line a failed allocation is reported at; a report that cannot be built fails the run, it never throws out of it.
 		int stage = __LINE__;
 		size_t written = 0;
@@ -706,7 +836,7 @@ namespace RTE {
 				// the first tick at which divergence appears, plus which subsystem diverged.
 				// Each trace is streamed in at its placeholder rather than built as a document.
 				const size_t index = runsJson.size();
-				if (!(index == 0 && firstRunHashes ? *firstRunHashes : r.tickHashes).empty()) {
+				if (index == 0 && firstRunTrace ? firstRunCount != 0 : !r.tickHashes.empty()) {
 					rj["tick_hashes"] = "@@tick_hashes_" + std::to_string(index) + "@@";
 				}
 
@@ -731,13 +861,12 @@ namespace RTE {
 					continue;
 				}
 				out.write(text.data() + from, static_cast<std::streamsize>(at - from));
-				const bool live = index == 0 && firstRunHashes;
-				const std::vector<TickHashRecord>& hashes = live ? *firstRunHashes : runs[index].tickHashes;
+				const bool live = index == 0 && firstRunTrace;
 				const std::vector<std::string>& names = live ? *firstRunNames : runs[index].subsystemNames;
 				stage = __LINE__;
 				std::vector<std::pair<const std::string*, const SimChecksum::Hash*>> sorted;
 				out << '[';
-				for (const TickHashRecord& t: hashes) {
+				const auto writeRecord = [&](const TickHashRecord& t) {
 					sorted.clear();
 					for (const auto& [name, hash]: t.subsystems) {
 						sorted.emplace_back(&names[name], &hash);
@@ -749,7 +878,9 @@ namespace RTE {
 					}
 					out << "},\"tick\":" << t.tick << ",\"total\":\"" << SimChecksum::HashHex(t.total) << "\"}";
 					++written;
-				}
+				};
+				if (live) (*firstRunTrace)(writeRecord);
+				else for (const TickHashRecord& t: runs[index].tickHashes) writeRecord(t);
 				out << "\n]";
 				from = at + placeholder.size();
 			}
