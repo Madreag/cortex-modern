@@ -17,6 +17,13 @@ import check_plan
 
 
 class AcceptancePlanVariants(unittest.TestCase):
+    def test_declaration_is_stable_under_the_run_chains_instrument_environment(self):
+        from test_inventory_oracle_evidence import run_stream
+        with patch.object(run_stream,'NO_FULLSTATE',False): before=built()['plan']
+        with patch.object(run_stream,'NO_FULLSTATE',True): after=built()['plan']
+        self.assertTrue(build_plan.comparable(before)==build_plan.comparable(after),
+                        'the RUN chain environment must not change its predeclared arguments')
+
     def test_plan_check_refuses_a_game_role_change_even_when_paths_are_unchanged(self):
         plan=built()['plan'];altered=copy.deepcopy(plan)
         altered['rows'][0]['engine_boxes']={'EROL-PC':1}
