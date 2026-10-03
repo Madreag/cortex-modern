@@ -777,6 +777,12 @@ namespace RTE {
 				    client.BuildPlayerRefusalText() != expected || host.GetReadyPeerCount() != 0 || host.GetState() != NetSessionState::Listening) {
 					*error = "the advertised mismatch changed admission or lost its versions: " + client.BuildPlayerRefusalText(); return false;
 				}
+				// The host's own notice names what differed from its side, never "this host".
+				const std::string hostExpected = protocol ? "Their network protocol differs (theirs " + std::string(c.advertised) + "; yours " + std::to_string(NetProtocol::c_Version) + ")." :
+				    "Their build differs from yours (theirs fixture-other-build; yours stage2-p2c-selftest).";
+				if (host.BuildPlayerRefusalText() != hostExpected) {
+					*error = "the host was told \"" + host.BuildPlayerRefusalText() + "\" where it must read \"" + hostExpected + "\""; return false;
+				}
 			}
 			std::cout << "[net-session-selftest] PASS advertised_versions_require_headless" << std::endl;
 			return true;

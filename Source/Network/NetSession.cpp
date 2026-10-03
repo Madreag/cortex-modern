@@ -1647,6 +1647,26 @@ namespace RTE {
 
 	std::string NetSession::BuildPlayerRefusalText() const {
 		if (!m_HasReject) return {};
+		if (m_Role == NetSessionRole::Host) {
+			// The host refused a joiner: its notice names what differed, the joiner's value against this host's own.
+			switch (m_RejectReason) {
+				case NetRejectReason::ProtocolMismatch: {
+					if (m_MismatchKey != "network_protocol_version" && m_MismatchKey != "protocol_version") return "Their network protocol differs.";
+					// A joiner offers a range of protocols; one that offers a single protocol is named by it.
+					const size_t dash = m_ActualValue.find('-');
+					const bool single = dash != std::string::npos && m_ActualValue.substr(0, dash) == m_ActualValue.substr(dash + 1);
+					return "Their network protocol differs (theirs " + (single ? m_ActualValue.substr(0, dash) : m_ActualValue) + "; yours " + m_ExpectedValue + ").";
+				}
+				case NetRejectReason::BuildMismatch:
+					// Two builds with the same id can still differ in their session identity; its hashes mean nothing on screen.
+					if (m_MismatchKey != "build_id") return "Their build differs from yours.";
+					return "Their build differs from yours (theirs " + m_ActualValue + "; yours " + m_ExpectedValue + ").";
+				case NetRejectReason::GameVersionMismatch: return "Their game version differs from yours (theirs " + m_ActualValue + "; yours " + m_ExpectedValue + ").";
+				case NetRejectReason::ControllerFrameVersionMismatch:
+				case NetRejectReason::ControllerFrameSizeMismatch: return "Their game version differs from yours.";
+				default: break;
+			}
+		}
 		if (m_Role == NetSessionRole::Client) {
 			// A version refusal says which side is newer: the host's value is whichever of the two is not this build's.
 			const auto hostValue = [&](const std::string& mine) { return m_ExpectedValue == mine ? m_ActualValue : m_ExpectedValue; };
