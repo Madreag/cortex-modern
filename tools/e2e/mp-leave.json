@@ -801,7 +801,10 @@
       "assert": "The leaver's probe asserts Running at tick 2700 after its rejoin, in its own seat; the host plays on to tick 3000.",
       "probe_steps": [
         2
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "window-seat-survives",
@@ -831,7 +834,10 @@
       "assert": "The leaver's probe asserts Running at tick 3000 after its rejoin.",
       "probe_steps": [
         2
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     }
   ]
 }

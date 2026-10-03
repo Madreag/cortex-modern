@@ -309,7 +309,10 @@
       "what": "the relaunched client rejoins the running match from its stored ticket and plays on from the host's state",
       "assert": "Rejoined client probe requires Running at tick 1200 and again at tick 1300.",
       "run": "reconnect",
-      "service_state": "Running"
+      "service_state": "Running",
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "rc-dropped-index-kept",
