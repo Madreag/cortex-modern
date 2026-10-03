@@ -375,5 +375,26 @@ class DirectoryPerRun(unittest.TestCase):
         self.assertEqual(counts, [1, 1])
 
 
+class OracleCorrections(unittest.TestCase):
+    """Two expectations the first live run (edith-pair-2, 2026-10-03 10:33 MST) proved wrong, each with field evidence."""
+
+    def test_cloudflare_s_registered_relay_space_is_cloudflare(self):
+        import relay_cloudflare_match as match
+        # Both relay candidates of the live run; ARIN RDAP: NET-104-16-0-0-1 104.16.0.0/12 CLOUDFLARENET, Cloudflare, Inc.
+        for address in ('104.30.136.195', '104.30.146.169'):
+            self.assertTrue(match.cloudflare_address(address), address)
+        for other in ('104.32.0.1', '68.3.162.151', '192.168.50.122'):
+            self.assertFalse(match.cloudflare_address(other), other)
+
+    def test_a_report_written_after_the_connection_closed_is_no_route_evidence(self):
+        import relay_cloudflare_match as match
+        closed = {'end_reason': 0, 'found': False, 'relay_pop': 0, 'relayed': False, 'remote_address': '', 'remote_identity': '', 'state': 0}
+        verdict = match.judge_relay(cloudflare_run(client_connection=closed))
+        self.assertTrue(verdict['passed'], verdict['reasons'])
+        self.assertEqual(verdict['client_report'], 'not available: the report was written after the connection closed')
+        found_direct = dict(closed, found=True, relayed=False, remote_address='24.251.145.96:5000', state=4)
+        self.assertFalse(match.judge_relay(cloudflare_run(client_connection=found_direct))['passed'])
+
+
 if __name__ == '__main__':
     unittest.main()

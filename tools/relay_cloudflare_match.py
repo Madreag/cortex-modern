@@ -57,6 +57,10 @@ CLOUDFLARE_RANGES = [ipaddress.ip_network(text) for text in (
     '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
     '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22', '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32',
     '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32')]
+# Cloudflare's own address space beyond that proxy list, by registry record: its Realtime TURN relays allocate from it
+# (the relay candidates of 2026-10-03 were 104.30.136.195 and 104.30.146.169; ARIN RDAP NET-104-16-0-0-1, CLOUDFLARENET,
+# registrant Cloudflare, Inc.). Every relay address a run sees is also looked up and its registrant kept in the verdict.
+CLOUDFLARE_REGISTERED = [ipaddress.ip_network('104.16.0.0/12')]
 CLOUDFLARE_HOSTS = {'turn.cloudflare.com', 'stun.cloudflare.com'}
 SECRET_SETTINGS = ('NetworkTurnPass', 'NetworkPlayerTurnPass')
 # The game's built-in directory (c_DefaultSessionDirectoryUrl): the hotspot rows that turn the tailnet off meet there.
@@ -99,7 +103,23 @@ def cloudflare_address(text: str) -> bool:
         address = ipaddress.ip_address(str(text).strip('[]'))
     except ValueError:
         return False
-    return any(address.version == network.version and address in network for network in CLOUDFLARE_RANGES)
+    return any(address.version == network.version and address in network for network in CLOUDFLARE_RANGES + CLOUDFLARE_REGISTERED)
+
+
+def registrant(address: str) -> dict:
+    """The address's registry record (RDAP through rdap.org, which redirects to the owning registry): network and owner."""
+    try:
+        request = urllib.request.Request(f'https://rdap.org/ip/{address}', headers={'User-Agent': 'cccp-relay-proof/1',
+                                                                                    'Accept': 'application/rdap+json'})
+        with urllib.request.urlopen(request, timeout=20) as reply:
+            record = json.load(reply)
+    except (OSError, ValueError) as error:
+        return dict(address=address, error=f'{type(error).__name__}: {error}'[:200])
+    owners = [item[3] for entity in record.get('entities', []) if {'registrant', 'administrative'} & set(entity.get('roles', []))
+              for item in (entity.get('vcardArray') or [None, []])[1] if item[0] == 'fn']
+    return dict(address=address, handle=record.get('handle'), name=record.get('name'), start=record.get('startAddress'),
+                end=record.get('endAddress'), owners=owners, cloudflare=any('cloudflare' in str(owner).lower() for owner in owners)
+                or 'cloudflare' in str(record.get('name', '')).lower())
 
 
 def host_of(endpoint: str) -> str:
@@ -158,7 +178,7 @@ def judge_relay(run: dict) -> dict:
     mode coturn: the same at our relay's addresses on a fixed offer; mode automatic: every peer's route recorded, and a
     peer the row expects on the relay (the hotspot fallback) relayed through the provider's offer."""
     mode, session = run['mode'], run.get('session_id')
-    reasons, peers, routes = [], {}, {}
+    reasons, peers, routes, client_report = [], {}, {}, None
     provider = run.get('provider', {'cloudflare': 'cloudflare', 'coturn': 'fixed'}.get(mode))
     relay_ok = (lambda address: address in (run.get('relay_addresses') or [])) if mode == 'coturn' else cloudflare_address
     sent = candidates_by_peer(run.get('signals') or [])
@@ -203,11 +223,13 @@ def judge_relay(run: dict) -> dict:
         if run.get('offer_urls') is not None and (not hosts or set(hosts) - allowed):
             reasons.append(f'the offer names relay servers {hosts}, expected only {sorted(allowed)}')
         report = run.get('client_connection') or {}
-        if report.get('relayed') is not True:
+        if report.get('found') is False:
+            client_report = 'not available: the report was written after the connection closed'
+        elif report.get('relayed') is not True:
             reasons.append(f'the client report does not name a relayed connection: {report}')
         elif report.get('remote_address') and not relay_ok(host_of(report['remote_address'])):
             reasons.append(f'the client report names {report["remote_address"]}, outside the {mode} relay')
-    return dict(mode=mode, passed=not reasons, reasons=reasons, peers=peers, routes=routes,
+    return dict(mode=mode, passed=not reasons, reasons=reasons, peers=peers, routes=routes, client_report=client_report,
                 direct_as_expected=all(route == 'direct' for route in routes.values()) if mode == 'automatic' else None)
 
 
@@ -765,6 +787,10 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
                              client_connection=connection if isinstance(connection, dict) else {}, expect_routes=run.get('expect_routes'),
                              relay_addresses=COTURN_ADDRESSES if run['relay'] == 'coturn' else None,
                              **({'provider': run['provider']} if 'provider' in run else {})))
+    # The candidates each side sent, parsed from the rendezvous the directory carried (addresses only, never the payload).
+    write_json(root / 'signals-candidates.json', [dict(sender='host' if sender == 'host' else 'client', candidates=[
+        f'{address}:{port} {kind}' for address, port, kind in signal_candidates(payload)],
+        payload_sha256=hashlib.sha256(payload.encode()).hexdigest()) for sender, payload in facts['signals']])
     builds = edith_cross.pair_build_evidence(root, dict(source_sha=next(iter({value['head'] for value in facts['identities'].values()}))), records)
     rtts = transport_rtts(host_log)
     scan = book.scan([root])
@@ -809,7 +835,12 @@ def judge_run(h, scenario: dict, run: dict, root: Path, facts: dict, book) -> di
         listed = read_json(root / f'{joiner}-listed.json').get('session_id') == session
         details['listing'] = listing_evidence(directory_lines, session, listed)
     checks.update({name: value['passed'] for name, value in details.items()})
-    verdict = dict(name=run['name'], scenario=scenario['name'], relay=run['relay'], root=str(root), passed=all(checks.values()), checks=checks, details=details,
+    # Each relay address the peers sent, as its registry records it: a Cloudflare row's relays are Cloudflare's.
+    relay_addresses = sorted({address for entry in relay['peers'].values() for address in entry.get('relay_addresses') or []})
+    registry = [registrant(address) for address in relay_addresses] if run['relay'] == 'cloudflare' else []
+    if registry:
+        checks['relay_registrant'] = all(row.get('cloudflare') for row in registry)
+    verdict = dict(name=run['name'], scenario=scenario['name'], relay=run['relay'], root=str(root), passed=all(checks.values()), checks=checks, details=details, registry=registry,
                    session_id=session, peers=peers, relay_evidence=relay, rtt=rtts, delay_changes=delay_changes(host_log),
                    compared_ticks=compared, desyncs=mismatched, builds=builds, provider_calls=facts['provider_calls'],
                    stun_legs=facts['legs'], ports=facts['ports'], states=facts['states'], started=facts['started'], finished=facts['finished'],
