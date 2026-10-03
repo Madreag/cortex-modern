@@ -49,55 +49,82 @@ def memory_verdict(peers):
     return dict(status=status, incarnations=rows, reason='; '.join(failures) or ('all incarnations sampled within both bounds' if rows else 'no incarnation memory evidence'))
 
 
+def completed_workload(instances, events, ticks):
+    observed = {instance['name']: max((row['budget_tick'] for row in events.get(instance['name'], [])
+                    if row.get('type') == 'progress' and type(row.get('budget_tick')) is int), default=0)
+                for instance in instances}
+    return dict(passed=bool(observed) and all(value >= ticks for value in observed.values()),
+                configured_ticks=ticks, observed_budget_ticks=observed)
+
+
 def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     core=all(checks.get(name,False) for name in CORE_CHECKS)
     engine_red=not checks.get('zero_unscheduled_holds',False) and bool(checks.get('only_capture_induced_holds')) and all(checks.get(name,False) for name in CORE_CHECKS if name not in ('full_history','zero_unscheduled_holds'))
-    oracle=lambda passed,reason='':dict(status='PASS' if passed else 'FAIL',reason=reason)
+    def oracle(*names, rule='', detail=''):
+        failed = [f'{name}={checks.get(name)!r}' for name in names if checks.get(name) is not True]
+        return dict(status='FAIL' if failed or detail else 'PASS', reason='; '.join([*failed, *([detail] if detail else [])]), rule=rule)
     pending=manifest.get('capture_rows_pending',[1,2])
     memory = memory_verdict(peers)
-    coverage_status='FAIL' if any(row['status']=='FAIL' for row in matrix) else \
-        'NOT COVERED' if any(row['status']=='NOT COVERED' for row in matrix) else 'PASS'
+    required_coverage = [row for row in matrix if row.get('required', True)]
+    coverage_failed = [row for row in required_coverage if row.get('status') not in ('PASS', 'NOT APPLICABLE')]
+    coverage_status = 'FAIL' if any(row.get('status') == 'FAIL' for row in coverage_failed) else 'NOT COVERED' if coverage_failed else 'PASS'
+    ungated = [name for name, peer in peers.items() if not peer.get('feel_gated')]
+    feel_detail = '; '.join(f'{name}: {peers[name].get("feel_status", "no quiet timing evidence")}' for name in ungated)
     oracles=dict(
-        preflight=dict(oracle(checks.get('preflight_complete',False),'; '.join(mixed_builds) or
-            'Every box preflighted without a driver finding, and every incarnation ran the executable its preflight hashed.'),reasons=list(mixed_builds)),
-        live_hashes=oracle(checks.get('full_history',False) and checks.get('zero_desync',False),'Every declared comparable key; UNKNOWN never equals.'),
-        unscheduled_holds=oracle(checks.get('zero_unscheduled_holds',False) and checks.get('hold_evidence_complete',False),
-            'Every incarnation must retain its stdout hold log; missing evidence cannot establish zero holds.'),
-        native_completion=oracle(checks.get('native_completion',False)),
-        full_state=oracle(checks.get('shared_fullstate',False) and not pending,
-            'NOT COVERED by '+ '; '.join(CAPTURE_ROWS[row] for row in pending) if pending else 'All promised Shared/canonical/restored observations must compare.'),
-        recovery=oracle(checks.get('bounded_recovery',False),'Every recovery id must reach its declared terminal outcome within its declared deadline.'),
-        fault_effects=oracle(checks.get('faults_applied',False) and checks.get('native_fault_effects',False),'Arming H4 is separate from observing its native ack/commit effect.'),
-        coverage=dict(status=coverage_status,reason='Each matrix row retains its own minimum, counts and reason.'),
-        feel=dict(status=('PASS' if checks.get('quiet_feel',False) else 'FAIL') if any(p.get('feel_gated') for p in peers.values()) else
-                         'UNDER LOAD' if any(p.get('feel_status')=='UNDER LOAD' for p in peers.values()) else 'REPORTED',reason='Gated only in a declared quiet window without measured load.'),
+        preflight=dict(oracle('preflight_complete', detail='; '.join(mixed_builds),
+            rule='Every incarnation runs the executable its preflight and build receipt identify.'), reasons=list(mixed_builds)),
+        live_hashes=oracle('full_history', 'zero_desync', rule='Every declared comparable key is equal; unknown evidence cannot pass.'),
+        unscheduled_holds=oracle('zero_unscheduled_holds', 'hold_evidence_complete',
+            rule='Every incarnation retains its hold log; every unscheduled hold fails.'),
+        native_completion=oracle('native_completion'),
+        full_state=oracle('shared_fullstate', detail='unresolved capture evidence: '+ '; '.join(CAPTURE_ROWS[row] for row in pending) if pending else '',
+            rule='All promised shared, canonical, restored and landed observations compare.'),
+        recovery=oracle('bounded_recovery', detail='; '.join(f"{row['id']}: {row.get('reason', 'terminal recovery failed')}" for row in recoveries if not row['passed']),
+            rule='Every scheduled recovery reaches its declared terminal within the measured deadline.'),
+        fault_effects=oracle('faults_applied', 'native_fault_effects', rule='Each scheduled injection leaves its native effect receipt.'),
+        coverage=dict(status=coverage_status, reason='; '.join(f"{row.get('id', 'coverage')}: {row.get('status', 'missing status')}" for row in coverage_failed),
+                      rule='Each required coverage minimum is measured.', diagnostic_rows=[row.get('id') for row in matrix if row.get('required') is False]),
+        feel=oracle('quiet_feel', detail=feel_detail or ('no peer timing evidence' if not peers else ''),
+                    rule='Every survivor meets the independent feel bars in a quiet measured window.'),
         memory=memory,
-        record_integrity=oracle(checks.get('record_integrity',False)),
-        engine_findings=oracle(checks.get('no_engine_findings',False),'All findings remain visible, including the named capture rows.'),
-        exits=oracle(checks.get('all_incarnation_exits',False),'Each incarnation must exit normally or have its own scheduled, actually injected crash receipt.'),
-        pace=oracle(checks.get('box_pace',False),'Every box whose own sim fits the tick holds >= 59.5 ticks/s over the match: a slow presenter sheds frames, never ticks.'))
+        record_integrity=oracle('record_integrity'),
+        engine_findings=oracle('no_engine_findings', rule='Every observed engine finding remains visible.'),
+        exits=oracle('all_incarnation_exits', rule='Each incarnation exits normally or has its own actual scheduled termination receipt.'),
+        pace=oracle('box_pace', rule='Every peer keeps the measured relative round rate.'),
+        workload=oracle('unique_gameplay_budget', rule='Every instance completes the configured number of unique gameplay ticks.'))
     if mixed_builds:
-        for name in ('live_hashes','full_state'): oracles[name]=dict(status='VOID',reason='Compared across a mixed build; the preflight names both executables.')
-    if not manifest.get('faults'): oracles['recovery']['status']='NOT APPLICABLE'
-    if not manifest.get('faults'): oracles['fault_effects']['status']='NOT APPLICABLE'
+        for name in ('live_hashes','full_state'): oracles[name].update(status='VOID', reason='; '.join(mixed_builds))
+    if not manifest.get('faults'):
+        for name in ('recovery', 'fault_effects'):
+            oracles[name].update(status='NOT APPLICABLE', reason='The schedule contains no fault.')
+    asked = []
     if manifest['scenario']!='match':
-        # Each item is judged for what the schedule asks of it; one the schedule never asks for is not applicable, with its reason.
         phases={f.get('phase','hold') for f in manifest.get('faults',[]) if f.get('action')=='brain-eliminate'}
-        forced={'hold':checks.get('forced_end_during_hold',False),'catch_up':checks.get('forced_end_during_transfer',False)}
-        oracles['forced_ends']=oracle(all(forced.get(phase,False) for phase in phases),'Actual activity-over must overlap the named recovery phase; a stale hint is insufficient.') if phases else             dict(status='NOT APPLICABLE',reason='The schedule forces no end.')
-        oracles['rematches']=oracle(checks.get('changed_settings_rematch',False) and checks.get('fog_on_match',False)) if checks.get('round_ended',True) else             dict(status='NOT APPLICABLE',reason='No round ended inside the budget, so no rematch carried changed settings.')
-        # A restarted peer returns through its ticket and the host's image; only a restart from its own archive exercises an autosave restore.
-        oracles['autosaves']=oracle(checks.get('validated_autosave_archives',False),'Archive integrity alone does not prove restoration or sealed admission.')             if any(f.get('action')=='crash-restart' and f.get('restore')=='archive' for f in manifest.get('faults',[])) else             dict(status='NOT APPLICABLE',reason='The schedule restarts no peer from its own archive (a restarted peer returns through its ticket and the host image), so no autosave restoration or sealed admission is exercised; the restore arms judge it.')
-    required = (*CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings', 'box_pace')
+        forced={'hold':'forced_end_during_hold','catch_up':'forced_end_during_transfer'}
+        oracles['forced_ends'] = oracle(*(forced.get(phase, 'unrecognized_end_phase:'+phase) for phase in sorted(phases)),
+            rule='The observed end overlaps the scheduled recovery phase.') if phases else dict(status='NOT APPLICABLE', reason='The schedule forces no end.')
+        rematches = bool(phases or manifest.get('rematches') or any('-net-cross-rematches' in spec.get('flags', []) for spec in manifest.get('specs', [])))
+        oracles['rematches'] = oracle('changed_settings_rematch', 'fog_on_match', rule='The requested rematch applies changed settings and fog.') if rematches else \
+            dict(status='NOT APPLICABLE', reason='The schedule requests no rematch.')
+        restore = any(f.get('action')=='crash-restart' and f.get('restore')=='archive' for f in manifest.get('faults',[]))
+        saves = restore or any('-net-autosave-seconds' in spec.get('flags', []) and
+            spec['flags'][spec['flags'].index('-net-autosave-seconds')+1] not in ('0', 0) for spec in manifest.get('specs', []))
+        oracles['autosaves'] = oracle('validated_autosave_archives', rule='Requested archives are present and valid; a requested restore also proves sealed admission.') if saves else \
+            dict(status='NOT APPLICABLE', reason='The schedule requests neither autosaves nor an archive restore; a ticket return uses the host image.')
+        asked = [name for name in ('forced_ends', 'rematches', 'autosaves') if oracles[name]['status'] != 'NOT APPLICABLE']
+    required = (*CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings', 'box_pace',
+                'quiet_feel', 'unique_gameplay_budget', 'coverage_minima', 'memory_bounds')
     if manifest['scenario'] != 'match':
         required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
     workload = (manifest['ticks'] == 1201 and not manifest.get('faults')) if manifest['scenario'] == 'match' else (
         manifest['ticks'] == 72000 if manifest['scenario'] == 'soak' else
         bool(manifest.get('faults')) if manifest['scenario'] == 'chaos' else False)
     v1 = (all(checks.get(name, False) for name in required) and workload and bool(manifest.get('fullstate_every'))
-          and not pending and not mixed_builds and memory['status'] == 'PASS')
+          and not pending and not mixed_builds and memory['status'] == 'PASS'
+          and oracles['feel']['status'] == 'PASS' and coverage_status == 'PASS'
+          and all(oracles[name]['status'] == 'PASS' for name in asked))
     return dict(core_passed=core,core_engine_red=engine_red,mixed_builds=list(mixed_builds),
-        v1_passed=bool(v1), v1_checks=list(required), v1_workload=workload,
+        v1_passed=bool(v1), v1_checks=list(required), v1_required_oracles=asked, v1_workload=workload,
         gate_b_eligible=(core or engine_red) and checks.get('shared_fullstate',False) and not pending and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
 
 
@@ -405,7 +432,8 @@ def coverage(events, peers, manifest):
         status = 'NOT COVERED' if reason else 'PASS' if all(c['successes'] and all(v >= minimum for v in c['successes'].values()) for c in counts.values()) else 'FAIL'
         if key=='terrain' and manifest['scenario']=='match':
             status,reason='NOT APPLICABLE','The destruction minimum applies to soaks; smoke event totals remain visible.'
-        result.append(dict(id=key, item=label, status=status, reason=reason, unit=unit, minimum=minimum, peers=counts))
+        result.append(dict(id=key, item=label, status=status, reason=reason, unit=unit, minimum=minimum, peers=counts,
+                           required=key == 'terrain', scope='acceptance soak minimum' if key == 'terrain' else 'broader diagnostic inventory'))
     return result
 
 
@@ -675,6 +703,7 @@ def build_report(root):
         under_load |= bool(preflight.get('load'))
         quiet = manifest.get('quiet_window', False) and not under_load and bool(samples)
         feel_pins = [timing.get('steady_wall_tps') is not None and timing['steady_wall_tps'] >= 59.5,
+                     stalls == 0,
                      timing.get('waiting_percent') is not None and timing['waiting_percent'] < 1,
                      timing.get('longest_stall_ms') is not None and timing['longest_stall_ms'] <= 50,
                      timing.get('confirmed_horizon_lag_ms') is not None and timing['confirmed_horizon_lag_ms'] <= 50]
@@ -784,7 +813,7 @@ def build_report(root):
                   native_desync_checks=all(p['native'].get('desync_check', {}).get('mismatches') == 0 and
                       p['native'].get('desync_check', {}).get('compares', 0) > 0 and
                       p['native']['desync_check'].get('compare_margin', -1) >= 0 for p in peers.values()),
-                  quiet_feel=all(not p['feel_gated'] or p['feel_pass'] for p in peers.values()),
+                  quiet_feel=bool(peers) and all(p['feel_gated'] and p['feel_pass'] for p in peers.values()),
                   binary_admission_limit=all(c.get('peer_limit', 0) >= len(manifest['instances']) for c in capabilities.values()),
                   record_integrity=all(any(r.get('type') == 'tick_timing' for r in values) and
                       not any(r.get('type') in ('record_loss', 'record_rotation') or (r.get('type') == 'tick_timing' and not r.get('partition_valid')) for r in values)
@@ -800,9 +829,10 @@ def build_report(root):
     checks['capture_barrier_outcomes']=all(any(r.get('source_peer')==b['peer'] and r.get('id')==b['id'] and
         r.get('capture_phase')==b['phase'] and r.get('capture_tick')==b['tick'] and r.get('outcome')=='released' and
         r.get('wait_ms',float('inf'))<=b['timeout_ms'] for r in barrier_receipts) for b in manifest.get('capture_barriers',[]))
+    checks['coverage_minima'] = all(r['status'] in ('PASS', 'NOT APPLICABLE') for r in matrix if r.get('required', True))
+    measured_workload = completed_workload(manifest['instances'], events, manifest['ticks'])
+    checks['unique_gameplay_budget'] = measured_workload['passed']
     if manifest['scenario'] != 'match':
-        checks['coverage_minima'] = all(r['status'] in ('PASS', 'NOT COVERED', 'NOT APPLICABLE') for r in matrix)
-        checks['unique_gameplay_budget'] = all(max((r.get('budget_tick',0) for r in values if r.get('type')=='progress'),default=0)>=manifest['ticks'] for values in events.values())
         endings = [r for values in events.values() for r in values if r.get('type')=='elimination_outcome' and r.get('result')=='activity_over']
         checks['forced_end_during_hold'] = any(r.get('overlap_hold_at_end') for r in endings)
         witnesses=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='recovery_match_end']
@@ -812,7 +842,9 @@ def build_report(root):
         checks['changed_settings_rematch'] = all(changed_settings(p['configs']) for p in peers.values())
         checks['fog_on_match'] = all(any(c.get('fog') for c in p['configs']) for p in peers.values())
         checks['round_ended'] = any(r.get('type')=='match_boundary' for values in events.values() for r in values)
-        checks['validated_autosave_archives'] = False
+        restore_requested = any(f.get('restore') == 'archive' for f in manifest['faults'])
+        checks['validated_autosave_archives'] = not restore_requested and bool(peers) and all(
+            peer['archives'] and all(row.get('passed') is True for row in peer['archives']) for peer in peers.values())
     checks['memory_bounds'] = memory_verdict(peers)['status'] == 'PASS'
     for name,peer in peers.items():
         peer['observations']=len(live[name])
@@ -831,6 +863,7 @@ def build_report(root):
                   peers=peers, local_host_render=local_host_render(manifest, peers),
                   comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
+                  measured_workload=measured_workload,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
                   native_recovery_records=native_recovery_records,native_fault_effects=effects,unscheduled_holds=unscheduled_holds,
                   findings=findings, triage=load(root/'triage.json',[]), requirements=requirements(manifest, comparison, peers),
