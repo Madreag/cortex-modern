@@ -156,12 +156,18 @@ namespace RTE {
 			const NetRosterSeat* seat = roster.Find(NetRosterIdOf(entry.stableSeat));
 			if (!seat) continue;
 			std::string name;
+			const std::string open = NetMatchConfigUtil::UnseatedSlotName(entry.lockstepPeerId, config.persistentWorld);
 			for (const NetMatchPlayerSlot& slot: config.players)
-				if (slot.peerId == entry.lockstepPeerId && !slot.displayName.empty()) name = slot.displayName;
+				if (slot.peerId == entry.lockstepPeerId && !slot.displayName.empty() && !(config.persistentWorld && slot.displayName == open)) name = slot.displayName;
 			for (const NetLobbyMember& member: m_LobbySnapshot.members)
-				if (member.peerId == entry.lockstepPeerId && !member.displayName.empty() && member.displayName != NetMatchConfigUtil::UnseatedSlotName(member.peerId, config.persistentWorld))
+				if (member.peerId == entry.lockstepPeerId && !member.displayName.empty() && member.displayName != open)
 					name = member.displayName;
 			views[entry.lockstepPeerId] = BuildSeatView(entry.lockstepPeerId, entry.stableSeat, roster.revision, *seat, name);
+		}
+		if (m_Coordinator) {
+			std::map<uint8_t, std::string> names;
+			for (const auto& [peerId, view]: views) names[peerId] = view.name;
+			m_Coordinator->SetSeatNames(std::move(names));
 		}
 		std::map<uint8_t, SeatView> previous = std::move(m_SeatViews);
 		m_SeatViews = std::move(views);

@@ -1377,8 +1377,10 @@ namespace RTE {
 		}
 		/// Names the required peers the next frame still waits on; empty when none are missing.
 		std::string DescribeMissingPeers() const;
-		/// The peer's roster display name, or "peer N" when the roster has none.
+		/// The peer's display name: its player's own from the seat roster, else its config slot's unless that is the world's open-seat label, else "peer N".
 		std::string DescribePeer(uint8_t peerId) const;
+		/// The seat roster's player names by lockstep peer; the session plane's pump hands them over from any thread.
+		void SetSeatNames(std::map<uint8_t, std::string> names);
 		std::string BuildReportJson() const;
 
 		static const char* StateName(NetLockstepState state);
@@ -1944,6 +1946,8 @@ namespace RTE {
 		uint8_t m_SupersedingPeer = 0; //!< Host: the successor that answered from a later generation.
 		std::set<uint8_t> m_RemovedPeers; //!< Host: the seats it kicked or banned; it never hands its match to one.
 		bool m_RemovedByHost = false; //!< Client: the host's last word was this seat's removal, so its link closing is not the host lost.
+		mutable std::mutex m_SeatNamesMutex; //!< Guards m_SeatNames, which the session plane sets outside the round's plane.
+		std::map<uint8_t, std::string> m_SeatNames; //!< The seat roster's player names by lockstep peer.
 		uint64_t m_RemovalBoundary = 0; //!< Client: the frame the host's latest removal notice took effect at.
 		bool m_Superseded = false; //!< Host: the match went on under a later generation without it.
 		/// Host: while provisional, asks each successor in the match's order in turn, once a second, whether it hosts the match at a later

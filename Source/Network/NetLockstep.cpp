@@ -9618,12 +9618,25 @@ namespace RTE {
 
 	std::string NetLockstepCoordinator::DescribePeer(uint8_t peerId) const {
 		NET_PLANE_CHECK();
+		{
+			std::lock_guard<std::mutex> lock(m_SeatNamesMutex);
+			if (const auto named = m_SeatNames.find(peerId); named != m_SeatNames.end()) {
+				return named->second;
+			}
+		}
+		// A world publishes every seat as open, so its slot label never names the player in it.
+		const std::string open = NetMatchConfigUtil::UnseatedSlotName(peerId, m_Config.matchConfig.persistentWorld);
 		for (const NetMatchPlayerSlot& slot: m_Config.matchConfig.players) {
-			if (slot.peerId == peerId && !slot.displayName.empty()) {
+			if (slot.peerId == peerId && !slot.displayName.empty() && !(m_Config.matchConfig.persistentWorld && slot.displayName == open)) {
 				return slot.displayName;
 			}
 		}
 		return "peer " + std::to_string(peerId);
+	}
+
+	void NetLockstepCoordinator::SetSeatNames(std::map<uint8_t, std::string> names) {
+		std::lock_guard<std::mutex> lock(m_SeatNamesMutex);
+		m_SeatNames = std::move(names);
 	}
 
 	std::string NetLockstepCoordinator::DescribeMissingPeers() const {

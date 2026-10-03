@@ -4511,6 +4511,30 @@ namespace RTE {
 			return true;
 		}
 
+		// A world publishes every seat as open, so the round names a seat by its player from the seat roster, never 'Open'.
+		bool TestAWorldSeatIsNamedByItsPlayer(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator client;
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A87, 2, NetTransportLane::ControlReliable);
+			b.peerCount = 3;
+			b.roundId = 0x9A87; b.authorityPeerId = 1;
+			b.matchConfig.persistentWorld = true;
+			b.matchConfig.players.clear();
+			for (uint8_t peer = 1; peer <= 3; ++peer)
+				b.matchConfig.players.push_back(NetMatchPlayerSlot{peer, static_cast<uint8_t>(peer - 1), false, peer == 1 ? std::string("Host") : NetMatchConfigUtil::UnseatedSlotName(peer, true)});
+			b.remoteTransportPeerIds = {{1, 1}, {3, 1}};
+			if (!hostWire.StartHost(48919, error) || !clientWire.Connect("loopback", 48919, error) || !client.Start(clientWire, b, error)) return false;
+			const std::string unnamed = client.DescribePeer(3);
+			client.SetSeatNames({{1, "Host"}, {3, "Ana"}});
+			const std::string named = client.DescribePeer(3);
+			if (unnamed == NetMatchConfigUtil::UnseatedSlotName(3, true) || named != "Ana" || client.DescribePeer(1) != "Host") {
+				*error = "a world seat reads '" + unnamed + "' with no roster name and '" + named + "' once its player is 'Ana'";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_world_seat_is_named_by_its_player unnamed='" << unnamed << "' named='" << named << "'" << std::endl;
+			return true;
+		}
+
 		// A seat whose stream keeps advancing is waited on while its newest tick stays within the bound of the frame the
 		// round needs from it, and held like any other once it strays past: nobody paces the others beyond the bound.
 		bool TestAFeedingPeerIsWaitedOnWithinTheBound(std::string* error) {
@@ -23395,6 +23419,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAJoinerIgnoresTheRoundsFirstBoundary, "a_joiner_ignores_the_rounds_first_boundary");
 		row(&TestAJoinerTakesTheHostsRoundStartAsAStraggler, "a_joiner_takes_the_hosts_round_start_as_a_straggler");
 		row(&TestAJoinerKeepsASeatHeldAfterItsStart, "a_joiner_keeps_a_seat_held_after_its_start");
+		row(&TestAWorldSeatIsNamedByItsPlayer, "a_world_seat_is_named_by_its_player");
 		row(&TestARemovedSeatEndsOnItsRemoval, "a_removed_seat_ends_on_its_removal");
 		row(&TestAHostKilledWithFourPlayersHandsOverOnAMajority, "a_host_killed_with_four_players_hands_over_on_a_majority");
 		row(&TestTheMostAdvancedSurvivorServesTheGather, "the_most_advanced_survivor_serves_the_gather");
