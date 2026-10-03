@@ -484,5 +484,20 @@ class FeelBars(unittest.TestCase):
         self.assertFalse(match.feel_bars({'peers': {}}, 'host')['passed'])
 
 
+class LoginSweep(unittest.TestCase):
+    """The pattern sweep finds a relay login in the clear without being told any secret, and passes a blanked one."""
+
+    def test_a_clear_login_is_found_and_a_blanked_one_is_not(self):
+        import tempfile
+        import relay_login_sweep as sweep
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'clear.ccreplay').write_bytes(b'\x00' + json.dumps({'iceServers': SERVERS}).encode())
+            (root / 'blank.ccreplay').write_bytes(b'\x00{"username":"xxxxxxxx","credential":"xxxxxxxxxx"}')
+            result = sweep.sweep([root], set())
+        self.assertEqual([Path(row['path']).name for row in result['files_with_logins']], ['clear.ccreplay'])
+        self.assertNotIn('unit-minted', json.dumps(result))
+
+
 if __name__ == '__main__':
     unittest.main()
