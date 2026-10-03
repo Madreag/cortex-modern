@@ -883,7 +883,9 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
     second.mkdir(parents=True, exist_ok=False)
     resumed, resumed_records = {}, {}
     for who in ("host", "client"):
-        args = ["-net-match-service-e2e", "-net-port", str(port + 2), "-net-match-peers", "2",
+        # The restarted host listens where it did: a ticket names its host by address and port, so a host that
+        # moved would be another host to the client, and a seat held for its player waits for that ticket.
+        args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
                 "-net-match-ticks", str(resume_ticks), "-net-match-input-delay", "3",
                 "-net-autosave-seconds", "1", "-net-match-e2e-resync",
                 "-net-match-service-preset", "Determinism FeelBaseline", "-net-match-service-module", "UserScenes.rte",
@@ -1234,7 +1236,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
             for leftover in (runtime / "Autosaves").glob(f"{world_id}-{resume_tick}.*"):
                 leftover.unlink()
 
-    resumed = _run_world_round(repo, second, port + 2, resume_end, stall(resume_tick, {}), carry=first, own_ticks=resumed_ticks,
+    resumed = _run_world_round(repo, second, port, resume_end, stall(resume_tick, {}), carry=first, own_ticks=resumed_ticks,
                                after_carry=drop_client_copy if client_lacks_checkpoint else None)
     host_log = peer_log(second, "host")
     if client_lacks_checkpoint:
@@ -1276,7 +1278,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     fresh.mkdir(parents=True, exist_ok=False)
     # The fresh world rotates the previous boot out only once it has completed its own retained checkpoints: it runs as many
     # writer passes as the resumed round did.
-    fresh_records = _run_world_round(repo, fresh, port + 4, resumed_ticks, stall(0, {"host": ["-net-world-fresh"]}), carry=second)
+    fresh_records = _run_world_round(repo, fresh, port, resumed_ticks, stall(0, {"host": ["-net-world-fresh"]}), carry=second)
     fresh_log = peer_log(fresh, "host")
     assert not RESUMING.search(fresh_log), "a fresh world boot resumed a checkpoint anyway"
     fresh_identity = WORLD_IDENTITY.findall(fresh_log)
