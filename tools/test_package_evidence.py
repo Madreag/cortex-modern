@@ -21,7 +21,8 @@ class PackageEvidence(unittest.TestCase):
         (root/'MANIFEST.json').write_text(json.dumps(manifest))
         smoke = root/'smoke'; smoke.mkdir()
         spec = json.loads((Path(package_windows.__file__).parent/'e2e/sp-smoke.json').read_text())
-        runs = [dict(name=row['name'], peers=[dict(peer=p['name'], record=dict(exit_code=0, exe_sha256=exe))
+        runs = [dict(name=row['name'], peers=[dict(peer=p['name'], record=dict(exit_code=0, exe_sha256=exe,
+            runner='win32_test_runner.py', exe_path=str(root/package_windows.EXECUTABLE), package_unpacked=str(root)))
             for p in row.get('peers', spec.get('peers', []))]) for row in spec['runs']]
         (smoke/'capture.json').write_text(json.dumps(dict(scenario='sp-smoke', runs=runs,
             source=dict(tip='a'*40, package='v1.0.0'), exe=dict(path=str(root/package_windows.EXECUTABLE), sha256=exe))))

@@ -108,6 +108,10 @@ def unpacked_smoke(unpacked, manifest, root):
         if not peers or any(peer.get('record', {}).get('exit_code') != 0 or peer.get('record', {}).get('timed_out')
                             or peer.get('record', {}).get('exe_sha256') != exe.get('sha256') for peer in peers):
             errors.append('smoke has absent/failed/mismatched peer launch evidence')
+        if any(peer.get('record', {}).get('runner') != 'win32_test_runner.py'
+               or Path(peer.get('record', {}).get('exe_path') or '').resolve() != (unpacked / EXECUTABLE).resolve()
+               or Path(peer.get('record', {}).get('package_unpacked') or '').resolve() != unpacked.resolve() for peer in peers):
+            errors.append('smoke lacks the Windows runner receipt for the actual unpacked executable path')
         items = review.get('checklist') or []
         if not items or review.get('run_findings') or review.get('interrupted') or any(
                 item.get('finding') or item.get('blocked_by') or item.get('probe') not in ('pass', 'awaiting-review') for item in items):

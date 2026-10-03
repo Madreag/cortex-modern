@@ -16,7 +16,7 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json
-from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes
+from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes_or_fail as compare_live_hashes
 from feel.records import compress_case_records, record_path
 from run_sim_test import make_run, engine_executable
 from feel.launch_budget import install_memory_guard, exclusive_matrix
@@ -43,7 +43,7 @@ LAG_ARMS = tuple(f'{lag}ms-{cap}' for lag in (100, 200) for cap in ('60hz', 'unc
 
 
 def stamp():
-    return datetime.now(MST).strftime('%Y-%m-%d %H:%M MST')
+    return datetime.now(MST).strftime('%Y-%m-%d %I:%M %p MST')
 
 
 def scratch_bytes(root, limit=BYTE_LIMIT):
@@ -302,6 +302,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                     lua_states_note='retired: the engine fixes the count at build time')
     write_json(out / 'manifest.json', manifest)
     peers = ['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)
+    manifest['heavy_scene_levers'] = {peer: dict(lever='CCCP_TEST_SIM_COST_US', cost_us=PEER_SIM_COST[peer][0],
+                                               from_tick=PEER_SIM_COST[peer][1]) for peer in peers if peer in PEER_SIM_COST}
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
     # The jitter rides with the lag: the peer that carries the link's delay jitters both of its directions, as a cross fault does.
     manifest['per_peer_jitter_ms'] = {peer: jitter_ms if manifest['per_peer_lag_ms'][peer] else 0 for peer in peers}
@@ -598,6 +600,20 @@ def timing_peer(run, peer):
         return unreduced_peer_report(run, peer, reason)
 
 
+def retained_pair_proof(run, peer, ticks, window_only=None):
+    path = run / f'{peer}-live.jsonl'
+    log_path = run / peer / 'stdout.log'
+    log = log_path.read_text(encoding='utf-8-sig', errors='replace') if log_path.is_file() else ''
+    try:
+        images = held_client_images(log, path)
+        return compare_pair(run / 'host_trace.json', run / f'{peer}_trace.json', ticks, cross_peer=True,
+                            client_away=tuple((stop, image) for stop, image in images if image >= stop),
+                            window_only=bool(images) if window_only is None else window_only,
+                            client_rewinds=tuple(image for stop, image in images if image < stop))
+    except ValueError as error:
+        return dict(status='FAIL', **{'pass': False}, reason=f'{path}: {error}')
+
+
 def reduce_timing_case(run, reference=None):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
@@ -614,19 +630,11 @@ def reduce_timing_case(run, reference=None):
         measured.setdefault('pins', {}).update(input_measurements[peer])
     # A peer that rejoined from an image is compared on every tick it kept: the ticks it voided up to the image are skipped, and
     # as it counts its cap from the image only the planned window is compared.
-    peer_log = (run / f'{comparison_peer}/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / f'{comparison_peer}/stdout.log').is_file() else ''
-    peer_live = run / f'{comparison_peer}-live.jsonl'
-    rejoined = bool(held_client_images(peer_log, peer_live))
-    proof = compare_pair(run / 'host_trace.json', run / f'{comparison_peer}_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
-                         client_away=held_client_away(peer_log, peer_live), window_only=rejoined, client_rewinds=held_client_rewinds(peer_log, peer_live))
+    proof = retained_pair_proof(run, comparison_peer, manifest.get('ticks', TICKS))
     if silent:
         # The held client's own ticks are compared too: before its hold and from the image it rejoined on.
-        client_log = (run / 'client/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / 'client/stdout.log').is_file() else ''
-        client_live = run / 'client-live.jsonl'
         # A rejoined client runs its own cap from its image, so only the planned window is compared.
-        proof['held_client'] = compare_pair(run / 'host_trace.json', run / 'client_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
-                                            client_away=held_client_away(client_log, client_live), window_only=True,
-                                            client_rewinds=held_client_rewinds(client_log, client_live))
+        proof['held_client'] = retained_pair_proof(run, 'client', manifest.get('ticks', TICKS), window_only=True)
         proof['pass'] &= proof['held_client']['pass']
     pairs = [(left, right) for index, left in enumerate(members) for right in members[index + 1:]]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)

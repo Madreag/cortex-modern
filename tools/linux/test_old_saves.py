@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from run_sim_test import make_run
 
 
-def check(repo, root, label, source):
+def check(repo, root, label, source, declared=None):
     result = {"pass": False, "source": str(source) if source else None}
     if source is None or not source.is_file():
         result["error"] = f"retained {label} .ccsave is required; no replacement fixture was generated"
@@ -24,14 +24,23 @@ def check(repo, root, label, source):
     payload = source.read_bytes()
     result.update(source=str(source), bytes=len(payload), mtime_ns=source.stat().st_mtime_ns,
                   sha256=hashlib.sha256(payload).hexdigest())
+    if declared is not None:
+        result['input_receipt'] = declared
+        if declared.get('label') != label or declared.get('sha256') != result['sha256'] or declared.get('bytes') != len(payload):
+            result['error'] = f'retained {label} bytes differ from the shipped input receipt'
+            return result
     name = "row513_" + label
     saved_tick = 0
-    with zipfile.ZipFile(source) as archive:
-        if "Restore.ini" in archive.namelist():
-            for line in archive.read("Restore.ini").decode("utf-8").splitlines():
-                key, separator, value = line.partition("=")
-                if separator and key.strip() == "SavedTick":
-                    saved_tick = int(value.strip())
+    try:
+        with zipfile.ZipFile(source) as archive:
+            if "Restore.ini" in archive.namelist():
+                for line in archive.read("Restore.ini").decode("utf-8").splitlines():
+                    key, separator, value = line.partition("=")
+                    if separator and key.strip() == "SavedTick":
+                        saved_tick = int(value.strip())
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        result['error'] = f'retained {label} archive: {type(error).__name__}: {error}'
+        return result
     probe = root / "probe/script.json"
     probe.parent.mkdir(parents=True)
     probe.write_text(json.dumps({"schema": 1, "timeout_ms": 180000, "steps": [
@@ -70,9 +79,16 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--original-7", type=Path)
     parser.add_argument("--fork-0920", type=Path)
+    parser.add_argument('--inputs', type=Path, help='the shipped save input manifest with source paths and byte hashes')
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
-    results = {label: check(args.repo.resolve(), args.out.resolve() / label, label, source)
+    try:
+        declared = {row['label']: row for row in json.loads(args.inputs.read_text())['inputs']} if args.inputs else None
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        (args.out/'result.json').write_text(json.dumps(dict(passed=False, error=f'save inputs: {error}'))+'\n')
+        return 1
+    results = {label: check(args.repo.resolve(), args.out.resolve() / label, label, source,
+                           declared.get(label, {}) if declared is not None else None)
                for label, source in (("original7", args.original_7), ("fork0920", args.fork_0920))}
     (args.out / "result.json").write_text(json.dumps(results, indent=2) + "\n")
     print(json.dumps({label: {key: value for key, value in result.items() if key in ("pass", "error", "ticks", "sha256")}

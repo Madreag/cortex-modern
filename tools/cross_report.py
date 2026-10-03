@@ -13,7 +13,7 @@ import subprocess
 
 from feel import report
 from feel.records import open_record, record_path, presentation_records, retract_private_history
-from feel.host_loss import host_loss_evidence
+from feel.host_loss import host_loss_evidence, scheduled_hold_classification
 from compare_sim_traces import CORE
 
 HERE = Path(__file__).resolve().parent
@@ -30,7 +30,10 @@ def unapplied_faults(faults, receipts):
     """The scheduled faults no receipt shows applied, by id: a fault whose target incarnation never reached its tick is one."""
     return [f['id'] for f in faults if not any(r.get('id') == f['id'] and r.get('applied') for r in receipts)]
 
-def memory_verdict(peers):
+def memory_verdict(peers, manifest=None):
+    if (manifest and manifest.get('scenario') == 'match' and manifest.get('acceptance_row') == 17
+            and manifest.get('ticks') == 1201 and not manifest.get('faults') and not manifest.get('world')):
+        return dict(status='NOT APPLICABLE', incarnations=[], reason='1201-tick match: shorter than the 120 s warm-up')
     rows = []
     for name, peer in peers.items():
         bounds = peer.get('memory_by_incarnation') or {}
@@ -59,8 +62,11 @@ def completed_workload(instances, events, ticks):
 
 
 def acceptance_identity(manifest, peers):
-    errors, build_errors = [], []
+    errors, build_errors, diagnostics = [], [], []
     expected = {'erol': 'EROL-PC', 'edith': 'EDITH', 'mac': 'Mac', 'linux': 'Linux'}
+    # G-READER-1819: the declared three-way/mixed acceptance rows bind their three named boxes.
+    if manifest.get('scenario') in ('soak', 'chaos') and manifest.get('roster') in ('three-way', 'mixed'):
+        expected.pop('linux')
     instances = manifest.get('instances', [])
     boxes = {row.get('name') for row in manifest.get('boxes', [])}
     actual = {row.get('name'): row.get('box') for row in instances}
@@ -89,11 +95,41 @@ def acceptance_identity(manifest, peers):
         pre = preflights.get(box, {})
         build = pre.get('build') or {}
         exe = pre.get('executable_sha256')
-        if pre.get('head') != tip or build.get('commit') != tip or not isinstance(exe, str) or not re.fullmatch(r'[0-9a-f]{64}', exe) or build.get('executable_sha256') != exe:
+        if pre.get('head') != tip:
+            diagnostics.append(f'{name}: stale tree head {pre.get("head")!r}; receipt tip={tip!r}')
+        if build.get('commit') != tip or not isinstance(exe, str) or not re.fullmatch(r'[0-9a-f]{64}', exe) or build.get('executable_sha256') != exe:
             build_errors.append(f'{name}: preflight head={pre.get("head")!r}, build commit={build.get("commit")!r}, build hash={build.get("executable_sha256")!r}, measured hash={exe!r}')
         record = peers.get(name, {}).get('record', {})
         if not exe or record.get('exe_sha256') != exe: build_errors.append(f'{name}: runner hash={record.get("exe_sha256")!r}, preflight hash={exe!r}')
-    return dict(roster_passed=not errors, builds_passed=bool(instances) and not build_errors, roster_errors=errors, build_errors=build_errors)
+    return dict(roster_passed=not errors, builds_passed=bool(instances) and not build_errors, roster_errors=errors,
+                build_errors=build_errors, diagnostics=diagnostics)
+
+
+def l4p_schedule(manifest):
+    faults = manifest.get('faults', [])
+    return (manifest.get('acceptance_arm') == 'L4P' and manifest.get('scenario') == 'match'
+            and manifest.get('acceptance_row') == 17 and len(faults) == 1
+            and faults[0].get('peer') in {row['name'] for row in manifest.get('instances', [])}
+            and all(faults[0].get(key) == value for key, value in dict(action='jitter', lag_ms=200, jitter_ms=60,
+                    percent=5, duration_ms=120000, duration_ticks=7200).items())
+            and type(manifest.get('ticks')) is int and manifest['ticks'] >= 12001)
+
+
+def l4p_effects(root, manifest, peers, recoveries):
+    fault = manifest['faults'][0]
+    logs = {name: ''.join(line for fragment in peer['fragments'] for _, line in read_log(root/fragment/'engine/stdout.log'))
+            for name, peer in peers.items()}
+    request = dict(ticks=manifest['ticks'], sustained_impairment=True,
+        per_peer_lag_ms={name: fault['lag_ms'] if name == fault['peer'] else 0 for name in peers},
+        per_peer_jitter_ms={name: fault['jitter_ms'] if name == fault['peer'] else 0 for name in peers},
+        per_peer_loss_percent={name: fault['percent'] if name == fault['peer'] else 0 for name in peers})
+    measured = report.impairment_evidence(root, request, logs=logs)
+    recovery = [row for row in recoveries if row['id'] == fault['id']]
+    duration = len(recovery) == 1 and recovery[0].get('requested_duration_consistent') is True and recovery[0].get('passed') is True
+    measured.update(passed=measured['passed'] and duration, sustained_duration=duration,
+                    evidence=[str(root/fragment/'engine/stdout.log') for peer in peers.values() for fragment in peer['fragments']])
+    if not duration: measured['reason'] += '; sustained 120000 ms interval and observed-reset recovery are absent or inconsistent'
+    return measured
 
 
 def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
@@ -105,14 +141,17 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         failed = [f'{name}={checks.get(name)!r}' for name in names if checks.get(name) is not True]
         return dict(status='FAIL' if failed or detail else 'PASS', reason='; '.join([*failed, *([detail] if detail else [])]), rule=rule)
     pending=manifest.get('capture_rows_pending',[1,2])
-    memory = memory_verdict(peers)
+    memory = memory_verdict(peers, manifest)
     required_coverage = [row for row in matrix if row.get('required', True)]
     coverage_failed = [row for row in required_coverage if row.get('status') not in ('PASS', 'NOT APPLICABLE')]
     coverage_status = 'FAIL' if any(row.get('status') == 'FAIL' for row in coverage_failed) else 'NOT COVERED' if coverage_failed else 'PASS'
-    ungated = [name for name, peer in peers.items() if not peer.get('feel_gated')]
+    l4p = l4p_schedule(manifest)
+    affected = manifest['faults'][0]['peer'] if l4p else None
+    ungated = [name for name, peer in peers.items() if name != affected and not peer.get('feel_gated')]
     feel_detail = '; '.join(f'{name}: {peers[name].get("feel_status", "no quiet timing evidence")}' for name in ungated)
     oracles=dict(
-        acceptance_identity=oracle('acceptance_roster', 'build_receipts', detail='; '.join(identity['roster_errors'] + identity['build_errors'])),
+        acceptance_identity=dict(oracle('acceptance_roster', 'build_receipts', detail='; '.join(identity['roster_errors'] + identity['build_errors'])),
+                                 diagnostics=identity['diagnostics']),
         preflight=dict(oracle('preflight_complete', detail='; '.join(mixed_builds),
             rule='Every incarnation runs the executable its preflight and build receipt identify.'), reasons=list(mixed_builds)),
         live_hashes=oracle('full_history', 'zero_desync', rule='Every declared comparable key is equal; unknown evidence cannot pass.'),
@@ -126,13 +165,13 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         fault_effects=oracle('faults_applied', 'native_fault_effects', rule='Each scheduled injection leaves its native effect receipt.'),
         coverage=dict(status=coverage_status, reason='; '.join(f"{row.get('id', 'coverage')}: {row.get('status', 'missing status')}" for row in coverage_failed),
                       rule='Each required coverage minimum is measured.', diagnostic_rows=[row.get('id') for row in matrix if row.get('required') is False]),
-        feel=oracle('quiet_feel', detail=feel_detail or ('no peer timing evidence' if not peers else ''),
+        feel=oracle('survivor_feel' if l4p else 'quiet_feel', detail=feel_detail or ('no peer timing evidence' if not peers else ''),
                     rule='Every survivor meets the independent feel bars in a quiet measured window.'),
         memory=memory,
         record_integrity=oracle('record_integrity'),
         engine_findings=oracle('no_engine_findings', rule='Every observed engine finding remains visible.'),
         exits=oracle('all_incarnation_exits', rule='Each incarnation exits normally or has its own actual scheduled termination receipt.'),
-        pace=oracle('box_pace', rule='Every peer keeps the measured relative round rate.'),
+        pace=oracle('survivor_pace' if l4p else 'box_pace', rule='Every applicable peer keeps the measured relative round rate.'),
         instrumentation=oracle('instrument_valid', rule='Every instrument has complete measured cost coverage; no guessed subtraction.'),
         workload=oracle('unique_gameplay_budget', rule='Every instance completes the configured number of unique gameplay ticks.'))
     if mixed_builds:
@@ -156,14 +195,20 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
             dict(status='NOT APPLICABLE', reason='The schedule requests neither autosaves nor an archive restore; a ticket return uses the host image.')
         asked = [name for name in ('forced_ends', 'rematches', 'autosaves') if oracles[name]['status'] != 'NOT APPLICABLE']
     required = (*CORE_CHECKS, 'acceptance_roster', 'build_receipts', 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings', 'box_pace',
-                'quiet_feel', 'unique_gameplay_budget', 'coverage_minima', 'memory_bounds', 'instrument_valid')
+                'quiet_feel', 'unique_gameplay_budget', 'coverage_minima', 'instrument_valid')
+    if memory['status'] != 'NOT APPLICABLE': required += ('memory_bounds',)
+    if l4p:
+        # V1 item 17 L4P: the sustained impairment arm judges survivor feel with native packet effects and reset evidence.
+        required = tuple(name for name in required if name not in ('quiet_feel', 'box_pace')) + (
+            'survivor_feel', 'survivor_pace', 'l4p_effects', 'bounded_recovery', 'faults_applied', 'native_fault_effects')
+        oracles['l4p_effects'] = oracle('l4p_effects', 'bounded_recovery', 'faults_applied', 'native_fault_effects')
     if manifest['scenario'] != 'match':
         required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
-    workload = (manifest['ticks'] == 1201 and not manifest.get('faults')) if manifest['scenario'] == 'match' else (
+    workload = ((manifest['ticks'] == 1201 and not manifest.get('faults')) or l4p) if manifest['scenario'] == 'match' else (
         manifest['ticks'] == 72000 if manifest['scenario'] == 'soak' else
         bool(manifest.get('faults')) if manifest['scenario'] == 'chaos' else False)
     v1 = (all(checks.get(name, False) for name in required) and workload and bool(manifest.get('fullstate_every'))
-          and not pending and not mixed_builds and memory['status'] == 'PASS'
+          and not pending and not mixed_builds and memory['status'] in ('PASS', 'NOT APPLICABLE')
           and oracles['feel']['status'] == 'PASS' and coverage_status == 'PASS'
           and all(oracles[name]['status'] == 'PASS' for name in asked))
     return dict(core_passed=core,core_engine_red=engine_red,mixed_builds=list(mixed_builds),
@@ -183,19 +228,32 @@ def round_capacity_evidence(natives, round_id=None):
             elif isinstance(node, list):
                 for child in node: visit(child)
         visit(native)
-        by_peer[peer] = [row for row in found if round_id is None or row['round_id'] == round_id]
-    rounds = {row['round_id'] for rows in by_peer.values() for row in rows}
-    valid = len(by_peer) >= 2 and len(rounds) == 1 and all(len(rows) == 1 for rows in by_peer.values())
-    capacities = {peer: rows[0]['local_capacity_tps'] for peer, rows in by_peer.items() if len(rows) == 1}
-    ticks = {row['sim_tick_ms'] for rows in by_peer.values() for row in rows}
-    valid &= len(ticks) == 1 and all(type(v) in (int, float) and math.isfinite(v) and v > 0 for v in [*capacities.values(), *ticks])
-    fastest = min(1000 / next(iter(ticks)), max(capacities.values())) if valid else None
-    simulations = {peer: (native.get('pace') or {}).get('sim_ms_per_tick') for peer, native in natives.items()}
-    whole_slow = bool(valid and fastest < 59.5 and all(type(value) in (int, float) and math.isfinite(value)
-                       and value >= next(iter(ticks)) for value in simulations.values()))
-    return dict(complete=bool(valid), round=next(iter(rounds)) if len(rounds) == 1 else None,
-                capacities=capacities, round_rate_tps=fastest, whole_round_slow=whole_slow,
-                reason='' if valid else 'missing, conflicting or unaligned native round capacity records')
+        by_peer[peer] = found
+    round_ids = {str(row['round_id']) for rows in by_peer.values() for row in rows}
+    if round_id is not None: round_ids = {str(round_id)}
+    rounds = {}
+    for rid in sorted(round_ids):
+        own = {peer: [row for row in rows if str(row['round_id']) == rid] for peer, rows in by_peer.items()}
+        valid = len(own) >= 2 and all(len(rows) == 1 for rows in own.values())
+        capacities = {peer: rows[0]['local_capacity_tps'] for peer, rows in own.items() if len(rows) == 1}
+        ticks = [row['sim_tick_ms'] for rows in own.values() for row in rows]
+        valid &= bool(ticks) and all(type(v) in (int, float) and math.isfinite(v) and v > 0
+                                    for v in [*capacities.values(), *ticks])
+        valid &= bool(ticks) and all(v == ticks[0] for v in ticks)
+        fastest = min(1000 / ticks[0], max(capacities.values())) if valid else None
+        simulations = {peer: (rows[0].get('pace') or (natives[peer].get('pace', {}) if len(by_peer[peer]) == 1 else {})).get('sim_ms_per_tick')
+                       for peer, rows in own.items() if len(rows) == 1}
+        whole_slow = bool(valid and fastest < 59.5 and all(type(v) in (int, float) and math.isfinite(v)
+                            and v >= ticks[0] for v in simulations.values()))
+        rounds[rid] = dict(complete=bool(valid), round=next((r['round_id'] for rows in own.values() for r in rows), round_id),
+            capacities=capacities, round_rate_tps=fastest, whole_round_slow=whole_slow,
+            native_records={peer: rows[0] for peer, rows in own.items() if len(rows) == 1},
+            reason='' if valid else f'round {rid}: missing, conflicting or unaligned native round capacity records')
+    if len(rounds) == 1:
+        return dict(next(iter(rounds.values())), rounds=rounds)
+    complete = bool(rounds) and all(row['complete'] for row in rounds.values())
+    return dict(complete=complete, round=None, capacities={}, round_rate_tps=None, whole_round_slow=False,
+                rounds=rounds, reason='; '.join(row['reason'] for row in rounds.values()) if rounds else 'no native round capacity records')
 
 
 def pace_verdict(native, tick_ms=1000/60, *, relative=None, peer=None, hold=None):
@@ -217,6 +275,53 @@ def pace_verdict(native, tick_ms=1000/60, *, relative=None, peer=None, hold=None
     return dict(sim_ms_per_tick=sim, wall_tps=tps, gated=not excused, passed=passed,
                 status='PASS' if passed else 'FAIL' if complete else 'INCOMPLETE',
                 minimum_tps=minimum, relative_capacity=relative, slow_seat_excused=excused, reason=reason)
+
+
+def segmented_round_timing(manifest, peers, events, live, waits, capacities):
+    """Judge each round on its own endpoint, clock, costs, waits and capacity receipts."""
+    round_ids = set(capacities.get('rounds', {})) | {str(row['round']) for peer in peers.values()
+                for row in peer.get('configs', []) if row.get('round') is not None}
+    results = {name: {} for name in peers}
+    for rid in sorted(round_ids):
+        relative = dict(capacities.get('rounds', {}).get(rid, dict(complete=False, reason=f'round {rid}: no capacity records')))
+        own = {}
+        for name, peer in peers.items():
+            configs = [row for row in peer.get('configs', []) if str(row.get('round')) == rid]
+            clock = [row for row in live.get(name, []) if str(row.get('round')) == rid and row.get('phase') == 'live']
+            endings = {row['final_tick'] for row in events.get(name, []) if row.get('type') == 'match_boundary'
+                       and str(row.get('round')) == rid and type(row.get('final_tick')) is int}
+            final_round = peer.get('configs', [])[-1].get('round') if peer.get('configs') else None
+            last = next(iter(endings)) if len(endings) == 1 else peer.get('native_final_tick') if not endings and str(final_round) == rid else None
+            native = relative.get('native_records', {}).get(name, {})
+            tick_ms = configs[0].get('sim_tick_ms') if len(configs) == 1 else None
+            measured = [row for row in events.get(name, []) if row.get('type') == 'tick_timing' and row.get('phase') == 'live'
+                        and str(row.get('round')) == rid and type(row.get('tick')) is int and last is not None and 300 <= row['tick'] <= last]
+            valid_cost = (type(last) is int and last > 300 and len(measured) == last - 300 + 1
+                and {row['tick'] for row in measured} == set(range(300, last + 1)) and all(row.get('partition_valid') is True
+                    and type(row.get('compute_us')) in (int, float) and math.isfinite(row['compute_us']) and row['compute_us'] >= 0 for row in measured))
+            sim = sum(row['compute_us'] for row in measured) / len(measured) / 1000 if valid_cost else (native.get('pace') or {}).get('sim_ms_per_tick')
+            own[name] = dict(clock=clock, last=last, sim_tick_ms=tick_ms, sim_ms_per_tick=sim,
+                             missing_frame_stalls=native.get('steady_missing_frame_stalls'))
+        rate = relative.get('round_rate_tps')
+        relative['whole_round_slow'] = bool(relative.get('complete') and rate is not None and rate < 59.5 and all(
+            type(row['sim_ms_per_tick']) in (int, float) and math.isfinite(row['sim_ms_per_tick'])
+            and type(row['sim_tick_ms']) in (int, float) and row['sim_ms_per_tick'] >= row['sim_tick_ms'] > 0 for row in own.values()))
+        for name, row in own.items():
+            tick_ms = 1000 / rate if relative['whole_round_slow'] else row['sim_tick_ms']
+            native_waits = [wait for wait in waits.get(name, []) if str(wait.get('round')) == rid]
+            complete = (relative.get('complete') and type(row['last']) is int and row['last'] > 300
+                        and type(tick_ms) in (int, float) and math.isfinite(tick_ms) and tick_ms > 0)
+            timing = report.reduce_net_window(row['clock'], native_waits, 300, row['last'], tick_ms, row['missing_frame_stalls']) if complete else dict(complete=False)
+            pace = pace_verdict(dict(pace=dict(sim_ms_per_tick=row['sim_ms_per_tick'], wall_tps=timing.get('steady_wall_tps'))),
+                                relative=relative, peer=name)
+            if not complete: pace.update(passed=False, status='INCOMPLETE', reason=relative.get('reason') or 'round endpoint or timing config is absent')
+            passed = bool(timing.get('complete') and pace['passed'] and timing.get('steady_missing_frame_stalls') == 0
+                and timing.get('waiting_percent') is not None and timing['waiting_percent'] < 1
+                and timing.get('longest_stall_ms') is not None and timing['longest_stall_ms'] <= 50
+                and timing.get('confirmed_horizon_lag_ms') is not None and timing['confirmed_horizon_lag_ms'] <= 50)
+            results[name][rid] = dict(status='PASS' if passed else 'INCOMPLETE' if not complete or not timing.get('complete') else 'FAIL',
+                                     passed=passed, timing=timing, pace=pace)
+    return results
 
 
 def judge_exit(record,peer,incarnation,faults,receipts):
@@ -490,15 +595,17 @@ def fullstate_expected(host_rows, cadence):
 
 
 def coverage(events, peers, manifest):
+    ticks = manifest.get('ticks')
+    below_window = type(ticks) is int and 0 <= ticks < 36000
     definitions = [
-        ('movement', 'Movement, jetpack, climb and impact', [], 5, 'each kind per originating seat per ten minutes', 'Movement, climb and impact success hooks and obstacle fixtures are incomplete.'),
+        ('movement', 'Movement, jetpack, climb and impact', ['movement_observed', 'climb_limb_push', 'impact_damage'], 5, 'each kind per originating seat per ten minutes', 'Jetpack and obstacle completion receipts are absent.'),
         ('weapons', 'Weapon classes and actions', ['round_fired', 'reload_completed', 'thrown_release'], 1, 'each class and action per seat per match', 'Melee, shield, explosion, sharp-aim and brain-weapon oracles remain absent.'),
         ('pie', 'Every pie command', [], 1, 'each command per seat per soak', 'No complete enumerated command-effect evidence on every seat.'),
         ('buy', 'Buy menu and delivery lifecycle', ['cargo_ejected', 'craft_departure', 'craft_refund'], 2, 'deliveries per seat, plus one refusal', 'Queue correlation, landing, funds and blocked-LZ refusal chains are incomplete.'),
         ('gold', 'Gold collection and funds', ['gold_deposited'], 1, 'collection per originating seat', 'No verified placed-vein mining chain and purchase/refund-adjusted positive funds assertion.'),
         ('objects', 'Doors, turrets, wounds, gibs and corpses', ['door_open_completed', 'door_close_completed', 'wound_added', 'wound_damage', 'gibbed', 'dying', 'dead'], 1, 'each successful kind per observing peer per soak', 'Emitter-output, turret attribution and corpse-settling records are not complete.'),
         ('ai', 'AI modes, paths, buying and difficulty', [], 1, 'each mode and one AI purchase per soak', 'No complete mode/path-before-and-after-terrain or CPU purchase oracle.'),
-        ('rules', 'Rosters, scenes, natural ends and changed rematches', ['match_boundary'], 2, 'natural ends and one changed-settings rematch', 'Real result/lobby surfaces and all roster/scene arms are not demonstrated.'),
+        ('rules', 'Rosters, scenes, natural ends and changed rematches', [], 2, 'natural ends and one changed-settings rematch', 'match_boundary counts do not identify natural ends or prove result/lobby surfaces and changed settings; round_result_presented is required from the engineer.'),
         ('scripts', 'Callbacks, timers, coroutines and errors', [], 1, 'both preselected error arms per soak', 'Before/after-write error outcomes and callback/timer/coroutine success records are incomplete.'),
         ('presentation', 'Window, menus, audio and music', [], 1, 'each change and authority scope per soak', 'Audio authority/music transitions require records outside this lane; actual OS presentation is not demonstrated.'),
         ('session', 'Chat, pause, delay, leave, saves, resume and replay', [], 1, 'each defined recovery per soak', 'Recipient, authorization, archive, full playback and first-controllable-input oracles are incomplete.'),
@@ -508,19 +615,45 @@ def coverage(events, peers, manifest):
         ('terrain', 'Terrain destruction and object load', ['terrain_removed'], 10000, 'gross removed non-air pixels per peer per soak', ''),
         ('fog', 'Fog reveal, capture and rejoin', [], 1, 'one fog arm per soak', 'No eligible fog-on unseen-layer and visible-reveal proof.'),
         ('mod', 'Void Wanderers mission, economy and transitions', [], 1, 'one real co-op arm', 'This run uses the combat fixture, not the unchanged-reference Void Wanderers arm.')]
+    missing_receipts = {
+        'movement': ['movement_completed {seat, actor, movement_kind, obstacle_id, first_tick, last_tick, succeeded}; jetpack/climb/impact outcome per ten-minute window'],
+        'weapons': ['weapon_action_completed {seat, actor, weapon_class, action, target, round, tick, outcome}; melee/shield/explosion/sharp-aim/brain weapon and per-seat class attribution'],
+        'pie': ['pie_command_applied {seat, actor, command_id, enumerated_command_ids, request_tick, applied_tick, effect, succeeded}'],
+        'buy': ['delivery_lifecycle {seat, purchase_id, craft_id, queued_tick, landed_tick, ejected_actor_ids, funds_before, funds_after, refund, refusal_reason, blocked_lz}'],
+        'gold': ['mining_funds_changed {seat, actor, vein_id, mined_oz, funds_before, funds_after, purchase_delta, refund_delta, tick}'],
+        'objects': ['object_effect_completed {object_id, actor, seat, kind, emitter_output, turret_shooter, wound_source, corpse_settled, tick}'],
+        'ai': ['ai_action_completed {actor, seat, mode, path_before, terrain_change_id, path_after, purchase_id, difficulty, tick, succeeded}'],
+        'rules': ['round_result_presented {round, roster, scene, natural_end, winner, result_surface, lobby_surface, next_config_hash, changed_fields}'],
+        'scripts': ['script_callback_outcome {script, callback, timer_id, coroutine_id, error_arm, wrote_before_error, state_before, state_after, tick, outcome}'],
+        'presentation': ['presentation_change_applied {instance, kind, old_value, new_value, window_state, authority_peer, sound_id, music_transition, wall_ms, tick}'],
+        'session': ['session_action_completed {action, sender, recipients, authorized, requested_tick, terminal_tick, archive_hash, replay_final_tick, first_controllable_input}'],
+        'migration': ['moderation_snapshot {stage, session, match, history_branch, source_round, instance, execution, incarnation, tick, host_peer, authority_generation, state:{held_seats,bans,tickets}}; admission_outcome {seat, kind, terminal, reason, tick}'],
+        'members': ['member_seat_outcome {member_id, team, seat, brain_id, lifecycle, shared_control, tick, outcome}'],
+        'counts': ['peer_count_admission {requested_count, admitted_count, peer_ids, refusal_reason, tick}; required counts 5,9,17,32 and refusal 33'],
+        'fog': ['fog_reveal_restored {team, unseen_layer_hash, revealed_cells, before_hash, after_hash, capture_id, rejoin_id, tick}'],
+        'mod': ['mod_mission_transition {module_hash, reference_hash, mission_id, co_op_seats, economy_before, economy_after, old_scene, new_scene, tick, outcome}'],
+    }
     result = []
     for key, label, kinds, minimum, unit, reason in definitions:
         counts = {}
         for peer in peers:
-            selected = [event for event in events[peer] if event.get('type') == 'coverage' and event.get('phase') == 'live' and event.get('gameplay_tick')]
+            selected = [event for event in events.get(peer, []) if event.get('phase') == 'live' and event.get('gameplay_tick') is True
+                        and event.get('type') == 'coverage']
             successes = {kind: sum(event.get('amount', 1) for event in selected if event.get('event') == kind
-                                   and event.get('result', 'success') in ('success', 'orphan', 'penetrate', 'penetrate_air', 'dislodge', 'silhouette', 'unattributed', 'health_exhausted_unattributed', 'death_timer', 'committed')) for kind in kinds}
+                                   and type(event.get('amount', 1)) in (int, float) and math.isfinite(event.get('amount', 1)) and event.get('amount', 1) > 0
+                                   and (event.get('result', 'success') in ('success', 'orphan', 'penetrate', 'penetrate_air', 'dislodge', 'silhouette', 'unattributed', 'health_exhausted_unattributed', 'death_timer', 'committed')
+                                        or (kind == 'dead' and event.get('result') == 'human_death_motion'))) for kind in kinds}
             counts[peer] = dict(successes=successes, attempts=sum(event.get('result') == 'attempt' for event in selected if event.get('event') in kinds))
-        status = 'NOT COVERED' if reason else 'PASS' if all(c['successes'] and all(v >= minimum for v in c['successes'].values()) for c in counts.values()) else 'FAIL'
+        status = 'NOT COVERED' if not kinds else 'PASS' if counts and all(c['successes'] and all(v >= minimum for v in c['successes'].values()) for c in counts.values()) else 'FAIL'
+        required = bool(kinds)
+        # These five minima apply only after ten minutes of simulation; unknown durations keep them required.
+        if key in ('movement', 'weapons', 'buy', 'gold', 'objects') and below_window:
+            status, reason, required = 'NOT APPLICABLE', f'below the coverage window: {ticks} ticks', False
         if key=='terrain' and manifest['scenario']=='match':
             status,reason='NOT APPLICABLE','The destruction minimum applies to soaks; smoke event totals remain visible.'
         result.append(dict(id=key, item=label, status=status, reason=reason, unit=unit, minimum=minimum, peers=counts,
-                           required=key == 'terrain', scope='acceptance soak minimum' if key == 'terrain' else 'broader diagnostic inventory'))
+                           required=required, scope='run-owned native counts per observing peer; missing semantic receipts remain engineer work',
+                           engineer_receipts=missing_receipts.get(key, [])))
     return result
 
 
@@ -551,6 +684,7 @@ def requirements(manifest, comparison, metrics):
         item['status'] = 'NOT COVERED'
         item['reason'] = reasons.get(item['number'], item['reason'])
         item['evidence'] = []
+        item.update(required=False, scope='historical cross-driver planning inventory; current V1 runtime oracles and coverage remain required')
     # Only complete requirements are credited; partial event totals remain visible in the matrix.
     if manifest.get('preflights') and len(manifest['preflights']) == len(manifest['boxes']) and metrics and all(p['record'].get('started') and any(s.get('engine_pid') and (s.get('resident') or s.get('working_set')) for s in p['samples']) for p in metrics.values()):
         for item in items:
@@ -564,6 +698,45 @@ def requirements(manifest, comparison, metrics):
         if item['number']=='reread-5' and metrics and all(p['timing'].get('complete') and all(p['timing'].get(k) is not None for k in ('steady_waits_over_50','steady_missing_frame_stalls','net_wait_ms','waiting_percent','longest_stall_ms')) for p in metrics.values()):
             item.update(status='PASS',reason='Matched declared windows report the eligible >50 ms wait count, separate native missing-frame stalls, wait sum, maximum and 100*wait/wall percentage.',evidence=['result.json#peers'])
     return items
+
+
+def annotate_applicability(result):
+    """Annotate only scopes replaced by the ruled short-match, L4P or HL4 oracles."""
+    manifest, peers = result['manifest'], result['peers']
+    short_memory = result['oracles']['memory']['status'] == 'NOT APPLICABLE'
+    loss = result.get('host_loss', {})
+    hl4 = bool(loss.get('ranges')) and loss.get('status') != 'NOT APPLICABLE'
+    retired = set(peers) - set(loss.get('survivors', [])) if hl4 else set()
+    affected = manifest['faults'][0]['peer'] if l4p_schedule(manifest) else None
+
+    def diagnostic(node, reason):
+        if isinstance(node, dict): node.update(required=False, reason=reason)
+
+    for name, peer in peers.items():
+        if short_memory or name in retired:
+            reason = result['oracles']['memory']['reason'] if short_memory else \
+                'HL4 terminated participant: host_loss binds its actual termination; the full memory rule applies to every continuing survivor'
+            diagnostic(peer.get('memory'), reason)
+            for field in ('memory_by_incarnation', 'memory_census'):
+                for row in peer.get(field, {}).values(): diagnostic(row, reason)
+        if name in retired or name == affected:
+            reason = ('HL4 terminated participant: host_loss judges continuing survivor feel and native completion' if name in retired else
+                      'V1 item 17 L4P: this is the declared impaired peer; every survivor keeps the item 20 feel bars')
+            for field in ('pace', 'timing'): diagnostic(peer.get(field), reason)
+        if name in retired:
+            reason = 'HL4 native termination/Ban is required at host_loss; ordinary successful end-of-match completion is inapplicable to this terminated participant'
+            diagnostic(peer.get('native'), reason)
+            for row in peer.get('exits', []): diagnostic(row, reason)
+    if hl4:
+        replacement = {
+            'live_hashes': 'history', 'full_state': 'fullstate', 'native_completion': 'native_host_loss',
+            'feel': 'native_host_loss', 'memory': 'survivor_memory', 'exits': 'native_host_loss',
+            'pace': 'survivor_pace', 'workload': 'survivor_workload', 'fault_effects': 'native_host_loss'}
+        for name, scoped in replacement.items():
+            diagnostic(result['oracles'].get(name), f'HL4 uses the required host_loss {scoped} evidence for terminated and continuing participants')
+        for name, scoped in (('comparison', 'history'), ('fullstate', 'fullstate'), ('measured_workload', 'survivor_workload')):
+            diagnostic(result.get(name), f'HL4 uses required host_loss {scoped}; this ordinary aggregate extends beyond the proved participant termination boundaries')
+    return result
 
 
 def local_host_render(manifest, peers):
@@ -642,29 +815,48 @@ def hold_causes(host_text):
     return causes
 
 
-PUBLISHED_SLOW = re.compile(r"\[net-lockstep\] slow machine peer (\d+) at frame (\d+): it runs ([0-9.eE+-]+) ticks/s against the fastest's ([0-9.eE+-]+);")
+PUBLISHED_SLOW = re.compile(r"\[net-lockstep\] slow machine peer (?P<peer>\d+) at frame (?P<frame>\d+): (?P<published>it runs )?(?P<own>[0-9.eE+-]+) ticks/s against (?(published)the fastest's |)(?P<fastest>[0-9.eE+-]+);(?(published)| the AI takes its seat)")
+PUBLISHED_OWN_SLOW = re.compile(r"\[net-lockstep\] this machine cannot keep up at frame (?P<frame>\d+): (?P<own>[0-9.eE+-]+) ticks/s against the others' (?P<fastest>[0-9.eE+-]+),")
+OWN_SEAT_COMMIT = re.compile(r" AI in control \(the host's own seat, AI of peer \d+\)")
 
 
 def host_hold_evidence(text, incarnation=0, path=None):
     holds, stalls, pending, capacity = [], [], {}, {}
-    current, local = None, None
+    current, local, own_capacity = None, None, None
     for number, line in enumerate(text.splitlines(), 1):
         if found := re.search(r'\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+)', line):
-            current, local = found[1], int(found[2]); pending = {}; capacity = {}
+            current, local = found[1], int(found[2]); pending = {}; capacity = {}; own_capacity = None
         elif found := PUBLISHED_SLOW.search(line):
-            peer, frame, own, fastest = int(found[1]), int(found[2]), float(found[3]), float(found[4])
+            peer, frame, own, fastest = int(found['peer']), int(found['frame']), float(found['own']), float(found['fastest'])
             if all(math.isfinite(value) and value > 0 for value in (own, fastest)):
                 capacity[peer, frame] = dict(peer=peer, frame=frame, capacity_tps=own, round_rate_tps=fastest,
-                    waiting=True, published=True, round=current, host_incarnation=incarnation, path=path, line=number)
+                    waiting=True, published=True, round=current, host_peer=local, host_incarnation=incarnation, path=path, line=number)
+        elif found := PUBLISHED_OWN_SLOW.search(line):
+            frame, own, fastest = int(found['frame']), float(found['own']), float(found['fastest'])
+            own_capacity = None
+            if current is not None and local is not None and all(math.isfinite(value) and value > 0 for value in (own, fastest)):
+                own_capacity = dict(peer=local, frame=frame, capacity_tps=own, round_rate_tps=fastest,
+                    waiting=True, published=True, own_machine=True, round=current, host_peer=local,
+                    host_incarnation=incarnation, path=path, line=number)
         elif found := PROPOSE_HOLD.search(line):
             peer, frame = int(found[1]), int(found[2])
-            cause = HOLD_CAUSE.search(line)
-            pending[peer] = dict(cause=cause[1] if cause else None, proposal_frame=frame,
-                                  capacity_evidence=capacity.get((peer, frame)))
+            named = HOLD_CAUSE.search(line)
+            cause, evidence = named[1] if named else None, capacity.get((peer, frame))
+            if peer == local and cause in (None, 'own_seat'):
+                candidate, own_capacity = own_capacity, None
+                # A host warning belongs only to its next own-seat proposal within the host-stall window.
+                if candidate and 0 <= frame - candidate['frame'] <= 60:
+                    evidence = candidate
+            pending[peer] = dict(cause=cause, proposal_frame=frame, capacity_evidence=evidence)
         elif found := HOLD_LINE.search(line):
             peer, frame = int(found[1]), int(found[2])
+            proposal = pending.pop(peer, {})
+            if proposal.get('cause') is None and peer == local and OWN_SEAT_COMMIT.search(line):
+                proposal['cause'] = 'own_seat'
+            if (proposal.get('capacity_evidence') or {}).get('own_machine') and proposal.get('proposal_frame') != frame:
+                proposal.pop('capacity_evidence')
             holds.append(dict(peer=peer, tick=frame, round=current, host_incarnation=incarnation,
-                              path=path, line=number, **pending.pop(peer, {})))
+                              path=path, line=number, **proposal))
         elif found := re.search(r'\[net-test\] live stall frame=(\d+) ms=(\d+)', line):
             stalls.append(dict(peer=local, frame=int(found[1]), ms=int(found[2]), round=current,
                                incarnation=incarnation, path=path, line=number, source='host stdout'))
@@ -679,7 +871,10 @@ def design_hold(hold, receipts):
     receipt = matching[0]
     capacity = receipt.get('capacity_evidence') or {}
     own, fastest = capacity.get('capacity_tps'), capacity.get('round_rate_tps')
-    if receipt.get('cause') not in DESIGN_CAUSES or own is None or fastest is None:
+    own_seat = receipt.get('cause') == 'own_seat' and capacity.get('host_peer') == hold.get('peer')
+    if capacity.get('own_machine') and not own_seat:
+        return {}
+    if (receipt.get('cause') not in DESIGN_CAUSES and not own_seat) or own is None or fastest is None:
         return {}
     tolerance = 0.5 if fastest >= 59.5 else fastest / 10.0
     if not capacity.get('published') or not capacity.get('waiting') or own >= fastest - tolerance:
@@ -816,7 +1011,7 @@ def build_report(root, *, acceptance_inputs=False):
             if match := re.search(r'\[cross-context\] round=(\d+) source_round=(\d+)',line):
                 observed_native_round=int(match[1]); observed_round=int(match[2])
             if match := re.search(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', line):
-                waits.append(dict(tick=int(match[1]), wait_ms=int(match[2]), line=number))
+                waits.append(dict(tick=int(match[1]), wait_ms=int(match[2]), line=number, round=observed_native_round, source_round=observed_round))
             if match := re.search(r'\[net-match\] hold peer=(\d+) frame=(\d+)', line):
                 holds.append(dict(peer=int(match[1]), tick=int(match[2]), line=number,source_round=observed_round,round=observed_native_round,path=str(log_path.relative_to(root))))
                 if any(r.get('type')=='adopted_config' and r.get('peer')==int(match[1]) and r.get('source_round')==observed_round for r in events[name]):
@@ -927,9 +1122,24 @@ def build_report(root, *, acceptance_inputs=False):
             configs=configs, paths={kind: str(record_path(own / leaf).relative_to(root)) for kind,leaf in [('live','live.jsonl'),('events','events.jsonl'),('log','engine/stdout.log'),('feel','engine/feel/raw.jsonl'),('native','match-report.json')]})
     if acceptance_inputs:
         return dict(manifest=manifest, peers=peers, events=events, live=live, paths=paths, findings=findings, capabilities=capabilities, mixed_builds=mixed_builds)
-    relative_capacity = round_capacity_evidence({name: peer['native'] for name, peer in peers.items()})
+    # X8: every retained process can own a different round; the final report cannot replace its predecessors.
+    capacity_inputs = {name: dict(reports=[load(root/fragment/'match-report.json', {}) for fragment in peer['fragments']],
+                                  pace=peer['native'].get('pace', {})) for name, peer in peers.items()}
+    relative_capacity = round_capacity_evidence(capacity_inputs)
+    multiple_rounds = len({str(row.get('round')) for peer in peers.values() for row in peer['configs']}) > 1 or len(relative_capacity.get('rounds', {})) > 1
+    segmented = segmented_round_timing(manifest, peers, events, live, peer_waits, relative_capacity) if multiple_rounds else {}
     for name, peer in peers.items():
         peer['pace'] = pace_verdict(peer['native'], relative=relative_capacity, peer=name)
+        if multiple_rounds:
+            rounds = segmented[name]
+            passed = bool(rounds) and all(row['passed'] for row in rounds.values())
+            peer['timing'] = dict(complete=all(row['timing'].get('complete') for row in rounds.values()), rounds=rounds)
+            peer['pace'].update(passed=bool(rounds) and all(row['pace']['passed'] for row in rounds.values()),
+                               rounds={rid: row['pace'] for rid, row in rounds.items()})
+            peer['pace']['status'] = 'PASS' if peer['pace']['passed'] else 'INCOMPLETE' if any(row['status'] == 'INCOMPLETE' for row in rounds.values()) else 'FAIL'
+            peer['feel_pass'] = passed
+            if peer['feel_gated']: peer['feel_status'] = 'PASS' if passed else 'INCOMPLETE' if peer['pace']['status'] == 'INCOMPLETE' else 'FAIL'
+            continue
         if relative_capacity.get('whole_round_slow') and len(peer['configs']) == 1:
             clock = [row for row in live[name] if row.get('phase') == 'live']
             peer['timing'] = report.reduce_net_window(clock, peer_waits[name], 300, manifest['ticks'],
@@ -990,7 +1200,7 @@ def build_report(root, *, acceptance_inputs=False):
     native_recovery_records=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='recovery']
     recoveries = []
     for fault in manifest['faults']:
-        if fault['action'] in ('brain-eliminate', 'host-kill'): continue
+        if fault['action'] in ('brain-eliminate', 'host-kill', 'silence', 'moderation-ban'): continue
         last_clock=peers[fault['peer']]['payload_clock_last_ms']
         recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
@@ -1014,12 +1224,14 @@ def build_report(root, *, acceptance_inputs=False):
                             reason='The held seat is the faulted one and the hold falls inside its scheduled fault window, on the host clock.')
             if not hold['scheduled_recovery_id']:
                 hold.update(design_hold(hold, authored_holds))
+            hold.update(scheduled_hold_classification(hold, host_loss))
     unscheduled_holds=sum(not h['scheduled_recovery_id'] and not h.get('design_cause') for p in peers.values() for h in p['holds'])
     for name, peer in peers.items():
         seats = {config.get('peer') for config in peer['configs'] if config.get('peer') is not None}
         owned = [hold for observed in peers.values() for hold in observed['holds'] if hold.get('design_cause')
                  and len(seats) == 1 and hold['peer'] in seats and hold.get('round') == relative_capacity.get('round')]
-        peer['pace'] = pace_verdict(peer['native'], relative=relative_capacity, peer=name, hold=owned[0] if owned else None)
+        if not multiple_rounds:
+            peer['pace'] = pace_verdict(peer['native'], relative=relative_capacity, peer=name, hold=owned[0] if owned else None)
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
                   preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings') and not mixed_builds,
                   full_history=comparison['passed'] and not missing_boundaries, zero_desync=comparison['unequal_keys'] == 0 and bool(ranges),
@@ -1065,8 +1277,15 @@ def build_report(root, *, acceptance_inputs=False):
         restore_requested = any(f.get('restore') == 'archive' for f in manifest['faults'])
         checks['validated_autosave_archives'] = not restore_requested and bool(peers) and all(
             peer['archives'] and all(row.get('passed') is True for row in peer['archives']) for peer in peers.values())
-    checks['memory_bounds'] = memory_verdict(peers)['status'] == 'PASS'
+    checks['memory_bounds'] = memory_verdict(peers, manifest)['status'] in ('PASS', 'NOT APPLICABLE')
     checks['instrument_valid'] = bool(peers) and all(peer['instrument_valid'] for peer in peers.values())
+    sustained = None
+    if l4p_schedule(manifest):
+        sustained = l4p_effects(root, manifest, peers, recoveries)
+        survivors = [peer for name, peer in peers.items() if name != manifest['faults'][0]['peer']]
+        checks.update(l4p_effects=sustained['passed'],
+            survivor_feel=bool(survivors) and all(peer['feel_gated'] and peer['feel_pass'] for peer in survivors),
+            survivor_pace=bool(survivors) and all(peer['pace']['passed'] for peer in survivors))
     for name,peer in peers.items():
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
@@ -1079,7 +1298,7 @@ def build_report(root, *, acceptance_inputs=False):
     judgment=judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds)
     if host_loss['status'] != 'NOT APPLICABLE':
         identity = acceptance_identity(manifest, peers)
-        survivors = [name for name in peers if name != manifest['host']]
+        survivors = host_loss.get('survivors') or [name for name in peers if name != manifest['host']]
         host_loss['collection_checks'] = dict(
             native_host_loss=host_loss['passed'], acceptance_identity=identity['roster_passed'] and identity['builds_passed'],
             preflight=checks['preflight_complete'], engine_findings=checks['no_engine_findings'],
@@ -1088,7 +1307,8 @@ def build_report(root, *, acceptance_inputs=False):
             fullstate=host_loss.get('fullstate', {}).get('passed') is True,
             survivor_pace=all(peers[name]['pace']['passed'] for name in survivors),
             survivor_memory=memory_verdict({name: peers[name] for name in survivors})['status'] == 'PASS',
-            hold_logs=checks['hold_evidence_complete'], unscheduled_holds=checks['zero_unscheduled_holds'])
+            hold_logs=checks['hold_evidence_complete'], unscheduled_holds=checks['zero_unscheduled_holds'],
+            coverage_minima=checks['coverage_minima'])
         host_loss['passed'] = all(host_loss['collection_checks'].values())
         host_loss['status'] = 'PASS' if host_loss['passed'] else 'FAIL'
         host_loss['reason'] += '; '.join(f'{key}={value}' for key, value in host_loss['collection_checks'].items() if not value)
@@ -1102,11 +1322,13 @@ def build_report(root, *, acceptance_inputs=False):
                   comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   measured_workload=measured_workload,
+                  sustained_impairment=sustained,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
                   native_recovery_records=native_recovery_records,native_fault_effects=effects,unscheduled_holds=unscheduled_holds,
                   design_holds=[hold for peer in peers.values() for hold in peer['holds'] if hold.get('design_cause')],
                   findings=findings, triage=load(root/'triage.json',[]), requirements=requirements(manifest, comparison, peers),
                   stopped=driver_stop(findings))
+    annotate_applicability(result)
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
     write_index(root.parent)
@@ -1166,7 +1388,7 @@ def write_page(root, result, events):
     parts.append('</div><h2>Tick compute time</h2>' + chart(result, events) + '<p>Samples measure non-overlapping compute, wait and capture durations. Cross-box wall-clock calibration is NOT COVERED; ticks align canonical events, and local clocks remain separate.</p>')
     parts.append('<h2>Gates</h2><ul>' + ''.join(f'<li class="{"pass" if ok else "fail"}">{escape(name)}: {"PASS" if ok else "FAIL"}</li>' for name,ok in result['checks'].items()) + '</ul>')
     parts.append('<h2>Independent oracle verdicts</h2><p>CORE PASS requires complete comparable live frames, zero live mismatches, zero unscheduled holds and native completion, with the box/configuration/integrity prerequisites. It does not turn any other oracle green.</p>'+
-        ''.join(f'<details><summary>{escape(name)} — {escape(row["status"])}</summary><p>{escape(row["reason"])}</p></details>' for name,row in result['oracles'].items()))
+        ''.join(f'<details><summary>{escape(name)} — {escape(row["status"])}</summary><p>{escape(row["reason"])}</p><p>{escape("; ".join(row.get("diagnostics", [])))}</p></details>' for name,row in result['oracles'].items()))
     parts.append('<h2>Every hold, classified</h2><p>CORE-ENGINE-RED means every unscheduled hold is capture-induced, with zero live mismatches and native completion. Missing live frames and full-state failures remain red in their own oracles. Repeated log observations of the same boundary are all retained. Unknown causes are other.</p><pre>'+escape(json.dumps({name:peer['holds'] for name,peer in result['peers'].items()},indent=2))+'</pre>')
     parts.append('<h2>Presentation retention</h2><p>'+escape(manifest.get('storage',{}).get('presentation_window','Legacy unbounded live presentation stream; compressed after exit.'))+'</p><p>Feel statistics describe the last incarnation’s retained window, not discarded rows. CRC, decoded byte counts and sequence continuity are checked for every retained chunk and incarnation. Native bounds must match the declared bounds; a normal exit must close its index.</p><pre>'+escape(json.dumps({name:peer.get('presentation_by_incarnation',{}) for name,peer in result['peers'].items()},indent=2))+'</pre>')
     parts.append('<h2>Diagnostic dump window</h2><p>'+escape(manifest.get('storage',{}).get('diagnostic_window','No live diagnostic window was declared for this historical run. Any later archival retirement is separately receipted.'))+'</p><pre>'+escape(json.dumps({name:peer.get('retired_diagnostics',[]) for name,peer in result['peers'].items()},indent=2))+'</pre>')

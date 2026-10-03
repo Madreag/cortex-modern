@@ -107,7 +107,16 @@ def file_evidence(path):
 def stamp():
     clock = subprocess.check_output(["date", "-u", "+%Y-%m-%dT%H:%M:%S"], text=True).strip()
     utc = datetime.strptime(clock, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
-    return utc.astimezone(timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %H:%M:%S MST")
+    return utc.astimezone(timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %I:%M:%S %p MST")
+
+
+def parse_stamp(value):
+    for form in ('%Y-%m-%d %I:%M:%S %p MST', '%Y-%m-%d %H:%M:%S MST'):
+        try:
+            return datetime.strptime(value, form)
+        except ValueError:
+            pass
+    raise ValueError(f'invalid capture timestamp: {value}')
 
 
 def scratch_bytes(root):
@@ -1020,9 +1029,23 @@ def screen_watch_results(peer_root):
             name = str(summary.get("watch", ""))
             name = name[4:] if name.startswith('h15-') else name
             row = results.setdefault(name, {'offences': [], 'summary': None, 'armed': None, 'arms': 0, 'summaries': []})
+            summary['_arm'] = row['arms']
             row['summary'] = summary
             row['summaries'].append(summary)
     return results or None
+
+
+def scene_termination_tick(peer):
+    record = peer.get('record') or {}
+    if not peer.get('expected_termination') or not str(record.get('injected_termination', '')).startswith('scenario drop'):
+        return None
+    path = Path(peer.get('video_dir') or Path(peer['root']) / 'video') / 'injected-drop.json'
+    try:
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    tick = (receipt.get('last_recorded_frame') or {}).get('sim_tick')
+    return tick if type(tick) is int and tick >= 0 else None
 
 
 def expected_screen_watches(peer):
@@ -1073,21 +1096,37 @@ def capture_evidence_items(scenario, capture, peer):
     output.append(item(f'recording-stills-{name}', f'Checked decoder and no running still over 1 s; pixel bars={MOTION_LEVELS}/{MOTION_PIXELS}',
                        error, incomplete=stills is None, stills=failures, moved_stills=moved, allowed_stills=allowed))
     watches = screen_watch_results(peer['root']) or {}
+    killed = bool(peer.get('expected_termination'))
+    kill_tick = scene_termination_tick(peer)
     for watch in sorted(expected_screen_watches(peer) | set(watches)):
         result = watches.get(watch) or dict(offences=[], summary=None, armed=None, arms=0, summaries=[])
         summaries = result.get('summaries', [])
-        offences = list(result['offences'])
-        complete = bool(result.get('arms')) and len(summaries) == result['arms']
+        offences = [row for row in result['offences'] if not (killed and kill_tick is not None
+                    and type(row.get('lockstep_frame')) is int and row['lockstep_frame'] > kill_tick)]
+        selected = []
+        for arm in range(1, result.get('arms', 0) + 1):
+            own = [row for row in summaries if row.get('_arm') == arm]
+            if killed:
+                own = [row for row in own if type(row.get('through_tick')) is int and kill_tick is not None
+                       and 0 <= row['through_tick'] <= kill_tick]
+                if own: selected.append(max(own, key=lambda row: row['through_tick']))
+            else:
+                final = [row for row in own if row.get('flush') != 'periodic']
+                if len(final) == 1: selected.append(final[0])
+        complete = bool(result.get('arms')) and len(selected) == result['arms']
         if not complete: offences.append(dict(detail=f'watch {watch}: arms={result.get("arms", 0)}, summaries={len(summaries)}'))
-        for summary in summaries:
+        for summary in selected:
             if type(summary.get('frames')) is not int or summary['frames'] <= 0 or type(summary.get('violations')) is not int:
                 complete = False; offences.append(dict(detail=f'watch {watch}: invalid summary {summary}'))
             elif summary['violations'] > 0: offences.append(dict(detail=f'watch {watch}: summary violations={summary["violations"]}'))
             if watch.startswith('scene-') and summary.get('active_frames', 0) == 0:
                 offences.append(dict(detail='its state never held while it was armed'))
         rule = SCREEN_WATCH_RULES.get(watch, (f'Every armed {watch} screen check has a terminal summary', ''))[0]
+        if killed:
+            rule += f' terminated by the scene at tick {kill_tick}' if kill_tick is not None else ' scene termination tick is unproved'
         output.append(item(f'screen-{watch}-{name}', rule, json.dumps(offences[0]) if offences else '', incomplete=not complete,
-                           watch=dict(summary=result['summary'], summaries=summaries, offences=offences[:40])))
+                           watch=dict(summary=selected[-1] if selected else None, summaries=summaries,
+                                      selected_summaries=selected, termination_tick=kill_tick, offences=offences[:40])))
     for row in output:
         if 'finding' in row: row['finding']['class'] = row['finding'].pop('class_')
         if capture.get('interrupted'):
@@ -1811,6 +1850,12 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
 
+    def kill_after_seconds(name, seconds):
+        video = Path(shared[f'VIDEO_{name}'])
+        rows = read_index(video)
+        write_json(video / 'injected-drop.json', dict(requested_seconds=seconds, last_recorded_frame=rows[-1] if rows else None))
+        drop_peer(runs[name], f'scenario drop after {seconds} seconds')
+
     interrupted, stop_finding, footprint = None, None, {"peak": 0}
     try:
         for peer in peers:
@@ -1843,7 +1888,7 @@ def run_one(options, scenario, run, run_index, out):
             # A scenario that drops a peer kills it through the runner, never by name or by PID.
             kill_after = float(peer.get("kill_after_s", 0) or 0)
             if kill_after:
-                timer = threading.Timer(kill_after, lambda handle=runs[name]: drop_peer(handle))
+                timer = threading.Timer(kill_after, kill_after_seconds, args=(name, kill_after))
                 timer.daemon = True
                 timer.start()
                 killers.append(timer)
@@ -1914,7 +1959,7 @@ def run_one(options, scenario, run, run_index, out):
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
                           "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when")),
         "record": {k: records.get(name, {}).get(k) for k in
-                                     ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
+                                     ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256", 'exe_path', 'runner', 'package_unpacked',
                                       "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")},
                           "launch": str(peer_root / "launch.json"),
                           "error": records.get(name, {}).get("error"),
@@ -1968,9 +2013,63 @@ def review_only(options):
     return 0 if complete else 1
 
 
+def finalizer_roots(capture, out, allow_recorded_root=False):
+    """Validate every review destination before writes, rebasing a copied run only by explicit request."""
+    def contained(path):
+        path = Path(path)
+        if not path.resolve().is_relative_to(out):
+            raise ValueError(f'finalize recorded root/path leaves given root: {path}')
+        return path
+
+    def child(root, name):
+        if not isinstance(name, str) or name in ('', '.', '..') or Path(name).name != name:
+            raise ValueError(f'finalize recorded root has invalid child name: {name!r}')
+        return contained(root / name)
+
+    for leaf in ('capture.json', 'manifest.json', 'review.json'):
+        contained(out / leaf)
+    if capture.get('root') and Path(capture['root']).resolve() != out:
+        if not allow_recorded_root: raise ValueError(f'finalize recorded root differs from given root: {capture["root"]} != {out}')
+        capture['recorded_root'] = capture['root']; capture['root'] = str(out)
+    definitions = capture['scenario_definition'].get('runs') or [{'name': 'run0', 'peers': capture['scenario_definition'].get('peers', [])}]
+    for index, definition in enumerate(definitions):
+        root = child(out, definition.get('name', f'run{index}'))
+        contained(root / 'review.json')
+        for peer in definition.get('peers') or capture['scenario_definition'].get('peers', []):
+            child(root, peer['name'])
+    for run in capture['runs']:
+        root = child(out, run['name'])
+        old = Path(run.get('root') or root).absolute()
+        if old.resolve() != root.resolve():
+            if not allow_recorded_root:
+                raise ValueError(f'finalize recorded root differs from given root: {old} != {root}; use --allow-recorded-root to rebase the copy')
+            run['recorded_root'] = str(old)
+        run['root'] = str(root)
+        contained(root / 'review.json')
+        for peer in run.get('peers', []):
+            expected = child(root, peer['peer'])
+            for field in ('root', 'video_dir', 'probe_dir', 'launch', 'video', 'contact_sheet', 'stage'):
+                if not peer.get(field): continue
+                recorded = Path(peer[field]).absolute()
+                if recorded.is_relative_to(old):
+                    rebased = root / recorded.relative_to(old)
+                else:
+                    raise ValueError(f'finalize recorded root does not own {field}: {recorded}')
+                if recorded.resolve() != rebased.resolve() and not allow_recorded_root:
+                    raise ValueError(f'finalize recorded root differs for {field}: {recorded}')
+                peer[field] = str(contained(rebased))
+            if Path(peer.get('root', expected)).resolve() != expected.resolve():
+                raise ValueError(f'finalize recorded root differs for peer {peer["peer"]}')
+            for leaf in ('stdout.reclaim-samples.log', 'video/timeline.ffconcat', 'video/capture.mp4', 'video/frames', 'feel/raw.jsonl.gz'):
+                contained(expected / leaf)
+            contained(root / f'{peer["peer"]}.mp4')
+            contained(root / f'{peer["peer"]}-sheet.png')
+
+
 def finalize_only(options):
     out = options.finalize_only.resolve()
     capture = json.loads((out / "capture.json").read_text(encoding="utf-8"))
+    finalizer_roots(capture, out, getattr(options, 'allow_recorded_root', False))
     scenario = capture["scenario_definition"]
     existing = {run["name"]: run for run in capture["runs"]}
     prior_manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8")) if (out / "manifest.json").is_file() else {}
@@ -1996,7 +2095,7 @@ def finalize_only(options):
                                         "probe_dir": str(root / f"{peer_name}-stage" / "probe"), "launch": str(launch_path),
                                         "args": launch.get("argv"), "env": launch.get("env_set"),
                                         "expected_termination": bool(definition_peer.get("kill_after_s") or definition_peer.get("kill_at_tick") or definition_peer.get("kill_when"))})
-            peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
+            peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256", 'exe_path', 'runner', 'package_unpacked',
                               "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")}
             peer["manifest"] = read_manifest(video)
             peer["index"] = read_index(video)
@@ -2008,6 +2107,7 @@ def finalize_only(options):
         run["peers"] = peers
         recovered.append(run)
     capture["runs"] = recovered
+    finalizer_roots(capture, out)
     incomplete = len(recovered) != len(scenario.get("runs") or [None]) or any(run.get("interrupted") for run in recovered)
     if incomplete and not capture.get("interrupted"):
         capture["interrupted"] = "Finalized after the capture owner ended; unstarted runs remain findings"
@@ -2021,8 +2121,8 @@ def finalize_only(options):
             retire_transients(run)
             retained_footprint(run, budget, limit)
         review(scenario, run, Path(run["root"]))
-    start = datetime.strptime(capture["started"], "%Y-%m-%d %H:%M:%S MST")
-    end = datetime.strptime(capture["finalized"], "%Y-%m-%d %H:%M:%S MST")
+    start = parse_stamp(capture['started'])
+    end = parse_stamp(capture['finalized'])
     scenario_manifest(capture, out, prior_manifest.get("wall_seconds", (end - start).total_seconds()))
     aggregate_review(capture, out)
     for run in recovered:
@@ -2450,6 +2550,7 @@ def main():
     parser.add_argument("--sheet-every", type=int, default=15)
     parser.add_argument("--review-only", type=Path)
     parser.add_argument("--finalize-only", type=Path)
+    parser.add_argument('--allow-recorded-root', action='store_true', help='rebase copied capture paths to --finalize-only; all writes stay in that given root')
     parser.add_argument("--metadata-only", action="store_true")
     parser.add_argument("--scratch-root", type=Path)
     parser.add_argument("--scratch-limit-bytes", type=positive_bytes,
