@@ -4,6 +4,13 @@ set -uo pipefail
 : "${LANE:?set LANE}" "${SHA:?set SHA}" "${ACCEPTANCE_COLLECTION:?set ACCEPTANCE_COLLECTION}"
 PY=/usr/bin/python3
 REPO=$LANE/repo
+"$PY" "$REPO/tools/acceptance_posix_guard.py" --check || exit 3
+GUARD=$HOME/cortex-workers/ACCEPTANCE-STREAM-RUNNING
+mkdir "$GUARD" || { echo "box launch refused: $GUARD held by $(cat "$GUARD/owner" 2>/dev/null)"; exit 3; }
+export CC_ACCEPTANCE_BOX_OWNER="$SHA:$LANE:endgame:$$"
+printf '%s\n' "$CC_ACCEPTANCE_BOX_OWNER" > "$GUARD/owner"
+release_box() { if [ "$(cat "$GUARD/owner" 2>/dev/null)" = "$CC_ACCEPTANCE_BOX_OWNER" ]; then rm "$GUARD/owner"; rmdir "$GUARD"; fi; }
+trap release_box EXIT
 export CC_INVENTORY_DIR=$LANE/inventory
 EV=$LANE/evidence
 export CCCP_HEADLESS=1 PYTHONDONTWRITEBYTECODE=1 CCCP_TEST_BINARY=$REPO/build-gcc/CortexCommand

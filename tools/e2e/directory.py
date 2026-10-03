@@ -20,7 +20,7 @@ from session_directory.session_directory import LOGGER, spawn_server
 
 
 @contextmanager
-def serve(root, port, block=(49400, 49479), turn_config=None):
+def serve(root, port, block=(49400, 49479), turn_config=None, secret_book=None):
     """The directory on the given port, which must lie in the video driver's block (its default or a lane's own)."""
     if not block[0] <= port <= block[1]:
         raise ValueError(f"the directory must stay in the video driver's port block {block[0]}-{block[1]}")
@@ -42,6 +42,14 @@ def serve(root, port, block=(49400, 49479), turn_config=None):
     previous_handlers = set(LOGGER.handlers)
     server = spawn_server(port=port, cert=cert, key=key_path, insecure_http=False, expiry_s=30,
                           heartbeat_s=2, log_file=root / "service.log", turn_config=turn_config)
+    if secret_book is not None:
+        provider = server.store.turn_provider
+        mint = provider.mint
+        def observed_mint(*args, **kwargs):
+            offer = mint(*args, **kwargs)
+            secret_book.add_offer(offer)
+            return offer
+        provider.mint = observed_mint
     stopped = threading.Event()
     context = ssl.create_default_context(cafile=str(cert))
     rows_path = root / "listings.jsonl"

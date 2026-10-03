@@ -93,6 +93,7 @@ def main() -> int:
     parser.add_argument('--inventory', type=Path)
     parser.add_argument('--collection-root', type=Path)
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--backends', choices=('cloudflare,coturn',))
     args = parser.parse_args()
     if args.host_box or args.client_box:
         from acceptance_relay_pair import run

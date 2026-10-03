@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
     *) echo "REFRESH FAIL usage: unknown option $1"; exit 4 ;;
   esac
 done
-say() { echo "[$(date '+%Y-%m-%d %H:%M:%S MST')] $*"; }
+say() { echo "[$(date '+%Y-%m-%d %I:%M:%S %p MST')] $*"; }
 fail() { say "REFRESH FAIL $1: $2"; exit "$3"; }
 [ -n "$TIP" ] && [ -n "$LANE" ] && [ -n "$GUARD" ] || fail usage "<tip-sha>, a lane and the Mac guard are required" 4
 TIP=$(git -C "$AW" rev-parse --verify -q "$TIP^{commit}") || fail EROL-PC "$1 is not a commit in alias-walk" 4
@@ -99,7 +99,7 @@ def plan(local, remote, out):
 
 def receipt(out, tip, sha, compiler, build_log, source):
     value = dict(commit=tip, executable_sha256=sha, compiler=compiler, build_log=build_log, source=source,
-                 stamp=dt.datetime.now(dt.timezone(dt.timedelta(hours=-7))).strftime('%Y-%m-%d %H:%M:%S MST'))
+                 stamp=dt.datetime.now(dt.timezone(dt.timedelta(hours=-7))).strftime('%Y-%m-%d %I:%M:%S %p MST'))
     Path(out).write_text(json.dumps(value, indent=2) + '\n', encoding='utf-8')
     print(f'receipt {out} commit={tip[:10]} exe={sha[:16]}')
 
@@ -222,11 +222,18 @@ TIP=$1 REPO=$2 EXE=$3 OUT=$4
 T=${TIP[1,10]}
 LOG=$OUT/steps-$T.log NLOG=$OUT/ninja-$T.log EXITF=$OUT/exit-$T.txt
 BUILD=${EXE:h}
-stamp() { TZ=America/Phoenix date '+%Y-%m-%d %H:%M:%S MST'; }
+stamp() { TZ=America/Phoenix date '+%Y-%m-%d %I:%M:%S %p MST'; }
 say() { echo "[$(stamp)] $*" >> $LOG; }
 finish() { say "done exit=$1 $2"; echo "$1 $2" > $EXITF; exit $1; }
 : > $LOG
 say "start tip=$TIP repo=$REPO"
+BOX_GUARD=$HOME/cortex-workers/ACCEPTANCE-STREAM-RUNNING
+if [ -e "$BOX_GUARD" ]; then
+  BOX_HOLDER=$(cat "$BOX_GUARD/owner" 2>/dev/null)
+  if [ -z "${CC_ACCEPTANCE_BOX_OWNER:-}" ] || [ "$BOX_HOLDER" != "$CC_ACCEPTANCE_BOX_OWNER" ]; then
+    finish 1 "box launch refused: $BOX_GUARD held by $BOX_HOLDER"
+  fi
+fi
 cd $REPO || finish 1 "no repo $REPO"
 busy=x
 for i in {1..40}; do
@@ -295,11 +302,18 @@ TIP=$1 REPO=$2 EXE=$3 OUT=$4
 T=${TIP:0:10}
 LOG=$OUT/steps-$T.log NLOG=$OUT/ninja-$T.log EXITF=$OUT/exit-$T.txt
 BUILD=$(dirname "$EXE")
-stamp() { TZ=America/Phoenix date '+%Y-%m-%d %H:%M:%S MST'; }
+stamp() { TZ=America/Phoenix date '+%Y-%m-%d %I:%M:%S %p MST'; }
 say() { echo "[$(stamp)] $*" >> $LOG; }
 finish() { say "done exit=$1 $2"; echo "$1 $2" > $EXITF; exit $1; }
 : > $LOG
 say "start tip=$TIP repo=$REPO"
+BOX_GUARD=$HOME/cortex-workers/ACCEPTANCE-STREAM-RUNNING
+if [ -e "$BOX_GUARD" ]; then
+  BOX_HOLDER=$(cat "$BOX_GUARD/owner" 2>/dev/null)
+  if [ -z "${CC_ACCEPTANCE_BOX_OWNER:-}" ] || [ "$BOX_HOLDER" != "$CC_ACCEPTANCE_BOX_OWNER" ]; then
+    finish 1 "box launch refused: $BOX_GUARD held by $BOX_HOLDER"
+  fi
+fi
 cd $REPO || finish 1 "no repo $REPO"
 busy=x
 for i in {1..40}; do

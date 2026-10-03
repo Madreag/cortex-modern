@@ -1490,6 +1490,12 @@ def review(scenario, capture, out):
                               "finding": capture.get("skip_finding") or {"class": "harness", "reason": "No such peer in this capture"}})
                 continue
             found, assertions = item_evidence(record, item, capture.get("port"))
+            if item.get('directory_relay_offer'):
+                from acceptance_relay_policy import directory_offer
+                passed = directory_offer(capture, item['directory_relay_offer'])
+                assertions['directory_relay_offer'] = dict(passed=passed, provider=item['directory_relay_offer'])
+                if not passed:
+                    assertions.update(probe='fail', reason='relay_offer_issued provider=cloudflare for this session is absent')
             if item.get("peer_drop"):
                 required = item["peer_drop"]
                 witness = next((row for row in capture["peers"] if row["peer"] == required["peer"]), None)
@@ -2609,6 +2615,11 @@ def main():
         print(json.dumps({"scenario": scenario["name"], "dry_run": True, "runs": options.completed_runs}, indent=2))
         return 0
     out.mkdir(parents=True, exist_ok=False)
+    if scenario.get('relay_secret_scan'):
+        from acceptance_relay_policy import CredentialBook
+        options.relay_book = CredentialBook()
+        for key in ('TURN_USER', 'TURN_PASS'):
+            options.relay_book.add(key, options.tokens.get(key))
     if options.host_box:
         from acceptance_e2e_remote import RemoteCapture
         options.remote_capture = RemoteCapture(options)
@@ -2683,7 +2694,10 @@ def main():
                 continue
             if directory_port:
                 from e2e.directory import serve
-                service = serve(out / f"{name}-directory", directory_port, (PORT_LO, PORT_HI), turn_config=run.get("directory_turn_config"))
+                from acceptance_relay_policy import CredentialBook, directory_config
+                book = getattr(options, 'relay_book', None) or CredentialBook()
+                backend = directory_config(run, out, book)
+                service = serve(out / f"{name}-directory", directory_port, (PORT_LO, PORT_HI), turn_config=backend, secret_book=book)
             with claim, service as tokens:
                 if getattr(options, 'remote_capture', None):
                     options.remote_capture.directory_tunnel(directory_port)
@@ -2716,6 +2730,15 @@ def main():
     (out / "capture.json").write_text(json.dumps(capture, indent=2) + "\n", encoding="utf-8")
     if getattr(options, 'remote_capture', None):
         options.remote_capture.close()
+    if scenario.get('relay_secret_scan'):
+        from acceptance_relay_policy import scan_retained
+        scan = scan_retained(out, options.relay_book)
+        write_json(out/'secret-scan.json', scan)
+        complete &= scan['passed']
+        if not scan['passed']:
+            document.setdefault('run_findings', []).append(dict(**{'class':'engine'},
+                reason='relay sanitizer did not prove 0 logins in every kept file', required=True))
+            write_json(out/'review.json', document)
     print(json.dumps({"capture": str(out / "capture.json"),
                       "review": [str(Path(run["root"]) / "review.json") for run in capture["runs"]]}, indent=2))
     return 0 if complete else 1
