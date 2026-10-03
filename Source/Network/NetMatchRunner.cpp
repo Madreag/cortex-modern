@@ -176,6 +176,8 @@ namespace RTE {
 	bool NetMatchRunner::AgreeOnSeatRoster(NetSession& session, std::string* error) {
 		m_RosterAgreedRevision = 0;
 		if (m_Config.host || m_MatchConfig.version < NetMatchConfigUtil::c_SeatRosterVersion || m_MatchConfig.seatRosterRevision == 0) return true;
+		// A peer that joins a running round was not at its start: it holds the host's roster whole from its admission.
+		if (m_WorldJoinImage) return true;
 		NetReconnectClient* reconnect = session.GetReconnectClient();
 		if (!reconnect) return true;
 		std::string why;

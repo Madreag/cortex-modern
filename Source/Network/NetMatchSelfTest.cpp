@@ -10905,6 +10905,28 @@ namespace RTE {
 		return true;
 	}
 
+	// A peer that joins a running round takes the host's roster whole with its admission: the revision the round's start agreed on,
+	// long before it came, is not asked of it.
+	bool TestARunningRoundsJoinerIsNotAskedForItsStartRoster(std::string* error) {
+		NetMatchRunner runner;
+		runner.m_Config.host = false;
+		runner.m_MatchConfig = MakeConfig();
+		runner.m_MatchConfig.version = NetMatchConfigUtil::c_Version;
+		runner.m_MatchConfig.seatRosterRevision = 1;
+		runner.m_MatchConfig.seatRosterHash[0] = 0x11;
+		runner.m_WorldJoinImage = true;
+		NetSession session;
+		NetReconnectClient reconnect;
+		session.SetReconnectClient(&reconnect);
+		std::string why;
+		if (!runner.AgreeOnSeatRoster(session, &why)) {
+			*error = "a peer joining a running round was refused for the roster its round started on: " + why;
+			return false;
+		}
+		std::cout << "PASS a_running_rounds_joiner_is_not_asked_for_its_start_roster" << std::endl;
+		return true;
+	}
+
 	// A host that asked for the start once, as a player presses Start once, before the seat roster moved in its open lobby: the stamp of the
 	// new revision is one the host never typed, so its peers acknowledge it again and the start stays asked.
 	bool TestAStartRequestOutlivesTheRosterStamp(std::string* error) {
@@ -15523,6 +15545,7 @@ namespace RTE {
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestPreRosterConfigRefusedByName(&error)) return fail(error);
 		if (!TestARecordedPreRosterConfigOpens(&error)) return fail(error);
+		if (!TestARunningRoundsJoinerIsNotAskedForItsStartRoster(&error)) return fail(error);
 		if (!TestFakeLinkEffectsAreReadFromTheLinksOwnCounters(&error)) return fail(error);
 		if (!TestTheModerationStateCarriesThroughTheCapsule(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);

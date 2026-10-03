@@ -261,6 +261,7 @@ namespace RTE {
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session = nullptr);
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
+		friend bool TestARunningRoundsJoinerIsNotAskedForItsStartRoster(std::string* error);
 		friend bool TestAStartRequestOutlivesTheRosterStamp(std::string* error);
 		// Lockstep peer ids are 1-based and dense; the session assigns the host id 0 and clients 1.. .
 		std::map<uint8_t, NetPeerId> BuildRemoteTransportMap(const NetSession& session) const;
