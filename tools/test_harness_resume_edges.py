@@ -166,6 +166,7 @@ class ResumeEdges(unittest.TestCase):
     def test_available_coverage_ignores_attempts_and_other_peers(self):
         events = dict(a=[dict(type='coverage', phase='live', gameplay_tick=True, event=event, amount=1, result='success')
                          for event in ('round_fired', 'reload_completed', 'thrown_release')], b=[])
+        for rows in events.values(): rows.append(dict(type='progress', budget_tick=72000))
         def weapons():
             return next(row for row in cross_report.coverage(events, dict(a={}, b={}), dict(scenario='soak')) if row['id'] == 'weapons')
         self.assertEqual(weapons()['status'], 'FAIL')

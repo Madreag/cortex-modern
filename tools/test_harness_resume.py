@@ -168,7 +168,7 @@ class HarnessResume(unittest.TestCase):
             self.assertEqual(coverage['pending'], {'S1': 3})
 
     def test_x11_zero_native_coverage_is_required_red(self):
-        rows = cross_report.coverage({'peer': []}, {'peer': {}}, dict(scenario='soak'))
+        rows = cross_report.coverage({'peer': [dict(type='progress', budget_tick=72000)]}, {'peer': {}}, dict(scenario='soak'))
         weapons = next(row for row in rows if row['id']=='weapons')
         self.assertTrue(weapons['required'], weapons)
         self.assertEqual(weapons['status'], 'FAIL', weapons)
