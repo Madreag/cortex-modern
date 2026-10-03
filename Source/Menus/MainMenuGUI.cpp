@@ -3661,17 +3661,22 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			if (open) return " - Team " + std::to_string(member.team + 1);
 			std::string tail = member.isLocal ? " (you)" : "";
 			tail += " - Team " + std::to_string(member.team + 1);
-			tail += member.peerId == snapshot.hostPeerId ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
+			// A running world readies nobody up: its joiner comes in by the image.
+			if (member.peerId == snapshot.hostPeerId) tail += " - Host";
+			else if (!snapshot.joiningWorld) tail += member.ready ? " - Ready" : " - Not ready";
 			tail += seat;
-			if (!member.cpu && withMetrics) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
+			// A world's joiner measures only its own link: the others' are the host's to know.
+			if (!member.cpu && withMetrics && (!snapshot.joiningWorld || member.isLocal)) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
 			return tail;
 		};
 		// An open seat reads open, never as a player who is not ready, nor by the remembered name of the one who held it.
 		lobbyRowName[i] = open ? std::string("Open seat")
 		                                     : LobbyRowName(member, m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty()
 		                                                            ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
-		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
-		lobbyRowTailWithoutMetrics[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine, false);
+		// The seat's line is "name: state"; the row already starts with the name.
+		const std::string seatLine = member.statusLine.empty() ? std::string() : member.statusLine.substr(member.statusLine.rfind(": ") == std::string::npos ? 0 : member.statusLine.rfind(": ") + 2);
+		lobbyRowTailFull[i] = buildTail(seatLine.empty() ? seatMark : " - " + seatLine);
+		lobbyRowTailWithoutMetrics[i] = buildTail(seatLine.empty() ? seatMark : " - " + seatLine, false);
 		// The row drops connection metrics before shortening the seat state.
 		lobbyRowTailCompact[i] = buildTail(seatMark, false);
 		label->SetVisible(true);
@@ -3903,8 +3908,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	leave->SetPositionRel(pairLeft, 236 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
-	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
-	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && snapshot.inLobby);
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost && !snapshot.joiningWorld);
+	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetEnabled(!snapshot.isHost && !snapshot.joiningWorld && snapshot.inLobby);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetVisible(snapshot.isHost);
 	// Start only once the remote peer is actually ready, not merely present.
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);

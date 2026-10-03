@@ -149,7 +149,9 @@ namespace RTE {
 		const bool hosted = m_IsHost && m_AdmissionAttached;
 		if (!hosted && !replica.HasRoster()) return;
 		const NetSeatRoster& roster = hosted ? m_ReconnectHost.GetRoster() : replica.Roster();
-		const NetMatchConfig& config = m_Runner ? m_Runner->GetMatchConfig() : (m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig);
+		// Before its round runs a joiner's seats are the lobby's agreed config, which the publish has just adopted.
+		const NetMatchConfig& config = m_State != NetMatchServiceState::Running && m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig
+		                               : m_Runner ? m_Runner->GetMatchConfig() : (m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig);
 		std::map<uint8_t, SeatView> views;
 		for (const NetH4Seat& entry: NetH4BuildSeatTable(config)) {
 			if (entry.cpu || entry.lockstepPeerId == 0) continue;
@@ -8111,12 +8113,38 @@ static std::string ResyncSaveName() {
 		// An unseated roster slot keeps its open name: presence still remembers the player who held
 		// it, and between rounds that entry is stale - a kicked seat must not read the removed name.
 		const bool persistentWorld = (m_Runner ? m_Runner->GetMatchConfig() : (m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig)).persistentWorld;
+		if (snapshot.joiningWorld && m_State == NetMatchServiceState::Starting && !m_SeatViews.empty()) {
+			// A world's joiner lists the world's seated players from the roster the host sent, not the lobby's passing member list,
+			// in which a dedicated host appears as a player and the seats come and go as their states arrive.
+			const NetMatchConfig& config = m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
+			const auto own = std::find_if(snapshot.members.begin(), snapshot.members.end(), [](const NetLobbyMember& member) { return member.isLocal; });
+			std::vector<NetLobbyMember> seated;
+			for (const auto& [peerId, view]: m_SeatViews) {
+				if (view.seat.owner == 0 && peerId != m_WorldJoinerSeatPeer) continue;
+				// The lobby's rows carry the lobby's ids; only this peer's own row (its link to the host) is kept from them.
+				NetLobbyMember member = peerId == m_WorldJoinerSeatPeer && own != snapshot.members.end() ? *own : NetLobbyMember{};
+				member.peerId = peerId;
+				member.isLocal = peerId == m_WorldJoinerSeatPeer;
+				member.connected = member.isLocal || view.seat.link == NetSeatLink::Connected;
+				for (const NetMatchPlayerSlot& slot: config.players)
+					if (slot.peerId == peerId) member.team = slot.team;
+				seated.push_back(std::move(member));
+			}
+			if (std::none_of(seated.begin(), seated.end(), [](const NetLobbyMember& member) { return member.isLocal; }))
+				for (const NetLobbyMember& member: snapshot.members)
+					if (member.isLocal) seated.insert(seated.begin(), member);
+			snapshot.members = std::move(seated);
+		}
 		for (NetLobbyMember& member: snapshot.members) {
-			const bool unseated = !member.connected && !member.cpu && !member.isLocal &&
-			                      member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld);
 			const auto view = m_SeatViews.find(member.peerId);
+			// A world publishes every seat as open: its roster, not the slot's label, says who sits in a seat and whether they are there.
+			const bool seatedInWorld = persistentWorld && view != m_SeatViews.end() && view->second.seat.owner != 0;
+			const bool unseated = !seatedInWorld && !member.connected && !member.cpu && !member.isLocal &&
+			                      member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld);
 			const bool known = !unseated && view != m_SeatViews.end();
 			if (known && !view->second.name.empty()) member.displayName = view->second.name;
+			if (seatedInWorld && !member.isLocal) member.connected = view->second.seat.link == NetSeatLink::Connected;
+			if (member.isLocal && !m_LocalName.empty() && member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld)) member.displayName = m_LocalName;
 			member.dropped = known && view->second.seat.link == NetSeatLink::Dropped && view->second.state != "Left";
 			member.reclaiming = known && view->second.state == "Reconnecting";
 			member.joining = member.reclaiming && view->second.seat.joining;
@@ -9667,6 +9695,9 @@ static std::string ResyncSaveName() {
 		runnerConfig.publishLobby = [this, runnerRaw](const NetLobbySnapshot& snapshot) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_LobbySnapshot = snapshot;
+			// A world's joiner that has begun to receive the image comes into a running world: nobody there readies up.
+			m_LobbySnapshot.joiningWorld = !m_IsHost && runnerRaw->SawWorldImageTransfer() &&
+			                               (runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle ? runnerRaw->GetLobbySession().GetMatchConfig() : runnerRaw->GetMatchConfig()).persistentWorld;
 			// The announced delay comes from the lobby's exchanged config (host-authored, already
 			// auto-adjusted) — never recomputed here, so every peer renders the same value.
 			const NetMatchConfig& config = runnerRaw->GetState() != NetMatchRuntimeState::Running && runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
@@ -9704,6 +9735,15 @@ static std::string ResyncSaveName() {
 			// The host's seat panel moderates from the admission rows, and the lobby is where it most
 			// needs them; they are named from the roster that has just been published.
 			PublishLobbyModerationViewLocked();
+			// A world's joiner sits in the lobby while the image comes: its seat lines read the roster the host has already sent,
+			// here on the thread that pumps its session.
+			if (!m_IsHost && config.persistentWorld && m_ReconnectClient.GetRosterReplica().HasRoster()) RefreshSeatViewsLocked(AdmissionNowMs());
+			// Its own seat is the one its ticket names: a world's seats and the lobby's ids are not the same numbers.
+			m_WorldJoinerSeatPeer = 0;
+			if (!m_IsHost && config.persistentWorld && m_ReconnectClient.HasRecord()) {
+				for (const NetH4Seat& entry: NetH4BuildSeatTable(config))
+					if (!entry.cpu && entry.stableSeat == m_ReconnectClient.GetRecord().stableSeat) m_WorldJoinerSeatPeer = entry.lockstepPeerId;
+			}
 		};
 
 		// One clock from here on: setup, play, stalls and every resync read the same elapsed time.

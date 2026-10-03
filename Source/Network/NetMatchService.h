@@ -1484,6 +1484,7 @@ namespace RTE {
 		bool m_IdentityPending = false;
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;
+		uint8_t m_WorldJoinerSeatPeer = 0; //!< A world's joiner: the lockstep peer of the seat its ticket names, read on the thread that pumps its session.
 		int m_LocalTeam = -1;
 		bool m_Dedicated = false;
 		int m_HumanSeats = 0;

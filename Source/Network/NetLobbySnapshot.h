@@ -95,6 +95,7 @@ namespace RTE {
 		uint32_t transferReceivedBytes = 0; //!< The world image this joiner is receiving: what has come so far.
 		uint32_t transferTotalBytes = 0;    //!< Its whole size; 0 when no image is coming.
 		std::string transferLine;           //!< The line the joiner reads while it comes; "" when none is.
+		bool joiningWorld = false;          //!< This peer comes into a running world by its image: nobody there readies up.
 		uint64_t resumeTick = 0;
 		std::string resumeDigest; //!< The checkpoint's world-structure digest, the identity a peer compares.
 		bool resumeHeldLocally = false; //!< Whether this peer holds that checkpoint and will load its own copy.
