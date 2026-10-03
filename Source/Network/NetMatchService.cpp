@@ -10041,6 +10041,8 @@ static std::string ResyncSaveName() {
 	}
 
 	NetKickBanResult NetMatchService::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
+		// The Seats panel calls this inside the plane's window, and a removal reads the round and evicts from it.
+		NetLockstepPlane::Gap plane("seat removal");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_LastRemovalIssue = {};
 		if (!m_AdmissionAttached || !m_IsHost) {
@@ -10078,6 +10080,8 @@ static std::string ResyncSaveName() {
 	}
 
 	NetKickBanResult NetMatchService::UnbanParticipant(const NetAuthBytes32& identity) {
+		// The ban list's Unban runs inside the plane's window too, and asks whether a relaunch holds the round.
+		NetLockstepPlane::Gap plane("unban");
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (!m_IsHost) {
 			m_LastKickBanResult = NetKickBanResult::NotHosting;
