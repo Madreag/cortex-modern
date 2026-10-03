@@ -143,6 +143,8 @@ def configure_plan(plan, row, mod_receipts=None):
         if not world:
             flags = flag(flags, "-module", "VoidWanderers.rte")
             spec["module_tree_sha256"] = plan["module_tree_sha256"]
+            box = next(value for value in plan["boxes"] if value["name"] == spec["box"])
+            spec["module_source"] = box.get("module_source", spec["repo"]+"/Data/VoidWanderers.rte")
         spec["flags"] = flags
         if plan['late_join'] and spec['peer'] == plan['late_join']['peer']:
             spec.update(defer_until_session=True, session_leaf='session-late.json')
@@ -159,8 +161,18 @@ def configure_plan(plan, row, mod_receipts=None):
 
 
 def preflight_mod(box, result):
-    path = Path(box["tree"])/"Data/VoidWanderers.rte"
-    result["acceptance_module"] = mod_manifest(path)
+    path = Path(box.get("module_source", str(Path(box["tree"])/"Data/VoidWanderers.rte")))
+    module = mod_manifest(path)
+    staged = {"VoidWanderers.rte/"+entry["path"]:entry["sha256"] for entry in module["files"]}
+    content = result.setdefault("content", {})
+    installed = {name:digest for name,digest in content.items() if name.startswith("VoidWanderers.rte/")}
+    if installed and installed != staged:
+        raise ValueError("base Data mod differs from the selected unchanged module")
+    # The private runtime adds this exact copy to Data; every one of its files remains in the full content comparison.
+    content.update(staged)
+    result.setdefault("modules", {})["VoidWanderers.rte/Index.ini"] = staged["VoidWanderers.rte/Index.ini"]
+    result["acceptance_module"] = module
+    result["acceptance_module_source"] = str(path)
 
 
 def preflight_driver(box, result):
@@ -281,7 +293,7 @@ def prepare_mod_runtime(spec):
     (runtime/"Userdata/Settings.ini").write_text("SettingsMan\n", encoding="utf-8")
     seed_settings(SimpleNamespace(cwd=runtime), RUNTIME_SETTINGS)
     archive, receipt = own/"module.tar", own/"module.json"
-    expected = pack(repo/"Data/VoidWanderers.rte", archive, receipt)
+    expected = pack(Path(spec.get("module_source", str(repo/"Data/VoidWanderers.rte"))), archive, receipt)
     if expected["tree_sha256"] != spec["module_tree_sha256"]:
         raise ValueError("mod changed after preflight")
     install(archive, receipt, runtime/"Data/VoidWanderers.rte")

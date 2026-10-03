@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from world_mod_cross import configure_plan, flag, late_join_due, stage_activity, restore_activity, prepare_mod_runtime, retain_native_screens, named_row, is_row, check_driver_preflights, check_mod_preflights
+from world_mod_cross import configure_plan, flag, late_join_due, stage_activity, restore_activity, prepare_mod_runtime, retain_native_screens, named_row, is_row, check_driver_preflights, check_mod_preflights, preflight_mod
 
 
 def baseline():
@@ -81,7 +81,7 @@ class Plans(unittest.TestCase):
     def test_flag_replacement_does_not_drop_adjacent_flag(self):
         self.assertEqual(flag(["-net-host", "-seed", "42"], "-net-host", False), ["-seed", "42"])
 
-    def refusal_fixture(self):
+    def refusal_fixture(self, external_source=False):
         from acceptance_mod import manifest
         retained = os.environ.get('CC_ACCEPTANCE_TEST_ROOT')
         if retained:
@@ -90,8 +90,9 @@ class Plans(unittest.TestCase):
             temporary = tempfile.TemporaryDirectory()
             self.addCleanup(temporary.cleanup)
             root = Path(temporary.name)
-        source = root/'repo/Data/VoidWanderers.rte'
+        source = root/('installed/VoidWanderers.rte' if external_source else 'repo/Data/VoidWanderers.rte')
         source.mkdir(parents=True)
+        (root/'repo/Data').mkdir(parents=True, exist_ok=True)
         (source/'Index.ini').write_bytes(b'DataModule\n')
         before = manifest(source)
         own = root/'run/linux/incarnation-0'
@@ -100,10 +101,28 @@ class Plans(unittest.TestCase):
         spec = dict(own=str(own), root=str(root/'run'), repo=str(root/'repo'), flags=args[:],
                     env={'CC_TEST_NET_UI_SCRIPT':'probe'}, port_block=[49320,49324], acceptance_row='mod-refusal',
                     module_refusal=True, module_tree_sha256=before['tree_sha256'])
+        if external_source:
+            spec['module_source'] = str(source)
         runtime = prepare_mod_runtime(spec)
         run = SimpleNamespace(cwd=runtime, argv=args, env={'CC_TEST_NET_UI_SCRIPT':'probe'},
                               record={'argv':args, 'env_set':{'CC_TEST_NET_UI_SCRIPT':'probe'}})
         return source, before, own, runtime, run, spec
+
+    def test_installed_reference_can_stay_outside_the_engine_worktree(self):
+        from acceptance_mod import manifest
+        source, before, own, runtime, run, spec = self.refusal_fixture(external_source=True)
+        self.assertEqual(manifest(runtime/'Data/VoidWanderers.rte'), before)
+        self.assertFalse((Path(spec['repo'])/'Data/VoidWanderers.rte').exists())
+        self.assertEqual(manifest(source), before)
+        result = dict(content={'Base.rte/Index.ini':'a'*64})
+        box = dict(tree=spec['repo'], module_source=str(source))
+        preflight_mod(box, result)
+        self.assertEqual(result['content']['Base.rte/Index.ini'], 'a'*64)
+        self.assertEqual(result['content']['VoidWanderers.rte/Index.ini'], before['files'][0]['sha256'])
+        self.assertEqual(result['acceptance_module'], before)
+        result['content']['VoidWanderers.rte/Index.ini'] = 'f'*64
+        with self.assertRaisesRegex(ValueError, 'differs'):
+            preflight_mod(box, result)
 
     def test_refusal_uses_real_menu_and_restores_the_copy(self):
         from acceptance_mod import manifest
