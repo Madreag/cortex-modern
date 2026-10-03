@@ -339,6 +339,20 @@ namespace RTE {
 		/// as the registry does after each. @return The first way it did not, or empty.
 		std::string KnownObjectsScopeMissedChange();
 
+		/// While one lives, the checkpoint saver reads the objects the script states held from this list, gathered on the
+		/// capturing thread before any state froze, instead of entering each state (which waits for that state's page copy).
+		class ScriptHeldScope {
+		public:
+			explicit ScriptHeldScope(std::vector<MovableObject*> held);
+			~ScriptHeldScope();
+			ScriptHeldScope(const ScriptHeldScope&) = delete;
+			ScriptHeldScope& operator=(const ScriptHeldScope&) = delete;
+			static const std::vector<MovableObject*>* Current();
+		private:
+			std::vector<MovableObject*> m_Held;
+			const std::vector<MovableObject*>* m_Previous = nullptr;
+		};
+
 		struct AddQueueMark {
 			size_t actors = 0;
 			size_t items = 0;

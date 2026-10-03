@@ -784,6 +784,14 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	sceneCache->Begin();
 	// What the workers would make on first use is made here; from the first worker to the join they only read.
 	LuaScriptGraphNativeCaptureScope::PreTouch();
+	// The movable saver's walk of the script states would wait at each state's copy gate once the graphs freeze them, so the
+	// objects they hold are gathered here, before any state freezes; no script runs between.
+	std::vector<MovableObject*> scriptHeld;
+	{
+		CaptureTrace::Span span("script_held");
+		g_LuaMan.VisitScriptHeldMovableObjects([&scriptHeld](MovableObject* object) { scriptHeld.push_back(object); });
+	}
+	MovableMan::ScriptHeldScope scriptHeldScope(std::move(scriptHeld));
 	std::optional<CaptureSentinel::ParallelPhase> parallel(std::in_place);
 	// The parts run in the order they are named, the longest first; this thread takes whatever part is left once the
 	// graphs are done, so it never waits behind other pool work for a part nobody started.

@@ -2764,6 +2764,23 @@ MovableMan::KnownObjectsScope::~KnownObjectsScope() {
 	g_MovableMan.m_KnownObjectsScope.store(m_Previous);
 }
 
+namespace {
+	// Set by the capturing thread before its savers start and read by them; one capture at a time.
+	std::atomic<const std::vector<MovableObject*>*> s_CaptureScriptHeld{nullptr};
+}
+
+MovableMan::ScriptHeldScope::ScriptHeldScope(std::vector<MovableObject*> held) : m_Held(std::move(held)), m_Previous(s_CaptureScriptHeld.load()) {
+	s_CaptureScriptHeld.store(&m_Held);
+}
+
+MovableMan::ScriptHeldScope::~ScriptHeldScope() {
+	s_CaptureScriptHeld.store(m_Previous);
+}
+
+const std::vector<MovableObject*>* MovableMan::ScriptHeldScope::Current() {
+	return s_CaptureScriptHeld.load();
+}
+
 std::string MovableMan::KnownObjectsScopeMissedChange() {
 	std::list<SceneObject*> actors;
 	GetAllActors(false, actors);
@@ -7796,9 +7813,13 @@ std::string MovableMan::SaveCheckpoint() const {
 	collect(m_Actors); collect(m_Items); collect(m_Particles);
 	collect(m_AddedActors); collect(m_AddedItems); collect(m_AddedParticles);
 	CollectOwnedMovableObjects(g_SceneMan.GetScene(), visited, carried);
-	g_LuaMan.VisitScriptHeldMovableObjects([&visited, &carried](MovableObject* object) {
-		CollectOwnedMovableObjects(object, visited, carried);
-	});
+	if (const std::vector<MovableObject*>* held = ScriptHeldScope::Current()) {
+		for (const MovableObject* object: *held) CollectOwnedMovableObjects(object, visited, carried);
+	} else {
+		g_LuaMan.VisitScriptHeldMovableObjects([&visited, &carried](MovableObject* object) {
+			CollectOwnedMovableObjects(object, visited, carried);
+		});
+	}
 	const auto shared = [&visited, &carried](const Activity* activity) {
 		if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
 			game->VisitCheckpointSharedObjects([&visited, &carried](const Entity* child) { CollectOwnedMovableObjects(child, visited, carried); });
