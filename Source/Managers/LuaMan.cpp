@@ -14334,6 +14334,7 @@ std::string LuaMan::DescribePreviewWindowCost() {
 CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
 	CopyBufferProbe probe;
 	probe.bound = CheckpointLua::HeapOwner::c_LiveSlabs + 1;
+	probe.liveBound = CheckpointLua::HeapOwner::c_LiveSlabs;
 	try {
 		const std::unique_ptr<CheckpointLua::HeapOwner> owner = CheckpointLua::HeapOwner::Create();
 		lua_State* state = owner->State();
@@ -14351,12 +14352,16 @@ CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
 		    "hot = {} for i = 1, 16384 do hot[i] = 0 end");
 		CheckpointLua::Snapshot held = owner->Freeze({});
 		probe.freezes = 1;
+		(void)owner->TakeCopyReceipt();
 		for (int round = 1; round <= rounds; ++round) {
 			run("for i = 1, 16384 do hot[i] = hot[i] + 1 end local t = groups[" + std::to_string(round) + "] for i = 1, 16384 do t[i] = -i end");
 			// Each freeze replaces the snapshot before it, as a world keeps one capture in flight.
 			held = owner->Freeze({});
 			++probe.freezes;
 			probe.mostLive = std::max(probe.mostLive, owner->LiveSlabs());
+			// The second freeze fills a buffer while the first still holds its own; from the third on one is always free.
+			const CheckpointLua::CopyReceipt receipt = owner->TakeCopyReceipt();
+			if (probe.freezes > 2) probe.freshAfterSecond += receipt.freshBytes;
 		}
 		// Nothing wrote the arrays after the last freeze, so its snapshot reads them back byte for byte.
 		const auto matches = [&held, state]() {

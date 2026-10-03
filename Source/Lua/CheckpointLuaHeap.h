@@ -55,8 +55,7 @@ namespace RTE::CheckpointLua {
 		int64_t landedUs = 0;
 	};
 
-	// The VM's memory at one freeze: a page table over copies, shared with the freezes before it for
-	// every page nothing wrote in between. Addresses identify the source VM; only the copies are read.
+	// The VM's memory at one freeze: a copy of every committed page. Addresses identify the source VM; only the copy is read.
 	class Snapshot {
 	public:
 		static constexpr size_t c_PageBytes = 4096;
@@ -117,7 +116,8 @@ namespace RTE::CheckpointLua {
 			std::atomic<size_t> copied{0};
 			int64_t freezeUs = 0;
 			std::atomic<int64_t> copyUs{0};
-			std::vector<std::shared_ptr<const Page>> pages; // One per committed page; empty means never written.
+			std::shared_ptr<const void> buffer; // Keeps the copy mapped.
+			const Page* pages = nullptr; // One per committed page, in order.
 			std::shared_future<void> ready; // Set only when a freeze was given somewhere to run its copy.
 			mutable std::atomic<bool> copiedFlag{false};
 			mutable std::deque<std::vector<std::byte>> assembled; // Read by the one worker that walks this snapshot.
@@ -131,14 +131,7 @@ namespace RTE::CheckpointLua {
 		std::shared_ptr<const Data> m_Data;
 		explicit Snapshot(std::shared_ptr<const Data> data) : m_Data(std::move(data)) {}
 
-		static const Page& ZeroPage() {
-			static const Page zero{};
-			return zero;
-		}
-		const std::byte* PageBytes(size_t index) const {
-			const auto& page = m_Data->pages[index];
-			return page ? page->bytes : ZeroPage().bytes;
-		}
+		const std::byte* PageBytes(size_t index) const { return m_Data->pages[index].bytes; }
 
 		friend class HeapOwner;
 	};
@@ -186,8 +179,8 @@ namespace RTE::CheckpointLua {
 		}
 	};
 
-	// Owns the VM and the reservation every block comes from. The kernel keeps the page-written bits,
-	// so a freeze copies the pages written since the freeze before it and shares the rest.
+	// Owns the VM and the reservation every block comes from. A freeze copies every committed page into a buffer
+	// the next freeze reuses once the snapshot that held it lets it go.
 	class HeapOwner {
 	public:
 		static std::unique_ptr<HeapOwner> Create() {
@@ -207,7 +200,6 @@ namespace RTE::CheckpointLua {
 				std::lock_guard lock(RegistryMutex());
 				LiveHeaps().erase(this);
 			}
-			m_Pages.clear();
 			{
 				std::lock_guard lock(m_SlabMutex);
 				for (const auto& slab: m_IdleSlabs) {
@@ -233,19 +225,18 @@ namespace RTE::CheckpointLua {
 		/// Every copy buffer any heap has mapped, idle ones included, and the idle part of it.
 		static size_t MappedCopyBytes() { return CopyBytes(false).load(std::memory_order_relaxed); }
 		static size_t IdleCopyBytes() { return CopyBytes(true).load(std::memory_order_relaxed); }
-		/// The copy buffers of this heap that a page table or a snapshot still holds.
+		/// The copy buffers of this heap that a snapshot still holds.
 		size_t LiveSlabs() const { return m_LiveSlabs.load(std::memory_order_relaxed); }
-		/// The buffer of the last freeze and the one of settled pages; a third means settled pages pin a stale one.
+		/// The buffer a snapshot holds and the one the next freeze fills while it still holds it.
 		static constexpr size_t c_LiveSlabs = 2;
 		/// Buffers handed back to a heap that no longer exists; any is a use after free.
 		static size_t CallsIntoDestroyedHeaps() { return DeadHeapCalls().load(std::memory_order_relaxed); }
 
 		using Submit = std::function<std::future<void>(std::function<void()>)>;
 
-		// With a Submit the freeze only fixes the instant and the copy runs there, reading the written pages
-		// and the kernel's bits itself: no VM may run until it lands, and every way into this VM waits for
-		// it at the gate (WaitCopy, from the state's lock and from the allocator), so the copy never needs
-		// the VM's own lock. Without a Submit the copy runs here, on the caller's thread.
+		// With a Submit the freeze only fixes the instant and the copy runs there: no VM may run until it lands,
+		// and every way into this VM waits for it at the gate (WaitCopy, from the state's lock and from the
+		// allocator), so the copy never needs the VM's own lock. Without a Submit the copy runs here, on the caller's thread.
 		Snapshot Freeze(const Submit& submit) {
 			const auto started = std::chrono::steady_clock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
@@ -259,16 +250,10 @@ namespace RTE::CheckpointLua {
 			data->base = m_Base;
 			data->committed = m_Committed;
 			auto copy = [this, data, started] {
-				try {
-					m_FreshBytes = 0;
-					CopyWrittenPages(*data);
-					std::lock_guard lock(m_CopyMutex);
-					m_LandedCopy = {++m_LandedGeneration, data->copied.load(std::memory_order_relaxed), data->copyUs.load(std::memory_order_relaxed), m_FreshBytes, MicrosecondsSince(started)};
-				} catch (...) {
-					// The kernel's bits may be spent already, so the next freeze copies every page again.
-					m_CopyEverything = true;
-					throw;
-				}
+				m_FreshBytes = 0;
+				CopyPages(*data);
+				std::lock_guard lock(m_CopyMutex);
+				m_LandedCopy = {++m_LandedGeneration, data->copied.load(std::memory_order_relaxed), data->copyUs.load(std::memory_order_relaxed), m_FreshBytes, MicrosecondsSince(started)};
 			};
 			if (submit) {
 				// The snapshot waits on a promise of its own: a task's future can keep the task, and with it this
@@ -351,15 +336,12 @@ namespace RTE::CheckpointLua {
 		size_t m_Blocks = 0;
 		void* m_Free[c_ClassCount] = {};
 		std::vector<std::pair<void*, size_t>> m_LargeFree; // Whole-page blocks given back, by their rounded size.
-		std::vector<std::shared_ptr<const Snapshot::Page>> m_Pages;
-		std::vector<void*> m_Written;
 
 		// A copy buffer mapped straight from the system and kept for reuse: a reused one has its pages resident.
 		struct Slab {
 			Snapshot::Page* pages = nullptr;
 			size_t capacity = 0;
 			HeapOwner* owner = nullptr;
-			bool pooled = true; // A buffer of settled pages is sized to them, so it is unmapped instead of reused.
 			~Slab();
 		};
 		static constexpr size_t c_IdleSlabs = 1; // With one capture in flight, the next freeze reuses the buffer the last one gave back.
@@ -370,7 +352,6 @@ namespace RTE::CheckpointLua {
 		std::shared_future<void> m_PendingCopy;
 		uint64_t m_CopyGeneration = 0;
 		std::atomic<bool> m_CopyPending{false};
-		bool m_CopyEverything = false;
 		size_t m_FreshBytes = 0; // The copy task's own: what its buffers mapped fresh.
 		uint64_t m_LandedGeneration = 0;
 		CopyReceipt m_LandedCopy; // Under m_CopyMutex.
@@ -396,9 +377,9 @@ namespace RTE::CheckpointLua {
 			static std::atomic<size_t> calls{0};
 			return calls;
 		}
-		std::shared_ptr<Slab> TakeSlab(size_t pages, bool pooled) {
+		std::shared_ptr<Slab> TakeSlab(size_t pages) {
 			std::unique_ptr<Slab> slab;
-			if (pooled) {
+			{
 				std::lock_guard lock(m_SlabMutex);
 				const auto fit = std::find_if(m_IdleSlabs.begin(), m_IdleSlabs.end(), [pages](const auto& candidate) { return candidate->capacity >= pages; });
 				if (fit != m_IdleSlabs.end()) {
@@ -410,8 +391,8 @@ namespace RTE::CheckpointLua {
 			if (!slab) {
 				slab = std::make_unique<Slab>();
 				slab->owner = this;
-				slab->pooled = pooled;
-				slab->capacity = pooled ? pages + pages / 4 : pages;
+				// Room for the heap to grow before a freeze needs a bigger buffer.
+				slab->capacity = pages + pages / 4;
 				slab->pages = static_cast<Snapshot::Page*>(MapPages(slab->capacity * Snapshot::c_PageBytes));
 				if (!slab->pages) throw std::runtime_error("could not map a Lua heap copy");
 				m_FreshBytes += slab->capacity * Snapshot::c_PageBytes;
@@ -441,11 +422,21 @@ namespace RTE::CheckpointLua {
 			}
 			m_LiveSlabs.fetch_sub(1, std::memory_order_relaxed);
 			std::lock_guard lock(m_SlabMutex);
-			if (slab->pooled && m_IdleSlabs.size() < c_IdleSlabs) {
-				m_IdleSlabs.push_back(std::unique_ptr<Slab>(slab));
-				CopyBytes(true).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
-				return;
+			// The next freeze needs a buffer as big as the heap, so a full pool keeps its largest.
+			if (m_IdleSlabs.size() >= c_IdleSlabs) {
+				const auto smallest = std::min_element(m_IdleSlabs.begin(), m_IdleSlabs.end(), [](const auto& a, const auto& b) { return a->capacity < b->capacity; });
+				if ((*smallest)->capacity >= slab->capacity) {
+					DropSlab(slab);
+					return;
+				}
+				CopyBytes(true).fetch_sub((*smallest)->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+				DropSlab(smallest->release());
+				m_IdleSlabs.erase(smallest);
 			}
+			m_IdleSlabs.push_back(std::unique_ptr<Slab>(slab));
+			CopyBytes(true).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+		}
+		static void DropSlab(Slab* slab) {
 			Unmap(slab->pages, slab->capacity * Snapshot::c_PageBytes);
 			CopyBytes(false).fetch_sub(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 			slab->pages = nullptr;
@@ -456,44 +447,19 @@ namespace RTE::CheckpointLua {
 			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		}
 
-		// Reads the pages written since the last freeze and copies them. Nothing writes the heap meanwhile.
-		void CopyWrittenPages(Snapshot::Data& data) {
+		// Copies every committed page; nothing writes the heap meanwhile. A capture's collection marks every live object, so
+		// nearly every page is written between two freezes: keeping the last copy to share the rest would hold a second
+		// copy of the heap for a tenth of the copying, and the buffer it pins could never be reused.
+		void CopyPages(Snapshot::Data& data) {
 			const auto copyStarted = std::chrono::steady_clock::now();
 			const size_t pageCount = data.committed / Snapshot::c_PageBytes;
-			m_Pages.resize(pageCount);
-			m_Written.resize(pageCount);
-			size_t written = WrittenPages();
-			if (std::exchange(m_CopyEverything, false)) {
-				for (size_t index = 0; index < pageCount; ++index) m_Written[index] = reinterpret_cast<void*>(m_Base + index * Snapshot::c_PageBytes);
-				written = pageCount;
+			if (pageCount != 0) {
+				std::shared_ptr<Slab> slab = TakeSlab(pageCount);
+				std::memcpy(slab->pages, reinterpret_cast<const void*>(m_Base), pageCount * Snapshot::c_PageBytes);
+				data.pages = slab->pages;
+				data.buffer = std::move(slab);
 			}
-			// A page nothing writes again keeps the whole buffer it was copied into mapped. Once more buffers
-			// are held than a freeze needs, every such page moves into one buffer of its own size.
-			std::vector<void*> settled;
-			if (m_LiveSlabs.load(std::memory_order_relaxed) > c_LiveSlabs) {
-				std::vector<bool> fresh(pageCount, false);
-				for (size_t index = 0; index < written; ++index) fresh[(reinterpret_cast<uintptr_t>(m_Written[index]) - m_Base) / Snapshot::c_PageBytes] = true;
-				for (size_t at = 0; at < pageCount; ++at) {
-					if (m_Pages[at] && !fresh[at]) settled.push_back(reinterpret_cast<void*>(m_Base + at * Snapshot::c_PageBytes));
-				}
-			}
-			data.pages = m_Pages;
-			std::shared_ptr<Slab> slab = written ? TakeSlab(written, true) : nullptr;
-			std::shared_ptr<Slab> settledSlab = settled.empty() ? nullptr : TakeSlab(settled.size(), false);
-			// Both page tables take the copies as they land.
-			const auto copyInto = [this, &data](const std::shared_ptr<Slab>& into, const void* const* from, size_t count) {
-				for (size_t index = 0; index < count; ++index) {
-					Snapshot::Page& page = into->pages[index];
-					std::memcpy(page.bytes, from[index], Snapshot::c_PageBytes);
-					const size_t at = (reinterpret_cast<uintptr_t>(from[index]) - m_Base) / Snapshot::c_PageBytes;
-					auto shared = std::shared_ptr<const Snapshot::Page>(into, &page);
-					data.pages[at] = shared;
-					m_Pages[at] = std::move(shared);
-				}
-			};
-			if (slab) copyInto(slab, m_Written.data(), written);
-			if (settledSlab) copyInto(settledSlab, settled.data(), settled.size());
-			data.copied.store(written + settled.size(), std::memory_order_relaxed);
+			data.copied.store(pageCount, std::memory_order_relaxed);
 			data.copyUs.store(MicrosecondsSince(copyStarted), std::memory_order_relaxed);
 		}
 
@@ -547,7 +513,7 @@ namespace RTE::CheckpointLua {
 		static void* MapPages(size_t bytes) noexcept { return VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE); }
 		static void Unmap(void* pages, size_t) noexcept { VirtualFree(pages, 0, MEM_RELEASE); }
 		void Reserve(size_t shift) {
-			void* base = VirtualAlloc(nullptr, c_ReserveBytes + c_Colors * c_PageStride, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
+			void* base = VirtualAlloc(nullptr, c_ReserveBytes + c_Colors * c_PageStride, MEM_RESERVE, PAGE_NOACCESS);
 			if (!base) throw std::runtime_error("could not reserve the tracked Lua heap");
 			m_Reservation = reinterpret_cast<uintptr_t>(base);
 			m_Base = m_Reservation + shift;
@@ -558,16 +524,6 @@ namespace RTE::CheckpointLua {
 		void Release() noexcept {
 			if (m_Reservation) VirtualFree(reinterpret_cast<void*>(m_Reservation), 0, MEM_RELEASE);
 			m_Reservation = m_Base = 0;
-		}
-		// The pages written since the last freeze, and the kernel's bits cleared for the next one.
-		size_t WrittenPages() {
-			if (m_Committed == 0) return 0;
-			ULONG_PTR count = m_Written.size();
-			DWORD granularity = 0;
-			if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, reinterpret_cast<void*>(m_Base), m_Committed,
-			        m_Written.data(), &count, &granularity) != 0 || granularity != Snapshot::c_PageBytes)
-				throw std::runtime_error("the tracked Lua heap's written pages could not be read");
-			return count;
 		}
 #else
 		static void* MapPages(size_t bytes) noexcept {
@@ -587,11 +543,6 @@ namespace RTE::CheckpointLua {
 		void Release() noexcept {
 			if (m_Reservation) munmap(reinterpret_cast<void*>(m_Reservation), c_ReserveBytes + c_Colors * c_PageStride);
 			m_Reservation = m_Base = 0;
-		}
-		// Without page-written bits every committed page is copied; correct, not incremental.
-		size_t WrittenPages() {
-			for (size_t index = 0; index < m_Written.size(); ++index) m_Written[index] = reinterpret_cast<void*>(m_Base + index * Snapshot::c_PageBytes);
-			return m_Written.size();
 		}
 #endif
 
@@ -682,7 +633,6 @@ namespace RTE::CheckpointLua {
 			kept->pages = std::exchange(pages, nullptr);
 			kept->capacity = capacity;
 			kept->owner = owner;
-			kept->pooled = pooled;
 			HeapOwner::ReturnSlab(owner, kept);
 			return;
 		}

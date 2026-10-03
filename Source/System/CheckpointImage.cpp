@@ -1205,6 +1205,15 @@ bool RTE::RunCheckpointImageSelfTest() {
 			} else {
 				pass(row, detail);
 			}
+			// A freeze copies into the buffer the snapshot before the last gave back: a fresh one costs a first-touch fault per page.
+			const char* reuse = "a_freeze_reuses_the_copy_buffer_the_last_one_released";
+			const std::string reused = "fresh_after_second=" + std::to_string(probe.freshAfterSecond) + " most_live=" + std::to_string(probe.mostLive) +
+			                           " live_bound=" + std::to_string(probe.liveBound);
+			if (probe.error.empty() && probe.freshAfterSecond == 0 && probe.mostLive <= probe.liveBound && probe.pagesMatch) {
+				pass(reuse, reused);
+			} else {
+				fail(reuse, reused);
+			}
 		}
 
 		// A checkpoint image can outlive the Lua state it froze (the last image at shutdown). Releasing it

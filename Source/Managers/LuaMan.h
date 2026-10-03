@@ -56,6 +56,8 @@ namespace RTE {
 		size_t freezes = 0;
 		size_t mostLive = 0; //!< The most copy buffers the heap held after any freeze, once the snapshot before it was released.
 		size_t bound = 0;
+		size_t freshAfterSecond = 0; //!< Copy buffer bytes the freezes after the second mapped fresh instead of reusing one released.
+		size_t liveBound = 0; //!< The buffers a heap holds at most: a snapshot's and the next freeze's.
 		bool pagesMatch = false; //!< Every array the last snapshot froze reads back as the live heap.
 		std::string error;
 	};
