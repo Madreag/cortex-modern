@@ -11,6 +11,15 @@ from test_soak_oracle_evidence import analyzed_pair
 
 
 class RelayReceipts(unittest.TestCase):
+    def test_linux_alternative_needs_its_own_build_receipt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            harness, meta = analyzed_pair(root)
+            meta['machines']['client'] = 'Linux'
+            (root / 'client-build.json').write_text('{}')
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertFalse(edith_cross.analyze_match(harness, root, meta)['passed'])
+
     def test_each_relay_only_peer_needs_selected_route_and_same_session_offer(self):
         for missing in ('none', 'offer', 'selected', 'session', 'client', 'host', 'contradiction'):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as folder:
