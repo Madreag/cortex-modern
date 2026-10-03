@@ -1273,8 +1273,11 @@ namespace RTE {
 			return true;
 		}
 
+		constexpr const char* c_RelaySelfTestOffer = "relay-selftest@1";
+
 		GnsP2PConfig RelayOnlyConfig(const std::string& server, const std::string& user, const std::string& pass) {
 			GnsP2PConfig config;
+			config.relayOffer = c_RelaySelfTestOffer;
 			config.iceEnable = k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_Relay;
 			config.connectionMode = 2;
 			config.turnServerList = server;
@@ -1290,6 +1293,15 @@ namespace RTE {
 				return {};
 			}
 			return std::string(side.name) + " is " + StateName(info.state) + (relayed ? ", relayed" : ", not relayed") + (info.endDebug.empty() ? std::string() : " (\"" + info.endDebug + "\")");
+		}
+
+		// A relayed route's receipt names the endpoint in use and the relay offer its TURN lists came from.
+		std::string CheckRouteReceipt(Side& side) {
+			const std::string receipt = side.transport.GetPeerConnectionInfo(side.peer).routeReceipt;
+			const bool relayed = receipt.find(" route=relay ") != std::string::npos;
+			const bool addressed = receipt.find(" remote=") != std::string::npos && receipt.find(" remote=none ") == std::string::npos;
+			const bool offered = receipt.find(std::string(" offer=") + c_RelaySelfTestOffer) != std::string::npos;
+			return relayed && addressed && offered ? std::string() : std::string(side.name) + " route receipt '" + receipt + "'";
 		}
 
 		std::vector<uint8_t> Numbered(char tag, uint32_t number) {
@@ -1376,6 +1388,8 @@ namespace RTE {
 						failure = "the relayed connection did not reach Connected on both sides within 30s (host \"" + host.closeReason + "\", joiner \"" + joiner.closeReason + "\")";
 					} else if (!(failure = CheckRelayed(joiner)).empty() || !(failure = CheckRelayed(host)).empty()) {
 						failure = "not a relayed route: " + failure;
+					} else if (!(failure = CheckRouteReceipt(joiner)).empty() || !(failure = CheckRouteReceipt(host)).empty()) {
+						failure = "the relayed route's receipt does not name its endpoint and offer: " + failure;
 					} else {
 						Say("both sides Connected over the relay " + Ms(ElapsedMs() - connectMs) + "ms after ConnectP2P; holding for " + std::to_string(seconds) + " s");
 						PrintConnection(joiner);

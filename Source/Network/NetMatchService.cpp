@@ -110,6 +110,11 @@ namespace RTE {
 		bool SeatViewAway(const NetMatchService::SeatView& view) {
 			return view.peerId != 0 && (view.seat.owner == 0 || view.seat.link == NetSeatLink::Dropped || view.state == "Reconnecting");
 		}
+
+		/// The name a route receipt gives the relay offer a connection's TURN lists came from: its match id and its expiry.
+		std::string RelayOfferName(const NetRelayConfig& offer) {
+			return offer.matchId + "@" + std::to_string(offer.expiresAt);
+		}
 	} // namespace
 
 	void NetMatchService::UpdateSummarySeatsLocked() {
@@ -9179,7 +9184,10 @@ static std::string ResyncSaveName() {
 		} else if (!settings.GetNetworkPlayerTurnServers().empty()) {
 			selected = NetRelayConfig::Fixed(settings.GetNetworkPlayerTurnServers(), settings.GetNetworkPlayerTurnUser(), settings.GetNetworkPlayerTurnPass(), "personal", now + 3600);
 		}
-		if (config.connectionMode != 1 && selected.Usable(now)) selected.UdpLists(config.turnServerList, config.turnUserList, config.turnPassList);
+		if (config.connectionMode != 1 && selected.Usable(now)) {
+			selected.UdpLists(config.turnServerList, config.turnUserList, config.turnPassList);
+			config.relayOffer = RelayOfferName(selected);
+		}
 		config.iceEnable = (config.stunServerList.empty() ? 2 : 6) | (config.turnServerList.empty() ? 0 : 1);
 		if (config.connectionMode == 2) {
 			config.iceEnable = 1;
@@ -9923,7 +9931,11 @@ static std::string ResyncSaveName() {
 						GnsP2PConfig update = initial;
 						if (!personal && initial.connectionMode != 1) {
 							update.turnServerList.clear(); update.turnUserList.clear(); update.turnPassList.clear();
-							if (offer.Usable(UnixNowMs(nullptr) / 1000)) offer.UdpLists(update.turnServerList, update.turnUserList, update.turnPassList);
+							update.relayOffer = "none";
+							if (offer.Usable(UnixNowMs(nullptr) / 1000)) {
+								offer.UdpLists(update.turnServerList, update.turnUserList, update.turnPassList);
+								update.relayOffer = RelayOfferName(offer);
+							}
 							update.iceEnable = initial.connectionMode == 2 ? 1 : (initial.stunServerList.empty() ? 2 : 6) | (update.turnServerList.empty() ? 0 : 1);
 						}
 						p2p->UpdateListenerIceServers(update);

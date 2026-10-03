@@ -461,6 +461,7 @@ namespace RTE {
 
 		void Stop() {
 			m_RouteLogged.clear(); m_CandidateIdentities.clear(); m_CandidateTypes.clear();
+			m_ConnectionOffers.clear(); m_RouteReceipts.clear(); m_RelayOffer = "none";
 			m_Announced.clear(); m_HeldPackets.clear();
 			m_P2PMode = -1;
 			if (!m_Interface) {
@@ -619,6 +620,9 @@ namespace RTE {
 		}
 
 		mutable std::set<HSteamNetConnection> m_RouteLogged;
+		mutable std::map<HSteamNetConnection, std::string> m_RouteReceipts; //!< Each connection's [net-route] line.
+		std::map<HSteamNetConnection, std::string> m_ConnectionOffers; //!< The relay offer each connection's TURN lists came from.
+		std::string m_RelayOffer = "none"; //!< The offer a connection made or accepted now runs with.
 		std::map<uint32_t, std::string> m_CandidateIdentities;
 		std::map<std::pair<std::string, std::string>, std::string> m_CandidateTypes;
 
@@ -630,7 +634,16 @@ namespace RTE {
 			const bool allowed = GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
 			if (m_RouteLogged.insert(connection).second) {
 				DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
-				DiagnosticLine() << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection << std::endl;
+				// The endpoint in use and, for a relayed route, the relay offer whose TURN lists this connection runs with.
+				char address[SteamNetworkingIPAddr::k_cchMaxString]{};
+				info.m_addrRemote.ToString(address, sizeof(address), true);
+				const auto offer = m_ConnectionOffers.find(connection);
+				std::ostringstream line;
+				line << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection
+				     << " remote=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : std::string(address))
+				     << " offer=" << (relayed && offer != m_ConnectionOffers.end() ? offer->second : std::string("none"));
+				m_RouteReceipts[connection] = line.str();
+				DiagnosticLine() << line.str() << std::endl;
 			}
 			return allowed;
 		}
@@ -711,6 +724,7 @@ namespace RTE {
 		}
 
 		void AcceptIncomingConnection(HSteamNetConnection connection) {
+			m_ConnectionOffers[connection] = m_RelayOffer;
 			if (m_Interface->AcceptConnection(connection) != k_EResultOK) {
 				m_Interface->CloseConnection(connection, 0, "accept failed", false);
 				m_PendingEvents.push_back({NetTransportEventType::TransportError, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS AcceptConnection failed"});
@@ -759,6 +773,8 @@ namespace RTE {
 
 		void ForgetConnection(HSteamNetConnection connection) {
 			m_RouteLogged.erase(connection);
+			m_ConnectionOffers.erase(connection);
+			m_RouteReceipts.erase(connection);
 			m_Announced.erase(connection);
 			m_HeldPackets.erase(connection);
 			const auto peerIt = m_PeersByConnection.find(connection);
@@ -826,6 +842,7 @@ namespace RTE {
 			m_IsStarted = true;
 			m_NextPeerId = 1;
 			m_LiveTurnLogin = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
+			m_RelayOffer = config.relayOffer;
 			return true;
 		}
 
@@ -866,6 +883,8 @@ namespace RTE {
 					m_ConnectionsByPeer[1] = m_ServerConnection;
 					s_ConnectionOwners[m_ServerConnection] = this;
 					m_LiveTurnLogin = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
+					m_RelayOffer = config.relayOffer;
+					m_ConnectionOffers[m_ServerConnection] = config.relayOffer;
 					return true;
 				}
 			}
@@ -914,6 +933,7 @@ namespace RTE {
 				result.connectedRoute = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0 ? "relay" : "direct";
 				result.selectedCandidateType = CandidateType(info);
 			}
+			if (const auto receipt = m_RouteReceipts.find(connectionIt->second); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second;
 
 			const std::pair<const char*, ESteamNetworkingConfigValue> numbers[] = {
 				{"P2P_Transport_ICE_Enable", k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable},
@@ -1006,6 +1026,7 @@ namespace RTE {
 		void UpdateListenerIceServers(const GnsP2PConfig& config) {
 			GnsTransport::ApplyIceServers(config);
 			UpdateLiveTurnLogins(config);
+			m_RelayOffer = config.relayOffer;
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) return;
 			auto* utils = SteamNetworkingUtils();
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_Int32, &config.iceEnable);
@@ -1023,6 +1044,7 @@ namespace RTE {
 			int renewed = 0;
 			for (const auto& [connection, peerId] : m_PeersByConnection) {
 				(void)peerId;
+				m_ConnectionOffers[connection] = config.relayOffer;
 				renewed += utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_ServerList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnServerList.c_str()) &&
 				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnUserList.c_str()) &&
 				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());

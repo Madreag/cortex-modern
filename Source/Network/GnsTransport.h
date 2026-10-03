@@ -23,6 +23,7 @@ namespace RTE {
 		int rendezvousLogLevel = 0; //!< k_ESteamNetworkingConfig_LogLevel_P2PRendezvous; 0 keeps the GNS default.
 		std::string localIdentity; //!< Non-empty: ResetIdentity to it first, which closes every GNS connection in the process.
 		int localVirtualPort = -1; //!< The joiner's own virtual port; -1 uses the remote one.
+		std::string relayOffer = "none"; //!< The relay offer the TURN lists came from (its match id and expiry), named on each relayed route.
 	};
 
 	/// A peer connection as GNS reports it: GetConnectionInfo plus the P2P config the connection runs with.
@@ -38,6 +39,7 @@ namespace RTE {
 		uint32_t relayPop = 0;
 		std::string connectedRoute;
 		std::string selectedCandidateType;
+		std::string routeReceipt; //!< The connection's [net-route] line, once its route is chosen.
 		std::vector<std::string> config; //!< "Name=value" of each config value the P2P path sets, read back from the connection.
 	};
 
