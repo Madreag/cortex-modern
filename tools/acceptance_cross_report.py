@@ -28,6 +28,37 @@ def native_labels(own):
     return "\n".join(texts)
 
 
+ENGINE_FINDING = re.compile(
+    r"RTE Assert|FATAL:|EXCEPTION_ACCESS_VIOLATION|Runtime Error due to unhandled exception|Rejected .*command|"
+    r"\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|"
+    r"\[net-match\] controller sync failed:|\[net-plane\].*ASSERT|"
+    r"\[fullstate(?:-refusal)?\].*(?:failed:|refused:|problem=)|Desync:|desync at|admission refused|"
+    r"\[Lua error\]|Segmentation fault", re.I)
+
+
+def native_prerequisites(native, record, log, preflight, peers):
+    """Keep the ordinary cross driver's native checks alongside the new row oracle."""
+    failures = []
+    if native.get("exit_code") != 0 or native.get("setup_error") != "" or native.get("runtime_error") != "":
+        failures.append("native match outcome missing or failed")
+    if record.get("exit_code") != 0 or record.get("timed_out") is not False:
+        failures.append("native runner did not complete successfully")
+    expected = preflight.get("executable_sha256")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(expected)) or record.get("exe_sha256") != expected:
+        failures.append("running binary differs from or lacks its preflight identity")
+    desync = native.get("desync_check", {})
+    if (desync.get("mismatches") != 0 or type(desync.get("compares")) is not int or desync["compares"] <= 0
+            or type(desync.get("compare_margin")) is not int or desync["compare_margin"] < 0):
+        failures.append("native desync check missing or failed")
+    config = native.get("service", {}).get("runner", {}).get("match_config", {})
+    if config.get("peer_count") != peers:
+        failures.append("native adopted peer count differs from the row")
+    lines = [str(number) for number, line in enumerate(log.splitlines(), 1) if ENGINE_FINDING.search(line)]
+    if lines:
+        failures.append("engine findings in stdout.log lines "+", ".join(lines))
+    return failures
+
+
 def build_report(root):
     from cross_report import peer_root
     root = Path(root)
@@ -65,6 +96,12 @@ def build_report(root):
         facts["transfer"] = load(paths.get("edith", root)/"acceptance-transfer.json", {})
     elif row == "mod-refusal":
         comparing.remove("linux")
+    for name in comparing:
+        own, spec = paths[name], specs[name]
+        native = load(own/"match-report.json", {})
+        record = load(own/"record.json", {})
+        for error in native_prerequisites(native, record, logs[name], preflights.get(spec["box"], {}), len(paths)-(row == "mod-refusal")):
+            failures.append(f"{name}: {error}")
     try:
         facts["live"] = live_hashes({n: documents[n] for n in comparing}, start, end) if start else {}
         facts["fullstate"] = fullstate_hashes({n: paths[n]/"engine/stdout.log" for n in comparing}, start, end) if start else {}
@@ -77,9 +114,6 @@ def build_report(root):
         facts.update(module="VoidWanderers.rte", activity="Void Wanderers", installed_activity="Void Wanderers")
         facts["tree_hashes"] = {name: preflights.get(spec["box"], {}).get("acceptance_module", {}).get("tree_sha256") for name, spec in specs.items()}
         for name, own in paths.items():
-            native = load(own/"match-report.json", {})
-            if not specs[name].get("module_refusal") and (native.get("exit_code") != 0 or native.get("setup_error") != "" or native.get("runtime_error") != ""):
-                failures.append(f"{name}: native match outcome missing or failed")
             # The activity must be named by an adopted native config, never only by launch flags.
             try:
                 adopted = [r for r in rows(own/"events.jsonl") if r.get("type") == "adopted_config"]
