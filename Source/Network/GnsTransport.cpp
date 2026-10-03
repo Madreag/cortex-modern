@@ -634,14 +634,16 @@ namespace RTE {
 			const bool allowed = GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
 			if (m_RouteLogged.insert(connection).second) {
 				DiagnosticLine() << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
-				// The endpoint in use and, for a relayed route, the relay offer whose TURN lists this connection runs with.
+				// The endpoint in use (GNS reports none for a relayed route) and, for a relayed route, the TURN servers this connection
+				// runs with and the relay offer they came from.
 				char address[SteamNetworkingIPAddr::k_cchMaxString]{};
 				info.m_addrRemote.ToString(address, sizeof(address), true);
 				const auto offer = m_ConnectionOffers.find(connection);
 				std::ostringstream line;
 				line << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection
-				     << " remote=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : std::string(address))
-				     << " offer=" << (relayed && offer != m_ConnectionOffers.end() ? offer->second : std::string("none"));
+				     << " remote=" << (info.m_addrRemote.IsIPv6AllZeros() ? std::string("none") : std::string(address));
+				if (relayed) line << " turn=" << ConnectionConfigString(connection, k_ESteamNetworkingConfig_P2P_TURN_ServerList);
+				line << " offer=" << (relayed && offer != m_ConnectionOffers.end() ? offer->second : std::string("none"));
 				m_RouteReceipts[connection] = line.str();
 				DiagnosticLine() << line.str() << std::endl;
 			}
