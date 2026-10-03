@@ -2,7 +2,11 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -118,6 +122,67 @@ class TaskSoak(unittest.TestCase):
         self.assertEqual(calls,['claim','run','release'])
         self.assertEqual(launch_budget.MIN_FREE_BYTES,previous)
         self.assertNotIn('token',json.loads((self.root/'reservation.json').read_text()))
+
+    @unittest.skipUnless(sys.platform == 'win32', 'native Windows file sharing regression')
+    def test_coordinator_read_allows_atomic_publication_while_handle_is_open(self):
+        path=self.root/'control.json'; opened=self.root/'reader-open'; release=self.root/'reader-release'
+        tasks.cross.write_json(path, dict(tick=1))
+        class LocalTransport:
+            def ssh(self, command):
+                hold = ("[IO.File]::WriteAllText("+tasks.ps_quote(opened)+", 'open'); "
+                        "$until=[DateTime]::UtcNow.AddSeconds(10); "
+                        "while (-not (Test-Path -LiteralPath "+tasks.ps_quote(release)+") -and [DateTime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 10 }; ")
+                command=command.replace('$reader =', hold+'$reader =')
+                return subprocess.check_output(['pwsh','-NoProfile','-Command',command],text=True,
+                                               creationflags=subprocess.CREATE_NO_WINDOW)
+        result=[]
+        reader=threading.Thread(target=lambda: result.append(tasks.read_json(LocalTransport(), str(path))))
+        reader.start()
+        try:
+            deadline=time.monotonic()+10
+            while not opened.is_file() and time.monotonic()<deadline: time.sleep(.01)
+            self.assertTrue(opened.is_file(), 'reader never opened the native file')
+            release_timer=threading.Timer(.15, lambda: release.write_text('release'))
+            release_timer.start()
+            world.publish_control(path, dict(tick=2))
+            release_timer.join()
+        finally:
+            release.write_text('release')
+            reader.join(15)
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(result,[dict(tick=1)], 'the open reader retains the old complete snapshot')
+        self.assertEqual(json.loads(path.read_text()),dict(tick=2))
+
+    def test_persistent_control_publication_denial_is_not_ignored(self):
+        with patch.object(tasks.cross,'write_json',side_effect=PermissionError('persistent denial')), \
+             patch.object(world.time,'monotonic',side_effect=[0,3]):
+            with self.assertRaises(PermissionError):
+                world.publish_control(self.root/'control.json',dict(tick=1))
+
+    def test_packed_evidence_retains_native_bytes_and_record_part_discovery(self):
+        import io
+        import tarfile
+        from acceptance_evidence import rows
+        from cross_report import event_paths
+        from feel.records import open_record
+        archive=self.root/'evidence.tar.gz'; target=self.root/'fetched'
+        native={'peer/live.jsonl':b'{"tick":1}\n{"tick":2}\n',
+                'peer/events.jsonl':b'{"type":"progress"}\n',
+                'peer/events.jsonl.part1':b'{"type":"tick_timing"}\n',
+                'peer/engine/stdout.log':b'native stdout\n'}
+        with tarfile.open(archive,'w:gz') as stream:
+            for name,data in native.items():
+                item=tarfile.TarInfo(name); item.size=len(data); stream.addfile(item,io.BytesIO(data))
+        before=archive.read_bytes()
+        self.assertEqual(world.extract_preserved(archive,target,compress_records=True),len(native))
+        self.assertEqual(archive.read_bytes(),before)
+        self.assertEqual(list(rows(target/'peer/live.jsonl')),[dict(tick=1),dict(tick=2)])
+        self.assertEqual([path.name for path in event_paths(target/'peer')],['events.jsonl','events.jsonl.part1'])
+        for name,data in native.items():
+            with open_record(target/name,'rb') as stream: self.assertEqual(stream.read(),data)
+        receipt=json.loads((target/'fetch-compression.json').read_text())
+        self.assertEqual(len(receipt['files']),3)
+        self.assertEqual(receipt['removed_files'],0)
 
 
 if __name__ == '__main__':

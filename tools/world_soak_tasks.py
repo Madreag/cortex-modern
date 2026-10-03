@@ -22,8 +22,20 @@ HOSTS = {'Z13': 'z13', 'EDITH': 'edith'}
 
 
 def read_json(remote, path):
-    text = remote.read_text(path)
-    return json.loads(text.lstrip('\ufeff')) if text is not None else None
+    # PowerShell Get-Content denies replacement while its read handle is open.
+    # The payload publishes by atomic rename, so readers must share deletion.
+    command = "$ErrorActionPreference='Stop'; $path="+ps_quote(path)+"; " + r"""
+if (Test-Path -LiteralPath $path) {
+    $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+                            ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try {
+        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8)
+        try { $reader.ReadToEnd() } finally { $reader.Dispose() }
+    } finally { $stream.Dispose() }
+} else { '<<ABSENT>>' }
+"""
+    value = remote.ssh(command).strip()
+    return None if value == '<<ABSENT>>' else json.loads(value.lstrip('\ufeff'))
 
 
 def task_profile(box, lane):
@@ -240,7 +252,7 @@ def launch(plan, root):
             outcome = remotes[name].wait_done(remote_roots[name]+'/task.done', 120, slice_cap_s=30)
             (root/'boxes'/name/'task-outcome.txt').write_text(outcome+'\n', encoding='utf-8')
         for name in started:
-            world.fetch_preserved(by_name[name], remote_roots[name], root/'boxes'/name)
+            world.fetch_preserved(by_name[name], remote_roots[name], root/'boxes'/name, compress_records=True)
     from acceptance_cross_report import build_report
     return build_report(root)
 

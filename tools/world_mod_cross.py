@@ -397,6 +397,21 @@ def retain_native_screens(spec, run):
     write_json(own/"native-screens.json", index)
 
 
+def publish_control(path, value):
+    from cross_peers import write_json as publish_json
+    deadline = time.monotonic()+2
+    while True:
+        try:
+            publish_json(path, value)
+            return
+        except PermissionError:
+            # Windows can retain a short read handle even with delete sharing.
+            # Failed candidate files remain retained; a persistent denial fails.
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(.01)
+
+
 def observe_soak(spec, run, now):
     if spec.get("acceptance_row") != "world-soak":
         return
@@ -410,8 +425,7 @@ def observe_soak(spec, run, now):
             sessions = re.findall(r'(?m)^\[net-directory\] registered session_id=(\S+) heartbeat_s=\d+', text)
             if sessions:
                 spec['_published_session'] = sessions[-1]
-        from cross_peers import write_json as publish_json
-        publish_json(Path(spec['root'])/'host-control.json', dict(session=spec.get('_published_session'),
+        publish_control(Path(spec['root'])/'host-control.json', dict(session=spec.get('_published_session'),
                      host_tick=tick, host_elapsed_s=now-spec['_soak_clock'] if '_soak_clock' in spec else None,
                      payload_monotonic_s=now, source='native live record and directory registration'))
         spec['_control_next'] = now+1
@@ -440,23 +454,14 @@ def expected_refusal(spec, record):
     return record.get("exit_code") in (0, 1) and "ModuleManifestMismatch" in log
 
 
-def fetch_preserved(box, root, local):
-    import subprocess
+def extract_preserved(archive, local, compress_records=False):
+    """Copy every archived file; compressed record copies retain every source byte."""
+    import gzip
+    import hashlib
     import tarfile
-    from acceptance_box_mods import shell_command
-    name = "edith" if box["kind"] == "windows-task" else "mac" if box["ssh"] == "Erol-Mac" else "linux"
-    target = {**box, "name": name}
-    prefix = ["env", "COPYFILE_DISABLE=1", "tar"] if name == "mac" else ["tar.exe" if name == "edith" else "tar"]
-    exclusions = ["runtime", "private-runtime", "*.ticket", "*.key", "*.pem", "evidence.tar"]
-    args = [*prefix, "-cf", "-", "-C", root, *("--exclude="+p for p in exclusions), "."]
     local = Path(local)
     local.mkdir(parents=True, exist_ok=True)
-    archive = local/"evidence-preserved.tar"
-    with archive.open("xb") as sink:
-        subprocess.run(["ssh", "-o", "BatchMode=yes", box["ssh"], shell_command(target, args)],
-                       stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.PIPE, check=True, timeout=1800,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    count = 0
+    count, receipts = 0, []
     with tarfile.open(archive) as stream:
         for member in stream.getmembers():
             path = local/member.name
@@ -469,10 +474,50 @@ def fetch_preserved(box, root, local):
             # Coordinator preflight/payload copies already exist; fetched copies remain separate.
             if path.exists():
                 path = path.with_name(path.name+".remote")
-            with path.open("xb") as output:
-                for chunk in iter(lambda: data.read(1024**2), b""):
-                    output.write(chunk)
+            packed = compress_records and re.search(r'\.jsonl(?:\.part\d+)?$', path.name) is not None
+            if packed:
+                path = path.with_name(path.name+'.gz')
+                digest, size = hashlib.sha256(), 0
+                with path.open('xb') as output:
+                    with gzip.GzipFile(filename='', fileobj=output, mode='wb', compresslevel=3, mtime=0) as encoded:
+                        for chunk in iter(lambda: data.read(1024**2), b''):
+                            digest.update(chunk); size += len(chunk); encoded.write(chunk)
+                restored, restored_size = hashlib.sha256(), 0
+                with gzip.open(path, 'rb') as decoded:
+                    for chunk in iter(lambda: decoded.read(1024**2), b''):
+                        restored.update(chunk); restored_size += len(chunk)
+                if size != member.size or restored_size != size or restored.digest() != digest.digest():
+                    raise ValueError('compressed evidence copy differs from its retained archive')
+                receipts.append(dict(source=member.name, retained=str(path.relative_to(local)),
+                                     original_bytes=size, original_sha256=digest.hexdigest(),
+                                     compressed_bytes=path.stat().st_size, removed_files=0))
+            else:
+                with path.open("xb") as output:
+                    for chunk in iter(lambda: data.read(1024**2), b""):
+                        output.write(chunk)
             count += 1
+    if compress_records:
+        write_json(local/'fetch-compression.json', dict(files=receipts, removed_files=0,
+                   method='Lossless copies from retained archive; all original remote files retained'))
+    return count
+
+
+def fetch_preserved(box, root, local, compress_records=False):
+    import subprocess
+    from acceptance_box_mods import shell_command
+    name = "edith" if box["kind"] == "windows-task" else "mac" if box["ssh"] == "Erol-Mac" else "linux"
+    target = {**box, "name": name}
+    prefix = ["env", "COPYFILE_DISABLE=1", "tar"] if name == "mac" else ["tar.exe" if name == "edith" else "tar"]
+    exclusions = ["runtime", "private-runtime", "*.ticket", "*.key", "*.pem", "evidence.tar"]
+    args = [*prefix, "-czf" if compress_records else "-cf", "-", "-C", root, *("--exclude="+p for p in exclusions), "."]
+    local = Path(local)
+    local.mkdir(parents=True, exist_ok=True)
+    archive = local/('evidence-preserved.tar.gz' if compress_records else 'evidence-preserved.tar')
+    with archive.open("xb") as sink:
+        subprocess.run(["ssh", "-o", "BatchMode=yes", box["ssh"], shell_command(target, args)],
+                       stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.PIPE, check=True, timeout=1800,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    count = extract_preserved(archive, local, compress_records)
     count_code = ("import os,sys; from pathlib import Path; n=0\n"
                   "for root,dirs,files in os.walk(sys.argv[1],followlinks=False):\n"
                   " dirs[:]=[d for d in dirs if d not in ('runtime','private-runtime') and not Path(root,d).is_symlink()]\n"
