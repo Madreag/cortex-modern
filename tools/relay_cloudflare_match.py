@@ -804,18 +804,22 @@ class LaneCoturn:
         low, high = LANE_COTURN['relay']
         command = (f'nohup {LANE_COTURN["binary"]} -n --listening-port={self.port} --listening-ip={self.address} --relay-ip={self.address} '
                    f'--min-port={low} --max-port={high} --realm=relay-proof.lane --use-auth-secret --static-auth-secret={self.secret} '
-                   f'--fingerprint --no-cli --no-tls --no-dtls --no-multicast-peers --no-stdout-log --log-file=/dev/null --simple-log '
+                   f'--fingerprint --no-tls --no-multicast-peers --no-stdout-log --log-file=/dev/null --simple-log '
                    f'> /dev/null 2>&1 & echo $!')
         done = subprocess.run(['ssh', '-o', 'BatchMode=yes', LANE_COTURN['ssh'], command], capture_output=True, text=True, timeout=60)
         self.pid = int(done.stdout.strip().split()[-1])
         time.sleep(2)
-        answer = turn_allocate((self.address, self.port), 'probe-not-a-login', 'x')
-        if answer.get('result') == 'no challenge' and answer.get('first') is None:
-            raise RuntimeError('the run coturn does not answer')
+        try:
+            answer = turn_allocate((self.address, self.port), 'probe-not-a-login', 'x')
+        except OSError as error:
+            raise RuntimeError(f'the run coturn does not answer ({type(error).__name__})') from error
+        if answer.get('error_code') != 401:
+            raise RuntimeError(f'the run coturn answered an unknown login with {answer}')
 
     def stop(self) -> None:
         if self.pid and not DRY_RUN:
-            subprocess.run(['ssh', '-o', 'BatchMode=yes', LANE_COTURN['ssh'], f'kill {self.pid}'], capture_output=True, timeout=60)
+            subprocess.run(['ssh', '-o', 'BatchMode=yes', LANE_COTURN['ssh'],
+                            f'kill {self.pid}; sleep 3; ps -p {self.pid} > /dev/null && kill -9 {self.pid}; true'], capture_output=True, timeout=60)
         self.pid = None
 
 
