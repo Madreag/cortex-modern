@@ -88,14 +88,20 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
     for name in INSTRUMENTS:
         declarations = [s.get('instruments', {}).get(name) for s in scopes if isinstance(s.get('instruments'), dict)]
         known = bool(declarations) and all(type(v) is bool for v in declarations)
-        disabled = known and not any(declarations)
+        disabled = known and not any(declarations) and not samples[name]
         values = [r['ms'] for r in covered[name]]
         observed_max = max([r.get('max_ms', 0) for r in samples[name]] + values, default=None)
-        if values and any(row.get('max_ms', 0) > max(values) for row in samples[name]):
-            errors.append(f'{name}: native cost summary exceeds the frame partition maximum {max(values)} ms')
+        missing_sources = []
+        for row in samples[name]:
+            own_values = [value['ms'] for value in covered[name] if value['path'] == row['path']]
+            if not own_values:
+                missing_sources.append(dict(path=row['path'], line=row['line']))
+            elif row.get('max_ms', 0) > max(own_values):
+                errors.append(f'{row["path"]}:{row["line"]}: {name} native cost {row["max_ms"]} ms exceeds its frame partition maximum {max(own_values)} ms')
         if observed_max is not None and not number(observed_max): errors.append(f'{name}: invalid measured cost {observed_max}')
-        instruments[name] = dict(status='DISABLED' if disabled else 'MEASURED' if values and all(complete_scopes) else 'MISSING COST',
-            scope_known=known, complete=disabled or bool(values) and all(complete_scopes),
+        measured = bool(values) and all(complete_scopes) and not missing_sources
+        instruments[name] = dict(status='DISABLED' if disabled else 'MEASURED' if measured else 'MISSING COST',
+            scope_known=known and not missing_sources, complete=disabled or measured, missing_cost_sources=missing_sources,
             measured_total_ms=sum(values) if values else None, measured_max_ms=observed_max,
             native_samples=samples[name], frame_samples=len(values))
         if name == 'census':
