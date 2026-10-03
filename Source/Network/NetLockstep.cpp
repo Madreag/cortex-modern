@@ -5962,6 +5962,9 @@ namespace RTE {
 			return false;
 		}
 		m_TimingDecisions[timing.revision] = {timing, 0, true, nowMs};
+		const uint64_t lastProgress = m_Stats.peers[peerId].lastProgressMs;
+		m_HoldFacts[peerId] = {timing.applyFrame, lastProgress != 0 && nowMs >= lastProgress ? nowMs - lastProgress : nowMs >= m_FirstMissingMs ? nowMs - m_FirstMissingMs : 0,
+		                       std::max<uint16_t>(1, m_Config.slowPlayerBoundTicks) * m_Config.simTickMs, cause};
 		QueueTiming(timing);
 		FlushTimingOutgoing();
 		ApplyTiming(timing);

@@ -862,6 +862,8 @@ namespace RTE {
 		void NotifyParticipantRemoved(NetRejectReason reason);
 		bool WasRemoved() const { return m_Removed; }
 		NetAuthBytes16 LastRemovalTx() const { return m_LastRemovalTx; }
+		/// The frame the host's removal of this seat took effect at.
+		uint64_t GetRemovalBoundary() const { return m_RemovalBoundary; }
 		/// The link died without an answer. The record is exactly what this case exists for: it stays.
 		void NotifyAmbiguousLoss();
 
@@ -942,6 +944,7 @@ namespace RTE {
 		bool m_WantsLinkClosed = false;
 		bool m_Removed = false;
 		NetAuthBytes16 m_LastRemovalTx{};
+		uint64_t m_RemovalBoundary = 0;
 		std::string m_Error;
 		std::vector<NetH4Outbound> m_Outbound;
 		NetReconnectClientStats m_Stats;

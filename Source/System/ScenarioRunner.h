@@ -145,6 +145,8 @@ namespace RTE {
 		/// The frame the hash records drop from, its round and the last frame this process ran past it, once; 0 when nothing was
 		/// abandoned since the last call.
 		static uint64_t TakeAbandonedTicksFrom(uint64_t& round, uint64_t& ranThrough);
+		/// What the host measured when it last held a seat, while a round runs.
+		static std::optional<NetLockstepCoordinator::HoldFact> GetLockstepLastHold(uint8_t peerId);
 		/// Keeps a receipt this process wrote for the harness, by name, so a probe's dump can read it back.
 		static void NoteHarnessReceipt(const std::string& name, const std::string& json);
 		/// The last receipt of that name, as JSON text; empty when this process wrote none.

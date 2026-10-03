@@ -3060,6 +3060,7 @@ namespace RTE {
 			if (NetAcceptParticipantRemoval(*notice, true, current, already) == NetParticipantRemovalVerdict::Accept &&
 			    m_HasRecord && notice->stableSeat == m_Record.stableSeat) {
 				m_LastRemovalTx = notice->txId;
+				m_RemovalBoundary = notice->boundaryFrame;
 				NotifyParticipantRemoved(notice->reason == NetParticipantRemovalReason::HostBan ? NetRejectReason::ParticipantBanned : NetRejectReason::ParticipantRemoved);
 			}
 			return true;

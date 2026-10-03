@@ -732,6 +732,16 @@ namespace RTE {
 		const NetReconnectUx& GetReconnectUx() const { return m_ReconnectUx; }
 		/// Reads the cached moderation view; actions require a running match on the game thread.
 		std::vector<NetH4ModerationSeat> GetModerationSeats() const;
+		/// The digest a player's stable identity is reported as, in the moderation state and its receipts.
+		static std::string IdentityDigest(uint64_t id);
+		/// The frame the host's last removal took effect at.
+		uint64_t GetLastRemovalBoundary() const;
+		/// This peer's own removal by the host: why, and the frame it took effect at.
+		struct OwnRemoval {
+			NetRejectReason reason = NetRejectReason::InternalError;
+			uint64_t boundary = 0;
+		};
+		std::optional<OwnRemoval> GetOwnRemoval() const;
 		/// One seat as the session's roster has it - the host's own, or a client's copy of it.
 		struct SeatView {
 			uint8_t peerId = 0;

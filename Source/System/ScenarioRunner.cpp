@@ -3105,6 +3105,11 @@ namespace RTE {
 		s_LockstepCoordinator->NoteLocalStartPark(g_ActivityMan.GetLastRestartMs());
 	}
 
+	std::optional<NetLockstepCoordinator::HoldFact> ScenarioRunner::GetLockstepLastHold(uint8_t peerId) {
+		NetLockstepPlaneGuard plane;
+		return s_LockstepCoordinator ? s_LockstepCoordinator->LastHoldOf(peerId) : std::nullopt;
+	}
+
 	uint8_t ScenarioRunner::GetLockstepAgreedSeatDeviceClass(int seat) {
 		NetLockstepPlaneGuard plane;
 		return s_LockstepCoordinator ? s_LockstepCoordinator->AgreedSeatDeviceClass(seat) : 0;

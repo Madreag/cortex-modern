@@ -191,7 +191,7 @@ namespace RTE {
 		// One finished line into the current part: a full part closes, and at the budget the oldest parts retire so
 		// recording goes on with the newest records kept.
 		void Place(json& record, const json& itemContext, size_t itemSequence) {
-			for (const auto& [key, value]: itemContext.items()) record[key] = value;
+			for (const auto& [key, value]: itemContext.items()) if (!record.contains(key)) record[key] = value;
 			record["sequence"] = itemSequence;
 			std::string line = record.dump() + '\n';
 			if (line.size() > partLimit) return Fail("event record larger than a part");

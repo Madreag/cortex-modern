@@ -442,6 +442,7 @@ static uint32_t s_netFullStateEvery = 0;
 static std::string s_netFullStateDump;
 static nlohmann::json s_crossSchedule = nlohmann::json::array();
 static uint64_t s_crossBudget = 0;
+static uint64_t s_crossOwnIdentity = 0; //!< This peer's stable identity as its seat's owner, last seen live.
 static std::map<uint64_t, uint64_t> s_crossLastCommitted;
 static std::map<uint64_t, uint64_t> s_crossFirstGameplayTick;
 static std::set<std::string> s_crossFired;
@@ -707,6 +708,7 @@ static void BeginCrossTick(uint64_t tick) {
 	if (const auto view = g_NetMatchService.GetSeatView(ScenarioRunner::GetLockstepLocalPeerId())) {
 		s_crossContext["seat_incarnation"] = view->seat.incarnation;
 		s_crossContext["seat_revision"] = view->revision;
+		if (view->seat.owner != 0) s_crossOwnIdentity = view->seat.owner;
 	}
 	g_MetricsCollector.BeginEventTick(s_crossContext);
 	// The moderation state a lost host hands over: every applied tick on the host, and once each handover on every survivor.
@@ -723,6 +725,25 @@ static void BeginCrossTick(uint64_t tick) {
 		if (generation > firstGeneration && generation != afterGeneration) {
 			afterGeneration = generation;
 			emit("after", g_NetMatchService.GetModerationSnapshotState(true));
+		}
+	}
+	// A silence another peer's schedule declared, once its seat is held here: the hold the host committed for it and what it measured.
+	if (!catchup && host == ScenarioRunner::GetLockstepLocalPeerId()) {
+		static std::set<std::string> namedHolds;
+		for (const auto& entry: s_crossSchedule) {
+			const std::string id = entry.value("id", std::string());
+			const std::string target = entry.value("peer", std::string());
+			const bool silence = entry.value("action", std::string()) == "silence" || entry.value("declared_action", std::string()) == "silence";
+			if (!silence || target.empty() || target == instance || namedHolds.contains(id) || s_crossBudget < entry.value("tick", uint64_t{0})) continue;
+			for (const NetH4ModerationSeat& seat: g_NetMatchService.GetModerationSeats()) {
+				if (seat.cpu || !seat.held || seat.displayName != target) continue;
+				const auto fact = ScenarioRunner::GetLockstepLastHold(seat.lockstepPeerId);
+				if (!fact) continue;
+				namedHolds.insert(id);
+				g_MetricsCollector.WriteObservation({{"type", "scheduled_hold"}, {"id", id}, {"peer", seat.lockstepPeerId}, {"cause", "silent"}, {"hold_cause", fact->cause},
+				    {"roster_cause", NetSeatHoldCauseName(seat.holdCause)}, {"ai_in_control", true}, {"tick", fact->frame}, {"silence_ms", fact->silenceMs},
+				    {"bound_ms", fact->boundMs}});
+			}
 		}
 	}
 	// This peer's seat comes back - a return, a held seat's reclaim, a stall's in-place catch-up, an applicant seated: the roster's committed
@@ -768,6 +789,21 @@ static void BeginCrossTick(uint64_t tick) {
 	previousRound = round; previousTick = tick;
 }
 
+// A peer the host banned ends on the ban: the entry that declared it, its identity and the last tick the host played it live.
+static void CrossNoteOwnBan() {
+	static bool noted = false;
+	const auto removal = !noted && g_MetricsCollector.EventsEnabled() ? g_NetMatchService.GetOwnRemoval() : std::nullopt;
+	if (!removal || removal->reason != NetRejectReason::ParticipantBanned || removal->boundary == 0 || s_crossOwnIdentity == 0) return;
+	noted = true;
+	const std::string instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
+	for (const auto& entry: s_crossSchedule) {
+		if (entry.value("action", std::string()) != "moderation-ban" || entry.value("target_peer", std::string()) != instance) continue;
+		g_MetricsCollector.WriteObservation({{"type", "moderation_terminal"}, {"id", entry.value("id", std::string())}, {"result", "ParticipantBanned"}, {"terminal", true},
+		    {"identity_sha256", NetMatchService::IdentityDigest(s_crossOwnIdentity)}, {"last_live_tick", removal->boundary - 1}, {"tick", removal->boundary - 1},
+		    {"simulated_through", g_TimerMan.GetSimUpdateCount()}});
+	}
+}
+
 static void ApplyCrossSchedule() {
 	if (s_crossSchedule.empty() || !ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::WorldCatchUpActive()) return;
 	static uint64_t resetAt = 0;
@@ -781,9 +817,12 @@ static void ApplyCrossSchedule() {
 		}
 		resetAt = 0;
 	}
+	static const std::string instance = CrossEnvironment("CC_TEST_CROSS_INSTANCE");
 	for (const auto& fault: s_crossSchedule) {
 		const std::string id = fault.at("id");
 		if (s_crossFired.contains(id) || s_crossBudget < fault.at("tick").get<uint64_t>()) continue;
+		// An entry naming another peer is that peer's fault, declared here so this one can name what it does about it.
+		if (const std::string owner = fault.value("peer", std::string()); !owner.empty() && owner != instance) continue;
 		const std::string action = fault.at("action");
 		if (action == "crash-restart" || action == "brain-eliminate") continue;
 		const auto stamp = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
@@ -817,6 +856,24 @@ static void ApplyCrossSchedule() {
 			s_crossLeaveRequested = true;
 			receipt["applied"] = true;
 			receipt["scope"] = "announced_leave_at_next_committed_tick_end";
+		} else if (action == "moderation-ban") {
+			const std::string target = fault.value("target_peer", std::string());
+			receipt["target_peer"] = target;
+			for (const NetH4ModerationSeat& seat: g_NetMatchService.GetModerationSeats()) {
+				if (seat.cpu || seat.displayName != target) continue;
+				const auto view = g_NetMatchService.GetSeatView(seat.lockstepPeerId);
+				const uint64_t identity = view ? view->seat.owner : 0;
+				const NetKickBanResult result = g_NetMatchService.RemoveParticipant(NetSelectModerationSeat(seat), NetParticipantRemovalAction::BanSession);
+				receipt["result"] = NetKickBanResultName(result);
+				receipt["target_seat"] = seat.lockstepPeerId;
+				receipt["applied"] = result == NetKickBanResult::Ok && identity != 0;
+				if (receipt["applied"] == true) {
+					g_MetricsCollector.WriteObservation({{"type", "moderation_action"}, {"id", id}, {"action", "Ban"}, {"applied", true}, {"target_peer", target},
+					    {"target_seat", seat.lockstepPeerId}, {"identity_sha256", NetMatchService::IdentityDigest(identity)}, {"budget_tick", s_crossBudget},
+					    {"tick", g_NetMatchService.GetLastRemovalBoundary()}});
+				}
+				break;
+			}
 		}
 		receipt["completed_wall_ms"] = stamp();
 		if (receipt["applied"] == true) {
@@ -6765,6 +6822,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				line << "[net-match] controller sync failed: " << error;
 				System::PrintDiagnosticErrorLine(line.str());
 			}
+			CrossNoteOwnBan();
 			g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
 			g_NetMatchService.ReportRuntimeError(error);
 			g_ActivityMan.EndActivity();
@@ -9949,6 +10007,7 @@ int RunNetMatchServiceE2E() {
 	}
 
 	CrossRecoveryAtCommittedTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	CrossNoteOwnBan();
 	std::string reportError;
 	const int exitCode = setupError.empty() ? s_netMatchServiceE2EExitCode : 1;
 	const bool a7ReportSettled = !NetA7Journal::Enabled() || g_NetMatchService.CanSealA7Journal();

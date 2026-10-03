@@ -6672,14 +6672,31 @@ static std::string ResyncSaveName() {
 		    {"reordered_packets", now.reorderedPackets - m_FakeLinkBaseline.reorderedPackets}, {"duplicated_packets", now.duplicatedPackets - m_FakeLinkBaseline.duplicatedPackets}}.dump());
 	}
 
+	std::string NetMatchService::IdentityDigest(uint64_t id) {
+		// A player's identity goes out as a digest of its stable id, never the id or its ticket.
+		std::array<uint8_t, 8> bytes{};
+		for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<uint8_t>(id >> (8 * i));
+		return System::Sha256Hex(bytes.data(), bytes.size());
+	}
+
+	uint64_t NetMatchService::GetLastRemovalBoundary() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastRemovalIssue.notice.boundaryFrame;
+	}
+
+	std::optional<NetMatchService::OwnRemoval> NetMatchService::GetOwnRemoval() const {
+		NetLockstepPlane::Gap plane("own removal");
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		const NetReconnectClient* client = m_Session ? m_Session->GetReconnectClient() : nullptr;
+		if (client && client->WasRemoved()) return OwnRemoval{client->GetLastRejectReason(), client->GetRemovalBoundary()};
+		// The round ends on the removal before its notice reaches the session; the round kept the notice's frame.
+		if (m_IsHost || !m_Coordinator || m_Coordinator->GetRemovalBoundary() == 0 || !m_Session || !m_Session->HasReject()) return std::nullopt;
+		return OwnRemoval{m_Session->GetRejectReason(), m_Coordinator->GetRemovalBoundary()};
+	}
+
 	std::string NetMatchService::ModerationStateOf(const NetSeatRoster& roster) {
 		using json = nlohmann::json;
-		// A player's identity goes out as a digest of its stable id, never the id or its ticket.
-		const auto digest = [](uint64_t id) {
-			std::array<uint8_t, 8> bytes{};
-			for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<uint8_t>(id >> (8 * i));
-			return System::Sha256Hex(bytes.data(), bytes.size());
-		};
+		const auto digest = [](uint64_t id) { return IdentityDigest(id); };
 		json held = json::array(), tickets = json::array(), bans = json::array();
 		for (const NetRosterSeat& seat: roster.seats) {
 			if (seat.owner == 0) continue;
