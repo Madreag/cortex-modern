@@ -464,7 +464,7 @@ def preflight_payload(path):
     repo = Path(box['tree'])
     content = content_manifest(repo)
     head = command(['git', '-C', repo, 'rev-parse', 'HEAD'], check=False).strip()
-    stamp_path = repo / 'tools/cross_peers/build.json'
+    stamp_path = Path(box.get('build_receipt') or repo / 'tools/cross_peers/build.json')
     build = json.loads(stamp_path.read_text(encoding='utf-8')) if stamp_path.is_file() else {}
     if sys.platform == 'win32':
         identity = command(['pwsh','-NoProfile','-Command','(Get-CimInstance Win32_ComputerSystemProduct).UUID']).strip()

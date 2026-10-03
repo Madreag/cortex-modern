@@ -22,6 +22,7 @@ from test_telemetry_bundle import set_visual_resolution
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "pause-save", "save-hotkey", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
          "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
+PAIRED_CASES = ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -1814,7 +1815,7 @@ def run_case(options, case, root, failing=None):
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in ("pause", "pause-save", "save-hotkey", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
+    paired = case in PAIRED_CASES
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
     menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early")
     seeded = {} if failing else seeds(case)
@@ -2652,8 +2653,18 @@ def run_case(options, case, root, failing=None):
         for run in runs.values():
             run.close()
         result["captures"] = images
-        (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        (root / "result.json").write_text(json.dumps(retain_capture_detail(root, result), indent=2) + "\n", encoding="utf-8")
     return result
+
+
+def retain_capture_detail(root, result):
+    """Keep every raw control snapshot in a hashed sidecar; verdicts retain their measured checks."""
+    path = Path(root)/'capture-detail.jsonl'
+    with path.open('w', encoding='utf-8') as stream:
+        for capture in result.get('captures', []):
+            stream.write(json.dumps(capture) + '\n')
+    return {key: value for key, value in result.items() if key != 'captures'} | {
+        'capture_detail': dict(path=path.name, sha256=sha(path), count=len(result.get('captures', [])))}
 
 
 def self_test():
@@ -2688,6 +2699,16 @@ def self_test():
     return 0 if all(results) else 1
 
 
+def planned_cases(case, requested, all_sizes=False):
+    rows = []
+    for name in CASES if case == 'all' else (case,):
+        sizes = [requested]
+        if name != 'oracles' and (all_sizes or name in ('net-chat', 'lobby-name', 'live')):
+            sizes.extend(size for key, size in SIZE_GATES if key == name and size not in sizes)
+        rows.extend((name, size) for size in sizes)
+    return rows
+
+
 def main():
     if "--self-test" in sys.argv[1:]:
         return self_test()
@@ -2698,8 +2719,15 @@ def main():
     parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080", "2560x1440", "3840x2160"), required=True)
     parser.add_argument("--all-sizes", action="store_true",
                         help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
+    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
+    selected = planned_cases(options.case, options.size, options.all_sizes)
+    if not selected:
+        parser.error('the selected size partition has no cases')
+    if options.dry_run:
+        print(json.dumps(dict(cases=selected, engine_count=max(2 if name in PAIRED_CASES else 1 for name, _ in selected))))
+        return 0
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
     if not (any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190))
@@ -2712,14 +2740,13 @@ def main():
     requested = options.size
 
     def sizes_for(case):
-        sizes = [requested]
-        if options.all_sizes or case in ("net-chat", "lobby-name", "live"):
-            sizes.extend(size for name, size in SIZE_GATES if name == case and size not in sizes)
-        return sizes
+        return [size for name, size in selected if name == case]
 
     rows = []
     for case in CASES if options.case == "all" else (options.case,):
         if case == "oracles":
+            if not sizes_for(case):
+                continue
             options.size = requested
             for name, command in {"visible": (LANDING, "", "assert_visible ButtonMultiplayerHostGame 0"),
                                   "focus": (LANDING, "", "assert_focus ButtonMultiplayerJoinGame"),
@@ -2734,10 +2761,12 @@ def main():
             reason = unavailable_reason(case)
             rows.append(unavailable_row(case, size, reason) if reason else run_case(options, case, options.out / case / size))
     passed, verdict, refused = summarize(rows)
-    result = {"pass": passed, "verdict": verdict, "unavailable": refused, "driver_sha256": sha(__file__),
-              "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port, "cases": rows}
+    result = {"pass": passed, "verdict": verdict, "unavailable": refused, "driver_sha256": sha(__file__), "declared_cases": selected,
+              "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port,
+              "cases": [{key: value for key, value in row.items() if key != 'captures'} for row in rows]}
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    (options.out / "captures.json").write_text(json.dumps([image for row in rows for image in row["captures"]], indent=2) + "\n", encoding="utf-8")
+    captures = retain_capture_detail(options.out, dict(captures=[image for row in rows for image in row.get('captures', [])]))
+    (options.out / "captures.json").write_text(json.dumps(captures, indent=2) + "\n", encoding="utf-8")
     print(f"[menu-readback] {verdict} {options.out / 'result.json'}" + (f" (unavailable here: {'; '.join(refused)})" if refused else ""))
     return 0 if passed else 3 if verdict == "UNAVAILABLE" else 1
 

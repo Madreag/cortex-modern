@@ -72,7 +72,7 @@ DRY_RUN = False
 
 
 def stamp():
-    return dt.datetime.now(MST).strftime('%Y-%m-%d %H:%M:%S MST')
+    return dt.datetime.now(MST).strftime('%Y-%m-%d %I:%M:%S %p MST')
 
 
 def say(message):

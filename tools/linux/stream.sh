@@ -31,6 +31,7 @@ export DISPLAY=${DISPLAY:-:0}
 PY=/usr/bin/python3
 REPO=$LANE/repo
 INV=$LANE/inventory
+export CC_INVENTORY_DIR=$INV
 EV=$LANE/evidence
 DEPS=$HOME/deps
 # GameNetworkingSockets v1.6.0 with the TURN patch, as ~/cortex-workers/setup-3090.sh left it.

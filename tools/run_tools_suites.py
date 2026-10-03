@@ -7,12 +7,13 @@ here. Every suite is a separate process and the exit code is the worst of them.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import sys
 
 # The inventory tools live beside the lead's tools, outside the repository; a box without them reports N/A.
-INVENTORY = Path("D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory")
+INVENTORY = Path(os.environ.get('CC_INVENTORY_DIR') or "D:/Projects/reviews/takeover-20260909/grok-workers/lead-tools/inventory")
 SUITES = (
     ("acceptance-harness", ["test_acceptance_harness.py"]),
     ("e2e-video", ["test_e2e_video.py"]),

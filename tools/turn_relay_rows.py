@@ -88,7 +88,18 @@ def main() -> int:
     parser.add_argument("--login-conf", type=Path, default=Path("D:/mx/coturn-20260920/turnserver-fixed.conf"))
     parser.add_argument("--coturn-log", default="", help="<ssh host>:<coturn log path>, fetched for the run window")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument('--host-box')
+    parser.add_argument('--client-box')
+    parser.add_argument('--inventory', type=Path)
+    parser.add_argument('--collection-root', type=Path)
+    parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
+    if args.host_box or args.client_box:
+        from acceptance_relay_pair import run
+        return run(args,args.row,REPO)
+    if args.dry_run:
+        print(json.dumps(dict(row=args.row,engine_count=1,seconds=args.seconds)))
+        return 0
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     user, password = read_login(args.login_conf)
