@@ -995,14 +995,17 @@ namespace RTE {
 		if (m_Config.host) {
 			const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
 			if (plane && plane->GetRoster().stage == NetRosterStage::Starting) {
-				// A forming round waits on the seats its roster has at the start on a live link, never on a held or an opened one.
+				// A forming round waits on the seats its roster has at the start on a live link, never on a held or an opened one;
+				// the host alone starts it when every other seat is held for its player.
 				for (const uint8_t member: plane->StartMembers())
 					if (member != m_Config.matchConfig.hostPeerId && !IsKnownRemote(member)) return false;
-			} else if (const std::vector<uint8_t>& members = m_Config.matchConfig.activePeerIds;
-			           m_RemotePeerIds.size() + 1 != (members.empty() ? m_Config.matchConfig.peerCount : members.size())) {
-				// The first lobby fills every seat; with no round forming the agreed config names the members.
-				return false;
+				return true;
 			}
+			const std::vector<uint8_t>& members = m_Config.matchConfig.activePeerIds;
+			// The first lobby fills every seat; with no round forming the agreed config names the members.
+			if (m_RemotePeerIds.size() + 1 != (members.empty() ? m_Config.matchConfig.peerCount : members.size())) return false;
+			// After a played round the members named are the ones present: the others' seats are held for them, the host alone included.
+			if (plane && plane->GetRoster().stage != NetRosterStage::Lobby && !members.empty()) return true;
 		}
 		return !m_RemotePeerIds.empty() || !SeatsRemoteHuman();
 	}

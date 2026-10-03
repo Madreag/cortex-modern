@@ -10606,8 +10606,8 @@ namespace RTE {
 	// host removed, or the row shows a player holding a seat nobody sits in.
 	// rematch=false is a resumed match's lobby: the roster holds its seats from the first start on just the same (A12).
 	// @param kick The host kicks the member instead of its link dropping: from the first start on its seat opens and the AI plays it.
-	bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick) {
-		const uint16_t port = kick ? 43257 : rematch ? 43251 : 43253;
+	bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick, bool alone) {
+		const uint16_t port = alone ? (rematch ? 43259 : 43261) : kick ? 43257 : rematch ? 43251 : 43253;
 		LoopbackTransport hostTransport;
 		LoopbackTransport clientTransport;
 		LoopbackTransport stayingTransport;
@@ -10775,6 +10775,11 @@ namespace RTE {
 		} else {
 			hostSession.DisconnectReadyPeer(seated, NetRejectReason::Timeout, "heartbeat timeout");
 		}
+		// D54.2: the other joiner drops too - the host is the only member present and every other seat is held for its player.
+		if (alone) {
+			for (const NetSessionPeerInfo& peer: hostSession.GetReadyPeers())
+				if (peer.displayName == "Stayer") hostSession.DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::Timeout, "heartbeat timeout");
+		}
 		for (const uint64_t until = now + 500; now <= until; now += 10) {
 			hostLobby.Tick(now);
 			clientSession.Tick(now);
@@ -10795,6 +10800,16 @@ namespace RTE {
 			*error = "a formed rematch's kicked seat reads '" + slotName(kickedPeerId) + "' with the round's members " + members + " at revision " +
 			         std::to_string(hostLobby.GetMatchConfig().configRevision - revisionBefore) + " past the kick: the round waits for a seat the AI plays";
 			return false;
+		}
+		if (alone) {
+			// D54.2: the round starts on the host alone, its two players' seats held for them.
+			if (!hostLobby.AllConfigAcked() || std::find(active.begin(), active.end(), kickedPeerId) != active.end() || std::find(active.begin(), active.end(), stayingPeerId) != active.end()) {
+				*error = std::string("the ") + (rematch ? "rematch" : "resumed") + " lobby whose every other player dropped never lets the host start alone: members " + members +
+				         " present " + std::to_string(hostLobby.m_RemotePeerIds.size() + 1) + " acked=" + std::to_string(hostLobby.AllConfigAcked());
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS " << (rematch ? "a_host_alone_starts_a_rematch_against_held_seats" : "a_host_alone_starts_a_resumed_lobby") << " members=" << members << std::endl;
+			return true;
 		}
 		const bool held = slotName(kickedPeerId) == "Joiner" && std::find(active.begin(), active.end(), kickedPeerId) == active.end() &&
 		                  std::find(active.begin(), active.end(), stayingPeerId) != active.end() && hostLobby.GetMatchConfig().configRevision == revisionBefore + 1;
@@ -15526,9 +15541,11 @@ namespace RTE {
 		if (!TestManifestPrimingStopsOnRequest(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
 		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, false)) return fail(error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, false, false)) return fail("a resumed match's lobby: " + error);
-		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, true)) return fail("a formed rematch's kick: " + error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, false, false)) return fail(error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, false, false, false)) return fail("a resumed match's lobby: " + error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, true, false)) return fail("a formed rematch's kick: " + error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, true, false, true)) return fail("a rematch the host plays alone: " + error);
+		if (!TestARematchLobbyHoldsADroppedSeat(&error, false, false, true)) return fail("a resumed lobby the host plays alone: " + error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		std::string stopCancelError, endedAdmissionError, twoIceRoundsError;
 		if (!TestServiceIceRematchPlaysTwoRounds(&twoIceRoundsError)) std::cerr << "[net-match-selftest] FAIL: " << twoIceRoundsError << std::endl;

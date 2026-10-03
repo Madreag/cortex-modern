@@ -29,7 +29,7 @@ namespace RTE {
 	bool TestLobbyModerationRows(std::string* error);
 	bool TestKickedSeatReadsOpen(std::string* error);
 	bool TestALinklessMemberIsHeldByTheStart(std::string* error);
-	bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick);
+	bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick, bool alone);
 	bool TestALobbyDropsAnAbandonedTransfersTail(std::string* error);
 	bool TestALaterLobbysTransferIsNewToItsPeers(std::string* error);
 	bool TestLobbyTrafficKeepsAHostLinkAlive(std::string* error);
@@ -1174,7 +1174,7 @@ namespace RTE {
 		};
 		const auto P = [](State s, Event e) { return std::make_pair(s, e); };
 		const Row kick{"service_kick", &TestServiceKick}, moderation{"lobby_moderation_rows", &TestLobbyModerationRows}, kickedOpen{"kicked_seat_reads_open", &TestKickedSeatReadsOpen};
-		const Row linkless{"a_linkless_member_is_held_by_the_start", &TestALinklessMemberIsHeldByTheStart}, lobbyHold{"a_rematch_lobby_holds_a_dropped_seat", [](std::string* error) { return TestARematchLobbyHoldsADroppedSeat(error, true, false); }};
+		const Row linkless{"a_linkless_member_is_held_by_the_start", &TestALinklessMemberIsHeldByTheStart}, lobbyHold{"a_rematch_lobby_holds_a_dropped_seat", [](std::string* error) { return TestARematchLobbyHoldsADroppedSeat(error, true, false, false); }};
 		const Row abandoned{"a_lobby_drops_an_abandoned_transfers_tail", &TestALobbyDropsAnAbandonedTransfersTail}, laterLobby{"a_later_lobbys_transfer_is_new_to_its_peers", &TestALaterLobbysTransferIsNewToItsPeers};
 		const Row traffic{"lobby_traffic_keeps_a_host_link_alive", &TestLobbyTrafficKeepsAHostLinkAlive}, startHeld{"a_start_held_seats_return_completes", &TestAStartHeldSeatsReturnCompletes};
 		const Row knocking{"a_seat_knocking_while_the_round_forms_is_answered", &TestASeatKnockingWhileTheRoundFormsIsAnswered}, queued{"a_queued_return_leaves_a_later_hold", &TestAQueuedReturnLeavesALaterHold};

@@ -268,7 +268,7 @@ namespace RTE {
 
 		bool IsKnownRemote(uint8_t peerId) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
-		friend bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick);
+		friend bool TestARematchLobbyHoldsADroppedSeat(std::string* error, bool rematch, bool kick, bool alone);
 		friend bool TestALobbyDropsAnAbandonedTransfersTail(std::string* error);
 		friend bool TestALaterLobbysTransferIsNewToItsPeers(std::string* error);
 		bool IsCommittedTransport(NetPeerId transportPeerId) const;
