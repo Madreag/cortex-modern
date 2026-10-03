@@ -12,6 +12,16 @@ if INVENTORY.is_dir():
 
 @unittest.skipUnless(INVENTORY.is_dir(), 'external inventory tools are absent')
 class RequiredArtifacts(unittest.TestCase):
+    def test_unowned_required_failure_blocks_the_collection_manifest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); plan, requirements = fixture(root)
+            path = root/'S1/required-build/result.json'
+            write(path, dict(passed=False, required=True, reason='native required build failed'))
+            collection = root/'S1/DEFECTS.json'; value = json.loads(collection.read_text())
+            value.update(hard_count=1, defects=[dict(kind='verdict', path=str(path), quoted_line='native required build failed')])
+            value['evidence_sha256'][str(path)] = reader.digest(path); write(collection, value)
+            self.assertFalse(reader.build_manifest(plan, requirements)['passed'])
+
     def test_native_child_failure_cannot_be_hidden_by_a_green_main_product(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); plan, requirements = fixture(root)
