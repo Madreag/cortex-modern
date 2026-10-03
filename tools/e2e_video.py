@@ -1732,7 +1732,8 @@ def run_one(options, scenario, run, run_index, out):
             console = retained / "LogConsole.txt"
             if previous and console.is_file():
                 (Path(previous["root"]) / "console-before-restore.log").write_bytes(console.read_bytes())
-        run_handle = make_run(options.repo, args, peer_root, timeout, env=environment, **({"runtime": retained} if retained else {}))
+        factory = options.remote_capture.make_run if getattr(options, 'remote_capture', None) else make_run
+        run_handle = factory(options.repo, args, peer_root, timeout, env=environment, **({"runtime": retained} if retained else {}))
         (Path(run_handle.out) / "video").mkdir(parents=True, exist_ok=False)
         for directory in peer.get("output_dirs", []):
             (Path(run_handle.out) / directory).mkdir(parents=True, exist_ok=False)
@@ -2516,6 +2517,10 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
     parser.add_argument("--peer", choices=("host", "client"))
+    parser.add_argument('--host-box')
+    parser.add_argument('--client-box')
+    parser.add_argument('--inventory', type=Path)
+    parser.add_argument('--collection-root', type=Path)
     parser.add_argument("--merge-peer-captures", nargs=2, type=Path, metavar=("HOST_CAPTURE", "CLIENT_CAPTURE"))
     parser.add_argument("--run", action="append", default=[], help="capture only this named run, repeatable")
     parser.add_argument("--token", action="append", default=[], metavar="NAME=VALUE")
@@ -2584,6 +2589,9 @@ def main():
         from e2e.cross import select_peer
         scenario = select_peer(scenario, options.peer)
     options.tokens = supplied_tokens(options.token)
+    if options.host_box or options.client_box:
+        if (options.host_box, options.client_box) != ('ALLY', 'EDITH') or not options.inventory or not options.collection_root:
+            parser.error('remote capture requires ALLY host, EDITH client, inventory and collection root')
     # Each scenario keeps its own slice of the block, so two of them can record side by side.
     if options.port is None:
         options.port = int(scenario.get("port_base", PORT_LO))
@@ -2601,6 +2609,9 @@ def main():
         print(json.dumps({"scenario": scenario["name"], "dry_run": True, "runs": options.completed_runs}, indent=2))
         return 0
     out.mkdir(parents=True, exist_ok=False)
+    if options.host_box:
+        from acceptance_e2e_remote import RemoteCapture
+        options.remote_capture = RemoteCapture(options)
     options.scratch_root = options.scratch_root or next(
         (parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
     options.scratch_limit_bytes = scratch_limit(options)
@@ -2674,6 +2685,8 @@ def main():
                 from e2e.directory import serve
                 service = serve(out / f"{name}-directory", directory_port, (PORT_LO, PORT_HI), turn_config=run.get("directory_turn_config"))
             with claim, service as tokens:
+                if getattr(options, 'remote_capture', None):
+                    options.remote_capture.directory_tunnel(directory_port)
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
                 captured["services"] = {key: str(value) for key, value in tokens.items()}
@@ -2701,6 +2714,8 @@ def main():
         for peer in run["peers"]:
             peer.pop("index", None)
     (out / "capture.json").write_text(json.dumps(capture, indent=2) + "\n", encoding="utf-8")
+    if getattr(options, 'remote_capture', None):
+        options.remote_capture.close()
     print(json.dumps({"capture": str(out / "capture.json"),
                       "review": [str(Path(run["root"]) / "review.json") for run in capture["runs"]]}, indent=2))
     return 0 if complete else 1

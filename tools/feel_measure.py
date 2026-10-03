@@ -157,6 +157,15 @@ AUTOSAVE_THREE_CASES = (
     ('autosave3-100ms', 100, 1),
     ('autosave3-200ms', 200, 1),
 )
+MATRIX_GROUP = 'all'
+
+
+def matrix_arm_selected(name, group):
+    if group not in ('all', 'pair', 'three'):
+        raise ValueError(f'unknown matrix group {group!r}')
+    three = {case[0] for case in TIMING_CASES if case[3] is not None} | {case[0] for case in AUTOSAVE_THREE_CASES}
+    # Each execution box measures its own baselines; no reference is borrowed across boxes.
+    return group == 'all' or name.startswith('baseline-') or (name in three) == (group == 'three')
 
 
 def runner_cpu_basis():
@@ -283,13 +292,15 @@ PEER_SIM_COST = {}
 
 
 def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True, jitter_ms=0, reorder_percent=0, dup_percent=0):
+    if not matrix_arm_selected(name, MATRIX_GROUP):
+        return None
+    final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
     if DRY_RUN_PLAN is not None:
         DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, jitter_ms=jitter_ms, local_prediction=prediction, loss_percent=loss_percent, silent_tick=silent_tick,
-                                 autosave_seconds=autosave_seconds, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
+                                 autosave_seconds=autosave_seconds, ticks=final_tick, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
         return None
     out = root / name
     out.mkdir(exist_ok=False)
-    final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
     # The engine's Lua state count is a build constant; the flags are kept, accepted and ignored.
     lua_states = {'host': host_lua_states, 'client': client_lua_states}
     pre_match_history = {'host': host_pre_match_history, 'client': client_pre_match_history}
@@ -762,7 +773,8 @@ def analyze(root, stock=None):
         write_json(root / 'feel-report.json', result)
         return [result]
     baselines, plain_baselines = {}, {}
-    subset = json.loads((root / 'matrix-plan.json').read_text(encoding='utf-8')).get('lag_arms') if (root / 'matrix-plan.json').is_file() else None
+    matrix_plan = json.loads((root / 'matrix-plan.json').read_text(encoding='utf-8')) if (root / 'matrix-plan.json').is_file() else {}
+    subset, group = matrix_plan.get('lag_arms'), matrix_plan.get('matrix_group', 'all')
     for cap_name in ('60hz', 'uncapped'):
         run = root / f'baseline-{cap_name}'
         if subset and not run.is_dir():
@@ -787,6 +799,8 @@ def analyze(root, stock=None):
     for lag in (100, 200):
         for cap_name in ('60hz', 'uncapped'):
             name = f'{lag}ms-{cap_name}'
+            if not matrix_arm_selected(name + '-on', group):
+                continue
             if subset and name not in subset:
                 continue
             on, off = root / (name + '-on'), root / (name + '-off')
@@ -850,6 +864,8 @@ def analyze(root, stock=None):
             summarize_case(report, on)
             results.append(report)
     for name, *_ in () if subset else TIMING_CASES + JITTER_CASES:
+        if not matrix_arm_selected(name, group):
+            continue
         run = root / name
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
@@ -860,6 +876,8 @@ def analyze(root, stock=None):
         write_json(run / 'feel-report.json', report)
         results.append(report)
     for name, _, _ in () if subset else AUTOSAVE_CASES + AUTOSAVE_THREE_CASES:
+        if not matrix_arm_selected(name, group):
+            continue
         run = root / name
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
@@ -934,6 +952,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo', type=Path, default=REPO)
     parser.add_argument('--matrix', action='store_true', help='run the complete matrix (the default)')
+    parser.add_argument('--matrix-group', choices=('all', 'pair', 'three'), default='all',
+                        help='complete matrix, or its one/two-engine and three-engine arms with their own baselines')
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--port', type=int, default=48231)
     parser.add_argument('--port-block', default='48231-48240', help="the calling lane's own port block, LO-HI; --port stays inside it")
@@ -993,8 +1013,12 @@ def dry_run_plan(launch_all):
         DRY_RUN_PLAN = None
 
 
-def main(argv=None):
+def _main(argv=None):
     parser, args = parse_args(argv)
+    global MATRIX_GROUP
+    MATRIX_GROUP = args.matrix_group
+    if args.matrix_group != 'all' and (args.cases or args.lag_arms):
+        parser.error('--matrix-group cannot be combined with --cases or --lag-arms')
     for spec in args.peer_sim_cost:
         peer, cost_us, from_tick = spec.split(':')
         PEER_SIM_COST[peer] = (int(cost_us), int(from_tick))
@@ -1110,10 +1134,8 @@ def main(argv=None):
                     scratch_byte_limits=dict(case=BYTE_LIMIT, matrix=MATRIX_BYTE_LIMIT),
                     mode='service e2e without -free-run-sim; the normal loop presents every render iteration',
                     captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame',
-                    lag_arms=args.lag_arms,
-                    arms=[f'baseline-{cap}-on' for cap in ('60hz', 'uncapped')] +
-                         [f'{lag}ms-{cap}-{state}' for lag in (100, 200) for cap in ('60hz', 'uncapped') for state in ('on', 'off')] +
-                         [name for name, *_ in TIMING_CASES + JITTER_CASES] + [name for name, *_ in AUTOSAVE_CASES + AUTOSAVE_THREE_CASES],
+                    lag_arms=args.lag_arms, matrix_group=args.matrix_group,
+                    arms=[arm['arm'] for arm in dry_run_plan(lambda: launch_matrix(root / 'input.txt', None))],
                     lua_states={'host': args.host_lua_states, 'client': args.client_lua_states},
                     pre_match_history={'host': args.host_pre_match_history, 'client': args.client_pre_match_history})
         write_json(root / 'matrix-plan.json', plan)
@@ -1141,14 +1163,17 @@ def main(argv=None):
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
     case_launches = {path.parent.name: json.loads(path.read_text(encoding='utf-8'))['launches_complete']
                      for path in sorted(root.glob('*/manifest.json'))}
+    declared = json.loads((root / 'matrix-plan.json').read_text(encoding='utf-8'))
+    declared_arms = declared.get('arms', list(case_launches))
     case_gates = write_case_gates(root, results)
-    complete = bool(case_launches) and all(case_launches.values()) and case_gates['passed']
+    complete = bool(case_launches) and set(case_launches) == set(declared_arms) and all(case_launches.values()) and case_gates['passed']
     item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
                   for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
     reasons = {name: case['reasons'] for name, case in case_gates['cases'].items()}
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
     completion = dict(finished=stamp(), measurement_complete=complete, product_pass=complete,
+                      matrix_group=declared.get('matrix_group', 'all'), declared_arms=declared_arms,
                       presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
                       launches_complete=bool(case_launches) and all(case_launches.values()),
                       case_launches=case_launches, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
@@ -1158,6 +1183,15 @@ def main(argv=None):
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')
     print(json.dumps(completion, indent=2), flush=True)
     return 0 if complete and (gate_pass or skip_gates) else 1
+
+
+def main(argv=None):
+    global MATRIX_GROUP
+    previous = MATRIX_GROUP
+    try:
+        return _main(argv)
+    finally:
+        MATRIX_GROUP = previous
 
 
 if __name__ == '__main__':

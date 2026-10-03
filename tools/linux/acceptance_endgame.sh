@@ -4,6 +4,7 @@ set -uo pipefail
 : "${LANE:?set LANE}" "${SHA:?set SHA}" "${ACCEPTANCE_COLLECTION:?set ACCEPTANCE_COLLECTION}"
 PY=/usr/bin/python3
 REPO=$LANE/repo
+export CC_INVENTORY_DIR=$LANE/inventory
 EV=$LANE/evidence
 export CCCP_HEADLESS=1 PYTHONDONTWRITEBYTECODE=1 CCCP_TEST_BINARY=$REPO/build-gcc/CortexCommand
 eval "$(systemctl --user show-environment 2>/dev/null | grep -E '^(DISPLAY|XAUTHORITY|XDG_RUNTIME_DIR)=' | sed 's/^/export /')"

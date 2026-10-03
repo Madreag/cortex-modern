@@ -10,6 +10,7 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 LANE=${LANE:-$HERE}
 INV=$LANE/inventory
+export CC_INVENTORY_DIR=$INV
 REPO=$LANE/repo
 EV=$LANE/evidence
 export CCCP_HEADLESS=1 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 INVENTORY_NO_FULLSTATE=1
