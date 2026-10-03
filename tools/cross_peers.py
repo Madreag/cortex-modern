@@ -278,6 +278,7 @@ def make_plan(options):
                     (HERE/'cross_peers.py',HERE/'cross_report.py',HERE/'feel/report.py',HERE/'feel/records.py')},
                 boxes=manifest['boxes'], instances=peers, specs=specs, host=host, ticks=options.ticks,
                 scenario=options.scenario, acceptance_row={'match': 17, 'soak': 18, 'chaos': 19}[options.scenario],
+                acceptance_arm=getattr(options, 'acceptance_arm', None),
                 roster=options.roster, scene=options.scene, seed=options.seed,
                 chaos_seed=options.chaos_seed if options.scenario == 'chaos' else None,
                 seed_scope='choices only; transport and OS timing are not reproduced', faults=faults,
@@ -1211,6 +1212,7 @@ def parse_args(argv=None):
     parser.add_argument('--local-render-cap', type=render_cap_hz, metavar='HZ', help='windows-local render cap: 0 or 60')
     parser.add_argument('--host-stall', type=host_stall_spec, metavar='TICK:MS', help="stall the host's simulation MS milliseconds at round tick TICK, every round")
     parser.add_argument('--scenario', choices=['match', 'soak', 'chaos', 'endurance'], default='match')
+    parser.add_argument('--acceptance-arm', choices=['L4P'], help='the V1 item 17 sustained four-box impairment arm')
     parser.add_argument('--roster', choices=['three-way', 'four-way', 'allies', 'ai-heavy', 'mixed'], default='three-way')
     parser.add_argument('--scene', default='Grasslands')
     parser.add_argument('--ticks', type=int)

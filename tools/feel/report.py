@@ -541,13 +541,13 @@ def return_hold_violations(log):
             if 0 < tick - back <= 100]
 
 
-def impairment_evidence(run, manifest):
+def impairment_evidence(run, manifest, logs=None):
     run = Path(run)
     members = tuple(manifest.get('per_peer_lag_ms') or ('host', 'client'))
     effects, changes, errors, paths = {}, {}, [], []
     for peer in members:
         path = run / peer / 'stdout.log'; paths.append(path)
-        log = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
+        log = logs.get(peer, '') if logs is not None else path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
         current, local, rounds, committed, receipts = None, None, {}, set(), []
         for line in log.splitlines():
             if found := re.match(r'\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+)', line):
@@ -565,7 +565,12 @@ def impairment_evidence(run, manifest):
                 else: errors.append(f'{peer}: unbound net-fake-link receipt')
         requests = dict(jitter_ms=(manifest.get('per_peer_jitter_ms') or {}).get(peer, manifest.get('jitter_ms', 0)),
                         reorder_percent=manifest.get('reorder_percent', 0), dup_percent=manifest.get('dup_percent', 0))
-        for key, counter in (('jitter_ms', 'jitter_packets'), ('reorder_percent', 'reordered_packets'), ('dup_percent', 'duplicated_packets')):
+        counters = [('jitter_ms', 'jitter_packets'), ('reorder_percent', 'reordered_packets'), ('dup_percent', 'duplicated_packets')]
+        if manifest.get('sustained_impairment'):
+            requests.update(lag_ms=(manifest.get('per_peer_lag_ms') or {}).get(peer, 0),
+                            loss_percent=(manifest.get('per_peer_loss_percent') or {}).get(peer, 0))
+            counters += [('lag_ms', 'delayed_packets'), ('loss_percent', 'dropped_packets')]
+        for key, counter in counters:
             if not requests[key]: continue
             if not rounds: errors.append(f'{peer}: no native round for requested {key}={requests[key]}')
             for round_id in rounds:

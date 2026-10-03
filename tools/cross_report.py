@@ -105,6 +105,33 @@ def acceptance_identity(manifest, peers):
                 build_errors=build_errors, diagnostics=diagnostics)
 
 
+def l4p_schedule(manifest):
+    faults = manifest.get('faults', [])
+    return (manifest.get('acceptance_arm') == 'L4P' and manifest.get('scenario') == 'match'
+            and manifest.get('acceptance_row') == 17 and len(faults) == 1
+            and faults[0].get('peer') in {row['name'] for row in manifest.get('instances', [])}
+            and all(faults[0].get(key) == value for key, value in dict(action='jitter', lag_ms=200, jitter_ms=60,
+                    percent=5, duration_ms=120000, duration_ticks=7200).items())
+            and type(manifest.get('ticks')) is int and manifest['ticks'] >= 12001)
+
+
+def l4p_effects(root, manifest, peers, recoveries):
+    fault = manifest['faults'][0]
+    logs = {name: ''.join(line for fragment in peer['fragments'] for _, line in read_log(root/fragment/'engine/stdout.log'))
+            for name, peer in peers.items()}
+    request = dict(ticks=manifest['ticks'], sustained_impairment=True,
+        per_peer_lag_ms={name: fault['lag_ms'] if name == fault['peer'] else 0 for name in peers},
+        per_peer_jitter_ms={name: fault['jitter_ms'] if name == fault['peer'] else 0 for name in peers},
+        per_peer_loss_percent={name: fault['percent'] if name == fault['peer'] else 0 for name in peers})
+    measured = report.impairment_evidence(root, request, logs=logs)
+    recovery = [row for row in recoveries if row['id'] == fault['id']]
+    duration = len(recovery) == 1 and recovery[0].get('requested_duration_consistent') is True and recovery[0].get('passed') is True
+    measured.update(passed=measured['passed'] and duration, sustained_duration=duration,
+                    evidence=[str(root/fragment/'engine/stdout.log') for peer in peers.values() for fragment in peer['fragments']])
+    if not duration: measured['reason'] += '; sustained 120000 ms interval and observed-reset recovery are absent or inconsistent'
+    return measured
+
+
 def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     identity = acceptance_identity(manifest, peers)
     checks = dict(checks, acceptance_roster=identity['roster_passed'], build_receipts=identity['builds_passed'])
@@ -118,7 +145,9 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     required_coverage = [row for row in matrix if row.get('required', True)]
     coverage_failed = [row for row in required_coverage if row.get('status') not in ('PASS', 'NOT APPLICABLE')]
     coverage_status = 'FAIL' if any(row.get('status') == 'FAIL' for row in coverage_failed) else 'NOT COVERED' if coverage_failed else 'PASS'
-    ungated = [name for name, peer in peers.items() if not peer.get('feel_gated')]
+    l4p = l4p_schedule(manifest)
+    affected = manifest['faults'][0]['peer'] if l4p else None
+    ungated = [name for name, peer in peers.items() if name != affected and not peer.get('feel_gated')]
     feel_detail = '; '.join(f'{name}: {peers[name].get("feel_status", "no quiet timing evidence")}' for name in ungated)
     oracles=dict(
         acceptance_identity=dict(oracle('acceptance_roster', 'build_receipts', detail='; '.join(identity['roster_errors'] + identity['build_errors'])),
@@ -136,13 +165,13 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         fault_effects=oracle('faults_applied', 'native_fault_effects', rule='Each scheduled injection leaves its native effect receipt.'),
         coverage=dict(status=coverage_status, reason='; '.join(f"{row.get('id', 'coverage')}: {row.get('status', 'missing status')}" for row in coverage_failed),
                       rule='Each required coverage minimum is measured.', diagnostic_rows=[row.get('id') for row in matrix if row.get('required') is False]),
-        feel=oracle('quiet_feel', detail=feel_detail or ('no peer timing evidence' if not peers else ''),
+        feel=oracle('survivor_feel' if l4p else 'quiet_feel', detail=feel_detail or ('no peer timing evidence' if not peers else ''),
                     rule='Every survivor meets the independent feel bars in a quiet measured window.'),
         memory=memory,
         record_integrity=oracle('record_integrity'),
         engine_findings=oracle('no_engine_findings', rule='Every observed engine finding remains visible.'),
         exits=oracle('all_incarnation_exits', rule='Each incarnation exits normally or has its own actual scheduled termination receipt.'),
-        pace=oracle('box_pace', rule='Every peer keeps the measured relative round rate.'),
+        pace=oracle('survivor_pace' if l4p else 'box_pace', rule='Every applicable peer keeps the measured relative round rate.'),
         instrumentation=oracle('instrument_valid', rule='Every instrument has complete measured cost coverage; no guessed subtraction.'),
         workload=oracle('unique_gameplay_budget', rule='Every instance completes the configured number of unique gameplay ticks.'))
     if mixed_builds:
@@ -168,9 +197,14 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
     required = (*CORE_CHECKS, 'acceptance_roster', 'build_receipts', 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings', 'box_pace',
                 'quiet_feel', 'unique_gameplay_budget', 'coverage_minima', 'instrument_valid')
     if memory['status'] != 'NOT APPLICABLE': required += ('memory_bounds',)
+    if l4p:
+        # V1 item 17 L4P: the sustained impairment arm judges survivor feel with native packet effects and reset evidence.
+        required = tuple(name for name in required if name not in ('quiet_feel', 'box_pace')) + (
+            'survivor_feel', 'survivor_pace', 'l4p_effects', 'bounded_recovery', 'faults_applied', 'native_fault_effects')
+        oracles['l4p_effects'] = oracle('l4p_effects', 'bounded_recovery', 'faults_applied', 'native_fault_effects')
     if manifest['scenario'] != 'match':
         required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
-    workload = (manifest['ticks'] == 1201 and not manifest.get('faults')) if manifest['scenario'] == 'match' else (
+    workload = ((manifest['ticks'] == 1201 and not manifest.get('faults')) or l4p) if manifest['scenario'] == 'match' else (
         manifest['ticks'] == 72000 if manifest['scenario'] == 'soak' else
         bool(manifest.get('faults')) if manifest['scenario'] == 'chaos' else False)
     v1 = (all(checks.get(name, False) for name in required) and workload and bool(manifest.get('fullstate_every'))
@@ -643,6 +677,7 @@ def requirements(manifest, comparison, metrics):
         item['status'] = 'NOT COVERED'
         item['reason'] = reasons.get(item['number'], item['reason'])
         item['evidence'] = []
+        item.update(required=False, scope='historical cross-driver planning inventory; current V1 runtime oracles and coverage remain required')
     # Only complete requirements are credited; partial event totals remain visible in the matrix.
     if manifest.get('preflights') and len(manifest['preflights']) == len(manifest['boxes']) and metrics and all(p['record'].get('started') and any(s.get('engine_pid') and (s.get('resident') or s.get('working_set')) for s in p['samples']) for p in metrics.values()):
         for item in items:
@@ -656,6 +691,45 @@ def requirements(manifest, comparison, metrics):
         if item['number']=='reread-5' and metrics and all(p['timing'].get('complete') and all(p['timing'].get(k) is not None for k in ('steady_waits_over_50','steady_missing_frame_stalls','net_wait_ms','waiting_percent','longest_stall_ms')) for p in metrics.values()):
             item.update(status='PASS',reason='Matched declared windows report the eligible >50 ms wait count, separate native missing-frame stalls, wait sum, maximum and 100*wait/wall percentage.',evidence=['result.json#peers'])
     return items
+
+
+def annotate_applicability(result):
+    """Annotate only scopes replaced by the ruled short-match, L4P or HL4 oracles."""
+    manifest, peers = result['manifest'], result['peers']
+    short_memory = result['oracles']['memory']['status'] == 'NOT APPLICABLE'
+    loss = result.get('host_loss', {})
+    hl4 = bool(loss.get('ranges')) and loss.get('status') != 'NOT APPLICABLE'
+    retired = set(peers) - set(loss.get('survivors', [])) if hl4 else set()
+    affected = manifest['faults'][0]['peer'] if l4p_schedule(manifest) else None
+
+    def diagnostic(node, reason):
+        if isinstance(node, dict): node.update(required=False, reason=reason)
+
+    for name, peer in peers.items():
+        if short_memory or name in retired:
+            reason = result['oracles']['memory']['reason'] if short_memory else \
+                'HL4 terminated participant: host_loss binds its actual termination; the full memory rule applies to every continuing survivor'
+            diagnostic(peer.get('memory'), reason)
+            for field in ('memory_by_incarnation', 'memory_census'):
+                for row in peer.get(field, {}).values(): diagnostic(row, reason)
+        if name in retired or name == affected:
+            reason = ('HL4 terminated participant: host_loss judges continuing survivor feel and native completion' if name in retired else
+                      'V1 item 17 L4P: this is the declared impaired peer; every survivor keeps the item 20 feel bars')
+            for field in ('pace', 'timing'): diagnostic(peer.get(field), reason)
+        if name in retired:
+            reason = 'HL4 native termination/Ban is required at host_loss; ordinary successful end-of-match completion is inapplicable to this terminated participant'
+            diagnostic(peer.get('native'), reason)
+            for row in peer.get('exits', []): diagnostic(row, reason)
+    if hl4:
+        replacement = {
+            'live_hashes': 'history', 'full_state': 'fullstate', 'native_completion': 'native_host_loss',
+            'feel': 'native_host_loss', 'memory': 'survivor_memory', 'exits': 'native_host_loss',
+            'pace': 'survivor_pace', 'workload': 'survivor_workload', 'fault_effects': 'native_host_loss'}
+        for name, scoped in replacement.items():
+            diagnostic(result['oracles'].get(name), f'HL4 uses the required host_loss {scoped} evidence for terminated and continuing participants')
+        for name, scoped in (('comparison', 'history'), ('fullstate', 'fullstate'), ('measured_workload', 'survivor_workload')):
+            diagnostic(result.get(name), f'HL4 uses required host_loss {scoped}; this ordinary aggregate extends beyond the proved participant termination boundaries')
+    return result
 
 
 def local_host_render(manifest, peers):
@@ -1169,6 +1243,13 @@ def build_report(root):
             peer['archives'] and all(row.get('passed') is True for row in peer['archives']) for peer in peers.values())
     checks['memory_bounds'] = memory_verdict(peers, manifest)['status'] in ('PASS', 'NOT APPLICABLE')
     checks['instrument_valid'] = bool(peers) and all(peer['instrument_valid'] for peer in peers.values())
+    sustained = None
+    if l4p_schedule(manifest):
+        sustained = l4p_effects(root, manifest, peers, recoveries)
+        survivors = [peer for name, peer in peers.items() if name != manifest['faults'][0]['peer']]
+        checks.update(l4p_effects=sustained['passed'],
+            survivor_feel=bool(survivors) and all(peer['feel_gated'] and peer['feel_pass'] for peer in survivors),
+            survivor_pace=bool(survivors) and all(peer['pace']['passed'] for peer in survivors))
     for name,peer in peers.items():
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
@@ -1190,7 +1271,8 @@ def build_report(root):
             fullstate=host_loss.get('fullstate', {}).get('passed') is True,
             survivor_pace=all(peers[name]['pace']['passed'] for name in survivors),
             survivor_memory=memory_verdict({name: peers[name] for name in survivors})['status'] == 'PASS',
-            hold_logs=checks['hold_evidence_complete'], unscheduled_holds=checks['zero_unscheduled_holds'])
+            hold_logs=checks['hold_evidence_complete'], unscheduled_holds=checks['zero_unscheduled_holds'],
+            coverage_minima=checks['coverage_minima'])
         host_loss['passed'] = all(host_loss['collection_checks'].values())
         host_loss['status'] = 'PASS' if host_loss['passed'] else 'FAIL'
         host_loss['reason'] += '; '.join(f'{key}={value}' for key, value in host_loss['collection_checks'].items() if not value)
@@ -1204,11 +1286,13 @@ def build_report(root):
                   comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   measured_workload=measured_workload,
+                  sustained_impairment=sustained,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
                   native_recovery_records=native_recovery_records,native_fault_effects=effects,unscheduled_holds=unscheduled_holds,
                   design_holds=[hold for peer in peers.values() for hold in peer['holds'] if hold.get('design_cause')],
                   findings=findings, triage=load(root/'triage.json',[]), requirements=requirements(manifest, comparison, peers),
                   stopped=driver_stop(findings))
+    annotate_applicability(result)
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')
     write_page(root, result, events)
     write_index(root.parent)
