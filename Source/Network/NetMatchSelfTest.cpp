@@ -2891,6 +2891,62 @@ namespace RTE {
 			return true;
 		}
 
+		// R6 (6): a host cut off by a split wrote a checkpoint past the regroup frame under its old generation; the match went on under the
+		// next one. A resume picks the higher generation first, retention keeps it, and the old generation never replaces its tick.
+		bool TestAResumePicksTheHighestGeneration(std::string* error) {
+			ResumeScratch scratch;
+			struct RetentionScope {
+				size_t prior = AutosaveStore::RetainedAutosaves();
+				~RetentionScope() { AutosaveStore::SetRetainedAutosaves(prior); }
+			} retention;
+			AutosaveStore::SetRetainedAutosaves(2);
+			const std::string matchId = "00000000feedface-0000000000000006";
+			const NetMatchConfig config = MakeConfig();
+			const auto publish = [&](uint64_t generation, uint64_t tick) {
+				if (!WriteResumeArchive(scratch.path, matchId, tick, 5)) return false;
+				AutosaveManifest manifest;
+				manifest.matchId = matchId;
+				manifest.sessionId = config.sessionId;
+				manifest.roundId = 5;
+				manifest.migrationGen = generation;
+				manifest.savedTick = tick;
+				manifest.configHash = NetMatchConfigUtil::StoredConfigHash(config);
+				manifest.configPayload = ResumePayloadHex(config);
+				return AutosaveStore::PublishManifest(scratch.path, manifest, error);
+			};
+			if (!publish(0, 540) || !publish(1, 600) || !publish(1, 660) || !publish(0, 900)) return false;
+			const auto held = AutosaveStore::ListRestorable(scratch.path, matchId);
+			std::vector<uint64_t> order;
+			for (const auto& entry: held) order.push_back(entry.savedTick);
+			if (order != std::vector<uint64_t>{660, 600, 900, 540} || held.front().migrationGen != 1) {
+				*error = "a resume after a split ranked the old generation's later tick first: order=" + nlohmann::json(order).dump();
+				return false;
+			}
+			AutosaveStore::ApplyRetention(scratch.path, matchId, 0, 0);
+			order.clear();
+			for (const auto& entry: AutosaveStore::ListRestorable(scratch.path, matchId)) order.push_back(entry.savedTick);
+			if (order != std::vector<uint64_t>{660, 600}) {
+				*error = "retention rotated out the higher generation's checkpoints: kept=" + nlohmann::json(order).dump();
+				return false;
+			}
+			std::string refusal;
+			AutosaveManifest stale;
+			stale.matchId = matchId;
+			stale.sessionId = config.sessionId;
+			stale.roundId = 5;
+			stale.savedTick = 660;
+			stale.configHash = NetMatchConfigUtil::StoredConfigHash(config);
+			stale.configPayload = ResumePayloadHex(config);
+			AutosaveManifest after;
+			if (AutosaveStore::PublishManifest(scratch.path, stale, &refusal) || !AutosaveStore::HigherGenerationHolds(scratch.path, matchId, 660, 0) ||
+			    !AutosaveStore::ReadManifest(scratch.path, matchId, 660, after, error) || after.migrationGen != 1) {
+				*error = "the old generation replaced the tick the match went on to write: refusal='" + refusal + "' generation=" + std::to_string(after.migrationGen);
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS a_resume_picks_the_highest_generation order=660,600 refused='" << refusal << "'" << std::endl;
+			return true;
+		}
+
 		bool TestWorldCheckpointOrderAndRoundPin(std::string* error) {
 			ResumeScratch scratch;
 			struct RetentionScope {
@@ -15431,6 +15487,7 @@ namespace RTE {
 		if (!TestLobbyStartReturnsBeforeHashingModules(&error)) return fail(error);
 		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
 		if (!TestWorldCheckpointOrderAndRoundPin(&error)) return fail(error);
+		if (!TestAResumePicksTheHighestGeneration(&error)) return fail(error);
 		if (!TestResumeCarriesTheAgreedSeats(&error)) return fail(error);
 		if (!TestResumeHeldPeerSkipsTheTransfer(&error)) return fail(error);
 		if (!TestResumePreparesTheAgreedLobby(&error)) return fail(error);

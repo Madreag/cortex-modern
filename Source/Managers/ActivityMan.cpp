@@ -475,6 +475,11 @@ namespace {
 		const int closed = zipClose(archive.file, fileName.c_str());
 		archive.file = nullptr;
 		if (closed != ZIP_OK) throw std::runtime_error("could not finish archive");
+		if (automatic && manifest && AutosaveStore::HigherGenerationHolds(savePath.parent_path(), matchId, manifest->savedTick, manifest->migrationGen)) {
+			std::error_code ignored;
+			std::filesystem::remove(archive.path, ignored);
+			throw std::runtime_error("a higher host generation already holds tick " + std::to_string(manifest->savedTick));
+		}
 #ifdef _WIN32
 		if (automatic) {
 			if (!MoveFileExW(archive.path.c_str(), savePath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) throw std::runtime_error("could not publish autosave: " + std::to_string(GetLastError()));
@@ -493,7 +498,10 @@ namespace {
 				throw std::runtime_error("the published checkpoint is not restorable: " + refusal);
 			}
 			// A heal names the rewind point from this record instead of reading every archive again.
-			if (manifest) published.worldBoot = manifest->worldBoot;
+			if (manifest) {
+				published.worldBoot = manifest->worldBoot;
+				published.migrationGen = manifest->migrationGen;
+			}
 			AutosaveStore::NoteValidated(published);
 			// The manifest is published after its world, so a manifest without an archive never exists.
 			if (manifest && !manifest->configPayload.empty()) {
@@ -1044,6 +1052,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		manifest.sessionId = identity->sessionId;
 		manifest.roundId = identity->roundId;
 		manifest.worldBoot = identity->worldBoot;
+		manifest.migrationGen = identity->migrationGen;
 		manifest.savedTick = tick;
 		manifest.simTimeTicks = descriptor.simTimeTicks;
 		manifest.intervalSeconds = identity->intervalSeconds;
