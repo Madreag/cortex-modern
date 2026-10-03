@@ -23,7 +23,7 @@ class NativeReceipts(unittest.TestCase):
 
     def write(self, name, rows):
         path = self.root/name
-        path.write_text("".join(json.dumps(r)+"\n" for r in rows), encoding="utf-8")
+        path.write_text("".join(json.dumps({**r, "instance": path.stem})+"\n" for r in rows), encoding="utf-8")
         return path
 
     def test_missing_activation_tick_is_not_trimmed(self):

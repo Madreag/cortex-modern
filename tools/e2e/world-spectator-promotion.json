@@ -25,7 +25,9 @@
       "probe": "world-spectator.host.probe.json",
       "input_script": "play-input.txt",
       "env": {
-        "CC_TEST_WORLD_MAX_SPECTATORS": "1"
+        "CC_TEST_WORLD_MAX_SPECTATORS": "1",
+        "CC_TEST_CROSS_INSTANCE": "host",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
       },
       "settings": {
         "NetworkDisplayName": "Host",
@@ -51,7 +53,11 @@
         "NetworkDisplayName": "Seated One",
         "NetworkPortMapEnable": "0"
       },
-      "probe": "world-spectator.leave.probe.json"
+      "probe": "world-spectator.leave.probe.json",
+      "env": {
+        "CC_TEST_CROSS_INSTANCE": "seated-one",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
+      }
     },
     {
       "name": "seated-two",
@@ -71,6 +77,10 @@
       "settings": {
         "NetworkDisplayName": "Seated Two",
         "NetworkPortMapEnable": "0"
+      },
+      "env": {
+        "CC_TEST_CROSS_INSTANCE": "seated-two",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
       }
     },
     {
@@ -92,7 +102,9 @@
       "env": {
         "CCCP_TEST_SIM_COST_US": "500000",
         "CCCP_TEST_SIM_COST_FROM_TICK": "1800",
-        "CCCP_TEST_SIM_COST_UNTIL_TICK": "1860"
+        "CCCP_TEST_SIM_COST_UNTIL_TICK": "1860",
+        "CC_TEST_CROSS_INSTANCE": "spectator",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
       },
       "settings": {
         "NetworkDisplayName": "Spectator",
