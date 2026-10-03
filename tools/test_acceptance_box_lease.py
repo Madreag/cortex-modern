@@ -12,6 +12,16 @@ from test_acceptance_remote_tasks import profiles
 
 
 class NativeReservation(unittest.TestCase):
+    def test_provisioning_cannot_claim_a_box_or_start_native_preflight(self):
+        box=profiles()[0]
+        plan=dict(run='fixture',boxes=[box],specs=[dict(box='Z13',peer='erol')])
+        with patch.object(Path,'mkdir'), patch.object(remote,'helper_archive',return_value=Path('/virtual/helpers.tar')), \
+                patch.object(remote,'remote_python'), patch.object(remote,'publish_new'), patch.object(remote,'write_json'), \
+                patch.object(remote,'start_leases') as holders, patch.object(remote.cross,'command') as command:
+            remote.provision(plan,Path('/virtual/run'))
+        holders.assert_not_called()
+        self.assertFalse(any('--preflight' in str(call) for call in command.call_args_list))
+
     def test_physical_pc_cannot_hold_a_game_box(self):
         payload=dict(box=profiles()[0])
         with patch.object(Path,'read_text',return_value=json.dumps(payload)), \

@@ -299,7 +299,7 @@ def stop_leases(plan, root, leases):
     return errors
 
 
-def stage(plan, root):
+def provision(plan, root):
     archive = helper_archive(Path(__file__).resolve().parent.parent, root)
     for box in plan['boxes']:
         remote_root = box['scratch']+'/'+plan['run']
@@ -310,6 +310,9 @@ def stage(plan, root):
         own = root/'boxes'/box['name']; own.mkdir(parents=True)
         write_json(own/'payload.json', dict(box=box, specs=[spec for spec in plan['specs'] if spec['box'] == box['name']], pin=''))
         publish_new(box, own/'payload.json', remote_root+'/payload.json')
+
+
+def measure_preflight(plan, root):
     leases = {}
     try:
         start_leases(plan, root, leases)
@@ -328,6 +331,11 @@ def stage(plan, root):
         failures = stop_leases(plan, root, leases)
         write_json(root/'lease-cleanup.json', dict(errors=failures))
         raise
+
+
+def stage(plan, root):
+    provision(plan, root)
+    return measure_preflight(plan, root)
 
 
 def preserve_before_launch(plan, root, evidence):
@@ -469,6 +477,7 @@ def main(argv=None):
     parser.add_argument('--out', type=Path)
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--stage-only', action='store_true')
+    parser.add_argument('--provision-only', action='store_true')
     parser.add_argument('--launch-staged', action='store_true')
     options = parser.parse_args(argv)
     if options.payload: return run_payload(options.payload)
@@ -479,7 +488,12 @@ def main(argv=None):
         parser.error('output must be a fresh run inside the named scratch root')
     with storage_scope(owned, reserve=1024**2):
         if options.launch_staged:
-            raise ValueError('a fresh run with held native preflights is required; staged-only evidence remains retained')
+            plan = json.loads((options.out/'manifest.json').read_text(encoding='utf-8'))
+            if plan.get('lane') != options.lane or plan.get('run') != options.out.name or plan.get('preflights') or \
+                    any((options.out/leaf).exists() for leaf in ('lease-stop.json','launch-go.json')):
+                raise ValueError('only an unused provisioned run may acquire fresh native preflights')
+            for box in plan['boxes']: validate_profile(box, options.lane, plan['acceptance_row'])
+            leases = measure_preflight(plan, options.out)
         else:
             if not options.profiles or not options.template_boxes or not options.row or not options.source_sha:
                 parser.error('--profiles, --template-boxes, --row and --source-sha are required')
@@ -488,6 +502,10 @@ def main(argv=None):
             receipts = json.loads(options.mod_receipts.read_text(encoding='utf-8-sig')) if options.mod_receipts else None
             plan = make_plan(options, profiles, receipts)
             write_json(options.out/'manifest.json', plan)
+            if options.provision_only:
+                provision(plan, options.out)
+                print('Frozen helper files provisioned; no reservation or engine launched')
+                return 0
             leases = stage(plan, options.out)
         try:
             if options.stage_only:
