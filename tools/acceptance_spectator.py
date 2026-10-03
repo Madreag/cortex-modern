@@ -24,7 +24,7 @@ def requirements(repo, scenario):
                "world_spectator_cost_window": Path(repo)/"Source/Main.cpp"}
     for lever in scenario.get("required_engine_levers", []):
         source = sources.get(lever)
-        if source is None or lever not in source.read_text(encoding="utf-8"):
+        if source is None or not source.is_file() or lever not in source.read_text(encoding="utf-8"):
             faults.append(f"engine receipt/lever missing: {lever}")
     return faults
 

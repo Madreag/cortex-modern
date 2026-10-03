@@ -7,6 +7,11 @@ from acceptance_spectator import requirements, ownership_agreement, collect
 
 
 class SpectatorScenario(unittest.TestCase):
+    def test_tool_only_export_reports_missing_sources_without_crashing(self):
+        scenario=dict(acceptance_row='spectator',peers=[],required_engine_levers=['dump_world_ownership'])
+        faults=requirements(Path('/virtual/no-engine-source'),scenario)
+        self.assertIn('engine receipt/lever missing: dump_world_ownership',faults)
+
     def test_promotion_takes_authorization_from_the_matching_host_receipt(self):
         native=dict(seat=1,actor=17,ticket_incarnation=2,activation_tick=7000,freed_seat=1)
         documents={
