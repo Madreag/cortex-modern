@@ -1,5 +1,7 @@
 """Private module overlays carry their actual settings before measurement staging."""
 from contextlib import ExitStack
+import contextlib
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,6 +42,22 @@ class PrivateRuntimeMetadata(unittest.TestCase):
             stack.enter_context(patch.object(cross.acceptance_cross,'stage_activity',side_effect=activity))
             cross.prepare_instance(spec,'',box)
         self.assertEqual(staged,[True])
+
+    def test_cancelled_initial_client_does_not_wait_for_publication(self):
+        documents={}
+        spec=dict(peer='edith',role='player',own='/virtual/edith',flags=['-net-match-peers','4'],session_wait_s=240)
+        payload=dict(box=dict(name='EDITH',kind='windows-task'),specs=[spec],pin='')
+        with patch.object(Path,'read_text',lambda path,**kw:json.dumps(payload) if path.name=='payload.json' else '{}'), \
+                patch.object(Path,'is_file',lambda path:path.name=='stop.json'), \
+                patch.object(cross,'assert_box_guard'), patch.object(cross,'read_capabilities',return_value=dict(peer_limit=4)), \
+                patch.object(cross,'wait_for_payload_release'), patch.object(cross,'prepare_instance') as prepare, \
+                patch.object(cross,'write_json',side_effect=lambda path,value:documents.update({path.name:value})), \
+                patch.object(cross.time,'monotonic',return_value=1), \
+                patch.object(cross.time,'sleep',side_effect=AssertionError('waited despite native cancellation')) as sleep, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cross.run_payload(Path('/virtual/payload.json')),1)
+        prepare.assert_not_called(); sleep.assert_not_called()
+        self.assertIn('coordinator cancelled',documents['payload-error.json']['error'])
 
 
 if __name__=='__main__': unittest.main()
