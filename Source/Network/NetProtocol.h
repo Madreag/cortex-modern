@@ -232,6 +232,10 @@ namespace RTE {
 		bool operator==(const NetPong&) const = default;
 	};
 
+	/// The words the host closes a removed seat's link with; the seat reads them as its removal, never as the host lost.
+	inline constexpr const char* c_NetRemovedLinkText = "removed from this session";
+	inline constexpr const char* c_NetBannedLinkText = "banned from this session";
+
 	struct NetDisconnect {
 		uint16_t disconnectReason = 0;
 		std::string message;

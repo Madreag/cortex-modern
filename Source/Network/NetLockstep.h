@@ -1067,6 +1067,16 @@ namespace RTE {
 		uint16_t InputDelayAt(uint8_t peerId, uint64_t producedFrame) const;
 		/// How far this clock may hold back while it stands at its input horizon at a tick, from the delays the round runs at it.
 		uint32_t HorizonSlideTicks(uint64_t tick) const;
+		/// Client: the frame the host's removal of this seat took effect at, once the host removed it; 0 otherwise.
+		uint64_t GetRemovalBoundary() const { NET_PLANE_CHECK(); return m_RemovedByHost ? m_RemovalBoundary : 0; }
+		/// What the host measured when it last proposed a hold of a seat: the frame, how long the seat had been silent, the bound it passed and why.
+		struct HoldFact {
+			uint64_t frame = 0;
+			uint64_t silenceMs = 0;
+			double boundMs = 0;
+			std::string cause;
+		};
+		std::optional<HoldFact> LastHoldOf(uint8_t peerId) const { NET_PLANE_CHECK(); const auto fact = m_HoldFacts.find(peerId); return fact == m_HoldFacts.end() ? std::nullopt : std::optional(fact->second); }
 		bool TimingDecisionPendingAt(uint64_t frame) const;
 		/// Names every decision holding a frame's production, for a wait that has lasted long enough to be a defect.
 		std::string DescribePendingTimingDecisions(uint64_t frame) const;
@@ -1788,6 +1798,7 @@ namespace RTE {
 		std::map<uint8_t, std::string> m_EvictAfterReclaim; //!< Host: removals that meet a return too close to withdraw; applied once it lands.
 		std::optional<NetLockstepStop> m_OwnEndDuringMigration; //!< This peer's own end while its host was being replaced; the new host hears it.
 		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
+		std::map<uint8_t, HoldFact> m_HoldFacts; //!< Host: what it measured at each seat's last hold.
 		std::map<uint8_t, NetGameSeatReclaim> m_ReclaimTransactions;
 		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_FirstMissingFrame;
@@ -1931,6 +1942,9 @@ namespace RTE {
 		uint8_t m_SuccessorProbePeer = 0; //!< Host: the successor the probe asks now.
 		uint64_t m_SuccessorProbeAtMs = 0; //!< Host: when the probe moves to the next successor.
 		uint8_t m_SupersedingPeer = 0; //!< Host: the successor that answered from a later generation.
+		std::set<uint8_t> m_RemovedPeers; //!< Host: the seats it kicked or banned; it never hands its match to one.
+		bool m_RemovedByHost = false; //!< Client: the host's last word was this seat's removal, so its link closing is not the host lost.
+		uint64_t m_RemovalBoundary = 0; //!< Client: the frame the host's latest removal notice took effect at.
 		bool m_Superseded = false; //!< Host: the match went on under a later generation without it.
 		/// Host: while provisional, asks each successor in the match's order in turn, once a second, whether it hosts the match at a later
 		/// generation; the first that does ends this host's provisional match.

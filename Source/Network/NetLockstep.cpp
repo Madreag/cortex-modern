@@ -3489,7 +3489,7 @@ namespace RTE {
 				NetHostMigrationMessage answer;
 				if (event.type != NetTransportEventType::PacketReceived || !NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, answer) ||
 				    answer.sessionId != m_Config.sessionId || answer.generation <= m_MigrationGeneration ||
-				    (answer.type != NetHostMigrationMessageType::Rejoin && answer.type != NetHostMigrationMessageType::RollCall))
+				    (answer.type != NetHostMigrationMessageType::Rejoin && answer.type != NetHostMigrationMessageType::RollCall) || m_RemovedPeers.contains(answer.senderPeerId))
 					continue;
 				// The match went on under that successor: this host's play since the loss is not the match's, and it returns as a player.
 				m_SupersedingPeer = answer.senderPeerId;
@@ -3503,7 +3503,7 @@ namespace RTE {
 		m_SuccessorProbeAtMs = nowMs + 1000;
 		for (size_t tried = 0; tried < order.size(); ++tried) {
 			const uint8_t peer = order[m_SuccessorProbeTurn++ % order.size()];
-			if (peer == m_Config.localPeerId) continue;
+			if (peer == m_Config.localPeerId || m_RemovedPeers.contains(peer)) continue;
 			const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& entry) { return entry.peerId == peer; });
 			if (endpoint == m_Config.matchConfig.migrationPeers.end() || endpoint->listenPort == 0) continue;
 			m_SuccessorProbe = m_Config.migrationTransportFactory();
@@ -10439,6 +10439,16 @@ namespace RTE {
 						break;
 					}
 				}
+				// The host removing this seat closes its link: the round ends with the removal, and no successor is sought for a host that is still there.
+				if (lockstepPeer == GetHostPeerId() && !m_RelayHost &&
+				    (m_RemovedByHost || event.reason == c_NetRemovedLinkText || event.reason == c_NetBannedLinkText)) {
+					if (m_SessionEventSink) m_SessionEventSink(event);
+					m_RemovedByHost = true;
+					m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerRemoved)) + ":" + (event.reason.empty() ? "removed by the host" : event.reason) +
+					                        (m_RemovalBoundary != 0 ? " from frame " + std::to_string(m_RemovalBoundary) : std::string());
+					m_State = NetLockstepState::Stopped;
+					break;
+				}
 				if (lockstepPeer == GetHostPeerId() && event.reason.find("slow player:") != std::string::npos) {
 					if (m_SessionEventSink) m_SessionEventSink(event);
 					m_LocalSeatHeld = true;
@@ -10571,6 +10581,13 @@ namespace RTE {
 						return;
 					}
 					if (decoded.error.code == NetLockstepErrorCode::BadMagic && (sessionPacket.ok || chatTyped)) {
+						if (sessionPacket.ok && !m_RelayHost && LockstepPeerOfTransport(event.peerId) == GetHostPeerId()) {
+							// The host sends a removal's notice to every seat and then closes the removed one's link: the newest notice before that close is its own.
+							if (const auto* removal = std::get_if<NetParticipantRemoval>(&sessionPacket.message.payload)) m_RemovalBoundary = removal->boundaryFrame;
+							if (const auto* disconnect = std::get_if<NetDisconnect>(&sessionPacket.message.payload))
+								m_RemovedByHost = m_RemovedByHost || disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantRemoved) ||
+								                  disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantBanned);
+						}
 						// A loading authority keeps its authenticated connection alive through session heartbeats.
 						if (sessionPacket.ok && std::holds_alternative<NetHeartbeat>(sessionPacket.message.payload) &&
 						    !m_RelayHost && LockstepPeerOfTransport(event.peerId) == GetHostPeerId()) NoteAuthorityHeard(nowMs);
@@ -11449,6 +11466,7 @@ namespace RTE {
 		if (!m_RelayHost || peerId == 0 || peerId == m_Config.localPeerId) {
 			return;
 		}
+		m_RemovedPeers.insert(peerId);
 		// A round that has ended or is relaunching is not rewritten: the next round forms without the removed seat.
 		if (!IsRunning()) {
 			return;

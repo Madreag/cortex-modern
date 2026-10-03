@@ -10084,7 +10084,7 @@ static std::string ResyncSaveName() {
 		}
 		if (m_LastRemovalIssue.connection != c_InvalidNetPeerId) {
 			const NetRejectReason reason = action == NetParticipantRemovalAction::Kick ? NetRejectReason::ParticipantRemoved : NetRejectReason::ParticipantBanned;
-			const char* text = action == NetParticipantRemovalAction::Kick ? "removed from this session" : "banned from this session";
+			const char* text = action == NetParticipantRemovalAction::Kick ? c_NetRemovedLinkText : c_NetBannedLinkText;
 			session.DisconnectReadyPeer(m_LastRemovalIssue.connection, reason, text);
 		}
 		session.TickAdmissionPlane(nowMs);

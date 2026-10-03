@@ -4431,6 +4431,43 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat the host removes ends its round with the removal: the host closing its link is the removal, never the host lost
+		// (hl4-local-1: the banned 'edith' read the closed link as host loss, hosted the match alone as generation 1, and the real
+		// host, which then reached only itself, yielded to it).
+		bool TestARemovedSeatEndsOnItsRemoval(std::string* error) {
+			for (const bool notice: {true, false}) {
+				LoopbackTransport hostWire, clientWire;
+				NetLockstepCoordinator host, client;
+				auto a = MakeCoordinatorConfig(1, 2, notice ? 0x9A87 : 0x9A88, 0, NetTransportLane::ControlReliable);
+				auto b = MakeCoordinatorConfig(2, 1, notice ? 0x9A87 : 0x9A88, 0, NetTransportLane::ControlReliable);
+				a.roundId = b.roundId = notice ? 0x9A87 : 0x9A88; a.relayToOtherPeers = true; a.authorityPeerId = b.authorityPeerId = 1;
+				a.timeoutMs = b.timeoutMs = 60000;
+				if (!StartCoordinatorPair(notice ? 48914 : 48915, hostWire, clientWire, host, client, a, b, error)) return false;
+				for (uint64_t now = 0; now < 40 && !client.IsRunning(); ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+				if (!client.IsRunning()) { *error = "the removal row's pair never started"; return false; }
+				// The host's removal says why before it closes the link; a close that outruns it still names the removal.
+				if (notice) {
+					NetMessage message;
+					message.sequence = 1;
+					message.payload = NetDisconnect{static_cast<uint16_t>(NetRejectReason::ParticipantBanned), c_NetBannedLinkText};
+					NetTransportEvent packet;
+					packet.type = NetTransportEventType::PacketReceived; packet.peerId = 1; packet.lane = NetTransportLane::ControlReliable;
+					if (!NetProtocol::Encode(message, packet.bytes)) { *error = "the removal row's notice would not encode"; return false; }
+					client.InjectEvent(packet, 50);
+				}
+				NetTransportEvent closed;
+				closed.type = NetTransportEventType::PeerDisconnected; closed.peerId = 1; closed.reason = notice ? "transport stopped" : c_NetBannedLinkText;
+				client.InjectEvent(closed, 51);
+				if (client.IsRunning() || !client.GetStats().timeoutReason.starts_with("PeerRemoved")) {
+					*error = std::string("a seat the host banned ended ") + (notice ? "after the notice" : "on the close alone") + " with state=" +
+					         NetLockstepCoordinator::StateName(client.GetState()) + " reason=" + client.GetStats().timeoutReason;
+					return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_removed_seat_ends_on_its_removal notice=PeerRemoved close_alone=PeerRemoved" << std::endl;
+			return true;
+		}
+
 		// A start the host hands a joining world seat for a member that seat already knows was held after it keeps the member held:
 		// the start is how the member came in, the hold is where it is now (wsp11: the joiner's round began 'held 3@1405', the host's
 		// start for peer 3 at 1250 un-held it, and the joiner waited on peer 3's frame 1669 until the host held the joiner instead).
@@ -23358,6 +23395,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAJoinerIgnoresTheRoundsFirstBoundary, "a_joiner_ignores_the_rounds_first_boundary");
 		row(&TestAJoinerTakesTheHostsRoundStartAsAStraggler, "a_joiner_takes_the_hosts_round_start_as_a_straggler");
 		row(&TestAJoinerKeepsASeatHeldAfterItsStart, "a_joiner_keeps_a_seat_held_after_its_start");
+		row(&TestARemovedSeatEndsOnItsRemoval, "a_removed_seat_ends_on_its_removal");
 		row(&TestAHostKilledWithFourPlayersHandsOverOnAMajority, "a_host_killed_with_four_players_hands_over_on_a_majority");
 		row(&TestTheMostAdvancedSurvivorServesTheGather, "the_most_advanced_survivor_serves_the_gather");
 		row(&TestATwoTwoSplitMigratesNobody, "a_two_two_split_migrates_nobody");
