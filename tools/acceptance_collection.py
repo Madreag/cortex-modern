@@ -174,8 +174,13 @@ class Share:
             evidence_sha256={**{Path(key).resolve().relative_to(self.out).as_posix(): value
                                for key, value in scanned.get('evidence_sha256', {}).items()}, **hashes})
         write(self.out/'DEFECTS.json', scanned)
-        identity = self.out/'evidence/identity.json'
-        identities = [dict(path='evidence/identity.json', sha256=sha256(identity))] if identity.is_file() else []
+        identity_paths = set()
+        for spec in self.rows.values():
+            for ref in spec.get('identities', []):
+                value = ref['path'] if isinstance(ref, dict) else ref
+                path = self.out/value[len(self.label)+1:] if value.startswith(self.label+'/') else self.root/value
+                if path.is_file(): identity_paths.add(path.resolve())
+        identities = [dict(path=Path(os.path.relpath(path, self.out)).as_posix(), sha256=sha256(path)) for path in sorted(identity_paths)]
         code = 1 if missing or scanned['hard_count'] or any(row.get('exit_code') != 0 for row in commands) else 3 if scanned.get('awaiting_review') else 0
         write(self.out/'terminal.json', dict(schema=1, label=self.label, box=self.declaration['box'], ids=self.declaration['ids'],
             collection_id=self.run_id, source_sha=self.source, sequence=self.schedule['sequence'], exit_code=code,

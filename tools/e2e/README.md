@@ -222,3 +222,13 @@ without extending them into a second migration acceptance run.
 
 The pause settings skin has Video, Audio, Input, Gameplay and Misc only. Its Network tab is intentionally absent
 (`SettingsGUI.cpp` selects `SettingsPauseGUI.ini`); the main-menu settings walk covers the six Network subpages.
+
+For a peer terminated by a scene, native screen/text watches must periodically
+flush their ordinary summary fields plus integer `through_tick` and
+`flush=periodic` (and flush again on the kill path). Summaries remain attached to
+the preceding arm of that named watch. Review uses the last summary at or before
+the observed termination tick for every arm and retains violation lines through
+that tick. It states `terminated by the scene at tick T`; an arm with no summary
+is incomplete. A configured kill without the actual runner/drop receipt cannot
+enable this scope. Normal exits still require terminal summaries. The native
+periodic and kill-path flushes are an engineer instrumentation request.
