@@ -6586,6 +6586,12 @@ static std::string ResyncSaveName() {
 			          << " at=" << m_WorldCatchUp.activationTick << " input_horizon=" << m_Coordinator->GetStats().nextFrame;
 				System::PrintDiagnosticLine(line.str());
 			}
+			// A watcher promoted into a seat plays it under the seat's id from here, and every later reading of this peer names that seat.
+			if (const uint8_t live = m_Coordinator->GetConfig().localPeerId; live != 0 && live != m_LocalPeerId) {
+				m_LocalPeerId = live;
+				for (const NetMatchPlayerSlot& slot: m_Coordinator->GetConfig().matchConfig.players)
+					if (slot.peerId == live) m_LocalTeam = slot.team;
+			}
 			m_WorldCatchUp.handedToRound = true;
 		}
 		if (m_Coordinator && m_Coordinator->IsRunning()) {
