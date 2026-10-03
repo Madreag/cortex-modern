@@ -82,15 +82,7 @@ def run_section(options):
         collection.start_section(options.root,options.section,inventory_root=options.inventory)
         schedule=collection.read(options.root/'split-plan.json')
     codes=[]
-    if any(row['runner']=='run_split' for row in rows):
-        argv=[sys.executable,'-B',str(options.inventory/'run_split.py'),'--repo',str(options.repo),'--helpers',str(options.repo),
-            '--manifest',str(options.inventory/'boxes.json'),'--exe',schedule['exe_sha256'],'--out',str(options.root),
-            '--acceptance-plan',str(options.root/'acceptance-plan.json'),'--collection-plan',str(options.root/'split-plan.json'),
-            '--section',str(options.section),'--asan-repo',options.asan_repo]
-        result=subprocess.run(argv,cwd=options.repo)
-        codes.append(result.returncode)
-    for spec in rows:
-        if spec['runner'] in ('run_split','remote-stream'): continue
+    def owned(spec):
         share=collection.Share(options.root,spec['share'],options.inventory)
         try:
             code=collection.run(share,spec['id'],options.repo,options.inventory/'acceptance-v1')
@@ -101,6 +93,17 @@ def run_section(options):
             code=share.finish(spec['id'],1,log,str(error),not_run=True)['exit_code']
         codes.append(code)
         print(f'{spec["share"]}/{spec["id"]}: exit={code}',flush=True)
+    front=[row for row in rows if options.section==4 and row.get('window_required') and row['runner']=='direct']
+    for spec in front: owned(spec)
+    if any(row['runner']=='run_split' for row in rows):
+        argv=[sys.executable,'-B',str(options.inventory/'run_split.py'),'--repo',str(options.repo),'--helpers',str(options.repo),
+            '--manifest',str(options.inventory/'boxes.json'),'--exe',schedule['exe_sha256'],'--out',str(options.root),
+            '--acceptance-plan',str(options.root/'acceptance-plan.json'),'--collection-plan',str(options.root/'split-plan.json'),
+            '--section',str(options.section),'--asan-repo',options.asan_repo]
+        result=subprocess.run(argv,cwd=options.repo)
+        codes.append(result.returncode)
+    for spec in rows:
+        if spec['runner'] not in ('run_split','remote-stream') and spec not in front: owned(spec)
     # Successful dispatch can include declared deferrals/review waits. Their own row receipts stay pending.
     return 1 if any(code not in (0,3) for code in codes) else 0
 
