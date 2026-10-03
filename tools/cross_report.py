@@ -596,7 +596,14 @@ def fullstate_expected(host_rows, cadence):
 
 def coverage(events, peers, manifest):
     ticks = manifest.get('ticks')
-    below_window = type(ticks) is int and 0 <= ticks < 36000
+    progress = {peer: max((row['budget_tick'] for row in events.get(peer, [])
+                          if row.get('type') == 'progress' and type(row.get('budget_tick')) is int and row['budget_tick'] > 0),
+                         default=None) for peer in peers}
+    progress_complete = bool(progress) and all(value is not None for value in progress.values())
+    declared_valid = type(ticks) is int and ticks >= 0
+    measured_ticks = max((value for value in progress.values() if value is not None), default=0)
+    window_ticks = max(ticks, measured_ticks) if declared_valid else measured_ticks
+    below_window = progress_complete and declared_valid and window_ticks < 36000
     definitions = [
         ('movement', 'Movement, jetpack, climb and impact', ['movement_observed', 'climb_limb_push', 'impact_damage'], 5, 'each kind per originating seat per ten minutes', 'Jetpack and obstacle completion receipts are absent.'),
         ('weapons', 'Weapon classes and actions', ['round_fired', 'reload_completed', 'thrown_release'], 1, 'each class and action per seat per match', 'Melee, shield, explosion, sharp-aim and brain-weapon oracles remain absent.'),
@@ -646,13 +653,18 @@ def coverage(events, peers, manifest):
             counts[peer] = dict(successes=successes, attempts=sum(event.get('result') == 'attempt' for event in selected if event.get('event') in kinds))
         status = 'NOT COVERED' if not kinds else 'PASS' if counts and all(c['successes'] and all(v >= minimum for v in c['successes'].values()) for c in counts.values()) else 'FAIL'
         required = bool(kinds)
-        # These five minima apply only after ten minutes of simulation; unknown durations keep them required.
-        if key in ('movement', 'weapons', 'buy', 'gold', 'objects') and below_window:
-            status, reason, required = 'NOT APPLICABLE', f'below the coverage window: {ticks} ticks', False
+        # Measured overruns keep the full minima; an unmeasured peer cannot establish a short attempt.
+        if key in ('movement', 'weapons', 'buy', 'gold', 'objects'):
+            if not progress_complete:
+                missing = [peer for peer, value in progress.items() if value is None]
+                status, reason = 'INCOMPLETE', f'measured progress absent for {missing or "every peer"}'
+            elif below_window:
+                status, reason, required = 'NOT APPLICABLE', f'below the coverage window: {window_ticks} ticks', False
         if key=='terrain' and manifest['scenario']=='match':
             status,reason='NOT APPLICABLE','The destruction minimum applies to soaks; smoke event totals remain visible.'
         result.append(dict(id=key, item=label, status=status, reason=reason, unit=unit, minimum=minimum, peers=counts,
-                           required=required, scope='run-owned native counts per observing peer; missing semantic receipts remain engineer work',
+                           required=required, coverage_window=dict(declared_ticks=ticks, measured_progress_ticks=progress, ticks=window_ticks),
+                           scope='run-owned native counts per observing peer; missing semantic receipts remain engineer work',
                            engineer_receipts=missing_receipts.get(key, [])))
     return result
 
@@ -824,6 +836,7 @@ def host_hold_evidence(text, incarnation=0, path=None):
     holds, stalls, pending, capacity = [], [], {}, {}
     current, local, own_capacity = None, None, None
     for number, line in enumerate(text.splitlines(), 1):
+        if own_capacity and number != own_capacity['line'] + 1: own_capacity = None
         if found := re.search(r'\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+)', line):
             current, local = found[1], int(found[2]); pending = {}; capacity = {}; own_capacity = None
         elif found := PUBLISHED_SLOW.search(line):

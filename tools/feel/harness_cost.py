@@ -40,7 +40,7 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
                        hash_ms=int(found[3])/1000, max_ms=max(int(found[2]), int(found[3]))/1000)
             if '[mem-census]' in line and 'census_us=' in line:
                 parts = {name: float(value)/1000 for name, value in re.findall(r'([a-zA-Z_]+):([0-9.eE+-]+)', line.split('census_us=', 1)[1])}
-                sample('census', path, line_number, components_ms=parts, total_ms=sum(parts.values()), max_ms=max(parts.values(), default=0))
+                sample('census', path, line_number, components_ms=parts, total_ms=sum(parts.values()), max_ms=sum(parts.values()))
             if found := re.search(r'\bharness_ms_total=([0-9.eE+-]+)', line):
                 sample('preview_fidelity', path, line_number, cumulative_total_ms=float(found[1]))
     def key(row):
@@ -88,16 +88,24 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
     for name in INSTRUMENTS:
         declarations = [s.get('instruments', {}).get(name) for s in scopes if isinstance(s.get('instruments'), dict)]
         known = bool(declarations) and all(type(v) is bool for v in declarations)
-        disabled = known and not any(declarations)
+        disabled = known and not any(declarations) and not samples[name]
         values = [r['ms'] for r in covered[name]]
         observed_max = max([r.get('max_ms', 0) for r in samples[name]] + values, default=None)
-        if values and any(row.get('max_ms', 0) > max(values) for row in samples[name]):
-            errors.append(f'{name}: native cost summary exceeds the frame partition maximum {max(values)} ms')
+        missing_sources = []
+        for row in samples[name]:
+            own_values = [value['ms'] for value in covered[name] if value['path'] == row['path']]
+            if not own_values:
+                missing_sources.append(dict(path=row['path'], line=row['line']))
+            elif row.get('max_ms', 0) > max(own_values):
+                errors.append(f'{row["path"]}:{row["line"]}: {name} native cost {row["max_ms"]} ms exceeds its frame partition maximum {max(own_values)} ms')
         if observed_max is not None and not number(observed_max): errors.append(f'{name}: invalid measured cost {observed_max}')
-        instruments[name] = dict(status='DISABLED' if disabled else 'MEASURED' if values and all(complete_scopes) else 'MISSING COST',
-            scope_known=known, complete=disabled or bool(values) and all(complete_scopes),
+        measured = bool(values) and all(complete_scopes) and not missing_sources
+        instruments[name] = dict(status='DISABLED' if disabled else 'MEASURED' if measured else 'MISSING COST',
+            scope_known=known and not missing_sources, complete=disabled or measured, missing_cost_sources=missing_sources,
             measured_total_ms=sum(values) if values else None, measured_max_ms=observed_max,
             native_samples=samples[name], frame_samples=len(values))
+        if name == 'census':
+            instruments[name]['native_instant_max_ms'] = max((r['total_ms'] for r in samples[name]), default=None)
     maximum = max([r['total_ms'] for r in aggregate] + [r['measured_max_ms'] for r in instruments.values()
                   if r['measured_max_ms'] is not None and number(r['measured_max_ms'])], default=None)
     complete = bool(scopes) and bool(complete_scopes) and all(complete_scopes) and not errors and all(r['complete'] for r in instruments.values())
@@ -105,6 +113,9 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
     status = 'FAIL' if errors or over else 'PASS' if complete else 'INCOMPLETE'
     missing = [name for name, row in instruments.items() if not row['complete']]
     reason = '; '.join([*errors, *([f'measured peak={maximum} ms'] if over else []), *([f'missing cost coverage: {missing}'] if missing else [])])
+    census_instant = instruments['census']['native_instant_max_ms']
+    if census_instant is not None:
+        reason = '; '.join(filter(None, [reason, f'census instant={census_instant:g} ms of measured instrument work; frame partition required, no pace subtraction']))
     return dict(status=status, passed=status == 'PASS', complete=complete, instrument_valid=status == 'PASS',
                 max_frame_ms=maximum, measured_total_ms=sum(row['total_ms'] for row in aggregate) if aggregate else None,
                 instruments=instruments, scope_receipts=scopes, measured_frames=len(aggregate), reason=reason,

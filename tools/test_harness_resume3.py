@@ -23,14 +23,14 @@ def native_events():
              'thrown_release', 'cargo_ejected', 'craft_departure', 'craft_refund', 'gold_deposited',
              'door_open_completed', 'door_close_completed', 'wound_added', 'wound_damage', 'gibbed', 'dying', 'dead')
     return [dict(type='coverage', phase='live', gameplay_tick=True, event=kind,
-                 result='human_death_motion' if kind == 'dead' else 'success', amount=10) for kind in kinds]
+                 result='human_death_motion' if kind == 'dead' else 'success', amount=10) for kind in kinds] + [dict(type='progress', budget_tick=72000)]
 
 
 class HarnessResume3(unittest.TestCase):
     def test_y01_short_match_is_green_without_soak_coverage(self):
         manifest, checks, peers, _, recoveries = attempt()
         manifest.update(scenario='match', acceptance_row=17, ticks=1201, faults=[])
-        matrix = cross_report.coverage({name: [] for name in peers}, peers, manifest)
+        matrix = cross_report.coverage({name: [dict(type='progress', budget_tick=1201)] for name in peers}, peers, manifest)
         checks['coverage_minima'] = all(row['status'] in ('PASS', 'NOT APPLICABLE')
                                         for row in matrix if row.get('required', True))
         result = cross_report.judge_attempt(manifest, checks, peers, matrix, recoveries)
@@ -57,7 +57,7 @@ class HarnessResume3(unittest.TestCase):
 
     def test_twenty_minute_soak_with_zero_movement_stays_red(self):
         manifest, checks, peers, _, recoveries = attempt()
-        events = [event for event in native_events() if event['event'] != 'movement_observed']
+        events = [event for event in native_events() if event.get('event') != 'movement_observed']
         events.append(dict(type='coverage', phase='live', gameplay_tick=True,
                            event='terrain_removed', result='success', amount=10000))
         matrix = cross_report.coverage({name: events for name in peers}, peers, manifest)
@@ -70,7 +70,7 @@ class HarnessResume3(unittest.TestCase):
         for scenario in ('match', 'soak', 'chaos'):
             for ticks in (1201, 12001, 35999, 36000, 72000, 144000, 216000):
                 with self.subTest(scenario=scenario, ticks=ticks):
-                    rows = cross_report.coverage({'host': []}, {'host': {}}, dict(scenario=scenario, ticks=ticks))
+                    rows = cross_report.coverage({'host': [dict(type='progress', budget_tick=ticks)]}, {'host': {}}, dict(scenario=scenario, ticks=ticks))
                     for row in rows:
                         if row['id'] not in COUNT_CATEGORIES:
                             continue
@@ -83,7 +83,7 @@ class HarnessResume3(unittest.TestCase):
     def test_missing_or_invalid_duration_cannot_excuse_coverage(self):
         for ticks in (None, -1, True, '1201', 1201.5):
             with self.subTest(ticks=ticks):
-                rows = cross_report.coverage({'host': []}, {'host': {}}, dict(scenario='match', ticks=ticks))
+                rows = cross_report.coverage({'host': [dict(type='progress', budget_tick=72000)]}, {'host': {}}, dict(scenario='match', ticks=ticks))
                 for row in rows:
                     if row['id'] in COUNT_CATEGORIES:
                         self.assertTrue(row['required'], row)

@@ -223,7 +223,7 @@ def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict
         paces[peer] = []
         for round_id in rounds:
             away = {tick for rid, start, end in windows[peer] if rid == round_id for tick in range(start, end)}
-            # The engine commits its terminal tick one past the match's tick count, on both peers alike.
+            # The e2e cap declares final frame N+1 and ends only after completedTicks > N, retaining that committed state.
             terminal = ticks + 1
             required = set(range(1, terminal + 1)) - away
             present = {tick for rid, tick in indexed[peer] if rid == round_id}
@@ -264,7 +264,7 @@ def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict
     if not shared:
         errors.append("no shared hashes")
     return dict(**{'pass': not errors}, errors=errors, pace_windows=paces,
-                hold_windows=windows, compared_keys=len(shared), expected_ticks=ticks)
+                hold_windows=windows, compared_keys=len(shared), expected_ticks=ticks + 1, declared_match_ticks=ticks)
 
 
 class MemoryCounters(ctypes.Structure):
@@ -375,6 +375,8 @@ def pace_across_own_seat_hold(root: Path) -> dict | None:
 
 def analyze_soak(root, options, ticks, plan, samples, records, elapsed):
     """Write a complete reduction even when one retained history receipt is invalid."""
+    from feel.harness_cost import reduce_costs
+    harness_cost = reduce_costs([root / peer / 'stdout.log' for peer in ('host', 'client')])
     live = compare_live_hashes(root / "host-live.jsonl", root / "client-live.jsonl", 1)
     hashes_equal = bool(live) and all(row["compared_ticks"] > 0 and row["mismatched_ticks"] == 0
                                       and row["mismatched_applied_input_ticks"] == 0 for row in live)
@@ -398,7 +400,7 @@ def analyze_soak(root, options, ticks, plan, samples, records, elapsed):
               "hashes_equal": hashes_equal, "fullstate": fullstate is None or bool(fullstate.get("passed")),
               "holds": holds >= options.holds, "rejoins": rejoins >= options.holds, "no_split_brain": split == 0,
               "autosaves": autosaves >= max(0, owed), "memory_sampled": minutes_sampled >= int(options.minutes),
-              "complete_history_and_pace": acceptance['pass']}
+              "complete_history_and_pace": acceptance['pass'], "instrument_valid": harness_cost['instrument_valid']}
     hold_judgement = soak_hold_judgement(root, plan['injections'])
     checks['paired_fault_recovery_and_survivor_waits'] = hold_judgement['passed']
     return_holds = {peer: return_hold_violations((root / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
@@ -435,7 +437,7 @@ def analyze_soak(root, options, ticks, plan, samples, records, elapsed):
               "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
               "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
               "clean_ticks": clean_ticks, "pace_across_own_seat_hold": pace_across_own_seat_hold(root),
-              "plan": plan, "acceptance_history": acceptance, "hold_judgement": hold_judgement}
+              "plan": plan, "acceptance_history": acceptance, "hold_judgement": hold_judgement, "harness_cost": harness_cost}
     (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "
           f"autosaves={autosaves}/{owed} samples={len(samples)} holds_after_returns={sum(len(kept) for _, kept in excused_holds.values())} -> {root / 'result.json'}", flush=True)
