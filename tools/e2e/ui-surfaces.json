@@ -133,10 +133,12 @@
       "peer": "host",
       "mark": "ui-network-tuning",
       "screen": "MultiplayerScreen",
-      "what": "Both slow-player rows are visible; bound and policy changes update live.",
+      "what": "Both slow-player rows are visible; the supported bound changes update live and the policy has its single supported choice.",
       "assert": "menu assertions in the marked interval",
       "events": [
         "assert_label TextHostNetSlowBound .*4.* PASS",
+        "assert_combo_items ComboHostNetSlowPolicy .*PASS",
+        "assert_enabled TextHostNetSlowBound .*PASS",
         "assert_label ComboHostNetSlowPolicy .*text=\"Give the seat to the AI \\(host too\\) until they catch up\" PASS"
       ],
       "run": [
