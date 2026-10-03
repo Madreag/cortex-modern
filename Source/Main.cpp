@@ -7050,8 +7050,39 @@ void RunGameLoop() {
 				static const long long s_fromTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_FROM_TICK"); return text ? std::atoll(text) : 0LL; }();
 				static const long long s_untilTick = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_UNTIL_TICK"); return text ? std::atoll(text) : 0LL; }();
 				const long long tick = g_TimerMan.GetSimUpdateCount();
+				// The window's receipt: which process crawled, over which ticks, from when to when on the steady clock the cross records read.
+				struct Window {
+					bool open = false, closed = false;
+					long long firstTick = 0, lastTick = 0;
+					double startMs = 0, endMs = 0;
+				};
+				static Window s_window;
+				const auto steadyMs = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
+				const auto receipt = [](const char* stage) {
+					return std::string("[sim-cost] ") + stage + " " + nlohmann::json{{"process", System::GetProcessID()}, {"instance", CrossEnvironment("CC_TEST_CROSS_INSTANCE")},
+					    {"incarnation", std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"))}, {"cost_us", s_testSimCostUs}, {"first_tick", s_window.firstTick},
+					    {"last_tick", s_window.lastTick}, {"start_ms", s_window.startMs}, {"end_ms", s_window.endMs}}.dump();
+				};
 				if (tick >= s_fromTick && (s_untilTick == 0 || tick < s_untilTick)) {
+					if (!s_window.open) {
+						s_window.open = true;
+						s_window.firstTick = tick;
+						s_window.startMs = steadyMs();
+						System::PrintDiagnosticLine(receipt("window_open"));
+						std::atexit([] {
+							if (s_window.open && !s_window.closed) {
+								s_window.closed = true;
+								System::PrintDiagnosticLine(std::string("[sim-cost] window_closed_at_exit ") + nlohmann::json{{"process", System::GetProcessID()},
+								    {"first_tick", s_window.firstTick}, {"last_tick", s_window.lastTick}, {"start_ms", s_window.startMs}, {"end_ms", s_window.endMs}}.dump());
+							}
+						});
+					}
 					for (const long long until = g_TimerMan.GetAbsoluteTime() + s_testSimCostUs; g_TimerMan.GetAbsoluteTime() < until;) {}
+					s_window.lastTick = tick;
+					s_window.endMs = steadyMs();
+				} else if (s_window.open && !s_window.closed) {
+					s_window.closed = true;
+					System::PrintDiagnosticLine(receipt("window_closed"));
 				}
 			};
 			if (s_testSimCostUs > 0 && s_testSimCostOutside) spendTestSimCost();
