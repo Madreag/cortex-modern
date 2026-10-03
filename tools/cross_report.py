@@ -128,13 +128,52 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         gate_b_eligible=(core or engine_red) and checks.get('shared_fullstate',False) and not pending and manifest['scenario']=='match' and manifest['ticks']==1201 and bool(manifest.get('fullstate_every')) and not manifest.get('faults'),oracles=oracles)
 
 
-def pace_verdict(native, tick_ms=1000/60):
-    """A box whose own simulation fits the tick holds the round's rate: it sheds presentation, never ticks. A box whose sim alone
-    cannot is a slow machine, held by the bound; its rate is reported, not gated."""
+def round_capacity_evidence(natives, round_id=None):
+    by_peer = {}
+    for peer, native in natives.items():
+        found = []
+        def visit(node):
+            if isinstance(node, dict):
+                if all(key in node for key in ('round_id', 'local_capacity_tps', 'sim_tick_ms')):
+                    found.append(node)
+                for child in node.values(): visit(child)
+            elif isinstance(node, list):
+                for child in node: visit(child)
+        visit(native)
+        by_peer[peer] = [row for row in found if round_id is None or row['round_id'] == round_id]
+    rounds = {row['round_id'] for rows in by_peer.values() for row in rows}
+    valid = len(by_peer) >= 2 and len(rounds) == 1 and all(len(rows) == 1 for rows in by_peer.values())
+    capacities = {peer: rows[0]['local_capacity_tps'] for peer, rows in by_peer.items() if len(rows) == 1}
+    ticks = {row['sim_tick_ms'] for rows in by_peer.values() for row in rows}
+    valid &= len(ticks) == 1 and all(type(v) in (int, float) and math.isfinite(v) and v > 0 for v in [*capacities.values(), *ticks])
+    fastest = min(1000 / next(iter(ticks)), max(capacities.values())) if valid else None
+    simulations = {peer: (native.get('pace') or {}).get('sim_ms_per_tick') for peer, native in natives.items()}
+    whole_slow = bool(valid and fastest < 59.5 and all(type(value) in (int, float) and math.isfinite(value)
+                       and value >= next(iter(ticks)) for value in simulations.values()))
+    return dict(complete=bool(valid), round=next(iter(rounds)) if len(rounds) == 1 else None,
+                capacities=capacities, round_rate_tps=fastest, whole_round_slow=whole_slow,
+                reason='' if valid else 'missing, conflicting or unaligned native round capacity records')
+
+
+def pace_verdict(native, tick_ms=1000/60, *, relative=None, peer=None, hold=None):
+    """A slower round needs every peer's published capacity; a held slow seat needs its own causal receipt."""
     pace = (native or {}).get('pace') or {}
     sim, tps = pace.get('sim_ms_per_tick'), pace.get('wall_tps')
-    gated = sim is not None and sim < tick_ms
-    return dict(sim_ms_per_tick=sim, wall_tps=tps, gated=gated, passed=not gated or (tps is not None and tps >= 59.5))
+    measured = all(type(value) in (int, float) and math.isfinite(value) and value > 0 for value in (sim, tps))
+    relative = relative or {}
+    rate = relative.get('round_rate_tps') if relative.get('complete') else None
+    minimum = rate - rate / 10.0 if measured and sim >= tick_ms and relative.get('whole_round_slow') else 59.5
+    capacity = relative.get('capacities', {}).get(peer)
+    slow = capacity is not None and rate is not None and capacity < rate - (0.5 if rate >= 59.5 else rate / 10.0)
+    excused = bool(slow and hold and hold.get('classification') == 'capacity (design)' and hold.get('capacity_evidence'))
+    complete = measured and (sim < tick_ms or rate is not None)
+    passed = bool(complete and (excused or tps >= minimum))
+    reason = (f'sim_ms_per_tick={sim!r}, wall_tps={tps!r}' if not measured else
+              'relative round capacity evidence is absent' if not complete else
+              f'wall_tps={tps}; minimum={minimum}' if not passed else '')
+    return dict(sim_ms_per_tick=sim, wall_tps=tps, gated=not excused, passed=passed,
+                status='PASS' if passed else 'FAIL' if complete else 'INCOMPLETE',
+                minimum_tps=minimum, relative_capacity=relative, slow_seat_excused=excused, reason=reason)
 
 
 def judge_exit(record,peer,incarnation,faults,receipts):
@@ -156,13 +195,16 @@ def crash_hold(hold,crash_ids):
     return {}
 
 
-def host_stall_hold(hold,stall):
-    """A hold of the host's own seat (lockstep peer 1) inside the forced host stall's window is that stall's: the own-seat rule holding a slow host."""
+def host_stall_hold(hold,stall,receipts=()):
+    """Only a fired stall on the host can explain its own hold."""
     if not stall or hold.get('peer')!=1 or hold.get('classification')!='other' or not isinstance(hold.get('tick'),int): return {}
     tick,ms=(int(part) for part in stall.split(':'))
-    if tick<=hold['tick']<=tick+ms//16+60:
+    matching = [row for row in receipts if row.get('peer') == 1 and row.get('frame') == tick and row.get('ms') == ms
+                and hold.get('round') is not None and str(row.get('round')) == str(hold['round'])
+                and row.get('source') == 'host stdout']
+    if len(matching) == 1 and tick<=hold['tick']<=tick+ms//16+60:
         return dict(scheduled_recovery_id='host-stall',classification='scheduled-fault',
-                    reason="The host held its own seat while the schedule stalled its simulation: the own-seat rule holding a slow host, never an election.")
+                    stall_receipt=matching[0], reason=f"host stall fired at {tick} for {ms} ms; own hold at {hold['tick']}")
     return {}
 
 
@@ -541,18 +583,63 @@ DESIGN_CAUSES = ('capacity', 'late_stream', 'quiet')
 
 
 def hold_causes(host_text):
-    """The cause the host named for each hold it authored, by (round, seat, frame). A log from before the cause field names a late stream
-    by its own arrival fields: the host had heard nothing from the seat past the frame before."""
+    """Only the host's named cause field supplies a cause."""
     causes, pending, current = {}, {}, None
     for line in host_text.splitlines():
-        if (found := ROUND_START.search(line)): current = found.group(1)
+        if (found := ROUND_START.search(line)): current = found.group(1); pending = {}
         elif (found := PROPOSE_HOLD.search(line)):
             heard, named = HEARD_THROUGH.search(line), HOLD_CAUSE.search(line)
             peer, frame, heard, named = int(found.group(1)), int(found.group(2)), heard and heard.group(1), named and named.group(1)
-            pending[peer] = named or ('late_stream' if heard is not None and int(heard) < frame else None)
+            pending[peer] = named
         elif (found := HOLD_LINE.search(line)) and int(found.group(1)) in pending:
             causes[(current, int(found.group(1)), int(found.group(2)))] = pending.pop(int(found.group(1)))
     return causes
+
+
+PUBLISHED_SLOW = re.compile(r"\[net-lockstep\] slow machine peer (\d+) at frame (\d+): it runs ([0-9.eE+-]+) ticks/s against the fastest's ([0-9.eE+-]+);")
+
+
+def host_hold_evidence(text, incarnation=0, path=None):
+    holds, stalls, pending, capacity = [], [], {}, {}
+    current, local = None, None
+    for number, line in enumerate(text.splitlines(), 1):
+        if found := re.search(r'\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+)', line):
+            current, local = found[1], int(found[2]); pending = {}; capacity = {}
+        elif found := PUBLISHED_SLOW.search(line):
+            peer, frame, own, fastest = int(found[1]), int(found[2]), float(found[3]), float(found[4])
+            if all(math.isfinite(value) and value > 0 for value in (own, fastest)):
+                capacity[peer, frame] = dict(peer=peer, frame=frame, capacity_tps=own, round_rate_tps=fastest,
+                    waiting=True, published=True, round=current, host_incarnation=incarnation, path=path, line=number)
+        elif found := PROPOSE_HOLD.search(line):
+            peer, frame = int(found[1]), int(found[2])
+            cause = HOLD_CAUSE.search(line)
+            pending[peer] = dict(cause=cause[1] if cause else None, proposal_frame=frame,
+                                  capacity_evidence=capacity.get((peer, frame)))
+        elif found := HOLD_LINE.search(line):
+            peer, frame = int(found[1]), int(found[2])
+            holds.append(dict(peer=peer, tick=frame, round=current, host_incarnation=incarnation,
+                              path=path, line=number, **pending.pop(peer, {})))
+        elif found := re.search(r'\[net-test\] live stall frame=(\d+) ms=(\d+)', line):
+            stalls.append(dict(peer=local, frame=int(found[1]), ms=int(found[2]), round=current,
+                               incarnation=incarnation, path=path, line=number, source='host stdout'))
+    return holds, stalls
+
+
+def design_hold(hold, receipts):
+    matching = [row for row in receipts if row['peer'] == hold.get('peer') and row['tick'] == hold.get('tick')
+                and hold.get('round') is not None and str(row['round']) == str(hold['round'])]
+    if len(matching) != 1:
+        return {}
+    receipt = matching[0]
+    capacity = receipt.get('capacity_evidence') or {}
+    own, fastest = capacity.get('capacity_tps'), capacity.get('round_rate_tps')
+    if receipt.get('cause') not in DESIGN_CAUSES or own is None or fastest is None:
+        return {}
+    tolerance = 0.5 if fastest >= 59.5 else fastest / 10.0
+    if not capacity.get('published') or not capacity.get('waiting') or own >= fastest - tolerance:
+        return {}
+    return dict(design_cause=receipt['cause'], classification='capacity (design)', capacity_evidence=capacity,
+                reason=f"peer {hold['peer']} published {own} TPS against round {fastest} at frame {capacity['frame']}; cause={receipt['cause']}")
 
 
 def void_abandoned(rows):
@@ -613,6 +700,7 @@ def adopt_restored_histories(live, ranges, logs):
 def build_report(root):
     root = Path(root).resolve(); manifest = load(root / 'manifest.json', {})
     live, events, peers, findings, paths = {}, {}, {}, list(manifest.get('driver_findings', [])), {}
+    peer_waits = {}
     mixed_builds = []
     capabilities = {}
     for box in manifest['boxes']:
@@ -654,6 +742,7 @@ def build_report(root):
                 own_hold_notifications.append(dict(tick=int(match[1]),source_round=observed_round,round=observed_native_round,incarnation=int(log_path.parent.parent.name.split('-')[-1]),path=str(log_path.relative_to(root)),line=number))
             if re.search(r'RTE Assert|FATAL:|EXCEPTION_ACCESS_VIOLATION|Runtime Error due to unhandled exception|Rejected .*command|\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|\[net-match\] controller sync failed:|\[net-plane\].*ASSERT|\[fullstate(?:-refusal)?\].*(?:failed:|refused:|problem=)|Desync:|desync at|admission refused|\[Lua error\]|Segmentation fault', line, re.I):
                 findings.append(dict(peer=name, path=str(log_path.relative_to(root)), line=number, text=line.strip()))
+        peer_waits[name] = waits
         raw_path = own / 'engine/feel/raw.jsonl'; raw = list(rows(raw_path))
         presentation_window=presentation_index(raw_path.with_name('raw.index.json'))
         presentation_by_incarnation={}
@@ -750,6 +839,19 @@ def build_report(root):
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:904 detailed-status text is not a per-tick counter API.',
             configs=configs, paths={kind: str(record_path(own / leaf).relative_to(root)) for kind,leaf in [('live','live.jsonl'),('events','events.jsonl'),('log','engine/stdout.log'),('feel','engine/feel/raw.jsonl'),('native','match-report.json')]})
+    relative_capacity = round_capacity_evidence({name: peer['native'] for name, peer in peers.items()})
+    for name, peer in peers.items():
+        peer['pace'] = pace_verdict(peer['native'], relative=relative_capacity, peer=name)
+        if relative_capacity.get('whole_round_slow') and len(peer['configs']) == 1:
+            clock = [row for row in live[name] if row.get('phase') == 'live']
+            peer['timing'] = report.reduce_net_window(clock, peer_waits[name], 300, manifest['ticks'],
+                1000 / relative_capacity['round_rate_tps'], peer['timing'].get('steady_missing_frame_stalls'))
+            timing = peer['timing']
+            peer['feel_pass'] = bool(timing['complete'] and peer['pace']['passed'] and timing['steady_missing_frame_stalls'] == 0
+                and timing['waiting_percent'] is not None and timing['waiting_percent'] < 1
+                and timing['longest_stall_ms'] <= 50 and timing['confirmed_horizon_lag_ms'] <= 50)
+            if peer['feel_gated']:
+                peer['feel_status'] = 'PASS' if peer['feel_pass'] else 'FAIL'
     host_rows = live.get(manifest['host'], [])
     ranges, missing_boundaries = report.declared_history_ranges(host_rows,
         [r for r in events.get(manifest['host'],[]) if r.get('type')=='match_boundary'], peers,
@@ -784,7 +886,12 @@ def build_report(root):
         recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
     clock = host_clock(host_rows)
-    causes = hold_causes(''.join(line for fragment in peers[manifest['host']]['fragments'] for _, line in read_log(root / fragment / 'engine/stdout.log')))
+    authored_holds, fired_stalls = [], []
+    for fragment in peers[manifest['host']]['fragments']:
+        path = root / fragment / 'engine/stdout.log'
+        authored, fired = host_hold_evidence(''.join(line for _, line in read_log(path)),
+            int(Path(fragment).name.split('-')[-1]), str(path.relative_to(root)))
+        authored_holds.extend(authored); fired_stalls.extend(fired)
     windows = fault_windows(manifest['faults'], fault_receipts, clock)
     crash_ids = {f['id'] for f in manifest['faults'] if f['action']=='crash-restart'}
     for p in peers.values():
@@ -792,14 +899,18 @@ def build_report(root):
             hold['scheduled_recovery_id']=scheduled_hold(hold,fault_receipts,recoveries)
             hold.update(classify_hold(hold,events,peers))
             hold.update(crash_hold(hold,crash_ids))
-            hold.update(host_stall_hold(hold,manifest.get('host_stall')))
+            hold.update(host_stall_hold(hold,manifest.get('host_stall'), fired_stalls))
             if not hold['scheduled_recovery_id'] and (window := fault_window_hold(hold, windows, clock)):
                 hold.update(scheduled_recovery_id=window, classification='scheduled-fault',
                             reason='The held seat is the faulted one and the hold falls inside its scheduled fault window, on the host clock.')
-            if not hold['scheduled_recovery_id'] and (cause := causes.get((str(hold.get('round')), hold['peer'], hold['tick']))) in DESIGN_CAUSES:
-                hold.update(design_cause=cause, classification='capacity (design)',
-                            reason='The host held the seat under its A1 rule (' + cause + '): the seat could not keep the round pace.')
+            if not hold['scheduled_recovery_id']:
+                hold.update(design_hold(hold, authored_holds))
     unscheduled_holds=sum(not h['scheduled_recovery_id'] and not h.get('design_cause') for p in peers.values() for h in p['holds'])
+    for name, peer in peers.items():
+        seats = {config.get('peer') for config in peer['configs'] if config.get('peer') is not None}
+        owned = [hold for observed in peers.values() for hold in observed['holds'] if hold.get('design_cause')
+                 and len(seats) == 1 and hold['peer'] in seats and hold.get('round') == relative_capacity.get('round')]
+        peer['pace'] = pace_verdict(peer['native'], relative=relative_capacity, peer=name, hold=owned[0] if owned else None)
     checks = dict(three_real_boxes=len({manifest.get('preflights',{}).get(p['box'],{}).get('machine_id',p['box']) for p in peers.values() if p['record'].get('started')}) >= 3,
                   preflight_complete=len(manifest.get('preflights', {})) == len(manifest['boxes']) and not manifest.get('driver_findings') and not mixed_builds,
                   full_history=comparison['passed'] and not missing_boundaries, zero_desync=comparison['unequal_keys'] == 0 and bool(ranges),
@@ -861,11 +972,13 @@ def build_report(root):
                   assigned_capture_rows={str(row):CAPTURE_ROWS[row] for row in manifest.get('capture_rows_pending',[1,2])},rerun_after_capture_fix=rerun,
                   faults_unapplied=unapplied,
                   peers=peers, local_host_render=local_host_render(manifest, peers),
+                  relative_capacity=relative_capacity,
                   comparison=comparison, declared_ranges=ranges, missing_boundaries=missing_boundaries,
                   fullstate=fullstate, fullstate_records=fullstate_documents,
                   measured_workload=measured_workload,
                   coverage=matrix, recoveries=recoveries, fault_receipts=fault_receipts, capabilities=capabilities, barrier_receipts=barrier_receipts,
                   native_recovery_records=native_recovery_records,native_fault_effects=effects,unscheduled_holds=unscheduled_holds,
+                  design_holds=[hold for peer in peers.values() for hold in peer['holds'] if hold.get('design_cause')],
                   findings=findings, triage=load(root/'triage.json',[]), requirements=requirements(manifest, comparison, peers),
                   stopped=driver_stop(findings))
     (root / 'result.json').write_text(json.dumps(result, indent=2, allow_nan=False) + '\n', encoding='utf-8')

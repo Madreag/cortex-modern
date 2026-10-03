@@ -89,9 +89,9 @@ class AttemptOracles(unittest.TestCase):
         # The four-machine block's EDITH: 10.4 ms of sim a tick at 55 ticks/s - its sim fits, so the rate is a verdict, not a report.
         self.assertFalse(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=10.4, wall_tps=55.0)))['passed'])
         self.assertTrue(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=10.4, wall_tps=59.6)))['passed'])
-        # A box whose sim alone cannot hold the rate is a slow machine: held by the bound, its rate reported.
+        # Own sim cost alone supplies no evidence of relative round capacity.
         slow = cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=19.5, wall_tps=48.9)))
-        self.assertEqual((slow['gated'], slow['passed']), (False, True))
+        self.assertEqual((slow['gated'], slow['passed'], slow['status']), (True, False, 'INCOMPLETE'))
         self.assertTrue(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=3.1, wall_tps=None)))['gated'])
         self.assertFalse(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=3.1, wall_tps=None)))['passed'])
 
@@ -251,8 +251,9 @@ class CatchUpRows(unittest.TestCase):
 class HostStallHolds(unittest.TestCase):
     def test_the_hosts_own_seat_held_in_the_forced_stall_is_the_stall(self):
         # l4p-41: the host's seat held at tick 902 of each round under --host-stall 900:300 read as 'other'.
-        held=dict(peer=1,tick=902,classification='other')
-        self.assertEqual(cross_report.host_stall_hold(held,'900:300')['classification'],'scheduled-fault')
+        held=dict(peer=1,tick=902,round=1,classification='other')
+        _, receipts = cross_report.host_hold_evidence('[net-lockstep] start round=1 frame=1 local_peer=1 peers=3\n[net-test] live stall frame=900 ms=300\n')
+        self.assertEqual(cross_report.host_stall_hold(held,'900:300',receipts)['classification'],'scheduled-fault')
         self.assertEqual(cross_report.host_stall_hold(held,None),{})
         self.assertEqual(cross_report.host_stall_hold(dict(held,peer=2),'900:300'),{})
         self.assertEqual(cross_report.host_stall_hold(dict(held,tick=2400),'900:300'),{})
@@ -382,8 +383,8 @@ class CausesDeadlinesStops(unittest.TestCase):
                       '[net-match] hold peer=3 frame=50 AI in control',
                       '[net-match] hold peer=2 frame=70 AI in control'])
         causes = cross_report.hold_causes(log)
-        # A late stream (the host heard nothing past the frame before) is the A1 design; another cause, or none, is not.
-        self.assertEqual(causes, {('9', 4, 118): 'late_stream', ('9', 3, 50): 'timing_ack'})
+        # Arrival lateness alone names no cause.
+        self.assertEqual(causes, {('9', 4, 118): None, ('9', 3, 50): 'timing_ack'})
         self.assertIn('late_stream', cross_report.DESIGN_CAUSES)
         self.assertNotIn('timing_ack', cross_report.DESIGN_CAUSES)
         self.assertIsNone(causes.get(('9', 2, 70)))

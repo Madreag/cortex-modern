@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 from feel.report import peer_id_of, return_hold_violations
-from cross_report import pace_verdict
+from cross_report import pace_verdict, round_capacity_evidence, host_hold_evidence, design_hold
 import threading
 import time
 from pathlib import Path
@@ -84,25 +84,24 @@ def soak_hold_judgement(root: Path, stalls: list[int]) -> dict:
 
 
 def excused_return_holds(root: Path, rows: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Splits holds after a return into the excused (the held engine said it is a slow machine and its own sim does not
-    fit the tick there) and the rest."""
+    """Only the host's cause and published relative capacity explain a return hold."""
     engines = {peer_id_of(root / f"{peer}_report.json"): peer for peer in ("host", "client")}
     logs = {peer: (root / peer / "stdout.log").read_text(encoding="utf-8", errors="replace") if (root / peer / "stdout.log").is_file() else ""
             for peer in ("host", "client")}
     excused, kept = [], []
+    receipts, _ = host_hold_evidence(logs['host'])
     for row in rows:
         engine = engines.get(row["held_peer"])
-        slow = any(f"[net-lockstep] slow machine peer {row['held_peer']} at frame {frame} " in text
-                   for text in logs.values() for frame in range(row["return_tick"], row["hold_tick"] + 1))
         sim = window_sim_ms(census_pace(root / engine / "stdout.log"), row["return_tick"], row["hold_tick"]) if engine else None
-        fits = pace_verdict({"pace": {"sim_ms_per_tick": sim, "wall_tps": None}})["gated"]
-        (excused if slow and sim is not None and not fits else kept).append(dict(row, held_engine=engine, sim_ms_per_tick=sim,
-                                                                                   slow_machine_line=slow))
+        evidence = design_hold(dict(peer=row['held_peer'], tick=row['hold_tick'], round=row['round']), receipts)
+        (excused if evidence else kept).append(dict(row, held_engine=engine, sim_ms_per_tick=sim, **evidence))
     return excused, kept
 
 
 def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict:
     records = {peer: read_live_hashes(root / f"{peer}-live.jsonl") for peer in ("host", "client")}
+    natives = {peer: json.loads((root / f'{peer}_report.json').read_text(encoding='utf-8-sig'))
+               if (root / f'{peer}_report.json').is_file() else {} for peer in records}
     errors, indexed, windows, paces = [], {}, {}, {}
     rounds = {row.get("round") for rows in records.values() for row in rows}
     if None in rounds or len(rounds) != expected_rounds:
@@ -140,13 +139,15 @@ def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict
                 elapsed = sum(durations)
                 rate = len(intervals) * 1000 / elapsed if elapsed > 0 and all(d >= 0 and math.isfinite(d) for d in durations) else None
                 # A window is gated when this engine's own sim fits the tick there; a slower one is reported, not gated.
+                relative = round_capacity_evidence(natives, round_id)
                 verdict = pace_verdict({"pace": {"sim_ms_per_tick": window_sim_ms(census, start, end),
-                                                 "wall_tps": rate if rate is not None and math.isfinite(rate) else None}})
-                ok = verdict["passed"] if verdict["sim_ms_per_tick"] is not None else rate is not None and math.isfinite(rate) and rate >= 59.5
+                                                 "wall_tps": rate if rate is not None and math.isfinite(rate) else None}},
+                                       relative=relative, peer=peer)
+                ok = verdict['passed']
                 paces[peer].append(dict(round=round_id, first=start, last=end, wall_tps=rate, passed=ok,
                                         sim_ms_per_tick=verdict["sim_ms_per_tick"], gated=verdict["gated"] or verdict["sim_ms_per_tick"] is None))
                 if not ok:
-                    errors.append(f"{peer} round {round_id}: pace window {start}-{end} below 59.5 TPS")
+                    errors.append(f"{peer} round {round_id}: pace window {start}-{end}: {verdict['reason']}")
         if not paces[peer]:
             errors.append(f"{peer}: no complete pace window")
     shared = set(indexed['host']) & set(indexed['client'])
