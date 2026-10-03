@@ -6969,11 +6969,20 @@ namespace RTE {
 			}
 			const std::filesystem::path directory = scratch.path / name;
 			std::filesystem::create_directories(directory);
-			// The recording.
+			// The recording, and the copy of it a diagnostics bundle stores as its Replay.ccrp member, byte for byte.
 			{
 				NetMatchReplayWriter writer;
 				if (!writer.Open((directory / "match.ccreplay").string(), config, error)) return false;
+				if (!writer.WriteFrame(1, {}, {}, error)) return false;
+				std::string diagnostic;
+				bool truncated = false;
+				if (!writer.CopyDiagnosticReplay(diagnostic, truncated) || truncated) {
+					*error = "the " + name + " recording kept no whole diagnostic copy";
+					return false;
+				}
+				std::ofstream((directory / "Replay.ccrp").string(), std::ios::binary) << diagnostic;
 				writer.Close();
+				if (!WaitForReplayCloseForTest(writer, error)) return false;
 			}
 			// The restart manifest, from the service's own written copy of the agreed config.
 			NetMatchService service;
@@ -7024,7 +7033,7 @@ namespace RTE {
 		NetRelayLogins::Remember("scrub-pass-77e0");
 		const std::string scrubbed = NetRelayLogins::Scrub("TURN allocate user=scrub-user-4c1d pass 'scrub-pass-77e0' tab ab");
 		const bool scrubs = scrubbed == "TURN allocate user=<relay-login> pass '<relay-login>' tab <relay-login>";
-		const bool pass = logins == 0 && files >= 6 && scrubs;
+		const bool pass = logins == 0 && files >= 8 && scrubs;
 		std::cout << "[net-match-selftest] " << (pass ? "PASS" : "FAIL") << " a_written_config_holds_no_relay_login files=" << files << " logins=" << logins
 		          << (first.empty() ? "" : " first=" + first) << " scrubbed='" << scrubbed << "'" << std::endl;
 		if (!pass) *error = logins ? "a written configuration holds a relay login (" + first + ")" : "a kept line was not scrubbed of a relay login";
