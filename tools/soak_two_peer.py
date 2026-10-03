@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 from feel.report import peer_id_of, return_hold_violations
-from cross_report import pace_verdict
+from cross_report import pace_verdict, round_capacity_evidence, host_hold_evidence, design_hold, event_paths, source_rows
 import threading
 import time
 from pathlib import Path
@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_sim_test import make_run  # noqa: E402
 from feel.launch_budget import install_memory_guard  # noqa: E402
 from compare_sim_traces import compare_fullstate  # noqa: E402
-from feel.retained_resume import compare_live_hashes, read_live_hashes, PER_PEER_SUBSYSTEMS  # noqa: E402
+from feel.retained_resume import compare_live_hashes_or_fail as compare_live_hashes, read_live_hashes, PER_PEER_SUBSYSTEMS  # noqa: E402
 from feel.report import own_hold_windows  # noqa: E402
 from compare_sim_traces import CORE  # noqa: E402
 from feel_measure import input_pattern, private_settings, stage_baseline  # noqa: E402
@@ -60,50 +60,152 @@ def window_sim_ms(census: dict[int, dict], start: int, end: int) -> float | None
     return census[closing].get("sim_ms_per_tick") if closing is not None else None
 
 
-def soak_hold_judgement(root: Path, stalls: list[int]) -> dict:
-    """A soak's holds by its own rules. A hold within 30 ticks after one of its planned stalls is planned. Any other passes only
-    when the host's log names its network cause at that tick (a resend asked for the held peer's frame), the designed recovery
-    followed on the held peer (its private catch-up or its image) and no survivor waited a frame over 50 ms around it."""
-    def text(peer: str) -> str:
-        path = Path(root) / peer / "stdout.log"
-        return path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else ""
-    host, client = text("host"), text("client")
-    waits = [(int(tick), int(ms)) for tick, ms in re.findall(r"^\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)", host, re.M)]
-    recoveries = [int(tick) for tick in re.findall(r"^\[net-match\] (?:private catch-up complete frame|bootstrap checkpoint)=(\d+)", client, re.M)]
-    planned, explained, unexplained = [], [], []
-    for peer, frame in ((int(peer), int(frame)) for peer, frame in re.findall(r"^\[net-match\] hold peer=(\d+) frame=(\d+)", host, re.M)):
-        if any(stall <= frame <= stall + 30 for stall in stalls):
-            planned.append(frame)
-            continue
-        asked = [int(tick) for tick in re.findall(rf"^\[lockstep-recv\] asked peer {peer} to resend frame=(\d+) of peer {peer} ", host, re.M)]
-        row = dict(frame=frame, peer=peer, cause=any(abs(tick - frame) <= 5 for tick in asked),
-                   recovered=any(frame <= tick <= frame + 3600 for tick in recoveries),
-                   survivor_waits_over_50=[ms for tick, ms in waits if frame - 10 <= tick <= frame + 60 and ms > 50])
-        (explained if row["cause"] and row["recovered"] and not row["survivor_waits_over_50"] else unexplained).append(row)
-    return dict(planned=planned, explained=explained, unexplained=unexplained, passed=not unexplained)
+def soak_peer_evidence(root, peer):
+    path = Path(root) / peer / 'stdout.log'
+    text = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
+    rows, rounds, current, local = [], [], None, None
+    record_path = Path(root) / f'{peer}-record.json'
+    record = json.loads(record_path.read_text(encoding='utf-8-sig')) if record_path.is_file() else {}
+    incarnation = record.get('incarnation', 0)
+    for number, line in enumerate(text.splitlines(), 1):
+        base = dict(engine=peer, incarnation=incarnation, round=current, peer=local, line=number, path=str(path))
+        if found := re.match(r'^\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+)', line):
+            current, local = int(found[1]), int(found[2])
+            if current not in rounds: rounds.append(current)
+        elif found := re.match(r'^\[net-test\] live stall frame=(\d+) ms=(\d+)', line):
+            rows.append(dict(base, type='stall', tick=int(found[1]), ms=int(found[2])))
+        elif found := re.match(r'^\[net-match\] hold peer=(\d+) frame=(\d+)', line):
+            rows.append(dict(base, type='hold', peer=int(found[1]), tick=int(found[2])))
+        elif found := re.match(r'^\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+) live_actors=(\d+)', line):
+            if int(found[1]) == local and int(found[3]) > 0:
+                rows.append(dict(base, type='activation', tick=int(found[2])))
+        elif found := re.match(r'^\[net-match\] private catch-up complete frame=(\d+)', line):
+            rows.append(dict(base, type='activation', tick=int(found[1])))
+        elif found := re.match(r'^\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', line):
+            rows.append(dict(base, type='wait', tick=int(found[1]), ms=int(found[2])))
+        elif found := re.match(r'^\[lockstep-recv\] asked peer (\d+) to resend frame=(\d+) of peer (\d+) ', line):
+            if found[1] == found[3]: rows.append(dict(base, type='resend', peer=int(found[1]), tick=int(found[2])))
+    native = [row for own in (Path(root) / peer, Path(root) / f'{peer}-records')
+              for path in event_paths(own) for row in source_rows(path, Path(root))]
+    return dict(rows=rows, native=native, rounds=rounds, log_present=bool(text), incarnation=incarnation)
+
+
+def fresh_control(row, round_id, peer, incarnation, activation):
+    sample = row.get('input') or {}
+    tick = row.get('tick')
+    return bool(row.get('type') == 'recovery' and row.get('recovery_phase') == 'first_controllable_input'
+        and row.get('round') == round_id and row.get('peer') == peer and row.get('incarnation') == incarnation
+        and row.get('terminal') is True and row.get('controllable') is True and row.get('held') is False and row.get('catchup') is False
+        and type(tick) is int and tick >= activation and row.get('wire_tick') == tick
+        and type(row.get('actor')) is int and row['actor'] > 0 and sample.get('actor') == row['actor']
+        and sample.get('input_round') == round_id and sample.get('target_tick') == tick and sample.get('queue_confirmed') is True
+        and type(sample.get('input_serial')) is int and sample['input_serial'] > 0
+        and type(row.get('player')) is int and sample.get('seat') == row['player']
+        and type(sample.get('produced_wall_ms')) in (int, float) and math.isfinite(sample['produced_wall_ms'])
+        and type(sample.get('produced_tick')) is int and activation <= sample['produced_tick'] <= tick)
+
+
+def stall_plan(stalls, stall_ms, host_stalls=(), each_round_tick=0, rounds=1):
+    faults = [dict(peer='client', tick=tick, ms=stall_ms, round_index=0, incarnation=0) for tick in stalls]
+    faults += [dict(peer='host', tick=int(spec.split(':')[0]), ms=int(spec.split(':')[1]), round_index=0, incarnation=0)
+               for spec in host_stalls]
+    faults += [dict(peer='client', tick=each_round_tick, ms=stall_ms, round_index=index, incarnation=0)
+               for index in range(rounds) if each_round_tick]
+    return [dict(row, id=f'stall-{index}') for index, row in enumerate(faults)]
+
+
+def soak_hold_judgement(root: Path, stalls: list) -> dict:
+    evidence = {peer: soak_peer_evidence(root, peer) for peer in ('host', 'client')}
+    plan = []
+    for index, fault in enumerate(stalls):
+        fault = dict(fault) if isinstance(fault, dict) else dict(peer='client', tick=int(fault))
+        fault.setdefault('id', f'stall-{index}')
+        fault.setdefault('incarnation', 0)
+        target = evidence.get(fault['peer'], {})
+        rounds = target.get('rounds', [])
+        ordinal = fault.get('round_index', 0)
+        fault.setdefault('round', rounds[ordinal] if 0 <= ordinal < len(rounds) else None)
+        plan.append(fault)
+    paired, planned, planned_rows, explained, unexplained = set(), [], [], [], []
+    for held in (row for row in evidence['host']['rows'] if row['type'] == 'hold'):
+        frame, round_id, seat = held['tick'], held['round'], held['peer']
+        target = next((peer for peer, data in evidence.items() if any(
+            row['round'] == round_id and row['peer'] == seat and row['type'] in ('stall', 'activation') for row in data['rows'])), None)
+        own = evidence.get(target, {})
+        incarnation = own.get('incarnation')
+        fault = next((item for item in plan if item['id'] not in paired and item['peer'] == target and item['round'] == round_id
+            and item['incarnation'] == incarnation and item['tick'] <= frame <= item['tick'] + 30 and any(
+                row['type'] == 'stall' and row['round'] == round_id and row['incarnation'] == incarnation and row['tick'] == item['tick']
+                and (item.get('ms') is None or row['ms'] == item['ms']) for row in own.get('rows', []))), None)
+        if fault:
+            paired.add(fault['id']); planned.append(frame)
+        cause = bool(fault) or any(row['type'] == 'resend' and row['round'] == round_id and row['peer'] == seat
+                                  and abs(row['tick'] - frame) <= 5 for row in evidence['host']['rows'])
+        activations = [row for row in own.get('rows', []) if row['type'] == 'activation' and row['round'] == round_id
+                       and row['peer'] == seat and row['incarnation'] == incarnation and frame <= row['tick'] <= frame + 3600]
+        controls = [row for row in own.get('native', []) if any(fresh_control(row, round_id, seat, incarnation, activation['tick'])
+                    for activation in activations) and row['tick'] <= frame + 3600
+                    and (not fault or not fault.get('recovery_id') or row.get('id') == fault['recovery_id'])]
+        terminal = min(controls, key=lambda row: row['tick']) if controls else None
+        end = terminal['tick'] if terminal else frame + 3600
+        windows = {}
+        for survivor, data in evidence.items():
+            if survivor == target: continue
+            waits = sorted((row for row in data['rows'] if row['type'] == 'wait' and row['round'] == round_id
+                            and frame - 10 <= row['tick'] <= end and row['ms'] > 0), key=lambda row: row['tick'])
+            grouped = []
+            for wait in waits:
+                if grouped and wait['tick'] <= grouped[-1]['last'] + 1:
+                    grouped[-1]['last'] = wait['tick']; grouped[-1]['ms'] += wait['ms']
+                else:
+                    grouped.append(dict(first=wait['tick'], last=wait['tick'], ms=wait['ms']))
+            windows[survivor] = grouped
+        waits_pass = bool(windows) and all(evidence[name]['log_present'] and len(rows) <= 1 and all(row['ms'] <= 50 for row in rows)
+                                         for name, rows in windows.items())
+        recovered = terminal is not None
+        row = dict(frame=frame, peer=seat, round=round_id, incarnation=incarnation, target=target,
+                   fault=fault['id'] if fault else None, cause=cause, recovered=recovered, activation=activations,
+                   fresh_input=terminal, survivor_wait_windows=windows,
+                   survivor_waits_over_50=[window['ms'] for rows in windows.values() for window in rows if window['ms'] > 50],
+                   passed=bool(cause and recovered and waits_pass))
+        row['reason'] = '; '.join(reason for reason in (
+            'no matching planned stall or resend receipt' if not cause else '',
+            'no own activation followed by fresh controllable input' if not recovered else '',
+            f'survivor wait windows={windows}' if not waits_pass else '') if reason)
+        if fault: planned_rows.append(row)
+        (explained if row['passed'] else unexplained).append(row)
+    missing = [fault for fault in plan if fault['id'] not in paired]
+    return dict(planned=planned, planned_rows=planned_rows, explained=explained, unexplained=unexplained,
+                missing_injections=missing, injection_plan=plan, passed=not unexplained and not missing)
 
 
 def excused_return_holds(root: Path, rows: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Splits holds after a return into the excused (the held engine said it is a slow machine and its own sim does not
-    fit the tick there) and the rest."""
+    """Only the host's cause and published relative capacity explain a return hold."""
     engines = {peer_id_of(root / f"{peer}_report.json"): peer for peer in ("host", "client")}
     logs = {peer: (root / peer / "stdout.log").read_text(encoding="utf-8", errors="replace") if (root / peer / "stdout.log").is_file() else ""
             for peer in ("host", "client")}
     excused, kept = [], []
+    receipts, _ = host_hold_evidence(logs['host'])
     for row in rows:
         engine = engines.get(row["held_peer"])
-        slow = any(f"[net-lockstep] slow machine peer {row['held_peer']} at frame {frame} " in text
-                   for text in logs.values() for frame in range(row["return_tick"], row["hold_tick"] + 1))
         sim = window_sim_ms(census_pace(root / engine / "stdout.log"), row["return_tick"], row["hold_tick"]) if engine else None
-        fits = pace_verdict({"pace": {"sim_ms_per_tick": sim, "wall_tps": None}})["gated"]
-        (excused if slow and sim is not None and not fits else kept).append(dict(row, held_engine=engine, sim_ms_per_tick=sim,
-                                                                                   slow_machine_line=slow))
+        evidence = design_hold(dict(peer=row['held_peer'], tick=row['hold_tick'], round=row['round']), receipts)
+        (excused if evidence else kept).append(dict(row, held_engine=engine, sim_ms_per_tick=sim, **evidence))
     return excused, kept
 
 
 def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict:
-    records = {peer: read_live_hashes(root / f"{peer}-live.jsonl") for peer in ("host", "client")}
-    errors, indexed, windows, paces = [], {}, {}, {}
+    errors, records = [], {}
+    for peer in ('host', 'client'):
+        path = root / f'{peer}-live.jsonl'
+        try:
+            records[peer] = read_live_hashes(path)
+        except ValueError as error:
+            records[peer] = []
+            errors.append(f'{path}: FAIL: {error}')
+    natives = {peer: json.loads((root / f'{peer}_report.json').read_text(encoding='utf-8-sig'))
+               if (root / f'{peer}_report.json').is_file() else {} for peer in records}
+    indexed, windows, paces = {}, {}, {}
     rounds = {row.get("round") for rows in records.values() for row in rows}
     if None in rounds or len(rounds) != expected_rounds:
         errors.append("round coverage differs from the declared workload")
@@ -140,13 +242,15 @@ def acceptance_history(root: Path, ticks: int, expected_rounds: int = 1) -> dict
                 elapsed = sum(durations)
                 rate = len(intervals) * 1000 / elapsed if elapsed > 0 and all(d >= 0 and math.isfinite(d) for d in durations) else None
                 # A window is gated when this engine's own sim fits the tick there; a slower one is reported, not gated.
+                relative = round_capacity_evidence(natives, round_id)
                 verdict = pace_verdict({"pace": {"sim_ms_per_tick": window_sim_ms(census, start, end),
-                                                 "wall_tps": rate if rate is not None and math.isfinite(rate) else None}})
-                ok = verdict["passed"] if verdict["sim_ms_per_tick"] is not None else rate is not None and math.isfinite(rate) and rate >= 59.5
+                                                 "wall_tps": rate if rate is not None and math.isfinite(rate) else None}},
+                                       relative=relative, peer=peer)
+                ok = verdict['passed']
                 paces[peer].append(dict(round=round_id, first=start, last=end, wall_tps=rate, passed=ok,
                                         sim_ms_per_tick=verdict["sim_ms_per_tick"], gated=verdict["gated"] or verdict["sim_ms_per_tick"] is None))
                 if not ok:
-                    errors.append(f"{peer} round {round_id}: pace window {start}-{end} below 59.5 TPS")
+                    errors.append(f"{peer} round {round_id}: pace window {start}-{end}: {verdict['reason']}")
         if not paces[peer]:
             errors.append(f"{peer}: no complete pace window")
     shared = set(indexed['host']) & set(indexed['client'])
@@ -269,6 +373,75 @@ def pace_across_own_seat_hold(root: Path) -> dict | None:
     return summary
 
 
+def analyze_soak(root, options, ticks, plan, samples, records, elapsed):
+    """Write a complete reduction even when one retained history receipt is invalid."""
+    live = compare_live_hashes(root / "host-live.jsonl", root / "client-live.jsonl", 1)
+    hashes_equal = bool(live) and all(row["compared_ticks"] > 0 and row["mismatched_ticks"] == 0
+                                      and row["mismatched_applied_input_ticks"] == 0 for row in live)
+    fullstate = compare_fullstate(root / "host" / "stdout.log", root / "client" / "stdout.log") if options.fullstate_every else None
+    holds = count(root / "host" / "stdout.log", "[net-match] hold peer=")
+    rejoins = count(root / "client" / "stdout.log", "[net-match] private catch-up complete")
+    # Every round's own stall ends in an in-place catch-up, the rematches' rounds included.
+    rounds = 1 + (max(1, options.rematches) if options.rematch else 0)
+    acceptance = acceptance_history(root, options.end_round_tick or ticks, rounds)
+    each_round = count(root / "client" / "stdout.log", "[net-test] live stall frame=", " round_index=")
+    in_place = count(root / "client" / "stdout.log", "[net-match] private catch-up complete", " in_place=1")
+    # The host is never killed here, so a client that names a new host has split the match in two.
+    split = count(root / "client" / "stdout.log", "[net-match] Host left - ")
+    autosaves = count(root / "host" / "stdout.log", "[autosave] tick=", "capture_ms=")
+    # The cadence is in simulation seconds, so what is owed follows the ticks the host reached, not the wall clock.
+    reached = max((row["last_tick"] for row in live), default=0)
+    owed = int(reached // (TICKS_PER_SECOND * options.autosave_seconds)) - 1
+    minutes_sampled = sum(1 for row in samples if row.get("host") and row.get("client"))
+    exits = {peer: {"exit_code": record.get("exit_code"), "timed_out": record.get("timed_out")} for peer, record in records.items()}
+    checks = {"exits": all(row["exit_code"] == 0 and not row["timed_out"] for row in exits.values()),
+              "hashes_equal": hashes_equal, "fullstate": fullstate is None or bool(fullstate.get("passed")),
+              "holds": holds >= options.holds, "rejoins": rejoins >= options.holds, "no_split_brain": split == 0,
+              "autosaves": autosaves >= max(0, owed), "memory_sampled": minutes_sampled >= int(options.minutes),
+              "complete_history_and_pace": acceptance['pass']}
+    hold_judgement = soak_hold_judgement(root, plan['injections'])
+    checks['paired_fault_recovery_and_survivor_waits'] = hold_judgement['passed']
+    return_holds = {peer: return_hold_violations((root / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
+                    for peer in ('host', 'client')}
+    excused_holds = {peer: excused_return_holds(root, rows) for peer, rows in return_holds.items()}
+    checks['no_hold_after_return'] = not any(kept for _, kept in excused_holds.values())
+    if options.host_stall:
+        checks['host_stalls_fired'] = count(root / 'host/stdout.log', '[net-test] live stall frame=') == len(options.host_stall)
+        checks['host_returned'] = count(root / 'host/stdout.log', '[net-match] seat-reclaimed peer=1') >= len(options.host_stall)
+    if options.stall_each_round:
+        checks["each_round_caught_up"] = each_round >= rounds and in_place >= rounds
+    first = next((row for row in samples if row.get("host") and row.get("client")), None)
+    last = next((row for row in reversed(samples) if row.get("host") and row.get("client")), None)
+    growth = {peer: {"first": first[peer]["working_set"], "last": last[peer]["working_set"],
+                     "peak": max(row[peer]["working_set"] for row in samples if row.get(peer))}
+              for peer in ("host", "client")} if first and last else None
+    # Growth is read from minute 10, past the match's warm-up, to the last sample; the census names the records behind it.
+    settled = next((row for row in samples if row.get("host") and row.get("client") and row["elapsed_s"] >= 600), None)
+    from_minute_10 = {peer: {"minute_10": settled[peer]["working_set"], "last": last[peer]["working_set"],
+                             "percent": round(100.0 * (last[peer]["working_set"] - settled[peer]["working_set"]) / settled[peer]["working_set"], 1)}
+                      for peer in ("host", "client")} if settled and last and settled is not last else None
+    census = {peer: census_growth(root / peer / "stdout.log", TICKS_PER_SECOND * 600) for peer in ("host", "client")}
+    # A capture the writer could not take yet replaces the one still waiting; each replacement is one line.
+    coalesced = {peer: count(root / peer / "stdout.log", "[fullstate-coalesced] ") + count(root / peer / "stdout.log", "[autosave-coalesced] ")
+                 for peer in ("host", "client")}
+    private_mb = {peer: census_private(root / peer / "stdout.log") for peer in ("host", "client")}
+    clean_ticks = {peer: terrain_event_ticks(root, peer, "clean") for peer in ("host", "client")} if options.terrain_events else None
+    result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
+              "holds_after_returns": {peer: kept for peer, (_, kept) in excused_holds.items()},
+              "holds_after_returns_excused": {peer: excused for peer, (excused, _) in excused_holds.items()},
+              "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
+              "autosaves_published": autosaves, "autosaves_owed": owed,
+              "each_round_stalls": each_round, "in_place_catch_ups": in_place, "rounds": rounds,
+              "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
+              "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
+              "clean_ticks": clean_ticks, "pace_across_own_seat_hold": pace_across_own_seat_hold(root),
+              "plan": plan, "acceptance_history": acceptance, "hold_judgement": hold_judgement}
+    (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
+    print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "
+          f"autosaves={autosaves}/{owed} samples={len(samples)} holds_after_returns={sum(len(kept) for _, kept in excused_holds.values())} -> {root / 'result.json'}", flush=True)
+    return 0 if result["pass"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -344,12 +517,14 @@ def main(argv: list[str] | None = None) -> int:
     stalls = [ticks * (index + 1) // (options.holds + 1) for index in range(options.holds)]
     script = root / "input.txt"
     input_pattern(script)
-    plan = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "repo": str(repo), "ticks": ticks, "minutes": options.minutes,
+    plan = {"started": time.strftime("%Y-%m-%d %I:%M:%S %p"), "repo": str(repo), "ticks": ticks, "minutes": options.minutes,
             "autosave_seconds": options.autosave_seconds, "stalls": [f"{tick}:{options.stall_ms}" for tick in stalls],
             "host_stalls": options.host_stall,
             "port": options.port, "fullstate_every": options.fullstate_every, "sample_seconds": options.sample_seconds,
             "saver_delay_ms": options.saver_delay_ms, "stall_each_round": options.stall_each_round,
             "client_free_run": options.client_free_run, "terrain_events": options.terrain_events}
+    plan['injections'] = stall_plan(stalls, options.stall_ms, options.host_stall, options.stall_each_round,
+                                   1 + (max(1, options.rematches) if options.rematch else 0))
     (root / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     runs, records = {}, {}
     samples: list[dict] = []
@@ -415,7 +590,7 @@ def main(argv: list[str] | None = None) -> int:
                 env["CC_TEST_SAVER_DELAY_MS"] = str(options.saver_delay_ms)
             if options.terrain_events:
                 env["CC_TERRAIN_EVENTS"] = options.terrain_events
-            if options.cross_records:
+            if options.cross_records or plan['injections']:
                 env["CC_TEST_CROSS_RECORDS"] = str(root / f"{peer}-records" / "events.jsonl")
                 (root / f"{peer}-records").mkdir()
                 if options.cross_event_limit:
@@ -455,69 +630,7 @@ def main(argv: list[str] | None = None) -> int:
         for peer, run in runs.items():
             records.setdefault(peer, run.record)
     elapsed = time.monotonic() - started
-    live = compare_live_hashes(root / "host-live.jsonl", root / "client-live.jsonl", 1)
-    hashes_equal = bool(live) and all(row["compared_ticks"] > 0 and row["mismatched_ticks"] == 0
-                                      and row["mismatched_applied_input_ticks"] == 0 for row in live)
-    fullstate = compare_fullstate(root / "host" / "stdout.log", root / "client" / "stdout.log") if options.fullstate_every else None
-    holds = count(root / "host" / "stdout.log", "[net-match] hold peer=")
-    rejoins = count(root / "client" / "stdout.log", "[net-match] private catch-up complete")
-    # Every round's own stall ends in an in-place catch-up, the rematches' rounds included.
-    rounds = 1 + (max(1, options.rematches) if options.rematch else 0)
-    acceptance = acceptance_history(root, options.end_round_tick or ticks, rounds)
-    each_round = count(root / "client" / "stdout.log", "[net-test] live stall frame=", " round_index=")
-    in_place = count(root / "client" / "stdout.log", "[net-match] private catch-up complete", " in_place=1")
-    # The host is never killed here, so a client that names a new host has split the match in two.
-    split = count(root / "client" / "stdout.log", "[net-match] Host left - ")
-    autosaves = count(root / "host" / "stdout.log", "[autosave] tick=", "capture_ms=")
-    # The cadence is in simulation seconds, so what is owed follows the ticks the host reached, not the wall clock.
-    reached = max((row["last_tick"] for row in live), default=0)
-    owed = int(reached // (TICKS_PER_SECOND * options.autosave_seconds)) - 1
-    minutes_sampled = sum(1 for row in samples if row.get("host") and row.get("client"))
-    exits = {peer: {"exit_code": record.get("exit_code"), "timed_out": record.get("timed_out")} for peer, record in records.items()}
-    checks = {"exits": all(row["exit_code"] == 0 and not row["timed_out"] for row in exits.values()),
-              "hashes_equal": hashes_equal, "fullstate": fullstate is None or bool(fullstate.get("passed")),
-              "holds": holds >= options.holds, "rejoins": rejoins >= options.holds, "no_split_brain": split == 0,
-              "autosaves": autosaves >= max(0, owed), "memory_sampled": minutes_sampled >= int(options.minutes),
-              "complete_history_and_pace": acceptance['pass']}
-    return_holds = {peer: return_hold_violations((root / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace'))
-                    for peer in ('host', 'client')}
-    excused_holds = {peer: excused_return_holds(root, rows) for peer, rows in return_holds.items()}
-    checks['no_hold_after_return'] = not any(kept for _, kept in excused_holds.values())
-    if options.host_stall:
-        checks['host_stalls_fired'] = count(root / 'host/stdout.log', '[net-test] live stall frame=') == len(options.host_stall)
-        checks['host_returned'] = count(root / 'host/stdout.log', '[net-match] seat-reclaimed peer=1') >= len(options.host_stall)
-    if options.stall_each_round:
-        checks["each_round_caught_up"] = each_round >= rounds and in_place >= rounds
-    first = next((row for row in samples if row.get("host") and row.get("client")), None)
-    last = next((row for row in reversed(samples) if row.get("host") and row.get("client")), None)
-    growth = {peer: {"first": first[peer]["working_set"], "last": last[peer]["working_set"],
-                     "peak": max(row[peer]["working_set"] for row in samples if row.get(peer))}
-              for peer in ("host", "client")} if first and last else None
-    # Growth is read from minute 10, past the match's warm-up, to the last sample; the census names the records behind it.
-    settled = next((row for row in samples if row.get("host") and row.get("client") and row["elapsed_s"] >= 600), None)
-    from_minute_10 = {peer: {"minute_10": settled[peer]["working_set"], "last": last[peer]["working_set"],
-                             "percent": round(100.0 * (last[peer]["working_set"] - settled[peer]["working_set"]) / settled[peer]["working_set"], 1)}
-                      for peer in ("host", "client")} if settled and last and settled is not last else None
-    census = {peer: census_growth(root / peer / "stdout.log", TICKS_PER_SECOND * 600) for peer in ("host", "client")}
-    # A capture the writer could not take yet replaces the one still waiting; each replacement is one line.
-    coalesced = {peer: count(root / peer / "stdout.log", "[fullstate-coalesced] ") + count(root / peer / "stdout.log", "[autosave-coalesced] ")
-                 for peer in ("host", "client")}
-    private_mb = {peer: census_private(root / peer / "stdout.log") for peer in ("host", "client")}
-    clean_ticks = {peer: terrain_event_ticks(root, peer, "clean") for peer in ("host", "client")} if options.terrain_events else None
-    result = {"pass": all(checks.values()), "checks": checks, "exits": exits, "elapsed_s": round(elapsed, 1),
-              "holds_after_returns": {peer: kept for peer, (_, kept) in excused_holds.items()},
-              "holds_after_returns_excused": {peer: excused for peer, (excused, _) in excused_holds.items()},
-              "ticks_reached": reached, "holds_taken": holds, "rejoins_completed": rejoins, "client_named_a_new_host": split,
-              "autosaves_published": autosaves, "autosaves_owed": owed,
-              "each_round_stalls": each_round, "in_place_catch_ups": in_place, "rounds": rounds,
-              "live_hashes": live, "fullstate": fullstate, "memory_samples": len(samples), "memory_working_set": growth,
-              "memory_from_minute_10": from_minute_10, "census": census, "census_private_mb": private_mb, "coalesced_captures": coalesced,
-              "clean_ticks": clean_ticks, "pace_across_own_seat_hold": pace_across_own_seat_hold(root),
-              "plan": plan, "acceptance_history": acceptance}
-    (root / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
-    print(f"[soak] {'PASS' if result['pass'] else 'FAIL'} {json.dumps(checks)} holds={holds} rejoins={rejoins} "
-          f"autosaves={autosaves}/{owed} samples={len(samples)} holds_after_returns={sum(len(kept) for _, kept in excused_holds.values())} -> {root / 'result.json'}", flush=True)
-    return 0 if result["pass"] else 1
+    return analyze_soak(root, options, ticks, plan, samples, records, elapsed)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,36 @@ import zipfile
 import zlib
 
 
+def private_history_row(row):
+    return row.get('phase') in ('catchup', 'private') and row.get('player_visible') is False
+
+
+def retract_private_history(rows, source=None):
+    kept = []
+    for marker in rows:
+        if 'abandon_from' not in marker:
+            kept.append(marker)
+            continue
+        first, round_id = marker.get('abandon_from'), marker.get('round')
+        if type(first) is not int or first < 1 or type(round_id) not in (int, str) or not str(round_id):
+            raise ValueError(f'invalid abandon receipt: first={first!r}, round={round_id!r}')
+        path = marker.get('_path') or source
+        identity = {key: marker[key] for key in ('instance', 'execution', 'incarnation') if key in marker}
+        if not path and not identity:
+            raise ValueError(f'abandon receipt at {first} has no process identity')
+        affected = [row for row in kept if str(row.get('round')) == str(round_id) and type(row.get('tick')) is int and row['tick'] >= first
+                    and (not path or (row.get('_path') or source) == path) and all(row.get(key) == value for key, value in identity.items())]
+        unsafe = [row for row in affected if not private_history_row(row)]
+        if unsafe:
+            raise ValueError(f'abandon receipt round={round_id} from={first} retracts non-private tick={unsafe[0]["tick"]} '
+                             f'phase={unsafe[0].get("phase")!r} player_visible={unsafe[0].get("player_visible")!r}')
+        if not affected and not (marker.get('private') is True and marker.get('player_visible') is False):
+            raise ValueError(f'abandon receipt round={round_id} from={first} has no private-history evidence')
+        identities = {id(row) for row in affected}
+        kept = [row for row in kept if id(row) not in identities]
+    return kept
+
+
 def retire_diagnostic(path, own, kind):
     path=Path(path); own=Path(own).resolve()
     if path.is_symlink() or not path.resolve().is_relative_to(own): raise ValueError('diagnostic leaves its owning instance')
@@ -134,7 +164,7 @@ class RecoveryLedger:
     def __init__(self,path,peer,clock_domain,begin_ms,cases):
         self.path=Path(path); self.peer=peer; self.clock_domain=clock_domain
         self.begin_ms=begin_ms; self.cases={case['id']:case for case in cases}
-        self.starts={}; self.applied=set(); self.completed=set()
+        self.starts={}; self.applied=set(); self.completed=set(); self.resets=set()
 
     def write(self,id,incarnation,phase,lower,upper,native):
         record=dict(id=id,peer=self.peer,incarnation=incarnation,phase=phase,clock_domain=self.clock_domain,
@@ -153,6 +183,12 @@ class RecoveryLedger:
                 start['upper']=upper
                 self.applied.add(id)
                 self.write(id,incarnation,'fault_applied',start['lower'],start['upper'],row)
+                if row.get('action') in ('live-stall', 'draw-stall', 'late-script-stall') and 'completed_wall_ms' in row:
+                    self.fault_reset(id, incarnation, lower, upper, row)
+            elif row.get('type') == 'fault_reset' and row.get('send_recv_armed') is True:
+                self.fault_reset(id, incarnation, lower, upper, row)
+            elif row.get('type') == 'fault_effect' and row.get('effect_observed') and row.get('reset'):
+                self.fault_reset(id, incarnation, lower, upper, row)
             elif row.get('type')=='recovery':
                 phase=row.get('recovery_phase','unmapped')
                 self.write(id,incarnation,phase,lower,upper,row)
@@ -163,6 +199,12 @@ class RecoveryLedger:
         id=case['id']; self.starts[id]=dict(lower=lower,upper=upper,native=progress,incarnation=incarnation)
         self.applied.add(id)
         self.write(id,incarnation,'fault_applied',lower,upper,dict(action=case['action'] if 'action' in case else 'crash-restart',actual=progress,applied=True))
+        self.fault_reset(id, incarnation, lower, upper, dict(action=case.get('action', 'crash-restart'), process_terminated=True))
+
+    def fault_reset(self, id, incarnation, lower, upper, native):
+        if id in self.applied and id not in self.resets:
+            self.write(id, incarnation, 'fault_reset', lower, upper, native)
+            self.resets.add(id)
 
     def restart_inputs(self,incarnation):
         return {id:dict(engine_after_wall_ms=0,effect_finished=True,origin=self.starts[id]) for id in self.applied-self.completed

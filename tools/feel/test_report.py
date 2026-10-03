@@ -83,10 +83,10 @@ class ReportTests(unittest.TestCase):
         from feel.retained_resume import compare_live_hashes
         with TemporaryDirectory() as folder:
             host, client = Path(folder) / 'host.jsonl', Path(folder) / 'client.jsonl'
-            rows = [dict(tick=tick, sim_gated=str(tick), subsystems={'controller': str(tick)}) for tick in range(1, 21)]
+            rows = [dict(round=1, tick=tick, sim_gated=str(tick), subsystems={'controller': str(tick)}) for tick in range(1, 21)]
             host.write_text('\n'.join(map(json.dumps, rows)), encoding='utf-8')
-            offround = [dict(row, sim_gated='held') for row in rows[9:12]]
-            held = rows[:9] + offround + [dict(abandon_from=10)] + rows[9:]
+            offround = [dict(row, sim_gated='held', phase='private', player_visible=False) for row in rows[9:12]]
+            held = rows[:9] + offround + [dict(abandon_from=10, round=1)] + rows[9:]
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             compared = compare_live_hashes(host, client, 1)
             self.assertEqual(sum(row['compared_ticks'] for row in compared), 20)
@@ -111,7 +111,7 @@ class ReportTests(unittest.TestCase):
                    '[net-match] recovery requested tick=12 catch_up=0 reason=tick 12 lockstep stopped: PeerHeld:Your seat is held by the AI.\n'
                    '[net-match] bootstrap checkpoint=14 local_peer=2\n')
             live = root / 'client-live.jsonl'
-            live.write_text(json.dumps({'abandon_from': 10, 'round': 1}) + '\n', encoding='utf-8')
+            live.write_text(json.dumps({'abandon_from': 10, 'round': 1, 'private': True, 'player_visible': False}) + '\n', encoding='utf-8')
             self.assertEqual(feel_measure.held_client_away(log, live), ((10, 14),))
             # Without its abandon record the gap starts at the hold, never at the recovery's ask.
             self.assertEqual(feel_measure.held_client_away(log), ((10, 14),))
@@ -136,7 +136,7 @@ class ReportTests(unittest.TestCase):
             second = [dict(round=2, tick=tick, sim_gated=f'b{tick}', subsystems={'controller': f'b{tick}'}) for tick in range(1, 21)]
             host.write_text('\n'.join(map(json.dumps, first + second)), encoding='utf-8')
             # Round 2's hold abandons 15-17, which the client ran off the round; round 1's 15-17 stay compared.
-            offround = [dict(row, sim_gated='held') for row in second[14:17]]
+            offround = [dict(row, sim_gated='held', phase='private', player_visible=False) for row in second[14:17]]
             held = first + second[:14] + offround + [dict(abandon_from=15, round=2)]
             client.write_text('\n'.join(map(json.dumps, held)), encoding='utf-8')
             compared = compare_live_hashes(host, client, 1)
@@ -150,11 +150,14 @@ class ReportTests(unittest.TestCase):
 
     def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False, dropped=False, beyond=None):
         from tempfile import TemporaryDirectory
+        from feel.test_harness_cost import complete_cost_log
+        import re
         with TemporaryDirectory() as folder:
             run = Path(folder)
             (run / 'host').mkdir()
             (run / 'manifest.json').write_text(json.dumps(dict(silent_tick=600 if silent else None, ticks=final_tick)), encoding='utf-8')
-            (run / 'host/stdout.log').write_text(waits, encoding='utf-8')
+            dump_peak = max([float(v) for v in re.findall(r'\[sim-dump\].*?(?:max_ms|\bms)=([0-9.eE+-]+)', waits)], default=0)
+            (run / 'host/stdout.log').write_text(complete_cost_log(last=final_tick, costs={'sim_dump': dump_peak}) + waits, encoding='utf-8')
             if silent:
                 (run / 'survivor').mkdir()
                 (run / 'survivor/stdout.log').write_text(survivor_log, encoding='utf-8')
@@ -382,16 +385,16 @@ class ReportTests(unittest.TestCase):
         drawn = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(4)]
         self.assertFalse(report.previewed_responses([edge], drawn, timeline)[0]['pass_check'])
 
-    def test_an_edge_the_world_acted_on_is_judged_from_the_first_preview_after_it(self):
+    def test_an_unresolved_world_interaction_does_not_turn_a_late_response_green(self):
         edge = dict(_line=1, tick=10, wall_ms=100, delay=3, actor=actor(), last_presented_frame=1, changes=[dict(action='L_LEFT', held=True)])
         timeline = [dict(type='committed', tick=12, wall_ms=90, actors=[actor()])] + [dict(type='committed', tick=13 + n, wall_ms=150 + 17 * n, actors=[actor(vx=-1 - n)]) for n in range(4)]
         late = [frame(1, 95, actor(), tick=8)] + [frame(2 + n, 150 + 17 * n, actor(vx=-1 - n), tick=9 + n) for n in range(6)]
         self.assertFalse(report.previewed_responses([edge], late, timeline)[0]['pass_check'])
-        # A hit at tick 11 no preview drawn before it could know: judged from the first preview drawn from tick 11 (182 ms), due a frame later.
+        # The field name alone does not say which velocity component the hit changed.
         hit = dict(type='interaction', tick=11, uid=7, fields='vel,angvel', source='Dropship Hull Panel Gib A#9')
         row = report.previewed_responses([edge], late, timeline, [hit])[0]
-        self.assertEqual((row['previewed_ms'], row['interaction']['tick'], row['interaction']['source'], row['interaction']['judged_from_ms'], row['pass_check']),
-                         (84, 11, 'Dropship Hull Panel Gib A#9', 82, True))
+        self.assertEqual((row['previewed_ms'], row['judged'], row['pass_check']), (50, False, False))
+        self.assertEqual(row['interaction_evidence']['status'], 'UNJUDGED')
         # Past the committed response, or on another actor, it is not in the edge's window: judged as before.
         # Past the committed response, on another actor, a clone that fell short, or a hit that left the velocity alone: judged as before.
         for other in (dict(hit, tick=20), dict(hit, uid=8), dict(hit, source='clone'), dict(hit, fields='aim,view')):

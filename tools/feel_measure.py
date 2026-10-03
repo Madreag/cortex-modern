@@ -16,7 +16,7 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json
-from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes
+from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes_or_fail as compare_live_hashes
 from feel.records import compress_case_records, record_path
 from run_sim_test import make_run, engine_executable
 from feel.launch_budget import install_memory_guard, exclusive_matrix
@@ -43,7 +43,7 @@ LAG_ARMS = tuple(f'{lag}ms-{cap}' for lag in (100, 200) for cap in ('60hz', 'unc
 
 
 def stamp():
-    return datetime.now(MST).strftime('%Y-%m-%d %H:%M MST')
+    return datetime.now(MST).strftime('%Y-%m-%d %I:%M %p MST')
 
 
 def scratch_bytes(root, limit=BYTE_LIMIT):
@@ -302,6 +302,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                     lua_states_note='retired: the engine fixes the count at build time')
     write_json(out / 'manifest.json', manifest)
     peers = ['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)
+    manifest['heavy_scene_levers'] = {peer: dict(lever='CCCP_TEST_SIM_COST_US', cost_us=PEER_SIM_COST[peer][0],
+                                               from_tick=PEER_SIM_COST[peer][1]) for peer in peers if peer in PEER_SIM_COST}
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
     # The jitter rides with the lag: the peer that carries the link's delay jitters both of its directions, as a cross fault does.
     manifest['per_peer_jitter_ms'] = {peer: jitter_ms if manifest['per_peer_lag_ms'][peer] else 0 for peer in peers}
@@ -348,7 +350,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                 if FULLSTATE_EVERY:
                     flags += ['-net-fullstate-hash-every', str(FULLSTATE_EVERY)]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
-            # The stall sampler stays armed: a frame past 80 ms names its stack in the peer's log (five sampled repeats cost no pin).
+            # The stall sampler stays armed; its perturbation needs measured cost coverage in the instrumentation verdict.
             # The preview's first step is compared with the committed actor, so the records name each tick the world acted on it.
             environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{final_tick}', PYTHONDONTWRITEBYTECODE='1',
                                CCCP_STALL_STACK_MS=os.environ.get('CCCP_STALL_STACK_MS', '80'), CCCP_TEST_PREVIEW_FIDELITY='1')
@@ -421,8 +423,10 @@ def held_client_images(log, live=None):
     the tick its recovery was asked at."""
     abandons = []
     if live is not None and Path(live).is_file():
-        for line in Path(live).read_text(encoding='utf-8').splitlines():
-            row = json.loads(line) if line.strip() else {}
+        from feel.records import retract_private_history
+        rows = [json.loads(line) for line in Path(live).read_text(encoding='utf-8').splitlines() if line.strip()]
+        retract_private_history(rows, str(live))
+        for row in rows:
             if 'abandon_from' in row:
                 abandons.append(int(row['abandon_from']))
     images, held, stop = [], None, None
@@ -596,31 +600,42 @@ def timing_peer(run, peer):
         return unreduced_peer_report(run, peer, reason)
 
 
+def retained_pair_proof(run, peer, ticks, window_only=None):
+    path = run / f'{peer}-live.jsonl'
+    log_path = run / peer / 'stdout.log'
+    log = log_path.read_text(encoding='utf-8-sig', errors='replace') if log_path.is_file() else ''
+    try:
+        images = held_client_images(log, path)
+        return compare_pair(run / 'host_trace.json', run / f'{peer}_trace.json', ticks, cross_peer=True,
+                            client_away=tuple((stop, image) for stop, image in images if image >= stop),
+                            window_only=bool(images) if window_only is None else window_only,
+                            client_rewinds=tuple(image for stop, image in images if image < stop))
+    except ValueError as error:
+        return dict(status='FAIL', **{'pass': False}, reason=f'{path}: {error}')
+
+
 def reduce_timing_case(run, reference=None):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
     members = tuple(manifest.get('per_peer_lag_ms') or (('host', 'client', 'survivor') if silent else ('host', 'client')))
-    # A jitter arm judges the client too: its link jitters, yet it must hold the round's rate like the host.
-    peers = {peer: timing_peer(run, peer) for peer in members if peer != 'client' or manifest.get('jitter_ms')}
+    # Every impairment arm judges the affected client as well as the survivors.
+    impaired = any(manifest.get(key) for key in ('jitter_ms', 'reorder_percent', 'dup_percent'))
+    peers = {peer: timing_peer(run, peer) for peer in members if peer != 'client' or impaired}
     comparison_peer = next((peer for peer in peers if peer != 'host'), 'client')
     if reference is not None:
         for value in peers.values():
             apply_tps_call(value, reference)
+    input_measurements = {peer: input_gates(run, peer) for peer in members}
+    for peer, measured in peers.items():
+        measured.setdefault('pins', {}).update(input_measurements[peer])
     # A peer that rejoined from an image is compared on every tick it kept: the ticks it voided up to the image are skipped, and
     # as it counts its cap from the image only the planned window is compared.
-    peer_log = (run / f'{comparison_peer}/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / f'{comparison_peer}/stdout.log').is_file() else ''
-    peer_live = run / f'{comparison_peer}-live.jsonl'
-    rejoined = bool(held_client_images(peer_log, peer_live))
-    proof = compare_pair(run / 'host_trace.json', run / f'{comparison_peer}_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
-                         client_away=held_client_away(peer_log, peer_live), window_only=rejoined, client_rewinds=held_client_rewinds(peer_log, peer_live))
+    proof = retained_pair_proof(run, comparison_peer, manifest.get('ticks', TICKS))
     if silent:
         # The held client's own ticks are compared too: before its hold and from the image it rejoined on.
-        client_log = (run / 'client/stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / 'client/stdout.log').is_file() else ''
-        client_live = run / 'client-live.jsonl'
         # A rejoined client runs its own cap from its image, so only the planned window is compared.
-        proof['held_client'] = compare_pair(run / 'host_trace.json', run / 'client_trace.json', manifest.get('ticks', TICKS), cross_peer=True,
-                                            client_away=held_client_away(client_log, client_live), window_only=True,
-                                            client_rewinds=held_client_rewinds(client_log, client_live))
+        proof['held_client'] = retained_pair_proof(run, 'client', manifest.get('ticks', TICKS), window_only=True)
+        proof['pass'] &= proof['held_client']['pass']
     pairs = [(left, right) for index, left in enumerate(members) for right in members[index + 1:]]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
             for left, right in pairs}
@@ -634,7 +649,34 @@ def reduce_timing_case(run, reference=None):
     write_json(run / 'hash-proof.json', proof)
     return dict(name=run.name, peers=peers, measurement_complete=manifest['launches_complete'] and all(value['measurement_complete'] for value in peers.values()),
                 launches_complete=manifest['launches_complete'], engine_placement=manifest.get('engine_placement') or {},
-                proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
+                proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()),
+                input_peers={peer: dict(pins=pins) for peer, pins in input_measurements.items()})
+
+
+def input_gates(run, peer):
+    """The recorded local response is required even in a timing arm."""
+    from feel import report as reducer
+    path = record_path(Path(run) / peer / 'feel/raw.jsonl')
+    try:
+        rows = list(reducer.read_jsonl(path))
+        inputs = [row for row in rows if row.get('type') == 'input']
+        frames = [row for row in rows if row.get('type') == 'frame' and row.get('active')]
+        committed = [row for row in rows if row.get('type') == 'committed']
+        log = Path(run) / peer / 'stdout.log'
+        interactions = reducer.interaction_evidence([row for row in rows if row.get('type') == 'interaction'],
+            log.read_text(encoding='utf-8-sig', errors='replace') if log.is_file() else '')
+        complete = (sum(row.get('type') == 'schema' and row.get('version') == 1 for row in rows) == 1
+                    and any(row.get('type') == 'end' for row in rows) and bool(inputs) and bool(frames))
+        carried = reducer.input_latencies(inputs, frames)
+        responses = reducer.previewed_responses(inputs, frames, committed, interactions)
+        response_value, response_passed = reducer.response_verdict(responses)
+        return dict(input_carried=reducer.pin(carried if complete else None,
+                        'every recorded input is carried within two frames', bool(carried) and all(row['carried_pass'] for row in carried), [path]),
+                    input_response=reducer.pin(response_value if complete else None,
+                        'every required input responds by its committed-reference deadline', response_passed, [path]))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return {name: dict(status='MISS', value=None, reason=f'{path}: {type(error).__name__}: {error}')
+                for name in ('input_carried', 'input_response')}
 
 
 def item9a_evidence_complete(report):
@@ -647,15 +689,17 @@ def item9a_evidence_complete(report):
         names = [name for name in pins if name.startswith('item9a_')]
         if pins.get('item9a_missing_frame_stalls', {}).get('value') is None:
             return False
-        if not names or any(pin.get('status') == 'MISS' for name, pin in pins.items() if name.startswith('item9a_')):
+        if not names or any(pin.get('status') == 'MISS' for name, pin in pins.items()
+                            if name.startswith('item9a_') and pin.get('required', True)):
             return False
     return True
 
 
 def failure_reasons(report):
-    reasons = [f'{peer}.{name}: {pin.get("status", "MISS")} value={pin.get("value")!r}; {pin.get("rule", "no rule recorded")}'
+    reasons = [f'{peer}.{name}: {pin.get("status", "MISS")} value={pin.get("value")!r}; {pin.get("reason", "")}'
                for peer, measured in report.get('peers', {}).items() for name, pin in measured.get('pins', {}).items()
-               if name.startswith('item9a_') and pin.get('status') != 'PASS']
+               if (name.startswith('item9a_') or name in ('input_carried', 'input_response'))
+               and pin.get('required', True) and pin.get('status') != 'PASS']
     for field in ('launches_complete', 'off_wire_pass'):
         if report.get(field) is False:
             reasons.append(f'{field}=false; see {report.get("name", "case")}/feel-report.json')
@@ -666,12 +710,38 @@ def failure_reasons(report):
     return reasons
 
 
+def product_predicate(case):
+    peers = case.get('peers') or {}
+    reasons = failure_reasons(case)
+    for field in ('launches_complete', 'off_wire_pass'):
+        if case.get(field) is not True and not any(reason.startswith(field + '=') for reason in reasons):
+            reasons.append(f'{field}={case.get(field)!r}')
+    if not peers:
+        reasons.append('no judged peers were reported')
+    for peer, measured in peers.items():
+        pins = measured.get('pins') or {}
+        required = [value for name, value in pins.items() if name.startswith('item9a_') and value.get('required', True)]
+        if not required:
+            reasons.append(f'{peer}: no required item9a pins were reported')
+        if pins.get('item9a_missing_frame_stalls', {}).get('value') is None:
+            reasons.append(f'{peer}.item9a_missing_frame_stalls: missing counter')
+    input_peers = case.get('input_peers', peers)
+    if not input_peers:
+        reasons.append('no local input measurements were reported')
+    for peer, measured in input_peers.items():
+        pins = measured.get('pins') or {}
+        control_for = measured.get('timing_control_for')
+        input_pins = (peers.get(control_for) or {}).get('pins', {}) if control_for else pins
+        for name in ('input_carried', 'input_response'):
+            if input_pins.get(name, {}).get('status') != 'PASS':
+                reason = f'{peer}.{name}: {input_pins.get(name, {}).get("status", "MISS")} value={input_pins.get(name, {}).get("value")!r}'
+                if not any(r.startswith(f'{peer}.{name}:') for r in reasons):
+                    reasons.append(reason)
+    return dict(passed=not reasons, reasons=reasons)
+
+
 def write_case_gates(root, results):
-    cases = {row['name']: dict(passed=item9a_evidence_complete(row) and row.get('item9a_pass', False) and row.get('off_wire_pass', True)
-                                    and row.get('launches_complete', False)
-                                    and all(pin['status'] == 'PASS' for peer in row.get('peers', {}).values() for name, pin in peer['pins'].items()
-                                            if name.startswith('item9a_') and pin.get('required', True)), reasons=failure_reasons(row))
-             for row in results}
+    cases = {row['name']: product_predicate(row) for row in results}
     for case in cases.values():
         if not case['passed'] and not case['reasons']:
             case['reasons'] = ['the case has no complete passing set of item9a measurements']
@@ -734,6 +804,7 @@ def analyze(root, stock=None):
                     if stock[cap_name]['steady_wall_tps'] < 59.5 or reference['steady_wall_tps'] >= 59.5:
                         reference = stock[cap_name]
                 apply_tps_call(timing, reference)
+                timing['timing_control_for'] = peer
                 peers[peer + '_off'] = timing
             proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json', cross_peer=True),
                      'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json', cross_peer=True),
@@ -1070,14 +1141,15 @@ def main(argv=None):
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
     case_launches = {path.parent.name: json.loads(path.read_text(encoding='utf-8'))['launches_complete']
                      for path in sorted(root.glob('*/manifest.json'))}
-    complete = bool(case_launches) and all(case_launches.values()) and all(item9a_evidence_complete(row) for row in results)
+    case_gates = write_case_gates(root, results)
+    complete = bool(case_launches) and all(case_launches.values()) and case_gates['passed']
     item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
                   for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
-    reasons = {row['name']: failure_reasons(row) for row in results}
-    write_case_gates(root, results)
+    reasons = {name: case['reasons'] for name, case in case_gates['cases'].items()}
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
-    completion = dict(finished=stamp(), measurement_complete=complete, presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
+    completion = dict(finished=stamp(), measurement_complete=complete, product_pass=complete,
+                      presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
                       launches_complete=bool(case_launches) and all(case_launches.values()),
                       case_launches=case_launches, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
                       scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates, failure_reasons=reasons)
@@ -1085,7 +1157,7 @@ def main(argv=None):
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')
     print(json.dumps(completion, indent=2), flush=True)
-    return 0 if complete and item9a_pass is not False and (gate_pass or skip_gates) else 1
+    return 0 if complete and (gate_pass or skip_gates) else 1
 
 
 if __name__ == '__main__':

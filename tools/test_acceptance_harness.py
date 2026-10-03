@@ -78,13 +78,16 @@ class AcceptanceTests(unittest.TestCase):
         self.assertFalse(cross_report.judge_attempt(manifest, checks, {}, [], []).get('v1_passed', True))
 
     def test_f12_unrelated_placeholder_does_not_decide_v1(self):
+        from feel.test_attempt_requirements import attempt
         for scenario in ('soak', 'chaos'):
-            manifest, checks = self.cross_case(scenario)
+            manifest, checks, peers, matrix, recoveries = attempt()
+            manifest['scenario'] = scenario
+            manifest['acceptance_row'] = {'soak': 18, 'chaos': 19}[scenario]
             checks.update(validated_autosave_archives=False, forced_end_during_transfer=False)
-            verdict = cross_report.judge_attempt(manifest, checks, {}, [], [])
+            verdict = cross_report.judge_attempt(manifest, checks, peers, matrix, recoveries)
             self.assertTrue(verdict.get('v1_passed', all(checks.values())))
             checks['bounded_recovery'] = False
-            verdict = cross_report.judge_attempt(manifest, checks, {}, [], [])
+            verdict = cross_report.judge_attempt(manifest, checks, peers, matrix, recoveries)
             self.assertFalse(verdict.get('v1_passed', all(checks.values())))
 
     def test_f12_a_box_below_the_rounds_rate_fails_v1(self):
@@ -135,7 +138,8 @@ class AcceptanceTests(unittest.TestCase):
             root = Path(temporary)
             for peer in ('host', 'client'):
                 (root / peer).mkdir()
-                (root / peer / 'stdout.log').write_text('')
+                (root / peer / 'stdout.log').write_text(''.join(
+                    f'[mem-census] tick={tick} private_mb=1 pace: wall_tps=60 sim_ms_per_tick=8\n' for tick in (3600, 7200)))
                 records = [dict(round=7, tick=tick, wall_ms=tick * 1000 / 60,
                                 sim_gated=str(tick), subsystems={key: str(tick) for key in soak.CORE | {'controller'}})
                            for tick in range(1, 7202)]

@@ -199,7 +199,43 @@
       ],
       "what": "A newcomer applies for the held seat and the host accepts it in the Seats panel.",
       "log_regex": [
-        "\\[net-reconnect\\] moderation: substitute seat 1 -> Ok"
+        "\\[net-moderation\\] substitute seat=1 applicant=\\d+ result=Ok"
+      ],
+      "probe_steps": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "readback": [
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "newcomer"
+        },
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Seat 1"
+        },
+        {
+          "step": 10,
+          "path": [
+            "control",
+            "enabled"
+          ],
+          "equals": true
+        }
       ]
     },
     {
@@ -211,7 +247,10 @@
       "what": "The newcomer plays in the seat the host gave it.",
       "probe_steps": [
         2
-      ]
+      ],
+      "ownership_reclaim": {
+        "seat": 1
+      }
     },
     {
       "id": "leave-leaver-told",
@@ -337,10 +376,6 @@
             "-net-player-name",
             "host",
             "-net-host",
-            "-net-h4-substitute",
-            "1",
-            "-net-h4-substitute-delay",
-            "3000",
             "-net-match-service-preset",
             "Determinism FeelBaseline",
             "-net-match-service-module",

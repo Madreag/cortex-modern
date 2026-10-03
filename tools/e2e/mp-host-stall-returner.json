@@ -426,7 +426,10 @@
         "host lost",
         "now hosting",
         "resync failed"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "ret-540-500-client-in-sync",
@@ -444,7 +447,10 @@
         "host lost",
         "now hosting",
         "resync failed"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "ret-540-500-survivor-in-sync",
@@ -480,7 +486,10 @@
         "host lost",
         "now hosting",
         "resync failed"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "ret-560-400-client-in-sync",
@@ -498,7 +507,10 @@
         "host lost",
         "now hosting",
         "resync failed"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "ret-560-400-survivor-in-sync",
@@ -534,7 +546,10 @@
         "host lost",
         "now hosting",
         "resync failed"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "ret-520-800-client-in-sync",
@@ -552,7 +567,10 @@
         "host lost",
         "now hosting",
         "resync failed"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "ret-520-800-survivor-in-sync",
