@@ -23,7 +23,7 @@ from acceptance_runtime import write_json
 
 ROWS = ("mod-match", "mod-refusal", "world-join", "world-soak")
 DRIVER_FILES = ("cross_peers.py", "cross_report.py", "e2e_video.py", "feel/report.py", "feel/records.py", "world_mod_cross.py",
-                "world_soak.py", "acceptance_rows.py", "acceptance_evidence.py", "acceptance_cross_report.py", "acceptance_fixed_gates.py", "acceptance_mod.py",
+                "world_soak.py", "world_soak_tasks.py", "acceptance_rows.py", "acceptance_evidence.py", "acceptance_cross_report.py", "acceptance_fixed_gates.py", "acceptance_mod.py",
                 "acceptance_runtime.py", "acceptance_box_mods.py", "run_sim_test.py", "win32_test_runner.py", "posix_test_runner.py",
                 "feel_measure.py", "feel/harness_cost.py", "feel/host_loss.py", "e2e/ownership.py", "edith/remote_box.py")
 
@@ -154,6 +154,9 @@ def configure_plan(plan, row, mod_receipts=None):
             spec['session_leaf'] = 'session.json'
         spec["env"].pop("CC_TEST_CROSS_BOT", None)
         spec["env"].pop("CC_TEST_CROSS_CAPTURE_BARRIER", None)
+        if world and spec['role'] == 'host':
+            # The dedicated world host has no local player for the standard buy/pie probe.
+            spec['env'].pop('CC_TEST_NET_UI_SCRIPT', None)
         spec["env"].update(CCCP_HEADLESS="1", CC_RUNNER_IGNORE_FULLSCREEN="1")
         if row == "mod-refusal" and spec["peer"] == "linux":
             spec["module_refusal"] = True
@@ -179,7 +182,7 @@ def preflight_mod(box, result):
 
 def preflight_driver(box, result):
     from acceptance_mod import sha256
-    result['acceptance_driver_sources'] = {name: sha256(Path(box['tree'])/'tools'/name) for name in DRIVER_FILES}
+    result['acceptance_driver_sources'] = {name: sha256(Path(box.get('helpers', box['tree']))/'tools'/name) for name in DRIVER_FILES}
 
 
 def check_driver_preflights(plan, preflights):
@@ -398,9 +401,22 @@ def observe_soak(spec, run, now):
     if spec.get("acceptance_row") != "world-soak":
         return
     tick = latest_tick(Path(spec["own"])/"live.jsonl")
+    if tick is not None:
+        spec.setdefault("_soak_clock", now)
+    if spec.get('task_control') and spec['role'] == 'host' and now >= spec.get('_control_next', 0):
+        if not spec.get('_published_session'):
+            path = Path(spec['own'])/'engine/stdout.log'
+            text = path.read_text(encoding='utf-8', errors='replace') if path.is_file() else ''
+            sessions = re.findall(r'(?m)^\[net-directory\] registered session_id=(\S+) heartbeat_s=\d+', text)
+            if sessions:
+                spec['_published_session'] = sessions[-1]
+        from cross_peers import write_json as publish_json
+        publish_json(Path(spec['root'])/'host-control.json', dict(session=spec.get('_published_session'),
+                     host_tick=tick, host_elapsed_s=now-spec['_soak_clock'] if '_soak_clock' in spec else None,
+                     payload_monotonic_s=now, source='native live record and directory registration'))
+        spec['_control_next'] = now+1
     if tick is None:
         return
-    spec.setdefault("_soak_clock", now)
     elapsed = now-spec["_soak_clock"]
     seen = spec.setdefault("_journal_minutes", [])
     if spec["role"] == "host":

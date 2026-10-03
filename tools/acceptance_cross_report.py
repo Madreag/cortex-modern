@@ -149,7 +149,8 @@ def build_report(root):
     try:
         facts["live"] = live_hashes({n: documents[n] for n in comparing}, start, end) if start else {}
         facts["fullstate"] = fullstate_hashes({n: paths[n]/"engine/stdout.log" for n in comparing}, start, end) if start else {}
-        facts["peers"] = {name: peer_receipt("edith" if name == "edith-first" else name, documents[name], logs[name], load(paths[name]/"record.json", {}),
+        host_box = manifest.get('world_host_box', 'EROL-PC')
+        facts["peers"] = {name: peer_receipt(host_box.lower() if row == 'world-soak' and name == 'pc' and host_box != 'EROL-PC' else "edith" if name == "edith-first" else name, documents[name], logs[name], load(paths[name]/"record.json", {}),
                                              start if row.startswith("world-") and name == "edith" and start else 1, end)
                           for name in paths if name != "linux" or row != "mod-refusal"}
     except (OSError, ValueError, TypeError) as error:
@@ -183,6 +184,7 @@ def build_report(root):
                                 refusal_tick=load(root/"late-join-released.json", {}).get("host_tick"),
                                 survivors=["pc", "edith", "mac"])
     if row == "world-soak":
+        facts['world_host_box'] = manifest.get('world_host_box', 'EROL-PC')
         observed = load(paths["pc"]/"soak-elapsed.json", {})
         released = load(root/"late-join-released.json", {})
         facts["soak"] = {**manifest["soak"], "elapsed_s": observed.get("elapsed_s"),
