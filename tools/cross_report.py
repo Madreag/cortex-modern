@@ -133,6 +133,7 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
         engine_findings=oracle('no_engine_findings', rule='Every observed engine finding remains visible.'),
         exits=oracle('all_incarnation_exits', rule='Each incarnation exits normally or has its own actual scheduled termination receipt.'),
         pace=oracle('box_pace', rule='Every peer keeps the measured relative round rate.'),
+        instrumentation=oracle('instrument_valid', rule='Every instrument has complete measured cost coverage; no guessed subtraction.'),
         workload=oracle('unique_gameplay_budget', rule='Every instance completes the configured number of unique gameplay ticks.'))
     if mixed_builds:
         for name in ('live_hashes','full_state'): oracles[name].update(status='VOID', reason='; '.join(mixed_builds))
@@ -155,7 +156,7 @@ def judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds=()):
             dict(status='NOT APPLICABLE', reason='The schedule requests neither autosaves nor an archive restore; a ticket return uses the host image.')
         asked = [name for name in ('forced_ends', 'rematches', 'autosaves') if oracles[name]['status'] != 'NOT APPLICABLE']
     required = (*CORE_CHECKS, 'acceptance_roster', 'build_receipts', 'shared_fullstate', 'all_incarnation_exits', 'no_engine_findings', 'box_pace',
-                'quiet_feel', 'unique_gameplay_budget', 'coverage_minima', 'memory_bounds')
+                'quiet_feel', 'unique_gameplay_budget', 'coverage_minima', 'memory_bounds', 'instrument_valid')
     if manifest['scenario'] != 'match':
         required += ('bounded_recovery', 'faults_applied', 'native_fault_effects')
     workload = (manifest['ticks'] == 1201 and not manifest.get('faults')) if manifest['scenario'] == 'match' else (
@@ -885,6 +886,8 @@ def build_report(root):
         memory_census={fragment.name.split('-')[-1]: report.reduce_memory_census(''.join(line for _, line in read_log(fragment/'engine/stdout.log')),
                         **manifest['memory'], elapsed_s=load(fragment/'record.json',{}).get('elapsed_seconds', 0))
                        for fragment in fragments}
+        from feel.harness_cost import reduce_costs
+        harness_cost = {fragment.name: reduce_costs([fragment/'engine/stdout.log']) for fragment in fragments}
         archives=[r for fragment in fragments for r in source_rows(fragment/'archives.jsonl',root)]
         payload_sizes = [r['trace_vector_payload_bytes'] for r in events[name]
                          if r.get('type') == 'tick_timing' and 'trace_vector_payload_bytes' in r]
@@ -910,7 +913,8 @@ def build_report(root):
             frame_interval_ms=report.distribution([r['interval_ms'] for r in frames if r.get('interval_ms') is not None]),
             frame_count=len(frames), frames_over_50_ms=[r['frame'] for r in frames if max(r['draw_ms'], r['present_ms'], r.get('interval_ms') or 0) > 50],
             effective_hz=(len(frames)-1)*1000/(frames[-1]['present_end_ms']-frames[0]['present_end_ms']) if len(frames)>1 and frames[-1]['present_end_ms']>frames[0]['present_end_ms'] else None,
-            memory=memory, memory_by_incarnation=memory_by_incarnation, memory_census=memory_census, instrumentation=instrumentation, archives=archives,
+            memory=memory, memory_by_incarnation=memory_by_incarnation, memory_census=memory_census, instrumentation=instrumentation,
+            harness_cost=harness_cost, instrument_valid=all(row['passed'] for row in harness_cost.values()), archives=archives,
             recovery_observations=recovery_observations,payload_clock_last_ms=max([payload_done.get('payload_monotonic_ms',0),*[r.get('payload_monotonic_ms',0) for r in samples],*[r.get('upper_wall_ms',0) for r in recovery_observations]]),
             native_completion=completion, native_final_tick=final_tick, exits=exits,own_hold_notifications=own_hold_notifications,
             hold_evidence_complete=all((f/'engine/stdout.log').is_file() and (f/'engine/stdout.log').stat().st_size>0 for f in fragments),
@@ -1057,6 +1061,7 @@ def build_report(root):
         checks['validated_autosave_archives'] = not restore_requested and bool(peers) and all(
             peer['archives'] and all(row.get('passed') is True for row in peer['archives']) for peer in peers.values())
     checks['memory_bounds'] = memory_verdict(peers)['status'] == 'PASS'
+    checks['instrument_valid'] = bool(peers) and all(peer['instrument_valid'] for peer in peers.values())
     for name,peer in peers.items():
         peer['observations']=len(live[name])
         peer['frames']=comparison['peers'][name]['present']
@@ -1073,7 +1078,7 @@ def build_report(root):
         host_loss['collection_checks'] = dict(
             native_host_loss=host_loss['passed'], acceptance_identity=identity['roster_passed'] and identity['builds_passed'],
             preflight=checks['preflight_complete'], engine_findings=checks['no_engine_findings'],
-            record_integrity=checks['record_integrity'], survivor_workload=completed_workload(
+            record_integrity=checks['record_integrity'], instrumentation=checks['instrument_valid'], survivor_workload=completed_workload(
                 [i for i in manifest['instances'] if i['name'] in survivors], events, manifest['ticks'])['passed'],
             fullstate=host_loss.get('fullstate', {}).get('passed') is True,
             survivor_pace=all(peers[name]['pace']['passed'] for name in survivors),

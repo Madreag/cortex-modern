@@ -150,11 +150,14 @@ class ReportTests(unittest.TestCase):
 
     def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200, live_clock=False, dropped=False, beyond=None):
         from tempfile import TemporaryDirectory
+        from feel.test_harness_cost import complete_cost_log
+        import re
         with TemporaryDirectory() as folder:
             run = Path(folder)
             (run / 'host').mkdir()
             (run / 'manifest.json').write_text(json.dumps(dict(silent_tick=600 if silent else None, ticks=final_tick)), encoding='utf-8')
-            (run / 'host/stdout.log').write_text(waits, encoding='utf-8')
+            dump_peak = max([float(v) for v in re.findall(r'\[sim-dump\].*?(?:max_ms|\bms)=([0-9.eE+-]+)', waits)], default=0)
+            (run / 'host/stdout.log').write_text(complete_cost_log(last=final_tick, costs={'sim_dump': dump_peak}) + waits, encoding='utf-8')
             if silent:
                 (run / 'survivor').mkdir()
                 (run / 'survivor/stdout.log').write_text(survivor_log, encoding='utf-8')

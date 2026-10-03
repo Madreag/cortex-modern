@@ -830,7 +830,7 @@ def check_review(results, scratch):
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))
     ok &= row(results, "review/failures-carried",
               document["failures"]["client"] == ["[menu-script] FAILED: assert_substate"])
-    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-"))]
+    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-", "harness-cost-"))]
     ok &= row(results, "review/no-probe-is-named",
               all(item.get("probe") == "awaiting-review" for item in scenario_items))
     # The dialog row is written for every capture: a player would have had to answer each line it lists.
@@ -903,7 +903,7 @@ def check_interruption(results, scratch):
     manifest = driver.scenario_manifest(capture, out, 1)
     review = driver.aggregate_review(capture, out)
     ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
-    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-"))]
+    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-", "harness-cost-"))]
     ok &= row(results, "interruption/unstarted-checklist-retained", len(started_items) == 2 and started_items[1]["run"] == "second")
     ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
     return ok
@@ -1190,7 +1190,7 @@ def check_finalizer(results, scratch):
     saved = json.loads((out / "capture.json").read_text())
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
-    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-"))]
+    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-", "harness-cost-"))]
     ok &= row(results, "finalize/names-unstarted-run", len(finalized_items) == 2 and finalized_items[1]["run"] == "second")
     ok &= row(results, "finalize/manifest-retains-budget", manifest.get("scratch_limit_bytes") == 8_000_000_000 and
               manifest.get("scratch_root") == str(scratch))
