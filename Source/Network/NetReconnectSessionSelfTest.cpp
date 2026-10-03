@@ -4644,113 +4644,120 @@ namespace RTE {
 			if (aged[1].droppedForMs != 0 || aged[1].droppedAtMs != 0 || aged[1].dropped) {
 				return Fail("a seat nobody dropped reports a drop age");
 			}
-			// The hold's frames are the round's; nothing off the round may invent them.
-			if (aged[0].holdFramesRemaining != 0) {
-				return Fail("the admission plane filled in a hold the round never counted");
-			}
 			std::cout << "[net-reconnect-session-selftest] PASS: moderation view ages the drop from the plane's clock" << std::endl;
 			return 0;
 		}
 
-		int TestSeatPresenceLine() {
-			const uint64_t hold = NetLockstepCoordinator::c_ReclaimHoldFrames;
-			NetSeatPresence presence;
-			NetLockstepSeatSnapshot snapshot;
-			snapshot.senderPeerId = 1;
-			snapshot.sessionId = 123;
-			snapshot.epoch = Ramp<16>(7);
-			snapshot.roundId = 70;
-			snapshot.revision = 1;
-			snapshot.observedAtMs = 1000;
-			NetSeatPresenceEntry seat;
-			seat.stableSeat = 0;
-			seat.peerId = 2;
-			seat.state = NetSeatPresenceState::Disconnected;
-			seat.holderGeneration = 4;
-			seat.seatGeneration = 8;
-			seat.incarnation = 2;
-			seat.holdActive = true;
-			seat.holdUntilMs = 21000;
-			seat.holdUntilFrame = 100 + hold;
-			seat.holderName = "Alice";
-			snapshot.seats = {seat};
-			if (!presence.Line(2, "Alice").empty() || !presence.ApplySnapshot(snapshot, 5000)) return Fail("initial roster state was not adopted");
-			presence.NoteFrame(100);
-			if (presence.HoldFramesRemaining(2) != hold || presence.HoldWallSecondsRemaining(2, 5000) != 20 ||
-			    presence.HoldWallSecondsRemaining(2, 14999) != 11 || presence.HoldWallSecondsRemaining(2, 15000) != 10 ||
-			    presence.HoldWallSecondsRemaining(2, 25000) != 0) return Fail("the two hold clocks were mixed or rounded down");
-			presence.NoteFrame(100 + hold + 100);
-			if (presence.StateOf(2) != NetSeatPresenceState::Disconnected || presence.HoldFramesRemaining(2) != 0 ||
-			    presence.HoldWallSecondsRemaining(2, 5000) != 20) return Fail("frame progress invented an admission transition");
-			snapshot.revision++;
-			snapshot.seats[0].state = NetSeatPresenceState::Reconnecting;
-			if (!presence.ApplySnapshot(snapshot, 5000) || presence.StateOf(2) != NetSeatPresenceState::Reconnecting) return Fail("reclaim start did not update the line");
-			const auto stale = snapshot;
-			snapshot.revision++;
-			snapshot.seats[0].state = NetSeatPresenceState::Disconnected;
-			presence.ApplySnapshot(snapshot, 5000);
-			if (presence.ApplySnapshot(stale, 5000) || presence.StateOf(2) != NetSeatPresenceState::Disconnected) return Fail("a stale reclaim replaced a failed attempt");
-			snapshot.revision++;
-			snapshot.seats[0].holdActive = false;
-			snapshot.seats[0].holdUntilMs = 0;
-			presence.ApplySnapshot(snapshot, 5000);
-			if (presence.Line(2, "Old name") != "Alice: disconnected") return Fail("hold expiry was presented as leaving the match");
-			snapshot.revision++;
-			snapshot.seats[0].state = NetSeatPresenceState::Substituted;
-			snapshot.seats[0].holderName = "Carol";
-			snapshot.seats[0].holderGeneration++;
-			snapshot.seats[0].seatGeneration++;
-			snapshot.seats[0].incarnation = 1;
-			presence.ApplySnapshot(snapshot, 5000);
-			if (presence.Line(2, "Carol") != "Carol: joined as substitute") return Fail("a substitute was described as replacing itself");
-			snapshot.roundId++;
-			snapshot.revision = 1;
-			snapshot.seats[0].holdUntilFrame = 0;
-			presence.NoteFrame(0);
-			if (!presence.ApplySnapshot(snapshot, 5000) || presence.HoldFramesRemaining(2) != 0 ||
-			    presence.StateOf(2) != NetSeatPresenceState::Substituted) return Fail("a full new-round snapshot did not replace the old frame hold");
-			snapshot.revision++;
-			snapshot.seats[0].state = NetSeatPresenceState::Present;
-			presence.ApplySnapshot(snapshot, 5000);
-			if (!presence.Line(2, "Carol").empty()) return Fail("a returned player retained a missing-player line");
-			snapshot.revision++;
-			snapshot.seats[0].state = NetSeatPresenceState::Left;
-			presence.ApplySnapshot(snapshot, 5000);
-			if (presence.Line(2, "Carol") != "Carol: left" || !presence.Line(4, "").empty()) return Fail("a clean leave or absent roster subject was misreported");
-			presence.Clear();
-			if (presence.GetSnapshot() || !presence.GetSeats().empty()) return Fail("roster survived the session lifetime");
-			if (NetSeatPresence::HoldSeconds(hold) != 20 || NetSeatPresence::HoldSeconds(0) != 0 ||
-			    NetSeatPresence::HoldSeconds(60) != 1 || NetSeatPresence::HoldSeconds(61) != 2) return Fail("hold seconds differ from the pinned timestep");
+		// Every seat label comes from the roster: its word, its line and its holder's name.
+		int TestRosterSeatLine() {
+			NetRosterSeat seat;
+			seat.seatId = 1;
+			seat.owner = 7;
+			seat.name = "Alice";
+			seat.phase = NetSeatPhase::Running;
+			if (std::string(RosterSeatStateWord(seat)) != "Present" || !RosterSeatLine(seat, seat.name).empty()) return Fail("a played seat carried a missing-player line");
+			seat.phase = NetSeatPhase::Held;
+			seat.link = NetSeatLink::Dropped;
+			seat.holdCause = NetSeatHoldCause::LinkDrop;
+			if (std::string(RosterSeatStateWord(seat)) != "Held" || RosterSeatLine(seat, seat.name) != "Alice: Held - AI in control (connection lost)") {
+				return Fail("a dropped seat read '" + RosterSeatLine(seat, seat.name) + "'");
+			}
+			seat.holdCause = NetSeatHoldCause::Leave;
+			if (RosterSeatLine(seat, seat.name) != "Alice: Held - AI in control (left)") return Fail("a left seat read '" + RosterSeatLine(seat, seat.name) + "'");
+			// A seat held in place keeps its link and its player, and still says why the AI plays it.
+			seat.link = NetSeatLink::Connected;
+			seat.holdCause = NetSeatHoldCause::Capacity;
+			if (std::string(RosterSeatStateWord(seat)) != "Held" || RosterSeatLine(seat, seat.name) != "Alice: Held - AI in control (machine too slow)") {
+				return Fail("a seat held in place read '" + RosterSeatLine(seat, seat.name) + "'");
+			}
+			seat.phase = NetSeatPhase::RejoinCatchUp;
+			if (std::string(RosterSeatStateWord(seat)) != "Reconnecting" || RosterSeatLine(seat, seat.name) != "Alice: Rejoining") {
+				return Fail("a returning seat read '" + RosterSeatLine(seat, seat.name) + "'");
+			}
+			seat.phase = NetSeatPhase::Running;
+			if (!RosterSeatLine(seat, seat.name).empty()) return Fail("a returned player retained a missing-player line");
+			seat.owner = 0;
+			seat.name.clear();
+			seat.holdCause = NetSeatHoldCause::Kicked;
+			if (std::string(RosterSeatStateWord(seat)) != "Left" || RosterSeatLine(seat, "Alice") != "Alice: Open - AI in control (kicked)") {
+				return Fail("a kicked seat read '" + RosterSeatLine(seat, "Alice") + "'");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS the_roster_labels_every_seat" << std::endl;
 			return 0;
 		}
 
-		// The seats panel and the stall overlay must agree about the pause: the round's hold decides,
-		// not the seat's remaining hold FRAMES, which outlive a resolved hold.
+		// Every holder labels a seat from the roster it was sent: a drop, a substitute's name and a hold in place reach the others.
+		int TestTheRosterNamesEverySeatsHolder() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint stayer;
+			stayer.connection = 71;
+			ConfigureEndpoint(stayer, "stayer", &unixNow);
+			wire.Add(&stayer);
+			if (!stayer.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the stayer's join did not settle: " + error);
+			}
+			Endpoint leaver;
+			leaver.connection = 72;
+			ConfigureEndpoint(leaver, "leaver", &unixNow);
+			wire.Add(&leaver);
+			wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+			if (!leaver.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the leaver's join did not settle: " + error);
+			}
+			const auto lineOf = [](const Endpoint& peer, uint16_t stableSeat) {
+				const NetRosterReplica& replica = peer.client.GetRosterReplica();
+				const NetRosterSeat* seat = replica.HasRoster() ? replica.Roster().Find(NetRosterIdOf(stableSeat)) : nullptr;
+				return seat ? RosterSeatLine(*seat, seat->name) : std::string("no seat");
+			};
+			wire.host.SetLiveMatch(true);
+			wire.host.NotifyDisconnect(leaver.connection, 120);
+			leaver.connected = false;
+			wire.Remove(leaver.connection);
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			if (lineOf(stayer, 1) != "leaver: Held - AI in control (connection lost)") {
+				return Fail("the stayer read the dropped seat as '" + lineOf(stayer, 1) + "'");
+			}
+			Endpoint substitute;
+			substitute.connection = 73;
+			ConfigureEndpoint(substitute, "Carol", &unixNow);
+			wire.Add(&substitute);
+			if (!substitute.client.BeginApplication(1, wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the application did not settle: " + error);
+			}
+			if (wire.host.SubstituteApplicant(1, substitute.connection, wire.nowMs) != NetH4ModerationResult::Ok || !wire.Pump(&error)) {
+				return Fail("the host could not seat the applicant: " + error);
+			}
+			if (substitute.client.GetState() != NetH4ClientState::Joined) {
+				return Fail(std::string("the substitute did not commit: ") + NetReconnectClientStateName(substitute.client.GetState()));
+			}
+			const NetRosterSeat* taken = stayer.client.GetRosterReplica().Roster().Find(NetRosterIdOf(1));
+			if (!taken || taken->name != "Carol") {
+				return Fail("the stayer names the substitute's seat '" + (taken ? taken->name : std::string("(no seat)")) + "'");
+			}
+			wire.host.NoteSeatHeldInPlace(MakeSeatTable()[0].lockstepPeerId, NetSeatHoldCause::Capacity);
+			if (!wire.Pump(&error)) {
+				return Fail(error);
+			}
+			if (lineOf(substitute, 0) != "stayer: Held - AI in control (machine too slow)") {
+				return Fail("the substitute read the stayer's seat held in place as '" + lineOf(substitute, 0) + "'");
+			}
+			std::cout << "[net-reconnect-session-selftest] PASS a_substitutes_name_reaches_every_holder dropped='" << "leaver: Held - AI in control (connection lost)"
+			          << "' substitute=" << taken->name << " held_in_place='" << lineOf(substitute, 0) << "'" << std::endl;
+			return 0;
+		}
+
+		// The seats panel and the stall overlay must agree about the pause: the round's hold decides.
 		int TestModerationPanelTitleFollowsTheRoundHold() {
-			const uint64_t hold = NetLockstepCoordinator::c_ReclaimHoldFrames;
-			NetSeatPresence presence;
-			NetLockstepSeatSnapshot snapshot;
-			snapshot.senderPeerId = 1;
-			snapshot.sessionId = 321;
-			snapshot.roundId = 9;
-			snapshot.revision = 1;
-			snapshot.observedAtMs = 1000;
-			NetSeatPresenceEntry seat;
-			seat.stableSeat = 0;
-			seat.peerId = 2;
-			seat.state = NetSeatPresenceState::Disconnected;
-			seat.holdActive = false;
-			seat.holdUntilFrame = 100 + hold;
-			seat.holderName = "Alice";
-			snapshot.seats = {seat};
-			if (!presence.ApplySnapshot(snapshot, 1000)) {
-				return Fail("the resolved-hold snapshot was not applied");
-			}
-			presence.NoteFrame(100);
-			// The frame budget still has the whole hold in it while the round holds nothing.
-			if (presence.HoldFramesRemaining(2) != hold) {
-				return Fail("the seat's frame hold was not the disagreement window this pins");
-			}
 			std::string who;
 			uint32_t seconds = 0;
 			if (ScenarioRunner::DescribeLockstepHoldPause(who, seconds) || !who.empty() || seconds != 0) {
@@ -8725,7 +8732,10 @@ namespace RTE {
 		if (const int result = TestModerationViewAgesTheDrop(); result != 0) {
 			return result;
 		}
-		if (const int result = TestSeatPresenceLine(); result != 0) {
+		if (const int result = TestRosterSeatLine(); result != 0) {
+			return result;
+		}
+		if (const int result = TestTheRosterNamesEverySeatsHolder(); result != 0) {
 			return result;
 		}
 		if (const int result = TestModerationPanelTitleFollowsTheRoundHold(); result != 0) {

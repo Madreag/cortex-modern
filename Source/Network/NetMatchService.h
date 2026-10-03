@@ -708,16 +708,34 @@ namespace RTE {
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
 		void PumpSessionEvents();
-		/// Consumes the host's current seat snapshot on the game thread.
-		void PumpSeatPresence();
+		/// Reads the session's seat roster on the game thread into the seat views every seat label, toast and report line comes from.
+		void PumpSeatViews();
+		/// While the fake link adds an effect, prints what it did to this peer's received packets in the running round, every two seconds.
+		void ReportFakeLinkEffects();
+		/// The moderation state a host hands over, as JSON: each held seat with its cause, each ban and each ticket, by digest. Live: this host's
+		/// roster now. Carried: the state in the last handover capsule this peer opened.
+		std::string GetModerationSnapshotState(bool carried) const;
+		/// That state of one roster and its ban list.
+		static std::string ModerationStateOf(const NetSeatRoster& roster);
 		/// The reconnect UX state machine (§11): auto-retry, the stored-ticket offer and the roster's
 		/// dropped/reclaiming marks. Game-thread only.
 		NetReconnectUx& GetReconnectUx() { return m_ReconnectUx; }
 		const NetReconnectUx& GetReconnectUx() const { return m_ReconnectUx; }
 		/// Reads the cached moderation view; actions require a running match on the game thread.
 		std::vector<NetH4ModerationSeat> GetModerationSeats() const;
-		/// The seat-presence plane — where dropped seats get their reclaim-hold marks.
-		const NetSeatPresence& GetSeatPresence() const { return m_SeatPresence; }
+		/// One seat as the session's roster has it - the host's own, or a client's copy of it.
+		struct SeatView {
+			uint8_t peerId = 0;
+			uint16_t stableSeat = 0;
+			uint32_t revision = 0; //!< The roster revision the view was read from.
+			NetRosterSeat seat;
+			std::string name;
+			std::string state; //!< A report's word for the seat: "Present", "Held", "Reconnecting" or "Left".
+			std::string line;  //!< "name: label" while the seat is not plainly played; empty otherwise.
+		};
+		/// The seat views, by lockstep peer; empty before any roster is heard.
+		std::map<uint8_t, SeatView> GetSeatViews() const;
+		std::optional<SeatView> GetSeatView(uint8_t peerId) const;
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
 		/// Host: close this holder without a reclaim hold. The host confirmation dialog calls this.
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action);
@@ -738,6 +756,10 @@ namespace RTE {
 		/// Held client: begins an armed retry of its host once the backoff is over.
 		/// @return Whether a retry is armed or has just begun.
 		bool PumpHeldRejoin(std::string* error = nullptr);
+		/// While this held seat waits for a host no majority can replace: what it waits for, in the player's words; empty otherwise.
+		std::string GetHostUnreachableLine() const;
+		/// The held seat's player leaves the wait: the seat and its ticket stay theirs, and the landing offers Rejoin Match.
+		void LeaveHeldWait();
 		/// How far every rejoin this host is serving has come: its admission, its phase, the image staged for
 		/// it, the transfer it has acknowledged and the tail it has consumed. The goodbye drain watches this
 		/// beside the round's own progress, because a rejoin commits no frame until it is back in the round.
@@ -1330,7 +1352,12 @@ namespace RTE {
 		/// recovery record (P22), then clears the registry, the ledger and the seats. Caller holds the lock.
 		void EndAdmissionSession();
 		void ResetRosterTransitionHistory();
-		void RecordRosterTransitions(uint64_t observedAtMs);
+		/// Reads the session's roster into the seat views, then records what moved. Caller holds the lock.
+		void RefreshSeatViewsLocked(uint64_t observedAtMs);
+		/// One seat's view: the roster's name for its holder first, then the caller's.
+		static SeatView BuildSeatView(uint8_t peerId, uint16_t stableSeat, uint32_t revision, const NetRosterSeat& seat, const std::string& name);
+		/// The toasts, the transition log and the summary counts from what moved since the previous views.
+		void RecordRosterTransitions(const std::map<uint8_t, SeatView>& previous, uint64_t observedAtMs);
 		/// Publishes a successful local host action to the presentation sink; caller holds the lock.
 		void RecordModerationAction(uint16_t stableSeat, NetModerationAction action);
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
@@ -1474,7 +1501,7 @@ namespace RTE {
 		NetLobbySnapshot m_LobbySnapshot;
 		std::optional<NetMatchSummary> m_LastMatchSummary;
 		NetMatchSummary m_CurrentMatchSummary;
-		std::map<uint8_t, NetSeatPresenceEntry> m_SummarySeats;
+		std::map<uint8_t, SeatView> m_SummarySeats;
 		NetSeatAuthRegistry m_SeatAuth; //!< Hosted-session reconnect-auth material (off-sim epoch + seat credentials); survives resync/rejoin/rematch.
 		// The admission plane lives on the service, not on a session or a match round, so a seat and its
 		// ledger survive resync, rejoin and rematch exactly as the registry does (§3).
@@ -1484,7 +1511,13 @@ namespace RTE {
 		NetParticipantIdentityStore m_ParticipantStore;
 		NetHostBanStore m_BanStore;
 		NetReconnectUx m_ReconnectUx;
-		NetSeatPresence m_SeatPresence;
+		std::map<uint8_t, SeatView> m_SeatViews; //!< Every seat label's source: the session's roster, read each pump.
+		uint64_t m_FakeLinkRound = 0;            //!< The round the fake link's counts are measured from.
+		NetFakeLinkEffects m_FakeLinkBaseline;   //!< The counts when that round began.
+		uint64_t m_FakeLinkReportedAtMs = 0;
+		std::string m_CarriedModerationState;      //!< The moderation state of the last handover capsule opened.
+		mutable std::pair<uint32_t, size_t> m_LiveModerationKey{UINT32_MAX, 0}; //!< The roster revision and ban count the cached live state was read at.
+		mutable std::string m_LiveModerationState;
 		struct RosterTransition {
 			uint8_t peerId = 0;
 			std::string state;

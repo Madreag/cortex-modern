@@ -15,7 +15,6 @@
 #include <vector>
 
 namespace RTE {
-	class NetSeatPresence;
 	/// CLI scenario direct-launch mode.
 	///
 	/// Activated when the binary is invoked with `-scenario <PresetName>`. Skips the menu loop,
@@ -342,7 +341,6 @@ namespace RTE {
 		/// What a round stopped by this peer's own seat hold tries first: the catch-up in place on the committed tail.
 		/// Returns whether it began, which takes the round off the stop path.
 		static void SetHeldCatchUp(std::function<bool()> begin);
-		static void SetLockstepSeatPresence(const NetSeatPresence* presence);
 
 		/// One shown match-event banner: the lockstep tick it was recorded at, its class and text.
 		struct NetUiToastRecord {

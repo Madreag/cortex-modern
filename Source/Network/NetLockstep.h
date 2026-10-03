@@ -42,7 +42,7 @@ namespace RTE {
 		Ack = 3,
 		Stop = 4,
 		Checksum = 5,
-		SeatSnapshot = 6,
+		// 6 stays unused: a seat snapshot from an older build must not decode as anything.
 		RecoveryChunk = 7,
 		Timing = 8,
 	};
@@ -68,43 +68,6 @@ namespace RTE {
 		Reclaimed = 1,
 		Substituted = 2,
 		Expired = 3,
-	};
-
-	enum class NetSeatPresenceState : uint8_t {
-		Present = 0,
-		Disconnected = 1,
-		Reconnecting = 2,
-		Substituted = 3,
-		Left = 4,
-	};
-
-	/// Public admission state. It describes a seat and never grants simulation authority.
-	struct NetSeatPresenceEntry {
-		uint16_t stableSeat = 0;
-		uint8_t peerId = 0;
-		NetSeatPresenceState state = NetSeatPresenceState::Present;
-		uint32_t holderGeneration = 0;
-		uint32_t seatGeneration = 0;
-		uint32_t incarnation = 0;
-		bool holdActive = false;
-		uint64_t holdUntilMs = 0; //!< Host admission-clock deadline, independent of the simulation hold.
-		uint64_t holdUntilFrame = 0;
-		std::string holderName;
-
-		bool operator==(const NetSeatPresenceEntry&) const = default;
-	};
-
-	/// A full roster update, authored by the host rather than by any of its subject seats.
-	struct NetLockstepSeatSnapshot {
-		uint8_t senderPeerId = 0;
-		uint64_t sessionId = 0;
-		std::array<uint8_t, 16> epoch{};
-		uint64_t roundId = 0;
-		uint64_t revision = 0;
-		uint64_t observedAtMs = 0;
-		std::vector<NetSeatPresenceEntry> seats;
-
-		bool operator==(const NetLockstepSeatSnapshot&) const = default;
 	};
 
 	enum class NetLockstepErrorCode {
@@ -376,7 +339,7 @@ namespace RTE {
 		bool operator==(const NetLockstepChecksum&) const = default;
 	};
 
-	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop, NetLockstepChecksum, NetLockstepSeatSnapshot, NetLockstepRecoveryChunk, NetLockstepTiming>;
+	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop, NetLockstepChecksum, NetLockstepRecoveryChunk, NetLockstepTiming>;
 
 	struct NetLockstepPacket {
 		NetLockstepPayload payload;
@@ -779,7 +742,6 @@ namespace RTE {
 		static constexpr uint16_t c_AIOrderWriterVersion = 21;
 		static constexpr uint16_t c_AIPassEventVersion = 22;
 		static constexpr uint16_t c_PlaceBrainVersion = 22;
-		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
 		static constexpr uint16_t c_StartParkVersion = 32;
@@ -1306,7 +1268,7 @@ namespace RTE {
 		bool IsSeatHeldForReclaim(uint8_t peerId) const;
 		/// Whether a seat the AI holds comes back to its player by a frame: its agreed return lands at or before it.
 		bool HeldSeatReturnsBy(uint8_t peerId, uint64_t frame) const;
-		// Kept for UI estimates that still speak in frames (HoldSeconds(1200) == 20). The hold itself
+		// Kept for estimates that still speak in frames (1200 frames = 20 s). The hold itself
 		// is the admission wall-clock; commits do not advance while a dropped seat is unresolved.
 		static constexpr uint64_t c_ReclaimHoldFrames = 1200;
 		static constexpr uint64_t c_HoldPauseMs = 20000;
@@ -1356,9 +1318,6 @@ namespace RTE {
 		void EvictRemovedPeer(uint8_t peerId, const std::string& message, uint64_t nowMs);
 		uint64_t HoldPauseRemainingMs(uint64_t nowMs) const;
 		std::string DescribeHeldPause(uint32_t& secondsLeft, uint64_t nowMs) const;
-		/// Publishes one complete current view. Refused sends retry the latest view without growing a queue.
-		bool PublishSeatSnapshot(std::vector<NetSeatPresenceEntry> seats, uint64_t observedAtMs);
-		std::optional<NetLockstepSeatSnapshot> TakeSeatSnapshot();
 		/// Whether the round has yet to commit a frame. A resync relaunch lands here: the ledgered
 		/// reseat rides the first committed frame, so nothing the round produced can be judged before it.
 		bool HasCommittedAFrame() const { NET_PLANE_CHECK(); return m_Stats.framesAccepted > 0; }
@@ -1600,8 +1559,6 @@ namespace RTE {
 		/// Sends the production a followed round owes the host, in order, retrying a refused send.
 		void FlushResendFrames();
 		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);
-		void HandleSeatSnapshot(const NetLockstepSeatSnapshot& snapshot, NetPeerId fromTransport);
-		void FlushSeatSnapshot();
 		void HandleChecksum(const NetLockstepChecksum& checksum, NetPeerId fromTransport);
 		/// Whether a packet's claimed sender owns the transport it arrived on. Only the relay host
 		/// receives each remote directly; clients get everything via the relay and trust the host.
@@ -1862,9 +1819,6 @@ namespace RTE {
 		std::map<uint8_t, NetLockstepHoldResolution> m_DroppedSeatResolutions;
 		std::map<uint8_t, uint64_t> m_DroppedAtMs;
 		uint64_t m_LastHoldHeartbeatMs = 0;
-		std::optional<NetLockstepSeatSnapshot> m_SeatSnapshot;
-		bool m_SeatSnapshotUnread = false;
-		std::set<uint8_t> m_PendingSeatSnapshotPeers;
 		std::map<uint8_t, uint64_t> m_PeerLastHeardMs; //!< peerId -> when its last packet arrived; the host's drop clock.
 		std::set<uint8_t> m_UnreachablePeers; //!< Remotes whose forwards never landed, dropped on the next tick.
 		std::set<uint8_t> m_CongestedPeers; //!< Remotes whose last refusal was our own full queue.

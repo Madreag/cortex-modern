@@ -22,8 +22,7 @@
 namespace RTE {
 
 	namespace {
-		/// Stable seats count from 0, roster seats from 1.
-		uint8_t RosterIdOf(uint16_t stableSeat) { return static_cast<uint8_t>(stableSeat + 1); }
+		uint8_t RosterIdOf(uint16_t stableSeat) { return NetRosterIdOf(stableSeat); }
 	} // namespace
 
 	uint64_t NetRosterMatchIdOf(const NetAuthBytes16& epoch) {
@@ -562,6 +561,7 @@ namespace RTE {
 		event.cause = cause;
 		event.owner = RosterOwnerOf(seat);
 		event.ticket = NetRosterTicketIdOf(m_ConfiguredEpoch, seat.seat.stableSeat, seat.holderGeneration);
+		event.name = !seat.substituteName.empty() ? seat.substituteName : seat.holderName;
 		const NetRosterSeat* held = m_Roster.Find(event.seat);
 		const NetRosterResult result = RTE::ApplyRosterEvent(m_Roster, event);
 		if (result.refused) {
@@ -1919,7 +1919,10 @@ namespace RTE {
 			entry.committed = IsSeated(seat);
 			entry.dropped = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && IsHolderAway(seat);
 			entry.held = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && RosterHoldsSeat(seat);
-			if (const NetRosterSeat* row = RosterSeatOf(seat)) entry.holdCause = row->holdCause;
+			if (const NetRosterSeat* row = RosterSeatOf(seat)) {
+				entry.holdCause = row->holdCause;
+				entry.slowMachine = row->owner != 0 && row->phase == NetSeatPhase::Held && row->holdCause == NetSeatHoldCause::Capacity;
+			}
 			entry.closed = IsHostOpened(seat);
 			entry.heldForReclaim = IsSeated(seat) && !IsHostOpened(seat);
 			entry.substitutable = IsSeatSubstitutable(seat);
@@ -2211,6 +2214,8 @@ namespace RTE {
 		seat->incarnation = 0;
 		seat->saturated = false;
 		CaptureParticipant(*seat, connection);
+		seat->substituteName = pending->displayName;
+		seat->holderName = pending->displayName;
 		SeatHolder(*seat);
 		if (pending->supersededGeneration != 0) {
 			seat->retiredGeneration = pending->supersededGeneration;
@@ -2227,8 +2232,6 @@ namespace RTE {
 		++m_Stats.substitutionsCommitted;
 		if (outgoing != c_InvalidNetPeerId) Send(outgoing, NetJoinRejected{NetRejectReason::SeatReassigned, "The host gave your seat to another player", "seat_reassigned", "", ""});
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, outgoing, false, true});
-		seat->substituteName = pending->displayName;
-		seat->holderName = pending->displayName;
 		if (NetH4GetFault() == NetH4Fault::CommitDrop) {
 			// The gate's commit-result-lost fault: the transaction is committed and cached, and the
 			// answer is thrown away exactly once. The substitute's own retry has to recover it.

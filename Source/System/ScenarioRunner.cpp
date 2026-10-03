@@ -69,7 +69,6 @@ namespace RTE {
 		std::function<bool()> s_PendingSessionTail;
 		std::function<uint64_t()> s_SessionProgress;
 		std::function<void()> s_GoodbyeToPendingReturners;
-		const NetSeatPresence* s_SeatPresence = nullptr;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		std::vector<std::pair<uint8_t, NetGameCheckpoint>> s_AppliedCheckpoints;
 		uint64_t s_NextLocalCommandSequence = 1;
@@ -901,10 +900,6 @@ namespace RTE {
 		s_HeldCatchUp = std::move(begin);
 	}
 
-	void ScenarioRunner::SetLockstepSeatPresence(const NetSeatPresence* presence) {
-		s_SeatPresence = presence;
-	}
-
 	void ScenarioRunner::PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId) {
 		NetLockstepPlaneGuard plane;
 		// Selftests drive the service before the managers are built, so there is no sim clock to stamp with.
@@ -1082,7 +1077,6 @@ namespace RTE {
 		s_PaceSlide.Reset();
 		s_LocalStartParkPublished = false;
 		if (!coordinator) {
-			s_SeatPresence = nullptr;
 			s_E2eFirstTransferUid = 0; // A resync does not undo the first transfer; the latch clears with the coordinator.
 		}
 		if (coordinator && (!preserveCommands || s_CommandSessionId != coordinator->GetConfig().sessionId || s_CommandEpoch != coordinator->GetConfig().seatPresenceEpoch)) {
@@ -1940,18 +1934,6 @@ namespace RTE {
 			return false;
 		}
 		outWho = s_LockstepCoordinator->DescribeHeldPause(outSecondsLeft, NetLockstepNowMs());
-		if (s_SeatPresence) {
-			for (const auto& [peerId, seat]: s_SeatPresence->GetSeats()) {
-				if (!seat.holdActive) {
-					continue;
-				}
-				if (!seat.holderName.empty()) {
-					outWho = seat.holderName;
-				}
-				outSecondsLeft = static_cast<uint32_t>(s_SeatPresence->HoldWallSecondsRemaining(peerId));
-				break;
-			}
-		}
 		return true;
 	}
 

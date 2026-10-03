@@ -1436,127 +1436,6 @@ namespace RTE {
 			return true;
 		}
 
-		bool ValidateSeatSnapshot(const NetLockstepSeatSnapshot& payload, NetLockstepError* error) {
-			if (!ValidatePeerId(payload.senderPeerId, error, "sender_peer_id")) return false;
-			if (payload.sessionId == 0 || payload.roundId == 0 || payload.revision == 0 ||
-			    std::all_of(payload.epoch.begin(), payload.epoch.end(), [](uint8_t byte) { return byte == 0; }) ||
-			    payload.seats.empty() || payload.seats.size() > NetLockstepCodec::c_MaxPeerCount) {
-				SetError(error, NetLockstepErrorCode::InvalidValue, 0, "invalid seat snapshot identity or count");
-				return false;
-			}
-			std::set<uint8_t> peers;
-			std::optional<uint16_t> lastSeat;
-			for (const NetSeatPresenceEntry& seat: payload.seats) {
-				if (!ValidatePeerId(seat.peerId, error, "seat_peer_id")) return false;
-				if ((lastSeat && seat.stableSeat <= *lastSeat) || !peers.insert(seat.peerId).second ||
-				    static_cast<uint8_t>(seat.state) > static_cast<uint8_t>(NetSeatPresenceState::Left) ||
-				    (!seat.holdActive && seat.holdUntilMs != 0) ||
-				    (seat.holdActive && seat.state != NetSeatPresenceState::Disconnected && seat.state != NetSeatPresenceState::Reconnecting)) {
-					SetError(error, NetLockstepErrorCode::InvalidValue, 0, "invalid seat snapshot entry");
-					return false;
-				}
-				lastSeat = seat.stableSeat;
-			}
-			return true;
-		}
-
-		bool AdvancesSeatSnapshot(const std::optional<NetLockstepSeatSnapshot>& previous, const NetLockstepSeatSnapshot& next, uint8_t peerCount, const NetMatchConfig& config) {
-			if (previous && (next.sessionId != previous->sessionId || next.epoch != previous->epoch || next.roundId != previous->roundId ||
-			                 next.revision <= previous->revision || next.observedAtMs < previous->observedAtMs)) return false;
-			for (const auto& seat: next.seats) {
-				if (seat.peerId > peerCount) return false;
-				if (!previous) continue;
-				const auto old = std::find_if(previous->seats.begin(), previous->seats.end(), [&](const auto& entry) { return entry.stableSeat == seat.stableSeat; });
-				if (old != previous->seats.end() &&
-				    (seat.peerId != old->peerId || seat.seatGeneration < old->seatGeneration || seat.holderGeneration < old->holderGeneration ||
-				     (seat.holderGeneration == old->holderGeneration && seat.incarnation < old->incarnation) ||
-				     (seat.holderGeneration > old->holderGeneration && seat.seatGeneration <= old->seatGeneration))) return false;
-			}
-			if (previous) {
-				for (const auto& old: previous->seats) {
-					if (std::none_of(next.seats.begin(), next.seats.end(), [&](const auto& seat) { return seat.stableSeat == old.stableSeat; })) return false;
-				}
-			}
-			for (const auto& player: config.players) {
-				if (!player.cpu && player.peerId != 0 && std::none_of(next.seats.begin(), next.seats.end(),
-				    [&](const auto& seat) { return seat.peerId == player.peerId; })) return false;
-			}
-			return true;
-		}
-
-		bool EncodePayload(const NetLockstepSeatSnapshot& payload, std::vector<uint8_t>& out, NetLockstepError* error) {
-			if (!ValidateSeatSnapshot(payload, error)) return false;
-			AppendU8(out, payload.senderPeerId);
-			AppendU8(out, static_cast<uint8_t>(payload.seats.size()));
-			AppendU16LE(out, 0);
-			AppendU64LE(out, payload.sessionId);
-			out.insert(out.end(), payload.epoch.begin(), payload.epoch.end());
-			AppendU64LE(out, payload.roundId);
-			AppendU64LE(out, payload.revision);
-			AppendU64LE(out, payload.observedAtMs);
-			for (const NetSeatPresenceEntry& seat: payload.seats) {
-				AppendU16LE(out, seat.stableSeat);
-				AppendU8(out, seat.peerId);
-				AppendU8(out, static_cast<uint8_t>(seat.state));
-				AppendU32LE(out, seat.holderGeneration);
-				AppendU32LE(out, seat.seatGeneration);
-				AppendU32LE(out, seat.incarnation);
-				AppendU8(out, seat.holdActive ? 1 : 0);
-				AppendU64LE(out, seat.holdUntilMs);
-				AppendU64LE(out, seat.holdUntilFrame);
-				if (!AppendString(out, seat.holderName, NetProtocol::c_MaxDisplayNameBytes, "seat_holder_name", error)) return false;
-			}
-			return true;
-		}
-
-		bool DecodeSeatSnapshot(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error, uint16_t version) {
-			if (version < NetLockstepCodec::c_SeatSnapshotVersion) {
-				SetError(error, NetLockstepErrorCode::UnsupportedVersion, 0, "seat snapshots require lockstep version 17");
-				return false;
-			}
-			NetLockstepSeatSnapshot payload;
-			uint8_t count = 0;
-			uint16_t reserved = 0;
-			const uint8_t* epoch = nullptr;
-			if (!ReadOrTruncated(reader.ReadU8(payload.senderPeerId), reader, error, "sender_peer_id") ||
-			    !ReadOrTruncated(reader.ReadU8(count), reader, error, "seat_count") ||
-			    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved") ||
-			    !ReadOrTruncated(reader.ReadU64LE(payload.sessionId), reader, error, "session_id") ||
-			    !ReadOrTruncated(reader.ReadBytes(epoch, payload.epoch.size()), reader, error, "epoch") ||
-			    !ReadOrTruncated(reader.ReadU64LE(payload.roundId), reader, error, "round_id") ||
-			    !ReadOrTruncated(reader.ReadU64LE(payload.revision), reader, error, "revision") ||
-			    !ReadOrTruncated(reader.ReadU64LE(payload.observedAtMs), reader, error, "observed_at_ms")) return false;
-			if (reserved != 0 || count > NetLockstepCodec::c_MaxPeerCount) {
-				SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "invalid seat snapshot header");
-				return false;
-			}
-			std::copy_n(epoch, payload.epoch.size(), payload.epoch.begin());
-			for (uint8_t index = 0; index < count; ++index) {
-				NetSeatPresenceEntry seat;
-				uint8_t state = 0, reclaim = 0;
-				if (!ReadOrTruncated(reader.ReadU16LE(seat.stableSeat), reader, error, "stable_seat") ||
-				    !ReadOrTruncated(reader.ReadU8(seat.peerId), reader, error, "seat_peer_id") ||
-				    !ReadOrTruncated(reader.ReadU8(state), reader, error, "seat_state") ||
-				    !ReadOrTruncated(reader.ReadU32LE(seat.holderGeneration), reader, error, "holder_generation") ||
-				    !ReadOrTruncated(reader.ReadU32LE(seat.seatGeneration), reader, error, "seat_generation") ||
-				    !ReadOrTruncated(reader.ReadU32LE(seat.incarnation), reader, error, "incarnation") ||
-				    !ReadOrTruncated(reader.ReadU8(reclaim), reader, error, "hold_active") ||
-				    !ReadOrTruncated(reader.ReadU64LE(seat.holdUntilMs), reader, error, "hold_until_ms") ||
-				    !ReadOrTruncated(reader.ReadU64LE(seat.holdUntilFrame), reader, error, "hold_until_frame") ||
-				    !reader.ReadString(seat.holderName, NetProtocol::c_MaxDisplayNameBytes, "seat_holder_name", error)) return false;
-				if (reclaim > 1) {
-					SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "invalid hold flag");
-					return false;
-				}
-				seat.state = static_cast<NetSeatPresenceState>(state);
-				seat.holdActive = reclaim != 0;
-				payload.seats.push_back(std::move(seat));
-			}
-			if (!ValidateSeatSnapshot(payload, error)) return false;
-			out = std::move(payload);
-			return true;
-		}
-
 		bool DecodeStart(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error, uint16_t version) {
 			NetLockstepStart payload;
 			uint8_t resume = 0;
@@ -2660,7 +2539,6 @@ namespace RTE {
 			[](const NetLockstepAck&) { return NetLockstepPacketType::Ack; },
 			[](const NetLockstepStop&) { return NetLockstepPacketType::Stop; },
 			[](const NetLockstepChecksum&) { return NetLockstepPacketType::Checksum; },
-			[](const NetLockstepSeatSnapshot&) { return NetLockstepPacketType::SeatSnapshot; },
 			[](const NetLockstepRecoveryChunk&) { return NetLockstepPacketType::RecoveryChunk; },
 			[](const NetLockstepTiming&) { return NetLockstepPacketType::Timing; },
 		}, payload);
@@ -2673,7 +2551,6 @@ namespace RTE {
 			case NetLockstepPacketType::Ack: return "Ack";
 			case NetLockstepPacketType::Stop: return "Stop";
 			case NetLockstepPacketType::Checksum: return "Checksum";
-			case NetLockstepPacketType::SeatSnapshot: return "SeatSnapshot";
 			case NetLockstepPacketType::RecoveryChunk: return "RecoveryChunk";
 			case NetLockstepPacketType::Timing: return "Timing";
 		}
@@ -2799,7 +2676,6 @@ namespace RTE {
 			[&](const NetLockstepAck& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepStop& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepChecksum& payload) { return EncodePayload(payload, payloadBytes, error); },
-			[&](const NetLockstepSeatSnapshot& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepRecoveryChunk& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepTiming& payload) { return EncodePayload(payload, payloadBytes, error); },
 		}, packet.payload);
@@ -2941,7 +2817,6 @@ namespace RTE {
 			case NetLockstepPacketType::Ack:
 			case NetLockstepPacketType::Stop:
 			case NetLockstepPacketType::Checksum:
-			case NetLockstepPacketType::SeatSnapshot:
 			case NetLockstepPacketType::RecoveryChunk:
 			case NetLockstepPacketType::Timing:
 				packetType = static_cast<NetLockstepPacketType>(rawPacketType);
@@ -2969,9 +2844,6 @@ namespace RTE {
 				break;
 			case NetLockstepPacketType::Checksum:
 				payloadOk = DecodeChecksum(payloadReader, payload, &payloadError, version);
-				break;
-			case NetLockstepPacketType::SeatSnapshot:
-				payloadOk = DecodeSeatSnapshot(payloadReader, payload, &payloadError, version);
 				break;
 			case NetLockstepPacketType::RecoveryChunk:
 				payloadOk = DecodeRecoveryChunk(payloadReader, payload, &payloadError, version);
@@ -3025,7 +2897,6 @@ namespace RTE {
 			case NetLockstepPacketType::Ack:
 			case NetLockstepPacketType::Stop:
 			case NetLockstepPacketType::Checksum:
-			case NetLockstepPacketType::SeatSnapshot:
 			case NetLockstepPacketType::RecoveryChunk:
 			case NetLockstepPacketType::Timing:
 				break;
@@ -5062,9 +4933,6 @@ namespace RTE {
 		m_InstalledResyncTargets.clear();
 		m_PeerLeaveFrames.clear();
 		m_PeerFrameWaivers.clear();
-		m_SeatSnapshot.reset();
-		m_SeatSnapshotUnread = false;
-		m_PendingSeatSnapshotPeers.clear();
 		m_LeftSeatsHeld.clear();
 		m_DroppedSeats.clear();
 		m_DroppedSeatResolutions.clear();
@@ -8976,7 +8844,6 @@ namespace RTE {
 		}
 		FlushRelayBacklog(nowMs);
 		FlushResendFrames();
-		FlushSeatSnapshot();
 		FlushRecoveryInputs(nowMs);
 		DropUnreachablePeers(nowMs);
 		AdjudicateSilentPeers(nowMs);
@@ -10743,7 +10610,6 @@ namespace RTE {
 			[](const NetLockstepAck& ack) { return ack.senderPeerId; },
 			[](const NetLockstepStop& stop) { return stop.senderPeerId; },
 			[](const NetLockstepChecksum& checksum) { return checksum.senderPeerId; },
-			[](const NetLockstepSeatSnapshot& snapshot) { return snapshot.senderPeerId; },
 			[](const NetLockstepRecoveryChunk& chunk) { return chunk.senderPeerId; },
 			[](const NetLockstepTiming& timing) { return timing.senderPeerId; },
 		}, packet.payload);
@@ -10757,7 +10623,6 @@ namespace RTE {
 			[&](const NetLockstepAck& ack) { HandleAck(ack, fromTransport); },
 			[&](const NetLockstepStop& stop) { HandleStop(stop, nowMs, fromTransport); },
 			[&](const NetLockstepChecksum& checksum) { HandleChecksum(checksum, fromTransport); },
-			[&](const NetLockstepSeatSnapshot& snapshot) { HandleSeatSnapshot(snapshot, fromTransport); },
 			[&](const NetLockstepRecoveryChunk& chunk) { HandleRecoveryChunk(chunk, nowMs, fromTransport); },
 			[&](const NetLockstepTiming& timing) { HandleTiming(timing, nowMs, fromTransport); },
 		}, packet.payload);
@@ -11402,72 +11267,6 @@ namespace RTE {
 		}
 		m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(stop.reason)) + ":" + stop.message;
 		m_State = stop.reason == NetLockstepStopReason::Complete ? NetLockstepState::Stopped : NetLockstepState::Failed;
-	}
-
-	bool NetLockstepCoordinator::PublishSeatSnapshot(std::vector<NetSeatPresenceEntry> seats, uint64_t observedAtMs) {
-		NET_PLANE_CHECK();
-		if (!m_RelayHost || m_Config.localPeerId != GetHostPeerId() || !IsRunning())
-			return false;
-		if (m_SeatSnapshot && observedAtMs < m_SeatSnapshot->observedAtMs) return false;
-		const bool unchanged = m_SeatSnapshot && m_SeatSnapshot->seats == seats;
-		const bool countingHold = std::any_of(seats.begin(), seats.end(), [](const auto& seat) { return seat.holdActive; });
-		if (unchanged && (!countingHold || observedAtMs < m_SeatSnapshot->observedAtMs || observedAtMs - m_SeatSnapshot->observedAtMs < 1000)) return true;
-		if (m_SeatSnapshot && m_SeatSnapshot->revision == UINT64_MAX) return false;
-		NetLockstepSeatSnapshot snapshot;
-		snapshot.senderPeerId = m_Config.localPeerId;
-		snapshot.sessionId = m_Config.sessionId;
-		snapshot.epoch = m_Config.seatPresenceEpoch;
-		snapshot.roundId = m_RoundId;
-		snapshot.revision = m_SeatSnapshot ? m_SeatSnapshot->revision + 1 : 1;
-		snapshot.observedAtMs = observedAtMs;
-		snapshot.seats = std::move(seats);
-		if (!AdvancesSeatSnapshot(m_SeatSnapshot, snapshot, m_Config.peerCount, m_Config.matchConfig)) return false;
-		std::vector<uint8_t> checked;
-		if (!NetLockstepCodec::Encode({snapshot}, checked)) return false;
-		m_SeatSnapshot = std::move(snapshot);
-		m_SeatSnapshotUnread = true;
-		for (const auto& [peerId, transportId]: m_RemoteTransports) m_PendingSeatSnapshotPeers.insert(peerId);
-		FlushSeatSnapshot();
-		return true;
-	}
-
-	void NetLockstepCoordinator::FlushSeatSnapshot() {
-		if (!IsRunning() || !m_RelayHost || !m_Transport || !m_SeatSnapshot || m_PendingSeatSnapshotPeers.empty()) return;
-		std::vector<uint8_t> bytes;
-		if (!NetLockstepCodec::Encode({*m_SeatSnapshot}, bytes)) return;
-		for (auto pending = m_PendingSeatSnapshotPeers.begin(); pending != m_PendingSeatSnapshotPeers.end();) {
-			const auto transport = m_RemoteTransports.find(*pending);
-			if (transport == m_RemoteTransports.end()) {
-				pending = m_PendingSeatSnapshotPeers.erase(pending);
-				continue;
-			}
-			// Coalesce UI updates while this peer's simulation stream is backlogged.
-			const auto backlog = m_RelayBacklog.find(*pending);
-			std::string error;
-			if ((backlog == m_RelayBacklog.end() || backlog->second.empty()) &&
-			    m_Transport->Send(transport->second, NetTransportLane::ControlReliable, bytes, &error)) {
-				pending = m_PendingSeatSnapshotPeers.erase(pending);
-			} else {
-				++pending;
-			}
-		}
-	}
-
-	void NetLockstepCoordinator::HandleSeatSnapshot(const NetLockstepSeatSnapshot& snapshot, NetPeerId fromTransport) {
-		if (m_RelayHost || snapshot.senderPeerId != GetHostPeerId() ||
-		    !IsRoundAuthority(snapshot.senderPeerId, fromTransport) ||
-		    snapshot.sessionId != m_Config.sessionId || snapshot.epoch != m_Config.seatPresenceEpoch ||
-		    snapshot.roundId == 0 || snapshot.roundId != m_RoundId ||
-		    !AdvancesSeatSnapshot(m_SeatSnapshot, snapshot, m_Config.peerCount, m_Config.matchConfig)) return;
-		m_SeatSnapshot = snapshot;
-		m_SeatSnapshotUnread = true;
-	}
-
-	std::optional<NetLockstepSeatSnapshot> NetLockstepCoordinator::TakeSeatSnapshot() {
-		NET_PLANE_CHECK();
-		if (!m_SeatSnapshotUnread) return std::nullopt;
-		m_SeatSnapshotUnread = false;
-		return m_SeatSnapshot;
 	}
 
 	void NetLockstepCoordinator::SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context) {

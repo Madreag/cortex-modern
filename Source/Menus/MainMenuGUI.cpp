@@ -2709,12 +2709,11 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 		}
 	}
 	const NetModerationUx::Row* mrow = m_HostSeatDlgModerationRow >= 0 ? &m_ModerationUx.GetRow(m_HostSeatDlgModerationRow) : nullptr;
-	if (mrow && (mrow->view.dropped || mrow->view.heldForReclaim || mrow->view.reclaiming)) {
-		// H08's countdown is the snapshot's own figure: frames the round still holds, in seconds.
-		const uint64_t seconds = NetSeatPresence::HoldSeconds(mrow->view.holdFramesRemaining);
-		m_HostSeatDlgReclaim->SetText(mrow->view.holdFramesRemaining > 0
-		                                  ? "Reclaim: seat held " + std::to_string(seconds) + "s for the original holder"
-		                                  : "Reclaim: the hold has run out");
+	if (mrow && (mrow->view.dropped || mrow->view.held || mrow->view.reclaiming)) {
+		// A held seat waits for its player with no deadline: only the host's click gives it away.
+		const std::string cause = NetModerationUx::HoldCause(mrow->view);
+		m_HostSeatDlgReclaim->SetText(mrow->view.reclaiming ? std::string("Reclaim: its player is rejoining")
+		                                                    : "Reclaim: seat kept for its player" + (cause.empty() ? std::string() : " - " + cause));
 	} else {
 		m_HostSeatDlgReclaim->SetText(mrow ? "Reclaim: seat in use" : "Reclaim: --");
 	}

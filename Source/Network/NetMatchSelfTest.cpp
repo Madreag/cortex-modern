@@ -5275,7 +5275,6 @@ namespace RTE {
 			NetReconnectTicketStore store;
 			NetReconnectClient reconnect;
 			std::vector<NetTransportEvent> handover;      //!< What the round handed the session, drained like PumpSessionEvents.
-			std::optional<NetLockstepSeatSnapshot> seats; //!< Client: the host's latest seat view this round.
 			std::map<uint64_t, std::string> trace;        //!< Every tick this round committed, as the sim applied it.
 			uint64_t nextProduce = 0;
 			uint64_t lastApplied = 0;
@@ -5417,7 +5416,6 @@ namespace RTE {
 			void Add(RematchPeer& peer, std::function<bool(RematchPeer&, std::string*)> setup) {
 				peer.round = std::make_unique<NetLockstepCoordinator>();
 				peer.handover.clear();
-				peer.seats.reset();
 				peer.trace.clear();
 				m_Peers.push_back(&peer);
 				m_Launched.push_back(0);
@@ -5494,39 +5492,6 @@ namespace RTE {
 			return live;
 		}
 
-		// The host's roster publication, as NetMatchService::PublishModerationView builds it.
-		void PublishRematchSeats(RematchPeer& host, uint64_t nowMs) {
-			NetLockstepCoordinator& round = *host.round;
-			if (!round.IsRunning()) return;
-			const auto& leaves = round.GetPeerLeaveFrames();
-			std::vector<NetSeatPresenceEntry> presence;
-			for (const NetH4ModerationSeat& seat: host.admission.GetModerationView()) {
-				if (seat.cpu || seat.lockstepPeerId == 0) continue;
-				NetSeatPresenceEntry entry;
-				entry.stableSeat = seat.stableSeat;
-				entry.peerId = seat.lockstepPeerId;
-				entry.holderGeneration = seat.holderGeneration;
-				entry.seatGeneration = seat.seatGeneration;
-				entry.incarnation = seat.incarnation;
-				if (seat.closed) {
-					entry.state = NetSeatPresenceState::Left;
-				} else if (seat.dropped) {
-					entry.state = seat.reclaiming ? NetSeatPresenceState::Reconnecting : NetSeatPresenceState::Disconnected;
-					entry.holdActive = seat.heldForReclaim;
-					entry.holdUntilMs = seat.holdUntilMs;
-				} else if (!seat.substituteName.empty()) {
-					entry.state = NetSeatPresenceState::Substituted;
-				}
-				const auto left = leaves.find(seat.lockstepPeerId);
-				if (seat.dropped && left != leaves.end()) {
-					entry.holdUntilFrame = left->second + NetLockstepCoordinator::c_ReclaimHoldFrames;
-				}
-				presence.push_back(std::move(entry));
-			}
-			std::sort(presence.begin(), presence.end(), [](const auto& a, const auto& b) { return a.stableSeat < b.stableSeat; });
-			(void)round.PublishSeatSnapshot(std::move(presence), nowMs);
-		}
-
 		ControllerFrame RematchFrame(uint8_t peerId, uint64_t frame) {
 			ControllerFrame controller;
 			controller.actorUniqueID = 1000 + peerId;
@@ -5578,15 +5543,11 @@ namespace RTE {
 				for (const NetHoldResolutionNotice& notice: peer.admission.TakePendingHoldResolutions()) {
 					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
 					switch (notice.resolution) {
-						case NetHoldResolution::Expired: resolution = NetLockstepHoldResolution::Expired; break;
 						case NetHoldResolution::Reclaimed: resolution = NetLockstepHoldResolution::Reclaimed; break;
 						case NetHoldResolution::Substituted: resolution = NetLockstepHoldResolution::Substituted; break;
 					}
 					round.ResolveHeldSeat(notice.lockstepPeerId, resolution, nowMs);
 				}
-				PublishRematchSeats(peer, nowMs);
-			} else if (std::optional<NetLockstepSeatSnapshot> snapshot = round.TakeSeatSnapshot()) {
-				peer.seats = std::move(snapshot);
 			}
 			std::string ignored;
 			// The fixture has no ScenarioRunner activity restart to measure. Publish the measured zero park
@@ -5741,14 +5702,17 @@ namespace RTE {
 				*error = "the host's own seat left stable seat 0";
 				return false;
 			}
+			// Every client holds the host's current roster, taken through its session and never derived.
 			const bool shown = PumpRematchUntil(fixture, 3000, [&] {
+				const auto hosted = HashRoster(host.admission.GetRoster());
 				for (RematchPeer* peer: LiveRematchPeers(fixture)) {
-					if (!peer->host && (!peer->seats || peer->seats->roundId != peer->round->GetRoundId())) return false;
+					const NetRosterReplica& replica = peer->reconnect.GetRosterReplica();
+					if (!peer->host && (!replica.HasRoster() || HashRoster(replica.Roster()) != hosted)) return false;
 				}
 				return true;
 			});
 			if (!shown) {
-				*error = "a client was never shown this round's seat view";
+				*error = "a client never held the host's seat roster";
 				return false;
 			}
 			for (RematchPeer* peer: LiveRematchPeers(fixture)) {
@@ -5774,10 +5738,14 @@ namespace RTE {
 					*error = "stable seat " + std::to_string(expected) + " does not hold lockstep peer " + std::to_string(lockstepId) + "'s own holder state";
 					return false;
 				}
-				const auto shownSeat = std::find_if(peer->seats->seats.begin(), peer->seats->seats.end(), [lockstepId](const NetSeatPresenceEntry& entry) { return entry.peerId == lockstepId; });
-				if (shownSeat == peer->seats->seats.end() || shownSeat->stableSeat != expected || shownSeat->state != NetSeatPresenceState::Present) {
-					*error = "lockstep peer " + std::to_string(lockstepId) + " was shown stable seat " +
-					         (shownSeat == peer->seats->seats.end() ? std::string("none") : std::to_string(shownSeat->stableSeat) + " " + NetSeatPresence::StateName(shownSeat->state)) +
+				const NetRosterSeat* shownSeat = peer->reconnect.GetRosterReplica().Roster().Find(NetRosterIdOf(expected));
+				uint8_t shownPeer = 0;
+				for (const NetH4Seat& entry: NetH4BuildSeatTable(peer->runner.GetMatchConfig())) {
+					if (entry.stableSeat == expected && !entry.cpu) shownPeer = entry.lockstepPeerId;
+				}
+				if (!shownSeat || shownPeer != lockstepId || std::string(RosterSeatStateWord(*shownSeat)) != "Present") {
+					*error = "lockstep peer " + std::to_string(lockstepId) + " was shown stable seat " + std::to_string(expected) + " as " +
+					         (shownSeat ? std::string(RosterSeatStateWord(*shownSeat)) + " of lockstep peer " + std::to_string(shownPeer) : std::string("no seat")) +
 					         ", its round-1 ticket names stable seat " + std::to_string(expected);
 					return false;
 				}
@@ -7457,23 +7425,16 @@ namespace RTE {
 			service.m_ReconnectHost.QueueHoldResolution(2, resolution);
 			service.PumpSessionEvents();
 			if (coordinator.AnyDroppedSeatHeld()) {
-				*error = resolution == NetHoldResolution::Expired
-				             ? "Expired left the dropped seat held after PumpSessionEvents"
-				             : "Reclaimed left the dropped seat held after PumpSessionEvents";
+				*error = "Reclaimed left the dropped seat held after PumpSessionEvents";
 				return false;
 			}
-			const NetLockstepHoldResolution expected = resolution == NetHoldResolution::Expired
-			                                               ? NetLockstepHoldResolution::Expired
-			                                               : NetLockstepHoldResolution::Reclaimed;
-			if (coordinator.HeldSeatResolution(2) != expected) {
-				*error = resolution == NetHoldResolution::Expired
-				             ? "Expired did not resolve the held seat"
-				             : "Reclaimed did not resolve the held seat";
+			if (coordinator.HeldSeatResolution(2) != NetLockstepHoldResolution::Reclaimed) {
+				*error = "Reclaimed did not resolve the held seat";
 				return false;
 			}
 			return true;
 		};
-		return pumpOne(NetHoldResolution::Expired) && pumpOne(NetHoldResolution::Reclaimed);
+		return pumpOne(NetHoldResolution::Reclaimed);
 	}
 
 	// A seat with no roster name is "Player N"; one with a name is the name. Never both.
@@ -7486,31 +7447,19 @@ namespace RTE {
 		NetLobbyMember nameless;
 		nameless.peerId = 3;
 		service.m_LobbySnapshot.members = {host, nameless};
-		NetLockstepSeatSnapshot snapshot;
-		snapshot.senderPeerId = 1;
-		snapshot.sessionId = 12;
-		snapshot.roundId = 1;
-		snapshot.revision = 1;
-		snapshot.observedAtMs = 1000;
-		NetSeatPresenceEntry seat;
-		seat.stableSeat = 2;
-		seat.peerId = 3;
-		seat.state = NetSeatPresenceState::Present;
-		snapshot.seats = {seat};
-		if (!service.m_SeatPresence.ApplySnapshot(snapshot, 1000)) {
-			*error = "the present snapshot was not applied";
-			return false;
-		}
-		service.RecordRosterTransitions(snapshot.observedAtMs);
-		snapshot.revision = 2;
-		snapshot.observedAtMs = 2000;
-		snapshot.seats[0].state = NetSeatPresenceState::Left;
-		if (!service.m_SeatPresence.ApplySnapshot(snapshot, 2000)) {
-			*error = "the leave snapshot was not applied";
-			return false;
-		}
+		NetRosterSeat seat;
+		seat.seatId = 3;
+		seat.owner = 33;
+		seat.phase = NetSeatPhase::Running;
+		service.m_SeatViews = {{3, NetMatchService::BuildSeatView(3, 2, 1, seat, "")}};
+		service.RecordRosterTransitions({}, 1000);
+		// The host opens the seat: its player is gone from it.
+		const std::map<uint8_t, NetMatchService::SeatView> present = service.m_SeatViews;
+		seat.owner = 0;
+		seat.holdCause = NetSeatHoldCause::Kicked;
+		service.m_SeatViews = {{3, NetMatchService::BuildSeatView(3, 2, 2, seat, "")}};
 		const size_t before = ScenarioRunner::GetNetUiToastLog().size();
-		service.RecordRosterTransitions(snapshot.observedAtMs);
+		service.RecordRosterTransitions(present, 2000);
 		const std::vector<ScenarioRunner::NetUiToastRecord>& toasts = ScenarioRunner::GetNetUiToastLog();
 		if (toasts.size() != before + 1 || toasts.back().kind != "player_left") {
 			*error = "the leave banner was not recorded";
@@ -7533,36 +7482,18 @@ namespace RTE {
 		leaver.peerId = 2;
 		leaver.displayName = "Leaver";
 		service.m_LobbySnapshot.members = {host, leaver};
-		NetLockstepSeatSnapshot snapshot;
-		snapshot.senderPeerId = 1;
-		snapshot.sessionId = 11;
-		snapshot.roundId = 1;
-		snapshot.revision = 1;
-		snapshot.observedAtMs = 1000;
-		NetSeatPresenceEntry seat;
-		seat.stableSeat = 1;
-		seat.peerId = 2;
-		seat.state = NetSeatPresenceState::Reconnecting;
-		seat.holdActive = true;
-		seat.holdUntilMs = 21000;
-		seat.holderName = "Leaver";
-		snapshot.seats = {seat};
-		if (!service.m_SeatPresence.ApplySnapshot(snapshot, 1000)) {
-			*error = "the hold snapshot was not applied";
-			return false;
-		}
-		service.RecordRosterTransitions(snapshot.observedAtMs);
-		snapshot.revision = 2;
-		snapshot.observedAtMs = 5000;
-		snapshot.seats[0].state = NetSeatPresenceState::Present;
-		snapshot.seats[0].holdActive = false;
-		snapshot.seats[0].holdUntilMs = 0;
-		if (!service.m_SeatPresence.ApplySnapshot(snapshot, 5000)) {
-			*error = "the present snapshot was not applied";
-			return false;
-		}
+		NetRosterSeat seat;
+		seat.seatId = 2;
+		seat.owner = 22;
+		seat.phase = NetSeatPhase::RejoinImage;
+		seat.name = "Leaver";
+		service.m_SeatViews = {{2, NetMatchService::BuildSeatView(2, 1, 1, seat, "")}};
+		service.RecordRosterTransitions({}, 1000);
+		const std::map<uint8_t, NetMatchService::SeatView> returning = service.m_SeatViews;
+		seat.phase = NetSeatPhase::Running;
+		service.m_SeatViews = {{2, NetMatchService::BuildSeatView(2, 1, 2, seat, "")}};
 		const size_t toastsBefore = ScenarioRunner::GetNetUiToastLog().size();
-		service.RecordRosterTransitions(snapshot.observedAtMs);
+		service.RecordRosterTransitions(returning, 5000);
 		// The banner is pushed from here with no managers built, so it has no sim clock to read.
 		const std::vector<ScenarioRunner::NetUiToastRecord>& toasts = ScenarioRunner::GetNetUiToastLog();
 		if (toasts.size() != toastsBefore + 1 || toasts.back().kind != "player_rejoined" || toasts.back().tick != 0) {
@@ -11239,10 +11170,9 @@ namespace RTE {
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
-			// No coordinator exists before the match, so the frame countdown a running row carries is zero.
-			if (joiner->holdFramesRemaining != 0 || joiner->actionsAvailable) {
-				*error = "the joiner's lobby row carries " + std::to_string(joiner->holdFramesRemaining) +
-				         " hold frames and actionsAvailable=" + (joiner->actionsAvailable ? "1" : "0");
+			// No action is offered on a lobby row before the match.
+			if (joiner->actionsAvailable) {
+				*error = "the joiner's lobby row offers actions before the match";
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
@@ -11740,7 +11670,6 @@ namespace RTE {
 			return false;
 		}
 		if (!service.m_Session->AdoptRematchPeerId(localSessionPeerId, error)) return false;
-		(void)service.m_Coordinator->TakeSeatSnapshot();
 		{
 			std::lock_guard<std::mutex> lock(service.m_Mutex);
 			service.m_State = NetMatchServiceState::Completed;
@@ -12050,7 +11979,6 @@ namespace RTE {
 				return fail("the dropped seat's hold resolved on the survivor's round without its player or the host");
 			}
 			if (!PlayRematchTicks(fixture, 2) || !FinishRematchRound(fixture, &step)) return fail("round 1 did not finish");
-			const uint64_t roundId = survivor->round->GetRoundId();
 
 			LoopbackTransport serviceHostTransport, serviceClientTransport;
 			NetSession serviceHostSession;
@@ -12065,24 +11993,18 @@ namespace RTE {
 			service.m_Coordinator = std::move(survivor->round);
 			StopRematchFixture(fixture);
 
-			// The host's published seat view of this round, as a client's service keeps it.
-			const auto viewOf = [&played](uint64_t viewRoundId, uint8_t gonePeerId) {
-				NetLockstepSeatSnapshot view;
-				view.senderPeerId = played.hostPeerId;
-				view.sessionId = played.sessionId;
-				view.roundId = viewRoundId;
-				view.revision = 1;
+			// The host's seat view as a client's service keeps it, one seat held away: it never takes a seat out of the next roster.
+			service.m_SeatViews.clear();
+			if (testCase.view != 0) {
 				for (const NetMatchPlayerSlot& slot: played.players) {
-					NetSeatPresenceEntry entry;
-					entry.stableSeat = static_cast<uint16_t>(slot.peerId - 1);
-					entry.peerId = slot.peerId;
-					entry.state = slot.peerId == gonePeerId ? NetSeatPresenceState::Disconnected : NetSeatPresenceState::Present;
-					view.seats.push_back(entry);
+					NetRosterSeat seat;
+					seat.seatId = NetRosterIdOf(static_cast<uint16_t>(slot.peerId - 1));
+					seat.owner = slot.peerId;
+					seat.phase = slot.peerId == 4 ? NetSeatPhase::Held : NetSeatPhase::Running;
+					seat.link = slot.peerId == 4 ? NetSeatLink::Dropped : NetSeatLink::Connected;
+					service.m_SeatViews[slot.peerId] = NetMatchService::BuildSeatView(slot.peerId, static_cast<uint16_t>(slot.peerId - 1), testCase.view == 1 ? 2 : 1, seat, slot.displayName);
 				}
-				return view;
-			};
-			service.m_SeatPresence.Clear();
-			if (testCase.view != 0) service.m_SeatPresence.ApplySnapshot(viewOf(testCase.view == 1 ? roundId : roundId + 1, 4));
+			}
 			NetMatchConfig roster;
 			if (!ServiceRematchRoster(service, played, survivorSessionPeerId, roster, &step)) return fail("ReturnToLobby did not form a roster");
 			std::vector<std::pair<uint8_t, uint8_t>> seats;
@@ -12461,7 +12383,6 @@ namespace RTE {
 				return false;
 			}
 			if (!service.m_Session->AdoptRematchPeerId(peerId, step)) return false;
-			(void)service.m_Coordinator->TakeSeatSnapshot();
 			{
 				std::lock_guard<std::mutex> lock(service.m_Mutex);
 				service.m_State = NetMatchServiceState::Completed;

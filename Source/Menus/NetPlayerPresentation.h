@@ -34,10 +34,15 @@ namespace RTE::NetPlayerPresentation {
 	/// Whether this session has seen the peer hold its seat.
 	inline bool Seated(uint8_t peer) { return seated.contains(peer); }
 
-	/// The departure every peer agrees on: the seat's own presence row, or the committed leave frame.
+	/// Whether the host opened the seat: its player no longer holds it.
+	inline bool Opened(uint8_t peer) {
+		const auto view = g_NetMatchService.GetSeatView(peer);
+		return view && view->seat.owner == 0;
+	}
+
+	/// The departure every peer agrees on: the seat the host opened, or the committed leave frame.
 	inline bool Departed(uint8_t peer) {
-		return g_NetMatchService.GetSeatPresence().StateOf(peer) == NetSeatPresenceState::Left ||
-		    (Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, ScenarioRunner::GetLockstepCompletedFrame()));
+		return Opened(peer) || (Seated(peer) && ScenarioRunner::IsLockstepPeerGone(peer, ScenarioRunner::GetLockstepCompletedFrame()));
 	}
 
 	inline std::string Name(uint8_t peer, const std::string& fallback) {
@@ -51,7 +56,7 @@ namespace RTE::NetPlayerPresentation {
 
 	inline std::string State(uint8_t peer, bool aiHeld, bool dropped, bool reclaiming) {
 		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
-		const bool released = ScenarioRunner::IsLockstepSeatReleased(peer) || g_NetMatchService.GetSeatPresence().StateOf(peer) == NetSeatPresenceState::Left;
+		const bool released = ScenarioRunner::IsLockstepSeatReleased(peer) || Opened(peer);
 		// A seat the AI plays for its player is held, however its player went; only the host's release makes it Left.
 		const bool held = !released && (aiHeld || ScenarioRunner::IsLockstepSeatUnderAI(peer, frame));
 		const bool left = !held && Departed(peer);

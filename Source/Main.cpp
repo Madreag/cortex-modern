@@ -682,13 +682,9 @@ static void BeginCrossTick(uint64_t tick) {
 	    {"config_hash", configHash}, {"host_peer", ScenarioRunner::GetLockstepHostPeerId()},
 	    {"phase", tickPhase}, {"gameplay_tick", g_ActivityMan.ActivityRunning()},
 	    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()}};
-	if (const auto& snapshot = g_NetMatchService.GetSeatPresence().GetSnapshot()) {
-		for (const auto& seat: snapshot->seats) if (seat.peerId == ScenarioRunner::GetLockstepLocalPeerId()) {
-			s_crossContext["seat_incarnation"] = seat.incarnation;
-			s_crossContext["holder_generation"] = seat.holderGeneration;
-			s_crossContext["seat_generation"] = seat.seatGeneration;
-			s_crossContext["seat_revision"] = snapshot->revision;
-		}
+	if (const auto view = g_NetMatchService.GetSeatView(ScenarioRunner::GetLockstepLocalPeerId())) {
+		s_crossContext["seat_incarnation"] = view->seat.incarnation;
+		s_crossContext["seat_revision"] = view->revision;
 	}
 	g_MetricsCollector.BeginEventTick(s_crossContext);
 	if (newRound) {
@@ -4387,9 +4383,12 @@ static void DrawFrameWithPreviews() {
 	NetModerationGUIProbe::AfterDraw();
 }
 
-static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
+/// Draws the wait; returns whether a held seat's player asked to leave it.
+static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, const std::string& heldLine = {}) {
 	PollSDLEvents();
 	g_UInputMan.Update(false);
+	// A held seat stays its player's, so the player may leave the wait from its first second.
+	const bool leave = heldRejoin && !g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.KeyPressed(SDLK_ESCAPE);
 	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
 		g_MenuMan.ToggleNetworkPanel();
 	}
@@ -4400,11 +4399,11 @@ static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	const int centerX = g_WindowMan.GetResX() / 2;
 	const int centerY = g_WindowMan.GetResY() / 2;
-	const std::string resyncTitle = heldRejoin ? "Held - AI in control - rejoining..." : "Resyncing the match...";
+	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Held - AI in control - rejoining...") : heldLine) : std::string("Resyncing the match...");
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
-	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]", GUIFont::Centre);
+	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]" + (heldRejoin ? "  /  Leave [Esc] - your seat is kept" : ""), GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	ScenarioRunner::NoteResyncOverlayFrame();
@@ -4416,6 +4415,7 @@ static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
 	NetModerationGUIProbe::AfterDraw();
 	g_UInputMan.EndFrame();
 	g_UInputMan.EndSimUpdate();
+	return leave;
 }
 
 // The previews' gameplay against -lpinv-expect. A preview that starts before the canonical pickup must
@@ -6382,6 +6382,11 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			bool resyncOk = false;
 			uint64_t endRecord = 0;
 			bool endedByRecord = false;
+			bool leftTheWait = false;
+			// Without a majority the seat waits for its host and the screen says why.
+			const size_t heldAt = error.find("PeerHeld:");
+			const std::string stopLine = heldAt == std::string::npos ? std::string() : error.substr(heldAt + 9);
+			const std::string unreachableAtStop = stopLine.rfind("The host is unreachable", 0) == 0 ? stopLine : std::string();
 			if (heldRejoin) {
 				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
@@ -6396,7 +6401,13 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 						resyncOk = false;
 						break;
 					}
-					UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count()), heldRejoin);
+					const std::string unreachable = heldRejoin ? g_NetMatchService.GetHostUnreachableLine() : std::string();
+					if (UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count()), heldRejoin,
+					                   unreachable.empty() ? unreachableAtStop : unreachable)) {
+						leftTheWait = true;
+						resyncOk = false;
+						break;
+					}
 					if (System::IsSetToQuit()) {
 						resyncError = "quit requested during resync";
 						resyncOk = false;
@@ -6415,7 +6426,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					std::this_thread::sleep_for(std::chrono::milliseconds(5));
 				}
 				// A held seat whose host is gone rejoins the peer that hosts the match now, through its private rejoin.
-				if (!resyncOk && !endedByRecord && heldRejoin && !System::IsSetToQuit()) {
+				if (!resyncOk && !endedByRecord && !leftTheWait && heldRejoin && !System::IsSetToQuit()) {
 					std::string nextError;
 					if (g_NetMatchService.BeginHeldRejoinOnNextHost(&nextError)) {
 						resyncOk = true;
@@ -6504,6 +6515,18 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				if (s_netMatchServiceE2E && E2ERematchesLeft()) {
 					(void)RunNetMatchE2ERematch(result, true);
 				} else if (s_netMatchServiceE2E) {
+					System::SetQuit(true);
+				} else {
+					returnToMenuAfterNetworkEnd = true;
+				}
+			} else if (leftTheWait) {
+				System::PrintDiagnosticLine("[net-match] held client: left the wait for its host; the seat and its ticket are kept");
+				g_ConsoleMan.PrintString("NETWORK: Left the match - your seat is kept; Rejoin Match while it runs");
+				g_NetMatchService.LeaveHeldWait();
+				g_ActivityMan.EndActivity();
+				g_ActivityMan.SetInActivity(false);
+				ScenarioRunner::ClearControllerReplayError();
+				if (s_netMatchServiceE2E) {
 					System::SetQuit(true);
 				} else {
 					returnToMenuAfterNetworkEnd = true;

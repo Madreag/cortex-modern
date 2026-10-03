@@ -1042,14 +1042,6 @@ namespace RTE {
 			played.peerCount = 4;
 			played.hostPeerId = 1;
 			played.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Two"}, NetMatchPlayerSlot{3, 2, false, "Three"}, NetMatchPlayerSlot{4, 3, false, "Four"}};
-			NetLockstepSeatSnapshot seats;
-			for (uint8_t peer = 1; peer <= 4; ++peer) {
-				NetSeatPresenceEntry entry;
-				entry.stableSeat = peer;
-				entry.peerId = peer;
-				entry.state = peer == 2 || peer == 4 ? NetSeatPresenceState::Disconnected : NetSeatPresenceState::Present;
-				seats.seats.push_back(entry);
-			}
 			NetMatchConfig derived;
 			std::string deriveError;
 			if (!NetMatchConfigUtil::DeriveRematchConfig(played, derived, &deriveError)) {

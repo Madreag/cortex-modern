@@ -47,6 +47,7 @@ namespace RTE {
 		uint64_t bindingRef = 0;                               ///< The committed world's brain/actor for the seat.
 		uint64_t givenAwayTicket = 0;                          ///< The ticket of the player the host gave this seat away from.
 		uint64_t heldSinceMs = 0;                              ///< When its owner went away, on the host's clock; the host's own, never sent.
+		std::string name;                                      ///< Its owner's display name as the host seated it; empty while the seat is open.
 	};
 
 	/// Who holds which seat, in what phase: owned by the host's session plane and replicated by revision.
@@ -64,6 +65,8 @@ namespace RTE {
 		NetRosterSeat* Find(uint8_t seatId);
 		/// The start gate waits on a seat only while its owner is at the gate on a live link.
 		bool StartWaitsOn(uint8_t seatId) const;
+		/// A host that plays no seat of its own (a dedicated host) names seat 0; any other host names a seat of the roster.
+		bool HostSeatValid() const { return hostSeat == 0 || Find(hostSeat) != nullptr; }
 	};
 
 	/// Every seat event; each goes through ApplyRosterEvent and nowhere else.
@@ -77,6 +80,7 @@ namespace RTE {
 		uint8_t seat = 0;              ///< The seat the event names.
 		uint64_t owner = 0;            ///< Admitted / ApplicantAccepted: the player taking the seat.
 		uint64_t ticket = 0;           ///< Returned: the ticket shown; Admitted / ApplicantAccepted: the ticket issued.
+		std::string name;              ///< Admitted / ApplicantAccepted: the display name of the player taking the seat.
 		uint64_t nowMs = 0;            ///< The plane's clock, for the return's backoff.
 		bool withTraffic = false;      ///< LivenessPassed: the link carried authenticated traffic.
 		NetSeatHoldCause cause = NetSeatHoldCause::None; ///< HeldInPlace: why the round holds the seat.
@@ -105,7 +109,14 @@ namespace RTE {
 	bool CheckRosterInvariants(const NetSeatRoster& before, const NetSeatRoster& after, NetRosterEventKind kind, std::string* reason);
 	/// The label the Seats panel shows for a seat.
 	std::string RosterSeatLabel(const NetRosterSeat& seat);
+	/// A report's word for a seat: "Present" while its owner plays it, "Held", "Reconnecting", or "Left" once the host opened it.
+	const char* RosterSeatStateWord(const NetRosterSeat& seat);
+	/// "name: label" while the seat is not plainly played; empty while it is.
+	std::string RosterSeatLine(const NetRosterSeat& seat, const std::string& name);
+	/// Stable seats count from 0, roster seats from 1.
+	inline uint8_t NetRosterIdOf(uint16_t stableSeat) { return static_cast<uint8_t>(stableSeat + 1); }
 	const char* NetSeatPhaseName(NetSeatPhase phase);
+	const char* NetSeatHoldCauseName(NetSeatHoldCause cause);
 	const char* NetRosterEventName(NetRosterEventKind kind);
 
 	/// A roster revision as it goes to the peers: tickets and the ban list stay on the host.

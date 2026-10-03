@@ -7827,7 +7827,6 @@ namespace RTE {
 			*error = "the second round started under the first round's goodbye: launched=" + std::to_string(launched) + " goodbye_seen=" + std::to_string(seen) +
 			         " owed_to_rejoiners=" + std::to_string(owed) + " final_frame=" + std::to_string(finalFrame) + " catch_up_reads_match_over=" + std::to_string(catchUpReadsOver);
 			service.Destroy();
-			ScenarioRunner::SetLockstepSeatPresence(nullptr);
 			return false;
 		}
 		// The second round ends held too; a teardown ends that goodbye with it.
@@ -7835,11 +7834,9 @@ namespace RTE {
 		if (!goodbye(service, finalFrame, owed, catchUpReadsOver) || !owed) {
 			*error = "the second held round ended without owing its returner the goodbye";
 			service.Destroy();
-			ScenarioRunner::SetLockstepSeatPresence(nullptr);
 			return false;
 		}
 		service.Destroy();
-		ScenarioRunner::SetLockstepSeatPresence(nullptr);
 		const bool seenAfterTeardown = goodbye(service, finalFrame, owed, catchUpReadsOver);
 		if (seenAfterTeardown || owed || finalFrame != 0 || catchUpReadsOver) {
 			*error = "a torn-down service kept the last round's goodbye: goodbye_seen=" + std::to_string(seenAfterTeardown) + " owed_to_rejoiners=" + std::to_string(owed) +

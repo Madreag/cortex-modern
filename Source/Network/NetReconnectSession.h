@@ -57,14 +57,13 @@ namespace RTE {
 	};
 
 	enum class NetHoldResolution : uint16_t {
-		Expired = 0,
 		Reclaimed = 1,
 		Substituted = 2,
 	};
 
 	struct NetHoldResolutionNotice {
 		uint8_t lockstepPeerId = 0;
-		NetHoldResolution resolution = NetHoldResolution::Expired;
+		NetHoldResolution resolution = NetHoldResolution::Reclaimed;
 	};
 
 	/// The seat table in the pinned form, straight off the live match config.
@@ -228,7 +227,7 @@ namespace RTE {
 		bool leftByChoice = false;    //!< The holder left on purpose; the seat is held for it as for a drop.
 		uint64_t leftForMs = 0;       //!< How long ago it left.
 		bool slowMachine = false;     //!< Held because the holder's machine cannot keep up with the round.
-		uint64_t holdFramesRemaining = 0; //!< Frames the round still holds the seat for; a frame, never a clock.
+		std::string joinProgress;     //!< How far the player coming into the seat is: the world's image, then its replay; "" otherwise.
 		std::vector<NetH4ApplicantView> applicants;
 
 		bool operator==(const NetH4ModerationSeat&) const = default;

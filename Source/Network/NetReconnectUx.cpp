@@ -247,9 +247,6 @@ namespace RTE {
 		} else if (seat.closed) {
 			text += " - left";
 		}
-		text += seat.holdFramesRemaining > 0
-		            ? " - hold " + std::to_string(seat.holdFramesRemaining) + "f (" + std::to_string(NetSeatPresence::HoldSeconds(seat.holdFramesRemaining)) + "s)"
-		            : " - hold over";
 		text += " - " + std::to_string(seat.applicants.size()) + " waiting";
 		return text;
 	}
@@ -361,87 +358,6 @@ namespace RTE {
 		}
 		return std::to_string(m_Rows.size()) + (m_Rows.size() == 1 ? " seat waiting, " : " seats waiting, ") +
 		       std::to_string(applicants) + (applicants == 1 ? " applicant" : " applicants");
-	}
-
-	bool NetSeatPresence::ApplySnapshot(const NetLockstepSeatSnapshot& snapshot, uint64_t receivedAtMs) {
-		if (m_Snapshot && snapshot.epoch == m_Snapshot->epoch && snapshot.sessionId == m_Snapshot->sessionId &&
-		    snapshot.roundId == m_Snapshot->roundId && snapshot.revision <= m_Snapshot->revision) return false;
-		m_Seats.clear();
-		for (const auto& seat: snapshot.seats) m_Seats.emplace(seat.peerId, seat);
-		m_Snapshot = snapshot;
-		m_ReceivedAtMs = receivedAtMs;
-		return true;
-	}
-
-	void NetSeatPresence::NoteFrame(uint64_t appliedFrame) {
-		m_Frame = appliedFrame;
-	}
-
-	void NetSeatPresence::Clear() {
-		m_Seats.clear();
-		m_Snapshot.reset();
-		m_ReceivedAtMs = 0;
-		m_Frame = 0;
-	}
-
-	NetSeatPresenceState NetSeatPresence::StateOf(uint8_t peerId) const {
-		const auto it = m_Seats.find(peerId);
-		return it == m_Seats.end() ? NetSeatPresenceState::Present : it->second.state;
-	}
-
-	uint64_t NetSeatPresence::HoldFramesRemaining(uint8_t peerId) const {
-		const auto it = m_Seats.find(peerId);
-		if (it == m_Seats.end() || it->second.holdUntilFrame <= m_Frame) {
-			return 0;
-		}
-		return it->second.holdUntilFrame - m_Frame;
-	}
-
-	uint64_t NetSeatPresence::HoldWallSecondsRemaining(uint8_t peerId, uint64_t nowMs) const {
-		const auto it = m_Seats.find(peerId);
-		if (!m_Snapshot || it == m_Seats.end() || !it->second.holdActive ||
-		    it->second.holdUntilMs <= m_Snapshot->observedAtMs) return 0;
-		const uint64_t atReceipt = it->second.holdUntilMs - m_Snapshot->observedAtMs;
-		const uint64_t elapsed = nowMs > m_ReceivedAtMs ? nowMs - m_ReceivedAtMs : 0;
-		return elapsed >= atReceipt ? 0 : (atReceipt - elapsed + 999) / 1000;
-	}
-
-	std::string NetSeatPresence::Line(uint8_t peerId, const std::string& playerName) const {
-		const auto it = m_Seats.find(peerId);
-		if (it == m_Seats.end() || it->second.state == NetSeatPresenceState::Present) {
-			return std::string();
-		}
-		const NetSeatPresenceEntry& seat = it->second;
-		const std::string who = !seat.holderName.empty() ? seat.holderName :
-		                        (playerName.empty() ? "Player " + std::to_string(peerId) : playerName);
-		switch (seat.state) {
-			case NetSeatPresenceState::Disconnected:
-			case NetSeatPresenceState::Reconnecting:
-				return who + ": " + (seat.state == NetSeatPresenceState::Reconnecting ? "reconnecting" : "disconnected") +
-				       (seat.holdActive ? " - round hold " + std::to_string(HoldWallSecondsRemaining(peerId)) + "s" : "");
-			case NetSeatPresenceState::Substituted:
-				return who + ": joined as substitute";
-			case NetSeatPresenceState::Left:
-				return who + ": left";
-			default:
-				return std::string();
-		}
-	}
-
-	uint64_t NetSeatPresence::HoldSeconds(uint64_t frames) {
-		// The pinned 0.0166666 s timestep, rounded up without overflowing the product.
-		return (frames / 10000000) * 166666 + ((frames % 10000000) * 166666 + 9999999) / 10000000;
-	}
-
-	const char* NetSeatPresence::StateName(NetSeatPresenceState state) {
-		switch (state) {
-			case NetSeatPresenceState::Present: return "Present";
-			case NetSeatPresenceState::Disconnected: return "Disconnected";
-			case NetSeatPresenceState::Reconnecting: return "Reconnecting";
-			case NetSeatPresenceState::Substituted: return "Substituted";
-			case NetSeatPresenceState::Left: return "Left";
-		}
-		return "Unknown";
 	}
 
 	const char* NetReconnectUx::StateName(NetReconnectUxState state) {
