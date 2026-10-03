@@ -644,7 +644,7 @@ namespace RTE {
 					}
 					// Keep the close reason the host sent with the disconnect so the UI can show why.
 					if (!m_HasReject) {
-						RecordReject(NetRejectReason::InternalError, "", "", "", event.reason.empty() ? "connection closed by peer" : event.reason);
+						RecordReject(NetRejectReason::HostLinkLost, "", "", "", event.reason.empty() ? "connection closed by peer" : event.reason);
 					}
 					m_State = NetSessionState::Closed;
 				}
@@ -1618,8 +1618,13 @@ namespace RTE {
 	}
 
 	void NetSession::RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
-		System::PrintDiagnosticLine(std::string("[net-session] admission refused reason=") + NetProtocol::RejectReasonName(reason) +
-		                            " role=" + (m_Role == NetSessionRole::Host ? "host" : "client") + " key=" + key + " detail=" + summary);
+		// A lost link refused nothing: it is named as what happened.
+		if (reason == NetRejectReason::HostLinkLost) {
+			System::PrintDiagnosticLine("[net-session] link to the host lost detail=" + summary);
+		} else {
+			System::PrintDiagnosticLine(std::string("[net-session] admission refused reason=") + NetProtocol::RejectReasonName(reason) +
+			                            " role=" + (m_Role == NetSessionRole::Host ? "host" : "client") + " key=" + key + " detail=" + summary);
+		}
 		m_RejectReason = reason;
 		m_HasReject = true;
 		m_MismatchKey = key;
@@ -1687,6 +1692,7 @@ namespace RTE {
 			case NetRejectReason::SessionEnded: return "This session has ended.";
 			case NetRejectReason::SeatReassigned: return "The host gave your seat to another player.";
 			case NetRejectReason::SeatReleased: return "The host released your seat.";
+			case NetRejectReason::HostLinkLost: return "The connection to the host was lost.";
 			case NetRejectReason::ParticipantRemoved:
 				if (m_Role == NetSessionRole::Host && !m_RefusedPlayerName.empty()) return m_RefusedPlayerName + " was removed from this session";
 				return "The host removed you from this session";

@@ -101,6 +101,8 @@ namespace RTE {
 		IdentityUnproven = 20,
 		// Host-authored: the host released this player's seat. Not SessionEnded (the match runs on).
 		SeatReleased = 21,
+		// A client's own record that its link to the host closed with no word from the host. Never sent, so never decoded.
+		HostLinkLost = 22,
 	};
 
 	enum class NetParticipantRemovalReason : uint8_t {

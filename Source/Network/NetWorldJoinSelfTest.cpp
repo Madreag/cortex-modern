@@ -3882,6 +3882,7 @@ namespace RTE {
 		const Case cases[] = {
 			{"own-transport-stopped", true, true, NetRejectReason::InternalError, true, false, 0, 0, false},
 			{"host-connection-dropped", true, true, NetRejectReason::InternalError, false, false, 0, 0, true},
+			{"host-link-lost", true, true, NetRejectReason::HostLinkLost, false, false, 0, 0, true},
 			{"host-ended-the-session", true, true, NetRejectReason::SessionEnded, false, false, 0, 0, true},
 			{"host-link-timed-out", true, true, NetRejectReason::Timeout, false, false, 0, 0, true},
 			{"link-closed-without-reject", true, false, NetRejectReason::InternalError, false, false, 0, 0, true},

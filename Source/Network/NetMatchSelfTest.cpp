@@ -7306,6 +7306,7 @@ namespace RTE {
 		    {"a host lost while the rejoin was setting up", true, true, NetRejectReason::Timeout, "client hello timeout", false},
 		    {"the host's goodbye", false, true, NetRejectReason::SessionEnded, "the host ended the session", false},
 		    {"a link with no refusal", false, false, NetRejectReason::InternalError, "", false},
+		    {"a host link that was lost", false, true, NetRejectReason::HostLinkLost, "Connection dropped", false},
 		};
 		for (const Case& c: cases) {
 			if (NetMatchService::HeldRejoinRetriesTheHost(c.lostDuringSetup, c.hasReject, c.reason, c.summary) != c.retriesHost) {
@@ -7330,6 +7331,7 @@ namespace RTE {
 		};
 		const Case cases[] = {
 		    {"a first failure the host gave no reason for", 1, false, NetRejectReason::InternalError, true, 2000},
+		    {"a first host link lost", 1, true, NetRejectReason::HostLinkLost, true, 2000},
 		    {"the roster's backoff refusal", 2, true, NetRejectReason::HostNotAccepting, true, 4000},
 		    {"a third failure", 3, true, NetRejectReason::Timeout, false, 0},
 		    {"the seat given away", 1, true, NetRejectReason::SeatReassigned, false, 0},
@@ -7378,6 +7380,7 @@ namespace RTE {
 		};
 		const Case cases[] = {
 		    {"a link the transport dropped", false, false, false, false, true, NetRejectReason::InternalError, true, false, false, true},
+		    {"a host link the session named lost", false, false, false, false, true, NetRejectReason::HostLinkLost, true, false, false, true},
 		    {"a link that timed out", false, false, false, false, true, NetRejectReason::Timeout, true, false, false, true},
 		    {"a link closed with no reason", false, false, false, false, false, NetRejectReason::InternalError, true, false, false, true},
 		    // l4p-19: the lobby failed its own state-transfer check; the session closed, but no transport lost anything.

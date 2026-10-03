@@ -296,6 +296,9 @@ namespace RTE {
 				case NetRejectReason::SeatReleased:
 					out = static_cast<NetRejectReason>(rawReason);
 					return true;
+				// A client's own record of its link, never a host's word.
+				case NetRejectReason::HostLinkLost:
+					break;
 			}
 			SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 2, "reject reason has invalid enum value");
 			return false;
@@ -1378,6 +1381,7 @@ namespace RTE {
 			case NetRejectReason::ParticipantBanned: return "ParticipantBanned";
 			case NetRejectReason::IdentityUnproven: return "IdentityUnproven";
 			case NetRejectReason::SeatReleased: return "SeatReleased";
+			case NetRejectReason::HostLinkLost: return "HostLinkLost";
 		}
 		return "Unknown";
 	}

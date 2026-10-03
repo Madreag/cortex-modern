@@ -1113,6 +1113,7 @@ static std::string ResyncSaveName() {
 			case NetRejectReason::SessionEnded:
 			case NetRejectReason::Timeout:
 			case NetRejectReason::InternalError:
+			case NetRejectReason::HostLinkLost:
 				return true;
 			default:
 				return false;
@@ -4581,7 +4582,7 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::HeldSeatHostIsGone(bool linkLost, bool hasReject, NetRejectReason reason, bool ownStop, bool imageRejoin, uint64_t hostSilentMs, uint64_t hostRttMs) {
 		// A dropped connection is carried as a plain disconnect; only this seat's own stop and the host's refusal say nothing of the host.
-		if (linkLost) return !ownStop && !imageRejoin && (!hasReject || reason == NetRejectReason::SessionEnded || reason == NetRejectReason::Timeout || reason == NetRejectReason::InternalError);
+		if (linkLost) return !ownStop && !imageRejoin && (!hasReject || reason == NetRejectReason::SessionEnded || reason == NetRejectReason::Timeout || reason == NetRejectReason::InternalError || reason == NetRejectReason::HostLinkLost);
 		return NetHostLinkLost(false, hostSilentMs, hostRttMs);
 	}
 
@@ -9549,7 +9550,7 @@ static std::string ResyncSaveName() {
 			return false;
 		}
 		const auto routeFailed = [&] {
-			const bool unconnectedClose = session.IsClosed() && session.GetRejectReason() == NetRejectReason::InternalError && session.GetMismatchKey().empty();
+			const bool unconnectedClose = session.IsClosed() && (session.GetRejectReason() == NetRejectReason::InternalError || session.GetRejectReason() == NetRejectReason::HostLinkLost) && session.GetMismatchKey().empty();
 			return runner.GetLobbySession().GetState() == NetLobbyState::Idle &&
 			       (session.IsFailed() || session.IsClosed() || session.GetState() == NetSessionState::Connecting) &&
 			       session.GetRemoteTransportPeerId() == c_InvalidNetPeerId && !session.IsRejected() &&
@@ -10626,7 +10627,7 @@ static std::string ResyncSaveName() {
 		// A start that never came on a link this side still reads ready is the host playing the round with this seat held.
 		if (isHost || hostEndedMatch || rosterRefused || (sessionReady && !startNeverCame) || !linkLost) return false;
 		// A link closed with no reason from the host, or lost in transport, is a drop: the host keeps the seat for its return.
-		return !hasReject || reason == NetRejectReason::InternalError || reason == NetRejectReason::Timeout;
+		return !hasReject || reason == NetRejectReason::InternalError || reason == NetRejectReason::HostLinkLost || reason == NetRejectReason::Timeout;
 	}
 
 	bool NetMatchService::RematchReturnOwed() const {

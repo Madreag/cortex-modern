@@ -1816,6 +1816,27 @@ namespace RTE {
 			return DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsClosed() && client.IsClosed(); }, error, 1000);
 		}
 
+		bool TestALostHostLinkIsNamed(std::string* error) {
+			const uint16_t port = 42293;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession host;
+			NetSession client;
+			if (!StartPair(port, host, client, hostTransport, clientTransport, MakeConfig(port, 1101, "Host"), MakeConfig(port, 1201, "Player"), error) ||
+			    !DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsReady() && client.IsReady(); }, error, 2000)) {
+				return false;
+			}
+			// The transport's own words for a link that died under a ready seat; the host said nothing.
+			client.InjectEvent({NetTransportEventType::PeerDisconnected, client.GetRemoteTransportPeerId(), NetTransportLane::ControlReliable, {}, "Connection dropped"}, 0);
+			const std::string text = client.HasReject() ? client.BuildPlayerRefusalText() : std::string();
+			if (!client.IsClosed() || !client.HasReject() || client.GetRejectReason() != NetRejectReason::HostLinkLost || text != "The connection to the host was lost.") {
+				*error = std::string("a lost host link reads ") + NetProtocol::RejectReasonName(client.GetRejectReason()) + " '" + text + "' closed=" + std::to_string(client.IsClosed());
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS a_lost_host_link_is_named reason=HostLinkLost text='" << text << "'" << std::endl;
+			return true;
+		}
+
 		class ScriptedAuthCrypto : public NetAuthCrypto {
 		public:
 			bool IsRealCrypto() const override { return false; }
@@ -2316,6 +2337,7 @@ namespace RTE {
 		if (!TestARejoinPhaseSuspendsOnlyItsOwnSilence(&error)) return fail(error);
 		if (!TestARejoinPhaseEndsAtItsCeiling(&error)) return fail(error);
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
+		if (!TestALostHostLinkIsNamed(&error)) return fail(error);
 		if (!TestModuleMismatchNamesModules(&error)) return fail(error);
 		if (!TestAdmissionRefusalIsLogged(&error)) return fail(error);
 		if (!TestModuleDigestJoinerSideMirror(&error)) return fail(error);
