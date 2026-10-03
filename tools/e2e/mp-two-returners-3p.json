@@ -46,7 +46,10 @@
         "lockstep stopped",
         "desync at frame",
         "lockstep start mismatch"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "rtt200-survivor-returns",
@@ -68,7 +71,10 @@
         "lockstep stopped",
         "desync at frame",
         "lockstep start mismatch"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     }
   ],
   "port_base": 49431,

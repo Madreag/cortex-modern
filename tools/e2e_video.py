@@ -1265,7 +1265,7 @@ def report_toast_evidence(record, spec):
 
 # What decides an item without eyes: a log line, a numeric gate, a probe step or an engine record. Such an item is a LOG item,
 # judged by its probe alone; every other item names what the screen must show and is a PICTURE item for the reviewer.
-LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop", "drop_tick")
+LOG_EVIDENCE = ("gate", "log_regex", "forbidden_log_regex", "events", "readback", "probe_steps", "sim_progress", "peer_drop", "drop_tick", "ownership_reclaim")
 
 
 def dropped_index_evidence(record, drop_tick):
@@ -1395,6 +1395,13 @@ def item_evidence(record, item, port=None):
         passed = evidence["process_drop"]["pass"]
         if not passed or evidence.get("probe") in ("none", "awaiting-review"):
             evidence["probe"] = "pass" if passed else "fail"
+    if 'ownership_reclaim' in item:
+        from e2e.ownership import reclaim_evidence
+        owned = reclaim_evidence(record['root'], item['ownership_reclaim'])
+        evidence['ownership_reclaim'] = owned
+        if not owned['passed'] or evidence.get('probe') in ('none', 'awaiting-review'):
+            evidence['probe'] = 'pass' if owned['passed'] else 'fail'
+        if not owned['passed']: evidence['reason'] = '; '.join(owned['errors'])
     if item.get("readback"):
         observed = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
         steps = {step["index"]: step.get("observed", {}) for step in observed.get("steps", [])}
@@ -1572,6 +1579,9 @@ def stage_peer(scenario, peer, root, tokens):
     watches = Path(root) / "screen-watches.txt"
     watches.write_text(SCREEN_WATCHES, encoding="utf-8")
     environment["CCCP_TEST_SCREEN_WATCHES"] = str(watches)
+    if any('ownership_reclaim' in item and item.get('peer') == peer['name'] for item in scenario.get('checklist', [])):
+        environment.update(CC_TEST_CROSS_RECORDS=str(Path(tokens['VIDEO']).parent / 'events.jsonl'),
+                           CC_TEST_CROSS_INSTANCE=peer['name'], CC_TEST_CROSS_INCARNATION=str(peer.get('incarnation', 0)))
     # Frames stream into one encoder process as they land (H11): no capture spools its pictures to disk first.
     ffmpeg = find_ffmpeg()
     if ffmpeg:
@@ -2254,6 +2264,15 @@ def native_behavior(root, spec):
 
 
 def feel_probes(run, capture, source):
+    if run.get('backdrop_refit_gate'):
+        from test_backdrop_refit import verdict
+        config = run['backdrop_refit_gate']
+        logs = [Path(capture['root']) / config[role] / 'stdout.log' for role in ('host', 'client')]
+        checked = verdict(*(path.read_text(encoding='utf-8', errors='replace') if path.is_file() else '' for path in logs))
+        result = dict(checked, status='PASS' if checked['pass'] else 'FAIL')
+        write_json(Path(capture['root']) / 'backdrop-refit.json', result)
+        for peer in capture['peers']:
+            peer.setdefault('gates', {})['backdrop-refit'] = result
     for key, name, check in (('round_hash_gate', 'all-round-hashes', compare_round_histories),
                              ('behavior_gate', 'scenario-behavior', native_behavior)):
         if run.get(key):
@@ -2286,10 +2305,10 @@ def feel_probes(run, capture, source):
             continue
         try:
             result[peer["peer"]] = item9a_gates(root, peer["peer"])
-            peer["gates"] = result[peer["peer"]]["pins"]
+            peer.setdefault('gates', {}).update(result[peer['peer']]['pins'])
         except Exception as error:
             result[peer["peer"]] = {"pass_check": False, "error": repr(error), "pins": {}}
-            peer["gates"] = {}
+            peer.setdefault('gates', {})
     # The gates average over a fixed tick window (feel_gate "ticks" ends it), so a round made longer to fit a
     # relaunch never dilutes them; the window each peer was measured over goes into review.json.
     capture["feel_window"] = {"end_tick": run["feel_gate"].get("ticks"),

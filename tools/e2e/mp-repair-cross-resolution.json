@@ -163,6 +163,14 @@
         "trace": "{peer}_trace.json",
         "report": "{peer}-match.json"
       }
+    },
+    {
+      "id": "backdrop-refit",
+      "peer": "client",
+      "screen": "game",
+      "gate": "backdrop-refit",
+      "what": "After the repair every differently scaled backdrop has its own initial client fit.",
+      "assert": "Native restore and own-fit scale receipts agree."
     }
   ],
   "runs": [
@@ -263,5 +271,9 @@
       ],
       "size": "1920x1080"
     }
-  ]
+  ],
+  "backdrop_refit_gate": {
+    "host": "host",
+    "client": "client"
+  }
 }
