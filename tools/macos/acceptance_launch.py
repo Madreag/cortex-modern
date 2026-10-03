@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 
 
@@ -14,12 +15,15 @@ def main(argv=None):
     parser.add_argument('--source-sha', required=True)
     parser.add_argument('--collection-id', required=True)
     parser.add_argument('--stream-sha256', required=True)
+    parser.add_argument('--label-suffix', default='')
     options = parser.parse_args(argv)
     lane = options.lane.resolve(); stream = lane/'stream.zsh'
     if hashlib.sha256(stream.read_bytes()).hexdigest() != options.stream_sha256:
         raise ValueError('shipped Mac stream hash differs from the declared tree file')
     if (lane/'completion.json').exists(): raise ValueError('this Mac stream already completed; retain it and use a new lane')
-    label = 'com.cortex.acceptance.' + options.collection_id
+    if options.label_suffix and not re.fullmatch(r'[A-Za-z0-9_-]+', options.label_suffix):
+        parser.error('label suffix must contain only letters, digits, underscore and hyphen')
+    label = 'com.cortex.acceptance.' + options.collection_id + ('.' + options.label_suffix if options.label_suffix else '')
     agent = lane/'acceptance-stream.plist'
     data = dict(Label=label, ProgramArguments=['/bin/zsh', str(stream)], WorkingDirectory=str(lane), RunAtLoad=True,
         KeepAlive=False, ProcessType='Background', StandardOutPath=str(lane/'job.out'), StandardErrorPath=str(lane/'job.err'),

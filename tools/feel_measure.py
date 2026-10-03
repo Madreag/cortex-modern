@@ -294,13 +294,13 @@ PEER_SIM_COST = {}
 def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0, three_peers=False, prediction=True, jitter_ms=0, reorder_percent=0, dup_percent=0):
     if not matrix_arm_selected(name, MATRIX_GROUP):
         return None
+    final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
     if DRY_RUN_PLAN is not None:
         DRY_RUN_PLAN.append(dict(arm=name, port=None if sp else port, lag_ms=lag, jitter_ms=jitter_ms, local_prediction=prediction, loss_percent=loss_percent, silent_tick=silent_tick,
-                                 autosave_seconds=autosave_seconds, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
+                                 autosave_seconds=autosave_seconds, ticks=final_tick, peers=['host', 'client', 'survivor'] if three_peers else case_peers(sp, silent_tick)))
         return None
     out = root / name
     out.mkdir(exist_ok=False)
-    final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
     # The engine's Lua state count is a build constant; the flags are kept, accepted and ignored.
     lua_states = {'host': host_lua_states, 'client': client_lua_states}
     pre_match_history = {'host': host_pre_match_history, 'client': client_pre_match_history}

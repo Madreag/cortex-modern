@@ -5,6 +5,7 @@ and collects the completed receipts. POSIX streams use begin/finish around their
 own commands and retain paths relative to their share for lossless fetching.
 """
 import argparse
+from contextlib import nullcontext
 import importlib
 import json
 import os
@@ -54,6 +55,7 @@ def start_section(root, section, *, marker=None, inventory_root=None, optional_b
     if inventory_root is not None:
         inventory(inventory_root)
     import run_split
+    import acceptance_manifest as reader
     plan, schedule = read(root/'acceptance-plan.json'), read(root/'split-plan.json')
     path = root/'sections'/f'{section}.json'
     if path.exists() or str(section) in schedule.get('section_receipts', {}):
@@ -78,7 +80,7 @@ def start_section(root, section, *, marker=None, inventory_root=None, optional_b
         optional_boxes = {}
         if inventory_root is not None:
             boxes, _ = run_split.load_manifest(Path(inventory_root)/'boxes.json')
-            participating = {box for row in rows for box, count in row.get('engine_boxes', {}).items() if count}
+            participating = {box for row in rows for box in reader.execution_boxes(row)}
             optional_boxes = run_split.probe_optional_boxes([box for box in boxes if box.name in participating])
     decisions = []
     for row in rows:
@@ -88,7 +90,7 @@ def start_section(root, section, *, marker=None, inventory_root=None, optional_b
         elif row.get('blocked_reason') and not capabilities.get('EDITH.readback', {}).get('passed'):
             reason = row['blocked_reason']
         else:
-            absent = sorted(box for box, count in row.get('engine_boxes', {}).items() if count and optional_boxes.get(box) is False)
+            absent = sorted(box for box in reader.execution_boxes(row) if optional_boxes.get(box) is False)
             if absent:
                 reason = ', '.join(absent) + ' absent: required game peer deferred'
         decisions.append(dict(share=row['share'], id=row['id'], state='AWAITING' if reason else 'READY', reason=reason))
@@ -310,7 +312,19 @@ def run(share, command_id, repo, here):
         log.write_text('no executable driver is declared for this owner row\n', encoding='utf-8')
         return share.finish(command_id, 1, log, 'owner driver is not available', not_run=True)['exit_code']
     (share.root/share.label/command_id).mkdir(parents=True, exist_ok=True)
-    with log.open('w', encoding='utf-8') as output:
+    if spec.get('runner') == 'remote-command':
+        from acceptance_remote import run_command
+        code = run_command(share, command_id, repo, here, commands, log)
+        return share.finish(command_id, code, log)['exit_code']
+    if spec.get('engine_boxes', {}).get('EROL-PC'):
+        from acceptance_identity import identity
+        native = identity('EROL-PC', repo, Path(repo)/'Cortex Command.exe', share.root/'build-receipt.json', share.source, share.run_id)
+        for reference in spec['identities']:
+            if reference['box'] == 'EROL-PC': write(share.root/reference['path'], native)
+        if native['status'] != 'PASS': raise ValueError('local window identity refused: '+ '; '.join(native['errors']))
+    import run_stream
+    reservation = run_stream.feel_box(share.root/share.label/command_id) if spec.get('window_required') else nullcontext()
+    with reservation, log.open('w', encoding='utf-8') as output:
         for command in commands:
             output.write(json.dumps(command) + '\n'); output.flush()
             try:

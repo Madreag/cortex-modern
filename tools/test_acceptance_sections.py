@@ -20,6 +20,37 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 class AcceptanceSections(unittest.TestCase):
+    def test_cross_preflight_uses_the_completed_streams_native_build_receipt(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);exe=root/'engine';exe.write_bytes(b'never executed')
+            (root/'tools/feel').mkdir(parents=True)
+            for name in ('CrossCombat.lua','CrossCombat.ini'): (root/'tools/feel'/name).write_text('synthetic fixture')
+            native=root/'stream-build.json';write(native,dict(commit='a'*40,executable_sha256=cross_peers.digest_file(exe)))
+            payload=root/'payload.json';write(payload,dict(box=dict(name='Mac',kind='posix-ssh',tree=str(root),
+                executable=str(exe),scratch=str(root),build_receipt=str(native))))
+            with patch.object(cross_peers,'assert_box_guard'),patch.object(cross_peers,'content_manifest',return_value={}), \
+                 patch.object(cross_peers,'command',return_value='native-hardware'),patch.object(cross_peers,'box_load',return_value=[]), \
+                 patch.object(cross_peers,'scratch_bytes',return_value=0),contextlib.redirect_stdout(io.StringIO()):
+                cross_peers.preflight_payload(payload)
+            self.assertEqual(json.loads((root/'preflight.json').read_text())['build'].get('commit'),'a'*40)
+
+    def test_an_absent_optional_compiler_defers_the_zero_engine_build_too(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);plan,_=fixture(root,boxes=('Z13',))
+            value=json.loads(plan.read_text());value['rows'][0].update(section=1,box='Z13',runner='run_split',engine_boxes={})
+            write(root/'acceptance-plan.json',value)
+            decision=collection.start_section(root,1,marker=root/'absent-marker',optional_boxes={'Z13':False})
+            self.assertEqual(decision['rows'][0]['state'],'AWAITING')
+
+    def test_a_readback_partition_needs_its_native_case_size_declaration(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); plan, required = fixture(root,item='2')
+            value = json.loads(plan.read_text())
+            value['rows'][0]['readback_cases'] = [['live','3840x2160']]
+            write(plan,value)
+            result = reader.build_manifest(plan,required)
+            self.assertFalse(result['rows'][0]['passed'])
+
     def test_a_ready_capture_cannot_invent_the_awaited_readback_proof(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); plan, required = fixture(root,boxes=('EDITH',))
