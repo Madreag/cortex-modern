@@ -239,7 +239,7 @@ namespace {
 
 	// A seat's own state names the seat; only a toast about an action names who did it.
 	bool ToastNamesTheSeat(const std::string& kind) { return kind == "seat_held"; }
-	bool ToastNamesNobody(const std::string& kind) { return kind == "slow_machine"; }
+	bool ToastNamesNobody(const std::string& kind) { return kind == "slow_machine" || kind == "catch_up"; }
 
 	bool ToastStillApplies(const ScenarioRunner::NetUiToastRecord& toast) {
 		if (toast.kind == "slow_machine") return ScenarioRunner::IsLockstepLocalMachineSlow();

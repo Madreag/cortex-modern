@@ -1022,8 +1022,9 @@ namespace RTE {
 			}
 			const bool fixed = s_WorldCatchUpActivationTick != 0;
 			const uint64_t target = fixed ? s_WorldCatchUpActivationTick - 1 : (s_WorldCatchUpTail.empty() ? applied : std::max(applied, s_WorldCatchUpTail.back().targetFrame));
-			const double tickMs = g_TimerMan.GetDeltaTimeMS();
-			visible.push_back({applied, "catch_up", NetCatchUpLine(applied, target, s_framesPerSecond, fixed || !(tickMs > 0.0) ? 0.0 : 1000.0 / tickMs), localPeer});
+			// Until the activation is named the replay runs on frames the host is still streaming, so its rate tells nothing of when
+			// it ends: the line says how far it has come and promises no time.
+			visible.push_back({applied, "catch_up", NetCatchUpLine(applied, target, fixed ? s_framesPerSecond : 0.0, 0.0), localPeer});
 		}
 		if (WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({s_WorldCatchUpAppliedThrough, "slow_machine", "Your machine cannot keep up with this match. The AI is playing your seat.", GetLockstepLocalPeerId()});
 		// A host whose own machine held its seat catches up in place, and says so on its own screen.
