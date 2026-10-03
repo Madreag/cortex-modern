@@ -1035,6 +1035,10 @@ def capture_evidence_items(scenario, capture, peer):
         return dict(base, id=id, what=rule, **{'assert': rule}, probe='incomplete' if incomplete else 'fail' if error else 'pass',
                     **details, **(dict(finding=dict(class_='harness', reason=error, launch=None, errors=[])) if error else {}))
     output = []
+    from feel.harness_cost import reduce_costs
+    cost = reduce_costs([Path(peer['root']) / 'stdout.log'])
+    output.append(item(f'harness-cost-{name}', cost['rule'], cost['reason'],
+                       incomplete=cost['status'] == 'INCOMPLETE', instrumentation=cost))
     health, error = None, ''
     try:
         health = recording_health(peer['video_dir'], minimum_duration_s=minimum) if peer.get('video_dir') else None

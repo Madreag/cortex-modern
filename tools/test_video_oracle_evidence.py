@@ -10,13 +10,14 @@ import e2e_video as video
 
 class VideoOracleEvidence(unittest.TestCase):
     def test_declared_capture_minimum_and_each_watch_summary_are_required(self):
+        from feel.test_harness_cost import complete_cost_log
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / 'manifest.json').write_text(json.dumps(dict(fps=30, frames_saved=60, frames_dropped=0, minimum_duration_s=4)))
             (root / 'frames.jsonl').write_text('\n'.join(json.dumps(dict(frame=i, wall_ms=i*1000/30, saved=True)) for i in range(60)))
             self.assertFalse(video.recording_health(root)['complete'])
             (root / 'manifest.json').write_text(json.dumps(dict(fps=30, frames_saved=60, frames_dropped=0)))
-            lines = []
+            lines = [complete_cost_log(first=1, last=60)]
             for name in video.SCREEN_WATCH_RULES:
                 lines += ['[text-watch] armed '+json.dumps(dict(armed='h15-'+name, rule='layout', state='always')),
                           '[text-watch] summary '+json.dumps(dict(watch='h15-'+name, frames=60, active_frames=60, violations=0))]

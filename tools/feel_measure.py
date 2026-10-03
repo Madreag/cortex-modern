@@ -348,7 +348,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                 if FULLSTATE_EVERY:
                     flags += ['-net-fullstate-hash-every', str(FULLSTATE_EVERY)]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
-            # The stall sampler stays armed: a frame past 80 ms names its stack in the peer's log (five sampled repeats cost no pin).
+            # The stall sampler stays armed; its perturbation needs measured cost coverage in the instrumentation verdict.
             # The preview's first step is compared with the committed actor, so the records name each tick the world acted on it.
             environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{final_tick}', PYTHONDONTWRITEBYTECODE='1',
                                CCCP_STALL_STACK_MS=os.environ.get('CCCP_STALL_STACK_MS', '80'), CCCP_TEST_PREVIEW_FIDELITY='1')
@@ -688,7 +688,7 @@ def item9a_evidence_complete(report):
 
 
 def failure_reasons(report):
-    reasons = [f'{peer}.{name}: {pin.get("status", "MISS")} value={pin.get("value")!r}; {pin.get("rule", "no rule recorded")}'
+    reasons = [f'{peer}.{name}: {pin.get("status", "MISS")} value={pin.get("value")!r}; {pin.get("reason", "")}'
                for peer, measured in report.get('peers', {}).items() for name, pin in measured.get('pins', {}).items()
                if (name.startswith('item9a_') or name in ('input_carried', 'input_response'))
                and pin.get('required', True) and pin.get('status') != 'PASS']

@@ -649,12 +649,13 @@ def item9a_gates(run, peer='host', rows=None):
     horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * clock_tick_ms
                                   for tick, stamps in by_tick.items())) if valid_tick and wall_ms is not None else None)
     evidence = [clock_path, log_path, report_path]
-    # The harness's own per-tick sim dump is not the engine's cost: one frame of it past 50 ms fails the arm, never passes as feel.
-    dump_ms = [float(ms) for ms in re.findall(r'\[sim-dump\] ticks=\d+ mean_ms=\S+ max_ms=([0-9.eE+-]+)', log)]
-    dump_ms += [float(ms) for ms in re.findall(r'\[sim-dump\] slow tick=\d+ ms=([0-9.eE+-]+)', log)]
-    harness_ms = max(dump_ms, default=0.0) if log_path.is_file() else None
+    from .harness_cost import reduce_costs
+    harness = reduce_costs([log_path], first_frame=first_tick, last_frame=final_tick)
+    cost_pin = pin(harness['max_frame_ms'], harness['rule'], harness['passed'], [log_path], harness,
+                   available=harness['status'] != 'INCOMPLETE')
+    cost_pin.update(category='instrumentation', reason=harness['reason'])
     pins = {
-        'item9a_harness_cost': pin(harness_ms, '<= 50 ms of the harness sim dump in any one frame', harness_ms is not None and harness_ms <= 50, [log_path]),
+        'item9a_harness_cost': cost_pin,
         'item9a_wall_tps': pin(tps, f'>= {minimum_tps} after tick 300, including recovery time', tps is not None and tps >= minimum_tps, evidence,
                             dict(relative_capacity=relative)),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
@@ -760,7 +761,9 @@ def item9a_gates(run, peer='host', rows=None):
             [host_path, survivor_path], dict(first_tick=held, last_tick=compare_through), available=bool(host_hashes) and bool(survivor_hashes))
         reholds = return_hold_violations(log)
         pins['item9a_no_rehold'] = pin(reholds, 'no seat is held within 100 frames after any return', not reholds, [log_path])
-    return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds) and missing is not None,
+    return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds) and missing is not None and harness['complete'],
+                instrument_valid=harness['instrument_valid'], instrumentation=harness,
+                product_pass=all(value['status'] == 'PASS' for name, value in pins.items() if name != 'item9a_harness_cost'),
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
                              confirmed_horizon_lag_ms=horizon_lag_ms,

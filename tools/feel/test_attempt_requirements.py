@@ -16,7 +16,7 @@ def attempt():
     checks = dict.fromkeys((*cross_report.CORE_CHECKS, 'shared_fullstate', 'all_incarnation_exits',
                            'no_engine_findings', 'box_pace', 'bounded_recovery', 'faults_applied',
                            'native_fault_effects', 'quiet_feel', 'unique_gameplay_budget',
-                           'coverage_minima', 'memory_bounds', 'acceptance_roster', 'build_receipts'), True)
+                           'coverage_minima', 'memory_bounds', 'acceptance_roster', 'build_receipts', 'instrument_valid'), True)
     peers = {name: dict(feel_gated=True, feel_pass=True, record=dict(exe_sha256='b'*64),
                        memory_by_incarnation={'0': dict(passed=True, sizes={'private': {}}, missing_samples=0)},
                        memory_census={'0': dict(status='PASS', warm_slope_bound=10)})
@@ -37,7 +37,7 @@ class AttemptRequirements(unittest.TestCase):
 
     def test_each_required_conjunct_fails_independently(self):
         self.assertTrue(cross_report.judge_attempt(*attempt())['v1_passed'])
-        for key in ('quiet_feel', 'unique_gameplay_budget', 'coverage_minima', 'memory_bounds'):
+        for key in ('quiet_feel', 'unique_gameplay_budget', 'coverage_minima', 'memory_bounds', 'instrument_valid'):
             with self.subTest(key=key):
                 args = attempt()
                 args[1][key] = False
