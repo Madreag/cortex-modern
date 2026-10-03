@@ -467,8 +467,15 @@ class CrossDriverTests(unittest.TestCase):
 
     def test_first_soak_cannot_accidentally_remove_its_host(self):
         for host in ('edith','mac'):
-            with self.assertRaisesRegex(ValueError,'host removal'):
-                cross_peers.make_plan(cross_peers.parse_args(['--lane','test-lane','--scenario','soak','--host',host]))
+            args = ['--lane','test-lane','--scenario','soak','--host',host]
+            planned = cross_peers.make_plan(cross_peers.parse_args(args))
+            self.assertFalse(any(fault['peer'] == host and fault['action'] in ('crash-restart', 'announced-leave-rejoin')
+                                 for fault in planned['faults']))
+            with tempfile.TemporaryDirectory() as folder:
+                schedule = Path(folder)/'schedule.json'
+                schedule.write_text(json.dumps([dict(peer=host, action='crash-restart', tick=7200)]))
+                with self.assertRaisesRegex(ValueError,'host removal'):
+                    cross_peers.make_plan(cross_peers.parse_args(args + ['--schedule', str(schedule)]))
 
     def test_new_round_hash_does_not_prove_changed_settings(self):
         rows=[dict(config_hash='first',difficulty=50,fog=False),dict(config_hash='next',difficulty=50,fog=False)]
