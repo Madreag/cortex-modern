@@ -1,15 +1,48 @@
 {
-  "schema":1,"timeout_ms":180000,"activate_phase":"Running",
-  "steps":[
-    {"op":"wait","lockstep_frame_at_least":1200},
-    {"op":"menu","command":"dump_world_ownership before-spectator"},
-    {"op":"wait_file","path":"{PROBE_DIR_spectator}/crawl-complete.json"},
-    {"op":"menu","command":"dump_world_ownership before-release"},
-    {"op":"wait_file","path":"{PROBE_DIR_seated-one}/departed.json"},
-    {"op":"remove_participant","stable_seat":2,"ban":false,"expected":"Ok"},
-    {"op":"signal","name":"host-released"},
-    {"op":"wait_file","path":"{PROBE_DIR_spectator}/promoted-input.json"},
-    {"op":"menu","command":"dump_world_ownership after-promotion"},
-    {"op":"finish"}
+  "schema": 1,
+  "timeout_ms": 480000,
+  "activate_phase": "Running",
+  "steps": [
+    {
+      "op": "wait",
+      "lockstep_frame_at_least": 1200
+    },
+    {
+      "op": "menu",
+      "command": "dump_world_ownership before-spectator"
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_spectator}/crawl-complete.json"
+    },
+    {
+      "op": "menu",
+      "command": "dump_world_ownership before-release"
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_seated-one}/departed.json"
+    },
+    {
+      "op": "remove_participant",
+      "stable_seat": 1,
+      "ban": false,
+      "expected": "Ok"
+    },
+    {
+      "op": "signal",
+      "name": "host-released"
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_spectator}/promoted-input.json"
+    },
+    {
+      "op": "menu",
+      "command": "dump_world_ownership after-promotion"
+    },
+    {
+      "op": "finish"
+    }
   ]
 }

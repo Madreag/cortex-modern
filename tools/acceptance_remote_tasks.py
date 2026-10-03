@@ -161,7 +161,8 @@ def preflight_payload(path):
     if box.get('build_receipt'):
         source = Path(box['build_receipt'])
         build = json.loads(source.read_text(encoding='utf-8-sig'))
-        if build.get('build_exit_code') != 0 or build.get('configuration') != 'release' or \
+        configuration = 'Final' if box['kind'] == 'windows-task' else 'release'
+        if build.get('build_exit_code') != 0 or build.get('configuration') != configuration or \
                 build.get('executable_sha256') != value['executable_sha256'] or \
                 not build.get('build_log') or sha256(Path(build['build_log'])) != build.get('build_log_sha256'):
             raise ValueError('native release build receipt or its build log differs')

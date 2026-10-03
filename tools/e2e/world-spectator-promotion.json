@@ -4,7 +4,7 @@
   "title": "A slow spectator watches a three-seat world and takes a host-released seat",
   "port_base": 49320,
   "size": "640x360",
-  "timeout_s": 240,
+  "timeout_s": 600,
   "acceptance_row": "spectator",
   "preserve_evidence": true,
   "required_engine_levers": [
@@ -84,6 +84,30 @@
       }
     },
     {
+      "name": "seated-three",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-live-tick-hashes",
+        "{OUT}/seated-two-live.jsonl"
+      ],
+      "menu_script": "world-spectator.seated.menu.txt",
+      "input_script": "play-input.txt",
+      "start_when": {
+        "peer": "seated-two",
+        "event": "video_mark spectator-first-connected",
+        "timeout_s": 90
+      },
+      "settings": {
+        "NetworkDisplayName": "Seated Three",
+        "NetworkPortMapEnable": "0"
+      },
+      "env": {
+        "CC_TEST_CROSS_INSTANCE": "seated-three",
+        "CC_TEST_CROSS_RUN": "world-spectator-promotion"
+      }
+    },
+    {
       "name": "spectator",
       "args": [
         "-input-script",
@@ -101,8 +125,8 @@
       },
       "env": {
         "CCCP_TEST_SIM_COST_US": "500000",
-        "CCCP_TEST_SIM_COST_FROM_TICK": "1800",
-        "CCCP_TEST_SIM_COST_UNTIL_TICK": "1860",
+        "CCCP_TEST_SIM_COST_FROM_TICK": "6000",
+        "CCCP_TEST_SIM_COST_UNTIL_TICK": "6060",
         "CC_TEST_CROSS_INSTANCE": "spectator",
         "CC_TEST_CROSS_RUN": "world-spectator-promotion"
       },
@@ -137,5 +161,11 @@
   ],
   "behavior_gate": {
     "kind": "acceptance-spectator"
-  }
+  },
+  "dedicated_host": "host",
+  "seated_processes": [
+    "seated-one",
+    "seated-two",
+    "seated-three"
+  ]
 }

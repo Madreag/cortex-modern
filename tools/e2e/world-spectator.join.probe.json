@@ -1,17 +1,59 @@
 {
-  "schema":1,"timeout_ms":180000,
-  "steps":[
-    {"op":"menu","command":"dump_world_ownership spectator-image"},
-    {"op":"wait","sim_at_least":1861},
-    {"op":"menu","command":"dump_world_ownership crawl-complete"},
-    {"op":"signal","name":"crawl-complete"},
-    {"op":"wait_file","path":"{PROBE_DIR_host}/host-released.json"},
-    {"op":"wait","renders":120},
-    {"op":"menu","command":"game_key D down"},
-    {"op":"wait","renders":10},
-    {"op":"menu","command":"dump_world_ownership promoted-input"},
-    {"op":"menu","command":"game_key D up"},
-    {"op":"signal","name":"promoted-input"},
-    {"op":"finish"}
-  ]
+  "schema": 1,
+  "timeout_ms": 480000,
+  "steps": [
+    {
+      "op": "menu",
+      "command": "dump_world_ownership spectator-image"
+    },
+    {
+      "op": "wait",
+      "sim_at_least": 6061
+    },
+    {
+      "op": "menu",
+      "command": "dump_world_ownership crawl-complete"
+    },
+    {
+      "op": "signal",
+      "name": "crawl-complete"
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_host}/host-released.json"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "local_peer_at_most": 4
+    },
+    {
+      "op": "wait",
+      "renders": 120
+    },
+    {
+      "op": "key_down",
+      "key": "D"
+    },
+    {
+      "op": "wait",
+      "renders": 10
+    },
+    {
+      "op": "menu",
+      "command": "dump_world_ownership promoted-input"
+    },
+    {
+      "op": "key_up",
+      "key": "D"
+    },
+    {
+      "op": "signal",
+      "name": "promoted-input"
+    },
+    {
+      "op": "finish"
+    }
+  ],
+  "activate_phase": "Running"
 }

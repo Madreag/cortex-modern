@@ -58,7 +58,8 @@ def good(row):
         data["live"] = hashes(1201, 1801)
         data["fullstate"] = hashes(1260, 1800, 60)
     if row == "spectator":
-        data["peers"] = {b: {**peer(1, 2401, b), "first_wall_ms":0, "last_wall_ms":40000} for b in BOXES}
+        data['configuration']['persistent_world'] = True
+        data["peers"] = {b: {**peer(1, 2401, 'pc'), "first_wall_ms":0, "last_wall_ms":40000} for b in BOXES}
         data["throttle"].update(first_tick=1800, last_tick=1860)
         data["watch"].update(first=1201, last=1861, hashes=hashes(1201, 1861))
         data["promotion"].update(activation_tick=4000, input_tick=4001, input_created_tick=4001)
@@ -74,6 +75,16 @@ def good(row):
 
 
 class AcceptanceRows(unittest.TestCase):
+    def test_spectator_clock_domains_cannot_be_assumed_equal_between_boxes(self):
+        data=good('spectator')
+        data['peers']['mac']['box']='linux'
+        self.assert_rejected('spectator',data,'throttle')
+
+    def test_spectator_configuration_must_be_a_persistent_world(self):
+        data=good('spectator')
+        data['configuration']['persistent_world']=False
+        self.assert_rejected('spectator',data,'configuration')
+
     def assert_rejected(self, row, data, field):
         result = judge(row, data)
         self.assertFalse(result["passed"], f"{row}: fabricated {field} violation was accepted")

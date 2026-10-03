@@ -1,16 +1,54 @@
 {
-  "schema":1,"timeout_ms":180000,"activate_phase":"Running",
-  "steps":[
-    {"op":"wait_file","path":"{PROBE_DIR_spectator}/crawl-complete.json"},
-    {"op":"menu","command":"dump_world_ownership departing-seat"},
-    {"op":"key_down","key":"Escape"},
-    {"op":"key_up","key":"Escape"},
-    {"op":"wait","screen":"Pause","elapsed_ms":450},
-    {"op":"menu","command":"activate ButtonLeaveMatch"},
-    {"op":"wait","screen":"PauseLeaveConfirm","elapsed_ms":450},
-    {"op":"menu","command":"activate ButtonLeaveConfirm"},
-    {"op":"wait","scope":"menu","elapsed_ms":450},
-    {"op":"signal","scope":"menu","name":"departed"},
-    {"op":"finish"}
+  "schema": 1,
+  "timeout_ms": 480000,
+  "activate_phase": "Running",
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_spectator}/crawl-complete.json"
+    },
+    {
+      "op": "menu",
+      "command": "dump_world_ownership departing-seat"
+    },
+    {
+      "op": "key_down",
+      "key": "Escape"
+    },
+    {
+      "op": "key_up",
+      "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonLeaveMatch"
+    },
+    {
+      "op": "wait",
+      "screen": "PauseLeaveConfirm",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonLeaveConfirm"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "signal",
+      "scope": "menu",
+      "name": "departed"
+    },
+    {
+      "op": "finish"
+    }
   ]
 }

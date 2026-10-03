@@ -212,7 +212,7 @@ def judge(row, facts):
                           peers[name]["last"] > refusal["refusal_tick"], "refusal", "survivor stopped at the refusal")
     elif row == "spectator":
         config, watch = facts.get("configuration", {}), facts.get("watch", {})
-        check.require(config.get("seats") == 3 and config.get("world_max_spectators") == 1,
+        check.require(config.get("seats") == 3 and config.get("world_max_spectators") == 1 and config.get('persistent_world') is True,
                       "configuration", "three seats and one spectator were not configured")
         seated, spectator = facts.get("seated", []), facts.get("spectator")
         check.require(len(seated) == 3 and spectator in peers and spectator not in seated,
@@ -222,6 +222,9 @@ def judge(row, facts):
                       "watch", "spectator image/role receipts missing")
         hash_gate(check, watch.get("hashes", {}), "watch.hashes", watch.get("first"), watch.get("last"))
         cost = facts.get("throttle", {})
+        clock_box = facts.get('clock_box', 'pc')
+        check.require(clock_box in ('pc','edith') and all(peers.get(name,{}).get('box') == clock_box for name in [*seated,spectator]),
+                      'throttle', 'crawl and seated timing must share their actual native clock domain')
         check.require(cost.get("process") == spectator and number(cost.get("sim_cost_us")) and cost["sim_cost_us"] >= 100000,
                       "throttle", "crawl cost was not applied to the spectator")
         check.require(number(cost.get("start_ms")) and number(cost.get("end_ms")) and cost["end_ms"]-cost["start_ms"] >= 30000,
