@@ -841,6 +841,43 @@ ROUTE = re.compile(r'\[net-ice\][^\n]*(?:selected|candidate|fail|timeout|retryin
                    r'|[^\n]*(?:ProblemDetectedLocally|ClosedByPeer|ConnectionState|connect(?:ion)? (?:failed|timed out|refused))[^\n]*', re.I)
 
 
+def relay_evidence(root, meta):
+    if meta.get('path') not in ('relay', 'directory-relay'):
+        return dict(passed=True, required=False, reason='')
+    session = meta.get('session_id')
+    required = ('client',) if meta['path'] == 'directory-relay' else ('host', 'client')
+    routes, errors = {}, []
+    for peer in required:
+        current, selected, accepted, wrong = None, set(), [], []
+        for line in peer_log(root, peer).splitlines():
+            if found := re.search(r'\[net-ice\] (?:host )?session (\S+)', line):
+                current = found[1]
+                selected.clear()
+            if found := re.search(r'\[net-ice\] selected candidate=\S+ connection=(\d+)', line):
+                if current == session and session: selected.add(found[1])
+            if found := re.search(r'\[net-route\] RouteAllowed route=(\w+) allowed=(\d+) connection=(\d+)', line):
+                if current != session or not session: continue
+                if found[1] == 'relay' and found[2] == '1' and found[3] in selected: accepted.append(line)
+                elif found[2] == '1': wrong.append(line)
+        routes[peer] = dict(selected_relay=accepted, wrong_allowed_route=wrong)
+        if not accepted or wrong: errors.append(f'{peer}: selected relay receipts={len(accepted)}, other allowed routes={wrong}')
+    offers = []
+    path = root / 'service.log'
+    for line in path.read_text(encoding='utf-8-sig', errors='replace').splitlines() if path.is_file() else []:
+        if 'relay_offer_issued ' not in line: continue
+        try:
+            row = json.loads(line.split('relay_offer_issued ', 1)[1])
+        except ValueError:
+            errors.append('invalid relay_offer_issued JSON'); continue
+        provider = row.get('provider')
+        expected = {'cloudflare', 'coturn'} if meta['path'] == 'directory-relay' else {'fixed'}
+        if row.get('session_id') == session and session and provider in expected and row.get('match_id') and all(
+                type(row.get(key)) is int and row[key] > 0 for key in ('generation', 'expires_at', 'server_count')):
+            offers.append(row)
+    if not offers: errors.append(f'no issued provider offer for session {session!r}')
+    return dict(passed=not errors, required=True, session_id=session, peers=routes, offers=offers, reason='; '.join(errors))
+
+
 def analyze_match(h, root, meta):
     records = {peer: read_json(root / f'{peer}-record.json') for peer in ('host', 'client')}
     complete = all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values())
@@ -892,10 +929,11 @@ def analyze_match(h, root, meta):
     targets = {row['peer'] for row in (hold_judgement or {}).get('injection_plan', [])}
     required_timing = ['host'] if is_soak and holds_pass and targets == {'client'} else ['host', 'client']
     timing_pass = all(result.get('peers', {}).get(peer, {}).get('pass_check') is True for peer in required_timing)
-    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass)
+    relay = relay_evidence(root, meta)
+    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass and relay['passed'])
     verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds, hold_judgement=hold_judgement,
                    trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest,
-                   soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing)
+                   soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing, relay=relay)
     write_json(root / 'verdict.json', verdict)
     cell = lambda key, fmt='{}': '/'.join('-' if peers[peer][key] is None else fmt.format(peers[peer][key]) for peer in ('host', 'client'))
     route = next((line for peer in (meta['local_peer'], 'host', 'client') for line in peers[peer]['route'] if 'selected' in line or 'RouteAllowed' in line), None)
