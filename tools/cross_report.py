@@ -1089,7 +1089,10 @@ def build_report(root):
             feel_gated=quiet, feel_pass=all(feel_pins), wire_egress=None,
             wire_reason='Transport wire counters are not exposed at an owned seam; GnsTransport.cpp:904 detailed-status text is not a per-tick counter API.',
             configs=configs, paths={kind: str(record_path(own / leaf).relative_to(root)) for kind,leaf in [('live','live.jsonl'),('events','events.jsonl'),('log','engine/stdout.log'),('feel','engine/feel/raw.jsonl'),('native','match-report.json')]})
-    relative_capacity = round_capacity_evidence({name: peer['native'] for name, peer in peers.items()})
+    # X8: every retained process can own a different round; the final report cannot replace its predecessors.
+    capacity_inputs = {name: dict(reports=[load(root/fragment/'match-report.json', {}) for fragment in peer['fragments']],
+                                  pace=peer['native'].get('pace', {})) for name, peer in peers.items()}
+    relative_capacity = round_capacity_evidence(capacity_inputs)
     multiple_rounds = len({str(row.get('round')) for peer in peers.values() for row in peer['configs']}) > 1 or len(relative_capacity.get('rounds', {})) > 1
     segmented = segmented_round_timing(manifest, peers, events, live, peer_waits, relative_capacity) if multiple_rounds else {}
     for name, peer in peers.items():
