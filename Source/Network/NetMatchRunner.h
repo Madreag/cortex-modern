@@ -179,6 +179,8 @@ namespace RTE {
 		NetLobbySession& GetLobbySession() { return m_Lobby; }
 		const NetLobbySession& GetLobbySession() const { return m_Lobby; }
 		bool TookWorldJoinImage() const { return m_WorldJoinImage; }
+		/// Whether this runner received any of a running world's image, whole or not.
+		bool SawWorldImageTransfer() const { return m_ImageTransferSeen || m_WorldJoinImage; }
 		/// Starts the joiner's lockstep at its activation tick without blocking the sim update it runs
 		/// inside: the handshake finishes over the pumps that follow.
 		/// @return Whether the coordinator is already running.
@@ -285,6 +287,9 @@ namespace RTE {
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
 		bool m_WorldJoinImage = false;
+		mutable bool m_ImageTransferSeen = false; //!< A world image transfer began while this runner was in its lobby.
+		mutable uint64_t m_TransferMarkMs = 0;      //!< When the incoming image's rate was first measured from.
+		mutable uint32_t m_TransferMarkBytes = 0;   //!< What had come by then.
 		bool m_WorldJoinStarting = false;      //!< A joiner's lockstep start is mid-handshake.
 		std::optional<uint64_t> m_WorldJoinStartLastTick;
 		uint32_t m_WorldJoinStartTicks = 0;    //!< The joiner's own updates that start has cost.

@@ -697,6 +697,8 @@ namespace RTE {
 		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double steadyCaptureMs);
 		/// The median of the given capture costs, or -1 when there are none.
 		static double SteadyCaptureMs(const std::deque<double>& costs);
+		/// Whether a host's roster names a player besides the host still connected, who plays on under a new host when the host goes.
+		static bool MatchPlaysOnUnderANewHost(const NetSeatRoster& roster);
 		/// Whether the round's goodbye is owed to a ready seat at the round's end: one the round does not use, or one still under the AI at its last frame.
 		static bool EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd);
 		/// Whether an ended round holds its record back from a held seat until that seat asks for its final tail; a seat whose rejoin

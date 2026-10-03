@@ -10853,6 +10853,32 @@ namespace RTE {
 		return true;
 	}
 
+	// A player joining a running match whose host goes is told the match changes host only when the host's roster names another player
+	// still connected to play on; a host alone, or one whose other players are gone, ended the match for it.
+	bool TestAJoinerIsToldTheMatchIsChangingHost(std::string* error) {
+		NetSeatRoster roster;
+		roster.hostSeat = 1;
+		for (uint8_t id = 1; id <= 3; ++id) {
+			NetRosterSeat seat;
+			seat.seatId = id;
+			seat.owner = id == 3 ? 0 : 0x5000 + id;
+			seat.link = NetSeatLink::Connected;
+			roster.seats.push_back(seat);
+		}
+		const bool playsOn = NetMatchService::MatchPlaysOnUnderANewHost(roster);
+		roster.seats[1].link = NetSeatLink::Dropped;
+		const bool othersGone = NetMatchService::MatchPlaysOnUnderANewHost(roster);
+		roster.seats.resize(1);
+		const bool hostAlone = NetMatchService::MatchPlaysOnUnderANewHost(roster);
+		if (!playsOn || othersGone || hostAlone) {
+			*error = std::string("a joiner whose host went reads the match as changing host: with another player connected ") + (playsOn ? "yes" : "no") +
+			         ", with the others gone " + (othersGone ? "yes" : "no") + ", with the host alone " + (hostAlone ? "yes" : "no");
+			return false;
+		}
+		std::cout << "PASS a_joiner_is_told_the_match_is_changing_host" << std::endl;
+		return true;
+	}
+
 	bool TestKickedSeatReadsOpen(std::string* error) {
 		const uint16_t port = 43247;
 		LoopbackTransport hostTransport;
@@ -15419,6 +15445,10 @@ namespace RTE {
 		if (!TestRematchKeepsEverySeatAcrossTwoLeaves(&twoShrinksError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << twoShrinksError << std::endl;
 		}
+		std::string changingHostError;
+		if (!TestAJoinerIsToldTheMatchIsChangingHost(&changingHostError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << changingHostError << std::endl;
+		}
 		std::string hardDropError;
 		if (!TestRematchAfterAHardDrop(&hardDropError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << hardDropError << std::endl;
@@ -15428,6 +15458,7 @@ namespace RTE {
 			std::cerr << "[net-match-selftest] FAIL: " << reclaimError << std::endl;
 		}
 		if (!twoShrinksError.empty()) return fail(twoShrinksError);
+		if (!changingHostError.empty()) return fail(changingHostError);
 		if (!hardDropError.empty()) return fail(hardDropError);
 		if (!reclaimError.empty()) return fail(reclaimError);
 		if (!TestLobbyThreePeer(&error)) return fail(error);

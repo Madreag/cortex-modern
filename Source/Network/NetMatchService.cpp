@@ -940,6 +940,12 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::MatchPlaysOnUnderANewHost(const NetSeatRoster& roster) {
+		return std::any_of(roster.seats.begin(), roster.seats.end(), [&roster](const NetRosterSeat& seat) {
+			return seat.seatId != roster.hostSeat && seat.owner != 0 && seat.link == NetSeatLink::Connected;
+		});
+	}
+
 	std::string NetMatchService::RoundEndResultText(int winnerTeam, int localTeam) {
 		if (winnerTeam < 0) return "Match over: draw";
 		if (localTeam == Activity::NoTeam) return "Match over";
@@ -6638,6 +6644,8 @@ static std::string ResyncSaveName() {
 					seat.joinProgress = NetSeatJoinProgress(receiving ? session.transferBytes * session.ackedChunks / session.totalChunks : 0, session.transferBytes, !receiving);
 			}
 		}
+		m_ModerationSeats = std::move(seats);
+		RefreshSeatViewsLocked(AdmissionNowMs());
 	}
 
 	void NetMatchService::PublishLobbyModerationViewLocked() {
@@ -9751,7 +9759,19 @@ static std::string ResyncSaveName() {
 				const bool lostHost = !request.host && !seatReleased &&
 				    (m_Runner->DidLoseHostDuringSetup() || (reachedHost && ClientSessionLossIsHostDeparture(*m_Session)));
 				System::PrintDiagnosticLine("[net-match] setup failed: " + error + (lostHost ? " (the host left)" : ""));
-				m_StatusText = lostHost ? "The host left the match"
+				// A player coming into a running match whose host went while the others play on: the match is changing host.
+				// An application waiting on a held seat is one: such a seat is in a match with other players.
+				NetReconnectClient* replica = m_Session ? m_Session->GetReconnectClient() : nullptr;
+				const bool joiningWorld = m_Runner->SawWorldImageTransfer() && replica && replica->GetRosterReplica().HasRoster() &&
+				                          MatchPlaysOnUnderANewHost(replica->GetRosterReplica().Roster());
+				const bool applying = replica && replica->HasUnansweredApplication();
+				const bool changingHost = lostHost && !NoteHostGoodbyeLocked(m_Session.get()) && (joiningWorld || applying);
+				if (changingHost) {
+					System::PrintDiagnosticLine(std::string("[net-match] the host left while this player was ") + (applying ? "applying for a seat" : "joining") +
+					                            "; the others play on under a new host");
+					if (applying) replica->CarryApplicationToNextHost();
+				}
+				m_StatusText = changingHost ? std::string(c_NetMatchChangingHostLine) : lostHost ? "The host left the match"
 				                        : SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
 				m_ErrorText = lostHost ? m_StatusText : (m_Session && m_Session->HasReject() ? m_Session->BuildPlayerRefusalText() : error);
 				// A refusal that says the round is over is an answer, not a lost link: the seat completes.

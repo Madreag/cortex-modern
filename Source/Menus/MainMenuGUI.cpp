@@ -1200,8 +1200,10 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_NetMatchService.RequestStart();
 		g_GUISound.ButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]) {
+		// A join cancelled while the world's image comes goes back to where the player chose the match; the host frees the seat it offered.
+		const bool cancelsTransfer = !g_NetMatchService.GetLobbySnapshot().transferLine.empty();
 		g_NetMatchService.Destroy();
-		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		m_MultiplayerSubScreen = cancelsTransfer ? MultiplayerSubScreen::JoinSetup : MultiplayerSubScreen::Landing;
 		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] &&
 	           m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch() &&
@@ -3727,7 +3729,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 	} else {
 		s_ShareResolved = false;
-		m_MultiplayerStatusLabel->SetText(PlayerFacingStatus(snapshot.statusText));
+		m_MultiplayerStatusLabel->SetText(!snapshot.transferLine.empty() ? snapshot.transferLine : PlayerFacingStatus(snapshot.statusText));
 	}
 	if (!addressOnOwnRow) {
 		m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(false);
@@ -3907,6 +3909,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	// Start only once the remote peer is actually ready, not merely present.
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
+	// While the world's image comes the exit cancels the join, and says so.
+	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetText(snapshot.transferLine.empty() ? "Leave" : "Cancel");
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
 	seats->SetPositionRel(pairLeft + leave->GetWidth() + pairGap, 236 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);

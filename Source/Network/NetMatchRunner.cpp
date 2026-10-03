@@ -843,6 +843,22 @@ namespace RTE {
 		NetLobbySnapshot snapshot;
 		snapshot.hostPeerId = m_ActiveHostPeerId != 0 ? m_ActiveHostPeerId : rosterConfig.hostPeerId;
 		snapshot.lobbyPhase = StateName(m_State);
+		// A joiner that receives the world's image says how much has come, how fast and how long is left.
+		if (const auto [received, total] = m_Lobby.GetStateTransferProgress(); !m_Config.host && total > 0 && !m_Lobby.HasCompleteStateTransfer()) {
+			const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+			if (m_TransferMarkMs == 0 || received < m_TransferMarkBytes) {
+				m_TransferMarkMs = nowMs;
+				m_TransferMarkBytes = received;
+			}
+			const uint64_t elapsedMs = nowMs - m_TransferMarkMs;
+			const double rate = elapsedMs >= 500 ? static_cast<double>(received - m_TransferMarkBytes) * 1000.0 / static_cast<double>(elapsedMs) : 0.0;
+			m_ImageTransferSeen = true;
+			snapshot.transferReceivedBytes = received;
+			snapshot.transferTotalBytes = total;
+			snapshot.transferLine = NetImageTransferLine(received, total, rate);
+		} else {
+			m_TransferMarkMs = 0;
+		}
 		snapshot.activityPreset = rosterConfig.activityPreset;
 		snapshot.activityModule = rosterConfig.activityModule;
 		snapshot.sceneName = rosterConfig.sceneName;

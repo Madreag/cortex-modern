@@ -17,6 +17,7 @@
 #include "NetMatchReplay.h"
 #include "NetReconnectUx.h"
 #include "NetWorldJoin.h"
+#include "NetLobbySnapshot.h"
 #include "RTETools.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
@@ -981,6 +982,26 @@ namespace RTE {
 		const uint8_t localPeer = GetLockstepLocalPeerId();
 		const bool ownSeatHeld = localPeer != 0 && IsLockstepSeatUnderAI(localPeer, GetLockstepCompletedFrame()) && !IsLockstepSeatReleased(localPeer);
 		if (WorldCatchUpActive() || ownSeatHeld) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", localPeer});
+		if (WorldCatchUpActive()) {
+			// The replay's own rate, over the last second or so; the frame it needs is the announced activation once there is one,
+			// else the round's newest frame here, which moves on at the round's rate.
+			static uint64_t s_markFrame = 0, s_markMs = 0;
+			static double s_framesPerSecond = 0.0;
+			const uint64_t applied = s_WorldCatchUpAppliedThrough;
+			if (s_markMs == 0 || applied < s_markFrame) {
+				s_markFrame = applied;
+				s_markMs = nowMs;
+				s_framesPerSecond = 0.0;
+			} else if (nowMs - s_markMs >= 1000) {
+				s_framesPerSecond = static_cast<double>(applied - s_markFrame) * 1000.0 / static_cast<double>(nowMs - s_markMs);
+				s_markFrame = applied;
+				s_markMs = nowMs;
+			}
+			const bool fixed = s_WorldCatchUpActivationTick != 0;
+			const uint64_t target = fixed ? s_WorldCatchUpActivationTick - 1 : (s_WorldCatchUpTail.empty() ? applied : std::max(applied, s_WorldCatchUpTail.back().targetFrame));
+			const double tickMs = g_TimerMan.GetDeltaTimeMS();
+			visible.push_back({applied, "catch_up", NetCatchUpLine(applied, target, s_framesPerSecond, fixed || !(tickMs > 0.0) ? 0.0 : 1000.0 / tickMs), localPeer});
+		}
 		if (WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({s_WorldCatchUpAppliedThrough, "slow_machine", "Your machine cannot keep up with this match. The AI is playing your seat.", GetLockstepLocalPeerId()});
 		// A host whose own machine held its seat catches up in place, and says so on its own screen.
 		uint64_t heldAt = 0;
