@@ -58,6 +58,17 @@ class ModuleIdentity(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "scratch-only"):
             mod.alter_one_byte(self.source, "Index.ini", self.root / "copy", self.root / "mutation.json")
 
+    def test_refusal_changes_only_trailing_whitespace(self):
+        original = mod.pack(self.source, self.archive, self.receipt)
+        mod.install(self.archive, self.receipt, self.destination)
+        receipt = self.root / "mutation.json"
+        before = (self.destination/"Index.ini").read_bytes()
+        mod.alter_one_byte(self.destination, "Index.ini", self.root, receipt, len(before)-1, 32)
+        after = (self.destination/"Index.ini").read_bytes()
+        self.assertEqual(before[:-1], after[:-1])
+        self.assertEqual(after[-1:], b" ")
+        self.assertEqual(mod.restore_one_byte(receipt), original)
+
     def test_restore_refuses_a_second_change(self):
         mod.pack(self.source, self.archive, self.receipt)
         mod.install(self.archive, self.receipt, self.destination)

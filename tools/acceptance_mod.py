@@ -133,7 +133,7 @@ def install(archive_path, receipt_path, destination):
     return observed
 
 
-def alter_one_byte(root, relative, scratch, receipt):
+def alter_one_byte(root, relative, scratch, receipt, offset=0, replacement=None):
     root, scratch = Path(root).resolve(), Path(scratch).resolve()
     if root == scratch or not root.is_relative_to(scratch) or root.name != "VoidWanderers.rte":
         raise ValueError("mutation requires a scratch-only VoidWanderers copy")
@@ -141,12 +141,19 @@ def alter_one_byte(root, relative, scratch, receipt):
     target = (root / relative).resolve()
     if not target.is_relative_to(root) or target.stat().st_size == 0:
         raise ValueError("mutation target must be a nonempty file inside the scratch module")
+    if type(offset) is not int or not 0 <= offset < target.stat().st_size:
+        raise ValueError("mutation offset leaves the file")
     with target.open("rb") as stream:
+        stream.seek(offset)
         old = stream.read(1)
-    change = dict(path=target.relative_to(root).as_posix(), offset=0, original=old[0], replacement=old[0] ^ 1,
+    replacement = old[0] ^ 1 if replacement is None else replacement
+    if type(replacement) is not int or not 0 <= replacement <= 255 or replacement == old[0]:
+        raise ValueError("replacement must change one byte")
+    change = dict(path=target.relative_to(root).as_posix(), offset=offset, original=old[0], replacement=replacement,
                   before=before, scratch=str(scratch), module=str(root))
     write_json(receipt, change)
     with target.open("r+b") as stream:
+        stream.seek(offset)
         stream.write(bytes([change["replacement"]]))
     after = manifest(root)
     changed = [r for r, s in zip(before["files"], after["files"]) if r != s]
@@ -200,6 +207,8 @@ def main():
     mutate.add_argument("relative")
     mutate.add_argument("--scratch", type=Path, required=True)
     mutate.add_argument("--receipt", type=Path, required=True)
+    mutate.add_argument("--offset", type=int, default=0)
+    mutate.add_argument("--replacement", type=int)
     restore = sub.add_parser("restore")
     restore.add_argument("receipt", type=Path)
     args = parser.parse_args()
@@ -212,7 +221,7 @@ def main():
         value = install(args.archive, args.receipt, args.destination)
         write_json(args.out, value)
     elif args.command == "alter":
-        value = alter_one_byte(args.root, args.relative, args.scratch, args.receipt)
+        value = alter_one_byte(args.root, args.relative, args.scratch, args.receipt, args.offset, args.replacement)
     else:
         value = restore_one_byte(args.receipt)
     print(json.dumps({k: v for k, v in value.items() if k in ("module", "tree_sha256", "bytes", "file_count", "before", "altered", "files_changed", "bytes_changed")}))
