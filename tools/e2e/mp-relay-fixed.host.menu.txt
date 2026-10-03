@@ -68,3 +68,5 @@ wait_remote_ready 180
 assert_enabled ButtonMultiplayerStart 1
 wait_ms 500
 activate ButtonMultiplayerStart
+# A finished script quits its engine: this one waits; the trace cap ends the match at its declared frame.
+wait_ms 900000

@@ -32,3 +32,5 @@ wait_connected 2 180
 wait_ms 825
 assert_substate Lobby
 activate ButtonMultiplayerReady
+# A finished script quits its engine: this one waits; the trace cap ends the match at its declared frame.
+wait_ms 900000
