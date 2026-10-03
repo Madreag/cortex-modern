@@ -1776,9 +1776,11 @@ static std::string ResyncSaveName() {
 				config.startFrame = m_WorldCatchUp.snapshotTick + 1;
 				config.migrationGeneration = m_WorldCatchUp.authorityGeneration;
 				config.simTickMs = g_TimerMan.GetDeltaTimeMS();
+				// A watcher holds no seat: it replays the round as its authority recorded it, and a playback takes no local input.
+				if (m_LocalPeerId == 0 || m_LocalPeerId > config.peerCount) config.localPeerId = config.authorityPeerId;
 				auto transport = std::make_unique<LoopbackTransport>();
 				auto replay = std::make_unique<NetLockstepCoordinator>();
-				if (config.peerCount != 0 && m_LocalPeerId != 0 && m_LocalPeerId <= config.peerCount && replay->StartReplay(*transport, config, error)) {
+				if (config.peerCount != 0 && config.localPeerId != 0 && config.localPeerId <= config.peerCount && replay->StartReplay(*transport, config, error)) {
 					m_CatchUpTransport = std::move(transport);
 					m_CatchUpCoordinator = std::move(replay);
 					ScenarioRunner::SetLockstepCoordinator(m_CatchUpCoordinator.get());
