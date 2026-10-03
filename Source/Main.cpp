@@ -8086,7 +8086,7 @@ void RunGameLoop() {
 			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;
 			WriteHarnessCostFrame(static_cast<uint64_t>(simTick));
 			// The watches' running totals, so a peer a scene kills has reported what it judged.
-			if (simTick % 600 == 0) MenuAutomation::ReportWatches();
+			if (simTick % 600 == 0) MenuAutomation::ReportWatches("periodic");
 
 			// The paced round estimates execution cost without counting its idle interval.
 			if (measureLockstepCost) {

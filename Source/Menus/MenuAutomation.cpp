@@ -523,7 +523,7 @@ namespace RTE::MenuAutomation {
 		if (!s_DropReported && ++s_DropChecks % 15 == 0 && FrameRecorder::Instance().Enabled() &&
 		    std::filesystem::exists(std::filesystem::path(FrameRecorder::Instance().Directory()) / "injected-drop.json")) {
 			s_DropReported = true;
-			ReportWatches();
+			ReportWatches("kill");
 		}
 		const auto now = std::chrono::steady_clock::now();
 		const double span = s_LastEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 : std::chrono::duration<double, std::milli>(now - s_LastEvaluated).count();
@@ -604,10 +604,12 @@ namespace RTE::MenuAutomation {
 		s_DrawnText.clear();
 	}
 
-	void ReportWatches() {
+	void ReportWatches(const char* flush) {
+		const long long throughTick = g_TimerMan.GetSimUpdateCount();
 		for (const auto& [name, watch]: s_Watches) {
 			System::PrintDiagnosticLine("[text-watch] summary " + Json{{"watch", name}, {"rule", watch.rule}, {"state", watch.state}, {"frames", watch.frames},
-			    {"active_frames", watch.active}, {"violations", watch.violations}, {"offences", watch.offenders.size()}, {"cost_us", watch.costUs}, {"worst_us", watch.worstUs}}.dump());
+			    {"active_frames", watch.active}, {"violations", watch.violations}, {"offences", watch.offenders.size()}, {"cost_us", watch.costUs}, {"worst_us", watch.worstUs},
+			    {"through_tick", throughTick}, {"flush", flush}}.dump());
 		}
 	}
 
@@ -1041,7 +1043,7 @@ namespace RTE::MenuAutomation {
 			if (observation.empty()) return false;
 			FrameRecorder::Instance().RecordEvent("video_mark " + observation);
 			// Each mark closes a span of the scene: the watches say what they judged up to it.
-			ReportWatches();
+			ReportWatches("periodic");
 			return true;
 		}
 		try {
