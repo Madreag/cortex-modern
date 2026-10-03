@@ -10617,6 +10617,43 @@ _PrimitiveQueueCapture = nil
 		lua_setglobal(m_State, firePath.c_str());
 	}
 	checkpointValues = previewLeavesNoUpvalueWrite && checkpointValues;
+	// A preview slot's fields are its instance table through a registry reference, and they may name the slot itself: dropping
+	// the slot must let both go, window after window, or each preview keeps its copy of the fields for the life of the state.
+	bool previewSlotDropReleasesFields = false;
+	{
+		const auto liveSlots = [this]() {
+			int live = 0;
+			lua_pushnil(m_State);
+			while (lua_next(m_State, LUA_REGISTRYINDEX) != 0) {
+				if (lua_type(m_State, -2) == LUA_TNUMBER && lua_type(m_State, -1) != LUA_TNUMBER) ++live;
+				lua_pop(m_State, 1);
+			}
+			return live;
+		};
+		constexpr long c_ProbeUid = 987654321;
+		const std::string slot = "_ScriptedObjects[\"" + std::to_string(c_ProbeUid) + "#preview\"]";
+		const std::string stash = "_ScriptFieldsStash[\"preview:" + std::to_string(c_ProbeUid) + "\"]";
+		RunScriptString("collectgarbage(\"collect\") collectgarbage(\"collect\")", false);
+		const int before = liveSlots();
+		bool bound = true;
+		constexpr int c_Windows = 50;
+		for (int window = 0; window < c_Windows && bound; ++window) {
+			bound = RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptFieldsStash = _ScriptFieldsStash or {}; " + slot + " = Vector(1, 2); " +
+			                        stash + " = {fieldValue = 1}; " + stash + ".slot = " + slot + "; _PreviewSlotProbeBound = _ScriptGraphSetInstance(" + slot + ", " + stash + ")",
+			                        false) == 0;
+			lua_getglobal(m_State, "_PreviewSlotProbeBound");
+			bound = bound && lua_toboolean(m_State, -1);
+			lua_pop(m_State, 1);
+			DropPreviewScriptObject(c_ProbeUid);
+			RunScriptString("collectgarbage(\"collect\") collectgarbage(\"collect\")", false);
+		}
+		RunScriptString("_PreviewSlotProbeBound = nil", false);
+		const int after = liveSlots();
+		previewSlotDropReleasesFields = bound && after <= before;
+		std::cout << "[script-graph-selftest] " << (previewSlotDropReleasesFields ? "PASS" : "FAIL") << " preview_slot_drop_releases_its_fields windows=" << c_Windows
+		          << " bound=" << bound << " live_registry_slots before=" << before << " after=" << after << std::endl;
+	}
+	checkpointValues = previewSlotDropReleasesFields && checkpointValues;
 	// A mod may add a key to a library table, by require("table.clear") or by a plain string.trim = f. The graph
 	// names such a value by its path, which is the very key the restore's wipe takes, so a set-aside must keep it.
 	bool addedLibraryKeyReinstates = false;
@@ -13932,7 +13969,8 @@ void LuaStateWrapper::ClearPreviewHeldHandles() {
 
 void LuaStateWrapper::DropPreviewScriptObject(long uniqueID) {
 	const std::string uid = std::to_string(uniqueID);
-	RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + uid + "#preview\"] = nil; if _ScriptFieldsStash then _ScriptFieldsStash[\"preview:" + uid + "\"] = nil; end");
+	// The window's copy of the fields is the slot's instance table through a registry reference; letting go of the slot alone leaves it rooted there.
+	RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; local slot = _ScriptedObjects[\"" + uid + "#preview\"]; if slot and _ScriptGraphSetInstance then _ScriptGraphSetInstance(slot, nil) end; _ScriptedObjects[\"" + uid + "#preview\"] = nil; if _ScriptFieldsStash then _ScriptFieldsStash[\"preview:" + uid + "\"] = nil; end");
 }
 
 bool LuaStateWrapper::AttachPreviewInvStride(MovableObject* object) {
