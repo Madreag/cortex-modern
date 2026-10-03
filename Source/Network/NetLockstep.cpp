@@ -5978,6 +5978,33 @@ namespace RTE {
 		return true;
 	}
 
+	uint16_t NetLockstepCoordinator::ReturnDelayFloor(uint8_t peerId, NetPeerId transport) const {
+		if (!m_Config.adaptiveInputDelay || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return 0;
+		// The same rule the round sized every sender's delay with at its start, on this seat's own link.
+		uint32_t ping = 0;
+		if (const auto known = m_Stats.peers.find(peerId); known != m_Stats.peers.end()) ping = known->second.pingMs;
+		if (m_Transport && transport != c_InvalidNetPeerId) ping = std::max(ping, m_Transport->GetPeerPingMs(transport));
+		NetInputDelayEstimator estimate;
+		estimate.Observe(0, ping);
+		return static_cast<uint16_t>(std::min<uint32_t>(estimate.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames) +
+		                                                    NetMatchConfigUtil::HoldMarginFrames(m_Config.matchConfig), NetLockstepCodec::c_MaxInputDelayFrames));
+	}
+
+	uint32_t NetLockstepCoordinator::HorizonSlideTicks(uint64_t tick) const {
+		NET_PLANE_CHECK();
+		const uint32_t bound = std::max<uint32_t>(1, m_Config.slowPlayerBoundTicks);
+		uint32_t nearest = UINT32_MAX;
+		uint32_t pingMs = 0;
+		for (uint8_t peer: m_RemotePeerIds) {
+			if (!IsRemoteRequiredForFrame(peer, tick)) continue;
+			nearest = std::min<uint32_t>(nearest, InputDelayAt(peer, tick));
+			if (const auto known = m_Stats.peers.find(peer); known != m_Stats.peers.end()) pingMs = std::max(pingMs, known->second.pingMs);
+		}
+		if (nearest == UINT32_MAX || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return bound;
+		const auto transit = static_cast<uint32_t>(std::ceil(pingMs / 2.0 / m_Config.simTickMs));
+		return NetPaceSlide::SlideTicks(bound, InputDelayAt(m_Config.localPeerId, tick), nearest, transit);
+	}
+
 	bool NetLockstepCoordinator::ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error) {
 		NET_PLANE_CHECK();
 		const uint8_t peer = transition.peerId;
@@ -5994,7 +6021,7 @@ namespace RTE {
 		timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId;
 		timing.revision = m_NextTimingRevision++; timing.authorityGeneration = m_Config.migrationGeneration;
 		timing.applyFrame = transition.activationFrame; timing.nextFrame = m_Stats.nextFrame;
-		timing.delayFrames = InputDelayAt(peer, timing.applyFrame);
+		timing.delayFrames = std::max<uint16_t>(InputDelayAt(peer, timing.applyFrame), ReturnDelayFloor(peer, transport));
 		timing.seatIncarnations[peer - 1] = incarnation;
 		timing.worldTransition = transition;
 		timing.neutralThroughFrame = timing.applyFrame + timing.delayFrames;
@@ -6029,6 +6056,8 @@ namespace RTE {
 			const uint32_t ping = std::max(link.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms());
 			covering += static_cast<uint64_t>(std::ceil((static_cast<double>(ping) / 2.0 + link.jitterMs) / m_Config.simTickMs));
 		}
+		// Never below the margin every seat's delay keeps: a seat that has never played has no delay of its own to come back to.
+		covering = std::max<uint64_t>(covering, ReturnDelayFloor(peerId, transport));
 		timing.delayFrames = static_cast<uint16_t>(std::min<uint64_t>(NetLockstepCodec::c_MaxInputDelayFrames, std::max<uint64_t>(InputDelayAt(peerId, frame), covering)));
 		timing.neutralThroughFrame = frame + timing.delayFrames;
 		for (uint64_t produced = frame > NetLockstepCodec::c_MaxInputDelayFrames ? frame - NetLockstepCodec::c_MaxInputDelayFrames : 0; produced <= frame; ++produced)

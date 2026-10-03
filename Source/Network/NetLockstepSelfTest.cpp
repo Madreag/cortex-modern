@@ -3401,6 +3401,27 @@ namespace RTE {
 			return true;
 		}
 
+		// A slide spends half the window between the remote input a clock waits on and its own input's need, never the bound alone: behind
+		// a dedicated host whose frames carry one frame of delay, a returning seat at four that held back the bound's three ticks sent its
+		// next input after the host's deadline and was held seven frames after its return (wsp8: 'pace slide at tick 1251 ... holds back
+		// 3 ticks', then 'propose hold peer=3 next_frame=1253 ... cause=late_stream').
+		bool TestASlideLeavesItsOwnInputALead(std::string* error) {
+			struct Case {
+				uint32_t own, remote, transit, expected;
+			};
+			for (const Case& c: {Case{4, 1, 0, 2}, Case{5, 5, 0, 3}, Case{6, 6, 3, 3}, Case{4, 1, 2, 0}, Case{1, 1, 0, 1}}) {
+				const uint32_t slide = NetPaceSlide::SlideTicks(3, c.own, c.remote, c.transit);
+				const int ownLead = static_cast<int>(c.own + c.remote) - static_cast<int>(2 * c.transit) - static_cast<int>(slide);
+				if (slide != c.expected || (slide > 0 && ownLead < static_cast<int>(slide))) {
+					*error = "a clock at delay " + std::to_string(c.own) + " behind a remote at " + std::to_string(c.remote) + " with " + std::to_string(c.transit) +
+					         " ticks of transit slides " + std::to_string(slide) + ", leaving its own input " + std::to_string(ownLead) + " ticks";
+					return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_slide_leaves_its_own_input_a_lead behind_a_one_frame_host=2 equal_delays=3" << std::endl;
+			return true;
+		}
+
 		// A clock its inputs keep waiting slides back once and never again for the same cause: a fast peer does not run slower for a
 		// slow one (the four-machine 4K match: seven slides in 1000 ticks behind a 55 tick/s peer).
 		bool TestAClockBehindASlowPeerSlidesOnce(std::string* error) {
@@ -23252,6 +23273,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestATickLostBeforeAnEpochComesBack, "a_tick_lost_before_an_epoch_comes_back");
 		row(&TestAPeerAtItsInputHorizonSlidesBack, "a_peer_at_its_input_horizon_slides_back");
 		row(&TestAClockBehindASlowPeerSlidesOnce, "a_clock_behind_a_slow_peer_slides_once");
+		row(&TestASlideLeavesItsOwnInputALead, "a_slide_leaves_its_own_input_a_lead");
 		row(&TestAHostInItsReclaimGapJudgesNoSeatLate, "a_host_in_its_reclaim_gap_judges_no_seat_late");
 		row(&TestAReturnRefusedBeforeItsStartStopsNobody, "a_return_refused_before_its_start_stops_nobody");
 		row(&TestAReadyFrameKeepsItsLocalInputForThePreview, "a_ready_frame_keeps_its_local_input_for_the_preview");

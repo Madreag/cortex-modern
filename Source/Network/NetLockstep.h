@@ -939,6 +939,18 @@ namespace RTE {
 			m_Slid = false;
 		}
 
+		/// The ticks a clock standing at its input horizon holds back: half the window between the remote input it waits on and its own
+		/// input's need on the other peers, so neither side of the window runs late; never past the slow-player bound.
+		/// @param bound The slow-player bound in ticks.
+		/// @param ownDelay This seat's input delay in frames.
+		/// @param nearestRemoteDelay The smallest delay among the remote inputs this seat waits on.
+		/// @param transitTicks One way across the link, in ticks.
+		static uint32_t SlideTicks(uint32_t bound, uint32_t ownDelay, uint32_t nearestRemoteDelay, uint32_t transitTicks) {
+			const uint32_t window = ownDelay + nearestRemoteDelay;
+			const uint32_t spent = 2 * transitTicks;
+			return std::min(std::max<uint32_t>(bound, 1), window > spent ? (window - spent) / 2 : 0);
+		}
+
 	private:
 		uint64_t m_WaitedTick = UINT64_MAX;
 		std::deque<bool> m_Window;
@@ -1053,6 +1065,8 @@ namespace RTE {
 		/// The in-flight commands this coordinator still holds for one seat at a frame.
 		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
 		uint16_t InputDelayAt(uint8_t peerId, uint64_t producedFrame) const;
+		/// How far this clock may hold back while it stands at its input horizon at a tick, from the delays the round runs at it.
+		uint32_t HorizonSlideTicks(uint64_t tick) const;
 		bool TimingDecisionPendingAt(uint64_t frame) const;
 		/// Names every decision holding a frame's production, for a wait that has lasted long enough to be a defect.
 		std::string DescribePendingTimingDecisions(uint64_t frame) const;
@@ -1927,6 +1941,8 @@ namespace RTE {
 		uint64_t m_AgreedEndDeadlineMs = 0; //!< When a host playing to its agreed end stops waiting for it.
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
 		uint64_t m_ReturnHistoryFloor = 0; //!< Host: the oldest frame a returning seat may still be served from.
+		/// The least delay a seat comes back or into a world at: the margin every seat's delay keeps, sized from its own link's ping.
+		uint16_t ReturnDelayFloor(uint8_t peerId, NetPeerId transport) const;
 		uint64_t m_HostSilentReportedSecond = UINT64_MAX; //!< The second of the host's silence last reported; one line a second.
 		uint32_t m_HostSilentReports = 0;                  //!< Lines reported about a silent host, all told.
 		static constexpr uint64_t c_SeatTransitionHistoryFrames = 3600; //!< How far behind this peer's simulation the seat transitions reach.
