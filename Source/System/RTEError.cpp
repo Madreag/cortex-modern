@@ -475,12 +475,16 @@ void RTEError::UnhandledExceptionFunc(const std::string& description, const std:
 		}
 	}
 
+	// The reason reaches the log before the dumps run: they touch a process that is already failing.
+	System::PrintFaultToCLI(exceptionMessage);
+	std::string afterDumps;
 	if (DumpAbortSave()) {
-		exceptionMessage += "\nThe game has saved to 'AbortSave'.";
+		afterDumps += "\nThe game has saved to 'AbortSave'.";
 	}
 	if (DumpAbortScreen()) {
-		exceptionMessage += "\nThe last frame has been dumped to 'AbortScreen.png'.";
+		afterDumps += "\nThe last frame has been dumped to 'AbortScreen.png'.";
 	}
+	exceptionMessage += afterDumps;
 
 	g_ConsoleMan.PrintString(exceptionMessage);
 
@@ -493,8 +497,11 @@ void RTEError::UnhandledExceptionFunc(const std::string& description, const std:
 	}
 	if (g_ConsoleMan.SaveAllText("AbortLog.txt")) {
 		exceptionMessage += consoleSaveMsg;
+		afterDumps += consoleSaveMsg;
 	}
-	System::PrintFaultToCLI(exceptionMessage);
+	if (!afterDumps.empty()) {
+		System::PrintFaultToCLI(afterDumps.substr(1));
+	}
 
 	// Ditch the video mode so the message box appears without problems.
 	if (g_WindowMan.GetWindow()) {
@@ -521,13 +528,17 @@ void RTEError::AbortFunc(const std::string& description, const SourceLocation& s
 		FormatFunctionSignature(funcName);
 
 		std::string abortMessage = "Runtime Error in file '" + fileName + "', line " + lineNum + ",\nin function '" + funcName + "'\nbecause:\n\n" + description + "\n";
+		// The reason reaches the log before the dumps run: they touch a process that is already failing.
+		System::PrintFaultToCLI(abortMessage);
+		std::string afterDumps;
 
 		if (DumpAbortSave()) {
-			abortMessage += "\nThe game has saved to 'AbortSave'.";
+			afterDumps += "\nThe game has saved to 'AbortSave'.";
 		}
 		if (DumpAbortScreen()) {
-			abortMessage += "\nThe last frame has been dumped to 'AbortScreen.png'.";
+			afterDumps += "\nThe last frame has been dumped to 'AbortScreen.png'.";
 		}
+		abortMessage += afterDumps;
 
 		g_ConsoleMan.PrintString(abortMessage);
 
@@ -552,8 +563,11 @@ void RTEError::AbortFunc(const std::string& description, const SourceLocation& s
 
 		if (g_ConsoleMan.SaveAllText("AbortLog.txt")) {
 			abortMessage += consoleSaveMsg;
+			afterDumps += consoleSaveMsg;
 		}
-		System::PrintFaultToCLI(abortMessage);
+		if (!afterDumps.empty()) {
+			System::PrintFaultToCLI(afterDumps.substr(1));
+		}
 
 		// Ditch the video mode so the message box appears without problems.
 		if (g_WindowMan.GetWindow()) {
@@ -792,31 +806,49 @@ void RTEError::DumpHardwareInfo() {
 }
 
 bool RTEError::DumpAbortScreen() {
-	int success = -1;
-	if (glReadPixels != nullptr) {
-		int w, h;
-		SDL_GetWindowSizeInPixels(g_WindowMan.GetWindow(), &w, &h);
-		if (!(w > 0 && h > 0)) {
-			return false;
-		}
-		BITMAP* readBuffer = create_bitmap_ex(24, w, h);
-		// Read screen from the front buffer since that is the only framebuffer guaranteed to exist at this point.
-		// Read twice because front buffer content is technically undefined, but most drivers still eventually give up the contents correctly.
-		glReadBuffer(GL_FRONT);
-		glPixelStorei(GL_PACK_ALIGNMENT, 1);
-		glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
-		glFinish();
-		glReadBuffer(GL_BACK);
-		glReadBuffer(GL_FRONT);
-		glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
-		glFinish();
-
-		BITMAP* flipBuffer = create_bitmap_ex(24, w, h);
-		draw_sprite_v_flip(flipBuffer, readBuffer, 0, 0);
-
-		success = save_png("AbortScreen.png", flipBuffer, nullptr);
+	// Only the thread whose context is current can read the window; an abort anywhere else has no frame to dump.
+	if (glReadPixels == nullptr || glBindFramebuffer == nullptr || glBindBuffer == nullptr || !g_WindowMan.GetWindow() || SDL_GL_GetCurrentContext() == nullptr) {
+		return false;
 	}
-	return success == 0;
+	int w = 0;
+	int h = 0;
+	SDL_GetWindowSizeInPixels(g_WindowMan.GetWindow(), &w, &h);
+	if (!(w > 0 && h > 0)) {
+		return false;
+	}
+	// A lost context reports an error on every call, so the old errors are drained a bounded number of times.
+	for (int drained = 0; drained < 32 && glGetError() != GL_NO_ERROR; ++drained) {}
+	// The renderer may have left its own framebuffer, pack buffer or row layout bound; this read is the default framebuffer, tightly packed.
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+	glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+	glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+	glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+	// Read screen from the front buffer since that is the only framebuffer guaranteed to exist at this point.
+	glReadBuffer(GL_FRONT);
+	if (const GLenum error = glGetError(); error != GL_NO_ERROR) {
+		System::PrintFaultToCLI("The last frame was not dumped: GL error " + std::to_string(error) + " selecting the front buffer.");
+		return false;
+	}
+	BITMAP* readBuffer = create_bitmap_ex(24, w, h);
+	BITMAP* flipBuffer = readBuffer ? create_bitmap_ex(24, w, h) : nullptr;
+	if (!flipBuffer) {
+		return false;
+	}
+	// Read twice because front buffer content is technically undefined, but most drivers still eventually give up the contents correctly.
+	glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
+	glFinish();
+	glReadBuffer(GL_BACK);
+	glReadBuffer(GL_FRONT);
+	glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, readBuffer->line[0]);
+	glFinish();
+	if (const GLenum error = glGetError(); error != GL_NO_ERROR) {
+		System::PrintFaultToCLI("The last frame was not dumped: GL error " + std::to_string(error) + " reading it.");
+		return false;
+	}
+	draw_sprite_v_flip(flipBuffer, readBuffer, 0, 0);
+	return save_png("AbortScreen.png", flipBuffer, nullptr) == 0;
 }
 
 bool RTEError::DumpAbortSave() {

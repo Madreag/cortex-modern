@@ -627,7 +627,7 @@ namespace RTE::MenuAutomation {
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
-			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "dump_world_ownership" || command == "fire_assert" ||
+			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "dump_world_ownership" || command == "fire_assert" || command == "fire_abort" ||
 			command == "window_event" || command == "assert_window_focus" || command == "game_key" || command == "assert_game_input" || command == "open_local_pause" || command == "meta_command";
 	}
 	Json PanelCoverage(GUIControl* control) {
@@ -789,6 +789,15 @@ namespace RTE::MenuAutomation {
 			if (reason.empty()) return false;
 			observation = reason;
 			RTEAssert(false, reason);
+			return true;
+		}
+		if (command == "fire_abort") {
+			if (!FireAssertAllowed()) return false;
+			// A real abort for a scripted run: its reason, its dumps and its exit are what the run proves on the box.
+			std::string reason{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			if (reason.empty()) return false;
+			observation = reason;
+			RTEAbort(reason);
 			return true;
 		}
 		if (command == "push_toast") {
