@@ -3230,10 +3230,11 @@ static std::string ResyncSaveName() {
 		}
 
 		/// The lobby payload bytes that carried a configuration, kept so a restart republishes the very
-		/// configuration the peers hashed instead of rebuilding one that only looks like it.
+		/// configuration the peers hashed instead of rebuilding one that only looks like it. The copy is written
+		/// down (a restart manifest, an image's offer and its log line), so it holds no relay login.
 		bool EncodeConfigPayload(const NetMatchConfig& config, std::string& outHex) {
 			std::vector<uint8_t> bytes;
-			if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyMatchConfig{config}}, bytes)) return false;
+			if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyMatchConfig{NetMatchConfigUtil::WithoutRelay(config)}}, bytes)) return false;
 			outHex = ResumeHex(bytes);
 			return true;
 		}

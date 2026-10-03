@@ -1,5 +1,6 @@
 #include "GnsTransport.h"
 #include "DiagnosticLine.h"
+#include "NetIceServers.h"
 #include "SettingsMan.h"
 #include "System.h"
 
@@ -204,7 +205,7 @@ namespace RTE {
 			std::lock_guard<std::mutex> lock(mutex);
 			for (std::string line; std::getline(lines, line);) {
 				if (!line.empty()) {
-					System::PrintDiagnosticLine("[net-gns] " + std::to_string(static_cast<int>(type)) + " " + line);
+					System::PrintDiagnosticLine("[net-gns] " + std::to_string(static_cast<int>(type)) + " " + NetRelayLogins::Scrub(line));
 				}
 			}
 		}
@@ -1375,6 +1376,9 @@ namespace RTE {
 	}
 
 	void GnsTransport::ApplyIceServers(const GnsP2PConfig& config) {
+		// Every relay login reaches the transport through here, so every log line can be scrubbed of it.
+		NetRelayLogins::Remember(config.turnUserList);
+		NetRelayLogins::Remember(config.turnPassList);
 #ifdef CCCP_WITH_GNS
 		if (!SteamNetworkingUtils()) return;
 		SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, config.stunServerList.c_str());

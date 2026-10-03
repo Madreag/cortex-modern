@@ -6,10 +6,14 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <deque>
 #include <limits>
+#include <mutex>
 #include <set>
 #include <regex>
+#include <vector>
 
 namespace RTE {
 
@@ -132,6 +136,60 @@ namespace RTE {
 				users += separator + server.username;
 				passwords += separator + server.credential;
 			}
+		}
+	}
+
+	namespace NetRelayLogins {
+		namespace {
+			std::mutex& Mutex() {
+				static std::mutex mutex;
+				return mutex;
+			}
+			// The newest logins, longest first when scrubbed; a long session renews its relay login many times.
+			std::deque<std::string>& Logins() {
+				static std::deque<std::string> logins;
+				return logins;
+			}
+			constexpr size_t c_MaxLogins = 64;
+			bool WordCharacter(char ch) { return std::isalnum(static_cast<unsigned char>(ch)) != 0; }
+		}
+
+		void Remember(const std::string& list) {
+			std::lock_guard lock(Mutex());
+			size_t begin = 0;
+			while (begin <= list.size()) {
+				const size_t end = std::min(list.find(',', begin), list.size());
+				std::string login = list.substr(begin, end - begin);
+				if (!login.empty() && std::find(Logins().begin(), Logins().end(), login) == Logins().end()) {
+					Logins().push_back(std::move(login));
+					if (Logins().size() > c_MaxLogins) Logins().pop_front();
+				}
+				begin = end + 1;
+			}
+		}
+
+		std::string Scrub(std::string line) {
+			std::vector<std::string> logins;
+			{
+				std::lock_guard lock(Mutex());
+				logins.assign(Logins().begin(), Logins().end());
+			}
+			std::sort(logins.begin(), logins.end(), [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+			static const std::string mark = "<relay-login>";
+			for (const std::string& login: logins) {
+				// Only a login standing alone is a login: a short one inside a longer word is that word.
+				for (size_t at = line.find(login); at != std::string::npos; at = line.find(login, at)) {
+					const size_t after = at + login.size();
+					if ((at > 0 && WordCharacter(line[at - 1]) && WordCharacter(login.front())) ||
+					    (after < line.size() && WordCharacter(line[after]) && WordCharacter(login.back()))) {
+						at = after;
+						continue;
+					}
+					line.replace(at, login.size(), mark);
+					at += mark.size();
+				}
+			}
+			return line;
 		}
 	}
 
@@ -607,6 +665,12 @@ namespace RTE {
 
 	std::string NetMatchConfigUtil::StoredConfigHash(const NetMatchConfig& config) {
 		return std::to_string(c_ConfigHashRule) + ":" + NetIdentity::HashHex(HashConfig(config));
+	}
+
+	NetMatchConfig NetMatchConfigUtil::WithoutRelay(const NetMatchConfig& config) {
+		NetMatchConfig written = config;
+		written.relay = {};
+		return written;
 	}
 
 	bool NetMatchConfigUtil::ParseStoredConfigHash(const std::string& stored, uint16_t& rule, std::string& hex) {

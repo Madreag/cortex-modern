@@ -1,6 +1,7 @@
 #include "GnsP2PSelfTest.h"
 
 #include "GnsTransport.h"
+#include "NetIceServers.h"
 
 #include <iostream>
 
@@ -118,6 +119,7 @@ namespace RTE {
 			std::lock_guard<std::mutex> lock(s_OutputMutex);
 			for (std::string line; std::getline(lines, line);) {
 				if (!line.empty()) {
+					line = NetRelayLogins::Scrub(line);
 					std::cout << "[net-p2p-selftest] t=" << Ms(ElapsedMs()) << "ms gns(" << static_cast<int>(type) << ") " << line << '\n';
 					NoteCandidates(line);
 					if (line.find("the renewed login") != std::string::npos) {

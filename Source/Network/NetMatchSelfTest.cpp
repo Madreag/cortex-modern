@@ -60,6 +60,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -6936,6 +6937,98 @@ namespace RTE {
 			return false;
 		}
 		return true;
+	}
+
+	// A relay login is a live secret: the recording players share, the restart manifest and a world image's offer (and its log
+	// line) hold none, a Fixed pair or a minted one; each still reads back as the agreed config.
+	bool TestWrittenConfigsHoldNoRelayLogin(std::string* error) {
+		ResumeScratch scratch;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		NetRelayConfig minted;
+		minted.matchId = "minted-offer";
+		minted.expiresAt = now + 600;
+		minted.iceServers.push_back({{"stun:stun.example.test:3478"}, "", ""});
+		minted.iceServers.push_back({{"turn:turn.example.test:3478?transport=udp", "turns:turn.example.test:5349?transport=tcp"}, "minted-user-5b8e07", "minted-cred-0d4fa2"});
+		const std::vector<std::tuple<std::string, NetRelayConfig, std::vector<std::string>>> relays = {
+		    {"fixed", NetRelayConfig::Fixed("relay.example.test:3478", "fixed-user-7f3a19", "fixed-pass-91c2e4", "host", now + 600), {"fixed-user-7f3a19", "fixed-pass-91c2e4"}},
+		    {"minted", minted, {"minted-user-5b8e07", "minted-cred-0d4fa2"}}};
+		const auto hexOf = [](const std::string& text) {
+			static constexpr char digits[] = "0123456789abcdef";
+			std::string hex;
+			for (unsigned char ch: text) { hex.push_back(digits[ch >> 4]); hex.push_back(digits[ch & 0x0F]); }
+			return hex;
+		};
+		size_t files = 0, logins = 0;
+		std::string first;
+		for (const auto& [name, relay, secrets]: relays) {
+			NetMatchConfig config = MakeConfig();
+			config.relay = relay;
+			if (!config.relay.Valid() || config.relay.Empty()) {
+				*error = "the " + name + " relay fixture is not a valid offer";
+				return false;
+			}
+			const std::filesystem::path directory = scratch.path / name;
+			std::filesystem::create_directories(directory);
+			// The recording.
+			{
+				NetMatchReplayWriter writer;
+				if (!writer.Open((directory / "match.ccreplay").string(), config, error)) return false;
+				writer.Close();
+			}
+			// The restart manifest, from the service's own written copy of the agreed config.
+			NetMatchService service;
+			service.SeatRestartConfigLocked(config);
+			AutosaveManifest manifest;
+			manifest.schema = AutosaveStore::c_ManifestSchema;
+			manifest.matchId = "00000000deadbeef-00000000000000a1";
+			manifest.sessionId = config.sessionId;
+			manifest.roundId = 11;
+			manifest.savedTick = 900;
+			manifest.intervalSeconds = 60;
+			manifest.configHash = service.m_AutosaveIdentity.configHash;
+			manifest.configPayload = service.m_AutosaveIdentity.configPayload;
+			manifest.activityPreset = config.activityPreset;
+			manifest.scenePreset = config.sceneName;
+			manifest.sideState = ResumeSideStateFixture();
+			if (manifest.configPayload.empty() || !AutosaveStore::PublishManifest(directory, manifest, error)) {
+				if (error->empty()) *error = "the service wrote no restart configuration";
+				return false;
+			}
+			// A world image's offer, as the host sends it and prints it.
+			NetWorldCheckpointImage image;
+			image.checkpointConfig = service.m_AutosaveIdentity.configPayload;
+			std::ofstream((directory / "offer.log").string()) << "[net-world] offer " << EncodeWorldJoinOffer(image) << '\n';
+			// The written copy still reads back as the agreed config.
+			std::vector<uint8_t> bytes;
+			for (size_t at = 0; at + 1 < manifest.configPayload.size(); at += 2) bytes.push_back(static_cast<uint8_t>(std::stoi(manifest.configPayload.substr(at, 2), nullptr, 16)));
+			const auto decoded = NetLobbyProtocol::Decode(bytes);
+			const auto* read = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+			if (!read || NetMatchConfigUtil::HashConfig(read->config) != NetMatchConfigUtil::HashConfig(config)) {
+				*error = "the " + name + " match's written configuration does not read back as the agreed one";
+				return false;
+			}
+			for (const auto& file: std::filesystem::recursive_directory_iterator(directory)) {
+				if (!file.is_regular_file()) continue;
+				++files;
+				std::ifstream input(file.path(), std::ios::binary);
+				const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+				for (const std::string& secret: secrets) {
+					if (text.find(secret) == std::string::npos && text.find(hexOf(secret)) == std::string::npos) continue;
+					++logins;
+					if (first.empty()) first = name + "/" + file.path().filename().string();
+				}
+			}
+		}
+		// A login the transport was given is scrubbed from a kept line; a short one inside a longer word is that word.
+		NetRelayLogins::Remember("scrub-user-4c1d,ab");
+		NetRelayLogins::Remember("scrub-pass-77e0");
+		const std::string scrubbed = NetRelayLogins::Scrub("TURN allocate user=scrub-user-4c1d pass 'scrub-pass-77e0' tab ab");
+		const bool scrubs = scrubbed == "TURN allocate user=<relay-login> pass '<relay-login>' tab <relay-login>";
+		const bool pass = logins == 0 && files >= 6 && scrubs;
+		std::cout << "[net-match-selftest] " << (pass ? "PASS" : "FAIL") << " a_written_config_holds_no_relay_login files=" << files << " logins=" << logins
+		          << (first.empty() ? "" : " first=" + first) << " scrubbed='" << scrubbed << "'" << std::endl;
+		if (!pass) *error = logins ? "a written configuration holds a relay login (" + first + ")" : "a kept line was not scrubbed of a relay login";
+		return pass;
 	}
 
 	bool TestServiceReportCarriesActivityPreset(std::string* error) {
@@ -15516,6 +15609,7 @@ namespace RTE {
 		row(&TestTheHostSavesTheMatchWhenAsked, "the_host_saves_the_match_when_asked");
 		row(&TestAManualSaveKeepsTheIntervalAndWaitsForASafeTick, "a_manual_save_keeps_the_interval_and_waits_for_a_safe_tick");
 		row(&TestTickHashTraceIsBoundedAndLossless, "tick_hash_trace_is_bounded_and_lossless");
+		row(&TestWrittenConfigsHoldNoRelayLogin, "a_written_config_holds_no_relay_login");
 		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);
