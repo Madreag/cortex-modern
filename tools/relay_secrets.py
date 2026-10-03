@@ -28,6 +28,7 @@ import os
 import re
 import secrets as random_source
 import stat
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -295,11 +296,17 @@ class ArchiveError(Exception):
     pass
 
 
-def file_hits(data: bytes, finder: Finder) -> tuple[list[dict], list[tuple[int, int]], bool]:
-    """Hits (form, kind, how) of one file, the raw spans to blank, and whether an archive member holds one."""
+def file_hits(data: bytes, finder: Finder, public=None, public_rows=None) -> tuple[list[dict], list[tuple[int, int]], bool]:
+    """Hits (form, kind, how) of one file, the raw spans to blank, and whether an archive member holds one. A username or
+    a shape hit whose value public() names as already published (the repository's own tracked files) goes to public_rows
+    instead; a key, token, secret, password or minted login is never excused."""
     rows, spans, in_archive = [], [], False
     for form, view, back in views(data):
         for start, end, kind, how in finder.hits(view):
+            reason = public(view[start:end]) if public and (kind == 'fixed-username' or kind.startswith('shape:')) else None
+            if reason:
+                public_rows.append(dict(form=form, kind=kind, how=how, reason=reason))
+                continue
             rows.append(dict(form=form, kind=kind, how=how))
             span = back(start, end) if back else None
             if span is None:
@@ -309,10 +316,10 @@ def file_hits(data: bytes, finder: Finder) -> tuple[list[dict], list[tuple[int, 
     return rows, spans, in_archive
 
 
-def sweep(roots: Iterable[Path | str], finder: Finder | None = None, scrub: bool = False) -> dict[str, Any]:
+def sweep(roots: Iterable[Path | str], finder: Finder | None = None, scrub: bool = False, public=None) -> dict[str, Any]:
     finder = finder or Finder([], None)
     files = 0
-    hits, incomplete, scrubbed = [], [], []
+    hits, incomplete, scrubbed, published = [], [], [], []
     for root in roots:
         for path, reason in walk(Path(root)):
             if reason:
@@ -321,7 +328,11 @@ def sweep(roots: Iterable[Path | str], finder: Finder | None = None, scrub: bool
             files += 1
             try:
                 data = path.read_bytes()
-                rows, spans, in_archive = file_hits(data, finder)
+                public_rows = []
+                rows, spans, in_archive = file_hits(data, finder, public, public_rows)
+                if public_rows:
+                    published.append(dict(path=str(path), hits=len(public_rows), kinds=sorted({hit['kind'] for hit in public_rows}),
+                                          reasons=sorted({hit['reason'] for hit in public_rows})))
             except ArchiveError as error:
                 incomplete.append(dict(path=str(path), reason=str(error)))
                 continue
@@ -338,7 +349,25 @@ def sweep(roots: Iterable[Path | str], finder: Finder | None = None, scrub: bool
     leaked_after = [row for row in scrubbed if not row['clean_after']]
     status = 'INCOMPLETE' if incomplete else 'CLEAN' if not hits or (scrub and not leaked_after) else 'LEAKED'
     return dict(status=status, clean=status == 'CLEAN' and not hits, scrubbed_clean=status == 'CLEAN',
-                files_scanned=files, files_with_secrets=hits, incomplete=incomplete, scrubbed=scrubbed)
+                files_scanned=files, files_with_secrets=hits, incomplete=incomplete, scrubbed=scrubbed, public=published)
+
+
+def repository_public(repo: Path | str):
+    """public() for sweep: a value already in the repository's tracked files at HEAD is published, never a login."""
+    cache: dict[bytes, str | None] = {}
+
+    def public(value: bytes) -> str | None:
+        if value not in cache:
+            try:
+                text = value.decode('utf-8')
+                done = subprocess.run(['git', '-C', str(repo), 'grep', '-F', '-I', '-l', '-e', text, 'HEAD', '--'],
+                                      capture_output=True, text=True, timeout=120)
+                files = [line for line in done.stdout.splitlines() if line]
+                cache[value] = f'in {len(files)} tracked file(s) of the repository' if done.returncode == 0 and files else None
+            except (UnicodeDecodeError, OSError, subprocess.TimeoutExpired):
+                cache[value] = None
+        return cache[value]
+    return public
 
 
 def clean_file(path: Path, data: bytes, spans: list[tuple[int, int]], in_archive: bool, row: dict, finder: Finder) -> dict:
@@ -371,10 +400,12 @@ def main(argv=None) -> int:
     run.add_argument('--digests', type=Path)
     run.add_argument('--scrub', action='store_true')
     run.add_argument('--out', type=Path, required=True)
+    run.add_argument('--public-repo', type=Path, help='a username or shape hit whose value this repository already tracks is reported as public')
     options = parser.parse_args(argv)
     finder = DigestBook(json.loads(options.digests.read_text(encoding='utf-8'))).finder() if options.digests else Finder([], None)
-    first = sweep(options.root, finder, scrub=options.scrub)
-    verify = sweep(options.root, finder) if options.scrub else None
+    public = repository_public(options.public_repo) if options.public_repo else None
+    first = sweep(options.root, finder, scrub=options.scrub, public=public)
+    verify = sweep(options.root, finder, public=public) if options.scrub else None
     result = dict(sweep=first, verify=verify)
     options.out.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     final = verify or first

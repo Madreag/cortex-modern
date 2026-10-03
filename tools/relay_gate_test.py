@@ -444,6 +444,27 @@ class ProofPieces(unittest.TestCase):
         self.assertFalse(match.menu_choice(chosen + '\n' + receipts(SESSION, route='direct'), 'Relay only', SESSION)['passed'])
         self.assertFalse(match.menu_choice(chosen + '\n' + receipts('another-session'), 'Relay only', SESSION)['passed'])
 
+    def test_a_published_username_or_fixture_is_reported_never_a_secret(self):
+        import relay_secrets
+        published = {FIXED_USER.encode(), b'private-user'}
+        public = lambda value: 'in the repository' if value in published else None
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'notes.md').write_text(f'the {FIXED_USER} project\n{{"username": "private-user"}}\n', encoding='utf-8')
+            sweep = relay_secrets.sweep([folder], book().finder(), public=public)
+            self.assertEqual(sweep['status'], 'CLEAN', sweep['files_with_secrets'])
+            self.assertEqual(sweep['public'][0]['hits'], 2)
+            (Path(folder) / 'Settings.ini').write_text(f'\tNetworkTurnPass = {FIXED_PASS}\n\tNetworkTurnUser = {USER}\n', encoding='utf-8')
+            leaked = relay_secrets.sweep([folder], book().finder(), public=lambda value: 'in the repository')
+        self.assertEqual(leaked['status'], 'LEAKED')
+        self.assertEqual({kind for row in leaked['files_with_secrets'] for kind in row['kinds']} & {'fixed-password', 'minted-username'},
+                         {'fixed-password', 'minted-username'})
+
+    def test_a_menu_check_without_a_session_fails(self):
+        run = dict(match.REQUIRED)
+        self.assertIn('pair_blanked', run['fixed'])
+        self.assertNotIn('no_secret_in_files', run['fixed'])
+        self.assertIn('no_secret_in_files', run['cloudflare'])
+
     def test_a_failure_before_the_judge_still_sweeps_every_box(self):
         swept = []
 
