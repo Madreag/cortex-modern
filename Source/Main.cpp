@@ -156,8 +156,8 @@
 #ifdef _WIN32
 #include "windows.h"
 #include <crtdbg.h>
+#include <processsnapshot.h>
 #include <psapi.h>
-#include <tlhelp32.h>
 #endif
 
 #include <algorithm>
@@ -322,14 +322,12 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 	}
 	DWORD handles = 0;
 	GetProcessHandleCount(GetCurrentProcess(), &handles);
+	// This process's threads alone: a thread snapshot of the whole system costs tens of milliseconds on a busy desktop.
 	size_t threads = 0;
-	if (HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); snapshot != INVALID_HANDLE_VALUE) {
-		THREADENTRY32 entry{};
-		entry.dwSize = sizeof(entry);
-		for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
-			if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++threads;
-		}
-		CloseHandle(snapshot);
+	if (HPSS snapshot = nullptr; PssCaptureSnapshot(GetCurrentProcess(), PSS_CAPTURE_THREADS, 0, &snapshot) == ERROR_SUCCESS) {
+		PSS_THREAD_INFORMATION captured{};
+		if (PssQuerySnapshot(snapshot, PSS_QUERY_THREAD_INFORMATION, &captured, sizeof(captured)) == ERROR_SUCCESS) threads = captured.ThreadsCaptured;
+		PssFreeSnapshot(GetCurrentProcess(), snapshot);
 	}
 	lap("heap_threads");
 	std::string histogram;
