@@ -219,6 +219,15 @@ namespace RTE {
 		void Configure(size_t maxFrames, uint64_t maxBytes);
 		void EnableJournal(const std::string& path);
 		bool HasJournal() const { return static_cast<bool>(m_Journal); }
+		/// The journal's files on disk as its writer last left them, and the frames it covers.
+		struct JournalStats {
+			uint64_t bytes = 0;
+			uint32_t files = 0;
+			uint64_t first = 0, last = 0;
+		};
+		JournalStats GetJournalStats() const;
+		size_t MaxFrames() const { return m_MaxFrames; }
+		uint64_t MaxBytes() const { return m_MaxBytes; }
 		bool JournalFailed() const;
 		/// Encodes and retains one committed frame. Frames must arrive in order and without gaps, and of the log's round once it has one.
 		bool Append(const NetLockstepFrame& frame, std::string* error = nullptr);

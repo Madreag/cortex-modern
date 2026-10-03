@@ -3717,6 +3717,7 @@ static std::string ResyncSaveName() {
 		NetLockstepPlaneGuard plane;
 		const uint64_t floor = ReturnHistoryFloorLocked(tick, SteadyNowMs());
 		m_WorldJoin.Tail().PruneJournalBefore(floor);
+		m_LastReturnHistoryFloor = floor;
 		m_Coordinator->SetReturnHistoryFloor(floor);
 	}
 
@@ -3821,6 +3822,15 @@ static std::string ResyncSaveName() {
 				// The segment holds this tick's frames from here; it opens when the archive validates and is
 				// dropped with it when the capture is refused.
 				RollWorldReplaySegment(tick);
+				// The round's history at each save: what this peer keeps of it in memory and on disk, beside the bounds that keep it flat.
+				if (m_WorldJoin.IsConfigured()) {
+					const NetWorldFrameLog& tail = m_WorldJoin.Tail();
+					const NetWorldFrameLog::JournalStats journal = tail.GetJournalStats();
+					const uint64_t journalBound = m_LastReturnHistoryFloor != 0 && journal.last >= m_LastReturnHistoryFloor ? journal.last + 1 - m_LastReturnHistoryFloor + NetWorldFrameLog::c_JournalSegmentFrames : 0;
+					System::PrintDiagnosticLine(std::format("[round-history] tick={} memory_frames={} memory_bytes={} memory_bound_frames={} memory_bound_bytes={} journal_files={} journal_bytes={} "
+					                                        "journal_first={} journal_last={} floor={} journal_bound_frames={}", tick, tail.Count(), tail.Bytes(), tail.MaxFrames(), tail.MaxBytes(),
+					                                        journal.files, journal.bytes, journal.first, journal.last, m_LastReturnHistoryFloor, journalBound));
+				}
 				if (m_WorldJoin.IsConfigured()) {
 					// The image is published when the writer thread has finished this archive, from the pump.
 					std::ostringstream line;
@@ -4289,6 +4299,17 @@ static std::string ResyncSaveName() {
 				outLeave.holderGeneration = slot->generation;
 				outLeave.team = slot->team;
 				outLeave.connection = session.connection;
+				return true;
+			}
+			// A member seated in the lobby before the round started has no world session: the roster alone binds it, and
+			// a slot no session claims is released once the roster stops seating its seat.
+			if (std::none_of(world.Sessions().begin(), world.Sessions().end(), [&](const NetWorldJoinSession& session) {
+				    return !session.spectator && session.assignedPeerId == slot->peerId;
+			    })) {
+				outLeave.peerId = slot->peerId;
+				outLeave.stableSeat = slot->stableSeat;
+				outLeave.holderGeneration = slot->generation;
+				outLeave.team = slot->team;
 				return true;
 			}
 		}
@@ -4838,6 +4859,7 @@ static std::string ResyncSaveName() {
 			release.team = held.team;
 			(void)m_WorldJoin.Membership().Release(held.peerId, nullptr);
 			(void)ScenarioRunner::SubmitWorldTransition(release);
+			NoteWorldReleaseLocked(m_ReconnectHost.GetSeatStatuses(), held.peerId, held.stableSeat, m_Coordinator->GetStats().nextFrame);
 			if (held.connection != c_InvalidNetPeerId) m_WorldJoin.CancelJoin(held.connection, "left while the AI held the seat");
 			System::PrintDiagnosticLine("[net-world] release held peer=" + std::to_string(static_cast<int>(held.peerId)) + ": its player left while the AI held the seat");
 		}
@@ -4994,12 +5016,16 @@ static std::string ResyncSaveName() {
 			release.team = leave.team;
 			(void)m_WorldJoin.Membership().Release(leave.peerId, nullptr);
 			(void)ScenarioRunner::SubmitWorldTransition(release);
-			m_WorldJoin.CancelJoin(leave.connection, "clean leave");
+			if (leave.connection != c_InvalidNetPeerId) m_WorldJoin.CancelJoin(leave.connection, "clean leave");
+			NoteWorldReleaseLocked(seatStatuses, leave.peerId, leave.stableSeat, nowFrame);
 			{
 				std::ostringstream line;
 				line << "[net-world] release peer=" << static_cast<int>(leave.peerId);
 				System::PrintDiagnosticLine(line.str());
 			}
+		}
+		// A slot the host freed - however its member went - goes to the watcher waiting longest.
+		if (m_WorldJoin.Membership().FreeSlots() > 0) {
 			uint64_t promotedAt = 0;
 			NetPeerId promoted = c_InvalidNetPeerId;
 			if (m_WorldJoin.PromoteWaitingSpectator(nowFrame, &promotedAt, &promoted, nullptr) && promotedAt != 0) {
@@ -5020,6 +5046,7 @@ static std::string ResyncSaveName() {
 					line << "[net-world] promote connection=" << promoted << " at=" << promotedAt;
 					System::PrintDiagnosticLine(line.str());
 				}
+				NoteWorldPromotionLocked(promoted, promotedAt);
 			}
 		}
 		DriveWorldSeatRespawns(nowFrame);
@@ -6655,6 +6682,80 @@ static std::string ResyncSaveName() {
 			m_LiveModerationState = ModerationStateOf(roster);
 		}
 		return m_LiveModerationState;
+	}
+
+	void NetMatchService::NoteWorldReleaseLocked(const std::vector<NetH4SeatStatus>& statuses, uint8_t peerId, uint16_t stableSeat, uint64_t frame) {
+		WorldSeatChange release;
+		release.peerId = peerId;
+		release.freedSeat = stableSeat;
+		release.frame = frame;
+		for (const NetH4SeatStatus& status: statuses) {
+			if (status.stableSeat != stableSeat) continue;
+			release.hostAuthorized = status.holdCause == NetSeatHoldCause::Kicked || status.holdCause == NetSeatHoldCause::Banned || status.holdCause == NetSeatHoldCause::Released;
+		}
+		m_LastWorldRelease = release;
+	}
+
+	void NetMatchService::NoteWorldPromotionLocked(NetPeerId connection, uint64_t activation) {
+		const NetWorldJoinSession* session = m_WorldJoin.FindSession(connection);
+		if (!session) return;
+		WorldSeatChange promotion;
+		promotion.peerId = session->assignedPeerId;
+		promotion.watcherSeat = session->stableSeat;
+		promotion.connection = connection;
+		promotion.frame = activation;
+		if (m_LastWorldRelease && m_LastWorldRelease->peerId == promotion.peerId) {
+			promotion.freedSeat = m_LastWorldRelease->freedSeat;
+			promotion.hostAuthorized = m_LastWorldRelease->hostAuthorized;
+		}
+		m_LastWorldPromotion = promotion;
+	}
+
+	std::string NetMatchService::GetWorldOwnershipFacts() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		nlohmann::json facts = nlohmann::json::object();
+		if (!m_Runner) return facts.dump();
+		const NetMatchConfig& config = m_Runner->GetMatchConfig();
+		uint32_t seats = 0;
+		for (const uint8_t capacity: config.worldTeamCapacity) seats += capacity;
+		facts["configuration"] = {{"seats", seats}, {"world_max_spectators", config.worldMaxSpectators}, {"persistent_world", config.persistentWorld}};
+		facts["is_host"] = m_IsHost;
+		facts["image_received"] = m_Runner->SawWorldImageTransfer();
+		// A watcher replays the committed tail outside any round, so its own id and the ticks it watched are the service's.
+		facts["local_peer"] = m_LocalPeerId;
+		if (!m_IsHost && m_WorldCatchUp.snapshotTick != 0) facts["replayed"] = {{"first", m_WorldCatchUp.snapshotTick + 1}, {"last", m_WorldCatchUp.appliedThrough}};
+		// A seat is named by the admission seat its lockstep id has in the round's config: the number every peer reads alike.
+		nlohmann::json seatOfPeer = nlohmann::json::object();
+		for (const NetH4Seat& seat: NetH4BuildSeatTable(config)) {
+			if (!seat.cpu && seat.lockstepPeerId != 0) seatOfPeer[std::to_string(seat.lockstepPeerId)] = seat.stableSeat;
+		}
+		facts["seat_of_peer"] = seatOfPeer;
+		if (m_IsHost && m_LastWorldRelease) {
+			facts["release"] = {{"peer", m_LastWorldRelease->peerId}, {"freed_seat", m_LastWorldRelease->freedSeat}, {"frame", m_LastWorldRelease->frame},
+			                    {"host_authorized", m_LastWorldRelease->hostAuthorized}};
+		}
+		if (m_IsHost && m_LastWorldPromotion) {
+			const WorldSeatChange& promoted = *m_LastWorldPromotion;
+			nlohmann::json promotion = {{"peer", promoted.peerId}, {"seat", seatOfPeer.value(std::to_string(promoted.peerId), nlohmann::json(nullptr))},
+			                            {"freed_seat", promoted.freedSeat}, {"watcher_seat", promoted.watcherSeat}, {"host_authorized", promoted.hostAuthorized}};
+			// An activation announced again later is the one that committed.
+			const NetWorldJoinSession* session = m_WorldJoin.FindSession(promoted.connection);
+			promotion["activation_tick"] = session && session->activationTick != 0 ? session->activationTick : promoted.frame;
+			NetPeerId holder = c_InvalidNetPeerId;
+			uint32_t generation = 0, incarnation = 0;
+			if (m_ReconnectHost.GetSeatHolder(promoted.watcherSeat, holder, generation, incarnation)) promotion["ticket_incarnation"] = incarnation;
+			if (Activity* activity = g_ActivityMan.GetActivity(); activity && WorldActivityPlayerOf(config, promoted.peerId) >= 0) {
+				if (const Actor* actor = activity->GetControlledActor(WorldActivityPlayerOf(config, promoted.peerId))) promotion["actor"] = actor->GetUniqueID();
+			}
+			facts["promotion"] = promotion;
+		}
+		if (!m_IsHost && m_Session) {
+			if (const NetReconnectClient* client = m_Session->GetReconnectClient(); client && client->HasRecord()) {
+				facts["ticket_incarnation"] = client->GetIncarnation();
+				facts["ticket_seat"] = client->GetRecord().stableSeat;
+			}
+		}
+		return facts.dump();
 	}
 
 	void NetMatchService::PumpSeatViews() {
@@ -10603,6 +10704,10 @@ static std::string ResyncSaveName() {
 				}
 			}
 			config.worldMaxSpectators = request.worldMaxSpectators.value_or(NetMatchConfigUtil::c_MaxWorldSpectators);
+			// Test lever: a scripted world names its watcher bound; unset, nothing changes.
+			if (const char* lever = std::getenv("CC_TEST_WORLD_MAX_SPECTATORS"); lever && *lever) {
+				config.worldMaxSpectators = static_cast<uint8_t>(std::clamp(std::atoi(lever), 0, static_cast<int>(NetMatchConfigUtil::c_MaxWorldSpectators)));
+			}
 			config.worldRespawnDelaySeconds = request.worldRespawnDelaySeconds.value_or(NetMatchConfigUtil::c_DefaultWorldRespawnDelaySeconds);
 			config.activityPreset = request.activityPreset.empty() ? "Persistent World" : request.activityPreset;
 			config.peerCount = request.peerCount;

@@ -720,6 +720,10 @@ namespace RTE {
 		/// The moderation state a host hands over, as JSON: each held seat with its cause, each ban and each ticket, by digest. Live: this host's
 		/// roster now. Carried: the state in the last handover capsule this peer opened.
 		std::string GetModerationSnapshotState(bool carried) const;
+		/// Who holds which world seat, as JSON, read from the roster and the world's slots for a probe's dump: the world's seats and
+		/// watchers, this peer's ticket and the seat its slot is, whether it received the world's image, and on the host the last
+		/// slot it freed and the watcher it promoted into it, with whether the host's own removal freed it.
+		std::string GetWorldOwnershipFacts() const;
 		/// That state of one roster and its ban list.
 		static std::string ModerationStateOf(const NetSeatRoster& roster);
 		/// The reconnect UX state machine (§11): auto-retry, the stored-ticket offer and the roster's
@@ -815,6 +819,19 @@ namespace RTE {
 		/// the seat's lockstep id - a promoted watcher plays on a slot its own seat does not name, so
 		/// a leftover row naming that id would release whoever holds it next.
 		static bool FindWorldCleanLeave(const std::vector<NetH4SeatStatus>& statuses, const NetWorldJoinHost& world, WorldCleanLeave& outLeave);
+		/// A world slot the host freed or a watcher it promoted into one, for the ownership receipts.
+		struct WorldSeatChange {
+			uint8_t peerId = 0;                          //!< The slot's lockstep id.
+			uint16_t freedSeat = 0;                      //!< The admission seat the slot was bound to when it was freed.
+			uint16_t watcherSeat = 0;                    //!< A promotion's watcher: its own admission seat.
+			NetPeerId connection = c_InvalidNetPeerId;   //!< A promotion's watcher connection.
+			uint64_t frame = 0;                          //!< The frame the slot was freed, or the activation a promotion announced.
+			bool hostAuthorized = false;                 //!< The host's own removal of the seat's player freed it.
+		};
+		/// Records a freed world slot; the host's removal (a kick, a ban, a release) is what authorizes a later promotion into it.
+		void NoteWorldReleaseLocked(const std::vector<NetH4SeatStatus>& statuses, uint8_t peerId, uint16_t stableSeat, uint64_t frame);
+		/// Records the watcher promoted into the last freed slot.
+		void NoteWorldPromotionLocked(NetPeerId connection, uint64_t activation);
 		/// A slot whose seat the AI holds while its player closed that seat by leaving: the member chose to go, so the seat is
 		/// released (the AI keeps its units) and the slot opens for a new join. A seat still committed, dropped or mid-reclaim
 		/// is still its member's. The departed returner's bootstrap, if any is left, is named in the result.
@@ -1529,6 +1546,9 @@ namespace RTE {
 		NetFakeLinkEffects m_FakeLinkBaseline;   //!< The counts when that round began.
 		uint64_t m_FakeLinkReportedAtMs = 0;
 		std::string m_CarriedModerationState;      //!< The moderation state of the last handover capsule opened.
+		std::optional<WorldSeatChange> m_LastWorldRelease;   //!< Host: the world slot it last freed.
+		std::optional<WorldSeatChange> m_LastWorldPromotion; //!< Host: the watcher it last promoted into a freed slot.
+		uint64_t m_LastReturnHistoryFloor = 0;               //!< The oldest frame a returner may still be served from, as last pruned to.
 		mutable std::pair<uint32_t, size_t> m_LiveModerationKey{UINT32_MAX, 0}; //!< The roster revision and ban count the cached live state was read at.
 		mutable std::string m_LiveModerationState;
 		struct RosterTransition {

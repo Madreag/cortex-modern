@@ -900,6 +900,8 @@ namespace RTE {
 		uint64_t queuedBytes = 0;
 		bool stopping = false;
 		std::atomic<bool> failed{false};
+		std::atomic<uint64_t> bytesOnDisk{0}; //!< Its files' bytes, as the worker last left them.
+		std::atomic<uint32_t> filesOnDisk{0};
 		std::map<std::tuple<uint64_t, size_t, uint64_t>, std::shared_future<ReadResult>> reads;
 		std::thread worker;
 
@@ -1006,6 +1008,12 @@ namespace RTE {
 						}
 						job.result->set_value(std::move(result));
 					}
+					if (!job.result) {
+						uint64_t bytes = 0;
+						for (const Segment& segment: segments) bytes += segment.endOffset;
+						bytesOnDisk = bytes;
+						filesOnDisk = static_cast<uint32_t>(segments.size());
+					}
 				}
 			} catch (...) { failed = true; }
 			for (Segment& segment: segments) close(segment);
@@ -1065,6 +1073,16 @@ namespace RTE {
 			m_Records.pop_front();
 			++m_Evicted;
 		}
+	}
+
+	NetWorldFrameLog::JournalStats NetWorldFrameLog::GetJournalStats() const {
+		JournalStats stats;
+		if (!m_Journal) return stats;
+		stats.bytes = m_Journal->bytesOnDisk;
+		stats.files = m_Journal->filesOnDisk;
+		stats.first = m_JournalFirst;
+		stats.last = m_JournalLast;
+		return stats;
 	}
 
 	uint64_t NetWorldFrameLog::FirstServableFrame() const {
