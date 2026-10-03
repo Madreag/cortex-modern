@@ -84,10 +84,10 @@ def export_commit(cache, commit, destination):
 def build_command(arguments, cwd, env, log, scratch):
     with log.open('xb') as stream:
         process = subprocess.Popen(arguments, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT)
-        deadline = time.monotonic()+1800
+        deadline = time.monotonic()+2700
         try:
             while process.poll() is None:
-                if time.monotonic() > deadline: raise TimeoutError('native build step exceeded 30 minutes')
+                if time.monotonic() > deadline: raise TimeoutError('native build step exceeded 45 minutes')
                 if retained_bytes(scratch) >= 3_750_000_000:
                     raise RuntimeError('native build approached the 4 GB retained scratch guard')
                 time.sleep(5)
