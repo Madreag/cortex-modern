@@ -252,6 +252,8 @@ namespace RTE {
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
 		/// A round starts only on the seat roster the host agreed it on: a peer that heard another is refused by name.
 		bool AgreeOnSeatRoster(NetSession& session, std::string* error);
+		/// Stamps a moved seat roster into the open lobby's config as its next revision; a start the host asked for stays asked.
+		void StampSeatRoster(const NetReconnectHost& admission);
 		uint32_t m_RosterAgreedRevision = 0;
 		static constexpr uint64_t c_RosterRevisionWaitMs = 2000; //!< How long a start waits for the revision it asked the host for.
 		bool RunLobby(INetTransport& transport, NetSession& session, uint64_t maxWaitMs, std::string* error, std::vector<NetTransportEvent> pendingEvents = {});
@@ -259,6 +261,7 @@ namespace RTE {
 		bool WaitForLockstepRunning(NetLockstepCoordinator& coordinator, uint64_t maxWaitMs, std::string* error, NetSession* session = nullptr);
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
+		friend bool TestAStartRequestOutlivesTheRosterStamp(std::string* error);
 		// Lockstep peer ids are 1-based and dense; the session assigns the host id 0 and clients 1.. .
 		std::map<uint8_t, NetPeerId> BuildRemoteTransportMap(const NetSession& session) const;
 		uint8_t LocalLockstepPeerId(const NetSession& session) const;

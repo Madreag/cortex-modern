@@ -10905,6 +10905,45 @@ namespace RTE {
 		return true;
 	}
 
+	// A host that asked for the start once, as a player presses Start once, before the seat roster moved in its open lobby: the stamp of the
+	// new revision is one the host never typed, so its peers acknowledge it again and the start stays asked.
+	bool TestAStartRequestOutlivesTheRosterStamp(std::string* error) {
+		LoopbackTransport transport, joiner;
+		NetPeerId hostPeer = 0, clientPeer = 0;
+		if (!StartLoopbackTransports(43192, transport, joiner, hostPeer, clientPeer, error)) return false;
+		NetMatchRunner runner;
+		runner.m_Config.host = true;
+		runner.m_MatchConfig = MakeConfig();
+		NetLobbySessionConfig config;
+		config.host = true;
+		config.localPeerId = 1;
+		config.remotePeerId = 2;
+		config.remoteTransportPeerId = hostPeer;
+		config.matchConfig = runner.m_MatchConfig;
+		config.autoStart = false;
+		if (!runner.m_Lobby.Start(transport, config, error)) return false;
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			*error = "the seat-auth registry could not draw an epoch";
+			return false;
+		}
+		NetReconnectHost admission;
+		admission.Configure(&registry, runner.m_MatchConfig.sessionId, RematchIdentity());
+		admission.SetSeatTable(NetH4BuildSeatTable(runner.m_MatchConfig), runner.m_MatchConfig.mode);
+		const uint32_t moved = admission.GetRoster().revision;
+		// The lobby's config names an older revision than the one its host plane now holds.
+		runner.m_MatchConfig.seatRosterRevision = moved + 7;
+		runner.m_Lobby.RequestStart();
+		runner.StampSeatRoster(admission);
+		if (runner.m_MatchConfig.seatRosterRevision != moved || !runner.m_Lobby.IsStartRequested()) {
+			*error = "a start the host asked for before the open lobby stamped seat roster revision " + std::to_string(moved) + " was " +
+			         (runner.m_Lobby.IsStartRequested() ? "kept" : "withdrawn") + " (the config names revision " + std::to_string(runner.m_MatchConfig.seatRosterRevision) + ")";
+			return false;
+		}
+		std::cout << "PASS a_start_request_outlives_the_roster_stamp roster_revision=" << moved << std::endl;
+		return true;
+	}
+
 	// A player joining a running match whose host goes is told the match changes host only when the host's roster names another player
 	// still connected to play on; a host alone, or one whose other players are gone, ended the match for it.
 	bool TestAJoinerIsToldTheMatchIsChangingHost(std::string* error) {
@@ -15498,6 +15537,10 @@ namespace RTE {
 		if (!TestRematchKeepsEverySeatAcrossTwoLeaves(&twoShrinksError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << twoShrinksError << std::endl;
 		}
+		std::string startRequestError;
+		if (!TestAStartRequestOutlivesTheRosterStamp(&startRequestError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << startRequestError << std::endl;
+		}
 		std::string changingHostError;
 		if (!TestAJoinerIsToldTheMatchIsChangingHost(&changingHostError)) {
 			std::cerr << "[net-match-selftest] FAIL: " << changingHostError << std::endl;
@@ -15511,6 +15554,7 @@ namespace RTE {
 			std::cerr << "[net-match-selftest] FAIL: " << reclaimError << std::endl;
 		}
 		if (!twoShrinksError.empty()) return fail(twoShrinksError);
+		if (!startRequestError.empty()) return fail(startRequestError);
 		if (!changingHostError.empty()) return fail(changingHostError);
 		if (!hardDropError.empty()) return fail(hardDropError);
 		if (!reclaimError.empty()) return fail(reclaimError);

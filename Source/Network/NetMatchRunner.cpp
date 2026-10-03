@@ -148,6 +148,31 @@ namespace RTE {
 		return true;
 	}
 
+	void NetMatchRunner::StampSeatRoster(const NetReconnectHost& admission) {
+		if (admission.GetRoster().revision == m_MatchConfig.seatRosterRevision || m_Lobby.IsStarted()) return;
+		NetMatchConfig stamped = m_MatchConfig;
+		stamped.configRevision = m_MatchConfig.configRevision + 1;
+		stamped.seatRosterRevision = admission.GetRoster().revision;
+		stamped.seatRosterHash = HashRoster(admission.GetRoster());
+		// A forming round's members are the roster's: a seat that drops or that the host opens leaves them and starts held.
+		if (const std::vector<uint8_t> waitsOn = admission.StartMembers(); !waitsOn.empty()) {
+			const std::vector<uint8_t> present = RematchMembers(stamped.hostPeerId, stamped.peerCount, waitsOn);
+			stamped.activePeerIds = present.size() < stamped.peerCount ? present : std::vector<uint8_t>{};
+		}
+		std::string stampError;
+		// The host asked for the start once; a roster revision it never typed reopens the acknowledgement, never withdraws that.
+		const bool startPending = m_Lobby.IsStartRequested();
+		if (m_Lobby.RepublishMatchConfig(stamped, &stampError)) {
+			if (startPending) m_Lobby.RequestStart();
+			m_MatchConfig = stamped;
+			m_Config.matchConfig = stamped;
+			m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+		} else if (stampError != m_LastRosterStampRefusal) {
+			m_LastRosterStampRefusal = stampError;
+			DiagnosticLine() << "[net-match] seat roster revision " << stamped.seatRosterRevision << " not republished: " << stampError << std::endl;
+		}
+	}
+
 	bool NetMatchRunner::AgreeOnSeatRoster(NetSession& session, std::string* error) {
 		m_RosterAgreedRevision = 0;
 		if (m_Config.host || m_MatchConfig.version < NetMatchConfigUtil::c_SeatRosterVersion || m_MatchConfig.seatRosterRevision == 0) return true;
@@ -576,26 +601,7 @@ namespace RTE {
 				m_Lobby.RequestStart();
 			}
 			// A new seat roster revision is the round's next configuration revision while the lobby is open, as a host option is.
-			if (admission && admission->GetRoster().revision != m_MatchConfig.seatRosterRevision && !m_Lobby.IsStarted()) {
-				NetMatchConfig stamped = m_MatchConfig;
-				stamped.configRevision = m_MatchConfig.configRevision + 1;
-				stamped.seatRosterRevision = admission->GetRoster().revision;
-				stamped.seatRosterHash = HashRoster(admission->GetRoster());
-				// A forming round's members are the roster's: a seat that drops or that the host opens leaves them and starts held.
-				if (const std::vector<uint8_t> waitsOn = admission->StartMembers(); !waitsOn.empty()) {
-					const std::vector<uint8_t> present = RematchMembers(stamped.hostPeerId, stamped.peerCount, waitsOn);
-					stamped.activePeerIds = present.size() < stamped.peerCount ? present : std::vector<uint8_t>{};
-				}
-				std::string stampError;
-				if (m_Lobby.RepublishMatchConfig(stamped, &stampError)) {
-					m_MatchConfig = stamped;
-					m_Config.matchConfig = stamped;
-					m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
-				} else if (stampError != m_LastRosterStampRefusal) {
-					m_LastRosterStampRefusal = stampError;
-					DiagnosticLine() << "[net-match] seat roster revision " << stamped.seatRosterRevision << " not republished: " << stampError << std::endl;
-				}
-			}
+			if (admission) StampSeatRoster(*admission);
 			// An accepted host-options draft becomes this round's next configuration revision here, on
 			// the thread that owns the lobby: every peer re-acknowledges it before the Start gate opens.
 			if (m_Config.host && m_Config.hostOptions && m_Config.hostOptions->Take(stagedOptions)) {
