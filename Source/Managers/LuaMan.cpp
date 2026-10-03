@@ -12954,19 +12954,42 @@ namespace {
 		return 0;
 	}
 
-	void PushPreviewClone(lua_State* L, int src, int seen, std::vector<std::string>& problems) {
+	// One copy of a script's instance: what it has copied so far and the coroutines and closures it copies.
+	struct PreviewCloneContext {
+		int seen;
+		std::vector<std::string>& problems;
+		LuaThreadCodec::PreviewCopier* copier = nullptr;
+	};
+
+	void PushPreviewClone(lua_State* L, int src, int seen, PreviewCloneContext& context);
+
+	void MapPreviewValue(lua_State* L, void* raw) {
+		auto& context = *static_cast<PreviewCloneContext*>(raw);
+		PushPreviewClone(L, -1, context.seen, context);
+		lua_replace(L, -2);
+	}
+
+	void PushPreviewClone(lua_State* L, int src, int seen, PreviewCloneContext& context) {
 		src = AbsoluteLuaIndex(L, src);
 		seen = AbsoluteLuaIndex(L, seen);
 		const int type = lua_type(L, src);
+		if (type == LUA_TFUNCTION) {
+			context.copier->PushFunction(src);
+			return;
+		}
 		if (type == LUA_TTHREAD) {
-			// A coroutine cannot be copied: the copy holds a stand-in that reads as the original does, suspended or dead, and
-			// resuming it marks the window so the preview runs again with the scripts frozen.
 			lua_pushvalue(L, src);
 			lua_rawget(L, seen);
 			if (!lua_isnil(L, -1)) {
 				return;
 			}
 			lua_pop(L, 1);
+			// A coroutine resumes on its own copy where the original stands.
+			if (context.copier->PushThread(src)) {
+				return;
+			}
+			// One that cannot be copied gets a stand-in that reads as the original does, and resuming it marks the window
+			// so the preview runs again with the scripts frozen.
 			lua_State* original = lua_tothread(L, src);
 			const int status = lua_status(original);
 			lua_State* standIn = lua_newthread(L);
@@ -13040,15 +13063,15 @@ namespace {
 		while (lua_next(L, src) != 0) {
 			const int value = lua_gettop(L);
 			const int key = value - 1;
-			PushPreviewClone(L, key, seen, problems);
-			PushPreviewClone(L, value, seen, problems);
+			PushPreviewClone(L, key, seen, context);
+			PushPreviewClone(L, value, seen, context);
 			lua_rawset(L, copy);
 			lua_pop(L, 1);
 		}
 		// A cached module or class keeps its methods on its metatable; the copy gets its own clone of it, so the
 		// preview reaches the same methods and a write through them still lands inside the copy.
 		if (lua_getmetatable(L, src) != 0) {
-			PushPreviewClone(L, -1, seen, problems);
+			PushPreviewClone(L, -1, seen, context);
 			lua_setmetatable(L, copy);
 			lua_pop(L, 1);
 		}
@@ -13146,6 +13169,26 @@ namespace {
 		if (LuaMan::IsPreviewClone(mo)) {
 			return true;
 		}
+		// An object's own script handle - a coroutine's or a closure's self - is its preview self, whose fields are the copy's.
+		{
+			const std::string uid = std::to_string(mo->GetUniqueID());
+			lua_getglobal(L, "_ScriptedObjects");
+			if (lua_istable(L, -1)) {
+				lua_getfield(L, -1, uid.c_str());
+				const bool own = lua_rawequal(L, -1, index) != 0;
+				lua_pop(L, 1);
+				if (own) {
+					lua_getfield(L, -1, (uid + "#preview").c_str());
+					if (lua_isuserdata(L, -1)) {
+						lua_replace(L, index);
+						lua_pop(L, 1);
+						return true;
+					}
+					lua_pop(L, 1);
+				}
+			}
+			lua_pop(L, 1);
+		}
 		// A script keeps its reference past the object's deletion, so only an object still alive is read.
 		if (!g_MovableMan.ValidMO(mo) && !ScriptGraphNativeAlive(L, object)) {
 			freezeClass = className;
@@ -13204,7 +13247,9 @@ namespace {
 		if (type == LUA_TUSERDATA) {
 			return RemapPreviewUserdata(L, index, freezeClass);
 		}
-		if (type != LUA_TTABLE) {
+		// A copied coroutine's stack and an own closure copy's variables hold references as the hold's fields do.
+		const bool copyValues = type == LUA_TTHREAD || (type == LUA_TFUNCTION && LuaThreadCodec::IsOwnPreviewCopy(L, index));
+		if (type != LUA_TTABLE && !copyValues) {
 			return true;
 		}
 		lua_pushvalue(L, index);
@@ -13217,6 +13262,13 @@ namespace {
 		lua_pushvalue(L, index);
 		lua_pushboolean(L, 1);
 		lua_rawset(L, seen);
+		if (copyValues) {
+			struct Remap { int seen; std::string& freezeClass; } remap{seen, freezeClass};
+			return LuaThreadCodec::RemapPreviewCopyValues(L, index, [](lua_State* state, void* raw) {
+				auto& context = *static_cast<Remap*>(raw);
+				return RemapPreviewValue(state, -1, context.seen, context.freezeClass);
+			}, &remap);
+		}
 
 		// The walk may change and clear existing fields; a key the remap changes is set once the walk is done.
 		int moved = 0;
@@ -13567,7 +13619,11 @@ bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector
 	}
 	lua_newtable(m_State);
 	const int seen = lua_gettop(m_State);
-	PushPreviewClone(m_State, -2, seen, problems);
+	PreviewCloneContext context{seen, problems};
+	LuaThreadCodec::PreviewCopier copier(m_State, seen, &MapPreviewValue, &context, PreviewCoroutineStandIn);
+	context.copier = &copier;
+	PushPreviewClone(m_State, -2, seen, context);
+	copier.Finish();
 	if (!lua_istable(m_State, -1)) {
 		problems.emplace_back("preview self clone produced no table");
 		lua_settop(m_State, top);

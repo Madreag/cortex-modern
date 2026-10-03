@@ -71,6 +71,9 @@ CASES = {
     "random": {"ticks": 1200, "files": ["preview_random_effect.lua"], "index": "",
                "both": ["-test-script", "UserScenes.rte/preview_random_effect.lua", "-net-local-prediction", "on"],
                "host": ["-input-script", str(FIXTURES / "preview_native_fence.txt")]},
+    "coroutine": {"ticks": 900, "files": ["preview_coroutine_fire.lua", "preview_coroutine_gun.lua"], "index": "",
+                  "both": ["-test-script", "UserScenes.rte/preview_coroutine_fire.lua", "-net-local-prediction", "on"],
+                  "host": ["-input-script", str(FIXTURES / "preview_coroutine_fire.txt")]},
     "craft": {"ticks": 480, "files": ["craft_handoff_activity.lua"], "index": CRAFT_ACTIVITY,
               "both": ["-net-match-service-preset", "Determinism Craft Handoff", "-net-match-service-module", "UserScenes.rte"],
               "host": []},
@@ -92,6 +95,8 @@ CACHE_COMMIT = re.compile(r"\[preview-cache\] commit uid=(\d+) tick=(\d+) impuls
 RANDOM = re.compile(r"\[preview-random\] preview uid=(\d+) jolt=(\S+) pick=(\S+) spin=(\S+) chance=(\S+) health_before=([-\d.]+) health_after=([-\d.]+)")
 RANDOM_COMMIT = re.compile(r"\[preview-random\] commit uid=(\d+) stride=(\d+) jolt=([-\d.]+) pick=(\d+) spin=([-\d.]+) chance=([-\d.]+) health=([-\d.]+)")
 OUTPARAM = re.compile(r"\[preview-outparam\] preview uid=(\d+) hit_before=([-\d.]+) hit_after=([-\d.]+)")
+COROUTINE = re.compile(r"\[preview-coroutine\] preview uid=(\d+) created=(\S+) wrapped=(\S+) self_created=(\S+) self_wrapped=(\S+) real_created=(\S+) real_wrapped=(\S+)")
+COROUTINE_COMMIT = re.compile(r"\[preview-coroutine\] commit uid=(\d+) created=(\S+) wrapped=(\S+)")
 CRAFT = re.compile(r"\[craft-fixture\] (hatch opening|passenger out|passenger played) tick=(\d+)")
 
 
@@ -340,6 +345,25 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "value_kept": sum(1 for row in rows if row["before"] == row["after"])}
         # The preview's cast writes a copy, so the Vector the real script keeps reads the same after it.
         fixture_ok = bool(rows) and result["previews"]["value_kept"] == len(rows)
+    elif case_name == "coroutine":
+        keys = ("uid", "created", "wrapped", "self_created", "self_wrapped", "real_created", "real_wrapped")
+        rows = [dict(zip(keys, match)) for match in COROUTINE.findall(texts["host"])]
+        commits = {who: COROUTINE_COMMIT.findall(texts[who]) for who in PEERS}
+        steps = lambda row: {key: int(row[key]) if row[key].isdigit() else None for key in keys}  # noqa: E731
+        # Each coroutine went on from where the real one stands, on the copy's own gun, and the real one stayed put.
+        continued = sum(1 for row in map(steps, rows) if None not in row.values() and row["created"] == row["self_created"] > row["real_created"]
+                        and row["wrapped"] == row["self_wrapped"] > row["real_wrapped"])
+        real = {(uid, created, wrapped) for uid, created, wrapped in commits["host"]}
+        shown = {(row["uid"], row["created"], row["wrapped"]) for row in rows}
+        per_gun = {}
+        for uid, created, wrapped in commits["host"]:
+            per_gun.setdefault(uid, []).append((created, wrapped))
+        # A real shot reaches the next step of both: a preview that moved a real coroutine would leave a gap.
+        unbroken = all(shots == [(str(step), str(step)) for step in range(1, len(shots) + 1)] for shots in per_gun.values())
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "continued": continued, "shown_then_real": len(shown & real),
+                              "commits": {who: len(commits[who]) for who in PEERS}, "unbroken": unbroken}
+        fixture_ok = (bool(rows) and continued == len(rows) and shown <= real and bool(commits["host"]) and unbroken
+                      and commits_agree(commits, held))
     else:
         events = {who: [(name, int(tick)) for name, tick in CRAFT.findall(texts[who])] for who in PEERS}
         result["craft"] = events

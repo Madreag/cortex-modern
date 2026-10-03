@@ -13,9 +13,12 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <limits>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -615,12 +618,11 @@ namespace {
 } // namespace
 
 namespace RTE::LuaThreadCodec {
-	bool VisitThreadStack(lua_State* thread, lua_State* dest, bool (*visitor)(lua_State* dest, void* context), void* context) {
-		if (!thread || !dest || !visitor) return false;
+	// What each slot of a coroutine's stack holds: 0 a Lua value, otherwise a frame link or a continuation's own slot.
+	std::vector<char> ThreadSlotKinds(lua_State* thread) {
 		TValue* stack = tvref(thread->stack);
 		const ptrdiff_t topIndex = thread->top - stack;
-		if (topIndex <= 1 + LJ_FR2) return false;
-		std::vector<char> kind(static_cast<size_t>(topIndex) + 1, 0);
+		std::vector<char> kind(static_cast<size_t>(std::max<ptrdiff_t>(topIndex, 0)) + 1, 0);
 		int guard = 0;
 		for (TValue* frame = thread->base - 1; frame > stack + LJ_FR2;) {
 			const ptrdiff_t index = frame - stack;
@@ -638,6 +640,15 @@ namespace RTE::LuaThreadCodec {
 			}
 			frame = lua ? frame_prevl(frame) : frame_prevd(frame);
 		}
+		return kind;
+	}
+
+	bool VisitThreadStack(lua_State* thread, lua_State* dest, bool (*visitor)(lua_State* dest, void* context), void* context) {
+		if (!thread || !dest || !visitor) return false;
+		TValue* stack = tvref(thread->stack);
+		const ptrdiff_t topIndex = thread->top - stack;
+		if (topIndex <= 1 + LJ_FR2) return false;
+		const std::vector<char> kind = ThreadSlotKinds(thread);
 		for (ptrdiff_t i = 1 + LJ_FR2; i < topIndex; ++i) {
 			if (!lua_checkstack(dest, 1)) return false;
 			stack = tvref(thread->stack);
@@ -687,5 +698,451 @@ namespace RTE::LuaThreadCodec {
 		lua_setglobal(state, "_ScriptGraphOpenUpvalues");
 		lua_pushcfunction(state, JoinOpenUpvalue);
 		lua_setglobal(state, "_ScriptGraphJoinOpenUpvalue");
+	}
+
+	namespace {
+		int EmptyFunction(lua_State*) { return 0; }
+
+		// The fast function id of coroutine.wrap's functions, read once from one the library makes.
+		int WrapFunctionId(lua_State* L) {
+			static std::atomic<int> id{-1};
+			if (id.load() < 0) {
+				const int top = lua_gettop(L);
+				lua_getglobal(L, "coroutine");
+				if (lua_istable(L, -1)) {
+					lua_getfield(L, -1, "wrap");
+					lua_pushcfunction(L, EmptyFunction);
+					if (lua_pcall(L, 1, 1, 0) == 0 && lua_isfunction(L, -1) && !isluafunc(funcV(L->top - 1))) {
+						id.store(funcV(L->top - 1)->c.ffid);
+					}
+				}
+				lua_settop(L, top);
+			}
+			return id.load();
+		}
+
+		GCupval* NewClosedUpvalue(lua_State* L, const GCupval* like) {
+			GCupval* upvalue = static_cast<GCupval*>(lj_mem_newgco(L, sizeof(GCupval)));
+			upvalue->gct = ~LJ_TUPVAL;
+			upvalue->serial = ++G(L)->objserial;
+			upvalue->closed = 1;
+			upvalue->immutable = like->immutable;
+			upvalue->dhash = like->dhash;
+			setnilV(&upvalue->tv);
+			setmref(upvalue->v, &upvalue->tv);
+			return upvalue;
+		}
+	} // namespace
+
+	namespace {
+		const char* const c_OwnPreviewCopiesKey = "cccp.preview_own_copies";
+	}
+
+	bool IsOwnPreviewCopy(lua_State* L, int index) {
+		index = index < 0 ? lua_gettop(L) + index + 1 : index;
+		if (!lua_isfunction(L, index)) return false;
+		lua_getfield(L, LUA_REGISTRYINDEX, c_OwnPreviewCopiesKey);
+		if (!lua_istable(L, -1)) {
+			lua_pop(L, 1);
+			return false;
+		}
+		lua_pushvalue(L, index);
+		lua_rawget(L, -2);
+		const bool own = lua_toboolean(L, -1) != 0;
+		lua_pop(L, 2);
+		return own;
+	}
+
+	bool RemapPreviewCopyValues(lua_State* L, int index, bool (*remap)(lua_State*, void*), void* context) {
+		index = index < 0 ? lua_gettop(L) + index + 1 : index;
+		if (lua_isthread(L, index)) {
+			lua_State* co = lua_tothread(L, index);
+			if (co == L) return true;
+			const ptrdiff_t topIndex = co->top - tvref(co->stack);
+			const std::vector<char> kind = ThreadSlotKinds(co);
+			for (ptrdiff_t slot = 1 + LJ_FR2; slot < topIndex; ++slot) {
+				if (kind[static_cast<size_t>(slot)] != 0 || tvisnil(tvref(co->stack) + slot)) continue;
+				if (!lua_checkstack(L, 2)) return false;
+				copyTV(L, L->top, tvref(co->stack) + slot);
+				incr_top(L);
+				// A coroutine's stack is traversed again at every collection's end, so writing it needs no barrier.
+				const bool remapped = remap(L, context);
+				if (remapped) copyTV(co, tvref(co->stack) + slot, L->top - 1);
+				L->top--;
+				if (!remapped) return false;
+			}
+			return true;
+		}
+		if (!IsOwnPreviewCopy(L, index)) return true;
+		GCfunc* function = funcV(L->base + index - 1);
+		if (!isluafunc(function)) {
+			// A coroutine.wrap copy holds its coroutine's copy.
+			for (uint32_t slot = 0; slot < function->c.nupvalues; ++slot) {
+				if (!lua_checkstack(L, 2)) return false;
+				copyTV(L, L->top, &function->c.upvalue[slot]);
+				incr_top(L);
+				const bool remapped = remap(L, context);
+				if (remapped) {
+					copyTV(L, &function->c.upvalue[slot], L->top - 1);
+					if (tvisgcv(L->top - 1)) lj_gc_objbarrier(L, function, gcV(L->top - 1));
+				}
+				L->top--;
+				if (!remapped) return false;
+			}
+			return true;
+		}
+		for (uint32_t slot = 0; slot < function->l.nupvalues; ++slot) {
+			GCupval* upvalue = &gcref(function->l.uvptr[slot])->uv;
+			if (!upvalue->closed) continue;
+			if (!lua_checkstack(L, 2)) return false;
+			copyTV(L, L->top, uvval(upvalue));
+			incr_top(L);
+			const bool remapped = remap(L, context);
+			if (remapped) {
+				copyTV(L, uvval(upvalue), L->top - 1);
+				if (tvisgcv(L->top - 1)) lj_gc_objbarrier(L, upvalue, gcV(L->top - 1));
+			}
+			L->top--;
+			if (!remapped) return false;
+		}
+		return true;
+	}
+
+	struct PreviewCopier::Impl {
+		struct Join {
+			GCfunc* function;
+			uint32_t index;
+			GCupval* original;
+			lua_State* thread;
+			ptrdiff_t slot;
+		};
+
+		lua_State* L;
+		int seen;
+		MapValue mapValue;
+		void* context;
+		int (*standIn)(lua_State*);
+		std::unordered_map<GCupval*, GCupval*> upvalues; //!< A variable a copied coroutine's code owns, and the copy's.
+		std::unordered_map<lua_State*, lua_State*> threads; //!< Each coroutine restored, and its copy.
+		std::unordered_set<GCfunc*> copies; //!< The closures this copy made.
+		std::unordered_set<GCfunc*> ownCopies; //!< Those whose closed variables are the copy's own.
+		std::vector<Join> joins; //!< Variables open on a coroutine, moved to its copy's stack once it is restored.
+		std::unordered_map<GCupval*, lua_State*> owners;
+		bool ownersRead = false;
+
+		TValue* Slot(int index) const { return L->base + ((index < 0 ? lua_gettop(L) + index + 1 : index) - 1); }
+
+		// The coroutine an open variable lives on; read from every coroutine's open list the first time one is needed.
+		lua_State* OwnerOf(GCupval* upvalue) {
+			if (!ownersRead) {
+				ownersRead = true;
+				for (GCobj* object = gcref(G(L)->gc.root); object != nullptr; object = gcnext(object)) {
+					if (object->gch.gct != ~LJ_TTHREAD) {
+						continue;
+					}
+					for (GCobj* entry = gcref(object->th.openupval); entry != nullptr; entry = gcnext(entry)) {
+						owners.emplace(&entry->uv, &object->th);
+					}
+				}
+			}
+			const auto found = owners.find(upvalue);
+			return found == owners.end() ? nullptr : found->second;
+		}
+
+		// A coroutine at rest whose copy can own a variable, not the state running the copy.
+		bool Copyable(const lua_State* thread) const { return thread && thread != L && thread != mainthread(G(L)); }
+
+		bool NeedsCopy(const GCfunc* function) {
+			for (uint32_t index = 0; index < function->l.nupvalues; ++index) {
+				GCupval* upvalue = &gcref(function->l.uvptr[index])->uv;
+				if (upvalues.contains(upvalue) || (!upvalue->closed && Copyable(OwnerOf(upvalue)))) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		void SetUpvalue(GCfunc* function, uint32_t index, GCupval* upvalue) {
+			setgcref(function->l.uvptr[index], obj2gco(upvalue));
+			lj_gc_objbarrier(L, function, upvalue);
+		}
+
+		// The value on top of the stack belongs to a copied coroutine's code: its functions are copied with their variables.
+		void MapOwn(PreviewCopier& copier) {
+			if (lua_type(L, -1) == LUA_TFUNCTION) {
+				PushClosure(copier, -1, true);
+				lua_replace(L, -2);
+			} else {
+				mapValue(L, context);
+			}
+		}
+
+		// The copies whose variables are all their own, for the remap that follows the copy.
+		void MarkOwn(GCfunc* copy) {
+			lua_getfield(L, LUA_REGISTRYINDEX, c_OwnPreviewCopiesKey);
+			if (!lua_istable(L, -1)) {
+				lua_pop(L, 1);
+				lua_newtable(L);
+				lua_newtable(L);
+				lua_pushliteral(L, "k");
+				lua_setfield(L, -2, "__mode");
+				lua_setmetatable(L, -2);
+				lua_pushvalue(L, -1);
+				lua_setfield(L, LUA_REGISTRYINDEX, c_OwnPreviewCopiesKey);
+			}
+			setfuncV(L, L->top, copy);
+			incr_top(L);
+			lua_pushboolean(L, 1);
+			lua_rawset(L, -3);
+			lua_pop(L, 1);
+		}
+
+		// Gives a copy its own closed variables, each copied once, its value mapped as the coroutine's own.
+		void OwnVariables(PreviewCopier& copier, GCfunc* copy, const GCfunc* original) {
+			ownCopies.insert(copy);
+			MarkOwn(copy);
+			for (uint32_t index = 0; index < original->l.nupvalues; ++index) {
+				GCupval* upvalue = &gcref(original->l.uvptr[index])->uv;
+				if (!upvalue->closed) {
+					continue;
+				}
+				if (const auto found = upvalues.find(upvalue); found != upvalues.end()) {
+					SetUpvalue(copy, index, found->second);
+					continue;
+				}
+				GCupval* own = NewClosedUpvalue(L, upvalue);
+				SetUpvalue(copy, index, own);
+				upvalues.emplace(upvalue, own);
+				copyTV(L, L->top, uvval(upvalue));
+				incr_top(L);
+				MapOwn(copier);
+				copyTV(L, uvval(own), L->top - 1);
+				if (tvisgcv(L->top - 1)) {
+					lj_gc_objbarrier(L, own, gcV(L->top - 1));
+				}
+				lua_pop(L, 1);
+			}
+		}
+
+		void PushClosure(PreviewCopier& copier, int index, bool own) {
+			index = index < 0 ? lua_gettop(L) + index + 1 : index;
+			GCfunc* original = funcV(Slot(index));
+			lua_pushvalue(L, index);
+			lua_rawget(L, seen);
+			if (!lua_isnil(L, -1)) {
+				GCfunc* known = funcV(L->top - 1);
+				if (own && isluafunc(known) && copies.contains(known) && !ownCopies.contains(known)) {
+					OwnVariables(copier, known, original);
+				}
+				return;
+			}
+			lua_pop(L, 1);
+			if (!isluafunc(original)) {
+				const int wrap = WrapFunctionId(L);
+				if (wrap < 0 || original->c.ffid != wrap || original->c.nupvalues != 1 || !tvisthread(&original->c.upvalue[0])) {
+					lua_pushvalue(L, index);
+					return;
+				}
+				// A coroutine.wrap function resumes its coroutine's copy.
+				GCfunc* copy = lj_func_newC(L, 1, tabref(original->c.env));
+				setnilV(&copy->c.upvalue[0]);
+				copy->c.ffid = original->c.ffid;
+				copy->c.f = original->c.f;
+				copy->c.pc = original->c.pc;
+				setfuncV(L, L->top, copy);
+				incr_top(L);
+				const int copyIndex = lua_gettop(L);
+				copies.insert(copy);
+				MarkOwn(copy);
+				lua_pushvalue(L, index);
+				lua_pushvalue(L, copyIndex);
+				lua_rawset(L, seen);
+				setthreadV(L, L->top, threadV(&original->c.upvalue[0]));
+				incr_top(L);
+				mapValue(L, context);
+				copyTV(L, &copy->c.upvalue[0], L->top - 1);
+				if (tvisgcv(L->top - 1)) {
+					lj_gc_objbarrier(L, copy, gcV(L->top - 1));
+				}
+				lua_settop(L, copyIndex);
+				return;
+			}
+			if (!own && !NeedsCopy(original)) {
+				lua_pushvalue(L, index);
+				return;
+			}
+			GCfunc* copy = lj_func_newL_empty(L, funcproto(original), tabref(original->l.env));
+			setfuncV(L, L->top, copy);
+			incr_top(L);
+			const int copyIndex = lua_gettop(L);
+			copies.insert(copy);
+			lua_pushvalue(L, index);
+			lua_pushvalue(L, copyIndex);
+			lua_rawset(L, seen);
+			for (uint32_t slot = 0; slot < original->l.nupvalues; ++slot) {
+				GCupval* upvalue = &gcref(original->l.uvptr[slot])->uv;
+				if (const auto found = upvalues.find(upvalue); found != upvalues.end()) {
+					SetUpvalue(copy, slot, found->second);
+				} else if (upvalue->closed) {
+					// Shared until the copy owns it below: the window's fence covers what the original's other holders reach.
+					SetUpvalue(copy, slot, upvalue);
+				} else if (lua_State* owner = OwnerOf(upvalue); Copyable(owner)) {
+					// Until the coroutine's copy is restored, the variable holds what the original holds, privately.
+					GCupval* held = &gcref(copy->l.uvptr[slot])->uv;
+					copyTV(L, L->top, uvval(upvalue));
+					incr_top(L);
+					mapValue(L, context);
+					copyTV(L, uvval(held), L->top - 1);
+					if (tvisgcv(L->top - 1)) {
+						lj_gc_objbarrier(L, held, gcV(L->top - 1));
+					}
+					lua_pop(L, 1);
+					joins.push_back({copy, slot, upvalue, owner, uvval(upvalue) - tvref(owner->stack)});
+				} else {
+					SetUpvalue(copy, slot, upvalue);
+				}
+			}
+			if (own) {
+				OwnVariables(copier, copy, original);
+			}
+			lua_settop(L, copyIndex);
+		}
+
+		void JoinOpenVariables(PreviewCopier& copier) {
+			for (size_t at = 0; at < joins.size(); ++at) {
+				const Join join = joins[at];
+				// A coroutine the collector freed closed its variables first: the copy keeps the value it holds.
+				if (join.original->closed) {
+					continue;
+				}
+				auto copied = threads.find(join.thread);
+				if (copied == threads.end()) {
+					// The walk never reached this coroutine: it is copied now, so the closure writes the copy's variable.
+					setthreadV(L, L->top, join.thread);
+					incr_top(L);
+					lua_pushvalue(L, -1);
+					lua_rawget(L, seen);
+					const bool known = !lua_isnil(L, -1);
+					lua_pop(L, 1);
+					if (!known && copier.PushThread(-1)) {
+						lua_pop(L, 1);
+					}
+					lua_pop(L, 1);
+					copied = threads.find(join.thread);
+					if (copied == threads.end()) {
+						continue;
+					}
+				}
+				TValue* stack = tvref(copied->second->stack);
+				if (join.slot >= 1 + LJ_FR2 && join.slot < copied->second->top - stack) {
+					SetUpvalue(join.function, join.index, FindOpenUpvalue(L, copied->second, stack + join.slot));
+				}
+			}
+			joins.clear();
+		}
+	};
+
+	PreviewCopier::PreviewCopier(lua_State* state, int seen, MapValue mapValue, void* context, int (*standIn)(lua_State*)) :
+	    m_Impl(new Impl{state, seen < 0 ? lua_gettop(state) + seen + 1 : seen, mapValue, context, standIn}) {}
+
+	PreviewCopier::~PreviewCopier() { delete m_Impl; }
+
+	bool PreviewCopier::PushThread(int index) {
+		lua_State* L = m_Impl->L;
+		index = index < 0 ? lua_gettop(L) + index + 1 : index;
+		lua_State* original = lua_tothread(L, index);
+		const std::string status = ThreadStatus(L, original);
+		if (status == "running" || status == "normal") {
+			return false;
+		}
+		const int top = lua_gettop(L);
+		lua_State* copy = lua_newthread(L);
+		const int copyIndex = lua_gettop(L);
+		lua_pushvalue(L, index);
+		lua_pushvalue(L, copyIndex);
+		lua_rawset(L, m_Impl->seen);
+		// An empty coroutine reads as dead, as the original does.
+		if (status == "dead") {
+			return true;
+		}
+		lua_pushcfunction(L, ThreadCapture);
+		lua_pushvalue(L, index);
+		if (lua_pcall(L, 1, 1, 0) != 0 || !lua_istable(L, -1)) {
+			lua_pushvalue(L, index);
+			lua_pushnil(L);
+			lua_rawset(L, m_Impl->seen);
+			lua_settop(L, top);
+			return false;
+		}
+		const int description = lua_gettop(L);
+		lua_getfield(L, description, "slots");
+		const int slots = lua_gettop(L);
+		std::vector<lua_Integer> keys;
+		lua_pushnil(L);
+		while (lua_next(L, slots) != 0) {
+			keys.push_back(lua_tointeger(L, -2));
+			lua_pop(L, 1);
+		}
+		for (const lua_Integer key: keys) {
+			lua_rawgeti(L, slots, static_cast<int>(key));
+			m_Impl->MapOwn(*this);
+			lua_rawseti(L, slots, static_cast<int>(key));
+		}
+		lua_pushcfunction(L, ThreadRestore);
+		lua_pushvalue(L, description);
+		lua_pushvalue(L, copyIndex);
+		if (lua_pcall(L, 2, 1, 0) == 0 && lua_isthread(L, -1)) {
+			m_Impl->threads[original] = copy;
+		} else {
+			// A copy that cannot run as the original would stands in for it: resuming it reruns the preview with the scripts frozen.
+			EmptyThread(copy);
+			lua_pushcfunction(copy, m_Impl->standIn);
+		}
+		lua_settop(L, copyIndex);
+		return true;
+	}
+
+	void PreviewCopier::PushFunction(int index) {
+		m_Impl->PushClosure(*this, index, false);
+	}
+
+	void PreviewCopier::Finish() {
+		lua_State* L = m_Impl->L;
+		m_Impl->JoinOpenVariables(*this);
+		if (m_Impl->upvalues.empty()) {
+			return;
+		}
+		// A closure a copied table took before the coroutine's code owned its variable moves onto the copy's.
+		const int top = lua_gettop(L);
+		lua_newtable(L);
+		const int tables = lua_gettop(L);
+		int count = 0;
+		lua_pushnil(L);
+		while (lua_next(L, m_Impl->seen) != 0) {
+			if (lua_istable(L, -1) && lua_istable(L, -2)) {
+				lua_pushvalue(L, -1);
+				lua_rawseti(L, tables, ++count);
+			}
+			lua_pop(L, 1);
+		}
+		for (int at = 1; at <= count; ++at) {
+			lua_rawgeti(L, tables, at);
+			const int table = lua_gettop(L);
+			lua_pushnil(L);
+			while (lua_next(L, table) != 0) {
+				if (lua_type(L, -1) == LUA_TFUNCTION && isluafunc(funcV(L->top - 1)) && !m_Impl->copies.contains(funcV(L->top - 1)) &&
+				    m_Impl->NeedsCopy(funcV(L->top - 1))) {
+					m_Impl->PushClosure(*this, -1, false);
+					lua_pushvalue(L, -3);
+					lua_pushvalue(L, -2);
+					lua_rawset(L, table);
+					lua_pop(L, 1);
+				}
+				lua_pop(L, 1);
+			}
+			lua_settop(L, table - 1);
+		}
+		lua_settop(L, top);
+		m_Impl->JoinOpenVariables(*this);
 	}
 } // namespace RTE::LuaThreadCodec
