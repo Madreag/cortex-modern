@@ -12295,10 +12295,14 @@ void LuaMan::Update() {
 	};
 	addReceipt(m_MasterScriptState);
 	for (LuaStateWrapper& luaState: m_ScriptStates) addReceipt(luaState);
+	// The simulation's own stall at the gates, wherever it met one since the last report, apart from the capture workers' waits.
+	static int64_t reportedSimGateUs = 0;
+	const int64_t simGateUs = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds();
 	if (copiedStates != 0) {
-		System::PrintDiagnosticLine(std::format("[heap-copy] tick={} states={} pages={} bytes={} copy_us_sum={} copy_us_max={} landed_after_freeze_us_max={} fresh_mapped_bytes={} gate_waited_us={}\n",
+		System::PrintDiagnosticLine(std::format("[heap-copy] tick={} states={} pages={} bytes={} copy_us_sum={} copy_us_max={} landed_after_freeze_us_max={} fresh_mapped_bytes={} gate_waited_us={} sim_gate_waited_us={}\n",
 		    g_TimerMan.GetSimUpdateCount(), copiedStates, copiedPages, copiedPages * CheckpointLua::Snapshot::c_PageBytes, copyUsSum, copyUsMax, landedUsMax, freshBytes,
-		    gateWaitUs - reportedGateWaitUs));
+		    gateWaitUs - reportedGateWaitUs, simGateUs - reportedSimGateUs));
+		reportedSimGateUs = simGateUs;
 	}
 	reportedGateWaitUs = gateWaitUs;
 

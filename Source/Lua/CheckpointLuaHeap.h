@@ -290,7 +290,9 @@ namespace RTE::CheckpointLua {
 			if (pending.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
 				const auto waited = std::chrono::steady_clock::now();
 				pending.wait();
-				GateWaitUs().fetch_add(MicrosecondsSince(waited), std::memory_order_relaxed);
+				const int64_t waitedUs = MicrosecondsSince(waited);
+				GateWaitUs().fetch_add(waitedUs, std::memory_order_relaxed);
+				ThreadGateWaitUs() += waitedUs;
 			}
 			lock.lock();
 			if (generation == m_CopyGeneration) {
@@ -301,6 +303,8 @@ namespace RTE::CheckpointLua {
 		bool CopyPending() const { return m_CopyPending.load(std::memory_order_acquire); }
 		/// Microseconds any thread has spent waiting at a gate for a copy, summed over every heap.
 		static int64_t GateWaitMicroseconds() { return GateWaitUs().load(std::memory_order_relaxed); }
+		/// The calling thread's own share of it: the simulation's stall, apart from capture workers that called into a frozen state.
+		static int64_t ThisThreadGateWaitMicroseconds() { return ThreadGateWaitUs(); }
 
 		/// The receipt of the copy that landed last, once; call it after the gate.
 		CopyReceipt TakeCopyReceipt() {
@@ -357,6 +361,10 @@ namespace RTE::CheckpointLua {
 		CopyReceipt m_LandedCopy; // Under m_CopyMutex.
 		static std::atomic<int64_t>& GateWaitUs() {
 			static std::atomic<int64_t> waited{0};
+			return waited;
+		}
+		static int64_t& ThreadGateWaitUs() {
+			thread_local int64_t waited = 0;
 			return waited;
 		}
 		static std::atomic<size_t>& CopyBytes(bool idle) {

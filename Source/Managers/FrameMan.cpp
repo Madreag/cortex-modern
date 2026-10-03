@@ -1,4 +1,5 @@
 #include "FrameMan.h"
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 
 #include "SDL3/SDL_surface.h"
@@ -48,6 +49,7 @@
 
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyOpenGL.hpp"
+#include <optional>
 #include <SDL3_image/SDL_image.h>
 
 #include <array>
@@ -2105,12 +2107,16 @@ bool FrameMan::RunPaletteCheckpointSelfTest() {
 std::string FrameMan::SaveCheckpoint() const {
 	CheckpointWriter writer("FrameMan3");
 	// The split and each screen's text and flash are this machine's own screens.
+	std::optional<CaptureTrace::Span> span(std::in_place, "frame_screens");
 	writer.PerPeer(m_HSplit, m_VSplit);
 	writer.BeginPerPeer();
 	VisitCheckpoint(writer, *this);
 	writer.EndPerPeer();
+	span.emplace("frame_fonts");
 	WriteFontSlots(writer, {m_SmallFonts[0], m_SmallFonts[1], m_LargeFonts[0], m_LargeFonts[1]});
+	span.emplace("frame_palette");
 	writer(CheckpointWriter::Native([&] { return SavePaletteCheckpoint(); }));
+	span.reset();
 	return writer.Text();
 }
 

@@ -7,6 +7,7 @@
 #include "SimDumpTape.h"
 #include "NetA7Journal.h"
 #include "PrimitiveMan.h"
+#include <optional>
 #include <chrono>
 #include <map>
 
@@ -7778,7 +7779,9 @@ void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 
 std::string MovableMan::SaveCheckpoint() const {
 	CheckpointWriter writer("MovableMan2");
+	std::optional<CaptureTrace::Span> span(std::in_place, "movable_fields");
 	VisitCheckpoint(writer, *this);
+	span.emplace("movable_collect");
 	std::map<long, std::vector<long>> references;
 	// A row exists to rebind borrowed pointers, so an object that borrows nothing needs none.
 	// Writing one anyway makes the restore demand back an owner the checkpoint never carried.
@@ -7803,6 +7806,7 @@ std::string MovableMan::SaveCheckpoint() const {
 	};
 	shared(g_ActivityMan.GetActivity());
 	shared(g_ActivityMan.GetCheckpointStartActivity());
+	span.emplace("movable_references", std::to_string(carried.size()));
 	std::map<long, std::vector<bool>> perPeer;
 	for (const auto& [identity, object]: m_KnownObjects) {
 		if (!carried.contains(object)) continue;
