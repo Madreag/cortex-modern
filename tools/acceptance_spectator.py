@@ -49,7 +49,11 @@ def ownership_agreement(host, promoted, departing):
 def collect(root):
     root = Path(root)
     remote = (root/'spectator-remote.json').is_file()
+    plan = read(root/'spectator-remote.json') if remote else {}
+    placement = plan.get('placement')
     def base(peer):
+        if placement:
+            return root/'boxes'/placement[peer]
         return root/'boxes'/('Z13' if peer=='host' else 'EDITH') if remote else root
     host_probe = base('host')/"host-stage/probe"
     spectator_probe = base('spectator')/"spectator-stage/probe"
@@ -64,6 +68,14 @@ def collect(root):
                  spectator="spectator", peers={}, throttle=cost.get("sim_cost", {}),
                  promotion=promoted.get("promotion", {}), watch=watch)
     errors = ownership_agreement(after.get("promotion", {}), facts["promotion"], departing.get("ownership", {}))
+    if placement:
+        from acceptance_clock_brackets import collect_brackets
+        facts['clock_box'] = None
+        facts['clock_brackets'] = {}
+        try:
+            facts['clock_brackets'] = collect_brackets(root, plan, facts['throttle'])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            errors.append('throttle: native clock brackets unavailable: '+str(error))
     # The native client receipt binds the applied input; only the host's native
     # receipt can authorize the release. Keep both sides and their agreement.
     facts['promotion']['host_authorized'] = after.get('promotion', {}).get('host_authorized')
@@ -74,12 +86,19 @@ def collect(root):
         try:
             live = base(peer)/(peer+'-live.jsonl')
             if peer in SEATED:
-                native = [row for row in rows(live) if row.get('phase')=='live' and type(row.get('wall_ms')) in (int,float)]
-                low = max(row['tick'] for row in native if row['wall_ms'] <= facts['throttle']['start_ms'])
-                high = min(row['tick'] for row in native if row['wall_ms'] >= facts['throttle']['end_ms'])
-                facts["peers"][peer] = peer_receipt(facts['clock_box'], live, log, record, low, high)
+                if placement:
+                    bracket = facts['clock_brackets']['peers'][peer]
+                    low, high = bracket['begin']['sim_tick']-1, bracket['end']['sim_tick']+1
+                    box = placement[peer].lower()
+                else:
+                    native = [row for row in rows(live) if row.get('phase')=='live' and type(row.get('wall_ms')) in (int,float)]
+                    low = max(row['tick'] for row in native if row['wall_ms'] <= facts['throttle']['start_ms'])
+                    high = min(row['tick'] for row in native if row['wall_ms'] >= facts['throttle']['end_ms'])
+                    box = facts['clock_box']
+                facts["peers"][peer] = peer_receipt(box, live, log, record, low, high)
             else:
-                facts['peers'][peer] = dict(box=facts['clock_box'], completed=record.get('exit_code')==0 and not record.get('timed_out',False))
+                facts['peers'][peer] = dict(box=placement[peer].lower() if placement else facts['clock_box'],
+                                          completed=record.get('exit_code')==0 and not record.get('timed_out',False))
         except (ValueError, TypeError, KeyError, OSError) as error:
             errors.append(f"{peer}: native timing unavailable: {error}")
     watch = facts["watch"]

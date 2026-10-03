@@ -223,18 +223,23 @@ def judge(row, facts):
         hash_gate(check, watch.get("hashes", {}), "watch.hashes", watch.get("first"), watch.get("last"))
         cost = facts.get("throttle", {})
         clock_box = facts.get('clock_box', 'pc')
-        check.require(clock_box in ('pc','edith') and all(peers.get(name,{}).get('box') == clock_box for name in [*seated,spectator]),
-                      'throttle', 'crawl and seated timing must share their actual native clock domain')
+        if 'clock_brackets' in facts:
+            from acceptance_clock_brackets import errors as clock_errors
+            check.failures.extend(clock_errors(facts))
+        else:
+            check.require(clock_box in ('pc','edith') and all(peers.get(name,{}).get('box') == clock_box for name in [*seated,spectator]),
+                          'throttle', 'crawl and seated timing must share their actual native clock domain')
         check.require(cost.get("process") == spectator and number(cost.get("sim_cost_us")) and cost["sim_cost_us"] >= 100000,
                       "throttle", "crawl cost was not applied to the spectator")
         check.require(number(cost.get("start_ms")) and number(cost.get("end_ms")) and cost["end_ms"]-cost["start_ms"] >= 30000,
                       "throttle", "spectator crawl lasted less than 30 seconds")
-        for name in seated:
-            value = peers.get(name, {})
-            check.require(number(value.get("first_wall_ms")) and number(value.get("last_wall_ms")) and
-                          number(cost.get("start_ms")) and number(cost.get("end_ms")) and
-                          value["first_wall_ms"] <= cost["start_ms"] < cost["end_ms"] <= value["last_wall_ms"],
-                          "throttle", f"{name} timing does not cover the crawl in the PC's steady-clock domain")
+        if 'clock_brackets' not in facts:
+            for name in seated:
+                value = peers.get(name, {})
+                check.require(number(value.get("first_wall_ms")) and number(value.get("last_wall_ms")) and
+                              number(cost.get("start_ms")) and number(cost.get("end_ms")) and
+                              value["first_wall_ms"] <= cost["start_ms"] < cost["end_ms"] <= value["last_wall_ms"],
+                              "throttle", f"{name} timing does not cover the crawl in the native steady-clock domain")
         check.require(all(type(value) is int for value in (watch.get("first"), watch.get("last"), cost.get("first_tick"), cost.get("last_tick"))) and
                       watch["first"] <= cost["first_tick"] <= cost["last_tick"] <= watch["last"],
                       "watch", "spectator hash comparison does not cover its crawl ticks")
