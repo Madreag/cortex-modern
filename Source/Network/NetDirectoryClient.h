@@ -27,6 +27,7 @@ namespace RTE {
 			Registered,  //!< The row is listed; heartbeats keep it alive.
 			Deleting,    //!< A delete is in flight.
 			Failed,      //!< The directory refused the row; stays until the listing intent changes.
+			Superseded,  //!< The match went on under a later host generation: this host keeps the row no more.
 		};
 		static const char* StateName(State state);
 
@@ -114,6 +115,8 @@ namespace RTE {
 		/// capability, otherwise the row is deleted once and the intent stays Failed.
 		void Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed = true);
 		bool Resume(const NetDirectoryRegisterRequest& row, const std::string& sessionId, const std::string& token, bool running = true, bool listed = true);
+		/// The host generation the directory said holds the row, once it refused this host's; 0 while it has not.
+		int64_t GetSupersededGeneration() const { return m_SupersededGeneration; }
 		void AbandonLease();
 		/// Marks listen_addrs dirty so the next heartbeat can refresh a renewed NAT mapping.
 		void NoteListenAddrs(std::vector<std::string> addrs);
@@ -204,6 +207,9 @@ namespace RTE {
 		std::string m_Token;
 		std::string m_ObservedIp;
 		int64_t m_HeartbeatS = 0;
+		int64_t m_SupersededGeneration = 0;
+		/// A 409 names the generation that holds the row now: this host keeps it no more.
+		bool TakeSuperseded(const Reply& reply);
 		int64_t m_ExpiresInS = 0;
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_NextAttemptMs = 0;   //!< The retry slot a transient failure or a 429 set.

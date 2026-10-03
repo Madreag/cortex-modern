@@ -1194,6 +1194,11 @@ namespace RTE {
 		NetHostMigrationReach GetHostReach() const { NET_PLANE_CHECK(); return m_HostReach; }
 		/// Host: the successor that answered this provisional host from a later generation - the match went on there; 0 while none has.
 		uint8_t SupersedingPeer() const { NET_PLANE_CHECK(); return m_SupersedingPeer; }
+		/// Host: whether the match went on under a later host generation without it - a successor answered its probe, or the
+		/// directory refused its row - so its play since the loss is not the match's.
+		bool IsSuperseded() const { NET_PLANE_CHECK(); return m_Superseded; }
+		/// Host: the directory says the row is held at a later generation; the round stops to rejoin the match as a player.
+		void NoteSuperseded(uint64_t generation);
 
 		/// Whether this machine judged itself unable to hold the round's rate and went quiet for the host's bound to hold its seat.
 		/// @return Whether it did.
@@ -1951,6 +1956,7 @@ namespace RTE {
 		uint8_t m_SuccessorProbePeer = 0; //!< Host: the successor the probe asks now.
 		uint64_t m_SuccessorProbeAtMs = 0; //!< Host: when the probe moves to the next successor.
 		uint8_t m_SupersedingPeer = 0; //!< Host: the successor that answered from a later generation.
+		bool m_Superseded = false; //!< Host: the match went on under a later generation without it.
 		/// Host: while provisional, asks each successor in the match's order in turn, once a second, whether it hosts the match at a later
 		/// generation; the first that does ends this host's provisional match.
 		void ProbeSuccessors(uint64_t nowMs);

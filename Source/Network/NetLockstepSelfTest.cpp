@@ -4028,7 +4028,7 @@ namespace RTE {
 			}
 			// The split heals: the survivor's generation wins, and the old host stops to rejoin it.
 			r.partition->cut.clear();
-			if (!PumpQuorumRig(r, 6000, [&r] { return r.Peer(1).IsStopped(); }) || r.Peer(1).SupersedingPeer() != 2 || !r.Peer(2).IsRunning()) {
+			if (!PumpQuorumRig(r, 6000, [&r] { return r.Peer(1).IsStopped(); }) || r.Peer(1).SupersedingPeer() != 2 || !r.Peer(1).IsSuperseded() || !r.Peer(2).IsRunning()) {
 				*error = "the survivor's generation did not win when the two-player split healed: superseded by " + std::to_string(r.Peer(1).SupersedingPeer()) + r.Report();
 				return false;
 			}

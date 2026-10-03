@@ -2077,7 +2077,7 @@ static std::string ResyncSaveName() {
 		m_LeftRoundHeld = false;
 		SealPendingWorldSegmentAtEnd();
 		// A host whose match went on under a successor writes nothing of its own play and leaves the listing to that successor.
-		const bool superseded = m_IsHost && m_Coordinator && m_Coordinator->SupersedingPeer() != 0;
+		const bool superseded = m_IsHost && m_Coordinator && m_Coordinator->IsSuperseded();
 		// A restart imports the seats as the round left them: a clean leave in its last seconds releases its seat there too.
 		if (!superseded) PublishRestartAdmission();
 		// A clean stop of a world leaves the tick it stopped on, before anything is torn down.
@@ -2490,6 +2490,8 @@ static std::string ResyncSaveName() {
 		JoinWorkerIfDone();
 		if (m_MigrationDirectoryResumePending) {
 			m_Directory.Configure(g_SettingsMan.GetSessionDirectoryUrl(), g_SettingsMan.GetOrCreateSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
+			// The successor claims the row at the generation it hosts: the directory takes one claim per generation.
+			m_DirectoryRow.migrationGen = static_cast<int64_t>(m_MigrationGeneration);
 			(void)m_Directory.Resume(m_DirectoryRow, m_MigrationDirectorySession, m_MigrationDirectoryToken);
 			m_MigrationDirectoryResumePending = false;
 		}
@@ -2632,6 +2634,7 @@ static std::string ResyncSaveName() {
 				m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
 				m_DirectoryRow.seatsFree = directorySeatsFree;
 				m_DirectoryRow.seatsHeld = directorySeatsHeld;
+				m_DirectoryRow.migrationGen = static_cast<int64_t>(m_MigrationGeneration);
 				m_DirectoryRow.spectatorFree = m_WorldSpectatorsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
 				advertised = m_DirectoryRow;
@@ -2650,6 +2653,8 @@ static std::string ResyncSaveName() {
 		}
 		// A provisional host refreshes no listing: the match may have gone on under the next generation.
 		if (!m_IsHost || !m_Coordinator || !m_Coordinator->IsHostProvisional()) m_Directory.Update(nowMs);
+		// The directory holds the row at a later generation: the match went on without this host.
+		if (m_IsHost && m_Coordinator && m_Directory.GetState() == NetDirectoryClient::State::Superseded) m_Coordinator->NoteSuperseded(static_cast<uint64_t>(m_Directory.GetSupersededGeneration()));
 		UpdateRelayOffer(nowMs);
 		{
 			// The worker cannot touch the directory client, so what it needs is published here.

@@ -265,6 +265,9 @@ namespace RTE {
 					IssueDelete(nowMs);
 				}
 				break;
+			case State::Superseded:
+				// The row is the successor's now: this host neither keeps it alive nor deletes it.
+				break;
 			case State::Failed:
 				if (!m_Listed) {
 					if (m_SessionId.empty()) {
@@ -401,7 +404,22 @@ namespace RTE {
 		}
 	}
 
+	bool NetDirectoryClient::TakeSuperseded(const Reply& reply) {
+		if (reply.statusCode != 409) return false;
+		int64_t generation = 0;
+		try {
+			const json body = json::parse(reply.body);
+			if (body.contains("migration_gen") && body.at("migration_gen").is_number_integer()) generation = body.at("migration_gen").get<int64_t>();
+		} catch (const json::exception&) {
+		}
+		m_SupersededGeneration = std::max<int64_t>(generation, 1);
+		NoteError("the match went on under host generation " + std::to_string(m_SupersededGeneration) + ": this host keeps the row no more");
+		SetState(State::Superseded);
+		return true;
+	}
+
 	void NetDirectoryClient::HandleRegisterReply(const Reply& reply, uint64_t nowMs) {
+		if (TakeSuperseded(reply)) return;
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("register: " + (reply.error.empty() ? "transport error" : reply.error));
 			ScheduleRetry(nowMs);
@@ -460,6 +478,7 @@ namespace RTE {
 	void NetDirectoryClient::HandleHeartbeatReply(const Reply& reply, uint64_t nowMs) {
 		// Addresses the service did not acknowledge are still owed to it.
 		const bool listenAddrsAnswered = std::exchange(m_ListenAddrsInFlight, false);
+		if (TakeSuperseded(reply)) return;
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("heartbeat: " + (reply.error.empty() ? "transport error" : reply.error));
 			ScheduleRetry(nowMs);
@@ -611,6 +630,7 @@ namespace RTE {
 		heartbeat.seatsFree = m_Row.seatsFree;
 		heartbeat.seatsHeld = m_Row.seatsHeld;
 		heartbeat.state = m_Running ? "running" : "lobby";
+		heartbeat.migrationGen = m_Row.migrationGen;
 		if (m_Capable) {
 			// A capable service gets the desired visibility on each heartbeat and must echo it.
 			heartbeat.listed = m_DesiredListed;
@@ -634,8 +654,10 @@ namespace RTE {
 		Request request;
 		request.method = "DELETE";
 		request.path = "/v1/sessions/" + m_SessionId;
-		const json body = {{"token", m_Token}};
-		request.body = body.dump();
+		NetDirectoryDeleteRequest deletion;
+		deletion.token = m_Token;
+		deletion.migrationGen = m_Row.migrationGen;
+		request.body = NetDirectoryCodec::EncodeDeleteRequest(deletion);
 		++m_Deletes;
 		SetState(State::Deleting);
 		StartRequest(RequestKind::Delete, request);
@@ -789,6 +811,7 @@ namespace RTE {
 			case State::Registered: return "registered";
 			case State::Deleting: return "deleting";
 			case State::Failed: return "failed";
+			case State::Superseded: return "superseded";
 		}
 		return "unknown";
 	}

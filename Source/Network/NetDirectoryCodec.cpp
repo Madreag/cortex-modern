@@ -257,6 +257,9 @@ namespace RTE {
 			if (obj.contains("resume_token") && !ReadStr(obj, "resume_token", out.resumeToken, reason)) {
 				return false;
 			}
+			if (obj.contains("migration_gen") && !ReadInt(obj, "migration_gen", 0, NetDirectoryLimits::c_MaxIntField, out.migrationGen, reason)) {
+				return false;
+			}
 			return true;
 		}
 
@@ -368,6 +371,8 @@ namespace RTE {
 		WriteRegisterFields(obj, request);
 		if (!request.resumeSessionId.empty()) {
 			obj["resume_session_id"] = request.resumeSessionId;
+			// A successor's claim names the generation it takes the row at: the directory takes the first claim of each.
+			if (request.migrationGen > 0) obj["migration_gen"] = request.migrationGen;
 			if (!request.resumeToken.empty()) {
 				obj["resume_token"] = request.resumeToken;
 			}
@@ -418,6 +423,7 @@ namespace RTE {
 		if (request.listenAddrs.has_value()) obj["listen_addrs"] = *request.listenAddrs;
 		if (request.state.has_value()) obj["state"] = *request.state;
 		if (request.listed.has_value()) obj["listed"] = *request.listed;
+		if (request.migrationGen.has_value()) obj["migration_gen"] = *request.migrationGen;
 		return obj.dump();
 	}
 
@@ -434,12 +440,14 @@ namespace RTE {
 			return false;
 		}
 		if (out.state.has_value() && !IsSessionState(*out.state)) return Fail(reason, "invalid_field", "state");
+		if (!ReadOptionalCount(obj, "migration_gen", out.migrationGen, reason)) return false;
 		return ReadOptionalBool(obj, "listed", out.listed, reason);
 	}
 
 	std::string NetDirectoryCodec::EncodeHeartbeatResponse(const NetDirectoryHeartbeatResponse& response) {
 		json obj = {{"expires_in_s", response.expiresInS}, {"heartbeat_s", response.heartbeatS}};
 		if (response.listed.has_value()) obj["listed"] = *response.listed;
+		if (response.migrationGen.has_value()) obj["migration_gen"] = *response.migrationGen;
 		return obj.dump();
 	}
 
@@ -448,17 +456,20 @@ namespace RTE {
 		if (!ParseBody(body, obj, reason)) return false;
 		return ReadInt(obj, "expires_in_s", 0, NetDirectoryLimits::c_MaxIntField, out.expiresInS, reason) &&
 		       ReadInt(obj, "heartbeat_s", 0, NetDirectoryLimits::c_MaxIntField, out.heartbeatS, reason) &&
-		       ReadOptionalBool(obj, "listed", out.listed, reason);
+		       ReadOptionalBool(obj, "listed", out.listed, reason) &&
+		       ReadOptionalCount(obj, "migration_gen", out.migrationGen, reason);
 	}
 
 	std::string NetDirectoryCodec::EncodeDeleteRequest(const NetDirectoryDeleteRequest& request) {
-		return json{{"token", request.token}}.dump();
+		json obj = {{"token", request.token}};
+		if (request.migrationGen.has_value()) obj["migration_gen"] = *request.migrationGen;
+		return obj.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeDeleteRequest(const std::string& body, NetDirectoryDeleteRequest& out, std::string& reason) {
 		json obj;
 		if (!ParseBody(body, obj, reason)) return false;
-		return ReadStr(obj, "token", out.token, reason);
+		return ReadStr(obj, "token", out.token, reason) && ReadOptionalCount(obj, "migration_gen", out.migrationGen, reason);
 	}
 
 	std::string NetDirectoryCodec::EncodeDeleteResponse(const NetDirectoryDeleteResponse& response) {

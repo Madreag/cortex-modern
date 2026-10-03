@@ -3587,6 +3587,16 @@ namespace RTE {
 		ProbeSuccessors(nowMs);
 	}
 
+	void NetLockstepCoordinator::NoteSuperseded(uint64_t generation) {
+		if (m_Superseded || m_Config.localPeerId != GetHostPeerId() || (!IsRunning() && !IsMigrating())) return;
+		DiagnosticLine() << "[net-match] the match went on under host generation " << generation << " without this host; it rejoins as a player" << std::endl;
+		m_Superseded = true;
+		m_SuccessorProbe.reset();
+		m_HostProvisional = false;
+		m_State = NetLockstepState::Stopped;
+		m_Stats.timeoutReason = "PeerHeld:The match went on under another host - rejoining it as a player";
+	}
+
 	void NetLockstepCoordinator::ProbeSuccessors(uint64_t nowMs) {
 		const auto& order = m_Config.matchConfig.successorOrder;
 		if (!m_HostProvisional || !m_Config.migrationTransportFactory || order.empty() ||
@@ -3612,12 +3622,9 @@ namespace RTE {
 					continue;
 				// The match went on under that successor: this host's play since the loss is not the match's, and it returns as a player.
 				m_SupersedingPeer = answer.senderPeerId;
-				m_SuccessorProbe.reset();
-				m_HostProvisional = false;
-				m_State = NetLockstepState::Stopped;
-				m_Stats.timeoutReason = "PeerHeld:The match went on under another host - rejoining it as a player";
 				DiagnosticLine() << "[net-match] superseded: peer " << static_cast<int>(answer.senderPeerId) << " hosts generation " << answer.generation
 				                 << " (this host's is " << m_MigrationGeneration << ")" << std::endl;
+				NoteSuperseded(answer.generation);
 				return;
 			}
 		}
@@ -4615,6 +4622,7 @@ namespace RTE {
 		m_HostLeaveRecordFrom = 0;
 		m_SuccessorProbe.reset();
 		m_SupersedingPeer = 0;
+		m_Superseded = false;
 		if ((config.adaptiveInputDelay || config.substituteSlowPeers) &&
 		    (!std::isfinite(config.simTickMs) || config.simTickMs <= 0 || config.peerCount > NetMatchConfigUtil::c_MaxPeerCount || config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks)) {
 			if (error) *error = "invalid simulation tick or slow player bound";
