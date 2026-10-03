@@ -92,6 +92,12 @@ class AcceptanceRows(unittest.TestCase):
         data["refusal"]["landing_text"] = "Could not connect"
         self.assert_rejected("mod-refusal", data, "refusal.landing_text")
 
+    def test_native_module_refusal_names_are_accepted(self):
+        data = good("mod-refusal")
+        data["refusal"]["log_text"] = "admission refused reason=ModuleManifestMismatch key=module_content_hash"
+        data["refusal"]["landing_text"] = "module content hash does not match: VoidWanderers.rte"
+        self.assertTrue(judge("mod-refusal", data)["passed"])
+
     def test_late_join_missing_activation_hash_is_red(self):
         data = good("world-join")
         data["live"]["first"] += 1

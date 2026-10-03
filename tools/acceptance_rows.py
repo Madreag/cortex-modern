@@ -187,7 +187,11 @@ def judge(row, facts):
                       "refusal", "altered tree is not the refused peer")
         for field in ("log_text", "landing_text"):
             text = refusal.get(field, "").casefold().replace("-", " ")
-            check.require("module manifest mismatch" in text, f"refusal.{field}", "named module-manifest refusal missing")
+            named = "module manifest mismatch" in text or "modulemanifestmismatch" in text
+            if field == "landing_text":
+                named |= any(message in text for message in ("module content hash does not match", "module manifest hash does not match",
+                                                              "this host's mods do not match yours."))
+            check.require(named, f"refusal.{field}", "named module-manifest refusal missing")
         survivors = refusal.get("survivors", [])
         check.require(set(survivors) == BOXES-{refusal.get("joiner")}, "refusal", "three survivors missing")
         peer_gate(check, peers, survivors)
