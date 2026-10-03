@@ -11,6 +11,17 @@ if INVENTORY.is_dir():
 
 @unittest.skipUnless(INVENTORY.is_dir(), 'external inventory tools are absent')
 class CompleteSchema(unittest.TestCase):
+    def test_review_exit_three_can_be_resolved_by_its_bound_picture_review(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); plan, requirements = fixture(root, code=3)
+            product = root/'S1/case/result.json'
+            write(product, dict(scenario='synthetic', verdict='agent-review-required',
+                checklist=[dict(id='native', probe='pass', state='AWAITING REVIEW')]))
+            collection = root/'S1/DEFECTS.json'; document = json.loads(collection.read_text())
+            document['evidence_sha256'][str(product)] = reader.digest(product); write(collection, document)
+            result = reader.build_manifest(plan, requirements)
+            self.assertTrue(result['passed'], result['rows'])
+
     def test_archive_uses_the_same_path_reference_as_the_generated_plan(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); plan, requirements = fixture(root)
