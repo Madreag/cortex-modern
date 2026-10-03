@@ -171,7 +171,7 @@ class FeelMeasureOutStamp(unittest.TestCase):
     def test_out_is_required_and_stamp_is_mst(self):
         """Base tree used a hardcoded scratch root and stamped with a date(1) shell-out."""
         import feel_measure
-        self.assertRegex(feel_measure.stamp(), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2} MST$")
+        self.assertRegex(feel_measure.stamp(), r"^\d{4}-\d{2}-\d{2} (?:0[1-9]|1[0-2]):[0-5]\d (?:AM|PM) MST$")
         text = (HERE / "feel_measure.py").read_text(encoding="utf-8")
         self.assertIn("datetime.now(MST)", text)
         self.assertNotIn("value-observations", text)
