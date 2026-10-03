@@ -214,6 +214,15 @@ def judge(row, facts):
                       "throttle", "crawl cost was not applied to the spectator")
         check.require(number(cost.get("start_ms")) and number(cost.get("end_ms")) and cost["end_ms"]-cost["start_ms"] >= 30000,
                       "throttle", "spectator crawl lasted less than 30 seconds")
+        for name in seated:
+            value = peers.get(name, {})
+            check.require(number(value.get("first_wall_ms")) and number(value.get("last_wall_ms")) and
+                          number(cost.get("start_ms")) and number(cost.get("end_ms")) and
+                          value["first_wall_ms"] <= cost["start_ms"] < cost["end_ms"] <= value["last_wall_ms"],
+                          "throttle", f"{name} timing does not cover the crawl in the PC's steady-clock domain")
+        check.require(all(type(value) is int for value in (watch.get("first"), watch.get("last"), cost.get("first_tick"), cost.get("last_tick"))) and
+                      watch["first"] <= cost["first_tick"] <= cost["last_tick"] <= watch["last"],
+                      "watch", "spectator hash comparison does not cover its crawl ticks")
         promotion = facts.get("promotion", {})
         check.require(promotion.get("host_authorized") is True, "promotion", "host release/reassignment missing")
         for field in ("seat", "actor", "ticket_incarnation", "activation_tick", "input_tick", "input_created_tick"):
@@ -224,6 +233,8 @@ def judge(row, facts):
             check.require(promotion.get(field) is not None and promotion.get(field) == promotion.get(source),
                           f"promotion.{field}", "promoted ownership and applied input disagree")
         activation = promotion.get("activation_tick")
+        check.require(type(activation) is int and type(cost.get("last_tick")) is int and activation > cost["last_tick"],
+                      "promotion", "spectator was promoted before its crawl ended")
         check.require(type(activation) is int and type(promotion.get("input_tick")) is int and
                       type(promotion.get("input_created_tick")) is int and
                       activation < promotion["input_created_tick"] <= promotion["input_tick"] and

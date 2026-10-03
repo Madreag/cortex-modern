@@ -31,6 +31,18 @@ def read(path):
     return json.loads(path.read_text(encoding="utf-8-sig")) if path.is_file() else {}
 
 
+def ownership_agreement(host, promoted, departing):
+    errors = []
+    for field in ("seat", "actor", "ticket_incarnation", "activation_tick", "freed_seat"):
+        if host.get(field) is None or host.get(field) != promoted.get(field):
+            errors.append(f"promotion: host and promoted peer disagree on {field} or its receipt is absent")
+    if host.get("host_authorized") is not True:
+        errors.append("promotion: authoritative host release/reassignment receipt missing")
+    if departing.get("seat") is None or departing.get("seat") != host.get("freed_seat"):
+        errors.append("promotion: released seat differs from the departing peer's authoritative binding")
+    return errors
+
+
 def collect(root):
     root = Path(root)
     host_probe = root/"host-stage/probe"
@@ -40,12 +52,12 @@ def collect(root):
     image = read(spectator_probe/"spectator-image.ownership.json")
     cost = read(spectator_probe/"crawl-complete.ownership.json")
     promoted = read(spectator_probe/"promoted-input.ownership.json")
+    departing = read(root/"seated-one-stage/probe/departing-seat.ownership.json")
+    watch = {**image.get("watch", {}), **cost.get("watch", {})}
     facts = dict(configuration=before.get("configuration", {}), seated=["host", "seated-one", "seated-two"],
-                 spectator="spectator", peers={}, throttle={**cost.get("sim_cost", {}), "process": "spectator"},
-                 promotion=promoted.get("promotion", {}), watch=image.get("watch", {}))
-    errors = []
-    if promoted.get("promotion", {}).get("actor") != after.get("promotion", {}).get("actor") or not after:
-        errors.append("promotion: host and promoted peer ownership receipts disagree or are absent")
+                 spectator="spectator", peers={}, throttle=cost.get("sim_cost", {}),
+                 promotion=promoted.get("promotion", {}), watch=watch)
+    errors = ownership_agreement(after.get("promotion", {}), facts["promotion"], departing.get("ownership", {}))
     low, high = before.get("seated_first_tick"), before.get("lockstep_frame")
     for peer in ("host", "seated-one", "seated-two", "spectator"):
         path = root/peer/"stdout.log"

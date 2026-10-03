@@ -57,6 +57,11 @@ def good(row):
     if row in ("world-join", "world-soak"):
         data["live"] = hashes(1201, 1801)
         data["fullstate"] = hashes(1260, 1800, 60)
+    if row == "spectator":
+        data["peers"] = {b: {**peer(1, 2401, b), "first_wall_ms":0, "last_wall_ms":40000} for b in BOXES}
+        data["throttle"].update(first_tick=1800, last_tick=1860)
+        data["watch"].update(first=1201, last=1861, hashes=hashes(1201, 1861))
+        data["promotion"].update(activation_tick=4000, input_tick=4001, input_created_tick=4001)
     if row == "world-soak":
         data["peers"] = {"pc": peer(1, 219601), "edith-first": peer(1, 219601, "edith"), "edith": peer(180001, 219601, "edith")}
         data['census']['edith-first'] = deepcopy(data['census']['pc'])
@@ -84,6 +89,21 @@ class AcceptanceRows(unittest.TestCase):
         data = good("spectator")
         data["promotion"]["applied_actor"] += 1
         self.assert_rejected("spectator", data, "promotion.applied_actor")
+
+    def test_spectator_cost_outside_seated_measurements_is_red(self):
+        data = good("spectator")
+        data["peers"]["pc"]["last_wall_ms"] = data["throttle"]["end_ms"]-1
+        self.assert_rejected("spectator", data, "throttle")
+
+    def test_spectator_hashes_before_the_cost_window_are_red(self):
+        data = good("spectator")
+        data["watch"].update(last=1799, hashes=hashes(1201, 1799))
+        self.assert_rejected("spectator", data, "watch")
+
+    def test_spectator_promoted_before_crawl_ends_is_red(self):
+        data = good("spectator")
+        data["promotion"].update(activation_tick=1859, input_tick=4001, input_created_tick=4001)
+        self.assert_rejected("spectator", data, "promotion")
 
     def test_four_box_mod_one_byte_mismatch_is_red(self):
         data = good("mod-match")

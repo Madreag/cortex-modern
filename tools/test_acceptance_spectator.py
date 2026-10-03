@@ -2,10 +2,21 @@ import json
 from pathlib import Path
 import unittest
 
-from acceptance_spectator import requirements
+from acceptance_spectator import requirements, ownership_agreement
 
 
 class SpectatorScenario(unittest.TestCase):
+    def test_promoted_input_is_bound_to_the_authoritative_host_receipt(self):
+        promoted = dict(seat=2, actor=17, ticket_incarnation=3, activation_tick=4000, freed_seat=2, host_authorized=True)
+        departing = dict(seat=2)
+        self.assertEqual(ownership_agreement(promoted, promoted, departing), [])
+        for field in ("seat", "actor", "ticket_incarnation", "activation_tick", "freed_seat"):
+            with self.subTest(field=field):
+                changed = {**promoted, field:promoted[field]+1}
+                self.assertTrue(ownership_agreement(promoted, changed, departing))
+        self.assertTrue(ownership_agreement(promoted, promoted, {"seat":1}))
+        self.assertTrue(ownership_agreement({**promoted, "host_authorized":False}, promoted, departing))
+
     def test_one_watcher_and_three_seated_processes(self):
         repo = Path(__file__).resolve().parents[1]
         scenario = json.loads((repo/"tools/e2e/world-spectator-promotion.json").read_text())

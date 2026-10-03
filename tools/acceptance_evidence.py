@@ -96,7 +96,8 @@ def peer_receipt(box, live_path, log, record, first, last):
                             elapsed_ms=times[-1][0]-times[0][0] if complete else None,
                             wait_ms=sum(interval_waits) if log else None,
                             max_wait_ms=max(interval_waits, default=0) if log else None))
-    return dict(box=box, first=first, last=last, completed=record.get("exit_code") == 0 and not record.get("timed_out", False),
+    bounds = {label: observed[tick][0] if len(observed[tick]) == 1 else None for label, tick in (("first_wall_ms", first), ("last_wall_ms", last))}
+    return dict(box=box, first=first, last=last, **bounds, completed=record.get("exit_code") == 0 and not record.get("timed_out", False),
                 holds=holds if log else None, timing=windows)
 
 
