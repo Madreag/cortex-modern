@@ -2122,8 +2122,9 @@ def run_case(options, case, root, failing=None):
             assert reports["client"]["service"]["status"] == "Match left", reports["client"]["service"]["status"]
             leave = reports["client"]["service"]["reconnect"]
             assert leave["client_leave_acks"] == 1 and leave["client_unacknowledged_leaves"] == 0, leave
-            assert leave["client_state"] == "Left" and leave["ticket_stored"] is False, leave
-            assert "[net-reconnect] leave: Left (ticket cleared)" in logs["client"], logs["client"][-2000:]
+            # A player who leaves keeps the seat and its ticket, so Rejoin Match brings the player back while the match runs.
+            assert leave["client_state"] == "Left" and leave["ticket_stored"] is True, leave
+            assert "[net-reconnect] leave: Left (ticket kept)" in logs["client"], logs["client"][-2000:]
             announcements = re.findall(r"\[net-lockstep\] a leave becomes a hold for peer 2 at frame (\d+): Match left", logs["host"])
             assert len(announcements) == 1, announcements
             leave_frame = int(announcements[0])
