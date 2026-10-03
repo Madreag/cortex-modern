@@ -110,7 +110,7 @@ class Share:
                 input_sha256={str(directory/'command.json'): sha256(directory/'command.json')},
                 source_sha=self.source, collection_id=self.run_id))
         actual_code = code
-        if code == 0 and (native is None or self.extractor.file_verdict(native, product.name) is False): code = 1
+        if code in (0, 3) and (native is None or self.extractor.file_verdict(native, product.name) is False): code = 1
         entry = dict(id=command_id, driver=self.rows[command_id].get('driver', self.rows[command_id].get('runner')),
             state='done', exit_code=code, actual_exit_code=actual_code, reason=reason, dir='.', attempt=1,
             product=dict(path=product.relative_to(self.out).as_posix()),
@@ -173,6 +173,12 @@ class Share:
             collection_complete=not missing and scanned['collection_complete'], missing_commands=missing,
             evidence_sha256={**{Path(key).resolve().relative_to(self.out).as_posix(): value
                                for key, value in scanned.get('evidence_sha256', {}).items()}, **hashes})
+        for entry in commands:
+            spec = self.rows[entry['id']]
+            if not spec.get('review') or entry.get('exit_code') not in (0, 3): continue
+            state, reason = self.reader.review_state(spec['review'], entry['id'], self.source, self.reader.Evidence(self.root))
+            if state != 'APPROVED':
+                scanned['awaiting_review'].append(dict(id=entry['id'], state=state, reason=reason, reference=spec['review']))
         write(self.out/'DEFECTS.json', scanned)
         identity_paths = set()
         for spec in self.rows.values():
@@ -181,7 +187,7 @@ class Share:
                 path = self.out/value[len(self.label)+1:] if value.startswith(self.label+'/') else self.root/value
                 if path.is_file(): identity_paths.add(path.resolve())
         identities = [dict(path=Path(os.path.relpath(path, self.out)).as_posix(), sha256=sha256(path)) for path in sorted(identity_paths)]
-        code = 1 if missing or scanned['hard_count'] or any(row.get('exit_code') != 0 for row in commands) else 3 if scanned.get('awaiting_review') else 0
+        code = 1 if missing or scanned['hard_count'] or any(row.get('exit_code') not in (0, 3) for row in commands) else 3 if scanned.get('awaiting_review') or any(row.get('exit_code') == 3 for row in commands) else 0
         write(self.out/'terminal.json', dict(schema=1, label=self.label, box=self.declaration['box'], ids=self.declaration['ids'],
             collection_id=self.run_id, source_sha=self.source, sequence=self.schedule['sequence'], exit_code=code,
             state='done' if code == 0 else 'pending' if code == 3 else 'failed',

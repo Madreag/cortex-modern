@@ -11,6 +11,16 @@ if INVENTORY.is_dir():
 
 @unittest.skipUnless(INVENTORY.is_dir(), 'external inventory tools are absent')
 class CompleteSchema(unittest.TestCase):
+    def test_missing_picture_review_keeps_a_green_product_pending(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); plan, requirements = fixture(root)
+            document = json.loads(plan.read_text())
+            document['rows'][0]['review'] = dict(path='not-yet-reviewed.json'); write(plan, document)
+            row = reader.build_manifest(plan, requirements)['rows'][0]
+            self.assertEqual(row['product_verdict'], 'PASS')
+            self.assertEqual(row['review_state'], 'AWAITING REVIEW')
+            self.assertEqual(row['status'], 'AWAITING REVIEW')
+
     def test_review_exit_three_can_be_resolved_by_its_bound_picture_review(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder); plan, requirements = fixture(root, code=3)

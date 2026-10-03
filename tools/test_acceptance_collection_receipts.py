@@ -18,6 +18,16 @@ from feel.test_attempt_requirements import attempt
 
 @unittest.skipUnless(INVENTORY.is_dir(), 'external inventory tools are absent')
 class CollectionReceipts(unittest.TestCase):
+    def test_outside_share_with_missing_picture_review_has_pending_terminal(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); plan, requirement, share = self.owned_share(root)
+            spec = json.loads(plan.read_text())
+            spec['rows'][0]['review'] = dict(path='not-yet-reviewed.json'); write(plan, spec)
+            share = Share(root, 'S1', INVENTORY)
+            share.collect()
+            terminal = json.loads((root/'S1/terminal.json').read_text())
+            self.assertEqual((terminal['exit_code'], terminal['state']), (3, 'pending'))
+
     def owned_share(self, root, passed=True):
         plan, requirement = fixture(root, passed=passed, code=0 if passed else 1)
         document = json.loads(plan.read_text())
