@@ -1287,8 +1287,10 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
     assert int(fresh_identity[0][2]) == round_one + 2, (fresh_identity[0][2], round_one)
     fresh_captures = [int(row[0]) for row in CAPTURE.findall(fresh_log)]
     assert fresh_captures, "the fresh world wrote no checkpoint of its own"
-    # A round that resumed would never capture below the checkpoint it stood on; a fresh one starts at 0.
-    assert min(fresh_captures) < resume_tick, (min(fresh_captures), resume_tick)
+    # A round that resumed starts its lockstep past the checkpoint it stood on; a fresh one starts at frame 1. (Its first capture
+    # cannot tell them apart when the resume stood on the boot's own first checkpoint: both name tick 51.)
+    fresh_start = re.search(r"^\[net-lockstep\] start round=\d+ frame=(\d+) ", fresh_log, re.MULTILINE)
+    assert fresh_start and int(fresh_start[1]) == 1, (fresh_start and fresh_start[0], resume_tick)
     for who in ("host", "client"):
         assert fresh_records[who].get("exit_code") == 0, (who, fresh_records[who].get("exit_code"))
         assert not fresh_records[who].get("timed_out"), who
