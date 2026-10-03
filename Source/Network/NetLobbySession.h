@@ -189,6 +189,8 @@ namespace RTE {
 		std::vector<NetTransportEvent> TakeEventsAfterRoundEnded() { return std::exchange(m_EventsAfterRoundEnded, {}); }
 		/// The round's own packets that arrived behind the Start in the read that started this lobby; the round reads them first.
 		std::vector<NetTransportEvent> TakeRoundEventsAfterStart() { return std::exchange(m_RoundEventsAfterStart, {}); }
+		/// Whether an event is the round's own traffic (a lockstep or a host-migration packet), which no lobby or session reads.
+		static bool IsRoundPacket(const NetTransportEvent& event);
 		/// The committed tail bytes received so far. With a round, only that round's are taken: the others are dropped and each
 		/// dropped round is listed with its byte count.
 		std::vector<uint8_t> TakePendingTailBytes(std::optional<uint64_t> round = std::nullopt, std::vector<std::pair<uint64_t, size_t>>* dropped = nullptr);

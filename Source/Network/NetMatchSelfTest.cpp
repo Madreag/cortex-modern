@@ -11144,12 +11144,83 @@ namespace RTE {
 		NetSession session;
 		NetReconnectClient reconnect;
 		session.SetReconnectClient(&reconnect);
+		LoopbackTransport idle;
 		std::string why;
-		if (!runner.AgreeOnSeatRoster(session, &why)) {
+		if (!runner.AgreeOnSeatRoster(idle, session, &why)) {
 			*error = "a peer joining a running round was refused for the roster its round started on: " + why;
 			return false;
 		}
 		std::cout << "PASS a_running_rounds_joiner_is_not_asked_for_its_start_roster" << std::endl;
+		return true;
+	}
+
+	// A peer that asks the host for the roster revision its round starts on reads the wire while it waits, and the host's round start
+	// can be on it: the start is the round's and is kept for it, never read and dropped as session traffic.
+	bool TestTheRostersWaitKeepsTheRoundsStart(std::string* error) {
+		const uint16_t port = 43153;
+		LoopbackTransport hostTransport, clientTransport;
+		NetSession host, client;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 1;
+		hostConfig.heartbeatIntervalMs = 25;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "roster-wait-round-start-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Client";
+		++clientConfig.localNonce;
+		if (!host.StartHost(hostTransport, hostConfig, error) || !client.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+		for (uint64_t now = 0; now <= 2000 && host.GetReadyPeerCount() != 1; now += 10) {
+			host.Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (host.GetReadyPeerCount() != 1) {
+			*error = "roster wait: the client was never seated on the host session";
+			return false;
+		}
+		NetLockstepStart start;
+		start.sessionId = 1;
+		start.startFrame = 77;
+		start.controllerFrameVersion = ControllerFrame::c_Version;
+		start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+		start.localPeerId = 1;
+		start.peerCount = 2;
+		start.scenario = "RosterWaitSelfTest";
+		start.ownershipPolicy = "unique-id-split";
+		std::vector<uint8_t> roundStart;
+		if (!NetLockstepCodec::Encode({start}, roundStart) || !hostTransport.Send(host.GetReadyPeers().front().transportPeerId, NetTransportLane::ControlReliable, roundStart)) {
+			*error = "roster wait: the host's round start could not be sent";
+			return false;
+		}
+		hostTransport.AdvanceTimeMs(10);
+		clientTransport.AdvanceTimeMs(10);
+		// The round starts on a roster revision this peer never heard, so it asks and reads the wire until its wait ends.
+		NetMatchRunner runner;
+		runner.m_Config.host = false;
+		runner.m_MatchConfig = MakeConfig();
+		runner.m_MatchConfig.version = NetMatchConfigUtil::c_Version;
+		runner.m_MatchConfig.seatRosterRevision = 1;
+		runner.m_MatchConfig.seatRosterHash[0] = 0x11;
+		NetReconnectClient reconnect;
+		client.SetReconnectClient(&reconnect);
+		std::string why;
+		const bool agreed = runner.AgreeOnSeatRoster(clientTransport, client, &why);
+		client.SetReconnectClient(nullptr);
+		const bool kept = std::any_of(runner.m_RoundEventsBeforeStart.begin(), runner.m_RoundEventsBeforeStart.end(), [&](const NetTransportEvent& event) { return event.bytes == roundStart; });
+		if (agreed || !kept) {
+			*error = agreed ? "roster wait: a revision nobody sent was agreed" : "roster wait: the host's round start that arrived while this peer asked for the roster was dropped (" +
+			         std::to_string(runner.m_RoundEventsBeforeStart.size()) + " round packets kept)";
+			return false;
+		}
+		std::cout << "PASS the_rosters_wait_keeps_the_rounds_start kept=" << runner.m_RoundEventsBeforeStart.size() << std::endl;
 		return true;
 	}
 
@@ -15775,6 +15846,7 @@ namespace RTE {
 		if (!TestPreRosterConfigRefusedByName(&error)) return fail(error);
 		if (!TestARecordedPreRosterConfigOpens(&error)) return fail(error);
 		if (!TestARunningRoundsJoinerIsNotAskedForItsStartRoster(&error)) return fail(error);
+		if (!TestTheRostersWaitKeepsTheRoundsStart(&error)) return fail(error);
 		if (!TestFakeLinkEffectsAreReadFromTheLinksOwnCounters(&error)) return fail(error);
 		if (!TestTheModerationStateCarriesThroughTheCapsule(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);

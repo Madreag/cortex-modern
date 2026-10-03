@@ -256,7 +256,7 @@ namespace RTE {
 		bool VerifyRematchProposal(std::string* error);
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
 		/// A round starts only on the seat roster the host agreed it on: a peer that heard another is refused by name.
-		bool AgreeOnSeatRoster(NetSession& session, std::string* error);
+		bool AgreeOnSeatRoster(INetTransport& transport, NetSession& session, std::string* error);
 		/// Stamps a moved seat roster into the open lobby's config as its next revision; a start the host asked for stays asked.
 		void StampSeatRoster(const NetReconnectHost& admission);
 		uint32_t m_RosterAgreedRevision = 0;
@@ -267,6 +267,7 @@ namespace RTE {
 		NetLobbySnapshot BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const;
 		friend bool TestKickedSeatReadsOpen(std::string* error);
 		friend bool TestARunningRoundsJoinerIsNotAskedForItsStartRoster(std::string* error);
+		friend bool TestTheRostersWaitKeepsTheRoundsStart(std::string* error);
 		friend bool TestAStartRequestOutlivesTheRosterStamp(std::string* error);
 		// Lockstep peer ids are 1-based and dense; the session assigns the host id 0 and clients 1.. .
 		std::map<uint8_t, NetPeerId> BuildRemoteTransportMap(const NetSession& session) const;
@@ -276,6 +277,7 @@ namespace RTE {
 		NetMatchRuntimeState m_State = NetMatchRuntimeState::Idle;
 		NetMatchRunnerConfig m_Config;
 		NetLobbySession m_Lobby;
+		std::vector<NetTransportEvent> m_RoundEventsBeforeStart; //!< The round's own packets read while its roster was agreed, before its coordinator started.
 		NetMatchConfig m_MatchConfig;
 		NetHash32 m_MatchConfigHash{};
 		std::optional<NetLockstepConfig> m_PrivateJoinConfig;

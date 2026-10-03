@@ -186,6 +186,10 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLobbySession::IsRoundPacket(const NetTransportEvent& event) {
+		return event.type == NetTransportEventType::PacketReceived && (NetLockstepCodec::LooksLikePacket(event.bytes) || NetHostMigrationCodec::LooksLikePacket(event.bytes));
+	}
+
 	void NetLobbySession::Tick(uint64_t nowMs) {
 		if (!m_Config.matchConfig.relay.Empty() && !m_Config.matchConfig.relay.Usable(RelayWallSeconds())) SetRelayOffer({});
 		if (!m_Transport || m_State == NetLobbyState::Idle || IsTerminal(m_State)) {
@@ -211,11 +215,8 @@ namespace RTE {
 			if (IsTerminal(m_State)) {
 				// The host sends the round's first packets right behind its Start: one read can carry both, and the round waits on them.
 				if (m_State == NetLobbyState::Started) {
-					for (; index < events.size(); ++index) {
-						NetTransportEvent& event = events[index];
-						if (event.type == NetTransportEventType::PacketReceived && (NetLockstepCodec::LooksLikePacket(event.bytes) || NetHostMigrationCodec::LooksLikePacket(event.bytes)))
-							m_RoundEventsAfterStart.push_back(std::move(event));
-					}
+					for (; index < events.size(); ++index)
+						if (IsRoundPacket(events[index])) m_RoundEventsAfterStart.push_back(std::move(events[index]));
 				}
 				return;
 			}
