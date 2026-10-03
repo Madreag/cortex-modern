@@ -837,18 +837,28 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			startActivity = Writer::Capture([&](Writer& writer) { writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get()); });
 		});
 	}
+	// The parts whose bitmaps rarely change (the terrain's material copy, fonts, glows) keep their caches from one capture to the
+	// next: each bitmap is compared row by row against what the part wrote last time instead of copied whole again.
+	std::vector<CheckpointCache*> partCaches;
+	const auto partCache = [&cow, &partCaches](const std::string& part) {
+		CheckpointCache& cache = cow.PartCache(part);
+		cache.Begin();
+		partCaches.push_back(&cache);
+		return &cache;
+	};
 	captureAside("scene_runtime", {}, [&] {
 		const auto sceneRuntimeStart = std::chrono::steady_clock::now();
 		image->sceneRuntime = CheckpointWriter::CaptureNative([scene] { return scene->SaveRuntimeCheckpoint(); });
 		image->sceneRuntimeUs = since(sceneRuntimeStart);
-	});
+	}, partCache("scene_runtime"));
 	captureAside("audio_samples", {}, [&audioSamples] { audioSamples = g_AudioMan.CaptureCheckpointSamples(); });
 	for (size_t part = 0; part < managerSavers.size(); ++part) {
-		captureAside("manager", managerSavers[part].name, [&managerParts, &managerTimings, &managerSavers, &since, part] {
+		const std::string& name = managerSavers[part].name;
+		captureAside("manager", name, [&managerParts, &managerTimings, &managerSavers, &since, part] {
 			const auto start = std::chrono::steady_clock::now();
 			managerParts[part] = CheckpointWriter::CaptureNative(managerSavers[part].save);
 			managerTimings[part] = {managerSavers[part].name, since(start)};
-		});
+		}, name == "frame" || name == "post_process" ? partCache("manager:" + name) : nullptr);
 	}
 	// Each terrain layer copies its own dirty rows; the image keeps the layers' order.
 	const auto layersStart = std::chrono::steady_clock::now();
@@ -968,6 +978,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->placeObjects = g_SceneMan.GetPlaceObjectsOnLoad();
 	image->placeUnits = g_SceneMan.GetPlaceUnitsOnLoad();
 	std::vector<CheckpointText> retired = cow.Cache().RetireUnused();
+	for (CheckpointCache* cache: partCaches) {
+		std::vector<CheckpointText> replaced = cache->RetireUnused();
+		std::move(replaced.begin(), replaced.end(), std::back_inserter(retired));
+	}
 	image->imageBytes = image->activity.OwnedBytes() + image->scene.OwnedBytes() + image->structure.OwnedBytes()
 		+ image->sceneRuntime.OwnedBytes() + image->globals.OwnedBytes();
 	size_t graphBytes = 0;

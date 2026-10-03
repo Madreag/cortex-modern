@@ -587,6 +587,12 @@ CheckpointText CheckpointCache::CapturePixels(const BITMAP* bitmap) {
 	return previous.text;
 }
 
+size_t CheckpointCache::PixelBytes() const {
+	size_t bytes = 0;
+	for (const auto& [bitmap, pixels]: m_Pixels) if (pixels.snapshot) bytes += pixels.snapshot->OwnedBytes();
+	return bytes;
+}
+
 std::string CheckpointCache::Census() const {
 	size_t entries = 0, bytes = 0, retiredBytes = 0;
 	for (const auto& [owner, channels]: m_Entries) {

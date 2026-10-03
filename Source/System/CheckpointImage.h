@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -108,6 +109,11 @@ namespace RTE {
 
 		CheckpointCache& Cache() { return m_Cache; }
 		const CheckpointCache& Cache() const { return m_Cache; }
+		/// A capture part's own cache, kept from one capture to the next so what the part wrote last time is compared, not copied
+		/// again; made on the capturing thread before the parts start, and used by that part alone.
+		CheckpointCache& PartCache(const std::string& part);
+		/// How many part caches there are and the pixel bytes they keep, for the memory census.
+		std::string PartCensus() const;
 		std::shared_ptr<const CheckpointImage> Last() const {
 			std::lock_guard lock(m_Mutex);
 			return m_Last;
@@ -136,6 +142,7 @@ namespace RTE {
 
 	private:
 		CheckpointCache m_Cache;
+		std::map<std::string, std::unique_ptr<CheckpointCache>> m_PartCaches;
 		mutable std::mutex m_Mutex;
 		std::shared_ptr<const CheckpointImage> m_Last;
 		std::vector<CheckpointText> m_LuaGraphs;

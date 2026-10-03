@@ -316,6 +316,18 @@ CheckpointCow& CheckpointCow::Get() {
 	return store;
 }
 
+CheckpointCache& CheckpointCow::PartCache(const std::string& part) {
+	std::unique_ptr<CheckpointCache>& cache = m_PartCaches[part];
+	if (!cache) cache = std::make_unique<CheckpointCache>();
+	return *cache;
+}
+
+std::string CheckpointCow::PartCensus() const {
+	size_t pixelBytes = 0;
+	for (const auto& [part, cache]: m_PartCaches) pixelBytes += cache->PixelBytes();
+	return "parts=" + std::to_string(m_PartCaches.size()) + " part_pixel_mb=" + std::to_string(pixelBytes >> 20);
+}
+
 void CheckpointCow::BeginImage() {
 	static const bool armed = [] { ArmLuaCheckpointBarrier(); return true; }();
 	(void)armed;
