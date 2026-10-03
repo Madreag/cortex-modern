@@ -154,8 +154,14 @@ namespace RTE {
 					if (IsBanned(next, seat->owner)) return refuse("the player is banned");
 					if (event.ticket != 0 && event.ticket == seat->givenAwayTicket) return refuse("The host gave your seat to another player");
 					if (event.ticket == 0 || event.ticket != seat->ticket) return refuse("the ticket is not this seat's");
-					if (next.stage == NetRosterStage::Migrating) return refuse("the return waits for the new host");
-					if (event.nowMs < seat->returnAfterMs) return refuse("Could not rejoin - retrying");
+					if (next.stage == NetRosterStage::Migrating) {
+						result.retryLater = true;
+						return refuse("the return waits for the new host");
+					}
+					if (event.nowMs < seat->returnAfterMs) {
+						result.retryLater = true;
+						return refuse("Could not rejoin - retrying");
+					}
 					++seat->incarnation;
 					seat->link = NetSeatLink::Connected;
 					seat->holdCause = NetSeatHoldCause::None;

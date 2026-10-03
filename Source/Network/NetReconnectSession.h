@@ -22,6 +22,9 @@ namespace RTE {
 	class NetHostBanStore;
 	class NetSeatAuthRegistry;
 
+	/// The refusal key of a return the host will take later with the same ticket (a backoff, a host change): its client retries, never joins anew.
+	constexpr const char* c_ReturnRetryKey = "return_retry";
+
 	/// One admission reply the session owes a connection.
 	struct NetH4Outbound {
 		NetPeerId connection = c_InvalidNetPeerId;
@@ -644,7 +647,8 @@ namespace RTE {
 		/// The roster's owner for the seat's holder: the player's proven identity, or with none proven its ticket.
 		uint64_t RosterOwnerOf(const SeatState& seat) const;
 		/// The seat roster's answer to a return with the ticket of this holder generation; empty when the return may begin.
-		std::string RosterRefusesReturn(const SeatState& seat, uint32_t holderGeneration) const;
+		/// retryLater says the same return is taken later.
+		std::string RosterRefusesReturn(const SeatState& seat, uint32_t holderGeneration, bool* retryLater = nullptr) const;
 		/// The plane seat a lockstep peer plays: a world slot's member before a seat whose own id it is.
 		const SeatState* SeatOfPeer(uint8_t lockstepPeerId) const;
 		SeatState* SeatOfPeer(uint8_t lockstepPeerId) { return const_cast<SeatState*>(std::as_const(*this).SeatOfPeer(lockstepPeerId)); }
@@ -796,6 +800,7 @@ namespace RTE {
 		uint32_t unacknowledgedLeaves = 0;
 		uint32_t ambiguousLosses = 0;
 		uint32_t confirmedSessionEnds = 0;
+		uint32_t returnRetries = 0; //!< Returns the host said to ask again later, asked again with the same ticket.
 	};
 
 	/// The client half: it persists the ticket the host offers before acknowledging it, answers a
@@ -831,9 +836,10 @@ namespace RTE {
 		bool BeginAdmission(uint64_t nowMs, std::string* error = nullptr);
 		/// The host refused the transaction. A refused RECLAIM falls back to one fresh join (the ticket
 		/// was for a session that is gone), which is exactly what a ticketless client would have sent.
-		/// A seat the host says was REASSIGNED is gone for good, so that one is never retried.
+		/// A seat the host says was REASSIGNED is gone for good, so that one is never retried. A return
+		/// the host takes later (the key c_ReturnRetryKey) is asked again with the same ticket after a backoff.
 		/// @return Whether the refusal was absorbed; false means the session should fail on it.
-		bool AbsorbRejection(uint64_t nowMs, NetRejectReason reason = NetRejectReason::HostNotAccepting);
+		bool AbsorbRejection(uint64_t nowMs, NetRejectReason reason = NetRejectReason::HostNotAccepting, const std::string& key = {});
 
 		bool BeginNewJoin(uint64_t nowMs, std::string* error = nullptr);
 		bool BeginReclaim(const NetH4TicketRecord& record, uint64_t nowMs, std::string* error = nullptr);
@@ -934,6 +940,8 @@ namespace RTE {
 		uint64_t m_RequestSentMs = 0;
 		uint64_t m_RequestOpenedMs = 0;
 		uint32_t m_Retransmits = 0;
+		uint64_t m_ReturnRetryAtMs = 0;   //!< When a return the host put off is asked again; 0 when none waits.
+		uint64_t m_ReturnRetryDelayMs = 0; //!< The last wait, doubled each time up to the roster's longest backoff.
 		NetAuthBytes16 m_TxId{};
 		std::optional<std::pair<uint16_t, NetAuthBytes16>> m_CarriedApplication; //!< An application a lost host left unanswered, for the next host.
 		NetH4TicketRecord m_Record;

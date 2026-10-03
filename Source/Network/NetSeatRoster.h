@@ -96,6 +96,7 @@ namespace RTE {
 		NetSeatRoster roster;
 		bool changed = false;          ///< A new revision.
 		bool refused = false;          ///< The event was refused; the roster is unchanged.
+		bool retryLater = false;       ///< A refusal that passes with time: the same event is accepted later.
 		std::string reason;            ///< What happened, in the words a player can act on.
 	};
 

@@ -3616,7 +3616,7 @@ namespace RTE {
 			wire.DrainHostOutbound();
 			const NetJoinRejected* told = LastOf<NetJoinRejected>(wire.Delivered(early->connection));
 			if (early->client.GetState() == NetH4ClientState::Joined || told == nullptr || told->rejectReason != NetRejectReason::HostNotAccepting ||
-			    told->humanMessage != "Could not rejoin - retrying") {
+			    told->humanMessage != "Could not rejoin - retrying" || told->mismatchKey != c_ReturnRetryKey) {
 				return Fail(std::string("a return inside the roster's backoff was not refused by it: client=") + NetReconnectClientStateName(early->client.GetState()) +
 				            " told=" + (told ? NetProtocol::RejectReasonName(told->rejectReason) + std::string(" '") + told->humanMessage + "'" : std::string("nothing")));
 			}
@@ -7524,6 +7524,83 @@ namespace RTE {
 			return 0;
 		}
 
+		// A return the host puts off (the roster's backoff, a host change) keeps its seat: the client asks again with the same
+		// ticket after a backoff that doubles to the roster's longest, and never trades the seat for a fresh one.
+		int TestAPutOffReturnAsksAgainWithItsTicket() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			NetReconnectTicketStore store;
+			store.SetPath(StorePath("put-off-return"));
+			NetH4TicketRecord record;
+
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
+			record.epoch = Ramp<16>(0x23);
+			record.stableSeat = 2;
+			record.holderGeneration = 5;
+			record.credential = Ramp<32>(0x63);
+			record.hostSessionId = 0x4833ULL;
+			record.hostAddress = "127.0.0.1";
+			record.issuedAtUnixMs = 1'700'000'000'000ULL;
+			record.matchConfigHash = MakeHash(7);
+			if (!store.Store(record, &error)) {
+				return Fail("could not store the reclaim ticket: " + error);
+			}
+			NetReconnectClient client;
+			uint64_t unixNow = record.issuedAtUnixMs;
+			client.Configure(&store, MakeIdentity(), "Player");
+			client.SetUnixClock(&FixedUnixClock, &unixNow);
+			client.SetHostContext("127.0.0.1", MakeHash(7));
+			if (!client.BeginAdmission(1000, &error) || !client.UsedStoredTicket()) {
+				return Fail("admission did not start from the stored ticket: " + error);
+			}
+			(void)client.TakeOutbound();
+			const auto sent = [&client](bool* newJoin) {
+				std::optional<NetH4Reclaim> reclaim;
+				for (NetH4Outbound& outbound: client.TakeOutbound()) {
+					if (const auto* again = std::get_if<NetH4Reclaim>(&outbound.payload)) reclaim = *again;
+					if (std::holds_alternative<NetH4NewJoin>(outbound.payload)) *newJoin = true;
+				}
+				return reclaim;
+			};
+			uint64_t nowMs = 1000;
+			bool newJoin = false;
+			std::vector<uint64_t> waits;
+			for (int refusal = 0; refusal < 4; ++refusal) {
+				const bool absorbed = client.AbsorbRejection(nowMs, NetRejectReason::HostNotAccepting, c_ReturnRetryKey);
+				const std::optional<NetH4Reclaim> early = sent(&newJoin);
+				if (!absorbed || newJoin || early || std::string(client.ReclaimOutcome()) != "reclaim_accepted" || !client.IsAdmissionPending()) {
+					std::cout << "[net-reconnect-session-selftest] FAIL a_put_off_return_asks_again_with_its_ticket refusal=" << refusal << " absorbed=" << absorbed
+					          << " new_join=" << newJoin << " outcome=" << client.ReclaimOutcome() << " state=" << NetReconnectClientStateName(client.GetState()) << std::endl;
+					return Fail(std::string("a put-off return was traded for a new join: outcome=") + client.ReclaimOutcome());
+				}
+				const uint64_t refusedAt = nowMs;
+				std::optional<NetH4Reclaim> again;
+				while (!again && nowMs < refusedAt + 60000) {
+					nowMs += 100;
+					client.Tick(nowMs);
+					again = sent(&newJoin);
+				}
+				if (!again || newJoin || again->stableSeat != record.stableSeat || again->holderGeneration != record.holderGeneration) {
+					return Fail("a put-off return was not asked again with its own ticket");
+				}
+				waits.push_back(nowMs - refusedAt);
+			}
+			const uint64_t longest = c_RosterReturnBackoffMs << (c_RosterReturnAttempts - 1);
+			const bool backsOff = waits.size() == 4 && waits[0] == c_RosterReturnBackoffMs && waits[1] == 2 * c_RosterReturnBackoffMs && waits[2] == longest && waits[3] == longest;
+			std::cout << "[net-reconnect-session-selftest] " << (backsOff ? "PASS" : "FAIL") << " a_put_off_return_asks_again_with_its_ticket waits_ms=" << waits[0] << ","
+			          << waits[1] << "," << waits[2] << "," << waits[3] << " retries=" << client.GetStats().returnRetries << std::endl;
+			if (!backsOff) return Fail("a put-off return's waits do not follow the roster's backoff");
+			// A refusal that names no later is still the one fallback a gone session gets.
+			if (!client.AbsorbRejection(nowMs, NetRejectReason::HostNotAccepting) || std::string(client.ReclaimOutcome()) != "new_join_after_refusal") {
+				return Fail("a plain refusal no longer falls back to one new join");
+			}
+			return 0;
+		}
+
 	namespace {
 		template <typename Host, typename Client, typename Registry>
 		int TestMigrationAdmission(bool hold, bool participant = false) {
@@ -8894,6 +8971,7 @@ namespace RTE {
 		if (const int result = TestRefusedReclaimReportsNewJoin(); result != 0) {
 			return result;
 		}
+		if (const int result = TestAPutOffReturnAsksAgainWithItsTicket(); result != 0) return result;
 		if (const int result = TestEndedCredentialsStayOutOfWorld(); result != 0) return result;
 		if (const int result = TestAnAnsweredReclaimIsNotRefusedTwice(); result != 0) return result;
 		std::cout << "[net-reconnect-session-selftest] PASS" << std::endl;

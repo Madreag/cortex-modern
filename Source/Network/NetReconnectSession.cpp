@@ -635,7 +635,7 @@ namespace RTE {
 		return NetRosterTicketIdOf(m_ConfiguredEpoch, seat.seat.stableSeat, seat.holderGeneration);
 	}
 
-	std::string NetReconnectHost::RosterRefusesReturn(const SeatState& seat, uint32_t holderGeneration) const {
+	std::string NetReconnectHost::RosterRefusesReturn(const SeatState& seat, uint32_t holderGeneration, bool* retryLater) const {
 		NetRosterEvent event;
 		event.kind = NetRosterEventKind::Returned;
 		event.seat = RosterIdOf(seat.seat.stableSeat);
@@ -643,6 +643,7 @@ namespace RTE {
 		event.owner = RosterOwnerOf(seat);
 		event.ticket = NetRosterTicketIdOf(m_ConfiguredEpoch, seat.seat.stableSeat, holderGeneration);
 		const NetRosterResult result = RTE::ApplyRosterEvent(m_Roster, event);
+		if (retryLater) *retryLater = result.refused && result.retryLater;
 		return result.refused ? result.reason : std::string();
 	}
 
@@ -1334,9 +1335,10 @@ namespace RTE {
 			return;
 		}
 		// The seat roster decides whether this return may begin now: its ticket the seat's, its backoff over, its host hosting.
-		if (const std::string why = RosterRefusesReturn(*seat, message.holderGeneration); !why.empty()) {
+		bool retryLater = false;
+		if (const std::string why = RosterRefusesReturn(*seat, message.holderGeneration, &retryLater); !why.empty()) {
 			++m_Stats.rosterRefusedReturns;
-			const NetPayload refusal = NetJoinRejected{NetRejectReason::HostNotAccepting, why, "return_refused", "", ""};
+			const NetPayload refusal = NetJoinRejected{NetRejectReason::HostNotAccepting, why, retryLater ? c_ReturnRetryKey : "return_refused", "", ""};
 			m_Admission.ScheduleDenial(connection, message.txId, NetH4DenialReason::RateLimited, nowMs, &refusal);
 			++m_Stats.denialsScheduled;
 			if (pending != m_PendingReclaims.end()) m_PendingReclaims.erase(pending);
@@ -2713,6 +2715,8 @@ namespace RTE {
 		}
 		m_UsedStoredTicket = false;
 		m_FellBackToNewJoin = false;
+		m_ReturnRetryAtMs = 0;
+		m_ReturnRetryDelayMs = 0;
 		if (m_ApplyForSeat) {
 			// A live match refuses an ordinary join, so a player the host has to approve asks instead.
 			return BeginApplication(m_ApplySeat, nowMs, error);
@@ -2730,7 +2734,7 @@ namespace RTE {
 		return BeginNewJoin(nowMs, error);
 	}
 
-	bool NetReconnectClient::AbsorbRejection(uint64_t nowMs, NetRejectReason reason) {
+	bool NetReconnectClient::AbsorbRejection(uint64_t nowMs, NetRejectReason reason, const std::string& key) {
 		m_LastRejectReason = reason;
 		m_HasLastRejectReason = true;
 		if (reason == NetRejectReason::SeatReassigned || reason == NetRejectReason::ParticipantRemoved ||
@@ -2742,6 +2746,16 @@ namespace RTE {
 		}
 		if (!m_UsedStoredTicket || m_FellBackToNewJoin || m_State == NetH4ClientState::Joined) {
 			return false;
+		}
+		if (key == c_ReturnRetryKey && m_HasRecord) {
+			// The seat is still this ticket's: a fresh join would trade it for a new seat, so the return is asked again.
+			m_ReturnRetryDelayMs = std::min(m_ReturnRetryDelayMs == 0 ? c_RosterReturnBackoffMs : m_ReturnRetryDelayMs * 2, c_RosterReturnBackoffMs << (c_RosterReturnAttempts - 1));
+			m_ReturnRetryAtMs = nowMs + m_ReturnRetryDelayMs;
+			m_HasPendingRequest = false;
+			m_State = NetH4ClientState::Reclaiming;
+			++m_Stats.returnRetries;
+			m_Error = "the host put the return off; asking again";
+			return true;
 		}
 		// The stored ticket named a hosted session that is gone (or a seat this host no longer knows).
 		// A fresh join is what a ticketless client would have sent, so try it once and let the seat
@@ -3018,6 +3032,7 @@ namespace RTE {
 			m_Incarnation = committed->incarnation;
 			m_AssignedPeerId = committed->assignedPeerId;
 			m_State = NetH4ClientState::Joined;
+			m_ReturnRetryDelayMs = 0;
 			++m_Stats.commitsReceived;
 			if (NetA7Journal::Enabled() && a7NewCommit) NetA7Journal::Session("commit", nowMs, {{"stable_seat", committed->stableSeat},
 				{"peer_id", static_cast<unsigned>(committed->assignedPeerId) + 1}, {"incarnation", committed->incarnation}, {"holder_generation", committed->holderGeneration},
@@ -3090,6 +3105,17 @@ namespace RTE {
 	}
 
 	void NetReconnectClient::Tick(uint64_t nowMs) {
+		if (m_ReturnRetryAtMs != 0) {
+			if (m_State != NetH4ClientState::Reclaiming) {
+				m_ReturnRetryAtMs = 0;
+			} else {
+				if (nowMs < m_ReturnRetryAtMs) return;
+				m_ReturnRetryAtMs = 0;
+				const NetH4TicketRecord record = m_Record;
+				BeginReclaim(record, nowMs);
+				return;
+			}
+		}
 		if (m_State == NetH4ClientState::Applied) {
 			// The host's own record of this application expires at P2; past that nobody is coming.
 			if (nowMs >= m_AppliedAtMs && nowMs - m_AppliedAtMs > NetReconnectHost::c_ProvisionalExpiryMs) {
