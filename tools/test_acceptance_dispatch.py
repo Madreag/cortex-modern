@@ -21,6 +21,12 @@ from test_acceptance_resume3 import acceptance_render as render
 
 
 class AcceptanceDispatch(unittest.TestCase):
+    def test_cloudflare_owner_adapter_keeps_the_declared_remote_peer_roles(self):
+        row=next(row for row in built()['plan']['rows'] if row['id']=='gap.mp-relay-cloudflare')
+        self.assertIn('--host-box',row['argv'])
+        self.assertEqual(row['argv'][row['argv'].index('--host-box')+1],'ALLY')
+        self.assertEqual(row['argv'][row['argv'].index('--client-box')+1],'EDITH')
+
     def test_four_k_rows_start_before_remote_capture_work_to_keep_one_short_window(self):
         import acceptance_sections as sections
         events=[]
