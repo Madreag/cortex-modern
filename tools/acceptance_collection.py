@@ -48,6 +48,58 @@ def start(root, plan_path, schedule_path, source, exe, ledger, inventory_root):
     return schedule
 
 
+def start_section(root, section, *, marker=None, inventory_root=None, optional_boxes=None):
+    """Freeze this section's authorization before any of its commands start."""
+    root = Path(root).resolve()
+    if inventory_root is not None:
+        inventory(inventory_root)
+    import run_split
+    plan, schedule = read(root/'acceptance-plan.json'), read(root/'split-plan.json')
+    path = root/'sections'/f'{section}.json'
+    if path.exists() or str(section) in schedule.get('section_receipts', {}):
+        raise ValueError(f'section {section} already started; its window choice cannot be replaced')
+    rows = [row for row in plan['rows'] if row.get('section') == section]
+    if not rows:
+        raise ValueError(f'section {section} has no declared rows')
+    if not schedule.get('collection_id') or not schedule.get('sequence'):
+        raise ValueError('section has no collection start')
+    window = run_split.window_variant(marker)
+    capabilities = {}
+    ref = root/'capabilities/edith-readback.json'
+    if any(row.get('blocked_reason') for row in rows):
+        try:
+            proof = read(ref)
+            passed = (proof.get('pass') is True and proof.get('box') == 'EDITH' and proof.get('engine_row') == 'A57.2'
+                      and proof.get('source_sha') == schedule['source_sha'] and proof.get('exe_sha256') == schedule.get('exe_sha256'))
+            capabilities['EDITH.readback'] = dict(passed=passed, reference=dict(path='capabilities/edith-readback.json', sha256=sha256(ref)))
+        except (OSError, ValueError):
+            capabilities['EDITH.readback'] = dict(passed=False)
+    if optional_boxes is None:
+        optional_boxes = {}
+        if inventory_root is not None:
+            boxes, _ = run_split.load_manifest(Path(inventory_root)/'boxes.json')
+            participating = {box for row in rows for box, count in row.get('engine_boxes', {}).items() if count}
+            optional_boxes = run_split.probe_optional_boxes([box for box in boxes if box.name in participating])
+    decisions = []
+    for row in rows:
+        reason = ''
+        if row.get('window_required') and window['variant'] == 'WITHOUT':
+            reason = run_split.WINDOW_REASON
+        elif row.get('blocked_reason') and not capabilities.get('EDITH.readback', {}).get('passed'):
+            reason = row['blocked_reason']
+        else:
+            absent = sorted(box for box, count in row.get('engine_boxes', {}).items() if count and optional_boxes.get(box) is False)
+            if absent:
+                reason = ', '.join(absent) + ' absent: required game peer deferred'
+        decisions.append(dict(share=row['share'], id=row['id'], state='AWAITING' if reason else 'READY', reason=reason))
+    document = dict(schema=1, section=section, collection_id=schedule['collection_id'], source_sha=schedule['source_sha'],
+                    window=window, capabilities=capabilities, optional_boxes=optional_boxes, rows=decisions, started=run_split.stamp())
+    write(path, document)
+    schedule.setdefault('section_receipts', {})[str(section)] = dict(path=f'sections/{section}.json', sha256=sha256(path))
+    write(root/'split-plan.json', schedule)
+    return document
+
+
 class Share:
     def __init__(self, root, share, inventory_root, *, share_root=None, plan=None, schedule=None):
         self.root = Path(root).resolve()
@@ -89,6 +141,19 @@ class Share:
             products=[product.relative_to(self.out).as_posix(), (directory/'collection-error.json').relative_to(self.out).as_posix()],
             started=self.reader.stamp()))
         return path
+
+    def defer(self, command_id):
+        spec = self.rows[command_id]
+        choice = self.reader.section_choice(spec, self.schedule, self.reader.Evidence(self.root))
+        if not choice or not choice['reason']:
+            raise ValueError(f'{command_id}: no section deferral authorizes withholding this row')
+        directory = self.receipt_dir(command_id)
+        if (directory/'command.json').exists() or (directory/'terminal.json').exists():
+            raise ValueError(f'{command_id}: already started or completed; cannot defer it')
+        entry = dict(id=command_id, state='awaiting', exit_code=3, reason=choice['reason'], engine_started=False,
+                     section_receipt=choice['reference'], collection_id=self.run_id, source_sha=self.source)
+        write(directory/'terminal.json', entry)
+        return entry
 
     def finish(self, command_id, code, log, reason='', *, not_run=False):
         directory = self.receipt_dir(command_id)
@@ -146,6 +211,12 @@ class Share:
             entry = read(path)
             if entry.get('collection_id') != self.run_id or entry.get('source_sha') != self.source:
                 raise ValueError(f'{command_id}: terminal receipt belongs to another collection/source')
+            if entry.get('state') == 'awaiting':
+                choice = self.reader.section_choice(self.rows[command_id], self.schedule, self.reader.Evidence(self.root))
+                if not choice or choice['reason'] != entry.get('reason'):
+                    raise ValueError(f'{command_id}: invalid deferred terminal')
+                commands.append(entry)
+                continue
             for attempt in entry.get('attempts') or [entry]:
                 product = (self.out/attempt['product']['path']).resolve()
                 if not product.is_relative_to(self.out): raise ValueError('collected product escapes its share')
@@ -168,12 +239,17 @@ class Share:
             defects=[item for row in scans for item in row['defects']], observations=[item for row in scans for item in row['observations']],
             awaiting_review=[item for row in scans for item in row.get('awaiting_review', [])],
             evidence_sha256={key: value for row in scans for key, value in row['evidence_sha256'].items()})
+        if not scans and commands and all(entry.get('state') == 'awaiting' for entry in commands):
+            scanned['collection_complete'] = True
         scanned.update(schema=1, path_basis='collection', collection_id=self.run_id, source_sha=self.source,
             box=self.declaration['box'], sequence=self.schedule['sequence'], commands=commands,
             collection_complete=not missing and scanned['collection_complete'], missing_commands=missing,
             evidence_sha256={**{Path(key).resolve().relative_to(self.out).as_posix(): value
                                for key, value in scanned.get('evidence_sha256', {}).items()}, **hashes})
         for entry in commands:
+            if entry.get('state') == 'awaiting':
+                scanned['awaiting_review'].append(dict(id=entry['id'], state='AWAITING', reason=entry['reason']))
+                continue
             spec = self.rows[entry['id']]
             if not spec.get('review') or entry.get('exit_code') not in (0, 3): continue
             state, reason = self.reader.review_state(spec['review'], entry['id'], self.source, self.reader.Evidence(self.root))
@@ -199,6 +275,10 @@ class Share:
         for command_id in self.declaration['ids']:
             directory = self.receipt_dir(command_id)
             if (directory/'terminal.json').is_file(): continue
+            choice = self.reader.section_choice(self.rows[command_id], self.schedule, self.reader.Evidence(self.root))
+            if choice and choice['reason']:
+                self.defer(command_id)
+                continue
             if not (directory/'command.json').is_file(): self.begin(command_id, [])
             self.finish(command_id, 1, log, reason, not_run=True)
 
@@ -214,6 +294,14 @@ def resolved_commands(spec, root, repo, here, exe_sha256=''):
 
 def run(share, command_id, repo, here):
     spec = share.rows[command_id]
+    choice = share.reader.section_choice(spec, share.schedule, share.reader.Evidence(share.root))
+    if choice and choice['reason']:
+        share.defer(command_id)
+        return 3
+    if spec.get('window_required'):
+        import run_split
+        if run_split.window_variant()['variant'] != 'WITH':
+            raise ValueError(f'{command_id}: EROL-PC window was withdrawn before launch')
     commands = resolved_commands(spec, share.root, repo, here, share.schedule.get('exe_sha256', ''))
     share.begin(command_id, commands)
     log = share.receipt_dir(command_id)/'driver-stdout.log'
@@ -236,7 +324,7 @@ def run(share, command_id, repo, here):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('start', 'begin', 'finish', 'run', 'collect', 'fail-missing', 'import-progress'))
+    parser.add_argument('action', choices=('start', 'section', 'defer', 'begin', 'finish', 'run', 'collect', 'fail-missing', 'import-progress'))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--inventory', type=Path, required=True)
     parser.add_argument('--plan', type=Path)
@@ -254,13 +342,21 @@ def main(argv=None):
     parser.add_argument('--repo', type=Path)
     parser.add_argument('--here', type=Path)
     parser.add_argument('--argv-json', default='[]')
+    parser.add_argument('--section', type=int)
+    parser.add_argument('--window-marker', type=Path)
     options = parser.parse_args(argv)
     if options.action == 'start':
         document = start(options.root, options.plan, options.schedule, options.source_sha, options.exe_sha256,
                          options.sequence_ledger, options.inventory)
         print(document['collection_id']); return 0
+    if options.action == 'section':
+        document = start_section(options.root, options.section, marker=options.window_marker, inventory_root=options.inventory)
+        print(f'section {options.section}: window {document["window"]["variant"]}; '
+              f'{sum(row["state"] == "AWAITING" for row in document["rows"])} deferred')
+        return 0
     share = Share(options.root, options.share, options.inventory, share_root=options.share_root, plan=options.plan, schedule=options.schedule)
-    if options.action == 'begin': share.begin(options.id, json.loads(options.argv_json))
+    if options.action == 'defer': share.defer(options.id)
+    elif options.action == 'begin': share.begin(options.id, json.loads(options.argv_json))
     elif options.action == 'finish': share.finish(options.id, options.exit_code, options.log, options.reason)
     elif options.action == 'run': return run(share, options.id, options.repo.resolve(), options.here.resolve())
     elif options.action == 'import-progress': share.import_progress(options.progress)
