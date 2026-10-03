@@ -333,6 +333,8 @@ namespace RTE {
 		const NetWorldSlot* FirstFreeSlot() const;
 		/// The slot a credentialed holder reclaims; null when the seat is not this world's.
 		const NetWorldSlot* SlotOfSeat(uint16_t stableSeat) const;
+		/// The slot that plays this lockstep id; null when the id is not one of this world's slots.
+		const NetWorldSlot* SlotOfPeer(uint8_t peerId) const;
 		bool Hold(uint8_t peerId, uint16_t stableSeat, const std::string& holderName, std::string* error = nullptr);
 		/// Gives a slot back to the holder its seat names. The generation does not move: a reclaim
 		/// is the same holder returning, not a new one, so the credentials it holds stay good.
@@ -608,7 +610,9 @@ namespace RTE {
 		/// @param nowMs The host's admission clock, so a stalled transfer can expire.
 		/// @param credentialedHolder Whether the admission plane says this connection is the seat's
 		/// own returning holder. Only it may take back a slot a reclaim hold is keeping.
-		bool BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error = nullptr, bool credentialedHolder = false);
+		/// @param seatPeerId The lockstep id of the seat the roster admitted this connection to; its slot is taken when free.
+		bool BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error = nullptr, bool credentialedHolder = false,
+		               uint8_t seatPeerId = 0);
 		/// Records which slots are waiting for a dropped holder, from the admission plane's seats.
 		void NoteReclaimHolds(const std::vector<uint8_t>& peerIds);
 		/// A watcher's own choice: a spectator that declines is skipped when a slot frees.

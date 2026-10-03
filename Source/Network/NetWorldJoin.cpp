@@ -1330,6 +1330,11 @@ namespace RTE {
 		return found == m_Slots.end() ? nullptr : &*found;
 	}
 
+	const NetWorldSlot* NetWorldMembership::SlotOfPeer(uint8_t peerId) const {
+		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [&](const NetWorldSlot& slot) { return slot.peerId == peerId; });
+		return found == m_Slots.end() ? nullptr : &*found;
+	}
+
 	const NetWorldSlot* NetWorldMembership::SlotOfSeat(uint16_t stableSeat) const {
 		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [&](const NetWorldSlot& slot) { return slot.seated && slot.stableSeat == stableSeat; });
 		return found == m_Slots.end() ? nullptr : &*found;
@@ -1629,7 +1634,8 @@ namespace RTE {
 		return found == m_Sessions.end() ? nullptr : &*found;
 	}
 
-	bool NetWorldJoinHost::BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error, bool credentialedHolder) {
+	bool NetWorldJoinHost::BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error, bool credentialedHolder,
+	                                 uint8_t seatPeerId) {
 		if (IsPrivateMatch() && !credentialedHolder) { if (error) *error = "a running match only readmits its authenticated holder"; return false; }
 		if (!IsConfigured()) {
 			if (error) *error = "the world join plane is not configured";
@@ -1674,7 +1680,9 @@ namespace RTE {
 			}
 		}
 		if (slot == nullptr) {
-			slot = m_Membership.FirstFreeSlot();
+			// The roster chose the seat: its own slot when that is free, else the first free one.
+			if (const NetWorldSlot* own = m_Membership.SlotOfPeer(seatPeerId); own && !own->held && !own->reclaimHold) slot = own;
+			else slot = m_Membership.FirstFreeSlot();
 		}
 		if (slot == nullptr) {
 			// Every team is at capacity, so this connection watches - but only while the host's bound

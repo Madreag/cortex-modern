@@ -826,6 +826,9 @@ namespace RTE {
 		/// A held slot whose seat the AI plays waits for its own player the same way.
 		static std::vector<uint8_t> WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership,
 		                                                  const std::set<uint8_t>& aiHeldPeers = {});
+		/// Binds every seat the roster has seated, and is not bringing in through the world's image, to its own slot: a member seated
+		/// in the lobby before the round started holds its slot as a member that joined later does. Returns how many it bound.
+		static size_t BindSeatedWorldMembers(const std::vector<NetH4SeatStatus>& statuses, const NetSeatRoster& roster, NetWorldMembership& membership);
 		/// The sim id and team the holder of an admission seat plays on. The world plane owns that
 		/// answer: a member plays the slot its seat is bound to, whatever id its seat table names.
 		/// An unbound seat is not the world's, so the caller keeps the seat's own pair.

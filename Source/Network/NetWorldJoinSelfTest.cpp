@@ -4499,6 +4499,38 @@ namespace RTE {
 		return true;
 	}
 
+	// A member the roster seated in the lobby, before the round started, holds its slot: a player joining the running world takes the slot of
+	// the seat the roster gave it, and a watcher arriving with no free slot watches, never playing on the member's slot.
+	int TestASeatedMembersSlotIsNotGivenToAJoiner() {
+		NetWorldJoinHost world;
+		std::string error;
+		if (!world.Configure(MakeTwoSeatWorld(), MakeIdentity(), &error)) return Fail("seated-members-slot: the world plane refused its config (" + error + ")");
+		// Seat 2 is the member's, playing since the start; seat 3 is the joiner's, admitted and coming in through the image.
+		std::vector<NetH4SeatStatus> statuses(2);
+		statuses[0].stableSeat = 2; statuses[0].lockstepPeerId = 2; statuses[0].committed = true;
+		statuses[1].stableSeat = 3; statuses[1].lockstepPeerId = 3; statuses[1].committed = true;
+		NetSeatRoster roster;
+		roster.seats.resize(2);
+		roster.seats[0].seatId = NetRosterIdOf(2); roster.seats[0].owner = 0xA1; roster.seats[0].phase = NetSeatPhase::Running; roster.seats[0].name = "member";
+		roster.seats[1].seatId = NetRosterIdOf(3); roster.seats[1].owner = 0xB2; roster.seats[1].phase = NetSeatPhase::RejoinImage; roster.seats[1].name = "joiner";
+		const size_t bound = NetMatchService::BindSeatedWorldMembers(statuses, roster, world.Membership());
+		const size_t again = NetMatchService::BindSeatedWorldMembers(statuses, roster, world.Membership());
+		if (!world.BeginJoin(71, 3, "joiner", 1000, &error, false, 3)) return Fail("seated-members-slot: the joiner was refused: " + error);
+		if (!world.BeginJoin(72, 4, "watcher", 1000, &error, false, c_WorldSpectatorLobbyPeerFirst)) return Fail("seated-members-slot: the watcher was refused: " + error);
+		const NetWorldJoinSession* joiner = world.FindSession(71);
+		const NetWorldJoinSession* watcher = world.FindSession(72);
+		const NetWorldSlot* member = world.Membership().SlotOfPeer(2);
+		if (!joiner || !watcher || !member || joiner->spectator || joiner->assignedPeerId != 3 || !watcher->spectator || !member->held || member->stableSeat != 2 || bound != 1 ||
+		    again != 0) {
+			return Fail("seated-members-slot: the joiner took slot " + std::to_string(joiner ? joiner->assignedPeerId : 0) + (joiner && joiner->spectator ? " as a watcher" : "") +
+			            ", the watcher " + (watcher && watcher->spectator ? "watches" : "took slot " + std::to_string(watcher ? watcher->assignedPeerId : 0)) +
+			            ", the member's slot 2 is " + (member && member->held ? "held by seat " + std::to_string(member->stableSeat) : std::string("free")) + ", bound " +
+			            std::to_string(bound) + " then " + std::to_string(again));
+		}
+		std::cout << "[net-world-join-selftest] PASS a_seated_members_slot_is_not_given_to_a_joiner joiner_slot=3 watcher=spectator member_slot=2" << std::endl;
+		return 0;
+	}
+
 	// A world member who leaves keeps its slot: its H4 row stays its own and nothing releases the slot to the next holder.
 	int TestWorldCleanLeaveReleasesOnlyTheSeatThatLeft() {
 		ScriptedAuthCrypto crypto;
@@ -8562,6 +8594,7 @@ namespace RTE {
 		if (const int result = TestWorldCleanLeaveReleasesOnlyTheSeatThatLeft(); result != 0) {
 			return result;
 		}
+		if (const int result = TestASeatedMembersSlotIsNotGivenToAJoiner(); result != 0) return result;
 		if (const int result = TestWorldReclaimHoldFollowsTheSeatsSlot(); result != 0) {
 			return result;
 		}

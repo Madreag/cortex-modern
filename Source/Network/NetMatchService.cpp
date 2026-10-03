@@ -4355,6 +4355,19 @@ static std::string ResyncSaveName() {
 		return holds;
 	}
 
+	size_t NetMatchService::BindSeatedWorldMembers(const std::vector<NetH4SeatStatus>& statuses, const NetSeatRoster& roster, NetWorldMembership& membership) {
+		size_t bound = 0;
+		for (const NetH4SeatStatus& status: statuses) {
+			if (status.stableSeat == 0 || !status.committed || status.closed || BoundWorldSlot(membership, status.stableSeat)) continue;
+			// A seat coming in through the image takes its slot when its join begins.
+			const NetRosterSeat* seat = roster.Find(NetRosterIdOf(status.stableSeat));
+			if (!seat || seat->phase == NetSeatPhase::RejoinImage || seat->phase == NetSeatPhase::RejoinCatchUp) continue;
+			const NetWorldSlot* slot = membership.SlotOfPeer(status.lockstepPeerId);
+			if (slot && !slot->held && membership.Hold(status.lockstepPeerId, status.stableSeat, seat->name)) ++bound;
+		}
+		return bound;
+	}
+
 	NetH4SeatSimIdentity NetMatchService::WorldSimIdentityOfSeat(const NetWorldMembership& membership, uint16_t stableSeat) {
 		const NetWorldSlot* bound = BoundWorldSlot(membership, stableSeat);
 		if (bound == nullptr) {
@@ -4826,6 +4839,8 @@ static std::string ResyncSaveName() {
 			if (held.connection != c_InvalidNetPeerId) m_WorldJoin.CancelJoin(held.connection, "left while the AI held the seat");
 			System::PrintDiagnosticLine("[net-world] release held peer=" + std::to_string(static_cast<int>(held.peerId)) + ": its player left while the AI held the seat");
 		}
+		// A member the roster seated before the round started holds its slot: a later join never takes it.
+		(void)BindSeatedWorldMembers(m_ReconnectHost.GetSeatStatuses(), m_ReconnectHost.GetRoster(), m_WorldJoin.Membership());
 		m_WorldJoin.NoteReclaimHolds(WorldReclaimHoldSlots(m_ReconnectHost.GetSeatStatuses(), m_WorldJoin.Membership(), aiHeld));
 		m_WorldSpectatorsFree = static_cast<int64_t>(m_WorldJoin.SpectatorsFree());
 		bool answeredRefusal = false;
@@ -4856,7 +4871,10 @@ static std::string ResyncSaveName() {
 					if (seat.stableSeat == stableSeat) played = m_ReconnectHost.SimIdentityOfSeat(seat).peerId;
 				if (played != 0 && !RosterOffersReturnLocked(played, peer.transportPeerId)) continue;
 			}
-			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, &joinError, credentialedHolder)) {
+			uint8_t seatPeerId = 0;
+			for (const NetH4Seat& seat: m_ReconnectHost.GetSeatTable())
+				if (seat.stableSeat == stableSeat) seatPeerId = seat.lockstepPeerId;
+			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, &joinError, credentialedHolder, seatPeerId)) {
 				// A world with no seat and no watcher slot answers the connection once, before it has
 				// read a byte of image, with the reason the joiner shows.
 				const NetWorldJoinRefusal refusal =
