@@ -31,7 +31,7 @@ class InventoryOracleEvidence(unittest.TestCase):
     def test_p24_split_without_terminal_results_fails(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            box = SimpleNamespace(name='local', local=True)
+            box = SimpleNamespace(name='local', local=True, hostname='local', optional=False, max_engines=4, min_free_gb=10)
             share = SimpleNamespace(label='S1', box=box, ids=['S1.unit'], whole=True, minutes=1, kept_here={})
             thread = Mock()
             with patch.object(run_split, 'load_manifest', return_value=([box], {})), \
