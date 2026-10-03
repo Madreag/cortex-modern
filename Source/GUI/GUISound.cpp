@@ -6,6 +6,7 @@
 #include "MovableObject.h"
 #include "ContentFile.h"
 #include <array>
+#include <unordered_map>
 #include <iostream>
 
 using namespace RTE;
@@ -179,34 +180,42 @@ struct GUISoundCheckpoint {
             &source.m_AreaPickedSound, &source.m_ObjectPickedSound, &source.m_PurchaseMadeSound,
             &source.m_PlacementBlip, &source.m_PlacementThud, &source.m_PlacementGravel};
     }
-    static Set CaptureSet(const SoundSet& source) {
+    // Each loaded sample's asset path, the smallest where one sound loaded under several: read once for a whole capture, not per sample.
+    using SamplePaths = std::unordered_map<const void*, std::string>;
+    static SamplePaths LoadedSamplePaths() {
+        SamplePaths paths;
+        for (const auto& [candidate, sound]: ContentFile::s_LoadedSamples) {
+            const auto [entry, added] = paths.try_emplace(sound, candidate);
+            if (!added && candidate < entry->second) entry->second = candidate;
+        }
+        return paths;
+    }
+    static std::string SamplePath(const SamplePaths& paths, const void* sound) {
+        if (!sound) return {};
+        const auto found = paths.find(sound);
+        if (found == paths.end()) throw std::runtime_error("GUI sample has no cached asset identity");
+        return found->second;
+    }
+    static Set CaptureSet(const SoundSet& source, const SamplePaths& paths) {
         Set value; value.cycle = source.m_SoundSelectionCycleMode; value.selection = source.m_CurrentSelection;
         for (const auto& sample: source.m_SoundData) {
-            std::string path;
-            if (sample.SoundObject) {
-                for (const auto& [candidate, sound]: ContentFile::s_LoadedSamples) if (sound == sample.SoundObject && (path.empty() || candidate < path)) path = candidate;
-                if (path.empty()) throw std::runtime_error("GUI sample has no cached asset identity");
-            }
-            value.samples.push_back({sample.SoundFile.SaveCheckpoint(), path, sample.Offset, sample.MinimumAudibleDistance, sample.AttenuationStartDistance});
+            value.samples.push_back({sample.SoundFile.SaveCheckpoint(), SamplePath(paths, sample.SoundObject), sample.Offset, sample.MinimumAudibleDistance, sample.AttenuationStartDistance});
         }
-        for (const auto* child: source.m_SubSoundSets) { if (!child) throw std::runtime_error("null GUI sound subset"); value.subsets.push_back(CaptureSet(*child)); }
+        for (const auto* child: source.m_SubSoundSets) { if (!child) throw std::runtime_error("null GUI sound subset"); value.subsets.push_back(CaptureSet(*child, paths)); }
         return value;
     }
     static Record Capture(const GUISound& source) {
         Record result;
         const auto members = Members(const_cast<GUISound&>(source));
-        for (size_t i = 0; i < members.size(); ++i) result.sounds[i] = {members[i]->SaveCheckpoint(), CaptureSet(*members[i]->m_TopLevelSoundSet)};
+        const SamplePaths paths = LoadedSamplePaths();
+        for (size_t i = 0; i < members.size(); ++i) result.sounds[i] = {members[i]->SaveCheckpoint(), CaptureSet(*members[i]->m_TopLevelSoundSet, paths)};
         return result;
     }
-    static std::string SaveCapturedSet(const SoundSet& source) {
+    static std::string SaveCapturedSet(const SoundSet& source, const SamplePaths& paths) {
         CheckpointWriter writer("GUISoundSet1");
         writer(source.m_SoundSelectionCycleMode, source.m_CurrentSelection, source.m_SoundData.size());
         for (const auto& sample: source.m_SoundData) {
-            std::string path;
-            if (sample.SoundObject) {
-                for (const auto& [candidate, sound]: ContentFile::s_LoadedSamples) if (sound == sample.SoundObject && (path.empty() || candidate < path)) path = candidate;
-                if (path.empty()) throw std::runtime_error("GUI sample has no cached asset identity");
-            }
+            const std::string path = SamplePath(paths, sample.SoundObject);
             writer(CheckpointWriter::Native([&] {
                 CheckpointWriter value("GUISoundSample1");
                 value(sample.SoundFile, path, sample.Offset, sample.MinimumAudibleDistance, sample.AttenuationStartDistance);
@@ -216,15 +225,16 @@ struct GUISoundCheckpoint {
         writer(source.m_SubSoundSets.size());
         for (const auto* child: source.m_SubSoundSets) {
             if (!child) throw std::runtime_error("null GUI sound subset");
-            writer(CheckpointWriter::Native([&] { return SaveCapturedSet(*child); }));
+            writer(CheckpointWriter::Native([&] { return SaveCapturedSet(*child, paths); }));
         }
         return writer.Text();
     }
     static std::string SaveCaptured(const GUISound& source) {
         CheckpointWriter writer("GUISound1");
+        const SamplePaths paths = LoadedSamplePaths();
         for (const auto* sound: Members(const_cast<GUISound&>(source))) writer(CheckpointWriter::Native([&] {
             CheckpointWriter value("GUISoundContainer1");
-            value(*sound, CheckpointWriter::Native([&] { return SaveCapturedSet(*sound->m_TopLevelSoundSet); }));
+            value(*sound, CheckpointWriter::Native([&] { return SaveCapturedSet(*sound->m_TopLevelSoundSet, paths); }));
             return value.Text();
         }));
         return writer.Text();
