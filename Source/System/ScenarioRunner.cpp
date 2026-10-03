@@ -154,6 +154,7 @@ namespace RTE {
 		uint64_t s_SlowMachineNoticeUntilMs = 0;
 		long long s_LockstepWaitUs = 0;
 		std::optional<std::chrono::steady_clock::time_point> s_PreSimWait;
+		bool s_PacedClockStarted = false; //!< This coordinator's round has run its first tick: its clock owes from there, never from the wait for its start.
 		NetPaceSlide s_PaceSlide;
 		struct LockstepWaitTimer {
 			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
@@ -1102,6 +1103,7 @@ namespace RTE {
 		NetLockstepPlane::Target(coordinator);
 		s_PreSimWait.reset();
 		s_PaceSlide.Reset();
+		s_PacedClockStarted = false;
 		s_LocalStartParkPublished = false;
 		if (!coordinator) {
 			s_E2eFirstTransferUid = 0; // A resync does not undo the first transfer; the latch clears with the coordinator.
@@ -3140,6 +3142,12 @@ namespace RTE {
 		if (!s_LockstepCoordinator->IsRunning()) {
 			s_PreSimWait = now;
 			return false;
+		}
+		// The time this peer waited for its round to start is not owed: a peer that waited longer would race through it and run
+		// ahead of the others' clocks by the difference, and the peer behind would feed every tick late.
+		if (!s_PacedClockStarted) {
+			s_PacedClockStarted = true;
+			g_TimerMan.HoldSimTicks(0);
 		}
 		std::string primeError;
 		if (!PrimeRestoredLockstepInputs(&primeError)) { SetControllerReplayError(primeError); return false; }
