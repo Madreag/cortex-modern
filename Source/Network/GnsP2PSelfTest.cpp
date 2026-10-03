@@ -1436,7 +1436,13 @@ namespace RTE {
 							const std::vector<uint8_t> fromHost = Payload('H');
 							if (!joiner.transport.Send(joiner.peer, NetTransportLane::ControlReliable, fromJoiner, &error) || !host.transport.Send(host.peer, NetTransportLane::ControlReliable, fromHost, &error)) {
 								failure = "Send after the hold: " + error;
-							} else if (!WaitUntil(5000, pump, [&] { return !host.received.empty() && !joiner.received.empty(); }) || host.received.front() != fromJoiner || joiner.received.front() != fromHost) {
+							} else if (!WaitUntil(5000, pump, [&] {
+								// The hold's last numbered message can still be in flight and land first; the reliable one must arrive whole.
+								const auto arrived = [](const Side& side, const std::vector<uint8_t>& message) {
+									return std::find(side.received.begin(), side.received.end(), message) != side.received.end();
+								};
+								return arrived(host, fromJoiner) && arrived(joiner, fromHost);
+							})) {
 								failure = "the 64-byte reliable messages did not cross both ways intact after the hold";
 							} else {
 								joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");
