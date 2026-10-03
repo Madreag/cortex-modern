@@ -1,9 +1,12 @@
-"""Every JSON "username"/"credential" value under the given roots that is not blanked, by file, never by value.
+"""Every relay login under the given roots in any form, by file, never by value; with no secret to look for.
 
-    python tools/relay_login_sweep.py <root> [<root> ...] [--skip-dir engine --skip-dir Data]
+    python tools/relay_login_sweep.py <root> [<root> ...] [--skip-dir <name>]
 
-Needs no secret to look for: it finds the shape the lobby codec writes a relay login in. A hit is a login some file holds
-in the clear (a test fixture's fake value counts too: read the path). Junctions and symlinks are never entered.
+It reads every file (no size or extension is skipped; a junction or symlink is never entered) in every form
+relay_secrets.sweep reads and finds a login by its shape: a JSON username/credential field (escaped too), an INI relay
+login key, a coturn REST username, a 64-hex value after a login key, a coturn account line. A file or directory it
+cannot read makes the result INCOMPLETE, never clean. --skip-dir drops whole named directories from the sweep and the
+result lists every one it dropped.
 """
 from __future__ import annotations
 
@@ -13,24 +16,22 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from relay_scrub import logins  # noqa: E402
-from relay_secrets import walk_files  # noqa: E402
+from relay_secrets import Finder, sweep as structural_sweep  # noqa: E402
 
 
-def sweep(roots: list[Path], skip_dirs: set[str]) -> dict:
-    hits, scanned = [], 0
-    for root in roots:
-        for path in walk_files(root):
-            if skip_dirs & set(path.relative_to(root).parts[:-1]):
-                continue
-            scanned += 1
-            try:
-                found = [field for field, _, _, value in logins(path.read_bytes()) if set(value) != {ord('x')}]
-            except OSError:
-                continue
-            if found:
-                hits.append(dict(path=str(path), fields=sorted(set(found)), count=len(found)))
-    return dict(files_scanned=scanned, files_with_logins=hits)
+def sweep(roots: list[Path], skip_dirs: set[str] | None = None) -> dict:
+    skip_dirs = set(skip_dirs or ())
+    chosen, skipped = [], []
+    for root in map(Path, roots):
+        if skip_dirs and root.is_dir():
+            for child in root.iterdir():
+                (skipped if child.name in skip_dirs else chosen).append(child)
+        else:
+            chosen.append(root)
+    result = structural_sweep(chosen, Finder([], None))
+    return dict(status=result['status'], files_scanned=result['files_scanned'], incomplete=result['incomplete'],
+                skipped_dirs=[str(path) for path in skipped],
+                files_with_logins=[dict(path=row['path'], fields=row['kinds'], forms=row['forms']) for row in result['files_with_secrets']])
 
 
 def main(argv=None) -> int:
@@ -40,7 +41,7 @@ def main(argv=None) -> int:
     options = parser.parse_args(argv)
     result = sweep(options.roots, set(options.skip_dir))
     print(json.dumps(result, indent=1))
-    return 1 if result['files_with_logins'] else 0
+    return 0 if result['status'] == 'CLEAN' else 3 if result['status'] == 'INCOMPLETE' else 1
 
 
 if __name__ == '__main__':
