@@ -50,6 +50,10 @@ PATTERNS = {
     # A JSON login field, and the same field escaped inside another JSON string.
     'json-login-field': re.compile(rb'"(username|credential)"\s*:\s*"((?:[^"\\]|\\.)*)"'),
     'escaped-json-login-field': re.compile(rb'\\"(username|credential)\\"\s*:\s*\\"((?:[^"\\]|\\\\(?:\\\\|\\"))*)\\"'),
+    # The same settings keys as JSON (a harness spec or receipt carrying a peer's settings), plain or escaped.
+    'json-relay-setting': re.compile(rb'(?i)"(NetworkTurnUser|NetworkTurnPass|NetworkPlayerTurnUser|NetworkPlayerTurnPass)"\s*:\s*"((?:[^"\\]|\\.)*)"'),
+    'escaped-json-relay-setting': re.compile(
+        rb'(?i)\\"(NetworkTurnUser|NetworkTurnPass|NetworkPlayerTurnUser|NetworkPlayerTurnPass)\\"\s*:\s*\\"((?:[^"\\]|\\\\(?:\\\\|\\"))*)\\"'),
     # A relay login written into an INI (Settings.ini) by the game or a harness.
     'ini-relay-login': re.compile(rb'(?mi)^[ \t]*(NetworkTurnUser|NetworkTurnPass|NetworkPlayerTurnUser|NetworkPlayerTurnPass)[ \t]*=[ \t]*([^\r\n]*?)[ \t]*\r?$'),
     # coturn's REST username as the directory mints it: expiry seconds, a colon, a 24-hex tag.

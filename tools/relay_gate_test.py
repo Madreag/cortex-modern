@@ -80,6 +80,15 @@ class EncodedForms(unittest.TestCase):
         self.assertEqual(shapes['status'], 'LEAKED', shapes)
         self.assertEqual(shapes['files_with_logins'][0]['fields'], ['shape:ini-relay-login'])
 
+    def test_a_settings_key_inside_a_json_spec_is_a_login_field(self):
+        # The first pass's EDITH spec kept NetworkTurnUser as a JSON key (edith-set-5/coturn/edith-peers.json, 4:01 PM sweep).
+        spec = plain({'peers': [{'settings': {'NetworkTurnUser': 'some-unknown-user', 'NetworkTurnPass': ''}}]})
+        for name, data in (('peers.json', spec), ('wrapped.json', plain({'spec': spec.decode()}))):
+            with self.subTest(name), tempfile.TemporaryDirectory() as folder:
+                (Path(folder) / name).write_bytes(data)
+                shapes = relay_login_sweep.sweep([Path(folder)], set())
+                self.assertEqual(shapes['status'], 'LEAKED', shapes)
+
     def test_a_zip_member(self):
         packed = io.BytesIO()
         with zipfile.ZipFile(packed, 'w', zipfile.ZIP_DEFLATED) as archive:
