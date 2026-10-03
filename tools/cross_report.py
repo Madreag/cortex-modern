@@ -595,6 +595,8 @@ def fullstate_expected(host_rows, cadence):
 
 
 def coverage(events, peers, manifest):
+    ticks = manifest.get('ticks')
+    below_window = type(ticks) is int and 0 <= ticks < 36000
     definitions = [
         ('movement', 'Movement, jetpack, climb and impact', ['movement_observed', 'climb_limb_push', 'impact_damage'], 5, 'each kind per originating seat per ten minutes', 'Jetpack and obstacle completion receipts are absent.'),
         ('weapons', 'Weapon classes and actions', ['round_fired', 'reload_completed', 'thrown_release'], 1, 'each class and action per seat per match', 'Melee, shield, explosion, sharp-aim and brain-weapon oracles remain absent.'),
@@ -639,13 +641,18 @@ def coverage(events, peers, manifest):
                         and event.get('type') == 'coverage']
             successes = {kind: sum(event.get('amount', 1) for event in selected if event.get('event') == kind
                                    and type(event.get('amount', 1)) in (int, float) and math.isfinite(event.get('amount', 1)) and event.get('amount', 1) > 0
-                                   and event.get('result', 'success') in ('success', 'orphan', 'penetrate', 'penetrate_air', 'dislodge', 'silhouette', 'unattributed', 'health_exhausted_unattributed', 'death_timer', 'committed')) for kind in kinds}
+                                   and (event.get('result', 'success') in ('success', 'orphan', 'penetrate', 'penetrate_air', 'dislodge', 'silhouette', 'unattributed', 'health_exhausted_unattributed', 'death_timer', 'committed')
+                                        or (kind == 'dead' and event.get('result') == 'human_death_motion'))) for kind in kinds}
             counts[peer] = dict(successes=successes, attempts=sum(event.get('result') == 'attempt' for event in selected if event.get('event') in kinds))
         status = 'NOT COVERED' if not kinds else 'PASS' if counts and all(c['successes'] and all(v >= minimum for v in c['successes'].values()) for c in counts.values()) else 'FAIL'
+        required = bool(kinds)
+        # These five minima apply only after ten minutes of simulation; unknown durations keep them required.
+        if key in ('movement', 'weapons', 'buy', 'gold', 'objects') and below_window:
+            status, reason, required = 'NOT APPLICABLE', f'below the coverage window: {ticks} ticks', False
         if key=='terrain' and manifest['scenario']=='match':
             status,reason='NOT APPLICABLE','The destruction minimum applies to soaks; smoke event totals remain visible.'
         result.append(dict(id=key, item=label, status=status, reason=reason, unit=unit, minimum=minimum, peers=counts,
-                           required=bool(kinds), scope='run-owned native counts per observing peer; missing semantic receipts remain engineer work',
+                           required=required, scope='run-owned native counts per observing peer; missing semantic receipts remain engineer work',
                            engineer_receipts=missing_receipts.get(key, [])))
     return result
 
@@ -809,28 +816,47 @@ def hold_causes(host_text):
 
 
 PUBLISHED_SLOW = re.compile(r"\[net-lockstep\] slow machine peer (?P<peer>\d+) at frame (?P<frame>\d+): (?P<published>it runs )?(?P<own>[0-9.eE+-]+) ticks/s against (?(published)the fastest's |)(?P<fastest>[0-9.eE+-]+);(?(published)| the AI takes its seat)")
+PUBLISHED_OWN_SLOW = re.compile(r"\[net-lockstep\] this machine cannot keep up at frame (?P<frame>\d+): (?P<own>[0-9.eE+-]+) ticks/s against the others' (?P<fastest>[0-9.eE+-]+),")
+OWN_SEAT_COMMIT = re.compile(r" AI in control \(the host's own seat, AI of peer \d+\)")
 
 
 def host_hold_evidence(text, incarnation=0, path=None):
     holds, stalls, pending, capacity = [], [], {}, {}
-    current, local = None, None
+    current, local, own_capacity = None, None, None
     for number, line in enumerate(text.splitlines(), 1):
         if found := re.search(r'\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+)', line):
-            current, local = found[1], int(found[2]); pending = {}; capacity = {}
+            current, local = found[1], int(found[2]); pending = {}; capacity = {}; own_capacity = None
         elif found := PUBLISHED_SLOW.search(line):
             peer, frame, own, fastest = int(found['peer']), int(found['frame']), float(found['own']), float(found['fastest'])
             if all(math.isfinite(value) and value > 0 for value in (own, fastest)):
                 capacity[peer, frame] = dict(peer=peer, frame=frame, capacity_tps=own, round_rate_tps=fastest,
                     waiting=True, published=True, round=current, host_peer=local, host_incarnation=incarnation, path=path, line=number)
+        elif found := PUBLISHED_OWN_SLOW.search(line):
+            frame, own, fastest = int(found['frame']), float(found['own']), float(found['fastest'])
+            own_capacity = None
+            if current is not None and local is not None and all(math.isfinite(value) and value > 0 for value in (own, fastest)):
+                own_capacity = dict(peer=local, frame=frame, capacity_tps=own, round_rate_tps=fastest,
+                    waiting=True, published=True, own_machine=True, round=current, host_peer=local,
+                    host_incarnation=incarnation, path=path, line=number)
         elif found := PROPOSE_HOLD.search(line):
             peer, frame = int(found[1]), int(found[2])
-            cause = HOLD_CAUSE.search(line)
-            pending[peer] = dict(cause=cause[1] if cause else None, proposal_frame=frame,
-                                  capacity_evidence=capacity.get((peer, frame)))
+            named = HOLD_CAUSE.search(line)
+            cause, evidence = named[1] if named else None, capacity.get((peer, frame))
+            if peer == local and cause in (None, 'own_seat'):
+                candidate, own_capacity = own_capacity, None
+                # A host warning belongs only to its next own-seat proposal within the host-stall window.
+                if candidate and 0 <= frame - candidate['frame'] <= 60:
+                    evidence = candidate
+            pending[peer] = dict(cause=cause, proposal_frame=frame, capacity_evidence=evidence)
         elif found := HOLD_LINE.search(line):
             peer, frame = int(found[1]), int(found[2])
+            proposal = pending.pop(peer, {})
+            if proposal.get('cause') is None and peer == local and OWN_SEAT_COMMIT.search(line):
+                proposal['cause'] = 'own_seat'
+            if (proposal.get('capacity_evidence') or {}).get('own_machine') and proposal.get('proposal_frame') != frame:
+                proposal.pop('capacity_evidence')
             holds.append(dict(peer=peer, tick=frame, round=current, host_incarnation=incarnation,
-                              path=path, line=number, **pending.pop(peer, {})))
+                              path=path, line=number, **proposal))
         elif found := re.search(r'\[net-test\] live stall frame=(\d+) ms=(\d+)', line):
             stalls.append(dict(peer=local, frame=int(found[1]), ms=int(found[2]), round=current,
                                incarnation=incarnation, path=path, line=number, source='host stdout'))
@@ -846,6 +872,8 @@ def design_hold(hold, receipts):
     capacity = receipt.get('capacity_evidence') or {}
     own, fastest = capacity.get('capacity_tps'), capacity.get('round_rate_tps')
     own_seat = receipt.get('cause') == 'own_seat' and capacity.get('host_peer') == hold.get('peer')
+    if capacity.get('own_machine') and not own_seat:
+        return {}
     if (receipt.get('cause') not in DESIGN_CAUSES and not own_seat) or own is None or fastest is None:
         return {}
     tolerance = 0.5 if fastest >= 59.5 else fastest / 10.0
