@@ -718,7 +718,9 @@ def forced_hold_evidence(root: Path, lever: str, scale: int = 1, offset: int = 0
     tick, milliseconds = map(int, lever.split(':'))
     tick = tick * scale + offset
     host, client = peer_log(root, 'host'), peer_log(root, 'client')
-    assert re.search(rf'\[net-test\] live stall frame={tick}\b', client), f'client stall {tick}:{milliseconds} never fired'
+    # The lever stalls once its frame is reached; a client running several ticks in one loop pass is past it by then.
+    fired = re.search(r'\[net-test\] live stall frame=(\d+)\b', client)
+    assert fired and int(fired[1]) >= tick, f'client stall {tick}:{milliseconds} never fired'
     identity = re.search(r'\[net-lockstep\] start [^\n]*local_peer=(\d+)', client)
     assert identity, 'client native seat identity is absent'
     seat = int(identity[1])
@@ -729,7 +731,7 @@ def forced_hold_evidence(root: Path, lever: str, scale: int = 1, offset: int = 0
     completed |= set(map(int, re.findall(rf'\[net-world\] catch-up complete peer={seat} at=(\d+)', client)))
     pairs = [(hold, back) for hold in holds if hold >= tick for back in reclaims if back > hold and back in completed]
     assert pairs, f'client stall {tick} has no native hold/completed reclaim: holds={holds}, reclaims={reclaims}'
-    return dict(requested=True, stall_tick=tick, seat=seat, hold=pairs[0][0], reclaim=pairs[0][1])
+    return dict(requested=True, stall_tick=tick, stall_fired=int(fired[1]), seat=seat, hold=pairs[0][0], reclaim=pairs[0][1])
 
 
 def judge_anchor(root: Path, ticks: int, perturb_at: int) -> dict:
