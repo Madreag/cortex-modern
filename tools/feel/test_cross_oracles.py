@@ -155,7 +155,8 @@ class HeldSeatAwayRange(unittest.TestCase):
             return away, cross_report.report.compare_histories(live, self.RANGE, {'controller', 'sim_rng'}, away)
         away, result = judge('[net-lockstep] hold of this seat at 6 revision=4' + chr(10) + self.LEFT)
         self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): (6, 10)})
-        self.assertTrue(result['passed'])
+        self.assertFalse(result['passed'])
+        self.assertTrue(any('non-private' in row.get('reason', '') for row in result['invalid']))
         # Without the seat's own hold line the same differing tick is compared.
         away, result = judge(self.LEFT)
         self.assertEqual(result['unequal_keys'], 1)
@@ -226,11 +227,13 @@ class ImageRejoinHistory(unittest.TestCase):
 
     def test_a_seat_held_from_its_rounds_start_that_only_replayed_it_was_away(self):
         # l4p-31's EDITH: relaunched in the lobby, held from round 2's first frame, replayed it from an image and landed in round 3.
-        live = {p: [live_row(t, p) for t in range(1, 13)] for p in ('a', 'b')}
-        live['c'] = [dict(live_row(t, 'c'), history_branch=None, phase='catchup') for t in range(5, 13)]
-        compared, away = cross_report.adopt_restored_histories(live, self.RANGE, {'c': ['[net-match] rejoin phase Loading -> TailReplay']})
-        self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): [(1, 12)]})
-        self.assertTrue(cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)['passed'])
+        rng = [dict(self.RANGE[0], match='1')]
+        live = {p: [dict(live_row(t, p), match='1') for t in range(1, 13)] for p in ('a', 'b')}
+        live['c'] = [dict(live_row(t, 'c'), match='1', history_branch=None, phase='catchup') for t in range(5, 13)]
+        receipt = '[net-lockstep] start round=1 frame=1 local_peer=3 peers=3\n[net-lockstep] hold of this seat at 1 revision=1\n[net-match] rejoin phase Loading -> TailReplay'
+        compared, away = cross_report.adopt_restored_histories(live, rng, {'c': [receipt]})
+        self.assertEqual(away, {('c', ('s', '1', 'initial', 1)): [(1, 12)]})
+        self.assertTrue(cross_report.report.compare_histories(compared, rng, {'controller', 'sim_rng'}, away)['passed'])
         # Without the replay the seat's absence is not explained.
         live['c'] = []
         self.assertEqual(cross_report.adopt_restored_histories(live, self.RANGE, {'c': ['[net-match] rejoin phase Loading -> TailReplay']})[1], {})
@@ -334,11 +337,12 @@ class ScheduleKeyedOracles(unittest.TestCase):
 
 class AbandonedTicks(unittest.TestCase):
     def test_the_engines_retraction_voids_the_rows_before_it(self):
-        rows = [live_row(t, 'c') for t in range(1, 7)] + [dict(abandon_from=5, round=None)] + [live_row(9, 'c')]
+        rows = [dict(live_row(t, 'c'), round=1, phase='private' if t >= 5 else 'live', player_visible=t < 5) for t in range(1, 7)]
+        rows += [dict(abandon_from=5, round=1, incarnation=0, instance='c', execution='one'), live_row(9, 'c')]
         kept = cross_report.void_abandoned(rows)
         self.assertEqual([r['tick'] for r in kept], [1, 2, 3, 4, 9])
         # A retraction names its round: another round's rows stay.
-        other = [dict(live_row(t, 'c'), round=7) for t in range(5, 8)] + [dict(abandon_from=5, round=8)]
+        other = [dict(live_row(t, 'c'), round=7) for t in range(5, 8)] + [dict(abandon_from=5, round=8, incarnation=0, instance='c', execution='one', private=True, player_visible=False)]
         self.assertEqual(len(cross_report.void_abandoned(other)), 3)
 
 class MemorySlope(unittest.TestCase):
