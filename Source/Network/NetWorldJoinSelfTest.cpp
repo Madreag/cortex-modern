@@ -1339,6 +1339,64 @@ namespace RTE {
 			return 0;
 		}
 
+		// A watcher speaks on its reserved lobby id, and its own state is what lets its image leave the host.
+		int TestWatcherStateMarksItsConnectionUp() {
+			for (const uint8_t peer: {c_WorldSpectatorLobbyPeerFirst, c_WorldSpectatorLobbyPeerLast, static_cast<uint8_t>(NetMatchConfigUtil::c_MaxPeerCount + 1),
+			                          static_cast<uint8_t>(c_WorldSpectatorLobbyPeerFirst - 1), static_cast<uint8_t>(c_WorldSpectatorLobbyPeerLast + 1)}) {
+				NetLobbyMessage message;
+				NetLobbyPeerState state;
+				state.peerId = peer;
+				state.displayName = "Watcher";
+				message.payload = state;
+				std::vector<uint8_t> bytes;
+				NetLobbyError encodeError;
+				if (!NetLobbyProtocol::Encode(message, bytes, &encodeError)) return Fail("watcher-state-undecodable: peer " + std::to_string(peer) + " did not encode: " + encodeError.message);
+				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(bytes);
+				const bool watcher = peer >= c_WorldSpectatorLobbyPeerFirst && peer <= c_WorldSpectatorLobbyPeerLast;
+				if (decoded.ok != watcher)
+					return Fail("watcher-state-undecodable: a peer state from lobby id " + std::to_string(peer) + (decoded.ok ? " decoded" : " was refused: " + decoded.error.message));
+			}
+			std::string error;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			if (!hostTransport.StartHost(47161, &error) || !clientTransport.Connect("loopback", 47161, &error)) return Fail("watcher pair: " + error);
+			NetPeerId hostRemote = c_InvalidNetPeerId;
+			NetPeerId clientRemote = c_InvalidNetPeerId;
+			for (const NetTransportEvent& event: hostTransport.PollEvents())
+				if (event.type == NetTransportEventType::PeerConnected) hostRemote = event.peerId;
+			for (const NetTransportEvent& event: clientTransport.PollEvents())
+				if (event.type == NetTransportEventType::PeerConnected) clientRemote = event.peerId;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.matchConfig = MakeWorldConfig();
+			hostConfig.autoStart = false;
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = c_WorldSpectatorLobbyPeerFirst;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemote;
+			clientConfig.matchConfig = MakeWorldConfig();
+			NetLobbySession host;
+			NetLobbySession client;
+			if (!host.Start(hostTransport, hostConfig, &error) || !host.BindWorldTransferRemote(c_WorldSpectatorLobbyPeerFirst, hostRemote, &error) ||
+			    !client.Start(clientTransport, clientConfig, &error)) {
+				return Fail("watcher pair: " + error);
+			}
+			uint64_t nowMs = 0;
+			for (int round = 0; round < 8; ++round) {
+				host.Tick(nowMs);
+				client.Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+				nowMs += 10;
+			}
+			if (!host.IsRemoteConnectionLobbyUp(c_WorldSpectatorLobbyPeerFirst) || host.GetStats().malformedMessages != 0) {
+				return Fail("watcher-never-lobby-up: the host heard the watcher's lobby lobby-up " + std::string(host.IsRemoteConnectionLobbyUp(c_WorldSpectatorLobbyPeerFirst) ? "true" : "false") +
+				            ", malformed " + std::to_string(host.GetStats().malformedMessages) + ", the watcher sent " + std::to_string(client.GetStats().messagesSent));
+			}
+			return 0;
+		}
+
 		// A joiner names a tail chunk it cannot read the round of instead of dropping it unseen.
 		int TestJoinerNamesAnUnroundedTailChunk() {
 			std::string error;
@@ -8315,6 +8373,10 @@ namespace RTE {
 			s_FailTag = "net-world-bootstrap-selftest";
 			return TestHostBootstrapRefusals();
 		}
+		if (std::strcmp(name, "watcher-lobby-up") == 0 || std::strcmp(name, "-net-world-watcher-lobby-up-selftest") == 0) {
+			s_FailTag = "net-world-watcher-lobby-up-selftest";
+			return TestWatcherStateMarksItsConnectionUp();
+		}
 		if (std::strcmp(name, "unrounded-tail") == 0 || std::strcmp(name, "-net-world-unrounded-tail-selftest") == 0) {
 			s_FailTag = "net-world-unrounded-tail-selftest";
 			return TestJoinerNamesAnUnroundedTailChunk();
@@ -8504,6 +8566,7 @@ namespace RTE {
 		if (const int result = TestHostBootstrapRefusals(); result != 0) {
 			return result;
 		}
+		if (const int result = TestWatcherStateMarksItsConnectionUp(); result != 0) return result;
 		if (const int result = TestJoinerNamesAnUnroundedTailChunk(); result != 0) return result;
 		if (const int result = TestWorldImagePublishedFromTheWriter(); result != 0) {
 			return result;

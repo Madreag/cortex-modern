@@ -203,6 +203,9 @@ namespace RTE {
 		static constexpr size_t c_MaxPlayers = NetMatchConfigUtil::c_MaxPlayers;
 		// A seat assignment names a lockstep peer, and the peerless CPU teams take slots past the last peer.
 		static constexpr size_t c_MaxPeers = NetMatchConfigUtil::c_MaxPeerCount;
+		// A world's watchers speak on lobby ids above every seat, one per connection.
+		static constexpr uint8_t c_FirstWatcherPeer = 32;
+		static constexpr uint8_t c_LastWatcherPeer = 47;
 
 		static constexpr uint16_t GetStateChunkCount(size_t totalBytes) {
 			return totalBytes == 0 || totalBytes > c_MaxTotalStateBytes ? 0 : static_cast<uint16_t>((totalBytes - 1) / c_MaxStateChunkBytes + 1);

@@ -397,8 +397,8 @@ namespace RTE {
 	/// World-join plane schema on the offer, the transition and the membership report.
 	inline constexpr uint16_t c_NetWorldJoinSchema = 1;
 	/// Overflow spectators bind lobby ids in [first, last], one per connection, above member seats.
-	inline constexpr uint8_t c_WorldSpectatorLobbyPeerFirst = 32;
-	inline constexpr uint8_t c_WorldSpectatorLobbyPeerLast = 47;
+	inline constexpr uint8_t c_WorldSpectatorLobbyPeerFirst = NetLobbyProtocol::c_FirstWatcherPeer;
+	inline constexpr uint8_t c_WorldSpectatorLobbyPeerLast = NetLobbyProtocol::c_LastWatcherPeer;
 	inline constexpr size_t c_WorldSpectatorLobbyCap = static_cast<size_t>(c_WorldSpectatorLobbyPeerLast - c_WorldSpectatorLobbyPeerFirst + 1);
 	// A host may never configure more spectators than the world has lobby ids to bind them on.
 	static_assert(NetMatchConfigUtil::c_MaxWorldSpectators <= c_WorldSpectatorLobbyCap);
