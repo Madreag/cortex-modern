@@ -4,10 +4,35 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from acceptance_cross_report import build_report, native_prerequisites, refusal_log_excerpt
+from acceptance_cross_report import build_report, native_prerequisites, refusal_log_excerpt, native_route_evidence
 
 
 class CrossReceiptReport(unittest.TestCase):
+    def test_route_uses_native_candidate_and_route_receipts(self):
+        host = '[net-ice] selected candidate=srflx connection=100\n[net-route] RouteAllowed route=direct allowed=1 connection=100\n'
+        client = '[net-ice] selected candidate=srflx connection=200\n[net-route] RouteAllowed route=direct allowed=1 connection=200\n'
+        result = native_route_evidence(host, client)
+        self.assertEqual(result['route'], 'direct')
+        self.assertTrue(result['nat_to_nat'])
+        self.assertTrue(result['stun'])
+
+    def test_unrelated_or_refused_routes_do_not_prove_nat_join(self):
+        host = '[net-ice] selected candidate=srflx connection=100\n[net-route] RouteAllowed route=direct allowed=1 connection=100\n'
+        candidate = '[net-ice] selected candidate=srflx connection=200\n'
+        for route in ('[net-route] RouteAllowed route=direct allowed=1 connection=201\n',
+                      '[net-route] RouteAllowed route=direct allowed=0 connection=200\n',
+                      '[net-route] RouteAllowed route=relay allowed=1 connection=200\n',
+                      '[net-ice] route=direct connection=200\n'):
+            with self.subTest(route=route):
+                result = native_route_evidence(host, candidate+route)
+                self.assertIsNone(result['route'])
+                self.assertFalse(result['nat_to_nat'])
+
+    def test_host_route_cannot_be_substituted_by_an_unpaired_candidate(self):
+        client = '[net-ice] selected candidate=srflx connection=200\n[net-route] RouteAllowed route=direct allowed=1 connection=200\n'
+        result = native_route_evidence('[net-ice] selected candidate=srflx connection=100\n', client)
+        self.assertFalse(result['nat_to_nat'])
+
     def test_refusal_report_does_not_copy_connection_details(self):
         text = '[net-session] admission refused reason=ModuleManifestMismatch endpoint=fixture-private-endpoint\n'
         self.assertEqual(refusal_log_excerpt(text), 'ModuleManifestMismatch')

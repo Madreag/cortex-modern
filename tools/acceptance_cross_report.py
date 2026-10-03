@@ -45,6 +45,31 @@ def refusal_log_excerpt(text):
     return "\n".join(re.findall(r"\bModuleManifestMismatch\b", text))
 
 
+def native_route_evidence(host_text, joiner_text):
+    """Pair the transport's candidate and allowed-route lines by native handle."""
+    def connections(text):
+        candidates, receipts = {}, []
+        for number, line in enumerate(text.splitlines(), 1):
+            candidate = re.fullmatch(r'\[net-ice\] selected candidate=(host|srflx|prflx|relay) connection=(\d+)', line)
+            if candidate:
+                candidates[candidate[2]] = (candidate[1], number)
+            route = re.fullmatch(r'\[net-route\] RouteAllowed route=(direct|relay) allowed=([01]) connection=(\d+)', line)
+            if route:
+                selected, candidate_line = candidates.get(route[3], (None, None))
+                receipts.append(dict(connection=int(route[3]), candidate=selected, candidate_line=candidate_line,
+                                     route=route[1], allowed=route[2] == '1', route_line=number))
+        return receipts
+
+    host, joiner = connections(host_text), connections(joiner_text)
+    def direct(receipt):
+        return receipt.get('candidate') in ('host', 'srflx', 'prflx') and receipt.get('route') == 'direct' and receipt.get('allowed') is True
+    latest = joiner[-1] if joiner else {}
+    reflected = direct(latest) and latest.get('candidate') == 'srflx'
+    return dict(nat_to_nat=reflected and any(direct(receipt) and receipt['candidate'] == 'srflx' for receipt in host),
+                stun=reflected, route='direct' if direct(latest) else None,
+                native_connections=dict(host=host, joiner=joiner))
+
+
 ENGINE_FINDING = re.compile(
     r"RTE Assert|FATAL:|EXCEPTION_ACCESS_VIOLATION|Runtime Error due to unhandled exception|Rejected .*command|"
     r"\[cross-record\] FAIL|\[net-ui-probe\] FAIL|\[net-match-service-e2e\].*(?:FAIL|setup failed)|"
@@ -107,9 +132,7 @@ def build_report(root):
         facts["join"] = dict(peer="edith", host_tick=released.get("host_tick"), activation_tick=start, last_tick=end,
                              directory=manifest.get("directory_mode"), public_directory_down=manifest.get("public_directory_down"),
                              own_certificate=manifest.get("own_certificate"),
-                             nat_to_nat=bool(re.search(r"\[net-ice\][^\n]*srflx", logs.get("edith", ""))) and bool(re.search(r"\[net-ice\][^\n]*srflx", logs.get("pc", ""))),
-                             stun=bool(re.search(r"\[net-ice\][^\n]*srflx", logs.get("edith", ""))),
-                             route="direct" if re.search(r"\[net-ice\][^\n]*route=direct", logs.get("edith", "")) else None)
+                             **native_route_evidence(logs.get("pc", ""), logs.get("edith", "")))
         facts["transfer"] = load(paths.get("edith", root)/"acceptance-transfer.json", {})
     elif row == "mod-refusal":
         comparing.remove("linux")
