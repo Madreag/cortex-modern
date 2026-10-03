@@ -51,7 +51,7 @@ PATTERNS = {
     'json-login-field': re.compile(rb'"(username|credential)"\s*:\s*"((?:[^"\\]|\\.)*)"'),
     'escaped-json-login-field': re.compile(rb'\\"(username|credential)\\"\s*:\s*\\"((?:[^"\\]|\\\\(?:\\\\|\\"))*)\\"'),
     # A relay login written into an INI (Settings.ini) by the game or a harness.
-    'ini-relay-login': re.compile(rb'(?mi)^[ \t]*(NetworkTurnUser|NetworkTurnPass|NetworkPlayerTurnUser|NetworkPlayerTurnPass)[ \t]*=[ \t]*([^\r\n]*?)[ \t]*$'),
+    'ini-relay-login': re.compile(rb'(?mi)^[ \t]*(NetworkTurnUser|NetworkTurnPass|NetworkPlayerTurnUser|NetworkPlayerTurnPass)[ \t]*=[ \t]*([^\r\n]*?)[ \t]*\r?$'),
     # coturn's REST username as the directory mints it: expiry seconds, a colon, a 24-hex tag.
     'coturn-rest-username': re.compile(rb'(?<![0-9])(1[0-9]{9}:[0-9a-f]{24})(?![0-9a-f])'),
     # A 64-hex value right after a login key (Cloudflare's minted username and credential are 64 hex characters).
@@ -302,8 +302,16 @@ def file_hits(data: bytes, finder: Finder, public=None, public_rows=None) -> tup
     instead; a key, token, secret, password or minted login is never excused."""
     rows, spans, in_archive = [], [], False
     for form, view, back in views(data):
-        for start, end, kind, how in finder.hits(view):
-            reason = public(view[start:end]) if public and (kind == 'fixed-username' or kind.startswith('shape:')) else None
+        found = finder.hits(view)
+        fields = [(start, end) for start, end, kind, _ in found if kind.startswith('shape:')]
+        booked = [(start, end) for start, end, kind, _ in found if not kind.startswith('shape:')]
+        overlaps = lambda start, end, spans_: any(start < right and left < end for left, right in spans_)
+        for start, end, kind, how in found:
+            # The retired account's name is a public word outside a login field; a login field's value is public only
+            # when it is no booked value (a sample login in a test file, never the retired account's own name).
+            excusable = (kind == 'fixed-username' and not overlaps(start, end, fields)) or \
+                        (kind.startswith('shape:') and not overlaps(start, end, booked))
+            reason = public(view[start:end]) if public and excusable else None
             if reason:
                 public_rows.append(dict(form=form, kind=kind, how=how, reason=reason))
                 continue

@@ -208,7 +208,9 @@ class SecretScan(unittest.TestCase):
             (root / 'leak.ini').write_text('NetworkTurnPass = unit-minted-credential\n', encoding='utf-8')
             scan = book.scan([root])
         self.assertFalse(scan['clean'])
-        self.assertEqual([(Path(row['path']).name, row['kinds']) for row in scan['files_with_secrets']], [('leak.ini', ['minted-credential'])])
+        # write_text writes CRLF here: the INI login shape reads that line as well as the book (it missed CRLF before).
+        self.assertEqual([(Path(row['path']).name, row['kinds']) for row in scan['files_with_secrets']],
+                         [('leak.ini', ['minted-credential', 'shape:ini-relay-login'])])
         self.assertNotIn('unit-minted-credential', json.dumps(scan))
 
     def test_the_scan_never_enters_a_junction_or_symlink(self):

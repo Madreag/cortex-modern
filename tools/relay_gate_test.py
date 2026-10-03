@@ -71,6 +71,15 @@ class EncodedForms(unittest.TestCase):
         ini = f'SettingsMan\n\tNetworkTurnServers = turn:relay.example:3479\n\tNetworkTurnUser = {FIXED_USER}\n\tNetworkTurnPass = {FIXED_PASS}\n'
         self.check('Settings.ini', ini.encode(), {'fixed-username', 'fixed-password'})
 
+    def test_a_windows_settings_file_is_read_by_its_login_shape(self):
+        # The engine writes Settings.ini with CRLF line ends; the shape sweep must read a login there with no book at all.
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'Settings.ini').write_bytes(b'SettingsMan\r\n\tNetworkTurnServers = turn:relay.example:3479\r\n'
+                                                        b'\tNetworkPlayerTurnUser = some-unknown-user\r\n\tNetworkPlayerTurnPass = some-unknown-pass\r\n')
+            shapes = relay_login_sweep.sweep([Path(folder)], set())
+        self.assertEqual(shapes['status'], 'LEAKED', shapes)
+        self.assertEqual(shapes['files_with_logins'][0]['fields'], ['shape:ini-relay-login'])
+
     def test_a_zip_member(self):
         packed = io.BytesIO()
         with zipfile.ZipFile(packed, 'w', zipfile.ZIP_DEFLATED) as archive:
@@ -458,6 +467,18 @@ class ProofPieces(unittest.TestCase):
         self.assertEqual(leaked['status'], 'LEAKED')
         self.assertEqual({kind for row in leaked['files_with_secrets'] for kind in row['kinds']} & {'fixed-password', 'minted-username'},
                          {'fixed-password', 'minted-username'})
+
+    def test_the_retired_name_in_a_login_field_is_a_login(self):
+        # EDITH's first-pass coturn run kept the retired account's name as NetworkTurnUser (2026-10-03 3:46 PM sweep).
+        import relay_secrets
+        public = lambda value: 'in the repository'
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / 'Settings.ini').write_text(f'\tNetworkTurnUser = {FIXED_USER}\n', encoding='utf-8')
+            (Path(folder) / 'peers.json').write_text(json.dumps({'settings': {'NetworkTurnUser': FIXED_USER}, 'iceServers': [
+                {'username': FIXED_USER}]}), encoding='utf-8')
+            sweep = relay_secrets.sweep([folder], book().finder(), public=public)
+        self.assertEqual(sweep['status'], 'LEAKED')
+        self.assertEqual(sorted(Path(row['path']).name for row in sweep['files_with_secrets']), ['Settings.ini', 'peers.json'])
 
     def test_a_menu_check_without_a_session_fails(self):
         run = dict(match.REQUIRED)
