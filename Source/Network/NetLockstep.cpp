@@ -3433,7 +3433,7 @@ namespace RTE {
 				if (heard == 0) continue;
 				const auto stats = m_Stats.peers.find(peer);
 				const uint64_t rtt = stats != m_Stats.peers.end() ? stats->second.pingMs : 0;
-				const bool closed = !m_RemoteTransports.contains(peer) && !m_HeldPeerLinks.contains(peer);
+				const bool closed = !m_RemoteTransports.contains(peer) && !m_HeldPeerLinks.contains(peer) && !m_ReturningLinks.contains(peer);
 				if (!NetHostLinkLost(closed, nowMs >= heard ? nowMs - heard : 0, rtt)) continue;
 				lost |= 1u << (peer - 1);
 				const auto held = m_AiHeldSeats.find(peer);
@@ -4939,6 +4939,7 @@ namespace RTE {
 		m_DroppedAtMs.clear();
 		m_LastHoldHeartbeatMs = 0;
 		m_HeldPeerLinks.clear();
+		m_ReturningLinks.clear();
 		m_LastHeldLinkMs = 0;
 		m_LastReliableWindowAliveMs = 0;
 		m_RequirePublishedStart = m_Config.requirePublishedStart;
@@ -5579,6 +5580,13 @@ namespace RTE {
 		for (const auto& [revision, proposal]: replay.m_SettledTimings) knowTaken(revision, proposal);
 		while (m_SettledTimings.size() > 64) m_SettledTimings.erase(m_SettledTimings.begin());
 		m_AwaitingReplayedSeatState = false;
+	}
+
+	void NetLockstepCoordinator::NoteReturningLink(uint8_t peerId, NetPeerId transportPeerId, uint64_t nowMs) {
+		NET_PLANE_CHECK();
+		// A player who came back to this host reaches it: without that, a host that lost its only other player writes no image for its return.
+		if (m_Config.localPeerId != GetHostPeerId() || transportPeerId == c_InvalidNetPeerId || !m_AiHeldSeats.contains(peerId)) return;
+		if (m_ReturningLinks.insert_or_assign(peerId, transportPeerId).second) m_PeerLinkHeardMs[peerId] = nowMs;
 	}
 
 	void NetLockstepCoordinator::NoteInPlaceReturn(uint8_t peerId) {
@@ -10424,6 +10432,8 @@ namespace RTE {
 				if (transport == event.peerId) m_PeerLinkHeardMs[peer] = nowMs;
 			for (const auto& [peer, held]: m_HeldPeerLinks)
 				if (held.first == event.peerId) m_PeerLinkHeardMs[peer] = nowMs;
+			for (const auto& [peer, link]: m_ReturningLinks)
+				if (link == event.peerId) m_PeerLinkHeardMs[peer] = nowMs;
 		}
 		if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {
 			HandleMigrationEvent(event, nowMs);
@@ -10448,6 +10458,7 @@ namespace RTE {
 				break;
 			case NetTransportEventType::PeerDisconnected: {
 				std::erase_if(m_HeldPeerLinks, [&](const auto& held) { return held.second.first == event.peerId; });
+				std::erase_if(m_ReturningLinks, [&](const auto& link) { return link.second == event.peerId; });
 				uint8_t lockstepPeer = 0;
 				for (const auto& [peerId, transportId]: m_RemoteTransports) {
 					if (transportId == event.peerId) {

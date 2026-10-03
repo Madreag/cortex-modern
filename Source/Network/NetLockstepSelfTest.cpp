@@ -4141,6 +4141,64 @@ namespace RTE {
 			return true;
 		}
 
+		// A two-player round whose client died leaves its host provisional. The player coming back to this host on a new link is a player
+		// it reaches, so the host is real again - it writes the image that return needs - and provisional again once that link closes.
+		bool TestAHostReachesAPlayerBackOnANewLink(std::string* error) {
+			QuorumRig r;
+			if (!StartQuorumRig(r, 2, 47200, error)) return false;
+			if (!PumpQuorumRig(r, 4000, [&r] { return r.simulated[0] >= 20 && r.simulated[1] >= 20; })) {
+				*error = "the two-player round never ran twenty frames:" + r.Report();
+				return false;
+			}
+			KillQuorumPeer(r, 2);
+			if (!PumpQuorumRig(r, 6000, [&r] { return r.Peer(1).IsHostProvisional() && r.Peer(1).IsSeatUnderAI(2, r.simulated[0]); })) {
+				*error = "the host of a two-player round whose client died was not provisional with the seat held:" + r.Report();
+				return false;
+			}
+			NetPeerId returnerLink = c_InvalidNetPeerId;
+			r.Peer(1).SetSessionEventSink([&returnerLink](const NetTransportEvent& event) {
+				if (event.type == NetTransportEventType::PeerConnected) returnerLink = event.peerId;
+			});
+			LoopbackTransport returner;
+			if (!returner.Connect("loopback", r.port, error)) return false;
+			bool back = true;
+			const auto step = [&] {
+				returner.AdvanceTimeMs(1);
+				std::vector<uint8_t> heartbeat;
+				if (back && r.now % 50 == 0 && NetProtocol::Encode({static_cast<uint32_t>(r.now), 0, NetHeartbeat{r.now, 0, 3}}, heartbeat, nullptr))
+					(void)returner.Send(1, NetTransportLane::ControlReliable, heartbeat);
+				(void)returner.PollEvents();
+				// The service names the returner's link on every pump while its seat waits for the image.
+				if (back && returnerLink != c_InvalidNetPeerId) r.Peer(1).NoteReturningLink(2, returnerLink, r.now);
+				StepQuorumRig(r);
+			};
+			for (uint64_t i = 0; i < 4000 && (returnerLink == c_InvalidNetPeerId || r.Peer(1).IsHostProvisional()); ++i) step();
+			if (returnerLink == c_InvalidNetPeerId || r.Peer(1).IsHostProvisional()) {
+				*error = "a host whose held seat's player is back on a live link stayed provisional: reaches " + std::to_string(r.Peer(1).GetHostReach().votes) + " of " +
+				         std::to_string(r.Peer(1).GetHostReach().seats) + (returnerLink == c_InvalidNetPeerId ? " (the new link never connected)" : "") + r.Report();
+				return false;
+			}
+			// Past the loss bound, only what keeps arriving on the new link keeps the host real.
+			uint64_t provisionalSteps = 0;
+			for (uint64_t i = 0; i < 3000; ++i) {
+				step();
+				provisionalSteps += r.Peer(1).IsHostProvisional() ? 1 : 0;
+			}
+			if (provisionalSteps != 0) {
+				*error = "a host hearing its returning player on the new link went provisional for " + std::to_string(provisionalSteps) + " of 3000 ms" + r.Report();
+				return false;
+			}
+			back = false;
+			returner.Stop();
+			for (uint64_t i = 0; i < 6000 && !r.Peer(1).IsHostProvisional(); ++i) step();
+			if (!r.Peer(1).IsHostProvisional()) {
+				*error = "a host whose returning player's link closed was not provisional again:" + r.Report();
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_host_reaches_a_player_back_on_a_new_link died=provisional back=real held_real_ms=3000 closed=provisional" << std::endl;
+			return true;
+		}
+
 		// R6 (7) on the round: a host whose process stalls for 900 ms is held, never replaced - the loss bound is one second plus two
 		// round trips - while a host silent past the bound is handed over by the majority.
 		bool TestAHostStallInsideTheLossBoundMigratesNobody(std::string* error) {
@@ -23443,6 +23501,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestALateVoterResyncsAfterTheMajorityCloses, "a_late_voter_resyncs_after_the_majority_closes");
 		row(&TestAnIsolatedHostIsProvisionalWhileTheMajorityMigrates, "an_isolated_host_is_provisional_while_the_majority_migrates");
 		row(&TestAHostIsProvisionalUntilItHearsAMajority, "a_host_is_provisional_until_it_hears_a_majority");
+		row(&TestAHostReachesAPlayerBackOnANewLink, "a_host_reaches_a_player_back_on_a_new_link");
 		row(&TestAHostStallInsideTheLossBoundMigratesNobody, "a_host_stall_inside_the_loss_bound_migrates_nobody");
 		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;

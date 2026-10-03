@@ -1125,6 +1125,8 @@ namespace RTE {
 		void NoteSeatReclaimed(uint8_t peerId);
 		/// Host: a returning seat whose catch-up is still replaying toward its reclaim frame; its first-input allowance starts at the catch-up's end.
 		void NoteReturnerCatchingUp(uint8_t peerId, uint64_t nowMs);
+		/// Host: a held seat's player is back on a new link, waiting for its image; what arrives on it counts as hearing that player.
+		void NoteReturningLink(uint8_t peerId, NetPeerId transportPeerId, uint64_t nowMs);
 		/// Host: a returning seat whose catch-up reached its reclaim frame; its first input is judged like any seat's from here.
 		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
@@ -1971,6 +1973,7 @@ namespace RTE {
 		uint64_t m_AuthorityLastHeardMs = 0;
 		uint64_t m_LastLivenessMs = 0; //!< Host: when it last told its clients it is alive while its round waited.
 		std::map<uint8_t, std::pair<NetPeerId, uint64_t>> m_HeldPeerLinks; //!< Host: each held seat's link it still talks on, and when the hold took it.
+		std::map<uint8_t, NetPeerId> m_ReturningLinks; //!< Host: the new link each held seat's player came back on, until it closes.
 		uint64_t m_LastHeldLinkMs = 0; //!< Host: when it last told its held seats it is alive.
 		uint64_t m_LastReliableWindowAliveMs = 0; //!< Host: when it last told the seats reading its frames on the reliable lane it is alive.
 		uint64_t m_OwnFramesSent = 0; //!< Frames of its own this peer has sent.
