@@ -58,6 +58,8 @@ namespace RTE {
 		bool Start(const std::string& directory, int fps, std::size_t queueBound, std::string* error);
 
 		bool Enabled() const { return m_Enabled; }
+		/// The directory this run's frames go to.
+		const std::string& Directory() const { return m_Directory; }
 		int Fps() const { return m_Fps; }
 
 		/// Records an automation observation on the frame index's clock.

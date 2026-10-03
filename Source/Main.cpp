@@ -7983,6 +7983,8 @@ void RunGameLoop() {
 			TelemetryBundle::CaptureAtTickBoundary();
 			const long long crossCaptureUs = g_TimerMan.GetAbsoluteTime() - crossCaptureStartUs;
 			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;
+			// The watches' running totals, so a peer a scene kills has reported what it judged.
+			if (simTick % 600 == 0) MenuAutomation::ReportWatches();
 
 			// The paced round estimates execution cost without counting its idle interval.
 			if (measureLockstepCost) {

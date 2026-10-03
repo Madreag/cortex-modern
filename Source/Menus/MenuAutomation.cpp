@@ -516,6 +516,14 @@ namespace RTE::MenuAutomation {
 			}
 		}
 		if (s_Watches.empty()) return;
+		// A scene that drops this peer says so in its recorder's directory first: the summaries go out before the process does.
+		static bool s_DropReported = false;
+		static int s_DropChecks = 0;
+		if (!s_DropReported && ++s_DropChecks % 15 == 0 && FrameRecorder::Instance().Enabled() &&
+		    std::filesystem::exists(std::filesystem::path(FrameRecorder::Instance().Directory()) / "injected-drop.json")) {
+			s_DropReported = true;
+			ReportWatches();
+		}
 		const auto now = std::chrono::steady_clock::now();
 		const double span = s_LastEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 : std::chrono::duration<double, std::milli>(now - s_LastEvaluated).count();
 		s_FrameSpanMs = std::clamp(span + 1.0, 1.0, c_DrawWindowSeconds * 1000);
@@ -1030,6 +1038,8 @@ namespace RTE::MenuAutomation {
 			args >> observation;
 			if (observation.empty()) return false;
 			FrameRecorder::Instance().RecordEvent("video_mark " + observation);
+			// Each mark closes a span of the scene: the watches say what they judged up to it.
+			ReportWatches();
 			return true;
 		}
 		try {
