@@ -132,8 +132,10 @@ def build_report(root):
         activated = re.findall(r"(?m)^\[net-world\] activate peer=(\d+) at=(\d+)\s*$", logs.get("pc", ""))
         completed = re.findall(r"(?m)^\[net-world\] catch-up complete peer=(\d+) at=(\d+)", logs.get("edith", ""))
         released = load(root/"late-join-released.json", {})
-        start = int(completed[-1][1]) if completed else None
-        if not isinstance(start, int) or completed[-1] not in activated:
+        # A repaired or returning seat still owes every tick after its first
+        # activation; a later catch-up must not erase an earlier bad interval.
+        start = int(completed[0][1]) if completed else None
+        if not isinstance(start, int) or any(value not in activated for value in completed):
             failures.append("join: native activation and late-join receipt do not agree")
             start = None
         facts["join"] = dict(peer="edith", host_tick=released.get("host_tick"), activation_tick=start, last_tick=end,

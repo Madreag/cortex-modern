@@ -63,6 +63,24 @@ class CrossReceiptReport(unittest.TestCase):
                 transfer_failures = [value for value in result['failures'] if value.startswith('transfer:')]
                 self.assertEqual(bool(transfer_failures), expected is None)
 
+    def test_reactivation_cannot_skip_history_after_the_first_late_activation(self):
+        for late_ticks, expected in (((1500, 2000), 1500), ((1500, 1750, 2000), None)):
+            with self.subTest(late_ticks=late_ticks):
+                root = self.run_root()
+                names = ('erol', 'edith', 'mac', 'linux')
+                manifest = dict(acceptance_row='world-join', ticks=3601, preflights={}, driver_findings=[],
+                                boxes=[dict(name=n, kind='windows-local') for n in names],
+                                specs=[dict(peer=n, box=n, own=str(root/n/'incarnation-0'), root=str(root)) for n in names])
+                (root/'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+                for name, label, ticks in (('erol', 'activate', (1500, 2000)), ('edith', 'catch-up complete', late_ticks)):
+                    engine = root/name/'incarnation-0/engine'
+                    engine.mkdir(parents=True)
+                    text = ''.join(f'[net-world] {label} peer=3 at={tick}\n' for tick in ticks)
+                    (engine/'stdout.log').write_text(text, encoding='utf-8')
+                build_report(root)
+                facts = json.loads((root/'acceptance-facts.json').read_text(encoding='utf-8'))
+                self.assertEqual(facts['join']['activation_tick'], expected)
+
     def test_unrelated_or_refused_routes_do_not_prove_nat_join(self):
         host = '[net-ice] selected candidate=srflx connection=100\n[net-route] RouteAllowed route=direct allowed=1 connection=100\n'
         candidate = '[net-ice] selected candidate=srflx connection=200\n'
