@@ -10,12 +10,15 @@ from test_world_mod_cross import baseline, mods
 import acceptance_remote_tasks as remote
 
 
-def profiles():
+def profiles(row=None):
     from test_world_soak_tasks import profiles as windows_profiles
     boxes = windows_profiles()
     for box in boxes:
         box['peers_per_box'] = 1
         box['hostname'] = 'EROL-TABLET' if box['name'] == 'Z13' else 'EDITH'
+        if row == 'world-join':
+            box['tree'] = 'D:/Projects/z13-rows-build' if box['name'] == 'Z13' else 'D:/mx/test/engine-tip'
+            box['executable'] = box['tree']+'/Cortex Command.exe'
     for name, alias, root, host in (('Mac', 'Erol-Mac', '/Users/erol/cortex-workers/test', 'Erol-Mac'),
                                     ('Linux', '3090', '/home/erol/cortex-workers/test', 'linux-host')):
         boxes.append(dict(name=name, ssh=alias, kind='posix-ssh', peers_per_box=1, hostname=host,
@@ -45,7 +48,7 @@ class RemoteSafety(unittest.TestCase):
     def test_remote_plan_has_only_the_named_four_machines(self):
         for row in remote.ROWS:
             with self.subTest(row=row):
-                plan = remote.make_plan(options(row), profiles(), mods() if row.startswith('mod-') else None)
+                plan = remote.make_plan(options(row), profiles(row), mods() if row.startswith('mod-') else None)
                 self.assertEqual({spec['peer']:spec['box'] for spec in plan['specs']}, remote.PEERS)
                 self.assertEqual(plan['coordinator_only']['engine_instances'], 0)
                 self.assertTrue(all(box['kind'] != 'windows-local' for box in plan['boxes']))
@@ -75,7 +78,7 @@ class RemoteSafety(unittest.TestCase):
         native.assert_not_called(); reserve.assert_not_called()
 
     def test_native_preflights_require_expected_source_and_equal_windows_bytes(self):
-        plan = remote.make_plan(options('world-join'), profiles())
+        plan = remote.make_plan(options('world-join'), profiles('world-join'))
         plan['preflights'] = {box['name']:dict(hostname=box['hostname'], machine_id=box['name'],
             executable_sha256=('e' if box['kind']=='windows-task' else 'f')*64,
             build=dict(commit='a'*40, executable_sha256=('e' if box['kind']=='windows-task' else 'f')*64),
@@ -107,6 +110,21 @@ class RemoteSafety(unittest.TestCase):
             box['exclusive_marker'] = box['scratch']+'/private-reservation'
             with self.assertRaisesRegex(ValueError, 'shared acceptance stream marker'):
                 remote.validate_profile(box, 'test')
+
+    def test_note8_rows_cannot_use_acceptance_or_engineer_development_files(self):
+        for name, tree in [('Z13','D:/Projects/z13-build'), ('Z13','D:/Projects/z13-dev-build'),
+                           ('EDITH','D:/Projects/inventory-build')]:
+            with self.subTest(name=name, tree=tree):
+                boxes=profiles('world-join')
+                selected=next(box for box in boxes if box['name']==name)
+                selected.update(tree=tree,executable=tree+'/Cortex Command.exe')
+                with self.assertRaises(ValueError):
+                    remote.make_plan(options('world-join'), boxes)
+        boxes=profiles('world-join')
+        with self.assertRaises(ValueError):
+            remote.make_plan(options('mod-match'), boxes, mods())
+        with self.assertRaises(ValueError):
+            remote.make_plan(options('world-join'), profiles())
 
     def test_remote_failure_releases_only_the_claim_and_restores_environment(self):
         import json, os

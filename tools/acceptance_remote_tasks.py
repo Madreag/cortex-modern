@@ -1,4 +1,4 @@
-"""Run the NOTE 7 four-box rows through remote tasks and POSIX runners only."""
+"""Run the NOTE 8 four-box rows through their separate native engine trees."""
 from __future__ import annotations
 
 import argparse
@@ -23,7 +23,8 @@ ALIASES = {'Z13': 'z13', 'EDITH': 'edith', 'Mac': 'Erol-Mac', 'Linux': '3090'}
 PEERS = {'erol': 'Z13', 'edith': 'EDITH', 'mac': 'Mac', 'linux': 'Linux'}
 
 
-def validate_profile(box, lane):
+def validate_profile(box, lane, row='mod-match'):
+    if row not in ROWS: raise ValueError('unknown four-box acceptance row')
     name = box.get('name')
     if name not in ALIASES or box.get('ssh') != ALIASES[name]:
         raise ValueError('four-box rows require Z13, EDITH, Mac and Linux through their named aliases')
@@ -37,7 +38,10 @@ def validate_profile(box, lane):
     if box.get('peers_per_box') != 1 or not box.get('exclusive_marker') or not box.get('hostname'):
         raise ValueError('one process, a real host identity and a box reservation are required')
     if windows:
-        tree = 'D:/Projects/z13-build' if name == 'Z13' else 'D:/Projects/inventory-build'
+        if row == 'world-join':
+            tree = 'D:/Projects/z13-rows-build' if name == 'Z13' else root+'/engine-tip'
+        else:
+            tree = 'D:/Projects/z13-build' if name == 'Z13' else 'D:/Projects/inventory-build'
         if box.get('tree') != tree or box.get('executable') != tree+'/Cortex Command.exe':
             raise ValueError('Windows runtime differs from the authorized existing path')
         if box.get('runner') != 'cortex-session1' or box.get('task_script') != 'D:/mx/session1/run.ps1':
@@ -56,7 +60,7 @@ def make_plan(options, profiles, mod_receipts=None):
     if len(profiles) != 4 or {box.get('name') for box in profiles} != set(ALIASES):
         raise ValueError('exactly the four authorized machines are required')
     for box in profiles:
-        validate_profile(box, options.lane)
+        validate_profile(box, options.lane, options.row)
     by_name = {box['name']: deepcopy(box) for box in profiles}
     base = cross.parse_args(['--boxes', str(options.template_boxes), '--lane', options.lane,
                              '--mac-guard', by_name['Mac'].get('guard_file', by_name['Mac']['exclusive_marker']), '--roster', 'four-way',
@@ -87,7 +91,7 @@ def make_plan(options, profiles, mod_receipts=None):
     plan.update(boxes=list(by_name.values()), acceptance_host_box='Z13', world_host_box='Z13',
                 source_sha=options.source_sha, expected_source_sha=options.source_sha,
                 coordinator_only=dict(box='EROL-PC', engine_instances=0),
-                authorization='LEAD-NOTES NOTE 7 / RESUME 2')
+                authorization='LEAD-NOTES NOTE 8 / RESUME 3')
     plan['driver_sources']['acceptance_remote_tasks.py'] = sha256(Path(__file__))
     return plan
 
@@ -102,6 +106,7 @@ def validate_preflights(plan):
         raise ValueError('full expected source commit is required')
     reference = values['Z13']
     for box in plan['boxes']:
+        validate_profile(box, plan['lane'], plan['acceptance_row'])
         name, value = box['name'], values[box['name']]
         build = value.get('build', {})
         if value.get('hostname', '').casefold() != box['hostname'].casefold():
@@ -144,7 +149,10 @@ def publish_new(box, local, remote):
 def preflight_payload(path):
     payload = json.loads(Path(path).read_text(encoding='utf-8-sig'))
     box = payload['box']
-    validate_profile(box, PurePosixPath(box['scratch']).name)
+    specs = payload.get('specs', [])
+    if len(specs) != 1 or PEERS.get(specs[0].get('peer')) != box['name']:
+        raise ValueError('payload differs from the authorized four-box roster')
+    validate_profile(box, PurePosixPath(box['scratch']).name, specs[0].get('acceptance_row'))
     if platform.node().casefold() != box['hostname'].casefold() or platform.node().casefold() == 'erol-pc':
         raise ValueError('payload is on the wrong physical host; no engine launched')
     result = cross.preflight_payload(path)
@@ -166,7 +174,9 @@ def preflight_payload(path):
 def run_payload(path):
     payload = json.loads(Path(path).read_text(encoding='utf-8-sig'))
     box, specs = payload['box'], payload['specs']
-    validate_profile(box, PurePosixPath(box['scratch']).name)
+    if len(specs) != 1 or PEERS.get(specs[0].get('peer')) != box['name']:
+        raise ValueError('payload differs from the authorized four-box roster')
+    validate_profile(box, PurePosixPath(box['scratch']).name, specs[0].get('acceptance_row'))
     if platform.node().casefold() != box['hostname'].casefold() or platform.node().casefold() == 'erol-pc':
         raise ValueError('payload is on the wrong physical host; no engine launched')
     if len(specs) != 1 or PEERS.get(specs[0].get('peer')) != box['name'] or specs[0].get('acceptance_row') not in ROWS:
