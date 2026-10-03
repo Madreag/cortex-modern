@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from world_mod_cross import configure_plan, flag, late_join_due, stage_activity, restore_activity
+from world_mod_cross import configure_plan, flag, late_join_due, stage_activity, restore_activity, prepare_mod_runtime, retain_native_screens
 
 
 def baseline():
@@ -70,7 +70,7 @@ class Plans(unittest.TestCase):
     def test_flag_replacement_does_not_drop_adjacent_flag(self):
         self.assertEqual(flag(["-net-host", "-seed", "42"], "-net-host", False), ["-seed", "42"])
 
-    def test_refusal_uses_real_menu_and_restores_the_copy(self):
+    def refusal_fixture(self):
         from acceptance_mod import manifest
         retained = os.environ.get('CC_ACCEPTANCE_TEST_ROOT')
         if retained:
@@ -84,14 +84,19 @@ class Plans(unittest.TestCase):
         (source/'Index.ini').write_bytes(b'DataModule\n')
         before = manifest(source)
         own = root/'run/linux/incarnation-0'
-        runtime = own/'engine/runtime'
-        runtime.mkdir(parents=True)
+        (own/'engine').mkdir(parents=True)
         args = ['engine', '-net-match-service-e2e', '-net-join-session', 'session-id']
-        run = SimpleNamespace(cwd=runtime, argv=args, env={'CC_TEST_NET_UI_SCRIPT':'probe'},
-                              record={'argv':args, 'env_set':{'CC_TEST_NET_UI_SCRIPT':'probe'}})
         spec = dict(own=str(own), root=str(root/'run'), repo=str(root/'repo'), flags=args[:],
                     env={'CC_TEST_NET_UI_SCRIPT':'probe'}, port_block=[49320,49324], acceptance_row='mod-refusal',
                     module_refusal=True, module_tree_sha256=before['tree_sha256'])
+        runtime = prepare_mod_runtime(spec)
+        run = SimpleNamespace(cwd=runtime, argv=args, env={'CC_TEST_NET_UI_SCRIPT':'probe'},
+                              record={'argv':args, 'env_set':{'CC_TEST_NET_UI_SCRIPT':'probe'}})
+        return source, before, own, runtime, run, spec
+
+    def test_refusal_uses_real_menu_and_restores_the_copy(self):
+        from acceptance_mod import manifest
+        source, before, own, runtime, run, spec = self.refusal_fixture()
         with patch('feel_measure.private_settings'):
             stage_activity(run, spec)
         self.assertNotIn('-net-match-service-e2e', run.argv)
@@ -101,8 +106,33 @@ class Plans(unittest.TestCase):
         self.assertNotIn('CC_TEST_NET_UI_SCRIPT', run.record['env_set'])
         self.assertIn('assert_substate Landing', (own/'refusal.menu.txt').read_text())
         restore_activity(spec)
-        self.assertEqual(manifest(runtime/'Mods/VoidWanderers.rte'), before)
+        self.assertEqual(manifest(runtime/'Data/VoidWanderers.rte'), before)
+        self.assertFalse((runtime/'Mods/VoidWanderers.rte').exists())
         self.assertEqual(manifest(source), before)
+
+    def test_failed_menu_staging_restores_its_one_byte_mutation(self):
+        from acceptance_mod import manifest
+        source, before, own, runtime, run, spec = self.refusal_fixture()
+        with patch('feel_measure.private_settings'), patch('world_mod_cross.stage_refusal_menu', side_effect=OSError('fixture staging failure')):
+            with self.assertRaisesRegex(OSError, 'fixture staging failure'):
+                stage_activity(run, spec)
+        self.assertEqual(manifest(runtime/'Data/VoidWanderers.rte'), before)
+        self.assertEqual(manifest(source), before)
+        self.assertTrue((own/'mutation.json.restored.json').is_file())
+
+    def test_native_landing_dump_survives_excluded_runtime(self):
+        import json
+        from acceptance_cross_report import native_labels
+        source, before, own, runtime, run, spec = self.refusal_fixture()
+        document = dict(screen='MultiplayerScreen', controls=[dict(name='LabelMultiplayerLandingStatus', visible=True,
+                        text='module content hash does not match: VoidWanderers.rte')])
+        path = runtime/'ScreenShots/dump_host_options_0.json'
+        path.write_text(json.dumps(document), encoding='utf-8')
+        retain_native_screens(spec, run)
+        self.assertIn('module content hash does not match', native_labels(own))
+        (own/'native-screens'/path.name).write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'differs'):
+            native_labels(own)
 
 
 if __name__ == "__main__":

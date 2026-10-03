@@ -18,7 +18,19 @@ def load(path, default=None):
 
 def native_labels(own):
     texts = []
-    for path in sorted((own/"engine/runtime/ScreenShots").glob("dump_host_options_*.json")):
+    index = load(own/"native-screens.json", [])
+    from acceptance_mod import sha256
+    paths = []
+    for entry in index:
+        name = entry.get("name", "")
+        if Path(name).name != name:
+            raise ValueError("retained screen receipt contains a non-leaf path")
+        path = own/"native-screens"/name
+        if not path.is_file() or path.stat().st_size != entry.get("bytes") or sha256(path) != entry.get("sha256"):
+            raise ValueError("retained screen dump differs from its native receipt")
+        if re.fullmatch(r"dump_host_options_\d+\.json", name):
+            paths.append(path)
+    for path in paths:
         document = load(path, {})
         if document.get("screen") != "MultiplayerScreen":
             continue

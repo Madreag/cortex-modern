@@ -11,6 +11,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import stat
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -235,51 +238,99 @@ def late_join_due(plan, clock, now=None):
     return now-clock["host_started"] >= late["host_elapsed_s"]
 
 
+def prepare_mod_runtime(spec):
+    """Create a fresh Data overlay; the installed original never sits behind the mutated path."""
+    from acceptance_mod import pack, install
+    from run_sim_test import RUNTIME_SETTINGS, seed_settings
+    from types import SimpleNamespace
+    own = Path(spec["own"])
+    repo = Path(spec["repo"])
+    runtime = own/"private-runtime"
+    runtime.mkdir()
+    for name in ("Data", "Mods", "ScreenShots", "Userdata", "Temp"):
+        (runtime/name).mkdir()
+    for source in sorted((repo/"Data").iterdir()):
+        if source.name == "VoidWanderers.rte":
+            continue
+        target = runtime/"Data"/source.name
+        if source.is_dir():
+            if os.name == "nt":
+                quote = lambda value: "'"+str(value).replace("'", "''")+"'"
+                subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                "New-Item -ItemType Junction -Path "+quote(target)+" -Target "+quote(source)+" | Out-Null"],
+                               check=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                target.symlink_to(source.resolve(), target_is_directory=True)
+        elif source.is_file() and not source.is_symlink():
+            shutil.copyfile(source, target)
+        else:
+            raise ValueError("Data overlay contains an unsupported source entry")
+    (runtime/"Userdata/Settings.ini").write_text("SettingsMan\n", encoding="utf-8")
+    seed_settings(SimpleNamespace(cwd=runtime), RUNTIME_SETTINGS)
+    archive, receipt = own/"module.tar", own/"module.json"
+    expected = pack(repo/"Data/VoidWanderers.rte", archive, receipt)
+    if expected["tree_sha256"] != spec["module_tree_sha256"]:
+        raise ValueError("mod changed after preflight")
+    install(archive, receipt, runtime/"Data/VoidWanderers.rte")
+    write_json(own/"module-runtime.json", dict(runtime=str(runtime), module=str(runtime/"Data/VoidWanderers.rte"),
+                                              tree_sha256=expected["tree_sha256"], settings_overrides=RUNTIME_SETTINGS))
+    return runtime
+
+
 def stage_activity(run, spec):
     from feel_measure import private_settings
     private_settings(run, spec.get("render_cap", 60))
     (Path(spec["own"])/"engine/feel").mkdir(exist_ok=True)
     if spec["acceptance_row"].startswith("mod-"):
-        from acceptance_mod import pack, install, alter_one_byte
+        from acceptance_mod import alter_one_byte
         own = Path(spec["own"])
-        archive, receipt = own/"module.tar", own/"module.json"
-        source = Path(spec["repo"])/"Data/VoidWanderers.rte"
-        expected = pack(source, archive, receipt)
-        if expected["tree_sha256"] != spec["module_tree_sha256"]:
-            raise ValueError("mod changed after preflight")
-        module = Path(run.cwd)/"Mods/VoidWanderers.rte"
-        install(archive, receipt, module)
+        module = Path(run.cwd)/"Data/VoidWanderers.rte"
+        data_info = (Path(run.cwd)/"Data").lstat()
+        if (Path(run.cwd).resolve() != (own/"private-runtime").resolve() or (Path(run.cwd)/"Data").is_symlink()
+                or getattr(data_info, "st_file_attributes", 0) & 0x400
+                or module.resolve().parent != (Path(run.cwd)/"Data").resolve()
+                or mod_manifest(module)["tree_sha256"] != spec["module_tree_sha256"]):
+            raise ValueError("mod run did not use its verified private Data copy")
         if spec.get("module_refusal"):
             selected = "Index.ini"
             raw = (module/selected).read_bytes()
             if not raw or raw[-1:] not in (b"\n", b"\r", b"\t"):
                 raise ValueError("module Index.ini has no trailing whitespace for the one-byte refusal")
             mutation = alter_one_byte(module, selected, Path(spec["root"]).parent, own/"mutation.json", len(raw)-1, 32)
-            write_json(own/"mutation-summary.json", mutation)
-            session = spec['flags'][spec['flags'].index('-net-join-session')+1]
-            if not re.fullmatch(r'[A-Za-z0-9_-]+', session):
-                raise ValueError('published session id is not safe for the menu script')
-            menu = own/'refusal.menu.txt'
-            menu.write_text('wait_ms 1980\nactivate ButtonMainToMultiplayer\nwait_ms 495\n'
-                            'activate ButtonMultiplayerJoinGame\nwait_ms 495\n'
-                            f'settext TextJoinAddress session:{session}\nsettext TextJoinPort {spec["port_block"][0]}\n'
-                            'activate ButtonMultiplayerConnect\nwait_state Failed\nwait_ms 495\n'
-                            'assert_substate Landing\nassert_enabled ButtonMultiplayerJoinGame 1\n'
-                            'assert_visible LabelMultiplayerLandingStatus 1\nassert_text_fits LabelMultiplayerLandingStatus\n'
-                            'assert_inside_screen LabelMultiplayerLandingStatus\n'
-                            'dump_host_options\nwait_ms 990\nexit\n', encoding='utf-8')
-            for name in ('-net-match-service-e2e', '-net-join-session'):
-                run.argv[:] = flag(run.argv, name, False)
-            run.argv[:] = flag(run.argv, '-menu-script', menu)
-            spec['env'].pop('CC_TEST_NET_UI_SCRIPT', None)
-            # The menu refusal has no game phase in which the ordinary gameplay probe could activate.
-            run.env.pop('CC_TEST_NET_UI_SCRIPT', None)
-            run.record.get('env_set', {}).pop('CC_TEST_NET_UI_SCRIPT', None)
-            from e2e_video import SCREEN_WATCHES
-            watches = own/'screen-watches.txt'
-            watches.write_text(SCREEN_WATCHES, encoding='utf-8')
-            run.env['CCCP_TEST_SCREEN_WATCHES'] = str(watches)
-            run.record.setdefault('env_set', {})['CCCP_TEST_SCREEN_WATCHES'] = str(watches)
+            try:
+                stage_refusal_menu(run, spec, own, mutation)
+            except BaseException:
+                # This run has not entered the payload's process table yet.
+                restore_activity(spec)
+                raise
+
+
+def stage_refusal_menu(run, spec, own, mutation):
+    write_json(own/"mutation-summary.json", mutation)
+    session = spec['flags'][spec['flags'].index('-net-join-session')+1]
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', session):
+        raise ValueError('published session id is not safe for the menu script')
+    menu = own/'refusal.menu.txt'
+    menu.write_text('wait_ms 1980\nactivate ButtonMainToMultiplayer\nwait_ms 495\n'
+                    'activate ButtonMultiplayerJoinGame\nwait_ms 495\n'
+                    f'settext TextJoinAddress session:{session}\nsettext TextJoinPort {spec["port_block"][0]}\n'
+                    'activate ButtonMultiplayerConnect\nwait_state Failed\nwait_ms 495\n'
+                    'assert_substate Landing\nassert_enabled ButtonMultiplayerJoinGame 1\n'
+                    'assert_visible LabelMultiplayerLandingStatus 1\nassert_text_fits LabelMultiplayerLandingStatus\n'
+                    'assert_inside_screen LabelMultiplayerLandingStatus\n'
+                    'dump_host_options\nwait_ms 990\nexit\n', encoding='utf-8')
+    for name in ('-net-match-service-e2e', '-net-join-session'):
+        run.argv[:] = flag(run.argv, name, False)
+    run.argv[:] = flag(run.argv, '-menu-script', menu)
+    spec['env'].pop('CC_TEST_NET_UI_SCRIPT', None)
+    # The menu refusal has no game phase in which the ordinary gameplay probe could activate.
+    run.env.pop('CC_TEST_NET_UI_SCRIPT', None)
+    run.record.get('env_set', {}).pop('CC_TEST_NET_UI_SCRIPT', None)
+    from e2e_video import SCREEN_WATCHES
+    watches = own/'screen-watches.txt'
+    watches.write_text(SCREEN_WATCHES, encoding='utf-8')
+    run.env['CCCP_TEST_SCREEN_WATCHES'] = str(watches)
+    run.record.setdefault('env_set', {})['CCCP_TEST_SCREEN_WATCHES'] = str(watches)
 
 
 def restore_activity(spec):
@@ -288,6 +339,32 @@ def restore_activity(spec):
         path = Path(spec["own"])/"mutation.json"
         if path.is_file():
             restore_one_byte(path)
+
+
+def retain_native_screens(spec, run):
+    """Keep native label dumps outside the runtime excluded from remote evidence transfer."""
+    if not spec.get("acceptance_row"):
+        return
+    own, index = Path(spec["own"]), []
+    destination = own/"native-screens"
+    destination.mkdir(exist_ok=True)
+    from acceptance_mod import sha256
+    for source in sorted((Path(run.cwd)/"ScreenShots").glob("*.json")):
+        info = source.lstat()
+        if not stat.S_ISREG(info.st_mode) or source.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise ValueError("native screen dump is not a regular file")
+        target = destination/source.name
+        digest = sha256(source)
+        if target.exists():
+            if sha256(target) != digest:
+                raise ValueError("retained screen dump changed")
+        else:
+            with source.open("rb") as original, target.open("xb") as output:
+                shutil.copyfileobj(original, output)
+        if sha256(target) != digest:
+            raise ValueError("retained screen dump differs from its native source")
+        index.append(dict(name=source.name, bytes=info.st_size, sha256=digest))
+    write_json(own/"native-screens.json", index)
 
 
 def observe_soak(spec, run, now):
@@ -327,7 +404,7 @@ def fetch_preserved(box, root, local):
     name = "edith" if box["kind"] == "windows-task" else "mac" if box["ssh"] == "Erol-Mac" else "linux"
     target = {**box, "name": name}
     prefix = ["env", "COPYFILE_DISABLE=1", "tar"] if name == "mac" else ["tar.exe" if name == "edith" else "tar"]
-    exclusions = ["runtime", "*.ticket", "*.key", "*.pem", "evidence.tar"]
+    exclusions = ["runtime", "private-runtime", "*.ticket", "*.key", "*.pem", "evidence.tar"]
     args = [*prefix, "-cf", "-", "-C", root, *("--exclude="+p for p in exclusions), "."]
     local = Path(local)
     local.mkdir(parents=True, exist_ok=True)
@@ -355,7 +432,7 @@ def fetch_preserved(box, root, local):
             count += 1
     count_code = ("import os,sys; from pathlib import Path; n=0\n"
                   "for root,dirs,files in os.walk(sys.argv[1],followlinks=False):\n"
-                  " dirs[:]=[d for d in dirs if d!='runtime' and not Path(root,d).is_symlink()]\n"
+                  " dirs[:]=[d for d in dirs if d not in ('runtime','private-runtime') and not Path(root,d).is_symlink()]\n"
                   " n+=sum(f!='evidence.tar' and not f.endswith(('.ticket','.key','.pem')) for f in files)\n"
                   "print(n)")
     done = subprocess.run(["ssh", "-o", "BatchMode=yes", box["ssh"], shell_command(target, [box["python"], "-c", count_code, root])],
