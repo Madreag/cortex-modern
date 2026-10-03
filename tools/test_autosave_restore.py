@@ -69,6 +69,7 @@ RETAINED = re.compile(r"^\[autosave\] retained tick=(\d+) keep=(\d+) pinned=(\d+
 RESTORE = re.compile(r"^\[autosave\] restore_check (PASS|FAIL) match=(\S+) tick=(\d+) sim_update_count=(\d+) "
                      r"world_hash=(\S+) expected=(\S+) policy=(\d)$", re.MULTILINE)
 POLICY = re.compile(r"^\[autosave-store-selftest\] (PASS|FAIL) (.*)$", re.MULTILINE)
+STORE_ONE_CHECKPOINT = re.compile(r"^\[autosave-store-selftest\] FAIL [^\n]*restorable=1 \(two checkpoints are needed\)$", re.MULTILINE)
 ANCHOR = re.compile(r"^\[autosave\] anchor (named|received) match=(\S+) tick=(\d+) local=(.*)$", re.MULTILINE)
 RESUMING = re.compile(r"^\[autosave\] resuming match=(\S+) tick=(\d+) activity=(.*) peers=(\d+) directory=(\S+)$", re.MULTILINE)
 OFFER = re.compile(r"^\[autosave\] resume offer match=(\S+) tick=(\d+) (held locally|not held: .*)$", re.MULTILINE)
@@ -455,6 +456,11 @@ class CheckpointsShort(AssertionError):
         self.record = record
 
 
+def written_before(log: str, end: int) -> list[int]:
+    """The autosaves a peer's log shows written (each one's retention line) before the given offset of that log."""
+    return sorted({int(row[0]) for row in RETAINED.findall(log[:end])})
+
+
 def landed_checkpoints(log: str) -> tuple[list, int]:
     """The ticks of the autosaves a peer's log shows written, and how many captures its saver coalesced: a capture the
     engine's own [autosave-coalesced] line names as replaced was asked for and never written."""
@@ -552,6 +558,14 @@ def arm_restore(repo: Path, root: Path, port: int, client_stall: str = "") -> di
 
 def judge_restore(root: Path, ticks: int, records: dict) -> dict:
     details, ticks_held = {}, {}
+    # The store asks two written checkpoints of its own self-test; a writer slower than the schedule had one on disk at the
+    # restore, which is a short run. Two or more written and still one restorable is the store's fault and fails below.
+    for who in ("host", "client"):
+        log = peer_log(root, who)
+        restore = RESTORE.search(log)
+        written = written_before(log, restore.start() if restore else len(log))
+        if STORE_ONE_CHECKPOINT.search(log) and len(written) < 2:
+            raise CheckpointsShort(f"{who} had written {written} when it restored; its store needs two", checkpoint_record(root, ticks))
     for who in ("host", "client"):
         assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
         log = peer_log(root, who)
@@ -742,6 +756,12 @@ def judge_anchor(root: Path, ticks: int, perturb_at: int) -> dict:
         log = peer_log(root, who)
         captures[who], _ = landed_checkpoints(log)
         found = ANCHOR.findall(log)
+        if not found:
+            # A heal with fewer than four checkpoints written before it had none both peers could name: a slow writer's short run.
+            heal = re.search(r"^\[lockstep\] desync at frame ", log, re.MULTILINE)
+            written = written_before(log, heal.start() if heal else len(log))
+            if len(written) < 4:
+                raise CheckpointsShort(f"{who} healed with {written} written and named no rewind point", checkpoint_record(root, ticks))
         assert found, f"{who} recorded no rewind anchor: {root / who / 'stdout.log'}"
         anchors[who] = found
     named = [row for row in anchors["host"] if row[0] == "named"]
@@ -856,7 +876,8 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
         deadline = threading.Event()
         for _ in range(4200):  # 420 s at the poll below, the runner's own budget.
             deadline.wait(0.1)
-            captures = [int(row[0]) for row in CAPTURE.findall(peer_log(first, "host"))]
+            # Written, not only captured: a host killed while its first write is in flight leaves nothing to resume.
+            captures = [int(row[0]) for row in RETAINED.findall(peer_log(first, "host"))]
             if any(tick >= kill_tick for tick in captures):
                 runs["host"].terminate(code=137, reason="host process killed mid-match")
                 killed = True
@@ -1355,6 +1376,30 @@ class CheckpointWaitTests(unittest.TestCase):
                "[fullstate-coalesced] tick=360 replaced=300 writing=240 waiting_bound=1\n")
         self.assertEqual(landed_checkpoints(log), ([130, 370], 1))
         self.assertEqual(landed_checkpoints(self.capture_lines([130, 751, 1186, 1346])), ([130, 751, 1186, 1346], 0))
+
+    def test_a_restore_with_one_written_checkpoint_is_short(self):
+        # The Mac on a758f2f4e0, 3:2x PM: each write took 8.7 s, so both peers had only 239 on disk at the tick-700 restore.
+        line = (f"[autosave-store-selftest] FAIL match={self.MATCH} restorable=1 (two checkpoints are needed)\n"
+                f"[autosave] restore_check FAIL match={self.MATCH} tick=239 sim_update_count=239 world_hash=ab expected=ab policy=0\n")
+        texts = {who: self.capture_lines([239]) + line for who in ("host", "client")}
+        records = {who: {"exit_code": 1} for who in texts}
+        with self.assertRaises(CheckpointsShort):
+            self.judge(judge_restore, texts, {"host": [239], "client": [239]}, 800, records)
+        # Two written and still one restorable is the store's own failure.
+        texts = {who: self.capture_lines([239, 359]) + line for who in ("host", "client")}
+        with self.assertRaises(AssertionError) as raised:
+            self.judge(judge_restore, texts, {"host": [239, 359], "client": [239, 359]}, 800, records)
+        self.assertNotIsInstance(raised.exception, CheckpointsShort)
+
+    def test_an_anchor_heal_before_four_written_checkpoints_is_short(self):
+        texts = {"host": "[net-test] live perturb frame=720\n" + self.capture_lines([245]) + "[lockstep] desync at frame 720 against Client\n",
+                 "client": self.capture_lines([245]) + "[lockstep] desync at frame 720 against Host\n"}
+        with self.assertRaises(CheckpointsShort):
+            self.judge(judge_anchor, texts, {"host": [245], "client": [245]}, 1400, 720)
+        texts = {who: text.replace(self.capture_lines([245]), self.capture_lines([125, 245, 365, 485])) for who, text in texts.items()}
+        with self.assertRaises(AssertionError) as raised:
+            self.judge(judge_anchor, texts, {"host": [125, 245, 365, 485], "client": [125, 245, 365, 485]}, 1400, 720)
+        self.assertNotIsInstance(raised.exception, CheckpointsShort)
 
     def test_a_short_run_waits_with_its_schedule_doubled(self):
         calls = []
