@@ -8,7 +8,7 @@ import re
 from acceptance_evidence import fullstate_hashes, live_hashes, peer_receipt, rows
 from acceptance_mod import sha256
 from acceptance_rows import judge
-from acceptance_runtime import write_json
+from acceptance_runtime import write_json, write_text
 from world_soak import census_receipts
 
 
@@ -235,5 +235,5 @@ def build_report(root):
     result["v1_passed"] = result["passed"]
     write_json(root/"acceptance-facts.json", facts)
     write_json(root/"result.json", result)
-    (root/"verdict.txt").write_text(f"{row}: {'PASS' if result['passed'] else 'FAIL'}\n"+"\n".join(result["failures"])+"\n", encoding="utf-8")
+    write_text(root/"verdict.txt", f"{row}: {'PASS' if result['passed'] else 'FAIL'}\n"+"\n".join(result["failures"])+"\n")
     return result

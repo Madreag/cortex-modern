@@ -1,5 +1,6 @@
 """Small helpers for retained acceptance evidence and local runner reservations."""
 from contextlib import contextmanager
+from contextvars import ContextVar
 import datetime as dt
 import json
 import os
@@ -10,10 +11,90 @@ import subprocess
 import sys
 
 MST = dt.timezone(dt.timedelta(hours=-7))
+ACTIVE_STORAGE = ContextVar('acceptance_storage', default=None)
+
+
+class StorageLimit(RuntimeError):
+    pass
+
+
+class RetainedBudget:
+    """Account output growth before each write, including compressed stream footers."""
+    def __init__(self, root, limit=5_000_000_000, reserve=0):
+        self.root = Path(root).resolve()
+        self.limit, self.reserve = limit, reserve
+        self.used = retained_bytes(self.root)
+        self.admit(0)
+
+    def contains(self, path):
+        return Path(path).resolve().is_relative_to(self.root)
+
+    def admit(self, growth):
+        if growth < 0:
+            raise ValueError('output growth cannot be negative')
+        if self.used + growth + self.reserve >= self.limit:
+            raise StorageLimit(f'retained output would reach its storage cap: used={self.used}, growth={growth}, '
+                               f'reserve={self.reserve}, limit={self.limit}; evidence remains in place')
+        self.used += growth
+
+    def open(self, path, mode='xb'):
+        path = Path(path)
+        if mode != 'xb':
+            raise ValueError('streamed retained files require exclusive creation')
+        self.admit(0)
+        return _RetainedWriter(path.open(mode), self)
+
+
+class _RetainedWriter:
+    def __init__(self, stream, budget):
+        self.stream, self.budget, self.size = stream, budget, 0
+
+    def write(self, data):
+        end = self.stream.tell()+len(data)
+        self.budget.admit(max(0, end-self.size))
+        self.size = max(self.size, end)
+        return self.stream.write(data)
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return self.stream.__exit__(*args)
+
+
+@contextmanager
+def storage_scope(root, limit=5_000_000_000, reserve=0):
+    budget = RetainedBudget(root, limit, reserve)
+    token = ACTIVE_STORAGE.set(budget)
+    try:
+        yield budget
+    finally:
+        ACTIVE_STORAGE.reset(token)
+
+
+def retained_open(path):
+    budget = ACTIVE_STORAGE.get()
+    return budget.open(path) if budget is not None and budget.contains(path) else Path(path).open('xb')
+
+
+def write_text(path, text):
+    path, data = Path(path), text.encode('utf-8')
+    budget = ACTIVE_STORAGE.get()
+    if budget is not None and budget.contains(path):
+        previous = path.stat().st_size if path.is_file() else 0
+        budget.admit(max(0, len(data)-previous))
+        # Admission happens before opening/truncating the existing metadata file.
+        path.write_bytes(data)
+        budget.used -= max(0, previous-len(data))
+    else:
+        path.write_bytes(data)
 
 
 def write_json(path, value):
-    Path(path).write_text(json.dumps(value, indent=2, allow_nan=False)+"\n", encoding="utf-8")
+    write_text(path, json.dumps(value, indent=2, allow_nan=False)+"\n")
 
 
 def retained_bytes(root):

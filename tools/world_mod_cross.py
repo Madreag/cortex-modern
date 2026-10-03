@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 
 from acceptance_mod import manifest as mod_manifest, equal_manifests
-from acceptance_runtime import write_json
+from acceptance_runtime import write_json, retained_open
 
 ROWS = ("mod-match", "mod-refusal", "world-join", "world-soak")
 DRIVER_FILES = ("cross_peers.py", "cross_report.py", "e2e_video.py", "feel/report.py", "feel/records.py", "world_mod_cross.py",
@@ -481,7 +481,7 @@ def extract_preserved(archive, local, compress_records=False):
             if packed:
                 path = path.with_name(path.name+'.gz')
                 digest, size = hashlib.sha256(), 0
-                with path.open('xb') as output:
+                with retained_open(path) as output:
                     with gzip.GzipFile(filename='', fileobj=output, mode='wb', compresslevel=3, mtime=0) as encoded:
                         for chunk in iter(lambda: data.read(1024**2), b''):
                             digest.update(chunk); size += len(chunk); encoded.write(chunk)
@@ -495,7 +495,7 @@ def extract_preserved(archive, local, compress_records=False):
                                      original_bytes=size, original_sha256=digest.hexdigest(),
                                      compressed_bytes=path.stat().st_size, removed_files=0))
             else:
-                with path.open("xb") as output:
+                with retained_open(path) as output:
                     for chunk in iter(lambda: data.read(1024**2), b""):
                         output.write(chunk)
             count += 1
@@ -540,9 +540,15 @@ def fetch_preserved(box, root, local, compress_records=False, stream_transfer=Fa
                 raise subprocess.CalledProcessError(code, command, stderr=errors)
     else:
         archive = local/('evidence-preserved.tar.gz' if compress_records else 'evidence-preserved.tar')
-        with archive.open("xb") as sink:
-            subprocess.run(command, stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.PIPE, check=True, timeout=1800,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        with retained_open(archive) as sink:
+            with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)) as process:
+                for chunk in iter(lambda: process.stdout.read(1024**2), b''):
+                    sink.write(chunk)
+                errors = process.stderr.read()
+                code = process.wait(timeout=1800)
+                if code:
+                    raise subprocess.CalledProcessError(code, command, stderr=errors)
         count = extract_preserved(archive, local, compress_records)
     count_code = ("import os,sys; from pathlib import Path; n=0\n"
                   "for root,dirs,files in os.walk(sys.argv[1],followlinks=False):\n"

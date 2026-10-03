@@ -15,7 +15,7 @@ import time
 import cross_peers as cross
 import world_mod_cross as world
 from acceptance_mod import sha256
-from acceptance_runtime import check_storage
+from acceptance_runtime import check_storage, write_json, write_text, retained_open, storage_scope, ACTIVE_STORAGE
 from edith.remote_box import RemoteBox, ps_quote, render_payload
 
 HOSTS = {'Z13': 'z13', 'EDITH': 'edith'}
@@ -102,11 +102,12 @@ def make_plan(options, profiles):
 def helper_archive(repo, root):
     archive = root/'helpers.tar'
     names = subprocess.check_output(['git', '-C', str(repo), 'ls-files', '-z', '--', 'tools'], text=True).split('\0')
-    with tarfile.open(archive, 'x') as stream:
-        for name in names:
-            path = repo/name
-            if name and path.is_file() and not path.is_symlink():
-                stream.add(path, arcname=name, recursive=False)
+    with retained_open(archive) as output:
+        with tarfile.open(fileobj=output, mode='w') as stream:
+            for name in names:
+                path = repo/name
+                if name and path.is_file() and not path.is_symlink():
+                    stream.add(path, arcname=name, recursive=False)
     return archive
 
 
@@ -126,16 +127,16 @@ def stage(plan, root):
         remote.mkdir(remote_root)
         own = root/'boxes'/box['name']; own.mkdir(parents=True)
         payload = dict(box=box, specs=[spec for spec in plan['specs'] if spec['box'] == box['name']], pin='')
-        cross.write_json(own/'payload.json', payload)
+        write_json(own/'payload.json', payload)
         remote.scp_to(own/'payload.json', remote_root+'/payload.json')
         remote.ssh('& '+ps_quote(box['python'])+' '+ps_quote(box['helpers']+'/tools/cross_peers.py')+
                    ' --preflight '+ps_quote(remote_root+'/payload.json'), timeout=240)
         # Fetch the retained preflight root by tar, then count it in a separate command.
         world.fetch_preserved(box, remote_root, own/'preflight-fetch')
         preflight = json.loads((own/'preflight-fetch/preflight.json').read_text(encoding='utf-8-sig'))
-        cross.write_json(own/'preflight.json', preflight)
+        write_json(own/'preflight.json', preflight)
         plan.setdefault('preflights', {})[box['name']] = preflight
-        cross.write_json(root/'manifest.json', plan)
+        write_json(root/'manifest.json', plan)
     validate_preflights(plan)
 
 
@@ -175,7 +176,7 @@ def run_payload(path):
         os.environ.update(settings)
         launch_budget.install_memory_guard()
         claim = cross.acquire_reservation(box, Path(path).parent, 60)
-        cross.write_json(Path(path).parent/'reservation.json', {key:value for key,value in claim['record'].items() if key != 'token'})
+        write_json(Path(path).parent/'reservation.json', {key:value for key,value in claim['record'].items() if key != 'token'})
         return cross.run_payload(path)
     finally:
         for key, value in previous.items():
@@ -185,7 +186,7 @@ def run_payload(path):
                 os.environ[key] = value
         if claim:
             released = cross.release_reservation(claim)
-            cross.write_json(Path(path).parent/'reservation-released.json', dict(released=released))
+            write_json(Path(path).parent/'reservation-released.json', dict(released=released))
 
 
 def launch(plan, root):
@@ -197,7 +198,7 @@ def launch(plan, root):
     if not world.public_directory_available(Path(__file__).resolve().parent.parent):
         raise RuntimeError('public directory is unavailable; a lane-owned fallback must be staged before this run')
     plan['driver_findings'] = []
-    cross.write_json(root/'manifest.json', plan)
+    write_json(root/'manifest.json', plan)
     started, published, late_released = [], False, False
     try:
         for name in ('EDITH', 'Z13'):
@@ -206,7 +207,7 @@ def launch(plan, root):
             script = render_payload(box['tree'], [box['helpers']+'/tools/world_soak_tasks.py', '--payload', remote_root+'/payload.json'],
                                     remote_root+'/task.log', remote_root+'/task.done',
                                     env=dict(CCCP_HEADLESS='1', CC_RUNNER_IGNORE_FULLSCREEN='1'), path_prepend=box.get('path_prepend'))
-            (own/'task.ps1').write_text(script, encoding='utf-8')
+            write_text(own/'task.ps1', script)
             remote.start_task(own/'task.ps1', budget_s=60)
             started.append(name)
         deadline = time.monotonic()+180
@@ -219,20 +220,20 @@ def launch(plan, root):
             time.sleep(2)
         else:
             raise TimeoutError('both task payloads did not become ready')
-        cross.write_json(root/'launch-go.json', dict(boxes=sorted(started), ready=ready))
+        write_json(root/'launch-go.json', dict(boxes=sorted(started), ready=ready))
         for name in started:
             cross.stage_remote(by_name[name], root/'launch-go.json', remote_roots[name]+'/launch-go.json')
         deadline, next_status = time.monotonic()+4500, 0
         while time.monotonic() < deadline:
             control = read_json(remotes['Z13'], remote_roots['Z13']+'/host-control.json') or {}
             if control.get('session') and not published:
-                cross.write_json(root/'session.json', dict(session=control['session']))
+                write_json(root/'session.json', dict(session=control['session']))
                 cross.stage_remote(by_name['EDITH'], root/'session.json', remote_roots['EDITH']+'/session.json')
                 published = True
             elapsed = control.get('host_elapsed_s')
             if published and not late_released and isinstance(elapsed, (int, float)) and elapsed >= 3000:
                 cross.stage_remote(by_name['EDITH'], root/'session.json', remote_roots['EDITH']+'/session-late.json')
-                cross.write_json(root/'late-join-released.json', {key:control[key] for key in ('host_tick', 'host_elapsed_s', 'payload_monotonic_s')})
+                write_json(root/'late-join-released.json', {key:control[key] for key in ('host_tick', 'host_elapsed_s', 'payload_monotonic_s')})
                 late_released = True
             done = {name: read_json(remotes[name], remote_roots[name]+'/done.json') for name in started}
             for name, outcome in done.items():
@@ -248,17 +249,26 @@ def launch(plan, root):
             raise TimeoutError('R5 task coordinator deadline')
     except Exception as error:
         plan['driver_findings'].append(str(error))
-        cross.write_json(root/'stop.json', dict(reason=str(error)))
+        write_json(root/'stop.json', dict(reason=str(error)))
         for name in started:
             cross.stage_remote(by_name[name], root/'stop.json', remote_roots[name]+'/stop.json')
     finally:
-        cross.write_json(root/'manifest.json', plan)
+        write_json(root/'manifest.json', plan)
         for name in started:
             outcome = remotes[name].wait_done(remote_roots[name]+'/task.done', 120, slice_cap_s=30)
-            (root/'boxes'/name/'task-outcome.txt').write_text(outcome+'\n', encoding='utf-8')
-        for name in started:
-            world.fetch_preserved(by_name[name], remote_roots[name], root/'boxes'/name,
-                                  compress_records=True, stream_transfer=True)
+            write_text(root/'boxes'/name/'task-outcome.txt', outcome+'\n')
+        budget = ACTIVE_STORAGE.get()
+        previous_reserve = budget.reserve if budget is not None else 0
+        try:
+            if budget is not None:
+                budget.reserve += 64*1024**2
+                budget.admit(0)
+            for name in started:
+                world.fetch_preserved(by_name[name], remote_roots[name], root/'boxes'/name,
+                                      compress_records=True, stream_transfer=True)
+        finally:
+            if budget is not None:
+                budget.reserve = previous_reserve
     from acceptance_cross_report import build_report
     return build_report(root)
 
@@ -280,20 +290,21 @@ def main(argv=None):
     owned = Path('D:/mx')/options.lane
     if not re.fullmatch(r'[A-Za-z0-9_-]+', options.lane) or not options.out.resolve().is_relative_to(owned.resolve()) or options.out.resolve() == owned.resolve():
         parser.error('output must be a fresh run inside the named lane scratch')
-    if options.launch_staged:
-        plan = json.loads((options.out/'manifest.json').read_text(encoding='utf-8'))
+    with storage_scope(owned, reserve=1024**2):
+        if options.launch_staged:
+            plan = json.loads((options.out/'manifest.json').read_text(encoding='utf-8'))
+            return 0 if launch(plan, options.out)['passed'] else 1
+        if not options.profiles or not options.template_boxes:
+            parser.error('--profiles and --template-boxes are required')
+        options.out.mkdir(parents=True, exist_ok=False)
+        plan = make_plan(options, json.loads(options.profiles.read_text(encoding='utf-8-sig')))
+        write_json(options.out/'manifest.json', plan)
+        stage(plan, options.out)
+        write_json(options.out/'manifest.json', plan)
+        if options.stage_only:
+            print('R5 tasks staged and native preflights verified; no engine launched')
+            return 0
         return 0 if launch(plan, options.out)['passed'] else 1
-    if not options.profiles or not options.template_boxes:
-        parser.error('--profiles and --template-boxes are required')
-    options.out.mkdir(parents=True, exist_ok=False)
-    plan = make_plan(options, json.loads(options.profiles.read_text(encoding='utf-8-sig')))
-    cross.write_json(options.out/'manifest.json', plan)
-    stage(plan, options.out)
-    cross.write_json(options.out/'manifest.json', plan)
-    if options.stage_only:
-        print('R5 tasks staged and native preflights verified; no engine launched')
-        return 0
-    return 0 if launch(plan, options.out)['passed'] else 1
 
 
 if __name__ == '__main__':
