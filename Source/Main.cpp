@@ -3962,10 +3962,14 @@ void ProcessMenuScript() {
 	}
 }
 
+static void BeginHarnessCostMenuStay();
+static void WriteHarnessCostMenuFrame();
+
 void RunMenuLoop() {
 	g_MenuMan.SetIsInMenuScreen(true);
 	g_UInputMan.DisableKeys(false);
 	g_UInputMan.TrapMousePos(false);
+	BeginHarnessCostMenuStay();
 
 	while (!System::IsSetToQuit()) {
 		g_WindowMan.ClearBackbuffer();
@@ -4010,8 +4014,9 @@ void RunMenuLoop() {
 
 		if (!s_menuScriptPath.empty()) {
 			ProcessMenuScript();
-			if (s_menuScriptHoldE2ePause && s_menuScriptComplete) break;
 		}
+		WriteHarnessCostMenuFrame();
+		if (!s_menuScriptPath.empty() && s_menuScriptHoldE2ePause && s_menuScriptComplete) break;
 	}
 
 	g_MenuMan.SetIsInMenuScreen(false);
@@ -4142,12 +4147,11 @@ namespace {
 	}
 }
 
-static void WriteHarnessCostFrame(uint64_t frame) {
+static void WriteHarnessCostFrameOf(uint64_t round, uint64_t frame) {
 	if (!HarnessCost::AnyEnabled()) return;
 	std::lock_guard<std::mutex> lock(s_harnessCostMutex);
 	static const unsigned long incarnation = std::stoul(CrossEnvironment("CC_TEST_CROSS_INCARNATION", "0"));
 	static std::map<uint64_t, uint32_t> s_segments;
-	const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 	HarnessCostScope& scope = s_harnessCostScope;
 	// A tick that simulated no new frame leaves its costs to the frame that follows.
 	if (scope.open && scope.round == round && frame == scope.last) return;
@@ -4170,6 +4174,25 @@ static void WriteHarnessCostFrame(uint64_t frame) {
 		if (HarnessCost::Enabled(static_cast<HarnessCost::Instrument>(instrument))) costs[HarnessCost::c_Names[instrument]] = static_cast<double>(charged[instrument]) / 1e6;
 	System::PrintDiagnosticLine("[harness-cost-frame] " + nlohmann::json{{"process", System::GetProcessID()}, {"incarnation", incarnation}, {"round", round},
 	    {"segment", scope.segment}, {"frame", frame}, {"partition_valid", true}, {"costs_ms", costs}}.dump());
+}
+
+static void WriteHarnessCostFrame(uint64_t frame) {
+	WriteHarnessCostFrameOf(ScenarioRunner::GetLockstepRoundId(), frame);
+}
+
+// The menus' frames carry their instruments' costs too (the recorder's readback, the menu script's watches); each stay in the
+// menu loop is a round of its own, numbered apart from any match round, its frames counted from one.
+static uint64_t s_harnessMenuStay = 0;
+static uint64_t s_harnessMenuFrame = 0;
+static constexpr uint64_t c_HarnessMenuRounds = uint64_t{1} << 62;
+
+static void BeginHarnessCostMenuStay() {
+	++s_harnessMenuStay;
+	s_harnessMenuFrame = 0;
+}
+
+static void WriteHarnessCostMenuFrame() {
+	WriteHarnessCostFrameOf(c_HarnessMenuRounds | s_harnessMenuStay, ++s_harnessMenuFrame);
 }
 
 // CC_TERRAIN_DUMP=<tick> saves the material and FG color bitmaps beside the -out trace at that tick
