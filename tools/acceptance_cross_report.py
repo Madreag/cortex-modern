@@ -134,6 +134,10 @@ def build_report(root):
                              own_certificate=manifest.get("own_certificate"),
                              **native_route_evidence(logs.get("pc", ""), logs.get("edith", "")))
         facts["transfer"] = load(paths.get("edith", root)/"acceptance-transfer.json", {})
+        totals = [int(value) for value in re.findall(r'(?m)^\[net-match\] state transfer complete: (\d+) bytes\s*$', logs.get('edith', ''))]
+        received = facts['transfer'].get('received_bytes')
+        if len(totals) != 1 or type(received) is not int or totals[0] != received:
+            failures.append('transfer: native StateChunk receipt missing, repeated, or differs from clocked byte count')
     elif row == "mod-refusal":
         comparing.remove("linux")
     for name in comparing:

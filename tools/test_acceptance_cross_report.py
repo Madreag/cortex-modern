@@ -8,6 +8,33 @@ from acceptance_cross_report import build_report, native_prerequisites, refusal_
 
 
 class CrossReceiptReport(unittest.TestCase):
+    def run_root(self):
+        retained = os.environ.get("CC_ACCEPTANCE_TEST_ROOT")
+        if retained:
+            return Path(tempfile.mkdtemp(prefix="cross-report-test-", dir=retained))
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        return Path(temporary.name)
+
+    def test_clocked_transfer_bytes_must_match_the_native_receiver(self):
+        line = '[net-match] state transfer complete: 123 bytes\n'
+        error = 'transfer: native StateChunk receipt missing, repeated, or differs from clocked byte count'
+        for receipt, log, rejected in ((123, line, False), (124, line, True), (None, line, True),
+                                       (123, '', True), (123, line+line, True)):
+            with self.subTest(receipt=receipt, log=log):
+                root = self.run_root()
+                names = ('erol', 'edith', 'mac', 'linux')
+                manifest = dict(acceptance_row='world-join', ticks=3601, preflights={}, driver_findings=[],
+                                boxes=[dict(name=n, kind='windows-local') for n in names],
+                                specs=[dict(peer=n, box=n, own=str(root/n/'incarnation-0'), root=str(root)) for n in names])
+                (root/'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+                own = root/'edith/incarnation-0'
+                (own/'engine').mkdir(parents=True)
+                (own/'engine/stdout.log').write_text(log, encoding='utf-8')
+                (own/'acceptance-transfer.json').write_text(json.dumps(dict(received_bytes=receipt)), encoding='utf-8')
+                result = build_report(root)
+                self.assertEqual(error in result['failures'], rejected)
+
     def test_route_uses_native_candidate_and_route_receipts(self):
         host = '[net-ice] selected candidate=srflx connection=100\n[net-route] RouteAllowed route=direct allowed=1 connection=100\n'
         client = '[net-ice] selected candidate=srflx connection=200\n[net-route] RouteAllowed route=direct allowed=1 connection=200\n'
@@ -67,13 +94,7 @@ class CrossReceiptReport(unittest.TestCase):
         self.assertIn("native adopted peer count differs from the row", native_prerequisites(native, record, "", preflight, 4))
 
     def test_empty_run_cannot_be_green_from_its_plan(self):
-        retained = os.environ.get("CC_ACCEPTANCE_TEST_ROOT")
-        if retained:
-            root = Path(tempfile.mkdtemp(prefix="cross-report-test-", dir=retained))
-        else:
-            temporary = tempfile.TemporaryDirectory()
-            self.addCleanup(temporary.cleanup)
-            root = Path(temporary.name)
+        root = self.run_root()
         names = ("erol", "edith", "mac", "linux")
         manifest = dict(acceptance_row="mod-match", ticks=1201, preflights={}, driver_findings=[],
                         boxes=[dict(name=n, kind="windows-local" if n == "erol" else "posix-ssh") for n in names],
