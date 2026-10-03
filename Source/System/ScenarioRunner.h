@@ -139,10 +139,12 @@ namespace RTE {
 		static bool RunCommittedSeatHandoffSelfTest();
 		/// The runner's and the round's records and their entry counts, one line for the memory census.
 		static std::string MemoryCensus();
-		/// A held seat that had already run frames from its hold on ran them off the round: its hash records drop them from this frame.
-		static void AbandonTicksFrom(uint64_t frame);
-		/// The frame the hash records drop from and the round it belongs to, once; 0 when nothing was abandoned since the last call.
-		static uint64_t TakeAbandonedTicksFrom(uint64_t& round);
+		/// A held seat's history leaves the round from its hold frame: its hash records drop the frames it ran from there through
+		/// ranThrough, the last it ran (0 when it learned of the hold before reaching it). Said once per hold.
+		static void AbandonTicksFrom(uint64_t frame, uint64_t ranThrough);
+		/// The frame the hash records drop from, its round and the last frame this process ran past it, once; 0 when nothing was
+		/// abandoned since the last call.
+		static uint64_t TakeAbandonedTicksFrom(uint64_t& round, uint64_t& ranThrough);
 		static void ObserveLockstepPlayerBindings(uint8_t peer, uint64_t frame, const NetGamePlayerBindings& bindings);
 		static bool ConsumeLockstepGameCommand(const NetGameCommand& command);
 		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();

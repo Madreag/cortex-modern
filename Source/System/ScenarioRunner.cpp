@@ -837,19 +837,25 @@ namespace RTE {
 		std::mutex s_AbandonedTicksMutex;
 		uint64_t s_AbandonedTicksFrom = 0;
 		uint64_t s_AbandonedTicksRound = 0;
+		uint64_t s_AbandonedRanThrough = 0;
+		std::pair<uint64_t, uint64_t> s_AbandonedTaken; //!< The round and hold frame last taken: a stopped round asks again every pass.
 	}
 
-	void ScenarioRunner::AbandonTicksFrom(uint64_t frame) {
+	void ScenarioRunner::AbandonTicksFrom(uint64_t frame, uint64_t ranThrough) {
 		const uint64_t round = GetLockstepRoundId();
 		std::lock_guard<std::mutex> lock(s_AbandonedTicksMutex);
+		if (s_AbandonedTaken == std::make_pair(round, frame)) return;
 		if (s_AbandonedTicksFrom != 0 && s_AbandonedTicksRound == round && s_AbandonedTicksFrom <= frame) return;
 		s_AbandonedTicksFrom = frame;
 		s_AbandonedTicksRound = round;
+		s_AbandonedRanThrough = ranThrough;
 	}
 
-	uint64_t ScenarioRunner::TakeAbandonedTicksFrom(uint64_t& round) {
+	uint64_t ScenarioRunner::TakeAbandonedTicksFrom(uint64_t& round, uint64_t& ranThrough) {
 		std::lock_guard<std::mutex> lock(s_AbandonedTicksMutex);
 		round = s_AbandonedTicksRound;
+		ranThrough = s_AbandonedRanThrough;
+		if (s_AbandonedTicksFrom != 0) s_AbandonedTaken = {s_AbandonedTicksRound, s_AbandonedTicksFrom};
 		return std::exchange(s_AbandonedTicksFrom, 0);
 	}
 
@@ -3122,7 +3128,7 @@ namespace RTE {
 		if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
 			if (s_LockstepCoordinator->IsStopped() && s_LockstepCoordinator->IsLocalSeatHeld()) {
 				// The ticks this seat ran from its hold on were off the round, however it comes back or if its round ends first.
-				if (const uint64_t hold = s_LockstepCoordinator->GetLocalHoldFrame(); hold != 0 && tick > hold) AbandonTicksFrom(hold);
+				if (const uint64_t hold = s_LockstepCoordinator->GetLocalHoldFrame(); hold != 0) AbandonTicksFrom(hold, tick > hold ? tick - 1 : 0);
 				if (s_HeldCatchUp && s_HeldCatchUp()) return false;
 			}
 			SetControllerReplayError("tick " + std::to_string(tick) + " lockstep stopped: " + s_LockstepCoordinator->GetStats().timeoutReason);

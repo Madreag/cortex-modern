@@ -237,16 +237,25 @@ static AsyncLineWriter& LiveTickHashStream() {
 	return s_netLiveTickHashes;
 }
 
-// Ticks a held seat ran off the round leave both hash records; the live stream names the round they belong to.
+static nlohmann::json s_crossContext;
+
+// Ticks a held seat ran off the round leave both hash records; the live stream names the round they belong to and the process that ran them.
 static void RetractAbandonedTickHashes() {
 	uint64_t round = 0;
-	const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(round);
+	uint64_t ranThrough = 0;
+	const uint64_t abandoned = ScenarioRunner::TakeAbandonedTicksFrom(round, ranThrough);
 	if (abandoned == 0) {
 		return;
 	}
-	g_MetricsCollector.RetractTickHashesFrom(abandoned);
+	// Ticks run past the hold were live on this seat's own screen until it heard of the hold; none run retracts nothing it showed.
+	const bool ran = ranThrough >= abandoned;
+	if (ran) g_MetricsCollector.RetractTickHashesFrom(abandoned);
 	if (!s_netLiveTickHashPath.empty()) {
-		LiveTickHashStream().Write(nlohmann::json{{"abandon_from", abandoned}, {"round", round}}.dump());
+		nlohmann::json receipt{{"abandon_from", abandoned}, {"round", round}, {"ran_through", ran ? ranThrough : 0}, {"private", !ran}, {"player_visible", ran},
+		                       {"process", System::GetProcessID()}};
+		for (const char* key: {"instance", "execution", "incarnation"})
+			if (s_crossContext.is_object() && s_crossContext.contains(key)) receipt[key] = s_crossContext[key];
+		LiveTickHashStream().Write(receipt.dump());
 	}
 }
 
@@ -431,7 +440,6 @@ private:
 // Test lever: every N committed lockstep ticks each peer hashes its whole capture; 0 is off.
 static uint32_t s_netFullStateEvery = 0;
 static std::string s_netFullStateDump;
-static nlohmann::json s_crossContext;
 static nlohmann::json s_crossSchedule = nlohmann::json::array();
 static uint64_t s_crossBudget = 0;
 static std::map<uint64_t, uint64_t> s_crossLastCommitted;
@@ -7749,6 +7757,10 @@ void RunGameLoop() {
 					// A subsystem with nothing to hash this tick (no actors left) still has its row entry, at the empty value.
 					for (const auto& [name, hash]: SimChecksum::CompleteSubsystems(tickResult)) subsystems[name] = SimChecksum::HashHex(hash);
 					nlohmann::json observation = s_crossContext.is_object() ? s_crossContext : nlohmann::json::object();
+					// A catch-up replays committed ticks behind its overlay: the player plays none of them, so they are its private history.
+					const bool catchUpTick = ScenarioRunner::WorldCatchUpActive();
+					if (!observation.contains("phase")) observation["phase"] = catchUpTick ? "catchup" : "live";
+					observation["player_visible"] = !catchUpTick;
 					observation.update(nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
 					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
 					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
