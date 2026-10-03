@@ -59,6 +59,21 @@ class RemoteSafety(unittest.TestCase):
                     self.assertEqual(spec['executable'], box['executable'])
                     self.assertEqual(spec['env']['CCCP_HEADLESS'], '1')
 
+    def test_frozen_coordinator_commit_does_not_follow_the_live_worktree(self):
+        frozen = dict(frozen_commit='7b9ff5067bc2901cfdac497d89a5961bb42afdb0',
+                      frozen_export='/virtual/export', coordinator_commit='b'*40)
+        boxes = profiles('mod-match')
+        for box in boxes:
+            if box['kind'] == 'posix-ssh':
+                box.update(acceptance_marker=box['exclusive_marker'],
+                           exclusive_marker=box['scratch']+'/FEEL-MATRIX-RUNNING')
+        with patch.object(remote, 'driver_git_context') as context, \
+                patch.object(remote.cross, 'coordinator', create=True):
+            context.return_value.__enter__.return_value = frozen
+            plan = remote.make_plan(options('mod-match'), boxes, mods())
+        self.assertEqual(plan['driver_commit'], frozen['coordinator_commit'])
+        self.assertIn('source_worktree_observed', plan)
+
     def test_profile_cannot_substitute_local_box_runner_floor_or_unowned_helpers(self):
         for field, value in (('name','EROL-PC'), ('kind','windows-local'), ('runner','bare-exe'),
                              ('hostname',''), ('helpers','D:/mx/other/helpers'), ('peers_per_box',2),
