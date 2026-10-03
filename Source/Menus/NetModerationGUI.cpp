@@ -912,6 +912,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		rect(backbuffer, kept.x, kept.y, kept.x + kept.width - 1, kept.y + kept.height - 1, makeacol32(59, 65, 83, 255));
 		hline(backbuffer, kept.x + 1, kept.y + 1, kept.x + kept.width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
 		m_NetStatus->Draw(&bitmap, false);
+		m_StatusWrap = m_StatusLayoutWrap;
 		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 	};
 	if (backbuffer->h < c_CompactMaxHeight && (m_Open || !g_SettingsMan.GetNetworkShowDiagnostics())) {
@@ -1013,6 +1014,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		checkKept(stripKept, stripKeptText);
 		m_StatusLayoutKey = stripKey;
 		m_StatusLayoutRect = m_StatusRect;
+		m_StatusLayoutWrap = {};
 		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 		return;
 	}
@@ -1123,6 +1125,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	checkKept(panelKept, panelKeptText);
 	m_StatusLayoutKey = panelKey;
 	m_StatusLayoutRect = m_StatusRect;
+	m_StatusLayoutWrap = m_StatusWrap;
 	RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 }
 
