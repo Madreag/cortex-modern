@@ -84,6 +84,7 @@
 #include "RTEError.h"
 #include "DataModule.h"
 #include "MenuAutomation.h"
+#include "GUIDrawRecord.h"
 #ifdef __APPLE__
 #include "AppleApplication.h"
 #include <mach/mach.h>
@@ -183,8 +184,10 @@
 #include <iomanip>
 #include <random>
 #include <condition_variable>
+#include <future>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <array>
 #include <list>
@@ -366,8 +369,13 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 class CensusWorker {
 public:
 	static CensusWorker& Get() {
-		static CensusWorker worker;
-		return worker;
+		// Never destroyed: a job still running at exit is left to finish, never joined past the exit's wait.
+		static CensusWorker* worker = [] {
+			auto* created = new CensusWorker();
+			std::atexit([] { Get().Stop(); });
+			return created;
+		}();
+		return *worker;
 	}
 
 	void Post(std::function<void()> job) {
@@ -378,13 +386,14 @@ public:
 		m_Wake.notify_one();
 	}
 
-	~CensusWorker() {
-		{
-			std::lock_guard<std::mutex> lock(m_Mutex);
-			m_Stopping = true;
-		}
+	void Stop() {
+		std::unique_lock<std::mutex> lock(m_Mutex);
+		m_Stopping = true;
 		m_Wake.notify_one();
-		m_Thread.join();
+		const bool finished = m_Done.wait_for(lock, std::chrono::seconds(2), [this] { return m_Finished; });
+		lock.unlock();
+		if (finished) m_Thread.join();
+		else m_Thread.detach();
 	}
 
 private:
@@ -399,6 +408,8 @@ private:
 				std::unique_lock<std::mutex> lock(m_Mutex);
 				m_Wake.wait(lock, [this] { return m_Stopping || !m_Jobs.empty(); });
 				if (m_Jobs.empty()) {
+					m_Finished = true;
+					m_Done.notify_all();
 					return;
 				}
 				job = std::move(m_Jobs.front());
@@ -411,7 +422,9 @@ private:
 	std::mutex m_Mutex;
 	std::condition_variable m_Wake;
 	std::deque<std::function<void()>> m_Jobs;
+	std::condition_variable m_Done;
 	bool m_Stopping = false;
+	bool m_Finished = false;
 	std::thread m_Thread;
 };
 // Test lever: every N committed lockstep ticks each peer hashes its whole capture; 0 is off.
@@ -10522,6 +10535,8 @@ int main(int argc, char** argv) {
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
 
 	const bool mainArgsValid = HandleMainArgs(argc, argv);
+	// Only a menu script or the UI probe reads what the renderer drew.
+	SetPanelDrawRecording(!s_menuScriptPath.empty() || (netUiProbeScript != nullptr && *netUiProbeScript != '\0'));
 	if (CaptureSentinel::Enabled()) CaptureSentinel::Enable();
 	if (s_netDedicated && !s_netMatchServiceE2E) {
 		s_netWorldDaemon = true;

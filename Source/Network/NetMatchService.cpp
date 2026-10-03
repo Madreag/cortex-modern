@@ -7688,15 +7688,10 @@ static std::string ResyncSaveName() {
 					if (notice.resolution == NetHoldResolution::Reclaimed && !PrepareHeldPeerRejoinLocked(notice.lockstepPeerId)) { ++it; continue; }
 					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
 					switch (notice.resolution) {
-						case NetHoldResolution::Expired: resolution = NetLockstepHoldResolution::Expired; break;
 						case NetHoldResolution::Reclaimed: resolution = NetLockstepHoldResolution::Reclaimed; break;
 						case NetHoldResolution::Substituted: resolution = NetLockstepHoldResolution::Substituted; break;
 					}
-					if (notice.resolution == NetHoldResolution::Expired)
-						System::PrintDiagnosticLine("[net-reconnect] the held seat of peer " + std::to_string(static_cast<int>(notice.lockstepPeerId)) + " expired at its holder's window");
 					m_Coordinator->ResolveHeldSeat(notice.lockstepPeerId, resolution, nowMs);
-					if (notice.resolution == NetHoldResolution::Expired)
-						std::erase_if(m_PendingHeldReseats, [&](const auto& reseat) { return reseat.newOwnerPeerId == notice.lockstepPeerId; });
 					it = m_PendingHeldResolutions.erase(it);
 				}
 			}

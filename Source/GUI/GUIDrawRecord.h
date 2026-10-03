@@ -27,4 +27,7 @@ namespace RTE {
 
 	/// Drops the record; the caller destroyed the panels it refers to.
 	void ClearPanelDrawRecord();
+
+	/// Turns the record on or off. Only a scripted run reads it, so a player's frames record nothing.
+	void SetPanelDrawRecording(bool recording);
 } // namespace RTE

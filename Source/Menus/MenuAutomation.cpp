@@ -1400,6 +1400,11 @@ namespace RTE::MenuAutomation {
 		}
 		{
 			// A panel its manager skipped on the latest pass is off the screen, however recent the pass before was.
+			SetPanelDrawRecording(false);
+			int unrecorded = 0;
+			RecordPanelDraw(&unrecorded);
+			check("draw_record_off_records_nothing", PanelDrawAgeMs(&unrecorded) < 0, "age_ms=" + std::to_string(PanelDrawAgeMs(&unrecorded)));
+			SetPanelDrawRecording(true);
 			int manager = 0, shown = 0, replaced = 0, loose = 0;
 			const void* previous = BeginPanelDrawPass(&manager);
 			RecordPanelDraw(&shown);
