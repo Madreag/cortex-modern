@@ -106,6 +106,13 @@ def transfer_gate(check, value, prefix="transfer"):
                           for r in labels), prefix, "label text dump missing")
 
 
+def named_boxes(check, facts):
+    host = facts.get('host_box', 'pc')
+    if not check.require(host in ('pc', 'z13'), 'host_box', 'host is outside the named four-box roster'):
+        return set()
+    return {host, 'edith', 'mac', 'linux'}
+
+
 def join_gate(check, facts, boxes=True, progress=True):
     join = facts.get("join", {})
     check.require(join.get("peer") == "edith", "join", "internet late joiner is not EDITH")
@@ -125,7 +132,7 @@ def join_gate(check, facts, boxes=True, progress=True):
     peers = facts.get("peers", {})
     if boxes:
         check.require(set(peers) == BOXES, "peers", "four real boxes are required")
-        check.require({p.get("box") for p in peers.values()} == BOXES, "peers", "duplicate machine")
+        check.require({p.get("box") for p in peers.values()} == named_boxes(check, facts), "peers", "machine set differs from the declared host roster")
     seated = [name for name in peers if name != join.get("peer")]
     peer_gate(check, peers, seated, timing=True)
     peer_gate(check, peers, ["edith"])
@@ -171,7 +178,7 @@ def judge(row, facts):
         hash_gate(check, facts.get("live", {}), "live", 1, 1201)
         hash_gate(check, facts.get("fullstate", {}), "fullstate", 60, 1200, 60)
     if row == "mod-match":
-        check.require(set(peers) == BOXES and {p.get("box") for p in peers.values()} == BOXES,
+        check.require(set(peers) == BOXES and {p.get("box") for p in peers.values()} == named_boxes(check, facts),
                       "peers", "four distinct boxes are required")
         peer_gate(check, peers, sorted(BOXES))
         check.require(bool(facts.get("activity")) and facts["activity"] == facts.get("installed_activity"),

@@ -85,6 +85,16 @@ class AcceptanceRows(unittest.TestCase):
                 result = judge(row, good(row))
                 self.assertTrue(result["passed"], result)
 
+    def test_four_box_rows_use_the_declared_z13_host(self):
+        for row in ('mod-match', 'world-join'):
+            with self.subTest(row=row):
+                data = good(row)
+                data['host_box'] = 'z13'
+                data['peers']['pc']['box'] = 'z13'
+                self.assertTrue(judge(row, data)['passed'])
+                data['peers']['pc']['box'] = 'pc'
+                self.assert_rejected(row, data, 'peers')
+
     def test_spectator_running_with_wrong_actor_is_red(self):
         data = good("spectator")
         data["promotion"]["applied_actor"] += 1

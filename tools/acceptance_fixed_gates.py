@@ -10,11 +10,11 @@ from feel.report import parse_fullstate, compare_fullstate_histories, reclaim_sa
 def identity(manifest, peers):
     row = manifest.get("acceptance_row")
     errors, diagnostics = [], []
-    expected = {"erol":"EROL-PC", "edith":"EDITH", "mac":"Mac", "linux":"Linux"}
+    host_box = manifest.get('acceptance_host_box', manifest.get('world_host_box', 'EROL-PC'))
+    if host_box not in (('EROL-PC', 'Z13', 'ALLY') if row == 'world-soak' else ('EROL-PC', 'Z13')):
+        errors.append("host box is outside the lead's named hosts for this row")
+    expected = {"erol":host_box, "edith":"EDITH", "mac":"Mac", "linux":"Linux"}
     if row == "world-soak":
-        host_box = manifest.get('world_host_box', 'EROL-PC')
-        if host_box not in ('EROL-PC', 'Z13', 'ALLY'):
-            errors.append("world host box is outside the lead's named R5 hosts")
         expected = {"erol":host_box, "edith-first":"EDITH", "edith":"EDITH"}
     actual = {entry.get("name"):entry.get("box") for entry in manifest.get("instances", [])}
     if actual != expected or set(peers) != set(expected):
@@ -119,14 +119,17 @@ def evaluate(inputs, facts):
         workload[name] = completed_workload([dict(name=name)], events, end-first+1) if type(first) is int and 1 <= first <= end else dict(passed=False)
         workload[name]["passed"] &= active[name].get("native_final_tick") == end and active[name].get("native_completion", {}).get("completion") == "completed"
     matrix = coverage(events, active, {**manifest, "scenario":"soak" if row == "world-soak" else "match"})
-    memory = memory_verdict(active)
+    # R2 explicitly uses item 17's ordinary-match gates. Preserve the shared
+    # oracle's exact 1201-tick/no-fault/no-world applicability test.
+    memory_manifest = {**manifest, 'acceptance_row':17} if row in ('mod-match', 'mod-refusal') else manifest
+    memory = memory_verdict(active, memory_manifest)
     bound = identity(manifest, peers)
     captures = capture_evidence(inputs, intervals, manifest.get("fullstate_every", 0))
     findings = [finding for finding in inputs.get("findings", []) if not (row == "mod-refusal" and finding.get("peer") == "linux"
                 and re.search(r"admission refused[^\n]*ModuleManifestMismatch", finding.get("text", "")))]
     checks = dict(identity=bound["passed"], measured_workload=bool(workload) and all(value["passed"] for value in workload.values()),
                   coverage_minima=all(value["status"] in ("PASS", "NOT APPLICABLE") for value in matrix if value.get("required", True)),
-                  memory_bounds=memory["status"] == "PASS", instrumentation=bool(active) and all(peer.get("instrument_valid") is True for peer in active.values()),
+                  memory_bounds=memory["status"] in ("PASS", "NOT APPLICABLE"), instrumentation=bool(active) and all(peer.get("instrument_valid") is True for peer in active.values()),
                   quiet_feel=bool(active) and all(peer.get("feel_gated") is True and peer.get("feel_pass") is True for peer in active.values()),
                   record_integrity=bool(active) and all(peer.get("presentation_valid") is True and peer.get("tick_timing_valid") is True
                       and any(event.get("type") == "tick_timing" for event in events.get(name, []))

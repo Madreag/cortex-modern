@@ -118,7 +118,9 @@ def build_report(root):
     logs = {name: (own/"engine/stdout.log").read_text(encoding="utf-8", errors="replace")
             if (own/"engine/stdout.log").is_file() else "" for name, own in paths.items()}
     documents = {name: own/"live.jsonl" for name, own in paths.items()}
-    facts, failures = {}, []
+    host_box = manifest.get('acceptance_host_box', manifest.get('world_host_box', 'EROL-PC'))
+    host_key = 'pc' if host_box == 'EROL-PC' else host_box.lower()
+    facts, failures = dict(host_box=host_key), []
     preflights = manifest.get("preflights", {})
     if len(preflights) != len(manifest["boxes"]) or any(not p.get("machine_id") for p in preflights.values()) or \
             len({p.get("machine_id") for p in preflights.values()}) != len(manifest["boxes"]):
@@ -166,8 +168,7 @@ def build_report(root):
     try:
         facts["live"] = live_hashes({n: documents[n] for n in comparing}, start, end) if start else {}
         facts["fullstate"] = fullstate_hashes({n: paths[n]/"engine/stdout.log" for n in comparing}, start, end) if start else {}
-        host_box = manifest.get('world_host_box', 'EROL-PC')
-        facts["peers"] = {name: peer_receipt(host_box.lower() if row == 'world-soak' and name == 'pc' and host_box != 'EROL-PC' else "edith" if name == "edith-first" else name, documents[name], logs[name], load(paths[name]/"record.json", {}),
+        facts["peers"] = {name: peer_receipt(host_key if name == 'pc' else "edith" if name == "edith-first" else name, documents[name], logs[name], load(paths[name]/"record.json", {}),
                                              start if row.startswith("world-") and name == "edith" and start else 1, end)
                           for name in paths if name != "linux" or row != "mod-refusal"}
     except (OSError, ValueError, TypeError) as error:
@@ -175,6 +176,7 @@ def build_report(root):
     if row.startswith("mod-"):
         facts.update(module="VoidWanderers.rte", activity="Void Wanderers", installed_activity="Void Wanderers")
         facts["tree_hashes"] = {name: preflights.get(spec["box"], {}).get("acceptance_module", {}).get("tree_sha256") for name, spec in specs.items()}
+        facts['tree_hashes_by_box'] = {spec['box']: facts['tree_hashes'][name] for name, spec in specs.items()}
         for name, own in paths.items():
             # The activity must be named by an adopted native config, never only by launch flags.
             try:

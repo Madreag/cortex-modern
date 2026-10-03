@@ -38,6 +38,22 @@ class FixedAcceptanceEvidence(unittest.TestCase):
         manifest['specs'][0]['box'] = 'EROL-PC'
         self.assertFalse(identity(manifest, value['peers'])['passed'])
 
+    def test_four_box_rows_bind_z13_under_the_named_host_authority(self):
+        value = fixture()
+        manifest = value['manifest']
+        manifest['acceptance_host_box'] = 'Z13'
+        for collection in ('instances', 'specs'):
+            for entry in manifest[collection]:
+                if entry['box'] == 'EROL-PC':
+                    entry['box'] = 'Z13'
+        for entry in manifest['boxes']:
+            if entry['name'] == 'EROL-PC':
+                entry['name'] = 'Z13'
+        manifest['preflights']['Z13'] = manifest['preflights'].pop('EROL-PC')
+        self.assertTrue(identity(manifest, value['peers'])['passed'])
+        manifest['specs'][0]['box'] = 'EROL-PC'
+        self.assertFalse(identity(manifest, value['peers'])['passed'])
+
     def judge(self, value):
         with patch('acceptance_fixed_gates.capture_evidence', return_value=dict(passed=True)):
             return evaluate(value, {})
@@ -61,8 +77,32 @@ class FixedAcceptanceEvidence(unittest.TestCase):
         for field in ('memory_census', 'memory_by_incarnation'):
             with self.subTest(field=field):
                 value = fixture()
+                value['manifest']['ticks'] = 36001
                 value['peers']['edith'][field] = {}
                 self.assertFalse(self.judge(value)['checks']['memory_bounds'])
+
+    def test_short_mod_rows_keep_the_ruled_item17_memory_scope(self):
+        for row in ('mod-match', 'mod-refusal'):
+            with self.subTest(row=row):
+                value = fixture()
+                value['manifest']['acceptance_row'] = row
+                for peer in value['peers'].values():
+                    peer.update(memory_census={}, memory_by_incarnation={})
+                result = self.judge(value)
+                self.assertEqual(result['memory']['status'], 'NOT APPLICABLE')
+                self.assertTrue(result['checks']['memory_bounds'])
+
+    def test_short_world_and_fault_rows_still_require_memory(self):
+        for change in (dict(world=True), dict(acceptance_row='world-join'),
+                       dict(faults=[dict(id='fixture', action='silence', peer='edith', tick=600, duration_ticks=1)])):
+            with self.subTest(change=change):
+                value = fixture()
+                value['manifest'].update(change)
+                for peer in value['peers'].values():
+                    peer.update(memory_census={}, memory_by_incarnation={})
+                result = self.judge(value)
+                self.assertNotEqual(result['memory']['status'], 'NOT APPLICABLE')
+                self.assertFalse(result['checks']['memory_bounds'])
 
     def test_box_roles_and_build_receipts_are_bound(self):
         for defect in ('role', 'box', 'build', 'runner'):
