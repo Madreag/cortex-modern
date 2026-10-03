@@ -13,6 +13,7 @@ import subprocess
 
 from feel import report
 from feel.records import open_record, record_path, presentation_records, retract_private_history
+from feel.host_loss import host_loss_evidence
 from compare_sim_traces import CORE
 
 HERE = Path(__file__).resolve().parent
@@ -301,6 +302,8 @@ def driver_stop(findings):
 
 def attempt_label(result):
     if result.get('stopped'): return f"STOPPED ({result['stopped']}); NOT JUDGED"
+    if result.get('host_loss', {}).get('status') != 'NOT APPLICABLE' and 'host_loss' in result:
+        return 'HL4 PASS' if result.get('hl4_passed') else 'HL4 FAIL'
     if result.get('v1_passed'): return 'V1 PASS'
     if 'v1_passed' not in result: return 'V1 NOT GRADED'
     if result.get('mixed_builds'): return 'PREFLIGHT RED (mixed build); FULL GATE VOID'
@@ -928,6 +931,9 @@ def build_report(root):
                 and timing['longest_stall_ms'] <= 50 and timing['confirmed_horizon_lag_ms'] <= 50)
             if peer['feel_gated']:
                 peer['feel_status'] = 'PASS' if peer['feel_pass'] else 'FAIL'
+    terminations = [row for box in manifest['boxes']
+                    for row in source_rows((root if box['kind'] == 'windows-local' else root / 'boxes' / box['name']) / 'terminations.jsonl', root)]
+    host_loss = host_loss_evidence(manifest, peers, events, live, terminations)
     host_rows = live.get(manifest['host'], [])
     ranges, missing_boundaries = report.declared_history_ranges(host_rows,
         [r for r in events.get(manifest['host'],[]) if r.get('type')=='match_boundary'], peers,
@@ -955,6 +961,13 @@ def build_report(root):
         sorted(set(fullstate_expected(host_rows,cadence)) | set(obligations['expected']) | labelled)) if cadence else dict(passed=False,status='NOT COVERED',reason='full-state instrumentation disabled')
     fullstate['obligations'] = obligations
     fullstate['passed'] &= not obligations['invalid']
+    if host_loss['ranges'] and cadence:
+        phases = []
+        for interval in host_loss['ranges']:
+            anchor = live[interval['peers'][0]]
+            wanted = [key for key in fullstate_expected(anchor, cadence) if interval['first'] <= key[1] <= interval['last']]
+            phases.append(report.compare_fullstate_histories({name: fullstate_documents[name] for name in interval['peers']}, wanted))
+        host_loss['fullstate'] = dict(passed=all(p['passed'] for p in phases) and not obligations['invalid'], phases=phases)
     matrix = coverage(events, peers, manifest)
     fault_receipts = [dict(r, source_peer=name) for name,values in events.items() for r in values if r.get('type') == 'fault']
     fault_receipts += [dict(r['native'],source_peer=name,id=r['id'],type='fault',applied=True,source='owning payload termination')
@@ -968,7 +981,7 @@ def build_report(root):
     native_recovery_records=[dict(r,source_peer=name) for name,values in events.items() for r in values if r.get('type')=='recovery']
     recoveries = []
     for fault in manifest['faults']:
-        if fault['action']=='brain-eliminate': continue
+        if fault['action'] in ('brain-eliminate', 'host-kill'): continue
         last_clock=peers[fault['peer']]['payload_clock_last_ms']
         recoveries += report.reduce_recoveries([fault], recovery_events, now_ms=last_clock)
     holds = sum(len(p['holds']) for p in peers.values())
@@ -1054,8 +1067,24 @@ def build_report(root):
         peer['first_unkeyed']=dict(tick=unkeyed[0].get('tick'),path=unkeyed[0].get('_path'),line=unkeyed[0].get('_line'),
             missing=[field for field in report.HISTORY_FIELDS if unkeyed[0].get(field) is None]) if unkeyed else None
     judgment=judge_attempt(manifest,checks,peers,matrix,recoveries,mixed_builds)
+    if host_loss['status'] != 'NOT APPLICABLE':
+        identity = acceptance_identity(manifest, peers)
+        survivors = [name for name in peers if name != manifest['host']]
+        host_loss['collection_checks'] = dict(
+            native_host_loss=host_loss['passed'], acceptance_identity=identity['roster_passed'] and identity['builds_passed'],
+            preflight=checks['preflight_complete'], engine_findings=checks['no_engine_findings'],
+            record_integrity=checks['record_integrity'], survivor_workload=completed_workload(
+                [i for i in manifest['instances'] if i['name'] in survivors], events, manifest['ticks'])['passed'],
+            fullstate=host_loss.get('fullstate', {}).get('passed') is True,
+            survivor_pace=all(peers[name]['pace']['passed'] for name in survivors),
+            survivor_memory=memory_verdict({name: peers[name] for name in survivors})['status'] == 'PASS',
+            hold_logs=checks['hold_evidence_complete'], unscheduled_holds=checks['zero_unscheduled_holds'])
+        host_loss['passed'] = all(host_loss['collection_checks'].values())
+        host_loss['status'] = 'PASS' if host_loss['passed'] else 'FAIL'
+        host_loss['reason'] += '; '.join(f'{key}={value}' for key, value in host_loss['collection_checks'].items() if not value)
     rerun=write_rerun_command(root,manifest)
-    result = dict(version=2, run=manifest['run'], passed=judgment['v1_passed'], diagnostic_passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
+    result = dict(version=2, run=manifest['run'], passed=host_loss['passed'] if host_loss['status'] != 'NOT APPLICABLE' else judgment['v1_passed'],
+                  hl4_passed=host_loss['passed'], host_loss=host_loss, diagnostic_passed=all(checks.values()), checks=checks, manifest=manifest,**judgment,
                   assigned_capture_rows={str(row):CAPTURE_ROWS[row] for row in manifest.get('capture_rows_pending',[1,2])},rerun_after_capture_fix=rerun,
                   faults_unapplied=unapplied,
                   peers=peers, local_host_render=local_host_render(manifest, peers),
@@ -1194,4 +1223,4 @@ def write_index(root):
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__); parser.add_argument('root',type=Path)
     result=build_report(parser.parse_args().root)
-    raise SystemExit(0 if result['v1_passed'] else 1)
+    raise SystemExit(0 if result['passed'] else 1)
