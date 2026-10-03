@@ -708,7 +708,8 @@ def scripts(case, port, root, size="960x540"):
                 "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait_ms 400\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
-                "activate ButtonMultiplayerStart\n")
+                # The Start button takes the remote ready on the menu's next update.
+                "wait 3\nactivate ButtonMultiplayerStart\n")
         client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\n"
                   f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
                   "activate ButtonMultiplayerConnect\nwait_connected 2 60\nactivate ButtonMultiplayerReady\n")
@@ -1004,7 +1005,8 @@ def scripts(case, port, root, size="960x540"):
                 "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait 5\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
-                "activate ButtonMultiplayerStart\n")
+                # The Start button takes the remote ready on the menu's next update.
+                "wait 3\nactivate ButtonMultiplayerStart\n")
         client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait 5\n"
                   f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
                   "activate ButtonMultiplayerConnect\nwait_connected 2 60\nwait 5\n"
