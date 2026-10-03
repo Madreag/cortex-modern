@@ -1157,9 +1157,9 @@ def scripts(case, port, root, size="960x540"):
                 "wait 10\nassert_label LabelHostSeatName1 Client 2\n"
                 "dump_host_options\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                # The kicked seat is open again: it reads the unseated name, never CPU, and the
+                # The kicked seat is open again: it reads open, never CPU nor the removed player, and the
                 # kicked client rejoins it below - only the ban list keeps an identity out.
-                "dump_lobby\nassert_label LabelLobbyPlayer1 Client 2\n"
+                "dump_lobby\nassert_label LabelLobbyPlayer1 Open seat - Team 1\n"
                 "assert_label_absent LabelLobbyPlayer0 Joiner\nassert_label_absent LabelLobbyPlayer1 Joiner\n"
                 "assert_label LabelLobbyPlayer2 CPU\n"
                 # The client's rejoin waits on this dump, taken on the options panel so the lobby keeps one capture.
