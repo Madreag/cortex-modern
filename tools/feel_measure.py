@@ -43,7 +43,7 @@ LAG_ARMS = tuple(f'{lag}ms-{cap}' for lag in (100, 200) for cap in ('60hz', 'unc
 
 
 def stamp():
-    return datetime.now(MST).strftime('%Y-%m-%d %H:%M MST')
+    return datetime.now(MST).strftime('%Y-%m-%d %I:%M %p MST')
 
 
 def scratch_bytes(root, limit=BYTE_LIMIT):
