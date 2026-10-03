@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import cross_peers
 import cross_report
@@ -10,6 +11,40 @@ from compare_sim_traces import CORE
 
 
 class HostLossEvidence(unittest.TestCase):
+    def test_payload_uses_completed_exit_before_windows_handles_are_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fault = dict(id='loss', peer='erol', action='host-kill', incarnation=0, tick=1)
+            spec = dict(peer='erol', role='host', incarnation=0, own=str(root/'erol/incarnation-0'), root=str(root),
+                        faults=[fault], recoveries=[], flags=['-net-match-peers', '4'], timeout=60)
+            (root/'payload.json').write_text(json.dumps(dict(box=dict(name='EROL-PC', kind='posix-ssh'), specs=[spec], pin='pin')))
+            (root/'preflight.json').write_text(json.dumps(dict(executable_sha256='a'*64)))
+            class Run:
+                cwd = str(root)
+                closed = False
+                def __init__(self): self.record = {}
+                def start(self): self.record.update(started=True, pid=44, exe_sha256='a'*64)
+                def poll(self):
+                    if self.closed: raise RuntimeError('poll after close uses a closed Windows handle')
+                    return None
+                def terminate(self, reason): self.record['injected_termination'] = reason
+                def finish(self):
+                    self.record.update(exit_code=137, timed_out=False)
+                    self.close()
+                    return self.record
+                def close(self): self.closed = True
+            def prepare(spec, _pin, _box):
+                own = Path(spec['own']); own.mkdir(parents=True)
+                (own/'events.jsonl').write_text(json.dumps(dict(type='progress', budget_tick=1, applied_frame=1, execution='process-0/0'))+'\n')
+                return Run()
+            with patch.object(cross_peers, 'assert_box_guard'), patch.object(cross_peers, 'read_capabilities', return_value=dict(peer_limit=4)), \
+                 patch.object(cross_peers, 'wait_for_payload_release'), patch.object(cross_peers, 'prepare_instance', side_effect=prepare), \
+                 patch.object(cross_peers, 'sample_memory', return_value=None), patch.object(cross_peers, 'retain_checkpoints'), \
+                 patch.object(cross_peers, 'box_load', return_value=[]), patch.object(cross_peers, 'seal_evidence'):
+                code = cross_peers.run_payload(root/'payload.json')
+            self.assertEqual(code, 0, (root/'payload-error.json').read_text() if (root/'payload-error.json').is_file() else '')
+            self.assertTrue(json.loads((root/'terminations.jsonl').read_text())['process_terminated'])
+
     def test_recorded_endpoint_allows_true_host_kill_plan(self):
         with tempfile.TemporaryDirectory() as folder:
             schedule = Path(folder) / 'schedule.json'
@@ -52,6 +87,9 @@ class HostLossEvidence(unittest.TestCase):
         peers['erol']['record'] = dict(pid=44, exit_code=-9, injected_termination='scheduled crash loss')
         good = reducer(manifest, peers, events, live, [receipt])
         self.assertTrue(good['passed'], good)
+        hopped = copy.deepcopy(peers)
+        hopped['erol']['record'].update(pid=88, hop=dict(engine_pid=44))
+        self.assertTrue(reducer(manifest, hopped, events, live, [receipt])['passed'])
         for change in ('missing', 'alive', 'wrong_pid', 'state', 'authority', 'history', 'feel'):
             e, h, p, r = copy.deepcopy(events), copy.deepcopy(live), copy.deepcopy(peers), copy.deepcopy([receipt])
             if change == 'missing': r = []
