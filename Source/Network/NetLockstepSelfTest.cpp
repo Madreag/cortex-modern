@@ -4117,6 +4117,32 @@ namespace RTE {
 			return true;
 		}
 
+		// R6 (7) on the round: a host whose process stalls for 900 ms is held, never replaced - the loss bound is one second plus two
+		// round trips - while a host silent past the bound is handed over by the majority.
+		bool TestAHostStallInsideTheLossBoundMigratesNobody(std::string* error) {
+			for (const uint64_t stallMs: {900ULL, 1600ULL}) {
+				QuorumRig r;
+				if (!StartQuorumRig(r, 4, static_cast<uint16_t>(stallMs == 900 ? 47180 : 47190), error)) return false;
+				if (!PumpQuorumRig(r, 4000, [&r] { for (uint8_t i = 0; i < 4; ++i) if (r.simulated[i] < 20) return false; return true; })) {
+					*error = "the four-player round never ran twenty frames:" + r.Report();
+					return false;
+				}
+				// The host's process stops: no tick, no packet, its link open.
+				r.live[0] = false;
+				(void)PumpQuorumRig(r, stallMs, [] { return false; });
+				r.live[0] = true;
+				(void)PumpQuorumRig(r, 3000, [] { return false; });
+				bool migrated = false;
+				for (uint8_t peer = 2; peer <= 4; ++peer) migrated = migrated || r.Peer(peer).GetMigrationResult().generation != 0 || r.Peer(peer).IsMigrating();
+				if (migrated != (stallMs > 1000)) {
+					*error = "a host stall of " + std::to_string(stallMs) + " ms " + (migrated ? "started a handover" : "was never handed over") + ":" + r.Report();
+					return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_host_stall_inside_the_loss_bound_migrates_nobody stall_900ms=held stall_1600ms=handed_over" << std::endl;
+			return true;
+		}
+
 		// A majority closes the roster at the answer budget: a voter whose answer comes after that rejoins through the successor's
 		// resync, the members it missed never waiting on it. The host leaves by its record, so its seat is out of the count and two of
 		// the three remaining seats are the majority.
@@ -23611,6 +23637,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestALateVoterResyncsAfterTheMajorityCloses, "a_late_voter_resyncs_after_the_majority_closes");
 		row(&TestAnIsolatedHostIsProvisionalWhileTheMajorityMigrates, "an_isolated_host_is_provisional_while_the_majority_migrates");
 		row(&TestAHostIsProvisionalUntilItHearsAMajority, "a_host_is_provisional_until_it_hears_a_majority");
+		row(&TestAHostStallInsideTheLossBoundMigratesNobody, "a_host_stall_inside_the_loss_bound_migrates_nobody");
 		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;
