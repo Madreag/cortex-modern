@@ -694,6 +694,41 @@ namespace RTE {
 			return true;
 		}
 
+		// The other direction: a host older than this build cannot write its refusal in this build's envelope, so it closes the link
+		// with the reason the published alpha's RejectOldWirePeer gives. The player reads which side is older, never a fault to retry.
+		bool TestANewPlayerIsToldTheHostIsOlder(std::string* error) {
+			constexpr uint16_t c_AlphaProtocol = 3;
+			constexpr uint16_t port = 49753;
+			LoopbackTransport alphaWire, clientWire;
+			if (!alphaWire.StartHost(port, error)) return false;
+			NetSession client;
+			if (!client.StartClient(clientWire, "loopback", MakeConfig(port, 303, "New player"), error)) return false;
+			NetPeerId fromClient = c_InvalidNetPeerId;
+			bool closed = false;
+			for (uint64_t now = 0; now <= 400; now += 5) {
+				client.Tick(now);
+				clientWire.AdvanceTimeMs(5);
+				alphaWire.AdvanceTimeMs(5);
+				for (const NetTransportEvent& event: alphaWire.PollEvents()) {
+					if (event.type != NetTransportEventType::PacketReceived || closed) continue;
+					uint16_t version = 0;
+					if (!NetProtocol::PeekHeaderVersion(event.bytes.data(), event.bytes.size(), version)) continue;
+					fromClient = event.peerId;
+					alphaWire.Disconnect(fromClient, "protocol version " + std::to_string(version) + " does not match this build's " + std::to_string(c_AlphaProtocol));
+					closed = true;
+				}
+				if (closed && client.GetState() != NetSessionState::HelloSent && client.GetState() != NetSessionState::Connecting) break;
+			}
+			const std::string told = client.BuildPlayerRefusalText();
+			const std::string expected = "Network protocol differs (host " + std::to_string(c_AlphaProtocol) + "; yours " + std::to_string(NetProtocol::c_Version) + ").";
+			if (fromClient == c_InvalidNetPeerId || client.GetState() != NetSessionState::Rejected || told != expected) {
+				*error = "a new player refused by an older host read '" + told + "' in state " + NetSession::StateName(client.GetState()) + (fromClient == c_InvalidNetPeerId ? " (its hello never arrived)" : "");
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS a_new_player_is_told_the_host_is_older told='" << told << "'" << std::endl;
+			return true;
+		}
+
 		bool TestAdvertisedVersionsRequireHeadless(std::string* error) {
 			struct Environment {
 				std::map<std::string, std::optional<std::string>> saved;
@@ -2269,6 +2304,7 @@ namespace RTE {
 		if (!TestHostWithNoRemoteSeatIsReady(&error)) return fail(error);
 		if (!TestAdvertisedVersionsRequireHeadless(&error)) return fail(error);
 		if (!TestThePublishedAlphaIsToldWhy(&error)) return fail(error);
+		if (!TestANewPlayerIsToldTheHostIsOlder(&error)) return fail(error);
 		if (!TestRejects(&error)) return fail(error);
 		if (!TestLockstepCodecAdmission(&error)) return fail(error);
 		if (!TestSessionFull(&error)) return fail(error);

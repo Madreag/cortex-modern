@@ -20,6 +20,22 @@
 namespace RTE {
 
 	namespace {
+		/// A host too old to write this build's envelope closes the link saying so: "protocol version N does not match this build's M".
+		bool ReadOlderHostClose(const std::string& reason, std::string& ours, std::string& hosts) {
+			static const std::string c_Lead = "protocol version ";
+			static const std::string c_Middle = " does not match this build's ";
+			const size_t lead = reason.find(c_Lead);
+			const size_t middle = lead == std::string::npos ? std::string::npos : reason.find(c_Middle, lead + c_Lead.size());
+			if (middle == std::string::npos) return false;
+			const auto digits = [](const std::string& text) { return !text.empty() && std::all_of(text.begin(), text.end(), [](char c) { return c >= '0' && c <= '9'; }); };
+			ours = reason.substr(lead + c_Lead.size(), middle - lead - c_Lead.size());
+			const size_t start = middle + c_Middle.size();
+			size_t end = start;
+			while (end < reason.size() && reason[end] >= '0' && reason[end] <= '9') ++end;
+			hosts = reason.substr(start, end - start);
+			return digits(ours) && digits(hosts);
+		}
+
 		using json = nlohmann::json;
 
 		constexpr uint8_t c_HostAssignedPeerId = 0;
@@ -621,6 +637,11 @@ namespace RTE {
 					}
 					RefreshHostState();
 				} else if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
+					std::string ours, hosts;
+					if (!m_HasReject && ReadOlderHostClose(event.reason, ours, hosts)) {
+						SetRejected(NetRejectReason::ProtocolMismatch, "protocol_version", hosts, ours, event.reason);
+						break;
+					}
 					// Keep the close reason the host sent with the disconnect so the UI can show why.
 					if (!m_HasReject) {
 						RecordReject(NetRejectReason::InternalError, "", "", "", event.reason.empty() ? "connection closed by peer" : event.reason);
@@ -648,6 +669,11 @@ namespace RTE {
 					// not fail the host session for everyone else. A committed peer drops via PeerDisconnected.
 					++m_Stats.unboundConnectionFaults;
 				} else {
+					std::string ours, hosts;
+					if (ReadOlderHostClose(event.reason, ours, hosts)) {
+						SetRejected(NetRejectReason::ProtocolMismatch, "protocol_version", hosts, ours, event.reason);
+						break;
+					}
 					// The client's lone link to the host faulted - it genuinely cannot proceed.
 					SetFailed(NetRejectReason::InternalError, "transport", "", event.reason, event.reason.empty() ? "transport error" : event.reason);
 				}
