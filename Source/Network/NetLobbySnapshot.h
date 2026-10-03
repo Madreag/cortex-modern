@@ -56,6 +56,7 @@ namespace RTE {
 		bool aiHeld = false;
 		bool dropped = false;    //!< §11: the seat is held but its player's link is gone.
 		bool reclaiming = false; //!< §11: that player is proving its ticket right now.
+		bool joining = false;    //!< That player came in by admission and is still on its way into the round: joining, not rejoining.
 		std::string connectedRoute;
 		std::string statusLine;  //!< §11's persistent line for the seat, derived on THIS peer; "" when the seat is fine.
 	};

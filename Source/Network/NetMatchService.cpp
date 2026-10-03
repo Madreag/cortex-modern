@@ -8119,6 +8119,7 @@ static std::string ResyncSaveName() {
 			if (known && !view->second.name.empty()) member.displayName = view->second.name;
 			member.dropped = known && view->second.seat.link == NetSeatLink::Dropped && view->second.state != "Left";
 			member.reclaiming = known && view->second.state == "Reconnecting";
+			member.joining = member.reclaiming && view->second.seat.joining;
 			member.statusLine = known ? view->second.line : std::string();
 			member.connectedRoute = GetConnectedRouteLocked(member.peerId);
 			if (m_Coordinator && m_State == NetMatchServiceState::Running) {

@@ -42,6 +42,7 @@ namespace RTE {
 		NetSeatPhase phase = NetSeatPhase::Lobby;
 		NetSeatHoldCause holdCause = NetSeatHoldCause::None;
 		NetSeatLink link = NetSeatLink::Connected;
+		bool joining = false;                                  ///< Its owner took the seat by admission and has not played it yet: joining, not rejoining.
 		uint8_t failedReturns = 0;                             ///< Returns that failed since its owner was last back.
 		uint64_t returnAfterMs = 0;                            ///< A return is not offered again before this (the backoff).
 		uint64_t bindingRef = 0;                               ///< The committed world's brain/actor for the seat.

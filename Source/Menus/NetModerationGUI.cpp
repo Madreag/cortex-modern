@@ -261,8 +261,9 @@ namespace {
 			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 			const auto member = std::find_if(snapshot.members.begin(), snapshot.members.end(), [&](const auto& row) { return row.peerId == sender; });
 			const std::string state = member != snapshot.members.end() ? NetPlayerPresentation::State(*member) : std::string("Held - AI in control");
+			const bool joining = member != snapshot.members.end() && member->joining;
 			return NetPlayerPresentation::Name(sender, g_NetMatchService.GetPeerDisplayName(sender)) + ": " +
-			    (toast.text.find("rejoining") != std::string::npos ? "Held - AI in control - rejoining" : state);
+			    (toast.text.find("rejoining") != std::string::npos ? (joining ? "Held - AI in control - joining" : "Held - AI in control - rejoining") : state);
 		}
 		if (toast.kind == "resumed" && sender == 0) {
 			const auto& events = ScenarioRunner::GetNetUiToastLog();

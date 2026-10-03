@@ -92,6 +92,10 @@ namespace RTE {
 				return result;
 			};
 			const auto commit = [&](const std::string& reason) {
+				// A seat that plays the round, or has no player, is nobody's way in.
+				for (NetRosterSeat& each: next.seats) {
+					if (each.phase == NetSeatPhase::Running || each.owner == 0) each.joining = false;
+				}
 				++next.revision;
 				result.changed = true;
 				result.reason = reason;
@@ -156,6 +160,7 @@ namespace RTE {
 					seat->link = NetSeatLink::Connected;
 					seat->holdCause = NetSeatHoldCause::None;
 					seat->heldSinceMs = 0;
+					seat->joining = false;
 					// A newer connection of a seat that plays the round takes over the play; any other return goes through its stage's path.
 					if (seat->phase != NetSeatPhase::Running || next.stage != NetRosterStage::Running) seat->phase = ReturnPhase(next.stage, event.keptWorld);
 					return commit(next.stage == NetRosterStage::Running ? "Rejoining - the AI plays the seat until the player is back" : "the player is back");
@@ -333,6 +338,7 @@ namespace RTE {
 					seat->ticket = event.ticket;
 					seat->name = BoundedName(event.name);
 					++seat->incarnation;
+					seat->joining = true;
 					seat->link = NetSeatLink::Connected;
 					seat->holdCause = NetSeatHoldCause::None;
 					seat->failedReturns = 0;
@@ -445,7 +451,7 @@ namespace RTE {
 					default: return "Held - AI in control (connection lost)";
 				}
 			case NetSeatPhase::RejoinImage:
-			case NetSeatPhase::RejoinCatchUp: return "Rejoining";
+			case NetSeatPhase::RejoinCatchUp: return seat.joining ? "Joining" : "Rejoining";
 			case NetSeatPhase::RoundEnd: return "Away - the seat is kept";
 			case NetSeatPhase::Relaunching: return "Held - AI in control (game restarting)";
 			case NetSeatPhase::Migrating: return "Host lost - arranging handover";
@@ -466,7 +472,7 @@ namespace RTE {
 	}
 
 	namespace {
-		constexpr uint8_t c_RosterWireVersion = 2;
+		constexpr uint8_t c_RosterWireVersion = 3;
 		constexpr size_t c_RosterMaxSeats = 32;
 
 		void PutBytes(std::vector<uint8_t>& out, uint64_t value, int bytes) {
@@ -500,6 +506,7 @@ namespace RTE {
 			PutBytes(out, static_cast<uint8_t>(seat.phase), 1);
 			PutBytes(out, static_cast<uint8_t>(seat.holdCause), 1);
 			PutBytes(out, static_cast<uint8_t>(seat.link), 1);
+			PutBytes(out, seat.joining ? 1 : 0, 1);
 			PutBytes(out, seat.bindingRef, 8);
 			const std::string name = BoundedName(seat.name);
 			PutBytes(out, name.size(), 1);
@@ -527,12 +534,12 @@ namespace RTE {
 		decoded.hostSeat = static_cast<uint8_t>(hostSeat);
 		decoded.migrationGen = static_cast<uint16_t>(migrationGen);
 		for (uint64_t i = 0; i < count; ++i) {
-			uint64_t seatId = 0, owner = 0, incarnation = 0, phase = 0, cause = 0, link = 0, bindingRef = 0, nameBytes = 0;
+			uint64_t seatId = 0, owner = 0, incarnation = 0, phase = 0, cause = 0, link = 0, joining = 0, bindingRef = 0, nameBytes = 0;
 			if (!TakeBytes(bytes, at, 1, seatId) || !TakeBytes(bytes, at, 8, owner) || !TakeBytes(bytes, at, 2, incarnation) || !TakeBytes(bytes, at, 1, phase) ||
-			    !TakeBytes(bytes, at, 1, cause) || !TakeBytes(bytes, at, 1, link) || !TakeBytes(bytes, at, 8, bindingRef) || !TakeBytes(bytes, at, 1, nameBytes) ||
-			    at + nameBytes > bytes.size()) return fail("a short seat roster");
+			    !TakeBytes(bytes, at, 1, cause) || !TakeBytes(bytes, at, 1, link) || !TakeBytes(bytes, at, 1, joining) || !TakeBytes(bytes, at, 8, bindingRef) ||
+			    !TakeBytes(bytes, at, 1, nameBytes) || at + nameBytes > bytes.size()) return fail("a short seat roster");
 			if (seatId == 0 || phase >= static_cast<uint64_t>(NetSeatPhase::Count) || cause > static_cast<uint64_t>(NetSeatHoldCause::Banned) ||
-			    link > static_cast<uint64_t>(NetSeatLink::Dropped) || nameBytes > c_RosterMaxNameBytes || decoded.Find(static_cast<uint8_t>(seatId))) return fail("a seat roster with a bad seat");
+			    link > static_cast<uint64_t>(NetSeatLink::Dropped) || joining > 1 || nameBytes > c_RosterMaxNameBytes || decoded.Find(static_cast<uint8_t>(seatId))) return fail("a seat roster with a bad seat");
 			NetRosterSeat seat;
 			seat.seatId = static_cast<uint8_t>(seatId);
 			seat.owner = owner;
@@ -540,6 +547,7 @@ namespace RTE {
 			seat.phase = static_cast<NetSeatPhase>(phase);
 			seat.holdCause = static_cast<NetSeatHoldCause>(cause);
 			seat.link = static_cast<NetSeatLink>(link);
+			seat.joining = joining != 0;
 			seat.bindingRef = bindingRef;
 			seat.name.assign(reinterpret_cast<const char*>(bytes.data() + at), static_cast<size_t>(nameBytes));
 			at += static_cast<size_t>(nameBytes);
@@ -558,10 +566,10 @@ namespace RTE {
 		for (const NetRosterSeat& seat: roster.seats) {
 			fields.emplace_back("seat." + std::to_string(seat.seatId), std::to_string(seat.owner) + ":" + std::to_string(seat.incarnation) + ":" + NetSeatPhaseName(seat.phase) + ":" +
 			                                                                   std::to_string(static_cast<int>(seat.holdCause)) + ":" + std::to_string(static_cast<int>(seat.link)) + ":" +
-			                                                                   std::to_string(seat.bindingRef));
+			                                                                   std::to_string(seat.bindingRef) + ":" + (seat.joining ? "joining" : "-"));
 			fields.emplace_back("seat." + std::to_string(seat.seatId) + ".name", seat.name);
 		}
-		return NetIdentity::HashCanonicalText("cortex.seat-roster.v2", fields);
+		return NetIdentity::HashCanonicalText("cortex.seat-roster.v3", fields);
 	}
 
 	bool NetRosterReplica::Apply(const NetSeatRoster& revision, std::string* why) {
@@ -992,6 +1000,54 @@ namespace RTE {
 			std::string error;
 			const bool crossed = DecodeRoster(EncodeRoster(taken.roster), copy, &error) && copy.hostSeat == 0 && copy.seats[0].name == "Alice";
 			check("seq L03 a dedicated host's roster names seat 0 and keeps every rule", kept && crossed, "why='" + why + "' error='" + error + "'");
+		}
+		{
+			// A newcomer taking an open seat of a running round is joining it, a returning player rejoining: the seat says which, on every peer.
+			NetSeatRoster world;
+			world.matchId = 78;
+			world.stage = NetRosterStage::Running;
+			for (uint8_t id = 1; id <= 3; ++id) {
+				NetRosterSeat seat;
+				seat.seatId = id;
+				seat.phase = NetSeatPhase::Running;
+				if (id != 2) {
+					seat.owner = 0x3000 + id;
+					seat.ticket = 0x8000 + id;
+				}
+				world.seats.push_back(seat);
+			}
+			world.seats[2].phase = NetSeatPhase::Held;
+			world.seats[2].link = NetSeatLink::Dropped;
+			NetRosterEvent admitted;
+			admitted.kind = NetRosterEventKind::Admitted;
+			admitted.seat = 2;
+			admitted.owner = 0x3002;
+			admitted.ticket = 0x8002;
+			admitted.name = "Newcomer";
+			const NetRosterResult joined = ApplyRosterEvent(world, admitted);
+			NetRosterEvent returned;
+			returned.kind = NetRosterEventKind::Returned;
+			returned.seat = 3;
+			returned.ticket = 0x8003;
+			const NetRosterResult back = ApplyRosterEvent(joined.roster, returned);
+			const NetRosterSeat* newcomer = back.roster.Find(2);
+			const NetRosterSeat* returner = back.roster.Find(3);
+			NetSeatRoster copy;
+			std::string error;
+			const bool crossed = DecodeRoster(EncodeRoster(back.roster), copy, &error) && copy.Find(2) && copy.Find(2)->joining && copy.Find(3) && !copy.Find(3)->joining;
+			NetRosterEvent loaded;
+			loaded.kind = NetRosterEventKind::ImageLoaded;
+			loaded.seat = 2;
+			NetRosterEvent caughtUp;
+			caughtUp.kind = NetRosterEventKind::CaughtUp;
+			caughtUp.seat = 2;
+			const NetRosterResult playing = ApplyRosterEvent(ApplyRosterEvent(back.roster, loaded).roster, caughtUp);
+			const NetRosterSeat* played = playing.roster.Find(2);
+			const std::string newcomerLabel = newcomer ? RosterSeatLabel(*newcomer) : "?", returnerLabel = returner ? RosterSeatLabel(*returner) : "?";
+			check("seq J01 a newcomer's seat reads joining and a returner's rejoining, on the wire too, until the seat plays",
+			      !joined.refused && !back.refused && newcomerLabel == "Joining" && returnerLabel == "Rejoining" && crossed && played && played->phase == NetSeatPhase::Running && !played->joining,
+			      "newcomer='" + newcomerLabel + "' returner='" + returnerLabel + "' crossed=" + std::to_string(crossed) + " error='" + error +
+			          "' played=" + (played ? std::string(NetSeatPhaseName(played->phase)) + (played->joining ? " joining" : "") : std::string("?")));
 		}
 		std::cout << tag << " totals pass=" << pass << " fail=" << fail << " na=" << unreachable << std::endl;
 		std::cout << tag << (fail == 0 ? " PASS" : " FAIL") << std::endl;
