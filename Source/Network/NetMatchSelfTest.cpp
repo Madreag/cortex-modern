@@ -4922,6 +4922,58 @@ namespace RTE {
 			return true;
 		}
 
+		// A recording made before the seat roster's bump opens in the layout it was written in: an ordinary match at 6, a world at 7.
+		bool TestARecordedPreRosterConfigOpens(std::string* error) {
+			struct Recorded {
+				const char* name;
+				uint16_t version;
+				bool world;
+				const char* hex;
+			};
+			// The match configs of two recordings of 2026-10-02, the ordinary one's addresses and names replaced by values of the same length.
+			const Recorded recordings[] = {
+			    {"ordinary", 6, false,
+			    "43434c340900100003000000910100000600345032454741545301040000010212000a004741536372697074656410004d756c746920426f7820436f6d6261740a0047726173736c616e64730c007076"
+			    "702d736b69726d69736804010000000400686f7374020100000800436c69656e742032030200000800436c69656e742033040300000800436c69656e7420340401000100010004000100000000000000"
+			    "04000000000000000e00557365725363656e65732e7274650800426173652e72746532000000000000000105002d416c6c2d00003205002d416c6c2d00003205002d416c6c2d00003205002d416c6c2d"
+			    "00003201b40000000a01011e000100030203040401edc2020e003139382e35312e3130302e31333022006963653a7374723a682d30303030303030303030303030303030303030303030303002eec202"
+			    "0e003139382e35312e3130302e3132320a006963653a69703a3a3a310389c4020d003139382e35312e3130302e33360a006963653a69703a3a3a3104f0c2020c003139382e35312e3130302e350a0069"
+			    "63653a69703a3a3a310300010002007b7d"},
+			    {"world", 7, true,
+			    "43434c340900100003000000f10000000700444c524f5700000001020000010205000a00474153637269707465640d00503420416c706861204475656c0a0047726173736c616e647303005076500200"
+			    "0001000500576f726c64020100000600506c6179657200010000000000000007000000000000000800426173652e7274650800426173652e72746532000000000000000105002d416c6c2d0000320500"
+			    "2d416c6c2d00003205002d416c6c2d00003205002d416c6c2d000032012d0000000a0101240061616161616161612d303030302d303030302d303030302d303030303030303030306336010000000000"
+			    "0000000000000000000300010002007b7d"},
+			};
+			for (const Recorded& recording: recordings) {
+				const std::string hex = recording.hex;
+				std::vector<uint8_t> bytes;
+				for (size_t i = 0; i + 1 < hex.size(); i += 2) bytes.push_back(static_cast<uint8_t>(std::stoul(hex.substr(i, 2), nullptr, 16)));
+				const std::string what = std::string("a recorded ") + recording.name + " v" + std::to_string(recording.version) + " config";
+				const auto decoded = NetLobbyProtocol::Decode(bytes, NetLobbyDecodeOptions{true});
+				const auto* opened = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+				if (!opened) {
+					*error = what + " did not open: " + decoded.error.message;
+					return false;
+				}
+				if (opened->config.version != recording.version || opened->config.persistentWorld != recording.world) {
+					*error = what + " opened as v" + std::to_string(opened->config.version) + (opened->config.persistentWorld ? " world" : " ordinary");
+					return false;
+				}
+				std::vector<uint8_t> again;
+				if (!NetLobbyProtocol::Encode({*opened}, again) || again != bytes) {
+					*error = what + " was not written back in its own layout";
+					return false;
+				}
+				if (NetLobbyProtocol::Decode(bytes).ok) {
+					*error = what + " opened as a live config";
+					return false;
+				}
+			}
+			std::cout << "PASS a_recorded_pre_roster_config_opens versions=6,7 live=" << NetMatchConfigUtil::c_LiveMinVersion << "/" << NetMatchConfigUtil::c_PersistentWorldVersion << std::endl;
+			return true;
+		}
+
 		// One bump for the seat roster: a config from before it (v6 ordinary, v7 world) is refused by name, never misread at a field.
 		bool TestPreRosterConfigRefusedByName(std::string* error) {
 			for (const uint16_t version: {uint16_t{6}, uint16_t{7}}) {
@@ -15431,6 +15483,7 @@ namespace RTE {
 		if (!TestResyncFailureAfterHostDeparture(&error)) return fail(error);
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestPreRosterConfigRefusedByName(&error)) return fail(error);
+		if (!TestARecordedPreRosterConfigOpens(&error)) return fail(error);
 		if (!TestFakeLinkEffectsAreReadFromTheLinksOwnCounters(&error)) return fail(error);
 		if (!TestTheModerationStateCarriesThroughTheCapsule(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);

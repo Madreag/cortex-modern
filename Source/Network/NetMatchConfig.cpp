@@ -458,7 +458,10 @@ namespace RTE {
 		} else if (carriesWorldCapacity()) {
 			return refuse("an ordinary match cannot carry world capacity");
 		}
-		if (config.version >= c_RelayLayoutVersion && config.version != (config.persistentWorld ? c_PersistentWorldVersion : c_Version)) return refuse("match config version does not match the world mode");
+		// A recorded config keeps the pairing it was written with: an ordinary match at 6 or 8, a world at 7 or 9.
+		const bool rostered = config.version >= c_SeatRosterVersion;
+		const uint16_t modeVersion = config.persistentWorld ? (rostered ? c_PersistentWorldVersion : c_PreRosterWorldVersion) : (rostered ? c_Version : c_RelayLayoutVersion);
+		if (config.version >= c_RelayLayoutVersion && config.version != modeVersion) return refuse("match config version does not match the world mode");
 		if (config.version < 3 && config.pathHorizonTicks != 0) return refuse("legacy config cannot carry a path horizon");
 		if (config.pathHorizonTicks > c_MaxPathHorizonTicks) return refuse("path_horizon_ticks is out of range");
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
