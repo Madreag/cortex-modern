@@ -1137,6 +1137,8 @@ namespace RTE {
 		}
 		/// A seat the AI holds for its returner. A released seat stays under the AI but no longer waits for anyone.
 		bool HasHeldAISeat(uint8_t peerId) const { NET_PLANE_CHECK(); return m_AiHeldSeats.contains(peerId) && !m_ReleasedAiSeats.contains(peerId); }
+		/// Lines this peer has said about a silent host, all told: one for each second of a silence.
+		uint32_t GetHostSilentReports() const { return m_HostSilentReports; }
 		bool AnyHeldAISeat() const { NET_PLANE_CHECK(); return std::any_of(m_AiHeldSeats.begin(), m_AiHeldSeats.end(), [&](const auto& seat) { return !m_ReleasedAiSeats.contains(seat.first); }); }
 		/// Whether the seat's hold was ended by a kick, a ban, a release or a clean leave: its units stay with the AI and a return is a new join.
 		bool IsSeatReleased(uint8_t peerId) const { NET_PLANE_CHECK(); return m_ReleasedAiSeats.contains(peerId); }
@@ -1925,6 +1927,8 @@ namespace RTE {
 		uint64_t m_AgreedEndDeadlineMs = 0; //!< When a host playing to its agreed end stops waiting for it.
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
 		uint64_t m_ReturnHistoryFloor = 0; //!< Host: the oldest frame a returning seat may still be served from.
+		uint64_t m_HostSilentReportedSecond = UINT64_MAX; //!< The second of the host's silence last reported; one line a second.
+		uint32_t m_HostSilentReports = 0;                  //!< Lines reported about a silent host, all told.
 		static constexpr uint64_t c_SeatTransitionHistoryFrames = 3600; //!< How far behind this peer's simulation the seat transitions reach.
 		/// Drops the seat transitions no query reaches any more, the newest at the cut standing for the ones before it.
 		void PruneSeatTransitions(uint64_t completedTick);

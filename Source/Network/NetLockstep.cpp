@@ -12080,8 +12080,15 @@ namespace RTE {
 			CompleteAtHostClose();
 			return;
 		}
-		if (hostSilent) DiagnosticLine() << "[net-lockstep] host silent " << hostQuietMs << "ms against " << NetHostLossBoundMs(hostRttMs) << "ms (rtt " << hostRttMs
-		                          << ") heard=" << m_AuthorityLastHeardMs << " wait_start=" << m_WaitStartMs << " next=" << m_Stats.nextFrame << std::endl;
+		// The wait loop asks every pass; the line is said once for each second of the silence.
+		if (!hostSilent) {
+			m_HostSilentReportedSecond = UINT64_MAX;
+		} else if (hostQuietMs / 1000 != m_HostSilentReportedSecond) {
+			m_HostSilentReportedSecond = hostQuietMs / 1000;
+			++m_HostSilentReports;
+			DiagnosticLine() << "[net-lockstep] host silent " << hostQuietMs << "ms against " << NetHostLossBoundMs(hostRttMs) << "ms (rtt " << hostRttMs
+			                 << ") heard=" << m_AuthorityLastHeardMs << " wait_start=" << m_WaitStartMs << " next=" << m_Stats.nextFrame << std::endl;
+		}
 		if (hostSilent && BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();

@@ -19337,6 +19337,52 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		/// A survivor that cannot take the round over - a world's, whose host is the world - waits on a silent host to the round's
+		/// timeout, and its wait asks every pass: the line saying so is written once for each second of the silence, not every pass.
+		bool TestASilentHostIsReportedOnceASecond(std::string* error) {
+			LoopbackTransport hostWire, aWire;
+			if (!hostWire.StartHost(49567, error) || !aWire.Connect("loopback", 49567, error)) return false;
+			auto match = NetMatchConfigUtil::MakeDefault(0x155);
+			match.peerCount = 2;
+			auto config = [&](uint8_t peer) {
+				NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match; value.peerCount = 2; value.localPeerId = peer;
+				value.startFrame = 1; value.timeoutMs = 20000; value.roundId = peer == 1 ? 0x15501 : 0; value.relayToOtherPeers = peer == 1;
+				value.simTickMs = 1000.0 / 60.0;
+				value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				return value;
+			};
+			NetLockstepCoordinator host, a;
+			if (!host.Start(hostWire, config(1), error) || !a.Start(aWire, config(2), error)) return false;
+			for (auto* peer: {&host, &a}) peer->DeferStopsToTickBoundary();
+			uint64_t now = 0;
+			auto step = [&](bool hostAlive) {
+				if (hostAlive) { host.Tick(now); hostWire.AdvanceTimeMs(5); }
+				a.Tick(now); aWire.AdvanceTimeMs(5);
+				for (auto* peer: {&host, &a}) { NetLockstepReadyFrame ready; while (peer->PopReadyFrame(ready)) peer->FinishSimulationTick(ready.frame); }
+				now += 5;
+			};
+			for (int turn = 0; turn < 60; ++turn) step(true);
+			for (uint64_t frame = 1; frame <= 5; ++frame) {
+				for (auto* peer: {&host, &a}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
+				for (int turn = 0; turn < 40; ++turn) step(true);
+			}
+			if (!a.IsRunning() || a.GetStats().nextFrame != 6) {
+				*error = "a-silent-host-is-reported-once-a-second: the fixture did not share frame 5: next=" + std::to_string(a.GetStats().nextFrame); return false;
+			}
+			for (uint64_t frame = 6; frame <= 7; ++frame) if (!a.QueueLocalInput(frame, {MakeFrame(102, frame)}, {}, error)) return false;
+			const uint64_t silentFrom = now;
+			while (now - silentFrom < 4000) step(false);
+			const uint64_t seconds = (now - silentFrom) / 1000 + 1;
+			if (!a.IsRunning() || a.IsMigrating() || a.GetHostSilentReports() == 0 || a.GetHostSilentReports() > seconds) {
+				*error = "a-silent-host-is-reported-once-a-second: in " + std::to_string(now - silentFrom) + " ms of a silent host the survivor said so " +
+				         std::to_string(a.GetHostSilentReports()) + " times (at most one a second, " + std::to_string(seconds) + "), running=" + std::to_string(a.IsRunning()) +
+				         " migrating=" + std::to_string(a.IsMigrating());
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_silent_host_is_reported_once_a_second silent_ms=" << (now - silentFrom) << " reports=" << a.GetHostSilentReports() << std::endl;
+			return true;
+		}
+
 		/// Past the round's last tick the host has nothing to send, so its quiet there is the round ending, not the host dying.
 		bool TestAHostQuietPastTheLastTickIsNotLost(std::string* error) {
 			LoopbackTransport hostWire, aWire, bWire;
@@ -23297,6 +23343,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (!TestSilentHostResumesWithinTwoSeconds(&error) ||
 		    !TestALongLinkedHostIsJudgedByItsSilenceAlone(&error) ||
 		    !TestALoneSurvivorConfirmsTheHostIsGone(&error) ||
+		    !TestASilentHostIsReportedOnceASecond(&error) ||
 		    !TestAHostQuietPastTheLastTickIsNotLost(&error) ||
 		    !TestAHostClosingAfterItsEndIsNotLost(&error) ||
 		    !TestLoadingHostKeepsItsAuthority(&error) ||
