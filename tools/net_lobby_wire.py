@@ -56,6 +56,10 @@ class LobbyWire:
     match_config_type: Constant
     relay_version: Constant
     roster_version: Constant
+    timing_options_version: Constant
+    relay_layout_version: Constant
+    seat_roster_version: Constant
+    default_slow_bound: Constant
 
     def describe(self):
         return (f"lobby protocol version {self.version.value} ({self.version.site})"
@@ -63,7 +67,7 @@ class LobbyWire:
 
     def as_json(self):
         return {name: {"value": getattr(self, name).value, "site": getattr(self, name).site}
-                for name in ("magic", "version", "header_bytes", "config_version", "match_config_type", "relay_version", "roster_version")}
+                for name in self.__dataclass_fields__}
 
 
 def read(repo):
@@ -80,7 +84,11 @@ def read(repo):
         config_version=_constant(config, CONFIG_HEADER, config_start, config_body, "NetMatchConfigUtil", "c_Version"),
         match_config_type=_enumerator(lobby, LOBBY_HEADER, type_start, type_body, "NetLobbyMessageType", "MatchConfig"),
         relay_version=_constant(config, CONFIG_HEADER, config_start, config_body, "NetMatchConfigUtil", "c_RelayLayoutVersion"),
-        roster_version=_constant(config, CONFIG_HEADER, config_start, config_body, "NetMatchConfigUtil", "c_SeatRosterVersion"))
+        roster_version=_constant(config, CONFIG_HEADER, config_start, config_body, "NetMatchConfigUtil", "c_SeatRosterVersion"),
+        timing_options_version=_constant(config, CONFIG_HEADER, config_start, config_body, 'NetMatchConfigUtil', 'c_TimingOptionsVersion'),
+        relay_layout_version=_constant(config, CONFIG_HEADER, config_start, config_body, 'NetMatchConfigUtil', 'c_RelayLayoutVersion'),
+        seat_roster_version=_constant(config, CONFIG_HEADER, config_start, config_body, 'NetMatchConfigUtil', 'c_SeatRosterVersion'),
+        default_slow_bound=_constant(config, CONFIG_HEADER, config_start, config_body, 'NetMatchConfigUtil', 'c_DefaultSlowPlayerBoundTicks'))
 
 
 def session_protocol(repo):

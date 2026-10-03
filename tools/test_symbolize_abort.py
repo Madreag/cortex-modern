@@ -1,4 +1,4 @@
-"""Symbolize a known pdb address through tools/symbolize_abort.py."""
+"""Symbolize known PE/PDB fixtures without depending on an unrelated engine build."""
 from __future__ import annotations
 
 import os
@@ -6,11 +6,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import shutil
 from pathlib import Path
-from run_sim_test import engine_executable  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
-EXE = engine_executable(REPO)
+EXE = REPO / 'tools/fixtures/symbolize/symbol_fixture.exe'
 TOOL = REPO / "tools" / "symbolize_abort.py"
 KNOWN = ("main", "WinMain", "SDL_main")
 
@@ -19,8 +19,8 @@ class TestSymbolizeAbort(unittest.TestCase):
     def test_tool_imports(self):
         import symbolize_abort  # noqa: F401
 
-    def test_known_symbol_from_tip_pdb(self):
-        self.assertTrue(EXE.is_file(), f"missing tip exe {EXE}")
+    def test_known_symbol_from_fixture_pdb(self):
+        self.assertTrue(EXE.is_file(), f"missing fixture exe {EXE}")
         self.assertTrue(TOOL.is_file(), f"missing {TOOL}")
         import symbolize_abort
 
@@ -50,7 +50,7 @@ class TestSymbolizeAbort(unittest.TestCase):
                 self.assertIn(info["name"], proc.stdout)
 
     def test_fatal_exe_offset_names_main(self):
-        self.assertTrue(EXE.is_file(), f"missing tip exe {EXE}")
+        self.assertTrue(EXE.is_file(), f"missing fixture exe {EXE}")
         self.assertTrue(TOOL.is_file(), f"missing {TOOL}")
         import symbolize_abort
 
@@ -75,6 +75,18 @@ class TestSymbolizeAbort(unittest.TestCase):
                 any("main" in row for row in fatal_rows),
                 proc.stdout + proc.stderr,
             )
+
+    def test_mismatched_pdb_identity_is_rejected(self):
+        import symbolize_abort
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / EXE.name
+            image = bytearray(EXE.read_bytes())
+            offset = image.index(b'RSDS') + 4
+            image[offset] ^= 1
+            path.write_bytes(image)
+            shutil.copyfile(EXE.with_suffix('.pdb'), path.with_suffix('.pdb'))
+            with self.assertRaisesRegex(ValueError, 'PDB identity mismatch'):
+                symbolize_abort.lookup_name(path, 'main')
 
 
 if __name__ == "__main__":

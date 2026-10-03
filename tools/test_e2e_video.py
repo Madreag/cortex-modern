@@ -58,7 +58,7 @@ def check_freeze_stills(results):
     inside = driver.running_stills(spans, running, allowed=named, named=[(1000 + 2000, 1000 + 4500, "the F6 panel over an idle world")])
     ok &= row(results, "stills/named-state-still-allowed", [still["start_s"] for still in inside] == [9.0] and named and named[0]["reason"] == "the F6 panel over an idle world")
     ok &= row(results, "stills/still-past-its-named-state-fails", [still["start_s"] for still in driver.running_stills(spans, running, named=[(1000 + 3000, 1000 + 4500, "late")])] == [2.5, 9.0])
-    ok &= row(results, "stills/capped-stop-elsewhere-fails", [still["start_s"] for still in driver.running_stills(spans, running, capped_stop_ms=1000 + 6000)] == [2.5, 9.0])
+    ok &= row(results, "stills/only-pre-stop-still-fails", [still["start_s"] for still in driver.running_stills(spans, running, capped_stop_ms=1000 + 6000)] == [2.5])
     return ok
 
 
@@ -201,7 +201,7 @@ def check_screen_watches(results, scratch):
              '[text-watch] summary {"watch": "h15-duplicates", "rule": "duplicates", "frames": 900, "active_frames": 900, "violations": 0}']
     (peer / "stdout.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
     watches = driver.screen_watch_results(peer)
-    ok = row(results, "screen/armed-watches-only", set(watches) == {"layout", "duplicates"})
+    ok = row(results, "screen/every-armed-watch", set(watches) == {"layout", "duplicates", "private"})
     ok &= row(results, "screen/each-offence-listed", [o["detail"]["control"] for o in watches["layout"]["offences"]] == ["LabelFiles", "LabelTelemetry"])
     ok &= row(results, "screen/clean-watch-has-summary", watches["duplicates"]["offences"] == [] and watches["duplicates"]["summary"]["frames"] == 900)
     ok &= row(results, "screen/nothing-armed-is-not-judged", driver.screen_watch_results(scratch / "screen-watch-none") is None)
@@ -830,7 +830,7 @@ def check_review(results, scratch):
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))
     ok &= row(results, "review/failures-carried",
               document["failures"]["client"] == ["[menu-script] FAILED: assert_substate"])
-    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-"))]
+    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-", "harness-cost-"))]
     ok &= row(results, "review/no-probe-is-named",
               all(item.get("probe") == "awaiting-review" for item in scenario_items))
     # The dialog row is written for every capture: a player would have had to answer each line it lists.
@@ -903,7 +903,7 @@ def check_interruption(results, scratch):
     manifest = driver.scenario_manifest(capture, out, 1)
     review = driver.aggregate_review(capture, out)
     ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
-    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-"))]
+    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-", "harness-cost-"))]
     ok &= row(results, "interruption/unstarted-checklist-retained", len(started_items) == 2 and started_items[1]["run"] == "second")
     ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
     return ok
@@ -1190,7 +1190,7 @@ def check_finalizer(results, scratch):
     saved = json.loads((out / "capture.json").read_text())
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
-    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-"))]
+    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs" and not item["id"].startswith(("recording-", "screen-", "harness-cost-"))]
     ok &= row(results, "finalize/names-unstarted-run", len(finalized_items) == 2 and finalized_items[1]["run"] == "second")
     ok &= row(results, "finalize/manifest-retains-budget", manifest.get("scratch_limit_bytes") == 8_000_000_000 and
               manifest.get("scratch_root") == str(scratch))

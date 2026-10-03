@@ -7,7 +7,7 @@ import json
 import math
 from pathlib import Path
 import re
-from .records import open_record, record_path
+from .records import open_record, record_path, private_history_row
 
 TICKS = 1200
 SIM_MS = 1000 / 60
@@ -52,7 +52,8 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
             missing += ['scalar:'+field for field in (*HISTORY_FIELDS,'instance','execution','incarnation')
                         if field in row and not isinstance(row[field],(int,str))]
             if missing:
-                invalid.append(dict(peer=peer, line=row.get('_line', number), missing=missing))
+                invalid.append(dict(peer=peer, line=row.get('_line', number), missing=missing,
+                                    reason=row.get('error') or f'missing or invalid fields: {missing}'))
                 continue
             key = tuple(row[field] for field in HISTORY_FIELDS)
             identity = (row['instance'], row['execution'], row['incarnation'], *key)
@@ -61,10 +62,10 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
             seen.add(identity)
             signature = {'sim_gated': row.get('sim_gated'), **{name: value for name, value in row['subsystems'].items()
                                                               if name != 'controller_route'}}
-            observations[key].append((signature, row.get('_line', number), row.get('_path')))
+            observations[key].append((signature, row.get('_line', number), row.get('_path'), private_history_row(row)))
         indexed[peer] = observations
     counts = {peer: dict(expected=0, present=0, missing=0) for peer in peers}
-    equal, unknown, unequal, expected_keys = 0, 0, 0, set()
+    equal, unknown, unequal, not_comparable, expected_keys = 0, 0, 0, 0, set()
     strips = []
     for interval in ranges:
         if interval['first'] > interval['last'] or len(set(interval['peers'])) < 3:
@@ -80,13 +81,17 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
                 skipped = away.get((peer, prefix))
                 spans = skipped if isinstance(skipped, list) else [skipped] if skipped else []
                 if any(low <= tick <= high for low, high in spans):
+                    for _, line, path, private in indexed.get(peer, {}).get(key, []):
+                        if not private:
+                            invalid.append(dict(peer=peer, line=line, path=path, key=dict(zip(HISTORY_FIELDS, key)),
+                                                reason='away exclusion overlaps a non-private recorded tick', missing=[]))
                     counts.setdefault(peer, dict(expected=0, present=0, missing=0)).setdefault('away', 0)
                     counts[peer]['away'] += 1
                     continue
                 counts.setdefault(peer, dict(expected=0, present=0, missing=0))['expected'] += 1
                 found = indexed.get(peer, {}).get(key, [])
                 counts[peer]['present' if found else 'missing'] += 1
-                values.extend((peer, signature, line, path) for signature, line, path in found)
+                values.extend((peer, signature, line, path) for signature, line, path, _ in found)
                 if not found:
                     absent.append(peer)
             differs = False
@@ -104,15 +109,17 @@ def compare_histories(peers, ranges, required_subsystems, away=None):
                                 first_value=reference.get(section), value=signature.get(section))
             unequal += differs
             unknown += bool(absent)
-            equal += not differs and not absent
-            status = 'UNEQUAL' if differs else 'UNKNOWN' if absent else 'EQUAL'
+            comparable = len({peer for peer, *_ in values}) >= 2
+            not_comparable += not comparable
+            equal += comparable and not differs and not absent
+            status = 'UNEQUAL' if differs else 'NOT COMPARABLE' if not comparable else 'UNKNOWN' if absent else 'EQUAL'
             if strips and strips[-1]['status'] == status and strips[-1]['prefix'] == list(prefix) and strips[-1]['last'] + 1 == tick:
                 strips[-1]['last'] = tick
             else:
                 strips.append(dict(prefix=list(prefix), first=tick, last=tick, status=status))
     unexpected = sum(key not in expected_keys for observations in indexed.values() for key in observations)
-    return dict(passed=bool(expected_keys) and not (unknown or unequal or invalid or duplicates),
-                equal_keys=equal, unknown_keys=unknown, unequal_keys=unequal, duplicates=duplicates,
+    return dict(passed=bool(expected_keys) and not (unknown or unequal or invalid or duplicates or unexpected or not_comparable),
+                equal_keys=equal, unknown_keys=unknown, unequal_keys=unequal, not_comparable_keys=not_comparable, duplicates=duplicates,
                 unexpected_keys=unexpected, invalid=invalid[:100], invalid_count=len(invalid),
                 peers=counts, first_difference=first_difference, strips=strips,
                 scope='sim_gated and hashed tick-end subsystems; controller_route is per-peer')
@@ -134,15 +141,35 @@ def reduce_recoveries(schedule, events, now_ms):
         duration = (terminal['wall_ms'] if terminal else now_ms) - start if start is not None else None
         start_upper=min((row.get('upper_wall_ms',row['wall_ms']) for row in starts),default=None)
         lower=max(0,terminal.get('lower_wall_ms',terminal['wall_ms'])-start_upper) if terminal and start_upper is not None else None
-        domains={row.get('clock_domain','legacy_native') for row in [*starts,*([terminal] if terminal else [])]}
-        # A seat cannot begin recovering before its scheduled fault ends: the deadline runs from the fault's end (ruling t).
-        after_end = duration - (case.get('duration_ms') or 0) if duration is not None else None
+        resets = [row for row in rows if row.get('incarnation') == case['incarnation'] and row['phase'] == 'fault_reset']
+        reset = resets[0] if len(resets) == 1 else None
+        domains={row.get('clock_domain','legacy_native') for row in [*starts,*resets,*([terminal] if terminal else [])]}
+        end_lower = reset.get('lower_wall_ms', reset['wall_ms']) if reset else None
+        end_upper = reset.get('upper_wall_ms', reset['wall_ms']) if reset else None
+        terminal_upper = terminal.get('upper_wall_ms', terminal['wall_ms']) if terminal else None
+        reset_valid = bool(reset and start is not None and start <= end_lower <= end_upper
+                           and reset.get('native', {}).get('send_recv_armed') is not False
+                           and (not terminal or rows.index(reset) < rows.index(terminal) and end_upper <= terminal_upper))
+        after_end = terminal_upper - end_lower if reset_valid and terminal else None
+        observed_duration = [max(0, end_lower - start_upper), end_upper - start] if reset_valid else None
+        requested = case.get('duration_ms')
+        consistent = observed_duration[0] <= requested <= observed_duration[1] if observed_duration and requested is not None else None
+        passed = bool(terminal and reset_valid and len(domains) == 1 and after_end is not None
+                      and 0 <= after_end <= case['deadline_ms'])
+        reason = (f'fault_reset receipts={len(resets)}' if not reset else
+                  'fault_reset identity, ordering or clock bounds are invalid' if not reset_valid else
+                  f'recovery clock domains differ: {sorted(domains)}' if len(domains) != 1 else
+                  'no declared terminal recovery receipt' if not terminal else
+                  f'recovery after observed fault end={after_end} ms; deadline={case["deadline_ms"]} ms')
         result=dict(case)
         result.update(phases=rows, scheduled_duration_ms=case.get('duration_ms'), duration_ms=duration,
                       duration_lower_ms=lower,duration_upper_ms=duration,clock_domains=sorted(domains),
                       recovery_after_fault_end_ms=after_end,
+                      fault_end_lower_ms=end_lower, fault_end_upper_ms=end_upper,
+                      observed_fault_duration_ms=observed_duration, requested_duration_consistent=consistent,
                       censored=terminal is None, outcome=terminal['phase'] if terminal else None,
-                      passed=terminal is not None and len(domains)==1 and 0 <= duration and after_end <= case['deadline_ms'])
+                      status='PASS' if passed else 'INCOMPLETE' if not reset or not terminal else 'FAIL', reason=reason,
+                      passed=passed)
         results.append(result)
     return results
 
@@ -186,9 +213,10 @@ def reduce_memory(samples, *, warmup_s, slope_bytes_per_minute, retained_bytes, 
         sizes[field] = dict(first=values[0][1], last=values[-1][1], peak=max(v for _, v in values),
                             slope_bytes_per_minute=slope, retained_bytes=growth,
                             passed=slope is not None and slope <= slope_bytes_per_minute and growth <= retained_bytes)
-    return dict(passed=bool(sizes) and len(slots) >= expected and all(v['passed'] for v in sizes.values()),
+    missing_slots = sorted(set(range(expected)) - slots)
+    return dict(passed=bool(sizes) and not missing_slots and all(v['passed'] for v in sizes.values()),
                 warmup_s=warmup_s, slope_bound=slope_bytes_per_minute, retention_bound=retained_bytes,
-                expected_samples=expected, observed_samples=len(samples), missing_samples=max(0, expected-len(slots)),
+                expected_samples=expected, observed_samples=len(samples), missing_samples=len(missing_slots), missing_slots=missing_slots,
                 sizes=sizes, instrumentation_growth='N/A without measured allocation records; no subtraction')
 
 
@@ -197,7 +225,9 @@ CENSUS_PROCESS = re.compile(r' (?:private|resident)_mb=(\d+)')
 CENSUS_INSTRUMENT = re.compile(r' cow: entries=\d+ entry_mb=(\d+) pixels=\d+ retired=\d+ retired_mb=(\d+)(?: last_image_mb=(\d+))?')
 
 
-def reduce_memory_census(text, *, warm_slope_mb_per_minute=10):
+def reduce_memory_census(text, *, warm_slope_mb_per_minute=10, warmup_s=120,
+                         slope_bytes_per_minute=8*1024*1024, retained_bytes=128*1024*1024,
+                         sample_seconds=60, elapsed_s=None):
     """One process's [mem-census] lines: its memory each minute net of the full-state instrument's own cache, and the slope between
     minutes. Warm-up is a falling slope that reaches under the bound; a slope that never does, or rises past it again, is a leak."""
     rows = []
@@ -212,9 +242,15 @@ def reduce_memory_census(text, *, warm_slope_mb_per_minute=10):
               for minute, (uptime, process, instrument) in sorted(minutes.items())]
     slopes = [round((b['net_mb'] - a['net_mb']) * 60000 / (b['uptime_ms'] - a['uptime_ms']), 1) for a, b in zip(series, series[1:]) if b['uptime_ms'] > a['uptime_ms']]
     warm = next((index for index, slope in enumerate(slopes) if slope < warm_slope_mb_per_minute), None)
-    status = 'NOT COVERED' if not slopes else 'PASS' if warm is not None and all(slope < warm_slope_mb_per_minute for slope in slopes[warm:]) else 'FAIL'
+    bounded = reduce_memory([dict(elapsed_s=row['uptime_ms']/1000, private=row['net_mb']*1024*1024) for row in series],
+        warmup_s=warmup_s, slope_bytes_per_minute=slope_bytes_per_minute, retained_bytes=retained_bytes,
+        sample_seconds=sample_seconds, elapsed_s=elapsed_s if elapsed_s is not None else max((row['uptime_ms']/1000 for row in series), default=0))
+    slope_pass = warm is not None and all(slope < warm_slope_mb_per_minute for slope in slopes[warm:])
+    covered = bool(bounded['sizes']) and not bounded['missing_samples']
+    status = 'NOT COVERED' if not covered else 'PASS' if slope_pass and bounded['passed'] else 'FAIL'
     return dict(status=status, census_lines=len(rows), series=series, slopes_mb_per_minute=slopes, warm_slope_bound=warm_slope_mb_per_minute,
-                warm_up_ends_after_interval=warm)
+                warm_up_ends_after_interval=warm, census_slope_pass=slope_pass, declared_bounds=bounded,
+                complete=covered)
 
 
 HOLD_OF_THIS_SEAT = re.compile(r'^\[net-lockstep\] hold of this seat at (\d+) ')
@@ -247,6 +283,7 @@ def own_hold_windows(lines):
 
 def parse_fullstate(paths):
     samples, scopes, contexts, refusals, coalesced, holds = [], defaultdict(list), defaultdict(list), [], [], []
+    announcements, reclaims = [], []
     sample_pattern = re.compile(r'^\[fullstate(?:-(canonical|restored|reclaim|landed))?\] tick=(\d+) hash=([0-9a-f]{16}) sections=(\S+) round=(\d+)')
     # The engine's own record of a periodic sample its writer replaced before writing it (ActivityMan's per-series bound).
     coalesced_pattern = re.compile(r'^\[fullstate-coalesced\] tick=(\d+) replaced=(\d+) ')
@@ -255,17 +292,26 @@ def parse_fullstate(paths):
     for path in paths:
         path=Path(path)
         if not path.is_file(): continue
-        seat_lines=[]
+        seat_lines=[]; round_id=None
         with path.open(encoding='utf-8-sig',errors='replace') as stream:
             for number,line in enumerate(stream,1):
+                if match := re.match(r'^\[net-lockstep\] start round=(\d+) ', line):
+                    round_id = int(match[1])
+                if match := re.match(r'^\[net-lockstep\] return of peer (\d+) at (\d+) delay=(\d+) neutral_through=(\d+) revision=(\d+) incarnation=(\d+)', line):
+                    reclaims.append(dict(round=round_id, peer=int(match[1]), frame=int(match[2]), delay=int(match[3]),
+                        neutral_through=int(match[4]), revision=int(match[5]), incarnation=int(match[6]), log=str(path), line=number))
                 if line.startswith(('[net-lockstep] start round=','[net-lockstep] hold of this seat at ','[net-match] seat-reclaimed ')):
                     seat_lines.append(line.strip())
                 if match:=context_pattern.match(line.strip()):
                     key=(int(match[2]),int(match[1]),match[3])
-                    contexts[key].append(dict(path=match[4],log=str(path),line=number))
+                    identity = re.search(r'(?:^|/)process-([^/]+)/round-(\d+)/capture-([^/]+)/([^/]+)$', match[4].replace('\\', '/'))
+                    context = dict(path=match[4], log=str(path), line=number, key=key,
+                                   capture_identity=(str(path), *identity.groups()) if identity and int(identity[2]) == key[0] else None)
+                    contexts[str(path), key].append(context)
+                    announcements.append(context)
                 elif match:=scope_pattern.match(line.strip()):
                     key=(int(match[2]),int(match[1]),match[3])
-                    scopes[key].append(dict(per_peer=match[4].split(',') if match[4] else [],log=str(path),line=number))
+                    scopes[str(path), key].append(dict(per_peer=match[4].split(',') if match[4] else [],log=str(path),line=number))
                 elif match:=coalesced_pattern.match(line.strip()):
                     coalesced.append(dict(tick=int(match[1]),replaced=int(match[2]),log=str(path),line=number))
                 elif match:=sample_pattern.match(line.strip()):
@@ -277,13 +323,58 @@ def parse_fullstate(paths):
                 elif line.startswith('[fullstate-refusal] '):
                     refusals.append(dict(log=str(path),line=number,text=line.strip()))
         holds.extend(own_hold_windows(seat_lines))
+    replaced_identities = set()
+    for receipt in coalesced:
+        preceding = [row for row in announcements if row['log'] == receipt['log'] and row['line'] < receipt['line']]
+        current = preceding[-1] if preceding else None
+        identity = current.get('capture_identity') if current else None
+        processes = {row['capture_identity'][1] for row in announcements
+                     if row['log'] == receipt['log'] and row.get('capture_identity')}
+        targets = [row for row in preceding if identity and row.get('capture_identity') and
+                   row['capture_identity'][0:2] == identity[0:2] and row['capture_identity'] not in replaced_identities
+                   and row['line'] < current['line'] and row['key'][1:] == (receipt['replaced'], 'sample')]
+        valid = bool(current and current['key'][1:] == (receipt['tick'], 'sample') and identity
+                     and processes == {identity[1]} and len(targets) == 1)
+        receipt['valid'] = valid
+        if valid:
+            target = targets[0]
+            receipt.update(round=target['key'][0], process=target['capture_identity'][1],
+                           capture_identity=target['capture_identity'], context=target,
+                           replacement_capture_identity=identity)
+            replaced_identities.add(target['capture_identity'])
+        else:
+            receipt['reason'] = f'coalesce tick={receipt["tick"]} replaced={receipt["replaced"]}: replacement context or unique owned capture identity is absent'
     ordinal=Counter()
     for sample in samples:
-        key=sample['key']; index=ordinal[key]; ordinal[key]+=1
+        key=(sample['log'], sample['key']); index=ordinal[key]; ordinal[key]+=1
+        kept_contexts = [row for row in contexts[key] if row.get('capture_identity') not in replaced_identities]
         sample['scope']=scopes[key][index] if index<len(scopes[key]) else None
-        sample['context']=contexts[key][index] if index<len(contexts[key]) else None
+        sample['context']=kept_contexts[index] if index<len(kept_contexts) else None
         sample['scope_valid']=sample['scope'] is not None and 'header' in sample['sections'] and not (set(sample['sections']) & set(sample['scope']['per_peer']))
-    return dict(samples=samples,refusals=refusals,coalesced=coalesced,holds=holds)
+    return dict(samples=samples,refusals=refusals,coalesced=coalesced,holds=holds,reclaims=reclaims)
+
+
+def reclaim_sample_obligations(documents, ranges):
+    agreements = defaultdict(list)
+    invalid = []
+    for peer, document in documents.items():
+        for row in document.get('reclaims', []):
+            if row.get('round') is None:
+                invalid.append(dict(observer=peer, reason='reclaim receipt has no round', **row))
+                continue
+            agreements[row['round'], row['peer'], row['revision'], row['incarnation']].append(dict(observer=peer, **row))
+    expected = set()
+    for identity, rows in agreements.items():
+        values = {(row['frame'], row['delay'], row['neutral_through']) for row in rows}
+        if len(values) != 1:
+            invalid.append(dict(identity=identity, reason=f'reclaim agreement differs: {sorted(values)}', receipts=rows))
+            continue
+        frame, delay, neutral = next(iter(values))
+        gap_end = max(neutral, frame + delay)
+        for tick, label in ((frame, 'reclaim'), (gap_end + 60, 'landed')):
+            if any(str(interval['match']) == str(identity[0]) and interval['first'] <= tick <= interval['last'] for interval in ranges):
+                expected.add((identity[0], tick, label))
+    return dict(expected=sorted(expected), invalid=invalid, receipts=[row for rows in agreements.values() for row in rows])
 
 
 def compare_fullstate_histories(peers, expected):
@@ -293,7 +384,10 @@ def compare_fullstate_histories(peers, expected):
     compared across the peers that wrote the key, and at least one key must be written by every peer."""
     missing, differences, bad_scope, restored, excused, held = [], [], [], [], [], []
     indexed={}
-    replaced={peer:Counter(row['replaced'] for row in document.get('coalesced',[])) for peer,document in peers.items()}
+    invalid_coalesces = [dict(peer=peer, **row) for peer, document in peers.items() for row in document.get('coalesced', [])
+                        if not row.get('valid') or not row.get('capture_identity') or not row.get('context')]
+    replaced={peer:Counter((row.get('round'), row['replaced']) for row in document.get('coalesced',[])
+                            if row.get('valid') and row.get('capture_identity') and row.get('context')) for peer,document in peers.items()}
     for peer,document in peers.items():
         indexed[peer]=defaultdict(list)
         for sample in document['samples']:
@@ -311,8 +405,8 @@ def compare_fullstate_histories(peers, expected):
         values=[]
         for peer in peers:
             found=indexed[peer].get(tuple(key),[])
-            if not found and key[2]=='sample' and replaced[peer][key[1]]>0:
-                replaced[peer][key[1]]-=1
+            if not found and key[2]=='sample' and replaced[peer][tuple(key[:2])]>0:
+                replaced[peer][tuple(key[:2])]-=1
                 excused.append(dict(peer=peer,key=tuple(key)))
             elif not found and key[2] in ('sample','landed') and any(round_id==key[0] and first<=key[1]<end for round_id,first,end in peers[peer].get('holds',[])):
                 held.append(dict(peer=peer,key=tuple(key)))
@@ -328,12 +422,13 @@ def compare_fullstate_histories(peers, expected):
                     differences.append(dict(key=key,first_peer=first_peer,peer=peer,sections=differing or ['combined_hash'],
                                             first_log=first['log'],first_line=first['line'],log=sample['log'],line=sample['line']))
     refused=[dict(peer=peer,**row) for peer,document in peers.items() for row in document['refusals']]
-    return dict(passed=bool(expected) and compared>0 and not (missing or differences or bad_scope or refused) and all(r['equal'] for r in restored),
+    return dict(passed=bool(expected) and compared>0 and not (missing or differences or bad_scope or refused or invalid_coalesces) and all(r['equal'] for r in restored),
                 expected_samples_per_peer=len(expected),compared_samples=compared,
                 coalesced={peer:sum(row['peer']==peer for row in excused) for peer in peers},coalesced_samples=excused,
                 held={peer:sum(row['peer']==peer for row in held) for peer in peers},held_samples=held,
                 missing=missing,differences=differences,scope_failures=bad_scope,
-                refusals=refused,restores=restored,scope='Shared sections only; PerPeer exclusions remain explicit and need behavioral oracles')
+                refusals=refused,restores=restored,invalid_coalesces=invalid_coalesces,
+                scope='Shared sections only; PerPeer exclusions remain explicit and need behavioral oracles')
 KILLALL = re.compile(r'killall sparing team \d+ at tick (\d+)')
 SCENARIO_EARLY = re.compile(r'\[scenario\] \S+ passed=no ticks=(\d+)')
 
@@ -446,6 +541,45 @@ def return_hold_violations(log):
             if 0 < tick - back <= 100]
 
 
+def impairment_evidence(run, manifest):
+    run = Path(run)
+    members = tuple(manifest.get('per_peer_lag_ms') or ('host', 'client'))
+    effects, changes, errors, paths = {}, {}, [], []
+    for peer in members:
+        path = run / peer / 'stdout.log'; paths.append(path)
+        log = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
+        current, local, rounds, committed, receipts = None, None, {}, set(), []
+        for line in log.splitlines():
+            if found := re.match(r'\[net-lockstep\] start round=(\d+) frame=\d+ local_peer=(\d+)', line):
+                current, local = int(found[1]), int(found[2]); rounds[current] = local
+            if found := re.match(r'\[net-match\] delay change peer=(\d+) frame=(\d+) delay=(\d+) revision=(\d+)', line):
+                seat, tick, delay, revision = map(int, found.groups())
+                if current is not None and 1 < tick <= manifest.get('ticks', TICKS): committed.add((current, seat, tick, delay, revision))
+            if line.startswith('[net-fake-link] '):
+                try:
+                    row = json.loads(line.split(' ', 1)[1])
+                except ValueError:
+                    errors.append(f'{peer}: invalid net-fake-link JSON'); continue
+                if isinstance(row, dict) and row.get('round') == current and row.get('peer') == local:
+                    receipts.append(row)
+                else: errors.append(f'{peer}: unbound net-fake-link receipt')
+        requests = dict(jitter_ms=(manifest.get('per_peer_jitter_ms') or {}).get(peer, manifest.get('jitter_ms', 0)),
+                        reorder_percent=manifest.get('reorder_percent', 0), dup_percent=manifest.get('dup_percent', 0))
+        for key, counter in (('jitter_ms', 'jitter_packets'), ('reorder_percent', 'reordered_packets'), ('dup_percent', 'duplicated_packets')):
+            if not requests[key]: continue
+            if not rounds: errors.append(f'{peer}: no native round for requested {key}={requests[key]}')
+            for round_id in rounds:
+                bound = [row for row in receipts if row['round'] == round_id and row.get(key) == requests[key]]
+                if not any(type(row.get(counter)) is int and row[counter] > 0 for row in bound):
+                    errors.append(f'{peer} round {round_id}: no positive {counter} at {key}={requests[key]}')
+        effects[peer] = receipts; changes[peer] = committed
+    reference = next(iter(changes.values()), set())
+    if not reference or any(value != reference for value in changes.values()):
+        errors.append(f'live delay-change receipts differ or are absent: { {peer: sorted(value) for peer, value in changes.items()} }')
+    return dict(passed=not errors, reason='; '.join(errors), effects=effects,
+                changes={peer: sorted(value) for peer, value in changes.items()}, evidence=paths)
+
+
 def item9a_gates(run, peer='host', rows=None):
     run = Path(run)
     raw = record_path(run / peer / 'feel/raw.jsonl')
@@ -504,16 +638,26 @@ def item9a_gates(run, peer='host', rows=None):
     round_missing = missing
     tick_ms = latest.get('sim_tick_ms')
     valid_tick = isinstance(tick_ms, (int, float)) and math.isfinite(tick_ms) and tick_ms > 0
-    horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * tick_ms
+    from cross_report import round_capacity_evidence
+    natives = {name: json.loads(path.read_text(encoding='utf-8-sig')) if path.is_file() else {}
+               for name in manifest.get('per_peer_lag_ms', {'host': 0, 'client': 0})
+               for path in [run / f'{name}_report.json']}
+    relative = round_capacity_evidence(natives)
+    rate = relative['round_rate_tps'] if relative['whole_round_slow'] else None
+    minimum_tps = rate - rate / 10.0 if rate is not None else 59.5
+    clock_tick_ms = 1000 / rate if rate is not None else tick_ms
+    horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * clock_tick_ms
                                   for tick, stamps in by_tick.items())) if valid_tick and wall_ms is not None else None)
     evidence = [clock_path, log_path, report_path]
-    # The harness's own per-tick sim dump is not the engine's cost: one frame of it past 50 ms fails the arm, never passes as feel.
-    dump_ms = [float(ms) for ms in re.findall(r'\[sim-dump\] ticks=\d+ mean_ms=\S+ max_ms=([0-9.eE+-]+)', log)]
-    dump_ms += [float(ms) for ms in re.findall(r'\[sim-dump\] slow tick=\d+ ms=([0-9.eE+-]+)', log)]
-    harness_ms = max(dump_ms, default=0.0) if log_path.is_file() else None
+    from .harness_cost import reduce_costs
+    harness = reduce_costs([log_path], first_frame=first_tick, last_frame=final_tick)
+    cost_pin = pin(harness['max_frame_ms'], harness['rule'], harness['passed'], [log_path], harness,
+                   available=harness['status'] != 'INCOMPLETE')
+    cost_pin.update(category='instrumentation', reason=harness['reason'])
     pins = {
-        'item9a_harness_cost': pin(harness_ms, '<= 50 ms of the harness sim dump in any one frame', harness_ms is not None and harness_ms <= 50, [log_path]),
-        'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
+        'item9a_harness_cost': cost_pin,
+        'item9a_wall_tps': pin(tps, f'>= {minimum_tps} after tick 300, including recovery time', tps is not None and tps >= minimum_tps, evidence,
+                            dict(relative_capacity=relative)),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
         'item9a_steady_stalls': pin(steady_stalls, '0 blocking waits before the injected spike', steady_stalls == 0, evidence),
         'item9a_missing_frame_stalls': pin(missing, '0 steady missing-frame stalls', missing == 0, evidence, available=True),
@@ -521,6 +665,10 @@ def item9a_gates(run, peer='host', rows=None):
         'item9a_confirmed_horizon_lag': pin(horizon_lag_ms, '<= 50 ms behind the steady confirmed-tick clock, including recovery',
             horizon_lag_ms is not None and horizon_lag_ms <= 50, evidence),
     }
+    if any(manifest.get(key) for key in ('jitter_ms', 'reorder_percent', 'dup_percent')):
+        impairment = impairment_evidence(run, manifest)
+        pins['item9a_impairment_effects_and_resize'] = pin(impairment, 'requested packet effects and identical live delay changes on every peer',
+                                                        impairment['passed'], impairment['evidence'])
     if manifest.get('loss_percent'):
         loss_log = run / 'client/stdout.log'
         armed = re.findall(r'\[net-transport-loss\] percent=(\S+) send_recv_armed=(\d+) round=(\d+)', loss_log.read_text(encoding='utf-8-sig', errors='replace')) if loss_log.is_file() else []
@@ -613,14 +761,17 @@ def item9a_gates(run, peer='host', rows=None):
             [host_path, survivor_path], dict(first_tick=held, last_tick=compare_through), available=bool(host_hashes) and bool(survivor_hashes))
         reholds = return_hold_violations(log)
         pins['item9a_no_rehold'] = pin(reholds, 'no seat is held within 100 frames after any return', not reholds, [log_path])
-    return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds) and missing is not None,
+    return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds) and missing is not None and harness['complete'],
+                instrument_valid=harness['instrument_valid'], instrumentation=harness,
+                product_pass=all(value['status'] == 'PASS' for name, value in pins.items() if name != 'item9a_harness_cost'),
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
                              confirmed_horizon_lag_ms=horizon_lag_ms,
                              confirmed_horizon_lag_ticks=horizon_lag_ms / tick_ms if horizon_lag_ms is not None else None,
                              steady_missing_frame_stalls=missing, round_missing_frame_stalls=round_missing,
                              first_tick=first_tick, last_tick=final_tick if final_tick in by_tick else None,
-                             clock_path=str(clock_path), sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
+                             clock_path=str(clock_path), sim_tick_ms=latest.get('sim_tick_ms'), relative_capacity=relative,
+                             confirmed_clock_tick_ms=clock_tick_ms, peer_input_delays=latest.get('peer_input_delays', {})))
 
 
 def apply_tps_call(result, reference):
@@ -754,6 +905,39 @@ def sustained_response(sequence, reference, moves, shows, runs=3):
     return None
 
 
+def interaction_evidence(interactions, log):
+    evidence = defaultdict(list)
+    for number, line in enumerate(log.splitlines(), 1):
+        match = re.match(r'\[preview-fidelity\] tick=(\d+) step=1 from=\d+ uid=(\d+) differing=\d+ first: (.*)', line)
+        if not match:
+            continue
+        pairs = {}
+        for field in ('vel', 'aim'):
+            values = re.findall(r'(?:^| ;; )' + field + r'=(\S+) \| ' + field + r'=(\S+)(?= ;; |$)', match[3])
+            if len(values) != 1:
+                continue
+            try:
+                values = [[float.fromhex(v) if '0x' in v.lower() else float(v) for v in part.split(',')]
+                          for part in values[0]]
+            except ValueError:
+                continue
+            if any(not math.isfinite(v) for part in values for v in part):
+                continue
+            if field == 'vel' and all(len(part) == 2 for part in values):
+                pairs['vx'] = [part[0] for part in values]
+            elif field == 'aim' and all(len(part) == 1 for part in values):
+                pairs['aim'] = [part[0] for part in values]
+        evidence[int(match[1]), int(match[2])].append(dict(line=number, pairs=pairs))
+    result = []
+    for record in interactions:
+        matches = evidence.get((record['tick'], record['uid']), [])
+        row = dict(record)
+        if len(matches) == 1:
+            row['fidelity'] = matches[0]
+        result.append(row)
+    return result
+
+
 def previewed_responses(inputs, frames, committed, interactions=()):
     """Each edge's previewed response against the committed response to that same edge.
 
@@ -761,8 +945,8 @@ def previewed_responses(inputs, frames, committed, interactions=()):
     what the player sees must answer no later than the committed response less the delay, plus one frame. One detector on both
     sides, each against its own state before the edge's frame, reading a change that holds for three records.
 
-    The world acting on the actor (a hit, a script) is not the player's input and no preview drawn before it lands can know it: an
-    edge whose response window holds such an interaction is judged on the previews drawn from it on, and its row names it."""
+    An interaction changes the deadline only when the committed response is delayed too and its first-step fidelity
+    comparison proves that it prevented the response in the component this edge judges."""
     acted = defaultdict(list)
     for record in interactions:
         # A clone that fell short of the actor is the preview's own fault and excuses nothing.
@@ -813,7 +997,24 @@ def previewed_responses(inputs, frames, committed, interactions=()):
                 judged_field = 'aim' if action == 'AIM_VECTOR' else 'vel'
                 touched = max((record for record in acted.get(uid, ()) if edge['tick'] < record['tick'] <= window_end and judged_field in record['fields'].split(',')),
                               key=lambda record: record['tick'], default=None)
-                if touched:
+                unresolved = False
+                if touched and truth and truth['tick'] >= touched['tick']:
+                    component = 'aim' if action == 'AIM_VECTOR' else 'vx'
+                    pair = touched.get('fidelity', {}).get('pairs', {}).get(component)
+                    at_hit = [actor for record, actor in kept[uid] if record['tick'] == touched['tick']]
+                    causal = False
+                    if pair and len(pair) == 2 and at_hit and all(actor.get(component) == pair[1] for actor in at_hit):
+                        predicted = dict(at_hit[0], **{component: pair[0]})
+                        causal = moves(predicted, before_kept[-1]) and not moves(at_hit[0], before_kept[-1])
+                    elif not pair or not at_hit:
+                        unresolved = True
+                    if not causal:
+                        row['interaction_evidence'] = dict(tick=touched['tick'], component=component,
+                            status='UNJUDGED' if unresolved else 'unrelated',
+                            reason='no component-specific first-step comparison at the interaction tick' if unresolved else
+                                   f'{component}: fidelity comparison does not show a blocked committed response')
+                        touched = None
+                if touched and truth:
                     after = [(frame, actor) for frame, actor in drawn[uid] if frame['tick'] >= touched['tick'] and frame['draw_begin_ms'] >= edge['wall_ms']]
                     seen = sustained_response([(frame, actor) for frame, actor in after if applied <= frame['tick'] + frame.get('preview_depth', 0) <= later_tick],
                                               before_drawn[-1], moves, lambda frame: frame['tick'] + frame.get('preview_depth', 0), runs)
@@ -830,6 +1031,8 @@ def previewed_responses(inputs, frames, committed, interactions=()):
                     if row.get('interaction') and row['interaction']['judged_from_ms'] is not None:
                         row['budget_ms'] = max(row['budget_ms'], row['interaction']['judged_from_ms'] + SIM_MS)
                     row['pass_check'] = row['previewed_ms'] is not None and row['previewed_ms'] <= row['budget_ms']
+                    if unresolved and not row['pass_check']:
+                        row.update(judged=False, status='UNJUDGED', reason=row['interaction_evidence']['reason'])
             results.append(row)
     return results
 
@@ -896,8 +1099,13 @@ def remote_commands(path, local_peer, first_tick=1, last_tick=TICKS, effective_s
         return commands, False
     launch = json.loads(launch_path.read_text(encoding='utf-8-sig'))
     verify = json.loads(verify_path.read_text(encoding='utf-8-sig'))
+    starts = {first_tick}
+    if type(effective_start) is int and effective_start >= 1:
+        starts.add(effective_start)
+    first = verify.get('first_frame')
     complete = (launch.get('exit_code') == 0 and launch.get('evidence_complete') is True and not launch.get('timed_out')
-                and verify.get('ok') is True and verify.get('first_frame') in {first_tick, effective_start} and verify.get('last_frame', 0) >= last_tick)
+                and verify.get('ok') is True and type(first) is int and first in starts
+                and type(verify.get('last_frame')) is int and verify['last_frame'] >= last_tick)
     return commands, complete
 
 
@@ -1064,7 +1272,8 @@ def reduce_peer(run, peer, baseline=None, *, ticks=TICKS, first_tick=1, allow_na
     inputs = [row for row in rows if row['type'] == 'input' and first_tick <= row['tick'] <= ticks]
     previews = [row for row in rows if row['type'] == 'preview' and first_tick <= row['committed_tick'] <= ticks]
     committed = [row for row in rows if row['type'] == 'committed']
-    interactions = [row for row in rows if row['type'] == 'interaction']
+    interactions = interaction_evidence([row for row in rows if row['type'] == 'interaction'],
+        (run / peer / 'stdout.log').read_text(encoding='utf-8-sig', errors='replace') if (run / peer / 'stdout.log').is_file() else '')
     all_iterations = [row for row in rows if row['type'] == 'iteration']
     iterations = [row for row in all_iterations if row['active'] and first_tick <= row['tick'] <= ticks]
     if not frames or not iterations:

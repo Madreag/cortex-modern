@@ -44,6 +44,8 @@ SUITES = (
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
     ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),
     ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),
+    ("inventory-merge-defects", [str(INVENTORY / "merge_defects.py"), "--self-test"]),
+    ("inventory-acceptance-manifest", [str(INVENTORY / "acceptance_manifest.py"), "--self-test"]),
     ("acceptance-collection", [str(INVENTORY / "test_acceptance_collection.py")]),
 )
 # The cross driver's suite reads the Windows boxes' trees and ctypes.WinDLL; the other platforms run the cross peers, not this suite.

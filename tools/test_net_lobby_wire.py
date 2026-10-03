@@ -22,8 +22,10 @@ class LaunchRelayLayoutTests(unittest.TestCase):
         # The relay offer, then the roster's revision and hash: nothing named, as a launch config carries them.
         self.assertEqual(current[-(relay + roster):-roster], b"\x02\x00{}")
         self.assertEqual(current[-roster:], bytes(roster))
-        self.assertEqual(len(current), len(historical) + relay + roster)
-        self.assertEqual(current[header + 2:-(relay + roster)], historical[header + 2:])
+        timing = struct.calcsize('<HBB')
+        self.assertEqual(current[-(timing + relay + roster):-(relay + roster)], struct.pack('<HBB', wire.default_slow_bound.value, 1, 0))
+        self.assertEqual(len(current), len(historical) + timing + relay + roster)
+        self.assertEqual(current[header + 2:-(timing + relay + roster)], historical[header + 2:])
         self.assertEqual(struct.unpack_from("<I", current, 12)[0], len(current) - header)
         self.assertEqual(struct.unpack_from("<H", current, header)[0], wire.config_version.value)
 
@@ -34,6 +36,17 @@ class LaunchRelayLayoutTests(unittest.TestCase):
         line = header[int(protocol.site.rsplit(":", 1)[1]) - 1]
         self.assertIn("c_Version", line)
         self.assertIn(str(protocol.value), line)
+    def test_v8_carries_timing_relay_and_seat_roster(self):
+        wire = replace(read(Path(__file__).resolve().parents[1]), config_version=Constant(8, 'recorded v8'))
+        rules = rules_for('rules')
+        historical = encode_config(rules, replace(wire, config_version=Constant(4, 'recorded v4')))
+        current = encode_config(rules, wire)
+        header = wire.header_bytes.value
+        self.assertEqual(current[-44:], struct.pack('<HBB', 3, 1, 0) + b"\x02\x00{}" + bytes(36))
+        self.assertEqual(len(current), len(historical) + 44)
+        self.assertEqual(current[header + 2:-44], historical[header + 2:])
+        self.assertEqual(struct.unpack_from("<I", current, 12)[0], len(current) - header)
+        self.assertEqual(struct.unpack_from("<H", current, header)[0], 8)
 
 
 if __name__ == "__main__":

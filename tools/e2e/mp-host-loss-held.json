@@ -162,7 +162,10 @@
       "what": "The held survivor rejoins the new host and plays on.",
       "log_regex": [
         "\\[net-match\\] private catch-up complete frame=\\d+"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     }
   ]
 }

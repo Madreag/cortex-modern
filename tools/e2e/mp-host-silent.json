@@ -125,7 +125,10 @@
         "PeerHeld:",
         "Your seat is held",
         "desync at frame"
-      ]
+      ],
+      "ownership_reclaim": {
+        "native": true
+      }
     },
     {
       "id": "silent-client-plays-on-host-held",

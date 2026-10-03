@@ -111,10 +111,13 @@ def encode_config(rules, wire, dedicated=False, default=False):
     payload += struct.pack("<BIBBB", 0, 0, 10, 1, 1)
     if horizon:
         payload += struct.pack("<H", horizon)
-    if wire.config_version.value >= wire.relay_version.value:
+    if wire.config_version.value >= wire.timing_options_version.value:
+        # Native default Substitute policy; no resync-only active roster on a fresh match.
+        payload += struct.pack('<HBB', wire.default_slow_bound.value, 1, 0)
+    if wire.config_version.value >= wire.relay_layout_version.value:
         payload += string("{}")
-    if wire.config_version.value >= wire.roster_version.value:
-        payload += struct.pack("<I", 0) + bytes(32)
+    if wire.config_version.value >= wire.seat_roster_version.value:
+        payload += struct.pack('<I', 0) + bytes(32)
     return struct.pack(ENVELOPE, wire.magic.value, wire.version.value, wire.header_bytes.value,
                        wire.match_config_type.value, 0, len(payload)) + payload
 

@@ -89,9 +89,9 @@ class AttemptOracles(unittest.TestCase):
         # The four-machine block's EDITH: 10.4 ms of sim a tick at 55 ticks/s - its sim fits, so the rate is a verdict, not a report.
         self.assertFalse(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=10.4, wall_tps=55.0)))['passed'])
         self.assertTrue(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=10.4, wall_tps=59.6)))['passed'])
-        # A box whose sim alone cannot hold the rate is a slow machine: held by the bound, its rate reported.
+        # Own sim cost alone supplies no evidence of relative round capacity.
         slow = cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=19.5, wall_tps=48.9)))
-        self.assertEqual((slow['gated'], slow['passed']), (False, True))
+        self.assertEqual((slow['gated'], slow['passed'], slow['status']), (True, False, 'INCOMPLETE'))
         self.assertTrue(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=3.1, wall_tps=None)))['gated'])
         self.assertFalse(cross_report.pace_verdict(dict(pace=dict(sim_ms_per_tick=3.1, wall_tps=None)))['passed'])
 
@@ -155,7 +155,8 @@ class HeldSeatAwayRange(unittest.TestCase):
             return away, cross_report.report.compare_histories(live, self.RANGE, {'controller', 'sim_rng'}, away)
         away, result = judge('[net-lockstep] hold of this seat at 6 revision=4' + chr(10) + self.LEFT)
         self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): (6, 10)})
-        self.assertTrue(result['passed'])
+        self.assertFalse(result['passed'])
+        self.assertTrue(any('non-private' in row.get('reason', '') for row in result['invalid']))
         # Without the seat's own hold line the same differing tick is compared.
         away, result = judge(self.LEFT)
         self.assertEqual(result['unequal_keys'], 1)
@@ -226,11 +227,13 @@ class ImageRejoinHistory(unittest.TestCase):
 
     def test_a_seat_held_from_its_rounds_start_that_only_replayed_it_was_away(self):
         # l4p-31's EDITH: relaunched in the lobby, held from round 2's first frame, replayed it from an image and landed in round 3.
-        live = {p: [live_row(t, p) for t in range(1, 13)] for p in ('a', 'b')}
-        live['c'] = [dict(live_row(t, 'c'), history_branch=None, phase='catchup') for t in range(5, 13)]
-        compared, away = cross_report.adopt_restored_histories(live, self.RANGE, {'c': ['[net-match] rejoin phase Loading -> TailReplay']})
-        self.assertEqual(away, {('c', ('s', 'm', 'initial', 1)): [(1, 12)]})
-        self.assertTrue(cross_report.report.compare_histories(compared, self.RANGE, {'controller', 'sim_rng'}, away)['passed'])
+        rng = [dict(self.RANGE[0], match='1')]
+        live = {p: [dict(live_row(t, p), match='1') for t in range(1, 13)] for p in ('a', 'b')}
+        live['c'] = [dict(live_row(t, 'c'), match='1', history_branch=None, phase='catchup') for t in range(5, 13)]
+        receipt = '[net-lockstep] start round=1 frame=1 local_peer=3 peers=3\n[net-lockstep] hold of this seat at 1 revision=1\n[net-match] rejoin phase Loading -> TailReplay'
+        compared, away = cross_report.adopt_restored_histories(live, rng, {'c': [receipt]})
+        self.assertEqual(away, {('c', ('s', '1', 'initial', 1)): [(1, 12)]})
+        self.assertTrue(cross_report.report.compare_histories(compared, rng, {'controller', 'sim_rng'}, away)['passed'])
         # Without the replay the seat's absence is not explained.
         live['c'] = []
         self.assertEqual(cross_report.adopt_restored_histories(live, self.RANGE, {'c': ['[net-match] rejoin phase Loading -> TailReplay']})[1], {})
@@ -251,8 +254,9 @@ class CatchUpRows(unittest.TestCase):
 class HostStallHolds(unittest.TestCase):
     def test_the_hosts_own_seat_held_in_the_forced_stall_is_the_stall(self):
         # l4p-41: the host's seat held at tick 902 of each round under --host-stall 900:300 read as 'other'.
-        held=dict(peer=1,tick=902,classification='other')
-        self.assertEqual(cross_report.host_stall_hold(held,'900:300')['classification'],'scheduled-fault')
+        held=dict(peer=1,tick=902,round=1,classification='other')
+        _, receipts = cross_report.host_hold_evidence('[net-lockstep] start round=1 frame=1 local_peer=1 peers=3\n[net-test] live stall frame=900 ms=300\n')
+        self.assertEqual(cross_report.host_stall_hold(held,'900:300',receipts)['classification'],'scheduled-fault')
         self.assertEqual(cross_report.host_stall_hold(held,None),{})
         self.assertEqual(cross_report.host_stall_hold(dict(held,peer=2),'900:300'),{})
         self.assertEqual(cross_report.host_stall_hold(dict(held,tick=2400),'900:300'),{})
@@ -333,11 +337,12 @@ class ScheduleKeyedOracles(unittest.TestCase):
 
 class AbandonedTicks(unittest.TestCase):
     def test_the_engines_retraction_voids_the_rows_before_it(self):
-        rows = [live_row(t, 'c') for t in range(1, 7)] + [dict(abandon_from=5, round=None)] + [live_row(9, 'c')]
+        rows = [dict(live_row(t, 'c'), round=1, phase='private' if t >= 5 else 'live', player_visible=t < 5) for t in range(1, 7)]
+        rows += [dict(abandon_from=5, round=1, incarnation=0, instance='c', execution='one'), live_row(9, 'c')]
         kept = cross_report.void_abandoned(rows)
         self.assertEqual([r['tick'] for r in kept], [1, 2, 3, 4, 9])
         # A retraction names its round: another round's rows stay.
-        other = [dict(live_row(t, 'c'), round=7) for t in range(5, 8)] + [dict(abandon_from=5, round=8)]
+        other = [dict(live_row(t, 'c'), round=7) for t in range(5, 8)] + [dict(abandon_from=5, round=8, incarnation=0, instance='c', execution='one', private=True, player_visible=False)]
         self.assertEqual(len(cross_report.void_abandoned(other)), 3)
 
 class MemorySlope(unittest.TestCase):
@@ -351,21 +356,21 @@ class MemorySlope(unittest.TestCase):
         from feel import report
         # l4p-27's Mac shape: +617, +335, +122, +61, then flat.
         verdict = report.reduce_memory_census(self.census([(1, 2892, 0), (2, 3509, 0), (3, 3844, 0), (4, 3966, 0), (5, 4027, 0), (6, 4030, 0)]))
-        self.assertEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['warm_up_ends_after_interval'], 4)
+        self.assertNotEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['warm_up_ends_after_interval'], 4)
 
     def test_a_slope_that_never_falls_is_a_leak(self):
         from feel import report
-        verdict = report.reduce_memory_census(self.census([(1, 3000, 0), (2, 3060, 0), (3, 3120, 0), (4, 3180, 0)]))
+        verdict = report.reduce_memory_census(self.census([(0, 2940, 0), (1, 3000, 0), (2, 3060, 0), (3, 3120, 0), (4, 3180, 0)]))
         self.assertEqual(verdict['status'], 'FAIL'); self.assertEqual(verdict['slopes_mb_per_minute'][-1], 60.0)
         # Rising again after reaching the bound is growth, not warm-up.
-        again = report.reduce_memory_census(self.census([(1, 3000, 0), (2, 3005, 0), (3, 3060, 0)]))
+        again = report.reduce_memory_census(self.census([(0, 3000, 0), (1, 3000, 0), (2, 3005, 0), (3, 3060, 0)]))
         self.assertEqual(again['status'], 'FAIL')
 
     def test_the_instruments_cache_is_taken_out(self):
         from feel import report
         # The process grows exactly as the full-state cache does: no growth of its own.
-        verdict = report.reduce_memory_census(self.census([(1, 3000, 100), (2, 3200, 300), (3, 3400, 500)]))
-        self.assertEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['slopes_mb_per_minute'], [0.0, 0.0])
+        verdict = report.reduce_memory_census(self.census([(0, 2900, 0), (1, 3000, 100), (2, 3200, 300), (3, 3400, 500)]))
+        self.assertEqual(verdict['status'], 'PASS'); self.assertEqual(verdict['slopes_mb_per_minute'], [0.0, 0.0, 0.0])
         self.assertEqual(report.reduce_memory_census('')['status'], 'NOT COVERED')
         # The retained last image counts as the instrument's too.
         kept = self.census([(1, 3000, 0), (2, 3300, 0)]).replace('retired_mb=0 movable', 'retired_mb=0 last_image_mb=300 movable', 1)
@@ -382,8 +387,8 @@ class CausesDeadlinesStops(unittest.TestCase):
                       '[net-match] hold peer=3 frame=50 AI in control',
                       '[net-match] hold peer=2 frame=70 AI in control'])
         causes = cross_report.hold_causes(log)
-        # A late stream (the host heard nothing past the frame before) is the A1 design; another cause, or none, is not.
-        self.assertEqual(causes, {('9', 4, 118): 'late_stream', ('9', 3, 50): 'timing_ack'})
+        # Arrival lateness alone names no cause.
+        self.assertEqual(causes, {('9', 4, 118): None, ('9', 3, 50): 'timing_ack'})
         self.assertIn('late_stream', cross_report.DESIGN_CAUSES)
         self.assertNotIn('timing_ack', cross_report.DESIGN_CAUSES)
         self.assertIsNone(causes.get(('9', 2, 70)))
@@ -392,6 +397,7 @@ class CausesDeadlinesStops(unittest.TestCase):
         case = dict(id='lag', peer='mac', incarnation=0, deadline_ms=120000, outcomes=['first_controllable_input'], duration_ms=120000)
         def judge(terminal_ms):
             rows = [dict(id='lag', peer='mac', incarnation=0, phase='fault_applied', wall_ms=1000.0),
+                    dict(id='lag', peer='mac', incarnation=0, phase='fault_reset', wall_ms=121000.0),
                     dict(id='lag', peer='mac', incarnation=0, phase='first_controllable_input', wall_ms=1000.0 + terminal_ms)]
             return cross_report.report.reduce_recoveries([case], rows, now_ms=10**9)[0]['passed']
         self.assertTrue(judge(150000))
@@ -402,4 +408,3 @@ class CausesDeadlinesStops(unittest.TestCase):
         self.assertEqual(cross_report.attempt_label(dict(stopped=stopped, v1_passed=False)), 'STOPPED (local scratch reached 4 GB; stopped without deletion); NOT JUDGED')
         # A peer that exited is a failure the run reports, not a stop.
         self.assertIsNone(cross_report.driver_stop([dict(kind='driver', reason='Mac: owning payload exited 1; stop the other peers instead of continuing a reduced match')]))
-

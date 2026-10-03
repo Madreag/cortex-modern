@@ -163,7 +163,12 @@ def schedule_for(options, peers, boxes):
     faults.sort(key=lambda f: (f['tick'], f['peer']))
     for number, fault in enumerate(faults, 1):
         if fault['peer'] not in names or fault['tick'] < 1: raise ValueError('invalid fault target or tick')
-        if fault['action'] == 'host-kill': raise ValueError('migration with EDITH is NOT COVERED until the endpoint fix')
+        if fault['action'] == 'host-kill':
+            host = next(p['name'] for p in peers if p['name'] == options.host or p['box'] == options.host)
+            if fault['peer'] != host or options.scenario != 'match':
+                raise ValueError('host-kill requires the declared host in the HL4 match arm')
+            if any(other is not fault for other in faults):
+                raise ValueError('HL4 has additional scheduled faults without a combined migration oracle')
         incarnation = fault.get('incarnation', incarnations[fault['peer']])
         restarting = fault['action'] in ('announced-leave-rejoin', 'crash-restart')
         fault.update(id=fault.get('id', f'fault-{number}'), incarnation=incarnation,
@@ -198,7 +203,7 @@ def make_plan(options):
     if not re.fullmatch(r'[A-Za-z0-9_-]+', stem): raise ValueError('run name must be a simple directory leaf')
     faults = schedule_for(options, peers, boxes)
     if any(f['peer']==host and f['action'] in ('crash-restart','announced-leave-rejoin') for f in faults):
-        raise ValueError('host removal requires the WAN migration endpoint fix; the first soak keeps its host alive')
+        raise ValueError('host removal by restart/rejoin has no four-box oracle; use the explicit host-kill HL4 arm')
     barriers = json.loads(options.barriers.read_text(encoding='utf-8')) if options.barriers else []
     for barrier in barriers:
         if barrier['peer'] not in {p['name'] for p in peers} or barrier['phase'] not in ('capture_announced','writer_pending') or \
@@ -255,7 +260,7 @@ def make_plan(options):
             specs[-1]['settings'] = dict(options.local_setting)
             if options.local_render_cap is not None:
                 specs[-1]['render_cap'] = options.local_render_cap
-        specs[-1]['recoveries']=[f for f in specs[-1]['faults'] if f['action']!='brain-eliminate']
+        specs[-1]['recoveries']=[f for f in specs[-1]['faults'] if f['action'] not in ('brain-eliminate', 'host-kill')]
         specs[-1]['forced_ends']=[f for f in faults if f['action']=='brain-eliminate']
         if specs[-1]['barriers']:
             specs[-1]['env']['CC_TEST_CROSS_CAPTURE_BARRIER'] = own+'/barriers.json'
@@ -265,7 +270,8 @@ def make_plan(options):
                 driver_sources={str(path.relative_to(HERE)):digest_file(path) for path in
                     (HERE/'cross_peers.py',HERE/'cross_report.py',HERE/'feel/report.py',HERE/'feel/records.py')},
                 boxes=manifest['boxes'], instances=peers, specs=specs, host=host, ticks=options.ticks,
-                scenario=options.scenario, roster=options.roster, scene=options.scene, seed=options.seed,
+                scenario=options.scenario, acceptance_row={'match': 17, 'soak': 18, 'chaos': 19}[options.scenario],
+                roster=options.roster, scene=options.scene, seed=options.seed,
                 chaos_seed=options.chaos_seed if options.scenario == 'chaos' else None,
                 seed_scope='choices only; transport and OS timing are not reproduced', faults=faults,
                 capture_barriers=barriers,
@@ -287,7 +293,7 @@ def make_plan(options):
                 capture_rows_pending=[],
                 required_gates=['three_real_boxes', 'matching_content', 'same_commit', 'full_history', 'zero_desync',
                                 'zero_unscheduled_holds', 'native_completion', 'bounded_recovery'],
-                limitations={'migration': 'NOT COVERED: NetMatchService endpoint publication and NetLockstep direct dialing need the endpoint fix',
+                limitations={'migration': 'HL4 requires actual host termination and native successor/moderation evidence; no host restart/rejoin oracle',
                              'team_members': 'NOT COVERED until netcode row 14 lands',
                              'peer_counts': 'NOT COVERED until netcode row 13 lands'})
 
@@ -526,7 +532,7 @@ def prepare_instance(spec, pin, box, runtime=None):
         rows += [f'player=0 {start} {end} {direction} FIRE AIM=0.9,-0.1',
                  f'player=0 {start+180} {min(start+210, spec["ticks"])} WEAPON_RELOAD'] if start+210 <= spec['ticks'] else [f'player=0 {start} {end} FIRE AIM=-0.9,-0.1']
     (own / 'input.txt').write_text('\n'.join(rows) + '\n', encoding='utf-8')
-    write_json(own / 'faults.json', [f for f in spec['faults'] if f['incarnation'] == spec['incarnation']])
+    write_json(own / 'faults.json', [f for f in spec['faults'] if f['incarnation'] == spec['incarnation'] and f['action'] != 'host-kill'])
     write_json(own / 'recoveries.json',dict(cases=spec.get('recoveries',spec['faults']),starts=spec.get('recovery_starts',{}),forced_ends=spec.get('forced_ends',[])))
     write_json(own / 'barriers.json',spec.get('barriers',[]))
     teams = dict(human_teams=[0,0,1], cpu_teams=[2]) if spec['roster'] in ('mixed','allies') else \
@@ -606,6 +612,17 @@ def restart_spec(spec, progress):
                             CC_TEST_CROSS_MATCH_FIRST_TICK=str(progress.get('first_gameplay_tick', 1)))
     next_spec['faults'] = [f for f in next_spec['faults'] if f['tick'] > progress.get('budget_tick', 0)]
     return next_spec
+
+
+def termination_receipt(fault, spec, pid, progress, record, polled, before, after):
+    """Publish only after the owning process wrapper observed termination and finish."""
+    terminated = (type(pid) is int and pid > 0 and polled is not None and
+                  record.get('exit_code') == polled and not record.get('timed_out') and
+                  record.get('injected_termination') == 'scheduled crash ' + fault['id'])
+    return dict(id=fault['id'], peer=spec['peer'], incarnation=spec['incarnation'],
+                execution=progress.get('execution'), action=fault['action'],
+                engine_pid=pid, process_terminated=terminated, exit_code=polled,
+                before_wall_ms=before, after_wall_ms=after, actual=progress)
 
 
 def crash_due(fault, progress, in_lobby):
@@ -849,7 +866,7 @@ def run_payload(path):
                     current = progress[peer]
                     # A lobby-phase drop waits for the rematch lobby, so the host loses the link where the round's seats are settled.
                     in_lobby = lobby_watches[peer].poll()
-                    due = next((f for f in spec['faults'] if f['action'] == 'crash-restart' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
+                    due = next((f for f in spec['faults'] if f['action'] in ('crash-restart', 'host-kill') and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
                                 and crash_due(f, current, in_lobby)), None)
                     leaving = next((f for f in spec['faults'] if f['action'] == 'announced-leave-rejoin' and f['incarnation'] == spec['incarnation'] and f['id'] not in fired
                                     and current.get('budget_tick', 0) >= f['tick']), None)
@@ -865,8 +882,32 @@ def run_payload(path):
                         if due:
                             crash_before=time.monotonic()*1000
                             run.terminate(reason=f'scheduled crash {fault["id"]}')
-                            recovery_ledgers[peer].external_start(fault,spec['incarnation'],crash_before,time.monotonic()*1000,current)
+                            if fault['action'] != 'host-kill':
+                                recovery_ledgers[peer].external_start(fault,spec['incarnation'],crash_before,time.monotonic()*1000,current)
                         record = run.finish(); run.close()
+                        if fault['action'] == 'host-kill':
+                            for _ in range(256):
+                                final_rows = readers[peer].read()
+                                for observed in final_rows:
+                                    if observed.get('type') == 'progress': current = observed
+                                if readers[peer].drained: break
+                            if not readers[peer].drained:
+                                raise RuntimeError(f'{peer}: terminated host event stream did not drain')
+                            terminated = termination_receipt(fault, spec, receipt['engine_pid'], current, record,
+                                                             record.get('exit_code'), crash_before, time.monotonic()*1000)
+                            with (root / 'terminations.jsonl').open('a', encoding='utf-8') as stream:
+                                stream.write(json.dumps(terminated) + '\n')
+                            if not terminated['process_terminated']:
+                                raise RuntimeError(f'{peer}: host termination was not observed')
+                            write_json(Path(spec['own']) / 'record.json', record)
+                            retain_checkpoints(run, spec, final=True)
+                            seal_evidence(spec['own'])
+                            completed.add(peer)
+                            continue
+                        if leaving and record.get('exit_code') == 0:
+                            ended = time.monotonic() * 1000
+                            recovery_ledgers[peer].fault_reset(fault['id'], spec['incarnation'], observed_at, ended,
+                                dict(action='announced-leave-rejoin', process_exited=True, exit_code=record['exit_code']))
                         write_json(Path(spec['own']) / 'record.json', record)
                         retain_checkpoints(run, spec, final=True)
                         seal_evidence(spec['own'])
@@ -1013,6 +1054,7 @@ def run_plan(plan, root):
                 preflights[box['name']] = json.loads((local_box / 'preflight.json').read_text())
             payloads[box['name']] = (payload, local_payload, box_root)
         reference = preflights[local['name']]
+        plan['source_sha'] = reference['head']
         require_distinct_machines(preflights)
         for box in boxes.values():
             value = preflights[box['name']]
@@ -1145,7 +1187,7 @@ def run_plan(plan, root):
         write_json(root / 'manifest.json', plan)
     import cross_report
     result = cross_report.build_report(root)
-    return 0 if result['v1_passed'] else 1
+    return 0 if result['passed'] else 1
 
 
 def parse_args(argv=None):

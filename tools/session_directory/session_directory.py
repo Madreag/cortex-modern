@@ -631,6 +631,9 @@ class SessionDirectory:
                 raise TurnError(503, "relay_credential_expired")
             sess.ice_offer = offer
             sess.ice_refused = False
+            LOGGER.info('relay_offer_issued %s', json.dumps(dict(session_id=session_id, match_id=offer['match_id'],
+                provider='fixed' if 'iceServers' in data else self.turn_provider._config.get('backend', 'cloudflare'),
+                generation=generation, expires_at=offer['expires_at'], server_count=len(offer['iceServers'])), sort_keys=True))
             return offer
 
     def get_ice_servers(self, session_id: str, now: float) -> dict[str, Any]:

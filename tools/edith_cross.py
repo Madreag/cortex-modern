@@ -135,6 +135,8 @@ def prepare_peer(h, spec):
     run_out = Path(spec['root']) / spec['peer']
     run = h.run.make_run(Path(spec['repo']), spec['flags'], run_out, timeout=spec['timeout'], env=spec['env'],
                          expected=[Path(path) for path in spec['expected']])
+    write_json(Path(spec['root']) / f'{spec["peer"]}-build.json', dict(
+        source_sha=command_source_sha(spec['repo']), build=read_json(Path(spec['repo']) / 'tools/cross_peers/build.json')))
     h.feel.private_settings(run, spec['cap'])
     if spec.get('record'):
         (run_out / 'feel').mkdir()
@@ -419,11 +421,14 @@ def soak_verdict(root, ticks):
     after_saves = [tick for tick in own_holds if any(0 <= tick - save <= 300 for save in saves)]
     pace = {peer: dict(windows=len(rows), failed=[(row['first'], round(row['wall_tps'] or 0, 2), row.get('sim_ms_per_tick')) for row in rows if not row['passed']])
             for peer, rows in history['pace_windows'].items()}
+    injections = soak.stall_plan(soak_stalls(ticks), SOAK_STALL_MS)
+    hold_judgement = soak.soak_hold_judgement(Path(root), injections)
     checks = dict(complete_history_and_pace=history['pass'], no_hold_after_return=not any(kept.values()), autosaves=autosaves >= max(0, owed),
+                  paired_fault_recovery_and_survivor_waits=hold_judgement['passed'],
                   no_hold_after_autosave=not after_saves)
     return dict(passed=all(checks.values()), checks=checks, errors_not_pace=[e for e in history['errors'] if 'pace window' not in e], pace=pace,
                 holds_after_returns=kept, autosaves=f'{autosaves}/{owed}', client_own_holds=own_holds, client_holds_after_autosaves=after_saves,
-                stalls=soak_stalls(ticks))
+                stalls=injections, hold_judgement=hold_judgement)
 
 
 def wait_done(root, budget_s):
@@ -780,7 +785,7 @@ def run_match(h, options, index, login):
         say(f'{name}: SOAK {"PASS" if verdict["passed"] else "FAIL"} {json.dumps(verdict["checks"])} autosaves={verdict["autosaves"]} '
             f'client_holds_after_autosaves={verdict["client_holds_after_autosaves"]}')
     return analyze_match(h, root, dict(name=name, started=started, finished=stamp(), direction=options.direction, path=options.path, ticks=match_ticks(options),
-                                       port=port, machines=machines,
+                                       port=port, machines=machines, soak=options.soak, source_sha=command_source_sha(options.repo),
                                        local_peer=local_peer, session_id=session_id, remote_state=remote_state, note=note,
                                        feel_records=options.feel_records, instrumentation=options.instrumentation, box_here_at_start=load))
 
@@ -805,17 +810,8 @@ def peer_log(root, peer):
 
 
 def live_ticks(path):
-    """The ticks a peer's live stream holds: an {"abandon_from": N} record (an image rejoin) voids the rows from N it wrote before."""
-    ticks = set()
-    for line in Path(path).read_text(encoding='utf-8').splitlines() if Path(path).is_file() else []:
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if 'abandon_from' in row:
-            ticks = {tick for tick in ticks if tick < row['abandon_from']}
-        elif 'tick' in row:
-            ticks.add(row['tick'])
-    return ticks
+    from feel.retained_resume import read_live_hashes
+    return {row['tick'] for row in read_live_hashes(Path(path)) if 'tick' in row}
 
 
 def read_json(path):
@@ -845,6 +841,60 @@ def find_key(node, key):
 ROUTE = re.compile(r'\[net-ice\][^\n]*(?:selected|candidate|fail|timeout|retrying)[^\n]*|\[net-route\][^\n]*|\[net-transport\][^\n]*'
                    r'|\[net-session\] admission refused[^\n]*|\[net-match-service-e2e\] setup failed[^\n]*'
                    r'|[^\n]*(?:ProblemDetectedLocally|ClosedByPeer|ConnectionState|connect(?:ion)? (?:failed|timed out|refused))[^\n]*', re.I)
+
+
+def relay_evidence(root, meta):
+    if meta.get('path') not in ('relay', 'directory-relay'):
+        return dict(passed=True, required=False, reason='')
+    session = meta.get('session_id')
+    required = ('client',) if meta['path'] == 'directory-relay' else ('host', 'client')
+    routes, errors = {}, []
+    for peer in required:
+        current, selected, accepted, wrong = None, set(), [], []
+        for line in peer_log(root, peer).splitlines():
+            if found := re.search(r'\[net-ice\] (?:host )?session (\S+)', line):
+                current = found[1]
+                selected.clear()
+            if found := re.search(r'\[net-ice\] selected candidate=\S+ connection=(\d+)', line):
+                if current == session and session: selected.add(found[1])
+            if found := re.search(r'\[net-route\] RouteAllowed route=(\w+) allowed=(\d+) connection=(\d+)', line):
+                if current != session or not session: continue
+                if found[1] == 'relay' and found[2] == '1' and found[3] in selected: accepted.append(line)
+                elif found[2] == '1': wrong.append(line)
+        routes[peer] = dict(selected_relay=accepted, wrong_allowed_route=wrong)
+        if not accepted or wrong: errors.append(f'{peer}: selected relay receipts={len(accepted)}, other allowed routes={wrong}')
+    offers = []
+    path = root / 'service.log'
+    for line in path.read_text(encoding='utf-8-sig', errors='replace').splitlines() if path.is_file() else []:
+        if 'relay_offer_issued ' not in line: continue
+        try:
+            row = json.loads(line.split('relay_offer_issued ', 1)[1])
+        except ValueError:
+            errors.append('invalid relay_offer_issued JSON'); continue
+        provider = row.get('provider')
+        expected = {'cloudflare', 'coturn'} if meta['path'] == 'directory-relay' else {'fixed'}
+        if row.get('session_id') == session and session and provider in expected and row.get('match_id') and all(
+                type(row.get(key)) is int and row[key] > 0 for key in ('generation', 'expires_at', 'server_count')):
+            offers.append(row)
+    if not offers: errors.append(f'no issued provider offer for session {session!r}')
+    return dict(passed=not errors, required=True, session_id=session, peers=routes, offers=offers, reason='; '.join(errors))
+
+
+def command_source_sha(repo):
+    return run(['git', '-C', str(repo), 'rev-parse', 'HEAD']).strip()
+
+
+def pair_build_evidence(root, meta, records):
+    errors = []
+    tip = meta.get('source_sha')
+    if not isinstance(tip, str) or not re.fullmatch(r'[0-9a-f]{40}', tip): errors.append(f'source_sha={tip!r}')
+    for peer, record in records.items():
+        observed = read_json(root / f'{peer}-build.json')
+        build = observed.get('build') or {}
+        sha = record.get('exe_sha256')
+        if observed.get('source_sha') != tip or build.get('commit') != tip or not sha or build.get('executable_sha256') != sha:
+            errors.append(f'{peer}: source={observed.get("source_sha")!r}, build={build.get("commit")!r}, runner hash={sha!r}, build hash={build.get("executable_sha256")!r}')
+    return dict(passed=not errors, reason='; '.join(errors), source_sha=tip)
 
 
 def analyze_match(h, root, meta):
@@ -888,13 +938,22 @@ def analyze_match(h, root, meta):
     # A soak plans its holds: they are judged by its own rules, every other run by holds == 0.
     soak_plan = read_json(root / 'soak-verdict.json')
     hold_judgement = None
-    if soak_plan:
+    is_soak = bool(meta.get('soak') or (root / 'soak-verdict.json').is_file())
+    if is_soak:
         import soak_two_peer
         hold_judgement = soak_two_peer.soak_hold_judgement(root, soak_plan.get('stalls', []))
     holds_pass = hold_judgement['passed'] if hold_judgement else holds == 0
-    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass)
+    soak_pass = soak_plan.get('passed') is True if is_soak else True
+    # The only seat removed from this run-wide timing window is the declared, proved injected target.
+    targets = {row['peer'] for row in (hold_judgement or {}).get('injection_plan', [])}
+    required_timing = ['host'] if is_soak and holds_pass and targets == {'client'} else ['host', 'client']
+    timing_pass = all(result.get('peers', {}).get(peer, {}).get('pass_check') is True for peer in required_timing)
+    relay = relay_evidence(root, meta)
+    builds = pair_build_evidence(root, meta, records)
+    passed = bool(complete and result.get('off_wire_pass') and passes and mismatched == 0 and holds_pass and soak_pass and timing_pass and relay['passed'] and builds['passed'])
     verdict = dict(name=meta['name'], passed=passed, compared_ticks=compared, desyncs=mismatched, holds=holds, hold_judgement=hold_judgement,
-                   trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest)
+                   trace_pair_pass=(result.get('proof') or {}).get('sim_gated_pass'), peers=peers, manifest=manifest,
+                   soak_pass=soak_pass, item9a_pass=timing_pass, required_timing_peers=required_timing, relay=relay, builds=builds)
     write_json(root / 'verdict.json', verdict)
     cell = lambda key, fmt='{}': '/'.join('-' if peers[peer][key] is None else fmt.format(peers[peer][key]) for peer in ('host', 'client'))
     route = next((line for peer in (meta['local_peer'], 'host', 'client') for line in peers[peer]['route'] if 'selected' in line or 'RouteAllowed' in line), None)
