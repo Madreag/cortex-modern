@@ -154,8 +154,10 @@ def configure_plan(plan, row, mod_receipts=None):
             spec['session_leaf'] = 'session.json'
         spec["env"].pop("CC_TEST_CROSS_BOT", None)
         spec["env"].pop("CC_TEST_CROSS_CAPTURE_BARRIER", None)
-        if world and spec['role'] == 'host':
-            # The dedicated world host has no local player for the standard buy/pie probe.
+        if world and (spec['role'] == 'host' or spec.get('defer_until_session')):
+            # The dedicated host has no seat; a late seat has no controlled actor
+            # during private catch-up. The standard match buy/pie probe aborts
+            # that visitor before activation. Native join and hash gates remain.
             spec['env'].pop('CC_TEST_NET_UI_SCRIPT', None)
         spec["env"].update(CCCP_HEADLESS="1", CC_RUNNER_IGNORE_FULLSCREEN="1")
         if row == "mod-refusal" and spec["peer"] == "linux":

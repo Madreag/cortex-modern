@@ -79,6 +79,14 @@ class TaskSoak(unittest.TestCase):
         bad=deepcopy(plan); bad['preflights']['EDITH']['build']['commit']='c'*40
         with self.assertRaises(ValueError): tasks.validate_preflights(bad)
 
+    def test_late_world_seat_does_not_run_actor_ui_probe_during_private_catchup(self):
+        options=SimpleNamespace(template_boxes=Path(__file__).parent/'cross_peers/boxes.json', lane='test', out=self.root/'r5-ui')
+        plan=tasks.make_plan(options,profiles())
+        by_peer={spec['peer']:spec for spec in plan['specs']}
+        self.assertNotIn('CC_TEST_NET_UI_SCRIPT',by_peer['edith']['env'])
+        self.assertIn('CC_TEST_NET_UI_SCRIPT',by_peer['edith-first']['env'])
+        self.assertTrue(by_peer['edith']['defer_until_session'])
+
     def test_publication_is_observed_before_the_first_live_tick(self):
         own=self.root/'host'; (own/'engine').mkdir(parents=True)
         (own/'engine/stdout.log').write_text('[net-directory] registered session_id=fixture-session heartbeat_s=10\n', encoding='utf-8')
