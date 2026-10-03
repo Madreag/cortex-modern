@@ -37,7 +37,8 @@ def host_loss_evidence(manifest, peers, events, live, terminations):
     if type(original_id) is not int or type(generation) is not int:
         return dict(status='INCOMPLETE', passed=False, reason=f'original host_peer={original_id}, authority_generation={generation}', ranges=[])
     owner_record = peers.get(host, {}).get('record', {})
-    if (owner_record.get('pid') != receipt['engine_pid'] or owner_record.get('exit_code') != receipt['exit_code']
+    owner_pid = (owner_record.get('hop') or {}).get('engine_pid', owner_record.get('pid'))
+    if (owner_pid != receipt['engine_pid'] or owner_record.get('exit_code') != receipt['exit_code']
             or owner_record.get('injected_termination') != 'scheduled crash ' + fault['id']):
         errors.append(f'{host}: termination PID/exit/injection differs from the owning runner record')
     before = [r for r in events.get(host, []) if r.get('type') == 'moderation_snapshot' and r.get('stage') == 'before'

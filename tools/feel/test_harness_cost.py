@@ -65,6 +65,12 @@ class HarnessCostEvidence(unittest.TestCase):
         self.assertEqual(result['instruments']['census']['native_samples'][0]['total_ms'], .30000000000000004)
         self.assertEqual(result['instruments']['preview_fidelity']['native_samples'][0]['cumulative_total_ms'], 18.5)
 
+    def test_frame_partition_cannot_understate_native_cost(self):
+        from feel.harness_cost import INSTRUMENTS
+        log = complete_cost_log(costs={name: 6 for name in INSTRUMENTS})
+        log += '[fullstate-cost] tick=300 freeze_us=10000 hash_us=0 image_bytes=4096\n'
+        self.assertFalse(self.measured(log)['instrument_valid'])
+
     def test_missing_frame_wrong_process_and_disabled_contradiction(self):
         valid = complete_cost_log()
         for broken in (valid.rsplit('\n', 2)[0], valid.replace('"process": 44', '"process": 45', 1),

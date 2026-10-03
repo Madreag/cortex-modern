@@ -894,7 +894,7 @@ def run_payload(path):
                             if not readers[peer].drained:
                                 raise RuntimeError(f'{peer}: terminated host event stream did not drain')
                             terminated = termination_receipt(fault, spec, receipt['engine_pid'], current, record,
-                                                             run.poll(), crash_before, time.monotonic()*1000)
+                                                             record.get('exit_code'), crash_before, time.monotonic()*1000)
                             with (root / 'terminations.jsonl').open('a', encoding='utf-8') as stream:
                                 stream.write(json.dumps(terminated) + '\n')
                             if not terminated['process_terminated']:

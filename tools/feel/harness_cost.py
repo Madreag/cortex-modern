@@ -91,6 +91,8 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
         disabled = known and not any(declarations)
         values = [r['ms'] for r in covered[name]]
         observed_max = max([r.get('max_ms', 0) for r in samples[name]] + values, default=None)
+        if values and any(row.get('max_ms', 0) > max(values) for row in samples[name]):
+            errors.append(f'{name}: native cost summary exceeds the frame partition maximum {max(values)} ms')
         if observed_max is not None and not number(observed_max): errors.append(f'{name}: invalid measured cost {observed_max}')
         instruments[name] = dict(status='DISABLED' if disabled else 'MEASURED' if values and all(complete_scopes) else 'MISSING COST',
             scope_known=known, complete=disabled or bool(values) and all(complete_scopes),
