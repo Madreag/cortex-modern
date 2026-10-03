@@ -223,6 +223,33 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+
+/// Test lever CCCP_TEST_MINIMIZE_TICKS=<from>:<to>[:fullscreen]: the window is minimized at the first tick and restored at the second.
+/// With ':fullscreen' it is shown in the game's own fullscreen from startup, before any round, and its state is written every 60 ticks
+/// from 60 before the minimize to 60 after the restore, so a run proves the whole minimized span was a fullscreen one.
+struct MinimizeLever { uint64_t from = 0, to = 0; bool fullscreen = false; };
+
+static const MinimizeLever& TestMinimizeLever() {
+	static const MinimizeLever s_lever = [] {
+		unsigned long long from = 0, to = 0;
+		char form[16] = {};
+		const char* text = std::getenv("CCCP_TEST_MINIMIZE_TICKS");
+		const int fields = text ? std::sscanf(text, "%llu:%llu:%15s", &from, &to, form) : 0;
+		if (fields < 2 || to <= from) return MinimizeLever{};
+		return MinimizeLever{from, to, fields == 3 && std::string(form) == "fullscreen"};
+	}();
+	return s_lever;
+}
+
+static void WriteTestWindowState(uint64_t tick) {
+	const SDL_WindowFlags flags = SDL_GetWindowFlags(g_WindowMan.GetWindow());
+	const MinimizeLever& lever = TestMinimizeLever();
+	const nlohmann::json state{{"tick", tick}, {"process", System::GetProcessID()}, {"round", ScenarioRunner::GetLockstepRoundId()},
+	                           {"fullscreen", g_WindowMan.IsFullscreen() && (flags & SDL_WINDOW_FULLSCREEN) != 0}, {"minimized", (flags & SDL_WINDOW_MINIMIZED) != 0},
+	                           {"hidden", (flags & SDL_WINDOW_HIDDEN) != 0}, {"input_focus", (flags & SDL_WINDOW_INPUT_FOCUS) != 0},
+	                           {"minimize_from", lever.from}, {"minimize_to", lever.to}};
+	System::PrintDiagnosticLine("[window-state] " + state.dump());
+}
 static std::string s_netLiveTickHashPath;
 
 // Written every tick, so the disk never holds the simulation.
@@ -1719,6 +1746,12 @@ void InitializeManagers() {
 	g_FrameMan.Initialize();
 	g_PostProcessMan.Initialize();
 	g_PerformanceMan.Initialize();
+	// The minimize lever's fullscreen form enters the game's own fullscreen before any round, as a player who plays fullscreen starts.
+	if (TestMinimizeLever().fullscreen && g_WindowMan.GetWindow()) {
+		SDL_ShowWindow(g_WindowMan.GetWindow());
+		if (!g_WindowMan.IsFullscreen()) g_WindowMan.ToggleFullscreen();
+		WriteTestWindowState(0);
+	}
 
 	if (g_AudioMan.Initialize()) {
 		g_GUISound.Initialize();
@@ -7894,21 +7927,21 @@ void RunGameLoop() {
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
-			// Test lever CCCP_TEST_MINIMIZE_TICKS=<from>:<to>: the window is minimized at the first tick and restored at the second.
-			static const std::pair<uint64_t, uint64_t> s_minimizeTicks = [] {
-				unsigned long long from = 0, to = 0;
-				const char* text = std::getenv("CCCP_TEST_MINIMIZE_TICKS");
-				return text && std::sscanf(text, "%llu:%llu", &from, &to) == 2 && to > from ? std::pair<uint64_t, uint64_t>(from, to) : std::pair<uint64_t, uint64_t>(0, 0);
-			}();
-			if (s_minimizeTicks.second != 0 && g_WindowMan.GetWindow()) {
+			if (const MinimizeLever& lever = TestMinimizeLever(); lever.to != 0 && g_WindowMan.GetWindow()) {
+				SDL_Window* window = g_WindowMan.GetWindow();
 				const uint64_t tick = static_cast<uint64_t>(simTick);
-				if (tick == s_minimizeTicks.first) SDL_MinimizeWindow(g_WindowMan.GetWindow());
-				if (tick == s_minimizeTicks.second) SDL_RestoreWindow(g_WindowMan.GetWindow());
-				if (tick == s_minimizeTicks.first || tick == s_minimizeTicks.first + 60 || tick == s_minimizeTicks.second || tick == s_minimizeTicks.second + 60) {
-					const SDL_WindowFlags flags = SDL_GetWindowFlags(g_WindowMan.GetWindow());
+				if (tick == lever.from) SDL_MinimizeWindow(window);
+				if (tick == lever.to) {
+					// SDL minimizes an unfocused fullscreen window again, and a private desktop gives none focus, so it comes back as a window.
+					if (lever.fullscreen && g_WindowMan.IsFullscreen()) g_WindowMan.ToggleFullscreen();
+					SDL_RestoreWindow(window);
+				}
+				if (tick == lever.from || tick == lever.from + 60 || tick == lever.to || tick == lever.to + 60) {
+					const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
 					System::PrintDiagnosticLine("[selftest] window tick=" + std::to_string(tick) + " minimized=" + std::to_string((flags & SDL_WINDOW_MINIMIZED) != 0) +
 					                            " hidden=" + std::to_string((flags & SDL_WINDOW_HIDDEN) != 0));
 				}
+				if (lever.fullscreen && tick + 60 >= lever.from && tick <= lever.to + 60 && (tick + 60 - lever.from) % 60 == 0) WriteTestWindowState(tick);
 			}
 			if (s_memoryCensusTicks != 0 && simTick % s_memoryCensusTicks == 0) {
 				// The census's counts are read on the sim thread and each part's cost goes on its line; the census worker sums the process heaps and prints it.
