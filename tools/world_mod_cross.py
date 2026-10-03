@@ -19,7 +19,7 @@ from acceptance_mod import manifest as mod_manifest, equal_manifests
 from acceptance_runtime import write_json
 
 ROWS = ("mod-match", "mod-refusal", "world-join", "world-soak")
-DRIVER_FILES = ("cross_peers.py", "cross_report.py", "feel/report.py", "feel/records.py", "world_mod_cross.py",
+DRIVER_FILES = ("cross_peers.py", "cross_report.py", "e2e_video.py", "feel/report.py", "feel/records.py", "world_mod_cross.py",
                 "world_soak.py", "acceptance_rows.py", "acceptance_evidence.py", "acceptance_cross_report.py", "acceptance_mod.py")
 
 
@@ -61,6 +61,27 @@ def configure_plan(plan, row, mod_receipts=None):
         plan["instances"] = [s for s in plan["instances"] if s["name"] in ("erol", "edith")]
         used = {s["box"] for s in plan["specs"]}
         plan["boxes"] = [b for b in plan["boxes"] if b["name"] in used]
+        late = next(s for s in plan['specs'] if s['peer'] == 'edith')
+        def initial_copy(value):
+            if isinstance(value, str): return value.replace('/edith/', '/edith-first/')
+            if isinstance(value, list): return [initial_copy(item) for item in value]
+            if isinstance(value, dict): return {key: initial_copy(item) for key, item in value.items()}
+            return value
+        initial = initial_copy(late)
+        initial['peer'] = 'edith-first'
+        initial['env']['CC_TEST_CROSS_INSTANCE'] = 'edith-first'
+        initial['flags'] = flag(initial['flags'], '-net-player-name', 'edith-first')
+        if 'port_block' in initial:
+            initial['port_block'] = [port+5 for port in initial['port_block']]
+            initial['flags'] = flag(initial['flags'], '-net-port', initial['port_block'][0])
+        plan['specs'].insert(1, initial)
+        template = next(p for p in plan['instances'] if p['name'] == 'edith')
+        plan['instances'].insert(1, {**deepcopy(template), 'name':'edith-first', **({'port_block':initial['port_block']} if 'port_block' in initial else {})})
+        for box in plan['boxes']:
+            if box['name'] == late['box']:
+                box['peers_per_box'] = 2
+                if 'ports' in box and initial['port_block'][-1] > box['ports'][-1]:
+                    raise ValueError('EDITH needs two disjoint instance port blocks')
         from world_soak import configuration
         plan["soak"] = configuration(max(3660, (plan["ticks"]-1)//60))
         plan["ticks"] = plan["soak"]["ticks"]
@@ -92,7 +113,7 @@ def configure_plan(plan, row, mod_receipts=None):
                     session_wait_s=3600 if row == "world-soak" else 240)
         flags = spec["flags"]
         for name, value in (("-max-ticks", plan["ticks"]), ("-net-match-ticks", plan["ticks"]-1),
-                            ("-net-match-peers", peers), ("-net-match-humans", peers), ("-net-match-cpu-slots", 0),
+                            ("-net-match-peers", peers), ("-net-match-humans", peers-1 if world else peers), ("-net-match-cpu-slots", 0),
                             ("-net-match-service-preset", "Persistent World" if world else "Void Wanderers"),
                             ("-net-match-service-module", "Base.rte" if world else "VoidWanderers.rte"),
                             ("-net-match-service-scene", spec["scene"]), ("-net-match-service-scene-module", spec["scene_module"]),
@@ -107,6 +128,10 @@ def configure_plan(plan, row, mod_receipts=None):
             flags = flag(flags, "-module", "VoidWanderers.rte")
             spec["module_tree_sha256"] = plan["module_tree_sha256"]
         spec["flags"] = flags
+        if plan['late_join'] and spec['peer'] == plan['late_join']['peer']:
+            spec.update(defer_until_session=True, session_leaf='session-late.json')
+        else:
+            spec['session_leaf'] = 'session.json'
         spec["env"].pop("CC_TEST_CROSS_BOT", None)
         spec["env"].pop("CC_TEST_CROSS_CAPTURE_BARRIER", None)
         spec["env"].update(CCCP_HEADLESS="1", CC_RUNNER_IGNORE_FULLSCREEN="1")
@@ -231,6 +256,30 @@ def stage_activity(run, spec):
                 raise ValueError("module Index.ini has no trailing whitespace for the one-byte refusal")
             mutation = alter_one_byte(module, selected, Path(spec["root"]).parent, own/"mutation.json", len(raw)-1, 32)
             write_json(own/"mutation-summary.json", mutation)
+            session = spec['flags'][spec['flags'].index('-net-join-session')+1]
+            if not re.fullmatch(r'[A-Za-z0-9_-]+', session):
+                raise ValueError('published session id is not safe for the menu script')
+            menu = own/'refusal.menu.txt'
+            menu.write_text('wait_ms 1980\nactivate ButtonMainToMultiplayer\nwait_ms 495\n'
+                            'activate ButtonMultiplayerJoinGame\nwait_ms 495\n'
+                            f'settext TextJoinAddress session:{session}\nsettext TextJoinPort {spec["port_block"][0]}\n'
+                            'activate ButtonMultiplayerConnect\nwait_state Failed\nwait_ms 495\n'
+                            'assert_substate Landing\nassert_enabled ButtonMultiplayerJoinGame 1\n'
+                            'assert_visible LabelMultiplayerLandingStatus 1\nassert_text_fits LabelMultiplayerLandingStatus\n'
+                            'assert_inside_screen LabelMultiplayerLandingStatus\n'
+                            'dump_host_options\nwait_ms 990\nexit\n', encoding='utf-8')
+            for name in ('-net-match-service-e2e', '-net-join-session'):
+                run.argv[:] = flag(run.argv, name, False)
+            run.argv[:] = flag(run.argv, '-menu-script', menu)
+            spec['env'].pop('CC_TEST_NET_UI_SCRIPT', None)
+            # The menu refusal has no game phase in which the ordinary gameplay probe could activate.
+            run.env.pop('CC_TEST_NET_UI_SCRIPT', None)
+            run.record.get('env_set', {}).pop('CC_TEST_NET_UI_SCRIPT', None)
+            from e2e_video import SCREEN_WATCHES
+            watches = own/'screen-watches.txt'
+            watches.write_text(SCREEN_WATCHES, encoding='utf-8')
+            run.env['CCCP_TEST_SCREEN_WATCHES'] = str(watches)
+            run.record.setdefault('env_set', {})['CCCP_TEST_SCREEN_WATCHES'] = str(watches)
 
 
 def restore_activity(spec):
@@ -334,7 +383,8 @@ def main(argv=None):
     manifests = json.loads(args.mod_receipts.read_text(encoding="utf-8-sig")) if args.mod_receipts else None
     plan = configure_plan(plan, args.acceptance_row, manifests)
     if options.dry_run:
-        cross_peers.dry_run(plan)
+        print(json.dumps(plan, indent=2))
+        print('DRY RUN: public directory first; fallback only after an outage; no engines or listeners started')
         return 0
     if "acceptance_row" not in Path(cross_peers.__file__).read_text(encoding="utf-8"):
         raise RuntimeError("Phase B cross-driver integration has not landed; no engine launched")

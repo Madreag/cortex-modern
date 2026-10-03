@@ -237,10 +237,14 @@ def judge(row, facts):
             check.require(number(late) and 3000 <= late < 3060, "soak", "late join was not at minute 50")
             check.require(soak.get("autosave_seconds") == 60 and soak.get("fullstate_every") == 60 and
                           soak.get("census_every_s") == 60, "soak", "autosave, hash or census cadence missing")
-            check.require(set(peers) == {"pc", "edith"}, "peers", "two-box world soak peers differ")
+            check.require(set(peers) == {"pc", "edith-first", "edith"}, "peers", "world host and the two EDITH seats are not covered")
+            activation = facts.get('join', {}).get('activation_tick')
+            if type(activation) is int:
+                hash_gate(check, facts.get('initial_live', {}), 'initial_live', 1, activation-1)
+                hash_gate(check, facts.get('initial_fullstate', {}), 'initial_fullstate', 60, (activation-1)//60*60, 60)
             details["memory"] = {}
             if number(duration) and number(late):
-                for name, seconds in (("pc", duration), ("edith", duration-late)):
+                for name, seconds in (("pc", duration), ("edith-first", duration), ("edith", duration-late)):
                     details["memory"][name] = census_gate(check, facts.get("census", {}).get(name, []), f"census.{name}", seconds)
             journal = soak.get("journal", [])
             check.require([r.get("minute") for r in journal] == [10, 30, 50, 60] and

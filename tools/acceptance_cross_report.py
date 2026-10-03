@@ -20,8 +20,10 @@ def native_labels(own):
     texts = []
     for path in sorted((own/"engine/runtime/ScreenShots").glob("dump_host_options_*.json")):
         document = load(path, {})
+        if document.get("screen") != "MultiplayerScreen":
+            continue
         for control in document.get("controls", []):
-            if control.get("visible") is True and control.get("text"):
+            if control.get("name") == "LabelMultiplayerLandingStatus" and control.get("visible") is True and control.get("text"):
                 texts.append(control["text"])
     return "\n".join(texts)
 
@@ -66,7 +68,7 @@ def build_report(root):
     try:
         facts["live"] = live_hashes({n: documents[n] for n in comparing}, start, end) if start else {}
         facts["fullstate"] = fullstate_hashes({n: paths[n]/"engine/stdout.log" for n in comparing}, start, end) if start else {}
-        facts["peers"] = {name: peer_receipt(name, documents[name], logs[name], load(paths[name]/"record.json", {}),
+        facts["peers"] = {name: peer_receipt("edith" if name == "edith-first" else name, documents[name], logs[name], load(paths[name]/"record.json", {}),
                                              start if row.startswith("world-") and name == "edith" and start else 1, end)
                           for name in paths if name != "linux" or row != "mod-refusal"}
     except (OSError, ValueError, TypeError) as error:
@@ -87,6 +89,12 @@ def build_report(root):
                 failures.append(f"{name}: native mod activity identity missing")
     if row == "mod-refusal":
         own = paths["linux"]
+        from e2e_video import screen_watch_results, menu_script_failures
+        watches = screen_watch_results(own/'engine')
+        if not watches or any(value.get('offences') or not value.get('summary') or value['summary'].get('violations') != 0 for value in watches.values()):
+            failures.append('refusal: shared screen assertions missing or failed')
+        if menu_script_failures(own/'engine'):
+            failures.append('refusal: menu assertion failed')
         mutation = load(own/"mutation-summary.json", {})
         restored = load(own/"mutation.json.restored.json", {})
         try: joined = any(r.get("phase") == "live" for r in rows(documents["linux"]))
@@ -101,6 +109,12 @@ def build_report(root):
         facts["soak"] = {**manifest["soak"], "elapsed_s": observed.get("elapsed_s"),
                          "late_join_elapsed_s": released.get("host_elapsed_s")}
         facts["soak"]["journal"] = load(paths["pc"]/"journal-sizes.json", [])
+        if start:
+            try:
+                facts['initial_live'] = live_hashes({n:documents[n] for n in ('pc','edith-first')}, 1, start-1)
+                facts['initial_fullstate'] = fullstate_hashes({n:paths[n]/'engine/stdout.log' for n in ('pc','edith-first')}, 1, start-1)
+            except (OSError, ValueError, TypeError) as error:
+                failures.append('initial world history: '+str(error))
         facts["census"] = {}
         for name, text in logs.items():
             census = census_receipts(text)

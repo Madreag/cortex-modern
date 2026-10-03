@@ -58,10 +58,13 @@ def good(row):
         data["live"] = hashes(1201, 1801)
         data["fullstate"] = hashes(1260, 1800, 60)
     if row == "world-soak":
-        data["peers"] = {"pc": peer(1, 219601), "edith": peer(180001, 219601, "edith")}
+        data["peers"] = {"pc": peer(1, 219601), "edith-first": peer(1, 219601, "edith"), "edith": peer(180001, 219601, "edith")}
+        data['census']['edith-first'] = deepcopy(data['census']['pc'])
         data["join"].update(host_tick=180000, activation_tick=180001, last_tick=219601)
         data["live"] = hashes(180001, 219601)
         data["fullstate"] = hashes(180060, 219600, 60)
+        data['initial_live'] = hashes(1,180000)
+        data['initial_fullstate'] = hashes(60,180000,60)
     return data
 
 
@@ -177,6 +180,11 @@ class AcceptanceRows(unittest.TestCase):
                 if section == "census": data["census"]["pc"].pop(30)
                 else: data["soak"]["journal"].pop(1)
                 self.assert_rejected("world-soak", data, section)
+
+    def test_soak_cannot_ignore_the_first_fifty_minutes(self):
+        data = good('world-soak')
+        data['initial_live']['unequal'] = 1
+        self.assert_rejected('world-soak', data, 'initial_live')
 
     def test_pending_pruning_never_claims_green(self):
         result = judge("world-soak", good("world-soak"))

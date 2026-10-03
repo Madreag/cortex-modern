@@ -1,8 +1,12 @@
 from copy import deepcopy
+import os
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from world_mod_cross import configure_plan, flag, late_join_due
+from world_mod_cross import configure_plan, flag, late_join_due, stage_activity, restore_activity
 
 
 def baseline():
@@ -53,7 +57,10 @@ class Plans(unittest.TestCase):
 
     def test_soak_is_two_boxes_and_joins_at_fifty_real_minutes(self):
         result = configure_plan(baseline(), "world-soak")
-        self.assertEqual({s["peer"] for s in result["specs"]}, {"erol", "edith"})
+        self.assertEqual({s["peer"] for s in result["specs"]}, {"erol", "edith-first", "edith"})
+        self.assertEqual({s["box"] for s in result["specs"]}, {"erol", "edith"})
+        self.assertEqual(next(s for s in result['specs'] if s['peer']=='edith')['session_leaf'], 'session-late.json')
+        self.assertFalse(next(s for s in result['specs'] if s['peer']=='edith-first').get('defer_until_session', False))
         self.assertEqual(result["ticks"], 219601)
         clock = {"host_started": 10}
         with patch("world_mod_cross.latest_tick", return_value=180000):
@@ -62,6 +69,40 @@ class Plans(unittest.TestCase):
 
     def test_flag_replacement_does_not_drop_adjacent_flag(self):
         self.assertEqual(flag(["-net-host", "-seed", "42"], "-net-host", False), ["-seed", "42"])
+
+    def test_refusal_uses_real_menu_and_restores_the_copy(self):
+        from acceptance_mod import manifest
+        retained = os.environ.get('CC_ACCEPTANCE_TEST_ROOT')
+        if retained:
+            root = Path(tempfile.mkdtemp(prefix='refusal-stage-', dir=retained))
+        else:
+            temporary = tempfile.TemporaryDirectory()
+            self.addCleanup(temporary.cleanup)
+            root = Path(temporary.name)
+        source = root/'repo/Data/VoidWanderers.rte'
+        source.mkdir(parents=True)
+        (source/'Index.ini').write_bytes(b'DataModule\n')
+        before = manifest(source)
+        own = root/'run/linux/incarnation-0'
+        runtime = own/'engine/runtime'
+        runtime.mkdir(parents=True)
+        args = ['engine', '-net-match-service-e2e', '-net-join-session', 'session-id']
+        run = SimpleNamespace(cwd=runtime, argv=args, env={'CC_TEST_NET_UI_SCRIPT':'probe'},
+                              record={'argv':args, 'env_set':{'CC_TEST_NET_UI_SCRIPT':'probe'}})
+        spec = dict(own=str(own), root=str(root/'run'), repo=str(root/'repo'), flags=args[:],
+                    env={'CC_TEST_NET_UI_SCRIPT':'probe'}, port_block=[49320,49324], acceptance_row='mod-refusal',
+                    module_refusal=True, module_tree_sha256=before['tree_sha256'])
+        with patch('feel_measure.private_settings'):
+            stage_activity(run, spec)
+        self.assertNotIn('-net-match-service-e2e', run.argv)
+        self.assertNotIn('-net-join-session', run.argv)
+        self.assertIn('-menu-script', run.argv)
+        self.assertIs(run.argv, run.record['argv'])
+        self.assertNotIn('CC_TEST_NET_UI_SCRIPT', run.record['env_set'])
+        self.assertIn('assert_substate Landing', (own/'refusal.menu.txt').read_text())
+        restore_activity(spec)
+        self.assertEqual(manifest(runtime/'Mods/VoidWanderers.rte'), before)
+        self.assertEqual(manifest(source), before)
 
 
 if __name__ == "__main__":
