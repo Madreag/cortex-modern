@@ -905,6 +905,7 @@ namespace RTE {
 		std::atomic<bool> failed{false};
 		std::atomic<uint64_t> bytesOnDisk{0}; //!< Its files' bytes, as the worker last left them.
 		std::atomic<uint32_t> filesOnDisk{0};
+		std::atomic<uint64_t> indexBytes{0}; //!< The worker's per-frame offsets, as it last left them.
 		std::map<std::tuple<uint64_t, size_t, uint64_t>, std::shared_future<ReadResult>> reads;
 		std::thread worker;
 
@@ -1012,10 +1013,14 @@ namespace RTE {
 						job.result->set_value(std::move(result));
 					}
 					if (!job.result) {
-						uint64_t bytes = 0;
-						for (const Segment& segment: segments) bytes += segment.endOffset;
+						uint64_t bytes = 0, index = 0;
+						for (const Segment& segment: segments) {
+							bytes += segment.endOffset;
+							index += segment.records.capacity() * sizeof(decltype(segment.records)::value_type);
+						}
 						bytesOnDisk = bytes;
 						filesOnDisk = static_cast<uint32_t>(segments.size());
+						indexBytes = index;
 					}
 				}
 			} catch (...) { failed = true; }
@@ -1085,6 +1090,15 @@ namespace RTE {
 		stats.files = m_Journal->filesOnDisk;
 		stats.first = m_JournalFirst;
 		stats.last = m_JournalLast;
+		stats.indexBytes = m_Journal->indexBytes;
+		// The reads are kept by the caller's thread, which this is.
+		stats.cachedReads = static_cast<uint32_t>(m_Journal->reads.size());
+		for (const auto& [key, read]: m_Journal->reads) {
+			if (read.wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
+			try {
+				for (const std::vector<uint8_t>& record: read.get().records) stats.cachedReadBytes += record.capacity();
+			} catch (...) {}
+		}
 		return stats;
 	}
 
@@ -2364,6 +2378,24 @@ namespace RTE {
 			}
 		}
 		return oldest;
+	}
+
+	std::string NetWorldJoinHost::MemoryCensus() const {
+		size_t active = 0, tailBytes = 0, inFlight = 0;
+		for (const NetWorldJoinSession& session: m_Sessions) {
+			active += session.phase == NetWorldJoinPhase::Active ? 1 : 0;
+			tailBytes += session.pendingTail.capacity();
+			inFlight += session.tailInFlight.size();
+		}
+		const NetWorldFrameLog::JournalStats journal = m_Tail.GetJournalStats();
+		std::ostringstream line;
+		line << "world: sessions=" << m_Sessions.size() << " active_sessions=" << active << " session_tail_bytes=" << tailBytes << " tail_in_flight=" << inFlight
+		     << " refused=" << m_Refused.size() << " cancelled=" << m_CancelledJoins.size() << " slots=" << m_Membership.Slots().size()
+		     << " history_frames=" << m_Tail.Count() << " history_bytes=" << m_Tail.Bytes() << " history_evicted=" << m_Tail.Evicted()
+		     << " journal_files=" << journal.files << " journal_disk_bytes=" << journal.bytes << " journal_index_bytes=" << journal.indexBytes
+		     << " journal_cached_reads=" << journal.cachedReads << " journal_cached_read_bytes=" << journal.cachedReadBytes
+		     << " image_tick=" << m_Image.tick << " image_bytes=" << m_Image.bytes;
+		return line.str();
 	}
 
 	std::string NetWorldJoinHost::BuildReportJson() const {

@@ -3859,8 +3859,9 @@ static std::string ResyncSaveName() {
 					const NetWorldFrameLog::JournalStats journal = tail.GetJournalStats();
 					const uint64_t journalBound = m_LastReturnHistoryFloor != 0 && journal.last >= m_LastReturnHistoryFloor ? journal.last + 1 - m_LastReturnHistoryFloor + NetWorldFrameLog::c_JournalSegmentFrames : 0;
 					System::PrintDiagnosticLine(std::format("[round-history] tick={} memory_frames={} memory_bytes={} memory_bound_frames={} memory_bound_bytes={} journal_files={} journal_bytes={} "
-					                                        "journal_first={} journal_last={} floor={} journal_bound_frames={}", tick, tail.Count(), tail.Bytes(), tail.MaxFrames(), tail.MaxBytes(),
-					                                        journal.files, journal.bytes, journal.first, journal.last, m_LastReturnHistoryFloor, journalBound));
+					                                        "journal_first={} journal_last={} floor={} journal_bound_frames={} journal_index_bytes={} journal_cached_reads={} journal_cached_read_bytes={}",
+					                                        tick, tail.Count(), tail.Bytes(), tail.MaxFrames(), tail.MaxBytes(), journal.files, journal.bytes, journal.first, journal.last,
+					                                        m_LastReturnHistoryFloor, journalBound, journal.indexBytes, journal.cachedReads, journal.cachedReadBytes));
 				}
 				if (m_WorldJoin.IsConfigured()) {
 					// The image is published when the writer thread has finished this archive, from the pump.
@@ -8841,6 +8842,22 @@ static std::string ResyncSaveName() {
 		}
 		record["save_refusals"] = std::move(refusals);
 		return record.dump(2, ' ', false, json::error_handler_t::replace);
+	}
+
+	std::string NetMatchService::MemoryCensus() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		std::ostringstream line;
+		line << m_WorldJoin.MemoryCensus();
+		size_t sideBytes = 0;
+		for (const auto& [tick, side]: m_WorldImageSideStates) sideBytes += side.capacity();
+		// The image's archive is shared with the writer's last autosave: the owners count says whether it is held twice.
+		line << " side_states=" << m_WorldImageSideStates.size() << " side_state_bytes=" << sideBytes
+		     << " image_archive_bytes=" << (m_WorldJoinImageArchive ? m_WorldJoinImageArchive->size() : 0) << " image_archive_owners=" << m_WorldJoinImageArchive.use_count();
+		if (const auto autosave = g_ActivityMan.LastCompletedAutosave(); autosave && autosave->archive) {
+			line << " autosave_archive_bytes=" << autosave->archive->size() << " autosave_archive_shared=" << (autosave->archive == m_WorldJoinImageArchive ? 1 : 0);
+		}
+		if (m_Runner) line << ' ' << m_Runner->GetLobbySession().MemoryCensus();
+		return line.str();
 	}
 
 	std::string NetMatchService::BuildReportJson() const {

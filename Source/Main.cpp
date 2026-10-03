@@ -402,6 +402,9 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 #endif
 }
 
+// The census's clock: the process's start, so its instants line up across rounds that restart their ticks.
+static const std::chrono::steady_clock::time_point s_CensusProcessStart = std::chrono::steady_clock::now();
+
 // The memory census's process figures are summed here, off the simulation thread: on a large heap they cost hundreds of milliseconds.
 class CensusWorker {
 public:
@@ -7966,13 +7969,13 @@ void RunGameLoop() {
 				const std::string runner = timed("runner", [] { return ScenarioRunner::MemoryCensus(); });
 				const std::string console = timed("console", [] { return g_ConsoleMan.LogCensus(); });
 				const std::string pace = timed("pace", [] { return PaceCensusSinceLast(); });
+				const std::string world = timed("world", [] { return g_NetMatchService.MemoryCensus(); });
 				std::ostringstream rest;
 				// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
-				static const auto s_censusEpoch = std::chrono::steady_clock::now();
-				rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_censusEpoch).count();
+				rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - s_CensusProcessStart).count();
 				rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua
 				     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
-				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << pace;
+				     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << pace;
 				CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
 					// The worker's whole job is the census's cost too, charged to the frame it ends in.
 					const auto began = std::chrono::steady_clock::now();

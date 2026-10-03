@@ -447,6 +447,19 @@ namespace RTE {
 		return !m_Config.resumeMatchId.empty() && !m_ResumeAnsweredPeers.contains(peerId);
 	}
 
+	std::string NetLobbySession::MemoryCensus() const {
+		size_t queued = 0, tail = 0, datagrams = 0;
+		for (const auto& [peer, bytes]: m_QueuedStateTransfers) queued += bytes.capacity();
+		for (const auto& [round, bytes]: m_PendingTail) tail += bytes.capacity();
+		for (const auto& [round, bytes]: m_PendingTailDatagrams) datagrams += bytes.capacity();
+		std::ostringstream line;
+		line << "lobby: send_bytes=" << m_StateBytesToSend.capacity() << " queued_transfers=" << m_QueuedStateTransfers.size() << " queued_bytes=" << queued
+		     << " received_bytes=" << m_ReceivedState.capacity() << " pending_tail=" << m_PendingTail.size() << " pending_tail_bytes=" << tail
+		     << " tail_datagrams=" << m_PendingTailDatagrams.size() << " tail_datagram_bytes=" << datagrams << " join_reports=" << m_WorldJoinReports.size()
+		     << " events_after_end=" << m_EventsAfterRoundEnded.size();
+		return line.str();
+	}
+
 	std::vector<uint8_t> NetLobbySession::TakeReceivedState() {
 		if (!m_IncomingStateComplete) return {};
 		m_IncomingStateComplete = false;

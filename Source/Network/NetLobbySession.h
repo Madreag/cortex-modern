@@ -202,6 +202,8 @@ namespace RTE {
 		std::pair<uint32_t, uint32_t> GetStateTransferProgress() const { return {m_IncomingReceivedBytes, m_IncomingTotalBytes}; }
 		bool IsStateTransferOutgoing() const { return HasPendingStateChunks(); }
 		uint64_t GetStateTransferProgressSerial() const { return m_StateTransferProgressSerial; }
+		/// The transfer buffers and queues it holds, as counts and bytes, for the memory census.
+		std::string MemoryCensus() const;
 
 		std::string BuildReportJson() const;
 

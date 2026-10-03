@@ -952,6 +952,8 @@ namespace RTE {
 		/// Proves the keepalive keeps ticking through a load that runs off the service lock.
 		bool RunSnapshotLoadKeepaliveSelfTest(std::string* error);
 		std::string BuildReportJson() const;
+		/// What the world's joins, history, images and transfers hold, as counts and bytes, for the memory census.
+		std::string MemoryCensus() const;
 		/// Builds the match roster from the request. An empty scene keeps MakeDefault unless the caller
 		/// already resolved one; a named scene overwrites the default after any launch-config rules.
 		static bool BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error = nullptr);

@@ -224,6 +224,9 @@ namespace RTE {
 			uint64_t bytes = 0;
 			uint32_t files = 0;
 			uint64_t first = 0, last = 0;
+			uint64_t indexBytes = 0;      //!< Memory: the files' per-frame offsets.
+			uint32_t cachedReads = 0;     //!< Memory: the reads kept for the joiners asking again.
+			uint64_t cachedReadBytes = 0;
 		};
 		JournalStats GetJournalStats() const;
 		size_t MaxFrames() const { return m_MaxFrames; }
@@ -704,6 +707,8 @@ namespace RTE {
 		const NetWorldMembership& Membership() const { return m_Membership; }
 		NetWorldFrameLog& Tail() { return m_Tail; }
 		const NetWorldFrameLog& Tail() const { return m_Tail; }
+		/// What its joins, history and image hold, as counts and bytes, for the memory census.
+		std::string MemoryCensus() const;
 		/// The round a joiner's catch-up names for this tail: the match round of a rejoin plane, the boot round of a world.
 		uint64_t TailRound() const { return m_PrivateRound != 0 ? m_PrivateRound : m_Identity.round; }
 		NetWorldMetrics& Metrics() { return m_Metrics; }
