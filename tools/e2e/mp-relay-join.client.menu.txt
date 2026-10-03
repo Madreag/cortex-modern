@@ -1,4 +1,5 @@
-# The hotspot player chooses Connection = Relay only by hand on the Network Connection page, then returns to the main menu.
+# The joining player chooses Connection = Relay only by hand on the Network Connection page, then joins the host's session
+# from the browser by its id and readies up.
 wait_ms 1800
 activate ButtonMainToOptions
 wait_ms 600
@@ -12,3 +13,22 @@ assert_label ComboNetworkConnection Relay only
 post_command ButtonBackToMainMenu
 wait_ms 900
 assert_screen MainScreen
+wait_ms 1980
+activate ButtonMainToMultiplayer
+wait_ms 495
+assert_substate Landing
+settext TextMultiplayerName {PLAYER}
+activate ButtonMultiplayerJoinGame
+wait_ms 660
+assert_substate JoinSetup
+wait_ms 4000
+settext TextJoinAddress session:{DIRECTORY_SESSION}
+settext TextJoinPort {PORT}
+assert_label TextJoinAddress session:{DIRECTORY_SESSION}
+wait_ms 1395
+assert_label TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_connected 2 180
+wait_ms 825
+assert_substate Lobby
+activate ButtonMultiplayerReady

@@ -1,0 +1,42 @@
+# The host lists the match on the Internet with the directory's relay (Relay = Directory) and starts it once the joiner is ready.
+wait_ms 1800
+activate ButtonMainToMultiplayer
+wait_ms 495
+assert_substate Landing
+settext TextMultiplayerName {PLAYER}
+activate ButtonMultiplayerHostGame
+wait_ms 450
+assert_substate HostSetup
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+wait_ms 500
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+wait_ms 495
+activate ButtonHostOptions
+wait_ms 450
+activate TabHostPageNetwork
+wait_ms 600
+activate TabHostNetRouting
+wait_ms 600
+activate TabHostNetTuning
+wait_ms 600
+combo_select ComboHostNetVisibility Internet: Listed
+wait_ms 900
+assert_label ComboHostNetVisibility Listed
+activate TabHostNetRouting
+wait_ms 600
+combo_select ComboHostNetRelay Directory
+wait_ms 600
+assert_label ComboHostNetRelay Directory
+activate ButtonHostOptBack
+wait_ms 450
+assert_substate HostSetup
+activate ButtonMultiplayerCreate
+wait_ms 825
+assert_substate Lobby
+wait_connected 2 180
+wait_ms 825
+wait_remote_ready 180
+assert_enabled ButtonMultiplayerStart 1
+wait_ms 500
+activate ButtonMultiplayerStart

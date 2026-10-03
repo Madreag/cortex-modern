@@ -100,7 +100,7 @@ def cloudflare_run(**changes):
                offers=[dict(session_id=session, match_id=f'{session}:1', provider='cloudflare', generation=1, expires_at=2000, server_count=2)],
                offer_urls=['stun:stun.cloudflare.com:3478', 'turn:turn.cloudflare.com:3478?transport=udp', 'turns:turn.cloudflare.com:443?transport=tcp'],
                client_connection={'relayed': True, 'remote_address': '141.101.90.17:40001'},
-               relay_addresses=None)
+               relay_addresses=None, overrides_cleared=True, run_ends_at=1500)
     run.update(changes)
     return run
 
@@ -163,7 +163,7 @@ class CloudflareMatchEvidence(unittest.TestCase):
     def test_our_relay_passes_only_with_its_own_addresses_and_a_fixed_offer(self):
         coturn = dict(mode='coturn', relay_addresses=['192.168.50.122', '68.3.162.151'],
                       signals=[('host', signal(relay_line('192.168.50.122', 49201))), ('client-nonce', signal(relay_line('192.168.50.122', 49202)))],
-                      offers=[dict(session_id='session-one', match_id='m', provider='fixed', generation=1, expires_at=2000, server_count=1)],
+                      offers=[dict(session_id='session-one', match_id='session-one:1', provider='coturn', generation=1, expires_at=2000, server_count=1)],
                       offer_urls=['turn:68.3.162.151:3479?transport=udp'], client_connection={'relayed': True, 'remote_address': '192.168.50.122:49201'})
         self.assertTrue(self.judge(cloudflare_run(**coturn))['passed'])
         through_cloudflare = dict(coturn, signals=cloudflare_run()['signals'])
@@ -232,9 +232,12 @@ class SecretScan(unittest.TestCase):
 
 
 def tunnel_rows(**changes):
+    at = [f'2026-10-03 02:00:{second:02d} PM MST' for second in (0, 1, 2, 40, 41)]
     rows = [dict(step='before', backend_state='Running'), dict(step='down', exit_code=0, backend_state='Stopped'),
             dict(step='engine-started', peer='client', backend_state='Stopped'), dict(step='engine-ended', peer='client', backend_state='Stopped'),
             dict(step='up', exit_code=0, backend_state='Running')]
+    for row, stamp in zip(rows, at):
+        row['at'] = stamp
     for index, change in changes.items():
         rows[int(index[1:])].update(change)
     return rows
@@ -262,7 +265,9 @@ class HotspotRows(unittest.TestCase):
 
     def test_a_automatic_fallback_needs_the_relay_on_the_hotspot_peer_with_no_player_action(self):
         session = 'session-one'
-        run = cloudflare_run(mode='automatic', provider='cloudflare', expect_routes={'client': 'relay'}, signals=[],
+        srflx = 'candidate:2 1 udp 1694498815 172.58.1.2 51000 typ srflx'
+        signals = [('host', signal(relay_line('141.101.90.17'), srflx)), ('client-nonce', signal(relay_line('162.159.207.9', 40002), srflx))]
+        run = cloudflare_run(mode='automatic', provider='cloudflare', expect_routes={'client': 'relay'}, signals=signals,
                              connection={'host': 'Automatic', 'client': 'Automatic'},
                              logs={'host': receipts(session), 'client': receipts(session)})
         verdict = self.match().judge_relay(run)
@@ -391,7 +396,8 @@ class OracleCorrections(unittest.TestCase):
         closed = {'end_reason': 0, 'found': False, 'relay_pop': 0, 'relayed': False, 'remote_address': '', 'remote_identity': '', 'state': 0}
         verdict = match.judge_relay(cloudflare_run(client_connection=closed))
         self.assertTrue(verdict['passed'], verdict['reasons'])
-        self.assertEqual(verdict['client_report'], 'not available: the report was written after the connection closed')
+        self.assertEqual(verdict['client_report'], 'closed')
+        self.assertEqual(verdict['bindings'], {'host': 'by exclusion', 'client': 'by exclusion'})
         found_direct = dict(closed, found=True, relayed=False, remote_address='24.251.145.96:5000', state=4)
         self.assertFalse(match.judge_relay(cloudflare_run(client_connection=found_direct))['passed'])
 
